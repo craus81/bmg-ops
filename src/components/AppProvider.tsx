@@ -6,7 +6,6 @@ import { useAuth } from '@/components/AuthProvider';
 import type { CatalogItem, TimeEntry, TimeBreak } from '@/lib/types';
 
 interface AppState {
-  // Clock
   clockStatus: 'out' | 'in' | 'break';
   clockInTime: string | null;
   breakStartTime: string | null;
@@ -17,10 +16,8 @@ interface AppState {
   doStartBreak: () => Promise<void>;
   doEndBreak: () => Promise<void>;
   doClockOut: () => Promise<void>;
-  // Active Part
   activePart: CatalogItem | null;
   setActivePart: (part: CatalogItem | null) => void;
-  // Loading
   appLoading: boolean;
 }
 
@@ -39,49 +36,49 @@ export function AppProvider({ children }: { children: ReactNode }) {
   const [activePart, setActivePart] = useState<CatalogItem | null>(null);
   const [appLoading, setAppLoading] = useState(true);
 
-  // Load active clock session on mount
   useEffect(() => {
     if (!user) return;
     const loadSession = async () => {
-      // Check for active time entry (not clocked out)
-      const { data: entry } = await supabase
-        .from('time_entries')
-        .select('*')
-        .eq('user_id', user.id)
-        .is('clock_out', null)
-        .order('clock_in', { ascending: false })
-        .limit(1)
-        .single();
-
-      if (entry) {
-        setActiveTimeEntry(entry);
-        setClockInTime(entry.clock_in);
-
-        // Load breaks for this entry
-        const { data: breaks } = await supabase
-          .from('time_breaks')
+      try {
+        const { data: entries } = await supabase
+          .from('time_entries')
           .select('*')
-          .eq('time_entry_id', entry.id)
-          .order('break_start', { ascending: true });
+          .eq('user_id', user.id)
+          .is('clock_out', null)
+          .order('clock_in', { ascending: false })
+          .limit(1);
 
-        const loadedBreaks = breaks || [];
-        setCurrentBreaks(loadedBreaks);
+        const entry = entries?.[0] || null;
 
-        // Check if currently on break (break with no end)
-        const openBreak = loadedBreaks.find((b: TimeBreak) => !b.break_end);
-        if (openBreak) {
-          setBreakStartTime(openBreak.break_start);
-          setClockStatus('break');
-        } else {
-          setClockStatus('in');
+        if (entry) {
+          setActiveTimeEntry(entry);
+          setClockInTime(entry.clock_in);
+
+          const { data: breaks } = await supabase
+            .from('time_breaks')
+            .select('*')
+            .eq('time_entry_id', entry.id)
+            .order('break_start', { ascending: true });
+
+          const loadedBreaks = breaks || [];
+          setCurrentBreaks(loadedBreaks);
+
+          const openBreak = loadedBreaks.find((b: TimeBreak) => !b.break_end);
+          if (openBreak) {
+            setBreakStartTime(openBreak.break_start);
+            setClockStatus('break');
+          } else {
+            setClockStatus('in');
+          }
         }
+      } catch (e) {
+        console.error('Load session error:', e);
       }
       setAppLoading(false);
     };
     loadSession();
   }, [user]);
 
-  // Elapsed timer
   useEffect(() => {
     if (clockStatus === 'out' || !clockInTime) return;
     const iv = setInterval(() => {
@@ -159,13 +156,11 @@ export function AppProvider({ children }: { children: ReactNode }) {
     const now = new Date();
     const nowISO = now.toISOString();
 
-    // End any open break
     const openBreak = currentBreaks.find((b) => !b.break_end);
     if (openBreak) {
       await supabase.from('time_breaks').update({ break_end: nowISO }).eq('id', openBreak.id);
     }
 
-    // Calculate total ms
     let totalMs = now.getTime() - new Date(clockInTime).getTime();
     const finalBreaks = currentBreaks.map((b) => ({
       ...b,
