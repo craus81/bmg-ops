@@ -23,10 +23,14 @@ export default function ScanPage() {
   const [cameraActive, setCameraActive] = useState(false);
   const [cameraError, setCameraError] = useState('');
   const [lastScanned, setLastScanned] = useState('');
+  const [scanCount, setScanCount] = useState(0);
   const ref = useRef<HTMLInputElement>(null);
   const videoRef = useRef<HTMLVideoElement>(null);
-  const controlsRef = useRef<any>(null);
+  const canvasRef = useRef<HTMLCanvasElement>(null);
+  const streamRef = useRef<MediaStream | null>(null);
+  const intervalRef = useRef<any>(null);
   const foundVinRef = useRef(false);
+  const readerRef = useRef<any>(null);
 
   useEffect(() => {
     if (mode === 'text' && ref.current) ref.current.focus();
@@ -37,17 +41,15 @@ export default function ScanPage() {
   }, []);
 
   const stopCamera = () => {
-    if (controlsRef.current) {
-      try {
-        controlsRef.current.stop();
-      } catch (e) {
-        // ignore
-      }
-      controlsRef.current = null;
+    if (intervalRef.current) {
+      clearInterval(intervalRef.current);
+      intervalRef.current = null;
     }
-    if (videoRef.current && videoRef.current.srcObject) {
-      var tracks = (videoRef.current.srcObject as MediaStream).getTracks();
-      tracks.forEach(function(t) { t.stop(); });
+    if (streamRef.current) {
+      streamRef.current.getTracks().forEach(function(t) { t.stop(); });
+      streamRef.current = null;
+    }
+    if (videoRef.current) {
       videoRef.current.srcObject = null;
     }
     setCameraActive(false);
@@ -57,8 +59,8 @@ export default function ScanPage() {
     setCameraError('');
     foundVinRef.current = false;
     setLastScanned('');
+    setScanCount(0);
     try {
-      var zxingBrowser = await import('@zxing/browser');
       var zxingLibrary = await import('@zxing/library');
 
       var formats = [
@@ -75,38 +77,78 @@ export default function ScanPage() {
       hints.set(zxingLibrary.DecodeHintType.POSSIBLE_FORMATS, formats);
       hints.set(zxingLibrary.DecodeHintType.TRY_HARDER, true);
 
-      var reader = new zxingBrowser.BrowserMultiFormatReader(hints);
+      var reader = new zxingLibrary.MultiFormatReader();
+      reader.setHints(hints);
+      readerRef.current = reader;
+
+      var stream = await navigator.mediaDevices.getUserMedia({
+        video: {
+          facingMode: 'environment',
+          width: { ideal: 1920 },
+          height: { ideal: 1080 },
+        }
+      });
+      streamRef.current = stream;
 
       if (!videoRef.current) return;
-
-      var controls = await reader.decodeFromVideoDevice(
-        undefined,
-        videoRef.current,
-        function(res: any, err: any) {
-          if (foundVinRef.current) return;
-          if (res) {
-            var raw = res.getText().trim().toUpperCase().replace(/[^A-HJ-NPR-Z0-9]/g, '');
-            setLastScanned(raw);
-            if (raw.length === 17 && isValidVIN(raw)) {
-              foundVinRef.current = true;
-              stopCamera();
-              setVin(raw);
-              handleScanVin(raw);
-            }
-          }
-        }
-      );
-
-      controlsRef.current = controls;
+      videoRef.current.srcObject = stream;
+      await videoRef.current.play();
       setCameraActive(true);
+
+      intervalRef.current = setInterval(function() {
+        scanFrame(zxingLibrary);
+      }, 150);
+
     } catch (e: any) {
-      if (e?.message?.includes('Permission') || e?.name === 'NotAllowedError') {
-        setCameraError('Camera permission denied. Allow camera access and try again, or use text input.');
-      } else if (e?.message?.includes('NotFound') || e?.name === 'NotFoundError') {
+      if (e?.name === 'NotAllowedError' || e?.message?.includes('Permission')) {
+        setCameraError('Camera permission denied. Allow camera access in your browser settings, or use text input.');
+      } else if (e?.name === 'NotFoundError') {
         setCameraError('No camera found. Use text input instead.');
       } else {
         setCameraError('Camera error: ' + (e?.message || 'Unknown error'));
       }
+    }
+  };
+
+  const scanFrame = (zxingLibrary: any) => {
+    if (foundVinRef.current) return;
+    if (!videoRef.current || !canvasRef.current || !readerRef.current) return;
+    var video = videoRef.current;
+    if (video.readyState !== video.HAVE_ENOUGH_DATA) return;
+
+    var canvas = canvasRef.current;
+    var ctx = canvas.getContext('2d');
+    if (!ctx) return;
+
+    canvas.width = video.videoWidth;
+    canvas.height = video.videoHeight;
+    ctx.drawImage(video, 0, 0);
+
+    setScanCount(function(c: number) { return c + 1; });
+
+    try {
+      var imageData = ctx.getImageData(0, 0, canvas.width, canvas.height);
+      var len = imageData.data.length / 4;
+      var luminances = new Uint8ClampedArray(len);
+      for (var i = 0; i < len; i++) {
+        var r = imageData.data[i * 4];
+        var g = imageData.data[i * 4 + 1];
+        var b = imageData.data[i * 4 + 2];
+        luminances[i] = Math.round(0.299 * r + 0.587 * g + 0.114 * b);
+      }
+      var source = new zxingLibrary.RGBLuminanceSource(luminances, canvas.width, canvas.height);
+      var bitmap = new zxingLibrary.BinaryBitmap(new zxingLibrary.HybridBinarizer(source));
+      var decoded = readerRef.current.decode(bitmap);
+      var raw = decoded.getText().trim().toUpperCase().replace(/[^A-HJ-NPR-Z0-9]/g, '');
+      setLastScanned(raw);
+      if (raw.length === 17 && isValidVIN(raw)) {
+        foundVinRef.current = true;
+        stopCamera();
+        setVin(raw);
+        handleScanVin(raw);
+      }
+    } catch (e: any) {
+      // no barcode found in this frame, keep scanning
     }
   };
 
@@ -178,6 +220,7 @@ export default function ScanPage() {
     setError('');
     setLastScanned('');
     foundVinRef.current = false;
+    setScanCount(0);
   };
 
   var title = result ? [result.vehicle.year, result.vehicle.make, result.vehicle.model].filter(Boolean).join(' ') : '';
@@ -206,21 +249,24 @@ export default function ScanPage() {
             ) : (
               <div>
                 <div style={{ position: 'relative', borderRadius: '12px', overflow: 'hidden', background: '#000', marginBottom: '8px' }}>
-                  <video ref={videoRef} playsInline muted style={{ width: '100%', height: '280px', objectFit: 'cover' }} />
-                  <div style={{ position: 'absolute', top: '50%', left: '5%', right: '5%', height: '80px', marginTop: '-40px', border: '2px solid rgba(59,130,246,0.5)', borderRadius: '8px', pointerEvents: 'none' }} />
+                  <video ref={videoRef} playsInline muted style={{ width: '100%', display: 'block' }} />
+                  <div style={{ position: 'absolute', top: '50%', left: '3%', right: '3%', height: '60px', marginTop: '-30px', border: '2px solid rgba(59,130,246,0.6)', borderRadius: '6px', pointerEvents: 'none' }}>
+                    <div style={{ position: 'absolute', top: '-20px', left: '50%', transform: 'translateX(-50%)', fontSize: '10px', color: '#60a5fa', fontWeight: 600, whiteSpace: 'nowrap' }}>Align barcode here</div>
+                  </div>
                 </div>
+                <canvas ref={canvasRef} style={{ display: 'none' }} />
                 <div style={{ textAlign: 'center', marginBottom: '8px' }}>
                   {cameraActive ? (
                     <div>
-                      <div style={{ fontSize: '12px', color: '#93c5fd', fontWeight: 600 }}>Align barcode in blue box - hold steady</div>
+                      <div style={{ fontSize: '12px', color: '#93c5fd', fontWeight: 600 }}>Hold phone 4-8 inches from barcode</div>
                       {lastScanned ? (
-                        <div style={{ fontSize: '11px', color: '#f59e0b', marginTop: '4px', fontFamily: 'monospace' }}>Detected: {lastScanned} ({lastScanned.length} chars{lastScanned.length === 17 ? ' - VIN!' : ''})</div>
+                        <div style={{ fontSize: '12px', color: '#f59e0b', marginTop: '4px', fontFamily: 'monospace', fontWeight: 700 }}>Read: {lastScanned} ({lastScanned.length} chars)</div>
                       ) : (
-                        <div style={{ fontSize: '11px', color: '#4a5f78', marginTop: '4px' }}>Searching for barcode...</div>
+                        <div style={{ fontSize: '11px', color: '#4a5f78', marginTop: '4px' }}>Scanning... ({scanCount} frames checked)</div>
                       )}
                     </div>
                   ) : (
-                    <div style={{ fontSize: '13px', color: '#4a5f78' }}>Starting camera...</div>
+                    <div style={{ fontSize: '13px', color: '#4a5f78', padding: '20px 0' }}>Starting camera...</div>
                   )}
                 </div>
               </div>
