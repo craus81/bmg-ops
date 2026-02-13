@@ -62,6 +62,7 @@ export default function ReportsPage() {
       var XLSX = await import('xlsx');
       var now = new Date();
 
+      var baseUrl = window.location.origin;
       var rows = vehicles.map(function(v: any) {
         var scanDate = new Date(v.scanned_at);
         return {
@@ -73,11 +74,12 @@ export default function ReportsPage() {
           'Make': v.vehicle_make || '',
           'Model': v.vehicle_model || '',
           'Date Scanned': scanDate.toLocaleDateString('en-US', { year: 'numeric', month: '2-digit', day: '2-digit' }),
+          'Photos': baseUrl + '/view/' + v.id,
         };
       });
 
       var ws = XLSX.utils.json_to_sheet(rows);
-      ws['!cols'] = [{ wch: 20 }, { wch: 16 }, { wch: 16 }, { wch: 18 }, { wch: 6 }, { wch: 14 }, { wch: 16 }, { wch: 12 }];
+      ws['!cols'] = [{ wch: 20 }, { wch: 16 }, { wch: 16 }, { wch: 18 }, { wch: 6 }, { wch: 14 }, { wch: 16 }, { wch: 12 }, { wch: 40 }];
       var wb = XLSX.utils.book_new();
       XLSX.utils.book_append_sheet(wb, ws, 'Vehicles');
 
@@ -109,6 +111,7 @@ export default function ReportsPage() {
       var XLSX = await import('xlsx');
       var now = new Date();
 
+      var baseUrl = window.location.origin;
       var rows = custVehicles.map(function(v: any) {
         var scanDate = new Date(v.scanned_at);
         return {
@@ -120,11 +123,12 @@ export default function ReportsPage() {
           'Make': v.vehicle_make || '',
           'Model': v.vehicle_model || '',
           'Date Scanned': scanDate.toLocaleDateString('en-US', { year: 'numeric', month: '2-digit', day: '2-digit' }),
+          'Photos': baseUrl + '/view/' + v.id,
         };
       });
 
       var ws = XLSX.utils.json_to_sheet(rows);
-      ws['!cols'] = [{ wch: 20 }, { wch: 16 }, { wch: 16 }, { wch: 18 }, { wch: 6 }, { wch: 14 }, { wch: 16 }, { wch: 12 }];
+      ws['!cols'] = [{ wch: 20 }, { wch: 16 }, { wch: 16 }, { wch: 18 }, { wch: 6 }, { wch: 14 }, { wch: 16 }, { wch: 12 }, { wch: 40 }];
       var wb = XLSX.utils.book_new();
       XLSX.utils.book_append_sheet(wb, ws, 'Vehicles');
 
@@ -162,6 +166,7 @@ export default function ReportsPage() {
       });
       if (batch.length === 0) return;
 
+      var baseUrl = window.location.origin;
       var rows = batch.map(function(v: any) {
         var scanDate = new Date(v.scanned_at);
         return {
@@ -173,11 +178,12 @@ export default function ReportsPage() {
           'Make': v.vehicle_make || '',
           'Model': v.vehicle_model || '',
           'Date Scanned': scanDate.toLocaleDateString('en-US', { year: 'numeric', month: '2-digit', day: '2-digit' }),
+          'Photos': baseUrl + '/view/' + v.id,
         };
       });
 
       var ws = XLSX.utils.json_to_sheet(rows);
-      ws['!cols'] = [{ wch: 20 }, { wch: 16 }, { wch: 16 }, { wch: 18 }, { wch: 6 }, { wch: 14 }, { wch: 16 }, { wch: 12 }];
+      ws['!cols'] = [{ wch: 20 }, { wch: 16 }, { wch: 16 }, { wch: 18 }, { wch: 6 }, { wch: 14 }, { wch: 16 }, { wch: 12 }, { wch: 40 }];
       var wb = XLSX.utils.book_new();
       XLSX.utils.book_append_sheet(wb, ws, 'Vehicles');
 
