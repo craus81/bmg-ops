@@ -14,6 +14,7 @@ export default function MorePage() {
       </div>
 
       <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
+        <MenuBtn icon="📊" title="Export Reports" sub="Download vehicle spreadsheets" onClick={() => router.push('/reports')} />
         {isAdmin && (
           <>
             <MenuBtn icon="📦" title="Part Catalog" sub="Manage part numbers" onClick={() => router.push('/admin/catalog')} />
