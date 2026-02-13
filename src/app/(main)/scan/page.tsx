@@ -31,6 +31,7 @@ export default function ScanPage() {
   const intervalRef = useRef<any>(null);
   const foundVinRef = useRef(false);
   const readerRef = useRef<any>(null);
+  const scanCountRef = useRef(0);
 
   useEffect(() => {
     if (mode === 'text' && ref.current) ref.current.focus();
@@ -60,6 +61,7 @@ export default function ScanPage() {
     foundVinRef.current = false;
     setLastScanned('');
     setScanCount(0);
+    scanCountRef.current = 0;
     try {
       var zxingLibrary = await import('@zxing/library');
 
@@ -97,7 +99,7 @@ export default function ScanPage() {
 
       intervalRef.current = setInterval(function() {
         scanFrame(zxingLibrary);
-      }, 150);
+      }, 200);
 
     } catch (e: any) {
       if (e?.name === 'NotAllowedError' || e?.message?.includes('Permission')) {
@@ -124,7 +126,8 @@ export default function ScanPage() {
     canvas.height = video.videoHeight;
     ctx.drawImage(video, 0, 0);
 
-    setScanCount(function(c: number) { return c + 1; });
+    scanCountRef.current = scanCountRef.current + 1;
+    setScanCount(scanCountRef.current);
 
     try {
       var imageData = ctx.getImageData(0, 0, canvas.width, canvas.height);
@@ -148,7 +151,7 @@ export default function ScanPage() {
         handleScanVin(raw);
       }
     } catch (e: any) {
-      // no barcode found in this frame, keep scanning
+      // no barcode found in this frame
     }
   };
 
@@ -221,6 +224,7 @@ export default function ScanPage() {
     setLastScanned('');
     foundVinRef.current = false;
     setScanCount(0);
+    scanCountRef.current = 0;
   };
 
   var title = result ? [result.vehicle.year, result.vehicle.make, result.vehicle.model].filter(Boolean).join(' ') : '';
@@ -248,27 +252,25 @@ export default function ScanPage() {
               </div>
             ) : (
               <div>
-                <div style={{ position: 'relative', borderRadius: '12px', overflow: 'hidden', background: '#000', marginBottom: '8px' }}>
-                  <video ref={videoRef} playsInline muted style={{ width: '100%', display: 'block' }} />
-                  <div style={{ position: 'absolute', top: '50%', left: '3%', right: '3%', height: '60px', marginTop: '-30px', border: '2px solid rgba(59,130,246,0.6)', borderRadius: '6px', pointerEvents: 'none' }}>
-                    <div style={{ position: 'absolute', top: '-20px', left: '50%', transform: 'translateX(-50%)', fontSize: '10px', color: '#60a5fa', fontWeight: 600, whiteSpace: 'nowrap' }}>Align barcode here</div>
+                <div style={{ position: 'relative', borderRadius: '12px', overflow: 'hidden', background: '#000', height: '300px', marginBottom: '8px' }}>
+                  <video ref={videoRef} playsInline muted style={{ width: '100%', height: '100%', objectFit: 'cover' }} />
+                  <div style={{ position: 'absolute', top: '50%', left: '3%', right: '3%', height: '70px', marginTop: '-35px', border: '3px solid rgba(59,130,246,0.8)', borderRadius: '8px', pointerEvents: 'none', boxShadow: '0 0 20px rgba(59,130,246,0.3)' }} />
+                  <div style={{ position: 'absolute', bottom: '0', left: '0', right: '0', padding: '10px', background: 'rgba(0,0,0,0.7)' }}>
+                    {cameraActive ? (
+                      <div style={{ textAlign: 'center' }}>
+                        <div style={{ fontSize: '13px', color: '#fff', fontWeight: 700 }}>Hold 4-8 in from barcode</div>
+                        {lastScanned ? (
+                          <div style={{ fontSize: '13px', color: '#fbbf24', marginTop: '3px', fontFamily: 'monospace', fontWeight: 800 }}>FOUND: {lastScanned} ({lastScanned.length} chars)</div>
+                        ) : (
+                          <div style={{ fontSize: '12px', color: '#9ca3af', marginTop: '3px' }}>Scanning... {scanCount} frames</div>
+                        )}
+                      </div>
+                    ) : (
+                      <div style={{ textAlign: 'center', fontSize: '13px', color: '#9ca3af' }}>Starting camera...</div>
+                    )}
                   </div>
                 </div>
                 <canvas ref={canvasRef} style={{ display: 'none' }} />
-                <div style={{ textAlign: 'center', marginBottom: '8px' }}>
-                  {cameraActive ? (
-                    <div>
-                      <div style={{ fontSize: '12px', color: '#93c5fd', fontWeight: 600 }}>Hold phone 4-8 inches from barcode</div>
-                      {lastScanned ? (
-                        <div style={{ fontSize: '12px', color: '#f59e0b', marginTop: '4px', fontFamily: 'monospace', fontWeight: 700 }}>Read: {lastScanned} ({lastScanned.length} chars)</div>
-                      ) : (
-                        <div style={{ fontSize: '11px', color: '#4a5f78', marginTop: '4px' }}>Scanning... ({scanCount} frames checked)</div>
-                      )}
-                    </div>
-                  ) : (
-                    <div style={{ fontSize: '13px', color: '#4a5f78', padding: '20px 0' }}>Starting camera...</div>
-                  )}
-                </div>
               </div>
             )}
           </div>
