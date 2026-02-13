@@ -225,6 +225,8 @@ export default function ScanPage() {
     foundVinRef.current = false;
     setScanCount(0);
     scanCountRef.current = 0;
+    setMode('camera');
+    setTimeout(function() { startCamera(); }, 300);
   };
 
   var title = result ? [result.vehicle.year, result.vehicle.make, result.vehicle.model].filter(Boolean).join(' ') : '';
