@@ -22,8 +22,10 @@ export default function ScanPage() {
   const [mode, setMode] = useState<'camera' | 'text'>('text');
   const [cameraActive, setCameraActive] = useState(false);
   const [cameraError, setCameraError] = useState('');
+  const [lastScanned, setLastScanned] = useState('');
   const ref = useRef<HTMLInputElement>(null);
   const scannerRef = useRef<any>(null);
+  const foundVinRef = useRef(false);
 
   useEffect(() => {
     if (mode === 'text' && ref.current) ref.current.focus();
@@ -51,23 +53,47 @@ export default function ScanPage() {
 
   const startCamera = async () => {
     setCameraError('');
+    foundVinRef.current = false;
     try {
-      const { Html5Qrcode } = await import('html5-qrcode');
+      const html5QrCode = await import('html5-qrcode');
+      const Html5Qrcode = html5QrCode.Html5Qrcode;
+      const Html5QrcodeSupportedFormats = html5QrCode.Html5QrcodeSupportedFormats;
       await stopCamera();
-      const scanner = new Html5Qrcode('barcode-reader');
+      const scanner = new Html5Qrcode('barcode-reader', {
+        formatsToSupport: [
+          Html5QrcodeSupportedFormats.CODE_128,
+          Html5QrcodeSupportedFormats.CODE_39,
+          Html5QrcodeSupportedFormats.CODE_93,
+          Html5QrcodeSupportedFormats.DATA_MATRIX,
+          Html5QrcodeSupportedFormats.QR_CODE,
+          Html5QrcodeSupportedFormats.PDF_417,
+        ],
+        verbose: false,
+      });
       scannerRef.current = scanner;
       await scanner.start(
         { facingMode: 'environment' },
-        { fps: 10, qrbox: { width: 280, height: 100 }, aspectRatio: 1.777 },
-        (decodedText: string) => {
-          const raw = decodedText.trim().toUpperCase().replace(/[^A-HJ-NPR-Z0-9]/g, '');
+        {
+          fps: 15,
+          qrbox: function(viewfinderWidth: number, viewfinderHeight: number) {
+            var w = Math.floor(viewfinderWidth * 0.85);
+            var h = Math.floor(viewfinderHeight * 0.35);
+            return { width: w, height: h };
+          },
+          disableFlip: false,
+        },
+        function(decodedText: string) {
+          if (foundVinRef.current) return;
+          var raw = decodedText.trim().toUpperCase().replace(/[^A-HJ-NPR-Z0-9]/g, '');
+          setLastScanned(raw);
           if (raw.length === 17 && isValidVIN(raw)) {
+            foundVinRef.current = true;
             stopCamera();
             setVin(raw);
             handleScanVin(raw);
           }
         },
-        () => {}
+        function() {}
       );
       setCameraActive(true);
     } catch (e: any) {
@@ -95,7 +121,7 @@ export default function ScanPage() {
 
   const switchToCamera = () => {
     setMode('camera');
-    setTimeout(() => startCamera(), 200);
+    setTimeout(function() { startCamera(); }, 200);
   };
 
   const switchToText = () => {
@@ -146,6 +172,8 @@ export default function ScanPage() {
     setVin('');
     setSavedVehicleId(null);
     setError('');
+    setLastScanned('');
+    foundVinRef.current = false;
   };
 
   const title = result ? [result.vehicle.year, result.vehicle.make, result.vehicle.model].filter(Boolean).join(' ') : '';
@@ -173,9 +201,14 @@ export default function ScanPage() {
               </div>
             ) : (
               <div>
-                <div id="barcode-reader" style={{ borderRadius: '12px', overflow: 'hidden', marginBottom: '12px' }}></div>
+                <div id="barcode-reader" style={{ borderRadius: '12px', overflow: 'hidden', marginBottom: '8px' }}></div>
                 {cameraActive && (
-                  <div style={{ textAlign: 'center', fontSize: '11px', color: '#93c5fd', fontWeight: 600 }}>Point at VIN barcode...</div>
+                  <div style={{ textAlign: 'center', marginBottom: '8px' }}>
+                    <div style={{ fontSize: '12px', color: '#93c5fd', fontWeight: 600 }}>Point at VIN barcode - hold steady</div>
+                    {lastScanned && (
+                      <div style={{ fontSize: '11px', color: '#f59e0b', marginTop: '4px', fontFamily: 'monospace' }}>Read: {lastScanned} ({lastScanned.length} chars)</div>
+                    )}
+                  </div>
                 )}
                 {!cameraActive && !cameraError && (
                   <div style={{ textAlign: 'center', padding: '40px 0', color: '#4a5f78', fontSize: '13px' }}>Starting camera...</div>
