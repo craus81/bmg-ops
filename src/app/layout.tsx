@@ -1,6 +1,7 @@
 import type { Metadata, Viewport } from 'next';
-import { AuthProvider } from '@/components/AuthProvider';
 import './globals.css';
+
+export const dynamic = "force-dynamic";
 
 export const metadata: Metadata = {
   title: 'BMG Ops',
@@ -27,9 +28,7 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
       <head>
         <link rel="apple-touch-icon" href="/icon-192.png" />
       </head>
-      <body>
-        <AuthProvider>{children}</AuthProvider>
-      </body>
+      <body>{children}</body>
     </html>
   );
 }

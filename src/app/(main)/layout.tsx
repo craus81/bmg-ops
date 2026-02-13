@@ -1,6 +1,6 @@
 'use client';
 
-import { useAuth } from '@/components/AuthProvider';
+import { AuthProvider, useAuth } from '@/components/AuthProvider';
 import { AppProvider, useApp } from '@/components/AppProvider';
 import Header from '@/components/Header';
 import BottomNav from '@/components/BottomNav';
@@ -41,8 +41,10 @@ function AppShell({ children }: { children: React.ReactNode }) {
 
 export default function MainLayout({ children }: { children: React.ReactNode }) {
   return (
-    <AppProvider>
-      <AppShell>{children}</AppShell>
-    </AppProvider>
+    <AuthProvider>
+      <AppProvider>
+        <AppShell>{children}</AppShell>
+      </AppProvider>
+    </AuthProvider>
   );
 }
