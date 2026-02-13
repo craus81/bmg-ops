@@ -24,7 +24,8 @@ export default function ScanPage() {
   const [cameraError, setCameraError] = useState('');
   const [lastScanned, setLastScanned] = useState('');
   const ref = useRef<HTMLInputElement>(null);
-  const scannerRef = useRef<any>(null);
+  const videoRef = useRef<HTMLVideoElement>(null);
+  const controlsRef = useRef<any>(null);
   const foundVinRef = useRef(false);
 
   useEffect(() => {
@@ -35,18 +36,19 @@ export default function ScanPage() {
     return () => { stopCamera(); };
   }, []);
 
-  const stopCamera = async () => {
-    if (scannerRef.current) {
+  const stopCamera = () => {
+    if (controlsRef.current) {
       try {
-        const state = scannerRef.current.getState();
-        if (state === 2) {
-          await scannerRef.current.stop();
-        }
-        scannerRef.current.clear();
+        controlsRef.current.stop();
       } catch (e) {
-        // ignore cleanup errors
+        // ignore
       }
-      scannerRef.current = null;
+      controlsRef.current = null;
+    }
+    if (videoRef.current && videoRef.current.srcObject) {
+      var tracks = (videoRef.current.srcObject as MediaStream).getTracks();
+      tracks.forEach(function(t) { t.stop(); });
+      videoRef.current.srcObject = null;
     }
     setCameraActive(false);
   };
@@ -54,52 +56,53 @@ export default function ScanPage() {
   const startCamera = async () => {
     setCameraError('');
     foundVinRef.current = false;
+    setLastScanned('');
     try {
-      const html5QrCode = await import('html5-qrcode');
-      const Html5Qrcode = html5QrCode.Html5Qrcode;
-      const Html5QrcodeSupportedFormats = html5QrCode.Html5QrcodeSupportedFormats;
-      await stopCamera();
-      const scanner = new Html5Qrcode('barcode-reader', {
-        formatsToSupport: [
-          Html5QrcodeSupportedFormats.CODE_128,
-          Html5QrcodeSupportedFormats.CODE_39,
-          Html5QrcodeSupportedFormats.CODE_93,
-          Html5QrcodeSupportedFormats.DATA_MATRIX,
-          Html5QrcodeSupportedFormats.QR_CODE,
-          Html5QrcodeSupportedFormats.PDF_417,
-        ],
-        verbose: false,
-      });
-      scannerRef.current = scanner;
-      await scanner.start(
-        { facingMode: 'environment' },
-        {
-          fps: 15,
-          qrbox: function(viewfinderWidth: number, viewfinderHeight: number) {
-            var w = Math.floor(viewfinderWidth * 0.85);
-            var h = Math.floor(viewfinderHeight * 0.35);
-            return { width: w, height: h };
-          },
-          disableFlip: false,
-        },
-        function(decodedText: string) {
+      var zxingBrowser = await import('@zxing/browser');
+      var zxingLibrary = await import('@zxing/library');
+
+      var formats = [
+        zxingLibrary.BarcodeFormat.CODE_128,
+        zxingLibrary.BarcodeFormat.CODE_39,
+        zxingLibrary.BarcodeFormat.CODE_93,
+        zxingLibrary.BarcodeFormat.DATA_MATRIX,
+        zxingLibrary.BarcodeFormat.QR_CODE,
+        zxingLibrary.BarcodeFormat.PDF_417,
+        zxingLibrary.BarcodeFormat.ITF,
+      ];
+
+      var hints = new Map();
+      hints.set(zxingLibrary.DecodeHintType.POSSIBLE_FORMATS, formats);
+      hints.set(zxingLibrary.DecodeHintType.TRY_HARDER, true);
+
+      var reader = new zxingBrowser.BrowserMultiFormatReader(hints);
+
+      if (!videoRef.current) return;
+
+      var controls = await reader.decodeFromVideoDevice(
+        undefined,
+        videoRef.current,
+        function(res: any, err: any) {
           if (foundVinRef.current) return;
-          var raw = decodedText.trim().toUpperCase().replace(/[^A-HJ-NPR-Z0-9]/g, '');
-          setLastScanned(raw);
-          if (raw.length === 17 && isValidVIN(raw)) {
-            foundVinRef.current = true;
-            stopCamera();
-            setVin(raw);
-            handleScanVin(raw);
+          if (res) {
+            var raw = res.getText().trim().toUpperCase().replace(/[^A-HJ-NPR-Z0-9]/g, '');
+            setLastScanned(raw);
+            if (raw.length === 17 && isValidVIN(raw)) {
+              foundVinRef.current = true;
+              stopCamera();
+              setVin(raw);
+              handleScanVin(raw);
+            }
           }
-        },
-        function() {}
+        }
       );
+
+      controlsRef.current = controls;
       setCameraActive(true);
     } catch (e: any) {
-      if (e?.message?.includes('Permission')) {
+      if (e?.message?.includes('Permission') || e?.name === 'NotAllowedError') {
         setCameraError('Camera permission denied. Allow camera access and try again, or use text input.');
-      } else if (e?.message?.includes('NotFound') || e?.message?.includes('Requested device not found')) {
+      } else if (e?.message?.includes('NotFound') || e?.name === 'NotFoundError') {
         setCameraError('No camera found. Use text input instead.');
       } else {
         setCameraError('Camera error: ' + (e?.message || 'Unknown error'));
@@ -111,8 +114,8 @@ export default function ScanPage() {
     setError('');
     setLoading(true);
     try {
-      const vehicle = await decodeVIN(v);
-      setResult({ vin: v, vehicle });
+      var vehicle = await decodeVIN(v);
+      setResult({ vin: v, vehicle: vehicle });
     } catch (e) {
       setError('Failed to decode VIN.');
     }
@@ -121,7 +124,7 @@ export default function ScanPage() {
 
   const switchToCamera = () => {
     setMode('camera');
-    setTimeout(function() { startCamera(); }, 200);
+    setTimeout(function() { startCamera(); }, 300);
   };
 
   const switchToText = () => {
@@ -130,15 +133,16 @@ export default function ScanPage() {
   };
 
   const handleScan = async () => {
-    const v = vin.trim().toUpperCase();
+    var v = vin.trim().toUpperCase();
     if (!isValidVIN(v)) { setError('Invalid VIN - must be 17 characters.'); return; }
     handleScanVin(v);
   };
 
   const handleConfirm = async () => {
     if (!result || !user) return;
-    const { vin: v, vehicle } = result;
-    const { data, error: dbErr } = await supabase
+    var v = result.vin;
+    var vehicle = result.vehicle;
+    var insertResult = await supabase
       .from('scanned_vehicles')
       .insert({
         vin: v,
@@ -158,11 +162,11 @@ export default function ScanPage() {
       })
       .select()
       .single();
-    if (dbErr) { setError('Failed to save: ' + dbErr.message); return; }
+    if (insertResult.error) { setError('Failed to save: ' + insertResult.error.message); return; }
     if (activePart) {
       await supabase.rpc('decrement_po_line', { p_part_number: activePart.part_number });
     }
-    setSavedVehicleId(data.id);
+    setSavedVehicleId(insertResult.data.id);
     setConfirmed(true);
   };
 
@@ -176,7 +180,7 @@ export default function ScanPage() {
     foundVinRef.current = false;
   };
 
-  const title = result ? [result.vehicle.year, result.vehicle.make, result.vehicle.model].filter(Boolean).join(' ') : '';
+  var title = result ? [result.vehicle.year, result.vehicle.make, result.vehicle.model].filter(Boolean).join(' ') : '';
 
   if (!result && !loading && !confirmed) {
     return (
@@ -201,18 +205,24 @@ export default function ScanPage() {
               </div>
             ) : (
               <div>
-                <div id="barcode-reader" style={{ borderRadius: '12px', overflow: 'hidden', marginBottom: '8px' }}></div>
-                {cameraActive && (
-                  <div style={{ textAlign: 'center', marginBottom: '8px' }}>
-                    <div style={{ fontSize: '12px', color: '#93c5fd', fontWeight: 600 }}>Point at VIN barcode - hold steady</div>
-                    {lastScanned && (
-                      <div style={{ fontSize: '11px', color: '#f59e0b', marginTop: '4px', fontFamily: 'monospace' }}>Read: {lastScanned} ({lastScanned.length} chars)</div>
-                    )}
-                  </div>
-                )}
-                {!cameraActive && !cameraError && (
-                  <div style={{ textAlign: 'center', padding: '40px 0', color: '#4a5f78', fontSize: '13px' }}>Starting camera...</div>
-                )}
+                <div style={{ position: 'relative', borderRadius: '12px', overflow: 'hidden', background: '#000', marginBottom: '8px' }}>
+                  <video ref={videoRef} playsInline muted style={{ width: '100%', height: '280px', objectFit: 'cover' }} />
+                  <div style={{ position: 'absolute', top: '50%', left: '5%', right: '5%', height: '80px', marginTop: '-40px', border: '2px solid rgba(59,130,246,0.5)', borderRadius: '8px', pointerEvents: 'none' }} />
+                </div>
+                <div style={{ textAlign: 'center', marginBottom: '8px' }}>
+                  {cameraActive ? (
+                    <div>
+                      <div style={{ fontSize: '12px', color: '#93c5fd', fontWeight: 600 }}>Align barcode in blue box - hold steady</div>
+                      {lastScanned ? (
+                        <div style={{ fontSize: '11px', color: '#f59e0b', marginTop: '4px', fontFamily: 'monospace' }}>Detected: {lastScanned} ({lastScanned.length} chars{lastScanned.length === 17 ? ' - VIN!' : ''})</div>
+                      ) : (
+                        <div style={{ fontSize: '11px', color: '#4a5f78', marginTop: '4px' }}>Searching for barcode...</div>
+                      )}
+                    </div>
+                  ) : (
+                    <div style={{ fontSize: '13px', color: '#4a5f78' }}>Starting camera...</div>
+                  )}
+                </div>
               </div>
             )}
           </div>
