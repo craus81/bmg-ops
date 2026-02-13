@@ -15,6 +15,7 @@ export default function POsPage() {
   const [catalog, setCatalog] = useState<CatalogItem[]>([]);
   const [loading, setLoading] = useState(true);
   const [showCreate, setShowCreate] = useState(false);
+  const [expandedPo, setExpandedPo] = useState<string | null>(null);
   const [form, setForm] = useState({ po_number: '', customer: 'Masterack' });
   const [lineItems, setLineItems] = useState<{ catalog_id: string; part_number: string; quantity: number; unit_price: number }[]>([]);
 
@@ -67,6 +68,8 @@ export default function POsPage() {
     setShowCreate(false);
   };
 
+  const fmt = (n: number) => '$' + n.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+
   if (loading) return <div style={{ textAlign: 'center', padding: '40px', color: '#4a5f78' }}>Loading...</div>;
 
   return (
@@ -75,7 +78,7 @@ export default function POsPage() {
         <div style={{ fontSize: '11px', fontWeight: 700, color: '#4a5f78', textTransform: 'uppercase', letterSpacing: '0.5px' }}>
           Purchase Orders ({pos.length})
         </div>
-        <button onClick={() => setShowCreate(!showCreate)} style={{ padding: '6px 12px', borderRadius: '8px', background: '#3b82f6', color: '#fff', fontSize: '12px', fontWeight: 700 }}>
+        <button onClick={() => setShowCreate(!showCreate)} style={{ padding: '6px 12px', borderRadius: '8px', background: '#3b82f6', color: '#fff', fontSize: '12px', fontWeight: 700, border: 'none' }}>
           {showCreate ? 'Cancel' : '+ New PO'}
         </button>
       </div>
@@ -107,6 +110,7 @@ export default function POsPage() {
               {lineItems.map((li, i) => (
                 <div key={i} style={{ display: 'flex', alignItems: 'center', gap: '8px', padding: '6px 0', borderBottom: '1px solid #1e2d3d' }}>
                   <div style={{ flex: 1, fontSize: '13px', fontWeight: 700 }}>{li.part_number}</div>
+                  <div style={{ fontSize: '11px', color: '#4a5f78' }}>{fmt(li.unit_price)} ea</div>
                   <input
                     type="number"
                     value={li.quantity}
@@ -117,9 +121,13 @@ export default function POsPage() {
                     style={{ ...inputStyle, width: '60px', textAlign: 'center' }}
                     min={1}
                   />
-                  <button onClick={() => setLineItems((prev) => prev.filter((_, j) => j !== i))} style={{ color: '#f87171', fontSize: '18px', padding: '0 4px' }}>×</button>
+                  <button onClick={() => setLineItems((prev) => prev.filter((_, j) => j !== i))} style={{ color: '#f87171', fontSize: '18px', padding: '0 4px', background: 'none', border: 'none' }}>×</button>
                 </div>
               ))}
+              <div style={{ display: 'flex', justifyContent: 'space-between', paddingTop: '8px', fontSize: '13px', fontWeight: 800 }}>
+                <span style={{ color: '#4a5f78' }}>Total</span>
+                <span style={{ color: '#e8ecf1' }}>{fmt(lineItems.reduce((s, li) => s + li.quantity * li.unit_price, 0))}</span>
+              </div>
             </div>
           )}
 
@@ -128,7 +136,7 @@ export default function POsPage() {
             disabled={!form.po_number || lineItems.length === 0}
             style={{
               width: '100%', padding: '12px', borderRadius: '10px', background: '#22c55e',
-              color: '#fff', fontWeight: 800, fontSize: '14px',
+              color: '#fff', fontWeight: 800, fontSize: '14px', border: 'none',
               opacity: form.po_number && lineItems.length > 0 ? 1 : 0.4,
             }}
           >
@@ -147,23 +155,90 @@ export default function POsPage() {
       {pos.map((po) => {
         const totalQty = po.line_items.reduce((s, l) => s + l.quantity, 0);
         const totalInstalled = po.line_items.reduce((s, l) => s + l.installed, 0);
+        const totalValue = po.line_items.reduce((s, l) => s + l.quantity * l.unit_price, 0);
+        const installedValue = po.line_items.reduce((s, l) => s + l.installed * l.unit_price, 0);
         const pct = totalQty > 0 ? (totalInstalled / totalQty) * 100 : 0;
+        const isExpanded = expandedPo === po.id;
         return (
-          <div key={po.id} style={{ background: '#141e2b', border: '1px solid #1e2d3d', borderRadius: '10px', padding: '12px', marginBottom: '6px' }}>
-            <div style={{ fontWeight: 800, fontSize: '15px' }}>PO #{po.po_number}</div>
-            <div style={{ fontSize: '12px', color: '#4a5f78', marginTop: '1px' }}>
-              {po.customer} • {po.line_items.length} items
-              {po.status === 'complete' && <span style={{ color: '#4ade80', marginLeft: '6px' }}>✓ Complete</span>}
-            </div>
-            <div style={{ marginTop: '8px' }}>
-              <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '11px', marginBottom: '3px' }}>
-                <span style={{ color: '#4a5f78' }}>Progress</span>
-                <span style={{ color: pct >= 100 ? '#4ade80' : '#60a5fa', fontWeight: 700 }}>{totalInstalled}/{totalQty}</span>
+          <div key={po.id} style={{ background: '#141e2b', border: '1px solid ' + (isExpanded ? '#2a4a6f' : '#1e2d3d'), borderRadius: '10px', marginBottom: '6px', overflow: 'hidden' }}>
+            <div
+              onClick={() => setExpandedPo(isExpanded ? null : po.id)}
+              style={{ padding: '12px', cursor: 'pointer' }}
+            >
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'start' }}>
+                <div>
+                  <div style={{ fontWeight: 800, fontSize: '15px' }}>PO #{po.po_number}</div>
+                  <div style={{ fontSize: '12px', color: '#4a5f78', marginTop: '1px' }}>
+                    {po.customer} • {po.line_items.length} item{po.line_items.length !== 1 ? 's' : ''}
+                    {po.status === 'complete' && <span style={{ color: '#4ade80', marginLeft: '6px' }}>✓ Complete</span>}
+                  </div>
+                </div>
+                <div style={{ textAlign: 'right' }}>
+                  <div style={{ fontWeight: 800, fontSize: '14px', color: '#e8ecf1' }}>{fmt(totalValue)}</div>
+                  <div style={{ fontSize: '10px', color: '#4a5f78', marginTop: '1px' }}>{isExpanded ? '▲' : '▼'} Details</div>
+                </div>
               </div>
-              <div style={{ height: '6px', background: '#1e2d3d', borderRadius: '3px' }}>
-                <div style={{ height: '100%', width: `${Math.min(pct, 100)}%`, background: pct >= 100 ? '#22c55e' : '#3b82f6', borderRadius: '3px' }} />
+              <div style={{ marginTop: '8px' }}>
+                <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '11px', marginBottom: '3px' }}>
+                  <span style={{ color: '#4a5f78' }}>Progress</span>
+                  <span style={{ color: pct >= 100 ? '#4ade80' : '#60a5fa', fontWeight: 700 }}>{totalInstalled}/{totalQty}</span>
+                </div>
+                <div style={{ height: '6px', background: '#1e2d3d', borderRadius: '3px' }}>
+                  <div style={{ height: '100%', width: `${Math.min(pct, 100)}%`, background: pct >= 100 ? '#22c55e' : '#3b82f6', borderRadius: '3px', transition: 'width 0.3s' }} />
+                </div>
               </div>
             </div>
+
+            {isExpanded && (
+              <div style={{ borderTop: '1px solid #1e2d3d', padding: '10px 12px' }}>
+                {/* Header row */}
+                <div style={{ display: 'grid', gridTemplateColumns: '1fr 50px 50px 70px', gap: '4px', fontSize: '9px', fontWeight: 700, color: '#4a5f78', textTransform: 'uppercase', letterSpacing: '0.5px', paddingBottom: '6px', borderBottom: '1px solid #1e2d3d' }}>
+                  <div>Part #</div>
+                  <div style={{ textAlign: 'center' }}>Qty</div>
+                  <div style={{ textAlign: 'center' }}>Done</div>
+                  <div style={{ textAlign: 'right' }}>Line Total</div>
+                </div>
+
+                {/* Line items */}
+                {po.line_items.map((li) => {
+                  const lineTotal = li.quantity * li.unit_price;
+                  const linePct = li.quantity > 0 ? (li.installed / li.quantity) * 100 : 0;
+                  return (
+                    <div key={li.id} style={{ display: 'grid', gridTemplateColumns: '1fr 50px 50px 70px', gap: '4px', alignItems: 'center', padding: '8px 0', borderBottom: '1px solid rgba(30,45,61,0.5)', fontSize: '12px' }}>
+                      <div>
+                        <div style={{ fontWeight: 700, color: '#e8ecf1' }}>{li.part_number}</div>
+                        <div style={{ fontSize: '10px', color: '#4a5f78' }}>{fmt(li.unit_price)} ea</div>
+                      </div>
+                      <div style={{ textAlign: 'center', fontWeight: 700, color: '#e8ecf1' }}>{li.quantity}</div>
+                      <div style={{ textAlign: 'center', fontWeight: 700, color: linePct >= 100 ? '#4ade80' : linePct > 0 ? '#60a5fa' : '#4a5f78' }}>{li.installed}</div>
+                      <div style={{ textAlign: 'right', fontWeight: 700, color: '#e8ecf1' }}>{fmt(lineTotal)}</div>
+                    </div>
+                  );
+                })}
+
+                {/* Totals */}
+                <div style={{ display: 'grid', gridTemplateColumns: '1fr 50px 50px 70px', gap: '4px', paddingTop: '8px', fontSize: '12px', fontWeight: 800 }}>
+                  <div style={{ color: '#4a5f78' }}>TOTAL</div>
+                  <div style={{ textAlign: 'center', color: '#e8ecf1' }}>{totalQty}</div>
+                  <div style={{ textAlign: 'center', color: pct >= 100 ? '#4ade80' : '#60a5fa' }}>{totalInstalled}</div>
+                  <div style={{ textAlign: 'right', color: '#e8ecf1' }}>{fmt(totalValue)}</div>
+                </div>
+
+                {totalInstalled > 0 && (
+                  <div style={{ display: 'flex', justifyContent: 'space-between', marginTop: '8px', paddingTop: '8px', borderTop: '1px solid #1e2d3d', fontSize: '11px' }}>
+                    <span style={{ color: '#4a5f78' }}>Installed value</span>
+                    <span style={{ color: '#4ade80', fontWeight: 700 }}>{fmt(installedValue)}</span>
+                  </div>
+                )}
+
+                {totalValue - installedValue > 0 && (
+                  <div style={{ display: 'flex', justifyContent: 'space-between', marginTop: '4px', fontSize: '11px' }}>
+                    <span style={{ color: '#4a5f78' }}>Remaining</span>
+                    <span style={{ color: '#f59e0b', fontWeight: 700 }}>{fmt(totalValue - installedValue)}</span>
+                  </div>
+                )}
+              </div>
+            )}
           </div>
         );
       })}
