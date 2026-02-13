@@ -19,6 +19,8 @@ export default function ScanPage() {
   const [result, setResult] = useState<any>(null);
   const [confirmed, setConfirmed] = useState(false);
   const [savedVehicleId, setSavedVehicleId] = useState<string | null>(null);
+  const [poWarning, setPoWarning] = useState('');
+  const [poMatch, setPoMatch] = useState('');
   const [mode, setMode] = useState<'camera' | 'text'>('text');
   const [cameraActive, setCameraActive] = useState(false);
   const [cameraError, setCameraError] = useState('');
@@ -187,6 +189,35 @@ export default function ScanPage() {
     if (!result || !user) return;
     var v = result.vin;
     var vehicle = result.vehicle;
+    var matchedPoLineId: string | null = null;
+    var matchedPoNumber: string | null = null;
+
+    setPoWarning('');
+    setPoMatch('');
+    setError('');
+
+    // Auto-match to open PO if we have a part number
+    if (activePart) {
+      // Find open PO line items matching this part number with remaining quantity
+      var { data: poLines } = await supabase
+        .from('po_line_items')
+        .select('*, purchase_orders!inner(id, po_number, status)')
+        .eq('part_number', activePart.part_number)
+        .eq('purchase_orders.status', 'open');
+
+      var availableLine = (poLines || []).find(function(line: any) {
+        return line.installed < line.quantity;
+      });
+
+      if (availableLine) {
+        matchedPoLineId = availableLine.id;
+        matchedPoNumber = (availableLine as any).purchase_orders.po_number;
+        setPoMatch('PO #' + matchedPoNumber + ' (' + (availableLine.installed + 1) + '/' + availableLine.quantity + ')');
+      } else {
+        setPoWarning('No open PO found for part ' + activePart.part_number);
+      }
+    }
+
     var insertResult = await supabase
       .from('scanned_vehicles')
       .insert({
@@ -203,14 +234,35 @@ export default function ScanPage() {
         part_number: activePart?.part_number || null,
         customer: activePart?.customer || null,
         end_customer: activePart?.end_customer || null,
+        po_line_item_id: matchedPoLineId,
         scanned_by: user.id,
       })
       .select()
       .single();
     if (insertResult.error) { setError('Failed to save: ' + insertResult.error.message); return; }
-    if (activePart) {
-      await supabase.rpc('decrement_po_line', { p_part_number: activePart.part_number });
+
+    // Increment installed count on the matched PO line
+    if (matchedPoLineId) {
+      await supabase.rpc('increment_po_installed', { p_line_id: matchedPoLineId });
+
+      // Check if entire PO is now fulfilled
+      var matchedLine = (poLines || []).find(function(l: any) { return l.id === matchedPoLineId; });
+      if (matchedLine) {
+        var poId = (matchedLine as any).purchase_orders.id;
+        var { data: allLines } = await supabase
+          .from('po_line_items')
+          .select('quantity, installed')
+          .eq('po_id', poId);
+        var allFulfilled = (allLines || []).every(function(l: any) {
+          return l.installed >= l.quantity;
+        });
+        if (allFulfilled) {
+          await supabase.from('purchase_orders').update({ status: 'complete' }).eq('id', poId);
+          setPoMatch(function(prev: string) { return prev + ' - PO COMPLETE!'; });
+        }
+      }
     }
+
     setSavedVehicleId(insertResult.data.id);
     setConfirmed(true);
   };
@@ -221,6 +273,8 @@ export default function ScanPage() {
     setVin('');
     setSavedVehicleId(null);
     setError('');
+    setPoWarning('');
+    setPoMatch('');
     setLastScanned('');
     foundVinRef.current = false;
     setScanCount(0);
@@ -303,10 +357,16 @@ export default function ScanPage() {
   if (confirmed) {
     return (
       <div style={{ textAlign: 'center', padding: '28px 0' }}>
-        <div style={{ width: '64px', height: '64px', borderRadius: '50%', background: 'rgba(34,197,94,0.12)', display: 'flex', alignItems: 'center', justifyContent: 'center', margin: '0 auto 14px', fontSize: '30px', color: '#4ade80' }}>OK</div>
+        <div style={{ width: '64px', height: '64px', borderRadius: '50%', background: poWarning ? 'rgba(251,191,36,0.12)' : 'rgba(34,197,94,0.12)', display: 'flex', alignItems: 'center', justifyContent: 'center', margin: '0 auto 14px', fontSize: '30px', color: poWarning ? '#fbbf24' : '#4ade80' }}>{poWarning ? '!' : 'OK'}</div>
         <div style={{ fontSize: '18px', fontWeight: 800 }}>Vehicle Recorded</div>
         <div style={{ color: '#6b7a8d', fontSize: '13px', marginTop: '4px' }}>{title}</div>
         <div style={{ fontFamily: 'monospace', fontSize: '11px', color: '#4a5f78' }}>{result.vin}</div>
+        {poMatch && (
+          <div style={{ marginTop: '8px', padding: '8px 12px', background: 'rgba(34,197,94,0.06)', border: '1px solid rgba(34,197,94,0.2)', borderRadius: '8px', color: '#4ade80', fontSize: '12px', fontWeight: 700 }}>{poMatch}</div>
+        )}
+        {poWarning && (
+          <div style={{ marginTop: '8px', padding: '8px 12px', background: 'rgba(251,191,36,0.06)', border: '1px solid rgba(251,191,36,0.2)', borderRadius: '8px', color: '#fbbf24', fontSize: '12px', fontWeight: 700 }}>{poWarning}</div>
+        )}
         <div style={{ marginTop: '20px', display: 'flex', flexDirection: 'column', gap: '8px' }}>
           <button onClick={() => router.push('/photos?id=' + savedVehicleId)} style={{ width: '100%', padding: '14px', borderRadius: '10px', background: '#8b5cf6', color: '#fff', fontWeight: 800, fontSize: '14px', border: 'none' }}>Add Completion Photos</button>
           <button onClick={() => resetScan()} style={{ width: '100%', padding: '16px', borderRadius: '10px', background: '#3b82f6', color: '#fff', fontWeight: 800, fontSize: '16px', border: 'none' }}>Scan Next VIN</button>
