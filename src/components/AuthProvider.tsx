@@ -1,7 +1,7 @@
 'use client';
 
 import { createContext, useContext, useEffect, useState, useRef, ReactNode } from 'react';
-import { createClient, createDataClient } from '@/lib/supabase-browser';
+import { createClient } from '@/lib/supabase-browser';
 import type { User } from '@supabase/supabase-js';
 import type { Profile } from '@/lib/types';
 
@@ -23,7 +23,6 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const [loading, setLoading] = useState(true);
   const mountedRef = useRef(true);
   const supabase = createClient();
-  const dataSupabase = createDataClient();
 
   useEffect(() => {
     mountedRef.current = true;
@@ -47,10 +46,10 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       // Set loading false immediately — don't wait for profile
       if (mountedRef.current) setLoading(false);
 
-      // Fetch profile in background using data client (no abort issues)
+      // Fetch profile in background
       if (u) {
         try {
-          const { data: profileData } = await dataSupabase
+          const { data: profileData } = await supabase
             .from('profiles')
             .select('*')
             .eq('id', u.id)
