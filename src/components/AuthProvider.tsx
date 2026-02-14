@@ -26,64 +26,30 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
   useEffect(() => {
     mountedRef.current = true;
-    console.log('[AUTH] Starting auth check...');
 
-    const getUser = async () => {
-      try {
-        console.log('[AUTH] Calling getSession...');
-        const { data, error } = await supabase.auth.getSession();
-        console.log('[AUTH] getSession returned:', { hasSession: !!data?.session, error });
-        
-        if (!mountedRef.current) {
-          console.log('[AUTH] Component unmounted, bailing');
-          return;
-        }
-
-        const u = data?.session?.user ?? null;
-        console.log('[AUTH] User:', u?.email || 'none');
-        setUser(u);
-
-        if (u) {
-          console.log('[AUTH] Fetching profile...');
-          const { data: profileData, error: profileError } = await supabase
-            .from('profiles')
-            .select('*')
-            .eq('id', u.id)
-            .maybeSingle();
-          console.log('[AUTH] Profile result:', { profileData, profileError });
-          if (mountedRef.current) setProfile(profileData);
-        }
-      } catch (e: any) {
-        console.error('[AUTH] Error:', e.name, e.message);
-      }
-      console.log('[AUTH] Setting loading to false');
-      if (mountedRef.current) setLoading(false);
-    };
-    getUser();
-
+    // Only use onAuthStateChange — getSession() hangs in this setup
     const { data: { subscription } } = supabase.auth.onAuthStateChange(async (_event, session) => {
-      console.log('[AUTH] Auth state changed:', _event);
       if (!mountedRef.current) return;
       try {
-        setUser(session?.user ?? null);
-        if (session?.user) {
+        const u = session?.user ?? null;
+        setUser(u);
+        if (u) {
           const { data: profileData } = await supabase
             .from('profiles')
             .select('*')
-            .eq('id', session.user.id)
+            .eq('id', u.id)
             .maybeSingle();
           if (mountedRef.current) setProfile(profileData);
         } else {
           setProfile(null);
         }
       } catch (e: any) {
-        console.error('[AUTH] State change error:', e.name, e.message);
+        console.error('[AUTH] Error:', e.name, e.message);
       }
       if (mountedRef.current) setLoading(false);
     });
 
     return () => {
-      console.log('[AUTH] Cleanup - unmounting');
       mountedRef.current = false;
       subscription.unsubscribe();
     };
