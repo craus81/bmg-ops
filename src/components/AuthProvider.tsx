@@ -1,6 +1,6 @@
 'use client';
 
-import { createContext, useContext, useEffect, useState, ReactNode } from 'react';
+import { createContext, useContext, useEffect, useState, useRef, ReactNode } from 'react';
 import { createClient } from '@/lib/supabase-browser';
 import type { User } from '@supabase/supabase-js';
 import type { Profile } from '@/lib/types';
@@ -21,16 +21,17 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const [user, setUser] = useState<User | null>(null);
   const [profile, setProfile] = useState<Profile | null>(null);
   const [loading, setLoading] = useState(true);
+  const mountedRef = useRef(true);
   const supabase = createClient();
 
   useEffect(() => {
-    let cancelled = false;
+    mountedRef.current = true;
 
     const getUser = async () => {
       try {
         const { data: { session } } = await supabase.auth.getSession();
+        if (!mountedRef.current) return;
         const u = session?.user ?? null;
-        if (cancelled) return;
         setUser(u);
         if (u) {
           const { data } = await supabase
@@ -38,19 +39,20 @@ export function AuthProvider({ children }: { children: ReactNode }) {
             .select('*')
             .eq('id', u.id)
             .maybeSingle();
-          if (!cancelled) setProfile(data);
+          if (!mountedRef.current) return;
+          setProfile(data);
         }
       } catch (e: any) {
-        if (e?.name === 'AbortError') return;
+        if (!mountedRef.current) return;
         console.error('Auth init error:', e);
       }
-      if (!cancelled) setLoading(false);
+      if (mountedRef.current) setLoading(false);
     };
     getUser();
 
-    const { data: { subscription } } = supabase.auth.onAuthStateChange(async (event, session) => {
+    const { data: { subscription } } = supabase.auth.onAuthStateChange(async (_event, session) => {
+      if (!mountedRef.current) return;
       try {
-        if (cancelled) return;
         setUser(session?.user ?? null);
         if (session?.user) {
           const { data } = await supabase
@@ -58,19 +60,20 @@ export function AuthProvider({ children }: { children: ReactNode }) {
             .select('*')
             .eq('id', session.user.id)
             .maybeSingle();
-          if (!cancelled) setProfile(data);
+          if (!mountedRef.current) return;
+          setProfile(data);
         } else {
           setProfile(null);
         }
       } catch (e: any) {
-        if (e?.name === 'AbortError') return;
+        if (!mountedRef.current) return;
         console.error('Auth state error:', e);
       }
-      if (!cancelled) setLoading(false);
+      if (mountedRef.current) setLoading(false);
     });
 
     return () => {
-      cancelled = true;
+      mountedRef.current = false;
       subscription.unsubscribe();
     };
   }, []);
