@@ -26,11 +26,13 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
   const loadProfile = async (u: User) => {
     try {
+      console.log('[AUTH] Loading profile for', u.id);
       const { data } = await supabase
         .from('profiles')
         .select('*')
         .eq('id', u.id)
         .maybeSingle();
+      console.log('[AUTH] Profile result:', data?.full_name || 'null');
       if (mountedRef.current) setProfile(data);
     } catch (e: any) {
       console.error('[AUTH] Profile error:', e.message);
@@ -38,12 +40,14 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   };
 
   useEffect(() => {
+    console.log('[AUTH] Mounting');
     mountedRef.current = true;
 
-    // Actively check session on mount
     const init = async () => {
       try {
-        const { data: { session } } = await supabase.auth.getSession();
+        console.log('[AUTH] Calling getSession...');
+        const { data: { session }, error } = await supabase.auth.getSession();
+        console.log('[AUTH] getSession result:', session ? 'HAS SESSION' : 'NO SESSION', error?.message || '');
         if (!mountedRef.current) return;
         const u = session?.user ?? null;
         setUser(u);
@@ -51,12 +55,13 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       } catch (e: any) {
         console.error('[AUTH] Init error:', e.message);
       }
+      console.log('[AUTH] Setting loading=false');
       if (mountedRef.current) setLoading(false);
     };
     init();
 
-    // Listen for changes (sign in, sign out, token refresh)
     const { data: { subscription } } = supabase.auth.onAuthStateChange(async (event, session) => {
+      console.log('[AUTH] onAuthStateChange:', event);
       if (!mountedRef.current) return;
       const u = session?.user ?? null;
       setUser(u);
@@ -73,6 +78,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       subscription.unsubscribe();
     };
   }, []);
+
+  console.log('[AUTH] Render - loading:', loading, 'user:', user?.id || 'null');
 
   const signOut = async () => {
     await supabase.auth.signOut();
