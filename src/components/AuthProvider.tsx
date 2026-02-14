@@ -1,7 +1,7 @@
 'use client';
 
 import { createContext, useContext, useEffect, useState, useRef, ReactNode } from 'react';
-import { createClient } from '@/lib/supabase-browser';
+import { createClient, createDataClient } from '@/lib/supabase-browser';
 import type { User } from '@supabase/supabase-js';
 import type { Profile } from '@/lib/types';
 
@@ -23,10 +23,12 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const [loading, setLoading] = useState(true);
   const mountedRef = useRef(true);
   const supabase = createClient();
+  const dataSupabase = createDataClient();
 
   useEffect(() => {
     mountedRef.current = true;
 
+    // Safety timeout
     const timeout = setTimeout(() => {
       if (mountedRef.current && loading) {
         console.log('[AUTH] Timeout fallback');
@@ -42,17 +44,18 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       const u = session?.user ?? null;
       setUser(u);
 
-      // Fetch profile separately — don't block loading on it
+      // Set loading false immediately — don't wait for profile
       if (mountedRef.current) setLoading(false);
 
+      // Fetch profile in background using data client (no abort issues)
       if (u) {
         try {
-          const { data: profileData, error } = await supabase
+          const { data: profileData } = await dataSupabase
             .from('profiles')
             .select('*')
             .eq('id', u.id)
             .maybeSingle();
-          console.log('[AUTH] Profile:', profileData?.full_name || 'none', 'error:', error);
+          console.log('[AUTH] Profile loaded:', profileData?.full_name);
           if (mountedRef.current) setProfile(profileData);
         } catch (e: any) {
           console.error('[AUTH] Profile error:', e.name, e.message);

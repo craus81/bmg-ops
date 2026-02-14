@@ -41,7 +41,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
 
   // Load active clock session on mount
   useEffect(() => {
-    if (!user) {
+    if (!user) { setAppLoading(false); return; }
       setAppLoading(false);
       return;
     }
