@@ -24,49 +24,52 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const mountedRef = useRef(true);
   const supabase = createClient();
 
+  const loadProfile = async (u: User) => {
+    try {
+      const { data } = await supabase
+        .from('profiles')
+        .select('*')
+        .eq('id', u.id)
+        .maybeSingle();
+      if (mountedRef.current) setProfile(data);
+    } catch (e: any) {
+      console.error('[AUTH] Profile error:', e.message);
+    }
+  };
+
   useEffect(() => {
     mountedRef.current = true;
 
-    // Safety timeout
-    const timeout = setTimeout(() => {
-      if (mountedRef.current && loading) {
-        console.log('[AUTH] Timeout fallback');
-        setLoading(false);
+    // Actively check session on mount
+    const init = async () => {
+      try {
+        const { data: { session } } = await supabase.auth.getSession();
+        if (!mountedRef.current) return;
+        const u = session?.user ?? null;
+        setUser(u);
+        if (u) await loadProfile(u);
+      } catch (e: any) {
+        console.error('[AUTH] Init error:', e.message);
       }
-    }, 3000);
+      if (mountedRef.current) setLoading(false);
+    };
+    init();
 
+    // Listen for changes (sign in, sign out, token refresh)
     const { data: { subscription } } = supabase.auth.onAuthStateChange(async (event, session) => {
       if (!mountedRef.current) return;
-      console.log('[AUTH] Event:', event);
-      clearTimeout(timeout);
-
       const u = session?.user ?? null;
       setUser(u);
-
-      // Set loading false immediately — don't wait for profile
-      if (mountedRef.current) setLoading(false);
-
-      // Fetch profile in background
       if (u) {
-        try {
-          const { data: profileData } = await supabase
-            .from('profiles')
-            .select('*')
-            .eq('id', u.id)
-            .maybeSingle();
-          console.log('[AUTH] Profile loaded:', profileData?.full_name);
-          if (mountedRef.current) setProfile(profileData);
-        } catch (e: any) {
-          console.error('[AUTH] Profile error:', e.name, e.message);
-        }
+        await loadProfile(u);
       } else {
         setProfile(null);
       }
+      if (mountedRef.current) setLoading(false);
     });
 
     return () => {
       mountedRef.current = false;
-      clearTimeout(timeout);
       subscription.unsubscribe();
     };
   }, []);
