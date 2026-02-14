@@ -22,44 +22,44 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const [profile, setProfile] = useState<Profile | null>(null);
   const [loading, setLoading] = useState(true);
   const mountedRef = useRef(true);
-  const initializedRef = useRef(false);
   const supabase = createClient();
 
   useEffect(() => {
     mountedRef.current = true;
 
-    // Safety timeout — if nothing fires in 3 seconds, stop loading
     const timeout = setTimeout(() => {
-      if (mountedRef.current && loading && !initializedRef.current) {
-        console.log('[AUTH] Timeout — no auth event received, setting loading false');
-        initializedRef.current = true;
+      if (mountedRef.current && loading) {
+        console.log('[AUTH] Timeout fallback');
         setLoading(false);
       }
     }, 3000);
 
     const { data: { subscription } } = supabase.auth.onAuthStateChange(async (event, session) => {
       if (!mountedRef.current) return;
-      console.log('[AUTH] Event:', event, 'User:', session?.user?.email || 'none');
-      initializedRef.current = true;
+      console.log('[AUTH] Event:', event);
       clearTimeout(timeout);
 
-      try {
-        const u = session?.user ?? null;
-        setUser(u);
-        if (u) {
-          const { data: profileData } = await supabase
+      const u = session?.user ?? null;
+      setUser(u);
+
+      // Fetch profile separately — don't block loading on it
+      if (mountedRef.current) setLoading(false);
+
+      if (u) {
+        try {
+          const { data: profileData, error } = await supabase
             .from('profiles')
             .select('*')
             .eq('id', u.id)
             .maybeSingle();
+          console.log('[AUTH] Profile:', profileData?.full_name || 'none', 'error:', error);
           if (mountedRef.current) setProfile(profileData);
-        } else {
-          setProfile(null);
+        } catch (e: any) {
+          console.error('[AUTH] Profile error:', e.name, e.message);
         }
-      } catch (e: any) {
-        console.error('[AUTH] Error:', e.name, e.message);
+      } else {
+        setProfile(null);
       }
-      if (mountedRef.current) setLoading(false);
     });
 
     return () => {
