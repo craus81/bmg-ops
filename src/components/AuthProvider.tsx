@@ -26,53 +26,64 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
   useEffect(() => {
     mountedRef.current = true;
+    console.log('[AUTH] Starting auth check...');
 
     const getUser = async () => {
       try {
-        const { data: { session } } = await supabase.auth.getSession();
-        if (!mountedRef.current) return;
-        const u = session?.user ?? null;
+        console.log('[AUTH] Calling getSession...');
+        const { data, error } = await supabase.auth.getSession();
+        console.log('[AUTH] getSession returned:', { hasSession: !!data?.session, error });
+        
+        if (!mountedRef.current) {
+          console.log('[AUTH] Component unmounted, bailing');
+          return;
+        }
+
+        const u = data?.session?.user ?? null;
+        console.log('[AUTH] User:', u?.email || 'none');
         setUser(u);
+
         if (u) {
-          const { data } = await supabase
+          console.log('[AUTH] Fetching profile...');
+          const { data: profileData, error: profileError } = await supabase
             .from('profiles')
             .select('*')
             .eq('id', u.id)
             .maybeSingle();
-          if (!mountedRef.current) return;
-          setProfile(data);
+          console.log('[AUTH] Profile result:', { profileData, profileError });
+          if (mountedRef.current) setProfile(profileData);
         }
       } catch (e: any) {
-        if (!mountedRef.current) return;
-        console.error('Auth init error:', e);
+        console.error('[AUTH] Error:', e.name, e.message);
       }
+      console.log('[AUTH] Setting loading to false');
       if (mountedRef.current) setLoading(false);
     };
     getUser();
 
     const { data: { subscription } } = supabase.auth.onAuthStateChange(async (_event, session) => {
+      console.log('[AUTH] Auth state changed:', _event);
       if (!mountedRef.current) return;
       try {
         setUser(session?.user ?? null);
         if (session?.user) {
-          const { data } = await supabase
+          const { data: profileData } = await supabase
             .from('profiles')
             .select('*')
             .eq('id', session.user.id)
             .maybeSingle();
-          if (!mountedRef.current) return;
-          setProfile(data);
+          if (mountedRef.current) setProfile(profileData);
         } else {
           setProfile(null);
         }
       } catch (e: any) {
-        if (!mountedRef.current) return;
-        console.error('Auth state error:', e);
+        console.error('[AUTH] State change error:', e.name, e.message);
       }
       if (mountedRef.current) setLoading(false);
     });
 
     return () => {
+      console.log('[AUTH] Cleanup - unmounting');
       mountedRef.current = false;
       subscription.unsubscribe();
     };
