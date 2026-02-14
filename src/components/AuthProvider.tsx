@@ -22,14 +22,27 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const [profile, setProfile] = useState<Profile | null>(null);
   const [loading, setLoading] = useState(true);
   const mountedRef = useRef(true);
+  const initializedRef = useRef(false);
   const supabase = createClient();
 
   useEffect(() => {
     mountedRef.current = true;
 
-    // Only use onAuthStateChange — getSession() hangs in this setup
-    const { data: { subscription } } = supabase.auth.onAuthStateChange(async (_event, session) => {
+    // Safety timeout — if nothing fires in 3 seconds, stop loading
+    const timeout = setTimeout(() => {
+      if (mountedRef.current && loading && !initializedRef.current) {
+        console.log('[AUTH] Timeout — no auth event received, setting loading false');
+        initializedRef.current = true;
+        setLoading(false);
+      }
+    }, 3000);
+
+    const { data: { subscription } } = supabase.auth.onAuthStateChange(async (event, session) => {
       if (!mountedRef.current) return;
+      console.log('[AUTH] Event:', event, 'User:', session?.user?.email || 'none');
+      initializedRef.current = true;
+      clearTimeout(timeout);
+
       try {
         const u = session?.user ?? null;
         setUser(u);
@@ -51,6 +64,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
     return () => {
       mountedRef.current = false;
+      clearTimeout(timeout);
       subscription.unsubscribe();
     };
   }, []);
