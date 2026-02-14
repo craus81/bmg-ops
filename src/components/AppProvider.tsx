@@ -46,38 +46,42 @@ export function AppProvider({ children }: { children: ReactNode }) {
       return;
     }
     const loadSession = async () => {
-      // Check for active time entry (not clocked out)
-      const { data: entry } = await supabase
-        .from('time_entries')
-        .select('*')
-        .eq('user_id', user.id)
-        .is('clock_out', null)
-        .order('clock_in', { ascending: false })
-        .limit(1)
-        .single();
-
-      if (entry) {
-        setActiveTimeEntry(entry);
-        setClockInTime(entry.clock_in);
-
-        // Load breaks for this entry
-        const { data: breaks } = await supabase
-          .from('time_breaks')
+      try {
+        // Check for active time entry (not clocked out)
+        const { data: entry } = await supabase
+          .from('time_entries')
           .select('*')
-          .eq('time_entry_id', entry.id)
-          .order('break_start', { ascending: true });
+          .eq('user_id', user.id)
+          .is('clock_out', null)
+          .order('clock_in', { ascending: false })
+          .limit(1)
+          .maybeSingle();
 
-        const loadedBreaks = breaks || [];
-        setCurrentBreaks(loadedBreaks);
+        if (entry) {
+          setActiveTimeEntry(entry);
+          setClockInTime(entry.clock_in);
 
-        // Check if currently on break (break with no end)
-        const openBreak = loadedBreaks.find((b: TimeBreak) => !b.break_end);
-        if (openBreak) {
-          setBreakStartTime(openBreak.break_start);
-          setClockStatus('break');
-        } else {
-          setClockStatus('in');
+          // Load breaks for this entry
+          const { data: breaks } = await supabase
+            .from('time_breaks')
+            .select('*')
+            .eq('time_entry_id', entry.id)
+            .order('break_start', { ascending: true });
+
+          const loadedBreaks = breaks || [];
+          setCurrentBreaks(loadedBreaks);
+
+          // Check if currently on break (break with no end)
+          const openBreak = loadedBreaks.find((b: TimeBreak) => !b.break_end);
+          if (openBreak) {
+            setBreakStartTime(openBreak.break_start);
+            setClockStatus('break');
+          } else {
+            setClockStatus('in');
+          }
         }
+      } catch (e: any) {
+        console.error('AppProvider load error:', e);
       }
       setAppLoading(false);
     };

@@ -24,38 +24,55 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const supabase = createClient();
 
   useEffect(() => {
+    let cancelled = false;
+
     const getUser = async () => {
-      const { data: { session } } = await supabase.auth.getSession();
-      const u = session?.user ?? null;
-      setUser(u);
-      if (u) {
-        const { data } = await supabase
-          .from('profiles')
-          .select('*')
-          .eq('id', u.id)
-          .single();
-        setProfile(data);
+      try {
+        const { data: { session } } = await supabase.auth.getSession();
+        const u = session?.user ?? null;
+        if (cancelled) return;
+        setUser(u);
+        if (u) {
+          const { data } = await supabase
+            .from('profiles')
+            .select('*')
+            .eq('id', u.id)
+            .maybeSingle();
+          if (!cancelled) setProfile(data);
+        }
+      } catch (e: any) {
+        if (e?.name === 'AbortError') return;
+        console.error('Auth init error:', e);
       }
-      setLoading(false);
+      if (!cancelled) setLoading(false);
     };
     getUser();
 
     const { data: { subscription } } = supabase.auth.onAuthStateChange(async (event, session) => {
-      setUser(session?.user ?? null);
-      if (session?.user) {
-        const { data } = await supabase
-          .from('profiles')
-          .select('*')
-          .eq('id', session.user.id)
-          .single();
-        setProfile(data);
-      } else {
-        setProfile(null);
+      try {
+        if (cancelled) return;
+        setUser(session?.user ?? null);
+        if (session?.user) {
+          const { data } = await supabase
+            .from('profiles')
+            .select('*')
+            .eq('id', session.user.id)
+            .maybeSingle();
+          if (!cancelled) setProfile(data);
+        } else {
+          setProfile(null);
+        }
+      } catch (e: any) {
+        if (e?.name === 'AbortError') return;
+        console.error('Auth state error:', e);
       }
-      setLoading(false);
+      if (!cancelled) setLoading(false);
     });
 
-    return () => subscription.unsubscribe();
+    return () => {
+      cancelled = true;
+      subscription.unsubscribe();
+    };
   }, []);
 
   const signOut = async () => {
