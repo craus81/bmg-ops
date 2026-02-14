@@ -24,34 +24,34 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const mountedRef = useRef(true);
   const supabase = createClient();
 
-  const loadProfile = async (u: User) => {
-    try {
-      console.log('[AUTH] Loading profile for', u.id);
-      const { data } = await supabase
-        .from('profiles')
-        .select('*')
-        .eq('id', u.id)
-        .maybeSingle();
-      console.log('[AUTH] Profile result:', data?.full_name || 'null');
-      if (mountedRef.current) setProfile(data);
-    } catch (e: any) {
-      console.error('[AUTH] Profile error:', e.message);
-    }
-  };
-
   useEffect(() => {
-    console.log('[AUTH] Mounting');
     mountedRef.current = true;
 
     const init = async () => {
       try {
         console.log('[AUTH] Calling getSession...');
-        const { data: { session }, error } = await supabase.auth.getSession();
+        const { data, error } = await supabase.auth.getSession();
+        const session = data?.session;
         console.log('[AUTH] getSession result:', session ? 'HAS SESSION' : 'NO SESSION', error?.message || '');
         if (!mountedRef.current) return;
         const u = session?.user ?? null;
         setUser(u);
-        if (u) await loadProfile(u);
+
+        // Load profile in background — don't block loading
+        if (u) {
+          supabase
+            .from('profiles')
+            .select('*')
+            .eq('id', u.id)
+            .maybeSingle()
+            .then(({ data: profileData }: any) => {
+              console.log('[AUTH] Profile loaded:', profileData?.full_name || 'null');
+              if (mountedRef.current) setProfile(profileData);
+            })
+            .catch((e: any) => {
+              console.error('[AUTH] Profile error:', e.message);
+            });
+        }
       } catch (e: any) {
         console.error('[AUTH] Init error:', e.message);
       }
@@ -60,22 +60,18 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     };
     init();
 
-    const { data: { subscription } } = supabase.auth.onAuthStateChange(async (event, session) => {
+    const { data } = supabase.auth.onAuthStateChange(async (event: any, session: any) => {
       console.log('[AUTH] onAuthStateChange:', event);
       if (!mountedRef.current) return;
       const u = session?.user ?? null;
       setUser(u);
-      if (u) {
-        await loadProfile(u);
-      } else {
-        setProfile(null);
-      }
+      if (!u) setProfile(null);
       if (mountedRef.current) setLoading(false);
     });
 
     return () => {
       mountedRef.current = false;
-      subscription.unsubscribe();
+      data?.subscription?.unsubscribe();
     };
   }, []);
 
