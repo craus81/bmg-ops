@@ -1,13 +1,22 @@
 'use client';
 
+import { useEffect } from 'react';
+import { useRouter } from 'next/navigation';
 import { AuthProvider, useAuth } from '@/components/AuthProvider';
 import { AppProvider, useApp } from '@/components/AppProvider';
 import Header from '@/components/Header';
 import BottomNav from '@/components/BottomNav';
 
 function AppShell({ children }: { children: React.ReactNode }) {
-  const { loading } = useAuth();
+  const router = useRouter();
+  const { user, loading } = useAuth();
   const { clockStatus, activePart, appLoading } = useApp();
+
+  useEffect(() => {
+    if (!loading && !user) {
+      router.push('/login');
+    }
+  }, [loading, user]);
 
   if (loading || appLoading) {
     return (
@@ -23,6 +32,8 @@ function AppShell({ children }: { children: React.ReactNode }) {
       </div>
     );
   }
+
+  if (!user) return null;
 
   return (
     <div style={{ minHeight: '100vh', paddingBottom: '70px' }}>
