@@ -4,6 +4,7 @@ import { useState, useEffect } from 'react';
 import { useRouter } from 'next/navigation';
 import { createClient } from '@/lib/supabase-browser';
 import { useAuth } from '@/components/AuthProvider';
+import SwipeToDelete from '@/components/SwipeToDelete';
 import type { PurchaseOrder, POLineItem, CatalogItem } from '@/lib/types';
 
 export default function POsPage() {
@@ -16,6 +17,10 @@ export default function POsPage() {
   const [loading, setLoading] = useState(true);
   const [showCreate, setShowCreate] = useState(false);
   const [expandedPo, setExpandedPo] = useState<string | null>(null);
+  const [editPoId, setEditPoId] = useState<string | null>(null);
+  const [editPoForm, setEditPoForm] = useState({ po_number: '', customer: '', status: '' as string });
+  const [editLineId, setEditLineId] = useState<string | null>(null);
+  const [editLineForm, setEditLineForm] = useState({ quantity: '', unit_price: '' });
   const [form, setForm] = useState({ po_number: '', customer: 'Masterack' });
   const [lineItems, setLineItems] = useState<{ catalog_id: string; part_number: string; quantity: number; unit_price: number }[]>([]);
 
@@ -34,7 +39,7 @@ export default function POsPage() {
       setPos(mapped);
 
       const { data: catData } = await supabase.from('catalog').select('*').eq('active', true).order('part_number');
-      setCatalog(catData || []);
+      setCatalog((catData as CatalogItem[]) || []);
       setLoading(false);
     };
     load();
@@ -48,7 +53,6 @@ export default function POsPage() {
 
   const handleCreate = async () => {
     if (!form.po_number || !form.customer || lineItems.length === 0 || !user) return;
-
     const { data: po, error } = await supabase
       .from('purchase_orders')
       .insert({ po_number: form.po_number, customer: form.customer, created_by: user.id })
@@ -62,19 +66,93 @@ export default function POsPage() {
       .insert(lineItems.map((li) => ({ po_id: po.id, ...li })))
       .select();
 
-    setPos((prev) => [{ ...po, line_items: items || [] }, ...prev]);
+    setPos((prev) => [{ ...po, line_items: (items as POLineItem[]) || [] }, ...prev]);
     setForm({ po_number: '', customer: 'Masterack' });
     setLineItems([]);
     setShowCreate(false);
   };
 
-  const toggleExpand = (poId: string) => {
-    setExpandedPo(expandedPo === poId ? null : poId);
+  const handleDeletePO = async (poId: string) => {
+    // Delete line items first, then PO
+    await supabase.from('po_line_items').delete().eq('po_id', poId);
+    const { error } = await supabase.from('purchase_orders').delete().eq('id', poId);
+    if (!error) {
+      setPos((prev) => prev.filter((p) => p.id !== poId));
+    }
   };
 
-  const fmt = (n: number) => {
-    return '$' + n.toFixed(2).replace(/\B(?=(\d{3})+(?!\d))/g, ',');
+  const handleDeleteLineItem = async (lineId: string, poId: string) => {
+    const { error } = await supabase.from('po_line_items').delete().eq('id', lineId);
+    if (!error) {
+      setPos((prev) =>
+        prev.map((po) =>
+          po.id === poId
+            ? { ...po, line_items: po.line_items.filter((li) => li.id !== lineId) }
+            : po
+        )
+      );
+    }
   };
+
+  // PO header edit
+  const startEditPO = (po: PurchaseOrder & { line_items: POLineItem[] }) => {
+    setEditPoId(po.id);
+    setEditPoForm({ po_number: po.po_number, customer: po.customer, status: po.status });
+  };
+
+  const saveEditPO = async () => {
+    if (!editPoId) return;
+    const { error } = await supabase
+      .from('purchase_orders')
+      .update({ po_number: editPoForm.po_number, customer: editPoForm.customer, status: editPoForm.status })
+      .eq('id', editPoId);
+
+    if (!error) {
+      setPos((prev) =>
+        prev.map((po) =>
+          po.id === editPoId
+            ? { ...po, po_number: editPoForm.po_number, customer: editPoForm.customer, status: editPoForm.status as any }
+            : po
+        )
+      );
+      setEditPoId(null);
+    }
+  };
+
+  // Line item edit
+  const startEditLine = (li: POLineItem) => {
+    setEditLineId(li.id);
+    setEditLineForm({ quantity: li.quantity.toString(), unit_price: li.unit_price.toString() });
+  };
+
+  const saveEditLine = async (poId: string) => {
+    if (!editLineId) return;
+    const qty = parseInt(editLineForm.quantity) || 1;
+    const price = parseFloat(editLineForm.unit_price) || 0;
+    const { error } = await supabase
+      .from('po_line_items')
+      .update({ quantity: qty, unit_price: price })
+      .eq('id', editLineId);
+
+    if (!error) {
+      setPos((prev) =>
+        prev.map((po) =>
+          po.id === poId
+            ? { ...po, line_items: po.line_items.map((li) => li.id === editLineId ? { ...li, quantity: qty, unit_price: price } : li) }
+            : po
+        )
+      );
+      setEditLineId(null);
+    }
+  };
+
+  const toggleExpand = (poId: string) => {
+    setExpandedPo(expandedPo === poId ? null : poId);
+    setEditPoId(null);
+    setEditLineId(null);
+  };
+
+  const fmt = (n: number) => '$' + n.toFixed(2).replace(/\B(?=(\d{3})+(?!\d))/g, ',');
 
   if (loading) return <div style={{ textAlign: 'center', padding: '40px', color: '#4a5f78' }}>Loading...</div>;
 
@@ -163,84 +241,161 @@ export default function POsPage() {
         const totalValue = po.line_items.reduce((s, l) => s + l.quantity * l.unit_price, 0);
         const pct = totalQty > 0 ? (totalInstalled / totalQty) * 100 : 0;
         const isExpanded = expandedPo === po.id;
+        const isEditingPO = editPoId === po.id;
         const createdDate = new Date(po.created_at);
 
         return (
-          <div key={po.id} style={{ background: '#141e2b', border: '1px solid #1e2d3d', borderRadius: '10px', marginBottom: '6px', overflow: 'hidden' }}>
-            <div
-              onClick={() => toggleExpand(po.id)}
-              style={{ padding: '12px', cursor: 'pointer' }}
-            >
-              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'start' }}>
-                <div>
-                  <div style={{ fontWeight: 800, fontSize: '15px' }}>PO #{po.po_number}</div>
-                  <div style={{ fontSize: '12px', color: '#4a5f78', marginTop: '1px' }}>
-                    {po.customer} • {po.line_items.length} item{po.line_items.length !== 1 ? 's' : ''}
-                    {po.status === 'complete' && <span style={{ color: '#4ade80', marginLeft: '6px' }}>✓ Complete</span>}
+          <SwipeToDelete
+            key={po.id}
+            onDelete={() => handleDeletePO(po.id)}
+            confirmMessage={`Delete PO #${po.po_number} and all its line items? This cannot be undone.`}
+          >
+            <div style={{ background: '#141e2b', border: '1px solid #1e2d3d', borderRadius: '10px', marginBottom: '6px', overflow: 'hidden' }}>
+              <div
+                onClick={() => toggleExpand(po.id)}
+                style={{ padding: '12px', cursor: 'pointer' }}
+              >
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'start' }}>
+                  <div>
+                    <div style={{ fontWeight: 800, fontSize: '15px' }}>PO #{po.po_number}</div>
+                    <div style={{ fontSize: '12px', color: '#4a5f78', marginTop: '1px' }}>
+                      {po.customer} • {po.line_items.length} item{po.line_items.length !== 1 ? 's' : ''}
+                      {po.status === 'complete' && <span style={{ color: '#4ade80', marginLeft: '6px' }}>✓ Complete</span>}
+                    </div>
+                  </div>
+                  <div style={{ textAlign: 'right' }}>
+                    <div style={{ fontSize: '14px', fontWeight: 800, color: '#60a5fa' }}>{fmt(totalValue)}</div>
+                    <div style={{ fontSize: '10px', color: '#4a5f78', marginTop: '1px' }}>{isExpanded ? '▲' : '▼'} Details</div>
                   </div>
                 </div>
-                <div style={{ textAlign: 'right' }}>
-                  <div style={{ fontSize: '14px', fontWeight: 800, color: '#60a5fa' }}>{fmt(totalValue)}</div>
-                  <div style={{ fontSize: '10px', color: '#4a5f78', marginTop: '1px' }}>{isExpanded ? '▲' : '▼'} Details</div>
+                <div style={{ marginTop: '8px' }}>
+                  <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '11px', marginBottom: '3px' }}>
+                    <span style={{ color: '#4a5f78' }}>Progress</span>
+                    <span style={{ color: pct >= 100 ? '#4ade80' : '#60a5fa', fontWeight: 700 }}>{totalInstalled}/{totalQty}</span>
+                  </div>
+                  <div style={{ height: '6px', background: '#1e2d3d', borderRadius: '3px' }}>
+                    <div style={{ height: '100%', width: `${Math.min(pct, 100)}%`, background: pct >= 100 ? '#22c55e' : '#3b82f6', borderRadius: '3px', transition: 'width 0.3s' }} />
+                  </div>
                 </div>
               </div>
-              <div style={{ marginTop: '8px' }}>
-                <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '11px', marginBottom: '3px' }}>
-                  <span style={{ color: '#4a5f78' }}>Progress</span>
-                  <span style={{ color: pct >= 100 ? '#4ade80' : '#60a5fa', fontWeight: 700 }}>{totalInstalled}/{totalQty}</span>
-                </div>
-                <div style={{ height: '6px', background: '#1e2d3d', borderRadius: '3px' }}>
-                  <div style={{ height: '100%', width: `${Math.min(pct, 100)}%`, background: pct >= 100 ? '#22c55e' : '#3b82f6', borderRadius: '3px', transition: 'width 0.3s' }} />
-                </div>
-              </div>
-            </div>
 
-            {isExpanded && (
-              <div style={{ borderTop: '1px solid #1e2d3d', padding: '10px 12px' }}>
-                <div style={{ fontSize: '10px', color: '#4a5f78', marginBottom: '2px' }}>
-                  Created {createdDate.toLocaleDateString([], { month: 'short', day: 'numeric', year: 'numeric' })}
-                </div>
-
-                {/* Column headers */}
-                <div style={{ display: 'flex', gap: '4px', padding: '8px 0 4px', borderBottom: '1px solid #1e2d3d', fontSize: '10px', fontWeight: 700, color: '#4a5f78', textTransform: 'uppercase', letterSpacing: '0.3px' }}>
-                  <div style={{ flex: 1 }}>Part #</div>
-                  <div style={{ width: '36px', textAlign: 'center' }}>Qty</div>
-                  <div style={{ width: '42px', textAlign: 'center' }}>Done</div>
-                  <div style={{ width: '65px', textAlign: 'right' }}>Price</div>
-                  <div style={{ width: '75px', textAlign: 'right' }}>Line Total</div>
-                </div>
-
-                {/* Line items */}
-                {po.line_items.map((li) => {
-                  const lineTotal = li.quantity * li.unit_price;
-                  const linePct = li.quantity > 0 ? (li.installed / li.quantity) * 100 : 0;
-                  return (
-                    <div key={li.id} style={{ display: 'flex', gap: '4px', padding: '8px 0', borderBottom: '1px solid rgba(30,45,61,0.5)', alignItems: 'center', fontSize: '12px' }}>
-                      <div style={{ flex: 1 }}>
-                        <div style={{ fontWeight: 700, color: '#e8ecf1' }}>{li.part_number}</div>
-                        <div style={{ height: '3px', background: '#1e2d3d', borderRadius: '2px', marginTop: '3px', width: '80%' }}>
-                          <div style={{ height: '100%', width: `${Math.min(linePct, 100)}%`, background: linePct >= 100 ? '#22c55e' : '#3b82f6', borderRadius: '2px' }} />
+              {isExpanded && (
+                <div style={{ borderTop: '1px solid #1e2d3d', padding: '10px 12px' }}>
+                  {/* PO Header Edit */}
+                  {isEditingPO ? (
+                    <div style={{ marginBottom: '10px', padding: '8px', background: 'rgba(59,130,246,0.05)', borderRadius: '8px' }}>
+                      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '6px' }}>
+                        <div>
+                          <label style={labelStyle}>PO Number</label>
+                          <input value={editPoForm.po_number} onChange={(e) => setEditPoForm({ ...editPoForm, po_number: e.target.value })} style={inputStyle} />
+                        </div>
+                        <div>
+                          <label style={labelStyle}>Customer</label>
+                          <select value={editPoForm.customer} onChange={(e) => setEditPoForm({ ...editPoForm, customer: e.target.value })} style={inputStyle}>
+                            <option>Masterack</option><option>Knapheide</option><option>Bodewell</option><option>Designs That Stick</option>
+                          </select>
                         </div>
                       </div>
-                      <div style={{ width: '36px', textAlign: 'center', color: '#6b7a8d', fontWeight: 600 }}>{li.quantity}</div>
-                      <div style={{ width: '42px', textAlign: 'center', fontWeight: 700, color: li.installed >= li.quantity ? '#4ade80' : '#fbbf24' }}>{li.installed}</div>
-                      <div style={{ width: '65px', textAlign: 'right', color: '#6b7a8d', fontSize: '11px' }}>{fmt(li.unit_price)}</div>
-                      <div style={{ width: '75px', textAlign: 'right', fontWeight: 700, color: '#e8ecf1' }}>{fmt(lineTotal)}</div>
+                      <div style={{ marginTop: '6px' }}>
+                        <label style={labelStyle}>Status</label>
+                        <select value={editPoForm.status} onChange={(e) => setEditPoForm({ ...editPoForm, status: e.target.value })} style={inputStyle}>
+                          <option value="open">Open</option><option value="complete">Complete</option><option value="cancelled">Cancelled</option>
+                        </select>
+                      </div>
+                      <div style={{ display: 'flex', gap: '6px', marginTop: '8px' }}>
+                        <button onClick={saveEditPO} style={{ flex: 1, padding: '8px', borderRadius: '8px', background: '#22c55e', color: '#fff', fontSize: '12px', fontWeight: 700, border: 'none' }}>Save</button>
+                        <button onClick={() => setEditPoId(null)} style={{ flex: 1, padding: '8px', borderRadius: '8px', background: 'transparent', border: '1px solid #1e2d3d', color: '#6b7a8d', fontSize: '12px', fontWeight: 700 }}>Cancel</button>
+                      </div>
                     </div>
-                  );
-                })}
+                  ) : (
+                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '6px' }}>
+                      <div style={{ fontSize: '10px', color: '#4a5f78' }}>
+                        Created {createdDate.toLocaleDateString([], { month: 'short', day: 'numeric', year: 'numeric' })}
+                      </div>
+                      <button
+                        onClick={(e) => { e.stopPropagation(); startEditPO(po); }}
+                        style={{ padding: '3px 8px', borderRadius: '6px', background: 'rgba(59,130,246,0.1)', border: '1px solid rgba(59,130,246,0.25)', color: '#60a5fa', fontSize: '10px', fontWeight: 700 }}
+                      >
+                        ✏️ Edit PO
+                      </button>
+                    </div>
+                  )}
 
-                {/* Totals */}
-                <div style={{ display: 'flex', gap: '4px', padding: '10px 0 4px', fontSize: '13px' }}>
-                  <div style={{ flex: 1, fontWeight: 800, color: '#e8ecf1' }}>Total</div>
-                  <div style={{ width: '36px', textAlign: 'center', fontWeight: 700, color: '#6b7a8d' }}>{totalQty}</div>
-                  <div style={{ width: '42px', textAlign: 'center', fontWeight: 700, color: totalInstalled >= totalQty ? '#4ade80' : '#60a5fa' }}>{totalInstalled}</div>
-                  <div style={{ width: '65px' }}></div>
-                  <div style={{ width: '75px', textAlign: 'right', fontWeight: 800, color: '#60a5fa' }}>{fmt(totalValue)}</div>
+                  {/* Column headers */}
+                  <div style={{ display: 'flex', gap: '4px', padding: '8px 0 4px', borderBottom: '1px solid #1e2d3d', fontSize: '10px', fontWeight: 700, color: '#4a5f78', textTransform: 'uppercase', letterSpacing: '0.3px' }}>
+                    <div style={{ flex: 1 }}>Part #</div>
+                    <div style={{ width: '36px', textAlign: 'center' }}>Qty</div>
+                    <div style={{ width: '42px', textAlign: 'center' }}>Done</div>
+                    <div style={{ width: '65px', textAlign: 'right' }}>Price</div>
+                    <div style={{ width: '55px', textAlign: 'right' }}>Total</div>
+                    <div style={{ width: '24px' }}></div>
+                  </div>
+
+                  {/* Line items */}
+                  {po.line_items.map((li) => {
+                    const lineTotal = li.quantity * li.unit_price;
+                    const linePct = li.quantity > 0 ? (li.installed / li.quantity) * 100 : 0;
+                    const isEditingLine = editLineId === li.id;
+
+                    if (isEditingLine) {
+                      return (
+                        <div key={li.id} style={{ padding: '8px 0', borderBottom: '1px solid rgba(30,45,61,0.5)' }}>
+                          <div style={{ fontSize: '12px', fontWeight: 700, marginBottom: '4px' }}>{li.part_number}</div>
+                          <div style={{ display: 'flex', gap: '6px', alignItems: 'end' }}>
+                            <div style={{ flex: 1 }}>
+                              <label style={{ ...labelStyle, fontSize: '9px' }}>Qty</label>
+                              <input type="number" value={editLineForm.quantity} onChange={(e) => setEditLineForm({ ...editLineForm, quantity: e.target.value })} style={{ ...inputStyle, padding: '6px 8px', fontSize: '12px' }} />
+                            </div>
+                            <div style={{ flex: 1 }}>
+                              <label style={{ ...labelStyle, fontSize: '9px' }}>Unit Price</label>
+                              <input type="number" value={editLineForm.unit_price} onChange={(e) => setEditLineForm({ ...editLineForm, unit_price: e.target.value })} style={{ ...inputStyle, padding: '6px 8px', fontSize: '12px' }} step="0.01" />
+                            </div>
+                            <button onClick={() => saveEditLine(po.id)} style={{ padding: '6px 10px', borderRadius: '6px', background: '#22c55e', color: '#fff', fontSize: '11px', fontWeight: 700, border: 'none' }}>✓</button>
+                            <button onClick={() => setEditLineId(null)} style={{ padding: '6px 10px', borderRadius: '6px', background: 'transparent', border: '1px solid #1e2d3d', color: '#6b7a8d', fontSize: '11px', fontWeight: 700 }}>✕</button>
+                          </div>
+                        </div>
+                      );
+                    }
+
+                    return (
+                      <div key={li.id} style={{ display: 'flex', gap: '4px', padding: '8px 0', borderBottom: '1px solid rgba(30,45,61,0.5)', alignItems: 'center', fontSize: '12px' }}>
+                        <div style={{ flex: 1 }} onClick={() => startEditLine(li)}>
+                          <div style={{ fontWeight: 700, color: '#e8ecf1' }}>{li.part_number}</div>
+                          <div style={{ height: '3px', background: '#1e2d3d', borderRadius: '2px', marginTop: '3px', width: '80%' }}>
+                            <div style={{ height: '100%', width: `${Math.min(linePct, 100)}%`, background: linePct >= 100 ? '#22c55e' : '#3b82f6', borderRadius: '2px' }} />
+                          </div>
+                        </div>
+                        <div style={{ width: '36px', textAlign: 'center', color: '#6b7a8d', fontWeight: 600 }} onClick={() => startEditLine(li)}>{li.quantity}</div>
+                        <div style={{ width: '42px', textAlign: 'center', fontWeight: 700, color: li.installed >= li.quantity ? '#4ade80' : '#fbbf24' }}>{li.installed}</div>
+                        <div style={{ width: '65px', textAlign: 'right', color: '#6b7a8d', fontSize: '11px' }} onClick={() => startEditLine(li)}>{fmt(li.unit_price)}</div>
+                        <div style={{ width: '55px', textAlign: 'right', fontWeight: 700, color: '#e8ecf1' }}>{fmt(lineTotal)}</div>
+                        <button
+                          onClick={() => {
+                            if (window.confirm(`Remove ${li.part_number} from this PO?`)) {
+                              handleDeleteLineItem(li.id, po.id);
+                            }
+                          }}
+                          style={{ width: '24px', background: 'none', border: 'none', color: '#f87171', fontSize: '14px', padding: 0, cursor: 'pointer' }}
+                        >
+                          ×
+                        </button>
+                      </div>
+                    );
+                  })}
+
+                  {/* Totals */}
+                  <div style={{ display: 'flex', gap: '4px', padding: '10px 0 4px', fontSize: '13px' }}>
+                    <div style={{ flex: 1, fontWeight: 800, color: '#e8ecf1' }}>Total</div>
+                    <div style={{ width: '36px', textAlign: 'center', fontWeight: 700, color: '#6b7a8d' }}>{totalQty}</div>
+                    <div style={{ width: '42px', textAlign: 'center', fontWeight: 700, color: totalInstalled >= totalQty ? '#4ade80' : '#60a5fa' }}>{totalInstalled}</div>
+                    <div style={{ width: '65px' }}></div>
+                    <div style={{ width: '55px', textAlign: 'right', fontWeight: 800, color: '#60a5fa' }}>{fmt(totalValue)}</div>
+                    <div style={{ width: '24px' }}></div>
+                  </div>
                 </div>
-              </div>
-            )}
-          </div>
+              )}
+            </div>
+          </SwipeToDelete>
         );
       })}
 
