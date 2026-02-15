@@ -1,21 +1,26 @@
 'use client';
 
-import { useRef, useState, ReactNode } from 'react';
+import { useRef, useState, useEffect, ReactNode } from 'react';
 
 interface SwipeToDeleteProps {
   onDelete: () => void;
-  confirmMessage?: string; // If set, shows confirm dialog before deleting
+  confirmMessage?: string;
   children: ReactNode;
 }
 
 export default function SwipeToDelete({ onDelete, confirmMessage, children }: SwipeToDeleteProps) {
-  const containerRef = useRef<HTMLDivElement>(null);
   const startX = useRef(0);
   const currentX = useRef(0);
   const [offset, setOffset] = useState(0);
   const [showDelete, setShowDelete] = useState(false);
   const [deleting, setDeleting] = useState(false);
+  const [isTouchDevice, setIsTouchDevice] = useState(true); // default true to avoid flash
+  const [hovered, setHovered] = useState(false);
   const threshold = -75;
+
+  useEffect(() => {
+    setIsTouchDevice('ontouchstart' in window || navigator.maxTouchPoints > 0);
+  }, []);
 
   const handleTouchStart = (e: React.TouchEvent) => {
     startX.current = e.touches[0].clientX;
@@ -58,36 +63,42 @@ export default function SwipeToDelete({ onDelete, confirmMessage, children }: Sw
   if (deleting) return null;
 
   return (
-    <div style={{ position: 'relative', overflow: 'hidden', borderRadius: '10px' }}>
-      {/* Delete button behind */}
-      <div
-        style={{
-          position: 'absolute', right: 0, top: 0, bottom: 0, width: '90px',
-          display: 'flex', alignItems: 'center', justifyContent: 'center',
-          background: '#ef4444', borderRadius: '0 10px 10px 0',
-          opacity: showDelete ? 1 : Math.min(1, Math.abs(offset) / 90),
-        }}
-      >
-        <button
-          onClick={handleDelete}
+    <div
+      style={{ position: 'relative', overflow: 'hidden', borderRadius: '10px' }}
+      onMouseEnter={!isTouchDevice ? () => setHovered(true) : undefined}
+      onMouseLeave={!isTouchDevice ? () => setHovered(false) : undefined}
+    >
+      {/* Swipe delete button behind (mobile) */}
+      {isTouchDevice && (
+        <div
           style={{
-            background: 'none', border: 'none', color: '#fff',
-            fontWeight: 800, fontSize: '12px', padding: '8px 12px',
-            cursor: 'pointer',
+            position: 'absolute', right: 0, top: 0, bottom: 0, width: '90px',
+            display: 'flex', alignItems: 'center', justifyContent: 'center',
+            background: '#ef4444', borderRadius: '0 10px 10px 0',
+            opacity: showDelete ? 1 : Math.min(1, Math.abs(offset) / 90),
           }}
         >
-          🗑 Delete
-        </button>
-      </div>
+          <button
+            onClick={handleDelete}
+            style={{
+              background: 'none', border: 'none', color: '#fff',
+              fontWeight: 800, fontSize: '12px', padding: '8px 12px',
+              cursor: 'pointer',
+            }}
+          >
+            🗑 Delete
+          </button>
+        </div>
+      )}
 
-      {/* Main content - slides left */}
+      {/* Main content - slides on mobile */}
       <div
-        onTouchStart={handleTouchStart}
-        onTouchMove={handleTouchMove}
-        onTouchEnd={handleTouchEnd}
+        onTouchStart={isTouchDevice ? handleTouchStart : undefined}
+        onTouchMove={isTouchDevice ? handleTouchMove : undefined}
+        onTouchEnd={isTouchDevice ? handleTouchEnd : undefined}
         onClick={showDelete ? handleCancel : undefined}
         style={{
-          transform: `translateX(${offset}px)`,
+          transform: isTouchDevice ? `translateX(${offset}px)` : 'none',
           transition: offset === 0 || offset === -90 ? 'transform 0.2s ease' : 'none',
           position: 'relative',
           zIndex: 1,
@@ -95,6 +106,26 @@ export default function SwipeToDelete({ onDelete, confirmMessage, children }: Sw
       >
         {children}
       </div>
+
+      {/* Desktop delete button - appears on hover */}
+      {!isTouchDevice && (
+        <button
+          onClick={(e) => { e.stopPropagation(); handleDelete(); }}
+          style={{
+            position: 'absolute', top: '10px', right: '10px', zIndex: 3,
+            width: '30px', height: '30px', borderRadius: '7px',
+            background: hovered ? 'rgba(239,68,68,0.15)' : 'transparent',
+            border: hovered ? '1px solid rgba(239,68,68,0.3)' : '1px solid transparent',
+            color: '#f87171', fontSize: '14px', cursor: 'pointer',
+            display: 'flex', alignItems: 'center', justifyContent: 'center',
+            opacity: hovered ? 1 : 0,
+            transition: 'opacity 0.15s, background 0.15s',
+            pointerEvents: hovered ? 'auto' : 'none',
+          }}
+        >
+          🗑
+        </button>
+      )}
     </div>
   );
 }
