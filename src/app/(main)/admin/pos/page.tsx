@@ -154,21 +154,21 @@ export default function POsPage() {
 
   const fmt = (n: number) => '$' + n.toFixed(2).replace(/\B(?=(\d{3})+(?!\d))/g, ',');
 
-  if (loading) return <div style={{ textAlign: 'center', padding: '40px', color: '#506070' }}>Loading...</div>;
+  if (loading) return <div style={{ textAlign: 'center', padding: '40px', color: 'var(--text-muted)' }}>Loading...</div>;
 
   return (
     <div>
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '12px' }}>
-        <div style={{ fontSize: '11px', fontWeight: 700, color: '#506070', textTransform: 'uppercase', letterSpacing: '0.5px' }}>
+        <div style={{ fontSize: '11px', fontWeight: 700, color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.5px' }}>
           Purchase Orders ({pos.length})
         </div>
-        <button onClick={() => setShowCreate(!showCreate)} style={{ padding: '6px 12px', borderRadius: '10px', background: '#1e4a5e', color: '#fff', fontSize: '12px', fontWeight: 700, border: 'none' }}>
+        <button onClick={() => setShowCreate(!showCreate)} style={{ padding: '6px 12px', borderRadius: '10px', background: 'var(--navy)', color: '#fff', fontSize: '12px', fontWeight: 700, border: 'none' }}>
           {showCreate ? 'Cancel' : '+ New PO'}
         </button>
       </div>
 
       {showCreate && (
-        <div style={{ background: '#161f2b', border: '1px solid #1e2d3d', borderRadius: '14px', padding: '14px', marginBottom: '12px' }}>
+        <div style={{ background: 'var(--card)', border: '1px solid #1e2d3d', borderRadius: '14px', padding: '14px', marginBottom: '12px' }}>
           <div style={{ marginBottom: '8px' }}>
             <label style={labelStyle}>PO Number</label>
             <input value={form.po_number} onChange={(e) => setForm({ ...form, po_number: e.target.value })} style={inputStyle} />
@@ -194,7 +194,7 @@ export default function POsPage() {
               {lineItems.map((li, i) => (
                 <div key={i} style={{ display: 'flex', alignItems: 'center', gap: '8px', padding: '6px 0', borderBottom: '1px solid #1e2d3d' }}>
                   <div style={{ flex: 1, fontSize: '13px', fontWeight: 700 }}>{li.part_number}</div>
-                  <div style={{ fontSize: '12px', color: '#506070' }}>{fmt(li.unit_price)}</div>
+                  <div style={{ fontSize: '12px', color: 'var(--text-muted)' }}>{fmt(li.unit_price)}</div>
                   <input
                     type="number"
                     value={li.quantity}
@@ -205,10 +205,10 @@ export default function POsPage() {
                     style={{ ...inputStyle, width: '60px', textAlign: 'center' }}
                     min={1}
                   />
-                  <button onClick={() => setLineItems((prev) => prev.filter((_, j) => j !== i))} style={{ color: '#f87171', fontSize: '18px', padding: '0 4px', background: 'none', border: 'none' }}>×</button>
+                  <button onClick={() => setLineItems((prev) => prev.filter((_, j) => j !== i))} style={{ color: 'var(--error)', fontSize: '18px', padding: '0 4px', background: 'none', border: 'none' }}>×</button>
                 </div>
               ))}
-              <div style={{ textAlign: 'right', marginTop: '6px', fontSize: '13px', fontWeight: 700, color: '#1e4a5e' }}>
+              <div style={{ textAlign: 'right', marginTop: '6px', fontSize: '13px', fontWeight: 700, color: 'var(--navy)' }}>
                 Total: {fmt(lineItems.reduce((s, l) => s + l.quantity * l.unit_price, 0))}
               </div>
             </div>
@@ -218,7 +218,7 @@ export default function POsPage() {
             onClick={handleCreate}
             disabled={!form.po_number || lineItems.length === 0}
             style={{
-              width: '100%', padding: '12px', borderRadius: '14px', background: '#059669',
+              width: '100%', padding: '12px', borderRadius: '14px', background: 'var(--success)',
               color: '#fff', fontWeight: 800, fontSize: '14px', border: 'none',
               opacity: form.po_number && lineItems.length > 0 ? 1 : 0.4,
             }}
@@ -229,7 +229,7 @@ export default function POsPage() {
       )}
 
       {pos.length === 0 && (
-        <div style={{ textAlign: 'center', padding: '32px 0', color: '#506070' }}>
+        <div style={{ textAlign: 'center', padding: '32px 0', color: 'var(--text-muted)' }}>
           <div style={{ fontSize: '36px', marginBottom: '6px', opacity: 0.4 }}>📋</div>
           <div style={{ fontWeight: 600, fontSize: '13px' }}>No purchase orders yet</div>
         </div>
@@ -250,7 +250,7 @@ export default function POsPage() {
             onDelete={() => handleDeletePO(po.id)}
             confirmMessage={`Delete PO #${po.po_number} and all its line items? This cannot be undone.`}
           >
-            <div style={{ background: '#161f2b', border: '1px solid #1e2d3d', borderRadius: '14px', marginBottom: '6px', overflow: 'hidden' }}>
+            <div style={{ background: 'var(--card)', border: '1px solid #1e2d3d', borderRadius: '14px', marginBottom: '6px', overflow: 'hidden' }}>
               <div
                 onClick={() => toggleExpand(po.id)}
                 style={{ padding: '12px', cursor: 'pointer' }}
@@ -258,23 +258,23 @@ export default function POsPage() {
                 <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'start' }}>
                   <div>
                     <div style={{ fontWeight: 800, fontSize: '15px' }}>PO #{po.po_number}</div>
-                    <div style={{ fontSize: '12px', color: '#506070', marginTop: '1px' }}>
+                    <div style={{ fontSize: '12px', color: 'var(--text-muted)', marginTop: '1px' }}>
                       {po.customer} • {po.line_items.length} item{po.line_items.length !== 1 ? 's' : ''}
-                      {po.status === 'complete' && <span style={{ color: '#34d399', marginLeft: '6px' }}>✓ Complete</span>}
+                      {po.status === 'complete' && <span style={{ color: 'var(--success)', marginLeft: '6px' }}>✓ Complete</span>}
                     </div>
                   </div>
                   <div style={{ textAlign: 'right' }}>
-                    <div style={{ fontSize: '14px', fontWeight: 800, color: '#1e4a5e' }}>{fmt(totalValue)}</div>
-                    <div style={{ fontSize: '10px', color: '#506070', marginTop: '1px' }}>{isExpanded ? '▲' : '▼'} Details</div>
+                    <div style={{ fontSize: '14px', fontWeight: 800, color: 'var(--navy)' }}>{fmt(totalValue)}</div>
+                    <div style={{ fontSize: '10px', color: 'var(--text-muted)', marginTop: '1px' }}>{isExpanded ? '▲' : '▼'} Details</div>
                   </div>
                 </div>
                 <div style={{ marginTop: '8px' }}>
                   <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '11px', marginBottom: '3px' }}>
-                    <span style={{ color: '#506070' }}>Progress</span>
-                    <span style={{ color: pct >= 100 ? '#34d399' : '#1e4a5e', fontWeight: 700 }}>{totalInstalled}/{totalQty}</span>
+                    <span style={{ color: 'var(--text-muted)' }}>Progress</span>
+                    <span style={{ color: pct >= 100 ? 'var(--success)' : 'var(--navy)', fontWeight: 700 }}>{totalInstalled}/{totalQty}</span>
                   </div>
-                  <div style={{ height: '6px', background: 'rgba(255,255,255,0.06)', borderRadius: '3px' }}>
-                    <div style={{ height: '100%', width: `${Math.min(pct, 100)}%`, background: pct >= 100 ? '#059669' : '#1e4a5e', borderRadius: '3px', transition: 'width 0.3s' }} />
+                  <div style={{ height: '6px', background: 'var(--border)', borderRadius: '3px' }}>
+                    <div style={{ height: '100%', width: `${Math.min(pct, 100)}%`, background: pct >= 100 ? 'var(--success)' : 'var(--navy)', borderRadius: '3px', transition: 'width 0.3s' }} />
                   </div>
                 </div>
               </div>
@@ -303,18 +303,18 @@ export default function POsPage() {
                         </select>
                       </div>
                       <div style={{ display: 'flex', gap: '6px', marginTop: '8px' }}>
-                        <button onClick={saveEditPO} style={{ flex: 1, padding: '8px', borderRadius: '10px', background: '#059669', color: '#fff', fontSize: '12px', fontWeight: 700, border: 'none' }}>Save</button>
-                        <button onClick={() => setEditPoId(null)} style={{ flex: 1, padding: '8px', borderRadius: '10px', background: 'transparent', border: '1px solid #1e2d3d', color: '#8e9baa', fontSize: '12px', fontWeight: 700 }}>Cancel</button>
+                        <button onClick={saveEditPO} style={{ flex: 1, padding: '8px', borderRadius: '10px', background: 'var(--success)', color: '#fff', fontSize: '12px', fontWeight: 700, border: 'none' }}>Save</button>
+                        <button onClick={() => setEditPoId(null)} style={{ flex: 1, padding: '8px', borderRadius: '10px', background: 'transparent', border: '1px solid #1e2d3d', color: 'var(--text-secondary)', fontSize: '12px', fontWeight: 700 }}>Cancel</button>
                       </div>
                     </div>
                   ) : (
                     <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '6px' }}>
-                      <div style={{ fontSize: '10px', color: '#506070' }}>
+                      <div style={{ fontSize: '10px', color: 'var(--text-muted)' }}>
                         Created {createdDate.toLocaleDateString([], { month: 'short', day: 'numeric', year: 'numeric' })}
                       </div>
                       <button
                         onClick={(e) => { e.stopPropagation(); startEditPO(po); }}
-                        style={{ padding: '3px 8px', borderRadius: '6px', background: 'rgba(59,130,246,0.1)', border: '1px solid rgba(238,49,32,0.15)', color: '#1e4a5e', fontSize: '10px', fontWeight: 700 }}
+                        style={{ padding: '3px 8px', borderRadius: '6px', background: 'rgba(59,130,246,0.1)', border: '1px solid rgba(238,49,32,0.15)', color: 'var(--navy)', fontSize: '10px', fontWeight: 700 }}
                       >
                         ✏️ Edit PO
                       </button>
@@ -322,7 +322,7 @@ export default function POsPage() {
                   )}
 
                   {/* Column headers */}
-                  <div style={{ display: 'flex', gap: '4px', padding: '8px 0 4px', borderBottom: '1px solid #1e2d3d', fontSize: '10px', fontWeight: 700, color: '#506070', textTransform: 'uppercase', letterSpacing: '0.3px' }}>
+                  <div style={{ display: 'flex', gap: '4px', padding: '8px 0 4px', borderBottom: '1px solid #1e2d3d', fontSize: '10px', fontWeight: 700, color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.3px' }}>
                     <div style={{ flex: 1 }}>Part #</div>
                     <div style={{ width: '36px', textAlign: 'center' }}>Qty</div>
                     <div style={{ width: '42px', textAlign: 'center' }}>Done</div>
@@ -350,8 +350,8 @@ export default function POsPage() {
                               <label style={{ ...labelStyle, fontSize: '9px' }}>Unit Price</label>
                               <input type="number" value={editLineForm.unit_price} onChange={(e) => setEditLineForm({ ...editLineForm, unit_price: e.target.value })} style={{ ...inputStyle, padding: '6px 8px', fontSize: '12px' }} step="0.01" />
                             </div>
-                            <button onClick={() => saveEditLine(po.id)} style={{ padding: '6px 10px', borderRadius: '6px', background: '#059669', color: '#fff', fontSize: '11px', fontWeight: 700, border: 'none' }}>✓</button>
-                            <button onClick={() => setEditLineId(null)} style={{ padding: '6px 10px', borderRadius: '6px', background: 'transparent', border: '1px solid #1e2d3d', color: '#8e9baa', fontSize: '11px', fontWeight: 700 }}>✕</button>
+                            <button onClick={() => saveEditLine(po.id)} style={{ padding: '6px 10px', borderRadius: '6px', background: 'var(--success)', color: '#fff', fontSize: '11px', fontWeight: 700, border: 'none' }}>✓</button>
+                            <button onClick={() => setEditLineId(null)} style={{ padding: '6px 10px', borderRadius: '6px', background: 'transparent', border: '1px solid #1e2d3d', color: 'var(--text-secondary)', fontSize: '11px', fontWeight: 700 }}>✕</button>
                           </div>
                         </div>
                       );
@@ -360,22 +360,22 @@ export default function POsPage() {
                     return (
                       <div key={li.id} style={{ display: 'flex', gap: '4px', padding: '8px 0', borderBottom: '1px solid rgba(30,45,61,0.5)', alignItems: 'center', fontSize: '12px' }}>
                         <div style={{ flex: 1 }} onClick={() => startEditLine(li)}>
-                          <div style={{ fontWeight: 700, color: '#e8ecf1' }}>{li.part_number}</div>
-                          <div style={{ height: '3px', background: 'rgba(255,255,255,0.06)', borderRadius: '2px', marginTop: '3px', width: '80%' }}>
-                            <div style={{ height: '100%', width: `${Math.min(linePct, 100)}%`, background: linePct >= 100 ? '#059669' : '#1e4a5e', borderRadius: '2px' }} />
+                          <div style={{ fontWeight: 700, color: 'var(--text-primary)' }}>{li.part_number}</div>
+                          <div style={{ height: '3px', background: 'var(--border)', borderRadius: '2px', marginTop: '3px', width: '80%' }}>
+                            <div style={{ height: '100%', width: `${Math.min(linePct, 100)}%`, background: linePct >= 100 ? 'var(--success)' : 'var(--navy)', borderRadius: '2px' }} />
                           </div>
                         </div>
-                        <div style={{ width: '36px', textAlign: 'center', color: '#8e9baa', fontWeight: 600 }} onClick={() => startEditLine(li)}>{li.quantity}</div>
-                        <div style={{ width: '42px', textAlign: 'center', fontWeight: 700, color: li.installed >= li.quantity ? '#34d399' : '#fbbf24' }}>{li.installed}</div>
-                        <div style={{ width: '65px', textAlign: 'right', color: '#8e9baa', fontSize: '11px' }} onClick={() => startEditLine(li)}>{fmt(li.unit_price)}</div>
-                        <div style={{ width: '55px', textAlign: 'right', fontWeight: 700, color: '#e8ecf1' }}>{fmt(lineTotal)}</div>
+                        <div style={{ width: '36px', textAlign: 'center', color: 'var(--text-secondary)', fontWeight: 600 }} onClick={() => startEditLine(li)}>{li.quantity}</div>
+                        <div style={{ width: '42px', textAlign: 'center', fontWeight: 700, color: li.installed >= li.quantity ? 'var(--success)' : 'var(--warning)' }}>{li.installed}</div>
+                        <div style={{ width: '65px', textAlign: 'right', color: 'var(--text-secondary)', fontSize: '11px' }} onClick={() => startEditLine(li)}>{fmt(li.unit_price)}</div>
+                        <div style={{ width: '55px', textAlign: 'right', fontWeight: 700, color: 'var(--text-primary)' }}>{fmt(lineTotal)}</div>
                         <button
                           onClick={() => {
                             if (window.confirm(`Remove ${li.part_number} from this PO?`)) {
                               handleDeleteLineItem(li.id, po.id);
                             }
                           }}
-                          style={{ width: '24px', background: 'none', border: 'none', color: '#f87171', fontSize: '14px', padding: 0, cursor: 'pointer' }}
+                          style={{ width: '24px', background: 'none', border: 'none', color: 'var(--error)', fontSize: '14px', padding: 0, cursor: 'pointer' }}
                         >
                           ×
                         </button>
@@ -385,11 +385,11 @@ export default function POsPage() {
 
                   {/* Totals */}
                   <div style={{ display: 'flex', gap: '4px', padding: '10px 0 4px', fontSize: '13px' }}>
-                    <div style={{ flex: 1, fontWeight: 800, color: '#e8ecf1' }}>Total</div>
-                    <div style={{ width: '36px', textAlign: 'center', fontWeight: 700, color: '#8e9baa' }}>{totalQty}</div>
-                    <div style={{ width: '42px', textAlign: 'center', fontWeight: 700, color: totalInstalled >= totalQty ? '#34d399' : '#1e4a5e' }}>{totalInstalled}</div>
+                    <div style={{ flex: 1, fontWeight: 800, color: 'var(--text-primary)' }}>Total</div>
+                    <div style={{ width: '36px', textAlign: 'center', fontWeight: 700, color: 'var(--text-secondary)' }}>{totalQty}</div>
+                    <div style={{ width: '42px', textAlign: 'center', fontWeight: 700, color: totalInstalled >= totalQty ? 'var(--success)' : 'var(--navy)' }}>{totalInstalled}</div>
                     <div style={{ width: '65px' }}></div>
-                    <div style={{ width: '55px', textAlign: 'right', fontWeight: 800, color: '#1e4a5e' }}>{fmt(totalValue)}</div>
+                    <div style={{ width: '55px', textAlign: 'right', fontWeight: 800, color: 'var(--navy)' }}>{fmt(totalValue)}</div>
                     <div style={{ width: '24px' }}></div>
                   </div>
                 </div>
@@ -399,12 +399,12 @@ export default function POsPage() {
         );
       })}
 
-      <button onClick={() => router.push('/more')} style={{ width: '100%', padding: '10px', borderRadius: '14px', marginTop: '14px', border: '1px solid #1e2d3d', background: 'transparent', color: '#8e9baa', fontSize: '13px', fontWeight: 700 }}>
+      <button onClick={() => router.push('/more')} style={{ width: '100%', padding: '10px', borderRadius: '14px', marginTop: '14px', border: '1px solid #1e2d3d', background: 'transparent', color: 'var(--text-secondary)', fontSize: '13px', fontWeight: 700 }}>
         ← Back
       </button>
     </div>
   );
 }
 
-const labelStyle: React.CSSProperties = { display: 'block', fontSize: '10px', fontWeight: 700, color: '#506070', textTransform: 'uppercase', letterSpacing: '0.5px', marginBottom: '4px' };
-const inputStyle: React.CSSProperties = { width: '100%', padding: '10px 12px', borderRadius: '10px', border: '1px solid #1e2d3d', background: '#0f1720', color: '#e8ecf1', fontSize: '13px' };
+const labelStyle: React.CSSProperties = { display: 'block', fontSize: '10px', fontWeight: 700, color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.5px', marginBottom: '4px' };
+const inputStyle: React.CSSProperties = { width: '100%', padding: '10px 12px', borderRadius: '10px', border: '1px solid #1e2d3d', background: 'var(--bg)', color: 'var(--text-primary)', fontSize: '13px' };

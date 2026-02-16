@@ -1,40 +1,46 @@
-// BMG Brand Theme — Dark
+// BMG Theme — CSS variable references
+// All actual values live in globals.css
+// These are just typed references for inline styles
+
 export const theme = {
-  // Brand
-  navy: '#1e4a5e',
-  navyLight: '#2a6178',
-  orange: '#ee3120',
-  orangeGlow: 'rgba(238,49,32,0.18)',
+  navy: 'var(--navy)',
+  navyLight: 'var(--navy-light)',
+  orange: 'var(--orange)',
+  orangeGlow: 'var(--orange-glow)',
+  orangeSoft: 'var(--orange-soft)',
 
-  // Backgrounds
-  bg: '#0f1720',
-  card: '#161f2b',
-  cardHover: '#1a2535',
-  headerBg: '#0c1a24',
-  navBg: '#141c27',
-  inputBg: '#111a24',
+  bg: 'var(--bg)',
+  card: 'var(--card)',
+  cardHover: 'var(--card-hover)',
+  headerBg: 'var(--header-bg)',
+  navBg: 'var(--nav-bg)',
+  inputBg: 'var(--input-bg)',
 
-  // Borders
-  border: 'rgba(255,255,255,0.06)',
-  borderStrong: 'rgba(255,255,255,0.1)',
+  border: 'var(--border)',
+  borderStrong: 'var(--border-strong)',
 
-  // Text
-  textPrimary: '#e8ecf1',
-  textSecondary: '#8e9baa',
-  textMuted: '#506070',
+  textPrimary: 'var(--text-primary)',
+  textSecondary: 'var(--text-secondary)',
+  textMuted: 'var(--text-muted)',
 
-  // Semantic
-  success: '#34d399',
-  successBg: 'rgba(52,211,153,0.08)',
-  successBorder: 'rgba(52,211,153,0.2)',
-  warning: '#fbbf24',
-  warningBg: 'rgba(251,191,36,0.08)',
-  warningBorder: 'rgba(251,191,36,0.2)',
-  error: '#f87171',
-  errorBg: 'rgba(248,113,113,0.08)',
-  errorBorder: 'rgba(248,113,113,0.2)',
+  success: 'var(--success)',
+  successBg: 'var(--success-bg)',
+  successBorder: 'var(--success-border)',
+  warning: 'var(--warning)',
+  warningBg: 'var(--warning-bg)',
+  warningBorder: 'var(--warning-border)',
+  error: 'var(--error)',
+  errorBg: 'var(--error-bg)',
+  errorBorder: 'var(--error-border)',
 
-  // Shadows
-  shadowSm: '0 1px 3px rgba(0,0,0,0.2)',
-  shadowMd: '0 2px 8px rgba(0,0,0,0.25)',
+  shadowSm: 'var(--shadow-sm)',
+  shadowMd: 'var(--shadow-md)',
+
+  progressTrack: 'var(--progress-track)',
+  subtleBg: 'var(--subtle-bg)',
+  overlay: 'var(--overlay)',
+
+  tabActiveBg: 'var(--tab-active-bg)',
+  tabActiveBorder: 'var(--tab-active-border)',
+  tabActiveColor: 'var(--tab-active-color)',
 } as const;

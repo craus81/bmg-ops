@@ -6,13 +6,165 @@
   box-sizing: border-box;
 }
 
+/* ===== DARK THEME (default) ===== */
+:root {
+  --navy: #1e4a5e;
+  --navy-light: #2a6178;
+  --orange: #ee3120;
+  --orange-glow: rgba(238,49,32,0.18);
+  --orange-soft: rgba(238,49,32,0.08);
+
+  --bg: #0f1720;
+  --card: #161f2b;
+  --card-hover: #1a2535;
+  --header-bg: #0c1a24;
+  --nav-bg: #141c27;
+  --input-bg: #111a24;
+
+  --border: rgba(255,255,255,0.06);
+  --border-strong: rgba(255,255,255,0.1);
+
+  --text-primary: #e8ecf1;
+  --text-secondary: #8e9baa;
+  --text-muted: #506070;
+
+  --success: #34d399;
+  --success-bg: rgba(52,211,153,0.08);
+  --success-border: rgba(52,211,153,0.2);
+  --warning: #fbbf24;
+  --warning-bg: rgba(251,191,36,0.08);
+  --warning-border: rgba(251,191,36,0.2);
+  --error: #f87171;
+  --error-bg: rgba(248,113,113,0.08);
+  --error-border: rgba(248,113,113,0.2);
+
+  --shadow-sm: 0 1px 3px rgba(0,0,0,0.2);
+  --shadow-md: 0 2px 8px rgba(0,0,0,0.25);
+
+  --progress-track: rgba(255,255,255,0.04);
+  --subtle-bg: rgba(255,255,255,0.03);
+  --overlay: rgba(0,0,0,0.7);
+
+  /* Header text is always white on dark header */
+  --header-text: #ffffff;
+  --header-text-muted: rgba(255,255,255,0.55);
+  --header-badge-admin-bg: rgba(238,49,32,0.18);
+  --header-badge-admin-border: rgba(238,49,32,0.3);
+  --header-badge-admin-color: #ff9e94;
+  --header-badge-crew-bg: rgba(255,255,255,0.1);
+  --header-badge-crew-border: rgba(255,255,255,0.15);
+  --header-badge-crew-color: rgba(255,255,255,0.7);
+  --header-logo-bg: rgba(255,255,255,0.08);
+  --header-logo-border: rgba(255,255,255,0.06);
+
+  /* Login */
+  --login-bg: linear-gradient(165deg, #152838 0%, #0f1e2a 40%, #0a1520 100%);
+  --login-input-bg: rgba(255,255,255,0.06);
+  --login-input-border: rgba(255,255,255,0.1);
+  --login-label: rgba(255,255,255,0.45);
+  --login-text: #ffffff;
+  --login-text-muted: rgba(255,255,255,0.25);
+  --login-tab-active-bg: rgba(255,255,255,0.1);
+  --login-tab-active-color: #ffffff;
+  --login-tab-color: rgba(255,255,255,0.4);
+  --login-tab-bg: rgba(255,255,255,0.06);
+
+  /* Toggle active tab */
+  --tab-active-bg: rgba(238,49,32,0.08);
+  --tab-active-border: rgba(238,49,32,0.2);
+  --tab-active-color: var(--orange);
+}
+
+/* ===== LIGHT THEME ===== */
+[data-theme="light"] {
+  --bg: #f4f5f7;
+  --card: #ffffff;
+  --card-hover: #fafbfc;
+  --header-bg: #1e4a5e;
+  --nav-bg: #ffffff;
+  --input-bg: #f0f2f4;
+
+  --border: rgba(0,0,0,0.06);
+  --border-strong: rgba(0,0,0,0.1);
+
+  --text-primary: #1a2b36;
+  --text-secondary: #5a6b78;
+  --text-muted: #8e99a4;
+
+  --success: #059669;
+  --success-bg: rgba(5,150,105,0.06);
+  --success-border: rgba(5,150,105,0.2);
+  --warning: #d97706;
+  --warning-bg: rgba(217,119,6,0.06);
+  --warning-border: rgba(217,119,6,0.2);
+  --error: #dc2626;
+  --error-bg: rgba(220,38,38,0.05);
+  --error-border: rgba(220,38,38,0.15);
+
+  --shadow-sm: 0 1px 2px rgba(0,0,0,0.04);
+  --shadow-md: 0 2px 8px rgba(0,0,0,0.06);
+
+  --progress-track: rgba(0,0,0,0.04);
+  --subtle-bg: rgba(0,0,0,0.02);
+  --overlay: rgba(0,0,0,0.5);
+
+  --login-bg: linear-gradient(165deg, #1e4a5e 0%, #153a4b 40%, #0e2a38 100%);
+
+  --tab-active-bg: rgba(30,74,94,0.08);
+  --tab-active-border: rgba(30,74,94,0.2);
+  --tab-active-color: var(--navy);
+}
+
+/* Auto: inherit system preference for light */
+@media (prefers-color-scheme: light) {
+  [data-theme="auto"] {
+    --bg: #f4f5f7;
+    --card: #ffffff;
+    --card-hover: #fafbfc;
+    --header-bg: #1e4a5e;
+    --nav-bg: #ffffff;
+    --input-bg: #f0f2f4;
+
+    --border: rgba(0,0,0,0.06);
+    --border-strong: rgba(0,0,0,0.1);
+
+    --text-primary: #1a2b36;
+    --text-secondary: #5a6b78;
+    --text-muted: #8e99a4;
+
+    --success: #059669;
+    --success-bg: rgba(5,150,105,0.06);
+    --success-border: rgba(5,150,105,0.2);
+    --warning: #d97706;
+    --warning-bg: rgba(217,119,6,0.06);
+    --warning-border: rgba(217,119,6,0.2);
+    --error: #dc2626;
+    --error-bg: rgba(220,38,38,0.05);
+    --error-border: rgba(220,38,38,0.15);
+
+    --shadow-sm: 0 1px 2px rgba(0,0,0,0.04);
+    --shadow-md: 0 2px 8px rgba(0,0,0,0.06);
+
+    --progress-track: rgba(0,0,0,0.04);
+    --subtle-bg: rgba(0,0,0,0.02);
+    --overlay: rgba(0,0,0,0.5);
+
+    --login-bg: linear-gradient(165deg, #1e4a5e 0%, #153a4b 40%, #0e2a38 100%);
+
+    --tab-active-bg: rgba(30,74,94,0.08);
+    --tab-active-border: rgba(30,74,94,0.2);
+    --tab-active-color: var(--navy);
+  }
+}
+
 html, body {
   height: 100%;
-  background: #0f1720;
-  color: #e8ecf1;
+  background: var(--bg);
+  color: var(--text-primary);
   font-family: 'DM Sans', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
   -webkit-font-smoothing: antialiased;
   -webkit-tap-highlight-color: transparent;
+  transition: background 0.25s ease, color 0.25s ease;
 }
 
 input, select, textarea, button {
@@ -28,12 +180,12 @@ button {
 
 ::selection {
   background: rgba(238,49,32,0.2);
-  color: #e8ecf1;
+  color: var(--text-primary);
 }
 
 ::-webkit-scrollbar { width: 6px; }
 ::-webkit-scrollbar-track { background: transparent; }
-::-webkit-scrollbar-thumb { background: #2a3a4a; border-radius: 3px; }
+::-webkit-scrollbar-thumb { background: var(--border-strong); border-radius: 3px; }
 
 @keyframes spin {
   to { transform: rotate(360deg); }

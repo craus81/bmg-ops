@@ -104,21 +104,21 @@ export default function CatalogPage() {
     resetForm();
   };
 
-  if (loading) return <div style={{ textAlign: 'center', padding: '40px', color: '#506070' }}>Loading...</div>;
+  if (loading) return <div style={{ textAlign: 'center', padding: '40px', color: 'var(--text-muted)' }}>Loading...</div>;
 
   return (
     <div>
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '12px' }}>
-        <div style={{ fontSize: '11px', fontWeight: 700, color: '#506070', textTransform: 'uppercase', letterSpacing: '0.5px' }}>
+        <div style={{ fontSize: '11px', fontWeight: 700, color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.5px' }}>
           Part Catalog ({catalog.length})
         </div>
-        <button onClick={() => { setShowAdd(!showAdd); setEditId(null); resetForm(); }} style={{ padding: '6px 12px', borderRadius: '10px', background: '#1e4a5e', color: '#fff', fontSize: '12px', fontWeight: 700, border: 'none' }}>
+        <button onClick={() => { setShowAdd(!showAdd); setEditId(null); resetForm(); }} style={{ padding: '6px 12px', borderRadius: '10px', background: 'var(--navy)', color: '#fff', fontSize: '12px', fontWeight: 700, border: 'none' }}>
           {showAdd ? 'Cancel' : '+ Add'}
         </button>
       </div>
 
       {showAdd && (
-        <div style={{ background: '#161f2b', border: '1px solid #1e2d3d', borderRadius: '14px', padding: '14px', marginBottom: '12px' }}>
+        <div style={{ background: 'var(--card)', border: '1px solid #1e2d3d', borderRadius: '14px', padding: '14px', marginBottom: '12px' }}>
           <Input label="Part Number" value={form.part_number} onChange={(v) => setForm({ ...form, part_number: v })} />
           <div style={{ marginTop: '8px' }}>
             <label style={labelStyle}>Customer</label>
@@ -131,7 +131,7 @@ export default function CatalogPage() {
           <Input label="Graphic Package" value={form.graphic_package} onChange={(v) => setForm({ ...form, graphic_package: v })} />
           <Input label="Price" value={form.price} onChange={(v) => setForm({ ...form, price: v })} type="number" />
           <Input label="Proof Pages" value={form.proof_pages} onChange={(v) => setForm({ ...form, proof_pages: v })} type="number" />
-          <button onClick={handleAdd} style={{ width: '100%', marginTop: '12px', padding: '12px', borderRadius: '14px', background: '#059669', color: '#fff', fontWeight: 800, fontSize: '14px', border: 'none' }}>
+          <button onClick={handleAdd} style={{ width: '100%', marginTop: '12px', padding: '12px', borderRadius: '14px', background: 'var(--success)', color: '#fff', fontWeight: 800, fontSize: '14px', border: 'none' }}>
             Save Part Number
           </button>
         </div>
@@ -147,7 +147,7 @@ export default function CatalogPage() {
               onDelete={() => handleDelete(c.id)}
               confirmMessage={`Delete part ${c.part_number}? This cannot be undone.`}
             >
-              <div style={{ background: '#161f2b', border: '1px solid #1e2d3d', borderRadius: '14px', padding: '12px' }}>
+              <div style={{ background: 'var(--card)', border: '1px solid #1e2d3d', borderRadius: '14px', padding: '12px' }}>
                 {isEditing ? (
                   <div>
                     <Input label="Part Number" value={form.part_number} onChange={(v) => setForm({ ...form, part_number: v })} />
@@ -163,10 +163,10 @@ export default function CatalogPage() {
                     <Input label="Price" value={form.price} onChange={(v) => setForm({ ...form, price: v })} type="number" />
                     <Input label="Proof Pages" value={form.proof_pages} onChange={(v) => setForm({ ...form, proof_pages: v })} type="number" />
                     <div style={{ display: 'flex', gap: '6px', marginTop: '10px' }}>
-                      <button onClick={saveEdit} style={{ flex: 1, padding: '10px', borderRadius: '10px', background: '#059669', color: '#fff', fontSize: '12px', fontWeight: 700, border: 'none' }}>
+                      <button onClick={saveEdit} style={{ flex: 1, padding: '10px', borderRadius: '10px', background: 'var(--success)', color: '#fff', fontSize: '12px', fontWeight: 700, border: 'none' }}>
                         Save
                       </button>
-                      <button onClick={cancelEdit} style={{ flex: 1, padding: '10px', borderRadius: '10px', background: 'transparent', border: '1px solid #1e2d3d', color: '#8e9baa', fontSize: '12px', fontWeight: 700 }}>
+                      <button onClick={cancelEdit} style={{ flex: 1, padding: '10px', borderRadius: '10px', background: 'transparent', border: '1px solid #1e2d3d', color: 'var(--text-secondary)', fontSize: '12px', fontWeight: 700 }}>
                         Cancel
                       </button>
                     </div>
@@ -175,14 +175,14 @@ export default function CatalogPage() {
                   <div onClick={() => startEdit(c)} style={{ display: 'flex', justifyContent: 'space-between', cursor: 'pointer' }}>
                     <div>
                       <div style={{ fontWeight: 800, fontSize: '15px' }}>{c.part_number}</div>
-                      <div style={{ fontSize: '12px', color: '#2a6178', marginTop: '1px' }}>{c.end_customer} — {c.graphic_package}</div>
-                      <div style={{ fontSize: '11px', color: '#506070' }}>
+                      <div style={{ fontSize: '12px', color: 'var(--navy-light)', marginTop: '1px' }}>{c.end_customer} — {c.graphic_package}</div>
+                      <div style={{ fontSize: '11px', color: 'var(--text-muted)' }}>
                         {c.vehicle_type} • {c.customer}
-                        <span style={{ marginLeft: '8px', color: '#1e4a5e', fontSize: '10px' }}>tap to edit</span>
+                        <span style={{ marginLeft: '8px', color: 'var(--navy)', fontSize: '10px' }}>tap to edit</span>
                       </div>
                     </div>
                     <div style={{ textAlign: 'right' }}>
-                      <div style={{ fontWeight: 800, fontSize: '15px', color: '#34d399' }}>${c.price.toFixed(2)}</div>
+                      <div style={{ fontWeight: 800, fontSize: '15px', color: 'var(--success)' }}>${c.price.toFixed(2)}</div>
                     </div>
                   </div>
                 )}
@@ -192,15 +192,15 @@ export default function CatalogPage() {
         })}
       </div>
 
-      <button onClick={() => router.push('/more')} style={{ width: '100%', padding: '10px', borderRadius: '14px', marginTop: '14px', border: '1px solid #1e2d3d', background: 'transparent', color: '#8e9baa', fontSize: '13px', fontWeight: 700 }}>
+      <button onClick={() => router.push('/more')} style={{ width: '100%', padding: '10px', borderRadius: '14px', marginTop: '14px', border: '1px solid #1e2d3d', background: 'transparent', color: 'var(--text-secondary)', fontSize: '13px', fontWeight: 700 }}>
         ← Back
       </button>
     </div>
   );
 }
 
-const labelStyle: React.CSSProperties = { display: 'block', fontSize: '10px', fontWeight: 700, color: '#506070', textTransform: 'uppercase', letterSpacing: '0.5px', marginBottom: '4px' };
-const inputStyle: React.CSSProperties = { width: '100%', padding: '10px 12px', borderRadius: '10px', border: '1px solid #1e2d3d', background: '#0f1720', color: '#e8ecf1', fontSize: '13px' };
+const labelStyle: React.CSSProperties = { display: 'block', fontSize: '10px', fontWeight: 700, color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.5px', marginBottom: '4px' };
+const inputStyle: React.CSSProperties = { width: '100%', padding: '10px 12px', borderRadius: '10px', border: '1px solid #1e2d3d', background: 'var(--bg)', color: 'var(--text-primary)', fontSize: '13px' };
 
 function Input({ label, value, onChange, type }: { label: string; value: string; onChange: (v: string) => void; type?: string }) {
   return (

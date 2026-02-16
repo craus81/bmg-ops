@@ -4,9 +4,9 @@ import { useEffect } from 'react';
 import { useRouter } from 'next/navigation';
 import { AuthProvider, useAuth } from '@/components/AuthProvider';
 import { AppProvider, useApp } from '@/components/AppProvider';
+import { ThemeProvider } from '@/components/ThemeProvider';
 import Header from '@/components/Header';
 import BottomNav from '@/components/BottomNav';
-import { theme } from '@/lib/theme';
 
 function AppShell({ children }: { children: React.ReactNode }) {
   const router = useRouter();
@@ -19,14 +19,14 @@ function AppShell({ children }: { children: React.ReactNode }) {
 
   if (loading || appLoading) {
     return (
-      <div style={{ minHeight: '100vh', display: 'flex', alignItems: 'center', justifyContent: 'center', background: theme.bg }}>
+      <div style={{ minHeight: '100vh', display: 'flex', alignItems: 'center', justifyContent: 'center', background: 'var(--bg)' }}>
         <div style={{ textAlign: 'center' }}>
           <div style={{
-            width: '36px', height: '36px', border: `3px solid ${theme.border}`,
-            borderTopColor: theme.orange, borderRadius: '50%', margin: '0 auto',
+            width: '36px', height: '36px', border: '3px solid var(--border)',
+            borderTopColor: 'var(--orange)', borderRadius: '50%', margin: '0 auto',
             animation: 'spin 1s linear infinite',
           }} />
-          <div style={{ color: theme.textMuted, marginTop: '12px', fontSize: '13px', fontWeight: 600 }}>Loading...</div>
+          <div style={{ color: 'var(--text-muted)', marginTop: '12px', fontSize: '13px', fontWeight: 600 }}>Loading...</div>
         </div>
       </div>
     );
@@ -35,7 +35,7 @@ function AppShell({ children }: { children: React.ReactNode }) {
   if (!user) return null;
 
   return (
-    <div style={{ minHeight: '100vh', paddingBottom: '70px', background: theme.bg }}>
+    <div style={{ minHeight: '100vh', paddingBottom: '70px', background: 'var(--bg)' }}>
       <Header clockStatus={clockStatus} activePartNumber={activePart?.part_number} activeEndCustomer={activePart?.end_customer} />
       <div style={{ maxWidth: '500px', margin: '0 auto', padding: '14px 20px' }}>
         {children}
@@ -47,10 +47,12 @@ function AppShell({ children }: { children: React.ReactNode }) {
 
 export default function ClientProviders({ children }: { children: React.ReactNode }) {
   return (
-    <AuthProvider>
-      <AppProvider>
-        <AppShell>{children}</AppShell>
-      </AppProvider>
-    </AuthProvider>
+    <ThemeProvider>
+      <AuthProvider>
+        <AppProvider>
+          <AppShell>{children}</AppShell>
+        </AppProvider>
+      </AuthProvider>
+    </ThemeProvider>
   );
 }
