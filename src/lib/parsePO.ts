@@ -3,8 +3,8 @@
 
 import * as pdfjsLib from 'pdfjs-dist';
 
-// Disable worker — runs on main thread, fine for small POs
-pdfjsLib.GlobalWorkerOptions.workerSrc = '';
+// Worker served from public folder (copied from node_modules/pdfjs-dist/build/pdf.worker.min.mjs)
+pdfjsLib.GlobalWorkerOptions.workerSrc = '/pdf.worker.min.mjs';
 
 export interface ParsedPOLine {
   line_no: string;
