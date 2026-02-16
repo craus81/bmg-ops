@@ -1,15 +1,14 @@
 // Parse Masterack PO PDFs
-// Extracts PO number, line items (part number, description, quantity, unit price)
+// Uses positional text extraction for accurate column mapping
 
 import * as pdfjsLib from 'pdfjs-dist';
 
-// Worker served from public folder (copied from node_modules/pdfjs-dist/build/pdf.worker.min.mjs)
 pdfjsLib.GlobalWorkerOptions.workerSrc = '/pdf.worker.min.mjs';
 
 export interface ParsedPOLine {
   line_no: string;
-  part_number: string;       // Masterack part number (e.g., 06CS982486)
-  supplier_part: string;     // Supplier part number (e.g., CS982486)
+  part_number: string;
+  supplier_part: string;
   description: string;
   quantity: number;
   unit_price: number;
@@ -22,75 +21,195 @@ export interface ParsedPO {
   customer: string;
   ordered_date: string;
   lines: ParsedPOLine[];
+  debug?: string; // raw text dump for troubleshooting
 }
 
-export async function parseMasterackPO(file: File): Promise<ParsedPO> {
+export async function parseMasterackPO(file: File, debug = false): Promise<ParsedPO> {
   const arrayBuffer = await file.arrayBuffer();
   const pdf = await pdfjsLib.getDocument({ data: arrayBuffer }).promise;
 
-  let fullText = '';
-  for (let i = 1; i <= pdf.numPages; i++) {
-    const page = await pdf.getPage(i);
+  // Get all text items with positions
+  interface TItem { str: string; x: number; y: number; w: number; }
+  const allItems: TItem[] = [];
+
+  for (let p = 1; p <= pdf.numPages; p++) {
+    const page = await pdf.getPage(p);
     const content = await page.getTextContent();
-    const pageText = content.items.map((item: any) => item.str).join(' ');
-    fullText += pageText + '\n';
+    for (const item of content.items as any[]) {
+      if (item.str !== undefined) {
+        allItems.push({
+          str: item.str,
+          x: Math.round(item.transform[4]),
+          y: Math.round(item.transform[5]),
+          w: Math.round(item.width || 0),
+        });
+      }
+    }
   }
 
+  // Build debug output
+  let debugText = '';
+  if (debug) {
+    // Sort by Y desc then X asc (reading order)
+    const sorted = [...allItems].sort((a, b) => b.y - a.y || a.x - b.x);
+    debugText = sorted.map((t) => `[y=${t.y} x=${t.x} w=${t.w}] "${t.str}"`).join('\n');
+  }
+
+  // Reconstruct lines by grouping items at similar Y positions
+  const yGroups = new Map<number, TItem[]>();
+  for (const item of allItems) {
+    if (!item.str.trim()) continue;
+    let matched = false;
+    for (const [y, group] of yGroups) {
+      if (Math.abs(item.y - y) <= 5) {
+        group.push(item);
+        matched = true;
+        break;
+      }
+    }
+    if (!matched) {
+      yGroups.set(item.y, [item]);
+    }
+  }
+
+  // Sort groups top to bottom (high Y = top of page in PDF coords), items left to right
+  const textLines: { y: number; items: TItem[] }[] = [];
+  for (const [y, items] of yGroups) {
+    items.sort((a, b) => a.x - b.x);
+    textLines.push({ y, items });
+  }
+  textLines.sort((a, b) => b.y - a.y);
+
+  // Build full text per line for regex matching
+  const fullLines = textLines.map((line) => ({
+    y: line.y,
+    items: line.items,
+    text: line.items.map((i) => i.str).join(' '),
+  }));
+
   // Extract PO number
-  const poMatch = fullText.match(/PURCHASE\s+ORDER\s+NUMBER\s+(\d+)/i);
-  const po_number = poMatch ? poMatch[1] : '';
+  let po_number = '';
+  for (const line of fullLines) {
+    const m = line.text.match(/PURCHASE\s*ORDER\s*NUMBER\s*(\d+)/i);
+    if (m) { po_number = m[1]; break; }
+  }
 
   // Extract ordered date
-  const dateMatch = fullText.match(/Ordered\s+Date:\s*(\d{2}\/\d{2}\/\d{2,4})/i);
-  const ordered_date = dateMatch ? dateMatch[1] : '';
+  let ordered_date = '';
+  for (const line of fullLines) {
+    const m = line.text.match(/Ordered\s*Date:\s*(\d{2}\/\d{2}\/\d{2,4})/i);
+    if (m) { ordered_date = m[1]; break; }
+  }
 
-  // Extract line items
-  // Masterack PO format: Line No | Part Number / Supplier Part | Description | Drawing | Harmonized | Qty | UOM | Unit Price | Extended | Date Tax
+  // Find data rows: look for lines starting with "X.000" (line number pattern)
   const lines: ParsedPOLine[] = [];
 
-  // Strategy: find patterns like "1.000 06CS982486 CS982486" followed by quantity and price
-  // Line numbers are like "1.000", "2.000", etc.
-  const linePattern = /(\d+\.\d{3})\s+(\S+)\s+/g;
-  let match;
+  for (let i = 0; i < fullLines.length; i++) {
+    const fl = fullLines[i];
+    // Line number pattern: "1.000", "2.000", etc
+    const lineNoItem = fl.items.find((item) => /^\d+\.\d{3}$/.test(item.str.trim()));
+    if (!lineNoItem) continue;
 
-  // Better approach: split by line numbers and parse each block
-  const lineBlocks = fullText.split(/(?=\d+\.\d{3}\s+\d{2}[A-Z])/);
+    const line_no = lineNoItem.str.trim();
 
-  for (const block of lineBlocks) {
-    // Match: "1.000 06CS982486 CS982486 ... 6.00 EA 0.0000"
-    const lineMatch = block.match(/^(\d+\.\d{3})\s+(\S+)\s+(\S+)/);
-    if (!lineMatch) continue;
+    // This row should contain: line_no, part_number, description pieces, qty, UOM, unit_price, etc
+    // Items are sorted left to right by X position
+    const rowItems = fl.items.filter((item) => item.str.trim());
 
-    const line_no = lineMatch[1];
-    const part_number = lineMatch[2];
-    const supplier_part = lineMatch[3];
+    // Part number: first substantial alphanumeric item after line number
+    let part_number = '';
+    let partIdx = -1;
+    for (let j = 0; j < rowItems.length; j++) {
+      const s = rowItems[j].str.trim();
+      if (s === line_no) continue;
+      if (/^[A-Z0-9]{4,}$/i.test(s)) {
+        part_number = s;
+        partIdx = j;
+        break;
+      }
+    }
 
-    // Find quantity: look for number followed by "EA"
-    const qtyMatch = block.match(/(\d+(?:\.\d+)?)\s+EA/);
-    const quantity = qtyMatch ? parseFloat(qtyMatch[1]) : 0;
+    // Find "EA" (UOM) - this anchors our column positions
+    let eaIdx = -1;
+    for (let j = 0; j < rowItems.length; j++) {
+      if (rowItems[j].str.trim() === 'EA' || rowItems[j].str.trim() === 'PC') {
+        eaIdx = j;
+        break;
+      }
+    }
 
-    // Find unit price: number after EA, format like "0.0000" or "195.0000"
-    const priceMatch = block.match(/EA\s+(\d+(?:\.\d+)?)/);
-    const unit_price = priceMatch ? parseFloat(priceMatch[1]) : 0;
+    // Quantity: the number immediately before "EA"
+    let quantity = 0;
+    if (eaIdx > 0) {
+      const qStr = rowItems[eaIdx - 1].str.trim();
+      if (/^\d+(\.\d+)?$/.test(qStr)) {
+        quantity = parseFloat(qStr);
+      }
+    }
 
-    // Find extended price: look for pattern after unit price
-    // The extended USD comes after unit price
-    const extMatch = block.match(/EA\s+\d+(?:\.\d+)?\s+(?:Y\s+)?(\d+(?:\.\d+)?)/);
-    const extended_price = extMatch ? parseFloat(extMatch[1]) : quantity * unit_price;
+    // Unit price: the number immediately after "EA" (or after the UOM)
+    let unit_price = 0;
+    if (eaIdx >= 0 && eaIdx + 1 < rowItems.length) {
+      const pStr = rowItems[eaIdx + 1].str.trim();
+      if (/^\d+(\.\d+)?$/.test(pStr)) {
+        unit_price = parseFloat(pStr);
+      }
+    }
 
-    // Find delivery date
-    const delMatch = block.match(/(\d{2}\/\d{2}\/\d{2,4})/);
-    const delivery_date = delMatch ? delMatch[1] : '';
+    // Delivery date: look for MM/DD/YY pattern
+    let delivery_date = '';
+    for (const item of rowItems) {
+      if (/^\d{2}\/\d{2}\/\d{2,4}$/.test(item.str.trim())) {
+        delivery_date = item.str.trim();
+        break;
+      }
+    }
 
-    // Extract description: text between supplier part and the quantity
-    // This is tricky from flattened text, grab what we can
-    const descStart = block.indexOf(supplier_part) + supplier_part.length;
-    const descEnd = qtyMatch ? block.indexOf(qtyMatch[0]) : block.length;
-    let description = block.substring(descStart, descEnd).trim();
-    // Clean up description - remove drawing numbers and codes
-    description = description.replace(/\s+/g, ' ').trim();
+    // Description: items between part number and qty, that aren't the supplier part or special
+    const descParts: string[] = [];
+    const qtyItemX = eaIdx > 0 ? rowItems[eaIdx - 1].x : 9999;
+    for (let j = (partIdx >= 0 ? partIdx + 1 : 1); j < rowItems.length; j++) {
+      const item = rowItems[j];
+      if (item.x >= qtyItemX - 10) break;
+      const s = item.str.trim();
+      if (s && s !== line_no && s !== part_number) {
+        descParts.push(s);
+      }
+    }
 
-    if (part_number && quantity > 0) {
+    // Supplier part: check the next text line for a part number pattern near same X as our part_number
+    let supplier_part = '';
+    if (i + 1 < fullLines.length) {
+      const nextLine = fullLines[i + 1];
+      // Should not be another "X.000" line
+      if (!nextLine.items.some((item) => /^\d+\.\d{3}$/.test(item.str.trim()))) {
+        // Look for alphanumeric code and description on continuation line
+        for (const item of nextLine.items) {
+          const s = item.str.trim();
+          if (/^[A-Z0-9]{4,}$/i.test(s) && s !== part_number) {
+            supplier_part = s;
+            break;
+          }
+        }
+        // Add rest of next line to description
+        const extraDesc = nextLine.items
+          .filter((item) => item.str.trim() !== supplier_part && item.str.trim())
+          .map((item) => item.str.trim());
+        if (extraDesc.length > 0) {
+          descParts.push(...extraDesc);
+        }
+      }
+    }
+
+    // Clean up description
+    const description = descParts
+      .filter((d) => !/^\d+\.\d{3}$/.test(d)) // remove line numbers
+      .filter((d) => !/^[YN]$/.test(d)) // remove tax flag
+      .filter((d) => !/^\d{2}\/\d{2}\/\d{2}$/.test(d)) // remove dates
+      .join(' ')
+      .trim();
+
+    if (part_number) {
       lines.push({
         line_no,
         part_number,
@@ -98,7 +217,7 @@ export async function parseMasterackPO(file: File): Promise<ParsedPO> {
         description,
         quantity,
         unit_price,
-        extended_price,
+        extended_price: quantity * unit_price,
         delivery_date,
       });
     }
@@ -109,5 +228,6 @@ export async function parseMasterackPO(file: File): Promise<ParsedPO> {
     customer: 'Masterack',
     ordered_date,
     lines,
+    debug: debug ? debugText : undefined,
   };
 }
