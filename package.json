@@ -14,6 +14,7 @@
     "@zxing/library": "^0.21.3",
     "html5-qrcode": "^2.3.8",
     "next": "^14.2.0",
+    "pdfjs-dist": "^5.4.624",
     "react": "^18.3.0",
     "react-dom": "^18.3.0",
     "xlsx": "^0.18.5"
