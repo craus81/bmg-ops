@@ -3,8 +3,8 @@
 
 import * as pdfjsLib from 'pdfjs-dist';
 
-// Use the worker from the package
-pdfjsLib.GlobalWorkerOptions.workerSrc = `//cdnjs.cloudflare.com/ajax/libs/pdf.js/${pdfjsLib.version}/pdf.worker.min.js`;
+// Disable worker — runs on main thread, fine for small POs
+pdfjsLib.GlobalWorkerOptions.workerSrc = '';
 
 export interface ParsedPOLine {
   line_no: string;
