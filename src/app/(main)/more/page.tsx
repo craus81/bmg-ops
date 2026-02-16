@@ -2,6 +2,7 @@
 
 import { useRouter } from 'next/navigation';
 import { useAuth } from '@/components/AuthProvider';
+import { theme } from '@/lib/theme';
 
 export default function MorePage() {
   const router = useRouter();
@@ -9,7 +10,7 @@ export default function MorePage() {
 
   return (
     <div>
-      <div style={{ fontSize: '11px', fontWeight: 700, color: '#4a5f78', textTransform: 'uppercase', letterSpacing: '0.5px', marginBottom: '12px' }}>
+      <div style={{ fontSize: '11px', fontWeight: 700, color: theme.gray500, textTransform: 'uppercase', letterSpacing: '0.5px', marginBottom: '12px' }}>
         More
       </div>
 
@@ -24,18 +25,18 @@ export default function MorePage() {
         <MenuBtn icon="📝" title="Quick Job (No PO)" sub="Start scanning without a PO" onClick={() => router.push('/scan')} />
       </div>
 
-      <div style={{ marginTop: '32px', padding: '14px', background: '#141e2b', border: '1px solid #1e2d3d', borderRadius: '10px' }}>
-        <div style={{ fontSize: '13px', fontWeight: 700 }}>{profile?.full_name}</div>
-        <div style={{ fontSize: '11px', color: '#4a5f78', marginTop: '2px' }}>{profile?.email}</div>
-        <div style={{ fontSize: '11px', color: isAdmin ? '#a78bfa' : '#60a5fa', marginTop: '2px', fontWeight: 600 }}>
+      <div style={{ marginTop: '32px', padding: '14px', background: theme.white, border: `1px solid ${theme.cardBorder}`, borderRadius: '12px', boxShadow: '0 1px 3px rgba(0,0,0,0.04)' }}>
+        <div style={{ fontSize: '13px', fontWeight: 700, color: theme.gray800 }}>{profile?.full_name}</div>
+        <div style={{ fontSize: '11px', color: theme.gray500, marginTop: '2px' }}>{profile?.email}</div>
+        <div style={{ fontSize: '11px', color: isAdmin ? theme.orange : theme.navy, marginTop: '2px', fontWeight: 600 }}>
           {isAdmin ? 'Administrator' : 'Installer'}
         </div>
         <button
           onClick={signOut}
           style={{
             marginTop: '12px', width: '100%', padding: '10px', borderRadius: '8px',
-            border: '1px solid rgba(239,68,68,0.25)', background: 'rgba(239,68,68,0.05)',
-            color: '#f87171', fontSize: '13px', fontWeight: 700,
+            border: `1px solid ${theme.errorBorder}`, background: theme.errorBg,
+            color: theme.error, fontSize: '13px', fontWeight: 700,
           }}
         >
           Sign Out
@@ -51,18 +52,19 @@ function MenuBtn({ icon, title, sub, onClick }: { icon: string; title: string; s
       onClick={onClick}
       style={{
         display: 'flex', alignItems: 'center', gap: '12px', width: '100%',
-        padding: '12px', borderRadius: '10px', textAlign: 'left',
-        border: '1px solid #1e2d3d', background: '#141e2b', color: '#e8ecf1',
+        padding: '14px', borderRadius: '12px', textAlign: 'left',
+        border: `1px solid ${theme.cardBorder}`, background: theme.white, color: theme.gray800,
+        boxShadow: '0 1px 3px rgba(0,0,0,0.04)',
       }}
     >
       <div style={{
-        width: '38px', height: '38px', borderRadius: '8px',
-        background: 'rgba(255,255,255,0.03)', display: 'flex',
-        alignItems: 'center', justifyContent: 'center', fontSize: '17px', flexShrink: 0,
+        width: '40px', height: '40px', borderRadius: '10px',
+        background: theme.gray50, display: 'flex',
+        alignItems: 'center', justifyContent: 'center', fontSize: '18px', flexShrink: 0,
       }}>{icon}</div>
       <div>
         <div style={{ fontWeight: 700, fontSize: '14px' }}>{title}</div>
-        <div style={{ fontSize: '11px', color: '#4a5f78', marginTop: '1px' }}>{sub}</div>
+        <div style={{ fontSize: '11px', color: theme.gray500, marginTop: '2px' }}>{sub}</div>
       </div>
     </button>
   );

@@ -1,6 +1,7 @@
 'use client';
 
 import { usePathname, useRouter } from 'next/navigation';
+import { theme } from '@/lib/theme';
 
 interface BottomNavProps {
   clockStatus: 'out' | 'in' | 'break';
@@ -8,7 +9,7 @@ interface BottomNavProps {
 
 const tabs = [
   { id: 'home', path: '/home', label: 'Home', icon: '🏠' },
-  { id: 'time', path: '/time', label: 'Time Clock', icon: '⏰' },
+  { id: 'time', path: '/time', label: 'Time', icon: '⏰' },
   { id: 'vehicles', path: '/vehicles', label: 'Vehicles', icon: '🚐' },
   { id: 'more', path: '/more', label: 'More', icon: '⋯' },
 ];
@@ -33,24 +34,36 @@ export default function BottomNav({ clockStatus }: BottomNavProps) {
   return (
     <nav style={{
       position: 'fixed', bottom: 0, left: 0, right: 0,
-      background: '#141e2b', borderTop: '1px solid #1e2d3d',
+      background: theme.white,
+      borderTop: `1px solid ${theme.gray200}`,
       display: 'flex', zIndex: 100,
       paddingBottom: 'env(safe-area-inset-bottom, 0px)',
+      boxShadow: '0 -1px 8px rgba(0,0,0,0.06)',
     }}>
-      {tabs.map((tab) => (
-        <button
-          key={tab.id}
-          onClick={() => router.push(tab.path)}
-          style={{
-            flex: 1, padding: '8px 4px 10px', display: 'flex',
-            flexDirection: 'column', alignItems: 'center', gap: '2px',
-            color: isActive(tab) ? '#60a5fa' : '#4a5f78',
-          }}
-        >
-          <div style={{ fontSize: '18px' }}>{getIcon(tab)}</div>
-          <div style={{ fontSize: '10px', fontWeight: 700 }}>{tab.label}</div>
-        </button>
-      ))}
+      {tabs.map((tab) => {
+        const active = isActive(tab);
+        return (
+          <button
+            key={tab.id}
+            onClick={() => router.push(tab.path)}
+            style={{
+              flex: 1, padding: '8px 4px 10px', display: 'flex',
+              flexDirection: 'column', alignItems: 'center', gap: '2px',
+              color: active ? theme.navy : theme.gray400,
+              position: 'relative',
+            }}
+          >
+            {active && (
+              <div style={{
+                position: 'absolute', top: '-1px', left: '25%', right: '25%',
+                height: '2px', background: theme.orange, borderRadius: '0 0 2px 2px',
+              }} />
+            )}
+            <div style={{ fontSize: '18px' }}>{getIcon(tab)}</div>
+            <div style={{ fontSize: '10px', fontWeight: active ? 800 : 600 }}>{tab.label}</div>
+          </button>
+        );
+      })}
     </nav>
   );
 }

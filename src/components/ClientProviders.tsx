@@ -6,6 +6,7 @@ import { AuthProvider, useAuth } from '@/components/AuthProvider';
 import { AppProvider, useApp } from '@/components/AppProvider';
 import Header from '@/components/Header';
 import BottomNav from '@/components/BottomNav';
+import { theme } from '@/lib/theme';
 
 function AppShell({ children }: { children: React.ReactNode }) {
   const router = useRouter();
@@ -20,14 +21,14 @@ function AppShell({ children }: { children: React.ReactNode }) {
 
   if (loading || appLoading) {
     return (
-      <div style={{ minHeight: '100vh', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+      <div style={{ minHeight: '100vh', display: 'flex', alignItems: 'center', justifyContent: 'center', background: theme.pageBg }}>
         <div style={{ textAlign: 'center' }}>
           <div style={{
-            width: '36px', height: '36px', border: '3px solid #1e2d3d',
-            borderTopColor: '#3b82f6', borderRadius: '50%', margin: '0 auto',
+            width: '36px', height: '36px', border: `3px solid ${theme.gray200}`,
+            borderTopColor: theme.orange, borderRadius: '50%', margin: '0 auto',
             animation: 'spin 1s linear infinite',
           }} />
-          <div style={{ color: '#4a5f78', marginTop: '12px', fontSize: '13px' }}>Loading...</div>
+          <div style={{ color: theme.gray500, marginTop: '12px', fontSize: '13px', fontWeight: 600 }}>Loading...</div>
         </div>
       </div>
     );
@@ -36,7 +37,7 @@ function AppShell({ children }: { children: React.ReactNode }) {
   if (!user) return null;
 
   return (
-    <div style={{ minHeight: '100vh', paddingBottom: '70px' }}>
+    <div style={{ minHeight: '100vh', paddingBottom: '70px', background: theme.pageBg }}>
       <Header
         clockStatus={clockStatus}
         activePartNumber={activePart?.part_number}
