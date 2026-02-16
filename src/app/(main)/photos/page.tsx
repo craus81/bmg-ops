@@ -95,7 +95,7 @@ export default function PhotosPage() {
   };
 
   if (!vehicleId) return <div style={{ color: '#f87171', padding: '20px' }}>No vehicle ID</div>;
-  if (loading) return <div style={{ textAlign: 'center', padding: '40px', color: '#4a5f78' }}>Loading...</div>;
+  if (loading) return <div style={{ textAlign: 'center', padding: '40px', color: '#506070' }}>Loading...</div>;
 
   const title = vehicle
     ? [vehicle.vehicle_year, vehicle.vehicle_make, vehicle.vehicle_model].filter(Boolean).join(' ')
@@ -103,12 +103,12 @@ export default function PhotosPage() {
 
   return (
     <div>
-      <div style={{ fontSize: '11px', fontWeight: 700, color: '#4a5f78', textTransform: 'uppercase', letterSpacing: '0.5px', marginBottom: '6px' }}>
+      <div style={{ fontSize: '11px', fontWeight: 700, color: '#506070', textTransform: 'uppercase', letterSpacing: '0.5px', marginBottom: '6px' }}>
         Completion Photos
       </div>
       <div style={{ fontWeight: 700, fontSize: '15px', marginBottom: '4px' }}>{title}</div>
       {vehicle?.vin && (
-        <div style={{ fontSize: '11px', fontFamily: 'monospace', color: '#4a5f78', marginBottom: '16px' }}>{vehicle.vin}</div>
+        <div style={{ fontSize: '11px', fontFamily: 'monospace', color: '#506070', marginBottom: '16px' }}>{vehicle.vin}</div>
       )}
 
       <input
@@ -125,8 +125,8 @@ export default function PhotosPage() {
           onClick={() => fileRef.current?.click()}
           disabled={uploading}
           style={{
-            flex: 1, padding: '14px', borderRadius: '10px',
-            background: '#3b82f6', color: '#fff', fontWeight: 700, fontSize: '14px',
+            flex: 1, padding: '14px', borderRadius: '14px',
+            background: '#1e4a5e', color: '#fff', fontWeight: 700, fontSize: '14px',
             opacity: uploading ? 0.5 : 1,
           }}
         >
@@ -142,9 +142,9 @@ export default function PhotosPage() {
           }}
           disabled={uploading}
           style={{
-            padding: '14px 18px', borderRadius: '10px',
-            border: '1px solid #1e2d3d', background: '#141e2b',
-            color: '#6b7a8d', fontWeight: 700, fontSize: '14px',
+            padding: '14px 18px', borderRadius: '14px',
+            border: '1px solid #1e2d3d', background: '#161f2b',
+            color: '#8e9baa', fontWeight: 700, fontSize: '14px',
           }}
         >
           📁
@@ -152,7 +152,7 @@ export default function PhotosPage() {
       </div>
 
       {photos.length === 0 && (
-        <div style={{ textAlign: 'center', padding: '28px 0', color: '#4a5f78' }}>
+        <div style={{ textAlign: 'center', padding: '28px 0', color: '#506070' }}>
           <div style={{ fontSize: '36px', marginBottom: '6px', opacity: 0.4 }}>📷</div>
           <div style={{ fontWeight: 600, fontSize: '13px' }}>No photos yet — tap to add</div>
         </div>
@@ -160,7 +160,7 @@ export default function PhotosPage() {
 
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: '4px' }}>
         {photos.map((p) => (
-          <div key={p.id} style={{ position: 'relative', paddingTop: '100%', borderRadius: '8px', overflow: 'hidden', background: '#141e2b' }}>
+          <div key={p.id} style={{ position: 'relative', paddingTop: '100%', borderRadius: '10px', overflow: 'hidden', background: '#161f2b' }}>
             {p.url && (
               <img
                 src={p.url}
@@ -176,9 +176,9 @@ export default function PhotosPage() {
         <button
           onClick={() => router.push('/scan')}
           style={{
-            width: '100%', padding: '12px', borderRadius: '10px',
-            background: 'rgba(59,130,246,0.08)', border: '1px solid rgba(59,130,246,0.25)',
-            color: '#60a5fa', fontWeight: 700, fontSize: '13px',
+            width: '100%', padding: '12px', borderRadius: '14px',
+            background: 'rgba(238,49,32,0.06)', border: '1px solid rgba(238,49,32,0.15)',
+            color: '#1e4a5e', fontWeight: 700, fontSize: '13px',
           }}
         >
           📷 Scan Next VIN
@@ -186,9 +186,9 @@ export default function PhotosPage() {
         <button
           onClick={() => router.back()}
           style={{
-            width: '100%', padding: '10px', borderRadius: '10px',
+            width: '100%', padding: '10px', borderRadius: '14px',
             border: '1px solid #1e2d3d', background: 'transparent',
-            color: '#6b7a8d', fontSize: '13px', fontWeight: 700,
+            color: '#8e9baa', fontSize: '13px', fontWeight: 700,
           }}
         >
           ← Back

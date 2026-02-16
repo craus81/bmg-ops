@@ -203,22 +203,22 @@ export default function ReportsPage() {
   });
 
   if (loading) {
-    return <div style={{ textAlign: 'center', padding: '40px', color: '#4a5f78' }}>Loading...</div>;
+    return <div style={{ textAlign: 'center', padding: '40px', color: '#506070' }}>Loading...</div>;
   }
 
   return (
     <div>
-      <div style={{ fontSize: '11px', fontWeight: 700, color: '#4a5f78', textTransform: 'uppercase', letterSpacing: '0.5px', marginBottom: '12px' }}>Reports</div>
+      <div style={{ fontSize: '11px', fontWeight: 700, color: '#506070', textTransform: 'uppercase', letterSpacing: '0.5px', marginBottom: '12px' }}>Reports</div>
 
-      <div style={{ display: 'flex', gap: '4px', marginBottom: '12px', background: '#141e2b', borderRadius: '8px', padding: '3px' }}>
-        <button onClick={function() { switchTab('pending'); }} style={{ flex: 1, padding: '8px', borderRadius: '6px', fontSize: '12px', fontWeight: 700, background: tab === 'pending' ? 'rgba(59,130,246,0.15)' : 'transparent', border: 'none', color: tab === 'pending' ? '#60a5fa' : '#4a5f78' }}>
+      <div style={{ display: 'flex', gap: '4px', marginBottom: '12px', background: '#161f2b', borderRadius: '10px', padding: '3px' }}>
+        <button onClick={function() { switchTab('pending'); }} style={{ flex: 1, padding: '8px', borderRadius: '6px', fontSize: '12px', fontWeight: 700, background: tab === 'pending' ? 'rgba(238,49,32,0.1)' : 'transparent', border: 'none', color: tab === 'pending' ? '#1e4a5e' : '#506070' }}>
           Ready to Export {vehicles.length > 0 ? '(' + vehicles.length + ')' : ''}
         </button>
-        <button onClick={function() { switchTab('archive'); }} style={{ flex: 1, padding: '8px', borderRadius: '6px', fontSize: '12px', fontWeight: 700, background: tab === 'archive' ? 'rgba(59,130,246,0.15)' : 'transparent', border: 'none', color: tab === 'archive' ? '#60a5fa' : '#4a5f78' }}>Archive</button>
+        <button onClick={function() { switchTab('archive'); }} style={{ flex: 1, padding: '8px', borderRadius: '6px', fontSize: '12px', fontWeight: 700, background: tab === 'archive' ? 'rgba(238,49,32,0.1)' : 'transparent', border: 'none', color: tab === 'archive' ? '#1e4a5e' : '#506070' }}>Archive</button>
       </div>
 
       {exported && (
-        <div style={{ padding: '10px 12px', background: 'rgba(34,197,94,0.06)', border: '1px solid rgba(34,197,94,0.2)', borderRadius: '8px', color: '#4ade80', fontSize: '13px', fontWeight: 700, marginBottom: '12px', textAlign: 'center' }}>
+        <div style={{ padding: '10px 12px', background: 'rgba(52,211,153,0.06)', border: '1px solid rgba(52,211,153,0.15)', borderRadius: '10px', color: '#34d399', fontSize: '13px', fontWeight: 700, marginBottom: '12px', textAlign: 'center' }}>
           Exported {exportedCount} vehicles
         </div>
       )}
@@ -226,7 +226,7 @@ export default function ReportsPage() {
       {tab === 'pending' && (
         <div>
           {vehicles.length === 0 && !exported && (
-            <div style={{ textAlign: 'center', padding: '32px 0', color: '#4a5f78' }}>
+            <div style={{ textAlign: 'center', padding: '32px 0', color: '#506070' }}>
               <div style={{ fontSize: '36px', marginBottom: '6px', opacity: 0.4 }}>✓</div>
               <div style={{ fontWeight: 600, fontSize: '13px' }}>All caught up - nothing to export</div>
             </div>
@@ -237,7 +237,7 @@ export default function ReportsPage() {
               <button
                 onClick={handleExportAll}
                 disabled={exporting}
-                style={{ width: '100%', padding: '14px', borderRadius: '10px', background: '#22c55e', color: '#fff', fontSize: '15px', fontWeight: 800, border: 'none', marginBottom: '12px' }}
+                style={{ width: '100%', padding: '14px', borderRadius: '14px', background: '#059669', color: '#fff', fontSize: '15px', fontWeight: 800, border: 'none', marginBottom: '12px' }}
               >
                 {exporting ? 'Exporting...' : 'Export All (' + vehicles.length + ' vehicles)'}
               </button>
@@ -245,16 +245,16 @@ export default function ReportsPage() {
               {Object.keys(grouped).map(function(customer) {
                 var custVehicles = grouped[customer];
                 return (
-                  <div key={customer} style={{ background: '#141e2b', border: '1px solid #1e2d3d', borderRadius: '10px', padding: '12px', marginBottom: '8px' }}>
+                  <div key={customer} style={{ background: '#161f2b', border: '1px solid #1e2d3d', borderRadius: '14px', padding: '12px', marginBottom: '8px' }}>
                     <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '8px' }}>
                       <div>
                         <div style={{ fontWeight: 800, fontSize: '14px' }}>{customer}</div>
-                        <div style={{ fontSize: '11px', color: '#4a5f78', marginTop: '1px' }}>{custVehicles.length} vehicle{custVehicles.length !== 1 ? 's' : ''}</div>
+                        <div style={{ fontSize: '11px', color: '#506070', marginTop: '1px' }}>{custVehicles.length} vehicle{custVehicles.length !== 1 ? 's' : ''}</div>
                       </div>
                       <button
                         onClick={function() { handleExportCustomer(customer); }}
                         disabled={exporting}
-                        style={{ padding: '8px 14px', borderRadius: '8px', background: '#3b82f6', color: '#fff', fontSize: '12px', fontWeight: 700, border: 'none' }}
+                        style={{ padding: '8px 14px', borderRadius: '10px', background: '#1e4a5e', color: '#fff', fontSize: '12px', fontWeight: 700, border: 'none' }}
                       >
                         Export
                       </button>
@@ -264,13 +264,13 @@ export default function ReportsPage() {
                       return (
                         <div key={v.id} style={{ padding: '4px 0', fontSize: '11px', borderTop: '1px solid rgba(30,45,61,0.5)' }}>
                           <span style={{ fontWeight: 600, color: '#e8ecf1' }}>{title}</span>
-                          <span style={{ color: '#4a5f78', marginLeft: '6px', fontFamily: 'monospace', fontSize: '10px' }}>{v.vin}</span>
-                          {v.part_number && <span style={{ color: '#93c5fd', marginLeft: '6px', fontSize: '10px' }}>{v.part_number}</span>}
+                          <span style={{ color: '#506070', marginLeft: '6px', fontFamily: 'monospace', fontSize: '10px' }}>{v.vin}</span>
+                          {v.part_number && <span style={{ color: '#2a6178', marginLeft: '6px', fontSize: '10px' }}>{v.part_number}</span>}
                         </div>
                       );
                     })}
                     {custVehicles.length > 5 && (
-                      <div style={{ fontSize: '10px', color: '#4a5f78', marginTop: '4px' }}>+ {custVehicles.length - 5} more</div>
+                      <div style={{ fontSize: '10px', color: '#506070', marginTop: '4px' }}>+ {custVehicles.length - 5} more</div>
                     )}
                   </div>
                 );
@@ -283,9 +283,9 @@ export default function ReportsPage() {
       {tab === 'archive' && (
         <div>
           {loadingArchive ? (
-            <div style={{ textAlign: 'center', padding: '20px', color: '#4a5f78' }}>Loading archive...</div>
+            <div style={{ textAlign: 'center', padding: '20px', color: '#506070' }}>Loading archive...</div>
           ) : Object.keys(archiveGroups).length === 0 ? (
-            <div style={{ textAlign: 'center', padding: '32px 0', color: '#4a5f78' }}>
+            <div style={{ textAlign: 'center', padding: '32px 0', color: '#506070' }}>
               <div style={{ fontSize: '36px', marginBottom: '6px', opacity: 0.4 }}>📁</div>
               <div style={{ fontWeight: 600, fontSize: '13px' }}>No exports yet</div>
             </div>
@@ -295,19 +295,19 @@ export default function ReportsPage() {
               var date = new Date(exportDate);
               var customers = Array.from(new Set(batch.map(function(v: any) { return v.customer || 'Unknown'; })));
               return (
-                <div key={exportDate} style={{ background: '#141e2b', border: '1px solid #1e2d3d', borderRadius: '10px', padding: '12px', marginBottom: '8px' }}>
+                <div key={exportDate} style={{ background: '#161f2b', border: '1px solid #1e2d3d', borderRadius: '14px', padding: '12px', marginBottom: '8px' }}>
                   <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
                     <div>
                       <div style={{ fontWeight: 700, fontSize: '13px' }}>
                         {date.toLocaleDateString([], { month: 'short', day: 'numeric', year: 'numeric' })} at {date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
                       </div>
-                      <div style={{ fontSize: '11px', color: '#4a5f78', marginTop: '2px' }}>
+                      <div style={{ fontSize: '11px', color: '#506070', marginTop: '2px' }}>
                         {batch.length} vehicles — {customers.join(', ')}
                       </div>
                     </div>
                     <button
                       onClick={function() { handleRedownload(exportDate); }}
-                      style={{ padding: '8px 14px', borderRadius: '8px', background: 'rgba(59,130,246,0.08)', border: '1px solid rgba(59,130,246,0.25)', color: '#60a5fa', fontSize: '12px', fontWeight: 700 }}
+                      style={{ padding: '8px 14px', borderRadius: '10px', background: 'rgba(238,49,32,0.06)', border: '1px solid rgba(238,49,32,0.15)', color: '#1e4a5e', fontSize: '12px', fontWeight: 700 }}
                     >
                       Re-download
                     </button>
@@ -319,7 +319,7 @@ export default function ReportsPage() {
         </div>
       )}
 
-      <button onClick={function() { router.push('/more'); }} style={{ width: '100%', padding: '10px', borderRadius: '10px', marginTop: '12px', border: '1px solid #1e2d3d', background: 'transparent', color: '#6b7a8d', fontSize: '13px', fontWeight: 700 }}>Back</button>
+      <button onClick={function() { router.push('/more'); }} style={{ width: '100%', padding: '10px', borderRadius: '14px', marginTop: '12px', border: '1px solid #1e2d3d', background: 'transparent', color: '#8e9baa', fontSize: '13px', fontWeight: 700 }}>Back</button>
     </div>
   );
 }

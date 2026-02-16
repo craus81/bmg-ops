@@ -14,21 +14,19 @@ function AppShell({ children }: { children: React.ReactNode }) {
   const { clockStatus, activePart, appLoading } = useApp();
 
   useEffect(() => {
-    if (!loading && !user) {
-      router.push('/login');
-    }
+    if (!loading && !user) router.push('/login');
   }, [loading, user]);
 
   if (loading || appLoading) {
     return (
-      <div style={{ minHeight: '100vh', display: 'flex', alignItems: 'center', justifyContent: 'center', background: theme.pageBg }}>
+      <div style={{ minHeight: '100vh', display: 'flex', alignItems: 'center', justifyContent: 'center', background: theme.bg }}>
         <div style={{ textAlign: 'center' }}>
           <div style={{
-            width: '36px', height: '36px', border: `3px solid ${theme.gray200}`,
+            width: '36px', height: '36px', border: `3px solid ${theme.border}`,
             borderTopColor: theme.orange, borderRadius: '50%', margin: '0 auto',
             animation: 'spin 1s linear infinite',
           }} />
-          <div style={{ color: theme.gray500, marginTop: '12px', fontSize: '13px', fontWeight: 600 }}>Loading...</div>
+          <div style={{ color: theme.textMuted, marginTop: '12px', fontSize: '13px', fontWeight: 600 }}>Loading...</div>
         </div>
       </div>
     );
@@ -37,12 +35,8 @@ function AppShell({ children }: { children: React.ReactNode }) {
   if (!user) return null;
 
   return (
-    <div style={{ minHeight: '100vh', paddingBottom: '70px', background: theme.pageBg }}>
-      <Header
-        clockStatus={clockStatus}
-        activePartNumber={activePart?.part_number}
-        activeEndCustomer={activePart?.end_customer}
-      />
+    <div style={{ minHeight: '100vh', paddingBottom: '70px', background: theme.bg }}>
+      <Header clockStatus={clockStatus} activePartNumber={activePart?.part_number} activeEndCustomer={activePart?.end_customer} />
       <div style={{ maxWidth: '500px', margin: '0 auto', padding: '14px 20px' }}>
         {children}
       </div>

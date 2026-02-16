@@ -22,42 +22,41 @@ export default function Header({ clockStatus, activePartNumber, activeEndCustome
 
   return (
     <header style={{
-      background: theme.navy,
+      background: theme.headerBg,
       padding: '12px 20px',
       display: 'flex', alignItems: 'center', justifyContent: 'space-between',
       position: 'sticky', top: 0, zIndex: 100,
-      boxShadow: '0 2px 8px rgba(0,0,0,0.12)',
+      borderBottom: `1px solid ${theme.border}`,
     }}>
       <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
-        {/* BMG Logo mark */}
         <div style={{
-          width: '34px', height: '34px', borderRadius: '8px',
-          background: 'rgba(255,255,255,0.12)',
+          height: '36px', padding: '4px 10px', borderRadius: '10px',
+          background: 'rgba(255,255,255,0.08)',
+          backdropFilter: 'blur(10px)',
           display: 'flex', alignItems: 'center', justifyContent: 'center',
-          fontWeight: 900, fontSize: '11px', color: '#fff',
-          letterSpacing: '0.5px',
+          border: '1px solid rgba(255,255,255,0.06)',
         }}>
-          <img src="/bmg-logo-mark.png" alt="BMG" style={{ width: '26px', height: '26px', objectFit: 'contain' }} onError={(e) => { (e.target as HTMLImageElement).style.display = 'none'; (e.target as HTMLImageElement).parentElement!.textContent = 'BMG'; }} />
+          <img src="/bmg-logo-white.png" alt="BMG" style={{ height: '26px', width: 'auto' }}
+            onError={(e) => { (e.target as HTMLImageElement).style.display = 'none'; (e.target as HTMLImageElement).parentElement!.innerHTML = '<span style="font-weight:800;font-size:11px;color:white;letter-spacing:1px">BMG</span>'; }} />
         </div>
         <div>
           <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
-            <span style={{ fontWeight: 700, fontSize: '15px', color: '#fff' }}>BMG Ops</span>
             <span style={{
-              background: isAdmin ? 'rgba(238,49,32,0.2)' : 'rgba(255,255,255,0.15)',
-              border: `1px solid ${isAdmin ? 'rgba(238,49,32,0.4)' : 'rgba(255,255,255,0.25)'}`,
+              background: isAdmin ? theme.orangeGlow : 'rgba(255,255,255,0.1)',
+              border: `1px solid ${isAdmin ? 'rgba(238,49,32,0.3)' : 'rgba(255,255,255,0.15)'}`,
               borderRadius: '5px',
-              color: isAdmin ? '#ffb4ae' : 'rgba(255,255,255,0.8)',
-              padding: '2px 6px', fontSize: '9px', fontWeight: 700,
+              color: isAdmin ? '#ff9e94' : 'rgba(255,255,255,0.7)',
+              padding: '2px 7px', fontSize: '9px', fontWeight: 700, letterSpacing: '0.3px',
             }}>
               {isAdmin ? 'Admin' : 'Crew'}
             </span>
           </div>
           {subtitle && (
-            <div style={{ fontSize: '10px', color: 'rgba(255,255,255,0.55)' }}>{subtitle}</div>
+            <div style={{ fontSize: '10px', color: theme.textMuted, marginTop: '2px' }}>{subtitle}</div>
           )}
         </div>
       </div>
-      <div style={{ fontSize: '12px', color: 'rgba(255,255,255,0.65)', fontWeight: 600 }}>
+      <div style={{ fontSize: '12px', color: theme.textMuted, fontWeight: 500 }}>
         {profile?.full_name}
       </div>
     </header>

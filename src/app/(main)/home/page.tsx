@@ -13,93 +13,73 @@ export default function HomePage() {
   return (
     <div>
       {clockStatus === 'out' && (
-        <button
-          onClick={() => router.push('/time')}
-          style={{
-            width: '100%', padding: '12px 16px', borderRadius: '10px', marginBottom: '12px',
-            background: theme.warningBg, border: `1px solid ${theme.warningBorder}`,
-            color: theme.warning, fontSize: '13px', fontWeight: 700, cursor: 'pointer',
-            textAlign: 'left', display: 'flex', alignItems: 'center', gap: '8px',
-          }}
-        >
+        <button onClick={() => router.push('/time')} style={{
+          width: '100%', padding: '12px 16px', borderRadius: '14px', marginBottom: '14px',
+          background: theme.warningBg, border: `1px solid ${theme.warningBorder}`,
+          color: theme.warning, fontSize: '13px', fontWeight: 600, textAlign: 'left',
+          display: 'flex', alignItems: 'center', gap: '8px',
+        }}>
           ⏰ Not clocked in — tap to start your day
         </button>
       )}
 
       {activePart && (
         <div style={{
-          background: theme.white,
-          border: `1px solid ${theme.cardBorder}`,
-          borderRadius: '14px', padding: '14px', marginBottom: '12px',
-          boxShadow: '0 1px 3px rgba(0,0,0,0.04)',
+          background: theme.card, border: `1px solid ${theme.border}`,
+          borderLeft: `3px solid ${theme.orange}`,
+          borderRadius: '4px 14px 14px 4px', padding: '14px 16px', marginBottom: '14px',
+          boxShadow: theme.shadowSm,
         }}>
           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'start' }}>
             <div>
-              <div style={{ fontSize: '10px', color: theme.orange, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.5px' }}>Active Part Number</div>
-              <div style={{ fontWeight: 800, fontSize: '18px', color: theme.gray800, marginTop: '2px' }}>{activePart.part_number}</div>
-              <div style={{ fontSize: '12px', color: theme.gray500, marginTop: '1px' }}>{activePart.end_customer} • {activePart.graphic_package}</div>
-              <div style={{ fontSize: '11px', color: theme.gray400, marginTop: '1px' }}>{activePart.vehicle_type} • {activePart.customer}</div>
+              <div style={{ fontSize: '10px', color: theme.orange, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.8px' }}>Active Part Number</div>
+              <div style={{ fontWeight: 800, fontSize: '20px', color: theme.textPrimary, marginTop: '2px', letterSpacing: '-0.5px' }}>{activePart.part_number}</div>
+              <div style={{ fontSize: '12px', color: theme.textSecondary, marginTop: '3px' }}>{activePart.end_customer} • {activePart.graphic_package}</div>
+              <div style={{ fontSize: '11px', color: theme.textMuted, marginTop: '1px' }}>{activePart.vehicle_type} • {activePart.customer}</div>
             </div>
-            <button
-              onClick={() => router.push('/select-part')}
-              style={{
-                background: theme.gray50, border: `1px solid ${theme.gray200}`,
-                borderRadius: '8px', color: theme.gray500, padding: '4px 10px',
-                fontSize: '10px', fontWeight: 700,
-              }}
-            >
-              Change
-            </button>
+            <button onClick={() => router.push('/select-part')} style={{
+              background: 'transparent', border: `1px solid ${theme.borderStrong}`,
+              borderRadius: '8px', color: theme.textSecondary, padding: '5px 10px',
+              fontSize: '11px', fontWeight: 700,
+            }}>Change</button>
           </div>
         </div>
       )}
 
       <div style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
-        <BigBtn
-          icon="📷" title="Scan VIN"
+        <ActionBtn icon="📷" title="Scan VIN"
           sub={activePart ? `${activePart.part_number} — ${activePart.end_customer}` : 'Select a part number first'}
-          onClick={() => router.push('/scan')}
-          primary
-          disabled={!activePart}
-        />
-        <BigBtn
-          icon="🔧" title="Set Active Part Number"
+          onClick={() => router.push('/scan')} primary disabled={!activePart} />
+        <ActionBtn icon="🔧" title="Set Active Part Number"
           sub={activePart ? 'Change what you\'re installing' : 'Choose before scanning'}
-          onClick={() => router.push('/select-part')}
-          highlight={!activePart}
-        />
+          onClick={() => router.push('/select-part')} highlight={!activePart} />
       </div>
     </div>
   );
 }
 
-function BigBtn({ icon, title, sub, onClick, primary, highlight, disabled }: {
+function ActionBtn({ icon, title, sub, onClick, primary, highlight, disabled }: {
   icon: string; title: string; sub?: string; onClick: () => void;
   primary?: boolean; highlight?: boolean; disabled?: boolean;
 }) {
   return (
-    <button
-      onClick={disabled ? undefined : onClick}
-      style={{
-        display: 'flex', alignItems: 'center', gap: '12px', width: '100%',
-        padding: '14px', borderRadius: '12px', cursor: disabled ? 'default' : 'pointer',
-        textAlign: 'left',
-        border: primary ? `1px solid rgba(238,49,32,0.25)` : highlight ? `1px solid ${theme.warningBorder}` : `1px solid ${theme.cardBorder}`,
-        background: primary ? 'rgba(238,49,32,0.04)' : highlight ? theme.warningBg : theme.white,
-        color: theme.gray700, opacity: disabled ? 0.4 : 1,
-        boxShadow: '0 1px 3px rgba(0,0,0,0.04)',
-        transition: 'box-shadow 0.15s',
-      }}
-    >
+    <button onClick={disabled ? undefined : onClick} style={{
+      display: 'flex', alignItems: 'center', gap: '14px', width: '100%',
+      padding: '16px', borderRadius: '14px', textAlign: 'left',
+      border: primary ? '1px solid rgba(238,49,32,0.12)' : highlight ? `1px solid ${theme.warningBorder}` : `1px solid ${theme.border}`,
+      background: primary ? 'rgba(238,49,32,0.04)' : highlight ? theme.warningBg : theme.card,
+      color: theme.textPrimary, opacity: disabled ? 0.4 : 1,
+      boxShadow: theme.shadowSm, transition: 'all 0.15s',
+    }}>
       <div style={{
-        width: '40px', height: '40px', borderRadius: '10px',
-        background: primary ? 'rgba(238,49,32,0.08)' : theme.gray50,
+        width: '44px', height: '44px', borderRadius: '12px',
+        background: primary ? 'rgba(238,49,32,0.08)' : 'rgba(255,255,255,0.03)',
         display: 'flex', alignItems: 'center', justifyContent: 'center',
-        fontSize: '18px', flexShrink: 0,
+        fontSize: '20px', flexShrink: 0,
       }}>{icon}</div>
       <div>
-        <div style={{ fontWeight: 700, fontSize: '14px', color: theme.gray800 }}>{title}</div>
-        {sub && <div style={{ fontSize: '11px', color: theme.gray400, marginTop: '2px' }}>{sub}</div>}
+        <div style={{ fontWeight: 700, fontSize: '15px', letterSpacing: '-0.2px' }}>{title}</div>
+        {sub && <div style={{ fontSize: '12px', color: theme.textMuted, marginTop: '2px' }}>{sub}</div>}
       </div>
     </button>
   );

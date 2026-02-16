@@ -16,161 +16,82 @@ export default function LoginPage() {
   const handleMagicLink = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!email) return;
-    setLoading(true);
-    setError('');
+    setLoading(true); setError('');
     const { error } = await supabase.auth.signInWithOtp({ email, options: { emailRedirectTo: `${window.location.origin}/auth/callback` } });
     setLoading(false);
-    if (error) setError(error.message);
-    else setSent(true);
+    if (error) setError(error.message); else setSent(true);
   };
 
   const handlePassword = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!email || !password) return;
-    setLoading(true);
-    setError('');
+    setLoading(true); setError('');
     const { error } = await supabase.auth.signInWithPassword({ email, password });
     setLoading(false);
-    if (error) setError(error.message);
-    else window.location.href = '/home';
+    if (error) setError(error.message); else window.location.href = '/home';
   };
+
+  const labelStyle: React.CSSProperties = { display: 'block', fontSize: '11px', fontWeight: 700, color: 'rgba(255,255,255,0.45)', textTransform: 'uppercase', letterSpacing: '0.8px', marginBottom: '8px' };
+  const inputStyle: React.CSSProperties = { width: '100%', padding: '14px 18px', borderRadius: '12px', border: '1px solid rgba(255,255,255,0.1)', background: 'rgba(255,255,255,0.06)', color: '#fff', fontSize: '16px', marginBottom: '12px' };
 
   return (
     <div style={{
       minHeight: '100vh', display: 'flex', alignItems: 'center', justifyContent: 'center',
-      padding: '20px', background: `linear-gradient(160deg, ${theme.navy} 0%, #153a4b 50%, #0f2a38 100%)`,
+      padding: '20px', background: 'linear-gradient(165deg, #152838 0%, #0f1e2a 40%, #0a1520 100%)',
     }}>
       <div style={{ width: '100%', maxWidth: '360px' }}>
-        {/* Logo */}
-        <div style={{ textAlign: 'center', marginBottom: '32px' }}>
-          <img
-            src="/bmg-logo-white.png"
-            alt="BMG Fleet"
-            style={{ height: '48px', marginBottom: '16px' }}
-            onError={(e) => { (e.target as HTMLImageElement).style.display = 'none'; }}
-          />
-          <h1 style={{ fontSize: '24px', fontWeight: 800, color: '#fff', letterSpacing: '-0.3px' }}>BMG Ops</h1>
-          <p style={{ fontSize: '13px', color: 'rgba(255,255,255,0.5)', marginTop: '4px' }}>Fleet Graphics Operations</p>
+        <div style={{ textAlign: 'center', marginBottom: '36px' }}>
+          <img src="/bmg-logo-white.png" alt="BMG Fleet" style={{ height: '72px', marginBottom: '12px' }}
+            onError={(e) => { (e.target as HTMLImageElement).style.display = 'none'; }} />
+          <p style={{ fontSize: '13px', color: 'rgba(255,255,255,0.35)', marginTop: '4px', fontWeight: 500 }}>Fleet Graphics Operations</p>
         </div>
 
-        {/* Tab toggle */}
-        <div style={{
-          display: 'flex', gap: '4px', marginBottom: '16px',
-          background: 'rgba(255,255,255,0.06)', borderRadius: '10px', padding: '3px',
-        }}>
-          <button
-            onClick={() => { setMode('password'); setError(''); }}
-            style={{
+        <div style={{ display: 'flex', gap: '4px', marginBottom: '16px', background: 'rgba(255,255,255,0.06)', borderRadius: '10px', padding: '3px' }}>
+          {(['password', 'magic'] as const).map((m) => (
+            <button key={m} onClick={() => { setMode(m); setError(''); }} style={{
               flex: 1, padding: '10px', borderRadius: '8px', fontSize: '12px', fontWeight: 700,
-              background: mode === 'password' ? 'rgba(255,255,255,0.12)' : 'transparent',
-              color: mode === 'password' ? '#fff' : 'rgba(255,255,255,0.45)',
-              transition: 'all 0.2s',
-            }}
-          >
-            Password
-          </button>
-          <button
-            onClick={() => { setMode('magic'); setError(''); }}
-            style={{
-              flex: 1, padding: '10px', borderRadius: '8px', fontSize: '12px', fontWeight: 700,
-              background: mode === 'magic' ? 'rgba(255,255,255,0.12)' : 'transparent',
-              color: mode === 'magic' ? '#fff' : 'rgba(255,255,255,0.45)',
-              transition: 'all 0.2s',
-            }}
-          >
-            Magic Link
-          </button>
+              background: mode === m ? 'rgba(255,255,255,0.1)' : 'transparent',
+              color: mode === m ? '#fff' : 'rgba(255,255,255,0.4)', transition: 'all 0.2s',
+            }}>
+              {m === 'password' ? 'Password' : 'Magic Link'}
+            </button>
+          ))}
         </div>
 
         {sent ? (
-          <div style={{
-            background: 'rgba(22,163,74,0.1)', border: '1px solid rgba(22,163,74,0.3)',
-            borderRadius: '14px', padding: '24px', textAlign: 'center',
-          }}>
+          <div style={{ background: 'rgba(52,211,153,0.08)', border: '1px solid rgba(52,211,153,0.25)', borderRadius: '14px', padding: '24px', textAlign: 'center' }}>
             <div style={{ fontSize: '36px', marginBottom: '8px' }}>📧</div>
-            <div style={{ fontWeight: 700, fontSize: '16px', color: '#4ade80' }}>Check your email</div>
-            <div style={{ fontSize: '13px', color: 'rgba(255,255,255,0.6)', marginTop: '6px' }}>
+            <div style={{ fontWeight: 700, fontSize: '16px', color: theme.success }}>Check your email</div>
+            <div style={{ fontSize: '13px', color: 'rgba(255,255,255,0.5)', marginTop: '6px' }}>
               We sent a sign-in link to <strong style={{ color: '#fff' }}>{email}</strong>
             </div>
-            <button
-              onClick={() => { setSent(false); setEmail(''); }}
-              style={{
-                marginTop: '16px', padding: '10px 20px', borderRadius: '8px',
-                border: '1px solid rgba(255,255,255,0.15)', color: 'rgba(255,255,255,0.6)',
-                fontSize: '13px', fontWeight: 600, background: 'transparent',
-              }}
-            >
+            <button onClick={() => { setSent(false); setEmail(''); }} style={{ marginTop: '16px', padding: '10px 20px', borderRadius: '8px', border: '1px solid rgba(255,255,255,0.12)', color: 'rgba(255,255,255,0.5)', fontSize: '13px', fontWeight: 600, background: 'transparent' }}>
               Use a different email
             </button>
           </div>
         ) : (
           <form onSubmit={mode === 'password' ? handlePassword : handleMagicLink}>
-            <div style={{ marginBottom: '12px' }}>
-              <label style={{ display: 'block', fontSize: '11px', fontWeight: 700, color: 'rgba(255,255,255,0.5)', textTransform: 'uppercase', letterSpacing: '0.5px', marginBottom: '6px' }}>
-                Email Address
-              </label>
-              <input
-                type="email"
-                value={email}
-                onChange={(e) => setEmail(e.target.value)}
-                placeholder="you@bmgfleet.com"
-                autoFocus
-                autoComplete="email"
-                style={{
-                  width: '100%', padding: '14px 16px', borderRadius: '10px',
-                  border: '1px solid rgba(255,255,255,0.12)', background: 'rgba(255,255,255,0.06)',
-                  color: '#fff', fontSize: '16px',
-                }}
-              />
-            </div>
-
-            {mode === 'password' && (
-              <div style={{ marginBottom: '12px' }}>
-                <label style={{ display: 'block', fontSize: '11px', fontWeight: 700, color: 'rgba(255,255,255,0.5)', textTransform: 'uppercase', letterSpacing: '0.5px', marginBottom: '6px' }}>
-                  Password
-                </label>
-                <input
-                  type="password"
-                  value={password}
-                  onChange={(e) => setPassword(e.target.value)}
-                  placeholder="Enter your password"
-                  autoComplete="current-password"
-                  style={{
-                    width: '100%', padding: '14px 16px', borderRadius: '10px',
-                    border: '1px solid rgba(255,255,255,0.12)', background: 'rgba(255,255,255,0.06)',
-                    color: '#fff', fontSize: '16px',
-                  }}
-                />
-              </div>
-            )}
-
+            <label style={labelStyle}>Email Address</label>
+            <input type="email" value={email} onChange={(e) => setEmail(e.target.value)} placeholder="you@bmgfleet.com" autoFocus autoComplete="email" style={inputStyle} />
+            {mode === 'password' && (<>
+              <label style={{ ...labelStyle, marginTop: '4px' }}>Password</label>
+              <input type="password" value={password} onChange={(e) => setPassword(e.target.value)} placeholder="Enter your password" autoComplete="current-password" style={inputStyle} />
+            </>)}
             {error && (
-              <div style={{
-                padding: '10px 14px', background: 'rgba(238,49,32,0.1)',
-                border: '1px solid rgba(238,49,32,0.3)', borderRadius: '10px',
-                color: '#ffb4ae', fontSize: '13px', marginBottom: '12px',
-              }}>
+              <div style={{ padding: '10px 14px', background: theme.errorBg, border: `1px solid ${theme.errorBorder}`, borderRadius: '10px', color: theme.error, fontSize: '13px', marginBottom: '12px' }}>
                 {error}
               </div>
             )}
-
-            <button
-              type="submit"
-              disabled={!email || (mode === 'password' && !password) || loading}
-              style={{
-                width: '100%', padding: '14px', borderRadius: '10px',
-                background: theme.orange,
-                color: '#fff', fontSize: '15px', fontWeight: 700,
-                opacity: (email && (mode === 'magic' || password) && !loading) ? 1 : 0.5,
-                transition: 'opacity 0.2s',
-                boxShadow: '0 2px 12px rgba(238,49,32,0.3)',
-              }}
-            >
+            <button type="submit" disabled={!email || (mode === 'password' && !password) || loading} style={{
+              width: '100%', padding: '16px', borderRadius: '12px', background: theme.orange,
+              color: '#fff', fontSize: '16px', fontWeight: 700,
+              opacity: (email && (mode === 'magic' || password) && !loading) ? 1 : 0.5,
+              boxShadow: '0 4px 20px rgba(238,49,32,0.3)', transition: 'opacity 0.2s',
+            }}>
               {loading ? 'Signing in...' : mode === 'password' ? 'Sign In' : 'Send Magic Link'}
             </button>
-
-            <p style={{ textAlign: 'center', fontSize: '12px', color: 'rgba(255,255,255,0.35)', marginTop: '16px' }}>
-              {mode === 'password' ? 'Contact admin if you need a password reset' : 'No password needed — we\'ll email you a sign-in link'}
+            <p style={{ textAlign: 'center', fontSize: '12px', color: 'rgba(255,255,255,0.25)', marginTop: '16px' }}>
+              {mode === 'password' ? 'Contact admin for password reset' : 'No password needed — we\'ll email you a link'}
             </p>
           </form>
         )}

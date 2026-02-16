@@ -1,45 +1,40 @@
-// BMG Brand Theme
-// Colors extracted from BMG Fleet logo
-
+// BMG Brand Theme — Dark
 export const theme = {
-  // Primary brand colors
-  navy: '#1e4a5e',        // Dark navy from logo text
-  navyLight: '#2a6178',   // Lighter navy for hover states
-  navyDark: '#153a4b',    // Darker navy for depth
-  orange: '#ee3120',      // Orange-red accent from logo
-  orangeLight: '#f15648', // Lighter orange for hover
-  orangeDark: '#c82818',  // Darker orange for pressed
+  // Brand
+  navy: '#1e4a5e',
+  navyLight: '#2a6178',
+  orange: '#ee3120',
+  orangeGlow: 'rgba(238,49,32,0.18)',
 
-  // Neutrals (light theme)
-  white: '#ffffff',
-  gray50: '#f7f8f9',      // Lightest gray - page background
-  gray100: '#eef1f3',     // Light gray - card backgrounds
-  gray200: '#dce2e6',     // Borders
-  gray300: '#b0bfc6',     // From logo anti-aliasing
-  gray400: '#8899a4',     // Muted text
-  gray500: '#6b7a84',     // Secondary text
-  gray600: '#4a5f6a',     // Body text
-  gray700: '#2d4450',     // Headings
-  gray800: '#1a3340',     // Dark text
-  gray900: '#0f2230',     // Darkest
+  // Backgrounds
+  bg: '#0f1720',
+  card: '#161f2b',
+  cardHover: '#1a2535',
+  headerBg: '#0c1a24',
+  navBg: '#141c27',
+  inputBg: '#111a24',
+
+  // Borders
+  border: 'rgba(255,255,255,0.06)',
+  borderStrong: 'rgba(255,255,255,0.1)',
+
+  // Text
+  textPrimary: '#e8ecf1',
+  textSecondary: '#8e9baa',
+  textMuted: '#506070',
 
   // Semantic
-  success: '#16a34a',
-  successBg: 'rgba(22,163,74,0.08)',
-  successBorder: 'rgba(22,163,74,0.2)',
-  warning: '#d97706',
-  warningBg: 'rgba(217,119,6,0.08)',
-  warningBorder: 'rgba(217,119,6,0.2)',
-  error: '#dc2626',
-  errorBg: 'rgba(220,38,38,0.06)',
-  errorBorder: 'rgba(220,38,38,0.2)',
+  success: '#34d399',
+  successBg: 'rgba(52,211,153,0.08)',
+  successBorder: 'rgba(52,211,153,0.2)',
+  warning: '#fbbf24',
+  warningBg: 'rgba(251,191,36,0.08)',
+  warningBorder: 'rgba(251,191,36,0.2)',
+  error: '#f87171',
+  errorBg: 'rgba(248,113,113,0.08)',
+  errorBorder: 'rgba(248,113,113,0.2)',
 
-  // UI
-  cardBg: '#ffffff',
-  cardBorder: '#dce2e6',
-  inputBg: '#f7f8f9',
-  inputBorder: '#dce2e6',
-  headerBg: '#1e4a5e',
-  navBg: '#ffffff',
-  pageBg: '#f0f2f4',
+  // Shadows
+  shadowSm: '0 1px 3px rgba(0,0,0,0.2)',
+  shadowMd: '0 2px 8px rgba(0,0,0,0.25)',
 } as const;

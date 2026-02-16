@@ -34,11 +34,10 @@ export default function BottomNav({ clockStatus }: BottomNavProps) {
   return (
     <nav style={{
       position: 'fixed', bottom: 0, left: 0, right: 0,
-      background: theme.white,
-      borderTop: `1px solid ${theme.gray200}`,
+      background: theme.navBg,
+      borderTop: `1px solid ${theme.border}`,
       display: 'flex', zIndex: 100,
       paddingBottom: 'env(safe-area-inset-bottom, 0px)',
-      boxShadow: '0 -1px 8px rgba(0,0,0,0.06)',
     }}>
       {tabs.map((tab) => {
         const active = isActive(tab);
@@ -49,7 +48,7 @@ export default function BottomNav({ clockStatus }: BottomNavProps) {
             style={{
               flex: 1, padding: '8px 4px 10px', display: 'flex',
               flexDirection: 'column', alignItems: 'center', gap: '2px',
-              color: active ? theme.navy : theme.gray400,
+              color: active ? theme.textPrimary : theme.textMuted,
               position: 'relative',
             }}
           >
@@ -60,7 +59,7 @@ export default function BottomNav({ clockStatus }: BottomNavProps) {
               }} />
             )}
             <div style={{ fontSize: '18px' }}>{getIcon(tab)}</div>
-            <div style={{ fontSize: '10px', fontWeight: active ? 800 : 600 }}>{tab.label}</div>
+            <div style={{ fontSize: '10px', fontWeight: active ? 700 : 600 }}>{tab.label}</div>
           </button>
         );
       })}

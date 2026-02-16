@@ -43,11 +43,11 @@ export default function SelectPartPage() {
     router.push('/home');
   };
 
-  if (loading) return <div style={{ textAlign: 'center', padding: '40px', color: '#4a5f78' }}>Loading catalog...</div>;
+  if (loading) return <div style={{ textAlign: 'center', padding: '40px', color: '#506070' }}>Loading catalog...</div>;
 
   return (
     <div>
-      <div style={{ fontSize: '11px', fontWeight: 700, color: '#4a5f78', textTransform: 'uppercase', letterSpacing: '0.5px', marginBottom: '12px' }}>
+      <div style={{ fontSize: '11px', fontWeight: 700, color: '#506070', textTransform: 'uppercase', letterSpacing: '0.5px', marginBottom: '12px' }}>
         Select Active Part Number
       </div>
       <input
@@ -56,8 +56,8 @@ export default function SelectPartPage() {
         placeholder="Search..."
         autoFocus
         style={{
-          width: '100%', padding: '10px 12px', borderRadius: '8px',
-          border: '1px solid #1e2d3d', background: '#141e2b', color: '#e8ecf1',
+          width: '100%', padding: '10px 12px', borderRadius: '10px',
+          border: '1px solid #1e2d3d', background: '#161f2b', color: '#e8ecf1',
           fontSize: '13px', marginBottom: '8px',
         }}
       />
@@ -76,18 +76,18 @@ export default function SelectPartPage() {
               key={c.id}
               onClick={() => handleSelect(c)}
               style={{
-                width: '100%', textAlign: 'left', padding: '12px', borderRadius: '10px',
+                width: '100%', textAlign: 'left', padding: '12px', borderRadius: '14px',
                 cursor: 'pointer',
-                background: isActive ? 'rgba(59,130,246,0.06)' : '#141e2b',
-                border: isActive ? '1px solid rgba(59,130,246,0.3)' : '1px solid #1e2d3d',
+                background: isActive ? 'rgba(238,49,32,0.04)' : '#161f2b',
+                border: isActive ? '1px solid rgba(238,49,32,0.2)' : '1px solid #1e2d3d',
                 color: '#e8ecf1',
               }}
             >
               <div style={{ fontWeight: 800, fontSize: '15px' }}>{c.part_number}</div>
-              <div style={{ fontSize: '12px', color: '#93c5fd', marginTop: '1px' }}>
+              <div style={{ fontSize: '12px', color: '#2a6178', marginTop: '1px' }}>
                 {c.end_customer} — {c.graphic_package}
               </div>
-              <div style={{ fontSize: '11px', color: '#4a5f78' }}>
+              <div style={{ fontSize: '11px', color: '#506070' }}>
                 {c.vehicle_type} • {c.customer}
               </div>
             </button>
@@ -98,8 +98,8 @@ export default function SelectPartPage() {
       <button
         onClick={() => router.back()}
         style={{
-          width: '100%', padding: '10px', borderRadius: '10px', marginTop: '14px',
-          border: '1px solid #1e2d3d', background: 'transparent', color: '#6b7a8d',
+          width: '100%', padding: '10px', borderRadius: '14px', marginTop: '14px',
+          border: '1px solid #1e2d3d', background: 'transparent', color: '#8e9baa',
           fontSize: '13px', fontWeight: 700,
         }}
       >
@@ -115,9 +115,9 @@ function Chip({ label, active, onClick }: { label: string; active: boolean; onCl
       onClick={onClick}
       style={{
         padding: '4px 10px', borderRadius: '6px', fontSize: '11px', fontWeight: 700,
-        background: active ? 'rgba(59,130,246,0.12)' : 'transparent',
-        border: active ? '1px solid rgba(59,130,246,0.3)' : '1px solid #1e2d3d',
-        color: active ? '#60a5fa' : '#4a5f78',
+        background: active ? 'rgba(238,49,32,0.08)' : 'transparent',
+        border: active ? '1px solid rgba(238,49,32,0.2)' : '1px solid #1e2d3d',
+        color: active ? '#1e4a5e' : '#506070',
       }}
     >
       {label}
