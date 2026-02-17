@@ -1,12 +1,81 @@
 'use client';
 
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import { useRouter } from 'next/navigation';
 import { useApp } from '@/components/AppProvider';
 import { useAuth } from '@/components/AuthProvider';
 import { createClient } from '@/lib/supabase-browser';
 import { theme } from '@/lib/theme';
 import type { CatalogProof } from '@/lib/types';
+
+// PDF thumbnail component — renders first page to canvas
+function PdfThumbnail({ url, style }: { url: string; style?: React.CSSProperties }) {
+  const canvasRef = useRef<HTMLCanvasElement>(null);
+  const [loaded, setLoaded] = useState(false);
+  const [error, setError] = useState(false);
+
+  useEffect(() => {
+    let cancelled = false;
+    const render = async () => {
+      try {
+        const pdfjsLib = await import('pdfjs-dist');
+        pdfjsLib.GlobalWorkerOptions.workerSrc = `https://cdnjs.cloudflare.com/ajax/libs/pdf.js/${pdfjsLib.version}/pdf.worker.min.mjs`;
+        const pdf = await pdfjsLib.getDocument(url).promise;
+        const page = await pdf.getPage(1);
+        const viewport = page.getViewport({ scale: 1 });
+        const canvas = canvasRef.current;
+        if (!canvas || cancelled) return;
+        // Scale to fit ~400px wide for good quality
+        const scale = 400 / viewport.width;
+        const scaledViewport = page.getViewport({ scale });
+        canvas.width = scaledViewport.width;
+        canvas.height = scaledViewport.height;
+        const ctx = canvas.getContext('2d');
+        if (!ctx) return;
+        await page.render({ canvasContext: ctx, viewport: scaledViewport, canvas } as any).promise;
+        if (!cancelled) setLoaded(true);
+      } catch (e) {
+        if (!cancelled) setError(true);
+      }
+    };
+    render();
+    return () => { cancelled = true; };
+  }, [url]);
+
+  if (error) {
+    return (
+      <div style={{ ...style, display: 'flex', alignItems: 'center', justifyContent: 'center', background: 'var(--subtle-bg)' }}>
+        <div style={{ textAlign: 'center' }}>
+          <div style={{ fontSize: '32px' }}>📄</div>
+          <div style={{ fontSize: '10px', color: 'var(--text-muted)', marginTop: '4px' }}>PDF Preview</div>
+        </div>
+      </div>
+    );
+  }
+
+  return (
+    <div style={{ ...style, position: 'relative', background: 'var(--subtle-bg)' }}>
+      <canvas
+        ref={canvasRef}
+        style={{
+          width: '100%', height: '100%', objectFit: 'contain', display: 'block',
+          opacity: loaded ? 1 : 0, transition: 'opacity 0.2s',
+        }}
+      />
+      {!loaded && (
+        <div style={{
+          position: 'absolute', inset: 0, display: 'flex', alignItems: 'center', justifyContent: 'center',
+        }}>
+          <div style={{
+            width: '24px', height: '24px', border: '2px solid var(--border)',
+            borderTopColor: 'var(--orange)', borderRadius: '50%',
+            animation: 'spin 1s linear infinite',
+          }} />
+        </div>
+      )}
+    </div>
+  );
+}
 
 export default function HomePage() {
   const router = useRouter();
@@ -18,7 +87,6 @@ export default function HomePage() {
   const [viewingProof, setViewingProof] = useState(false);
   const [viewIdx, setViewIdx] = useState(0);
 
-  // Load proofs when active part changes
   useEffect(() => {
     if (!activePart) { setProofs([]); return; }
     const load = async () => {
@@ -41,10 +109,14 @@ export default function HomePage() {
     const proof = proofs[viewIdx];
     if (!proof) return;
     const url = getProofUrl(proof);
-    const win = window.open(url, '_blank');
-    if (win) {
-      // For images, wrap in a printable page
-      if (proof.file_type.startsWith('image/')) {
+
+    if (proof.file_type === 'application/pdf') {
+      // Open PDF in new tab — user can print from there
+      window.open(url, '_blank');
+    } else {
+      // For images, open a print-ready page
+      const win = window.open('', '_blank');
+      if (win) {
         win.document.write(`
           <html><head><title>${activePart?.part_number} - Proof</title>
           <style>
@@ -57,7 +129,6 @@ export default function HomePage() {
         `);
         win.document.close();
       }
-      // PDFs open natively — browser print dialog works from there
     }
   };
 
@@ -71,7 +142,6 @@ export default function HomePage() {
 
     return (
       <div style={{ position: 'fixed', inset: 0, zIndex: 200, background: 'var(--overlay)', display: 'flex', flexDirection: 'column' }}>
-        {/* Header */}
         <div style={{
           padding: '12px 16px', display: 'flex', alignItems: 'center', justifyContent: 'space-between',
           background: 'var(--header-bg)', borderBottom: '1px solid var(--border)',
@@ -97,19 +167,12 @@ export default function HomePage() {
           </div>
         </div>
 
-        {/* Content */}
         <div style={{ flex: 1, overflow: 'auto', display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '16px' }}>
           {isImage && (
             <img src={url} alt={proof.file_name} style={{ maxWidth: '100%', maxHeight: '100%', borderRadius: '8px', objectFit: 'contain' }} />
           )}
           {isPdf && (
-            <div style={{ width: '100%', height: '100%', display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '12px' }}>
-              <iframe src={url} style={{ width: '100%', flex: 1, borderRadius: '8px', border: 'none' }} />
-              <a href={url} target="_blank" rel="noopener noreferrer" style={{
-                padding: '10px 20px', borderRadius: '10px', background: 'var(--navy)',
-                color: '#fff', fontSize: '13px', fontWeight: 700, textDecoration: 'none',
-              }}>Open PDF in New Tab</a>
-            </div>
+            <PdfThumbnail url={url} style={{ width: '100%', height: '100%', borderRadius: '8px' }} />
           )}
           {!isImage && !isPdf && (
             <div style={{ textAlign: 'center', color: 'var(--text-muted)' }}>
@@ -123,7 +186,6 @@ export default function HomePage() {
           )}
         </div>
 
-        {/* Navigation */}
         {total > 1 && (
           <div style={{
             padding: '12px 16px', display: 'flex', gap: '8px', justifyContent: 'center',
@@ -183,54 +245,49 @@ export default function HomePage() {
 
           {/* Proof preview */}
           {proofs.length > 0 && (() => {
-            const firstImage = proofs.find((p) => p.file_type.startsWith('image/'));
-            const proof = firstImage || proofs[0];
+            const proof = proofs[0];
             const url = getProofUrl(proof);
             const isImage = proof.file_type.startsWith('image/');
+            const isPdf = proof.file_type === 'application/pdf';
 
             return (
               <button
-                onClick={() => { setViewIdx(firstImage ? proofs.indexOf(firstImage) : 0); setViewingProof(true); }}
+                onClick={() => { setViewIdx(0); setViewingProof(true); }}
                 style={{
                   width: '100%', display: 'block', cursor: 'pointer',
                   borderTop: `1px solid ${theme.border}`,
                   background: 'transparent', padding: 0,
                 }}
               >
-                {isImage ? (
-                  <div style={{ position: 'relative' }}>
+                <div style={{ position: 'relative' }}>
+                  {isImage && (
                     <img src={url} alt="Proof" style={{ width: '100%', maxHeight: '200px', objectFit: 'contain', background: 'var(--subtle-bg)', display: 'block' }} />
-                    <div style={{
-                      position: 'absolute', bottom: '8px', right: '8px',
-                      display: 'flex', gap: '4px',
-                    }}>
-                      {proofs.length > 1 && (
-                        <span style={{
-                          background: 'rgba(0,0,0,0.75)', borderRadius: '6px',
-                          padding: '3px 8px', fontSize: '10px', fontWeight: 700, color: '#fff',
-                        }}>{proofs.length} proofs</span>
-                      )}
-                      <span style={{
-                        background: 'rgba(238,49,32,0.9)', borderRadius: '6px',
-                        padding: '3px 8px', fontSize: '10px', fontWeight: 700, color: '#fff',
-                      }}>Tap to view & print</span>
-                    </div>
-                  </div>
-                ) : (
-                  <div style={{
-                    padding: '12px 16px', display: 'flex', alignItems: 'center', gap: '10px',
-                    background: 'var(--subtle-bg)',
-                  }}>
-                    <div style={{ fontSize: '24px' }}>📄</div>
-                    <div style={{ flex: 1, textAlign: 'left' }}>
+                  )}
+                  {isPdf && (
+                    <PdfThumbnail url={url} style={{ width: '100%', height: '200px' }} />
+                  )}
+                  {!isImage && !isPdf && (
+                    <div style={{ padding: '16px', display: 'flex', alignItems: 'center', gap: '10px', background: 'var(--subtle-bg)' }}>
+                      <div style={{ fontSize: '24px' }}>📄</div>
                       <div style={{ fontSize: '12px', fontWeight: 700, color: theme.textPrimary }}>{proof.file_name}</div>
-                      <div style={{ fontSize: '10px', color: theme.textMuted }}>
-                        {proofs.length} proof{proofs.length > 1 ? 's' : ''} — tap to view & print
-                      </div>
                     </div>
-                    <div style={{ fontSize: '11px', color: theme.orange, fontWeight: 700 }}>Open →</div>
+                  )}
+                  <div style={{
+                    position: 'absolute', bottom: '8px', right: '8px',
+                    display: 'flex', gap: '4px',
+                  }}>
+                    {proofs.length > 1 && (
+                      <span style={{
+                        background: 'rgba(0,0,0,0.75)', borderRadius: '6px',
+                        padding: '3px 8px', fontSize: '10px', fontWeight: 700, color: '#fff',
+                      }}>{proofs.length} proofs</span>
+                    )}
+                    <span style={{
+                      background: 'rgba(238,49,32,0.9)', borderRadius: '6px',
+                      padding: '3px 8px', fontSize: '10px', fontWeight: 700, color: '#fff',
+                    }}>Tap to view & print</span>
                   </div>
-                )}
+                </div>
               </button>
             );
           })()}
