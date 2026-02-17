@@ -17,6 +17,20 @@ export interface CatalogItem {
   active: boolean;
 }
 
+export interface CatalogProof {
+  id: string;
+  catalog_id: string;
+  part_number: string;
+  file_name: string;
+  file_path: string;
+  file_type: string;
+  file_size: number | null;
+  label: string | null;
+  sort_order: number;
+  uploaded_by: string | null;
+  created_at: string;
+}
+
 export interface PurchaseOrder {
   id: string;
   po_number: string;
