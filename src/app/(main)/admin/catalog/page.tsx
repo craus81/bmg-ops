@@ -19,6 +19,7 @@ export default function CatalogPage() {
   const [proofPanel, setProofPanel] = useState<string | null>(null); // catalog_id showing proof manager
   const [uploading, setUploading] = useState(false);
   const fileRef = useRef<HTMLInputElement>(null);
+  const [search, setSearch] = useState('');
   const [form, setForm] = useState({
     part_number: '', customer: 'Masterack', end_customer: '',
     vehicle_type: '', graphic_package: '', price: '', proof_pages: '1',
@@ -231,8 +232,23 @@ export default function CatalogPage() {
         }}
       />
 
+      <input
+        value={search}
+        onChange={(e) => setSearch(e.target.value)}
+        placeholder="Search parts..."
+        style={{
+          width: '100%', padding: '10px 12px', borderRadius: '10px',
+          border: '1px solid var(--border)', background: 'var(--card)', color: 'var(--text-primary)',
+          fontSize: '13px', marginBottom: '10px',
+        }}
+      />
+
       <div style={{ display: 'flex', flexDirection: 'column', gap: '5px' }}>
-        {catalog.map((c) => {
+        {catalog.filter((c) => {
+          if (!search) return true;
+          const q = search.toLowerCase();
+          return `${c.part_number} ${c.end_customer} ${c.vehicle_type} ${c.graphic_package} ${c.customer}`.toLowerCase().includes(q);
+        }).map((c) => {
           const isEditing = editId === c.id;
           const showingProofs = proofPanel === c.id;
           const proofs = proofMap[c.id] || [];
