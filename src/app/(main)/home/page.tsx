@@ -171,14 +171,14 @@ export default function HomePage() {
                   {isImage ? (
                     <img src={url} alt="Proof" style={{ width: '100%', maxHeight: '200px', objectFit: 'contain', background: 'var(--subtle-bg)', display: 'block' }} />
                   ) : (
-                    /* PDF thumbnail — use embedded iframe at small scale */
-                    <div style={{ width: '100%', height: '200px', overflow: 'hidden', position: 'relative', background: '#fff' }}>
+                    /* PDF thumbnail — scaled iframe preview */
+                    <div style={{ width: '100%', height: '220px', overflow: 'hidden', position: 'relative', background: '#fff', borderRadius: '0 0 10px 0' }}>
                       <iframe
-                        src={`${url}#toolbar=0&navpanes=0&scrollbar=0`}
+                        src={`${url}#toolbar=0&navpanes=0&scrollbar=0&view=FitH`}
                         style={{
-                          width: '100%', height: '600px', border: 'none',
+                          width: '300%', height: '300%', border: 'none',
                           position: 'absolute', top: 0, left: 0,
-                          transform: 'scale(0.34)', transformOrigin: 'top left',
+                          transform: 'scale(0.333)', transformOrigin: 'top left',
                           pointerEvents: 'none',
                         }}
                         title="Proof preview"
