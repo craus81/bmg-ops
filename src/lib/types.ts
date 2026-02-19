@@ -3,6 +3,8 @@ export interface Profile {
   full_name: string;
   email: string;
   role: 'admin' | 'installer';
+  status?: 'pending' | 'approved' | 'denied';
+  requested_role?: string;
 }
 
 export interface CatalogItem {

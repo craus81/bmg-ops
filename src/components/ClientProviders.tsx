@@ -8,9 +8,54 @@ import { ThemeProvider } from '@/components/ThemeProvider';
 import Header from '@/components/Header';
 import BottomNav from '@/components/BottomNav';
 
+function PendingScreen() {
+  const { signOut } = useAuth();
+  return (
+    <div style={{ minHeight: '100vh', display: 'flex', alignItems: 'center', justifyContent: 'center', background: 'var(--bg)', padding: '20px' }}>
+      <div style={{ textAlign: 'center', maxWidth: '340px' }}>
+        <div style={{ fontSize: '48px', marginBottom: '12px' }}>⏳</div>
+        <div style={{ fontSize: '20px', fontWeight: 800, color: 'var(--text-primary)', marginBottom: '8px' }}>Waiting for Approval</div>
+        <div style={{ fontSize: '14px', color: 'var(--text-secondary)', lineHeight: '1.5', marginBottom: '24px' }}>
+          Your account has been created but hasn&apos;t been approved yet. An admin will review your request shortly.
+        </div>
+        <button onClick={() => window.location.reload()} style={{
+          padding: '12px 24px', borderRadius: '12px', background: 'var(--navy)',
+          color: '#fff', fontSize: '14px', fontWeight: 700, border: 'none',
+          marginBottom: '10px', width: '100%',
+        }}>Check Again</button>
+        <button onClick={signOut} style={{
+          padding: '12px 24px', borderRadius: '12px', background: 'transparent',
+          color: 'var(--text-muted)', fontSize: '13px', fontWeight: 600,
+          border: '1px solid var(--border)', width: '100%',
+        }}>Sign Out</button>
+      </div>
+    </div>
+  );
+}
+
+function DeniedScreen() {
+  const { signOut } = useAuth();
+  return (
+    <div style={{ minHeight: '100vh', display: 'flex', alignItems: 'center', justifyContent: 'center', background: 'var(--bg)', padding: '20px' }}>
+      <div style={{ textAlign: 'center', maxWidth: '340px' }}>
+        <div style={{ fontSize: '48px', marginBottom: '12px' }}>🚫</div>
+        <div style={{ fontSize: '20px', fontWeight: 800, color: 'var(--text-primary)', marginBottom: '8px' }}>Access Denied</div>
+        <div style={{ fontSize: '14px', color: 'var(--text-secondary)', lineHeight: '1.5', marginBottom: '24px' }}>
+          Your account request was not approved. Contact an admin if you believe this is a mistake.
+        </div>
+        <button onClick={signOut} style={{
+          padding: '12px 24px', borderRadius: '12px', background: 'transparent',
+          color: 'var(--text-muted)', fontSize: '13px', fontWeight: 600,
+          border: '1px solid var(--border)', width: '100%',
+        }}>Sign Out</button>
+      </div>
+    </div>
+  );
+}
+
 function AppShell({ children }: { children: React.ReactNode }) {
   const router = useRouter();
-  const { user, loading } = useAuth();
+  const { user, loading, profile } = useAuth();
   const { clockStatus, activePart, appLoading } = useApp();
 
   useEffect(() => {
@@ -33,6 +78,10 @@ function AppShell({ children }: { children: React.ReactNode }) {
   }
 
   if (!user) return null;
+
+  // Check approval status
+  if (profile?.status === 'pending') return <PendingScreen />;
+  if (profile?.status === 'denied') return <DeniedScreen />;
 
   return (
     <div style={{ minHeight: '100vh', paddingBottom: '70px', background: 'var(--bg)' }}>

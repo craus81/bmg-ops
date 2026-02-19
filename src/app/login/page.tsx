@@ -6,13 +6,15 @@ import { createClient } from '@/lib/supabase-browser';
 export default function LoginPage() {
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
-  const [mode, setMode] = useState<'magic' | 'password'>('password');
+  const [fullName, setFullName] = useState('');
+  const [requestedRole, setRequestedRole] = useState('installer');
+  const [mode, setMode] = useState<'password' | 'magic' | 'signup'>('password');
   const [sent, setSent] = useState(false);
+  const [signupDone, setSignupDone] = useState(false);
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(false);
   const supabase = createClient();
 
-  // Apply theme on login page too
   useEffect(() => {
     try {
       const saved = localStorage.getItem('bmg-theme') || 'auto';
@@ -38,6 +40,32 @@ export default function LoginPage() {
     if (error) setError(error.message); else window.location.href = '/home';
   };
 
+  const handleSignup = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!email || !password || !fullName) return;
+    if (password.length < 6) { setError('Password must be at least 6 characters'); return; }
+    setLoading(true); setError('');
+
+    const { error } = await supabase.auth.signUp({
+      email,
+      password,
+      options: {
+        data: {
+          full_name: fullName,
+          requested_role: requestedRole,
+          status: 'pending',
+        },
+      },
+    });
+
+    setLoading(false);
+    if (error) {
+      setError(error.message);
+    } else {
+      setSignupDone(true);
+    }
+  };
+
   const labelStyle: React.CSSProperties = { display: 'block', fontSize: '11px', fontWeight: 700, color: 'var(--login-label, rgba(255,255,255,0.45))', textTransform: 'uppercase', letterSpacing: '0.8px', marginBottom: '8px' };
   const inputStyle: React.CSSProperties = { width: '100%', padding: '14px 18px', borderRadius: '12px', border: '1px solid var(--login-input-border, rgba(255,255,255,0.1))', background: 'var(--login-input-bg, rgba(255,255,255,0.06))', color: 'var(--login-text, #fff)', fontSize: '16px', marginBottom: '12px' };
 
@@ -53,19 +81,25 @@ export default function LoginPage() {
           <p style={{ fontSize: '13px', color: 'var(--login-text-muted, rgba(255,255,255,0.35))', marginTop: '4px', fontWeight: 500 }}>Fleet Graphics Operations</p>
         </div>
 
+        {/* Mode tabs */}
         <div style={{ display: 'flex', gap: '4px', marginBottom: '16px', background: 'var(--login-tab-bg, rgba(255,255,255,0.06))', borderRadius: '10px', padding: '3px' }}>
-          {(['password', 'magic'] as const).map((m) => (
-            <button key={m} onClick={() => { setMode(m); setError(''); }} style={{
-              flex: 1, padding: '10px', borderRadius: '8px', fontSize: '12px', fontWeight: 700,
-              background: mode === m ? 'var(--login-tab-active-bg, rgba(255,255,255,0.1))' : 'transparent',
-              color: mode === m ? 'var(--login-tab-active-color, #fff)' : 'var(--login-tab-color, rgba(255,255,255,0.4))',
+          {([
+            { id: 'password' as const, label: 'Sign In' },
+            { id: 'magic' as const, label: 'Magic Link' },
+            { id: 'signup' as const, label: 'Request Access' },
+          ]).map((m) => (
+            <button key={m.id} onClick={() => { setMode(m.id); setError(''); setSignupDone(false); }} style={{
+              flex: 1, padding: '10px', borderRadius: '8px', fontSize: '11px', fontWeight: 700,
+              background: mode === m.id ? 'var(--login-tab-active-bg, rgba(255,255,255,0.1))' : 'transparent',
+              color: mode === m.id ? 'var(--login-tab-active-color, #fff)' : 'var(--login-tab-color, rgba(255,255,255,0.4))',
               transition: 'all 0.2s',
             }}>
-              {m === 'password' ? 'Password' : 'Magic Link'}
+              {m.label}
             </button>
           ))}
         </div>
 
+        {/* Magic link sent */}
         {sent ? (
           <div style={{ background: 'var(--success-bg)', border: '1px solid var(--success-border)', borderRadius: '14px', padding: '24px', textAlign: 'center' }}>
             <div style={{ fontSize: '36px', marginBottom: '8px' }}>📧</div>
@@ -77,29 +111,81 @@ export default function LoginPage() {
               Use a different email
             </button>
           </div>
+
+        /* Signup done */
+        ) : signupDone ? (
+          <div style={{ background: 'var(--success-bg)', border: '1px solid var(--success-border)', borderRadius: '14px', padding: '24px', textAlign: 'center' }}>
+            <div style={{ fontSize: '36px', marginBottom: '8px' }}>✅</div>
+            <div style={{ fontWeight: 700, fontSize: '16px', color: 'var(--success)' }}>Request Submitted!</div>
+            <div style={{ fontSize: '13px', color: 'rgba(255,255,255,0.5)', marginTop: '6px' }}>
+              Your account has been created. An admin will review and approve your access.
+              You&apos;ll be able to sign in once approved.
+            </div>
+            <button onClick={() => { setSignupDone(false); setMode('password'); setEmail(''); setPassword(''); setFullName(''); }} style={{ marginTop: '16px', padding: '10px 20px', borderRadius: '8px', border: '1px solid rgba(255,255,255,0.12)', color: 'rgba(255,255,255,0.5)', fontSize: '13px', fontWeight: 600, background: 'transparent' }}>
+              Back to Sign In
+            </button>
+          </div>
+
+        /* Forms */
         ) : (
-          <form onSubmit={mode === 'password' ? handlePassword : handleMagicLink}>
+          <form onSubmit={mode === 'password' ? handlePassword : mode === 'magic' ? handleMagicLink : handleSignup}>
+            {mode === 'signup' && (<>
+              <label style={labelStyle}>Full Name</label>
+              <input type="text" value={fullName} onChange={(e) => setFullName(e.target.value)} placeholder="Your full name" autoComplete="name" style={inputStyle} />
+            </>)}
+
             <label style={labelStyle}>Email Address</label>
             <input type="email" value={email} onChange={(e) => setEmail(e.target.value)} placeholder="you@bmgfleet.com" autoFocus autoComplete="email" style={inputStyle} />
-            {mode === 'password' && (<>
+
+            {(mode === 'password' || mode === 'signup') && (<>
               <label style={{ ...labelStyle, marginTop: '4px' }}>Password</label>
-              <input type="password" value={password} onChange={(e) => setPassword(e.target.value)} placeholder="Enter your password" autoComplete="current-password" style={inputStyle} />
+              <input type="password" value={password} onChange={(e) => setPassword(e.target.value)} placeholder={mode === 'signup' ? 'Create a password (6+ chars)' : 'Enter your password'} autoComplete={mode === 'signup' ? 'new-password' : 'current-password'} style={inputStyle} />
             </>)}
+
+            {mode === 'signup' && (
+              <div style={{ marginBottom: '12px' }}>
+                <label style={labelStyle}>Role</label>
+                <div style={{ display: 'flex', gap: '6px' }}>
+                  {([
+                    { id: 'installer', label: '🔧 Installer', desc: 'Scan VINs, track time' },
+                    { id: 'admin', label: '👔 Admin', desc: 'Full access' },
+                  ]).map((r) => (
+                    <button
+                      key={r.id}
+                      type="button"
+                      onClick={() => setRequestedRole(r.id)}
+                      style={{
+                        flex: 1, padding: '12px 8px', borderRadius: '10px', textAlign: 'center',
+                        background: requestedRole === r.id ? 'rgba(238,49,32,0.08)' : 'rgba(255,255,255,0.04)',
+                        border: requestedRole === r.id ? '1px solid rgba(238,49,32,0.25)' : '1px solid rgba(255,255,255,0.08)',
+                        transition: 'all 0.15s',
+                      }}
+                    >
+                      <div style={{ fontSize: '14px', fontWeight: 700, color: requestedRole === r.id ? '#fff' : 'rgba(255,255,255,0.5)' }}>{r.label}</div>
+                      <div style={{ fontSize: '10px', color: 'rgba(255,255,255,0.3)', marginTop: '2px' }}>{r.desc}</div>
+                    </button>
+                  ))}
+                </div>
+              </div>
+            )}
+
             {error && (
               <div style={{ padding: '10px 14px', background: 'var(--error-bg)', border: '1px solid var(--error-border)', borderRadius: '10px', color: 'var(--error)', fontSize: '13px', marginBottom: '12px' }}>
                 {error}
               </div>
             )}
-            <button type="submit" disabled={!email || (mode === 'password' && !password) || loading} style={{
+
+            <button type="submit" disabled={!email || (mode !== 'magic' && !password) || (mode === 'signup' && !fullName) || loading} style={{
               width: '100%', padding: '16px', borderRadius: '12px', background: 'var(--orange)',
               color: '#fff', fontSize: '16px', fontWeight: 700,
-              opacity: (email && (mode === 'magic' || password) && !loading) ? 1 : 0.5,
+              opacity: (email && (mode === 'magic' || password) && (mode !== 'signup' || fullName) && !loading) ? 1 : 0.5,
               boxShadow: '0 4px 20px rgba(238,49,32,0.3)', transition: 'opacity 0.2s',
             }}>
-              {loading ? 'Signing in...' : mode === 'password' ? 'Sign In' : 'Send Magic Link'}
+              {loading ? (mode === 'signup' ? 'Creating...' : 'Signing in...') : mode === 'password' ? 'Sign In' : mode === 'magic' ? 'Send Magic Link' : 'Request Access'}
             </button>
+
             <p style={{ textAlign: 'center', fontSize: '12px', color: 'var(--login-text-muted, rgba(255,255,255,0.25))', marginTop: '16px' }}>
-              {mode === 'password' ? 'Contact admin for password reset' : 'No password needed — we\'ll email you a link'}
+              {mode === 'password' ? 'Contact admin for password reset' : mode === 'magic' ? 'No password needed — we\'ll email you a link' : 'Admin will review your request'}
             </p>
           </form>
         )}

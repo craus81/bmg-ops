@@ -1,13 +1,29 @@
 'use client';
 
+import { useState, useEffect } from 'react';
 import { useRouter } from 'next/navigation';
 import { useAuth } from '@/components/AuthProvider';
 import { useTheme } from '@/components/ThemeProvider';
+import { createClient } from '@/lib/supabase-browser';
 
 export default function MorePage() {
   const router = useRouter();
   const { isAdmin, profile, signOut } = useAuth();
   const { mode, setMode, resolvedTheme } = useTheme();
+  const supabase = createClient();
+  const [pendingCount, setPendingCount] = useState(0);
+
+  useEffect(() => {
+    if (!isAdmin) return;
+    const load = async () => {
+      const { count } = await supabase
+        .from('profiles')
+        .select('*', { count: 'exact', head: true })
+        .eq('status', 'pending');
+      setPendingCount(count || 0);
+    };
+    load();
+  }, [isAdmin]);
 
   return (
     <div>
@@ -19,6 +35,13 @@ export default function MorePage() {
         {isAdmin && (<>
           <MenuBtn icon="📦" title="Part Catalog" sub="Manage part numbers" onClick={() => router.push('/admin/catalog')} />
           <MenuBtn icon="📋" title="Purchase Orders" sub="Manage POs" onClick={() => router.push('/admin/pos')} />
+          <MenuBtn
+            icon="👥"
+            title="User Management"
+            sub={pendingCount > 0 ? `${pendingCount} pending approval` : 'Manage team access'}
+            onClick={() => router.push('/admin/users')}
+            badge={pendingCount > 0 ? pendingCount : undefined}
+          />
         </>)}
         <MenuBtn icon="📝" title="Quick Job (No PO)" sub="Start scanning without a PO" onClick={() => router.push('/scan')} />
       </div>
@@ -34,9 +57,9 @@ export default function MorePage() {
           borderRadius: '14px', boxShadow: 'var(--shadow-sm)',
         }}>
           {([
-            { id: 'auto' as const, label: '🔄 Auto', desc: 'System' },
-            { id: 'light' as const, label: '☀️ Light', desc: '' },
-            { id: 'dark' as const, label: '🌙 Dark', desc: '' },
+            { id: 'auto' as const, label: '🔄 Auto' },
+            { id: 'light' as const, label: '☀️ Light' },
+            { id: 'dark' as const, label: '🌙 Dark' },
           ]).map((opt) => (
             <button
               key={opt.id}
@@ -78,23 +101,33 @@ export default function MorePage() {
   );
 }
 
-function MenuBtn({ icon, title, sub, onClick }: { icon: string; title: string; sub: string; onClick: () => void }) {
+function MenuBtn({ icon, title, sub, onClick, badge }: { icon: string; title: string; sub: string; onClick: () => void; badge?: number }) {
   return (
     <button onClick={onClick} style={{
       display: 'flex', alignItems: 'center', gap: '14px', width: '100%',
       padding: '16px', borderRadius: '14px', textAlign: 'left',
       border: '1px solid var(--border)', background: 'var(--card)',
       boxShadow: 'var(--shadow-sm)', transition: 'all 0.15s',
+      position: 'relative',
     }}>
       <div style={{
         width: '44px', height: '44px', borderRadius: '12px',
         background: 'var(--subtle-bg)', display: 'flex',
         alignItems: 'center', justifyContent: 'center', fontSize: '20px', flexShrink: 0,
       }}>{icon}</div>
-      <div>
+      <div style={{ flex: 1 }}>
         <div style={{ fontWeight: 700, fontSize: '15px', color: 'var(--text-primary)', letterSpacing: '-0.2px' }}>{title}</div>
-        <div style={{ fontSize: '12px', color: 'var(--text-muted)', marginTop: '2px' }}>{sub}</div>
+        <div style={{ fontSize: '12px', color: badge ? 'var(--warning)' : 'var(--text-muted)', marginTop: '2px', fontWeight: badge ? 600 : 400 }}>{sub}</div>
       </div>
+      {badge && (
+        <div style={{
+          width: '22px', height: '22px', borderRadius: '50%',
+          background: 'var(--orange)', color: '#fff',
+          fontSize: '11px', fontWeight: 800,
+          display: 'flex', alignItems: 'center', justifyContent: 'center',
+          flexShrink: 0,
+        }}>{badge}</div>
+      )}
     </button>
   );
 }
