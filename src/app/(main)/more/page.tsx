@@ -11,16 +11,24 @@ export default function MorePage() {
   const { isAdmin, profile, signOut } = useAuth();
   const { mode, setMode, resolvedTheme } = useTheme();
   const supabase = createClient();
-  const [pendingCount, setPendingCount] = useState(0);
+  const [pendingUserCount, setPendingUserCount] = useState(0);
+  const [pendingReviewCount, setPendingReviewCount] = useState(0);
 
   useEffect(() => {
     if (!isAdmin) return;
     const load = async () => {
-      const { count } = await supabase
+      const { count: userCount } = await supabase
         .from('profiles')
         .select('*', { count: 'exact', head: true })
         .eq('status', 'pending');
-      setPendingCount(count || 0);
+      setPendingUserCount(userCount || 0);
+
+      const { count: reviewCount } = await supabase
+        .from('scanned_vehicles')
+        .select('*', { count: 'exact', head: true })
+        .eq('review_status', 'pending')
+        .eq('submitted_for_review', true);
+      setPendingReviewCount(reviewCount || 0);
     };
     load();
   }, [isAdmin]);
@@ -36,11 +44,18 @@ export default function MorePage() {
           <MenuBtn icon="📦" title="Part Catalog" sub="Manage part numbers" onClick={() => router.push('/admin/catalog')} />
           <MenuBtn icon="📋" title="Purchase Orders" sub="Manage POs" onClick={() => router.push('/admin/pos')} />
           <MenuBtn
+            icon="📸"
+            title="Photo Reviews"
+            sub={pendingReviewCount > 0 ? `${pendingReviewCount} waiting for approval` : 'Review completion photos'}
+            onClick={() => router.push('/admin/reviews')}
+            badge={pendingReviewCount > 0 ? pendingReviewCount : undefined}
+          />
+          <MenuBtn
             icon="👥"
             title="User Management"
-            sub={pendingCount > 0 ? `${pendingCount} pending approval` : 'Manage team access'}
+            sub={pendingUserCount > 0 ? `${pendingUserCount} pending approval` : 'Manage team access'}
             onClick={() => router.push('/admin/users')}
-            badge={pendingCount > 0 ? pendingCount : undefined}
+            badge={pendingUserCount > 0 ? pendingUserCount : undefined}
           />
         </>)}
         <MenuBtn icon="📝" title="Quick Job (No PO)" sub="Start scanning without a PO" onClick={() => router.push('/scan')} />

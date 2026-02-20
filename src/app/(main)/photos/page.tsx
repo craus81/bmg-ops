@@ -23,6 +23,8 @@ export default function PhotosPage() {
   const [vehicle, setVehicle] = useState<any>(null);
   const [uploading, setUploading] = useState(false);
   const [loading, setLoading] = useState(true);
+  const [submitting, setSubmitting] = useState(false);
+  const [submitted, setSubmitted] = useState(false);
   const fileRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
@@ -34,6 +36,7 @@ export default function PhotosPage() {
         .eq('id', vehicleId)
         .single();
       setVehicle(v);
+      setSubmitted(v?.submitted_for_review || false);
 
       const { data: p } = await supabase
         .from('vehicle_photos')
@@ -94,6 +97,66 @@ export default function PhotosPage() {
     e.target.value = '';
   };
 
+  const handleSubmitForReview = async () => {
+    if (!vehicleId || !user || photos.length === 0) return;
+    setSubmitting(true);
+
+    // Update vehicle status
+    await supabase
+      .from('scanned_vehicles')
+      .update({
+        submitted_for_review: true,
+        submitted_at: new Date().toISOString(),
+        review_status: 'pending',
+      })
+      .eq('id', vehicleId);
+
+    // Get all admin users
+    const { data: admins } = await supabase
+      .from('profiles')
+      .select('id, email')
+      .eq('role', 'admin')
+      .eq('status', 'approved');
+
+    // Create notification for each admin
+    if (admins && admins.length > 0) {
+      const title = vehicle
+        ? `Photo review: ${[vehicle.vehicle_year, vehicle.vehicle_make, vehicle.vehicle_model].filter(Boolean).join(' ')}`
+        : 'New photo review submitted';
+
+      await supabase
+        .from('notifications')
+        .insert(admins.map((admin: any) => ({
+          user_id: admin.id,
+          type: 'review_submitted',
+          title,
+          body: `${photos.length} photo${photos.length !== 1 ? 's' : ''} submitted for VIN ${vehicle?.vin || 'unknown'}`,
+          vehicle_id: vehicleId,
+        })));
+
+      // Call edge function to send email
+      try {
+        await supabase.functions.invoke('send-review-email', {
+          body: {
+            type: 'submitted',
+            vehicle_id: vehicleId,
+            vehicle_info: vehicle ? `${vehicle.vehicle_year || ''} ${vehicle.vehicle_make || ''} ${vehicle.vehicle_model || ''}`.trim() : 'Unknown',
+            vin: vehicle?.vin || '',
+            photo_count: photos.length,
+            submitted_by: user.id,
+            admin_emails: admins.map((a: any) => a.email),
+          },
+        });
+      } catch (e) {
+        console.error('Email send failed:', e);
+        // Don't block the submission if email fails
+      }
+    }
+
+    setSubmitted(true);
+    setSubmitting(false);
+  };
+
   if (!vehicleId) return <div style={{ color: 'var(--error)', padding: '20px' }}>No vehicle ID</div>;
   if (loading) return <div style={{ textAlign: 'center', padding: '40px', color: 'var(--text-muted)' }}>Loading...</div>;
 
@@ -101,14 +164,57 @@ export default function PhotosPage() {
     ? [vehicle.vehicle_year, vehicle.vehicle_make, vehicle.vehicle_model].filter(Boolean).join(' ')
     : 'Vehicle';
 
+  const reviewStatus = vehicle?.review_status || 'none';
+
   return (
     <div>
       <div style={{ fontSize: '11px', fontWeight: 700, color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.5px', marginBottom: '6px' }}>
         Completion Photos
       </div>
-      <div style={{ fontWeight: 700, fontSize: '15px', marginBottom: '4px' }}>{title}</div>
+      <div style={{ fontWeight: 700, fontSize: '15px', marginBottom: '4px', color: 'var(--text-primary)' }}>{title}</div>
       {vehicle?.vin && (
-        <div style={{ fontSize: '11px', fontFamily: 'monospace', color: 'var(--text-muted)', marginBottom: '16px' }}>{vehicle.vin}</div>
+        <div style={{ fontSize: '11px', fontFamily: 'monospace', color: 'var(--text-muted)', marginBottom: '8px' }}>{vehicle.vin}</div>
+      )}
+
+      {/* Review status banner */}
+      {reviewStatus === 'pending' && (
+        <div style={{ padding: '10px 14px', borderRadius: '10px', background: 'var(--warning-bg)', border: '1px solid var(--warning-border)', marginBottom: '12px', display: 'flex', alignItems: 'center', gap: '8px' }}>
+          <span style={{ fontSize: '16px' }}>⏳</span>
+          <div>
+            <div style={{ fontSize: '12px', fontWeight: 700, color: 'var(--warning)' }}>Pending Review</div>
+            <div style={{ fontSize: '10px', color: 'var(--text-muted)' }}>Waiting for admin approval</div>
+          </div>
+        </div>
+      )}
+      {reviewStatus === 'approved' && (
+        <div style={{ padding: '10px 14px', borderRadius: '10px', background: 'var(--success-bg)', border: '1px solid var(--success-border)', marginBottom: '12px', display: 'flex', alignItems: 'center', gap: '8px' }}>
+          <span style={{ fontSize: '16px' }}>✅</span>
+          <div>
+            <div style={{ fontSize: '12px', fontWeight: 700, color: 'var(--success)' }}>Approved</div>
+            {vehicle?.review_notes && <div style={{ fontSize: '10px', color: 'var(--text-muted)' }}>{vehicle.review_notes}</div>}
+          </div>
+        </div>
+      )}
+      {reviewStatus === 'denied' && (
+        <div style={{ padding: '10px 14px', borderRadius: '10px', background: 'var(--error-bg)', border: '1px solid var(--error-border)', marginBottom: '12px' }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+            <span style={{ fontSize: '16px' }}>❌</span>
+            <div>
+              <div style={{ fontSize: '12px', fontWeight: 700, color: 'var(--error)' }}>Needs Rework</div>
+              {vehicle?.review_notes && <div style={{ fontSize: '10px', color: 'var(--text-muted)', marginTop: '2px' }}>{vehicle.review_notes}</div>}
+            </div>
+          </div>
+          <button
+            onClick={() => { setSubmitted(false); }}
+            style={{
+              marginTop: '8px', width: '100%', padding: '8px', borderRadius: '8px',
+              background: 'transparent', border: '1px solid var(--error-border)',
+              color: 'var(--error)', fontSize: '11px', fontWeight: 700,
+            }}
+          >
+            Upload new photos and resubmit
+          </button>
+        </div>
       )}
 
       <input
@@ -120,36 +226,39 @@ export default function PhotosPage() {
         style={{ display: 'none' }}
       />
 
-      <div style={{ display: 'flex', gap: '8px', marginBottom: '16px' }}>
-        <button
-          onClick={() => fileRef.current?.click()}
-          disabled={uploading}
-          style={{
-            flex: 1, padding: '14px', borderRadius: '14px',
-            background: 'var(--navy)', color: '#fff', fontWeight: 700, fontSize: '14px',
-            opacity: uploading ? 0.5 : 1,
-          }}
-        >
-          {uploading ? 'Uploading...' : '📸 Take Photo'}
-        </button>
-        <button
-          onClick={() => {
-            if (fileRef.current) {
-              fileRef.current.removeAttribute('capture');
-              fileRef.current.click();
-              fileRef.current.setAttribute('capture', 'environment');
-            }
-          }}
-          disabled={uploading}
-          style={{
-            padding: '14px 18px', borderRadius: '14px',
-            border: '1px solid #1e2d3d', background: 'var(--card)',
-            color: 'var(--text-secondary)', fontWeight: 700, fontSize: '14px',
-          }}
-        >
-          📁
-        </button>
-      </div>
+      {/* Upload buttons — hide if already approved */}
+      {reviewStatus !== 'approved' && (
+        <div style={{ display: 'flex', gap: '8px', marginBottom: '16px' }}>
+          <button
+            onClick={() => fileRef.current?.click()}
+            disabled={uploading}
+            style={{
+              flex: 1, padding: '14px', borderRadius: '10px',
+              background: 'var(--navy)', color: '#fff', fontWeight: 700, fontSize: '14px',
+              opacity: uploading ? 0.5 : 1, border: 'none',
+            }}
+          >
+            {uploading ? 'Uploading...' : '📸 Take Photo'}
+          </button>
+          <button
+            onClick={() => {
+              if (fileRef.current) {
+                fileRef.current.removeAttribute('capture');
+                fileRef.current.click();
+                fileRef.current.setAttribute('capture', 'environment');
+              }
+            }}
+            disabled={uploading}
+            style={{
+              padding: '14px 18px', borderRadius: '10px',
+              border: '1px solid var(--border)', background: 'var(--card)',
+              color: 'var(--text-muted)', fontWeight: 700, fontSize: '14px',
+            }}
+          >
+            📁
+          </button>
+        </div>
+      )}
 
       {photos.length === 0 && (
         <div style={{ textAlign: 'center', padding: '28px 0', color: 'var(--text-muted)' }}>
@@ -160,7 +269,7 @@ export default function PhotosPage() {
 
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: '4px' }}>
         {photos.map((p) => (
-          <div key={p.id} style={{ position: 'relative', paddingTop: '100%', borderRadius: '10px', overflow: 'hidden', background: 'var(--card)' }}>
+          <div key={p.id} style={{ position: 'relative', paddingTop: '100%', borderRadius: '8px', overflow: 'hidden', background: 'var(--card)' }}>
             {p.url && (
               <img
                 src={p.url}
@@ -173,12 +282,39 @@ export default function PhotosPage() {
       </div>
 
       <div style={{ marginTop: '16px', display: 'flex', flexDirection: 'column', gap: '8px' }}>
+        {/* Submit for Review button */}
+        {photos.length > 0 && reviewStatus !== 'approved' && !submitted && (
+          <button
+            onClick={handleSubmitForReview}
+            disabled={submitting}
+            style={{
+              width: '100%', padding: '14px', borderRadius: '14px',
+              background: 'var(--orange)', color: '#fff',
+              fontWeight: 800, fontSize: '15px', border: 'none',
+              boxShadow: '0 4px 16px rgba(238,49,32,0.3)',
+              opacity: submitting ? 0.5 : 1,
+            }}
+          >
+            {submitting ? 'Submitting...' : `✓ Submit ${photos.length} Photo${photos.length !== 1 ? 's' : ''} for Review`}
+          </button>
+        )}
+
+        {submitted && reviewStatus === 'pending' && (
+          <div style={{
+            width: '100%', padding: '14px', borderRadius: '14px', textAlign: 'center',
+            background: 'var(--warning-bg)', border: '1px solid var(--warning-border)',
+            color: 'var(--warning)', fontWeight: 700, fontSize: '13px',
+          }}>
+            ⏳ Submitted — waiting for admin review
+          </div>
+        )}
+
         <button
           onClick={() => router.push('/scan')}
           style={{
-            width: '100%', padding: '12px', borderRadius: '14px',
-            background: 'rgba(238,49,32,0.06)', border: '1px solid rgba(238,49,32,0.15)',
-            color: 'var(--navy)', fontWeight: 700, fontSize: '13px',
+            width: '100%', padding: '12px', borderRadius: '10px',
+            background: 'var(--tab-active-bg)', border: '1px solid var(--tab-active-border)',
+            color: 'var(--tab-active-color)', fontWeight: 700, fontSize: '13px',
           }}
         >
           📷 Scan Next VIN
@@ -186,8 +322,8 @@ export default function PhotosPage() {
         <button
           onClick={() => router.back()}
           style={{
-            width: '100%', padding: '10px', borderRadius: '14px',
-            border: '1px solid #1e2d3d', background: 'transparent',
+            width: '100%', padding: '10px', borderRadius: '10px',
+            border: '1px solid var(--border)', background: 'transparent',
             color: 'var(--text-secondary)', fontSize: '13px', fontWeight: 700,
           }}
         >
