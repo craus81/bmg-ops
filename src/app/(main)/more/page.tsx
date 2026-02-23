@@ -43,6 +43,7 @@ export default function MorePage() {
         <MenuBtn icon="📊" title="Export Reports" sub="Download vehicle spreadsheets" onClick={() => router.push('/reports')} />
         {isAdmin && (<>
           <MenuBtn icon="📋" title="All Jobs" sub="View all jobs by company" onClick={() => router.push('/admin/jobs')} />
+          <MenuBtn icon="📅" title="Schedule" sub="Assign jobs to installers" onClick={() => router.push('/admin/schedule')} />
           <MenuBtn icon="📦" title="Part Catalog" sub="Manage part numbers" onClick={() => router.push('/admin/catalog')} />
           <MenuBtn icon="📋" title="Purchase Orders" sub="Manage POs" onClick={() => router.push('/admin/pos')} />
           <MenuBtn
