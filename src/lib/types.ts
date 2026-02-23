@@ -5,6 +5,7 @@ export interface Profile {
   role: 'admin' | 'installer';
   status?: 'pending' | 'approved' | 'denied';
   requested_role?: string;
+  company_id?: string;
 }
 
 export interface CatalogItem {
@@ -67,6 +68,7 @@ export interface ScannedVehicle {
   end_customer: string | null;
   catalog_id: string | null;
   po_line_item_id: string | null;
+  company_id?: string;
   scanned_by: string;
   scanned_at: string;
   photos?: VehiclePhoto[];
