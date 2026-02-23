@@ -136,8 +136,16 @@ export default function PhotosPage() {
 
       // Call edge function to send email
       try {
-        await supabase.functions.invoke('send-review-email', {
-          body: {
+        const { data: { session } } = await supabase.auth.getSession();
+        
+        await fetch(`${process.env.NEXT_PUBLIC_SUPABASE_URL}/functions/v1/send-review-email`, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            'Authorization': `Bearer ${session?.access_token || process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY}`,
+            'apikey': process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY || '',
+          },
+          body: JSON.stringify({
             type: 'submitted',
             vehicle_id: vehicleId,
             vehicle_info: vehicle ? `${vehicle.vehicle_year || ''} ${vehicle.vehicle_make || ''} ${vehicle.vehicle_model || ''}`.trim() : 'Unknown',
@@ -145,13 +153,11 @@ export default function PhotosPage() {
             photo_count: photos.length,
             submitted_by: user.id,
             admin_emails: admins.map((a: any) => a.email),
-          },
+          }),
         });
       } catch (e) {
         console.error('Email send failed:', e);
-        // Don't block the submission if email fails
       }
-    }
 
     setSubmitted(true);
     setSubmitting(false);
