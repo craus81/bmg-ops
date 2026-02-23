@@ -319,7 +319,7 @@ export default function ReviewsPage() {
                 {/* Photo thumbnails — always show */}
                 <div style={{ display: 'flex', gap: '4px', marginTop: '10px', overflowX: 'auto' }}>
                   {v.photos.slice(0, 5).map((p) => (
-                    <div key={p.id} style={{
+  <div key={p.id} onClick={(e) => { e.stopPropagation(); setViewingPhoto(p.url || null); }} style={{
                       width: '56px', height: '56px', borderRadius: '6px', overflow: 'hidden',
                       background: 'var(--subtle-bg)', flexShrink: 0,
                     }}>
@@ -344,7 +344,7 @@ export default function ReviewsPage() {
                     {v.photos.map((p) => (
                       <button key={p.id} onClick={() => setViewingPhoto(p.url || null)} style={{
                         position: 'relative', paddingTop: '100%', borderRadius: '6px',
-                        overflow: 'hidden', background: 'var(--subtle-bg)', border: 'none', padding: 0,
+                        overflow: 'hidden', background: 'var(--subtle-bg)', border: 'none',
                       }}>
                         {p.url && <img src={p.url} alt="" style={{ position: 'absolute', top: 0, left: 0, width: '100%', height: '100%', objectFit: 'cover' }} />}
                       </button>
