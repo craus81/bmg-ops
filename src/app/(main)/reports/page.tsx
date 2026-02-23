@@ -3,10 +3,12 @@
 import { useState, useEffect } from 'react';
 import { useRouter } from 'next/navigation';
 import { createClient } from '@/lib/supabase-browser';
+import { useAuth } from '@/components/AuthProvider';
 
 export default function ReportsPage() {
   const router = useRouter();
   const supabase = createClient();
+  const { user, isAdmin } = useAuth();
   const [vehicles, setVehicles] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
   const [exporting, setExporting] = useState(false);
@@ -17,27 +19,39 @@ export default function ReportsPage() {
   const [loadingArchive, setLoadingArchive] = useState(false);
 
   useEffect(() => {
-    loadPending();
-  }, []);
+    if (user) loadPending();
+  }, [user]);
 
   var loadPending = async () => {
     setLoading(true);
-    var { data } = await supabase
+    let query = supabase
       .from('scanned_vehicles')
       .select('*')
       .is('exported_at', null)
       .order('scanned_at', { ascending: false });
+
+    if (!isAdmin) {
+      query = query.eq('scanned_by', user!.id);
+    }
+
+    var { data } = await query;
     setVehicles(data || []);
     setLoading(false);
   };
 
   var loadArchive = async () => {
     setLoadingArchive(true);
-    var { data } = await supabase
+    let query = supabase
       .from('scanned_vehicles')
       .select('*')
       .not('exported_at', 'is', null)
       .order('exported_at', { ascending: false });
+
+    if (!isAdmin) {
+      query = query.eq('scanned_by', user!.id);
+    }
+
+    var { data } = await query;
     setArchives(data || []);
     setLoadingArchive(false);
   };
@@ -137,14 +151,12 @@ export default function ReportsPage() {
       var filename = 'BMG-' + safeCustomer + '-' + dateStr + '.xlsx';
       XLSX.writeFile(wb, filename);
 
-      // Mark these as exported
       var ids = custVehicles.map(function(v: any) { return v.id; });
       await supabase
         .from('scanned_vehicles')
         .update({ exported_at: now.toISOString() })
         .in('id', ids);
 
-      // Remove from pending list
       setVehicles(function(prev: any[]) {
         return prev.filter(function(v: any) { return !ids.includes(v.id); });
       });
@@ -208,7 +220,9 @@ export default function ReportsPage() {
 
   return (
     <div>
-      <div style={{ fontSize: '11px', fontWeight: 700, color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.5px', marginBottom: '12px' }}>Reports</div>
+      <div style={{ fontSize: '11px', fontWeight: 700, color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.5px', marginBottom: '12px' }}>
+        {isAdmin ? 'Reports' : 'My Reports'}
+      </div>
 
       <div style={{ display: 'flex', gap: '4px', marginBottom: '12px', background: 'var(--card)', borderRadius: '10px', padding: '3px' }}>
         <button onClick={function() { switchTab('pending'); }} style={{ flex: 1, padding: '8px', borderRadius: '6px', fontSize: '12px', fontWeight: 700, background: tab === 'pending' ? 'var(--tab-active-bg)' : 'transparent', border: 'none', color: tab === 'pending' ? 'var(--navy)' : 'var(--text-muted)' }}>

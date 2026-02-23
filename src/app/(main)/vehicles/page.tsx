@@ -3,12 +3,14 @@
 import { useState, useEffect } from 'react';
 import { useRouter } from 'next/navigation';
 import { createClient } from '@/lib/supabase-browser';
+import { useAuth } from '@/components/AuthProvider';
 import SwipeToDelete from '@/components/SwipeToDelete';
 import { theme } from '@/lib/theme';
 import type { ScannedVehicle } from '@/lib/types';
 
 export default function VehiclesPage() {
   const router = useRouter();
+  const { user, isAdmin } = useAuth();
   const [vehicles, setVehicles] = useState<ScannedVehicle[]>([]);
   const [loading, setLoading] = useState(true);
   const [editId, setEditId] = useState<string | null>(null);
@@ -16,13 +18,21 @@ export default function VehiclesPage() {
   const supabase = createClient();
 
   useEffect(() => {
+    if (!user) return;
     const load = async () => {
-      const { data } = await supabase.from('scanned_vehicles').select('*').order('scanned_at', { ascending: false }).limit(50);
+      let query = supabase.from('scanned_vehicles').select('*').order('scanned_at', { ascending: false }).limit(50);
+
+      // Non-admins only see their own scans
+      if (!isAdmin) {
+        query = query.eq('scanned_by', user.id);
+      }
+
+      const { data } = await query;
       setVehicles((data as ScannedVehicle[]) || []);
       setLoading(false);
     };
     load();
-  }, []);
+  }, [user, isAdmin]);
 
   const handleDelete = async (id: string) => {
     await supabase.from('vehicle_photos').delete().eq('vehicle_id', id);
@@ -52,13 +62,13 @@ export default function VehiclesPage() {
   return (
     <div>
       <div style={{ fontSize: '11px', fontWeight: 700, color: theme.textMuted, textTransform: 'uppercase', letterSpacing: '0.8px', marginBottom: '12px' }}>
-        Scanned Vehicles ({vehicles.length})
+        {isAdmin ? 'Scanned Vehicles' : 'My Scanned Vehicles'} ({vehicles.length})
       </div>
 
       {vehicles.length === 0 && (
         <div style={{ textAlign: 'center', padding: '40px 0', color: theme.textMuted }}>
           <div style={{ fontSize: '40px', marginBottom: '8px', opacity: 0.3 }}>🚐</div>
-          <div style={{ fontWeight: 600, fontSize: '14px' }}>No vehicles scanned yet</div>
+          <div style={{ fontWeight: 600, fontSize: '14px' }}>{isAdmin ? 'No vehicles scanned yet' : 'You haven\'t scanned any vehicles yet'}</div>
         </div>
       )}
 
