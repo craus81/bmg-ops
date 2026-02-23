@@ -44,6 +44,10 @@ interface Invoice {
   submitter_email?: string;
   vehicles: { id: string; vin: string; vehicle_year: string | null; vehicle_make: string | null; vehicle_model: string | null }[];
   file_url?: string;
+  paid_at?: string | null;
+  payment_amount?: number | null;
+  payment_method?: string | null;
+  payment_notes?: string | null;
 }
 
 export default function AllJobsPage() {
@@ -58,11 +62,18 @@ export default function AllJobsPage() {
   const [statusFilter, setStatusFilter] = useState<'all' | 'pending' | 'approved' | 'denied' | 'not_submitted'>('all');
   const [invoices, setInvoices] = useState<Invoice[]>([]);
   const [invoicesLoading, setInvoicesLoading] = useState(true);
-  const [invoiceFilter, setInvoiceFilter] = useState<'pending' | 'approved' | 'denied' | 'all'>('pending');
+  const [invoiceFilter, setInvoiceFilter] = useState<'pending' | 'approved' | 'paid' | 'denied' | 'all'>('pending');
   const [expandedInvoice, setExpandedInvoice] = useState<string | null>(null);
   const [denyNotes, setDenyNotes] = useState('');
   const [processingInvoice, setProcessingInvoice] = useState<string | null>(null);
   const [viewingFile, setViewingFile] = useState<string | null>(null);
+  // Payment state
+  const [payingInvoice, setPayingInvoice] = useState<string | null>(null);
+  const [payDate, setPayDate] = useState('');
+  const [payAmount, setPayAmount] = useState('');
+  const [payMethod, setPayMethod] = useState('');
+  const [payNotes, setPayNotes] = useState('');
+  const [savingPayment, setSavingPayment] = useState(false);
 
   useEffect(() => {
     if (!isAdmin) { router.push('/home'); return; }
@@ -162,6 +173,41 @@ export default function AllJobsPage() {
     setExpandedInvoice(null);
   };
 
+  const handleMarkPaid = async (invoiceId: string) => {
+    if (!user || !payDate || !payAmount || !payMethod) return;
+    setSavingPayment(true);
+    await supabase.from('invoices').update({
+      status: 'paid',
+      paid_at: new Date(payDate + 'T12:00:00').toISOString(),
+      payment_amount: parseFloat(payAmount),
+      payment_method: payMethod,
+      payment_notes: payNotes.trim() || null,
+      paid_by: user.id,
+    }).eq('id', invoiceId);
+
+    const invoice = invoices.find((i) => i.id === invoiceId);
+    if (invoice?.submitter_email) {
+      // Notify installer
+      await supabase.from('notifications').insert({
+        user_id: invoice.submitted_by,
+        type: 'invoice_paid',
+        title: `Invoice #${invoice.invoice_number} Paid`,
+        body: `Payment of $${parseFloat(payAmount).toFixed(2)} via ${payMethod} on ${new Date(payDate + 'T12:00:00').toLocaleDateString([], { month: 'short', day: 'numeric', year: 'numeric' })}`,
+      });
+    }
+
+    setInvoices((prev) => prev.map((i) => i.id === invoiceId ? {
+      ...i, status: 'paid',
+      paid_at: new Date(payDate + 'T12:00:00').toISOString(),
+      payment_amount: parseFloat(payAmount),
+      payment_method: payMethod,
+      payment_notes: payNotes.trim() || null,
+    } : i));
+    setPayingInvoice(null);
+    setPayDate(''); setPayAmount(''); setPayMethod(''); setPayNotes('');
+    setSavingPayment(false);
+  };
+
   const vehicleTitle = (v: any) => [v.vehicle_year, v.vehicle_make, v.vehicle_model].filter(Boolean).join(' ') || 'Unknown Vehicle';
 
   const filteredJobs = jobs.filter((j) => {
@@ -182,6 +228,7 @@ export default function AllJobsPage() {
 
   const filteredInvoices = invoiceFilter === 'all' ? invoices : invoices.filter((i) => i.status === invoiceFilter);
   const pendingInvoiceCount = invoices.filter((i) => i.status === 'pending').length;
+  const unpaidCount = invoices.filter((i) => i.status === 'approved').length;
 
   const jobStatusBadge = (v: Job) => {
     if (!v.submitted_for_review) return <span style={{ padding: '2px 7px', borderRadius: '6px', fontSize: '10px', fontWeight: 700, background: 'var(--subtle-bg)', border: '1px solid var(--border)', color: 'var(--text-muted)' }}>Not Submitted</span>;
@@ -268,7 +315,7 @@ export default function AllJobsPage() {
             {pendingInvoiceCount > 0 && <div style={{ padding: '4px 10px', borderRadius: '8px', fontSize: '11px', fontWeight: 700, background: 'var(--warning-bg)', border: '1px solid var(--warning-border)', color: 'var(--warning)' }}>{pendingInvoiceCount} pending</div>}
           </div>
           <div style={{ display: 'flex', gap: '4px', marginBottom: '12px' }}>
-            {([{ id: 'pending' as const, label: `Pending${pendingInvoiceCount > 0 ? ` (${pendingInvoiceCount})` : ''}` }, { id: 'approved' as const, label: 'Approved' }, { id: 'denied' as const, label: 'Denied' }, { id: 'all' as const, label: 'All' }]).map((f) => (
+            {([{ id: 'pending' as const, label: `Pending${pendingInvoiceCount > 0 ? ` (${pendingInvoiceCount})` : ''}` }, { id: 'approved' as const, label: `Unpaid${unpaidCount > 0 ? ` (${unpaidCount})` : ''}` }, { id: 'paid' as const, label: 'Paid' }, { id: 'denied' as const, label: 'Denied' }, { id: 'all' as const, label: 'All' }]).map((f) => (
               <button key={f.id} onClick={() => setInvoiceFilter(f.id)} style={{ padding: '6px 12px', borderRadius: '8px', fontSize: '11px', fontWeight: 700, background: invoiceFilter === f.id ? 'var(--tab-active-bg)' : 'transparent', border: invoiceFilter === f.id ? '1px solid var(--tab-active-border)' : '1px solid var(--border)', color: invoiceFilter === f.id ? 'var(--tab-active-color)' : 'var(--text-muted)' }}>{f.label}</button>
             ))}
           </div>
@@ -279,9 +326,10 @@ export default function AllJobsPage() {
               const isPending = inv.status === 'pending';
               const isApproved = inv.status === 'approved';
               const isDenied = inv.status === 'denied';
-              const statusColor = isPending ? 'var(--warning)' : isApproved ? 'var(--success)' : 'var(--error)';
-              const statusBg = isPending ? 'var(--warning-bg)' : isApproved ? 'var(--success-bg)' : 'var(--error-bg)';
-              const statusBorder = isPending ? 'var(--warning-border)' : isApproved ? 'var(--success-border)' : 'var(--error-border)';
+              const isPaid = inv.status === 'paid';
+              const statusColor = isPending ? 'var(--warning)' : (isApproved || isPaid) ? 'var(--success)' : 'var(--error)';
+              const statusBg = isPending ? 'var(--warning-bg)' : (isApproved || isPaid) ? 'var(--success-bg)' : 'var(--error-bg)';
+              const statusBorder = isPending ? 'var(--warning-border)' : (isApproved || isPaid) ? 'var(--success-border)' : 'var(--error-border)';
               return (
                 <div key={inv.id} style={{ background: 'var(--card)', border: `1px solid ${isPending ? 'var(--warning-border)' : 'var(--border)'}`, borderRadius: '14px', overflow: 'hidden', boxShadow: 'var(--shadow-sm)' }}>
                   <button onClick={() => { setExpandedInvoice(isExpanded ? null : inv.id); setDenyNotes(''); }} style={{ width: '100%', padding: '14px', textAlign: 'left', background: 'transparent', border: 'none', color: 'var(--text-primary)' }}>
@@ -292,7 +340,7 @@ export default function AllJobsPage() {
                         <div style={{ fontSize: '11px', color: 'var(--text-muted)', marginTop: '2px' }}>{inv.vehicles.length} vehicle{inv.vehicles.length !== 1 ? 's' : ''}{inv.file_name ? ` • 📎 ${inv.file_name}` : ''}</div>
                       </div>
                       <div style={{ textAlign: 'right' }}>
-                        <span style={{ padding: '3px 8px', borderRadius: '6px', fontSize: '10px', fontWeight: 700, background: statusBg, border: `1px solid ${statusBorder}`, color: statusColor }}>{isPending ? '⏳ Pending' : isApproved ? '✅ Approved' : '❌ Denied'}</span>
+                        <span style={{ padding: '3px 8px', borderRadius: '6px', fontSize: '10px', fontWeight: 700, background: statusBg, border: `1px solid ${statusBorder}`, color: statusColor }}>{isPending ? '⏳ Pending' : isPaid ? '💵 Paid' : isApproved ? '✅ Approved' : '❌ Denied'}</span>
                         <div style={{ fontSize: '10px', color: 'var(--text-muted)', marginTop: '4px' }}>{new Date(inv.submitted_at).toLocaleDateString([], { month: 'short', day: 'numeric' })}</div>
                       </div>
                     </div>
@@ -326,7 +374,69 @@ export default function AllJobsPage() {
                           </div>
                         </div>
                       )}
-                      {isApproved && inv.reviewed_at && <div style={{ fontSize: '11px', color: 'var(--text-muted)', padding: '8px 0' }}>Approved {new Date(inv.reviewed_at).toLocaleDateString([], { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' })}</div>}
+                      {isApproved && (
+                        <div>
+                          {inv.reviewed_at && <div style={{ fontSize: '11px', color: 'var(--text-muted)', marginBottom: '10px' }}>Approved {new Date(inv.reviewed_at).toLocaleDateString([], { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' })}</div>}
+                          {payingInvoice === inv.id ? (
+                            <div style={{ padding: '12px', borderRadius: '10px', background: 'var(--subtle-bg)', border: '1px solid var(--border)' }}>
+                              <div style={{ fontSize: '10px', fontWeight: 700, color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.5px', marginBottom: '10px' }}>Record Payment</div>
+                              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '8px', marginBottom: '8px' }}>
+                                <div>
+                                  <label style={{ display: 'block', fontSize: '9px', fontWeight: 700, color: 'var(--text-muted)', textTransform: 'uppercase', marginBottom: '3px' }}>Payment Date</label>
+                                  <input type="date" value={payDate} onChange={(e) => setPayDate(e.target.value)} style={{ width: '100%', padding: '10px', borderRadius: '8px', border: '1px solid var(--border)', background: 'var(--bg)', color: 'var(--text-primary)', fontSize: '13px' }} />
+                                </div>
+                                <div>
+                                  <label style={{ display: 'block', fontSize: '9px', fontWeight: 700, color: 'var(--text-muted)', textTransform: 'uppercase', marginBottom: '3px' }}>Amount ($)</label>
+                                  <input type="number" step="0.01" value={payAmount} onChange={(e) => setPayAmount(e.target.value)} placeholder="0.00" style={{ width: '100%', padding: '10px', borderRadius: '8px', border: '1px solid var(--border)', background: 'var(--bg)', color: 'var(--text-primary)', fontSize: '13px' }} />
+                                </div>
+                              </div>
+                              <div style={{ marginBottom: '8px' }}>
+                                <label style={{ display: 'block', fontSize: '9px', fontWeight: 700, color: 'var(--text-muted)', textTransform: 'uppercase', marginBottom: '3px' }}>Method</label>
+                                <div style={{ display: 'flex', gap: '4px', flexWrap: 'wrap' }}>
+                                  {['Check', 'ACH', 'Wire', 'Zelle', 'Cash', 'Credit Card', 'Other'].map((m) => (
+                                    <button key={m} onClick={() => setPayMethod(m)} style={{
+                                      padding: '6px 12px', borderRadius: '6px', fontSize: '11px', fontWeight: 700,
+                                      background: payMethod === m ? 'var(--navy)' : 'transparent',
+                                      border: `1px solid ${payMethod === m ? 'var(--navy)' : 'var(--border)'}`,
+                                      color: payMethod === m ? '#fff' : 'var(--text-muted)',
+                                    }}>{m}</button>
+                                  ))}
+                                </div>
+                              </div>
+                              <div style={{ marginBottom: '10px' }}>
+                                <label style={{ display: 'block', fontSize: '9px', fontWeight: 700, color: 'var(--text-muted)', textTransform: 'uppercase', marginBottom: '3px' }}>Notes (optional)</label>
+                                <input type="text" value={payNotes} onChange={(e) => setPayNotes(e.target.value)} placeholder="Check #, reference, etc." style={{ width: '100%', padding: '10px', borderRadius: '8px', border: '1px solid var(--border)', background: 'var(--bg)', color: 'var(--text-primary)', fontSize: '13px' }} />
+                              </div>
+                              <button onClick={() => handleMarkPaid(inv.id)} disabled={savingPayment || !payDate || !payAmount || !payMethod} style={{
+                                width: '100%', padding: '12px', borderRadius: '10px', marginBottom: '6px',
+                                background: 'var(--success)', color: '#fff', fontWeight: 800, fontSize: '14px', border: 'none',
+                                opacity: savingPayment || !payDate || !payAmount || !payMethod ? 0.4 : 1,
+                              }}>{savingPayment ? 'Saving...' : '💵 Mark as Paid'}</button>
+                              <button onClick={() => { setPayingInvoice(null); setPayDate(''); setPayAmount(''); setPayMethod(''); setPayNotes(''); }} style={{
+                                width: '100%', padding: '8px', borderRadius: '8px', border: '1px solid var(--border)',
+                                background: 'transparent', color: 'var(--text-muted)', fontSize: '12px', fontWeight: 700,
+                              }}>Cancel</button>
+                            </div>
+                          ) : (
+                            <button onClick={() => { setPayingInvoice(inv.id); setPayDate(new Date().toISOString().split('T')[0]); }} style={{
+                              width: '100%', padding: '12px', borderRadius: '10px',
+                              background: 'var(--navy)', color: '#fff', fontWeight: 800, fontSize: '14px', border: 'none',
+                            }}>💵 Mark as Paid</button>
+                          )}
+                        </div>
+                      )}
+                      {isPaid && (
+                        <div style={{ padding: '12px', borderRadius: '10px', background: 'var(--success-bg)', border: '1px solid var(--success-border)' }}>
+                          <div style={{ fontSize: '10px', fontWeight: 700, color: 'var(--success)', textTransform: 'uppercase', letterSpacing: '0.5px', marginBottom: '6px' }}>Payment Recorded</div>
+                          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '6px', fontSize: '12px' }}>
+                            <div><span style={{ color: 'var(--text-muted)' }}>Date:</span> <span style={{ fontWeight: 700, color: 'var(--text-primary)' }}>{inv.paid_at ? new Date(inv.paid_at).toLocaleDateString([], { month: 'short', day: 'numeric', year: 'numeric' }) : '—'}</span></div>
+                            <div><span style={{ color: 'var(--text-muted)' }}>Amount:</span> <span style={{ fontWeight: 700, color: 'var(--text-primary)' }}>${inv.payment_amount?.toFixed(2) || '—'}</span></div>
+                            <div><span style={{ color: 'var(--text-muted)' }}>Method:</span> <span style={{ fontWeight: 700, color: 'var(--text-primary)' }}>{inv.payment_method || '—'}</span></div>
+                            {inv.payment_notes && <div><span style={{ color: 'var(--text-muted)' }}>Notes:</span> <span style={{ fontWeight: 700, color: 'var(--text-primary)' }}>{inv.payment_notes}</span></div>}
+                          </div>
+                          {inv.reviewed_at && <div style={{ fontSize: '10px', color: 'var(--text-muted)', marginTop: '6px' }}>Approved {new Date(inv.reviewed_at).toLocaleDateString([], { month: 'short', day: 'numeric' })}</div>}
+                        </div>
+                      )}
                     </div>
                   )}
                 </div>

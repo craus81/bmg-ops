@@ -26,6 +26,9 @@ export default function ScanPage() {
   const [cameraError, setCameraError] = useState('');
   const [lastScanned, setLastScanned] = useState('');
   const [scanCount, setScanCount] = useState(0);
+  const [notes, setNotes] = useState('');
+  const [savingNotes, setSavingNotes] = useState(false);
+  const [notesSaved, setNotesSaved] = useState(false);
   const ref = useRef<HTMLInputElement>(null);
   const videoRef = useRef<HTMLVideoElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
@@ -196,9 +199,7 @@ export default function ScanPage() {
     setPoMatch('');
     setError('');
 
-    // Auto-match to open PO if we have a part number
     if (activePart) {
-      // Find open PO line items matching this part number with remaining quantity
       var { data: poLines } = await supabase
         .from('po_line_items')
         .select('*, purchase_orders!inner(id, po_number, status)')
@@ -242,11 +243,9 @@ export default function ScanPage() {
       .single();
     if (insertResult.error) { setError('Failed to save: ' + insertResult.error.message); return; }
 
-    // Increment installed count on the matched PO line
     if (matchedPoLineId) {
       await supabase.rpc('increment_po_installed', { p_line_id: matchedPoLineId });
 
-      // Check if entire PO is now fulfilled
       var matchedLine = (poLines || []).find(function(l: any) { return l.id === matchedPoLineId; });
       if (matchedLine) {
         var poId = (matchedLine as any).purchase_orders.id;
@@ -268,6 +267,17 @@ export default function ScanPage() {
     setConfirmed(true);
   };
 
+  const handleSaveNotes = async () => {
+    if (!savedVehicleId || !notes.trim()) return;
+    setSavingNotes(true);
+    await supabase
+      .from('scanned_vehicles')
+      .update({ notes: notes.trim() })
+      .eq('id', savedVehicleId);
+    setSavingNotes(false);
+    setNotesSaved(true);
+  };
+
   const resetScan = () => {
     setResult(null);
     setConfirmed(false);
@@ -277,6 +287,8 @@ export default function ScanPage() {
     setPoWarning('');
     setPoMatch('');
     setLastScanned('');
+    setNotes('');
+    setNotesSaved(false);
     foundVinRef.current = false;
     setScanCount(0);
     scanCountRef.current = 0;
@@ -368,7 +380,49 @@ export default function ScanPage() {
         {poWarning && (
           <div style={{ marginTop: '8px', padding: '8px 12px', background: 'var(--warning-bg)', border: '1px solid rgba(251,191,36,0.15)', borderRadius: '10px', color: 'var(--warning)', fontSize: '12px', fontWeight: 700 }}>{poWarning}</div>
         )}
-        <div style={{ marginTop: '20px', display: 'flex', flexDirection: 'column', gap: '8px' }}>
+
+        {/* Comments section */}
+        <div style={{ marginTop: '16px', textAlign: 'left' }}>
+          <div style={{
+            background: 'var(--card)', border: '1px solid var(--border)', borderRadius: '14px',
+            padding: '14px', boxShadow: 'var(--shadow-sm)',
+          }}>
+            <label style={{ display: 'block', fontSize: '10px', fontWeight: 700, color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.5px', marginBottom: '6px' }}>
+              Comments / Notes
+            </label>
+            <textarea
+              value={notes}
+              onChange={(e) => { setNotes(e.target.value); setNotesSaved(false); }}
+              placeholder="Add any notes about this vehicle (damage, special instructions, etc.)"
+              rows={3}
+              style={{
+                width: '100%', padding: '10px', borderRadius: '10px',
+                border: '1px solid var(--border)', background: 'var(--bg)',
+                color: 'var(--text-primary)', fontSize: '13px', resize: 'vertical',
+              }}
+            />
+            {notes.trim() && !notesSaved && (
+              <button
+                onClick={handleSaveNotes}
+                disabled={savingNotes}
+                style={{
+                  marginTop: '8px', width: '100%', padding: '10px', borderRadius: '10px',
+                  background: 'var(--navy)', color: '#fff', fontSize: '12px', fontWeight: 700,
+                  border: 'none', opacity: savingNotes ? 0.5 : 1,
+                }}
+              >
+                {savingNotes ? 'Saving...' : 'Save Notes'}
+              </button>
+            )}
+            {notesSaved && (
+              <div style={{ marginTop: '8px', fontSize: '12px', color: 'var(--success)', fontWeight: 700, textAlign: 'center' }}>
+                ✅ Notes saved
+              </div>
+            )}
+          </div>
+        </div>
+
+        <div style={{ marginTop: '16px', display: 'flex', flexDirection: 'column', gap: '8px' }}>
           <button onClick={() => router.push('/photos?id=' + savedVehicleId)} style={{ width: '100%', padding: '14px', borderRadius: '14px', background: 'var(--navy)', color: '#fff', fontWeight: 800, fontSize: '14px', border: 'none' }}>Add Completion Photos</button>
           <button onClick={() => resetScan()} style={{ width: '100%', padding: '16px', borderRadius: '14px', background: 'var(--navy)', color: '#fff', fontWeight: 800, fontSize: '16px', border: 'none' }}>Scan Next VIN</button>
           <button onClick={() => router.push('/home')} style={{ width: '100%', padding: '10px', borderRadius: '14px', border: '1px solid #1e2d3d', background: 'transparent', color: 'var(--text-secondary)', fontSize: '13px', fontWeight: 700 }}>Home</button>

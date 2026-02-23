@@ -15,24 +15,113 @@ export default function VehiclesPage() {
   const [loading, setLoading] = useState(true);
   const [editId, setEditId] = useState<string | null>(null);
   const [editForm, setEditForm] = useState({ vin: '', vehicle_year: '', vehicle_make: '', vehicle_model: '', part_number: '', end_customer: '' });
+  const [submittingAll, setSubmittingAll] = useState(false);
+  const [submitResult, setSubmitResult] = useState<{ count: number } | null>(null);
   const supabase = createClient();
 
   useEffect(() => {
     if (!user) return;
     const load = async () => {
       let query = supabase.from('scanned_vehicles').select('*').order('scanned_at', { ascending: false }).limit(50);
-
-      // Non-admins only see their own scans
       if (!isAdmin) {
         query = query.eq('scanned_by', user.id);
       }
-
       const { data } = await query;
       setVehicles((data as ScannedVehicle[]) || []);
       setLoading(false);
     };
     load();
   }, [user, isAdmin]);
+
+  const unsubmittedVehicles = vehicles.filter((v: any) => !v.submitted_for_review);
+
+  const handleSubmitAll = async () => {
+    if (!user || unsubmittedVehicles.length === 0) return;
+    setSubmittingAll(true);
+    setSubmitResult(null);
+
+    // Find which unsubmitted vehicles actually have photos
+    const withPhotos: ScannedVehicle[] = [];
+    for (const v of unsubmittedVehicles) {
+      const { count } = await supabase
+        .from('vehicle_photos')
+        .select('*', { count: 'exact', head: true })
+        .eq('vehicle_id', v.id);
+      if (count && count > 0) withPhotos.push(v);
+    }
+
+    if (withPhotos.length === 0) {
+      alert('No unsubmitted vehicles have photos to submit.');
+      setSubmittingAll(false);
+      return;
+    }
+
+    const now = new Date().toISOString();
+    const ids = withPhotos.map((v) => v.id);
+
+    // Batch update all vehicles
+    await supabase
+      .from('scanned_vehicles')
+      .update({
+        submitted_for_review: true,
+        submitted_at: now,
+        review_status: 'pending',
+      })
+      .in('id', ids);
+
+    // Get admin users for notifications
+    const { data: admins } = await supabase
+      .from('profiles')
+      .select('id, email')
+      .eq('role', 'admin')
+      .eq('status', 'approved');
+
+    if (admins && admins.length > 0) {
+      // Create one notification per admin for the batch
+      await supabase
+        .from('notifications')
+        .insert(admins.map((admin: any) => ({
+          user_id: admin.id,
+          type: 'review_submitted',
+          title: `Batch submission: ${withPhotos.length} vehicle${withPhotos.length !== 1 ? 's' : ''}`,
+          body: `${withPhotos.length} vehicle${withPhotos.length !== 1 ? 's' : ''} submitted for photo review`,
+        })));
+
+      // Send batch email notification
+      try {
+        const { data: { session } } = await supabase.auth.getSession();
+        await fetch(`${process.env.NEXT_PUBLIC_SUPABASE_URL}/functions/v1/send-review-email`, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            'Authorization': `Bearer ${session?.access_token || process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY}`,
+            'apikey': process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY || '',
+          },
+          body: JSON.stringify({
+            type: 'submitted',
+            vehicle_info: `Batch: ${withPhotos.length} vehicles`,
+            vin: withPhotos.map((v) => v.vin).join(', '),
+            photo_count: withPhotos.length,
+            submitted_by: user.id,
+            admin_emails: admins.map((a: any) => a.email),
+          }),
+        });
+      } catch (e) {
+        console.error('Email send failed:', e);
+      }
+    }
+
+    // Update local state
+    setVehicles((prev) =>
+      prev.map((v: any) =>
+        ids.includes(v.id) ? { ...v, submitted_for_review: true, submitted_at: now, review_status: 'pending' } : v
+      )
+    );
+
+    setSubmitResult({ count: withPhotos.length });
+    setSubmittingAll(false);
+    setTimeout(() => setSubmitResult(null), 5000);
+  };
 
   const handleDelete = async (id: string) => {
     await supabase.from('vehicle_photos').delete().eq('vehicle_id', id);
@@ -65,6 +154,34 @@ export default function VehiclesPage() {
         {isAdmin ? 'Scanned Vehicles' : 'My Scanned Vehicles'} ({vehicles.length})
       </div>
 
+      {/* Submit All button */}
+      {unsubmittedVehicles.length > 0 && (
+        <button
+          onClick={handleSubmitAll}
+          disabled={submittingAll}
+          style={{
+            width: '100%', padding: '14px', borderRadius: '14px', marginBottom: '12px',
+            background: 'var(--orange)', color: '#fff',
+            fontWeight: 800, fontSize: '14px', border: 'none',
+            boxShadow: '0 4px 16px rgba(238,49,32,0.3)',
+            opacity: submittingAll ? 0.5 : 1,
+          }}
+        >
+          {submittingAll ? 'Submitting...' : `✓ Submit All for Review (${unsubmittedVehicles.length} unsubmitted)`}
+        </button>
+      )}
+
+      {/* Success banner */}
+      {submitResult && (
+        <div style={{
+          padding: '10px 14px', borderRadius: '10px', marginBottom: '12px',
+          background: 'var(--success-bg)', border: '1px solid var(--success-border)',
+          color: 'var(--success)', fontSize: '13px', fontWeight: 700, textAlign: 'center',
+        }}>
+          ✅ Submitted {submitResult.count} vehicle{submitResult.count !== 1 ? 's' : ''} for review
+        </div>
+      )}
+
       {vehicles.length === 0 && (
         <div style={{ textAlign: 'center', padding: '40px 0', color: theme.textMuted }}>
           <div style={{ fontSize: '40px', marginBottom: '8px', opacity: 0.3 }}>🚐</div>
@@ -77,10 +194,16 @@ export default function VehiclesPage() {
           const title = [v.vehicle_year, v.vehicle_make, v.vehicle_model].filter(Boolean).join(' ') || 'Unknown Vehicle';
           const time = new Date(v.scanned_at);
           const isEditing = editId === v.id;
+          const isSubmitted = (v as any).submitted_for_review;
+          const reviewStatus = (v as any).review_status;
 
           return (
             <SwipeToDelete key={v.id} onDelete={() => handleDelete(v.id)}>
-              <div style={{ background: theme.card, border: `1px solid ${theme.border}`, borderRadius: '14px', padding: '14px 16px', boxShadow: theme.shadowSm }}>
+              <div style={{
+                background: theme.card,
+                border: `1px solid ${isSubmitted && reviewStatus === 'pending' ? 'var(--warning-border)' : reviewStatus === 'approved' ? 'var(--success-border)' : reviewStatus === 'denied' ? 'var(--error-border)' : theme.border}`,
+                borderRadius: '14px', padding: '14px 16px', boxShadow: theme.shadowSm,
+              }}>
                 {isEditing ? (
                   <div>
                     <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '8px' }}>
@@ -99,7 +222,19 @@ export default function VehiclesPage() {
                 ) : (
                   <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'start' }}>
                     <div style={{ flex: 1 }} onClick={() => startEdit(v)}>
-                      <div style={{ fontWeight: 700, fontSize: '15px', color: theme.textPrimary, letterSpacing: '-0.2px' }}>{title}</div>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: '8px', flexWrap: 'wrap' }}>
+                        <div style={{ fontWeight: 700, fontSize: '15px', color: theme.textPrimary, letterSpacing: '-0.2px' }}>{title}</div>
+                        {isSubmitted && (
+                          <span style={{
+                            padding: '2px 7px', borderRadius: '6px', fontSize: '9px', fontWeight: 700,
+                            background: reviewStatus === 'approved' ? 'var(--success-bg)' : reviewStatus === 'denied' ? 'var(--error-bg)' : 'var(--warning-bg)',
+                            border: `1px solid ${reviewStatus === 'approved' ? 'var(--success-border)' : reviewStatus === 'denied' ? 'var(--error-border)' : 'var(--warning-border)'}`,
+                            color: reviewStatus === 'approved' ? 'var(--success)' : reviewStatus === 'denied' ? 'var(--error)' : 'var(--warning)',
+                          }}>
+                            {reviewStatus === 'approved' ? '✅' : reviewStatus === 'denied' ? '❌' : '⏳'} {reviewStatus === 'approved' ? 'Approved' : reviewStatus === 'denied' ? 'Rework' : 'Pending'}
+                          </span>
+                        )}
+                      </div>
                       <div style={{ fontSize: '11px', fontFamily: "'SF Mono', 'Fira Code', monospace", color: theme.textMuted, marginTop: '3px', letterSpacing: '0.3px' }}>{v.vin}</div>
                       {v.part_number && (
                         <div style={{ fontSize: '12px', color: theme.navyLight, fontWeight: 600, marginTop: '4px' }}>{v.part_number} — {v.end_customer}</div>
