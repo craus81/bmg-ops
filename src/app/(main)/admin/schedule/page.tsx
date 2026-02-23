@@ -135,7 +135,7 @@ export default function SchedulePage() {
       .select('id, vin, vehicle_year, vehicle_make, vehicle_model, end_customer, part_number')
       .in('id', vehicleIds.length > 0 ? vehicleIds : ['none']);
 
-    const vehicleMap = new Map((vehicles || []).map((v: any) => [v.id, v]));
+    const vehicleMap: Map<string, any> = new Map((vehicles || []).map((v: any) => [v.id, v]));
 
     const enriched = data.map((a: any) => {
       const v = vehicleMap.get(a.vehicle_id);
