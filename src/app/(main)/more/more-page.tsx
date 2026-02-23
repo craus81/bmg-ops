@@ -39,8 +39,10 @@ export default function MorePage() {
         More
       </div>
       <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
+        <MenuBtn icon="🔧" title="My Jobs" sub="View your company's work" onClick={() => router.push('/jobs')} />
         <MenuBtn icon="📊" title="Export Reports" sub="Download vehicle spreadsheets" onClick={() => router.push('/reports')} />
         {isAdmin && (<>
+          <MenuBtn icon="📋" title="All Jobs" sub="View all jobs by company" onClick={() => router.push('/admin/jobs')} />
           <MenuBtn icon="📦" title="Part Catalog" sub="Manage part numbers" onClick={() => router.push('/admin/catalog')} />
           <MenuBtn icon="📋" title="Purchase Orders" sub="Manage POs" onClick={() => router.push('/admin/pos')} />
           <MenuBtn

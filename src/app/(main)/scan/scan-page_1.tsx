@@ -9,7 +9,7 @@ import { decodeVIN, isValidVIN } from '@/lib/vin-decoder';
 
 export default function ScanPage() {
   const router = useRouter();
-  const { user } = useAuth();
+  const { user, profile } = useAuth();
   const { activePart } = useApp();
   const supabase = createClient();
 
@@ -236,6 +236,7 @@ export default function ScanPage() {
         end_customer: activePart?.end_customer || null,
         po_line_item_id: matchedPoLineId,
         scanned_by: user.id,
+        company_id: profile?.company_id || null,
       })
       .select()
       .single();
