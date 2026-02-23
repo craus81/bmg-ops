@@ -151,7 +151,6 @@ export default function ReviewsPage() {
         review_notes: denyNotes.trim(),
         reviewed_by: user.id,
         reviewed_at: new Date().toISOString(),
-        submitted_for_review: false, // Allow resubmission
       })
       .eq('id', vehicleId);
 
