@@ -158,7 +158,7 @@ export default function PhotosPage() {
       } catch (e) {
         console.error('Email send failed:', e);
       }
-
+    }
     setSubmitted(true);
     setSubmitting(false);
   };
