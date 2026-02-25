@@ -144,6 +144,10 @@ export default function ReviewsPage() {
 
     const vehicle = vehicles.find((v) => v.id === vehicleId);
 
+    // Increment denial_count for rework tracking
+    const currentVehicle = vehicles.find((v) => v.id === vehicleId);
+    const currentDenialCount = (currentVehicle as any)?.denial_count || 0;
+
     await supabase
       .from('scanned_vehicles')
       .update({
@@ -151,6 +155,7 @@ export default function ReviewsPage() {
         review_notes: denyNotes.trim(),
         reviewed_by: user.id,
         reviewed_at: new Date().toISOString(),
+        denial_count: currentDenialCount + 1,
       })
       .eq('id', vehicleId);
 

@@ -69,6 +69,8 @@ export interface ScannedVehicle {
   catalog_id: string | null;
   po_line_item_id: string | null;
   company_id?: string;
+  denial_count?: number;
+  install_location?: string;
   scanned_by: string;
   scanned_at: string;
   photos?: VehiclePhoto[];
