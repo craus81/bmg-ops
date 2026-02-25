@@ -10,8 +10,18 @@ interface HeaderProps {
   activeEndCustomer?: string;
 }
 
+interface Notification {
+  id: string;
+  type: string;
+  title: string;
+  body: string;
+  vehicle_id?: string;
+  read_at: string | null;
+  created_at: string;
+}
+
 export default function Header({ clockStatus, activePartNumber, activeEndCustomer }: HeaderProps) {
-  const { profile, isAdmin, signOut } = useAuth();
+  const { user, profile, isAdmin, signOut } = useAuth();
   const [showMenu, setShowMenu] = useState(false);
   const [showSwitchModal, setShowSwitchModal] = useState(false);
   const [switchEmail, setSwitchEmail] = useState('');
@@ -19,6 +29,14 @@ export default function Header({ clockStatus, activePartNumber, activeEndCustome
   const [switching, setSwitching] = useState(false);
   const [switchError, setSwitchError] = useState('');
   const menuRef = useRef<HTMLDivElement>(null);
+
+  // Notifications state
+  const [showNotifications, setShowNotifications] = useState(false);
+  const [notifications, setNotifications] = useState<Notification[]>([]);
+  const [unreadCount, setUnreadCount] = useState(0);
+  const [loadingNotifs, setLoadingNotifs] = useState(false);
+  const notifRef = useRef<HTMLDivElement>(null);
+
   const { createClient } = require('@/lib/supabase-browser');
   const supabase = createClient();
 
@@ -28,32 +46,113 @@ export default function Header({ clockStatus, activePartNumber, activeEndCustome
       if (menuRef.current && !menuRef.current.contains(e.target as Node)) {
         setShowMenu(false);
       }
+      if (notifRef.current && !notifRef.current.contains(e.target as Node)) {
+        setShowNotifications(false);
+      }
     };
-    if (showMenu) document.addEventListener('mousedown', handleClick);
+    if (showMenu || showNotifications) document.addEventListener('mousedown', handleClick);
     return () => document.removeEventListener('mousedown', handleClick);
-  }, [showMenu]);
+  }, [showMenu, showNotifications]);
+
+  // Load unread count on mount and poll every 30s
+  useEffect(() => {
+    if (!user) return;
+    loadUnreadCount();
+    const interval = setInterval(loadUnreadCount, 30000);
+    return () => clearInterval(interval);
+  }, [user]);
+
+  const loadUnreadCount = async () => {
+    if (!user) return;
+    const { count } = await supabase
+      .from('notifications')
+      .select('*', { count: 'exact', head: true })
+      .eq('user_id', user.id)
+      .is('read_at', null);
+    setUnreadCount(count || 0);
+  };
+
+  const loadNotifications = async () => {
+    if (!user) return;
+    setLoadingNotifs(true);
+    const { data } = await supabase
+      .from('notifications')
+      .select('*')
+      .eq('user_id', user.id)
+      .order('created_at', { ascending: false })
+      .limit(30);
+    setNotifications(data || []);
+    setLoadingNotifs(false);
+  };
+
+  const handleBellClick = () => {
+    if (!showNotifications) {
+      loadNotifications();
+    }
+    setShowNotifications(!showNotifications);
+    setShowMenu(false);
+  };
+
+  const markAsRead = async (id: string) => {
+    await supabase
+      .from('notifications')
+      .update({ read_at: new Date().toISOString() })
+      .eq('id', id);
+    setNotifications((prev) =>
+      prev.map((n) => n.id === id ? { ...n, read_at: new Date().toISOString() } : n)
+    );
+    setUnreadCount((c) => Math.max(0, c - 1));
+  };
+
+  const markAllRead = async () => {
+    if (!user) return;
+    await supabase
+      .from('notifications')
+      .update({ read_at: new Date().toISOString() })
+      .eq('user_id', user.id)
+      .is('read_at', null);
+    setNotifications((prev) =>
+      prev.map((n) => ({ ...n, read_at: n.read_at || new Date().toISOString() }))
+    );
+    setUnreadCount(0);
+  };
+
+  const timeAgo = (dateStr: string) => {
+    const diff = Date.now() - new Date(dateStr).getTime();
+    const mins = Math.floor(diff / 60000);
+    if (mins < 1) return 'just now';
+    if (mins < 60) return `${mins}m ago`;
+    const hrs = Math.floor(mins / 60);
+    if (hrs < 24) return `${hrs}h ago`;
+    const days = Math.floor(hrs / 24);
+    if (days < 7) return `${days}d ago`;
+    return new Date(dateStr).toLocaleDateString([], { month: 'short', day: 'numeric' });
+  };
+
+  const notifIcon = (type: string) => {
+    if (type.includes('approved')) return '✅';
+    if (type.includes('denied')) return '❌';
+    if (type.includes('paid')) return '💵';
+    if (type.includes('submitted') || type.includes('review')) return '📸';
+    if (type.includes('invoice')) return '📄';
+    if (type.includes('schedule')) return '📅';
+    return '🔔';
+  };
 
   const handleSwitchUser = async () => {
     if (!switchEmail.trim() || !switchPassword.trim()) return;
     setSwitching(true);
     setSwitchError('');
-
-    // Sign out current user first
     await supabase.auth.signOut();
-
-    // Sign in as new user
     const { error } = await supabase.auth.signInWithPassword({
       email: switchEmail.trim(),
       password: switchPassword.trim(),
     });
-
     if (error) {
       setSwitchError(error.message);
       setSwitching(false);
       return;
     }
-
-    // Reload the page to reinitialize everything
     window.location.href = '/home';
   };
 
@@ -128,90 +227,215 @@ export default function Header({ clockStatus, activePartNumber, activeEndCustome
   }
 
   return (
-    <header style={{
-      background: theme.headerBg, padding: '12px 20px',
-      display: 'flex', alignItems: 'center', justifyContent: 'space-between',
-      position: 'sticky', top: 0, zIndex: 100,
-      borderBottom: `1px solid ${theme.border}`,
-    }}>
-      <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
-        <div style={{
-          height: '36px', padding: '4px 10px', borderRadius: '10px',
-          background: 'rgba(255,255,255,0.08)', backdropFilter: 'blur(10px)',
-          display: 'flex', alignItems: 'center', justifyContent: 'center',
-          border: '1px solid rgba(255,255,255,0.06)',
-        }}>
-          <img src="/bmg-logo-white.png" alt="BMG" style={{ height: '26px', width: 'auto' }}
-            onError={(e) => { (e.target as HTMLImageElement).style.display = 'none'; (e.target as HTMLImageElement).parentElement!.innerHTML = '<span style="font-weight:800;font-size:11px;color:white;letter-spacing:1px">BMG</span>'; }} />
-        </div>
-        <div>
-          <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
-            <span style={{
-              background: isAdmin ? theme.orangeGlow : 'rgba(255,255,255,0.1)',
-              border: `1px solid ${isAdmin ? 'rgba(238,49,32,0.3)' : 'rgba(255,255,255,0.15)'}`,
-              borderRadius: '5px',
-              color: isAdmin ? '#ff9e94' : 'rgba(255,255,255,0.7)',
-              padding: '2px 7px', fontSize: '9px', fontWeight: 700, letterSpacing: '0.3px',
-            }}>
-              {isAdmin ? 'Admin' : 'Crew'}
-            </span>
-          </div>
-          {subtitle && (
-            <div style={{ fontSize: '10px', color: theme.textMuted, marginTop: '2px' }}>{subtitle}</div>
-          )}
-        </div>
-      </div>
-
-      {/* Tappable name with dropdown */}
-      <div ref={menuRef} style={{ position: 'relative' }}>
-        <button onClick={() => setShowMenu(!showMenu)} style={{
-          background: showMenu ? 'rgba(255,255,255,0.12)' : 'transparent',
-          border: '1px solid transparent', borderRadius: '8px',
-          padding: '6px 10px', fontSize: '12px', color: theme.textMuted,
-          fontWeight: 600, display: 'flex', alignItems: 'center', gap: '4px',
-          transition: 'all 0.15s',
-        }}>
-          {profile?.full_name}
-          <span style={{ fontSize: '8px', opacity: 0.6 }}>▼</span>
-        </button>
-
-        {showMenu && (
+    <>
+      <header style={{
+        background: theme.headerBg, padding: '12px 20px',
+        display: 'flex', alignItems: 'center', justifyContent: 'space-between',
+        position: 'sticky', top: 0, zIndex: 100,
+        borderBottom: `1px solid ${theme.border}`,
+      }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
           <div style={{
-            position: 'absolute', top: '100%', right: 0, marginTop: '6px',
-            background: 'var(--card)', border: '1px solid var(--border)',
-            borderRadius: '12px', boxShadow: '0 8px 30px rgba(0,0,0,0.25)',
-            overflow: 'hidden', minWidth: '180px', zIndex: 150,
+            height: '36px', padding: '4px 10px', borderRadius: '10px',
+            background: 'rgba(255,255,255,0.08)', backdropFilter: 'blur(10px)',
+            display: 'flex', alignItems: 'center', justifyContent: 'center',
+            border: '1px solid rgba(255,255,255,0.06)',
           }}>
-            {/* Current user info */}
-            <div style={{ padding: '12px 14px', borderBottom: '1px solid var(--border)' }}>
-              <div style={{ fontSize: '13px', fontWeight: 700, color: 'var(--text-primary)' }}>{profile?.full_name}</div>
-              <div style={{ fontSize: '10px', color: 'var(--text-muted)', marginTop: '2px' }}>{profile?.email}</div>
-              <div style={{ fontSize: '10px', color: isAdmin ? 'var(--orange)' : 'var(--navy-light)', marginTop: '2px', fontWeight: 600 }}>
-                {isAdmin ? 'Administrator' : 'Installer'}
-              </div>
-            </div>
-
-            {/* Switch User */}
-            <button onClick={() => { setShowMenu(false); setShowSwitchModal(true); setSwitchEmail(''); setSwitchPassword(''); setSwitchError(''); }} style={{
-              width: '100%', padding: '12px 14px', textAlign: 'left', background: 'transparent',
-              border: 'none', borderBottom: '1px solid var(--border)',
-              fontSize: '13px', fontWeight: 600, color: 'var(--text-primary)',
-              display: 'flex', alignItems: 'center', gap: '8px',
-            }}>
-              🔄 Switch User
-            </button>
-
-            {/* Sign Out */}
-            <button onClick={() => { setShowMenu(false); signOut(); }} style={{
-              width: '100%', padding: '12px 14px', textAlign: 'left', background: 'transparent',
-              border: 'none', fontSize: '13px', fontWeight: 600, color: 'var(--error)',
-              display: 'flex', alignItems: 'center', gap: '8px',
-            }}>
-              🚪 Sign Out
-            </button>
+            <img src="/bmg-logo-white.png" alt="BMG" style={{ height: '26px', width: 'auto' }}
+              onError={(e) => { (e.target as HTMLImageElement).style.display = 'none'; (e.target as HTMLImageElement).parentElement!.innerHTML = '<span style="font-weight:800;font-size:11px;color:white;letter-spacing:1px">BMG</span>'; }} />
           </div>
-        )}
-      </div>
-    </header>
+          <div>
+            <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+              <span style={{
+                background: isAdmin ? theme.orangeGlow : 'rgba(255,255,255,0.1)',
+                border: `1px solid ${isAdmin ? 'rgba(238,49,32,0.3)' : 'rgba(255,255,255,0.15)'}`,
+                borderRadius: '5px',
+                color: isAdmin ? '#ff9e94' : 'rgba(255,255,255,0.7)',
+                padding: '2px 7px', fontSize: '9px', fontWeight: 700, letterSpacing: '0.3px',
+              }}>
+                {isAdmin ? 'Admin' : 'Crew'}
+              </span>
+            </div>
+            {subtitle && (
+              <div style={{ fontSize: '10px', color: theme.textMuted, marginTop: '2px' }}>{subtitle}</div>
+            )}
+          </div>
+        </div>
+
+        <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+          {/* Notification bell */}
+          <div ref={notifRef} style={{ position: 'relative' }}>
+            <button onClick={handleBellClick} style={{
+              background: showNotifications ? 'rgba(255,255,255,0.12)' : 'transparent',
+              border: '1px solid transparent', borderRadius: '8px',
+              padding: '6px 8px', fontSize: '16px', position: 'relative',
+              cursor: 'pointer', transition: 'all 0.15s',
+              lineHeight: 1,
+            }}>
+              🔔
+              {unreadCount > 0 && (
+                <span style={{
+                  position: 'absolute', top: '2px', right: '2px',
+                  background: '#ef4444', color: '#fff',
+                  fontSize: '9px', fontWeight: 800,
+                  minWidth: '16px', height: '16px',
+                  borderRadius: '8px', display: 'flex',
+                  alignItems: 'center', justifyContent: 'center',
+                  padding: '0 4px',
+                  boxShadow: '0 2px 6px rgba(239,68,68,0.4)',
+                }}>
+                  {unreadCount > 99 ? '99+' : unreadCount}
+                </span>
+              )}
+            </button>
+
+            {/* Notifications dropdown */}
+            {showNotifications && (
+              <div style={{
+                position: 'absolute', top: '100%', right: 0, marginTop: '6px',
+                background: 'var(--card)', border: '1px solid var(--border)',
+                borderRadius: '14px', boxShadow: '0 12px 40px rgba(0,0,0,0.3)',
+                width: '320px', maxHeight: '440px', display: 'flex', flexDirection: 'column',
+                zIndex: 160, overflow: 'hidden',
+              }}>
+                {/* Header */}
+                <div style={{
+                  padding: '12px 14px', borderBottom: '1px solid var(--border)',
+                  display: 'flex', justifyContent: 'space-between', alignItems: 'center',
+                  flexShrink: 0,
+                }}>
+                  <div style={{ fontSize: '14px', fontWeight: 800, color: 'var(--text-primary)' }}>
+                    Notifications
+                    {unreadCount > 0 && (
+                      <span style={{ fontSize: '11px', fontWeight: 700, color: 'var(--orange)', marginLeft: '6px' }}>
+                        {unreadCount} new
+                      </span>
+                    )}
+                  </div>
+                  {unreadCount > 0 && (
+                    <button onClick={markAllRead} style={{
+                      background: 'none', border: 'none', fontSize: '11px',
+                      fontWeight: 700, color: 'var(--navy-light)', cursor: 'pointer',
+                      padding: '4px 8px', borderRadius: '6px',
+                    }}>
+                      Mark all read
+                    </button>
+                  )}
+                </div>
+
+                {/* Notification list */}
+                <div style={{ overflowY: 'auto', flex: 1 }}>
+                  {loadingNotifs ? (
+                    <div style={{ padding: '24px', textAlign: 'center', color: 'var(--text-muted)', fontSize: '13px' }}>Loading...</div>
+                  ) : notifications.length === 0 ? (
+                    <div style={{ padding: '32px 16px', textAlign: 'center' }}>
+                      <div style={{ fontSize: '28px', opacity: 0.3, marginBottom: '6px' }}>🔔</div>
+                      <div style={{ fontSize: '13px', fontWeight: 600, color: 'var(--text-muted)' }}>No notifications yet</div>
+                    </div>
+                  ) : (
+                    notifications.map((n) => {
+                      const isUnread = !n.read_at;
+                      return (
+                        <button
+                          key={n.id}
+                          onClick={() => { if (isUnread) markAsRead(n.id); }}
+                          style={{
+                            width: '100%', textAlign: 'left', padding: '12px 14px',
+                            background: isUnread ? 'rgba(238,49,32,0.03)' : 'transparent',
+                            borderBottom: '1px solid var(--border)', border: 'none',
+                            borderLeft: isUnread ? '3px solid var(--orange)' : '3px solid transparent',
+                            cursor: isUnread ? 'pointer' : 'default',
+                            transition: 'background 0.15s',
+                            display: 'flex', gap: '10px', alignItems: 'start',
+                          }}
+                        >
+                          <div style={{ fontSize: '16px', flexShrink: 0, marginTop: '1px' }}>
+                            {notifIcon(n.type)}
+                          </div>
+                          <div style={{ flex: 1, minWidth: 0 }}>
+                            <div style={{
+                              fontSize: '13px', fontWeight: isUnread ? 700 : 600,
+                              color: isUnread ? 'var(--text-primary)' : 'var(--text-secondary)',
+                              lineHeight: 1.3,
+                            }}>
+                              {n.title}
+                            </div>
+                            <div style={{
+                              fontSize: '11px', color: 'var(--text-muted)', marginTop: '2px',
+                              lineHeight: 1.3,
+                              overflow: 'hidden', textOverflow: 'ellipsis',
+                              display: '-webkit-box', WebkitLineClamp: 2, WebkitBoxOrient: 'vertical' as any,
+                            }}>
+                              {n.body}
+                            </div>
+                            <div style={{ fontSize: '10px', color: 'var(--text-muted)', marginTop: '3px', opacity: 0.7 }}>
+                              {timeAgo(n.created_at)}
+                            </div>
+                          </div>
+                          {isUnread && (
+                            <div style={{
+                              width: '8px', height: '8px', borderRadius: '50%',
+                              background: 'var(--orange)', flexShrink: 0, marginTop: '4px',
+                            }} />
+                          )}
+                        </button>
+                      );
+                    })
+                  )}
+                </div>
+              </div>
+            )}
+          </div>
+
+          {/* User menu */}
+          <div ref={menuRef} style={{ position: 'relative' }}>
+            <button onClick={() => { setShowMenu(!showMenu); setShowNotifications(false); }} style={{
+              background: showMenu ? 'rgba(255,255,255,0.12)' : 'transparent',
+              border: '1px solid transparent', borderRadius: '8px',
+              padding: '6px 10px', fontSize: '12px', color: theme.textMuted,
+              fontWeight: 600, display: 'flex', alignItems: 'center', gap: '4px',
+              transition: 'all 0.15s',
+            }}>
+              {profile?.full_name}
+              <span style={{ fontSize: '8px', opacity: 0.6 }}>▼</span>
+            </button>
+
+            {showMenu && (
+              <div style={{
+                position: 'absolute', top: '100%', right: 0, marginTop: '6px',
+                background: 'var(--card)', border: '1px solid var(--border)',
+                borderRadius: '12px', boxShadow: '0 8px 30px rgba(0,0,0,0.25)',
+                overflow: 'hidden', minWidth: '180px', zIndex: 150,
+              }}>
+                <div style={{ padding: '12px 14px', borderBottom: '1px solid var(--border)' }}>
+                  <div style={{ fontSize: '13px', fontWeight: 700, color: 'var(--text-primary)' }}>{profile?.full_name}</div>
+                  <div style={{ fontSize: '10px', color: 'var(--text-muted)', marginTop: '2px' }}>{profile?.email}</div>
+                  <div style={{ fontSize: '10px', color: isAdmin ? 'var(--orange)' : 'var(--navy-light)', marginTop: '2px', fontWeight: 600 }}>
+                    {isAdmin ? 'Administrator' : 'Installer'}
+                  </div>
+                </div>
+
+                <button onClick={() => { setShowMenu(false); setShowSwitchModal(true); setSwitchEmail(''); setSwitchPassword(''); setSwitchError(''); }} style={{
+                  width: '100%', padding: '12px 14px', textAlign: 'left', background: 'transparent',
+                  border: 'none', borderBottom: '1px solid var(--border)',
+                  fontSize: '13px', fontWeight: 600, color: 'var(--text-primary)',
+                  display: 'flex', alignItems: 'center', gap: '8px',
+                }}>
+                  🔄 Switch User
+                </button>
+
+                <button onClick={() => { setShowMenu(false); signOut(); }} style={{
+                  width: '100%', padding: '12px 14px', textAlign: 'left', background: 'transparent',
+                  border: 'none', fontSize: '13px', fontWeight: 600, color: 'var(--error)',
+                  display: 'flex', alignItems: 'center', gap: '8px',
+                }}>
+                  🚪 Sign Out
+                </button>
+              </div>
+            )}
+          </div>
+        </div>
+      </header>
+    </>
   );
 }
