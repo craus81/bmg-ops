@@ -556,5 +556,25 @@ function ActionBtn({ icon, title, sub, onClick, primary, highlight, disabled }: 
 // ─── Main Export ────────────────────────────────────────────────
 export default function HomePage() {
   const { isAdmin } = useAuth();
-  return isAdmin ? <AdminDashboard /> : <InstallerHome />;
+  const [mode, setMode] = useState<'admin' | 'installer'>(isAdmin ? 'admin' : 'installer');
+
+  if (!isAdmin) return <InstallerHome />;
+
+  return (
+    <div>
+      <div style={{ display: 'flex', gap: '4px', marginBottom: '14px', background: 'var(--card)', borderRadius: '10px', padding: '3px' }}>
+        <button onClick={() => setMode('admin')} style={{
+          flex: 1, padding: '10px', borderRadius: '8px', fontSize: '13px', fontWeight: 700,
+          background: mode === 'admin' ? 'var(--tab-active-bg)' : 'transparent', border: 'none',
+          color: mode === 'admin' ? 'var(--text-primary)' : 'var(--text-muted)',
+        }}>📊 Dashboard</button>
+        <button onClick={() => setMode('installer')} style={{
+          flex: 1, padding: '10px', borderRadius: '8px', fontSize: '13px', fontWeight: 700,
+          background: mode === 'installer' ? 'var(--tab-active-bg)' : 'transparent', border: 'none',
+          color: mode === 'installer' ? 'var(--text-primary)' : 'var(--text-muted)',
+        }}>📷 Scan & Install</button>
+      </div>
+      {mode === 'admin' ? <AdminDashboard /> : <InstallerHome />}
+    </div>
+  );
 }
