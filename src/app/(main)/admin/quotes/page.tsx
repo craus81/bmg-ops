@@ -23,20 +23,50 @@ function fileToBase64(file: File): Promise<string> {
   });
 }
 
-// ============ Helper: compress image to fit under size limit ============
-function compressImage(file: File, maxWidthPx = 2048, quality = 0.8): Promise<{ base64: string; mediaType: string }> {
-  return new Promise((resolve, reject) => {
-    // If not an image, just return base64 as-is
-    if (!file.type.startsWith('image/')) {
-      fileToBase64(file).then(b64 => resolve({ base64: b64, mediaType: file.type || 'application/octet-stream' })).catch(reject);
-      return;
-    }
+// ============ Helper: render PDF first page to image ============
+async function pdfToImage(file: File, maxWidthPx = 2048, quality = 0.8): Promise<{ base64: string; mediaType: string }> {
+  const pdfjsLib = await import('pdfjs-dist');
+  pdfjsLib.GlobalWorkerOptions.workerSrc = `https://cdnjs.cloudflare.com/ajax/libs/pdf.js/${pdfjsLib.version}/pdf.worker.min.js`;
 
+  const arrayBuffer = await file.arrayBuffer();
+  const pdf = await pdfjsLib.getDocument({ data: arrayBuffer }).promise;
+  const page = await pdf.getPage(1);
+
+  // Scale to maxWidthPx
+  const unscaledViewport = page.getViewport({ scale: 1 });
+  const scale = Math.min(maxWidthPx / unscaledViewport.width, 3); // cap at 3x
+  const viewport = page.getViewport({ scale });
+
+  const canvas = document.createElement('canvas');
+  canvas.width = viewport.width;
+  canvas.height = viewport.height;
+  const ctx = canvas.getContext('2d')!;
+  await page.render({ canvasContext: ctx, viewport }).promise;
+
+  const dataUrl = canvas.toDataURL('image/jpeg', quality);
+  const base64 = dataUrl.split(',')[1];
+  return { base64, mediaType: 'image/jpeg' };
+}
+
+// ============ Helper: compress image to fit under size limit ============
+async function compressImage(file: File, maxWidthPx = 2048, quality = 0.8): Promise<{ base64: string; mediaType: string }> {
+  // Handle PDFs: render first page to image
+  if (file.type === 'application/pdf') {
+    return pdfToImage(file, maxWidthPx, quality);
+  }
+
+  // Non-image files: return base64 as-is
+  if (!file.type.startsWith('image/')) {
+    const b64 = await fileToBase64(file);
+    return { base64: b64, mediaType: file.type || 'application/octet-stream' };
+  }
+
+  // Images: resize and compress
+  return new Promise((resolve, reject) => {
     const img = new Image();
     const url = URL.createObjectURL(file);
     img.onload = () => {
       URL.revokeObjectURL(url);
-      // Scale down if wider than maxWidthPx
       let w = img.width;
       let h = img.height;
       if (w > maxWidthPx) {
@@ -426,10 +456,6 @@ function NewQuote({ onCreated }: { onCreated: () => void }) {
       }
 
       const result = await response.json();
-
-      if (!response.ok) {
-        throw new Error(result.error || 'Analysis failed');
-      }
 
       setAnalysis(result.analysis);
       setStep(4);
