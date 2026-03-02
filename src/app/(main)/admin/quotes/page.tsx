@@ -391,16 +391,19 @@ function NewQuote({ onCreated }: { onCreated: () => void }) {
           .from('vehicle-templates')
           .getPublicUrl(selectedTemplate.template_image_path);
 
-        // Fetch the template image, convert to a File, then compress
+        // Fetch the template image and convert to base64 directly
+        // (template images are already stored at a reasonable size in Supabase)
         const imgResponse = await fetch(data.publicUrl);
         const imgBlob = await imgResponse.blob();
-        const templateFile = new File([imgBlob], 'template.png', { type: imgBlob.type || 'image/png' });
-        const compressed = await compressImage(templateFile, 2048, 0.8);
-        templateBase64 = compressed.base64;
-        templateMediaType = compressed.mediaType;
+        templateBase64 = await new Promise<string>((resolve) => {
+          const reader = new FileReader();
+          reader.onload = () => resolve((reader.result as string).split(',')[1]);
+          reader.readAsDataURL(imgBlob);
+        });
+        templateMediaType = imgBlob.type || 'image/png';
       }
 
-      // Compress proof file (resize large images to max 2048px wide)
+      // Compress proof file (resize large user uploads to max 2048px wide)
       const proofCompressed = await compressImage(proofFile, 2048, 0.8);
       const proofBase64 = proofCompressed.base64;
       const proofMediaType = proofCompressed.mediaType;
