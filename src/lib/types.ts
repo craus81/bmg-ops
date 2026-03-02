@@ -102,3 +102,87 @@ export interface TimeBreak {
   break_end: string | null;
   break_type: 'lunch' | 'other';
 }
+
+// ============ Quoting / Estimating ============
+
+export interface VehicleTemplate {
+  id: string;
+  name: string;
+  make: string;
+  model: string;
+  year: string | null;
+  variant: string | null;
+  scale: string;
+  overall_length_in: number | null;
+  overall_height_in: number | null;
+  wheelbase_in: number | null;
+  template_image_path: string | null;
+  original_file_path: string | null;
+  panel_data: PanelDimension[];
+  created_by: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface PanelDimension {
+  name: string;
+  width_in: number;
+  height_in: number;
+  area_sqft: number;
+}
+
+export interface Quote {
+  id: string;
+  quote_number: string;
+  customer_name: string;
+  vehicle_description: string | null;
+  template_id: string | null;
+  proof_image_path: string | null;
+  status: 'draft' | 'sent' | 'accepted' | 'declined' | 'expired';
+  ai_analysis: AIAnalysisResult | null;
+  total_vinyl_sqft: number;
+  coverage_percentage: number;
+  material_cost_per_sqft: number;
+  labor_cost_per_sqft: number;
+  material_total: number;
+  labor_total: number;
+  subtotal: number;
+  markup_percentage: number;
+  total_price: number;
+  notes: string | null;
+  created_by: string | null;
+  created_at: string;
+  updated_at: string;
+  panels?: QuotePanel[];
+  template?: VehicleTemplate;
+}
+
+export interface QuotePanel {
+  id: string;
+  quote_id: string;
+  panel_name: string;
+  panel_area_sqft: number;
+  vinyl_coverage_pct: number;
+  vinyl_sqft: number;
+  vinyl_type: string | null;
+  notes: string | null;
+  sort_order: number;
+}
+
+export interface AIAnalysisResult {
+  panels: AIPanelResult[];
+  total_vinyl_sqft: number;
+  total_vehicle_sqft: number;
+  overall_coverage_pct: number;
+  confidence: string;
+  notes: string;
+}
+
+export interface AIPanelResult {
+  panel_name: string;
+  panel_area_sqft: number;
+  vinyl_coverage_pct: number;
+  vinyl_sqft: number;
+  vinyl_type: string;
+  description: string;
+}

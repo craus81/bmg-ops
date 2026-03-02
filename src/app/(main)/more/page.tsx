@@ -60,6 +60,7 @@ export default function MorePage() {
             onClick={() => router.push('/admin/users')}
             badge={pendingUserCount > 0 ? pendingUserCount : undefined}
           />
+          <MenuBtn icon="📐" title="Estimating" sub="AI-powered vinyl wrap quoting" onClick={() => router.push('/admin/quotes')} />
         </>)}
         <MenuBtn icon="📝" title="Quick Job (No PO)" sub="Start scanning without a PO" onClick={() => router.push('/scan')} />
       </div>
