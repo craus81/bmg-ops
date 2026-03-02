@@ -412,25 +412,33 @@ function NewQuote({ onCreated }: { onCreated: () => void }) {
     setAnalysisError('');
 
     try {
-      // Get template image from storage and compress it
+      // Get template image from storage
       let templateBase64 = '';
       let templateMediaType = 'image/png';
 
       if (selectedTemplate.template_image_path) {
-        const { data } = supabase.storage
-          .from('vehicle-templates')
-          .getPublicUrl(selectedTemplate.template_image_path);
+        try {
+          const { data } = supabase.storage
+            .from('vehicle-templates')
+            .getPublicUrl(selectedTemplate.template_image_path);
 
-        // Fetch the template image and convert to base64 directly
-        // (template images are already stored at a reasonable size in Supabase)
-        const imgResponse = await fetch(data.publicUrl);
-        const imgBlob = await imgResponse.blob();
-        templateBase64 = await new Promise<string>((resolve) => {
-          const reader = new FileReader();
-          reader.onload = () => resolve((reader.result as string).split(',')[1]);
-          reader.readAsDataURL(imgBlob);
-        });
-        templateMediaType = imgBlob.type || 'image/png';
+          const imgResponse = await fetch(data.publicUrl);
+          if (!imgResponse.ok) {
+            throw new Error(`Failed to fetch template image: ${imgResponse.status}`);
+          }
+          const imgBlob = await imgResponse.blob();
+          templateBase64 = await new Promise<string>((resolve) => {
+            const reader = new FileReader();
+            reader.onload = () => resolve((reader.result as string).split(',')[1]);
+            reader.readAsDataURL(imgBlob);
+          });
+          templateMediaType = imgBlob.type || 'image/png';
+        } catch (fetchErr: any) {
+          console.error('Template image fetch error:', fetchErr);
+          throw new Error('Could not load template image from storage. Make sure the template has a PNG preview uploaded.');
+        }
+      } else {
+        throw new Error('Selected template has no image. Please upload a PNG preview for this template in the Templates tab first.');
       }
 
       // Compress proof file (resize large user uploads to max 2048px wide)
