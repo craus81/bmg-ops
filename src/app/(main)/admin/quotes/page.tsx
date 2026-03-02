@@ -4,7 +4,8 @@ import { useState, useEffect, useRef, useCallback } from 'react';
 import { useAuth } from '@/components/AuthProvider';
 import { createClient } from '@/lib/supabase-browser';
 import { theme } from '@/lib/theme';
-import type { VehicleTemplate, Quote, QuotePanel, AIAnalysisResult } from '@/lib/types';
+import type { VehicleTemplate, Quote, QuotePanel, QuoteElement, AIAnalysisResult, GraphicElement, RollNestingResult } from '@/lib/types';
+import { applyBleed, nestElementsOnRoll } from '@/lib/nesting-algorithm';
 
 const supabase = createClient();
 
@@ -233,6 +234,7 @@ function QuotesList() {
 // ============ Quote Detail View ============
 function QuoteDetail({ quote, onBack }: { quote: Quote; onBack: () => void }) {
   const [panels, setPanels] = useState<QuotePanel[]>([]);
+  const [elements, setElements] = useState<QuoteElement[]>([]);
   const [loading, setLoading] = useState(true);
   const [proofUrl, setProofUrl] = useState<string | null>(null);
 
@@ -245,12 +247,23 @@ function QuoteDetail({ quote, onBack }: { quote: Quote; onBack: () => void }) {
   }, [quote]);
 
   async function loadPanels() {
-    const { data } = await supabase
-      .from('quote_panels')
-      .select('*')
-      .eq('quote_id', quote.id)
-      .order('sort_order');
-    setPanels((data as QuotePanel[]) || []);
+    // Load elements if this is an element-based quote
+    if (quote.analysis_version === 'individual_elements') {
+      const { data } = await supabase
+        .from('quote_elements')
+        .select('*')
+        .eq('quote_id', quote.id)
+        .order('sort_order');
+      setElements((data as QuoteElement[]) || []);
+    } else {
+      // Load panels for panel-based quotes
+      const { data } = await supabase
+        .from('quote_panels')
+        .select('*')
+        .eq('quote_id', quote.id)
+        .order('sort_order');
+      setPanels((data as QuotePanel[]) || []);
+    }
     setLoading(false);
   }
 
@@ -319,33 +332,70 @@ function QuoteDetail({ quote, onBack }: { quote: Quote; onBack: () => void }) {
         ))}
       </div>
 
-      {/* Panel Breakdown */}
-      <div style={{ background: theme.card, border: `1px solid ${theme.border}`, borderRadius: '12px', padding: '16px' }}>
-        <div style={{ fontSize: '14px', fontWeight: 700, color: theme.textPrimary, marginBottom: '12px' }}>Panel Breakdown</div>
-        {loading ? <LoadingSpinner /> : panels.map(p => (
-          <div key={p.id} style={{ padding: '10px 0', borderBottom: `1px solid ${theme.border}` }}>
-            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-              <div>
-                <div style={{ fontSize: '14px', fontWeight: 700, color: theme.textPrimary }}>{p.panel_name}</div>
-                <div style={{ fontSize: '12px', color: theme.textMuted }}>{p.vinyl_type} • {p.panel_area_sqft?.toFixed(1)} sq ft panel</div>
+      {/* Elements or Panel Breakdown */}
+      {quote.analysis_version === 'individual_elements' ? (
+        <div style={{ background: theme.card, border: `1px solid ${theme.border}`, borderRadius: '12px', padding: '16px' }}>
+          <div style={{ fontSize: '14px', fontWeight: 700, color: theme.textPrimary, marginBottom: '12px' }}>Graphic Elements</div>
+          {loading ? <LoadingSpinner /> : elements.map((el, i) => (
+            <div key={el.id} style={{ padding: '10px 0', borderBottom: i < elements.length - 1 ? `1px solid ${theme.border}` : 'none' }}>
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
+                <div>
+                  <div style={{ fontSize: '14px', fontWeight: 700, color: theme.textPrimary }}>{el.element_name}</div>
+                  <div style={{ fontSize: '11px', background: theme.subtleBg, color: theme.textMuted, fontWeight: 600, marginTop: '2px', padding: '2px 6px', borderRadius: '4px', display: 'inline-block' }}>
+                    {el.element_type}
+                  </div>
+                </div>
+                <div style={{ textAlign: 'right' }}>
+                  <div style={{ fontSize: '13px', fontWeight: 700, color: theme.textPrimary }}>{el.width_in?.toFixed(1)}" × {el.height_in?.toFixed(1)}"</div>
+                  <div style={{ fontSize: '12px', color: theme.textMuted }}>{((el.width_in || 0) * (el.height_in || 0)).toFixed(1)} sq in</div>
+                </div>
               </div>
-              <div style={{ textAlign: 'right' }}>
-                <div style={{ fontSize: '15px', fontWeight: 800, color: theme.orange }}>{p.vinyl_sqft?.toFixed(1)} sq ft</div>
-                <div style={{ fontSize: '12px', color: theme.textMuted }}>{p.vinyl_coverage_pct?.toFixed(0)}% covered</div>
+              {el.description && (
+                <div style={{ marginTop: '6px', padding: '8px 10px', background: theme.subtleBg, borderRadius: '6px', fontSize: '12px', color: theme.textSecondary, borderLeft: `3px solid ${theme.orange}` }}>
+                  {el.description}
+                </div>
+              )}
+              {el.nested_x_in !== null && el.nested_y_in !== null && (
+                <div style={{ marginTop: '4px', fontSize: '11px', color: theme.textMuted }}>
+                  Positioned at: {el.nested_x_in.toFixed(1)}", {el.nested_y_in.toFixed(1)}" (with {el.bleed_in?.toFixed(3)}" bleed)
+                </div>
+              )}
+            </div>
+          ))}
+          {quote.notes && (
+            <div style={{ marginTop: '12px', padding: '10px', background: theme.subtleBg, borderRadius: '8px', fontSize: '13px', color: theme.textSecondary }}>
+              <strong>AI Notes:</strong> {quote.notes}
+            </div>
+          )}
+        </div>
+      ) : (
+        <div style={{ background: theme.card, border: `1px solid ${theme.border}`, borderRadius: '12px', padding: '16px' }}>
+          <div style={{ fontSize: '14px', fontWeight: 700, color: theme.textPrimary, marginBottom: '12px' }}>Panel Breakdown</div>
+          {loading ? <LoadingSpinner /> : panels.map(p => (
+            <div key={p.id} style={{ padding: '10px 0', borderBottom: `1px solid ${theme.border}` }}>
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                <div>
+                  <div style={{ fontSize: '14px', fontWeight: 700, color: theme.textPrimary }}>{p.panel_name}</div>
+                  <div style={{ fontSize: '12px', color: theme.textMuted }}>{p.vinyl_type} • {p.panel_area_sqft?.toFixed(1)} sq ft panel</div>
+                </div>
+                <div style={{ textAlign: 'right' }}>
+                  <div style={{ fontSize: '15px', fontWeight: 800, color: theme.orange }}>{p.vinyl_sqft?.toFixed(1)} sq ft</div>
+                  <div style={{ fontSize: '12px', color: theme.textMuted }}>{p.vinyl_coverage_pct?.toFixed(0)}% covered</div>
+                </div>
+              </div>
+              {/* Coverage bar */}
+              <div style={{ marginTop: '6px', height: '6px', borderRadius: '3px', background: theme.progressTrack, overflow: 'hidden' }}>
+                <div style={{ height: '100%', width: `${Math.min(p.vinyl_coverage_pct, 100)}%`, background: theme.orange, borderRadius: '3px', transition: 'width 0.3s' }} />
               </div>
             </div>
-            {/* Coverage bar */}
-            <div style={{ marginTop: '6px', height: '6px', borderRadius: '3px', background: theme.progressTrack, overflow: 'hidden' }}>
-              <div style={{ height: '100%', width: `${Math.min(p.vinyl_coverage_pct, 100)}%`, background: theme.orange, borderRadius: '3px', transition: 'width 0.3s' }} />
+          ))}
+          {quote.notes && (
+            <div style={{ marginTop: '12px', padding: '10px', background: theme.subtleBg, borderRadius: '8px', fontSize: '13px', color: theme.textSecondary }}>
+              <strong>AI Notes:</strong> {quote.notes}
             </div>
-          </div>
-        ))}
-        {quote.notes && (
-          <div style={{ marginTop: '12px', padding: '10px', background: theme.subtleBg, borderRadius: '8px', fontSize: '13px', color: theme.textSecondary }}>
-            <strong>AI Notes:</strong> {quote.notes}
-          </div>
-        )}
-      </div>
+          )}
+        </div>
+      )}
     </div>
   );
 }
@@ -377,6 +427,10 @@ function NewQuote({ onCreated }: { onCreated: () => void }) {
   const [laborRate, setLaborRate] = useState(4.00);
   const [markupPct, setMarkupPct] = useState(20);
 
+  // Element-based quoting
+  const [bleedSize, setBleedSize] = useState(0.5);
+  const [nestingResult, setNestingResult] = useState<RollNestingResult | null>(null);
+
   const [saving, setSaving] = useState(false);
 
   useEffect(() => {
@@ -389,6 +443,13 @@ function NewQuote({ onCreated }: { onCreated: () => void }) {
       .select('*')
       .order('make, model, year');
     setTemplates((data as VehicleTemplate[]) || []);
+  }
+
+  function recalculateNesting(elements: GraphicElement[], bleed: number) {
+    const withBleed = applyBleed(elements, bleed);
+    const result = nestElementsOnRoll(withBleed, 60);
+    setNestingResult(result);
+    return result;
   }
 
   // Handle proof file selection
@@ -474,6 +535,12 @@ function NewQuote({ onCreated }: { onCreated: () => void }) {
       const result = await response.json();
 
       setAnalysis(result.analysis);
+
+      // Run nesting if analysis has graphic elements
+      if (result.analysis.graphic_elements?.length) {
+        recalculateNesting(result.analysis.graphic_elements, bleedSize);
+      }
+
       setStep(4);
     } catch (err: any) {
       setAnalysisError(err.message || 'Analysis failed. Please try again.');
@@ -488,8 +555,11 @@ function NewQuote({ onCreated }: { onCreated: () => void }) {
     setSaving(true);
 
     try {
-      const materialTotal = analysis.total_vinyl_sqft * materialRate;
-      const laborTotal = analysis.total_vinyl_sqft * laborRate;
+      // Use nesting result for vinyl area if available
+      const vinylSqft = nestingResult?.roll_area_sqft || analysis.total_vinyl_sqft || 0;
+
+      const materialTotal = vinylSqft * materialRate;
+      const laborTotal = vinylSqft * laborRate;
       const subtotal = materialTotal + laborTotal;
       const markupAmount = subtotal * (markupPct / 100);
       const totalPrice = subtotal + markupAmount;
@@ -508,6 +578,8 @@ function NewQuote({ onCreated }: { onCreated: () => void }) {
         if (!uploadError) proofPath = fileName;
       }
 
+      const isElementBased = !!(analysis.graphic_elements?.length);
+
       // Insert quote
       const { data: quoteData, error: quoteError } = await supabase
         .from('quotes')
@@ -521,7 +593,8 @@ function NewQuote({ onCreated }: { onCreated: () => void }) {
           proof_image_path: proofPath || null,
           status: 'draft',
           ai_analysis: analysis,
-          total_vinyl_sqft: analysis.total_vinyl_sqft,
+          analysis_version: isElementBased ? 'individual_elements' : 'panel_coverage',
+          total_vinyl_sqft: vinylSqft,
           coverage_percentage: analysis.overall_coverage_pct,
           material_cost_per_sqft: materialRate,
           labor_cost_per_sqft: laborRate,
@@ -530,6 +603,7 @@ function NewQuote({ onCreated }: { onCreated: () => void }) {
           subtotal: subtotal,
           markup_percentage: markupPct,
           total_price: totalPrice,
+          nesting_result: nestingResult || null,
           notes: analysis.notes,
           created_by: user.id,
         })
@@ -538,8 +612,25 @@ function NewQuote({ onCreated }: { onCreated: () => void }) {
 
       if (quoteError) throw quoteError;
 
-      // Insert panel breakdowns
-      if (quoteData && analysis.panels) {
+      // Insert elements OR panels based on analysis type
+      if (isElementBased && analysis.graphic_elements && quoteData) {
+        const elementInserts = analysis.graphic_elements.map((el, i) => {
+          const nested = nestingResult?.nested_elements[i];
+          return {
+            quote_id: quoteData.id,
+            element_name: el.element_name,
+            element_type: el.element_type,
+            width_in: el.width_in,
+            height_in: el.height_in,
+            description: el.description,
+            bleed_in: bleedSize,
+            nested_x_in: nested?.x_in ?? null,
+            nested_y_in: nested?.y_in ?? null,
+            sort_order: i,
+          };
+        });
+        await supabase.from('quote_elements').insert(elementInserts);
+      } else if (analysis.panels && quoteData) {
         const panelInserts = analysis.panels.map((p, i) => ({
           quote_id: quoteData.id,
           panel_name: p.panel_name,
@@ -563,8 +654,9 @@ function NewQuote({ onCreated }: { onCreated: () => void }) {
   }
 
   // Calculated totals for step 4
-  const materialTotal = (analysis?.total_vinyl_sqft || 0) * materialRate;
-  const laborTotal = (analysis?.total_vinyl_sqft || 0) * laborRate;
+  const vinylSqft = nestingResult?.roll_area_sqft || analysis?.total_vinyl_sqft || 0;
+  const materialTotal = vinylSqft * materialRate;
+  const laborTotal = vinylSqft * laborRate;
   const subtotal = materialTotal + laborTotal;
   const markupAmount = subtotal * (markupPct / 100);
   const totalPrice = subtotal + markupAmount;
@@ -866,34 +958,171 @@ function NewQuote({ onCreated }: { onCreated: () => void }) {
             </div>
           </div>
 
-          {/* Panel-by-Panel Breakdown with Full Reasoning */}
-          <div style={{ background: theme.card, border: `1px solid ${theme.border}`, borderRadius: '12px', padding: '14px', marginBottom: '12px' }}>
-            <div style={{ fontSize: '14px', fontWeight: 700, color: theme.textPrimary, marginBottom: '10px' }}>Panel-by-Panel Breakdown</div>
-            {analysis.panels?.map((p, i) => (
-              <div key={i} style={{ padding: '10px 0', borderBottom: i < analysis.panels.length - 1 ? `1px solid ${theme.border}` : 'none' }}>
-                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
-                  <div>
-                    <div style={{ fontSize: '14px', fontWeight: 700, color: theme.textPrimary }}>{p.panel_name}</div>
-                    <div style={{ fontSize: '11px', color: theme.orange, fontWeight: 600, marginTop: '2px' }}>{p.vinyl_type}</div>
-                  </div>
-                  <div style={{ textAlign: 'right', whiteSpace: 'nowrap' }}>
-                    <div style={{ fontSize: '16px', fontWeight: 800, color: theme.orange }}>{p.vinyl_sqft?.toFixed(1)} ft²</div>
-                    <div style={{ fontSize: '11px', color: theme.textMuted }}>{p.vinyl_coverage_pct}% of {p.panel_area_sqft?.toFixed(1)} ft²</div>
-                  </div>
+          {/* Roll Material Summary */}
+          {nestingResult ? (
+            <div style={{ background: theme.card, border: `1px solid ${theme.border}`, borderRadius: '12px', padding: '14px', marginBottom: '12px' }}>
+              <div style={{ fontSize: '14px', fontWeight: 700, color: theme.textPrimary, marginBottom: '10px' }}>Roll Material Summary</div>
+              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: '8px' }}>
+                <div style={{ textAlign: 'center', padding: '8px', background: theme.subtleBg, borderRadius: '8px' }}>
+                  <div style={{ fontSize: '14px', fontWeight: 800, color: theme.textPrimary }}>60"</div>
+                  <div style={{ fontSize: '10px', color: theme.textMuted, fontWeight: 600 }}>WIDTH</div>
                 </div>
-                {/* Coverage bar */}
-                <div style={{ marginTop: '6px', height: '6px', borderRadius: '3px', background: theme.progressTrack }}>
-                  <div style={{ height: '100%', width: `${Math.min(p.vinyl_coverage_pct, 100)}%`, background: theme.orange, borderRadius: '3px' }} />
+                <div style={{ textAlign: 'center', padding: '8px', background: theme.subtleBg, borderRadius: '8px' }}>
+                  <div style={{ fontSize: '14px', fontWeight: 800, color: theme.textPrimary }}>{nestingResult.roll_length_in?.toFixed(1)}"</div>
+                  <div style={{ fontSize: '10px', color: theme.textMuted, fontWeight: 600 }}>LENGTH</div>
                 </div>
-                {/* AI's reasoning for this panel */}
-                {p.description && (
-                  <div style={{ marginTop: '8px', padding: '8px 10px', background: theme.subtleBg, borderRadius: '8px', fontSize: '12px', color: theme.textSecondary, lineHeight: 1.5, borderLeft: `3px solid ${theme.orange}` }}>
-                    🤖 {p.description}
-                  </div>
-                )}
+                <div style={{ textAlign: 'center', padding: '8px', background: theme.subtleBg, borderRadius: '8px' }}>
+                  <div style={{ fontSize: '14px', fontWeight: 800, color: theme.orange }}>{nestingResult.roll_area_sqft?.toFixed(1)} sq ft</div>
+                  <div style={{ fontSize: '10px', color: theme.textMuted, fontWeight: 600 }}>AREA</div>
+                </div>
               </div>
-            ))}
-          </div>
+            </div>
+          ) : (
+            <div style={{ background: theme.card, border: `1px solid ${theme.border}`, borderRadius: '12px', padding: '14px', marginBottom: '12px' }}>
+              <div style={{ fontSize: '14px', fontWeight: 700, color: theme.textPrimary, marginBottom: '10px' }}>Material Summary</div>
+              <div style={{ textAlign: 'center', padding: '8px', background: theme.subtleBg, borderRadius: '8px' }}>
+                <div style={{ fontSize: '14px', fontWeight: 800, color: theme.orange }}>{analysis.total_vinyl_sqft?.toFixed(1)} sq ft</div>
+                <div style={{ fontSize: '10px', color: theme.textMuted, fontWeight: 600 }}>VINYL AREA</div>
+              </div>
+            </div>
+          )}
+
+          {/* Bleed Control (for element-based) */}
+          {analysis.graphic_elements && analysis.graphic_elements.length > 0 && (
+            <div style={{ background: theme.card, border: `1px solid ${theme.border}`, borderRadius: '12px', padding: '14px', marginBottom: '12px' }}>
+              <label style={{ display: 'block', fontSize: '13px', fontWeight: 700, color: theme.textPrimary, marginBottom: '8px' }}>Bleed Per Side</label>
+              <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                <input
+                  type="number"
+                  step="0.125"
+                  min="0"
+                  max="2"
+                  value={bleedSize}
+                  onChange={(e) => {
+                    const newBleed = parseFloat(e.target.value) || 0;
+                    setBleedSize(newBleed);
+                    if (analysis.graphic_elements) {
+                      recalculateNesting(analysis.graphic_elements, newBleed);
+                    }
+                  }}
+                  style={{
+                    flex: 1, padding: '10px', borderRadius: '8px', border: `1px solid ${theme.border}`,
+                    background: theme.inputBg, color: theme.textPrimary, fontSize: '14px', fontWeight: 700,
+                    boxSizing: 'border-box',
+                  }}
+                />
+                <div style={{ fontSize: '12px', color: theme.textMuted }}>in</div>
+              </div>
+            </div>
+          )}
+
+          {/* Nesting Visualization (for element-based) */}
+          {nestingResult && analysis.graphic_elements && (
+            <div style={{ background: theme.card, border: `1px solid ${theme.border}`, borderRadius: '12px', padding: '14px', marginBottom: '12px' }}>
+              <div style={{ fontSize: '14px', fontWeight: 700, color: theme.textPrimary, marginBottom: '10px' }}>Nesting Layout</div>
+              <div style={{ width: '100%', background: theme.inputBg, borderRadius: '8px', padding: '10px', marginBottom: '8px' }}>
+                <svg
+                  viewBox={`0 0 60 ${nestingResult.roll_length_in}`}
+                  style={{ width: '100%', height: 'auto', background: '#fff', borderRadius: '6px', border: `1px solid ${theme.border}` }}
+                  preserveAspectRatio="xMidYMid meet"
+                >
+                  {/* Roll outline */}
+                  <rect x="0" y="0" width="60" height={nestingResult.roll_length_in} fill="none" stroke={theme.border} strokeWidth="0.5" />
+
+                  {/* Nested elements */}
+                  {nestingResult.nested_elements.map((elem, idx) => {
+                    const colors = [theme.orange, theme.navy, theme.success, theme.warning];
+                    const color = colors[idx % colors.length];
+                    const elementData = analysis.graphic_elements![idx];
+                    return (
+                      <g key={idx}>
+                        <rect
+                          x={elem.x_in}
+                          y={elem.y_in}
+                          width={elementData.width_in}
+                          height={elementData.height_in}
+                          fill={color}
+                          fillOpacity="0.2"
+                          stroke={color}
+                          strokeWidth="0.3"
+                        />
+                        <text
+                          x={elem.x_in + elementData.width_in / 2}
+                          y={elem.y_in + elementData.height_in / 2}
+                          textAnchor="middle"
+                          dominantBaseline="middle"
+                          fontSize="1.5"
+                          fill={color}
+                          fontWeight="700"
+                        >
+                          {idx + 1}
+                        </text>
+                      </g>
+                    );
+                  })}
+                </svg>
+              </div>
+              <div style={{ fontSize: '11px', color: theme.textMuted, textAlign: 'center' }}>
+                Roll: 60" × {nestingResult.roll_length_in?.toFixed(1)}" = {nestingResult.roll_area_sqft?.toFixed(1)} sq ft
+              </div>
+            </div>
+          )}
+
+          {/* Elements List (for element-based) */}
+          {analysis.graphic_elements && analysis.graphic_elements.length > 0 ? (
+            <div style={{ background: theme.card, border: `1px solid ${theme.border}`, borderRadius: '12px', padding: '14px', marginBottom: '12px' }}>
+              <div style={{ fontSize: '14px', fontWeight: 700, color: theme.textPrimary, marginBottom: '10px' }}>Graphic Elements</div>
+              {analysis.graphic_elements.map((el, i) => (
+                <div key={i} style={{ padding: '10px 0', borderBottom: i < analysis.graphic_elements.length - 1 ? `1px solid ${theme.border}` : 'none' }}>
+                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
+                    <div>
+                      <div style={{ fontSize: '14px', fontWeight: 700, color: theme.textPrimary }}>{el.element_name}</div>
+                      <div style={{ fontSize: '11px', background: theme.subtleBg, color: theme.textMuted, fontWeight: 600, marginTop: '2px', padding: '2px 6px', borderRadius: '4px', display: 'inline-block' }}>
+                        {el.element_type}
+                      </div>
+                    </div>
+                    <div style={{ textAlign: 'right', whiteSpace: 'nowrap' }}>
+                      <div style={{ fontSize: '13px', fontWeight: 700, color: theme.textPrimary }}>{el.width_in.toFixed(1)}" × {el.height_in.toFixed(1)}"</div>
+                      <div style={{ fontSize: '11px', color: theme.textMuted }}>{(el.width_in * el.height_in).toFixed(1)} sq in</div>
+                    </div>
+                  </div>
+                  {el.description && (
+                    <div style={{ marginTop: '8px', padding: '8px 10px', background: theme.subtleBg, borderRadius: '8px', fontSize: '12px', color: theme.textSecondary, lineHeight: 1.5, borderLeft: `3px solid ${theme.orange}` }}>
+                      {el.description}
+                    </div>
+                  )}
+                </div>
+              ))}
+            </div>
+          ) : (
+            <div style={{ background: theme.card, border: `1px solid ${theme.border}`, borderRadius: '12px', padding: '14px', marginBottom: '12px' }}>
+              <div style={{ fontSize: '14px', fontWeight: 700, color: theme.textPrimary, marginBottom: '10px' }}>Panel-by-Panel Breakdown</div>
+              {analysis.panels?.map((p, i) => (
+                <div key={i} style={{ padding: '10px 0', borderBottom: i < analysis.panels.length - 1 ? `1px solid ${theme.border}` : 'none' }}>
+                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
+                    <div>
+                      <div style={{ fontSize: '14px', fontWeight: 700, color: theme.textPrimary }}>{p.panel_name}</div>
+                      <div style={{ fontSize: '11px', color: theme.orange, fontWeight: 600, marginTop: '2px' }}>{p.vinyl_type}</div>
+                    </div>
+                    <div style={{ textAlign: 'right', whiteSpace: 'nowrap' }}>
+                      <div style={{ fontSize: '16px', fontWeight: 800, color: theme.orange }}>{p.vinyl_sqft?.toFixed(1)} ft²</div>
+                      <div style={{ fontSize: '11px', color: theme.textMuted }}>{p.vinyl_coverage_pct}% of {p.panel_area_sqft?.toFixed(1)} ft²</div>
+                    </div>
+                  </div>
+                  {/* Coverage bar */}
+                  <div style={{ marginTop: '6px', height: '6px', borderRadius: '3px', background: theme.progressTrack }}>
+                    <div style={{ height: '100%', width: `${Math.min(p.vinyl_coverage_pct, 100)}%`, background: theme.orange, borderRadius: '3px' }} />
+                  </div>
+                  {/* AI's reasoning for this panel */}
+                  {p.description && (
+                    <div style={{ marginTop: '8px', padding: '8px 10px', background: theme.subtleBg, borderRadius: '8px', fontSize: '12px', color: theme.textSecondary, lineHeight: 1.5, borderLeft: `3px solid ${theme.orange}` }}>
+                      🤖 {p.description}
+                    </div>
+                  )}
+                </div>
+              ))}
+            </div>
+          )}
 
           {/* AI Notes */}
           {analysis.notes && (
@@ -954,8 +1183,13 @@ function NewQuote({ onCreated }: { onCreated: () => void }) {
             {/* Price summary */}
             <div style={{ borderTop: `1px solid ${theme.border}`, paddingTop: '12px' }}>
               {[
-                { label: `Material (${analysis.total_vinyl_sqft?.toFixed(1)} ft² × ${fmtCurrency(materialRate)})`, value: fmtCurrency(materialTotal) },
-                { label: `Labor (${analysis.total_vinyl_sqft?.toFixed(1)} ft² × ${fmtCurrency(laborRate)})`, value: fmtCurrency(laborTotal) },
+                {
+                  label: nestingResult
+                    ? `Material (Roll: 60" × ${nestingResult.roll_length_in?.toFixed(1)}" = ${vinylSqft.toFixed(1)} sq ft × ${fmtCurrency(materialRate)})`
+                    : `Material (${vinylSqft.toFixed(1)} ft² × ${fmtCurrency(materialRate)})`,
+                  value: fmtCurrency(materialTotal)
+                },
+                { label: `Labor (${vinylSqft.toFixed(1)} ft² × ${fmtCurrency(laborRate)})`, value: fmtCurrency(laborTotal) },
                 { label: 'Subtotal', value: fmtCurrency(subtotal) },
                 { label: `Markup (${markupPct}%)`, value: fmtCurrency(markupAmount) },
               ].map(row => (

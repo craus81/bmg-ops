@@ -153,7 +153,10 @@ export interface Quote {
   created_by: string | null;
   created_at: string;
   updated_at: string;
+  analysis_version?: string;
+  nesting_result?: RollNestingResult | null;
   panels?: QuotePanel[];
+  elements?: QuoteElement[];
   template?: VehicleTemplate;
 }
 
@@ -170,12 +173,14 @@ export interface QuotePanel {
 }
 
 export interface AIAnalysisResult {
-  panels: AIPanelResult[];
+  panels?: AIPanelResult[];
+  graphic_elements?: GraphicElement[];
   total_vinyl_sqft: number;
   total_vehicle_sqft: number;
   overall_coverage_pct: number;
   confidence: string;
   notes: string;
+  analysis_version?: 'panel_coverage' | 'individual_elements';
 }
 
 export interface AIPanelResult {
@@ -185,4 +190,52 @@ export interface AIPanelResult {
   vinyl_sqft: number;
   vinyl_type: string;
   description: string;
+}
+
+// ============ Element-Based Quoting ============
+
+export interface GraphicElement {
+  element_name: string;
+  element_type: string;
+  width_in: number;
+  height_in: number;
+  description: string;
+}
+
+export interface ElementWithBleed {
+  element: GraphicElement;
+  bleed_in: number;
+  total_width_in: number;
+  total_height_in: number;
+}
+
+export interface NestedElement {
+  element: GraphicElement;
+  bleed_in: number;
+  total_width_in: number;
+  total_height_in: number;
+  x_in: number;
+  y_in: number;
+}
+
+export interface RollNestingResult {
+  roll_width_in: number;
+  roll_length_in: number;
+  roll_area_sqft: number;
+  nested_elements: NestedElement[];
+  efficiency_pct: number;
+}
+
+export interface QuoteElement {
+  id: string;
+  quote_id: string;
+  element_name: string;
+  element_type: string | null;
+  width_in: number;
+  height_in: number;
+  description: string | null;
+  bleed_in: number;
+  nested_x_in: number | null;
+  nested_y_in: number | null;
+  sort_order: number;
 }

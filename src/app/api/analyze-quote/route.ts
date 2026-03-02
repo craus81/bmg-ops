@@ -11,40 +11,53 @@ const ANALYSIS_PROMPT = `You are a vehicle wrap estimation expert. You are analy
 
 2. A PROOF/DESIGN FILE - showing the proposed vinyl graphics wrap design on the same vehicle. The colored/designed areas represent vinyl graphics. White/uncolored areas are bare paint. Dark tinted areas are windows. Gray areas at the bottom are bumpers.
 
-Your task:
-1. Read the dimensions from the template image (overall length, height, wheelbase)
-2. For each major vehicle panel visible in the proof, estimate:
-   - The total panel area in square feet (using the template dimensions)
-   - What percentage of that panel is covered with vinyl graphics (vs bare paint/windows/bumpers)
-   - The resulting vinyl square footage for that panel
-   - The type of coverage (full wrap, partial wrap, lettering/decals only)
+Your task: Identify each INDIVIDUAL GRAPHIC ELEMENT in the proof and estimate its bounding box dimensions in inches.
 
-Analyze these panels:
-- Driver Side (full side profile)
-- Passenger Side (full side profile)
-- Hood/Front
-- Rear (back doors/tailgate)
-- Roof (if visible in proof)
+For each distinct graphic piece (logo, stripe, text block, side graphic panel, door graphic, etc.):
+1. Give it a descriptive name (e.g. "Driver Side Body Stripe", "Rear Door Logo", "Phone Number Text")
+2. Classify the type: "logo", "stripe", "text_block", "graphic", "full_panel", "decal"
+3. Estimate the WIDTH and HEIGHT in INCHES of the smallest rectangle that contains that element
+4. Use the template's labeled 1:20 scale dimensions to calculate real-world sizes
+5. Explain your reasoning for the measurements
 
-IMPORTANT: Use the template's labeled dimensions to calculate real square footage. The template is at 1:20 scale with dimensions printed on it. Vehicle panels are not flat rectangles - use reasonable estimates accounting for curves, wheel wells, windows, and trim.
+IMPORTANT RULES:
+- Identify EACH separate printed piece, not panels
+- If the same graphic appears on both sides (driver + passenger), list them as SEPARATE elements (e.g. "Driver Side Stripe" and "Passenger Side Stripe")
+- Measure the BOUNDING BOX (smallest rectangle enclosing the graphic), not the total panel
+- Use the template dimensions to convert from the visual scale to real inches
+- Be conservative with measurements - measure only actual vinyl, not bare paint or windows
 
-Return your analysis as JSON only, no other text, in this exact format:
+Return JSON only, no other text, in this exact format:
 {
-  "panels": [
+  "graphic_elements": [
     {
-      "panel_name": "Driver Side",
-      "panel_area_sqft": 85.5,
-      "vinyl_coverage_pct": 72,
-      "vinyl_sqft": 61.56,
-      "vinyl_type": "partial wrap",
-      "description": "Blue vinyl covers upper body from behind cab to rear doors. Lower body, bumper, and windows are not wrapped."
+      "element_name": "Driver Side Body Stripe",
+      "element_type": "stripe",
+      "width_in": 120.0,
+      "height_in": 18.5,
+      "description": "Blue diagonal stripe running from behind cab to rear wheel well on driver side. Approximately 120 inches long by 18.5 inches tall based on template overall length of 235 inches."
+    },
+    {
+      "element_name": "Passenger Side Body Stripe",
+      "element_type": "stripe",
+      "width_in": 120.0,
+      "height_in": 18.5,
+      "description": "Matching stripe on passenger side, same dimensions as driver side."
+    },
+    {
+      "element_name": "Rear Door Company Logo",
+      "element_type": "logo",
+      "width_in": 24.0,
+      "height_in": 16.0,
+      "description": "Company logo centered on rear doors, approximately 24 x 16 inches."
     }
   ],
-  "total_vinyl_sqft": 180.5,
+  "total_vinyl_sqft": 45.2,
   "total_vehicle_sqft": 350.0,
-  "overall_coverage_pct": 51.6,
+  "overall_coverage_pct": 12.9,
   "confidence": "high",
-  "notes": "Measurements based on template dimensions of 238.7 inches overall length. Coverage includes solid color vinyl on body panels above the belt line."
+  "notes": "Measurements based on template dimensions. Total vinyl is sum of all element bounding boxes.",
+  "analysis_version": "individual_elements"
 }`;
 
 export async function POST(request: NextRequest) {
