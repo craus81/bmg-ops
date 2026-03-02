@@ -369,6 +369,8 @@ function NewQuote({ onCreated }: { onCreated: () => void }) {
   const [analyzing, setAnalyzing] = useState(false);
   const [analysis, setAnalysis] = useState<AIAnalysisResult | null>(null);
   const [analysisError, setAnalysisError] = useState('');
+  const [templatePreviewUrl, setTemplatePreviewUrl] = useState<string | null>(null);
+  const [proofPreviewForReview, setProofPreviewForReview] = useState<string | null>(null);
 
   // Step 4: Pricing
   const [materialRate, setMaterialRate] = useState(2.50);
@@ -422,6 +424,9 @@ function NewQuote({ onCreated }: { onCreated: () => void }) {
             .from('vehicle-templates')
             .getPublicUrl(selectedTemplate.template_image_path);
 
+          // Save URL for Step 4 display
+          setTemplatePreviewUrl(data.publicUrl);
+
           const imgResponse = await fetch(data.publicUrl);
           if (!imgResponse.ok) {
             throw new Error(`Failed to fetch template image: ${imgResponse.status}`);
@@ -445,6 +450,9 @@ function NewQuote({ onCreated }: { onCreated: () => void }) {
       const proofCompressed = await compressImage(proofFile, 2048, 0.8);
       const proofBase64 = proofCompressed.base64;
       const proofMediaType = proofCompressed.mediaType;
+
+      // Save proof preview for Step 4 display
+      setProofPreviewForReview(`data:${proofMediaType};base64,${proofBase64}`);
 
       // Call our API route
       const response = await fetch('/api/analyze-quote', {
@@ -819,32 +827,78 @@ function NewQuote({ onCreated }: { onCreated: () => void }) {
             AI Confidence: {analysis.confidence?.toUpperCase()} • {analysis.total_vinyl_sqft?.toFixed(1)} sq ft total vinyl
           </div>
 
-          {/* Panel Breakdown */}
+          {/* Image Comparison */}
           <div style={{ background: theme.card, border: `1px solid ${theme.border}`, borderRadius: '12px', padding: '14px', marginBottom: '12px' }}>
-            <div style={{ fontSize: '14px', fontWeight: 700, color: theme.textPrimary, marginBottom: '10px' }}>Coverage Breakdown</div>
+            <div style={{ fontSize: '14px', fontWeight: 700, color: theme.textPrimary, marginBottom: '10px' }}>What AI Analyzed</div>
+            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '8px' }}>
+              <div>
+                <div style={{ fontSize: '11px', fontWeight: 700, color: theme.textMuted, marginBottom: '4px', textTransform: 'uppercase' }}>Template</div>
+                {templatePreviewUrl ? (
+                  <img src={templatePreviewUrl} alt="Template" style={{ width: '100%', borderRadius: '8px', background: '#fff', border: `1px solid ${theme.border}` }} />
+                ) : (
+                  <div style={{ padding: '20px', textAlign: 'center', background: theme.inputBg, borderRadius: '8px', fontSize: '12px', color: theme.textMuted }}>No preview</div>
+                )}
+              </div>
+              <div>
+                <div style={{ fontSize: '11px', fontWeight: 700, color: theme.textMuted, marginBottom: '4px', textTransform: 'uppercase' }}>Proof Design</div>
+                {proofPreviewForReview ? (
+                  <img src={proofPreviewForReview} alt="Proof" style={{ width: '100%', borderRadius: '8px', border: `1px solid ${theme.border}` }} />
+                ) : proofPreview ? (
+                  <img src={proofPreview} alt="Proof" style={{ width: '100%', borderRadius: '8px', border: `1px solid ${theme.border}` }} />
+                ) : (
+                  <div style={{ padding: '20px', textAlign: 'center', background: theme.inputBg, borderRadius: '8px', fontSize: '12px', color: theme.textMuted }}>{proofFile?.name || 'No preview'}</div>
+                )}
+              </div>
+            </div>
+            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: '6px', marginTop: '10px' }}>
+              <div style={{ textAlign: 'center', padding: '8px', background: theme.subtleBg, borderRadius: '8px' }}>
+                <div style={{ fontSize: '16px', fontWeight: 800, color: theme.textPrimary }}>{analysis.total_vehicle_sqft?.toFixed(0)}</div>
+                <div style={{ fontSize: '10px', color: theme.textMuted, fontWeight: 600 }}>TOTAL ft²</div>
+              </div>
+              <div style={{ textAlign: 'center', padding: '8px', background: theme.subtleBg, borderRadius: '8px' }}>
+                <div style={{ fontSize: '16px', fontWeight: 800, color: theme.orange }}>{analysis.total_vinyl_sqft?.toFixed(1)}</div>
+                <div style={{ fontSize: '10px', color: theme.textMuted, fontWeight: 600 }}>VINYL ft²</div>
+              </div>
+              <div style={{ textAlign: 'center', padding: '8px', background: theme.subtleBg, borderRadius: '8px' }}>
+                <div style={{ fontSize: '16px', fontWeight: 800, color: theme.textPrimary }}>{analysis.overall_coverage_pct?.toFixed(0)}%</div>
+                <div style={{ fontSize: '10px', color: theme.textMuted, fontWeight: 600 }}>COVERAGE</div>
+              </div>
+            </div>
+          </div>
+
+          {/* Panel-by-Panel Breakdown with Full Reasoning */}
+          <div style={{ background: theme.card, border: `1px solid ${theme.border}`, borderRadius: '12px', padding: '14px', marginBottom: '12px' }}>
+            <div style={{ fontSize: '14px', fontWeight: 700, color: theme.textPrimary, marginBottom: '10px' }}>Panel-by-Panel Breakdown</div>
             {analysis.panels?.map((p, i) => (
-              <div key={i} style={{ padding: '8px 0', borderBottom: i < analysis.panels.length - 1 ? `1px solid ${theme.border}` : 'none' }}>
-                <div style={{ display: 'flex', justifyContent: 'space-between' }}>
+              <div key={i} style={{ padding: '10px 0', borderBottom: i < analysis.panels.length - 1 ? `1px solid ${theme.border}` : 'none' }}>
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
                   <div>
-                    <div style={{ fontSize: '13px', fontWeight: 700, color: theme.textPrimary }}>{p.panel_name}</div>
-                    <div style={{ fontSize: '11px', color: theme.textMuted }}>{p.vinyl_type} • {p.description?.slice(0, 60)}{(p.description?.length || 0) > 60 ? '...' : ''}</div>
+                    <div style={{ fontSize: '14px', fontWeight: 700, color: theme.textPrimary }}>{p.panel_name}</div>
+                    <div style={{ fontSize: '11px', color: theme.orange, fontWeight: 600, marginTop: '2px' }}>{p.vinyl_type}</div>
                   </div>
                   <div style={{ textAlign: 'right', whiteSpace: 'nowrap' }}>
-                    <div style={{ fontSize: '14px', fontWeight: 800, color: theme.orange }}>{p.vinyl_sqft?.toFixed(1)} ft²</div>
+                    <div style={{ fontSize: '16px', fontWeight: 800, color: theme.orange }}>{p.vinyl_sqft?.toFixed(1)} ft²</div>
                     <div style={{ fontSize: '11px', color: theme.textMuted }}>{p.vinyl_coverage_pct}% of {p.panel_area_sqft?.toFixed(1)} ft²</div>
                   </div>
                 </div>
-                <div style={{ marginTop: '4px', height: '4px', borderRadius: '2px', background: theme.progressTrack }}>
-                  <div style={{ height: '100%', width: `${Math.min(p.vinyl_coverage_pct, 100)}%`, background: theme.orange, borderRadius: '2px' }} />
+                {/* Coverage bar */}
+                <div style={{ marginTop: '6px', height: '6px', borderRadius: '3px', background: theme.progressTrack }}>
+                  <div style={{ height: '100%', width: `${Math.min(p.vinyl_coverage_pct, 100)}%`, background: theme.orange, borderRadius: '3px' }} />
                 </div>
+                {/* AI's reasoning for this panel */}
+                {p.description && (
+                  <div style={{ marginTop: '8px', padding: '8px 10px', background: theme.subtleBg, borderRadius: '8px', fontSize: '12px', color: theme.textSecondary, lineHeight: 1.5, borderLeft: `3px solid ${theme.orange}` }}>
+                    🤖 {p.description}
+                  </div>
+                )}
               </div>
             ))}
           </div>
 
           {/* AI Notes */}
           {analysis.notes && (
-            <div style={{ background: theme.subtleBg, borderRadius: '10px', padding: '12px', marginBottom: '12px', fontSize: '12px', color: theme.textSecondary, lineHeight: 1.5 }}>
-              📝 {analysis.notes}
+            <div style={{ background: theme.subtleBg, borderRadius: '10px', padding: '12px', marginBottom: '12px', fontSize: '12px', color: theme.textSecondary, lineHeight: 1.5, borderLeft: `3px solid ${theme.navy}` }}>
+              📝 <strong>AI Notes:</strong> {analysis.notes}
             </div>
           )}
 
