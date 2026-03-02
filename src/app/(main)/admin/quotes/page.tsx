@@ -23,6 +23,40 @@ function fileToBase64(file: File): Promise<string> {
   });
 }
 
+// ============ Helper: compress image to fit under size limit ============
+function compressImage(file: File, maxWidthPx = 2048, quality = 0.8): Promise<{ base64: string; mediaType: string }> {
+  return new Promise((resolve, reject) => {
+    // If not an image, just return base64 as-is
+    if (!file.type.startsWith('image/')) {
+      fileToBase64(file).then(b64 => resolve({ base64: b64, mediaType: file.type || 'application/octet-stream' })).catch(reject);
+      return;
+    }
+
+    const img = new Image();
+    const url = URL.createObjectURL(file);
+    img.onload = () => {
+      URL.revokeObjectURL(url);
+      // Scale down if wider than maxWidthPx
+      let w = img.width;
+      let h = img.height;
+      if (w > maxWidthPx) {
+        h = Math.round(h * (maxWidthPx / w));
+        w = maxWidthPx;
+      }
+      const canvas = document.createElement('canvas');
+      canvas.width = w;
+      canvas.height = h;
+      const ctx = canvas.getContext('2d')!;
+      ctx.drawImage(img, 0, 0, w, h);
+      const dataUrl = canvas.toDataURL('image/jpeg', quality);
+      const base64 = dataUrl.split(',')[1];
+      resolve({ base64, mediaType: 'image/jpeg' });
+    };
+    img.onerror = () => { URL.revokeObjectURL(url); reject(new Error('Failed to load image for compression')); };
+    img.src = url;
+  });
+}
+
 // ============ Helper: format currency ============
 function fmtCurrency(n: number) {
   return new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD' }).format(n);
@@ -348,7 +382,7 @@ function NewQuote({ onCreated }: { onCreated: () => void }) {
     setAnalysisError('');
 
     try {
-      // Get template image from storage
+      // Get template image from storage and compress it
       let templateBase64 = '';
       let templateMediaType = 'image/png';
 
@@ -357,25 +391,19 @@ function NewQuote({ onCreated }: { onCreated: () => void }) {
           .from('vehicle-templates')
           .getPublicUrl(selectedTemplate.template_image_path);
 
-        // Fetch the template image and convert to base64
+        // Fetch the template image, convert to a File, then compress
         const imgResponse = await fetch(data.publicUrl);
         const imgBlob = await imgResponse.blob();
-        templateBase64 = await new Promise<string>((resolve) => {
-          const reader = new FileReader();
-          reader.onload = () => resolve((reader.result as string).split(',')[1]);
-          reader.readAsDataURL(imgBlob);
-        });
-        templateMediaType = imgBlob.type || 'image/png';
+        const templateFile = new File([imgBlob], 'template.png', { type: imgBlob.type || 'image/png' });
+        const compressed = await compressImage(templateFile, 2048, 0.8);
+        templateBase64 = compressed.base64;
+        templateMediaType = compressed.mediaType;
       }
 
-      // Convert proof file to base64
-      const proofBase64 = await fileToBase64(proofFile);
-      let proofMediaType = proofFile.type || 'image/png';
-
-      // For PDFs, we need to convert to image first (or send as PDF)
-      if (proofFile.type === 'application/pdf') {
-        proofMediaType = 'application/pdf';
-      }
+      // Compress proof file (resize large images to max 2048px wide)
+      const proofCompressed = await compressImage(proofFile, 2048, 0.8);
+      const proofBase64 = proofCompressed.base64;
+      const proofMediaType = proofCompressed.mediaType;
 
       // Call our API route
       const response = await fetch('/api/analyze-quote', {
@@ -388,6 +416,11 @@ function NewQuote({ onCreated }: { onCreated: () => void }) {
           proofMediaType,
         }),
       });
+
+      if (!response.ok) {
+        const errorText = await response.text();
+        throw new Error(errorText || `Server error: ${response.status}`);
+      }
 
       const result = await response.json();
 

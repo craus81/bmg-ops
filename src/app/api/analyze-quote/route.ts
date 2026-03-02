@@ -1,5 +1,17 @@
 import { NextRequest, NextResponse } from 'next/server';
 
+// Increase Vercel serverless function body size limit to 10MB
+export const config = {
+  api: {
+    bodyParser: {
+      sizeLimit: '10mb',
+    },
+  },
+};
+
+// For App Router, also set max duration for long AI calls
+export const maxDuration = 60;
+
 const ANTHROPIC_API_KEY = process.env.ANTHROPIC_API_KEY;
 
 const ANALYSIS_PROMPT = `You are a vehicle wrap estimation expert. You are analyzing two images:
