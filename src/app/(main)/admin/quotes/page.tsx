@@ -25,12 +25,11 @@ function fileToBase64(file: File): Promise<string> {
 
 // ============ Helper: render PDF first page to image ============
 async function pdfToImage(file: File, maxWidthPx = 2048, quality = 0.8): Promise<{ base64: string; mediaType: string }> {
-  const pdfjsLib = await import('pdfjs-dist/legacy/build/pdf.mjs');
-  // @ts-ignore - disable worker for simplicity (single page render)
-  pdfjsLib.GlobalWorkerOptions.workerSrc = false;
+  const pdfjsLib = await import('pdfjs-dist');
+  pdfjsLib.GlobalWorkerOptions.workerSrc = `//unpkg.com/pdfjs-dist@${pdfjsLib.version}/build/pdf.worker.min.mjs`;
 
   const arrayBuffer = await file.arrayBuffer();
-  const pdf = await pdfjsLib.getDocument({ data: arrayBuffer } as any).promise;
+  const pdf = await pdfjsLib.getDocument({ data: new Uint8Array(arrayBuffer) }).promise;
   const page = await pdf.getPage(1);
 
   // Scale to maxWidthPx
