@@ -41,7 +41,7 @@ async function pdfToImage(file: File, maxWidthPx = 2048, quality = 0.8): Promise
   canvas.width = viewport.width;
   canvas.height = viewport.height;
   const ctx = canvas.getContext('2d')!;
-  await page.render({ canvasContext: ctx, viewport }).promise;
+  await page.render({ canvasContext: ctx, viewport, canvas } as any).promise;
 
   const dataUrl = canvas.toDataURL('image/jpeg', quality);
   const base64 = dataUrl.split(',')[1];
