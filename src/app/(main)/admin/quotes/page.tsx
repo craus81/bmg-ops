@@ -1068,7 +1068,7 @@ function NewQuote({ onCreated }: { onCreated: () => void }) {
                     src={elementCrops[el.element_name]}
                     alt={el.element_name}
                     style={{
-                      width: '72px', height: '72px', objectFit: 'cover', borderRadius: '6px',
+                      maxWidth: '72px', maxHeight: '72px', objectFit: 'contain', borderRadius: '6px',
                       border: `2px solid ${theme.success}`, cursor: 'pointer',
                     }}
                     onClick={() => {
@@ -1262,15 +1262,15 @@ function NewQuote({ onCreated }: { onCreated: () => void }) {
                           stroke={color}
                           strokeWidth="0.3"
                         />
-                        {/* Cropped image inside the bleed rectangle */}
+                        {/* Cropped image filling the full rectangle */}
                         {cropSrc && (
                           <image
                             href={cropSrc}
-                            x={elem.x_in + elem.bleed_in}
-                            y={elem.y_in + elem.bleed_in}
-                            width={elem.total_width_in - elem.bleed_in * 2}
-                            height={elem.total_height_in - elem.bleed_in * 2}
-                            preserveAspectRatio="xMidYMid slice"
+                            x={elem.x_in}
+                            y={elem.y_in}
+                            width={elem.total_width_in}
+                            height={elem.total_height_in}
+                            preserveAspectRatio="xMidYMid meet"
                             opacity="0.85"
                           />
                         )}
@@ -1309,17 +1309,20 @@ function NewQuote({ onCreated }: { onCreated: () => void }) {
                   <div style={{ display: 'flex', gap: '10px', alignItems: 'flex-start' }}>
                     {/* Cropped thumbnail from proof */}
                     {elementCrops[el.element_name] ? (
-                      <img
-                        src={elementCrops[el.element_name]}
-                        alt={el.element_name}
-                        style={{
-                          width: '72px', height: '72px', objectFit: 'cover', borderRadius: '6px',
-                          border: `1px solid ${theme.border}`, flexShrink: 0, background: theme.inputBg,
-                        }}
-                      />
+                      <div style={{
+                        width: '80px', height: '80px', flexShrink: 0, borderRadius: '6px',
+                        border: `1px solid ${theme.border}`, background: theme.inputBg,
+                        display: 'flex', alignItems: 'center', justifyContent: 'center', overflow: 'hidden',
+                      }}>
+                        <img
+                          src={elementCrops[el.element_name]}
+                          alt={el.element_name}
+                          style={{ maxWidth: '100%', maxHeight: '100%', objectFit: 'contain' }}
+                        />
+                      </div>
                     ) : (
                       <div style={{
-                        width: '72px', height: '72px', borderRadius: '6px', flexShrink: 0,
+                        width: '80px', height: '80px', borderRadius: '6px', flexShrink: 0,
                         background: theme.inputBg, border: `1px solid ${theme.border}`,
                         display: 'flex', alignItems: 'center', justifyContent: 'center',
                         fontSize: '10px', color: theme.textMuted, textAlign: 'center', padding: '4px',
