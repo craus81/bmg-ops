@@ -11,7 +11,7 @@ const ANALYSIS_PROMPT = `You are a vehicle wrap estimation expert. You are analy
 
 2. A PROOF/DESIGN FILE - showing the proposed vinyl graphics wrap design on the same vehicle. The colored/designed areas represent vinyl graphics. White/uncolored areas are bare paint. Dark tinted areas are windows. Gray areas at the bottom are bumpers.
 
-Your task: Identify each INDIVIDUAL GRAPHIC ELEMENT in the proof and estimate its bounding box dimensions in inches. Also locate each element visually in the PROOF image so we can crop a thumbnail.
+Your task: Identify each INDIVIDUAL GRAPHIC ELEMENT in the proof and estimate its bounding box dimensions in inches.
 
 For each distinct graphic piece (logo, stripe, text block, side graphic panel, door graphic, etc.):
 1. Give it a descriptive name (e.g. "Driver Side Body Stripe", "Rear Door Logo", "Phone Number Text")
@@ -19,12 +19,6 @@ For each distinct graphic piece (logo, stripe, text block, side graphic panel, d
 3. Estimate the WIDTH and HEIGHT in INCHES of the smallest rectangle that contains that element
 4. Use the template's labeled 1:20 scale dimensions to calculate real-world sizes
 5. Explain your reasoning for the measurements
-6. Provide the crop region of this element in the PROOF IMAGE as percentage coordinates:
-   - crop_x_pct: left edge as % of image width (0 = left edge, 100 = right edge)
-   - crop_y_pct: top edge as % of image height (0 = top, 100 = bottom)
-   - crop_w_pct: width of crop region as % of image width
-   - crop_h_pct: height of crop region as % of image height
-   These should tightly bound the graphic element as it appears in the proof image.
 
 IMPORTANT RULES:
 - Identify EACH separate printed piece, not panels
@@ -32,7 +26,6 @@ IMPORTANT RULES:
 - Measure the BOUNDING BOX (smallest rectangle enclosing the graphic), not the total panel
 - Use the template dimensions to convert from the visual scale to real inches
 - Be conservative with measurements - measure only actual vinyl, not bare paint or windows
-- The crop coordinates should accurately locate each element in the proof image — look carefully at where each graphic sits
 
 Return JSON only, no other text, in this exact format:
 {
@@ -42,10 +35,6 @@ Return JSON only, no other text, in this exact format:
       "element_type": "stripe",
       "width_in": 120.0,
       "height_in": 18.5,
-      "crop_x_pct": 5.0,
-      "crop_y_pct": 22.0,
-      "crop_w_pct": 42.0,
-      "crop_h_pct": 8.0,
       "description": "Blue diagonal stripe running from behind cab to rear wheel well on driver side. Approximately 120 inches long by 18.5 inches tall based on template overall length of 235 inches."
     },
     {
@@ -53,10 +42,6 @@ Return JSON only, no other text, in this exact format:
       "element_type": "stripe",
       "width_in": 120.0,
       "height_in": 18.5,
-      "crop_x_pct": 5.0,
-      "crop_y_pct": 55.0,
-      "crop_w_pct": 42.0,
-      "crop_h_pct": 8.0,
       "description": "Matching stripe on passenger side, same dimensions as driver side."
     },
     {
@@ -64,10 +49,6 @@ Return JSON only, no other text, in this exact format:
       "element_type": "logo",
       "width_in": 24.0,
       "height_in": 16.0,
-      "crop_x_pct": 60.0,
-      "crop_y_pct": 40.0,
-      "crop_w_pct": 12.0,
-      "crop_h_pct": 10.0,
       "description": "Company logo centered on rear doors, approximately 24 x 16 inches."
     }
   ],

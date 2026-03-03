@@ -453,43 +453,35 @@ function NewQuote({ onCreated }: { onCreated: () => void }) {
     return result;
   }
 
-  // Crop element thumbnails from the proof image using AI-provided coordinates
-  async function generateElementCrops(elements: GraphicElement[], proofDataUrl: string) {
-    const crops: Record<string, string> = {};
-    try {
-      const img = new Image();
-      img.crossOrigin = 'anonymous';
-      await new Promise<void>((resolve, reject) => {
-        img.onload = () => resolve();
-        img.onerror = () => reject(new Error('Failed to load proof image for cropping'));
-        img.src = proofDataUrl;
-      });
+  // Crop a region from the proof image given pixel coordinates on the displayed image
+  function cropFromProof(elementName: string, imgEl: HTMLImageElement, sx: number, sy: number, sw: number, sh: number) {
+    if (sw < 2 || sh < 2) return;
+    // Scale selection coords from displayed size to natural image size
+    const scaleX = imgEl.naturalWidth / imgEl.clientWidth;
+    const scaleY = imgEl.naturalHeight / imgEl.clientHeight;
+    const nx = sx * scaleX;
+    const ny = sy * scaleY;
+    const nw = sw * scaleX;
+    const nh = sh * scaleY;
 
-      for (const el of elements) {
-        if (el.crop_x_pct == null || el.crop_y_pct == null || el.crop_w_pct == null || el.crop_h_pct == null) continue;
-        // Convert percentage coords to pixels
-        const sx = (el.crop_x_pct / 100) * img.naturalWidth;
-        const sy = (el.crop_y_pct / 100) * img.naturalHeight;
-        const sw = (el.crop_w_pct / 100) * img.naturalWidth;
-        const sh = (el.crop_h_pct / 100) * img.naturalHeight;
-        if (sw < 1 || sh < 1) continue;
-
-        const canvas = document.createElement('canvas');
-        // Cap thumbnail size for performance
-        const maxDim = 400;
-        const scale = Math.min(1, maxDim / Math.max(sw, sh));
-        canvas.width = Math.round(sw * scale);
-        canvas.height = Math.round(sh * scale);
-        const ctx = canvas.getContext('2d');
-        if (!ctx) continue;
-        ctx.drawImage(img, sx, sy, sw, sh, 0, 0, canvas.width, canvas.height);
-        crops[el.element_name] = canvas.toDataURL('image/jpeg', 0.85);
-      }
-    } catch (err) {
-      console.error('Element crop error:', err);
-    }
-    setElementCrops(crops);
+    const canvas = document.createElement('canvas');
+    const maxDim = 400;
+    const scale = Math.min(1, maxDim / Math.max(nw, nh));
+    canvas.width = Math.round(nw * scale);
+    canvas.height = Math.round(nh * scale);
+    const ctx = canvas.getContext('2d');
+    if (!ctx) return;
+    ctx.drawImage(imgEl, nx, ny, nw, nh, 0, 0, canvas.width, canvas.height);
+    const dataUrl = canvas.toDataURL('image/jpeg', 0.85);
+    setElementCrops(prev => ({ ...prev, [elementName]: dataUrl }));
   }
+
+  // State for the crop tool
+  const [croppingElement, setCroppingElement] = useState<string | null>(null);
+  const [cropStart, setCropStart] = useState<{ x: number; y: number } | null>(null);
+  const [cropEnd, setCropEnd] = useState<{ x: number; y: number } | null>(null);
+  const [isDragging, setIsDragging] = useState(false);
+  const proofImgRef = useRef<HTMLImageElement>(null);
 
   // Handle proof file selection
   function handleProofSelect(e: React.ChangeEvent<HTMLInputElement>) {
@@ -578,12 +570,12 @@ function NewQuote({ onCreated }: { onCreated: () => void }) {
       // Run nesting if analysis has graphic elements
       if (result.analysis.graphic_elements?.length) {
         recalculateNesting(result.analysis.graphic_elements, bleedSize);
-        // Generate cropped thumbnails from proof image
-        const proofUrl = `data:${proofMediaType};base64,${proofBase64}`;
-        generateElementCrops(result.analysis.graphic_elements, proofUrl);
+        // Go to tag elements step so user can crop thumbnails
+        setStep(4);
+      } else {
+        // Panel-based analysis, skip tagging
+        setStep(5);
       }
-
-      setStep(4);
     } catch (err: any) {
       setAnalysisError(err.message || 'Analysis failed. Please try again.');
     } finally {
@@ -711,7 +703,7 @@ function NewQuote({ onCreated }: { onCreated: () => void }) {
     <div>
       {/* Progress Steps */}
       <div style={{ display: 'flex', gap: '4px', marginBottom: '20px' }}>
-        {[1, 2, 3, 4].map(s => (
+        {[1, 2, 3, 4, 5].map(s => (
           <div key={s} style={{
             flex: 1, height: '4px', borderRadius: '2px',
             background: s <= step ? theme.orange : theme.progressTrack,
@@ -940,11 +932,192 @@ function NewQuote({ onCreated }: { onCreated: () => void }) {
         </div>
       )}
 
-      {/* Step 4: Results & Pricing */}
-      {step === 4 && analysis && (
+      {/* Step 4: Tag Elements — manual crop tool */}
+      {step === 4 && analysis && analysis.graphic_elements?.length && (
         <div>
           <div style={{ fontSize: '16px', fontWeight: 800, color: theme.textPrimary, marginBottom: '4px' }}>
-            Step 4: Review & Price
+            Step 4: Tag Elements
+          </div>
+          <div style={{ fontSize: '13px', color: theme.textSecondary, marginBottom: '16px' }}>
+            Click an element below, then draw a rectangle on the proof image to tag it. You can skip any elements.
+          </div>
+
+          {/* Element buttons */}
+          <div style={{ display: 'flex', flexWrap: 'wrap', gap: '6px', marginBottom: '12px' }}>
+            {analysis.graphic_elements!.map((el, i) => {
+              const isCropped = !!elementCrops[el.element_name];
+              const isActive = croppingElement === el.element_name;
+              return (
+                <button
+                  key={i}
+                  onClick={() => {
+                    setCroppingElement(isActive ? null : el.element_name);
+                    setCropStart(null);
+                    setCropEnd(null);
+                  }}
+                  style={{
+                    padding: '6px 12px', borderRadius: '8px', fontSize: '12px', fontWeight: 600,
+                    cursor: 'pointer', transition: 'all 0.2s',
+                    border: isActive ? `2px solid ${theme.orange}` : `1px solid ${isCropped ? theme.success : theme.border}`,
+                    background: isActive ? theme.orangeSoft : isCropped ? theme.successBg : theme.inputBg,
+                    color: isActive ? theme.orange : isCropped ? theme.success : theme.textSecondary,
+                  }}
+                >
+                  {isCropped ? '✓ ' : ''}{el.element_name}
+                </button>
+              );
+            })}
+          </div>
+
+          {/* Active crop instruction */}
+          {croppingElement && (
+            <div style={{
+              padding: '8px 12px', borderRadius: '8px', marginBottom: '10px',
+              background: theme.orangeSoft, border: `1px solid ${theme.orange}`,
+              fontSize: '13px', color: theme.orange, fontWeight: 600,
+            }}>
+              Draw a rectangle around: <strong>{croppingElement}</strong>
+            </div>
+          )}
+
+          {/* Proof image with crop overlay */}
+          <div
+            style={{
+              position: 'relative', userSelect: 'none', cursor: croppingElement ? 'crosshair' : 'default',
+              borderRadius: '10px', overflow: 'hidden', border: `1px solid ${theme.border}`, marginBottom: '12px',
+            }}
+            onMouseDown={(e) => {
+              if (!croppingElement || !proofImgRef.current) return;
+              const rect = proofImgRef.current.getBoundingClientRect();
+              const x = e.clientX - rect.left;
+              const y = e.clientY - rect.top;
+              setCropStart({ x, y });
+              setCropEnd({ x, y });
+              setIsDragging(true);
+            }}
+            onMouseMove={(e) => {
+              if (!isDragging || !proofImgRef.current) return;
+              const rect = proofImgRef.current.getBoundingClientRect();
+              const x = Math.max(0, Math.min(e.clientX - rect.left, rect.width));
+              const y = Math.max(0, Math.min(e.clientY - rect.top, rect.height));
+              setCropEnd({ x, y });
+            }}
+            onMouseUp={() => {
+              if (!isDragging || !cropStart || !cropEnd || !croppingElement || !proofImgRef.current) {
+                setIsDragging(false);
+                return;
+              }
+              setIsDragging(false);
+              const sx = Math.min(cropStart.x, cropEnd.x);
+              const sy = Math.min(cropStart.y, cropEnd.y);
+              const sw = Math.abs(cropEnd.x - cropStart.x);
+              const sh = Math.abs(cropEnd.y - cropStart.y);
+              if (sw > 5 && sh > 5) {
+                cropFromProof(croppingElement, proofImgRef.current, sx, sy, sw, sh);
+              }
+              setCropStart(null);
+              setCropEnd(null);
+              // Auto-advance to next untagged element
+              const nextUntagged = analysis.graphic_elements!.find(
+                el => el.element_name !== croppingElement && !elementCrops[el.element_name]
+              );
+              setCroppingElement(nextUntagged?.element_name || null);
+            }}
+            onMouseLeave={() => {
+              if (isDragging) {
+                setIsDragging(false);
+                setCropStart(null);
+                setCropEnd(null);
+              }
+            }}
+          >
+            <img
+              ref={proofImgRef}
+              src={proofPreviewForReview || proofPreview || ''}
+              alt="Proof"
+              style={{ width: '100%', display: 'block', pointerEvents: 'none' }}
+              draggable={false}
+            />
+            {/* Crop selection rectangle */}
+            {isDragging && cropStart && cropEnd && (
+              <div style={{
+                position: 'absolute',
+                left: Math.min(cropStart.x, cropEnd.x),
+                top: Math.min(cropStart.y, cropEnd.y),
+                width: Math.abs(cropEnd.x - cropStart.x),
+                height: Math.abs(cropEnd.y - cropStart.y),
+                border: `2px solid ${theme.orange}`,
+                background: 'rgba(255, 140, 0, 0.15)',
+                pointerEvents: 'none',
+                borderRadius: '2px',
+              }} />
+            )}
+            {/* Show already-cropped regions as subtle outlines */}
+            {/* (positions not tracked - would need separate state) */}
+          </div>
+
+          {/* Thumbnails of tagged elements */}
+          {Object.keys(elementCrops).length > 0 && (
+            <div style={{
+              display: 'flex', flexWrap: 'wrap', gap: '8px', marginBottom: '12px',
+              padding: '10px', background: theme.card, borderRadius: '10px', border: `1px solid ${theme.border}`,
+            }}>
+              {analysis.graphic_elements!.filter(el => elementCrops[el.element_name]).map((el, i) => (
+                <div key={i} style={{ textAlign: 'center', width: '80px' }}>
+                  <img
+                    src={elementCrops[el.element_name]}
+                    alt={el.element_name}
+                    style={{
+                      width: '72px', height: '72px', objectFit: 'cover', borderRadius: '6px',
+                      border: `2px solid ${theme.success}`, cursor: 'pointer',
+                    }}
+                    onClick={() => {
+                      setCroppingElement(el.element_name);
+                      setCropStart(null);
+                      setCropEnd(null);
+                    }}
+                    title={`Click to re-crop "${el.element_name}"`}
+                  />
+                  <div style={{ fontSize: '9px', color: theme.textMuted, marginTop: '3px', lineHeight: 1.2, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                    {el.element_name}
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
+
+          {/* Navigation */}
+          <div style={{ display: 'flex', gap: '8px' }}>
+            <button
+              onClick={() => setStep(3)}
+              style={{
+                flex: 1, padding: '14px', borderRadius: '12px', border: `1px solid ${theme.border}`,
+                background: 'transparent', color: theme.textSecondary, fontSize: '15px', fontWeight: 700, cursor: 'pointer',
+              }}
+            >
+              ← Back
+            </button>
+            <button
+              onClick={() => setStep(5)}
+              style={{
+                flex: 2, padding: '14px', borderRadius: '12px', border: 'none',
+                background: theme.orange, color: '#fff',
+                fontSize: '15px', fontWeight: 700, cursor: 'pointer',
+              }}
+            >
+              {Object.keys(elementCrops).length > 0
+                ? `Continue with ${Object.keys(elementCrops).length} tagged →`
+                : 'Skip tagging →'}
+            </button>
+          </div>
+        </div>
+      )}
+
+      {/* Step 5: Results & Pricing */}
+      {step === 5 && analysis && (
+        <div>
+          <div style={{ fontSize: '16px', fontWeight: 800, color: theme.textPrimary, marginBottom: '4px' }}>
+            Step 5: Review & Price
           </div>
           <div style={{ fontSize: '13px', color: theme.textSecondary, marginBottom: '16px' }}>
             AI analysis complete. Review the coverage breakdown and set your pricing.
@@ -1290,13 +1463,13 @@ function NewQuote({ onCreated }: { onCreated: () => void }) {
 
           <div style={{ display: 'flex', gap: '8px' }}>
             <button
-              onClick={() => setStep(3)}
+              onClick={() => setStep(analysis.graphic_elements?.length ? 4 : 3)}
               style={{
                 flex: 1, padding: '14px', borderRadius: '12px', border: `1px solid ${theme.border}`,
                 background: 'transparent', color: theme.textSecondary, fontSize: '15px', fontWeight: 700, cursor: 'pointer',
               }}
             >
-              ← Re-analyze
+              ← Back
             </button>
             <button
               onClick={saveQuote}
