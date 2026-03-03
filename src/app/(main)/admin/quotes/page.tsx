@@ -430,6 +430,7 @@ function NewQuote({ onCreated }: { onCreated: () => void }) {
   // Element-based quoting
   const [bleedSize, setBleedSize] = useState(0.5);
   const [nestingResult, setNestingResult] = useState<RollNestingResult | null>(null);
+  const [elementCrops, setElementCrops] = useState<Record<string, string>>({});
 
   const [saving, setSaving] = useState(false);
 
@@ -450,6 +451,44 @@ function NewQuote({ onCreated }: { onCreated: () => void }) {
     const result = nestElementsOnRoll(withBleed, 60);
     setNestingResult(result);
     return result;
+  }
+
+  // Crop element thumbnails from the proof image using AI-provided coordinates
+  async function generateElementCrops(elements: GraphicElement[], proofDataUrl: string) {
+    const crops: Record<string, string> = {};
+    try {
+      const img = new Image();
+      img.crossOrigin = 'anonymous';
+      await new Promise<void>((resolve, reject) => {
+        img.onload = () => resolve();
+        img.onerror = () => reject(new Error('Failed to load proof image for cropping'));
+        img.src = proofDataUrl;
+      });
+
+      for (const el of elements) {
+        if (el.crop_x_pct == null || el.crop_y_pct == null || el.crop_w_pct == null || el.crop_h_pct == null) continue;
+        // Convert percentage coords to pixels
+        const sx = (el.crop_x_pct / 100) * img.naturalWidth;
+        const sy = (el.crop_y_pct / 100) * img.naturalHeight;
+        const sw = (el.crop_w_pct / 100) * img.naturalWidth;
+        const sh = (el.crop_h_pct / 100) * img.naturalHeight;
+        if (sw < 1 || sh < 1) continue;
+
+        const canvas = document.createElement('canvas');
+        // Cap thumbnail size for performance
+        const maxDim = 400;
+        const scale = Math.min(1, maxDim / Math.max(sw, sh));
+        canvas.width = Math.round(sw * scale);
+        canvas.height = Math.round(sh * scale);
+        const ctx = canvas.getContext('2d');
+        if (!ctx) continue;
+        ctx.drawImage(img, sx, sy, sw, sh, 0, 0, canvas.width, canvas.height);
+        crops[el.element_name] = canvas.toDataURL('image/jpeg', 0.85);
+      }
+    } catch (err) {
+      console.error('Element crop error:', err);
+    }
+    setElementCrops(crops);
   }
 
   // Handle proof file selection
@@ -539,6 +578,9 @@ function NewQuote({ onCreated }: { onCreated: () => void }) {
       // Run nesting if analysis has graphic elements
       if (result.analysis.graphic_elements?.length) {
         recalculateNesting(result.analysis.graphic_elements, bleedSize);
+        // Generate cropped thumbnails from proof image
+        const proofUrl = `data:${proofMediaType};base64,${proofBase64}`;
+        generateElementCrops(result.analysis.graphic_elements, proofUrl);
       }
 
       setStep(4);
@@ -1033,26 +1075,44 @@ function NewQuote({ onCreated }: { onCreated: () => void }) {
                   {nestingResult.nested_elements.map((elem, idx) => {
                     const colors = [theme.orange, theme.navy, theme.success, theme.warning];
                     const color = colors[idx % colors.length];
+                    const cropSrc = elementCrops[elem.element.element_name];
                     return (
                       <g key={idx}>
+                        {/* Bleed area (full rectangle) */}
                         <rect
                           x={elem.x_in}
                           y={elem.y_in}
                           width={elem.total_width_in}
                           height={elem.total_height_in}
                           fill={color}
-                          fillOpacity="0.2"
+                          fillOpacity="0.08"
                           stroke={color}
                           strokeWidth="0.3"
                         />
+                        {/* Cropped image inside the bleed rectangle */}
+                        {cropSrc && (
+                          <image
+                            href={cropSrc}
+                            x={elem.x_in + elem.bleed_in}
+                            y={elem.y_in + elem.bleed_in}
+                            width={elem.total_width_in - elem.bleed_in * 2}
+                            height={elem.total_height_in - elem.bleed_in * 2}
+                            preserveAspectRatio="xMidYMid slice"
+                            opacity="0.85"
+                          />
+                        )}
+                        {/* Element number label */}
                         <text
                           x={elem.x_in + elem.total_width_in / 2}
                           y={elem.y_in + elem.total_height_in / 2}
                           textAnchor="middle"
                           dominantBaseline="middle"
-                          fontSize="1.5"
-                          fill={color}
-                          fontWeight="700"
+                          fontSize="1.8"
+                          fill="#fff"
+                          fontWeight="800"
+                          stroke={color}
+                          strokeWidth="0.15"
+                          paintOrder="stroke"
                         >
                           {idx + 1}
                         </text>
@@ -1073,23 +1133,47 @@ function NewQuote({ onCreated }: { onCreated: () => void }) {
               <div style={{ fontSize: '14px', fontWeight: 700, color: theme.textPrimary, marginBottom: '10px' }}>Graphic Elements</div>
               {analysis.graphic_elements.map((el, i) => (
                 <div key={i} style={{ padding: '10px 0', borderBottom: i < analysis.graphic_elements.length - 1 ? `1px solid ${theme.border}` : 'none' }}>
-                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
-                    <div>
-                      <div style={{ fontSize: '14px', fontWeight: 700, color: theme.textPrimary }}>{el.element_name}</div>
-                      <div style={{ fontSize: '11px', background: theme.subtleBg, color: theme.textMuted, fontWeight: 600, marginTop: '2px', padding: '2px 6px', borderRadius: '4px', display: 'inline-block' }}>
-                        {el.element_type}
+                  <div style={{ display: 'flex', gap: '10px', alignItems: 'flex-start' }}>
+                    {/* Cropped thumbnail from proof */}
+                    {elementCrops[el.element_name] ? (
+                      <img
+                        src={elementCrops[el.element_name]}
+                        alt={el.element_name}
+                        style={{
+                          width: '72px', height: '72px', objectFit: 'cover', borderRadius: '6px',
+                          border: `1px solid ${theme.border}`, flexShrink: 0, background: theme.inputBg,
+                        }}
+                      />
+                    ) : (
+                      <div style={{
+                        width: '72px', height: '72px', borderRadius: '6px', flexShrink: 0,
+                        background: theme.inputBg, border: `1px solid ${theme.border}`,
+                        display: 'flex', alignItems: 'center', justifyContent: 'center',
+                        fontSize: '10px', color: theme.textMuted, textAlign: 'center', padding: '4px',
+                      }}>
+                        No crop
                       </div>
-                    </div>
-                    <div style={{ textAlign: 'right', whiteSpace: 'nowrap' }}>
-                      <div style={{ fontSize: '13px', fontWeight: 700, color: theme.textPrimary }}>{el.width_in.toFixed(1)}" × {el.height_in.toFixed(1)}"</div>
-                      <div style={{ fontSize: '11px', color: theme.textMuted }}>{(el.width_in * el.height_in).toFixed(1)} sq in</div>
+                    )}
+                    <div style={{ flex: 1, minWidth: 0 }}>
+                      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
+                        <div>
+                          <div style={{ fontSize: '14px', fontWeight: 700, color: theme.textPrimary }}>{el.element_name}</div>
+                          <div style={{ fontSize: '11px', background: theme.subtleBg, color: theme.textMuted, fontWeight: 600, marginTop: '2px', padding: '2px 6px', borderRadius: '4px', display: 'inline-block' }}>
+                            {el.element_type}
+                          </div>
+                        </div>
+                        <div style={{ textAlign: 'right', whiteSpace: 'nowrap' }}>
+                          <div style={{ fontSize: '13px', fontWeight: 700, color: theme.textPrimary }}>{el.width_in.toFixed(1)}" × {el.height_in.toFixed(1)}"</div>
+                          <div style={{ fontSize: '11px', color: theme.textMuted }}>{(el.width_in * el.height_in).toFixed(1)} sq in</div>
+                        </div>
+                      </div>
+                      {el.description && (
+                        <div style={{ marginTop: '8px', padding: '8px 10px', background: theme.subtleBg, borderRadius: '8px', fontSize: '12px', color: theme.textSecondary, lineHeight: 1.5, borderLeft: `3px solid ${theme.orange}` }}>
+                          {el.description}
+                        </div>
+                      )}
                     </div>
                   </div>
-                  {el.description && (
-                    <div style={{ marginTop: '8px', padding: '8px 10px', background: theme.subtleBg, borderRadius: '8px', fontSize: '12px', color: theme.textSecondary, lineHeight: 1.5, borderLeft: `3px solid ${theme.orange}` }}>
-                      {el.description}
-                    </div>
-                  )}
                 </div>
               ))}
             </div>

@@ -200,6 +200,11 @@ export interface GraphicElement {
   width_in: number;
   height_in: number;
   description: string;
+  // Crop region in the proof image (percentages of image dimensions)
+  crop_x_pct?: number;
+  crop_y_pct?: number;
+  crop_w_pct?: number;
+  crop_h_pct?: number;
 }
 
 export interface ElementWithBleed {
