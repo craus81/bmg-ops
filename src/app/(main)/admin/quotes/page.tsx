@@ -1029,26 +1029,25 @@ function NewQuote({ onCreated }: { onCreated: () => void }) {
                   {/* Roll outline */}
                   <rect x="0" y="0" width="60" height={nestingResult.roll_length_in} fill="none" stroke={theme.border} strokeWidth="0.5" />
 
-                  {/* Nested elements */}
+                  {/* Nested elements — use total_width/height_in from nesting result (includes bleed + rotation) */}
                   {nestingResult.nested_elements.map((elem, idx) => {
                     const colors = [theme.orange, theme.navy, theme.success, theme.warning];
                     const color = colors[idx % colors.length];
-                    const elementData = analysis.graphic_elements![idx];
                     return (
                       <g key={idx}>
                         <rect
                           x={elem.x_in}
                           y={elem.y_in}
-                          width={elementData.width_in}
-                          height={elementData.height_in}
+                          width={elem.total_width_in}
+                          height={elem.total_height_in}
                           fill={color}
                           fillOpacity="0.2"
                           stroke={color}
                           strokeWidth="0.3"
                         />
                         <text
-                          x={elem.x_in + elementData.width_in / 2}
-                          y={elem.y_in + elementData.height_in / 2}
+                          x={elem.x_in + elem.total_width_in / 2}
+                          y={elem.y_in + elem.total_height_in / 2}
                           textAnchor="middle"
                           dominantBaseline="middle"
                           fontSize="1.5"
