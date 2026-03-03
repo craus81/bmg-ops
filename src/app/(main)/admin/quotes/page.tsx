@@ -5,7 +5,7 @@ import { useAuth } from '@/components/AuthProvider';
 import { createClient } from '@/lib/supabase-browser';
 import { theme } from '@/lib/theme';
 import type { VehicleTemplate, Quote, QuotePanel, QuoteElement, AIAnalysisResult, GraphicElement, RollNestingResult } from '@/lib/types';
-import { applyBleed, nestElementsOnRoll } from '@/lib/nesting-algorithm';
+import { applyBleed, nestElementsOnRoll, recalcFromPositions } from '@/lib/nesting-algorithm';
 
 const supabase = createClient();
 
@@ -432,6 +432,11 @@ function NewQuote({ onCreated }: { onCreated: () => void }) {
   const [nestingResult, setNestingResult] = useState<RollNestingResult | null>(null);
   const [elementCrops, setElementCrops] = useState<Record<string, string>>({});
 
+  // Drag-and-drop state for nesting diagram
+  const [draggingIdx, setDraggingIdx] = useState<number | null>(null);
+  const [dragOffset, setDragOffset] = useState<{ x: number; y: number }>({ x: 0, y: 0 });
+  const nestingSvgRef = useRef<SVGSVGElement>(null);
+
   const [saving, setSaving] = useState(false);
 
   useEffect(() => {
@@ -451,6 +456,69 @@ function NewQuote({ onCreated }: { onCreated: () => void }) {
     const result = nestElementsOnRoll(withBleed, 60);
     setNestingResult(result);
     return result;
+  }
+
+  // Convert SVG screen coordinates to viewBox coordinates
+  function svgPoint(e: React.MouseEvent<SVGSVGElement> | MouseEvent): { x: number; y: number } | null {
+    const svg = nestingSvgRef.current;
+    if (!svg) return null;
+    const pt = svg.createSVGPoint();
+    pt.x = (e as any).clientX;
+    pt.y = (e as any).clientY;
+    const svgP = pt.matrixTransform(svg.getScreenCTM()?.inverse());
+    return { x: svgP.x, y: svgP.y };
+  }
+
+  function handleNestDragStart(idx: number, e: React.MouseEvent<SVGGElement>) {
+    if (!nestingResult) return;
+    e.preventDefault();
+    const pt = svgPoint(e as any);
+    if (!pt) return;
+    const elem = nestingResult.nested_elements[idx];
+    setDraggingIdx(idx);
+    setDragOffset({ x: pt.x - elem.x_in, y: pt.y - elem.y_in });
+  }
+
+  function handleNestDragMove(e: React.MouseEvent<SVGSVGElement>) {
+    if (draggingIdx === null || !nestingResult) return;
+    const pt = svgPoint(e);
+    if (!pt) return;
+    const elem = nestingResult.nested_elements[draggingIdx];
+    let newX = pt.x - dragOffset.x;
+    let newY = pt.y - dragOffset.y;
+    // Clamp to roll bounds
+    newX = Math.max(0, Math.min(newX, 60 - elem.total_width_in));
+    newY = Math.max(0, newY);
+    // Snap to 0.5" grid
+    newX = Math.round(newX * 2) / 2;
+    newY = Math.round(newY * 2) / 2;
+    // Update position
+    const updated = nestingResult.nested_elements.map((el, i) =>
+      i === draggingIdx ? { ...el, x_in: newX, y_in: newY } : el
+    );
+    setNestingResult(recalcFromPositions(updated, 60));
+  }
+
+  function handleNestDragEnd() {
+    setDraggingIdx(null);
+  }
+
+  // Check for overlaps between nested elements
+  function getOverlaps(): Set<number> {
+    if (!nestingResult) return new Set();
+    const overlapping = new Set<number>();
+    const els = nestingResult.nested_elements;
+    for (let i = 0; i < els.length; i++) {
+      for (let j = i + 1; j < els.length; j++) {
+        const a = els[i], b = els[j];
+        if (a.x_in < b.x_in + b.total_width_in && a.x_in + a.total_width_in > b.x_in &&
+            a.y_in < b.y_in + b.total_height_in && a.y_in + a.total_height_in > b.y_in) {
+          overlapping.add(i);
+          overlapping.add(j);
+        }
+      }
+    }
+    return overlapping;
   }
 
   // Crop a region from the proof image given pixel coordinates on the displayed image
@@ -1231,74 +1299,132 @@ function NewQuote({ onCreated }: { onCreated: () => void }) {
             </div>
           )}
 
-          {/* Nesting Visualization (for element-based) */}
-          {nestingResult && analysis.graphic_elements && (
-            <div style={{ background: theme.card, border: `1px solid ${theme.border}`, borderRadius: '12px', padding: '14px', marginBottom: '12px' }}>
-              <div style={{ fontSize: '14px', fontWeight: 700, color: theme.textPrimary, marginBottom: '10px' }}>Nesting Layout</div>
-              <div style={{ width: '100%', background: theme.inputBg, borderRadius: '8px', padding: '10px', marginBottom: '8px' }}>
-                <svg
-                  viewBox={`0 0 60 ${nestingResult.roll_length_in}`}
-                  style={{ width: '100%', height: 'auto', background: '#fff', borderRadius: '6px', border: `1px solid ${theme.border}` }}
-                  preserveAspectRatio="xMidYMid meet"
-                >
-                  {/* Roll outline */}
-                  <rect x="0" y="0" width="60" height={nestingResult.roll_length_in} fill="none" stroke={theme.border} strokeWidth="0.5" />
+          {/* Nesting Visualization — Drag & Drop (for element-based) */}
+          {nestingResult && analysis.graphic_elements && (() => {
+            const overlaps = getOverlaps();
+            const hasOverlaps = overlaps.size > 0;
+            // Add some padding below lowest element for drop room
+            const viewH = Math.max(nestingResult.roll_length_in + 10, 40);
+            return (
+              <div style={{ background: theme.card, border: `1px solid ${theme.border}`, borderRadius: '12px', padding: '14px', marginBottom: '12px' }}>
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '10px' }}>
+                  <div style={{ fontSize: '14px', fontWeight: 700, color: theme.textPrimary }}>Nesting Layout</div>
+                  <div style={{ fontSize: '11px', color: theme.textMuted }}>Drag elements to rearrange</div>
+                </div>
+                {hasOverlaps && (
+                  <div style={{
+                    padding: '6px 10px', borderRadius: '6px', marginBottom: '8px',
+                    background: theme.warningBg, border: `1px solid ${theme.warningBorder}`,
+                    fontSize: '12px', color: theme.warning, fontWeight: 600,
+                  }}>
+                    ⚠ Some elements overlap — drag them apart
+                  </div>
+                )}
+                <div style={{ width: '100%', background: theme.inputBg, borderRadius: '8px', padding: '10px', marginBottom: '8px' }}>
+                  <svg
+                    ref={nestingSvgRef}
+                    viewBox={`0 0 60 ${viewH}`}
+                    style={{
+                      width: '100%', height: 'auto', background: '#fff', borderRadius: '6px',
+                      border: `1px solid ${theme.border}`, cursor: draggingIdx !== null ? 'grabbing' : 'default',
+                      userSelect: 'none',
+                    }}
+                    preserveAspectRatio="xMidYMid meet"
+                    onMouseMove={handleNestDragMove}
+                    onMouseUp={handleNestDragEnd}
+                    onMouseLeave={handleNestDragEnd}
+                  >
+                    {/* Grid lines every 10" */}
+                    {Array.from({ length: Math.ceil(viewH / 10) }, (_, i) => (
+                      <line key={`gy${i}`} x1="0" y1={i * 10} x2="60" y2={i * 10} stroke="#eee" strokeWidth="0.15" />
+                    ))}
+                    {Array.from({ length: 6 }, (_, i) => (
+                      <line key={`gx${i}`} x1={i * 10} y1="0" x2={i * 10} y2={viewH} stroke="#eee" strokeWidth="0.15" />
+                    ))}
 
-                  {/* Nested elements — use total_width/height_in from nesting result (includes bleed + rotation) */}
-                  {nestingResult.nested_elements.map((elem, idx) => {
-                    const colors = [theme.orange, theme.navy, theme.success, theme.warning];
-                    const color = colors[idx % colors.length];
-                    const cropSrc = elementCrops[elem.element.element_name];
-                    return (
-                      <g key={idx}>
-                        {/* Bleed area (full rectangle) */}
-                        <rect
-                          x={elem.x_in}
-                          y={elem.y_in}
-                          width={elem.total_width_in}
-                          height={elem.total_height_in}
-                          fill={color}
-                          fillOpacity="0.08"
-                          stroke={color}
-                          strokeWidth="0.3"
-                        />
-                        {/* Cropped image filling the full rectangle */}
-                        {cropSrc && (
-                          <image
-                            href={cropSrc}
+                    {/* Roll cut line */}
+                    <line x1="0" y1={nestingResult.roll_length_in} x2="60" y2={nestingResult.roll_length_in} stroke={theme.orange} strokeWidth="0.3" strokeDasharray="1,1" />
+
+                    {/* Roll outline */}
+                    <rect x="0" y="0" width="60" height={viewH} fill="none" stroke={theme.border} strokeWidth="0.5" />
+
+                    {/* Nested elements — draggable */}
+                    {nestingResult.nested_elements.map((elem, idx) => {
+                      const colors = [theme.orange, theme.navy, theme.success, theme.warning];
+                      const color = overlaps.has(idx) ? '#ef4444' : colors[idx % colors.length];
+                      const cropSrc = elementCrops[elem.element.element_name];
+                      const isDragging = draggingIdx === idx;
+                      return (
+                        <g
+                          key={idx}
+                          style={{ cursor: isDragging ? 'grabbing' : 'grab' }}
+                          onMouseDown={(e) => handleNestDragStart(idx, e)}
+                        >
+                          {/* Background fill */}
+                          <rect
                             x={elem.x_in}
                             y={elem.y_in}
                             width={elem.total_width_in}
                             height={elem.total_height_in}
-                            preserveAspectRatio="xMidYMid meet"
-                            opacity="0.85"
+                            fill={color}
+                            fillOpacity={isDragging ? 0.15 : 0.08}
+                            stroke={color}
+                            strokeWidth={isDragging ? 0.5 : 0.3}
+                            strokeDasharray={overlaps.has(idx) ? '1,0.5' : 'none'}
                           />
-                        )}
-                        {/* Element number label */}
-                        <text
-                          x={elem.x_in + elem.total_width_in / 2}
-                          y={elem.y_in + elem.total_height_in / 2}
-                          textAnchor="middle"
-                          dominantBaseline="middle"
-                          fontSize="1.8"
-                          fill="#fff"
-                          fontWeight="800"
-                          stroke={color}
-                          strokeWidth="0.15"
-                          paintOrder="stroke"
-                        >
-                          {idx + 1}
-                        </text>
-                      </g>
-                    );
-                  })}
-                </svg>
+                          {/* Cropped image */}
+                          {cropSrc && (
+                            <image
+                              href={cropSrc}
+                              x={elem.x_in}
+                              y={elem.y_in}
+                              width={elem.total_width_in}
+                              height={elem.total_height_in}
+                              preserveAspectRatio="xMidYMid meet"
+                              opacity={isDragging ? 0.6 : 0.85}
+                              style={{ pointerEvents: 'none' }}
+                            />
+                          )}
+                          {/* Element number label */}
+                          <text
+                            x={elem.x_in + elem.total_width_in / 2}
+                            y={elem.y_in + elem.total_height_in / 2}
+                            textAnchor="middle"
+                            dominantBaseline="middle"
+                            fontSize="1.8"
+                            fill="#fff"
+                            fontWeight="800"
+                            stroke={color}
+                            strokeWidth="0.15"
+                            paintOrder="stroke"
+                            style={{ pointerEvents: 'none' }}
+                          >
+                            {idx + 1}
+                          </text>
+                        </g>
+                      );
+                    })}
+                  </svg>
+                </div>
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                  <div style={{ fontSize: '11px', color: theme.textMuted }}>
+                    Roll: 60" × {nestingResult.roll_length_in?.toFixed(1)}" = {nestingResult.roll_area_sqft?.toFixed(1)} sq ft
+                    {nestingResult.efficiency_pct > 0 && ` • ${nestingResult.efficiency_pct}% efficiency`}
+                  </div>
+                  <button
+                    onClick={() => { if (analysis.graphic_elements) recalculateNesting(analysis.graphic_elements, bleedSize); }}
+                    style={{
+                      padding: '4px 10px', borderRadius: '6px', border: `1px solid ${theme.border}`,
+                      background: 'transparent', color: theme.textSecondary, fontSize: '11px', fontWeight: 600,
+                      cursor: 'pointer',
+                    }}
+                  >
+                    Reset Layout
+                  </button>
+                </div>
               </div>
-              <div style={{ fontSize: '11px', color: theme.textMuted, textAlign: 'center' }}>
-                Roll: 60" × {nestingResult.roll_length_in?.toFixed(1)}" = {nestingResult.roll_area_sqft?.toFixed(1)} sq ft
-              </div>
-            </div>
-          )}
+            );
+          })()}
 
           {/* Elements List (for element-based) */}
           {analysis.graphic_elements && analysis.graphic_elements.length > 0 ? (
