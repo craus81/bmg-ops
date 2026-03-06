@@ -26,7 +26,7 @@ export default function ReportsPage() {
     setLoading(true);
     let query = supabase
       .from('scanned_vehicles')
-      .select('*')
+      .select('*, po_line_items(po_id, purchase_orders(po_number))')
       .is('exported_at', null)
       .order('scanned_at', { ascending: false });
 
@@ -43,7 +43,7 @@ export default function ReportsPage() {
     setLoadingArchive(true);
     let query = supabase
       .from('scanned_vehicles')
-      .select('*')
+      .select('*, po_line_items(po_id, purchase_orders(po_number))')
       .not('exported_at', 'is', null)
       .order('exported_at', { ascending: false });
 
@@ -69,6 +69,11 @@ export default function ReportsPage() {
     grouped[key].push(v);
   });
 
+  // Extract PO number from the nested Supabase join
+  function getPONumber(v: any): string {
+    return v.po_line_items?.purchase_orders?.po_number || '';
+  }
+
   var handleExportAll = async () => {
     if (vehicles.length === 0) return;
     setExporting(true);
@@ -80,6 +85,7 @@ export default function ReportsPage() {
       var rows = vehicles.map(function(v: any) {
         var scanDate = new Date(v.scanned_at);
         return {
+          'PO Number': getPONumber(v),
           'VIN': v.vin,
           'Part Number': v.part_number || '',
           'Customer': v.customer || '',
@@ -93,7 +99,7 @@ export default function ReportsPage() {
       });
 
       var ws = XLSX.utils.json_to_sheet(rows);
-      ws['!cols'] = [{ wch: 20 }, { wch: 16 }, { wch: 16 }, { wch: 18 }, { wch: 6 }, { wch: 14 }, { wch: 16 }, { wch: 12 }, { wch: 40 }];
+      ws['!cols'] = [{ wch: 14 }, { wch: 20 }, { wch: 16 }, { wch: 16 }, { wch: 18 }, { wch: 6 }, { wch: 14 }, { wch: 16 }, { wch: 12 }, { wch: 40 }];
       var wb = XLSX.utils.book_new();
       XLSX.utils.book_append_sheet(wb, ws, 'Vehicles');
 
@@ -129,6 +135,7 @@ export default function ReportsPage() {
       var rows = custVehicles.map(function(v: any) {
         var scanDate = new Date(v.scanned_at);
         return {
+          'PO Number': getPONumber(v),
           'VIN': v.vin,
           'Part Number': v.part_number || '',
           'Customer': v.customer || '',
@@ -142,7 +149,7 @@ export default function ReportsPage() {
       });
 
       var ws = XLSX.utils.json_to_sheet(rows);
-      ws['!cols'] = [{ wch: 20 }, { wch: 16 }, { wch: 16 }, { wch: 18 }, { wch: 6 }, { wch: 14 }, { wch: 16 }, { wch: 12 }, { wch: 40 }];
+      ws['!cols'] = [{ wch: 14 }, { wch: 20 }, { wch: 16 }, { wch: 16 }, { wch: 18 }, { wch: 6 }, { wch: 14 }, { wch: 16 }, { wch: 12 }, { wch: 40 }];
       var wb = XLSX.utils.book_new();
       XLSX.utils.book_append_sheet(wb, ws, 'Vehicles');
 
@@ -182,6 +189,7 @@ export default function ReportsPage() {
       var rows = batch.map(function(v: any) {
         var scanDate = new Date(v.scanned_at);
         return {
+          'PO Number': getPONumber(v),
           'VIN': v.vin,
           'Part Number': v.part_number || '',
           'Customer': v.customer || '',
@@ -195,7 +203,7 @@ export default function ReportsPage() {
       });
 
       var ws = XLSX.utils.json_to_sheet(rows);
-      ws['!cols'] = [{ wch: 20 }, { wch: 16 }, { wch: 16 }, { wch: 18 }, { wch: 6 }, { wch: 14 }, { wch: 16 }, { wch: 12 }, { wch: 40 }];
+      ws['!cols'] = [{ wch: 14 }, { wch: 20 }, { wch: 16 }, { wch: 16 }, { wch: 18 }, { wch: 6 }, { wch: 14 }, { wch: 16 }, { wch: 12 }, { wch: 40 }];
       var wb = XLSX.utils.book_new();
       XLSX.utils.book_append_sheet(wb, ws, 'Vehicles');
 
