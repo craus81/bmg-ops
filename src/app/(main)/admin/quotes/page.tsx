@@ -529,6 +529,7 @@ function NewQuote({ onCreated }: { onCreated: () => void }) {
       ...elem,
       total_width_in: elem.total_height_in,
       total_height_in: elem.total_width_in,
+      rotated: !elem.rotated,
     };
     // Clamp to roll width after rotation
     if (rotated.x_in + rotated.total_width_in > 60) {
@@ -1391,19 +1392,39 @@ function NewQuote({ onCreated }: { onCreated: () => void }) {
                             strokeWidth={isDragging ? 0.5 : 0.3}
                             strokeDasharray={overlaps.has(idx) ? '1,0.5' : 'none'}
                           />
-                          {/* Cropped image */}
-                          {cropSrc && (
-                            <image
-                              href={cropSrc}
-                              x={elem.x_in}
-                              y={elem.y_in}
-                              width={elem.total_width_in}
-                              height={elem.total_height_in}
-                              preserveAspectRatio="xMidYMid meet"
-                              opacity={isDragging ? 0.6 : 0.85}
-                              style={{ pointerEvents: 'none' }}
-                            />
-                          )}
+                          {/* Cropped image — rotate 90° when element is rotated */}
+                          {cropSrc && (() => {
+                            const cx = elem.x_in + elem.total_width_in / 2;
+                            const cy = elem.y_in + elem.total_height_in / 2;
+                            // When rotated, draw image at swapped (original) dims then rotate around center
+                            if (elem.rotated) {
+                              return (
+                                <image
+                                  href={cropSrc}
+                                  x={cx - elem.total_height_in / 2}
+                                  y={cy - elem.total_width_in / 2}
+                                  width={elem.total_height_in}
+                                  height={elem.total_width_in}
+                                  preserveAspectRatio="xMidYMid meet"
+                                  opacity={isDragging ? 0.6 : 0.85}
+                                  transform={`rotate(90, ${cx}, ${cy})`}
+                                  style={{ pointerEvents: 'none' }}
+                                />
+                              );
+                            }
+                            return (
+                              <image
+                                href={cropSrc}
+                                x={elem.x_in}
+                                y={elem.y_in}
+                                width={elem.total_width_in}
+                                height={elem.total_height_in}
+                                preserveAspectRatio="xMidYMid meet"
+                                opacity={isDragging ? 0.6 : 0.85}
+                                style={{ pointerEvents: 'none' }}
+                              />
+                            );
+                          })()}
                           {/* Element number label */}
                           <text
                             x={elem.x_in + elem.total_width_in / 2}

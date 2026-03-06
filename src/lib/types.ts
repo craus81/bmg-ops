@@ -221,6 +221,7 @@ export interface NestedElement {
   total_height_in: number;
   x_in: number;
   y_in: number;
+  rotated?: boolean;
 }
 
 export interface RollNestingResult {
