@@ -963,7 +963,7 @@ function NewQuote({ onCreated, editQuote }: { onCreated: () => void; editQuote?:
                   key={t.id}
                   onClick={() => setSelectedTemplate(t)}
                   style={{
-                    display: 'flex', alignItems: 'center', gap: '12px', padding: '10px 12px', borderRadius: '10px',
+                    display: 'flex', flexDirection: 'column', gap: '8px', padding: '12px', borderRadius: '12px',
                     border: selectedTemplate?.id === t.id ? `2px solid ${theme.orange}` : `1px solid ${theme.border}`,
                     background: selectedTemplate?.id === t.id ? theme.orangeSoft : theme.card,
                     cursor: 'pointer', textAlign: 'left', width: '100%',
@@ -973,12 +973,12 @@ function NewQuote({ onCreated, editQuote }: { onCreated: () => void; editQuote?:
                     <img
                       src={supabase.storage.from('vehicle-templates').getPublicUrl(t.template_image_path).data.publicUrl}
                       alt={t.name}
-                      style={{ width: '80px', height: '50px', objectFit: 'contain', borderRadius: '6px', background: '#fff' }}
+                      style={{ width: '100%', maxWidth: '400px', height: '250px', objectFit: 'contain', borderRadius: '8px', background: '#fff' }}
                     />
                   )}
                   <div>
-                    <div style={{ fontSize: '14px', fontWeight: 700, color: theme.textPrimary }}>{t.name}</div>
-                    <div style={{ fontSize: '12px', color: theme.textMuted }}>
+                    <div style={{ fontSize: '15px', fontWeight: 700, color: theme.textPrimary }}>{t.name}</div>
+                    <div style={{ fontSize: '13px', color: theme.textMuted }}>
                       {t.year} {t.make} {t.model} {t.variant || ''}
                     </div>
                   </div>
