@@ -2041,10 +2041,10 @@ function TemplatesManager() {
                 <img
                   src={supabase.storage.from('vehicle-templates').getPublicUrl(t.template_image_path).data.publicUrl}
                   alt={t.name}
-                  style={{ width: '100px', height: '60px', objectFit: 'contain', borderRadius: '8px', background: '#fff', flexShrink: 0 }}
+                  style={{ width: '300px', height: '180px', objectFit: 'contain', borderRadius: '8px', background: '#fff', flexShrink: 0 }}
                 />
               ) : (
-                <div style={{ width: '100px', height: '60px', borderRadius: '8px', background: theme.inputBg, display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: '24px', flexShrink: 0 }}>🚐</div>
+                <div style={{ width: '300px', height: '180px', borderRadius: '8px', background: theme.inputBg, display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: '48px', flexShrink: 0 }}>🚐</div>
               )}
               <div style={{ flex: 1, minWidth: 0 }}>
                 <div style={{ fontSize: '14px', fontWeight: 700, color: theme.textPrimary }}>{t.name}</div>
