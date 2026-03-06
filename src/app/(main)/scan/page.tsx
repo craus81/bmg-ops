@@ -164,6 +164,17 @@ export default function ScanPage() {
     setError('');
     setLoading(true);
     try {
+      // Check for duplicate VIN in database
+      var { data: existing } = await supabase
+        .from('scanned_vehicles')
+        .select('id, scanned_at')
+        .eq('vin', v)
+        .limit(1);
+      if (existing && existing.length > 0) {
+        setError('Duplicate VIN — this vehicle has already been scanned (' + new Date(existing[0].scanned_at).toLocaleDateString([], { month: 'short', day: 'numeric' }) + ').');
+        setLoading(false);
+        return;
+      }
       var vehicle = await decodeVIN(v);
       setResult({ vin: v, vehicle: vehicle });
     } catch (e) {
