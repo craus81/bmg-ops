@@ -208,7 +208,10 @@ function QuotesList({ onEdit }: { onEdit: (q: Quote) => void }) {
             <div>
               <div style={{ fontSize: '15px', fontWeight: 700, color: theme.textPrimary }}>{q.quote_number}</div>
               <div style={{ fontSize: '13px', color: theme.textSecondary, marginTop: '2px' }}>{q.customer_name}</div>
-              <div style={{ fontSize: '12px', color: theme.textMuted, marginTop: '2px' }}>{q.vehicle_description}</div>
+              <div style={{ fontSize: '12px', color: theme.textMuted, marginTop: '2px' }}>
+                {q.vehicle_description}
+                {(q as any).vehicle_qty > 1 && <span style={{ marginLeft: '6px', padding: '1px 6px', borderRadius: '4px', fontSize: '10px', fontWeight: 800, background: theme.navy + '20', color: theme.navy }}>×{(q as any).vehicle_qty}</span>}
+              </div>
             </div>
             <div style={{ textAlign: 'right' }}>
               <div style={{
@@ -297,9 +300,15 @@ function QuoteDetail({ quote, onBack, onEdit }: { quote: Quote; onBack: () => vo
           <div>
             <div style={{ fontSize: '20px', fontWeight: 800, color: theme.textPrimary }}>{quote.quote_number}</div>
             <div style={{ fontSize: '14px', color: theme.textSecondary, marginTop: '2px' }}>{quote.customer_name}</div>
-            <div style={{ fontSize: '13px', color: theme.textMuted }}>{quote.vehicle_description}</div>
+            <div style={{ fontSize: '13px', color: theme.textMuted }}>
+              {quote.vehicle_description}
+              {(quote as any).vehicle_qty > 1 && <span style={{ marginLeft: '6px', padding: '2px 8px', borderRadius: '4px', fontSize: '11px', fontWeight: 800, background: theme.navy + '20', color: theme.navy }}>×{(quote as any).vehicle_qty} vehicles</span>}
+            </div>
           </div>
-          <div style={{ fontSize: '24px', fontWeight: 800, color: theme.orange }}>{fmtCurrency(quote.total_price)}</div>
+          <div style={{ textAlign: 'right' }}>
+            <div style={{ fontSize: '24px', fontWeight: 800, color: theme.orange }}>{fmtCurrency(quote.total_price)}</div>
+            {(quote as any).vehicle_qty > 1 && <div style={{ fontSize: '12px', color: theme.textMuted }}>{fmtCurrency(quote.total_price / (quote as any).vehicle_qty)}/vehicle</div>}
+          </div>
         </div>
 
         {/* Status Actions */}
@@ -443,6 +452,7 @@ function NewQuote({ onCreated, editQuote }: { onCreated: () => void; editQuote?:
 
   // Element-based quoting
   const [bleedSize, setBleedSize] = useState(0.5);
+  const [vehicleQty, setVehicleQty] = useState(1);
   const [nestingResult, setNestingResult] = useState<RollNestingResult | null>(null);
   const [elementCrops, setElementCrops] = useState<Record<string, string>>({});
 
@@ -530,9 +540,12 @@ function NewQuote({ onCreated, editQuote }: { onCreated: () => void; editQuote?:
     setLaborRate(editQuote.labor_cost_per_sqft || 4.00);
     setMarkupPct(editQuote.markup_percentage || 20);
 
-    // Nesting result
+    // Nesting result and vehicle quantity
     if (editQuote.nesting_result) {
       setNestingResult(editQuote.nesting_result);
+    }
+    if ((editQuote as any).vehicle_qty) {
+      setVehicleQty((editQuote as any).vehicle_qty);
     }
 
     // Proof image from storage
@@ -546,8 +559,15 @@ function NewQuote({ onCreated, editQuote }: { onCreated: () => void; editQuote?:
     setStep(5);
   }, [editQuote]);
 
-  function recalculateNesting(elements: GraphicElement[], bleed: number) {
-    const withBleed = applyBleed(elements, bleed);
+  function recalculateNesting(elements: GraphicElement[], bleed: number, qty: number = 1) {
+    // Duplicate elements for multi-vehicle nesting
+    const multiplied: GraphicElement[] = [];
+    for (let i = 0; i < qty; i++) {
+      elements.forEach(el => {
+        multiplied.push({ ...el, element_name: qty > 1 ? `${el.element_name} (${i + 1})` : el.element_name });
+      });
+    }
+    const withBleed = applyBleed(multiplied, bleed);
     const result = nestElementsOnRoll(withBleed, 60);
     setNestingResult(result);
     return result;
@@ -752,7 +772,7 @@ function NewQuote({ onCreated, editQuote }: { onCreated: () => void; editQuote?:
 
       // Run nesting if analysis has graphic elements
       if (result.analysis.graphic_elements?.length) {
-        recalculateNesting(result.analysis.graphic_elements, bleedSize);
+        recalculateNesting(result.analysis.graphic_elements, bleedSize, vehicleQty);
         // Go to tag elements step so user can crop thumbnails
         setStep(4);
       } else {
@@ -822,6 +842,7 @@ function NewQuote({ onCreated, editQuote }: { onCreated: () => void; editQuote?:
         markup_percentage: markupPct,
         total_price: totalPrice,
         nesting_result: nestingResult || null,
+        vehicle_qty: vehicleQty,
         notes: analysis.notes,
         updated_at: new Date().toISOString(),
       };
@@ -1500,7 +1521,7 @@ function NewQuote({ onCreated, editQuote }: { onCreated: () => void; editQuote?:
                     const newBleed = parseFloat(e.target.value) || 0;
                     setBleedSize(newBleed);
                     if (analysis.graphic_elements) {
-                      recalculateNesting(analysis.graphic_elements, newBleed);
+                      recalculateNesting(analysis.graphic_elements, newBleed, vehicleQty);
                     }
                   }}
                   style={{
@@ -1511,6 +1532,39 @@ function NewQuote({ onCreated, editQuote }: { onCreated: () => void; editQuote?:
                 />
                 <div style={{ fontSize: '12px', color: theme.textMuted }}>in</div>
               </div>
+            </div>
+          )}
+
+          {/* Vehicle Quantity */}
+          {analysis.graphic_elements && analysis.graphic_elements.length > 0 && (
+            <div style={{ background: theme.card, border: `1px solid ${theme.border}`, borderRadius: '12px', padding: '14px', marginBottom: '12px' }}>
+              <label style={{ display: 'block', fontSize: '13px', fontWeight: 700, color: theme.textPrimary, marginBottom: '8px' }}>Number of Vehicles</label>
+              <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                <input
+                  type="number"
+                  step="1"
+                  min="1"
+                  value={vehicleQty}
+                  onChange={(e) => {
+                    const newQty = Math.max(1, parseInt(e.target.value) || 1);
+                    setVehicleQty(newQty);
+                    if (analysis.graphic_elements) {
+                      recalculateNesting(analysis.graphic_elements, bleedSize, newQty);
+                    }
+                  }}
+                  style={{
+                    flex: 1, padding: '10px', borderRadius: '8px', border: `1px solid ${theme.border}`,
+                    background: theme.inputBg, color: theme.textPrimary, fontSize: '14px', fontWeight: 700,
+                    boxSizing: 'border-box',
+                  }}
+                />
+                <div style={{ fontSize: '12px', color: theme.textMuted }}>vehicles</div>
+              </div>
+              {vehicleQty > 1 && (
+                <div style={{ fontSize: '11px', color: theme.textMuted, marginTop: '6px' }}>
+                  Nesting {vehicleQty} sets of graphics on one roll for optimal material usage
+                </div>
+              )}
             </div>
           )}
 
@@ -1648,7 +1702,7 @@ function NewQuote({ onCreated, editQuote }: { onCreated: () => void; editQuote?:
                     {nestingResult.efficiency_pct > 0 && ` • ${nestingResult.efficiency_pct}% efficiency`}
                   </div>
                   <button
-                    onClick={() => { if (analysis.graphic_elements) recalculateNesting(analysis.graphic_elements, bleedSize); }}
+                    onClick={() => { if (analysis.graphic_elements) recalculateNesting(analysis.graphic_elements, bleedSize, vehicleQty); }}
                     style={{
                       padding: '4px 10px', borderRadius: '6px', border: `1px solid ${theme.border}`,
                       background: 'transparent', color: theme.textSecondary, fontSize: '11px', fontWeight: 600,
@@ -1820,9 +1874,15 @@ function NewQuote({ onCreated, editQuote }: { onCreated: () => void; editQuote?:
                 </div>
               ))}
               <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '18px', fontWeight: 800, padding: '10px 0 0', borderTop: `2px solid ${theme.border}`, marginTop: '8px' }}>
-                <span style={{ color: theme.textPrimary }}>Total</span>
+                <span style={{ color: theme.textPrimary }}>Total{vehicleQty > 1 ? ` (${vehicleQty} vehicles)` : ''}</span>
                 <span style={{ color: theme.orange }}>{fmtCurrency(totalPrice)}</span>
               </div>
+              {vehicleQty > 1 && (
+                <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '13px', padding: '6px 0 0' }}>
+                  <span style={{ color: theme.textMuted }}>Per Vehicle</span>
+                  <span style={{ color: theme.textSecondary, fontWeight: 700 }}>{fmtCurrency(totalPrice / vehicleQty)}</span>
+                </div>
+              )}
             </div>
           </div>
 
