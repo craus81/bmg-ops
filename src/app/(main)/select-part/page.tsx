@@ -47,7 +47,7 @@ export default function SelectPartPage() {
 
   const handleSelect = (item: CatalogItem) => {
     setActivePart(item);
-    router.push('/home');
+    router.push('/scan');
   };
 
   const getProofUrl = (proof: CatalogProof) => {
