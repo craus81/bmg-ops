@@ -521,6 +521,25 @@ function NewQuote({ onCreated }: { onCreated: () => void }) {
     return overlapping;
   }
 
+  // Rotate an element 90° in the nesting diagram (swap width and height)
+  function handleNestRotate(idx: number) {
+    if (!nestingResult) return;
+    const elem = nestingResult.nested_elements[idx];
+    const rotated = {
+      ...elem,
+      total_width_in: elem.total_height_in,
+      total_height_in: elem.total_width_in,
+    };
+    // Clamp to roll width after rotation
+    if (rotated.x_in + rotated.total_width_in > 60) {
+      rotated.x_in = Math.max(0, 60 - rotated.total_width_in);
+    }
+    const updated = nestingResult.nested_elements.map((el, i) =>
+      i === idx ? rotated : el
+    );
+    setNestingResult(recalcFromPositions(updated, 60));
+  }
+
   // Crop a region from the proof image given pixel coordinates on the displayed image
   function cropFromProof(elementName: string, imgEl: HTMLImageElement, sx: number, sy: number, sw: number, sh: number) {
     if (sw < 2 || sh < 2) return;
@@ -1000,18 +1019,55 @@ function NewQuote({ onCreated }: { onCreated: () => void }) {
         </div>
       )}
 
-      {/* Step 4: Tag Elements — manual crop tool */}
+      {/* Step 4: Tag Elements — fullscreen crop tool */}
       {step === 4 && analysis && analysis.graphic_elements?.length && (
-        <div>
-          <div style={{ fontSize: '16px', fontWeight: 800, color: theme.textPrimary, marginBottom: '4px' }}>
-            Step 4: Tag Elements
-          </div>
-          <div style={{ fontSize: '13px', color: theme.textSecondary, marginBottom: '16px' }}>
-            Click an element below, then draw a rectangle on the proof image to tag it. You can skip any elements.
+        <div style={{
+          position: 'fixed', inset: 0, zIndex: 200,
+          background: theme.bg || '#0e1621',
+          display: 'flex', flexDirection: 'column',
+        }}>
+          {/* Header bar */}
+          <div style={{
+            padding: '10px 16px', display: 'flex', alignItems: 'center', justifyContent: 'space-between',
+            background: theme.card, borderBottom: `1px solid ${theme.border}`, flexShrink: 0,
+          }}>
+            <div>
+              <div style={{ fontSize: '14px', fontWeight: 800, color: theme.textPrimary }}>Tag Elements</div>
+              <div style={{ fontSize: '11px', color: theme.textMuted }}>
+                {croppingElement
+                  ? `Drawing: ${croppingElement}`
+                  : `${Object.keys(elementCrops).length} of ${analysis.graphic_elements!.length} tagged`}
+              </div>
+            </div>
+            <div style={{ display: 'flex', gap: '8px' }}>
+              <button
+                onClick={() => setStep(3)}
+                style={{
+                  padding: '8px 14px', borderRadius: '8px', border: `1px solid ${theme.border}`,
+                  background: 'transparent', color: theme.textSecondary, fontSize: '12px', fontWeight: 700, cursor: 'pointer',
+                }}
+              >
+                ← Back
+              </button>
+              <button
+                onClick={() => setStep(5)}
+                style={{
+                  padding: '8px 14px', borderRadius: '8px', border: 'none',
+                  background: theme.orange, color: '#fff', fontSize: '12px', fontWeight: 700, cursor: 'pointer',
+                }}
+              >
+                {Object.keys(elementCrops).length > 0
+                  ? `Continue (${Object.keys(elementCrops).length} tagged) →`
+                  : 'Skip →'}
+              </button>
+            </div>
           </div>
 
-          {/* Element buttons */}
-          <div style={{ display: 'flex', flexWrap: 'wrap', gap: '6px', marginBottom: '12px' }}>
+          {/* Element buttons — scrollable strip */}
+          <div style={{
+            padding: '8px 16px', display: 'flex', gap: '6px', overflowX: 'auto', flexShrink: 0,
+            borderBottom: `1px solid ${theme.border}`, background: theme.card,
+          }}>
             {analysis.graphic_elements!.map((el, i) => {
               const isCropped = !!elementCrops[el.element_name];
               const isActive = croppingElement === el.element_name;
@@ -1024,8 +1080,8 @@ function NewQuote({ onCreated }: { onCreated: () => void }) {
                     setCropEnd(null);
                   }}
                   style={{
-                    padding: '6px 12px', borderRadius: '8px', fontSize: '12px', fontWeight: 600,
-                    cursor: 'pointer', transition: 'all 0.2s',
+                    padding: '5px 10px', borderRadius: '6px', fontSize: '11px', fontWeight: 600,
+                    cursor: 'pointer', whiteSpace: 'nowrap', flexShrink: 0,
                     border: isActive ? `2px solid ${theme.orange}` : `1px solid ${isCropped ? theme.success : theme.border}`,
                     background: isActive ? theme.orangeSoft : isCropped ? theme.successBg : theme.inputBg,
                     color: isActive ? theme.orange : isCropped ? theme.success : theme.textSecondary,
@@ -1037,22 +1093,11 @@ function NewQuote({ onCreated }: { onCreated: () => void }) {
             })}
           </div>
 
-          {/* Active crop instruction */}
-          {croppingElement && (
-            <div style={{
-              padding: '8px 12px', borderRadius: '8px', marginBottom: '10px',
-              background: theme.orangeSoft, border: `1px solid ${theme.orange}`,
-              fontSize: '13px', color: theme.orange, fontWeight: 600,
-            }}>
-              Draw a rectangle around: <strong>{croppingElement}</strong>
-            </div>
-          )}
-
-          {/* Proof image with crop overlay */}
+          {/* Proof image — fills remaining space */}
           <div
             style={{
-              position: 'relative', userSelect: 'none', cursor: croppingElement ? 'crosshair' : 'default',
-              borderRadius: '10px', overflow: 'hidden', border: `1px solid ${theme.border}`, marginBottom: '12px',
+              flex: 1, overflow: 'auto', position: 'relative', userSelect: 'none',
+              cursor: croppingElement ? 'crosshair' : 'default',
             }}
             onMouseDown={(e) => {
               if (!croppingElement || !proofImgRef.current) return;
@@ -1120,23 +1165,21 @@ function NewQuote({ onCreated }: { onCreated: () => void }) {
                 borderRadius: '2px',
               }} />
             )}
-            {/* Show already-cropped regions as subtle outlines */}
-            {/* (positions not tracked - would need separate state) */}
           </div>
 
-          {/* Thumbnails of tagged elements */}
+          {/* Tagged thumbnails strip at bottom */}
           {Object.keys(elementCrops).length > 0 && (
             <div style={{
-              display: 'flex', flexWrap: 'wrap', gap: '8px', marginBottom: '12px',
-              padding: '10px', background: theme.card, borderRadius: '10px', border: `1px solid ${theme.border}`,
+              display: 'flex', gap: '8px', padding: '8px 16px', overflowX: 'auto', flexShrink: 0,
+              background: theme.card, borderTop: `1px solid ${theme.border}`,
             }}>
               {analysis.graphic_elements!.filter(el => elementCrops[el.element_name]).map((el, i) => (
-                <div key={i} style={{ textAlign: 'center', width: '80px' }}>
+                <div key={i} style={{ textAlign: 'center', flexShrink: 0 }}>
                   <img
                     src={elementCrops[el.element_name]}
                     alt={el.element_name}
                     style={{
-                      maxWidth: '72px', maxHeight: '72px', objectFit: 'contain', borderRadius: '6px',
+                      maxWidth: '56px', maxHeight: '56px', objectFit: 'contain', borderRadius: '4px',
                       border: `2px solid ${theme.success}`, cursor: 'pointer',
                     }}
                     onClick={() => {
@@ -1144,40 +1187,15 @@ function NewQuote({ onCreated }: { onCreated: () => void }) {
                       setCropStart(null);
                       setCropEnd(null);
                     }}
-                    title={`Click to re-crop "${el.element_name}"`}
+                    title={`Re-crop "${el.element_name}"`}
                   />
-                  <div style={{ fontSize: '9px', color: theme.textMuted, marginTop: '3px', lineHeight: 1.2, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                  <div style={{ fontSize: '8px', color: theme.textMuted, marginTop: '2px', maxWidth: '56px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
                     {el.element_name}
                   </div>
                 </div>
               ))}
             </div>
           )}
-
-          {/* Navigation */}
-          <div style={{ display: 'flex', gap: '8px' }}>
-            <button
-              onClick={() => setStep(3)}
-              style={{
-                flex: 1, padding: '14px', borderRadius: '12px', border: `1px solid ${theme.border}`,
-                background: 'transparent', color: theme.textSecondary, fontSize: '15px', fontWeight: 700, cursor: 'pointer',
-              }}
-            >
-              ← Back
-            </button>
-            <button
-              onClick={() => setStep(5)}
-              style={{
-                flex: 2, padding: '14px', borderRadius: '12px', border: 'none',
-                background: theme.orange, color: '#fff',
-                fontSize: '15px', fontWeight: 700, cursor: 'pointer',
-              }}
-            >
-              {Object.keys(elementCrops).length > 0
-                ? `Continue with ${Object.keys(elementCrops).length} tagged →`
-                : 'Skip tagging →'}
-            </button>
-          </div>
         </div>
       )}
 
@@ -1309,7 +1327,7 @@ function NewQuote({ onCreated }: { onCreated: () => void }) {
               <div style={{ background: theme.card, border: `1px solid ${theme.border}`, borderRadius: '12px', padding: '14px', marginBottom: '12px' }}>
                 <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '10px' }}>
                   <div style={{ fontSize: '14px', fontWeight: 700, color: theme.textPrimary }}>Nesting Layout</div>
-                  <div style={{ fontSize: '11px', color: theme.textMuted }}>Drag elements to rearrange</div>
+                  <div style={{ fontSize: '11px', color: theme.textMuted }}>Drag to move, double-click to rotate</div>
                 </div>
                 {hasOverlaps && (
                   <div style={{
@@ -1359,6 +1377,7 @@ function NewQuote({ onCreated }: { onCreated: () => void }) {
                           key={idx}
                           style={{ cursor: isDragging ? 'grabbing' : 'grab' }}
                           onMouseDown={(e) => handleNestDragStart(idx, e)}
+                          onDoubleClick={(e) => { e.preventDefault(); e.stopPropagation(); handleNestRotate(idx); }}
                         >
                           {/* Background fill */}
                           <rect
