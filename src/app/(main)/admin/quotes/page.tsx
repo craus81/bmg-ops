@@ -330,7 +330,7 @@ function QuoteDetail({ quote, onBack, onEdit }: { quote: Quote; onBack: () => vo
       {/* Summary */}
       <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '8px', marginBottom: '12px' }}>
         {[
-          { label: 'Vinyl Area', value: `${quote.total_vinyl_sqft?.toFixed(1)} sq ft` },
+          { label: 'Roll Material', value: `${quote.total_vinyl_sqft?.toFixed(1)} sq ft` },
           { label: 'Coverage', value: `${quote.coverage_percentage?.toFixed(0)}%` },
           { label: 'Material', value: fmtCurrency(quote.material_total) },
           { label: 'Labor', value: fmtCurrency(quote.labor_total) },
@@ -1405,7 +1405,7 @@ function NewQuote({ onCreated, editQuote }: { onCreated: () => void; editQuote?:
             color: analysis.confidence === 'high' ? theme.success : theme.warning,
             fontWeight: 600,
           }}>
-            AI Confidence: {analysis.confidence?.toUpperCase()} • {analysis.total_vinyl_sqft?.toFixed(1)} sq ft total vinyl
+            AI Confidence: {analysis.confidence?.toUpperCase()}{nestingResult ? ` • ${nestingResult.roll_area_sqft?.toFixed(1)} sq ft roll material` : ` • ${analysis.total_vinyl_sqft?.toFixed(1)} sq ft vinyl`}
           </div>
 
           {/* Image Comparison */}
@@ -1431,19 +1431,28 @@ function NewQuote({ onCreated, editQuote }: { onCreated: () => void; editQuote?:
                 )}
               </div>
             </div>
-            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: '6px', marginTop: '10px' }}>
+            <div style={{ display: 'grid', gridTemplateColumns: nestingResult ? '1fr 1fr' : '1fr 1fr 1fr', gap: '6px', marginTop: '10px' }}>
               <div style={{ textAlign: 'center', padding: '8px', background: theme.subtleBg, borderRadius: '8px' }}>
                 <div style={{ fontSize: '16px', fontWeight: 800, color: theme.textPrimary }}>{analysis.total_vehicle_sqft?.toFixed(0)}</div>
-                <div style={{ fontSize: '10px', color: theme.textMuted, fontWeight: 600 }}>TOTAL ft²</div>
+                <div style={{ fontSize: '10px', color: theme.textMuted, fontWeight: 600 }}>VEHICLE ft²</div>
               </div>
-              <div style={{ textAlign: 'center', padding: '8px', background: theme.subtleBg, borderRadius: '8px' }}>
-                <div style={{ fontSize: '16px', fontWeight: 800, color: theme.orange }}>{analysis.total_vinyl_sqft?.toFixed(1)}</div>
-                <div style={{ fontSize: '10px', color: theme.textMuted, fontWeight: 600 }}>VINYL ft²</div>
-              </div>
-              <div style={{ textAlign: 'center', padding: '8px', background: theme.subtleBg, borderRadius: '8px' }}>
-                <div style={{ fontSize: '16px', fontWeight: 800, color: theme.textPrimary }}>{analysis.overall_coverage_pct?.toFixed(0)}%</div>
-                <div style={{ fontSize: '10px', color: theme.textMuted, fontWeight: 600 }}>COVERAGE</div>
-              </div>
+              {nestingResult ? (
+                <div style={{ textAlign: 'center', padding: '8px', background: theme.subtleBg, borderRadius: '8px' }}>
+                  <div style={{ fontSize: '16px', fontWeight: 800, color: theme.orange }}>{nestingResult.roll_area_sqft?.toFixed(1)}</div>
+                  <div style={{ fontSize: '10px', color: theme.textMuted, fontWeight: 600 }}>ROLL ft²</div>
+                </div>
+              ) : (
+                <>
+                  <div style={{ textAlign: 'center', padding: '8px', background: theme.subtleBg, borderRadius: '8px' }}>
+                    <div style={{ fontSize: '16px', fontWeight: 800, color: theme.orange }}>{analysis.total_vinyl_sqft?.toFixed(1)}</div>
+                    <div style={{ fontSize: '10px', color: theme.textMuted, fontWeight: 600 }}>VINYL ft²</div>
+                  </div>
+                  <div style={{ textAlign: 'center', padding: '8px', background: theme.subtleBg, borderRadius: '8px' }}>
+                    <div style={{ fontSize: '16px', fontWeight: 800, color: theme.textPrimary }}>{analysis.overall_coverage_pct?.toFixed(0)}%</div>
+                    <div style={{ fontSize: '10px', color: theme.textMuted, fontWeight: 600 }}>COVERAGE</div>
+                  </div>
+                </>
+              )}
             </div>
           </div>
 
