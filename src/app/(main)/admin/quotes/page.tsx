@@ -426,6 +426,8 @@ function NewQuote({ onCreated, editQuote }: { onCreated: () => void; editQuote?:
   // Step 2: Proof Upload
   const [proofFile, setProofFile] = useState<File | null>(null);
   const [proofPreview, setProofPreview] = useState<string | null>(null);
+  const [proofLibrary, setProofLibrary] = useState<{ url: string; path: string; customer: string; vehicle: string; quoteNum: string }[]>([]);
+  const [loadingLibrary, setLoadingLibrary] = useState(false);
 
   // Step 3: AI Analysis
   const [analyzing, setAnalyzing] = useState(false);
@@ -466,6 +468,48 @@ function NewQuote({ onCreated, editQuote }: { onCreated: () => void; editQuote?:
     if (editQuote?.template_id && data) {
       const match = (data as VehicleTemplate[]).find(t => t.id === editQuote.template_id);
       if (match) setSelectedTemplate(match);
+    }
+  }
+
+  // Load proof library from saved quotes
+  async function loadProofLibrary() {
+    setLoadingLibrary(true);
+    const { data } = await supabase
+      .from('quotes')
+      .select('quote_number, customer_name, vehicle_description, proof_image_path')
+      .not('proof_image_path', 'is', null)
+      .order('created_at', { ascending: false });
+
+    if (data) {
+      const proofs = data
+        .filter((q: any) => q.proof_image_path)
+        .map((q: any) => {
+          const { data: urlData } = supabase.storage.from('quote-proofs').getPublicUrl(q.proof_image_path);
+          return {
+            url: urlData.publicUrl,
+            path: q.proof_image_path,
+            customer: q.customer_name || '',
+            vehicle: q.vehicle_description || '',
+            quoteNum: q.quote_number || '',
+          };
+        });
+      setProofLibrary(proofs);
+    }
+    setLoadingLibrary(false);
+  }
+
+  // Select a proof from the library
+  async function selectLibraryProof(proof: typeof proofLibrary[0]) {
+    // Fetch the image and create a File object so it works with existing analysis flow
+    try {
+      const response = await fetch(proof.url);
+      const blob = await response.blob();
+      const ext = proof.path.split('.').pop() || 'png';
+      const file = new File([blob], `library-proof.${ext}`, { type: blob.type });
+      setProofFile(file);
+      setProofPreview(proof.url);
+    } catch {
+      alert('Could not load proof image');
     }
   }
 
@@ -965,7 +1009,7 @@ function NewQuote({ onCreated, editQuote }: { onCreated: () => void; editQuote?:
             Step 2: Upload Proof
           </div>
           <div style={{ fontSize: '13px', color: theme.textSecondary, marginBottom: '16px' }}>
-            Upload the proof/design file showing the proposed vinyl graphics for the {selectedTemplate?.name}
+            Upload a new proof or choose from a previous quote
           </div>
 
           {/* Upload Area */}
@@ -988,11 +1032,67 @@ function NewQuote({ onCreated, editQuote }: { onCreated: () => void; editQuote?:
             ) : (
               <>
                 <div style={{ fontSize: '36px', marginBottom: '8px' }}>📤</div>
-                <div style={{ fontSize: '14px', fontWeight: 700, color: theme.textPrimary }}>Tap to upload proof</div>
+                <div style={{ fontSize: '14px', fontWeight: 700, color: theme.textPrimary }}>Tap to upload new proof</div>
                 <div style={{ fontSize: '12px', color: theme.textMuted, marginTop: '4px' }}>PDF, PNG, or JPG</div>
               </>
             )}
           </label>
+
+          {/* Proof Library */}
+          {proofLibrary.length === 0 && !loadingLibrary && (
+            <button
+              onClick={loadProofLibrary}
+              style={{
+                width: '100%', padding: '12px', borderRadius: '10px', border: `1px solid ${theme.border}`,
+                background: theme.card, color: theme.textSecondary, fontSize: '13px', fontWeight: 600,
+                cursor: 'pointer', marginBottom: '16px',
+              }}
+            >
+              📂 Browse previous proofs
+            </button>
+          )}
+          {loadingLibrary && (
+            <div style={{ textAlign: 'center', padding: '12px', color: theme.textMuted, fontSize: '13px', marginBottom: '16px' }}>
+              Loading proof library...
+            </div>
+          )}
+          {proofLibrary.length > 0 && (
+            <div style={{ marginBottom: '16px' }}>
+              <div style={{ fontSize: '13px', fontWeight: 700, color: theme.textSecondary, marginBottom: '8px' }}>
+                Previous Proofs
+              </div>
+              <div style={{
+                display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(140px, 1fr))', gap: '8px',
+                maxHeight: '280px', overflowY: 'auto', padding: '2px',
+              }}>
+                {proofLibrary.map((proof, i) => (
+                  <button
+                    key={i}
+                    onClick={() => selectLibraryProof(proof)}
+                    style={{
+                      background: theme.card, border: `1px solid ${theme.border}`, borderRadius: '10px',
+                      padding: '6px', cursor: 'pointer', textAlign: 'left', overflow: 'hidden',
+                      transition: 'border-color 0.15s',
+                    }}
+                    onMouseOver={(e) => (e.currentTarget.style.borderColor = theme.orange)}
+                    onMouseOut={(e) => (e.currentTarget.style.borderColor = theme.border)}
+                  >
+                    <img
+                      src={proof.url}
+                      alt={proof.quoteNum}
+                      style={{ width: '100%', height: '90px', objectFit: 'cover', borderRadius: '6px', marginBottom: '4px' }}
+                    />
+                    <div style={{ fontSize: '11px', fontWeight: 700, color: theme.textPrimary, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                      {proof.customer || proof.quoteNum}
+                    </div>
+                    <div style={{ fontSize: '10px', color: theme.textMuted, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                      {proof.vehicle || proof.quoteNum}
+                    </div>
+                  </button>
+                ))}
+              </div>
+            </div>
+          )}
 
           <div style={{ display: 'flex', gap: '8px' }}>
             <button
@@ -1006,11 +1106,11 @@ function NewQuote({ onCreated, editQuote }: { onCreated: () => void; editQuote?:
             </button>
             <button
               onClick={() => setStep(3)}
-              disabled={!proofFile}
+              disabled={!proofFile && !proofPreview}
               style={{
                 flex: 2, padding: '14px', borderRadius: '12px', border: 'none',
-                background: !proofFile ? theme.border : theme.navy,
-                color: !proofFile ? theme.textMuted : '#fff',
+                background: (!proofFile && !proofPreview) ? theme.border : theme.navy,
+                color: (!proofFile && !proofPreview) ? theme.textMuted : '#fff',
                 fontSize: '15px', fontWeight: 700, cursor: 'pointer',
               }}
             >
