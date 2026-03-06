@@ -97,6 +97,7 @@ function fmtCurrency(n: number) {
 export default function QuotesPage() {
   const { user, isAdmin } = useAuth();
   const [tab, setTab] = useState<'quotes' | 'templates' | 'new'>('quotes');
+  const [editQuote, setEditQuote] = useState<Quote | null>(null);
 
   if (!isAdmin) {
     return (
@@ -140,15 +141,15 @@ export default function QuotesPage() {
         ))}
       </div>
 
-      {tab === 'quotes' && <QuotesList />}
-      {tab === 'new' && <NewQuote onCreated={() => setTab('quotes')} />}
+      {tab === 'quotes' && <QuotesList onEdit={(q) => { setEditQuote(q); setTab('new'); }} />}
+      {tab === 'new' && <NewQuote editQuote={editQuote} onCreated={() => { setEditQuote(null); setTab('quotes'); }} />}
       {tab === 'templates' && <TemplatesManager />}
     </div>
   );
 }
 
 // ============ Quotes List ============
-function QuotesList() {
+function QuotesList({ onEdit }: { onEdit: (q: Quote) => void }) {
   const [quotes, setQuotes] = useState<Quote[]>([]);
   const [loading, setLoading] = useState(true);
   const [viewQuote, setViewQuote] = useState<Quote | null>(null);
@@ -170,7 +171,7 @@ function QuotesList() {
   if (loading) return <LoadingSpinner />;
 
   if (viewQuote) {
-    return <QuoteDetail quote={viewQuote} onBack={() => { setViewQuote(null); loadQuotes(); }} />;
+    return <QuoteDetail quote={viewQuote} onBack={() => { setViewQuote(null); loadQuotes(); }} onEdit={(q) => { setViewQuote(null); onEdit(q); }} />;
   }
 
   if (quotes.length === 0) {
@@ -232,7 +233,7 @@ function QuotesList() {
 }
 
 // ============ Quote Detail View ============
-function QuoteDetail({ quote, onBack }: { quote: Quote; onBack: () => void }) {
+function QuoteDetail({ quote, onBack, onEdit }: { quote: Quote; onBack: () => void; onEdit: (q: Quote) => void }) {
   const [panels, setPanels] = useState<QuotePanel[]>([]);
   const [elements, setElements] = useState<QuoteElement[]>([]);
   const [loading, setLoading] = useState(true);
@@ -275,9 +276,20 @@ function QuoteDetail({ quote, onBack }: { quote: Quote; onBack: () => void }) {
 
   return (
     <div>
-      <button onClick={onBack} style={{ background: 'none', border: 'none', color: theme.orange, fontSize: '14px', fontWeight: 700, cursor: 'pointer', marginBottom: '12px', padding: 0 }}>
-        ← Back to Quotes
-      </button>
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '12px' }}>
+        <button onClick={onBack} style={{ background: 'none', border: 'none', color: theme.orange, fontSize: '14px', fontWeight: 700, cursor: 'pointer', padding: 0 }}>
+          ← Back to Quotes
+        </button>
+        <button
+          onClick={() => onEdit(quote)}
+          style={{
+            background: theme.navy, color: '#fff', border: 'none', borderRadius: '8px',
+            padding: '8px 16px', fontSize: '13px', fontWeight: 700, cursor: 'pointer',
+          }}
+        >
+          Edit Quote
+        </button>
+      </div>
 
       {/* Header */}
       <div style={{ background: theme.card, border: `1px solid ${theme.border}`, borderRadius: '12px', padding: '16px', marginBottom: '12px' }}>
@@ -401,7 +413,7 @@ function QuoteDetail({ quote, onBack }: { quote: Quote; onBack: () => void }) {
 }
 
 // ============ New Quote Creator ============
-function NewQuote({ onCreated }: { onCreated: () => void }) {
+function NewQuote({ onCreated, editQuote }: { onCreated: () => void; editQuote?: Quote | null }) {
   const { user } = useAuth();
   const [step, setStep] = useState(1);
 
@@ -449,7 +461,46 @@ function NewQuote({ onCreated }: { onCreated: () => void }) {
       .select('*')
       .order('make, model, year');
     setTemplates((data as VehicleTemplate[]) || []);
+
+    // If editing, select the matching template
+    if (editQuote?.template_id && data) {
+      const match = (data as VehicleTemplate[]).find(t => t.id === editQuote.template_id);
+      if (match) setSelectedTemplate(match);
+    }
   }
+
+  // Hydrate state when editing an existing quote
+  useEffect(() => {
+    if (!editQuote) return;
+
+    // Step 1: Customer
+    setCustomerName(editQuote.customer_name || '');
+
+    // Step 3: AI Analysis result
+    if (editQuote.ai_analysis) {
+      setAnalysis(editQuote.ai_analysis);
+    }
+
+    // Step 4: Pricing
+    setMaterialRate(editQuote.material_cost_per_sqft || 2.50);
+    setLaborRate(editQuote.labor_cost_per_sqft || 4.00);
+    setMarkupPct(editQuote.markup_percentage || 20);
+
+    // Nesting result
+    if (editQuote.nesting_result) {
+      setNestingResult(editQuote.nesting_result);
+    }
+
+    // Proof image from storage
+    if (editQuote.proof_image_path) {
+      const { data } = supabase.storage.from('quote-proofs').getPublicUrl(editQuote.proof_image_path);
+      setProofPreview(data.publicUrl);
+      setProofPreviewForReview(data.publicUrl);
+    }
+
+    // Jump to step 5 (review/price) so they can see everything and navigate back
+    setStep(5);
+  }, [editQuote]);
 
   function recalculateNesting(elements: GraphicElement[], bleed: number) {
     const withBleed = applyBleed(elements, bleed);
@@ -671,7 +722,7 @@ function NewQuote({ onCreated }: { onCreated: () => void }) {
     }
   }
 
-  // Save quote
+  // Save quote (insert new or update existing)
   async function saveQuote() {
     if (!analysis || !user) return;
     setSaving(true);
@@ -686,12 +737,16 @@ function NewQuote({ onCreated }: { onCreated: () => void }) {
       const markupAmount = subtotal * (markupPct / 100);
       const totalPrice = subtotal + markupAmount;
 
-      // Generate quote number from timestamp
-      const now = new Date();
-      const quoteNum = `QUO-${now.getFullYear().toString().slice(-2)}${String(now.getMonth() + 1).padStart(2, '0')}${String(now.getDate()).padStart(2, '0')}-${Date.now().toString().slice(-4)}`;
+      const isEditing = !!editQuote;
+      const quoteNum = isEditing
+        ? editQuote.quote_number
+        : (() => {
+            const now = new Date();
+            return `QUO-${now.getFullYear().toString().slice(-2)}${String(now.getMonth() + 1).padStart(2, '0')}${String(now.getDate()).padStart(2, '0')}-${Date.now().toString().slice(-4)}`;
+          })();
 
-      // Upload proof file to storage
-      let proofPath = '';
+      // Upload proof file to storage (only if a new file was selected)
+      let proofPath = isEditing ? (editQuote.proof_image_path || '') : '';
       if (proofFile) {
         const fileName = `${quoteNum}-proof-${Date.now()}.${proofFile.name.split('.').pop()}`;
         const { error: uploadError } = await supabase.storage
@@ -702,44 +757,62 @@ function NewQuote({ onCreated }: { onCreated: () => void }) {
 
       const isElementBased = !!(analysis.graphic_elements?.length);
 
-      // Insert quote
-      const { data: quoteData, error: quoteError } = await supabase
-        .from('quotes')
-        .insert({
-          quote_number: quoteNum,
-          customer_name: customerName,
-          vehicle_description: selectedTemplate
-            ? `${selectedTemplate.year || ''} ${selectedTemplate.make} ${selectedTemplate.model} ${selectedTemplate.variant || ''}`.trim()
-            : '',
-          template_id: selectedTemplate?.id || null,
-          proof_image_path: proofPath || null,
-          status: 'draft',
-          ai_analysis: analysis,
-          analysis_version: isElementBased ? 'individual_elements' : 'panel_coverage',
-          total_vinyl_sqft: vinylSqft,
-          coverage_percentage: analysis.overall_coverage_pct,
-          material_cost_per_sqft: materialRate,
-          labor_cost_per_sqft: laborRate,
-          material_total: materialTotal,
-          labor_total: laborTotal,
-          subtotal: subtotal,
-          markup_percentage: markupPct,
-          total_price: totalPrice,
-          nesting_result: nestingResult || null,
-          notes: analysis.notes,
-          created_by: user.id,
-        })
-        .select()
-        .single();
+      const quotePayload = {
+        quote_number: quoteNum,
+        customer_name: customerName,
+        vehicle_description: selectedTemplate
+          ? `${selectedTemplate.year || ''} ${selectedTemplate.make} ${selectedTemplate.model} ${selectedTemplate.variant || ''}`.trim()
+          : (editQuote?.vehicle_description || ''),
+        template_id: selectedTemplate?.id || null,
+        proof_image_path: proofPath || null,
+        status: isEditing ? editQuote.status : 'draft' as const,
+        ai_analysis: analysis,
+        analysis_version: isElementBased ? 'individual_elements' : 'panel_coverage',
+        total_vinyl_sqft: vinylSqft,
+        coverage_percentage: analysis.overall_coverage_pct,
+        material_cost_per_sqft: materialRate,
+        labor_cost_per_sqft: laborRate,
+        material_total: materialTotal,
+        labor_total: laborTotal,
+        subtotal: subtotal,
+        markup_percentage: markupPct,
+        total_price: totalPrice,
+        nesting_result: nestingResult || null,
+        notes: analysis.notes,
+        updated_at: new Date().toISOString(),
+      };
 
-      if (quoteError) throw quoteError;
+      let quoteId: string;
+
+      if (isEditing) {
+        // Update existing quote
+        const { error: updateError } = await supabase
+          .from('quotes')
+          .update(quotePayload)
+          .eq('id', editQuote.id);
+        if (updateError) throw updateError;
+        quoteId = editQuote.id;
+
+        // Delete old elements/panels before re-inserting
+        await supabase.from('quote_elements').delete().eq('quote_id', quoteId);
+        await supabase.from('quote_panels').delete().eq('quote_id', quoteId);
+      } else {
+        // Insert new quote
+        const { data: quoteData, error: quoteError } = await supabase
+          .from('quotes')
+          .insert({ ...quotePayload, created_by: user.id })
+          .select()
+          .single();
+        if (quoteError) throw quoteError;
+        quoteId = quoteData.id;
+      }
 
       // Insert elements OR panels based on analysis type
-      if (isElementBased && analysis.graphic_elements && quoteData) {
+      if (isElementBased && analysis.graphic_elements) {
         const elementInserts = analysis.graphic_elements.map((el, i) => {
           const nested = nestingResult?.nested_elements[i];
           return {
-            quote_id: quoteData.id,
+            quote_id: quoteId,
             element_name: el.element_name,
             element_type: el.element_type,
             width_in: el.width_in,
@@ -752,9 +825,9 @@ function NewQuote({ onCreated }: { onCreated: () => void }) {
           };
         });
         await supabase.from('quote_elements').insert(elementInserts);
-      } else if (analysis.panels && quoteData) {
+      } else if (analysis.panels) {
         const panelInserts = analysis.panels.map((p, i) => ({
-          quote_id: quoteData.id,
+          quote_id: quoteId,
           panel_name: p.panel_name,
           panel_area_sqft: p.panel_area_sqft,
           vinyl_coverage_pct: p.vinyl_coverage_pct,
@@ -763,7 +836,6 @@ function NewQuote({ onCreated }: { onCreated: () => void }) {
           notes: p.description,
           sort_order: i,
         }));
-
         await supabase.from('quote_panels').insert(panelInserts);
       }
 
@@ -970,7 +1042,7 @@ function NewQuote({ onCreated }: { onCreated: () => void }) {
             </div>
             <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '13px' }}>
               <span style={{ color: theme.textSecondary }}>Proof:</span>
-              <span style={{ color: theme.textPrimary, fontWeight: 700 }}>{proofFile?.name}</span>
+              <span style={{ color: theme.textPrimary, fontWeight: 700 }}>{proofFile?.name || (editQuote?.proof_image_path ? 'Existing proof' : 'None')}</span>
             </div>
           </div>
 
@@ -1007,14 +1079,29 @@ function NewQuote({ onCreated }: { onCreated: () => void }) {
               </button>
               <button
                 onClick={runAnalysis}
+                disabled={!proofFile || !selectedTemplate}
                 style={{
                   flex: 2, padding: '14px', borderRadius: '12px', border: 'none',
-                  background: theme.orange, color: '#fff',
-                  fontSize: '15px', fontWeight: 700, cursor: 'pointer',
+                  background: (!proofFile || !selectedTemplate) ? theme.border : theme.orange,
+                  color: (!proofFile || !selectedTemplate) ? theme.textMuted : '#fff',
+                  fontSize: '15px', fontWeight: 700, cursor: (!proofFile || !selectedTemplate) ? 'not-allowed' : 'pointer',
                 }}
               >
                 🤖 Run AI Analysis
               </button>
+              {/* When editing with existing analysis, allow skipping re-analysis */}
+              {editQuote && analysis && (
+                <button
+                  onClick={() => setStep(analysis.graphic_elements?.length ? 4 : 5)}
+                  style={{
+                    flex: 2, padding: '14px', borderRadius: '12px', border: 'none',
+                    background: theme.navy, color: '#fff',
+                    fontSize: '15px', fontWeight: 700, cursor: 'pointer',
+                  }}
+                >
+                  Continue →
+                </button>
+              )}
             </div>
           )}
         </div>
@@ -1649,7 +1736,7 @@ function NewQuote({ onCreated }: { onCreated: () => void }) {
                 color: '#fff', fontSize: '15px', fontWeight: 700, cursor: 'pointer',
               }}
             >
-              {saving ? 'Saving...' : `💾 Save Quote (${fmtCurrency(totalPrice)})`}
+              {saving ? 'Saving...' : `💾 ${editQuote ? 'Update' : 'Save'} Quote (${fmtCurrency(totalPrice)})`}
             </button>
           </div>
         </div>
