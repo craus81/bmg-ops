@@ -892,15 +892,19 @@ function NewQuote({ onCreated, editQuote }: { onCreated: () => void; editQuote?:
     return result;
   }
 
-  // Convert SVG screen coordinates to viewBox coordinates
-  function svgPoint(e: React.MouseEvent<SVGSVGElement> | MouseEvent): { x: number; y: number } | null {
+  // Convert screen coordinates to SVG viewBox coordinates
+  function svgPointFromClient(clientX: number, clientY: number): { x: number; y: number } | null {
     const svg = nestingSvgRef.current;
     if (!svg) return null;
     const pt = svg.createSVGPoint();
-    pt.x = (e as any).clientX;
-    pt.y = (e as any).clientY;
+    pt.x = clientX;
+    pt.y = clientY;
     const svgP = pt.matrixTransform(svg.getScreenCTM()?.inverse());
     return { x: svgP.x, y: svgP.y };
+  }
+
+  function svgPoint(e: React.MouseEvent<SVGSVGElement> | MouseEvent): { x: number; y: number } | null {
+    return svgPointFromClient((e as any).clientX, (e as any).clientY);
   }
 
   function handleNestDragStart(idx: number, e: React.MouseEvent<SVGGElement>) {
@@ -973,6 +977,48 @@ function NewQuote({ onCreated, editQuote }: { onCreated: () => void; editQuote?:
       i === idx ? rotated : el
     );
     setNestingResult(recalcFromPositions(updated, 60));
+  }
+
+  // Touch handlers for nesting diagram drag
+  const nestTouchIdx = useRef<number | null>(null);
+  const nestTouchOffset = useRef<{ x: number; y: number }>({ x: 0, y: 0 });
+
+  function handleNestTouchStart(idx: number, e: React.TouchEvent<SVGGElement>) {
+    if (!nestingResult || e.touches.length !== 1) return;
+    e.preventDefault();
+    e.stopPropagation();
+    const t = e.touches[0];
+    const pt = svgPointFromClient(t.clientX, t.clientY);
+    if (!pt) return;
+    const elem = nestingResult.nested_elements[idx];
+    nestTouchIdx.current = idx;
+    nestTouchOffset.current = { x: pt.x - elem.x_in, y: pt.y - elem.y_in };
+    setDraggingIdx(idx);
+  }
+
+  function handleNestTouchMove(e: React.TouchEvent<SVGSVGElement>) {
+    if (nestTouchIdx.current === null || !nestingResult || e.touches.length !== 1) return;
+    e.preventDefault();
+    const t = e.touches[0];
+    const pt = svgPointFromClient(t.clientX, t.clientY);
+    if (!pt) return;
+    const idx = nestTouchIdx.current;
+    const elem = nestingResult.nested_elements[idx];
+    let newX = pt.x - nestTouchOffset.current.x;
+    let newY = pt.y - nestTouchOffset.current.y;
+    newX = Math.max(0, Math.min(newX, 60 - elem.total_width_in));
+    newY = Math.max(0, newY);
+    newX = Math.round(newX * 2) / 2;
+    newY = Math.round(newY * 2) / 2;
+    const updated = nestingResult.nested_elements.map((el, i) =>
+      i === idx ? { ...el, x_in: newX, y_in: newY } : el
+    );
+    setNestingResult(recalcFromPositions(updated, 60));
+  }
+
+  function handleNestTouchEnd() {
+    nestTouchIdx.current = null;
+    setDraggingIdx(null);
   }
 
   // Crop a region from the proof image given pixel coordinates on the displayed image
@@ -2106,12 +2152,15 @@ function NewQuote({ onCreated, editQuote }: { onCreated: () => void; editQuote?:
                     style={{
                       width: '100%', height: 'auto', background: '#fff', borderRadius: '6px',
                       border: `1px solid ${theme.border}`, cursor: draggingIdx !== null ? 'grabbing' : 'default',
-                      userSelect: 'none',
+                      userSelect: 'none', touchAction: 'none',
                     }}
                     preserveAspectRatio="xMidYMid meet"
                     onMouseMove={handleNestDragMove}
                     onMouseUp={handleNestDragEnd}
                     onMouseLeave={handleNestDragEnd}
+                    onTouchMove={handleNestTouchMove}
+                    onTouchEnd={handleNestTouchEnd}
+                    onTouchCancel={handleNestTouchEnd}
                   >
                     {/* Grid lines every 10" */}
                     {Array.from({ length: Math.ceil(viewH / 10) }, (_, i) => (
@@ -2138,6 +2187,7 @@ function NewQuote({ onCreated, editQuote }: { onCreated: () => void; editQuote?:
                           key={idx}
                           style={{ cursor: isDragging ? 'grabbing' : 'grab' }}
                           onMouseDown={(e) => handleNestDragStart(idx, e)}
+                          onTouchStart={(e) => handleNestTouchStart(idx, e)}
                           onDoubleClick={(e) => { e.preventDefault(); e.stopPropagation(); handleNestRotate(idx); }}
                         >
                           {/* Background fill */}
