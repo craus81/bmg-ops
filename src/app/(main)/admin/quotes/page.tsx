@@ -1733,14 +1733,14 @@ function NewQuote({ onCreated, editQuote }: { onCreated: () => void; editQuote?:
                 // Resize handle helper
                 // Corner-only resize handles — positioned inside box edges
                 const handle = (pos: 'ne' | 'nw' | 'se' | 'sw') => {
-                  const size = 16;
-                  const inset = -2; // sit right on the border
+                  const dot = 6; // matches ~2px border weight visually
+                  const offset = -3; // center dot on corner
                   const cursors: Record<string, string> = { ne: 'nesw-resize', nw: 'nwse-resize', se: 'nwse-resize', sw: 'nesw-resize' };
                   const posStyles: Record<string, React.CSSProperties> = {
-                    nw: { top: inset, left: inset },
-                    ne: { top: inset, right: inset },
-                    sw: { bottom: inset, left: inset },
-                    se: { bottom: inset, right: inset },
+                    nw: { top: offset, left: offset },
+                    ne: { top: offset, right: offset },
+                    sw: { bottom: offset, left: offset },
+                    se: { bottom: offset, right: offset },
                   };
                   return (
                     <div
@@ -1748,18 +1748,23 @@ function NewQuote({ onCreated, editQuote }: { onCreated: () => void; editQuote?:
                       onMouseDown={(e) => handleBboxMouseDown(e, i, pos)}
                       style={{
                         position: 'absolute',
-                        width: size, height: size,
-                        background: '#fff',
-                        border: `2px solid ${color}`,
-                        borderRadius: '3px',
+                        width: dot, height: dot,
+                        background: color,
+                        borderRadius: '50%',
                         cursor: cursors[pos],
                         zIndex: 15,
                         display: showHandles ? 'block' : 'none',
                         touchAction: 'none',
-                        boxShadow: '0 1px 3px rgba(0,0,0,0.3)',
                         ...posStyles[pos],
                       }}
-                    />
+                    >
+                      {/* Invisible expanded hit area for easier grabbing */}
+                      <div style={{
+                        position: 'absolute',
+                        top: -8, left: -8, right: -8, bottom: -8,
+                        borderRadius: '50%',
+                      }} />
+                    </div>
                   );
                 };
                 return (
