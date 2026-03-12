@@ -457,6 +457,7 @@ function NewQuote({ onCreated, editQuote }: { onCreated: () => void; editQuote?:
   const [elementCrops, setElementCrops] = useState<Record<string, string>>({});
   const [includedElements, setIncludedElements] = useState<Set<string>>(new Set());
   const [hoveredElement, setHoveredElement] = useState<string | null>(null);
+  const [selectedBboxIdx, setSelectedBboxIdx] = useState<number | null>(null);
 
   // Bounding box drag/resize state (Step 4)
   const [bboxDragging, setBboxDragging] = useState<{ idx: number; mode: 'move' | 'n' | 's' | 'e' | 'w' | 'ne' | 'nw' | 'se' | 'sw'; startX: number; startY: number; origBox: { x: number; y: number; w: number; h: number } } | null>(null);
@@ -806,11 +807,11 @@ function NewQuote({ onCreated, editQuote }: { onCreated: () => void; editQuote?:
       return;
     }
 
-    // Short tap without movement → toggle include/exclude
+    // Short tap without movement → select this box (show detail panel)
     const elapsed = Date.now() - touchStartTime.current;
     if (elapsed < 300 && !touchMovedEnough.current) {
       e.preventDefault();
-      toggleElement(analysis?.graphic_elements?.[idx]?.element_name || '');
+      setSelectedBboxIdx(selectedBboxIdx === idx ? null : idx);
     }
 
     touchStartPos.current = null;
@@ -819,6 +820,8 @@ function NewQuote({ onCreated, editQuote }: { onCreated: () => void; editQuote?:
   // Touch handlers for crop tool on proof image
   function handleProofTouchStart(e: React.TouchEvent) {
     if (bboxDragging || touchDragging) return;
+    // Deselect bbox when touching background
+    setSelectedBboxIdx(null);
     if (!croppingElement || !proofImgRef.current || e.touches.length !== 1) return;
     e.preventDefault();
     const t = e.touches[0];
@@ -1600,49 +1603,30 @@ function NewQuote({ onCreated, editQuote }: { onCreated: () => void; editQuote?:
           }}>
             {analysis.graphic_elements!.map((el, i) => {
               const isIncluded = includedElements.has(el.element_name);
-              const isCropped = !!elementCrops[el.element_name];
-              const isActive = croppingElement === el.element_name;
+              const isSelected = selectedBboxIdx === i;
+              const boxColors = [
+                '#FF6B35', '#4ECDC4', '#FFE66D', '#95E1D3', '#F38181',
+                '#AA96DA', '#A8D8EA', '#FCBAD3', '#C9CBA3', '#E8A87C',
+              ];
+              const color = boxColors[i % boxColors.length];
               return (
-                <div key={i} style={{ display: 'flex', gap: '2px', flexShrink: 0 }}>
-                  {/* Include/exclude toggle */}
-                  <button
-                    onClick={() => toggleElement(el.element_name)}
-                    title={isIncluded ? 'Click to exclude from kit' : 'Click to include in kit'}
-                    style={{
-                      width: '28px', borderRadius: '6px 0 0 6px', fontSize: '13px',
-                      cursor: 'pointer', border: `1px solid ${isIncluded ? theme.success : theme.border}`,
-                      borderRight: 'none',
-                      background: isIncluded ? theme.successBg : theme.inputBg,
-                      color: isIncluded ? theme.success : theme.textMuted,
-                      display: 'flex', alignItems: 'center', justifyContent: 'center',
-                    }}
-                  >
-                    {isIncluded ? '✓' : '○'}
-                  </button>
-                  {/* Element name — click to start cropping */}
-                  <button
-                    onClick={() => {
-                      setCroppingElement(isActive ? null : el.element_name);
-                      setCropStart(null);
-                      setCropEnd(null);
-                    }}
-                    onMouseEnter={() => setHoveredElement(el.element_name)}
-                    onMouseLeave={() => setHoveredElement(null)}
-                    style={{
-                      padding: '5px 10px', borderRadius: '0 6px 6px 0', fontSize: '11px', fontWeight: 600,
-                      cursor: 'pointer', whiteSpace: 'nowrap',
-                      border: isActive ? `2px solid ${theme.orange}` : `1px solid ${isIncluded ? theme.success : isCropped ? theme.success : theme.border}`,
-                      background: isActive ? theme.orangeSoft : isIncluded ? theme.successBg : theme.inputBg,
-                      color: isActive ? theme.orange : isIncluded ? theme.success : theme.textSecondary,
-                      opacity: isIncluded || isActive ? 1 : 0.6,
-                    }}
-                  >
-                    {isCropped ? '✂ ' : ''}{el.element_name}
-                    <span style={{ fontSize: '9px', marginLeft: '4px', opacity: 0.7 }}>
-                      {el.width_in}"×{el.height_in}"
-                    </span>
-                  </button>
-                </div>
+                <button
+                  key={i}
+                  onClick={() => setSelectedBboxIdx(isSelected ? null : i)}
+                  style={{
+                    width: '32px', height: '32px', borderRadius: '50%', fontSize: '12px', fontWeight: 800,
+                    cursor: 'pointer', flexShrink: 0,
+                    border: isSelected ? `3px solid #fff` : `2px solid ${isIncluded ? color : theme.border}`,
+                    background: isIncluded ? color : theme.inputBg,
+                    color: isIncluded ? '#fff' : theme.textMuted,
+                    boxShadow: isSelected ? `0 0 0 2px ${color}` : 'none',
+                    display: 'flex', alignItems: 'center', justifyContent: 'center',
+                    transition: 'box-shadow 0.15s',
+                  }}
+                  title={el.element_name}
+                >
+                  {isIncluded ? '✓' : i + 1}
+                </button>
               );
             })}
           </div>
@@ -1655,7 +1639,9 @@ function NewQuote({ onCreated, editQuote }: { onCreated: () => void; editQuote?:
               touchAction: (bboxDragging || touchDragging) ? 'none' : 'auto',
             }}
             onMouseDown={(e) => {
-              if (bboxDragging) return; // bbox drag takes priority
+              if (bboxDragging) return;
+              // Deselect bbox when clicking background
+              setSelectedBboxIdx(null);
               if (!croppingElement || !proofImgRef.current) return;
               const rect = proofImgRef.current.getBoundingClientRect();
               const x = e.clientX - rect.left;
@@ -1732,24 +1718,21 @@ function NewQuote({ onCreated, editQuote }: { onCreated: () => void; editQuote?:
                 style={{ width: '100%', display: 'block', pointerEvents: 'none' }}
                 draggable={false}
               />
-              {/* AI-detected bounding boxes overlay — draggable & resizable */}
+              {/* AI-detected bounding boxes overlay — clean minimal UI */}
               {analysis.graphic_elements!.map((el, i) => {
                 if (!el.crop_x_pct && el.crop_x_pct !== 0) return null;
                 const isIncluded = includedElements.has(el.element_name);
-                const isHovered = hoveredElement === el.element_name;
-                const isActive = croppingElement === el.element_name;
+                const isSelected = selectedBboxIdx === i;
                 const isDraggingThis = bboxDragging?.idx === i;
-                const showHandles = isHovered || isActive || isDraggingThis;
+                const showHandles = isSelected || isDraggingThis;
                 const boxColors = [
                   '#FF6B35', '#4ECDC4', '#FFE66D', '#95E1D3', '#F38181',
                   '#AA96DA', '#A8D8EA', '#FCBAD3', '#C9CBA3', '#E8A87C',
                 ];
                 const color = boxColors[i % boxColors.length];
-                const opacity = isIncluded ? 1 : 0.4;
-                // Resize handle style helper
+                // Resize handle helper
                 const handle = (pos: 'n' | 's' | 'e' | 'w' | 'ne' | 'nw' | 'se' | 'sw') => {
-                  // Larger touch targets for mobile (visual size stays small, hit area expands)
-                  const size = 10;
+                  const size = 12;
                   const half = -size / 2;
                   const cursors: Record<string, string> = { n: 'ns-resize', s: 'ns-resize', e: 'ew-resize', w: 'ew-resize', ne: 'nesw-resize', nw: 'nwse-resize', se: 'nwse-resize', sw: 'nesw-resize' };
                   const posStyles: Record<string, React.CSSProperties> = {
@@ -1787,69 +1770,53 @@ function NewQuote({ onCreated, editQuote }: { onCreated: () => void; editQuote?:
                     onMouseLeave={() => { if (!bboxDragging) setHoveredElement(null); }}
                     onTouchStart={(e) => handleBboxTouchStart(e, i)}
                     onTouchEnd={(e) => handleBboxTouchEnd(e, i)}
+                    onClick={(e) => { e.stopPropagation(); setSelectedBboxIdx(isSelected ? null : i); }}
                     style={{
                       position: 'absolute',
                       left: `${el.crop_x_pct}%`,
                       top: `${el.crop_y_pct}%`,
                       width: `${el.crop_w_pct}%`,
                       height: `${el.crop_h_pct}%`,
-                      border: `2px ${isIncluded ? 'solid' : 'dashed'} ${color}`,
-                      background: isHovered || isActive || isDraggingThis || touchDragging
-                        ? `${color}30`
-                        : isIncluded ? `${color}15` : 'transparent',
-                      opacity,
+                      border: `2px ${isIncluded ? 'solid' : 'dashed'} ${isSelected ? '#fff' : color}`,
+                      boxShadow: isSelected ? `0 0 0 2px ${color}, 0 0 12px ${color}80` : 'none',
+                      background: isSelected ? `${color}25` : isIncluded ? `${color}10` : 'transparent',
+                      opacity: isIncluded || isSelected ? 1 : 0.35,
                       pointerEvents: isDragging ? 'none' : 'auto',
-                      zIndex: isDraggingThis ? 20 : isHovered || isActive ? 10 : 1,
+                      zIndex: isDraggingThis ? 20 : isSelected ? 15 : 1,
                       borderRadius: '3px',
                       touchAction: 'none',
+                      transition: 'box-shadow 0.15s, opacity 0.15s',
                     }}
                   >
-                    {/* Drag body — move cursor, double-click/tap to toggle include */}
+                    {/* Drag body */}
                     <div
                       onMouseDown={(e) => handleBboxMouseDown(e, i, 'move')}
-                      onDoubleClick={(e) => { e.stopPropagation(); toggleElement(el.element_name); }}
                       style={{
-                        position: 'absolute', inset: '4px',
+                        position: 'absolute', inset: '0',
                         cursor: 'grab',
                         touchAction: 'none',
                       }}
-                      title={`Drag to move • Double-click to ${isIncluded ? 'exclude' : 'include'}`}
                     />
-                    {/* Resize handles — 8 points */}
+                    {/* Resize handles — only when selected */}
                     {handle('nw')}{handle('n')}{handle('ne')}
                     {handle('w')}{handle('e')}
                     {handle('sw')}{handle('s')}{handle('se')}
-                    {/* Element label */}
+                    {/* Tiny number badge in corner */}
                     <div style={{
                       position: 'absolute',
-                      top: '-18px', left: '0',
-                      background: color,
+                      top: '-8px', left: '-8px',
+                      width: '16px', height: '16px',
+                      borderRadius: '50%',
+                      background: isIncluded ? color : 'rgba(100,100,100,0.7)',
                       color: '#fff',
                       fontSize: '9px',
-                      fontWeight: 700,
-                      padding: '1px 5px',
-                      borderRadius: '3px 3px 0 0',
-                      whiteSpace: 'nowrap',
-                      lineHeight: '14px',
-                      opacity: isHovered || isActive || isIncluded ? 1 : 0.7,
+                      fontWeight: 800,
+                      display: 'flex', alignItems: 'center', justifyContent: 'center',
                       pointerEvents: 'none',
+                      lineHeight: 1,
+                      border: isSelected ? '2px solid #fff' : 'none',
                     }}>
-                      {isIncluded ? '✓ ' : ''}{el.element_name}
-                    </div>
-                    {/* Dimension badge */}
-                    <div style={{
-                      position: 'absolute',
-                      bottom: '2px', right: '2px',
-                      background: 'rgba(0,0,0,0.7)',
-                      color: '#fff',
-                      fontSize: '9px',
-                      fontWeight: 700,
-                      padding: '1px 4px',
-                      borderRadius: '3px',
-                      whiteSpace: 'nowrap',
-                      pointerEvents: 'none',
-                    }}>
-                      {el.width_in}"×{el.height_in}"
+                      {isIncluded ? '✓' : i + 1}
                     </div>
                   </div>
                 );
@@ -1872,35 +1839,70 @@ function NewQuote({ onCreated, editQuote }: { onCreated: () => void; editQuote?:
             </div>
           </div>
 
-          {/* Tagged thumbnails strip at bottom */}
-          {Object.keys(elementCrops).length > 0 && (
-            <div style={{
-              display: 'flex', gap: '8px', padding: '8px 16px', overflowX: 'auto', flexShrink: 0,
-              background: theme.card, borderTop: `1px solid ${theme.border}`,
-            }}>
-              {analysis.graphic_elements!.filter(el => elementCrops[el.element_name]).map((el, i) => (
-                <div key={i} style={{ textAlign: 'center', flexShrink: 0 }}>
+          {/* Bottom detail panel — shows when a box is selected */}
+          {selectedBboxIdx !== null && analysis.graphic_elements![selectedBboxIdx] && (() => {
+            const sel = analysis.graphic_elements![selectedBboxIdx];
+            const isIncluded = includedElements.has(sel.element_name);
+            const boxColors = [
+              '#FF6B35', '#4ECDC4', '#FFE66D', '#95E1D3', '#F38181',
+              '#AA96DA', '#A8D8EA', '#FCBAD3', '#C9CBA3', '#E8A87C',
+            ];
+            const color = boxColors[selectedBboxIdx % boxColors.length];
+            return (
+              <div style={{
+                flexShrink: 0, background: theme.card, borderTop: `3px solid ${color}`,
+                padding: '10px 16px', display: 'flex', gap: '10px', alignItems: 'center',
+              }}>
+                {/* Crop thumbnail or placeholder */}
+                {elementCrops[sel.element_name] ? (
                   <img
-                    src={elementCrops[el.element_name]}
-                    alt={el.element_name}
-                    style={{
-                      maxWidth: '56px', maxHeight: '56px', objectFit: 'contain', borderRadius: '4px',
-                      border: `2px solid ${theme.success}`, cursor: 'pointer',
-                    }}
-                    onClick={() => {
-                      setCroppingElement(el.element_name);
-                      setCropStart(null);
-                      setCropEnd(null);
-                    }}
-                    title={`Re-crop "${el.element_name}"`}
+                    src={elementCrops[sel.element_name]}
+                    alt={sel.element_name}
+                    style={{ width: '48px', height: '48px', objectFit: 'contain', borderRadius: '6px', border: `2px solid ${color}`, flexShrink: 0 }}
+                    onClick={() => { setCroppingElement(sel.element_name); setCropStart(null); setCropEnd(null); }}
                   />
-                  <div style={{ fontSize: '8px', color: theme.textMuted, marginTop: '2px', maxWidth: '56px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-                    {el.element_name}
+                ) : (
+                  <div style={{
+                    width: '48px', height: '48px', borderRadius: '6px', flexShrink: 0,
+                    background: theme.inputBg, border: `2px solid ${color}`,
+                    display: 'flex', alignItems: 'center', justifyContent: 'center',
+                    fontSize: '16px', fontWeight: 800, color,
+                  }}>{selectedBboxIdx + 1}</div>
+                )}
+                {/* Element info */}
+                <div style={{ flex: 1, minWidth: 0 }}>
+                  <div style={{ fontSize: '13px', fontWeight: 700, color: theme.textPrimary, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                    {sel.element_name}
+                  </div>
+                  <div style={{ fontSize: '11px', color: theme.textMuted, marginTop: '1px' }}>
+                    {sel.element_type} — {sel.width_in}"×{sel.height_in}"
                   </div>
                 </div>
-              ))}
-            </div>
-          )}
+                {/* Include/exclude button */}
+                <button
+                  onClick={() => toggleElement(sel.element_name)}
+                  style={{
+                    padding: '8px 14px', borderRadius: '8px', fontSize: '12px', fontWeight: 700,
+                    border: isIncluded ? `2px solid ${theme.success}` : `2px solid ${theme.border}`,
+                    background: isIncluded ? theme.successBg : 'transparent',
+                    color: isIncluded ? theme.success : theme.textMuted,
+                    cursor: 'pointer', flexShrink: 0, minWidth: '70px',
+                  }}
+                >
+                  {isIncluded ? '✓ In Kit' : 'Add'}
+                </button>
+                {/* Close */}
+                <button
+                  onClick={() => setSelectedBboxIdx(null)}
+                  style={{
+                    width: '28px', height: '28px', borderRadius: '50%', border: `1px solid ${theme.border}`,
+                    background: 'transparent', color: theme.textMuted, fontSize: '14px',
+                    cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0,
+                  }}
+                >✕</button>
+              </div>
+            );
+          })()}
         </div>
       )}
 
