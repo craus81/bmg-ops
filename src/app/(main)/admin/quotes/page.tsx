@@ -983,6 +983,80 @@ function NewQuote({ onCreated, editQuote }: { onCreated: () => void; editQuote?:
     });
   }
 
+  // Duplicate an element (e.g. same graphic on both sides of vehicle)
+  function duplicateElement(idx: number) {
+    if (!analysis?.graphic_elements) return;
+    const el = analysis.graphic_elements[idx];
+    // Find a unique name for the copy
+    const baseName = el.element_name.replace(/ \(copy.*\)$/, '');
+    const existingNames = new Set(analysis.graphic_elements.map(e => e.element_name));
+    let copyName = `${baseName} (copy)`;
+    let copyNum = 2;
+    while (existingNames.has(copyName)) {
+      copyName = `${baseName} (copy ${copyNum})`;
+      copyNum++;
+    }
+    const duplicate: GraphicElement = {
+      ...el,
+      element_name: copyName,
+    };
+    // Add to analysis
+    const updatedElements = [...analysis.graphic_elements, duplicate];
+    setAnalysis({ ...analysis, graphic_elements: updatedElements });
+    // Auto-include if original is included
+    if (includedElements.has(el.element_name)) {
+      const next = new Set(includedElements);
+      next.add(copyName);
+      setIncludedElements(next);
+      // Copy the crop image too if it exists
+      if (elementCrops[el.element_name]) {
+        setElementCrops(prev => ({ ...prev, [copyName]: prev[el.element_name] }));
+      }
+      // Recalculate nesting with the new element
+      const included = updatedElements.filter(e => next.has(e.element_name));
+      const multiplied: GraphicElement[] = [];
+      for (let q = 0; q < vehicleQty; q++) {
+        included.forEach(e => multiplied.push({ ...e, element_name: vehicleQty > 1 ? `${e.element_name} (${q + 1})` : e.element_name }));
+      }
+      const withBleed = applyBleed(multiplied, bleedSize);
+      setNestingResult(nestElementsOnRoll(withBleed, 60));
+    } else {
+      // Copy crop anyway
+      if (elementCrops[el.element_name]) {
+        setElementCrops(prev => ({ ...prev, [copyName]: prev[el.element_name] }));
+      }
+    }
+  }
+
+  // Remove a duplicated element
+  function removeElement(idx: number) {
+    if (!analysis?.graphic_elements) return;
+    const el = analysis.graphic_elements[idx];
+    const updatedElements = analysis.graphic_elements.filter((_, i) => i !== idx);
+    setAnalysis({ ...analysis, graphic_elements: updatedElements });
+    // Remove from included set and crops
+    const next = new Set(includedElements);
+    next.delete(el.element_name);
+    setIncludedElements(next);
+    setElementCrops(prev => {
+      const updated = { ...prev };
+      delete updated[el.element_name];
+      return updated;
+    });
+    // Recalculate nesting
+    const included = updatedElements.filter(e => next.has(e.element_name));
+    if (included.length === 0) {
+      setNestingResult(null);
+    } else {
+      const multiplied: GraphicElement[] = [];
+      for (let q = 0; q < vehicleQty; q++) {
+        included.forEach(e => multiplied.push({ ...e, element_name: vehicleQty > 1 ? `${e.element_name} (${q + 1})` : e.element_name }));
+      }
+      const withBleed = applyBleed(multiplied, bleedSize);
+      setNestingResult(nestElementsOnRoll(withBleed, 60));
+    }
+  }
+
   // Touch handlers for nesting diagram drag
   const nestTouchIdx = useRef<number | null>(null);
   const nestTouchOffset = useRef<{ x: number; y: number }>({ x: 0, y: 0 });
@@ -2407,6 +2481,32 @@ function NewQuote({ onCreated, editQuote }: { onCreated: () => void; editQuote?:
                             <div style={{ fontSize: '13px', fontWeight: 700, color: theme.textPrimary }}>{el.width_in.toFixed(1)}" × {el.height_in.toFixed(1)}"</div>
                             <div style={{ fontSize: '11px', color: theme.textMuted }}>{(el.width_in * el.height_in).toFixed(1)} sq in</div>
                           </div>
+                        </div>
+                        <div style={{ display: 'flex', gap: '6px', marginTop: '6px' }}>
+                          <button
+                            onClick={() => duplicateElement(i)}
+                            style={{
+                              padding: '4px 10px', borderRadius: '6px', border: `1px solid ${theme.border}`,
+                              background: 'transparent', color: theme.textSecondary, fontSize: '11px', fontWeight: 600,
+                              cursor: 'pointer', display: 'flex', alignItems: 'center', gap: '4px',
+                            }}
+                            title="Duplicate this element (e.g. same graphic on both sides)"
+                          >
+                            ⧉ Duplicate
+                          </button>
+                          {el.element_name.includes('(copy') && (
+                            <button
+                              onClick={() => removeElement(i)}
+                              style={{
+                                padding: '4px 10px', borderRadius: '6px', border: `1px solid ${theme.border}`,
+                                background: 'transparent', color: '#ef4444', fontSize: '11px', fontWeight: 600,
+                                cursor: 'pointer', display: 'flex', alignItems: 'center', gap: '4px',
+                              }}
+                              title="Remove this duplicate"
+                            >
+                              ✕ Remove
+                            </button>
+                          )}
                         </div>
                         {el.description && (
                           <div style={{ marginTop: '8px', padding: '8px 10px', background: theme.subtleBg, borderRadius: '8px', fontSize: '12px', color: theme.textSecondary, lineHeight: 1.5, borderLeft: `3px solid ${theme.orange}` }}>
