@@ -1710,7 +1710,7 @@ function NewQuote({ onCreated, editQuote }: { onCreated: () => void; editQuote?:
             }}
           >
             {/* Inner wrapper sized exactly to the image so % bounding boxes align */}
-            <div style={{ position: 'relative', display: 'inline-block', width: '100%' }}>
+            <div style={{ position: 'relative', display: 'inline-block', width: '100%', overflow: 'visible' }}>
               <img
                 ref={proofImgRef}
                 src={proofPreviewForReview || proofPreview || ''}
@@ -1731,19 +1731,16 @@ function NewQuote({ onCreated, editQuote }: { onCreated: () => void; editQuote?:
                 ];
                 const color = boxColors[i % boxColors.length];
                 // Resize handle helper
-                const handle = (pos: 'n' | 's' | 'e' | 'w' | 'ne' | 'nw' | 'se' | 'sw') => {
-                  const size = 12;
-                  const half = -size / 2;
-                  const cursors: Record<string, string> = { n: 'ns-resize', s: 'ns-resize', e: 'ew-resize', w: 'ew-resize', ne: 'nesw-resize', nw: 'nwse-resize', se: 'nwse-resize', sw: 'nesw-resize' };
+                // Corner-only resize handles — positioned inside box edges
+                const handle = (pos: 'ne' | 'nw' | 'se' | 'sw') => {
+                  const size = 16;
+                  const inset = -2; // sit right on the border
+                  const cursors: Record<string, string> = { ne: 'nesw-resize', nw: 'nwse-resize', se: 'nwse-resize', sw: 'nesw-resize' };
                   const posStyles: Record<string, React.CSSProperties> = {
-                    nw: { top: half, left: half },
-                    n: { top: half, left: '50%', marginLeft: half },
-                    ne: { top: half, right: half },
-                    w: { top: '50%', left: half, marginTop: half },
-                    e: { top: '50%', right: half, marginTop: half },
-                    sw: { bottom: half, left: half },
-                    s: { bottom: half, left: '50%', marginLeft: half },
-                    se: { bottom: half, right: half },
+                    nw: { top: inset, left: inset },
+                    ne: { top: inset, right: inset },
+                    sw: { bottom: inset, left: inset },
+                    se: { bottom: inset, right: inset },
                   };
                   return (
                     <div
@@ -1754,10 +1751,12 @@ function NewQuote({ onCreated, editQuote }: { onCreated: () => void; editQuote?:
                         width: size, height: size,
                         background: '#fff',
                         border: `2px solid ${color}`,
-                        borderRadius: '2px',
+                        borderRadius: '3px',
                         cursor: cursors[pos],
                         zIndex: 15,
                         display: showHandles ? 'block' : 'none',
+                        touchAction: 'none',
+                        boxShadow: '0 1px 3px rgba(0,0,0,0.3)',
                         ...posStyles[pos],
                       }}
                     />
@@ -1786,6 +1785,7 @@ function NewQuote({ onCreated, editQuote }: { onCreated: () => void; editQuote?:
                       borderRadius: '3px',
                       touchAction: 'none',
                       transition: 'box-shadow 0.15s, opacity 0.15s',
+                      overflow: 'visible',
                     }}
                   >
                     {/* Drag body */}
@@ -1797,10 +1797,9 @@ function NewQuote({ onCreated, editQuote }: { onCreated: () => void; editQuote?:
                         touchAction: 'none',
                       }}
                     />
-                    {/* Resize handles — only when selected */}
-                    {handle('nw')}{handle('n')}{handle('ne')}
-                    {handle('w')}{handle('e')}
-                    {handle('sw')}{handle('s')}{handle('se')}
+                    {/* Resize handles — corners only, shown when selected */}
+                    {handle('nw')}{handle('ne')}
+                    {handle('sw')}{handle('se')}
                     {/* Tiny number badge in corner */}
                     <div style={{
                       position: 'absolute',
