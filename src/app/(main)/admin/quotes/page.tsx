@@ -1420,103 +1420,106 @@ function NewQuote({ onCreated, editQuote }: { onCreated: () => void; editQuote?:
               }
             }}
           >
-            <img
-              ref={proofImgRef}
-              src={proofPreviewForReview || proofPreview || ''}
-              alt="Proof"
-              style={{ width: '100%', display: 'block', pointerEvents: 'none' }}
-              draggable={false}
-            />
-            {/* AI-detected bounding boxes overlay */}
-            {analysis.graphic_elements!.map((el, i) => {
-              if (!el.crop_x_pct && el.crop_x_pct !== 0) return null;
-              const isIncluded = includedElements.has(el.element_name);
-              const isHovered = hoveredElement === el.element_name;
-              const isActive = croppingElement === el.element_name;
-              const boxColors = [
-                '#FF6B35', '#4ECDC4', '#FFE66D', '#95E1D3', '#F38181',
-                '#AA96DA', '#A8D8EA', '#FCBAD3', '#C9CBA3', '#E8A87C',
-              ];
-              const color = boxColors[i % boxColors.length];
-              const opacity = isIncluded ? 1 : 0.4;
-              return (
-                <div
-                  key={`bbox-${i}`}
-                  onClick={(e) => {
-                    e.stopPropagation();
-                    toggleElement(el.element_name);
-                  }}
-                  onMouseEnter={() => setHoveredElement(el.element_name)}
-                  onMouseLeave={() => setHoveredElement(null)}
-                  style={{
-                    position: 'absolute',
-                    left: `${el.crop_x_pct}%`,
-                    top: `${el.crop_y_pct}%`,
-                    width: `${el.crop_w_pct}%`,
-                    height: `${el.crop_h_pct}%`,
-                    border: `2px ${isIncluded ? 'solid' : 'dashed'} ${color}`,
-                    background: isHovered || isActive
-                      ? `${color}30`
-                      : isIncluded ? `${color}15` : 'transparent',
-                    opacity,
-                    cursor: 'pointer',
-                    pointerEvents: isDragging ? 'none' : 'auto',
-                    zIndex: isHovered || isActive ? 10 : 1,
-                    transition: 'opacity 0.15s, background 0.15s',
-                    borderRadius: '3px',
-                  }}
-                  title={`${el.element_name} — ${el.width_in}"×${el.height_in}" — click to ${isIncluded ? 'exclude' : 'include'}`}
-                >
-                  {/* Element label with dimensions */}
-                  <div style={{
-                    position: 'absolute',
-                    top: '-18px', left: '0',
-                    background: color,
-                    color: '#fff',
-                    fontSize: '9px',
-                    fontWeight: 700,
-                    padding: '1px 5px',
-                    borderRadius: '3px 3px 0 0',
-                    whiteSpace: 'nowrap',
-                    lineHeight: '14px',
-                    opacity: isHovered || isActive || isIncluded ? 1 : 0.7,
-                    pointerEvents: 'none',
-                  }}>
-                    {isIncluded ? '✓ ' : ''}{el.element_name}
+            {/* Inner wrapper sized exactly to the image so % bounding boxes align */}
+            <div style={{ position: 'relative', display: 'inline-block', width: '100%' }}>
+              <img
+                ref={proofImgRef}
+                src={proofPreviewForReview || proofPreview || ''}
+                alt="Proof"
+                style={{ width: '100%', display: 'block', pointerEvents: 'none' }}
+                draggable={false}
+              />
+              {/* AI-detected bounding boxes overlay — positioned relative to image */}
+              {analysis.graphic_elements!.map((el, i) => {
+                if (!el.crop_x_pct && el.crop_x_pct !== 0) return null;
+                const isIncluded = includedElements.has(el.element_name);
+                const isHovered = hoveredElement === el.element_name;
+                const isActive = croppingElement === el.element_name;
+                const boxColors = [
+                  '#FF6B35', '#4ECDC4', '#FFE66D', '#95E1D3', '#F38181',
+                  '#AA96DA', '#A8D8EA', '#FCBAD3', '#C9CBA3', '#E8A87C',
+                ];
+                const color = boxColors[i % boxColors.length];
+                const opacity = isIncluded ? 1 : 0.4;
+                return (
+                  <div
+                    key={`bbox-${i}`}
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      toggleElement(el.element_name);
+                    }}
+                    onMouseEnter={() => setHoveredElement(el.element_name)}
+                    onMouseLeave={() => setHoveredElement(null)}
+                    style={{
+                      position: 'absolute',
+                      left: `${el.crop_x_pct}%`,
+                      top: `${el.crop_y_pct}%`,
+                      width: `${el.crop_w_pct}%`,
+                      height: `${el.crop_h_pct}%`,
+                      border: `2px ${isIncluded ? 'solid' : 'dashed'} ${color}`,
+                      background: isHovered || isActive
+                        ? `${color}30`
+                        : isIncluded ? `${color}15` : 'transparent',
+                      opacity,
+                      cursor: 'pointer',
+                      pointerEvents: isDragging ? 'none' : 'auto',
+                      zIndex: isHovered || isActive ? 10 : 1,
+                      transition: 'opacity 0.15s, background 0.15s',
+                      borderRadius: '3px',
+                    }}
+                    title={`${el.element_name} — ${el.width_in}"×${el.height_in}" — click to ${isIncluded ? 'exclude' : 'include'}`}
+                  >
+                    {/* Element label with dimensions */}
+                    <div style={{
+                      position: 'absolute',
+                      top: '-18px', left: '0',
+                      background: color,
+                      color: '#fff',
+                      fontSize: '9px',
+                      fontWeight: 700,
+                      padding: '1px 5px',
+                      borderRadius: '3px 3px 0 0',
+                      whiteSpace: 'nowrap',
+                      lineHeight: '14px',
+                      opacity: isHovered || isActive || isIncluded ? 1 : 0.7,
+                      pointerEvents: 'none',
+                    }}>
+                      {isIncluded ? '✓ ' : ''}{el.element_name}
+                    </div>
+                    {/* Dimension badge */}
+                    <div style={{
+                      position: 'absolute',
+                      bottom: '2px', right: '2px',
+                      background: 'rgba(0,0,0,0.7)',
+                      color: '#fff',
+                      fontSize: '9px',
+                      fontWeight: 700,
+                      padding: '1px 4px',
+                      borderRadius: '3px',
+                      whiteSpace: 'nowrap',
+                      pointerEvents: 'none',
+                    }}>
+                      {el.width_in}"×{el.height_in}"
+                    </div>
                   </div>
-                  {/* Dimension badge */}
-                  <div style={{
-                    position: 'absolute',
-                    bottom: '2px', right: '2px',
-                    background: 'rgba(0,0,0,0.7)',
-                    color: '#fff',
-                    fontSize: '9px',
-                    fontWeight: 700,
-                    padding: '1px 4px',
-                    borderRadius: '3px',
-                    whiteSpace: 'nowrap',
-                    pointerEvents: 'none',
-                  }}>
-                    {el.width_in}"×{el.height_in}"
-                  </div>
-                </div>
-              );
-            })}
-            {/* Crop selection rectangle */}
-            {isDragging && cropStart && cropEnd && (
-              <div style={{
-                position: 'absolute',
-                left: Math.min(cropStart.x, cropEnd.x),
-                top: Math.min(cropStart.y, cropEnd.y),
-                width: Math.abs(cropEnd.x - cropStart.x),
-                height: Math.abs(cropEnd.y - cropStart.y),
-                border: `2px solid ${theme.orange}`,
-                background: 'rgba(255, 140, 0, 0.15)',
-                pointerEvents: 'none',
-                borderRadius: '2px',
-                zIndex: 20,
-              }} />
-            )}
+                );
+              })}
+              {/* Crop selection rectangle */}
+              {isDragging && cropStart && cropEnd && (
+                <div style={{
+                  position: 'absolute',
+                  left: Math.min(cropStart.x, cropEnd.x),
+                  top: Math.min(cropStart.y, cropEnd.y),
+                  width: Math.abs(cropEnd.x - cropStart.x),
+                  height: Math.abs(cropEnd.y - cropStart.y),
+                  border: `2px solid ${theme.orange}`,
+                  background: 'rgba(255, 140, 0, 0.15)',
+                  pointerEvents: 'none',
+                  borderRadius: '2px',
+                  zIndex: 20,
+                }} />
+              )}
+            </div>
           </div>
 
           {/* Tagged thumbnails strip at bottom */}
