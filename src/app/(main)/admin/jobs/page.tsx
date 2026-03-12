@@ -507,6 +507,13 @@ function BulkVINUpload() {
   const [worksheetError, setWorksheetError] = useState('');
   const [worksheetNotes, setWorksheetNotes] = useState('');
 
+  // Editing state
+  const [editingRow, setEditingRow] = useState<number | null>(null);
+  const [editingField, setEditingField] = useState<'vin' | 'unit' | null>(null);
+  const [editValue, setEditValue] = useState('');
+  const [editingHeaderField, setEditingHeaderField] = useState<string | null>(null);
+  const [editHeaderValue, setEditHeaderValue] = useState('');
+
   // Processing state
   const [processing, setProcessing] = useState(false);
   const [processedCount, setProcessedCount] = useState(0);
@@ -827,6 +834,95 @@ function BulkVINUpload() {
     }
   };
 
+  // --- Inline Editing Helpers ---
+  const startEditRow = (index: number, field: 'vin' | 'unit') => {
+    const pv = parsedVINs[index];
+    setEditingRow(index);
+    setEditingField(field);
+    setEditValue(field === 'vin' ? (pv.vin || pv.raw) : (pv.unitNumber || ''));
+  };
+
+  const commitEditRow = async () => {
+    if (editingRow === null || !editingField) return;
+    const updated = [...parsedVINs];
+    const pv = { ...updated[editingRow] };
+
+    if (editingField === 'vin') {
+      const cleaned = editValue.toUpperCase().replace(/[^A-HJ-NPR-Z0-9]/g, '');
+      pv.vin = cleaned;
+      pv.raw = editValue;
+      // Re-validate
+      if (pv.isPartial) {
+        pv.valid = cleaned.length >= 4;
+        pv.reason = cleaned.length < 4 ? 'Too short or empty' : undefined;
+      } else {
+        pv.valid = isValidVIN(cleaned);
+        pv.reason = !pv.valid ? 'Invalid VIN format' : undefined;
+      }
+      pv.duplicate = false;
+      pv.existsInDb = false;
+    } else {
+      pv.unitNumber = editValue || undefined;
+    }
+
+    updated[editingRow] = pv;
+    // Re-check duplicates
+    updated.forEach(v => { v.duplicate = false; v.existsInDb = false; });
+    await markDuplicatesAndExisting(updated);
+    setParsedVINs(updated);
+    setEditingRow(null);
+    setEditingField(null);
+    setEditValue('');
+  };
+
+  const cancelEditRow = () => {
+    setEditingRow(null);
+    setEditingField(null);
+    setEditValue('');
+  };
+
+  const removeRow = (index: number) => {
+    const updated = parsedVINs.filter((_, i) => i !== index);
+    updated.forEach(v => { v.duplicate = false; v.existsInDb = false; });
+    markDuplicatesAndExisting(updated).then(() => setParsedVINs([...updated]));
+  };
+
+  const addRow = () => {
+    setParsedVINs(prev => [...prev, {
+      raw: '',
+      vin: '',
+      valid: false,
+      reason: 'Empty — tap to edit',
+      isPartial: inputMode === 'worksheet',
+      unitNumber: undefined,
+    }]);
+    // Auto-focus the new row
+    setTimeout(() => startEditRow(parsedVINs.length, 'vin'), 50);
+  };
+
+  const startEditHeader = (field: string) => {
+    if (!worksheetHeader) return;
+    setEditingHeaderField(field);
+    setEditHeaderValue((worksheetHeader as any)[field] || '');
+  };
+
+  const commitEditHeader = () => {
+    if (!editingHeaderField || !worksheetHeader) return;
+    const updated = { ...worksheetHeader, [editingHeaderField]: editHeaderValue || null };
+    setWorksheetHeader(updated);
+    // Re-match part if part_number changed
+    if (editingHeaderField === 'part_number') {
+      autoMatchPart(editHeaderValue || '');
+    }
+    setEditingHeaderField(null);
+    setEditHeaderValue('');
+  };
+
+  const cancelEditHeader = () => {
+    setEditingHeaderField(null);
+    setEditHeaderValue('');
+  };
+
   // Process all valid VINs
   const processVINs = async () => {
     const toProcess = parsedVINs.filter(v => v.valid && !v.duplicate && !v.existsInDb);
@@ -1139,23 +1235,42 @@ function BulkVINUpload() {
         </div>
       )}
 
-      {/* Worksheet Header Info */}
+      {/* Worksheet Header Info — Editable */}
       {worksheetHeader && (
         <div style={{ background: 'var(--card)', border: '1px solid var(--border)', borderRadius: '12px', padding: '12px', marginBottom: '12px' }}>
-          <div style={{ fontSize: '11px', fontWeight: 700, color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.5px', marginBottom: '8px' }}>Worksheet Header</div>
+          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '8px' }}>
+            <div style={{ fontSize: '11px', fontWeight: 700, color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.5px' }}>Worksheet Header</div>
+            <div style={{ fontSize: '10px', color: 'var(--text-muted)' }}>tap to edit</div>
+          </div>
           <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '6px', fontSize: '12px' }}>
-            {worksheetHeader.part_number && (
-              <div><span style={{ color: 'var(--text-muted)' }}>Part#:</span> <span style={{ fontWeight: 700, color: 'var(--text-primary)' }}>{worksheetHeader.part_number}</span></div>
-            )}
-            {worksheetHeader.customer && (
-              <div><span style={{ color: 'var(--text-muted)' }}>Customer:</span> <span style={{ fontWeight: 700, color: 'var(--text-primary)' }}>{worksheetHeader.customer}</span></div>
-            )}
-            {worksheetHeader.date && (
-              <div><span style={{ color: 'var(--text-muted)' }}>Date:</span> <span style={{ fontWeight: 700, color: 'var(--text-primary)' }}>{worksheetHeader.date}</span></div>
-            )}
-            {worksheetHeader.po_number && (
-              <div><span style={{ color: 'var(--text-muted)' }}>PO#:</span> <span style={{ fontWeight: 700, color: 'var(--text-primary)' }}>{worksheetHeader.po_number}</span></div>
-            )}
+            {(['part_number', 'customer', 'date', 'po_number'] as const).map(field => {
+              const labels: Record<string, string> = { part_number: 'Part#', customer: 'Customer', date: 'Date', po_number: 'PO#' };
+              const val = (worksheetHeader as any)[field];
+              if (!val && editingHeaderField !== field) return null;
+              return (
+                <div key={field}>
+                  <span style={{ color: 'var(--text-muted)' }}>{labels[field]}:</span>{' '}
+                  {editingHeaderField === field ? (
+                    <span style={{ display: 'inline-flex', gap: '4px', alignItems: 'center' }}>
+                      <input
+                        autoFocus
+                        value={editHeaderValue}
+                        onChange={e => setEditHeaderValue(e.target.value)}
+                        onKeyDown={e => { if (e.key === 'Enter') commitEditHeader(); if (e.key === 'Escape') cancelEditHeader(); }}
+                        style={{ fontSize: '12px', fontWeight: 700, padding: '2px 6px', border: '1px solid var(--primary)', borderRadius: '4px', background: 'var(--subtle-bg)', color: 'var(--text-primary)', width: '100px', outline: 'none' }}
+                      />
+                      <button onClick={commitEditHeader} style={{ fontSize: '10px', padding: '2px 4px', border: 'none', background: 'var(--success)', color: '#fff', borderRadius: '3px', cursor: 'pointer' }}>✓</button>
+                      <button onClick={cancelEditHeader} style={{ fontSize: '10px', padding: '2px 4px', border: '1px solid var(--border)', background: 'transparent', color: 'var(--text-muted)', borderRadius: '3px', cursor: 'pointer' }}>✕</button>
+                    </span>
+                  ) : (
+                    <span
+                      onClick={() => startEditHeader(field)}
+                      style={{ fontWeight: 700, color: 'var(--text-primary)', cursor: 'pointer', borderBottom: '1px dashed var(--border)', paddingBottom: '1px' }}
+                    >{val}</span>
+                  )}
+                </div>
+              );
+            })}
           </div>
           {selectedPart && (
             <div style={{ marginTop: '6px', padding: '4px 8px', borderRadius: '6px', background: 'var(--success-bg)', border: '1px solid var(--success-border)', fontSize: '11px', color: 'var(--success)', fontWeight: 600 }}>
@@ -1179,28 +1294,90 @@ function BulkVINUpload() {
             {existsCount > 0 && <span style={{ padding: '4px 10px', borderRadius: '8px', fontSize: '11px', fontWeight: 700, background: 'var(--subtle-bg)', border: '1px solid var(--border)', color: 'var(--text-muted)' }}>↻ {existsCount} already exists</span>}
           </div>
 
-          {/* VIN List */}
-          <div style={{ maxHeight: '300px', overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: '3px', marginBottom: '12px' }}>
+          {/* VIN List — Editable */}
+          <div style={{ maxHeight: '350px', overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: '3px', marginBottom: '8px' }}>
             {parsedVINs.map((pv, i) => {
               const skipped = pv.duplicate || pv.existsInDb;
+              const isEditingVin = editingRow === i && editingField === 'vin';
+              const isEditingUnit = editingRow === i && editingField === 'unit';
               const borderColor = !pv.valid ? 'var(--error-border)' : skipped ? 'var(--border)' : 'var(--success-border)';
               const bgColor = !pv.valid ? 'var(--error-bg)' : skipped ? 'var(--subtle-bg)' : 'var(--success-bg)';
               return (
-                <div key={i} style={{ display: 'flex', alignItems: 'center', gap: '8px', padding: '8px 10px', borderRadius: '8px', border: `1px solid ${borderColor}`, background: bgColor }}>
-                  <span style={{ fontSize: '14px', width: '20px', textAlign: 'center' }}>{!pv.valid ? '❌' : skipped ? '⏭️' : '✅'}</span>
+                <div key={i} style={{ display: 'flex', alignItems: 'center', gap: '6px', padding: '8px 10px', borderRadius: '8px', border: `1px solid ${borderColor}`, background: bgColor }}>
+                  <span style={{ fontSize: '14px', width: '20px', textAlign: 'center', flexShrink: 0 }}>{!pv.valid ? '❌' : skipped ? '⏭️' : '✅'}</span>
                   <div style={{ flex: 1, minWidth: 0 }}>
-                    <div style={{ fontSize: '12px', fontWeight: 700, fontFamily: 'monospace', color: 'var(--text-primary)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{pv.vin || pv.raw}</div>
+                    {/* VIN — editable */}
+                    {isEditingVin ? (
+                      <div style={{ display: 'flex', gap: '4px', alignItems: 'center' }}>
+                        <input
+                          autoFocus
+                          value={editValue}
+                          onChange={e => setEditValue(e.target.value)}
+                          onKeyDown={e => { if (e.key === 'Enter') commitEditRow(); if (e.key === 'Escape') cancelEditRow(); }}
+                          style={{ flex: 1, fontSize: '12px', fontWeight: 700, fontFamily: 'monospace', padding: '3px 6px', border: '1px solid var(--primary)', borderRadius: '4px', background: 'var(--subtle-bg)', color: 'var(--text-primary)', outline: 'none' }}
+                          placeholder="Enter VIN..."
+                        />
+                        <button onClick={commitEditRow} style={{ fontSize: '11px', padding: '3px 6px', border: 'none', background: 'var(--success)', color: '#fff', borderRadius: '4px', cursor: 'pointer', fontWeight: 700 }}>✓</button>
+                        <button onClick={cancelEditRow} style={{ fontSize: '11px', padding: '3px 6px', border: '1px solid var(--border)', background: 'transparent', color: 'var(--text-muted)', borderRadius: '4px', cursor: 'pointer' }}>✕</button>
+                      </div>
+                    ) : (
+                      <div
+                        onClick={() => startEditRow(i, 'vin')}
+                        style={{ fontSize: '12px', fontWeight: 700, fontFamily: 'monospace', color: 'var(--text-primary)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', cursor: 'pointer', borderBottom: '1px dashed transparent' }}
+                        onMouseEnter={e => (e.currentTarget.style.borderBottomColor = 'var(--border)')}
+                        onMouseLeave={e => (e.currentTarget.style.borderBottomColor = 'transparent')}
+                        title="Click to edit VIN"
+                      >{pv.vin || pv.raw || '(empty — click to edit)'}</div>
+                    )}
                     {pv.reason && <div style={{ fontSize: '10px', color: 'var(--error)' }}>{pv.reason}</div>}
                     {pv.duplicate && <div style={{ fontSize: '10px', color: 'var(--warning)' }}>Duplicate in list</div>}
                     {pv.existsInDb && <div style={{ fontSize: '10px', color: 'var(--text-muted)' }}>Already in system</div>}
                     {pv.partNumber && <div style={{ fontSize: '10px', color: 'var(--text-muted)' }}>Part: {pv.partNumber}</div>}
-                    {pv.unitNumber && <div style={{ fontSize: '10px', color: 'var(--text-muted)' }}>Unit: {pv.unitNumber}</div>}
+                    {/* Unit Number — editable */}
+                    {isEditingUnit ? (
+                      <div style={{ display: 'flex', gap: '4px', alignItems: 'center', marginTop: '2px' }}>
+                        <span style={{ fontSize: '10px', color: 'var(--text-muted)' }}>Unit:</span>
+                        <input
+                          autoFocus
+                          value={editValue}
+                          onChange={e => setEditValue(e.target.value)}
+                          onKeyDown={e => { if (e.key === 'Enter') commitEditRow(); if (e.key === 'Escape') cancelEditRow(); }}
+                          style={{ flex: 1, fontSize: '10px', padding: '2px 4px', border: '1px solid var(--primary)', borderRadius: '3px', background: 'var(--subtle-bg)', color: 'var(--text-primary)', outline: 'none' }}
+                          placeholder="Unit number..."
+                        />
+                        <button onClick={commitEditRow} style={{ fontSize: '9px', padding: '2px 4px', border: 'none', background: 'var(--success)', color: '#fff', borderRadius: '3px', cursor: 'pointer' }}>✓</button>
+                        <button onClick={cancelEditRow} style={{ fontSize: '9px', padding: '2px 4px', border: '1px solid var(--border)', background: 'transparent', color: 'var(--text-muted)', borderRadius: '3px', cursor: 'pointer' }}>✕</button>
+                      </div>
+                    ) : pv.unitNumber ? (
+                      <div
+                        onClick={() => startEditRow(i, 'unit')}
+                        style={{ fontSize: '10px', color: 'var(--text-muted)', cursor: 'pointer' }}
+                        title="Click to edit unit number"
+                      >Unit: <span style={{ borderBottom: '1px dashed var(--border)' }}>{pv.unitNumber}</span></div>
+                    ) : inputMode === 'worksheet' ? (
+                      <div
+                        onClick={() => startEditRow(i, 'unit')}
+                        style={{ fontSize: '10px', color: 'var(--text-muted)', cursor: 'pointer', fontStyle: 'italic' }}
+                        title="Click to add unit number"
+                      >+ add unit #</div>
+                    ) : null}
                     {pv.isPartial && <div style={{ fontSize: '10px', color: 'var(--text-muted)', fontStyle: 'italic' }}>Last 8 of VIN</div>}
                   </div>
+                  {/* Remove button */}
+                  <button
+                    onClick={() => removeRow(i)}
+                    title="Remove row"
+                    style={{ width: '22px', height: '22px', borderRadius: '6px', border: '1px solid var(--border)', background: 'transparent', color: 'var(--text-muted)', fontSize: '12px', cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0, lineHeight: 1 }}
+                  >✕</button>
                 </div>
               );
             })}
           </div>
+          {/* Add Row Button */}
+          <button
+            onClick={addRow}
+            style={{ width: '100%', padding: '8px', borderRadius: '8px', border: '1px dashed var(--border)', background: 'transparent', color: 'var(--text-muted)', fontSize: '12px', fontWeight: 600, cursor: 'pointer', marginBottom: '12px' }}
+          >+ Add VIN</button>
 
           {/* Action Buttons */}
           <div style={{ display: 'flex', gap: '8px' }}>
