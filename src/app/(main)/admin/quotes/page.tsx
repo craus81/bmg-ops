@@ -1789,7 +1789,7 @@ function NewQuote({ onCreated, editQuote }: { onCreated: () => void; editQuote?:
                       top: `${el.crop_y_pct}%`,
                       width: `${el.crop_w_pct}%`,
                       height: `${el.crop_h_pct}%`,
-                      border: `2px ${isIncluded ? 'solid' : 'dashed'} ${isSelected ? '#fff' : color}`,
+                      border: `2px solid ${isSelected ? '#fff' : color}`,
                       boxShadow: isSelected ? `0 0 0 2px ${color}, 0 0 12px ${color}80` : 'none',
                       background: isSelected ? `${color}25` : isIncluded ? `${color}10` : 'transparent',
                       opacity: isIncluded || isSelected ? 1 : 0.35,
