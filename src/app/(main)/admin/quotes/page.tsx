@@ -458,6 +458,9 @@ function NewQuote({ onCreated, editQuote }: { onCreated: () => void; editQuote?:
   const [includedElements, setIncludedElements] = useState<Set<string>>(new Set());
   const [hoveredElement, setHoveredElement] = useState<string | null>(null);
 
+  // Bounding box drag/resize state (Step 4)
+  const [bboxDragging, setBboxDragging] = useState<{ idx: number; mode: 'move' | 'n' | 's' | 'e' | 'w' | 'ne' | 'nw' | 'se' | 'sw'; startX: number; startY: number; origBox: { x: number; y: number; w: number; h: number } } | null>(null);
+
   // Drag-and-drop state for nesting diagram
   const [draggingIdx, setDraggingIdx] = useState<number | null>(null);
   const [dragOffset, setDragOffset] = useState<{ x: number; y: number }>({ x: 0, y: 0 });
@@ -581,6 +584,91 @@ function NewQuote({ onCreated, editQuote }: { onCreated: () => void; editQuote?:
   // Get only the included elements
   function getIncludedElements(elements: GraphicElement[]): GraphicElement[] {
     return elements.filter(el => includedElements.has(el.element_name));
+  }
+
+  // Bounding box drag/resize handlers
+  function handleBboxMouseDown(e: React.MouseEvent, idx: number, mode: 'move' | 'n' | 's' | 'e' | 'w' | 'ne' | 'nw' | 'se' | 'sw') {
+    e.stopPropagation();
+    e.preventDefault();
+    const el = analysis?.graphic_elements?.[idx];
+    if (!el) return;
+    setBboxDragging({
+      idx,
+      mode,
+      startX: e.clientX,
+      startY: e.clientY,
+      origBox: {
+        x: el.crop_x_pct || 0,
+        y: el.crop_y_pct || 0,
+        w: el.crop_w_pct || 0,
+        h: el.crop_h_pct || 0,
+      },
+    });
+  }
+
+  function handleBboxMouseMove(e: React.MouseEvent) {
+    if (!bboxDragging || !analysis?.graphic_elements || !proofImgRef.current) return;
+    const imgRect = proofImgRef.current.getBoundingClientRect();
+    // Convert pixel delta to percentage of image
+    const dxPct = ((e.clientX - bboxDragging.startX) / imgRect.width) * 100;
+    const dyPct = ((e.clientY - bboxDragging.startY) / imgRect.height) * 100;
+    const { mode, origBox, idx } = bboxDragging;
+
+    let newX = origBox.x;
+    let newY = origBox.y;
+    let newW = origBox.w;
+    let newH = origBox.h;
+
+    if (mode === 'move') {
+      newX = Math.max(0, Math.min(100 - origBox.w, origBox.x + dxPct));
+      newY = Math.max(0, Math.min(100 - origBox.h, origBox.y + dyPct));
+    } else {
+      // Resize from edges/corners
+      if (mode.includes('w')) {
+        const maxDx = origBox.w - 2; // minimum 2% width
+        const clampedDx = Math.min(dxPct, maxDx);
+        newX = Math.max(0, origBox.x + clampedDx);
+        newW = origBox.w - (newX - origBox.x);
+      }
+      if (mode.includes('e')) {
+        newW = Math.max(2, Math.min(100 - origBox.x, origBox.w + dxPct));
+      }
+      if (mode.includes('n')) {
+        const maxDy = origBox.h - 2;
+        const clampedDy = Math.min(dyPct, maxDy);
+        newY = Math.max(0, origBox.y + clampedDy);
+        newH = origBox.h - (newY - origBox.y);
+      }
+      if (mode.includes('s')) {
+        newH = Math.max(2, Math.min(100 - origBox.y, origBox.h + dyPct));
+      }
+    }
+
+    // Update the element in-place (mutate analysis to avoid full re-render stutter)
+    const el = analysis.graphic_elements[idx];
+    el.crop_x_pct = newX;
+    el.crop_y_pct = newY;
+    el.crop_w_pct = newW;
+    el.crop_h_pct = newH;
+    // Force re-render
+    setAnalysis({ ...analysis });
+  }
+
+  function handleBboxMouseUp() {
+    if (!bboxDragging || !analysis?.graphic_elements) return;
+    const { idx, mode, origBox } = bboxDragging;
+    const el = analysis.graphic_elements[idx];
+
+    // If resized (not just moved), scale physical dimensions proportionally
+    if (mode !== 'move') {
+      const wRatio = (el.crop_w_pct || 1) / (origBox.w || 1);
+      const hRatio = (el.crop_h_pct || 1) / (origBox.h || 1);
+      el.width_in = Math.round(el.width_in * wRatio * 10) / 10;
+      el.height_in = Math.round(el.height_in * hRatio * 10) / 10;
+      setAnalysis({ ...analysis });
+    }
+
+    setBboxDragging(null);
   }
 
   function recalculateNesting(elements: GraphicElement[], bleed: number, qty: number = 1) {
@@ -1373,9 +1461,10 @@ function NewQuote({ onCreated, editQuote }: { onCreated: () => void; editQuote?:
           <div
             style={{
               flex: 1, overflow: 'auto', position: 'relative', userSelect: 'none',
-              cursor: croppingElement ? 'crosshair' : 'default',
+              cursor: bboxDragging ? (bboxDragging.mode === 'move' ? 'grabbing' : 'nwse-resize') : croppingElement ? 'crosshair' : 'default',
             }}
             onMouseDown={(e) => {
+              if (bboxDragging) return; // bbox drag takes priority
               if (!croppingElement || !proofImgRef.current) return;
               const rect = proofImgRef.current.getBoundingClientRect();
               const x = e.clientX - rect.left;
@@ -1385,6 +1474,11 @@ function NewQuote({ onCreated, editQuote }: { onCreated: () => void; editQuote?:
               setIsDragging(true);
             }}
             onMouseMove={(e) => {
+              // Bbox drag/resize takes priority
+              if (bboxDragging) {
+                handleBboxMouseMove(e);
+                return;
+              }
               if (!isDragging || !proofImgRef.current) return;
               const rect = proofImgRef.current.getBoundingClientRect();
               const x = Math.max(0, Math.min(e.clientX - rect.left, rect.width));
@@ -1392,6 +1486,11 @@ function NewQuote({ onCreated, editQuote }: { onCreated: () => void; editQuote?:
               setCropEnd({ x, y });
             }}
             onMouseUp={() => {
+              // Bbox drag/resize
+              if (bboxDragging) {
+                handleBboxMouseUp();
+                return;
+              }
               if (!isDragging || !cropStart || !cropEnd || !croppingElement || !proofImgRef.current) {
                 setIsDragging(false);
                 return;
@@ -1413,6 +1512,10 @@ function NewQuote({ onCreated, editQuote }: { onCreated: () => void; editQuote?:
               setCroppingElement(nextUntagged?.element_name || null);
             }}
             onMouseLeave={() => {
+              if (bboxDragging) {
+                handleBboxMouseUp();
+                return;
+              }
               if (isDragging) {
                 setIsDragging(false);
                 setCropStart(null);
@@ -1429,27 +1532,58 @@ function NewQuote({ onCreated, editQuote }: { onCreated: () => void; editQuote?:
                 style={{ width: '100%', display: 'block', pointerEvents: 'none' }}
                 draggable={false}
               />
-              {/* AI-detected bounding boxes overlay — positioned relative to image */}
+              {/* AI-detected bounding boxes overlay — draggable & resizable */}
               {analysis.graphic_elements!.map((el, i) => {
                 if (!el.crop_x_pct && el.crop_x_pct !== 0) return null;
                 const isIncluded = includedElements.has(el.element_name);
                 const isHovered = hoveredElement === el.element_name;
                 const isActive = croppingElement === el.element_name;
+                const isDraggingThis = bboxDragging?.idx === i;
+                const showHandles = isHovered || isActive || isDraggingThis;
                 const boxColors = [
                   '#FF6B35', '#4ECDC4', '#FFE66D', '#95E1D3', '#F38181',
                   '#AA96DA', '#A8D8EA', '#FCBAD3', '#C9CBA3', '#E8A87C',
                 ];
                 const color = boxColors[i % boxColors.length];
                 const opacity = isIncluded ? 1 : 0.4;
+                // Resize handle style helper
+                const handle = (pos: 'n' | 's' | 'e' | 'w' | 'ne' | 'nw' | 'se' | 'sw') => {
+                  const size = 8;
+                  const half = -size / 2;
+                  const cursors: Record<string, string> = { n: 'ns-resize', s: 'ns-resize', e: 'ew-resize', w: 'ew-resize', ne: 'nesw-resize', nw: 'nwse-resize', se: 'nwse-resize', sw: 'nesw-resize' };
+                  const posStyles: Record<string, React.CSSProperties> = {
+                    nw: { top: half, left: half },
+                    n: { top: half, left: '50%', marginLeft: half },
+                    ne: { top: half, right: half },
+                    w: { top: '50%', left: half, marginTop: half },
+                    e: { top: '50%', right: half, marginTop: half },
+                    sw: { bottom: half, left: half },
+                    s: { bottom: half, left: '50%', marginLeft: half },
+                    se: { bottom: half, right: half },
+                  };
+                  return (
+                    <div
+                      key={pos}
+                      onMouseDown={(e) => handleBboxMouseDown(e, i, pos)}
+                      style={{
+                        position: 'absolute',
+                        width: size, height: size,
+                        background: '#fff',
+                        border: `2px solid ${color}`,
+                        borderRadius: '2px',
+                        cursor: cursors[pos],
+                        zIndex: 15,
+                        display: showHandles ? 'block' : 'none',
+                        ...posStyles[pos],
+                      }}
+                    />
+                  );
+                };
                 return (
                   <div
                     key={`bbox-${i}`}
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      toggleElement(el.element_name);
-                    }}
                     onMouseEnter={() => setHoveredElement(el.element_name)}
-                    onMouseLeave={() => setHoveredElement(null)}
+                    onMouseLeave={() => { if (!bboxDragging) setHoveredElement(null); }}
                     style={{
                       position: 'absolute',
                       left: `${el.crop_x_pct}%`,
@@ -1457,19 +1591,30 @@ function NewQuote({ onCreated, editQuote }: { onCreated: () => void; editQuote?:
                       width: `${el.crop_w_pct}%`,
                       height: `${el.crop_h_pct}%`,
                       border: `2px ${isIncluded ? 'solid' : 'dashed'} ${color}`,
-                      background: isHovered || isActive
+                      background: isHovered || isActive || isDraggingThis
                         ? `${color}30`
                         : isIncluded ? `${color}15` : 'transparent',
                       opacity,
-                      cursor: 'pointer',
                       pointerEvents: isDragging ? 'none' : 'auto',
-                      zIndex: isHovered || isActive ? 10 : 1,
-                      transition: 'opacity 0.15s, background 0.15s',
+                      zIndex: isDraggingThis ? 20 : isHovered || isActive ? 10 : 1,
                       borderRadius: '3px',
                     }}
-                    title={`${el.element_name} — ${el.width_in}"×${el.height_in}" — click to ${isIncluded ? 'exclude' : 'include'}`}
                   >
-                    {/* Element label with dimensions */}
+                    {/* Drag body — move cursor, double-click to toggle include */}
+                    <div
+                      onMouseDown={(e) => handleBboxMouseDown(e, i, 'move')}
+                      onDoubleClick={(e) => { e.stopPropagation(); toggleElement(el.element_name); }}
+                      style={{
+                        position: 'absolute', inset: '4px',
+                        cursor: 'grab',
+                      }}
+                      title={`Drag to move • Double-click to ${isIncluded ? 'exclude' : 'include'}`}
+                    />
+                    {/* Resize handles — 8 points */}
+                    {handle('nw')}{handle('n')}{handle('ne')}
+                    {handle('w')}{handle('e')}
+                    {handle('sw')}{handle('s')}{handle('se')}
+                    {/* Element label */}
                     <div style={{
                       position: 'absolute',
                       top: '-18px', left: '0',
