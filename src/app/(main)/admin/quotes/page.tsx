@@ -461,6 +461,16 @@ function NewQuote({ onCreated, editQuote }: { onCreated: () => void; editQuote?:
   // Bounding box drag/resize state (Step 4)
   const [bboxDragging, setBboxDragging] = useState<{ idx: number; mode: 'move' | 'n' | 's' | 'e' | 'w' | 'ne' | 'nw' | 'se' | 'sw'; startX: number; startY: number; origBox: { x: number; y: number; w: number; h: number } } | null>(null);
 
+  // Touch state for bbox interactions
+  const longPressTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const [touchDragging, setTouchDragging] = useState(false);
+  const pinchStartDist = useRef<number | null>(null);
+  const pinchStartBox = useRef<{ w: number; h: number; x: number; y: number } | null>(null);
+  const pinchIdx = useRef<number | null>(null);
+  const touchStartPos = useRef<{ x: number; y: number } | null>(null);
+  const touchStartTime = useRef<number>(0);
+  const touchMovedEnough = useRef(false);
+
   // Drag-and-drop state for nesting diagram
   const [draggingIdx, setDraggingIdx] = useState<number | null>(null);
   const [dragOffset, setDragOffset] = useState<{ x: number; y: number }>({ x: 0, y: 0 });
@@ -669,6 +679,186 @@ function NewQuote({ onCreated, editQuote }: { onCreated: () => void; editQuote?:
     }
 
     setBboxDragging(null);
+  }
+
+  // --- Touch handlers for bounding boxes ---
+  function getTouchDist(t1: React.Touch, t2: React.Touch) {
+    return Math.hypot(t2.clientX - t1.clientX, t2.clientY - t1.clientY);
+  }
+
+  function handleBboxTouchStart(e: React.TouchEvent, idx: number) {
+    const el = analysis?.graphic_elements?.[idx];
+    if (!el) return;
+
+    if (e.touches.length === 2) {
+      // Pinch start
+      e.preventDefault();
+      e.stopPropagation();
+      pinchStartDist.current = getTouchDist(e.touches[0], e.touches[1]);
+      pinchStartBox.current = {
+        w: el.crop_w_pct || 0, h: el.crop_h_pct || 0,
+        x: el.crop_x_pct || 0, y: el.crop_y_pct || 0,
+      };
+      pinchIdx.current = idx;
+      // Cancel any long press
+      if (longPressTimer.current) { clearTimeout(longPressTimer.current); longPressTimer.current = null; }
+      return;
+    }
+
+    if (e.touches.length === 1) {
+      e.stopPropagation();
+      const t = e.touches[0];
+      touchStartPos.current = { x: t.clientX, y: t.clientY };
+      touchStartTime.current = Date.now();
+      touchMovedEnough.current = false;
+
+      // Start long press timer for drag
+      longPressTimer.current = setTimeout(() => {
+        setTouchDragging(true);
+        setBboxDragging({
+          idx,
+          mode: 'move',
+          startX: t.clientX,
+          startY: t.clientY,
+          origBox: {
+            x: el.crop_x_pct || 0, y: el.crop_y_pct || 0,
+            w: el.crop_w_pct || 0, h: el.crop_h_pct || 0,
+          },
+        });
+      }, 300);
+    }
+  }
+
+  function handleBboxTouchMove(e: React.TouchEvent) {
+    // Pinch resize
+    if (e.touches.length === 2 && pinchStartDist.current !== null && pinchStartBox.current && pinchIdx.current !== null && analysis?.graphic_elements) {
+      e.preventDefault();
+      e.stopPropagation();
+      const dist = getTouchDist(e.touches[0], e.touches[1]);
+      const scale = dist / pinchStartDist.current;
+      const el = analysis.graphic_elements[pinchIdx.current];
+      const orig = pinchStartBox.current;
+      // Scale from center
+      const newW = Math.max(2, Math.min(100, orig.w * scale));
+      const newH = Math.max(2, Math.min(100, orig.h * scale));
+      const dw = newW - orig.w;
+      const dh = newH - orig.h;
+      el.crop_w_pct = newW;
+      el.crop_h_pct = newH;
+      el.crop_x_pct = Math.max(0, Math.min(100 - newW, orig.x - dw / 2));
+      el.crop_y_pct = Math.max(0, Math.min(100 - newH, orig.y - dh / 2));
+      setAnalysis({ ...analysis });
+      return;
+    }
+
+    // Single finger — check if moved enough to cancel tap
+    if (e.touches.length === 1 && touchStartPos.current) {
+      const t = e.touches[0];
+      const dx = t.clientX - touchStartPos.current.x;
+      const dy = t.clientY - touchStartPos.current.y;
+      if (Math.abs(dx) > 8 || Math.abs(dy) > 8) {
+        touchMovedEnough.current = true;
+      }
+    }
+
+    // Drag move
+    if (bboxDragging && touchDragging && e.touches.length === 1 && proofImgRef.current) {
+      e.preventDefault();
+      e.stopPropagation();
+      const t = e.touches[0];
+      const imgRect = proofImgRef.current.getBoundingClientRect();
+      const dxPct = ((t.clientX - bboxDragging.startX) / imgRect.width) * 100;
+      const dyPct = ((t.clientY - bboxDragging.startY) / imgRect.height) * 100;
+      const el = analysis?.graphic_elements?.[bboxDragging.idx];
+      if (el) {
+        el.crop_x_pct = Math.max(0, Math.min(100 - bboxDragging.origBox.w, bboxDragging.origBox.x + dxPct));
+        el.crop_y_pct = Math.max(0, Math.min(100 - bboxDragging.origBox.h, bboxDragging.origBox.y + dyPct));
+        setAnalysis({ ...analysis! });
+      }
+    }
+  }
+
+  function handleBboxTouchEnd(e: React.TouchEvent, idx: number) {
+    // Clear long press timer
+    if (longPressTimer.current) { clearTimeout(longPressTimer.current); longPressTimer.current = null; }
+
+    // Pinch end — update physical dimensions
+    if (pinchIdx.current !== null && pinchStartBox.current && analysis?.graphic_elements) {
+      const el = analysis.graphic_elements[pinchIdx.current];
+      const orig = pinchStartBox.current;
+      if (el.crop_w_pct && el.crop_h_pct) {
+        const wRatio = el.crop_w_pct / (orig.w || 1);
+        const hRatio = el.crop_h_pct / (orig.h || 1);
+        el.width_in = Math.round(el.width_in * wRatio * 10) / 10;
+        el.height_in = Math.round(el.height_in * hRatio * 10) / 10;
+        setAnalysis({ ...analysis });
+      }
+      pinchStartDist.current = null;
+      pinchStartBox.current = null;
+      pinchIdx.current = null;
+      return;
+    }
+
+    // If was dragging, stop
+    if (touchDragging) {
+      setTouchDragging(false);
+      setBboxDragging(null);
+      return;
+    }
+
+    // Short tap without movement → toggle include/exclude
+    const elapsed = Date.now() - touchStartTime.current;
+    if (elapsed < 300 && !touchMovedEnough.current) {
+      e.preventDefault();
+      toggleElement(analysis?.graphic_elements?.[idx]?.element_name || '');
+    }
+
+    touchStartPos.current = null;
+  }
+
+  // Touch handlers for crop tool on proof image
+  function handleProofTouchStart(e: React.TouchEvent) {
+    if (bboxDragging || touchDragging) return;
+    if (!croppingElement || !proofImgRef.current || e.touches.length !== 1) return;
+    e.preventDefault();
+    const t = e.touches[0];
+    const rect = proofImgRef.current.getBoundingClientRect();
+    const x = t.clientX - rect.left;
+    const y = t.clientY - rect.top;
+    setCropStart({ x, y });
+    setCropEnd({ x, y });
+    setIsDragging(true);
+  }
+
+  function handleProofTouchMove(e: React.TouchEvent) {
+    if (!isDragging || !proofImgRef.current || e.touches.length !== 1) return;
+    e.preventDefault();
+    const t = e.touches[0];
+    const rect = proofImgRef.current.getBoundingClientRect();
+    const x = Math.max(0, Math.min(t.clientX - rect.left, rect.width));
+    const y = Math.max(0, Math.min(t.clientY - rect.top, rect.height));
+    setCropEnd({ x, y });
+  }
+
+  function handleProofTouchEnd() {
+    if (!isDragging || !cropStart || !cropEnd || !croppingElement || !proofImgRef.current) {
+      setIsDragging(false);
+      return;
+    }
+    setIsDragging(false);
+    const sx = Math.min(cropStart.x, cropEnd.x);
+    const sy = Math.min(cropStart.y, cropEnd.y);
+    const sw = Math.abs(cropEnd.x - cropStart.x);
+    const sh = Math.abs(cropEnd.y - cropStart.y);
+    if (sw > 5 && sh > 5) {
+      cropFromProof(croppingElement, proofImgRef.current, sx, sy, sw, sh);
+    }
+    setCropStart(null);
+    setCropEnd(null);
+    const nextUntagged = analysis!.graphic_elements!.find(
+      el => el.element_name !== croppingElement && !elementCrops[el.element_name]
+    );
+    setCroppingElement(nextUntagged?.element_name || null);
   }
 
   function recalculateNesting(elements: GraphicElement[], bleed: number, qty: number = 1) {
@@ -1462,6 +1652,7 @@ function NewQuote({ onCreated, editQuote }: { onCreated: () => void; editQuote?:
             style={{
               flex: 1, overflow: 'auto', position: 'relative', userSelect: 'none',
               cursor: bboxDragging ? (bboxDragging.mode === 'move' ? 'grabbing' : 'nwse-resize') : croppingElement ? 'crosshair' : 'default',
+              touchAction: (bboxDragging || touchDragging) ? 'none' : 'auto',
             }}
             onMouseDown={(e) => {
               if (bboxDragging) return; // bbox drag takes priority
@@ -1522,6 +1713,15 @@ function NewQuote({ onCreated, editQuote }: { onCreated: () => void; editQuote?:
                 setCropEnd(null);
               }
             }}
+            onTouchStart={handleProofTouchStart}
+            onTouchMove={(e) => {
+              // Bbox touch events bubble up here for global move tracking
+              handleBboxTouchMove(e);
+              handleProofTouchMove(e);
+            }}
+            onTouchEnd={(e) => {
+              handleProofTouchEnd();
+            }}
           >
             {/* Inner wrapper sized exactly to the image so % bounding boxes align */}
             <div style={{ position: 'relative', display: 'inline-block', width: '100%' }}>
@@ -1548,7 +1748,8 @@ function NewQuote({ onCreated, editQuote }: { onCreated: () => void; editQuote?:
                 const opacity = isIncluded ? 1 : 0.4;
                 // Resize handle style helper
                 const handle = (pos: 'n' | 's' | 'e' | 'w' | 'ne' | 'nw' | 'se' | 'sw') => {
-                  const size = 8;
+                  // Larger touch targets for mobile (visual size stays small, hit area expands)
+                  const size = 10;
                   const half = -size / 2;
                   const cursors: Record<string, string> = { n: 'ns-resize', s: 'ns-resize', e: 'ew-resize', w: 'ew-resize', ne: 'nesw-resize', nw: 'nwse-resize', se: 'nwse-resize', sw: 'nesw-resize' };
                   const posStyles: Record<string, React.CSSProperties> = {
@@ -1584,6 +1785,8 @@ function NewQuote({ onCreated, editQuote }: { onCreated: () => void; editQuote?:
                     key={`bbox-${i}`}
                     onMouseEnter={() => setHoveredElement(el.element_name)}
                     onMouseLeave={() => { if (!bboxDragging) setHoveredElement(null); }}
+                    onTouchStart={(e) => handleBboxTouchStart(e, i)}
+                    onTouchEnd={(e) => handleBboxTouchEnd(e, i)}
                     style={{
                       position: 'absolute',
                       left: `${el.crop_x_pct}%`,
@@ -1591,22 +1794,24 @@ function NewQuote({ onCreated, editQuote }: { onCreated: () => void; editQuote?:
                       width: `${el.crop_w_pct}%`,
                       height: `${el.crop_h_pct}%`,
                       border: `2px ${isIncluded ? 'solid' : 'dashed'} ${color}`,
-                      background: isHovered || isActive || isDraggingThis
+                      background: isHovered || isActive || isDraggingThis || touchDragging
                         ? `${color}30`
                         : isIncluded ? `${color}15` : 'transparent',
                       opacity,
                       pointerEvents: isDragging ? 'none' : 'auto',
                       zIndex: isDraggingThis ? 20 : isHovered || isActive ? 10 : 1,
                       borderRadius: '3px',
+                      touchAction: 'none',
                     }}
                   >
-                    {/* Drag body — move cursor, double-click to toggle include */}
+                    {/* Drag body — move cursor, double-click/tap to toggle include */}
                     <div
                       onMouseDown={(e) => handleBboxMouseDown(e, i, 'move')}
                       onDoubleClick={(e) => { e.stopPropagation(); toggleElement(el.element_name); }}
                       style={{
                         position: 'absolute', inset: '4px',
                         cursor: 'grab',
+                        touchAction: 'none',
                       }}
                       title={`Drag to move • Double-click to ${isIncluded ? 'exclude' : 'include'}`}
                     />
