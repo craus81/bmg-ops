@@ -466,6 +466,7 @@ function NewQuote({ onCreated, editQuote }: { onCreated: () => void; editQuote?:
   const longPressTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const [touchDragging, setTouchDragging] = useState(false);
   const pinchStartDist = useRef<number | null>(null);
+  const pinchStartSpread = useRef<{ dx: number; dy: number } | null>(null);
   const pinchStartBox = useRef<{ w: number; h: number; x: number; y: number } | null>(null);
   const pinchIdx = useRef<number | null>(null);
   const touchStartPos = useRef<{ x: number; y: number } | null>(null);
@@ -696,6 +697,10 @@ function NewQuote({ onCreated, editQuote }: { onCreated: () => void; editQuote?:
       e.preventDefault();
       e.stopPropagation();
       pinchStartDist.current = getTouchDist(e.touches[0], e.touches[1]);
+      pinchStartSpread.current = {
+        dx: Math.abs(e.touches[0].clientX - e.touches[1].clientX) || 1,
+        dy: Math.abs(e.touches[0].clientY - e.touches[1].clientY) || 1,
+      };
       pinchStartBox.current = {
         w: el.crop_w_pct || 0, h: el.crop_h_pct || 0,
         x: el.crop_x_pct || 0, y: el.crop_y_pct || 0,
@@ -732,16 +737,18 @@ function NewQuote({ onCreated, editQuote }: { onCreated: () => void; editQuote?:
 
   function handleBboxTouchMove(e: React.TouchEvent) {
     // Pinch resize
-    if (e.touches.length === 2 && pinchStartDist.current !== null && pinchStartBox.current && pinchIdx.current !== null && analysis?.graphic_elements) {
+    if (e.touches.length === 2 && pinchStartSpread.current && pinchStartBox.current && pinchIdx.current !== null && analysis?.graphic_elements) {
       e.preventDefault();
       e.stopPropagation();
-      const dist = getTouchDist(e.touches[0], e.touches[1]);
-      const scale = dist / pinchStartDist.current;
+      const curDx = Math.abs(e.touches[0].clientX - e.touches[1].clientX) || 1;
+      const curDy = Math.abs(e.touches[0].clientY - e.touches[1].clientY) || 1;
+      const scaleX = curDx / pinchStartSpread.current.dx;
+      const scaleY = curDy / pinchStartSpread.current.dy;
       const el = analysis.graphic_elements[pinchIdx.current];
       const orig = pinchStartBox.current;
-      // Scale from center
-      const newW = Math.max(2, Math.min(100, orig.w * scale));
-      const newH = Math.max(2, Math.min(100, orig.h * scale));
+      // Scale width and height independently based on finger spread direction
+      const newW = Math.max(2, Math.min(100, orig.w * scaleX));
+      const newH = Math.max(2, Math.min(100, orig.h * scaleY));
       const dw = newW - orig.w;
       const dh = newH - orig.h;
       el.crop_w_pct = newW;
@@ -795,6 +802,7 @@ function NewQuote({ onCreated, editQuote }: { onCreated: () => void; editQuote?:
         setAnalysis({ ...analysis });
       }
       pinchStartDist.current = null;
+      pinchStartSpread.current = null;
       pinchStartBox.current = null;
       pinchIdx.current = null;
       return;
