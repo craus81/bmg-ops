@@ -13,16 +13,17 @@ export function applyBleed(elements: GraphicElement[], bleedIn: number): Element
 }
 
 /**
- * Free-rectangle based bin packing (Guillotine algorithm).
+ * Maximal Rectangles Best Area Fit (MAXRECTS-BAF) bin packing.
  *
- * Instead of fixed-height shelves, this tracks a list of free rectangular
- * spaces on the roll. When placing an element, the algorithm:
- *  1. Finds the best free rect that fits (lowest Y first, then leftmost)
- *  2. Places the element in the top-left corner of that free rect
- *  3. Splits the remaining space into two new free rects
- *
- * This eliminates the huge wasted space that shelf packing creates when
- * tall narrow items sit next to short wide items.
+ * Key improvements over the previous guillotine approach:
+ *  1. Always tries BOTH orientations (normal + rotated 90°) and picks whichever
+ *     fits better — critical for tall narrow elements like bed stripes that
+ *     should lay horizontally on a 60" wide roll.
+ *  2. Uses "best short side fit" scoring: among all free rects that can hold
+ *     the element, pick the one where the leftover space on the shorter side
+ *     is minimized. This produces tighter packing.
+ *  3. Maintains a maximal free rectangles list with overlap merging, which
+ *     recovers usable space that guillotine splits lose.
  */
 
 interface FreeRect {
@@ -47,44 +48,52 @@ export function nestElementsOnRoll(
     };
   }
 
-  // Sort by area descending (biggest pieces first for better packing)
+  // Sort by height descending — place tallest pieces first so shorter ones
+  // can fill gaps beside them. Break ties by area descending.
   const sorted = [...elementsWithBleed].sort((a, b) => {
+    const maxA = Math.max(a.total_width_in, a.total_height_in);
+    const maxB = Math.max(b.total_width_in, b.total_height_in);
+    if (Math.abs(maxB - maxA) > 0.1) return maxB - maxA;
     return (b.total_width_in * b.total_height_in) - (a.total_width_in * a.total_height_in);
   });
 
-  // Start with one huge free rectangle (the entire roll)
-  const freeRects: FreeRect[] = [{ x: 0, y: 0, w: rollWidthIn, h: maxLengthIn }];
+  // Start with one large free rectangle (the entire roll)
+  let freeRects: FreeRect[] = [{ x: 0, y: 0, w: rollWidthIn, h: maxLengthIn }];
   const placed: NestedElement[] = [];
 
   for (const ewb of sorted) {
-    const w = ewb.total_width_in;
-    const h = ewb.total_height_in;
+    const ew = ewb.total_width_in;
+    const eh = ewb.total_height_in;
 
-    // Build candidate orientations
-    const orientations: { pw: number; ph: number }[] = [];
-    if (w <= rollWidthIn) orientations.push({ pw: w, ph: h });
-    if (h <= rollWidthIn && h !== w) orientations.push({ pw: h, ph: w });
+    // Build candidate orientations — always try both
+    const orientations: { pw: number; ph: number; rotated: boolean }[] = [];
+    if (ew <= rollWidthIn) orientations.push({ pw: ew, ph: eh, rotated: false });
+    if (eh <= rollWidthIn && Math.abs(eh - ew) > 0.01) orientations.push({ pw: eh, ph: ew, rotated: true });
 
     if (orientations.length === 0) {
       console.warn(`Element "${ewb.element.element_name}" exceeds roll width. Skipping.`);
       continue;
     }
 
-    // Find the best free rect: minimize the bottom edge of the placed element
-    // (i.e. place where y + height is smallest), then leftmost X
+    // Find the best free rect using "Best Short Side Fit":
+    // Place where min(leftover_w, leftover_h) is smallest — tightest fit.
+    // Among ties, prefer lower Y (pack towards the top of the roll).
     let bestFreeIdx = -1;
     let bestOri = orientations[0];
-    let bestScore = Infinity;
+    let bestShortSide = Infinity;
+    let bestY = Infinity;
 
     for (let fi = 0; fi < freeRects.length; fi++) {
       const fr = freeRects[fi];
       for (const ori of orientations) {
         if (ori.pw <= fr.w && ori.ph <= fr.h) {
-          // Score: minimize bottom edge (y + height), then prefer leftmost
-          const bottomEdge = fr.y + ori.ph;
-          const score = bottomEdge * 10000 + fr.x;
-          if (score < bestScore) {
-            bestScore = score;
+          const leftoverW = fr.w - ori.pw;
+          const leftoverH = fr.h - ori.ph;
+          const shortSide = Math.min(leftoverW, leftoverH);
+          const y = fr.y;
+          if (shortSide < bestShortSide || (shortSide === bestShortSide && y < bestY)) {
+            bestShortSide = shortSide;
+            bestY = y;
             bestFreeIdx = fi;
             bestOri = ori;
           }
@@ -108,42 +117,47 @@ export function nestElementsOnRoll(
       total_height_in: bestOri.ph,
       x_in: px,
       y_in: py,
+      rotated: bestOri.rotated,
     });
 
-    // Remove the used free rect
-    freeRects.splice(bestFreeIdx, 1);
+    // The placed rectangle
+    const usedRect: FreeRect = { x: px, y: py, w: bestOri.pw, h: bestOri.ph };
 
-    // Split remaining space into two new free rects (guillotine split)
-    // Choose split direction that maximizes the larger remaining rect
-    const rightW = fr.w - bestOri.pw;
-    const belowH = fr.h - bestOri.ph;
-
-    // Option A: split horizontally first (right gets full height, below gets reduced width)
-    // Option B: split vertically first (below gets full width, right gets reduced height)
-    // Pick whichever gives a larger usable rectangle
-    const areaA = Math.max(rightW * fr.h, bestOri.pw * belowH);
-    const areaB = Math.max(rightW * bestOri.ph, fr.w * belowH);
-
-    if (areaA >= areaB) {
-      // Split A: right side gets full height
-      if (rightW > 0.5) {
-        freeRects.push({ x: px + bestOri.pw, y: fr.y, w: rightW, h: fr.h });
+    // Split every existing free rect that overlaps with the placed element
+    const newFreeRects: FreeRect[] = [];
+    for (const rect of freeRects) {
+      if (!rectsOverlap(rect, usedRect)) {
+        newFreeRects.push(rect);
+        continue;
       }
-      if (belowH > 0.5) {
-        freeRects.push({ x: px, y: py + bestOri.ph, w: bestOri.pw, h: belowH });
+      // Generate up to 4 sub-rectangles from the non-overlapping portions
+      // Top strip
+      if (usedRect.y > rect.y) {
+        newFreeRects.push({ x: rect.x, y: rect.y, w: rect.w, h: usedRect.y - rect.y });
       }
-    } else {
-      // Split B: below gets full width
-      if (belowH > 0.5) {
-        freeRects.push({ x: fr.x, y: py + bestOri.ph, w: fr.w, h: belowH });
+      // Bottom strip
+      const usedBottom = usedRect.y + usedRect.h;
+      const rectBottom = rect.y + rect.h;
+      if (usedBottom < rectBottom) {
+        newFreeRects.push({ x: rect.x, y: usedBottom, w: rect.w, h: rectBottom - usedBottom });
       }
-      if (rightW > 0.5) {
-        freeRects.push({ x: px + bestOri.pw, y: py, w: rightW, h: bestOri.ph });
+      // Left strip
+      if (usedRect.x > rect.x) {
+        newFreeRects.push({ x: rect.x, y: rect.y, w: usedRect.x - rect.x, h: rect.h });
+      }
+      // Right strip
+      const usedRight = usedRect.x + usedRect.w;
+      const rectRight = rect.x + rect.w;
+      if (usedRight < rectRight) {
+        newFreeRects.push({ x: usedRight, y: rect.y, w: rectRight - usedRight, h: rect.h });
       }
     }
+
+    // Remove any free rect that is fully contained inside another (prune redundant)
+    freeRects = pruneContained(newFreeRects);
   }
 
-  // Calculate actual roll length needed (max bottom edge of any placed element)
+  // Calculate actual roll length needed
   const totalHeight = placed.reduce(
     (max, el) => Math.max(max, el.y_in + el.total_height_in), 0
   );
@@ -161,6 +175,32 @@ export function nestElementsOnRoll(
     nested_elements: placed,
     efficiency_pct: Math.round(efficiency * 10) / 10,
   };
+}
+
+/** Check if two rectangles overlap (exclusive — touching edges don't count) */
+function rectsOverlap(a: FreeRect, b: FreeRect): boolean {
+  return a.x < b.x + b.w && a.x + a.w > b.x && a.y < b.y + b.h && a.y + a.h > b.y;
+}
+
+/** Remove free rects that are fully contained inside another free rect */
+function pruneContained(rects: FreeRect[]): FreeRect[] {
+  const result: FreeRect[] = [];
+  for (let i = 0; i < rects.length; i++) {
+    // Skip very small rects (< 0.5" on either side)
+    if (rects[i].w < 0.5 || rects[i].h < 0.5) continue;
+    let contained = false;
+    for (let j = 0; j < rects.length; j++) {
+      if (i === j) continue;
+      if (rects[j].x <= rects[i].x && rects[j].y <= rects[i].y &&
+          rects[j].x + rects[j].w >= rects[i].x + rects[i].w &&
+          rects[j].y + rects[j].h >= rects[i].y + rects[i].h) {
+        contained = true;
+        break;
+      }
+    }
+    if (!contained) result.push(rects[i]);
+  }
+  return result;
 }
 
 /**
