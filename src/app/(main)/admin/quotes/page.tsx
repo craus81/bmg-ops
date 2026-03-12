@@ -455,6 +455,8 @@ function NewQuote({ onCreated, editQuote }: { onCreated: () => void; editQuote?:
   const [vehicleQty, setVehicleQty] = useState(1);
   const [nestingResult, setNestingResult] = useState<RollNestingResult | null>(null);
   const [elementCrops, setElementCrops] = useState<Record<string, string>>({});
+  const [includedElements, setIncludedElements] = useState<Set<string>>(new Set());
+  const [hoveredElement, setHoveredElement] = useState<string | null>(null);
 
   // Drag-and-drop state for nesting diagram
   const [draggingIdx, setDraggingIdx] = useState<number | null>(null);
@@ -533,6 +535,10 @@ function NewQuote({ onCreated, editQuote }: { onCreated: () => void; editQuote?:
     // Step 3: AI Analysis result
     if (editQuote.ai_analysis) {
       setAnalysis(editQuote.ai_analysis);
+      // When loading existing quote, include all elements (user already selected them)
+      if (editQuote.ai_analysis.graphic_elements?.length) {
+        setIncludedElements(new Set(editQuote.ai_analysis.graphic_elements.map((e: GraphicElement) => e.element_name)));
+      }
     }
 
     // Step 4: Pricing
@@ -559,11 +565,35 @@ function NewQuote({ onCreated, editQuote }: { onCreated: () => void; editQuote?:
     setStep(5);
   }, [editQuote]);
 
+  // Toggle element inclusion
+  function toggleElement(elementName: string) {
+    setIncludedElements(prev => {
+      const next = new Set(prev);
+      if (next.has(elementName)) {
+        next.delete(elementName);
+      } else {
+        next.add(elementName);
+      }
+      return next;
+    });
+  }
+
+  // Get only the included elements
+  function getIncludedElements(elements: GraphicElement[]): GraphicElement[] {
+    return elements.filter(el => includedElements.has(el.element_name));
+  }
+
   function recalculateNesting(elements: GraphicElement[], bleed: number, qty: number = 1) {
+    // Filter to only included elements
+    const included = elements.filter(el => includedElements.has(el.element_name));
+    if (included.length === 0) {
+      setNestingResult(null);
+      return null;
+    }
     // Duplicate elements for multi-vehicle nesting
     const multiplied: GraphicElement[] = [];
     for (let i = 0; i < qty; i++) {
-      elements.forEach(el => {
+      included.forEach(el => {
         multiplied.push({ ...el, element_name: qty > 1 ? `${el.element_name} (${i + 1})` : el.element_name });
       });
     }
@@ -677,6 +707,8 @@ function NewQuote({ onCreated, editQuote }: { onCreated: () => void; editQuote?:
     ctx.drawImage(imgEl, nx, ny, nw, nh, 0, 0, canvas.width, canvas.height);
     const dataUrl = canvas.toDataURL('image/jpeg', 0.85);
     setElementCrops(prev => ({ ...prev, [elementName]: dataUrl }));
+    // Cropping automatically includes the element
+    setIncludedElements(prev => new Set(prev).add(elementName));
   }
 
   // State for the crop tool
@@ -772,8 +804,10 @@ function NewQuote({ onCreated, editQuote }: { onCreated: () => void; editQuote?:
 
       // Run nesting if analysis has graphic elements
       if (result.analysis.graphic_elements?.length) {
-        recalculateNesting(result.analysis.graphic_elements, bleedSize, vehicleQty);
-        // Go to tag elements step so user can crop thumbnails
+        // Start with all elements excluded — user tags what's in the kit
+        setIncludedElements(new Set());
+        setNestingResult(null);
+        // Go to tag elements step so user can crop thumbnails & select elements
         setStep(4);
       } else {
         // Panel-based analysis, skip tagging
@@ -1245,7 +1279,7 @@ function NewQuote({ onCreated, editQuote }: { onCreated: () => void; editQuote?:
               <div style={{ fontSize: '11px', color: theme.textMuted }}>
                 {croppingElement
                   ? `Drawing: ${croppingElement}`
-                  : `${Object.keys(elementCrops).length} of ${analysis.graphic_elements!.length} tagged`}
+                  : `${includedElements.size} of ${analysis.graphic_elements!.length} included`}
               </div>
             </div>
             <div style={{ display: 'flex', gap: '8px' }}>
@@ -1259,15 +1293,24 @@ function NewQuote({ onCreated, editQuote }: { onCreated: () => void; editQuote?:
                 ← Back
               </button>
               <button
-                onClick={() => setStep(5)}
+                onClick={() => {
+                  // Recalculate nesting with only included elements before moving to review
+                  if (analysis.graphic_elements) {
+                    recalculateNesting(analysis.graphic_elements, bleedSize, vehicleQty);
+                  }
+                  setStep(5);
+                }}
+                disabled={includedElements.size === 0}
                 style={{
                   padding: '8px 14px', borderRadius: '8px', border: 'none',
-                  background: theme.orange, color: '#fff', fontSize: '12px', fontWeight: 700, cursor: 'pointer',
+                  background: includedElements.size === 0 ? theme.border : theme.orange,
+                  color: includedElements.size === 0 ? theme.textMuted : '#fff',
+                  fontSize: '12px', fontWeight: 700, cursor: includedElements.size === 0 ? 'not-allowed' : 'pointer',
                 }}
               >
-                {Object.keys(elementCrops).length > 0
-                  ? `Continue (${Object.keys(elementCrops).length} tagged) →`
-                  : 'Skip →'}
+                {includedElements.size > 0
+                  ? `Continue (${includedElements.size} included) →`
+                  : 'Select elements to continue'}
               </button>
             </div>
           </div>
@@ -1278,26 +1321,50 @@ function NewQuote({ onCreated, editQuote }: { onCreated: () => void; editQuote?:
             borderBottom: `1px solid ${theme.border}`, background: theme.card,
           }}>
             {analysis.graphic_elements!.map((el, i) => {
+              const isIncluded = includedElements.has(el.element_name);
               const isCropped = !!elementCrops[el.element_name];
               const isActive = croppingElement === el.element_name;
               return (
-                <button
-                  key={i}
-                  onClick={() => {
-                    setCroppingElement(isActive ? null : el.element_name);
-                    setCropStart(null);
-                    setCropEnd(null);
-                  }}
-                  style={{
-                    padding: '5px 10px', borderRadius: '6px', fontSize: '11px', fontWeight: 600,
-                    cursor: 'pointer', whiteSpace: 'nowrap', flexShrink: 0,
-                    border: isActive ? `2px solid ${theme.orange}` : `1px solid ${isCropped ? theme.success : theme.border}`,
-                    background: isActive ? theme.orangeSoft : isCropped ? theme.successBg : theme.inputBg,
-                    color: isActive ? theme.orange : isCropped ? theme.success : theme.textSecondary,
-                  }}
-                >
-                  {isCropped ? '✓ ' : ''}{el.element_name}
-                </button>
+                <div key={i} style={{ display: 'flex', gap: '2px', flexShrink: 0 }}>
+                  {/* Include/exclude toggle */}
+                  <button
+                    onClick={() => toggleElement(el.element_name)}
+                    title={isIncluded ? 'Click to exclude from kit' : 'Click to include in kit'}
+                    style={{
+                      width: '28px', borderRadius: '6px 0 0 6px', fontSize: '13px',
+                      cursor: 'pointer', border: `1px solid ${isIncluded ? theme.success : theme.border}`,
+                      borderRight: 'none',
+                      background: isIncluded ? theme.successBg : theme.inputBg,
+                      color: isIncluded ? theme.success : theme.textMuted,
+                      display: 'flex', alignItems: 'center', justifyContent: 'center',
+                    }}
+                  >
+                    {isIncluded ? '✓' : '○'}
+                  </button>
+                  {/* Element name — click to start cropping */}
+                  <button
+                    onClick={() => {
+                      setCroppingElement(isActive ? null : el.element_name);
+                      setCropStart(null);
+                      setCropEnd(null);
+                    }}
+                    onMouseEnter={() => setHoveredElement(el.element_name)}
+                    onMouseLeave={() => setHoveredElement(null)}
+                    style={{
+                      padding: '5px 10px', borderRadius: '0 6px 6px 0', fontSize: '11px', fontWeight: 600,
+                      cursor: 'pointer', whiteSpace: 'nowrap',
+                      border: isActive ? `2px solid ${theme.orange}` : `1px solid ${isIncluded ? theme.success : isCropped ? theme.success : theme.border}`,
+                      background: isActive ? theme.orangeSoft : isIncluded ? theme.successBg : theme.inputBg,
+                      color: isActive ? theme.orange : isIncluded ? theme.success : theme.textSecondary,
+                      opacity: isIncluded || isActive ? 1 : 0.6,
+                    }}
+                  >
+                    {isCropped ? '✂ ' : ''}{el.element_name}
+                    <span style={{ fontSize: '9px', marginLeft: '4px', opacity: 0.7 }}>
+                      {el.width_in}"×{el.height_in}"
+                    </span>
+                  </button>
+                </div>
               );
             })}
           </div>
@@ -1360,6 +1427,81 @@ function NewQuote({ onCreated, editQuote }: { onCreated: () => void; editQuote?:
               style={{ width: '100%', display: 'block', pointerEvents: 'none' }}
               draggable={false}
             />
+            {/* AI-detected bounding boxes overlay */}
+            {analysis.graphic_elements!.map((el, i) => {
+              if (!el.crop_x_pct && el.crop_x_pct !== 0) return null;
+              const isIncluded = includedElements.has(el.element_name);
+              const isHovered = hoveredElement === el.element_name;
+              const isActive = croppingElement === el.element_name;
+              const boxColors = [
+                '#FF6B35', '#4ECDC4', '#FFE66D', '#95E1D3', '#F38181',
+                '#AA96DA', '#A8D8EA', '#FCBAD3', '#C9CBA3', '#E8A87C',
+              ];
+              const color = boxColors[i % boxColors.length];
+              const opacity = isIncluded ? 1 : 0.4;
+              return (
+                <div
+                  key={`bbox-${i}`}
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    toggleElement(el.element_name);
+                  }}
+                  onMouseEnter={() => setHoveredElement(el.element_name)}
+                  onMouseLeave={() => setHoveredElement(null)}
+                  style={{
+                    position: 'absolute',
+                    left: `${el.crop_x_pct}%`,
+                    top: `${el.crop_y_pct}%`,
+                    width: `${el.crop_w_pct}%`,
+                    height: `${el.crop_h_pct}%`,
+                    border: `2px ${isIncluded ? 'solid' : 'dashed'} ${color}`,
+                    background: isHovered || isActive
+                      ? `${color}30`
+                      : isIncluded ? `${color}15` : 'transparent',
+                    opacity,
+                    cursor: 'pointer',
+                    pointerEvents: isDragging ? 'none' : 'auto',
+                    zIndex: isHovered || isActive ? 10 : 1,
+                    transition: 'opacity 0.15s, background 0.15s',
+                    borderRadius: '3px',
+                  }}
+                  title={`${el.element_name} — ${el.width_in}"×${el.height_in}" — click to ${isIncluded ? 'exclude' : 'include'}`}
+                >
+                  {/* Element label with dimensions */}
+                  <div style={{
+                    position: 'absolute',
+                    top: '-18px', left: '0',
+                    background: color,
+                    color: '#fff',
+                    fontSize: '9px',
+                    fontWeight: 700,
+                    padding: '1px 5px',
+                    borderRadius: '3px 3px 0 0',
+                    whiteSpace: 'nowrap',
+                    lineHeight: '14px',
+                    opacity: isHovered || isActive || isIncluded ? 1 : 0.7,
+                    pointerEvents: 'none',
+                  }}>
+                    {isIncluded ? '✓ ' : ''}{el.element_name}
+                  </div>
+                  {/* Dimension badge */}
+                  <div style={{
+                    position: 'absolute',
+                    bottom: '2px', right: '2px',
+                    background: 'rgba(0,0,0,0.7)',
+                    color: '#fff',
+                    fontSize: '9px',
+                    fontWeight: 700,
+                    padding: '1px 4px',
+                    borderRadius: '3px',
+                    whiteSpace: 'nowrap',
+                    pointerEvents: 'none',
+                  }}>
+                    {el.width_in}"×{el.height_in}"
+                  </div>
+                </div>
+              );
+            })}
             {/* Crop selection rectangle */}
             {isDragging && cropStart && cropEnd && (
               <div style={{
@@ -1372,6 +1514,7 @@ function NewQuote({ onCreated, editQuote }: { onCreated: () => void; editQuote?:
                 background: 'rgba(255, 140, 0, 0.15)',
                 pointerEvents: 'none',
                 borderRadius: '2px',
+                zIndex: 20,
               }} />
             )}
           </div>
@@ -1716,58 +1859,111 @@ function NewQuote({ onCreated, editQuote }: { onCreated: () => void; editQuote?:
             );
           })()}
 
-          {/* Elements List (for element-based) */}
+          {/* Elements List (for element-based) — with include/exclude toggles */}
           {analysis.graphic_elements && analysis.graphic_elements.length > 0 ? (
             <div style={{ background: theme.card, border: `1px solid ${theme.border}`, borderRadius: '12px', padding: '14px', marginBottom: '12px' }}>
-              <div style={{ fontSize: '14px', fontWeight: 700, color: theme.textPrimary, marginBottom: '10px' }}>Graphic Elements</div>
-              {analysis.graphic_elements.map((el, i) => (
-                <div key={i} style={{ padding: '10px 0', borderBottom: i < analysis.graphic_elements.length - 1 ? `1px solid ${theme.border}` : 'none' }}>
-                  <div style={{ display: 'flex', gap: '10px', alignItems: 'flex-start' }}>
-                    {/* Cropped thumbnail from proof */}
-                    {elementCrops[el.element_name] ? (
-                      <div style={{
-                        width: '80px', height: '80px', flexShrink: 0, borderRadius: '6px',
-                        border: `1px solid ${theme.border}`, background: theme.inputBg,
-                        display: 'flex', alignItems: 'center', justifyContent: 'center', overflow: 'hidden',
-                      }}>
-                        <img
-                          src={elementCrops[el.element_name]}
-                          alt={el.element_name}
-                          style={{ maxWidth: '100%', maxHeight: '100%', objectFit: 'contain' }}
-                        />
-                      </div>
-                    ) : (
-                      <div style={{
-                        width: '80px', height: '80px', borderRadius: '6px', flexShrink: 0,
-                        background: theme.inputBg, border: `1px solid ${theme.border}`,
-                        display: 'flex', alignItems: 'center', justifyContent: 'center',
-                        fontSize: '10px', color: theme.textMuted, textAlign: 'center', padding: '4px',
-                      }}>
-                        No crop
-                      </div>
-                    )}
-                    <div style={{ flex: 1, minWidth: 0 }}>
-                      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
-                        <div>
-                          <div style={{ fontSize: '14px', fontWeight: 700, color: theme.textPrimary }}>{el.element_name}</div>
-                          <div style={{ fontSize: '11px', background: theme.subtleBg, color: theme.textMuted, fontWeight: 600, marginTop: '2px', padding: '2px 6px', borderRadius: '4px', display: 'inline-block' }}>
-                            {el.element_type}
-                          </div>
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '10px' }}>
+                <div style={{ fontSize: '14px', fontWeight: 700, color: theme.textPrimary }}>Graphic Elements</div>
+                <div style={{ fontSize: '11px', color: theme.textMuted, fontWeight: 600 }}>
+                  {includedElements.size} of {analysis.graphic_elements.length} in kit
+                </div>
+              </div>
+              {analysis.graphic_elements.map((el, i) => {
+                const isIncluded = includedElements.has(el.element_name);
+                return (
+                  <div key={i} style={{
+                    padding: '10px 0',
+                    borderBottom: i < analysis.graphic_elements.length - 1 ? `1px solid ${theme.border}` : 'none',
+                    opacity: isIncluded ? 1 : 0.45,
+                    transition: 'opacity 0.15s',
+                  }}>
+                    <div style={{ display: 'flex', gap: '10px', alignItems: 'flex-start' }}>
+                      {/* Include/exclude toggle */}
+                      <button
+                        onClick={() => {
+                          // Toggle and immediately recalculate with the new set
+                          const next = new Set(includedElements);
+                          if (next.has(el.element_name)) {
+                            next.delete(el.element_name);
+                          } else {
+                            next.add(el.element_name);
+                          }
+                          setIncludedElements(next);
+                          // Recalculate with updated set inline
+                          const included = analysis.graphic_elements!.filter(e => next.has(e.element_name));
+                          if (included.length === 0) {
+                            setNestingResult(null);
+                          } else {
+                            const multiplied: GraphicElement[] = [];
+                            for (let q = 0; q < vehicleQty; q++) {
+                              included.forEach(e => multiplied.push({ ...e, element_name: vehicleQty > 1 ? `${e.element_name} (${q + 1})` : e.element_name }));
+                            }
+                            const withBleed = applyBleed(multiplied, bleedSize);
+                            setNestingResult(nestElementsOnRoll(withBleed, 60));
+                          }
+                        }}
+                        style={{
+                          width: '32px', height: '32px', borderRadius: '8px', flexShrink: 0,
+                          border: `2px solid ${isIncluded ? theme.success : theme.border}`,
+                          background: isIncluded ? theme.successBg : 'transparent',
+                          color: isIncluded ? theme.success : theme.textMuted,
+                          fontSize: '16px', fontWeight: 700, cursor: 'pointer',
+                          display: 'flex', alignItems: 'center', justifyContent: 'center',
+                          marginTop: '4px',
+                        }}
+                        title={isIncluded ? 'Click to exclude from kit' : 'Click to include in kit'}
+                      >
+                        {isIncluded ? '✓' : ''}
+                      </button>
+                      {/* Cropped thumbnail from proof */}
+                      {elementCrops[el.element_name] ? (
+                        <div style={{
+                          width: '80px', height: '80px', flexShrink: 0, borderRadius: '6px',
+                          border: `1px solid ${theme.border}`, background: theme.inputBg,
+                          display: 'flex', alignItems: 'center', justifyContent: 'center', overflow: 'hidden',
+                        }}>
+                          <img
+                            src={elementCrops[el.element_name]}
+                            alt={el.element_name}
+                            style={{ maxWidth: '100%', maxHeight: '100%', objectFit: 'contain' }}
+                          />
                         </div>
-                        <div style={{ textAlign: 'right', whiteSpace: 'nowrap' }}>
-                          <div style={{ fontSize: '13px', fontWeight: 700, color: theme.textPrimary }}>{el.width_in.toFixed(1)}" × {el.height_in.toFixed(1)}"</div>
-                          <div style={{ fontSize: '11px', color: theme.textMuted }}>{(el.width_in * el.height_in).toFixed(1)} sq in</div>
-                        </div>
-                      </div>
-                      {el.description && (
-                        <div style={{ marginTop: '8px', padding: '8px 10px', background: theme.subtleBg, borderRadius: '8px', fontSize: '12px', color: theme.textSecondary, lineHeight: 1.5, borderLeft: `3px solid ${theme.orange}` }}>
-                          {el.description}
+                      ) : (
+                        <div style={{
+                          width: '80px', height: '80px', borderRadius: '6px', flexShrink: 0,
+                          background: theme.inputBg, border: `1px solid ${theme.border}`,
+                          display: 'flex', alignItems: 'center', justifyContent: 'center',
+                          fontSize: '10px', color: theme.textMuted, textAlign: 'center', padding: '4px',
+                        }}>
+                          No crop
                         </div>
                       )}
+                      <div style={{ flex: 1, minWidth: 0 }}>
+                        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
+                          <div>
+                            <div style={{ fontSize: '14px', fontWeight: 700, color: theme.textPrimary }}>
+                              {el.element_name}
+                              {!isIncluded && <span style={{ fontSize: '10px', color: theme.textMuted, fontWeight: 400, marginLeft: '6px' }}>excluded</span>}
+                            </div>
+                            <div style={{ fontSize: '11px', background: theme.subtleBg, color: theme.textMuted, fontWeight: 600, marginTop: '2px', padding: '2px 6px', borderRadius: '4px', display: 'inline-block' }}>
+                              {el.element_type}
+                            </div>
+                          </div>
+                          <div style={{ textAlign: 'right', whiteSpace: 'nowrap' }}>
+                            <div style={{ fontSize: '13px', fontWeight: 700, color: theme.textPrimary }}>{el.width_in.toFixed(1)}" × {el.height_in.toFixed(1)}"</div>
+                            <div style={{ fontSize: '11px', color: theme.textMuted }}>{(el.width_in * el.height_in).toFixed(1)} sq in</div>
+                          </div>
+                        </div>
+                        {el.description && (
+                          <div style={{ marginTop: '8px', padding: '8px 10px', background: theme.subtleBg, borderRadius: '8px', fontSize: '12px', color: theme.textSecondary, lineHeight: 1.5, borderLeft: `3px solid ${theme.orange}` }}>
+                            {el.description}
+                          </div>
+                        )}
+                      </div>
                     </div>
                   </div>
-                </div>
-              ))}
+                );
+              })}
             </div>
           ) : (
             <div style={{ background: theme.card, border: `1px solid ${theme.border}`, borderRadius: '12px', padding: '14px', marginBottom: '12px' }}>

@@ -19,6 +19,12 @@ For each distinct graphic piece (logo, stripe, text block, side graphic panel, d
 3. Estimate the WIDTH and HEIGHT in INCHES of the smallest rectangle that contains that element
 4. Use the template's labeled 1:20 scale dimensions to calculate real-world sizes
 5. Explain your reasoning for the measurements
+6. Estimate where this element appears on the PROOF image as a percentage bounding box:
+   - crop_x_pct: left edge as % of image width (0-100)
+   - crop_y_pct: top edge as % of image height (0-100)
+   - crop_w_pct: width as % of image width (0-100)
+   - crop_h_pct: height as % of image height (0-100)
+   These should tightly bound the graphic element on the proof image.
 
 IMPORTANT RULES:
 - Identify EACH separate printed piece, not panels
@@ -35,21 +41,33 @@ Return JSON only, no other text, in this exact format:
       "element_type": "stripe",
       "width_in": 120.0,
       "height_in": 18.5,
-      "description": "Blue diagonal stripe running from behind cab to rear wheel well on driver side. Approximately 120 inches long by 18.5 inches tall based on template overall length of 235 inches."
+      "description": "Blue diagonal stripe running from behind cab to rear wheel well on driver side. Approximately 120 inches long by 18.5 inches tall based on template overall length of 235 inches.",
+      "crop_x_pct": 15.0,
+      "crop_y_pct": 8.0,
+      "crop_w_pct": 45.0,
+      "crop_h_pct": 12.0
     },
     {
       "element_name": "Passenger Side Body Stripe",
       "element_type": "stripe",
       "width_in": 120.0,
       "height_in": 18.5,
-      "description": "Matching stripe on passenger side, same dimensions as driver side."
+      "description": "Matching stripe on passenger side, same dimensions as driver side.",
+      "crop_x_pct": 15.0,
+      "crop_y_pct": 32.0,
+      "crop_w_pct": 45.0,
+      "crop_h_pct": 12.0
     },
     {
       "element_name": "Rear Door Company Logo",
       "element_type": "logo",
       "width_in": 24.0,
       "height_in": 16.0,
-      "description": "Company logo centered on rear doors, approximately 24 x 16 inches."
+      "description": "Company logo centered on rear doors, approximately 24 x 16 inches.",
+      "crop_x_pct": 65.0,
+      "crop_y_pct": 10.0,
+      "crop_w_pct": 10.0,
+      "crop_h_pct": 8.0
     }
   ],
   "total_vinyl_sqft": 45.2,
