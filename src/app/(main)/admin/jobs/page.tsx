@@ -466,6 +466,8 @@ interface ParsedVIN {
   duplicate?: boolean;
   existsInDb?: boolean;
   partNumber?: string;
+  unitNumber?: string;
+  isPartial?: boolean;
 }
 
 interface ProcessResult {
@@ -476,19 +478,34 @@ interface ProcessResult {
   error?: string;
 }
 
+interface WorksheetHeader {
+  vendor_name?: string | null;
+  part_number?: string | null;
+  date?: string | null;
+  po_number?: string | null;
+  customer?: string | null;
+}
+
 function BulkVINUpload() {
   const { user, profile } = useAuth();
   const supabase = createClient();
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const worksheetInputRef = useRef<HTMLInputElement>(null);
 
   // State
-  const [inputMode, setInputMode] = useState<'paste' | 'file'>('paste');
+  const [inputMode, setInputMode] = useState<'paste' | 'file' | 'worksheet'>('paste');
   const [textInput, setTextInput] = useState('');
   const [fileName, setFileName] = useState('');
   const [parsedVINs, setParsedVINs] = useState<ParsedVIN[]>([]);
   const [catalogItems, setCatalogItems] = useState<CatalogItem[]>([]);
   const [selectedPartId, setSelectedPartId] = useState<string>('');
   const [hasPartNumberColumn, setHasPartNumberColumn] = useState(false);
+
+  // Worksheet state
+  const [worksheetHeader, setWorksheetHeader] = useState<WorksheetHeader | null>(null);
+  const [scanningWorksheet, setScanningWorksheet] = useState(false);
+  const [worksheetError, setWorksheetError] = useState('');
+  const [worksheetNotes, setWorksheetNotes] = useState('');
 
   // Processing state
   const [processing, setProcessing] = useState(false);
@@ -633,6 +650,183 @@ function BulkVINUpload() {
     }
   };
 
+  // Handle worksheet image/PDF upload
+  const handleWorksheetUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    setFileName(file.name);
+    setWorksheetError('');
+    setWorksheetHeader(null);
+    setWorksheetNotes('');
+    setScanningWorksheet(true);
+
+    try {
+      let imageBase64 = '';
+      let mediaType = 'image/jpeg';
+
+      const ext = file.name.split('.').pop()?.toLowerCase();
+      if (ext === 'pdf') {
+        // Render first page of PDF to image using pdfjs
+        const pdfjs = await import('pdfjs-dist');
+        pdfjs.GlobalWorkerOptions.workerSrc = '/pdf.worker.min.mjs';
+        const buf = await file.arrayBuffer();
+        const pdf = await pdfjs.getDocument({ data: buf }).promise;
+        const page = await pdf.getPage(1);
+        const viewport = page.getViewport({ scale: 2.0 });
+        const canvas = document.createElement('canvas');
+        canvas.width = viewport.width;
+        canvas.height = viewport.height;
+        const ctx = canvas.getContext('2d')!;
+        await page.render({ canvasContext: ctx, viewport, canvas } as any).promise;
+        imageBase64 = canvas.toDataURL('image/jpeg', 0.9).split(',')[1];
+        mediaType = 'image/jpeg';
+
+        // Check for additional pages
+        const totalPages = pdf.numPages;
+        if (totalPages > 1) {
+          // Process each page
+          const allResults: ParsedVIN[] = [];
+          let firstHeader: WorksheetHeader | null = null;
+          let allNotes: string[] = [];
+
+          for (let pageNum = 1; pageNum <= totalPages; pageNum++) {
+            const pg = await pdf.getPage(pageNum);
+            const vp = pg.getViewport({ scale: 2.0 });
+            const c = document.createElement('canvas');
+            c.width = vp.width;
+            c.height = vp.height;
+            const cx = c.getContext('2d')!;
+            await pg.render({ canvasContext: cx, viewport: vp, canvas: c } as any).promise;
+            const pgBase64 = c.toDataURL('image/jpeg', 0.9).split(',')[1];
+
+            const res = await fetch('/api/scan-worksheet', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ imageBase64: pgBase64, mediaType: 'image/jpeg' }),
+            });
+            if (!res.ok) {
+              const err = await res.json();
+              throw new Error(err.error || `Failed to scan page ${pageNum}`);
+            }
+            const { data } = await res.json();
+            if (!firstHeader && data.header) firstHeader = data.header;
+            if (data.notes) allNotes.push(`Page ${pageNum}: ${data.notes}`);
+
+            (data.rows || []).forEach((row: any) => {
+              if (row.partial_vin) {
+                allResults.push({
+                  raw: row.partial_vin,
+                  vin: row.partial_vin.toUpperCase().replace(/[^A-HJ-NPR-Z0-9]/g, ''),
+                  valid: true,
+                  isPartial: true,
+                  unitNumber: row.unit_number || undefined,
+                });
+              }
+            });
+          }
+
+          if (firstHeader) {
+            setWorksheetHeader(firstHeader);
+            autoMatchPart(firstHeader.part_number || '');
+          }
+          if (allNotes.length > 0) setWorksheetNotes(allNotes.join('\n'));
+          await markDuplicatesAndExisting(allResults);
+          setParsedVINs(allResults);
+          setScanningWorksheet(false);
+          return;
+        }
+      } else {
+        // Image file - convert to base64
+        const reader = new FileReader();
+        const b64 = await new Promise<string>((resolve) => {
+          reader.onload = () => resolve((reader.result as string).split(',')[1]);
+          reader.readAsDataURL(file);
+        });
+        imageBase64 = b64;
+        mediaType = file.type || 'image/jpeg';
+      }
+
+      // Send to API for OCR
+      const res = await fetch('/api/scan-worksheet', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ imageBase64, mediaType }),
+      });
+
+      if (!res.ok) {
+        const err = await res.json();
+        throw new Error(err.error || 'Failed to scan worksheet');
+      }
+
+      const { data } = await res.json();
+
+      // Set header info
+      if (data.header) {
+        setWorksheetHeader(data.header);
+        autoMatchPart(data.header.part_number || '');
+      }
+      if (data.notes) setWorksheetNotes(data.notes);
+
+      // Parse rows into VINs
+      const vins: ParsedVIN[] = (data.rows || []).map((row: any) => ({
+        raw: row.partial_vin || '',
+        vin: (row.partial_vin || '').toUpperCase().replace(/[^A-HJ-NPR-Z0-9]/g, ''),
+        valid: !!(row.partial_vin && row.partial_vin.trim().length >= 4),
+        isPartial: true,
+        unitNumber: row.unit_number || undefined,
+        reason: (!row.partial_vin || row.partial_vin.trim().length < 4) ? 'Too short or empty' : undefined,
+      }));
+
+      await markDuplicatesAndExisting(vins);
+      setParsedVINs(vins);
+    } catch (err: any) {
+      setWorksheetError(err.message || 'Failed to scan worksheet');
+    }
+    setScanningWorksheet(false);
+  };
+
+  // Auto-match part number from worksheet header
+  const autoMatchPart = (partNum: string) => {
+    if (!partNum) return;
+    const cleaned = partNum.replace(/\s+/g, '').toUpperCase();
+    const match = catalogItems.find(c =>
+      c.part_number.replace(/\s+/g, '').toUpperCase() === cleaned ||
+      c.part_number.replace(/\s+/g, '').toUpperCase().includes(cleaned) ||
+      cleaned.includes(c.part_number.replace(/\s+/g, '').toUpperCase())
+    );
+    if (match) setSelectedPartId(match.id);
+  };
+
+  // Mark duplicates within list and check DB existence
+  const markDuplicatesAndExisting = async (vins: ParsedVIN[]) => {
+    const seen = new Set<string>();
+    vins.forEach(v => {
+      if (v.valid) {
+        if (seen.has(v.vin)) v.duplicate = true;
+        seen.add(v.vin);
+      }
+    });
+    const validVins = vins.filter(v => v.valid).map(v => v.vin);
+    if (validVins.length > 0) {
+      // For partial VINs, check if any existing VIN ends with this partial
+      const { data: allVehicles } = await supabase.from('scanned_vehicles').select('vin');
+      if (allVehicles) {
+        const existingSet = new Set<string>();
+        vins.forEach(v => {
+          if (v.isPartial) {
+            const match = allVehicles.find((ev: any) => ev.vin.endsWith(v.vin));
+            if (match) existingSet.add(v.vin);
+          } else {
+            if (allVehicles.find((ev: any) => ev.vin === v.vin)) existingSet.add(v.vin);
+          }
+        });
+        vins.forEach(v => {
+          if (existingSet.has(v.vin)) v.existsInDb = true;
+        });
+      }
+    }
+  };
+
   // Process all valid VINs
   const processVINs = async () => {
     const toProcess = parsedVINs.filter(v => v.valid && !v.duplicate && !v.existsInDb);
@@ -648,8 +842,11 @@ function BulkVINUpload() {
     for (let i = 0; i < toProcess.length; i++) {
       const pv = toProcess[i];
       try {
-        // 1. Decode VIN
-        const vehicle = await decodeVIN(pv.vin);
+        // 1. Decode VIN (skip for partial VINs from worksheets)
+        let vehicle = { year: '', make: '', model: '', trim: '', bodyClass: '', driveType: '', fuelType: '', doors: '', gvwr: '' };
+        if (!pv.isPartial) {
+          vehicle = await decodeVIN(pv.vin);
+        }
 
         // 2. Determine which part to use
         let part: CatalogItem | null = null;
@@ -682,26 +879,32 @@ function BulkVINUpload() {
         }
 
         // 4. Insert into scanned_vehicles
+        const insertPayload: any = {
+          vin: pv.vin,
+          vehicle_year: vehicle.year || null,
+          vehicle_make: vehicle.make || null,
+          vehicle_model: vehicle.model || null,
+          vehicle_trim: vehicle.trim || null,
+          body_class: vehicle.bodyClass || null,
+          drive_type: vehicle.driveType || null,
+          fuel_type: vehicle.fuelType || null,
+          gvwr: vehicle.gvwr || null,
+          catalog_id: part?.id || null,
+          part_number: part?.part_number || null,
+          customer: part?.customer || null,
+          end_customer: part?.end_customer || null,
+          po_line_item_id: matchedPoLineId,
+          scanned_by: user!.id,
+          company_id: profile?.company_id || null,
+        };
+        // Store unit number in notes for worksheet entries
+        if (pv.unitNumber) {
+          insertPayload.notes = `Unit: ${pv.unitNumber}`;
+        }
+
         const { error: insertError } = await supabase
           .from('scanned_vehicles')
-          .insert({
-            vin: pv.vin,
-            vehicle_year: vehicle.year,
-            vehicle_make: vehicle.make,
-            vehicle_model: vehicle.model,
-            vehicle_trim: vehicle.trim,
-            body_class: vehicle.bodyClass,
-            drive_type: vehicle.driveType,
-            fuel_type: vehicle.fuelType,
-            gvwr: vehicle.gvwr,
-            catalog_id: part?.id || null,
-            part_number: part?.part_number || null,
-            customer: part?.customer || null,
-            end_customer: part?.end_customer || null,
-            po_line_item_id: matchedPoLineId,
-            scanned_by: user!.id,
-            company_id: profile?.company_id || null,
-          });
+          .insert(insertPayload);
 
         if (insertError) throw new Error(insertError.message);
 
@@ -725,7 +928,9 @@ function BulkVINUpload() {
           }
         }
 
-        const title = [vehicle.year, vehicle.make, vehicle.model].filter(Boolean).join(' ') || 'Unknown Vehicle';
+        const title = pv.isPartial
+          ? `VIN ...${pv.vin}${pv.unitNumber ? ` (${pv.unitNumber})` : ''}`
+          : ([vehicle.year, vehicle.make, vehicle.model].filter(Boolean).join(' ') || 'Unknown Vehicle');
         allResults.push({ vin: pv.vin, success: true, vehicleTitle: title, poMatch: poMatchStr || undefined });
       } catch (err: any) {
         allResults.push({ vin: pv.vin, success: false, error: err.message || 'Unknown error' });
@@ -752,7 +957,11 @@ function BulkVINUpload() {
     setShowResults(false);
     setProcessedCount(0);
     setHasPartNumberColumn(false);
+    setWorksheetHeader(null);
+    setWorksheetError('');
+    setWorksheetNotes('');
     if (fileInputRef.current) fileInputRef.current.value = '';
+    if (worksheetInputRef.current) worksheetInputRef.current.value = '';
   };
 
   const validCount = parsedVINs.filter(v => v.valid && !v.duplicate && !v.existsInDb).length;
@@ -860,6 +1069,7 @@ function BulkVINUpload() {
       <div style={{ display: 'flex', gap: '4px', marginBottom: '12px', background: 'var(--card)', borderRadius: '10px', padding: '3px' }}>
         <button onClick={() => setInputMode('paste')} style={{ flex: 1, padding: '8px', borderRadius: '8px', fontSize: '12px', fontWeight: 700, background: inputMode === 'paste' ? 'var(--tab-active-bg)' : 'transparent', border: 'none', color: inputMode === 'paste' ? 'var(--text-primary)' : 'var(--text-muted)' }}>Paste VINs</button>
         <button onClick={() => setInputMode('file')} style={{ flex: 1, padding: '8px', borderRadius: '8px', fontSize: '12px', fontWeight: 700, background: inputMode === 'file' ? 'var(--tab-active-bg)' : 'transparent', border: 'none', color: inputMode === 'file' ? 'var(--text-primary)' : 'var(--text-muted)' }}>Upload File</button>
+        <button onClick={() => setInputMode('worksheet')} style={{ flex: 1, padding: '8px', borderRadius: '8px', fontSize: '12px', fontWeight: 700, background: inputMode === 'worksheet' ? 'var(--tab-active-bg)' : 'transparent', border: 'none', color: inputMode === 'worksheet' ? 'var(--text-primary)' : 'var(--text-muted)' }}>Scan Sheet</button>
       </div>
 
       {/* Input Area */}
@@ -878,7 +1088,7 @@ function BulkVINUpload() {
             style={{ width: '100%', marginTop: '8px', padding: '12px', borderRadius: '10px', border: 'none', background: !textInput.trim() ? 'var(--border)' : 'var(--navy)', color: !textInput.trim() ? 'var(--text-muted)' : '#fff', fontSize: '14px', fontWeight: 700, cursor: 'pointer' }}
           >Parse VINs</button>
         </div>
-      ) : (
+      ) : inputMode === 'file' ? (
         <div style={{ marginBottom: '12px' }}>
           <input
             ref={fileInputRef}
@@ -896,6 +1106,65 @@ function BulkVINUpload() {
           <div style={{ fontSize: '10px', color: 'var(--text-muted)', marginTop: '6px', textAlign: 'center' }}>
             Supports CSV, Excel, and text files. Optionally include a &quot;part_number&quot; column for per-VIN part assignment.
           </div>
+        </div>
+      ) : (
+        <div style={{ marginBottom: '12px' }}>
+          <input
+            ref={worksheetInputRef}
+            type="file"
+            accept=".jpg,.jpeg,.png,.pdf,.heic"
+            onChange={handleWorksheetUpload}
+            style={{ display: 'none' }}
+          />
+          {scanningWorksheet ? (
+            <div style={{ width: '100%', padding: '32px', borderRadius: '12px', border: '2px dashed var(--border)', background: 'var(--card)', textAlign: 'center' }}>
+              <div style={{ fontSize: '28px', marginBottom: '8px' }}>🔍</div>
+              <div style={{ fontSize: '14px', fontWeight: 700, color: 'var(--text-primary)' }}>Scanning worksheet...</div>
+              <div style={{ fontSize: '12px', color: 'var(--text-muted)', marginTop: '4px' }}>AI is reading the handwritten data</div>
+            </div>
+          ) : (
+            <button
+              onClick={() => worksheetInputRef.current?.click()}
+              style={{ width: '100%', padding: '24px', borderRadius: '12px', border: '2px dashed var(--border)', background: 'var(--card)', color: 'var(--text-muted)', fontSize: '14px', fontWeight: 700, cursor: 'pointer', textAlign: 'center' }}
+            >
+              {fileName ? `📄 ${fileName}` : '📷 Upload worksheet photo or PDF'}
+            </button>
+          )}
+          <div style={{ fontSize: '10px', color: 'var(--text-muted)', marginTop: '6px', textAlign: 'center' }}>
+            Take a photo or scan of a handwritten worksheet. AI reads the VINs, part numbers, and PO info.
+          </div>
+          {worksheetError && (
+            <div style={{ padding: '10px', borderRadius: '8px', marginTop: '8px', background: 'var(--error-bg)', border: '1px solid var(--error-border)', fontSize: '12px', color: 'var(--error)' }}>{worksheetError}</div>
+          )}
+        </div>
+      )}
+
+      {/* Worksheet Header Info */}
+      {worksheetHeader && (
+        <div style={{ background: 'var(--card)', border: '1px solid var(--border)', borderRadius: '12px', padding: '12px', marginBottom: '12px' }}>
+          <div style={{ fontSize: '11px', fontWeight: 700, color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.5px', marginBottom: '8px' }}>Worksheet Header</div>
+          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '6px', fontSize: '12px' }}>
+            {worksheetHeader.part_number && (
+              <div><span style={{ color: 'var(--text-muted)' }}>Part#:</span> <span style={{ fontWeight: 700, color: 'var(--text-primary)' }}>{worksheetHeader.part_number}</span></div>
+            )}
+            {worksheetHeader.customer && (
+              <div><span style={{ color: 'var(--text-muted)' }}>Customer:</span> <span style={{ fontWeight: 700, color: 'var(--text-primary)' }}>{worksheetHeader.customer}</span></div>
+            )}
+            {worksheetHeader.date && (
+              <div><span style={{ color: 'var(--text-muted)' }}>Date:</span> <span style={{ fontWeight: 700, color: 'var(--text-primary)' }}>{worksheetHeader.date}</span></div>
+            )}
+            {worksheetHeader.po_number && (
+              <div><span style={{ color: 'var(--text-muted)' }}>PO#:</span> <span style={{ fontWeight: 700, color: 'var(--text-primary)' }}>{worksheetHeader.po_number}</span></div>
+            )}
+          </div>
+          {selectedPart && (
+            <div style={{ marginTop: '6px', padding: '4px 8px', borderRadius: '6px', background: 'var(--success-bg)', border: '1px solid var(--success-border)', fontSize: '11px', color: 'var(--success)', fontWeight: 600 }}>
+              ✓ Auto-matched to: {selectedPart.part_number}
+            </div>
+          )}
+          {worksheetNotes && (
+            <div style={{ marginTop: '6px', fontSize: '10px', color: 'var(--text-muted)', fontStyle: 'italic' }}>{worksheetNotes}</div>
+          )}
         </div>
       )}
 
@@ -925,6 +1194,8 @@ function BulkVINUpload() {
                     {pv.duplicate && <div style={{ fontSize: '10px', color: 'var(--warning)' }}>Duplicate in list</div>}
                     {pv.existsInDb && <div style={{ fontSize: '10px', color: 'var(--text-muted)' }}>Already in system</div>}
                     {pv.partNumber && <div style={{ fontSize: '10px', color: 'var(--text-muted)' }}>Part: {pv.partNumber}</div>}
+                    {pv.unitNumber && <div style={{ fontSize: '10px', color: 'var(--text-muted)' }}>Unit: {pv.unitNumber}</div>}
+                    {pv.isPartial && <div style={{ fontSize: '10px', color: 'var(--text-muted)', fontStyle: 'italic' }}>Last 8 of VIN</div>}
                   </div>
                 </div>
               );
