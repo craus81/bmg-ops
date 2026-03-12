@@ -918,23 +918,25 @@ function NewQuote({ onCreated, editQuote }: { onCreated: () => void; editQuote?:
   }
 
   function handleNestDragMove(e: React.MouseEvent<SVGSVGElement>) {
-    if (draggingIdx === null || !nestingResult) return;
+    if (draggingIdx === null) return;
     const pt = svgPoint(e);
     if (!pt) return;
-    const elem = nestingResult.nested_elements[draggingIdx];
-    let newX = pt.x - dragOffset.x;
-    let newY = pt.y - dragOffset.y;
-    // Clamp to roll bounds
-    newX = Math.max(0, Math.min(newX, 60 - elem.total_width_in));
-    newY = Math.max(0, newY);
-    // Snap to 0.5" grid
-    newX = Math.round(newX * 2) / 2;
-    newY = Math.round(newY * 2) / 2;
-    // Update position
-    const updated = nestingResult.nested_elements.map((el, i) =>
-      i === draggingIdx ? { ...el, x_in: newX, y_in: newY } : el
-    );
-    setNestingResult(recalcFromPositions(updated, 60));
+    // Use functional update to always read the latest state
+    setNestingResult(prev => {
+      if (!prev) return prev;
+      const elem = prev.nested_elements[draggingIdx];
+      if (!elem) return prev;
+      let newX = pt.x - dragOffset.x;
+      let newY = pt.y - dragOffset.y;
+      newX = Math.max(0, Math.min(newX, 60 - elem.total_width_in));
+      newY = Math.max(0, newY);
+      newX = Math.round(newX * 2) / 2;
+      newY = Math.round(newY * 2) / 2;
+      const updated = prev.nested_elements.map((el, i) =>
+        i === draggingIdx ? { ...el, x_in: newX, y_in: newY } : el
+      );
+      return recalcFromPositions(updated, 60);
+    });
   }
 
   function handleNestDragEnd() {
@@ -961,22 +963,24 @@ function NewQuote({ onCreated, editQuote }: { onCreated: () => void; editQuote?:
 
   // Rotate an element 90° in the nesting diagram (swap width and height)
   function handleNestRotate(idx: number) {
-    if (!nestingResult) return;
-    const elem = nestingResult.nested_elements[idx];
-    const rotated = {
-      ...elem,
-      total_width_in: elem.total_height_in,
-      total_height_in: elem.total_width_in,
-      rotated: !elem.rotated,
-    };
-    // Clamp to roll width after rotation
-    if (rotated.x_in + rotated.total_width_in > 60) {
-      rotated.x_in = Math.max(0, 60 - rotated.total_width_in);
-    }
-    const updated = nestingResult.nested_elements.map((el, i) =>
-      i === idx ? rotated : el
-    );
-    setNestingResult(recalcFromPositions(updated, 60));
+    setNestingResult(prev => {
+      if (!prev) return prev;
+      const elem = prev.nested_elements[idx];
+      if (!elem) return prev;
+      const rotated = {
+        ...elem,
+        total_width_in: elem.total_height_in,
+        total_height_in: elem.total_width_in,
+        rotated: !elem.rotated,
+      };
+      if (rotated.x_in + rotated.total_width_in > 60) {
+        rotated.x_in = Math.max(0, 60 - rotated.total_width_in);
+      }
+      const updated = prev.nested_elements.map((el, i) =>
+        i === idx ? rotated : el
+      );
+      return recalcFromPositions(updated, 60);
+    });
   }
 
   // Touch handlers for nesting diagram drag
@@ -984,36 +988,48 @@ function NewQuote({ onCreated, editQuote }: { onCreated: () => void; editQuote?:
   const nestTouchOffset = useRef<{ x: number; y: number }>({ x: 0, y: 0 });
 
   function handleNestTouchStart(idx: number, e: React.TouchEvent<SVGGElement>) {
-    if (!nestingResult || e.touches.length !== 1) return;
+    if (e.touches.length !== 1) return;
     e.preventDefault();
     e.stopPropagation();
     const t = e.touches[0];
     const pt = svgPointFromClient(t.clientX, t.clientY);
     if (!pt) return;
-    const elem = nestingResult.nested_elements[idx];
-    nestTouchIdx.current = idx;
-    nestTouchOffset.current = { x: pt.x - elem.x_in, y: pt.y - elem.y_in };
+    // Read current position from latest state via ref-style access
+    setNestingResult(prev => {
+      if (!prev) return prev;
+      const elem = prev.nested_elements[idx];
+      if (elem) {
+        nestTouchIdx.current = idx;
+        nestTouchOffset.current = { x: pt.x - elem.x_in, y: pt.y - elem.y_in };
+      }
+      return prev; // no change, just reading
+    });
     setDraggingIdx(idx);
   }
 
   function handleNestTouchMove(e: React.TouchEvent<SVGSVGElement>) {
-    if (nestTouchIdx.current === null || !nestingResult || e.touches.length !== 1) return;
+    if (nestTouchIdx.current === null || e.touches.length !== 1) return;
     e.preventDefault();
     const t = e.touches[0];
     const pt = svgPointFromClient(t.clientX, t.clientY);
     if (!pt) return;
     const idx = nestTouchIdx.current;
-    const elem = nestingResult.nested_elements[idx];
-    let newX = pt.x - nestTouchOffset.current.x;
-    let newY = pt.y - nestTouchOffset.current.y;
-    newX = Math.max(0, Math.min(newX, 60 - elem.total_width_in));
-    newY = Math.max(0, newY);
-    newX = Math.round(newX * 2) / 2;
-    newY = Math.round(newY * 2) / 2;
-    const updated = nestingResult.nested_elements.map((el, i) =>
-      i === idx ? { ...el, x_in: newX, y_in: newY } : el
-    );
-    setNestingResult(recalcFromPositions(updated, 60));
+    const offset = nestTouchOffset.current;
+    setNestingResult(prev => {
+      if (!prev) return prev;
+      const elem = prev.nested_elements[idx];
+      if (!elem) return prev;
+      let newX = pt.x - offset.x;
+      let newY = pt.y - offset.y;
+      newX = Math.max(0, Math.min(newX, 60 - elem.total_width_in));
+      newY = Math.max(0, newY);
+      newX = Math.round(newX * 2) / 2;
+      newY = Math.round(newY * 2) / 2;
+      const updated = prev.nested_elements.map((el, i) =>
+        i === idx ? { ...el, x_in: newX, y_in: newY } : el
+      );
+      return recalcFromPositions(updated, 60);
+    });
   }
 
   function handleNestTouchEnd() {
@@ -2130,6 +2146,7 @@ function NewQuote({ onCreated, editQuote }: { onCreated: () => void; editQuote?:
             const hasOverlaps = overlaps.size > 0;
             // Add some padding below lowest element for drop room
             const viewH = Math.max(nestingResult.roll_length_in + 10, 40);
+            const labelMargin = 7; // left margin for inch labels
             return (
               <div style={{ background: theme.card, border: `1px solid ${theme.border}`, borderRadius: '12px', padding: '14px', marginBottom: '12px' }}>
                 <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '10px' }}>
@@ -2148,7 +2165,7 @@ function NewQuote({ onCreated, editQuote }: { onCreated: () => void; editQuote?:
                 <div style={{ width: '100%', background: theme.inputBg, borderRadius: '8px', padding: '10px', marginBottom: '8px' }}>
                   <svg
                     ref={nestingSvgRef}
-                    viewBox={`0 0 60 ${viewH}`}
+                    viewBox={`-${labelMargin} 0 ${60 + labelMargin} ${viewH}`}
                     style={{
                       width: '100%', height: 'auto', background: '#fff', borderRadius: '6px',
                       border: `1px solid ${theme.border}`, cursor: draggingIdx !== null ? 'grabbing' : 'default',
@@ -2162,6 +2179,26 @@ function NewQuote({ onCreated, editQuote }: { onCreated: () => void; editQuote?:
                     onTouchEnd={handleNestTouchEnd}
                     onTouchCancel={handleNestTouchEnd}
                   >
+                    {/* Inch markers on left Y axis */}
+                    {Array.from({ length: Math.ceil(viewH / 10) + 1 }, (_, i) => {
+                      const y = i * 10;
+                      if (y > viewH) return null;
+                      return (
+                        <g key={`ym${i}`}>
+                          <line x1={-1} y1={y} x2={0} y2={y} stroke="#999" strokeWidth="0.2" />
+                          <text
+                            x={-1.5}
+                            y={y + 0.5}
+                            textAnchor="end"
+                            fontSize="2"
+                            fill="#999"
+                            dominantBaseline="middle"
+                          >
+                            {y}"
+                          </text>
+                        </g>
+                      );
+                    })}
                     {/* Grid lines every 10" */}
                     {Array.from({ length: Math.ceil(viewH / 10) }, (_, i) => (
                       <line key={`gy${i}`} x1="0" y1={i * 10} x2="60" y2={i * 10} stroke="#eee" strokeWidth="0.15" />
