@@ -2533,46 +2533,17 @@ function NewQuote({ onCreated, editQuote }: { onCreated: () => void; editQuote?:
             </div>
           )}
 
-          {/* Pricing Controls */}
+          {/* Material Pricing */}
           <div style={{ background: theme.card, border: `1px solid ${theme.border}`, borderRadius: '12px', padding: '14px', marginBottom: '12px' }}>
-            <div style={{ fontSize: '14px', fontWeight: 700, color: theme.textPrimary, marginBottom: '12px' }}>Pricing</div>
-
-            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr 1fr', gap: '8px', marginBottom: '12px' }}>
+            <div style={{ fontSize: '14px', fontWeight: 700, color: theme.textPrimary, marginBottom: '12px' }}>Material</div>
+            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '8px', marginBottom: '12px' }}>
               <div>
-                <label style={{ display: 'block', fontSize: '11px', fontWeight: 700, color: theme.textMuted, marginBottom: '4px' }}>Material $/ft²</label>
+                <label style={{ display: 'block', fontSize: '11px', fontWeight: 700, color: theme.textMuted, marginBottom: '4px' }}>Rate $/ft²</label>
                 <input
                   type="number"
                   step="0.25"
                   value={materialRate}
                   onChange={e => setMaterialRate(parseFloat(e.target.value) || 0)}
-                  style={{
-                    width: '100%', padding: '10px', borderRadius: '8px', border: `1px solid ${theme.border}`,
-                    background: theme.inputBg, color: theme.textPrimary, fontSize: '14px', fontWeight: 700,
-                    boxSizing: 'border-box',
-                  }}
-                />
-              </div>
-              <div>
-                <label style={{ display: 'block', fontSize: '11px', fontWeight: 700, color: theme.textMuted, marginBottom: '4px' }}>Labor $/ft²</label>
-                <input
-                  type="number"
-                  step="0.25"
-                  value={laborRate}
-                  onChange={e => setLaborRate(parseFloat(e.target.value) || 0)}
-                  style={{
-                    width: '100%', padding: '10px', borderRadius: '8px', border: `1px solid ${theme.border}`,
-                    background: theme.inputBg, color: theme.textPrimary, fontSize: '14px', fontWeight: 700,
-                    boxSizing: 'border-box',
-                  }}
-                />
-              </div>
-              <div>
-                <label style={{ display: 'block', fontSize: '11px', fontWeight: 700, color: theme.textMuted, marginBottom: '4px' }}>Profit Margin %</label>
-                <input
-                  type="number"
-                  step="5"
-                  value={marginPct}
-                  onChange={e => setMarginPct(parseFloat(e.target.value) || 0)}
                   style={{
                     width: '100%', padding: '10px', borderRadius: '8px', border: `1px solid ${theme.border}`,
                     background: theme.inputBg, color: theme.textPrimary, fontSize: '14px', fontWeight: 700,
@@ -2595,31 +2566,99 @@ function NewQuote({ onCreated, editQuote }: { onCreated: () => void; editQuote?:
                 />
               </div>
             </div>
-
-            {/* Price summary */}
-            <div style={{ borderTop: `1px solid ${theme.border}`, paddingTop: '12px' }}>
-              {[
-                {
-                  label: nestingResult
-                    ? `Material (${baseVinylSqft.toFixed(1)} ft² + ${wastePct}% waste = ${vinylSqft.toFixed(1)} ft² × ${fmtCurrency(materialRate)})`
-                    : `Material (${vinylSqft.toFixed(1)} ft² × ${fmtCurrency(materialRate)})`,
-                  value: fmtCurrency(materialTotal)
-                },
-                { label: `Labor (${baseVinylSqft.toFixed(1)} ft² × ${fmtCurrency(laborRate)})`, value: fmtCurrency(laborTotal) },
-                { label: 'Subtotal', value: fmtCurrency(subtotal) },
-                { label: `Profit Margin (${marginPct}%)`, value: fmtCurrency(marginAmount) },
-              ].map(row => (
-                <div key={row.label} style={{ display: 'flex', justifyContent: 'space-between', fontSize: '13px', padding: '4px 0' }}>
-                  <span style={{ color: theme.textSecondary }}>{row.label}</span>
-                  <span style={{ color: theme.textPrimary, fontWeight: 600 }}>{row.value}</span>
+            <div style={{ background: theme.subtleBg, borderRadius: '8px', padding: '10px' }}>
+              <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '12px', padding: '2px 0', color: theme.textMuted }}>
+                <span>Base area</span>
+                <span>{baseVinylSqft.toFixed(1)} ft²</span>
+              </div>
+              {wastePct > 0 && (
+                <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '12px', padding: '2px 0', color: theme.textMuted }}>
+                  <span>+ {wastePct}% waste</span>
+                  <span>{(vinylSqft - baseVinylSqft).toFixed(1)} ft²</span>
                 </div>
-              ))}
-              <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '18px', fontWeight: 800, padding: '10px 0 0', borderTop: `2px solid ${theme.border}`, marginTop: '8px' }}>
+              )}
+              <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '12px', padding: '2px 0', color: theme.textMuted }}>
+                <span>Total material × {fmtCurrency(materialRate)}/ft²</span>
+                <span>{vinylSqft.toFixed(1)} ft²</span>
+              </div>
+              <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '14px', fontWeight: 700, padding: '6px 0 0', marginTop: '4px', borderTop: `1px solid ${theme.border}` }}>
+                <span style={{ color: theme.textPrimary }}>Material Cost</span>
+                <span style={{ color: theme.orange }}>{fmtCurrency(materialTotal)}</span>
+              </div>
+            </div>
+          </div>
+
+          {/* Install Labor Pricing */}
+          <div style={{ background: theme.card, border: `1px solid ${theme.border}`, borderRadius: '12px', padding: '14px', marginBottom: '12px' }}>
+            <div style={{ fontSize: '14px', fontWeight: 700, color: theme.textPrimary, marginBottom: '12px' }}>Install Labor</div>
+            <div style={{ marginBottom: '12px' }}>
+              <label style={{ display: 'block', fontSize: '11px', fontWeight: 700, color: theme.textMuted, marginBottom: '4px' }}>Rate $/ft²</label>
+              <input
+                type="number"
+                step="0.25"
+                value={laborRate}
+                onChange={e => setLaborRate(parseFloat(e.target.value) || 0)}
+                style={{
+                  width: '100%', padding: '10px', borderRadius: '8px', border: `1px solid ${theme.border}`,
+                  background: theme.inputBg, color: theme.textPrimary, fontSize: '14px', fontWeight: 700,
+                  boxSizing: 'border-box',
+                }}
+              />
+            </div>
+            <div style={{ background: theme.subtleBg, borderRadius: '8px', padding: '10px' }}>
+              <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '12px', padding: '2px 0', color: theme.textMuted }}>
+                <span>Install area × {fmtCurrency(laborRate)}/ft²</span>
+                <span>{baseVinylSqft.toFixed(1)} ft²</span>
+              </div>
+              <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '14px', fontWeight: 700, padding: '6px 0 0', marginTop: '4px', borderTop: `1px solid ${theme.border}` }}>
+                <span style={{ color: theme.textPrimary }}>Labor Cost</span>
+                <span style={{ color: theme.orange }}>{fmtCurrency(laborTotal)}</span>
+              </div>
+            </div>
+          </div>
+
+          {/* Quote Total */}
+          <div style={{ background: theme.card, border: `1px solid ${theme.border}`, borderRadius: '12px', padding: '14px', marginBottom: '12px' }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '12px' }}>
+              <div style={{ fontSize: '14px', fontWeight: 700, color: theme.textPrimary }}>Quote Total</div>
+              <div>
+                <label style={{ fontSize: '11px', fontWeight: 700, color: theme.textMuted, marginRight: '6px' }}>Profit Margin %</label>
+                <input
+                  type="number"
+                  step="5"
+                  value={marginPct}
+                  onChange={e => setMarginPct(parseFloat(e.target.value) || 0)}
+                  style={{
+                    width: '70px', padding: '6px 8px', borderRadius: '6px', border: `1px solid ${theme.border}`,
+                    background: theme.inputBg, color: theme.textPrimary, fontSize: '13px', fontWeight: 700,
+                    boxSizing: 'border-box', textAlign: 'center',
+                  }}
+                />
+              </div>
+            </div>
+            <div style={{ background: theme.subtleBg, borderRadius: '8px', padding: '10px' }}>
+              <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '13px', padding: '3px 0' }}>
+                <span style={{ color: theme.textSecondary }}>Material</span>
+                <span style={{ color: theme.textPrimary, fontWeight: 600 }}>{fmtCurrency(materialTotal)}</span>
+              </div>
+              <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '13px', padding: '3px 0' }}>
+                <span style={{ color: theme.textSecondary }}>Install Labor</span>
+                <span style={{ color: theme.textPrimary, fontWeight: 600 }}>{fmtCurrency(laborTotal)}</span>
+              </div>
+              <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '13px', padding: '3px 0', borderTop: `1px solid ${theme.border}`, marginTop: '4px', paddingTop: '6px' }}>
+                <span style={{ color: theme.textSecondary }}>Subtotal</span>
+                <span style={{ color: theme.textPrimary, fontWeight: 600 }}>{fmtCurrency(subtotal)}</span>
+              </div>
+              <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '13px', padding: '3px 0' }}>
+                <span style={{ color: theme.textSecondary }}>Profit Margin ({marginPct}%)</span>
+                <span style={{ color: theme.textPrimary, fontWeight: 600 }}>{fmtCurrency(marginAmount)}</span>
+              </div>
+              <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '18px', fontWeight: 800, padding: '8px 0 0', borderTop: `2px solid ${theme.border}`, marginTop: '6px' }}>
                 <span style={{ color: theme.textPrimary }}>Total{vehicleQty > 1 ? ` (${vehicleQty} vehicles)` : ''}</span>
                 <span style={{ color: theme.orange }}>{fmtCurrency(totalPrice)}</span>
               </div>
               {vehicleQty > 1 && (
-                <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '13px', padding: '6px 0 0' }}>
+                <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '13px', padding: '4px 0 0' }}>
                   <span style={{ color: theme.textMuted }}>Per Vehicle</span>
                   <span style={{ color: theme.textSecondary, fontWeight: 700 }}>{fmtCurrency(totalPrice / vehicleQty)}</span>
                 </div>
