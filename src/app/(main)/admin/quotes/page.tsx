@@ -1258,10 +1258,10 @@ function NewQuote({ onCreated, editQuote }: { onCreated: () => void; editQuote?:
       const materialTotal = vinylSqft * materialRate;
       const laborTotal = baseVinylSqft * laborRate;
       const subtotal = materialTotal + laborTotal;
-      // Profit margin: total = cost / (1 - margin%)
+      // Profit margin applies to material only
       const marginFraction = marginPct / 100;
-      const totalPrice = marginFraction >= 1 ? subtotal : subtotal / (1 - marginFraction);
-      const marginAmount = totalPrice - subtotal;
+      const materialWithMargin = marginFraction >= 1 ? materialTotal : materialTotal / (1 - marginFraction);
+      const totalPrice = materialWithMargin + laborTotal;
 
       const isEditing = !!editQuote;
       const quoteNum = isEditing
@@ -1380,10 +1380,11 @@ function NewQuote({ onCreated, editQuote }: { onCreated: () => void; editQuote?:
   const materialTotal = vinylSqft * materialRate;
   const laborTotal = baseVinylSqft * laborRate; // labor based on actual area, not waste
   const subtotal = materialTotal + laborTotal;
-  // Profit margin: total = cost / (1 - margin%)
+  // Profit margin applies to material only — labor rate is set directly
   const marginFraction = marginPct / 100;
-  const totalPrice = marginFraction >= 1 ? subtotal : subtotal / (1 - marginFraction);
-  const marginAmount = totalPrice - subtotal;
+  const materialWithMargin = marginFraction >= 1 ? materialTotal : materialTotal / (1 - marginFraction);
+  const marginAmount = materialWithMargin - materialTotal;
+  const totalPrice = materialWithMargin + laborTotal;
 
   const filteredTemplates = templates.filter(t =>
     `${t.make} ${t.model} ${t.year} ${t.variant}`.toLowerCase().includes(templateSearch.toLowerCase())
@@ -2638,20 +2639,22 @@ function NewQuote({ onCreated, editQuote }: { onCreated: () => void; editQuote?:
             </div>
             <div style={{ background: theme.subtleBg, borderRadius: '8px', padding: '10px' }}>
               <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '13px', padding: '3px 0' }}>
-                <span style={{ color: theme.textSecondary }}>Material</span>
+                <span style={{ color: theme.textSecondary }}>Material Cost</span>
                 <span style={{ color: theme.textPrimary, fontWeight: 600 }}>{fmtCurrency(materialTotal)}</span>
               </div>
-              <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '13px', padding: '3px 0' }}>
-                <span style={{ color: theme.textSecondary }}>Install Labor</span>
-                <span style={{ color: theme.textPrimary, fontWeight: 600 }}>{fmtCurrency(laborTotal)}</span>
+              {marginPct > 0 && (
+                <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '13px', padding: '3px 0' }}>
+                  <span style={{ color: theme.textSecondary }}>Material Margin ({marginPct}%)</span>
+                  <span style={{ color: theme.textPrimary, fontWeight: 600 }}>{fmtCurrency(marginAmount)}</span>
+                </div>
+              )}
+              <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '13px', padding: '3px 0', fontWeight: 600 }}>
+                <span style={{ color: theme.textSecondary }}>Material Sell</span>
+                <span style={{ color: theme.textPrimary }}>{fmtCurrency(materialWithMargin)}</span>
               </div>
               <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '13px', padding: '3px 0', borderTop: `1px solid ${theme.border}`, marginTop: '4px', paddingTop: '6px' }}>
-                <span style={{ color: theme.textSecondary }}>Subtotal</span>
-                <span style={{ color: theme.textPrimary, fontWeight: 600 }}>{fmtCurrency(subtotal)}</span>
-              </div>
-              <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '13px', padding: '3px 0' }}>
-                <span style={{ color: theme.textSecondary }}>Profit Margin ({marginPct}%)</span>
-                <span style={{ color: theme.textPrimary, fontWeight: 600 }}>{fmtCurrency(marginAmount)}</span>
+                <span style={{ color: theme.textSecondary }}>Install Labor</span>
+                <span style={{ color: theme.textPrimary, fontWeight: 600 }}>{fmtCurrency(laborTotal)}</span>
               </div>
               <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '18px', fontWeight: 800, padding: '8px 0 0', borderTop: `2px solid ${theme.border}`, marginTop: '6px' }}>
                 <span style={{ color: theme.textPrimary }}>Total{vehicleQty > 1 ? ` (${vehicleQty} vehicles)` : ''}</span>
