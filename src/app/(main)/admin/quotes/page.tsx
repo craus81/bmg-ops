@@ -378,7 +378,7 @@ function QuoteDetail({ quote, onBack, onEdit }: { quote: Quote; onBack: () => vo
               )}
               {el.nested_x_in !== null && el.nested_y_in !== null && (
                 <div style={{ marginTop: '4px', fontSize: '11px', color: theme.textMuted }}>
-                  Positioned at: {el.nested_x_in.toFixed(1)}", {el.nested_y_in.toFixed(1)}" (with {el.bleed_in?.toFixed(3)}" bleed)
+                  Positioned at: {el.nested_x_in.toFixed(1)}", {el.nested_y_in.toFixed(1)}"
                 </div>
               )}
             </div>
@@ -451,7 +451,7 @@ function NewQuote({ onCreated, editQuote }: { onCreated: () => void; editQuote?:
   const [marginPct, setMarginPct] = useState(20);
 
   // Element-based quoting
-  const [bleedSize, setBleedSize] = useState(0.5);
+  const [wastePct, setWastePct] = useState(15);
   const [vehicleQty, setVehicleQty] = useState(1);
   const [nestingResult, setNestingResult] = useState<RollNestingResult | null>(null);
   const [elementCrops, setElementCrops] = useState<Record<string, string>>({});
@@ -872,7 +872,7 @@ function NewQuote({ onCreated, editQuote }: { onCreated: () => void; editQuote?:
     setCroppingElement(nextUntagged?.element_name || null);
   }
 
-  function recalculateNesting(elements: GraphicElement[], bleed: number, qty: number = 1) {
+  function recalculateNesting(elements: GraphicElement[], qty: number = 1) {
     // Filter to only included elements
     const included = elements.filter(el => includedElements.has(el.element_name));
     if (included.length === 0) {
@@ -886,7 +886,7 @@ function NewQuote({ onCreated, editQuote }: { onCreated: () => void; editQuote?:
         multiplied.push({ ...el, element_name: qty > 1 ? `${el.element_name} (${i + 1})` : el.element_name });
       });
     }
-    const withBleed = applyBleed(multiplied, bleed);
+    const withBleed = applyBleed(multiplied, 0);
     const result = nestElementsOnRoll(withBleed, 60);
     setNestingResult(result);
     return result;
@@ -1018,7 +1018,7 @@ function NewQuote({ onCreated, editQuote }: { onCreated: () => void; editQuote?:
       for (let q = 0; q < vehicleQty; q++) {
         included.forEach(e => multiplied.push({ ...e, element_name: vehicleQty > 1 ? `${e.element_name} (${q + 1})` : e.element_name }));
       }
-      const withBleed = applyBleed(multiplied, bleedSize);
+      const withBleed = applyBleed(multiplied, 0);
       setNestingResult(nestElementsOnRoll(withBleed, 60));
     } else {
       // Copy crop anyway
@@ -1052,7 +1052,7 @@ function NewQuote({ onCreated, editQuote }: { onCreated: () => void; editQuote?:
       for (let q = 0; q < vehicleQty; q++) {
         included.forEach(e => multiplied.push({ ...e, element_name: vehicleQty > 1 ? `${e.element_name} (${q + 1})` : e.element_name }));
       }
-      const withBleed = applyBleed(multiplied, bleedSize);
+      const withBleed = applyBleed(multiplied, 0);
       setNestingResult(nestElementsOnRoll(withBleed, 60));
     }
   }
@@ -1251,11 +1251,12 @@ function NewQuote({ onCreated, editQuote }: { onCreated: () => void; editQuote?:
     setSaving(true);
 
     try {
-      // Use nesting result for vinyl area if available
-      const vinylSqft = nestingResult?.roll_area_sqft || analysis.total_vinyl_sqft || 0;
+      // Use nesting result for vinyl area if available, plus waste factor
+      const baseVinylSqft = nestingResult?.roll_area_sqft || analysis.total_vinyl_sqft || 0;
+      const vinylSqft = baseVinylSqft * (1 + wastePct / 100);
 
       const materialTotal = vinylSqft * materialRate;
-      const laborTotal = vinylSqft * laborRate;
+      const laborTotal = baseVinylSqft * laborRate;
       const subtotal = materialTotal + laborTotal;
       // Profit margin: total = cost / (1 - margin%)
       const marginFraction = marginPct / 100;
@@ -1344,7 +1345,7 @@ function NewQuote({ onCreated, editQuote }: { onCreated: () => void; editQuote?:
             width_in: el.width_in,
             height_in: el.height_in,
             description: el.description,
-            bleed_in: bleedSize,
+            bleed_in: 0,
             nested_x_in: nested?.x_in ?? null,
             nested_y_in: nested?.y_in ?? null,
             sort_order: i,
@@ -1373,10 +1374,11 @@ function NewQuote({ onCreated, editQuote }: { onCreated: () => void; editQuote?:
     }
   }
 
-  // Calculated totals for step 4
-  const vinylSqft = nestingResult?.roll_area_sqft || analysis?.total_vinyl_sqft || 0;
+  // Calculated totals for step 5
+  const baseVinylSqft = nestingResult?.roll_area_sqft || analysis?.total_vinyl_sqft || 0;
+  const vinylSqft = baseVinylSqft * (1 + wastePct / 100);
   const materialTotal = vinylSqft * materialRate;
-  const laborTotal = vinylSqft * laborRate;
+  const laborTotal = baseVinylSqft * laborRate; // labor based on actual area, not waste
   const subtotal = materialTotal + laborTotal;
   // Profit margin: total = cost / (1 - margin%)
   const marginFraction = marginPct / 100;
@@ -1725,7 +1727,7 @@ function NewQuote({ onCreated, editQuote }: { onCreated: () => void; editQuote?:
                 onClick={() => {
                   // Recalculate nesting with only included elements before moving to review
                   if (analysis.graphic_elements) {
-                    recalculateNesting(analysis.graphic_elements, bleedSize, vehicleQty);
+                    recalculateNesting(analysis.graphic_elements, vehicleQty);
                   }
                   setStep(5);
                 }}
@@ -2156,35 +2158,6 @@ function NewQuote({ onCreated, editQuote }: { onCreated: () => void; editQuote?:
             </div>
           )}
 
-          {/* Bleed Control (for element-based) */}
-          {analysis.graphic_elements && analysis.graphic_elements.length > 0 && (
-            <div style={{ background: theme.card, border: `1px solid ${theme.border}`, borderRadius: '12px', padding: '14px', marginBottom: '12px' }}>
-              <label style={{ display: 'block', fontSize: '13px', fontWeight: 700, color: theme.textPrimary, marginBottom: '8px' }}>Bleed Per Side</label>
-              <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-                <input
-                  type="number"
-                  step="0.125"
-                  min="0"
-                  max="2"
-                  value={bleedSize}
-                  onChange={(e) => {
-                    const newBleed = parseFloat(e.target.value) || 0;
-                    setBleedSize(newBleed);
-                    if (analysis.graphic_elements) {
-                      recalculateNesting(analysis.graphic_elements, newBleed, vehicleQty);
-                    }
-                  }}
-                  style={{
-                    flex: 1, padding: '10px', borderRadius: '8px', border: `1px solid ${theme.border}`,
-                    background: theme.inputBg, color: theme.textPrimary, fontSize: '14px', fontWeight: 700,
-                    boxSizing: 'border-box',
-                  }}
-                />
-                <div style={{ fontSize: '12px', color: theme.textMuted }}>in</div>
-              </div>
-            </div>
-          )}
-
           {/* Vehicle Quantity */}
           {analysis.graphic_elements && analysis.graphic_elements.length > 0 && (
             <div style={{ background: theme.card, border: `1px solid ${theme.border}`, borderRadius: '12px', padding: '14px', marginBottom: '12px' }}>
@@ -2199,7 +2172,7 @@ function NewQuote({ onCreated, editQuote }: { onCreated: () => void; editQuote?:
                     const newQty = Math.max(1, parseInt(e.target.value) || 1);
                     setVehicleQty(newQty);
                     if (analysis.graphic_elements) {
-                      recalculateNesting(analysis.graphic_elements, bleedSize, newQty);
+                      recalculateNesting(analysis.graphic_elements, newQty);
                     }
                   }}
                   style={{
@@ -2377,7 +2350,7 @@ function NewQuote({ onCreated, editQuote }: { onCreated: () => void; editQuote?:
                     {nestingResult.efficiency_pct > 0 && ` • ${nestingResult.efficiency_pct}% efficiency`}
                   </div>
                   <button
-                    onClick={() => { if (analysis.graphic_elements) recalculateNesting(analysis.graphic_elements, bleedSize, vehicleQty); }}
+                    onClick={() => { if (analysis.graphic_elements) recalculateNesting(analysis.graphic_elements, vehicleQty); }}
                     style={{
                       padding: '4px 10px', borderRadius: '6px', border: `1px solid ${theme.border}`,
                       background: 'transparent', color: theme.textSecondary, fontSize: '11px', fontWeight: 600,
@@ -2430,7 +2403,7 @@ function NewQuote({ onCreated, editQuote }: { onCreated: () => void; editQuote?:
                             for (let q = 0; q < vehicleQty; q++) {
                               included.forEach(e => multiplied.push({ ...e, element_name: vehicleQty > 1 ? `${e.element_name} (${q + 1})` : e.element_name }));
                             }
-                            const withBleed = applyBleed(multiplied, bleedSize);
+                            const withBleed = applyBleed(multiplied, 0);
                             setNestingResult(nestElementsOnRoll(withBleed, 60));
                           }
                         }}
@@ -2564,7 +2537,7 @@ function NewQuote({ onCreated, editQuote }: { onCreated: () => void; editQuote?:
           <div style={{ background: theme.card, border: `1px solid ${theme.border}`, borderRadius: '12px', padding: '14px', marginBottom: '12px' }}>
             <div style={{ fontSize: '14px', fontWeight: 700, color: theme.textPrimary, marginBottom: '12px' }}>Pricing</div>
 
-            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: '8px', marginBottom: '12px' }}>
+            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr 1fr', gap: '8px', marginBottom: '12px' }}>
               <div>
                 <label style={{ display: 'block', fontSize: '11px', fontWeight: 700, color: theme.textMuted, marginBottom: '4px' }}>Material $/ft²</label>
                 <input
@@ -2607,6 +2580,20 @@ function NewQuote({ onCreated, editQuote }: { onCreated: () => void; editQuote?:
                   }}
                 />
               </div>
+              <div>
+                <label style={{ display: 'block', fontSize: '11px', fontWeight: 700, color: theme.textMuted, marginBottom: '4px' }}>Waste %</label>
+                <input
+                  type="number"
+                  step="5"
+                  value={wastePct}
+                  onChange={e => setWastePct(parseFloat(e.target.value) || 0)}
+                  style={{
+                    width: '100%', padding: '10px', borderRadius: '8px', border: `1px solid ${theme.border}`,
+                    background: theme.inputBg, color: theme.textPrimary, fontSize: '14px', fontWeight: 700,
+                    boxSizing: 'border-box',
+                  }}
+                />
+              </div>
             </div>
 
             {/* Price summary */}
@@ -2614,11 +2601,11 @@ function NewQuote({ onCreated, editQuote }: { onCreated: () => void; editQuote?:
               {[
                 {
                   label: nestingResult
-                    ? `Material (Roll: 60" × ${nestingResult.roll_length_in?.toFixed(1)}" = ${vinylSqft.toFixed(1)} sq ft × ${fmtCurrency(materialRate)})`
+                    ? `Material (${baseVinylSqft.toFixed(1)} ft² + ${wastePct}% waste = ${vinylSqft.toFixed(1)} ft² × ${fmtCurrency(materialRate)})`
                     : `Material (${vinylSqft.toFixed(1)} ft² × ${fmtCurrency(materialRate)})`,
                   value: fmtCurrency(materialTotal)
                 },
-                { label: `Labor (${vinylSqft.toFixed(1)} ft² × ${fmtCurrency(laborRate)})`, value: fmtCurrency(laborTotal) },
+                { label: `Labor (${baseVinylSqft.toFixed(1)} ft² × ${fmtCurrency(laborRate)})`, value: fmtCurrency(laborTotal) },
                 { label: 'Subtotal', value: fmtCurrency(subtotal) },
                 { label: `Profit Margin (${marginPct}%)`, value: fmtCurrency(marginAmount) },
               ].map(row => (
