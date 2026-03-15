@@ -245,3 +245,64 @@ export interface QuoteElement {
   nested_y_in: number | null;
   sort_order: number;
 }
+
+// ============ Fleet Check-In ============
+
+export interface FleetCheckin {
+  id: string;
+  vin: string;
+  vehicle_year: string | null;
+  vehicle_make: string | null;
+  vehicle_model: string | null;
+  vehicle_trim: string | null;
+  body_class: string | null;
+  netsuite_sales_order_id: string | null;
+  sales_order_number: string | null;
+  customer_name: string | null;
+  sales_order_memo: string | null;
+  sales_order_total: number | null;
+  proof_file_path: string | null;
+  proof_file_name: string | null;
+  proof_thumbnail_path: string | null;
+  notes: string | null;
+  status: 'checked_in' | 'in_progress' | 'complete';
+  checked_in_by: string;
+  company_id?: string;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface GraphicsProof {
+  id: string;
+  customer_name: string;
+  vehicle_type: string | null;
+  file_name: string;
+  storage_path: string;
+  thumbnail_path: string | null;
+  file_size: number | null;
+  file_type: string;
+  uploaded_by: string | null;
+  created_at: string;
+}
+
+export interface NetsuiteSalesOrder {
+  id: string;
+  sales_order_number: string;
+  date: string;
+  vin: string | null;
+  status: string;
+  customer_id: string;
+  customer_name: string;
+  memo: string | null;
+  total: number | null;
+  line_items: NetsuiteSalesOrderLine[];
+}
+
+export interface NetsuiteSalesOrderLine {
+  line_number: number;
+  item_name: string | null;
+  description: string | null;
+  quantity: number;
+  rate: number;
+  amount: number;
+}

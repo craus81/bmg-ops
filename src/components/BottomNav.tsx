@@ -10,6 +10,7 @@ interface BottomNavProps {
 const tabs = [
   { id: 'home', path: '/home', label: 'Home', icon: '🏠' },
   { id: 'time', path: '/time', label: 'Time', icon: '⏰' },
+  { id: 'fleet', path: '/fleet', label: 'Fleet', icon: '🚚' },
   { id: 'vehicles', path: '/vehicles', label: 'Vehicles', icon: '🚐' },
   { id: 'more', path: '/more', label: 'More', icon: '⋯' },
 ];
