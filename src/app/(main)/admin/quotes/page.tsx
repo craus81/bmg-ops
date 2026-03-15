@@ -344,7 +344,7 @@ function QuoteDetail({ quote, onBack, onEdit }: { quote: Quote; onBack: () => vo
           { label: 'Material', value: fmtCurrency(quote.material_total) },
           { label: 'Labor', value: fmtCurrency(quote.labor_total) },
           { label: 'Subtotal', value: fmtCurrency(quote.subtotal) },
-          { label: 'Markup', value: `${quote.markup_percentage}%` },
+          { label: 'Profit Margin', value: `${quote.markup_percentage}%` },
         ].map(item => (
           <div key={item.label} style={{ background: theme.card, border: `1px solid ${theme.border}`, borderRadius: '10px', padding: '12px' }}>
             <div style={{ fontSize: '11px', color: theme.textMuted, fontWeight: 600 }}>{item.label}</div>
@@ -448,7 +448,7 @@ function NewQuote({ onCreated, editQuote }: { onCreated: () => void; editQuote?:
   // Step 4: Pricing
   const [materialRate, setMaterialRate] = useState(2.50);
   const [laborRate, setLaborRate] = useState(4.00);
-  const [markupPct, setMarkupPct] = useState(20);
+  const [marginPct, setMarginPct] = useState(20);
 
   // Element-based quoting
   const [bleedSize, setBleedSize] = useState(0.5);
@@ -559,7 +559,7 @@ function NewQuote({ onCreated, editQuote }: { onCreated: () => void; editQuote?:
     // Step 4: Pricing
     setMaterialRate(editQuote.material_cost_per_sqft || 2.50);
     setLaborRate(editQuote.labor_cost_per_sqft || 4.00);
-    setMarkupPct(editQuote.markup_percentage || 20);
+    setMarginPct(editQuote.markup_percentage || 20);
 
     // Nesting result and vehicle quantity
     if (editQuote.nesting_result) {
@@ -1257,8 +1257,10 @@ function NewQuote({ onCreated, editQuote }: { onCreated: () => void; editQuote?:
       const materialTotal = vinylSqft * materialRate;
       const laborTotal = vinylSqft * laborRate;
       const subtotal = materialTotal + laborTotal;
-      const markupAmount = subtotal * (markupPct / 100);
-      const totalPrice = subtotal + markupAmount;
+      // Profit margin: total = cost / (1 - margin%)
+      const marginFraction = marginPct / 100;
+      const totalPrice = marginFraction >= 1 ? subtotal : subtotal / (1 - marginFraction);
+      const marginAmount = totalPrice - subtotal;
 
       const isEditing = !!editQuote;
       const quoteNum = isEditing
@@ -1298,7 +1300,7 @@ function NewQuote({ onCreated, editQuote }: { onCreated: () => void; editQuote?:
         material_total: materialTotal,
         labor_total: laborTotal,
         subtotal: subtotal,
-        markup_percentage: markupPct,
+        markup_percentage: marginPct,
         total_price: totalPrice,
         nesting_result: nestingResult || null,
         vehicle_qty: vehicleQty,
@@ -1376,8 +1378,10 @@ function NewQuote({ onCreated, editQuote }: { onCreated: () => void; editQuote?:
   const materialTotal = vinylSqft * materialRate;
   const laborTotal = vinylSqft * laborRate;
   const subtotal = materialTotal + laborTotal;
-  const markupAmount = subtotal * (markupPct / 100);
-  const totalPrice = subtotal + markupAmount;
+  // Profit margin: total = cost / (1 - margin%)
+  const marginFraction = marginPct / 100;
+  const totalPrice = marginFraction >= 1 ? subtotal : subtotal / (1 - marginFraction);
+  const marginAmount = totalPrice - subtotal;
 
   const filteredTemplates = templates.filter(t =>
     `${t.make} ${t.model} ${t.year} ${t.variant}`.toLowerCase().includes(templateSearch.toLowerCase())
@@ -2590,12 +2594,12 @@ function NewQuote({ onCreated, editQuote }: { onCreated: () => void; editQuote?:
                 />
               </div>
               <div>
-                <label style={{ display: 'block', fontSize: '11px', fontWeight: 700, color: theme.textMuted, marginBottom: '4px' }}>Markup %</label>
+                <label style={{ display: 'block', fontSize: '11px', fontWeight: 700, color: theme.textMuted, marginBottom: '4px' }}>Profit Margin %</label>
                 <input
                   type="number"
                   step="5"
-                  value={markupPct}
-                  onChange={e => setMarkupPct(parseFloat(e.target.value) || 0)}
+                  value={marginPct}
+                  onChange={e => setMarginPct(parseFloat(e.target.value) || 0)}
                   style={{
                     width: '100%', padding: '10px', borderRadius: '8px', border: `1px solid ${theme.border}`,
                     background: theme.inputBg, color: theme.textPrimary, fontSize: '14px', fontWeight: 700,
@@ -2616,7 +2620,7 @@ function NewQuote({ onCreated, editQuote }: { onCreated: () => void; editQuote?:
                 },
                 { label: `Labor (${vinylSqft.toFixed(1)} ft² × ${fmtCurrency(laborRate)})`, value: fmtCurrency(laborTotal) },
                 { label: 'Subtotal', value: fmtCurrency(subtotal) },
-                { label: `Markup (${markupPct}%)`, value: fmtCurrency(markupAmount) },
+                { label: `Profit Margin (${marginPct}%)`, value: fmtCurrency(marginAmount) },
               ].map(row => (
                 <div key={row.label} style={{ display: 'flex', justifyContent: 'space-between', fontSize: '13px', padding: '4px 0' }}>
                   <span style={{ color: theme.textSecondary }}>{row.label}</span>
