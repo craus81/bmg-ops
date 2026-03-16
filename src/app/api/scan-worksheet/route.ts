@@ -66,45 +66,16 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    // Determine if this is a PDF or image
-    const resolvedMediaType = mediaType || 'image/jpeg';
-    const isPdf = resolvedMediaType === 'application/pdf';
-
-    // Build the content block — PDFs use 'document' type, images use 'image' type
-    const fileBlock = isPdf
-      ? {
-          type: 'document' as const,
-          source: {
-            type: 'base64' as const,
-            media_type: 'application/pdf' as const,
-            data: imageBase64,
-          },
-        }
-      : {
-          type: 'image' as const,
-          source: {
-            type: 'base64' as const,
-            media_type: resolvedMediaType,
-            data: imageBase64,
-          },
-        };
-
-    // Build headers — add PDF beta header when sending PDFs
-    const apiHeaders: Record<string, string> = {
-      'Content-Type': 'application/json',
-      'x-api-key': ANTHROPIC_API_KEY,
-      'anthropic-version': '2023-06-01',
-    };
-    if (isPdf) {
-      apiHeaders['anthropic-beta'] = 'pdfs-2024-09-25';
-    }
-
     const response = await fetch('https://api.anthropic.com/v1/messages', {
       method: 'POST',
-      headers: apiHeaders,
+      headers: {
+        'Content-Type': 'application/json',
+        'x-api-key': ANTHROPIC_API_KEY,
+        'anthropic-version': '2023-06-01',
+      },
       body: JSON.stringify({
         model: 'claude-sonnet-4-5-20250929',
-        max_tokens: isPdf ? 8192 : 4096,
+        max_tokens: 4096,
         messages: [
           {
             role: 'user',
@@ -113,7 +84,14 @@ export async function POST(request: NextRequest) {
                 type: 'text',
                 text: 'Read this handwritten vehicle worksheet and extract all the data:',
               },
-              fileBlock,
+              {
+                type: 'image',
+                source: {
+                  type: 'base64',
+                  media_type: mediaType || 'image/jpeg',
+                  data: imageBase64,
+                },
+              },
               {
                 type: 'text',
                 text: WORKSHEET_PROMPT,
