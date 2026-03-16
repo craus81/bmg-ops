@@ -522,6 +522,7 @@ function BulkVINUpload() {
   const [editValue, setEditValue] = useState('');
   const [editingHeaderField, setEditingHeaderField] = useState<string | null>(null);
   const [editHeaderValue, setEditHeaderValue] = useState('');
+  const [editingPageNum, setEditingPageNum] = useState<number | null>(null); // which page's header is being edited
 
   // Processing state
   const [processing, setProcessing] = useState(false);
@@ -926,27 +927,69 @@ function BulkVINUpload() {
     setTimeout(() => startEditRow(parsedVINs.length, 'vin'), 50);
   };
 
-  const startEditHeader = (field: string) => {
-    if (!worksheetHeader) return;
-    setEditingHeaderField(field);
-    setEditHeaderValue((worksheetHeader as any)[field] || '');
+  const startEditHeader = (field: string, pageNum?: number) => {
+    if (pageNum != null) {
+      // Multi-page: edit a specific page's header
+      const page = worksheetPages.find(wp => wp.pageNum === pageNum);
+      if (!page) return;
+      setEditingPageNum(pageNum);
+      setEditingHeaderField(field);
+      setEditHeaderValue((page.header as any)[field] || '');
+    } else {
+      // Single-page: edit the main header
+      if (!worksheetHeader) return;
+      setEditingPageNum(null);
+      setEditingHeaderField(field);
+      setEditHeaderValue((worksheetHeader as any)[field] || '');
+    }
   };
 
   const commitEditHeader = () => {
-    if (!editingHeaderField || !worksheetHeader) return;
-    const updated = { ...worksheetHeader, [editingHeaderField]: editHeaderValue || null };
-    setWorksheetHeader(updated);
-    // Re-match part if part_number changed
-    if (editingHeaderField === 'part_number') {
-      autoMatchPart(editHeaderValue || '');
+    if (!editingHeaderField) return;
+
+    if (editingPageNum != null) {
+      // Multi-page: update that page's header
+      const updatedPages = worksheetPages.map(wp => {
+        if (wp.pageNum !== editingPageNum) return wp;
+        const updatedHeader = { ...wp.header, [editingHeaderField!]: editHeaderValue || null };
+        return { ...wp, header: updatedHeader };
+      });
+      setWorksheetPages(updatedPages);
+
+      // If part_number changed, re-tag VINs on that page
+      if (editingHeaderField === 'part_number') {
+        const cleaned = (editHeaderValue || '').replace(/\s+/g, '').toUpperCase();
+        const matchedPart = cleaned ? catalogItems.find(ci =>
+          ci.part_number.replace(/\s+/g, '').toUpperCase() === cleaned ||
+          ci.part_number.replace(/\s+/g, '').toUpperCase().includes(cleaned) ||
+          cleaned.includes(ci.part_number.replace(/\s+/g, '').toUpperCase())
+        ) || null : null;
+
+        const updatedVINs = parsedVINs.map(v => {
+          if (v.pageNum !== editingPageNum) return v;
+          return { ...v, partNumber: matchedPart?.part_number || undefined };
+        });
+        setParsedVINs(updatedVINs);
+      }
+    } else {
+      // Single-page
+      if (!worksheetHeader) return;
+      const updated = { ...worksheetHeader, [editingHeaderField]: editHeaderValue || null };
+      setWorksheetHeader(updated);
+      if (editingHeaderField === 'part_number') {
+        autoMatchPart(editHeaderValue || '');
+      }
     }
+
     setEditingHeaderField(null);
     setEditHeaderValue('');
+    setEditingPageNum(null);
   };
 
   const cancelEditHeader = () => {
     setEditingHeaderField(null);
     setEditHeaderValue('');
+    setEditingPageNum(null);
   };
 
   // Process all valid VINs
@@ -1280,17 +1323,43 @@ function BulkVINUpload() {
                 cleaned.includes(ci.part_number.replace(/\s+/g, '').toUpperCase())
               ) || null;
             })();
+            const isEditingThisPage = editingPageNum === wp.pageNum;
             return (
               <div key={wp.pageNum} style={{ background: 'var(--card)', border: '1px solid var(--border)', borderRadius: '12px', padding: '10px 12px' }}>
                 <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '6px' }}>
                   <div style={{ fontSize: '11px', fontWeight: 700, color: 'var(--orange)' }}>Page {wp.pageNum}</div>
-                  <div style={{ fontSize: '10px', color: 'var(--text-muted)' }}>{wp.vinCount} VIN{wp.vinCount !== 1 ? 's' : ''}</div>
+                  <div style={{ fontSize: '10px', color: 'var(--text-muted)' }}>{wp.vinCount} VIN{wp.vinCount !== 1 ? 's' : ''} · tap to edit</div>
                 </div>
                 <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '4px', fontSize: '11px' }}>
-                  {h.part_number && <div><span style={{ color: 'var(--text-muted)' }}>Part#:</span> <span style={{ fontWeight: 700, color: 'var(--text-primary)' }}>{h.part_number}</span></div>}
-                  {h.customer && <div><span style={{ color: 'var(--text-muted)' }}>Customer:</span> <span style={{ fontWeight: 700, color: 'var(--text-primary)' }}>{h.customer}</span></div>}
-                  {h.po_number && <div><span style={{ color: 'var(--text-muted)' }}>PO#:</span> <span style={{ fontWeight: 700, color: 'var(--text-primary)' }}>{h.po_number}</span></div>}
-                  {h.date && <div><span style={{ color: 'var(--text-muted)' }}>Date:</span> <span style={{ fontWeight: 700, color: 'var(--text-primary)' }}>{h.date}</span></div>}
+                  {(['part_number', 'customer', 'po_number', 'date'] as const).map(field => {
+                    const labels: Record<string, string> = { part_number: 'Part#', customer: 'Customer', date: 'Date', po_number: 'PO#' };
+                    const val = (h as any)[field];
+                    const isEditing = isEditingThisPage && editingHeaderField === field;
+                    if (!val && !isEditing) return null;
+                    return (
+                      <div key={field}>
+                        <span style={{ color: 'var(--text-muted)' }}>{labels[field]}:</span>{' '}
+                        {isEditing ? (
+                          <span style={{ display: 'inline-flex', gap: '3px', alignItems: 'center' }}>
+                            <input
+                              autoFocus
+                              value={editHeaderValue}
+                              onChange={e => setEditHeaderValue(e.target.value)}
+                              onKeyDown={e => { if (e.key === 'Enter') commitEditHeader(); if (e.key === 'Escape') cancelEditHeader(); }}
+                              style={{ fontSize: '11px', fontWeight: 700, padding: '2px 5px', border: '1px solid var(--primary)', borderRadius: '4px', background: 'var(--subtle-bg)', color: 'var(--text-primary)', width: '90px', outline: 'none' }}
+                            />
+                            <button onClick={commitEditHeader} style={{ fontSize: '9px', padding: '2px 3px', border: 'none', background: 'var(--success)', color: '#fff', borderRadius: '3px', cursor: 'pointer' }}>✓</button>
+                            <button onClick={cancelEditHeader} style={{ fontSize: '9px', padding: '2px 3px', border: '1px solid var(--border)', background: 'transparent', color: 'var(--text-muted)', borderRadius: '3px', cursor: 'pointer' }}>✕</button>
+                          </span>
+                        ) : (
+                          <span
+                            onClick={() => startEditHeader(field, wp.pageNum)}
+                            style={{ fontWeight: 700, color: 'var(--text-primary)', cursor: 'pointer', borderBottom: '1px dashed var(--border)', paddingBottom: '1px' }}
+                          >{val}</span>
+                        )}
+                      </div>
+                    );
+                  })}
                 </div>
                 {matchedPagePart && (
                   <div style={{ marginTop: '4px', padding: '3px 6px', borderRadius: '5px', background: 'var(--success-bg)', border: '1px solid var(--success-border)', fontSize: '10px', color: 'var(--success)', fontWeight: 600 }}>
