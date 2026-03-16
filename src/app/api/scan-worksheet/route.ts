@@ -11,8 +11,8 @@ The worksheet has:
 2. A TABLE with numbered rows. Each row typically has:
    - A row number
    - A partial VIN (usually the last 8 digits of the vehicle identification number)
-   - A unit number (asset/fleet identifier)
-   - Sometimes additional columns
+   - A unit number (asset/fleet identifier, or sometimes a location like "Joliet, IL")
+   - Sometimes additional columns like Order #
 
 IMPORTANT RULES:
 - Read the handwriting as carefully as possible

@@ -468,6 +468,13 @@ interface ParsedVIN {
   partNumber?: string;
   unitNumber?: string;
   isPartial?: boolean;
+  pageNum?: number;
+}
+
+interface WorksheetPage {
+  pageNum: number;
+  header: WorksheetHeader;
+  vinCount: number;
 }
 
 interface ProcessResult {
@@ -503,7 +510,9 @@ function BulkVINUpload() {
 
   // Worksheet state
   const [worksheetHeader, setWorksheetHeader] = useState<WorksheetHeader | null>(null);
+  const [worksheetPages, setWorksheetPages] = useState<WorksheetPage[]>([]);
   const [scanningWorksheet, setScanningWorksheet] = useState(false);
+  const [scanProgress, setScanProgress] = useState('');
   const [worksheetError, setWorksheetError] = useState('');
   const [worksheetNotes, setWorksheetNotes] = useState('');
 
@@ -664,7 +673,9 @@ function BulkVINUpload() {
     setFileName(file.name);
     setWorksheetError('');
     setWorksheetHeader(null);
+    setWorksheetPages([]);
     setWorksheetNotes('');
+    setScanProgress('');
     setScanningWorksheet(true);
 
     try {
@@ -680,12 +691,13 @@ function BulkVINUpload() {
         const pdf = await pdfjs.getDocument({ data: buf }).promise;
         const totalPages = pdf.numPages;
 
-        // Process all pages (single or multi)
+        // Process all pages — group by page with individual headers
         const allResults: ParsedVIN[] = [];
-        let firstHeader: WorksheetHeader | null = null;
+        const pages: WorksheetPage[] = [];
         let allNotes: string[] = [];
 
         for (let pageNum = 1; pageNum <= totalPages; pageNum++) {
+          setScanProgress(`Scanning page ${pageNum} of ${totalPages}...`);
           const pg = await pdf.getPage(pageNum);
           const vp = pg.getViewport({ scale: 2.0 });
           const c = document.createElement('canvas');
@@ -705,25 +717,51 @@ function BulkVINUpload() {
             throw new Error(err.error || `Failed to scan page ${pageNum}`);
           }
           const { data } = await res.json();
-          if (!firstHeader && data.header) firstHeader = data.header;
+
+          // Store page header
+          const pageHeader: WorksheetHeader = data.header || {};
           if (data.notes) allNotes.push(`Page ${pageNum}: ${data.notes}`);
 
+          // Auto-match part for this page's header
+          let pagePartNumber = pageHeader.part_number || '';
+          let matchedPart: CatalogItem | null = null;
+          if (pagePartNumber) {
+            const cleaned = pagePartNumber.replace(/\s+/g, '').toUpperCase();
+            matchedPart = catalogItems.find(ci =>
+              ci.part_number.replace(/\s+/g, '').toUpperCase() === cleaned ||
+              ci.part_number.replace(/\s+/g, '').toUpperCase().includes(cleaned) ||
+              cleaned.includes(ci.part_number.replace(/\s+/g, '').toUpperCase())
+            ) || null;
+          }
+
+          let pageVinCount = 0;
           (data.rows || []).forEach((row: any) => {
             if (row.partial_vin) {
+              pageVinCount++;
               allResults.push({
                 raw: row.partial_vin,
                 vin: row.partial_vin.toUpperCase().replace(/[^A-HJ-NPR-Z0-9]/g, ''),
                 valid: true,
                 isPartial: true,
                 unitNumber: row.unit_number || undefined,
+                pageNum,
+                partNumber: matchedPart?.part_number || undefined,
               });
             }
           });
+
+          pages.push({ pageNum, header: pageHeader, vinCount: pageVinCount });
         }
 
-        if (firstHeader) {
-          setWorksheetHeader(firstHeader);
-          autoMatchPart(firstHeader.part_number || '');
+        setScanProgress('');
+        setWorksheetPages(pages);
+        // Use first page header as the main display header
+        if (pages.length > 0) {
+          setWorksheetHeader(pages[0].header);
+          // Only auto-select part dropdown for single-page PDFs
+          if (pages.length === 1) {
+            autoMatchPart(pages[0].header.part_number || '');
+          }
         }
         if (allNotes.length > 0) setWorksheetNotes(allNotes.join('\n'));
         await markDuplicatesAndExisting(allResults);
@@ -1042,8 +1080,10 @@ function BulkVINUpload() {
     setProcessedCount(0);
     setHasPartNumberColumn(false);
     setWorksheetHeader(null);
+    setWorksheetPages([]);
     setWorksheetError('');
     setWorksheetNotes('');
+    setScanProgress('');
     if (fileInputRef.current) fileInputRef.current.value = '';
     if (worksheetInputRef.current) worksheetInputRef.current.value = '';
   };
@@ -1204,7 +1244,7 @@ function BulkVINUpload() {
             <div style={{ width: '100%', padding: '32px', borderRadius: '12px', border: '2px dashed var(--border)', background: 'var(--card)', textAlign: 'center' }}>
               <div style={{ fontSize: '28px', marginBottom: '8px' }}>🔍</div>
               <div style={{ fontSize: '14px', fontWeight: 700, color: 'var(--text-primary)' }}>Scanning worksheet...</div>
-              <div style={{ fontSize: '12px', color: 'var(--text-muted)', marginTop: '4px' }}>AI is reading the handwritten data</div>
+              <div style={{ fontSize: '12px', color: 'var(--text-muted)', marginTop: '4px' }}>{scanProgress || 'AI is reading the handwritten data'}</div>
             </div>
           ) : (
             <button
@@ -1223,8 +1263,48 @@ function BulkVINUpload() {
         </div>
       )}
 
-      {/* Worksheet Header Info — Editable */}
-      {worksheetHeader && (
+      {/* Worksheet Header Info — Per-page when multi-page, single card when single page */}
+      {worksheetPages.length > 1 ? (
+        <div style={{ display: 'flex', flexDirection: 'column', gap: '8px', marginBottom: '12px' }}>
+          <div style={{ fontSize: '11px', fontWeight: 700, color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.5px' }}>
+            {worksheetPages.length} Pages Scanned
+          </div>
+          {worksheetPages.map((wp) => {
+            const h = wp.header;
+            const matchedPagePart = (() => {
+              if (!h.part_number) return null;
+              const cleaned = h.part_number.replace(/\s+/g, '').toUpperCase();
+              return catalogItems.find(ci =>
+                ci.part_number.replace(/\s+/g, '').toUpperCase() === cleaned ||
+                ci.part_number.replace(/\s+/g, '').toUpperCase().includes(cleaned) ||
+                cleaned.includes(ci.part_number.replace(/\s+/g, '').toUpperCase())
+              ) || null;
+            })();
+            return (
+              <div key={wp.pageNum} style={{ background: 'var(--card)', border: '1px solid var(--border)', borderRadius: '12px', padding: '10px 12px' }}>
+                <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '6px' }}>
+                  <div style={{ fontSize: '11px', fontWeight: 700, color: 'var(--orange)' }}>Page {wp.pageNum}</div>
+                  <div style={{ fontSize: '10px', color: 'var(--text-muted)' }}>{wp.vinCount} VIN{wp.vinCount !== 1 ? 's' : ''}</div>
+                </div>
+                <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '4px', fontSize: '11px' }}>
+                  {h.part_number && <div><span style={{ color: 'var(--text-muted)' }}>Part#:</span> <span style={{ fontWeight: 700, color: 'var(--text-primary)' }}>{h.part_number}</span></div>}
+                  {h.customer && <div><span style={{ color: 'var(--text-muted)' }}>Customer:</span> <span style={{ fontWeight: 700, color: 'var(--text-primary)' }}>{h.customer}</span></div>}
+                  {h.po_number && <div><span style={{ color: 'var(--text-muted)' }}>PO#:</span> <span style={{ fontWeight: 700, color: 'var(--text-primary)' }}>{h.po_number}</span></div>}
+                  {h.date && <div><span style={{ color: 'var(--text-muted)' }}>Date:</span> <span style={{ fontWeight: 700, color: 'var(--text-primary)' }}>{h.date}</span></div>}
+                </div>
+                {matchedPagePart && (
+                  <div style={{ marginTop: '4px', padding: '3px 6px', borderRadius: '5px', background: 'var(--success-bg)', border: '1px solid var(--success-border)', fontSize: '10px', color: 'var(--success)', fontWeight: 600 }}>
+                    ✓ Matched: {matchedPagePart.part_number}
+                  </div>
+                )}
+              </div>
+            );
+          })}
+          {worksheetNotes && (
+            <div style={{ fontSize: '10px', color: 'var(--text-muted)', fontStyle: 'italic' }}>{worksheetNotes}</div>
+          )}
+        </div>
+      ) : worksheetHeader && (
         <div style={{ background: 'var(--card)', border: '1px solid var(--border)', borderRadius: '12px', padding: '12px', marginBottom: '12px' }}>
           <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '8px' }}>
             <div style={{ fontSize: '11px', fontWeight: 700, color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.5px' }}>Worksheet Header</div>
@@ -1282,7 +1362,7 @@ function BulkVINUpload() {
             {existsCount > 0 && <span style={{ padding: '4px 10px', borderRadius: '8px', fontSize: '11px', fontWeight: 700, background: 'var(--subtle-bg)', border: '1px solid var(--border)', color: 'var(--text-muted)' }}>↻ {existsCount} already exists</span>}
           </div>
 
-          {/* VIN List — Editable */}
+          {/* VIN List — Editable, grouped by page for multi-page worksheets */}
           <div style={{ maxHeight: '350px', overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: '3px', marginBottom: '8px' }}>
             {parsedVINs.map((pv, i) => {
               const skipped = pv.duplicate || pv.existsInDb;
@@ -1290,8 +1370,23 @@ function BulkVINUpload() {
               const isEditingUnit = editingRow === i && editingField === 'unit';
               const borderColor = !pv.valid ? 'var(--error-border)' : skipped ? 'var(--border)' : 'var(--success-border)';
               const bgColor = !pv.valid ? 'var(--error-bg)' : skipped ? 'var(--subtle-bg)' : 'var(--success-bg)';
+              // Page divider for multi-page worksheets
+              const showPageDivider = worksheetPages.length > 1 && pv.pageNum != null &&
+                (i === 0 || parsedVINs[i - 1]?.pageNum !== pv.pageNum);
+              const pageInfo = showPageDivider ? worksheetPages.find(wp => wp.pageNum === pv.pageNum) : null;
               return (
-                <div key={i} style={{ display: 'flex', alignItems: 'center', gap: '6px', padding: '8px 10px', borderRadius: '8px', border: `1px solid ${borderColor}`, background: bgColor }}>
+                <div key={i}>
+                {pageInfo && (
+                  <div style={{ padding: '6px 10px', marginTop: i > 0 ? '8px' : '0', marginBottom: '4px', borderRadius: '8px', background: 'var(--orange)', color: '#fff' }}>
+                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                      <span style={{ fontSize: '11px', fontWeight: 800 }}>Page {pageInfo.pageNum}</span>
+                      <span style={{ fontSize: '10px', fontWeight: 600 }}>
+                        {[pageInfo.header.part_number, pageInfo.header.customer, pageInfo.header.po_number ? `PO: ${pageInfo.header.po_number}` : null].filter(Boolean).join(' · ')}
+                      </span>
+                    </div>
+                  </div>
+                )}
+                <div style={{ display: 'flex', alignItems: 'center', gap: '6px', padding: '8px 10px', borderRadius: '8px', border: `1px solid ${borderColor}`, background: bgColor }}>
                   <span style={{ fontSize: '14px', width: '20px', textAlign: 'center', flexShrink: 0 }}>{!pv.valid ? '❌' : skipped ? '⏭️' : '✅'}</span>
                   <div style={{ flex: 1, minWidth: 0 }}>
                     {/* VIN — editable */}
@@ -1357,6 +1452,7 @@ function BulkVINUpload() {
                     title="Remove row"
                     style={{ width: '22px', height: '22px', borderRadius: '6px', border: '1px solid var(--border)', background: 'transparent', color: 'var(--text-muted)', fontSize: '12px', cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0, lineHeight: 1 }}
                   >✕</button>
+                </div>
                 </div>
               );
             })}
