@@ -483,6 +483,8 @@ interface ProcessResult {
   vehicleTitle?: string;
   poMatch?: string;
   error?: string;
+  pageNum?: number;
+  partNumber?: string;
 }
 
 interface WorksheetHeader {
@@ -1096,9 +1098,9 @@ function BulkVINUpload() {
         const title = pv.isPartial
           ? `VIN ...${pv.vin}${pv.unitNumber ? ` (${pv.unitNumber})` : ''}`
           : ([vehicle.year, vehicle.make, vehicle.model].filter(Boolean).join(' ') || 'Unknown Vehicle');
-        allResults.push({ vin: pv.vin, success: true, vehicleTitle: title, poMatch: poMatchStr || undefined });
+        allResults.push({ vin: pv.vin, success: true, vehicleTitle: title, poMatch: poMatchStr || undefined, pageNum: pv.pageNum, partNumber: part?.part_number || undefined });
       } catch (err: any) {
-        allResults.push({ vin: pv.vin, success: false, error: err.message || 'Unknown error' });
+        allResults.push({ vin: pv.vin, success: false, error: err.message || 'Unknown error', pageNum: pv.pageNum });
       }
 
       setProcessedCount(i + 1);
@@ -1165,18 +1167,41 @@ function BulkVINUpload() {
         </div>
 
         <div style={{ display: 'flex', flexDirection: 'column', gap: '4px', marginBottom: '16px' }}>
-          {results.map((r, i) => (
-            <div key={i} style={{ padding: '10px 12px', borderRadius: '10px', border: `1px solid ${r.success ? 'var(--success-border)' : 'var(--error-border)'}`, background: r.success ? 'var(--success-bg)' : 'var(--error-bg)' }}>
-              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                <div>
-                  <span style={{ fontSize: '12px', fontWeight: 700, color: 'var(--text-primary)' }}>{r.success ? '✅' : '❌'} {r.vehicleTitle || r.vin}</span>
-                  <div style={{ fontSize: '10px', color: 'var(--text-muted)', fontFamily: 'monospace' }}>{r.vin}</div>
+          {results.map((r, i) => {
+            // Page divider in results for multi-page worksheets
+            const showPageDivider = worksheetPages.length > 1 && r.pageNum != null &&
+              (i === 0 || results[i - 1]?.pageNum !== r.pageNum);
+            const pageInfo = showPageDivider ? worksheetPages.find(wp => wp.pageNum === r.pageNum) : null;
+            const pageResults = pageInfo ? results.filter(pr => pr.pageNum === r.pageNum) : [];
+            const pagePoMatches = pageResults.filter(pr => pr.poMatch).length;
+            const pageSuccess = pageResults.filter(pr => pr.success).length;
+            return (
+              <div key={i}>
+                {pageInfo && (
+                  <div style={{ padding: '8px 10px', marginTop: i > 0 ? '10px' : '0', marginBottom: '6px', borderRadius: '8px', background: 'var(--orange)', color: '#fff' }}>
+                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                      <span style={{ fontSize: '11px', fontWeight: 800 }}>Page {pageInfo.pageNum} — {pageInfo.header.customer || 'Unknown'}</span>
+                      <span style={{ fontSize: '10px', fontWeight: 600 }}>{pageInfo.header.part_number || ''}</span>
+                    </div>
+                    <div style={{ display: 'flex', gap: '8px', marginTop: '4px', fontSize: '10px', fontWeight: 600 }}>
+                      <span>{pageSuccess} uploaded</span>
+                      {pagePoMatches > 0 && <span>· {pagePoMatches} PO matched</span>}
+                    </div>
+                  </div>
+                )}
+                <div style={{ padding: '10px 12px', borderRadius: '10px', border: `1px solid ${r.success ? 'var(--success-border)' : 'var(--error-border)'}`, background: r.success ? 'var(--success-bg)' : 'var(--error-bg)' }}>
+                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                    <div>
+                      <span style={{ fontSize: '12px', fontWeight: 700, color: 'var(--text-primary)' }}>{r.success ? '✅' : '❌'} {r.vehicleTitle || r.vin}</span>
+                      <div style={{ fontSize: '10px', color: 'var(--text-muted)', fontFamily: 'monospace' }}>{r.vin}</div>
+                    </div>
+                    {r.poMatch && <span style={{ fontSize: '10px', fontWeight: 700, color: 'var(--warning)', background: 'var(--warning-bg)', padding: '2px 6px', borderRadius: '4px' }}>{r.poMatch}</span>}
+                  </div>
+                  {r.error && <div style={{ fontSize: '11px', color: 'var(--error)', marginTop: '4px' }}>{r.error}</div>}
                 </div>
-                {r.poMatch && <span style={{ fontSize: '10px', fontWeight: 700, color: 'var(--warning)', background: 'var(--warning-bg)', padding: '2px 6px', borderRadius: '4px' }}>{r.poMatch}</span>}
               </div>
-              {r.error && <div style={{ fontSize: '11px', color: 'var(--error)', marginTop: '4px' }}>{r.error}</div>}
-            </div>
-          ))}
+            );
+          })}
         </div>
 
         <button onClick={reset} style={{ width: '100%', padding: '14px', borderRadius: '12px', border: 'none', background: 'var(--navy)', color: '#fff', fontSize: '15px', fontWeight: 700, cursor: 'pointer' }}>Upload More VINs</button>
