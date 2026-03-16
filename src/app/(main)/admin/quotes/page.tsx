@@ -437,6 +437,7 @@ function NewQuote({ onCreated, editQuote }: { onCreated: () => void; editQuote?:
   const [proofPreview, setProofPreview] = useState<string | null>(null);
   const [proofLibrary, setProofLibrary] = useState<{ url: string; path: string; customer: string; vehicle: string; quoteNum: string }[]>([]);
   const [loadingLibrary, setLoadingLibrary] = useState(false);
+  const [templateOnly, setTemplateOnly] = useState(false); // Full wrap — no proof needed
 
   // Step 3: AI Analysis
   const [analyzing, setAnalyzing] = useState(false);
@@ -1245,6 +1246,70 @@ function NewQuote({ onCreated, editQuote }: { onCreated: () => void; editQuote?:
     }
   }
 
+  // Run template-only AI analysis (no proof — full wrap panel detection)
+  async function runTemplateOnlyAnalysis() {
+    if (!selectedTemplate) return;
+
+    setAnalyzing(true);
+    setAnalysisError('');
+    setTemplateOnly(true);
+
+    try {
+      // Get template image from storage
+      if (!selectedTemplate.template_image_path) {
+        throw new Error('Selected template has no image. Please upload a PNG preview first.');
+      }
+
+      const { data } = supabase.storage
+        .from('vehicle-templates')
+        .getPublicUrl(selectedTemplate.template_image_path);
+
+      setTemplatePreviewUrl(data.publicUrl);
+
+      const imgResponse = await fetch(data.publicUrl);
+      if (!imgResponse.ok) throw new Error(`Failed to fetch template image: ${imgResponse.status}`);
+
+      const imgBlob = await imgResponse.blob();
+      const templateBase64 = await new Promise<string>((resolve) => {
+        const reader = new FileReader();
+        reader.onload = () => resolve((reader.result as string).split(',')[1]);
+        reader.readAsDataURL(imgBlob);
+      });
+      const templateMediaType = imgBlob.type || 'image/png';
+
+      // Use the template image as the "proof" image for the tagging UI
+      setProofPreviewForReview(data.publicUrl);
+
+      // Call template-only analysis API
+      const response = await fetch('/api/analyze-template', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ templateImageBase64: templateBase64, templateMediaType }),
+      });
+
+      if (!response.ok) {
+        const errorText = await response.text();
+        throw new Error(errorText || `Server error: ${response.status}`);
+      }
+
+      const result = await response.json();
+      setAnalysis(result.analysis);
+
+      if (result.analysis.graphic_elements?.length) {
+        // Start with all panels INCLUDED (since this is a full wrap)
+        setIncludedElements(new Set(result.analysis.graphic_elements.map((e: GraphicElement) => e.element_name)));
+        setNestingResult(null);
+        setStep(4); // Go to tag/adjust panels
+      } else {
+        setStep(5); // Go straight to pricing
+      }
+    } catch (err: any) {
+      setAnalysisError(err.message || 'Template analysis failed.');
+    } finally {
+      setAnalyzing(false);
+    }
+  }
+
   // Save quote (insert new or update existing)
   async function saveQuote() {
     if (!analysis || !user) return;
@@ -1581,6 +1646,32 @@ function NewQuote({ onCreated, editQuote }: { onCreated: () => void; editQuote?:
             </div>
           )}
 
+          {/* Divider */}
+          <div style={{
+            display: 'flex', alignItems: 'center', gap: '12px', margin: '16px 0',
+          }}>
+            <div style={{ flex: 1, height: '1px', background: theme.border }} />
+            <span style={{ fontSize: '12px', fontWeight: 700, color: theme.textMuted, textTransform: 'uppercase', letterSpacing: '0.5px' }}>or</span>
+            <div style={{ flex: 1, height: '1px', background: theme.border }} />
+          </div>
+
+          {/* Full Wrap — No Proof */}
+          <button
+            onClick={() => { setTemplateOnly(true); setStep(3); }}
+            style={{
+              width: '100%', padding: '16px', borderRadius: '12px',
+              border: `2px solid ${theme.orange}`, background: theme.orange + '10',
+              color: theme.orange, fontSize: '15px', fontWeight: 800, cursor: 'pointer',
+              marginBottom: '16px', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '8px',
+            }}
+          >
+            <span style={{ fontSize: '20px' }}>🎨</span>
+            Full Wrap — Skip Proof
+          </button>
+          <div style={{ fontSize: '11px', color: theme.textMuted, textAlign: 'center', marginBottom: '16px' }}>
+            AI will detect panels from the template. You can draw and adjust wrap areas.
+          </div>
+
           <div style={{ display: 'flex', gap: '8px' }}>
             <button
               onClick={() => setStep(1)}
@@ -1592,7 +1683,7 @@ function NewQuote({ onCreated, editQuote }: { onCreated: () => void; editQuote?:
               ← Back
             </button>
             <button
-              onClick={() => setStep(3)}
+              onClick={() => { setTemplateOnly(false); setStep(3); }}
               disabled={!proofFile && !proofPreview}
               style={{
                 flex: 2, padding: '14px', borderRadius: '12px', border: 'none',
@@ -1601,7 +1692,7 @@ function NewQuote({ onCreated, editQuote }: { onCreated: () => void; editQuote?:
                 fontSize: '15px', fontWeight: 700, cursor: 'pointer',
               }}
             >
-              Next: Analyze →
+              Next: Analyze Proof →
             </button>
           </div>
         </div>
@@ -1614,7 +1705,9 @@ function NewQuote({ onCreated, editQuote }: { onCreated: () => void; editQuote?:
             Step 3: AI Analysis
           </div>
           <div style={{ fontSize: '13px', color: theme.textSecondary, marginBottom: '16px' }}>
-            AI will compare the proof design against the {selectedTemplate?.name} template to estimate vinyl coverage
+            {templateOnly
+              ? `AI will detect wrappable panels on the ${selectedTemplate?.name} template`
+              : `AI will compare the proof design against the ${selectedTemplate?.name} template to estimate vinyl coverage`}
           </div>
 
           {/* Summary of what we're analyzing */}
@@ -1628,8 +1721,10 @@ function NewQuote({ onCreated, editQuote }: { onCreated: () => void; editQuote?:
               <span style={{ color: theme.textPrimary, fontWeight: 700 }}>{selectedTemplate?.name}</span>
             </div>
             <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '13px' }}>
-              <span style={{ color: theme.textSecondary }}>Proof:</span>
-              <span style={{ color: theme.textPrimary, fontWeight: 700 }}>{proofFile?.name || (editQuote?.proof_image_path ? 'Existing proof' : 'None')}</span>
+              <span style={{ color: theme.textSecondary }}>Mode:</span>
+              <span style={{ color: templateOnly ? theme.orange : theme.textPrimary, fontWeight: 700 }}>
+                {templateOnly ? '🎨 Full Wrap (No Proof)' : proofFile?.name || (editQuote?.proof_image_path ? 'Existing proof' : 'None')}
+              </span>
             </div>
           </div>
 
@@ -1647,10 +1742,12 @@ function NewQuote({ onCreated, editQuote }: { onCreated: () => void; editQuote?:
                 animation: 'spin 1s linear infinite',
               }} />
               <div style={{ color: theme.textPrimary, marginTop: '16px', fontSize: '15px', fontWeight: 700 }}>
-                🤖 AI is analyzing your proof...
+                🤖 {templateOnly ? 'AI is detecting panels...' : 'AI is analyzing your proof...'}
               </div>
               <div style={{ color: theme.textMuted, marginTop: '6px', fontSize: '13px' }}>
-                Comparing proof against template dimensions to estimate vinyl coverage. This may take 15-30 seconds.
+                {templateOnly
+                  ? 'Identifying wrappable panels from template dimensions. This may take 15-30 seconds.'
+                  : 'Comparing proof against template dimensions to estimate vinyl coverage. This may take 15-30 seconds.'}
               </div>
             </div>
           ) : (
@@ -1665,16 +1762,16 @@ function NewQuote({ onCreated, editQuote }: { onCreated: () => void; editQuote?:
                 ← Back
               </button>
               <button
-                onClick={runAnalysis}
-                disabled={!proofFile || !selectedTemplate}
+                onClick={templateOnly ? runTemplateOnlyAnalysis : runAnalysis}
+                disabled={templateOnly ? !selectedTemplate : (!proofFile || !selectedTemplate)}
                 style={{
                   flex: 2, padding: '14px', borderRadius: '12px', border: 'none',
-                  background: (!proofFile || !selectedTemplate) ? theme.border : theme.orange,
-                  color: (!proofFile || !selectedTemplate) ? theme.textMuted : '#fff',
-                  fontSize: '15px', fontWeight: 700, cursor: (!proofFile || !selectedTemplate) ? 'not-allowed' : 'pointer',
+                  background: (templateOnly ? !selectedTemplate : (!proofFile || !selectedTemplate)) ? theme.border : theme.orange,
+                  color: (templateOnly ? !selectedTemplate : (!proofFile || !selectedTemplate)) ? theme.textMuted : '#fff',
+                  fontSize: '15px', fontWeight: 700, cursor: (templateOnly ? !selectedTemplate : (!proofFile || !selectedTemplate)) ? 'not-allowed' : 'pointer',
                 }}
               >
-                🤖 Run AI Analysis
+                🤖 {templateOnly ? 'Detect Panels' : 'Run AI Analysis'}
               </button>
               {/* When editing with existing analysis, allow skipping re-analysis */}
               {editQuote && analysis && (
@@ -1707,7 +1804,7 @@ function NewQuote({ onCreated, editQuote }: { onCreated: () => void; editQuote?:
             background: theme.card, borderBottom: `1px solid ${theme.border}`, flexShrink: 0,
           }}>
             <div>
-              <div style={{ fontSize: '14px', fontWeight: 800, color: theme.textPrimary }}>Tag Elements</div>
+              <div style={{ fontSize: '14px', fontWeight: 800, color: theme.textPrimary }}>{templateOnly ? 'Tag Panels' : 'Tag Elements'}</div>
               <div style={{ fontSize: '11px', color: theme.textMuted }}>
                 {croppingElement
                   ? `Drawing: ${croppingElement}`
@@ -1865,7 +1962,7 @@ function NewQuote({ onCreated, editQuote }: { onCreated: () => void; editQuote?:
               <img
                 ref={proofImgRef}
                 src={proofPreviewForReview || proofPreview || ''}
-                alt="Proof"
+                alt={templateOnly ? 'Template' : 'Proof'}
                 style={{ width: '100%', display: 'block', pointerEvents: 'none' }}
                 draggable={false}
               />
