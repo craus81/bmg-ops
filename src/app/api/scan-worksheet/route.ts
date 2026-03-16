@@ -4,7 +4,7 @@ export const maxDuration = 60;
 
 const ANTHROPIC_API_KEY = process.env.ANTHROPIC_API_KEY;
 
-const WORKSHEET_PROMPT = `You are reading a handwritten fleet vehicle worksheet/log sheet. Extract ALL data from this document.
+const WORKSHEET_PROMPT = `You are reading a handwritten fleet vehicle worksheet/log sheet. Extract ALL data from this document. If the document has MULTIPLE PAGES, extract data from EVERY page and combine all rows into a single list.
 
 The worksheet has:
 1. A HEADER section at the top with fields like: Vendor Name, Part# (or Part Number), Date, PO# (or PO Number), Customer
@@ -16,6 +16,7 @@ The worksheet has:
 
 IMPORTANT RULES:
 - Read the handwriting as carefully as possible
+- Extract ALL rows from ALL pages of the document
 - VIN digits are alphanumeric (0-9 and A-Z, excluding I, O, Q)
 - Common handwriting confusions to watch for: 5/S, 0/O, 1/I, 8/B, 6/G, 2/Z
 - The Part# field often contains codes like "065058", "06CS900008", "06T278", etc.
@@ -65,16 +66,45 @@ export async function POST(request: NextRequest) {
       );
     }
 
+    // Determine if this is a PDF or image
+    const resolvedMediaType = mediaType || 'image/jpeg';
+    const isPdf = resolvedMediaType === 'application/pdf';
+
+    // Build the content block — PDFs use 'document' type, images use 'image' type
+    const fileBlock = isPdf
+      ? {
+          type: 'document' as const,
+          source: {
+            type: 'base64' as const,
+            media_type: 'application/pdf' as const,
+            data: imageBase64,
+          },
+        }
+      : {
+          type: 'image' as const,
+          source: {
+            type: 'base64' as const,
+            media_type: resolvedMediaType,
+            data: imageBase64,
+          },
+        };
+
+    // Build headers — add PDF beta header when sending PDFs
+    const apiHeaders: Record<string, string> = {
+      'Content-Type': 'application/json',
+      'x-api-key': ANTHROPIC_API_KEY,
+      'anthropic-version': '2023-06-01',
+    };
+    if (isPdf) {
+      apiHeaders['anthropic-beta'] = 'pdfs-2024-09-25';
+    }
+
     const response = await fetch('https://api.anthropic.com/v1/messages', {
       method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'x-api-key': ANTHROPIC_API_KEY,
-        'anthropic-version': '2023-06-01',
-      },
+      headers: apiHeaders,
       body: JSON.stringify({
         model: 'claude-sonnet-4-5-20250929',
-        max_tokens: 4096,
+        max_tokens: isPdf ? 8192 : 4096,
         messages: [
           {
             role: 'user',
@@ -83,14 +113,7 @@ export async function POST(request: NextRequest) {
                 type: 'text',
                 text: 'Read this handwritten vehicle worksheet and extract all the data:',
               },
-              {
-                type: 'image',
-                source: {
-                  type: 'base64',
-                  media_type: mediaType || 'image/jpeg',
-                  data: imageBase64,
-                },
-              },
+              fileBlock,
               {
                 type: 'text',
                 text: WORKSHEET_PROMPT,

@@ -673,75 +673,14 @@ function BulkVINUpload() {
 
       const ext = file.name.split('.').pop()?.toLowerCase();
       if (ext === 'pdf') {
-        // Render first page of PDF to image using pdfjs
-        const pdfjs = await import('pdfjs-dist');
-        pdfjs.GlobalWorkerOptions.workerSrc = '/pdf.worker.min.mjs';
-        const buf = await file.arrayBuffer();
-        const pdf = await pdfjs.getDocument({ data: buf }).promise;
-        const page = await pdf.getPage(1);
-        const viewport = page.getViewport({ scale: 2.0 });
-        const canvas = document.createElement('canvas');
-        canvas.width = viewport.width;
-        canvas.height = viewport.height;
-        const ctx = canvas.getContext('2d')!;
-        await page.render({ canvasContext: ctx, viewport, canvas } as any).promise;
-        imageBase64 = canvas.toDataURL('image/jpeg', 0.9).split(',')[1];
-        mediaType = 'image/jpeg';
-
-        // Check for additional pages
-        const totalPages = pdf.numPages;
-        if (totalPages > 1) {
-          // Process each page
-          const allResults: ParsedVIN[] = [];
-          let firstHeader: WorksheetHeader | null = null;
-          let allNotes: string[] = [];
-
-          for (let pageNum = 1; pageNum <= totalPages; pageNum++) {
-            const pg = await pdf.getPage(pageNum);
-            const vp = pg.getViewport({ scale: 2.0 });
-            const c = document.createElement('canvas');
-            c.width = vp.width;
-            c.height = vp.height;
-            const cx = c.getContext('2d')!;
-            await pg.render({ canvasContext: cx, viewport: vp, canvas: c } as any).promise;
-            const pgBase64 = c.toDataURL('image/jpeg', 0.9).split(',')[1];
-
-            const res = await fetch('/api/scan-worksheet', {
-              method: 'POST',
-              headers: { 'Content-Type': 'application/json' },
-              body: JSON.stringify({ imageBase64: pgBase64, mediaType: 'image/jpeg' }),
-            });
-            if (!res.ok) {
-              const err = await res.json();
-              throw new Error(err.error || `Failed to scan page ${pageNum}`);
-            }
-            const { data } = await res.json();
-            if (!firstHeader && data.header) firstHeader = data.header;
-            if (data.notes) allNotes.push(`Page ${pageNum}: ${data.notes}`);
-
-            (data.rows || []).forEach((row: any) => {
-              if (row.partial_vin) {
-                allResults.push({
-                  raw: row.partial_vin,
-                  vin: row.partial_vin.toUpperCase().replace(/[^A-HJ-NPR-Z0-9]/g, ''),
-                  valid: true,
-                  isPartial: true,
-                  unitNumber: row.unit_number || undefined,
-                });
-              }
-            });
-          }
-
-          if (firstHeader) {
-            setWorksheetHeader(firstHeader);
-            autoMatchPart(firstHeader.part_number || '');
-          }
-          if (allNotes.length > 0) setWorksheetNotes(allNotes.join('\n'));
-          await markDuplicatesAndExisting(allResults);
-          setParsedVINs(allResults);
-          setScanningWorksheet(false);
-          return;
-        }
+        // Send PDF directly to Claude API as a document (native PDF support)
+        const reader = new FileReader();
+        const pdfBase64 = await new Promise<string>((resolve) => {
+          reader.onload = () => resolve((reader.result as string).split(',')[1]);
+          reader.readAsDataURL(file);
+        });
+        imageBase64 = pdfBase64;
+        mediaType = 'application/pdf';
       } else {
         // Image file - convert to base64
         const reader = new FileReader();
