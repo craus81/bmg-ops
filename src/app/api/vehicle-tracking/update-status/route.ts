@@ -1,25 +1,9 @@
-import { createServerClient } from '@supabase/ssr';
-import { cookies } from 'next/headers';
+import { createClient } from '@/lib/supabase-server';
 import { NextResponse } from 'next/server';
-
-function getSupabase() {
-  const cookieStore = cookies();
-  return createServerClient(
-    process.env.NEXT_PUBLIC_SUPABASE_URL!,
-    process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!,
-    {
-      cookies: {
-        get(name: string) {
-          return cookieStore.get(name)?.value;
-        },
-      },
-    }
-  );
-}
 
 export async function POST(request: Request) {
   try {
-    const supabase = getSupabase();
+    const supabase = createClient();
     const { data: { user }, error: authError } = await supabase.auth.getUser();
 
     if (authError || !user) {
@@ -75,7 +59,6 @@ export async function POST(request: Request) {
 
     if (historyError) {
       console.error('Failed to log status history:', historyError);
-      // Don't fail the request — status was already updated
     }
 
     return NextResponse.json({
