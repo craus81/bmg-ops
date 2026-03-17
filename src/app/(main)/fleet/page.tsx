@@ -277,6 +277,7 @@ export default function FleetPage() {
         proof_file_path: selectedProof?.storage_path || null,
         proof_file_name: selectedProof?.file_name || null,
         notes: notes.trim() || null,
+        status: 'received',
         checked_in_by: user.id,
         company_id: profile?.company_id || null,
       })

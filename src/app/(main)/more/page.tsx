@@ -13,6 +13,7 @@ export default function MorePage() {
   const supabase = createClient();
   const [pendingUserCount, setPendingUserCount] = useState(0);
   const [pendingReviewCount, setPendingReviewCount] = useState(0);
+  const [stuckVehicleCount, setStuckVehicleCount] = useState(0);
 
   useEffect(() => {
     if (!isAdmin) return;
@@ -29,6 +30,16 @@ export default function MorePage() {
         .eq('review_status', 'pending')
         .eq('submitted_for_review', true);
       setPendingReviewCount(reviewCount || 0);
+
+      const { count: stuckParts } = await supabase
+        .from('fleet_checkins')
+        .select('*', { count: 'exact', head: true })
+        .eq('status', 'stuck_parts');
+      const { count: stuckGraphics } = await supabase
+        .from('fleet_checkins')
+        .select('*', { count: 'exact', head: true })
+        .eq('status', 'stuck_graphics');
+      setStuckVehicleCount((stuckParts || 0) + (stuckGraphics || 0));
     };
     load();
   }, [isAdmin]);
@@ -39,9 +50,17 @@ export default function MorePage() {
         More
       </div>
       <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
+        <MenuBtn icon="🔄" title="Update Vehicle Status" sub="Scan VIN to update status" onClick={() => router.push('/fleet/update')} />
         <MenuBtn icon="🔧" title="My Jobs" sub="View your company's work" onClick={() => router.push('/jobs')} />
         <MenuBtn icon="📊" title="Export Reports" sub="Download vehicle spreadsheets" onClick={() => router.push('/reports')} />
         {isAdmin && (<>
+          <MenuBtn
+            icon="🚚"
+            title="Vehicle Tracking"
+            sub={stuckVehicleCount > 0 ? `${stuckVehicleCount} stuck — needs attention` : 'Track all shop vehicles'}
+            onClick={() => router.push('/admin/tracking')}
+            badge={stuckVehicleCount > 0 ? stuckVehicleCount : undefined}
+          />
           <MenuBtn icon="📋" title="All Jobs" sub="View all jobs by company" onClick={() => router.push('/admin/jobs')} />
           <MenuBtn icon="📅" title="Schedule" sub="Assign jobs to installers" onClick={() => router.push('/admin/schedule')} />
           <MenuBtn icon="📦" title="Part Catalog" sub="Manage part numbers" onClick={() => router.push('/admin/catalog')} />

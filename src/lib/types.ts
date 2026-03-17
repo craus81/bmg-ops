@@ -246,7 +246,31 @@ export interface QuoteElement {
   sort_order: number;
 }
 
-// ============ Fleet Check-In ============
+// ============ Fleet Check-In / Vehicle Tracking ============
+
+export type VehicleTrackingStatus = 'received' | 'in_progress' | 'stuck_parts' | 'stuck_graphics' | 'complete' | 'shipped';
+
+export const VEHICLE_STATUS_PIPELINE: VehicleTrackingStatus[] = [
+  'received', 'in_progress', 'stuck_parts', 'stuck_graphics', 'complete', 'shipped'
+];
+
+export const VEHICLE_STATUS_LABELS: Record<VehicleTrackingStatus, string> = {
+  received: 'Received',
+  in_progress: 'In Progress',
+  stuck_parts: 'Stuck (Parts)',
+  stuck_graphics: 'Stuck (Graphics)',
+  complete: 'Complete',
+  shipped: 'Shipped',
+};
+
+export const VEHICLE_STATUS_COLORS: Record<VehicleTrackingStatus, { bg: string; border: string; text: string }> = {
+  received: { bg: 'rgba(99,102,241,0.08)', border: 'rgba(99,102,241,0.25)', text: '#818cf8' },
+  in_progress: { bg: 'rgba(59,130,246,0.08)', border: 'rgba(59,130,246,0.25)', text: '#60a5fa' },
+  stuck_parts: { bg: 'rgba(251,191,36,0.08)', border: 'rgba(251,191,36,0.25)', text: '#fbbf24' },
+  stuck_graphics: { bg: 'rgba(251,146,60,0.08)', border: 'rgba(251,146,60,0.25)', text: '#fb923c' },
+  complete: { bg: 'rgba(52,211,153,0.08)', border: 'rgba(52,211,153,0.25)', text: '#34d399' },
+  shipped: { bg: 'rgba(139,92,246,0.08)', border: 'rgba(139,92,246,0.25)', text: '#a78bfa' },
+};
 
 export interface FleetCheckin {
   id: string;
@@ -265,11 +289,24 @@ export interface FleetCheckin {
   proof_file_name: string | null;
   proof_thumbnail_path: string | null;
   notes: string | null;
-  status: 'checked_in' | 'in_progress' | 'complete';
+  status: VehicleTrackingStatus | 'checked_in';
+  assigned_to: string | null;
+  customer_portal_token: string | null;
   checked_in_by: string;
   company_id?: string;
   created_at: string;
   updated_at: string;
+}
+
+export interface VehicleStatusHistory {
+  id: string;
+  vehicle_id: string;
+  from_status: VehicleTrackingStatus | null;
+  to_status: VehicleTrackingStatus;
+  note: string | null;
+  changed_by: string;
+  changed_by_name: string | null;
+  created_at: string;
 }
 
 export interface GraphicsProof {
