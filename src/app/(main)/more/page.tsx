@@ -61,6 +61,7 @@ export default function MorePage() {
             onClick={() => router.push('/admin/tracking')}
             badge={stuckVehicleCount > 0 ? stuckVehicleCount : undefined}
           />
+          <MenuBtn icon="📄" title="Proof Hygiene" sub="Assign unmatched proof files from NAS" onClick={() => router.push('/admin/proofs')} />
           <MenuBtn icon="📋" title="All Jobs" sub="View all jobs by company" onClick={() => router.push('/admin/jobs')} />
           <MenuBtn icon="📅" title="Schedule" sub="Assign jobs to installers" onClick={() => router.push('/admin/schedule')} />
           <MenuBtn icon="📦" title="Part Catalog" sub="Manage part numbers" onClick={() => router.push('/admin/catalog')} />

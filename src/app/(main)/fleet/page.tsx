@@ -241,6 +241,7 @@ export default function FleetPage() {
     let query = supabase
       .from('graphics_proofs')
       .select('*')
+      .in('sync_status', ['synced', 'manual'])
       .order('created_at', { ascending: false });
 
     if (customerName) {
