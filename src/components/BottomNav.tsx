@@ -11,6 +11,7 @@ const tabs = [
   { id: 'home', path: '/home', label: 'Home', icon: '🏠' },
   { id: 'time', path: '/time', label: 'Time', icon: '⏰' },
   { id: 'fleet', path: '/fleet', label: 'Fleet', icon: '🚚' },
+  { id: 'tracking', path: '/tracking', label: 'Tracking', icon: '📋' },
   { id: 'vehicles', path: '/vehicles', label: 'Vehicles', icon: '🚐' },
   { id: 'more', path: '/more', label: 'More', icon: '⋯' },
 ];
@@ -29,6 +30,8 @@ export default function BottomNav({ clockStatus }: BottomNavProps) {
 
   const isActive = (tab: typeof tabs[0]) => {
     if (tab.path === '/home') return pathname === '/home' || pathname === '/scan' || pathname === '/select-part' || pathname === '/photos';
+    if (tab.path === '/fleet') return pathname === '/fleet' || pathname === '/fleet/update';
+    if (tab.path === '/tracking') return pathname === '/tracking';
     return pathname.startsWith(tab.path);
   };
 
@@ -59,8 +62,8 @@ export default function BottomNav({ clockStatus }: BottomNavProps) {
                 height: '2px', background: theme.orange, borderRadius: '0 0 2px 2px',
               }} />
             )}
-            <div style={{ fontSize: '18px' }}>{getIcon(tab)}</div>
-            <div style={{ fontSize: '10px', fontWeight: active ? 700 : 600 }}>{tab.label}</div>
+            <div style={{ fontSize: '16px' }}>{getIcon(tab)}</div>
+            <div style={{ fontSize: '9px', fontWeight: active ? 700 : 600 }}>{tab.label}</div>
           </button>
         );
       })}
