@@ -78,26 +78,56 @@ export default function TrackingPage() {
     setUpdatingId(vehicleId);
     setUpdateSuccess(null);
     try {
-      const res = await fetch('/api/vehicle-tracking/update-status', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ vehicleId, newStatus, note: statusNote.trim() || null }),
-      });
-      const result = await res.json();
-      if (result.success) {
-        setStatusNote('');
-        setUpdateSuccess(`Updated to ${VEHICLE_STATUS_LABELS[newStatus]}`);
-        setTimeout(() => setUpdateSuccess(null), 2000);
-        await loadVehicles();
-        if (expandedId === vehicleId) loadHistory(vehicleId);
-      } else {
-        alert('Update failed: ' + (result.error || 'Unknown error'));
+      // Get current status first
+      const { data: vehicle, error: fetchErr } = await supabase
+        .from('fleet_checkins')
+        .select('status')
+        .eq('id', vehicleId)
+        .single();
+
+      if (fetchErr || !vehicle) {
+        alert('Vehicle not found');
+        setUpdatingId(null);
+        return;
       }
+
+      const fromStatus = vehicle.status;
+
+      // Update the status
+      const { error: updateErr } = await supabase
+        .from('fleet_checkins')
+        .update({ status: newStatus })
+        .eq('id', vehicleId);
+
+      if (updateErr) {
+        alert('Update failed: ' + updateErr.message);
+        setUpdatingId(null);
+        return;
+      }
+
+      // Log to status history
+      const { data: { user: authUser } } = await supabase.auth.getUser();
+      if (authUser) {
+        await supabase.from('vehicle_status_history').insert({
+          vehicle_id: vehicleId,
+          from_status: fromStatus,
+          to_status: newStatus,
+          note: statusNote.trim() || null,
+          changed_by: authUser.id,
+          changed_by_name: profile?.full_name || authUser.email || 'Unknown',
+        });
+      }
+
+      setStatusNote('');
+      setUpdateSuccess(`Updated to ${VEHICLE_STATUS_LABELS[newStatus]}`);
+      setTimeout(() => setUpdateSuccess(null), 2000);
+      await loadVehicles();
+      if (expandedId === vehicleId) loadHistory(vehicleId);
     } catch (err) {
       alert('Network error — please try again');
     }
     setUpdatingId(null);
-  }, [statusNote, expandedId]);
+  }, [statusNote, expandedId, profile]);
 
   // Filter & search
   const filtered = vehicles.filter(v => {
