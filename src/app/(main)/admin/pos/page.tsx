@@ -419,10 +419,6 @@ export default function POsPage() {
   };
 
   const cancelOverwrite = () => {
-    // Mark as skipped so the button shows "Already exists" instead of Import
-    if (overwriteMessageId) {
-      setEmailImportResults(prev => ({ ...prev, [overwriteMessageId!]: { status: 'skipped', reason: 'User declined overwrite' } }));
-    }
     setShowOverwriteConfirm(false);
     setOverwriteData(null);
     setOverwriteMessageId(null);
@@ -534,15 +530,13 @@ export default function POsPage() {
                 {emailEmails.map((email) => {
                   const result = emailImportResults[email.messageId];
                   const isImporting = importingEmailId === email.messageId;
-                  const imported = result?.status === 'imported' || result?.status === 'updated';
-                  const skipped = result?.status === 'skipped';
-                  const alreadyExists = email.alreadyInSystem && !imported && !skipped;
-                  const alreadyImported = email.alreadyImported && !imported && !skipped;
+                  const justImported = result?.status === 'imported' || result?.status === 'updated';
                   const failed = result?.status === 'error';
-                  const isNew = !email.alreadyImported && !email.alreadyInSystem && email.pdfs.length > 0 && !imported && !failed && !skipped;
+                  const existsInSystem = email.alreadyImported || email.alreadyInSystem;
+                  const hasPdfs = email.pdfs.length > 0;
 
-                  const borderColor = imported ? 'rgba(34,197,94,0.3)' : failed ? 'rgba(239,68,68,0.3)' : (alreadyImported || skipped) ? '#1e2d3d' : alreadyExists ? 'rgba(251,191,36,0.2)' : 'rgba(59,130,246,0.2)';
-                  const bgColor = imported ? 'rgba(34,197,94,0.05)' : failed ? 'rgba(239,68,68,0.05)' : '#0f1720';
+                  const borderColor = justImported ? 'rgba(34,197,94,0.3)' : failed ? 'rgba(239,68,68,0.3)' : existsInSystem ? 'rgba(34,197,94,0.2)' : 'rgba(59,130,246,0.2)';
+                  const bgColor = justImported ? 'rgba(34,197,94,0.05)' : failed ? 'rgba(239,68,68,0.05)' : '#0f1720';
 
                   return (
                     <div key={email.messageId} style={{ padding: '10px', borderRadius: '8px', border: `1px solid ${borderColor}`, background: bgColor }}>
@@ -560,46 +554,34 @@ export default function POsPage() {
                             </div>
                           )}
                         </div>
-                        <div style={{ flexShrink: 0 }}>
-                          {imported && (
+                        <div style={{ flexShrink: 0, display: 'flex', alignItems: 'center', gap: '6px' }}>
+                          {/* Green imported tag - shows after successful import/update OR if previously imported */}
+                          {(justImported || existsInSystem) && (
                             <span style={{ fontSize: '10px', fontWeight: 700, color: '#4ade80', padding: '3px 8px', borderRadius: '4px', background: 'rgba(34,197,94,0.1)' }}>
-                              ✓ {result?.status === 'updated' ? 'Updated' : 'Imported'} ({result?.lineCount} lines)
+                              ✓ {justImported ? (result?.status === 'updated' ? 'Updated' : 'Imported') : 'Imported'}{justImported && result?.lineCount ? ` (${result.lineCount} lines)` : ''}
                             </span>
-                          )}
-                          {alreadyImported && (
-                            <span style={{ fontSize: '10px', fontWeight: 600, color: '#4a5f78', padding: '3px 8px', borderRadius: '4px', background: '#1e2d3d' }}>
-                              Already imported
-                            </span>
-                          )}
-                          {skipped && !imported && (
-                            <span style={{ fontSize: '10px', fontWeight: 600, color: '#4a5f78', padding: '3px 8px', borderRadius: '4px', background: '#1e2d3d' }}>
-                              Skipped
-                            </span>
-                          )}
-                          {alreadyExists && email.pdfs.length > 0 && (
-                            <button
-                              onClick={() => importEmailPO(email.messageId)}
-                              disabled={isImporting}
-                              style={{ padding: '4px 10px', borderRadius: '5px', background: isImporting ? '#1e2d3d' : 'rgba(251,191,36,0.15)', border: '1px solid rgba(251,191,36,0.3)', color: '#fbbf24', fontSize: '10px', fontWeight: 700, cursor: 'pointer' }}
-                            >
-                              {isImporting ? 'Checking...' : 'Update'}
-                            </button>
                           )}
                           {failed && (
                             <span style={{ fontSize: '10px', fontWeight: 600, color: '#ef4444', padding: '3px 8px', borderRadius: '4px', background: 'rgba(239,68,68,0.1)' }}>
                               Failed
                             </span>
                           )}
-                          {isNew && (
+                          {/* Always show Update button if there are PDFs (regardless of import status) */}
+                          {hasPdfs && (
                             <button
                               onClick={() => importEmailPO(email.messageId)}
                               disabled={isImporting}
-                              style={{ padding: '4px 10px', borderRadius: '5px', background: isImporting ? '#1e2d3d' : '#3b82f6', border: 'none', color: '#fff', fontSize: '10px', fontWeight: 700, cursor: 'pointer' }}
+                              style={{
+                                padding: '4px 10px', borderRadius: '5px', fontSize: '10px', fontWeight: 700, cursor: 'pointer',
+                                background: isImporting ? '#1e2d3d' : (existsInSystem || justImported) ? 'rgba(251,191,36,0.15)' : '#3b82f6',
+                                border: (existsInSystem || justImported) ? '1px solid rgba(251,191,36,0.3)' : 'none',
+                                color: (existsInSystem || justImported) ? '#fbbf24' : '#fff',
+                              }}
                             >
-                              {isImporting ? 'Importing...' : 'Import'}
+                              {isImporting ? 'Checking...' : (existsInSystem || justImported) ? 'Update' : 'Import'}
                             </button>
                           )}
-                          {email.pdfs.length === 0 && !alreadyImported && !alreadyExists && !skipped && (
+                          {!hasPdfs && (
                             <span style={{ fontSize: '10px', color: '#4a5f78' }}>No PDF</span>
                           )}
                         </div>
