@@ -4,6 +4,8 @@ import { useState, useEffect } from 'react';
 import { useRouter } from 'next/navigation';
 import { createClient } from '@/lib/supabase-browser';
 import { useAuth } from '@/components/AuthProvider';
+import jsPDF from 'jspdf';
+import autoTable from 'jspdf-autotable';
 
 interface Customer {
   id: string;
@@ -52,6 +54,12 @@ export default function CustomersPage() {
   const [syncResult, setSyncResult] = useState<string | null>(null);
   const [search, setSearch] = useState('');
   const [sortBy, setSortBy] = useState<'name' | 'spend' | 'orders' | 'recent'>('name');
+
+  // Purchase report state
+  const [reportCustomer, setReportCustomer] = useState<string | null>(null);
+  const [reportStartDate, setReportStartDate] = useState(() => `${new Date().getFullYear()}-01-01`);
+  const [reportEndDate, setReportEndDate] = useState(() => new Date().toISOString().slice(0, 10));
+  const [generatingReport, setGeneratingReport] = useState(false);
   const [expandedCustomer, setExpandedCustomer] = useState<string | null>(null);
 
   // Add/edit contact state
@@ -142,6 +150,118 @@ export default function CustomersPage() {
     if (res.ok) {
       setContacts(prev => prev.filter(c => c.id !== id));
     }
+  };
+
+  const generatePurchaseReport = async (customer: Customer) => {
+    setGeneratingReport(true);
+    try {
+      const params = new URLSearchParams({
+        customerId: customer.netsuite_id || '',
+        startDate: reportStartDate,
+        endDate: reportEndDate,
+      });
+      const res = await fetch(`/api/netsuite/customer-purchases?${params}`);
+      const data = await res.json();
+
+      if (!res.ok || data.error) {
+        alert(data.error || 'Failed to fetch purchase data');
+        setGeneratingReport(false);
+        return;
+      }
+
+      const { lines, summary } = data;
+
+      // Generate PDF
+      const doc = new jsPDF();
+      const pageWidth = doc.internal.pageSize.getWidth();
+
+      // Header
+      doc.setFontSize(18);
+      doc.setFont('helvetica', 'bold');
+      doc.text('Customer Purchase Report', 14, 20);
+
+      doc.setFontSize(11);
+      doc.setFont('helvetica', 'normal');
+      doc.text(customer.company_name, 14, 28);
+
+      doc.setFontSize(9);
+      doc.setTextColor(100);
+      const startFormatted = new Date(reportStartDate + 'T00:00:00').toLocaleDateString();
+      const endFormatted = new Date(reportEndDate + 'T00:00:00').toLocaleDateString();
+      doc.text(`${startFormatted} — ${endFormatted}`, 14, 34);
+      doc.text(`Generated ${new Date().toLocaleDateString()}`, 14, 39);
+
+      // Summary box
+      doc.setDrawColor(200);
+      doc.setFillColor(245, 247, 250);
+      doc.roundedRect(14, 44, pageWidth - 28, 18, 2, 2, 'FD');
+
+      doc.setTextColor(0);
+      doc.setFontSize(9);
+      doc.setFont('helvetica', 'bold');
+      const summaryY = 53;
+      const colW = (pageWidth - 28) / 4;
+      doc.text(`Total Spend`, 20, summaryY - 3);
+      doc.text(`$${summary.totalSpend.toFixed(2).replace(/\B(?=(\d{3})+(?!\d))/g, ',')}`, 20, summaryY + 2);
+
+      doc.text(`Orders`, 20 + colW, summaryY - 3);
+      doc.text(`${summary.uniqueOrders}`, 20 + colW, summaryY + 2);
+
+      doc.text(`Unique Items`, 20 + colW * 2, summaryY - 3);
+      doc.text(`${summary.uniqueItems}`, 20 + colW * 2, summaryY + 2);
+
+      doc.text(`Avg Order`, 20 + colW * 3, summaryY - 3);
+      doc.text(`$${summary.avgOrderValue.toFixed(2).replace(/\B(?=(\d{3})+(?!\d))/g, ',')}`, 20 + colW * 3, summaryY + 2);
+
+      // Table
+      if (lines.length > 0) {
+        autoTable(doc, {
+          startY: 68,
+          head: [['Date', 'SO #', 'PO #', 'Item', 'Qty', 'Rate', 'Total']],
+          body: lines.map((l: any) => [
+            l.orderDate ? new Date(l.orderDate + 'T00:00:00').toLocaleDateString() : '',
+            l.soNumber,
+            l.poNumber,
+            l.itemName,
+            l.quantity.toString(),
+            `$${l.rate.toFixed(2)}`,
+            `$${l.lineTotal.toFixed(2)}`,
+          ]),
+          styles: { fontSize: 8, cellPadding: 2 },
+          headStyles: { fillColor: [59, 130, 246], textColor: 255, fontStyle: 'bold' },
+          alternateRowStyles: { fillColor: [245, 247, 250] },
+          columnStyles: {
+            0: { cellWidth: 22 },
+            4: { halign: 'right', cellWidth: 14 },
+            5: { halign: 'right', cellWidth: 20 },
+            6: { halign: 'right', cellWidth: 22 },
+          },
+        });
+      } else {
+        doc.setFontSize(11);
+        doc.setTextColor(150);
+        doc.text('No purchase data found for this date range.', 14, 75);
+      }
+
+      // Footer on each page
+      const totalPages = (doc as any).internal.getNumberOfPages();
+      for (let i = 1; i <= totalPages; i++) {
+        doc.setPage(i);
+        doc.setFontSize(7);
+        doc.setTextColor(150);
+        doc.text(
+          `BMG FleetSuite — ${customer.company_name} — Page ${i} of ${totalPages}`,
+          pageWidth / 2, doc.internal.pageSize.getHeight() - 8,
+          { align: 'center' }
+        );
+      }
+
+      // Download
+      doc.save(`${customer.company_name.replace(/[^a-zA-Z0-9]/g, '_')}_purchases_${reportStartDate}_${reportEndDate}.pdf`);
+    } catch (err: any) {
+      alert(err.message || 'Failed to generate report');
+    }
+    setGeneratingReport(false);
   };
 
   const startEditContact = (contact: Contact) => {
@@ -357,12 +477,67 @@ export default function CustomersPage() {
                         target="_blank"
                         rel="noopener noreferrer"
                         onClick={(e) => e.stopPropagation()}
-                        style={{ color: '#3b82f6', textDecoration: 'none', fontWeight: 600 }}
+                        style={{ color: '#4a5f78', textDecoration: 'none', fontWeight: 600, fontSize: '10px' }}
                       >
-                        View in NetSuite ↗
+                        NetSuite ↗
                       </a>
                     )}
                   </div>
+
+                  {/* Purchase Report */}
+                  {customer.netsuite_id && (
+                    <div style={{ padding: '10px 0', borderBottom: '1px solid rgba(30,45,61,0.5)' }}>
+                      <div style={{ fontSize: '10px', fontWeight: 700, color: '#4a5f78', textTransform: 'uppercase', marginBottom: '6px' }}>Purchase Report</div>
+                      <div style={{ display: 'flex', gap: '8px', alignItems: 'center', flexWrap: 'wrap' }}>
+                        <div style={{ display: 'flex', alignItems: 'center', gap: '4px' }}>
+                          <label style={{ fontSize: '10px', color: '#6b7a8d' }}>From</label>
+                          <input
+                            type="date"
+                            value={reportCustomer === customer.id ? reportStartDate : `${new Date().getFullYear()}-01-01`}
+                            onClick={(e) => { e.stopPropagation(); setReportCustomer(customer.id); }}
+                            onChange={(e) => { setReportCustomer(customer.id); setReportStartDate(e.target.value); }}
+                            style={{
+                              padding: '4px 8px', borderRadius: '5px', border: '1px solid #1e2d3d',
+                              background: '#0a1018', color: '#e8ecf1', fontSize: '11px', outline: 'none',
+                            }}
+                          />
+                        </div>
+                        <div style={{ display: 'flex', alignItems: 'center', gap: '4px' }}>
+                          <label style={{ fontSize: '10px', color: '#6b7a8d' }}>To</label>
+                          <input
+                            type="date"
+                            value={reportCustomer === customer.id ? reportEndDate : new Date().toISOString().slice(0, 10)}
+                            onClick={(e) => { e.stopPropagation(); setReportCustomer(customer.id); }}
+                            onChange={(e) => { setReportCustomer(customer.id); setReportEndDate(e.target.value); }}
+                            style={{
+                              padding: '4px 8px', borderRadius: '5px', border: '1px solid #1e2d3d',
+                              background: '#0a1018', color: '#e8ecf1', fontSize: '11px', outline: 'none',
+                            }}
+                          />
+                        </div>
+                        <button
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            if (reportCustomer !== customer.id) {
+                              setReportCustomer(customer.id);
+                              setReportStartDate(`${new Date().getFullYear()}-01-01`);
+                              setReportEndDate(new Date().toISOString().slice(0, 10));
+                            }
+                            generatePurchaseReport(customer);
+                          }}
+                          disabled={generatingReport}
+                          style={{
+                            padding: '5px 14px', borderRadius: '6px', fontSize: '11px', fontWeight: 700,
+                            background: generatingReport ? '#1e2d3d' : 'rgba(59,130,246,0.15)',
+                            border: '1px solid rgba(59,130,246,0.3)', color: generatingReport ? '#4a5f78' : '#60a5fa',
+                            cursor: generatingReport ? 'not-allowed' : 'pointer',
+                          }}
+                        >
+                          {generatingReport && reportCustomer === customer.id ? 'Generating...' : '📄 Download Report'}
+                        </button>
+                      </div>
+                    </div>
+                  )}
 
                   {/* Contacts list */}
                   {custContacts.length > 0 ? (
