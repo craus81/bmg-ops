@@ -473,9 +473,9 @@ export default function POsPage() {
     const newEmails = emailEmails.filter(e => !e.alreadyImported && !e.alreadyInSystem && e.pdfs.length > 0 && !emailImportResults[e.messageId]);
     for (let i = 0; i < newEmails.length; i++) {
       await importEmailPO(newEmails[i].messageId);
-      // Wait 3 seconds between imports to avoid API rate limiting
+      // Wait 5 seconds between imports to avoid API rate limiting / degraded responses
       if (i < newEmails.length - 1) {
-        await new Promise(r => setTimeout(r, 3000));
+        await new Promise(r => setTimeout(r, 5000));
       }
     }
   };

@@ -189,6 +189,10 @@ export async function POST(req: NextRequest) {
     const hasLines = extractedLines.length > 0;
     const hasPricing = extractedLines.some((l: any) => parseFloat(l.unit_price) > 0);
     const stopReason = aiResult.stop_reason;
+    const inputTokens = aiResult.usage?.input_tokens || 0;
+    const outputTokens = aiResult.usage?.output_tokens || 0;
+
+    console.log(`PO ${poNumber}: extracted ${extractedLines.length} lines, hasPricing=${hasPricing}, stopReason=${stopReason}, tokens=${inputTokens}/${outputTokens}`);
 
     if (stopReason === 'max_tokens') {
       console.warn(`PO ${poNumber}: AI response hit max_tokens — extraction may be truncated`);
@@ -215,8 +219,25 @@ export async function POST(req: NextRequest) {
       }, { status: 422 });
     }
 
-    if (!hasPricing) {
-      console.warn(`PO ${poNumber}: Extracted ${extractedLines.length} lines but none have pricing`)
+    if (!hasPricing && hasLines) {
+      await supabase.from('gmail_po_imports').upsert({
+        message_id: messageId,
+        thread_id: message.threadId,
+        subject,
+        from_email: from,
+        received_at: date ? new Date(date).toISOString() : null,
+        po_number: String(poNumber),
+        attachment_filename: targetPdf.filename,
+        status: 'error',
+        error_message: `AI extracted ${extractedLines.length} line items but all prices are $0.00 — degraded response, try again`,
+        raw_extraction: extracted,
+      }, { onConflict: 'message_id' });
+
+      return NextResponse.json({
+        error: `Extracted PO #${poNumber} with ${extractedLines.length} lines but all prices are $0.00. This is likely a degraded API response — try importing again.`,
+        extracted,
+        warning: 'missing_pricing',
+      }, { status: 422 });
     }
 
     // Check if PO already exists
@@ -349,7 +370,7 @@ export async function POST(req: NextRequest) {
         );
         return {
           po_id: existingPO.id,
-          catalog_id: catalogMatch?.id || null,
+          ...(catalogMatch?.id ? { catalog_id: catalogMatch.id } : {}),
           part_number: partNum,
           quantity: parseInt(l.quantity) || 0,
           unit_price: parseFloat(l.unit_price) || 0,
@@ -441,7 +462,7 @@ export async function POST(req: NextRequest) {
         );
         return {
           po_id: newPO.id,
-          catalog_id: catalogMatch?.id || null,
+          ...(catalogMatch?.id ? { catalog_id: catalogMatch.id } : {}),
           part_number: partNum,
           quantity: parseInt(l.quantity) || 0,
           unit_price: parseFloat(l.unit_price) || 0,
