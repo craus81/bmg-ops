@@ -363,6 +363,13 @@ export default function POsPage() {
       });
       const data = await res.json();
 
+      // Normalize error responses — API returns { error: '...' } on non-200
+      if (!res.ok || data.error) {
+        setEmailImportResults(prev => ({ ...prev, [messageId]: { status: 'error', error: data.error || `Request failed (${res.status})` } }));
+        setImportingEmailId(null);
+        return;
+      }
+
       // If PO already exists, show the change confirmation dialog
       if (data.status === 'exists') {
         setOverwriteData(data);
@@ -384,7 +391,7 @@ export default function POsPage() {
         setPos(mapped);
       }
     } catch (err: any) {
-      setEmailImportResults(prev => ({ ...prev, [messageId]: { status: 'error', error: err.message } }));
+      setEmailImportResults(prev => ({ ...prev, [messageId]: { status: 'error', error: err.message || 'Network error' } }));
     }
     setImportingEmailId(null);
   };
@@ -399,19 +406,24 @@ export default function POsPage() {
         body: JSON.stringify({ messageId: overwriteMessageId, autoCreate: true, forceOverwrite: true }),
       });
       const data = await res.json();
-      setEmailImportResults(prev => ({ ...prev, [overwriteMessageId!]: data }));
 
-      // Refresh PO list
-      if (data.status === 'updated') {
-        const { data: poData } = await supabase
-          .from('purchase_orders')
-          .select('*, po_line_items(*)')
-          .order('created_at', { ascending: false });
-        const mapped = (poData || []).map((po: any) => ({ ...po, line_items: po.po_line_items || [] }));
-        setPos(mapped);
+      if (!res.ok || data.error) {
+        setEmailImportResults(prev => ({ ...prev, [overwriteMessageId!]: { status: 'error', error: data.error || `Update failed (${res.status})` } }));
+      } else {
+        setEmailImportResults(prev => ({ ...prev, [overwriteMessageId!]: data }));
+
+        // Refresh PO list
+        if (data.status === 'updated') {
+          const { data: poData } = await supabase
+            .from('purchase_orders')
+            .select('*, po_line_items(*)')
+            .order('created_at', { ascending: false });
+          const mapped = (poData || []).map((po: any) => ({ ...po, line_items: po.po_line_items || [] }));
+          setPos(mapped);
+        }
       }
     } catch (err: any) {
-      setEmailImportResults(prev => ({ ...prev, [overwriteMessageId!]: { status: 'error', error: err.message } }));
+      setEmailImportResults(prev => ({ ...prev, [overwriteMessageId!]: { status: 'error', error: err.message || 'Network error' } }));
     }
     setOverwriting(false);
     setShowOverwriteConfirm(false);
@@ -608,7 +620,7 @@ export default function POsPage() {
                                 color: (existsInSystem || justImported) ? '#fbbf24' : '#fff',
                               }}
                             >
-                              {isImporting ? 'Checking...' : (existsInSystem || justImported) ? 'Update' : 'Import'}
+                              {isImporting ? 'Checking...' : failed ? 'Retry' : (existsInSystem || justImported) ? 'Update' : 'Import'}
                             </button>
                           )}
                           {!hasPdfs && (
