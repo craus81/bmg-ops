@@ -44,6 +44,15 @@ export default function POsPage() {
   const [parseError, setParseError] = useState('');
   const [importing, setImporting] = useState(false);
 
+  // Gmail Import state
+  const [showEmailImport, setShowEmailImport] = useState(false);
+  const [emailLoading, setEmailLoading] = useState(false);
+  const [emailEmails, setEmailEmails] = useState<any[]>([]);
+  const [emailError, setEmailError] = useState('');
+  const [emailNeedsAuth, setEmailNeedsAuth] = useState(false);
+  const [importingEmailId, setImportingEmailId] = useState<string | null>(null);
+  const [emailImportResults, setEmailImportResults] = useState<Record<string, any>>({});
+
   useEffect(() => {
     if (!isAdmin) { router.push('/home'); return; }
     const load = async () => {
@@ -315,6 +324,64 @@ export default function POsPage() {
     setEditLineId(null);
   };
 
+  // Gmail import functions
+  const searchGmailPOs = async (days = 30) => {
+    setEmailLoading(true);
+    setEmailError('');
+    setEmailNeedsAuth(false);
+    try {
+      const res = await fetch(`/api/gmail/search-pos?days=${days}`);
+      const data = await res.json();
+      if (data.needsAuth) {
+        setEmailNeedsAuth(true);
+        return;
+      }
+      if (data.error) {
+        setEmailError(data.error);
+        return;
+      }
+      setEmailEmails(data.emails || []);
+    } catch (err: any) {
+      setEmailError(err.message || 'Failed to search Gmail');
+    }
+    setEmailLoading(false);
+  };
+
+  const importEmailPO = async (messageId: string) => {
+    setImportingEmailId(messageId);
+    try {
+      const res = await fetch('/api/gmail/import-po', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ messageId, autoCreate: true }),
+      });
+      const data = await res.json();
+      setEmailImportResults(prev => ({ ...prev, [messageId]: data }));
+
+      // Refresh PO list if imported
+      if (data.status === 'imported') {
+        const { data: poData } = await supabase
+          .from('purchase_orders')
+          .select('*, po_line_items(*)')
+          .order('created_at', { ascending: false });
+        const mapped = (poData || []).map((po: any) => ({ ...po, line_items: po.po_line_items || [] }));
+        setPos(mapped);
+      }
+    } catch (err: any) {
+      setEmailImportResults(prev => ({ ...prev, [messageId]: { status: 'error', error: err.message } }));
+    }
+    setImportingEmailId(null);
+  };
+
+  const importAllNewPOs = async () => {
+    const newEmails = emailEmails.filter(e => !e.alreadyImported && !e.alreadyInSystem && e.pdfs.length > 0);
+    for (const email of newEmails) {
+      await importEmailPO(email.messageId);
+      // Small delay between imports
+      await new Promise(r => setTimeout(r, 500));
+    }
+  };
+
   const fmt = (n: number) => '$' + n.toFixed(2).replace(/\B(?=(\d{3})+(?!\d))/g, ',');
 
   if (loading) return <div style={{ textAlign: 'center', padding: '40px', color: '#4a5f78' }}>Loading...</div>;
@@ -327,19 +394,162 @@ export default function POsPage() {
         </div>
         <div style={{ display: 'flex', gap: '6px' }}>
           <button
-            onClick={() => { setShowImport(!showImport); setShowCreate(false); setParsedPO(null); setImportLines([]); setParseError(''); }}
+            onClick={() => { setShowEmailImport(!showEmailImport); setShowImport(false); setShowCreate(false); if (!showEmailImport) searchGmailPOs(); }}
+            style={{ padding: '6px 12px', borderRadius: '8px', background: showEmailImport ? '#1e2d3d' : 'rgba(34,197,94,0.1)', border: '1px solid rgba(34,197,94,0.25)', color: '#4ade80', fontSize: '12px', fontWeight: 700 }}
+          >
+            {showEmailImport ? 'Cancel' : '📧 Email Import'}
+          </button>
+          <button
+            onClick={() => { setShowImport(!showImport); setShowCreate(false); setShowEmailImport(false); setParsedPO(null); setImportLines([]); setParseError(''); }}
             style={{ padding: '6px 12px', borderRadius: '8px', background: showImport ? '#1e2d3d' : 'rgba(59,130,246,0.1)', border: '1px solid rgba(59,130,246,0.25)', color: '#60a5fa', fontSize: '12px', fontWeight: 700 }}
           >
             {showImport ? 'Cancel' : '📄 Import PDF'}
           </button>
           <button
-            onClick={() => { setShowCreate(!showCreate); setShowImport(false); }}
+            onClick={() => { setShowCreate(!showCreate); setShowImport(false); setShowEmailImport(false); }}
             style={{ padding: '6px 12px', borderRadius: '8px', background: '#3b82f6', color: '#fff', fontSize: '12px', fontWeight: 700, border: 'none' }}
           >
             {showCreate ? 'Cancel' : '+ New PO'}
           </button>
         </div>
       </div>
+
+      {/* Gmail Email Import Panel */}
+      {showEmailImport && (
+        <div style={{ background: '#141e2b', border: '1px solid rgba(34,197,94,0.25)', borderRadius: '10px', padding: '14px', marginBottom: '12px' }}>
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '8px' }}>
+            <div style={{ fontSize: '13px', fontWeight: 700, color: '#e8ecf1' }}>Import POs from Gmail</div>
+            <div style={{ display: 'flex', gap: '6px' }}>
+              <select
+                onChange={(e) => searchGmailPOs(parseInt(e.target.value))}
+                style={{ padding: '4px 8px', borderRadius: '6px', background: '#1e2d3d', border: '1px solid #2a3a4d', color: '#e8ecf1', fontSize: '11px' }}
+              >
+                <option value="7">Last 7 days</option>
+                <option value="30" selected>Last 30 days</option>
+                <option value="90">Last 90 days</option>
+              </select>
+              <button
+                onClick={() => searchGmailPOs()}
+                style={{ padding: '4px 10px', borderRadius: '6px', background: '#2a3a4d', border: 'none', color: '#60a5fa', fontSize: '11px', fontWeight: 700, cursor: 'pointer' }}
+              >Refresh</button>
+            </div>
+          </div>
+
+          {emailNeedsAuth && (
+            <div style={{ textAlign: 'center', padding: '20px' }}>
+              <div style={{ fontSize: '12px', color: '#f59e0b', marginBottom: '10px' }}>Gmail is not connected. Authorize access to search for PO emails.</div>
+              <a
+                href="/api/auth/google"
+                style={{ display: 'inline-block', padding: '10px 20px', borderRadius: '8px', background: '#3b82f6', color: '#fff', fontSize: '13px', fontWeight: 700, textDecoration: 'none' }}
+              >Connect Gmail</a>
+            </div>
+          )}
+
+          {emailError && !emailNeedsAuth && (
+            <div style={{ padding: '8px', borderRadius: '6px', background: 'rgba(239,68,68,0.1)', border: '1px solid rgba(239,68,68,0.25)', fontSize: '11px', color: '#ef4444', marginBottom: '8px' }}>{emailError}</div>
+          )}
+
+          {emailLoading && (
+            <div style={{ textAlign: 'center', padding: '20px' }}>
+              <div style={{ fontSize: '12px', color: '#4a5f78' }}>Searching Gmail for PO emails...</div>
+            </div>
+          )}
+
+          {!emailLoading && !emailNeedsAuth && emailEmails.length > 0 && (
+            <div>
+              {/* Summary */}
+              {(() => {
+                const newCount = emailEmails.filter(e => !e.alreadyImported && !e.alreadyInSystem && e.pdfs.length > 0).length;
+                return newCount > 0 ? (
+                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '8px 10px', borderRadius: '8px', background: 'rgba(34,197,94,0.1)', border: '1px solid rgba(34,197,94,0.2)', marginBottom: '8px' }}>
+                    <span style={{ fontSize: '12px', fontWeight: 700, color: '#4ade80' }}>{newCount} new PO{newCount !== 1 ? 's' : ''} ready to import</span>
+                    <button
+                      onClick={importAllNewPOs}
+                      disabled={importingEmailId !== null}
+                      style={{ padding: '5px 12px', borderRadius: '6px', background: '#22c55e', border: 'none', color: '#fff', fontSize: '11px', fontWeight: 700, cursor: 'pointer' }}
+                    >Import All</button>
+                  </div>
+                ) : (
+                  <div style={{ fontSize: '11px', color: '#4a5f78', marginBottom: '8px' }}>All PO emails have been imported or already exist.</div>
+                );
+              })()}
+
+              {/* Email list */}
+              <div style={{ maxHeight: '400px', overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: '4px' }}>
+                {emailEmails.map((email) => {
+                  const result = emailImportResults[email.messageId];
+                  const isImporting = importingEmailId === email.messageId;
+                  const isNew = !email.alreadyImported && !email.alreadyInSystem && email.pdfs.length > 0;
+                  const imported = result?.status === 'imported';
+                  const skippedOrExists = email.alreadyImported || email.alreadyInSystem || result?.status === 'skipped';
+                  const failed = result?.status === 'error';
+
+                  const borderColor = imported ? 'rgba(34,197,94,0.3)' : failed ? 'rgba(239,68,68,0.3)' : skippedOrExists ? '#1e2d3d' : 'rgba(59,130,246,0.2)';
+                  const bgColor = imported ? 'rgba(34,197,94,0.05)' : failed ? 'rgba(239,68,68,0.05)' : '#0f1720';
+
+                  return (
+                    <div key={email.messageId} style={{ padding: '10px', borderRadius: '8px', border: `1px solid ${borderColor}`, background: bgColor }}>
+                      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: '8px' }}>
+                        <div style={{ flex: 1, minWidth: 0 }}>
+                          <div style={{ fontSize: '12px', fontWeight: 700, color: '#e8ecf1', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                            {email.poNumber ? `PO #${email.poNumber}` : email.subject}
+                          </div>
+                          <div style={{ fontSize: '10px', color: '#4a5f78', marginTop: '2px' }}>
+                            {email.customer} · {email.from} · {new Date(email.date).toLocaleDateString()}
+                          </div>
+                          {email.pdfs.length > 0 && (
+                            <div style={{ fontSize: '10px', color: '#4a5f78', marginTop: '1px' }}>
+                              📎 {email.pdfs.map((p: any) => p.filename).join(', ')}
+                            </div>
+                          )}
+                        </div>
+                        <div style={{ flexShrink: 0 }}>
+                          {imported && (
+                            <span style={{ fontSize: '10px', fontWeight: 700, color: '#4ade80', padding: '3px 8px', borderRadius: '4px', background: 'rgba(34,197,94,0.1)' }}>
+                              ✓ Imported ({result.lineCount} lines)
+                            </span>
+                          )}
+                          {skippedOrExists && !imported && (
+                            <span style={{ fontSize: '10px', fontWeight: 600, color: '#4a5f78', padding: '3px 8px', borderRadius: '4px', background: '#1e2d3d' }}>
+                              Already exists
+                            </span>
+                          )}
+                          {failed && (
+                            <span style={{ fontSize: '10px', fontWeight: 600, color: '#ef4444', padding: '3px 8px', borderRadius: '4px', background: 'rgba(239,68,68,0.1)' }}>
+                              Failed
+                            </span>
+                          )}
+                          {isNew && !imported && !failed && (
+                            <button
+                              onClick={() => importEmailPO(email.messageId)}
+                              disabled={isImporting}
+                              style={{ padding: '4px 10px', borderRadius: '5px', background: isImporting ? '#1e2d3d' : '#3b82f6', border: 'none', color: '#fff', fontSize: '10px', fontWeight: 700, cursor: 'pointer' }}
+                            >
+                              {isImporting ? 'Importing...' : 'Import'}
+                            </button>
+                          )}
+                          {email.pdfs.length === 0 && !skippedOrExists && (
+                            <span style={{ fontSize: '10px', color: '#4a5f78' }}>No PDF</span>
+                          )}
+                        </div>
+                      </div>
+                      {failed && result.error && (
+                        <div style={{ fontSize: '10px', color: '#ef4444', marginTop: '4px' }}>{result.error}</div>
+                      )}
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+          )}
+
+          {!emailLoading && !emailNeedsAuth && emailEmails.length === 0 && (
+            <div style={{ textAlign: 'center', padding: '16px', fontSize: '12px', color: '#4a5f78' }}>
+              No PO emails found in the selected timeframe.
+            </div>
+          )}
+        </div>
+      )}
 
       {/* PDF Import Panel */}
       {showImport && !parsedPO && (
