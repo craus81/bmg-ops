@@ -66,6 +66,7 @@ export default function MorePage() {
           <MenuBtn icon="📅" title="Schedule" sub="Assign jobs to installers" onClick={() => router.push('/admin/schedule')} />
           <MenuBtn icon="📦" title="Part Catalog" sub="Manage part numbers" onClick={() => router.push('/admin/catalog')} />
           <MenuBtn icon="📋" title="Purchase Orders" sub="Manage POs" onClick={() => router.push('/admin/pos')} />
+          <MenuBtn icon="🏢" title="Customers" sub="Customers & contacts from NetSuite" onClick={() => router.push('/admin/customers')} />
           <MenuBtn
             icon="📸"
             title="Photo Reviews"
