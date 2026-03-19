@@ -204,14 +204,28 @@ export async function POST(req: NextRequest) {
 
       // Create the PO
       const customer = extracted.customer || 'Unknown';
+
+      // Get any admin user to use as created_by (FK constraint may require valid user)
+      const { data: adminUser } = await supabase
+        .from('profiles')
+        .select('id')
+        .eq('role', 'admin')
+        .limit(1)
+        .single();
+
+      const insertPayload: any = {
+        po_number: poNumber,
+        customer,
+        notes: extracted.notes ? String(extracted.notes) : null,
+      };
+      // Only include created_by if we found a valid user
+      if (adminUser?.id) {
+        insertPayload.created_by = adminUser.id;
+      }
+
       const { data: newPO, error: poError } = await supabase
         .from('purchase_orders')
-        .insert({
-          po_number: poNumber,
-          customer,
-          notes: extracted.notes || null,
-          created_by: '00000000-0000-0000-0000-000000000000', // system import
-        })
+        .insert(insertPayload)
         .select()
         .single();
 

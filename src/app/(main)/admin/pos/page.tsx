@@ -374,7 +374,7 @@ export default function POsPage() {
   };
 
   const importAllNewPOs = async () => {
-    const newEmails = emailEmails.filter(e => !e.alreadyImported && !e.alreadyInSystem && e.pdfs.length > 0);
+    const newEmails = emailEmails.filter(e => !e.alreadyImported && !e.alreadyInSystem && e.pdfs.length > 0 && !emailImportResults[e.messageId]);
     for (const email of newEmails) {
       await importEmailPO(email.messageId);
       // Small delay between imports
@@ -459,7 +459,7 @@ export default function POsPage() {
             <div>
               {/* Summary */}
               {(() => {
-                const newCount = emailEmails.filter(e => !e.alreadyImported && !e.alreadyInSystem && e.pdfs.length > 0).length;
+                const newCount = emailEmails.filter(e => !e.alreadyImported && !e.alreadyInSystem && e.pdfs.length > 0 && !emailImportResults[e.messageId]).length;
                 return newCount > 0 ? (
                   <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '8px 10px', borderRadius: '8px', background: 'rgba(34,197,94,0.1)', border: '1px solid rgba(34,197,94,0.2)', marginBottom: '8px' }}>
                     <span style={{ fontSize: '12px', fontWeight: 700, color: '#4ade80' }}>{newCount} new PO{newCount !== 1 ? 's' : ''} ready to import</span>
@@ -479,10 +479,10 @@ export default function POsPage() {
                 {emailEmails.map((email) => {
                   const result = emailImportResults[email.messageId];
                   const isImporting = importingEmailId === email.messageId;
-                  const isNew = !email.alreadyImported && !email.alreadyInSystem && email.pdfs.length > 0;
                   const imported = result?.status === 'imported';
                   const skippedOrExists = email.alreadyImported || email.alreadyInSystem || result?.status === 'skipped';
                   const failed = result?.status === 'error';
+                  const isNew = !email.alreadyImported && !email.alreadyInSystem && email.pdfs.length > 0 && !imported && !failed;
 
                   const borderColor = imported ? 'rgba(34,197,94,0.3)' : failed ? 'rgba(239,68,68,0.3)' : skippedOrExists ? '#1e2d3d' : 'rgba(59,130,246,0.2)';
                   const bgColor = imported ? 'rgba(34,197,94,0.05)' : failed ? 'rgba(239,68,68,0.05)' : '#0f1720';
@@ -519,7 +519,7 @@ export default function POsPage() {
                               Failed
                             </span>
                           )}
-                          {isNew && !imported && !failed && (
+                          {isNew && (
                             <button
                               onClick={() => importEmailPO(email.messageId)}
                               disabled={isImporting}
