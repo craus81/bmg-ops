@@ -409,7 +409,7 @@ export async function findCustomer(name: string): Promise<{
     WHERE UPPER(c.companyname) LIKE UPPER('%${searchTerm}%')
     OR UPPER(c.entityid) LIKE UPPER('%${searchTerm}%')
     ORDER BY c.companyname
-    LIMIT 10
+    FETCH FIRST 10 ROWS ONLY
   `;
 
   const result = await suiteqlQuery(query);
