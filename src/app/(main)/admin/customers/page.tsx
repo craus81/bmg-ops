@@ -13,6 +13,10 @@ interface Customer {
   email: string | null;
   phone: string | null;
   address: string | null;
+  total_orders: number;
+  total_spend: number;
+  avg_order_value: number;
+  last_order_date: string | null;
   active: boolean;
   created_at: string;
 }
@@ -42,6 +46,7 @@ export default function CustomersPage() {
   const [syncing, setSyncing] = useState(false);
   const [syncResult, setSyncResult] = useState<string | null>(null);
   const [search, setSearch] = useState('');
+  const [sortBy, setSortBy] = useState<'name' | 'spend' | 'orders' | 'recent'>('name');
   const [expandedCustomer, setExpandedCustomer] = useState<string | null>(null);
 
   // Add/edit contact state
@@ -147,21 +152,32 @@ export default function CustomersPage() {
     });
   };
 
-  const filteredCustomers = customers.filter(c => {
-    if (!search.trim()) return true;
-    const q = search.toLowerCase();
-    if (c.company_name.toLowerCase().includes(q)) return true;
-    if (c.entity_id?.toLowerCase().includes(q)) return true;
-    if (c.email?.toLowerCase().includes(q)) return true;
-    // Also search contacts
-    const custContacts = contacts.filter(ct => ct.customer_id === c.id);
-    if (custContacts.some(ct =>
-      ct.name.toLowerCase().includes(q) ||
-      ct.email?.toLowerCase().includes(q) ||
-      ct.phone?.toLowerCase().includes(q)
-    )) return true;
-    return false;
-  });
+  const fmt = (n: number) => '$' + n.toFixed(2).replace(/\B(?=(\d{3})+(?!\d))/g, ',');
+  const fmtK = (n: number) => n >= 1000 ? '$' + (n / 1000).toFixed(1) + 'k' : fmt(n);
+
+  const filteredCustomers = customers
+    .filter(c => {
+      if (!search.trim()) return true;
+      const q = search.toLowerCase();
+      if (c.company_name.toLowerCase().includes(q)) return true;
+      if (c.entity_id?.toLowerCase().includes(q)) return true;
+      if (c.email?.toLowerCase().includes(q)) return true;
+      const custContacts = contacts.filter(ct => ct.customer_id === c.id);
+      if (custContacts.some(ct =>
+        ct.name.toLowerCase().includes(q) ||
+        ct.email?.toLowerCase().includes(q) ||
+        ct.phone?.toLowerCase().includes(q)
+      )) return true;
+      return false;
+    })
+    .sort((a, b) => {
+      switch (sortBy) {
+        case 'spend': return (b.total_spend || 0) - (a.total_spend || 0);
+        case 'orders': return (b.total_orders || 0) - (a.total_orders || 0);
+        case 'recent': return (b.last_order_date || '').localeCompare(a.last_order_date || '');
+        default: return a.company_name.localeCompare(b.company_name);
+      }
+    });
 
   const inputStyle: React.CSSProperties = {
     width: '100%', padding: '8px 10px', borderRadius: '6px', border: '1px solid #1e2d3d',
@@ -208,14 +224,33 @@ export default function CustomersPage() {
         </div>
       )}
 
-      {/* Search */}
+      {/* Search + Sort */}
       <input
         type="text"
         placeholder="Search customers, contacts..."
         value={search}
         onChange={e => setSearch(e.target.value)}
-        style={{ ...inputStyle, marginBottom: '12px' }}
+        style={{ ...inputStyle, marginBottom: '8px' }}
       />
+      <div style={{ display: 'flex', gap: '4px', marginBottom: '12px' }}>
+        {([
+          ['name', 'A-Z'],
+          ['spend', 'Top Spend'],
+          ['orders', 'Most Orders'],
+          ['recent', 'Recent'],
+        ] as const).map(([key, label]) => (
+          <button
+            key={key}
+            onClick={() => setSortBy(key)}
+            style={{
+              padding: '4px 10px', borderRadius: '5px', fontSize: '10px', fontWeight: 700, cursor: 'pointer',
+              background: sortBy === key ? '#3b82f6' : 'rgba(59,130,246,0.1)',
+              border: sortBy === key ? 'none' : '1px solid rgba(59,130,246,0.2)',
+              color: sortBy === key ? '#fff' : '#60a5fa',
+            }}
+          >{label}</button>
+        ))}
+      </div>
 
       {/* Customer list */}
       <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
@@ -240,7 +275,7 @@ export default function CustomersPage() {
                   padding: '12px 14px', cursor: 'pointer', display: 'flex', justifyContent: 'space-between', alignItems: 'center',
                 }}
               >
-                <div>
+                <div style={{ flex: 1, minWidth: 0 }}>
                   <div style={{ fontSize: '14px', fontWeight: 700, color: '#e8ecf1' }}>
                     {customer.company_name}
                   </div>
@@ -251,8 +286,29 @@ export default function CustomersPage() {
                     {custContacts.length} contact{custContacts.length !== 1 ? 's' : ''}
                   </div>
                 </div>
-                <div style={{ fontSize: '16px', color: '#4a5f78', transform: isExpanded ? 'rotate(180deg)' : 'rotate(0deg)', transition: 'transform 0.2s' }}>
-                  ▾
+                {/* Spend metrics */}
+                <div style={{ display: 'flex', gap: '12px', alignItems: 'center', flexShrink: 0 }}>
+                  {(customer.total_spend > 0) && (
+                    <div style={{ textAlign: 'right' }}>
+                      <div style={{ fontSize: '13px', fontWeight: 800, color: '#4ade80' }}>{fmtK(customer.total_spend)}</div>
+                      <div style={{ fontSize: '9px', color: '#4a5f78', textTransform: 'uppercase' }}>Total</div>
+                    </div>
+                  )}
+                  {(customer.total_orders > 0) && (
+                    <div style={{ textAlign: 'right' }}>
+                      <div style={{ fontSize: '13px', fontWeight: 800, color: '#60a5fa' }}>{customer.total_orders}</div>
+                      <div style={{ fontSize: '9px', color: '#4a5f78', textTransform: 'uppercase' }}>Orders</div>
+                    </div>
+                  )}
+                  {(customer.avg_order_value > 0) && (
+                    <div style={{ textAlign: 'right' }}>
+                      <div style={{ fontSize: '13px', fontWeight: 800, color: '#fbbf24' }}>{fmtK(customer.avg_order_value)}</div>
+                      <div style={{ fontSize: '9px', color: '#4a5f78', textTransform: 'uppercase' }}>Avg</div>
+                    </div>
+                  )}
+                  <div style={{ fontSize: '16px', color: '#4a5f78', transform: isExpanded ? 'rotate(180deg)' : 'rotate(0deg)', transition: 'transform 0.2s' }}>
+                    ▾
+                  </div>
                 </div>
               </div>
 
@@ -260,11 +316,15 @@ export default function CustomersPage() {
               {isExpanded && (
                 <div style={{ padding: '0 14px 14px 14px', borderTop: '1px solid #1e2d3d' }}>
                   {/* Customer details */}
-                  {customer.address && (
-                    <div style={{ fontSize: '11px', color: '#6b7a8d', padding: '8px 0', borderBottom: '1px solid rgba(30,45,61,0.5)' }}>
-                      {customer.address}
-                    </div>
-                  )}
+                  <div style={{ display: 'flex', gap: '16px', flexWrap: 'wrap', padding: '8px 0', borderBottom: '1px solid rgba(30,45,61,0.5)', fontSize: '11px', color: '#6b7a8d' }}>
+                    {customer.address && <span>{customer.address}</span>}
+                    {customer.last_order_date && (
+                      <span>Last order: <strong style={{ color: '#94a3b8' }}>{new Date(customer.last_order_date).toLocaleDateString()}</strong></span>
+                    )}
+                    {customer.netsuite_id && (
+                      <span>NS ID: {customer.netsuite_id}</span>
+                    )}
+                  </div>
 
                   {/* Contacts list */}
                   {custContacts.length > 0 ? (

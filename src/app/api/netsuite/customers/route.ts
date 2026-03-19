@@ -10,7 +10,7 @@ export async function GET(req: NextRequest) {
     );
 
     // Fetch customers from NetSuite via SuiteQL
-    const query = `
+    const customerQuery = `
       SELECT
         c.id,
         c.companyname,
@@ -25,8 +25,36 @@ export async function GET(req: NextRequest) {
       FETCH FIRST 500 ROWS ONLY
     `;
 
-    const result = await suiteqlQuery(query);
+    const result = await suiteqlQuery(customerQuery);
     const nsCustomers = result?.items || [];
+
+    // Fetch order/spend data per customer
+    const spendQuery = `
+      SELECT
+        t.entity AS customer_id,
+        COUNT(t.id) AS order_count,
+        SUM(t.foreigntotal) AS total_spend,
+        MAX(t.trandate) AS last_order_date
+      FROM transaction t
+      WHERE t.type = 'SalesOrd'
+        AND t.entity IS NOT NULL
+      GROUP BY t.entity
+    `;
+
+    let spendMap: Record<string, { order_count: number; total_spend: number; last_order_date: string | null }> = {};
+    try {
+      const spendResult = await suiteqlQuery(spendQuery);
+      for (const row of (spendResult?.items || [])) {
+        spendMap[row.customer_id?.toString()] = {
+          order_count: parseInt(row.order_count) || 0,
+          total_spend: parseFloat(row.total_spend) || 0,
+          last_order_date: row.last_order_date || null,
+        };
+      }
+    } catch (spendErr: any) {
+      console.warn('Could not fetch spend data:', spendErr.message);
+      // Continue without spend data — not critical
+    }
 
     // Upsert into our local customers table
     let synced = 0;
@@ -34,15 +62,23 @@ export async function GET(req: NextRequest) {
     const errors: string[] = [];
 
     for (const nsc of nsCustomers) {
+      const nsId = nsc.id?.toString();
+      const spend = spendMap[nsId] || { order_count: 0, total_spend: 0, last_order_date: null };
+      const avgOrder = spend.order_count > 0 ? spend.total_spend / spend.order_count : 0;
+
       const { error } = await supabase
         .from('customers')
         .upsert({
-          netsuite_id: nsc.id?.toString(),
+          netsuite_id: nsId,
           company_name: nsc.companyname || nsc.entityid || 'Unknown',
           entity_id: nsc.entityid || '',
           email: nsc.email || null,
           phone: nsc.phone || null,
           address: nsc.defaultbillingaddress || null,
+          total_orders: spend.order_count,
+          total_spend: spend.total_spend,
+          avg_order_value: Math.round(avgOrder * 100) / 100,
+          last_order_date: spend.last_order_date || null,
           active: true,
         }, { onConflict: 'netsuite_id' });
 
