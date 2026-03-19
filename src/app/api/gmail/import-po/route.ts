@@ -2,6 +2,35 @@ import { NextRequest, NextResponse } from 'next/server';
 import { getMessage, getPdfAttachments, getAttachment, getHeader } from '@/lib/google';
 import { createClient } from '@supabase/supabase-js';
 
+async function callAnthropicWithRetry(body: any, apiKey: string, maxRetries = 3): Promise<Response> {
+  for (let attempt = 0; attempt < maxRetries; attempt++) {
+    const res = await fetch('https://api.anthropic.com/v1/messages', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'x-api-key': apiKey,
+        'anthropic-version': '2023-06-01',
+        'anthropic-beta': 'pdfs-2024-09-25',
+      },
+      body: JSON.stringify(body),
+    });
+
+    // If rate limited (429) or server error (529 overloaded), retry with backoff
+    if ((res.status === 429 || res.status === 529) && attempt < maxRetries - 1) {
+      const retryAfter = res.headers.get('retry-after');
+      const waitMs = retryAfter ? parseInt(retryAfter) * 1000 : Math.min(2000 * Math.pow(2, attempt), 30000);
+      console.log(`Anthropic API ${res.status}, retrying in ${waitMs}ms (attempt ${attempt + 1}/${maxRetries})`);
+      await new Promise(r => setTimeout(r, waitMs));
+      continue;
+    }
+
+    return res;
+  }
+
+  // Should not reach here, but just in case
+  throw new Error('Max retries exceeded for Anthropic API');
+}
+
 const PO_EXTRACTION_PROMPT = `You are extracting purchase order data from a PDF document. This is typically a Masterack or similar fleet equipment purchase order sent to BMG Fleet Installation.
 
 CRITICAL: You MUST extract every single line item from the table. Each line item row has: a line number (like 1.000, 2.000), a part number, a description, quantity, unit of measure (EA/PC), and a unit price. Some POs have many line items across multiple pages — extract ALL of them.
@@ -76,37 +105,28 @@ export async function POST(req: NextRequest) {
     const targetPdf = pdfs.reduce((a, b) => a.size > b.size ? a : b);
     const pdfBase64 = await getAttachment(messageId, targetPdf.attachmentId);
 
-    // Send to Claude API for extraction using native PDF support
-    const anthropicRes = await fetch('https://api.anthropic.com/v1/messages', {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'x-api-key': process.env.ANTHROPIC_API_KEY!,
-        'anthropic-version': '2023-06-01',
-        'anthropic-beta': 'pdfs-2024-09-25',
-      },
-      body: JSON.stringify({
-        model: 'claude-sonnet-4-5-20250929',
-        max_tokens: 8192,
-        messages: [{
-          role: 'user',
-          content: [
-            {
-              type: 'document',
-              source: {
-                type: 'base64',
-                media_type: 'application/pdf',
-                data: pdfBase64,
-              },
+    // Send to Claude API for extraction using native PDF support (with retry)
+    const anthropicRes = await callAnthropicWithRetry({
+      model: 'claude-sonnet-4-5-20250929',
+      max_tokens: 8192,
+      messages: [{
+        role: 'user',
+        content: [
+          {
+            type: 'document',
+            source: {
+              type: 'base64',
+              media_type: 'application/pdf',
+              data: pdfBase64,
             },
-            {
-              type: 'text',
-              text: PO_EXTRACTION_PROMPT,
-            },
-          ],
-        }],
-      }),
-    });
+          },
+          {
+            type: 'text',
+            text: PO_EXTRACTION_PROMPT,
+          },
+        ],
+      }],
+    }, process.env.ANTHROPIC_API_KEY!);
 
     if (!anthropicRes.ok) {
       const errBody = await anthropicRes.text();
@@ -164,6 +184,40 @@ export async function POST(req: NextRequest) {
     }
 
     const extractedLines = (extracted.lines || []).filter((l: any) => l.part_number);
+
+    // Validate extraction quality — catch partial/degraded extractions
+    const hasLines = extractedLines.length > 0;
+    const hasPricing = extractedLines.some((l: any) => parseFloat(l.unit_price) > 0);
+    const stopReason = aiResult.stop_reason;
+
+    if (stopReason === 'max_tokens') {
+      console.warn(`PO ${poNumber}: AI response hit max_tokens — extraction may be truncated`);
+    }
+
+    if (!hasLines) {
+      await supabase.from('gmail_po_imports').upsert({
+        message_id: messageId,
+        thread_id: message.threadId,
+        subject,
+        from_email: from,
+        received_at: date ? new Date(date).toISOString() : null,
+        po_number: String(poNumber),
+        attachment_filename: targetPdf.filename,
+        status: 'error',
+        error_message: 'AI extracted PO number but no line items — possible rate limit or degraded response',
+        raw_extraction: extracted,
+      }, { onConflict: 'message_id' });
+
+      return NextResponse.json({
+        error: `Extracted PO #${poNumber} but no line items were found. This may be due to API rate limiting — try again in a moment.`,
+        extracted,
+        warning: 'partial_extraction',
+      }, { status: 422 });
+    }
+
+    if (!hasPricing) {
+      console.warn(`PO ${poNumber}: Extracted ${extractedLines.length} lines but none have pricing`)
+    }
 
     // Check if PO already exists
     const { data: existingPO } = await supabase
