@@ -58,6 +58,9 @@ export default function POsPage() {
   const [overwriteData, setOverwriteData] = useState<any>(null);
   const [overwriteMessageId, setOverwriteMessageId] = useState<string | null>(null);
   const [overwriting, setOverwriting] = useState(false);
+  // NetSuite SO creation state
+  const [creatingSOForPo, setCreatingSOForPo] = useState<string | null>(null);
+  const [soResults, setSoResults] = useState<Record<string, any>>({});
 
   useEffect(() => {
     if (!isAdmin) { router.push('/home'); return; }
@@ -435,6 +438,35 @@ export default function POsPage() {
     setShowOverwriteConfirm(false);
     setOverwriteData(null);
     setOverwriteMessageId(null);
+  };
+
+  const createNetSuiteSO = async (poId: string) => {
+    setCreatingSOForPo(poId);
+    try {
+      const res = await fetch('/api/netsuite/create-sales-order', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ poId }),
+      });
+      const data = await res.json();
+
+      if (!res.ok || data.error) {
+        setSoResults(prev => ({ ...prev, [poId]: { status: 'error', error: data.error || 'Failed' } }));
+      } else {
+        setSoResults(prev => ({ ...prev, [poId]: data }));
+        // Update the local PO with the NetSuite SO info
+        if (data.salesOrderId) {
+          setPos(prev => prev.map(po =>
+            po.id === poId
+              ? { ...po, netsuite_so_id: data.salesOrderId, netsuite_so_number: data.salesOrderNumber }
+              : po
+          ));
+        }
+      }
+    } catch (err: any) {
+      setSoResults(prev => ({ ...prev, [poId]: { status: 'error', error: err.message || 'Network error' } }));
+    }
+    setCreatingSOForPo(null);
   };
 
   const importAllNewPOs = async () => {
@@ -1070,13 +1102,53 @@ export default function POsPage() {
                     <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '6px' }}>
                       <div style={{ fontSize: '10px', color: '#4a5f78' }}>
                         Created {createdDate.toLocaleDateString([], { month: 'short', day: 'numeric', year: 'numeric' })}
+                        {(po as any).netsuite_so_number && (
+                          <span style={{ color: '#a78bfa', marginLeft: '6px' }}>
+                            · NS SO #{(po as any).netsuite_so_number}
+                          </span>
+                        )}
                       </div>
-                      <button
-                        onClick={(e) => { e.stopPropagation(); startEditPO(po); }}
-                        style={{ padding: '3px 8px', borderRadius: '6px', background: 'rgba(59,130,246,0.1)', border: '1px solid rgba(59,130,246,0.25)', color: '#60a5fa', fontSize: '10px', fontWeight: 700 }}
-                      >
-                        ✏️ Edit PO
-                      </button>
+                      <div style={{ display: 'flex', gap: '4px' }}>
+                        {(() => {
+                          const soResult = soResults[po.id];
+                          const isCreating = creatingSOForPo === po.id;
+                          const hasSO = (po as any).netsuite_so_id || soResult?.salesOrderId;
+                          const soError = soResult?.status === 'error';
+
+                          return (
+                            <button
+                              onClick={(e) => { e.stopPropagation(); createNetSuiteSO(po.id); }}
+                              disabled={isCreating}
+                              style={{
+                                padding: '3px 8px', borderRadius: '6px', fontSize: '10px', fontWeight: 700, cursor: 'pointer',
+                                background: hasSO ? 'rgba(167,139,250,0.1)' : soError ? 'rgba(239,68,68,0.1)' : 'rgba(167,139,250,0.1)',
+                                border: `1px solid ${hasSO ? 'rgba(167,139,250,0.25)' : soError ? 'rgba(239,68,68,0.25)' : 'rgba(167,139,250,0.25)'}`,
+                                color: hasSO ? '#a78bfa' : soError ? '#ef4444' : '#a78bfa',
+                              }}
+                            >
+                              {isCreating ? 'Creating...' : hasSO ? `NS SO #${(po as any).netsuite_so_number || soResult?.salesOrderNumber || 'Created'}` : soError ? 'Retry NS SO' : 'Create NS SO'}
+                            </button>
+                          );
+                        })()}
+                        <button
+                          onClick={(e) => { e.stopPropagation(); startEditPO(po); }}
+                          style={{ padding: '3px 8px', borderRadius: '6px', background: 'rgba(59,130,246,0.1)', border: '1px solid rgba(59,130,246,0.25)', color: '#60a5fa', fontSize: '10px', fontWeight: 700 }}
+                        >
+                          ✏️ Edit PO
+                        </button>
+                      </div>
+                    </div>
+                  )}
+
+                  {soResults[po.id]?.status === 'error' && (
+                    <div style={{ padding: '6px 8px', borderRadius: '6px', background: 'rgba(239,68,68,0.06)', border: '1px solid rgba(239,68,68,0.15)', fontSize: '10px', color: '#ef4444', marginBottom: '6px' }}>
+                      {soResults[po.id].error}
+                    </div>
+                  )}
+
+                  {soResults[po.id]?.unmatchedParts?.length > 0 && soResults[po.id]?.status !== 'error' && (
+                    <div style={{ padding: '6px 8px', borderRadius: '6px', background: 'rgba(251,191,36,0.06)', border: '1px solid rgba(251,191,36,0.15)', fontSize: '10px', color: '#fbbf24', marginBottom: '6px' }}>
+                      Note: {soResults[po.id].unmatchedParts.length} part(s) not found in NetSuite: {soResults[po.id].unmatchedParts.join(', ')}
                     </div>
                   )}
 

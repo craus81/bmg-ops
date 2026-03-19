@@ -269,6 +269,190 @@ export async function getOpenSalesOrdersByCustomer(customerName: string): Promis
   };
 }
 
+/**
+ * Create a Sales Order in NetSuite from a bmg-ops Purchase Order
+ * Uses the REST Record API: POST /services/rest/record/v1/salesOrder
+ */
+export async function createSalesOrder(payload: {
+  customerId: string | number;
+  poNumber: string;
+  orderDate?: string;
+  shipTo?: {
+    name?: string;
+    address?: string;
+    city?: string;
+    state?: string;
+    zip?: string;
+  };
+  memo?: string;
+  lineItems: {
+    itemId: string | number;
+    quantity: number;
+    rate: number;
+    description?: string;
+  }[];
+}): Promise<{
+  success: boolean;
+  salesOrderId?: string;
+  salesOrderNumber?: string;
+  error?: string;
+}> {
+  const config = getConfig();
+  const baseUrl = getBaseUrl(config.accountId);
+  const url = `${baseUrl}/services/rest/record/v1/salesOrder`;
+  const { oauth, token } = createOAuth(config);
+
+  const authHeader = getAuthHeader(oauth, token, { url, method: 'POST' });
+
+  // Build line items for NetSuite
+  const items = payload.lineItems.map((li) => ({
+    item: { id: li.itemId },
+    quantity: li.quantity,
+    rate: li.rate,
+    ...(li.description ? { description: li.description } : {}),
+  }));
+
+  const body: any = {
+    entity: { id: payload.customerId },
+    otherRefNum: payload.poNumber,
+    item: { items },
+  };
+
+  if (payload.orderDate) {
+    body.tranDate = payload.orderDate;
+  }
+
+  if (payload.memo) {
+    body.memo = payload.memo;
+  }
+
+  // Ship-to address if provided
+  if (payload.shipTo) {
+    body.shippingAddress = {
+      addressee: payload.shipTo.name || '',
+      addr1: payload.shipTo.address || '',
+      city: payload.shipTo.city || '',
+      state: payload.shipTo.state || '',
+      zip: payload.shipTo.zip || '',
+      country: { id: 'US' },
+    };
+  }
+
+  try {
+    const response = await fetch(url, {
+      method: 'POST',
+      headers: {
+        'Authorization': authHeader,
+        'Content-Type': 'application/json',
+        'Prefer': 'respondAsync=false',
+      },
+      body: JSON.stringify(body),
+    });
+
+    if (!response.ok) {
+      const text = await response.text();
+      console.error('NetSuite create SO error:', text);
+      return { success: false, error: `NetSuite error (${response.status}): ${text}` };
+    }
+
+    // NetSuite returns 204 with Location header on success, or the record
+    const location = response.headers.get('Location');
+    let soId = '';
+
+    if (location) {
+      // Extract ID from Location header: .../salesOrder/12345
+      const match = location.match(/\/(\d+)$/);
+      soId = match?.[1] || '';
+    }
+
+    // Try to get the response body if present
+    let soNumber = '';
+    try {
+      const result = await response.json();
+      soId = soId || result.id?.toString() || '';
+      soNumber = result.tranId || result.tranid || '';
+    } catch {
+      // 204 No Content — that's fine, we have the ID from Location
+    }
+
+    // If we got an ID, look up the SO number via SuiteQL
+    if (soId && !soNumber) {
+      try {
+        const lookup = await suiteqlQuery(`SELECT tranid FROM transaction WHERE id = ${soId}`);
+        soNumber = lookup?.items?.[0]?.tranid || '';
+      } catch {
+        // Non-critical
+      }
+    }
+
+    return {
+      success: true,
+      salesOrderId: soId,
+      salesOrderNumber: soNumber,
+    };
+  } catch (e: any) {
+    return { success: false, error: `Failed to create sales order: ${e.message}` };
+  }
+}
+
+/**
+ * Look up a NetSuite customer by name (partial match)
+ */
+export async function findCustomer(name: string): Promise<{
+  found: boolean;
+  customers: { id: string; name: string; entityId: string }[];
+}> {
+  const searchTerm = name.trim().replace(/'/g, "''");
+  const query = `
+    SELECT c.id, c.companyname, c.entityid
+    FROM customer c
+    WHERE UPPER(c.companyname) LIKE UPPER('%${searchTerm}%')
+    OR UPPER(c.entityid) LIKE UPPER('%${searchTerm}%')
+    ORDER BY c.companyname
+    LIMIT 10
+  `;
+
+  const result = await suiteqlQuery(query);
+  const items = result?.items || [];
+
+  return {
+    found: items.length > 0,
+    customers: items.map((c: any) => ({
+      id: c.id?.toString(),
+      name: c.companyname,
+      entityId: c.entityid,
+    })),
+  };
+}
+
+/**
+ * Look up NetSuite items by part number
+ */
+export async function findItems(partNumbers: string[]): Promise<Record<string, { id: string; name: string; displayName: string }>> {
+  if (partNumbers.length === 0) return {};
+
+  const conditions = partNumbers.map(p => `UPPER(i.itemid) = UPPER('${p.replace(/'/g, "''")}')`).join(' OR ');
+  const query = `
+    SELECT i.id, i.itemid, i.displayname
+    FROM item i
+    WHERE ${conditions}
+  `;
+
+  const result = await suiteqlQuery(query);
+  const items = result?.items || [];
+  const map: Record<string, { id: string; name: string; displayName: string }> = {};
+
+  for (const item of items) {
+    map[item.itemid?.toUpperCase()] = {
+      id: item.id?.toString(),
+      name: item.itemid,
+      displayName: item.displayname || item.itemid,
+    };
+  }
+
+  return map;
+}
+
 export async function getSalesOrderPdf(salesOrderId: string): Promise<{
   success: boolean;
   pdfBase64?: string;
