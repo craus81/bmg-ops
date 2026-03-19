@@ -52,6 +52,11 @@ export default function POsPage() {
   const [emailNeedsAuth, setEmailNeedsAuth] = useState(false);
   const [importingEmailId, setImportingEmailId] = useState<string | null>(null);
   const [emailImportResults, setEmailImportResults] = useState<Record<string, any>>({});
+  // PO overwrite confirmation state
+  const [showOverwriteConfirm, setShowOverwriteConfirm] = useState(false);
+  const [overwriteData, setOverwriteData] = useState<any>(null);
+  const [overwriteMessageId, setOverwriteMessageId] = useState<string | null>(null);
+  const [overwriting, setOverwriting] = useState(false);
 
   useEffect(() => {
     if (!isAdmin) { router.push('/home'); return; }
@@ -356,10 +361,20 @@ export default function POsPage() {
         body: JSON.stringify({ messageId, autoCreate: true }),
       });
       const data = await res.json();
+
+      // If PO already exists, show the change confirmation dialog
+      if (data.status === 'exists') {
+        setOverwriteData(data);
+        setOverwriteMessageId(messageId);
+        setShowOverwriteConfirm(true);
+        setImportingEmailId(null);
+        return;
+      }
+
       setEmailImportResults(prev => ({ ...prev, [messageId]: data }));
 
-      // Refresh PO list if imported
-      if (data.status === 'imported') {
+      // Refresh PO list if imported or updated
+      if (data.status === 'imported' || data.status === 'updated') {
         const { data: poData } = await supabase
           .from('purchase_orders')
           .select('*, po_line_items(*)')
@@ -371,6 +386,46 @@ export default function POsPage() {
       setEmailImportResults(prev => ({ ...prev, [messageId]: { status: 'error', error: err.message } }));
     }
     setImportingEmailId(null);
+  };
+
+  const confirmOverwrite = async () => {
+    if (!overwriteMessageId) return;
+    setOverwriting(true);
+    try {
+      const res = await fetch('/api/gmail/import-po', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ messageId: overwriteMessageId, autoCreate: true, forceOverwrite: true }),
+      });
+      const data = await res.json();
+      setEmailImportResults(prev => ({ ...prev, [overwriteMessageId!]: data }));
+
+      // Refresh PO list
+      if (data.status === 'updated') {
+        const { data: poData } = await supabase
+          .from('purchase_orders')
+          .select('*, po_line_items(*)')
+          .order('created_at', { ascending: false });
+        const mapped = (poData || []).map((po: any) => ({ ...po, line_items: po.po_line_items || [] }));
+        setPos(mapped);
+      }
+    } catch (err: any) {
+      setEmailImportResults(prev => ({ ...prev, [overwriteMessageId!]: { status: 'error', error: err.message } }));
+    }
+    setOverwriting(false);
+    setShowOverwriteConfirm(false);
+    setOverwriteData(null);
+    setOverwriteMessageId(null);
+  };
+
+  const cancelOverwrite = () => {
+    // Mark as skipped so the button shows "Already exists" instead of Import
+    if (overwriteMessageId) {
+      setEmailImportResults(prev => ({ ...prev, [overwriteMessageId!]: { status: 'skipped', reason: 'User declined overwrite' } }));
+    }
+    setShowOverwriteConfirm(false);
+    setOverwriteData(null);
+    setOverwriteMessageId(null);
   };
 
   const importAllNewPOs = async () => {
@@ -479,12 +534,14 @@ export default function POsPage() {
                 {emailEmails.map((email) => {
                   const result = emailImportResults[email.messageId];
                   const isImporting = importingEmailId === email.messageId;
-                  const imported = result?.status === 'imported';
-                  const skippedOrExists = email.alreadyImported || email.alreadyInSystem || result?.status === 'skipped';
+                  const imported = result?.status === 'imported' || result?.status === 'updated';
+                  const skipped = result?.status === 'skipped';
+                  const alreadyExists = email.alreadyInSystem && !imported && !skipped;
+                  const alreadyImported = email.alreadyImported && !imported && !skipped;
                   const failed = result?.status === 'error';
-                  const isNew = !email.alreadyImported && !email.alreadyInSystem && email.pdfs.length > 0 && !imported && !failed;
+                  const isNew = !email.alreadyImported && !email.alreadyInSystem && email.pdfs.length > 0 && !imported && !failed && !skipped;
 
-                  const borderColor = imported ? 'rgba(34,197,94,0.3)' : failed ? 'rgba(239,68,68,0.3)' : skippedOrExists ? '#1e2d3d' : 'rgba(59,130,246,0.2)';
+                  const borderColor = imported ? 'rgba(34,197,94,0.3)' : failed ? 'rgba(239,68,68,0.3)' : (alreadyImported || skipped) ? '#1e2d3d' : alreadyExists ? 'rgba(251,191,36,0.2)' : 'rgba(59,130,246,0.2)';
                   const bgColor = imported ? 'rgba(34,197,94,0.05)' : failed ? 'rgba(239,68,68,0.05)' : '#0f1720';
 
                   return (
@@ -506,13 +563,27 @@ export default function POsPage() {
                         <div style={{ flexShrink: 0 }}>
                           {imported && (
                             <span style={{ fontSize: '10px', fontWeight: 700, color: '#4ade80', padding: '3px 8px', borderRadius: '4px', background: 'rgba(34,197,94,0.1)' }}>
-                              ✓ Imported ({result.lineCount} lines)
+                              ✓ {result?.status === 'updated' ? 'Updated' : 'Imported'} ({result?.lineCount} lines)
                             </span>
                           )}
-                          {skippedOrExists && !imported && (
+                          {alreadyImported && (
                             <span style={{ fontSize: '10px', fontWeight: 600, color: '#4a5f78', padding: '3px 8px', borderRadius: '4px', background: '#1e2d3d' }}>
-                              Already exists
+                              Already imported
                             </span>
+                          )}
+                          {skipped && !imported && (
+                            <span style={{ fontSize: '10px', fontWeight: 600, color: '#4a5f78', padding: '3px 8px', borderRadius: '4px', background: '#1e2d3d' }}>
+                              Skipped
+                            </span>
+                          )}
+                          {alreadyExists && email.pdfs.length > 0 && (
+                            <button
+                              onClick={() => importEmailPO(email.messageId)}
+                              disabled={isImporting}
+                              style={{ padding: '4px 10px', borderRadius: '5px', background: isImporting ? '#1e2d3d' : 'rgba(251,191,36,0.15)', border: '1px solid rgba(251,191,36,0.3)', color: '#fbbf24', fontSize: '10px', fontWeight: 700, cursor: 'pointer' }}
+                            >
+                              {isImporting ? 'Checking...' : 'Update'}
+                            </button>
                           )}
                           {failed && (
                             <span style={{ fontSize: '10px', fontWeight: 600, color: '#ef4444', padding: '3px 8px', borderRadius: '4px', background: 'rgba(239,68,68,0.1)' }}>
@@ -528,7 +599,7 @@ export default function POsPage() {
                               {isImporting ? 'Importing...' : 'Import'}
                             </button>
                           )}
-                          {email.pdfs.length === 0 && !skippedOrExists && (
+                          {email.pdfs.length === 0 && !alreadyImported && !alreadyExists && !skipped && (
                             <span style={{ fontSize: '10px', color: '#4a5f78' }}>No PDF</span>
                           )}
                         </div>
@@ -548,6 +619,104 @@ export default function POsPage() {
               No PO emails found in the selected timeframe.
             </div>
           )}
+        </div>
+      )}
+
+      {/* PO Overwrite Confirmation Dialog */}
+      {showOverwriteConfirm && overwriteData && (
+        <div style={{ position: 'fixed', top: 0, left: 0, right: 0, bottom: 0, background: 'rgba(0,0,0,0.7)', zIndex: 1000, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '16px' }}>
+          <div style={{ background: '#141e2b', border: '1px solid rgba(251,191,36,0.3)', borderRadius: '14px', padding: '18px', maxWidth: '420px', width: '100%', maxHeight: '80vh', overflowY: 'auto' }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '12px' }}>
+              <div>
+                <div style={{ fontSize: '15px', fontWeight: 800, color: '#fbbf24' }}>PO #{overwriteData.poNumber} Already Exists</div>
+                <div style={{ fontSize: '11px', color: '#4a5f78', marginTop: '2px' }}>
+                  {overwriteData.existingLineCount} existing line{overwriteData.existingLineCount !== 1 ? 's' : ''} vs {overwriteData.newLineCount} in new PDF
+                </div>
+              </div>
+            </div>
+
+            {overwriteData.hasChanges ? (
+              <div>
+                <div style={{ fontSize: '11px', fontWeight: 700, color: '#e8ecf1', marginBottom: '8px' }}>Changes Detected:</div>
+
+                {/* Added lines */}
+                {overwriteData.changes.filter((c: any) => c.type === 'added').length > 0 && (
+                  <div style={{ marginBottom: '8px' }}>
+                    <div style={{ fontSize: '10px', fontWeight: 700, color: '#4ade80', textTransform: 'uppercase', marginBottom: '4px' }}>+ New Lines</div>
+                    {overwriteData.changes.filter((c: any) => c.type === 'added').map((c: any, i: number) => (
+                      <div key={`add-${i}`} style={{ padding: '6px 8px', marginBottom: '3px', borderRadius: '6px', background: 'rgba(34,197,94,0.08)', border: '1px solid rgba(34,197,94,0.2)' }}>
+                        <div style={{ fontSize: '12px', fontWeight: 700, color: '#4ade80' }}>{c.part_number}</div>
+                        <div style={{ fontSize: '10px', color: '#4a5f78' }}>{c.description}</div>
+                        <div style={{ fontSize: '11px', color: '#e8ecf1', marginTop: '2px' }}>Qty: {c.quantity} × ${c.unit_price?.toFixed(2)}</div>
+                      </div>
+                    ))}
+                  </div>
+                )}
+
+                {/* Changed lines */}
+                {overwriteData.changes.filter((c: any) => c.type === 'changed').length > 0 && (
+                  <div style={{ marginBottom: '8px' }}>
+                    <div style={{ fontSize: '10px', fontWeight: 700, color: '#fbbf24', textTransform: 'uppercase', marginBottom: '4px' }}>~ Modified Lines</div>
+                    {overwriteData.changes.filter((c: any) => c.type === 'changed').map((c: any, i: number) => (
+                      <div key={`chg-${i}`} style={{ padding: '6px 8px', marginBottom: '3px', borderRadius: '6px', background: 'rgba(251,191,36,0.08)', border: '1px solid rgba(251,191,36,0.2)' }}>
+                        <div style={{ fontSize: '12px', fontWeight: 700, color: '#fbbf24' }}>{c.part_number}</div>
+                        <div style={{ fontSize: '10px', color: '#4a5f78' }}>{c.description}</div>
+                        <div style={{ display: 'flex', gap: '12px', marginTop: '3px' }}>
+                          {c.quantity_changed && (
+                            <div style={{ fontSize: '11px' }}>
+                              <span style={{ color: '#ef4444', textDecoration: 'line-through' }}>Qty: {c.old_quantity}</span>
+                              <span style={{ color: '#4ade80', marginLeft: '4px' }}>Qty: {c.new_quantity}</span>
+                            </div>
+                          )}
+                          {c.price_changed && (
+                            <div style={{ fontSize: '11px' }}>
+                              <span style={{ color: '#ef4444', textDecoration: 'line-through' }}>${c.old_price?.toFixed(2)}</span>
+                              <span style={{ color: '#4ade80', marginLeft: '4px' }}>${c.new_price?.toFixed(2)}</span>
+                            </div>
+                          )}
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                )}
+
+                {/* Removed lines */}
+                {overwriteData.changes.filter((c: any) => c.type === 'removed').length > 0 && (
+                  <div style={{ marginBottom: '8px' }}>
+                    <div style={{ fontSize: '10px', fontWeight: 700, color: '#ef4444', textTransform: 'uppercase', marginBottom: '4px' }}>- Removed Lines</div>
+                    {overwriteData.changes.filter((c: any) => c.type === 'removed').map((c: any, i: number) => (
+                      <div key={`rem-${i}`} style={{ padding: '6px 8px', marginBottom: '3px', borderRadius: '6px', background: 'rgba(239,68,68,0.08)', border: '1px solid rgba(239,68,68,0.2)' }}>
+                        <div style={{ fontSize: '12px', fontWeight: 700, color: '#ef4444' }}>{c.part_number}</div>
+                        <div style={{ fontSize: '11px', color: '#6b7a8d' }}>Qty: {c.quantity} × ${c.unit_price?.toFixed(2)}</div>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
+            ) : (
+              <div style={{ padding: '12px', borderRadius: '8px', background: 'rgba(59,130,246,0.08)', border: '1px solid rgba(59,130,246,0.2)', marginBottom: '8px' }}>
+                <div style={{ fontSize: '12px', color: '#60a5fa', fontWeight: 600 }}>No changes detected</div>
+                <div style={{ fontSize: '11px', color: '#4a5f78', marginTop: '2px' }}>The new PDF has the same line items as the existing PO. You can still overwrite to refresh the data.</div>
+              </div>
+            )}
+
+            <div style={{ display: 'flex', gap: '8px', marginTop: '12px' }}>
+              <button
+                onClick={confirmOverwrite}
+                disabled={overwriting}
+                style={{ flex: 1, padding: '12px', borderRadius: '10px', background: overwriting ? '#1e2d3d' : '#f59e0b', color: '#fff', fontWeight: 800, fontSize: '13px', border: 'none', cursor: 'pointer' }}
+              >
+                {overwriting ? 'Updating...' : overwriteData.hasChanges ? 'Apply Changes' : 'Overwrite Anyway'}
+              </button>
+              <button
+                onClick={cancelOverwrite}
+                disabled={overwriting}
+                style={{ flex: 1, padding: '12px', borderRadius: '10px', background: 'transparent', border: '1px solid #1e2d3d', color: '#6b7a8d', fontWeight: 700, fontSize: '13px', cursor: 'pointer' }}
+              >
+                Keep Existing
+              </button>
+            </div>
+          </div>
         </div>
       )}
 

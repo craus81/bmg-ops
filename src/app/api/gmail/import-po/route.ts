@@ -2,15 +2,24 @@ import { NextRequest, NextResponse } from 'next/server';
 import { getMessage, getPdfAttachments, getAttachment, getHeader } from '@/lib/google';
 import { createClient } from '@supabase/supabase-js';
 
-const PO_EXTRACTION_PROMPT = `You are extracting purchase order data from a PDF document. Extract ALL information accurately.
+const PO_EXTRACTION_PROMPT = `You are extracting purchase order data from a PDF document. This is typically a Masterack or similar fleet equipment purchase order sent to BMG Fleet Installation.
 
-Return JSON only, no other text, in this exact format:
+CRITICAL: You MUST extract every single line item from the table. Each line item row has: a line number (like 1.000, 2.000), a part number, a description, quantity, unit of measure (EA/PC), and a unit price. Some POs have many line items across multiple pages — extract ALL of them.
+
+LOOK FOR THESE SPECIFIC ELEMENTS:
+- PURCHASE ORDER NUMBER: Usually at top right, labeled "PURCHASE ORDER NUMBER" followed by a number like 35045953
+- ORDERED DATE: Format like MM/DD/YY or MM/DD/YYYY
+- SHIP TO / DELIVER TO: The address block showing where to ship
+- LINE ITEMS TABLE: Each row starts with a line number (1.000, 2.000, etc.) followed by a part number (alphanumeric like 06T278, RM530432, 065058, 06CS900008), description text, quantity (integer), UOM (EA or PC), and unit price (decimal number)
+- The row below a line item may contain a "Supplier Part" number — this is BMG's part number
+
+Return ONLY valid JSON, no markdown, no backticks, no other text:
 {
   "po_number": "35045953",
   "customer": "Masterack",
   "ordered_date": "03/18/2026",
   "ship_to": {
-    "name": "BMG Fleet Installation",
+    "name": "BMG Fleet Installation LLC",
     "address": "123 Main St",
     "city": "Indianapolis",
     "state": "IN",
@@ -18,30 +27,31 @@ Return JSON only, no other text, in this exact format:
   },
   "lines": [
     {
-      "line_no": "1",
+      "line_no": "1.000",
       "part_number": "06T278",
       "supplier_part": "06T278",
-      "description": "Transit Van Graphic Kit",
+      "description": "GRAPHIC KIT-FORD TRANSIT",
       "quantity": 10,
       "unit_price": 45.00,
       "delivery_date": "03/25/2026"
     }
   ],
-  "notes": "Any special instructions or notes from the PO"
+  "notes": null
 }
 
-IMPORTANT RULES:
-- Extract ALL line items, not just the first few
-- Part numbers are alphanumeric codes (e.g., 06T278, RM530432, 065058)
-- Quantities are whole numbers
-- Prices should be numeric (no $ signs)
-- If a field is not present, use null
-- For the customer field, use the company name from the "Ship To" or "Buyer" section
-- The PO number is usually prominently displayed at the top`;
+RULES:
+- Extract EVERY line item row — do not skip any
+- part_number: The Masterack/buyer part number from the main line (e.g., RM530432)
+- supplier_part: BMG's part number from the line below (e.g., 06T278). If not present, copy part_number
+- quantity: Integer only
+- unit_price: Decimal number, no $ sign (e.g., 45.00)
+- delivery_date: The requested delivery date for that line, if shown
+- If the PO has items across multiple pages, include ALL pages
+- customer: Usually "Masterack" for Masterack POs. Use the buyer/company name from the header`;
 
 export async function POST(req: NextRequest) {
   try {
-    const { messageId, autoCreate } = await req.json();
+    const { messageId, autoCreate, forceOverwrite } = await req.json();
     if (!messageId) {
       return NextResponse.json({ error: 'messageId required' }, { status: 400 });
     }
@@ -50,18 +60,6 @@ export async function POST(req: NextRequest) {
       process.env.NEXT_PUBLIC_SUPABASE_URL!,
       process.env.SUPABASE_SERVICE_ROLE_KEY!
     );
-
-    // Check if already imported
-    const { data: existingImport } = await supabase
-      .from('gmail_po_imports')
-      .select('*')
-      .eq('message_id', messageId)
-      .eq('status', 'imported')
-      .maybeSingle();
-
-    if (existingImport) {
-      return NextResponse.json({ error: 'Already imported', import: existingImport }, { status: 409 });
-    }
 
     // Get the message and find PDF attachment
     const message = await getMessage(messageId);
@@ -78,12 +76,7 @@ export async function POST(req: NextRequest) {
     const targetPdf = pdfs.reduce((a, b) => a.size > b.size ? a : b);
     const pdfBase64 = await getAttachment(messageId, targetPdf.attachmentId);
 
-    // Convert base64 PDF to page images using a different approach
-    // We'll send the PDF as a document to Claude API (with beta header)
-    // Actually, let's render pages to images server-side
-    // For server-side, we'll send the raw PDF base64 to Claude with document type
-
-    // Send to Claude Vision API for extraction
+    // Send to Claude API for extraction using native PDF support
     const anthropicRes = await fetch('https://api.anthropic.com/v1/messages', {
       method: 'POST',
       headers: {
@@ -94,7 +87,7 @@ export async function POST(req: NextRequest) {
       },
       body: JSON.stringify({
         model: 'claude-sonnet-4-5-20250929',
-        max_tokens: 4096,
+        max_tokens: 8192,
         messages: [{
           role: 'user',
           content: [
@@ -119,7 +112,6 @@ export async function POST(req: NextRequest) {
       const errBody = await anthropicRes.text();
       console.error('Anthropic API error:', errBody);
 
-      // Record the error
       await supabase.from('gmail_po_imports').upsert({
         message_id: messageId,
         thread_id: message.threadId,
@@ -140,9 +132,16 @@ export async function POST(req: NextRequest) {
     // Parse the JSON from AI response
     let extracted;
     try {
-      const jsonMatch = aiText.match(/\{[\s\S]*\}/);
-      if (!jsonMatch) throw new Error('No JSON found in AI response');
-      extracted = JSON.parse(jsonMatch[0]);
+      // Try to find JSON in the response, handling potential markdown wrapping
+      let jsonStr = aiText;
+      const codeBlockMatch = aiText.match(/```(?:json)?\s*([\s\S]*?)```/);
+      if (codeBlockMatch) {
+        jsonStr = codeBlockMatch[1];
+      } else {
+        const jsonMatch = aiText.match(/\{[\s\S]*\}/);
+        if (jsonMatch) jsonStr = jsonMatch[0];
+      }
+      extracted = JSON.parse(jsonStr);
     } catch (parseErr: any) {
       await supabase.from('gmail_po_imports').upsert({
         message_id: messageId,
@@ -164,48 +163,163 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ error: 'No PO number found in PDF', extracted }, { status: 400 });
     }
 
+    const extractedLines = (extracted.lines || []).filter((l: any) => l.part_number);
+
     // Check if PO already exists
     const { data: existingPO } = await supabase
       .from('purchase_orders')
-      .select('id, po_number')
-      .eq('po_number', poNumber)
+      .select('*, po_line_items(*)')
+      .eq('po_number', String(poNumber))
       .maybeSingle();
 
-    if (existingPO) {
-      // Record as skipped
+    if (existingPO && !forceOverwrite) {
+      // Build a diff of what changed
+      const existingLines = existingPO.po_line_items || [];
+      const changes: any[] = [];
+
+      // Check for new or changed lines
+      for (const newLine of extractedLines) {
+        const match = existingLines.find((el: any) =>
+          el.part_number?.toUpperCase() === (newLine.part_number || '').toUpperCase() ||
+          el.part_number?.toUpperCase() === (newLine.supplier_part || '').toUpperCase()
+        );
+        if (!match) {
+          changes.push({
+            type: 'added',
+            part_number: newLine.supplier_part || newLine.part_number,
+            description: newLine.description,
+            quantity: parseInt(newLine.quantity) || 0,
+            unit_price: parseFloat(newLine.unit_price) || 0,
+          });
+        } else {
+          const newQty = parseInt(newLine.quantity) || 0;
+          const newPrice = parseFloat(newLine.unit_price) || 0;
+          const qtyChanged = newQty !== match.quantity;
+          const priceChanged = Math.abs(newPrice - match.unit_price) > 0.001;
+          if (qtyChanged || priceChanged) {
+            changes.push({
+              type: 'changed',
+              part_number: match.part_number,
+              description: newLine.description,
+              old_quantity: match.quantity,
+              new_quantity: newQty,
+              old_price: match.unit_price,
+              new_price: newPrice,
+              quantity_changed: qtyChanged,
+              price_changed: priceChanged,
+            });
+          }
+        }
+      }
+
+      // Check for removed lines
+      for (const existingLine of existingLines) {
+        const stillExists = extractedLines.find((nl: any) =>
+          (nl.part_number || '').toUpperCase() === existingLine.part_number?.toUpperCase() ||
+          (nl.supplier_part || '').toUpperCase() === existingLine.part_number?.toUpperCase()
+        );
+        if (!stillExists) {
+          changes.push({
+            type: 'removed',
+            part_number: existingLine.part_number,
+            quantity: existingLine.quantity,
+            unit_price: existingLine.unit_price,
+          });
+        }
+      }
+
+      // Record extraction
       await supabase.from('gmail_po_imports').upsert({
         message_id: messageId,
         thread_id: message.threadId,
         subject,
         from_email: from,
         received_at: date ? new Date(date).toISOString() : null,
-        po_number: poNumber,
+        po_number: String(poNumber),
         po_id: existingPO.id,
         attachment_filename: targetPdf.filename,
-        status: 'skipped',
-        error_message: 'PO already exists',
+        status: 'pending',
         raw_extraction: extracted,
       }, { onConflict: 'message_id' });
 
       return NextResponse.json({
-        status: 'skipped',
-        reason: 'PO already exists',
+        status: 'exists',
         poNumber,
         poId: existingPO.id,
-        extracted
+        existingLineCount: existingLines.length,
+        newLineCount: extractedLines.length,
+        changes,
+        hasChanges: changes.length > 0,
+        extracted,
       });
     }
 
-    // Auto-create the PO if requested
-    if (autoCreate !== false) {
+    // Overwrite existing PO if forceOverwrite is true
+    if (existingPO && forceOverwrite) {
+      // Delete old line items
+      await supabase.from('po_line_items').delete().eq('po_id', existingPO.id);
+
+      // Update PO header
+      const customer = extracted.customer || existingPO.customer || 'Unknown';
+      await supabase.from('purchase_orders').update({
+        customer,
+        notes: extracted.notes ? String(extracted.notes) : existingPO.notes,
+      }).eq('id', existingPO.id);
+
       // Get catalog for part matching
       const { data: catalogData } = await supabase.from('catalog').select('*').eq('active', true);
       const catalogItems = catalogData || [];
 
-      // Create the PO
+      // Insert new line items
+      const lineInserts = extractedLines.map((l: any) => {
+        const partNum = l.supplier_part || l.part_number;
+        const catalogMatch = catalogItems.find((c: any) =>
+          c.part_number.toUpperCase() === (partNum || '').toUpperCase() ||
+          c.part_number.toUpperCase() === (l.part_number || '').toUpperCase()
+        );
+        return {
+          po_id: existingPO.id,
+          catalog_id: catalogMatch?.id || null,
+          part_number: partNum,
+          quantity: parseInt(l.quantity) || 0,
+          unit_price: parseFloat(l.unit_price) || 0,
+        };
+      });
+
+      if (lineInserts.length > 0) {
+        await supabase.from('po_line_items').insert(lineInserts);
+      }
+
+      await supabase.from('gmail_po_imports').upsert({
+        message_id: messageId,
+        thread_id: message.threadId,
+        subject,
+        from_email: from,
+        received_at: date ? new Date(date).toISOString() : null,
+        po_number: String(poNumber),
+        po_id: existingPO.id,
+        attachment_filename: targetPdf.filename,
+        status: 'imported',
+        raw_extraction: extracted,
+      }, { onConflict: 'message_id' });
+
+      return NextResponse.json({
+        status: 'updated',
+        poNumber,
+        poId: existingPO.id,
+        customer: extracted.customer || existingPO.customer,
+        lineCount: lineInserts.length,
+        extracted,
+      });
+    }
+
+    // Create new PO
+    if (autoCreate !== false) {
+      const { data: catalogData } = await supabase.from('catalog').select('*').eq('active', true);
+      const catalogItems = catalogData || [];
+
       const customer = extracted.customer || 'Unknown';
 
-      // Get any admin user to use as created_by (FK constraint may require valid user)
       const { data: adminUser } = await supabase
         .from('profiles')
         .select('id')
@@ -214,11 +328,10 @@ export async function POST(req: NextRequest) {
         .single();
 
       const insertPayload: any = {
-        po_number: poNumber,
+        po_number: String(poNumber),
         customer,
         notes: extracted.notes ? String(extracted.notes) : null,
       };
-      // Only include created_by if we found a valid user
       if (adminUser?.id) {
         insertPayload.created_by = adminUser.id;
       }
@@ -236,7 +349,7 @@ export async function POST(req: NextRequest) {
           subject,
           from_email: from,
           received_at: date ? new Date(date).toISOString() : null,
-          po_number: poNumber,
+          po_number: String(poNumber),
           attachment_filename: targetPdf.filename,
           status: 'error',
           error_message: `Failed to create PO: ${poError?.message}`,
@@ -246,19 +359,16 @@ export async function POST(req: NextRequest) {
         return NextResponse.json({ error: 'Failed to create PO', details: poError?.message }, { status: 500 });
       }
 
-      // Create line items
-      const lines = (extracted.lines || []).filter((l: any) => l.part_number);
-      const lineInserts = lines.map((l: any) => {
-        // Try to match to catalog
+      const lineInserts = extractedLines.map((l: any) => {
+        const partNum = l.supplier_part || l.part_number;
         const catalogMatch = catalogItems.find((c: any) =>
-          c.part_number.toUpperCase() === (l.part_number || '').toUpperCase() ||
-          c.part_number.toUpperCase() === (l.supplier_part || '').toUpperCase()
+          c.part_number.toUpperCase() === (partNum || '').toUpperCase() ||
+          c.part_number.toUpperCase() === (l.part_number || '').toUpperCase()
         );
-
         return {
           po_id: newPO.id,
           catalog_id: catalogMatch?.id || null,
-          part_number: l.part_number,
+          part_number: partNum,
           quantity: parseInt(l.quantity) || 0,
           unit_price: parseFloat(l.unit_price) || 0,
         };
@@ -268,14 +378,13 @@ export async function POST(req: NextRequest) {
         await supabase.from('po_line_items').insert(lineInserts);
       }
 
-      // Record successful import
       await supabase.from('gmail_po_imports').upsert({
         message_id: messageId,
         thread_id: message.threadId,
         subject,
         from_email: from,
         received_at: date ? new Date(date).toISOString() : null,
-        po_number: poNumber,
+        po_number: String(poNumber),
         po_id: newPO.id,
         attachment_filename: targetPdf.filename,
         status: 'imported',
@@ -292,14 +401,14 @@ export async function POST(req: NextRequest) {
       });
     }
 
-    // Just return the extracted data without creating
+    // Just return extracted data
     await supabase.from('gmail_po_imports').upsert({
       message_id: messageId,
       thread_id: message.threadId,
       subject,
       from_email: from,
       received_at: date ? new Date(date).toISOString() : null,
-      po_number: poNumber,
+      po_number: String(poNumber),
       attachment_filename: targetPdf.filename,
       status: 'pending',
       raw_extraction: extracted,
