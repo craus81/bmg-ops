@@ -30,6 +30,9 @@ export async function GET(req: NextRequest) {
 
     // Upsert into our local customers table
     let synced = 0;
+    let firstError: string | null = null;
+    const errors: string[] = [];
+
     for (const nsc of nsCustomers) {
       const { error } = await supabase
         .from('customers')
@@ -43,13 +46,19 @@ export async function GET(req: NextRequest) {
           active: true,
         }, { onConflict: 'netsuite_id' });
 
-      if (!error) synced++;
+      if (error) {
+        if (!firstError) firstError = `${error.code}: ${error.message} (hint: ${error.hint || 'none'})`;
+        if (errors.length < 3) errors.push(`${nsc.companyname}: ${error.message}`);
+      } else {
+        synced++;
+      }
     }
 
     return NextResponse.json({
       status: 'synced',
       total: nsCustomers.length,
       synced,
+      ...(firstError ? { firstError, sampleErrors: errors } : {}),
     });
   } catch (err: any) {
     console.error('NetSuite customer sync error:', err);

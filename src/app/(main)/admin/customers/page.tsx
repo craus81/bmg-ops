@@ -74,7 +74,8 @@ export default function CustomersPage() {
       if (!res.ok || data.error) {
         setSyncResult(`Error: ${data.error || 'Sync failed'}`);
       } else {
-        setSyncResult(`Synced ${data.synced} of ${data.total} customers from NetSuite`);
+        const msg = `Synced ${data.synced} of ${data.total} customers from NetSuite`;
+        setSyncResult(data.firstError ? `${msg} (errors: ${data.firstError})` : msg);
         await loadData();
       }
     } catch (err: any) {
