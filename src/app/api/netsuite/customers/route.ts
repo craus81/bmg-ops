@@ -9,6 +9,9 @@ export async function GET(req: NextRequest) {
       process.env.SUPABASE_SERVICE_ROLE_KEY!
     );
 
+    const currentYear = new Date().getFullYear();
+    const lastYear = currentYear - 1;
+
     // Fetch customers from NetSuite via SuiteQL
     const customerQuery = `
       SELECT
@@ -28,8 +31,8 @@ export async function GET(req: NextRequest) {
     const result = await suiteqlQuery(customerQuery);
     const nsCustomers = result?.items || [];
 
-    // Fetch order/spend data per customer
-    const spendQuery = `
+    // Fetch all-time spend data per customer
+    const allTimeQuery = `
       SELECT
         t.entity AS customer_id,
         COUNT(t.id) AS order_count,
@@ -41,20 +44,73 @@ export async function GET(req: NextRequest) {
       GROUP BY t.entity
     `;
 
-    let spendMap: Record<string, { order_count: number; total_spend: number; last_order_date: string | null }> = {};
+    // Fetch YTD spend
+    const ytdQuery = `
+      SELECT
+        t.entity AS customer_id,
+        COUNT(t.id) AS order_count,
+        SUM(t.foreigntotal) AS total_spend
+      FROM transaction t
+      WHERE t.type = 'SalesOrd'
+        AND t.entity IS NOT NULL
+        AND EXTRACT(YEAR FROM t.trandate) = ${currentYear}
+      GROUP BY t.entity
+    `;
+
+    // Fetch last year spend
+    const lastYearQuery = `
+      SELECT
+        t.entity AS customer_id,
+        COUNT(t.id) AS order_count,
+        SUM(t.foreigntotal) AS total_spend
+      FROM transaction t
+      WHERE t.type = 'SalesOrd'
+        AND t.entity IS NOT NULL
+        AND EXTRACT(YEAR FROM t.trandate) = ${lastYear}
+      GROUP BY t.entity
+    `;
+
+    type SpendRow = { customer_id: string; order_count: number; total_spend: number; last_order_date?: string | null };
+    const allTimeMap: Record<string, SpendRow> = {};
+    const ytdMap: Record<string, SpendRow> = {};
+    const lastYearMap: Record<string, SpendRow> = {};
+
     try {
-      const spendResult = await suiteqlQuery(spendQuery);
-      for (const row of (spendResult?.items || [])) {
-        spendMap[row.customer_id?.toString()] = {
+      const [allTimeRes, ytdRes, lastYearRes] = await Promise.all([
+        suiteqlQuery(allTimeQuery),
+        suiteqlQuery(ytdQuery),
+        suiteqlQuery(lastYearQuery),
+      ]);
+
+      for (const row of (allTimeRes?.items || [])) {
+        allTimeMap[row.customer_id?.toString()] = {
+          customer_id: row.customer_id?.toString(),
           order_count: parseInt(row.order_count) || 0,
           total_spend: parseFloat(row.total_spend) || 0,
           last_order_date: row.last_order_date || null,
         };
       }
+      for (const row of (ytdRes?.items || [])) {
+        ytdMap[row.customer_id?.toString()] = {
+          customer_id: row.customer_id?.toString(),
+          order_count: parseInt(row.order_count) || 0,
+          total_spend: parseFloat(row.total_spend) || 0,
+        };
+      }
+      for (const row of (lastYearRes?.items || [])) {
+        lastYearMap[row.customer_id?.toString()] = {
+          customer_id: row.customer_id?.toString(),
+          order_count: parseInt(row.order_count) || 0,
+          total_spend: parseFloat(row.total_spend) || 0,
+        };
+      }
     } catch (spendErr: any) {
       console.warn('Could not fetch spend data:', spendErr.message);
-      // Continue without spend data — not critical
     }
+
+    // Build NetSuite base URL for customer links
+    const nsAccountId = (process.env.NETSUITE_ACCOUNT_ID || '').toLowerCase().replace(/_/g, '-');
+    const nsBaseUrl = `https://${nsAccountId}.app.netsuite.com`;
 
     // Upsert into our local customers table
     let synced = 0;
@@ -63,22 +119,29 @@ export async function GET(req: NextRequest) {
 
     for (const nsc of nsCustomers) {
       const nsId = nsc.id?.toString();
-      const spend = spendMap[nsId] || { order_count: 0, total_spend: 0, last_order_date: null };
-      const avgOrder = spend.order_count > 0 ? spend.total_spend / spend.order_count : 0;
+      const allTime = allTimeMap[nsId] || { order_count: 0, total_spend: 0, last_order_date: null };
+      const ytd = ytdMap[nsId] || { order_count: 0, total_spend: 0 };
+      const ly = lastYearMap[nsId] || { order_count: 0, total_spend: 0 };
+      const avgOrder = allTime.order_count > 0 ? allTime.total_spend / allTime.order_count : 0;
 
       const { error } = await supabase
         .from('customers')
         .upsert({
           netsuite_id: nsId,
+          netsuite_url: nsAccountId ? `${nsBaseUrl}/app/common/entity/custjob.nl?id=${nsId}` : null,
           company_name: nsc.companyname || nsc.entityid || 'Unknown',
           entity_id: nsc.entityid || '',
           email: nsc.email || null,
           phone: nsc.phone || null,
           address: nsc.defaultbillingaddress || null,
-          total_orders: spend.order_count,
-          total_spend: spend.total_spend,
+          total_orders: allTime.order_count,
+          total_spend: allTime.total_spend,
           avg_order_value: Math.round(avgOrder * 100) / 100,
-          last_order_date: spend.last_order_date || null,
+          ytd_spend: ytd.total_spend,
+          ytd_orders: ytd.order_count,
+          last_year_spend: ly.total_spend,
+          last_year_orders: ly.order_count,
+          last_order_date: allTime.last_order_date || null,
           active: true,
         }, { onConflict: 'netsuite_id' });
 

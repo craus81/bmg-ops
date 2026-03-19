@@ -8,6 +8,7 @@ import { useAuth } from '@/components/AuthProvider';
 interface Customer {
   id: string;
   netsuite_id: string | null;
+  netsuite_url: string | null;
   company_name: string;
   entity_id: string | null;
   email: string | null;
@@ -16,6 +17,10 @@ interface Customer {
   total_orders: number;
   total_spend: number;
   avg_order_value: number;
+  ytd_spend: number;
+  ytd_orders: number;
+  last_year_spend: number;
+  last_year_orders: number;
   last_order_date: string | null;
   active: boolean;
   created_at: string;
@@ -286,24 +291,24 @@ export default function CustomersPage() {
                     {custContacts.length} contact{custContacts.length !== 1 ? 's' : ''}
                   </div>
                 </div>
-                {/* Spend metrics */}
+                {/* Spend metrics - compact */}
                 <div style={{ display: 'flex', gap: '12px', alignItems: 'center', flexShrink: 0 }}>
+                  {(customer.ytd_spend > 0) && (
+                    <div style={{ textAlign: 'right' }}>
+                      <div style={{ fontSize: '13px', fontWeight: 800, color: '#4ade80' }}>{fmtK(customer.ytd_spend)}</div>
+                      <div style={{ fontSize: '9px', color: '#4a5f78', textTransform: 'uppercase' }}>YTD</div>
+                    </div>
+                  )}
                   {(customer.total_spend > 0) && (
                     <div style={{ textAlign: 'right' }}>
-                      <div style={{ fontSize: '13px', fontWeight: 800, color: '#4ade80' }}>{fmtK(customer.total_spend)}</div>
-                      <div style={{ fontSize: '9px', color: '#4a5f78', textTransform: 'uppercase' }}>Total</div>
+                      <div style={{ fontSize: '13px', fontWeight: 800, color: '#60a5fa' }}>{fmtK(customer.total_spend)}</div>
+                      <div style={{ fontSize: '9px', color: '#4a5f78', textTransform: 'uppercase' }}>All-Time</div>
                     </div>
                   )}
                   {(customer.total_orders > 0) && (
                     <div style={{ textAlign: 'right' }}>
-                      <div style={{ fontSize: '13px', fontWeight: 800, color: '#60a5fa' }}>{customer.total_orders}</div>
+                      <div style={{ fontSize: '13px', fontWeight: 800, color: '#fbbf24' }}>{customer.total_orders}</div>
                       <div style={{ fontSize: '9px', color: '#4a5f78', textTransform: 'uppercase' }}>Orders</div>
-                    </div>
-                  )}
-                  {(customer.avg_order_value > 0) && (
-                    <div style={{ textAlign: 'right' }}>
-                      <div style={{ fontSize: '13px', fontWeight: 800, color: '#fbbf24' }}>{fmtK(customer.avg_order_value)}</div>
-                      <div style={{ fontSize: '9px', color: '#4a5f78', textTransform: 'uppercase' }}>Avg</div>
                     </div>
                   )}
                   <div style={{ fontSize: '16px', color: '#4a5f78', transform: isExpanded ? 'rotate(180deg)' : 'rotate(0deg)', transition: 'transform 0.2s' }}>
@@ -315,14 +320,47 @@ export default function CustomersPage() {
               {/* Expanded: contacts */}
               {isExpanded && (
                 <div style={{ padding: '0 14px 14px 14px', borderTop: '1px solid #1e2d3d' }}>
+                  {/* Spend breakdown */}
+                  {(customer.total_spend > 0 || customer.ytd_spend > 0) && (
+                    <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: '8px', padding: '10px 0', borderBottom: '1px solid rgba(30,45,61,0.5)' }}>
+                      <div style={{ textAlign: 'center', padding: '8px', borderRadius: '6px', background: 'rgba(34,197,94,0.08)' }}>
+                        <div style={{ fontSize: '15px', fontWeight: 800, color: '#4ade80' }}>{fmtK(customer.ytd_spend || 0)}</div>
+                        <div style={{ fontSize: '9px', color: '#4a5f78', textTransform: 'uppercase', marginTop: '2px' }}>YTD Spend</div>
+                        {customer.ytd_orders > 0 && <div style={{ fontSize: '9px', color: '#6b7a8d' }}>{customer.ytd_orders} orders</div>}
+                      </div>
+                      <div style={{ textAlign: 'center', padding: '8px', borderRadius: '6px', background: 'rgba(251,191,36,0.08)' }}>
+                        <div style={{ fontSize: '15px', fontWeight: 800, color: '#fbbf24' }}>{fmtK(customer.last_year_spend || 0)}</div>
+                        <div style={{ fontSize: '9px', color: '#4a5f78', textTransform: 'uppercase', marginTop: '2px' }}>Last Year</div>
+                        {customer.last_year_orders > 0 && <div style={{ fontSize: '9px', color: '#6b7a8d' }}>{customer.last_year_orders} orders</div>}
+                      </div>
+                      <div style={{ textAlign: 'center', padding: '8px', borderRadius: '6px', background: 'rgba(59,130,246,0.08)' }}>
+                        <div style={{ fontSize: '15px', fontWeight: 800, color: '#60a5fa' }}>{fmtK(customer.total_spend || 0)}</div>
+                        <div style={{ fontSize: '9px', color: '#4a5f78', textTransform: 'uppercase', marginTop: '2px' }}>All-Time</div>
+                        {customer.total_orders > 0 && <div style={{ fontSize: '9px', color: '#6b7a8d' }}>{customer.total_orders} orders</div>}
+                      </div>
+                      <div style={{ textAlign: 'center', padding: '8px', borderRadius: '6px', background: 'rgba(168,85,247,0.08)' }}>
+                        <div style={{ fontSize: '15px', fontWeight: 800, color: '#a855f7' }}>{fmtK(customer.avg_order_value || 0)}</div>
+                        <div style={{ fontSize: '9px', color: '#4a5f78', textTransform: 'uppercase', marginTop: '2px' }}>Avg Order</div>
+                      </div>
+                    </div>
+                  )}
+
                   {/* Customer details */}
-                  <div style={{ display: 'flex', gap: '16px', flexWrap: 'wrap', padding: '8px 0', borderBottom: '1px solid rgba(30,45,61,0.5)', fontSize: '11px', color: '#6b7a8d' }}>
+                  <div style={{ display: 'flex', gap: '16px', flexWrap: 'wrap', padding: '8px 0', borderBottom: '1px solid rgba(30,45,61,0.5)', fontSize: '11px', color: '#6b7a8d', alignItems: 'center' }}>
                     {customer.address && <span>{customer.address}</span>}
                     {customer.last_order_date && (
                       <span>Last order: <strong style={{ color: '#94a3b8' }}>{new Date(customer.last_order_date).toLocaleDateString()}</strong></span>
                     )}
-                    {customer.netsuite_id && (
-                      <span>NS ID: {customer.netsuite_id}</span>
+                    {customer.netsuite_url && (
+                      <a
+                        href={customer.netsuite_url}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        onClick={(e) => e.stopPropagation()}
+                        style={{ color: '#3b82f6', textDecoration: 'none', fontWeight: 600 }}
+                      >
+                        View in NetSuite ↗
+                      </a>
                     )}
                   </div>
 
