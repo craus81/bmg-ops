@@ -273,9 +273,30 @@ export async function getOpenSalesOrdersByCustomer(customerName: string): Promis
  * Create a Sales Order in NetSuite from a bmg-ops Purchase Order
  * Uses the REST Record API: POST /services/rest/record/v1/salesOrder
  */
+/**
+ * Look up a NetSuite location by name
+ */
+export async function findLocation(name: string): Promise<{ id: string; name: string } | null> {
+  const searchTerm = name.trim().replace(/'/g, "''");
+  const query = `
+    SELECT l.id, l.name
+    FROM location l
+    WHERE UPPER(l.name) LIKE UPPER('%${searchTerm}%')
+    FETCH FIRST 1 ROWS ONLY
+  `;
+
+  const result = await suiteqlQuery(query);
+  const items = result?.items || [];
+  if (items.length > 0) {
+    return { id: items[0].id?.toString(), name: items[0].name };
+  }
+  return null;
+}
+
 export async function createSalesOrder(payload: {
   customerId: string | number;
   poNumber: string;
+  locationId?: string | number;
   orderDate?: string;
   shipTo?: {
     name?: string;
@@ -316,6 +337,7 @@ export async function createSalesOrder(payload: {
     entity: { id: payload.customerId },
     otherRefNum: payload.poNumber,
     item: { items },
+    ...(payload.locationId ? { location: { id: payload.locationId } } : {}),
   };
 
   if (payload.orderDate) {

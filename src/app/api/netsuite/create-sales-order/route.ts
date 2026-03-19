@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { createSalesOrder, findCustomer, findItems } from '@/lib/netsuite';
+import { createSalesOrder, findCustomer, findItems, findLocation } from '@/lib/netsuite';
 import { createClient } from '@supabase/supabase-js';
 
 export async function POST(req: NextRequest) {
@@ -90,10 +90,20 @@ export async function POST(req: NextRequest) {
       }, { status: 400 });
     }
 
-    // Step 3: Create the sales order
+    // Step 3: Look up the default location
+    const nsLocation = await findLocation("O'Fallon");
+    if (!nsLocation) {
+      return NextResponse.json({
+        error: "Location \"O'Fallon\" not found in NetSuite. Please verify the location exists.",
+        step: 'location_lookup',
+      }, { status: 400 });
+    }
+
+    // Step 4: Create the sales order
     const result = await createSalesOrder({
       customerId: nsCustomer.id,
       poNumber: po.po_number,
+      locationId: nsLocation.id,
       memo: `Auto-created from BMG FleetSuite PO #${po.po_number}${po.notes ? ' - ' + po.notes : ''}`,
       lineItems: soLineItems,
     });
