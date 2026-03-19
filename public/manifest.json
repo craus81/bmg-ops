@@ -1,6 +1,6 @@
 {
-  "name": "BMG Ops",
-  "short_name": "BMG Ops",
+  "name": "BMG FleetSuite",
+  "short_name": "FleetSuite",
   "description": "BMG Fleet Installations Operations",
   "start_url": "/",
   "display": "standalone",

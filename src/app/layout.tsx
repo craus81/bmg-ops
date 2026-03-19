@@ -4,13 +4,13 @@ import './globals.css';
 export const dynamic = "force-dynamic";
 
 export const metadata: Metadata = {
-  title: 'BMG Ops',
-  description: 'BMG Fleet Installations Operations App',
+  title: 'BMG FleetSuite',
+  description: 'BMG Fleet Installations Operations',
   manifest: '/manifest.json',
   appleWebApp: {
     capable: true,
     statusBarStyle: 'black-translucent',
-    title: 'BMG Ops',
+    title: 'BMG FleetSuite',
   },
 };
 

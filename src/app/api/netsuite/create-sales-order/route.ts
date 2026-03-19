@@ -94,7 +94,7 @@ export async function POST(req: NextRequest) {
     const result = await createSalesOrder({
       customerId: nsCustomer.id,
       poNumber: po.po_number,
-      memo: `Auto-created from bmg-ops PO #${po.po_number}${po.notes ? ' - ' + po.notes : ''}`,
+      memo: `Auto-created from BMG FleetSuite PO #${po.po_number}${po.notes ? ' - ' + po.notes : ''}`,
       lineItems: soLineItems,
     });
 

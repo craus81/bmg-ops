@@ -54,6 +54,11 @@ export default function Header({ clockStatus, activePartNumber, activeEndCustome
     return () => document.removeEventListener('mousedown', handleClick);
   }, [showMenu, showNotifications]);
 
+  // Set dynamic page title based on role
+  useEffect(() => {
+    document.title = isAdmin ? 'BMG FleetSuite' : 'BMG Fleet GO';
+  }, [isAdmin]);
+
   // Load unread count on mount and poll every 30s
   useEffect(() => {
     if (!user) return;
@@ -246,6 +251,9 @@ export default function Header({ clockStatus, activePartNumber, activeEndCustome
           </div>
           <div>
             <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+              <span style={{ fontSize: '12px', fontWeight: 800, color: '#fff', letterSpacing: '0.3px' }}>
+                {isAdmin ? 'FleetSuite' : 'Fleet GO'}
+              </span>
               <span style={{
                 background: isAdmin ? theme.orangeGlow : 'rgba(255,255,255,0.1)',
                 border: `1px solid ${isAdmin ? 'rgba(238,49,32,0.3)' : 'rgba(255,255,255,0.15)'}`,

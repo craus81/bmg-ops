@@ -78,7 +78,7 @@ export default function LoginPage() {
         <div style={{ textAlign: 'center', marginBottom: '36px' }}>
           <img src="/bmg-logo-white.png" alt="BMG Fleet" style={{ height: '72px', marginBottom: '12px' }}
             onError={(e) => { (e.target as HTMLImageElement).style.display = 'none'; }} />
-          <p style={{ fontSize: '13px', color: 'var(--login-text-muted, rgba(255,255,255,0.35))', marginTop: '4px', fontWeight: 500 }}>Fleet Graphics Operations</p>
+          <p style={{ fontSize: '15px', color: 'var(--login-text-muted, rgba(255,255,255,0.5))', marginTop: '4px', fontWeight: 700, letterSpacing: '0.5px' }}>FleetSuite</p>
         </div>
 
         {/* Mode tabs */}

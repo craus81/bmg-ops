@@ -91,7 +91,7 @@ export default function PublicVehicleView() {
         <div style={{ display: 'flex', alignItems: 'center', gap: '10px', marginBottom: '20px' }}>
           <div style={{ width: '40px', height: '40px', borderRadius: '10px', background: 'rgba(59,130,246,0.1)', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: '18px', fontWeight: 800, color: '#3b82f6' }}>B</div>
           <div>
-            <div style={{ fontWeight: 800, fontSize: '11px', color: '#4a5f78', textTransform: 'uppercase', letterSpacing: '1px' }}>BMG Fleet Installations</div>
+            <div style={{ fontWeight: 800, fontSize: '11px', color: '#4a5f78', textTransform: 'uppercase', letterSpacing: '1px' }}>BMG FleetSuite</div>
             <div style={{ fontSize: '10px', color: '#3a4a5c' }}>Vehicle Completion Report</div>
           </div>
         </div>
@@ -145,7 +145,7 @@ export default function PublicVehicleView() {
 
         {/* Footer */}
         <div style={{ textAlign: 'center', marginTop: '32px', paddingTop: '16px', borderTop: '1px solid #1e2d3d' }}>
-          <div style={{ fontSize: '11px', color: '#3a4a5c' }}>BMG Fleet Installations LLC</div>
+          <div style={{ fontSize: '11px', color: '#3a4a5c' }}>BMG Fleet Installations LLC · FleetSuite</div>
         </div>
       </div>
 
