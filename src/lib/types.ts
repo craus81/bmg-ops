@@ -50,6 +50,7 @@ export interface POLineItem {
   po_id: string;
   catalog_id: string;
   part_number: string;
+  description: string | null;
   quantity: number;
   installed: number;
   unit_price: number;

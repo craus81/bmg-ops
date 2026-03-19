@@ -525,7 +525,7 @@ export default function POsPage() {
       const q = poSearch.toLowerCase();
       if (po.po_number.toLowerCase().includes(q)) return true;
       if (po.customer.toLowerCase().includes(q)) return true;
-      if (po.line_items.some((li) => li.part_number.toLowerCase().includes(q))) return true;
+      if (po.line_items.some((li) => li.part_number.toLowerCase().includes(q) || li.description?.toLowerCase().includes(q))) return true;
       return false;
     })
     .sort((a, b) => a.po_number.localeCompare(b.po_number, undefined, { numeric: true }));
@@ -1267,6 +1267,9 @@ export default function POsPage() {
                       <div key={li.id} style={{ display: 'flex', gap: '4px', padding: '8px 0', borderBottom: '1px solid rgba(30,45,61,0.5)', alignItems: 'center', fontSize: '12px' }}>
                         <div style={{ flex: 1 }} onClick={() => startEditLine(li)}>
                           <div style={{ fontWeight: 700, color: '#e8ecf1' }}>{li.part_number}</div>
+                          {li.description && (
+                            <div style={{ fontSize: '10px', color: '#4a5f78', marginTop: '1px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{li.description}</div>
+                          )}
                           <div style={{ height: '3px', background: '#1e2d3d', borderRadius: '2px', marginTop: '3px', width: '80%' }}>
                             <div style={{ height: '100%', width: `${Math.min(linePct, 100)}%`, background: linePct >= 100 ? '#22c55e' : '#3b82f6', borderRadius: '2px' }} />
                           </div>

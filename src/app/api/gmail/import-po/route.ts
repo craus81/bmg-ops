@@ -372,6 +372,7 @@ export async function POST(req: NextRequest) {
           po_id: existingPO.id,
           ...(catalogMatch?.id ? { catalog_id: catalogMatch.id } : {}),
           part_number: partNum,
+          description: l.description || null,
           quantity: parseInt(l.quantity) || 0,
           unit_price: parseFloat(l.unit_price) || 0,
         };
@@ -480,6 +481,7 @@ export async function POST(req: NextRequest) {
           po_id: newPO.id,
           ...(catalogMatch?.id ? { catalog_id: catalogMatch.id } : {}),
           part_number: partNum,
+          description: l.description || null,
           quantity: parseInt(l.quantity) || 0,
           unit_price: parseFloat(l.unit_price) || 0,
         };
