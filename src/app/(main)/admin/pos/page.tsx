@@ -37,6 +37,7 @@ export default function POsPage() {
   const [form, setForm] = useState({ po_number: '', customer: 'Masterack' });
   const [lineItems, setLineItems] = useState<{ catalog_id: string; part_number: string; quantity: number; unit_price: number }[]>([]);
   const fileRef = useRef<HTMLInputElement>(null);
+  const [poSearch, setPoSearch] = useState('');
 
   // PDF Import state
   const [parsedPO, setParsedPO] = useState<ParsedPO | null>(null);
@@ -435,13 +436,25 @@ export default function POsPage() {
 
   const fmt = (n: number) => '$' + n.toFixed(2).replace(/\B(?=(\d{3})+(?!\d))/g, ',');
 
+  // Sort by PO number and filter by search
+  const filteredPos = pos
+    .filter((po) => {
+      if (!poSearch.trim()) return true;
+      const q = poSearch.toLowerCase();
+      if (po.po_number.toLowerCase().includes(q)) return true;
+      if (po.customer.toLowerCase().includes(q)) return true;
+      if (po.line_items.some((li) => li.part_number.toLowerCase().includes(q))) return true;
+      return false;
+    })
+    .sort((a, b) => a.po_number.localeCompare(b.po_number, undefined, { numeric: true }));
+
   if (loading) return <div style={{ textAlign: 'center', padding: '40px', color: '#4a5f78' }}>Loading...</div>;
 
   return (
     <div>
-      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '12px' }}>
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '8px' }}>
         <div style={{ fontSize: '11px', fontWeight: 700, color: '#4a5f78', textTransform: 'uppercase', letterSpacing: '0.5px' }}>
-          Purchase Orders ({pos.length})
+          Purchase Orders ({filteredPos.length}{poSearch ? ` of ${pos.length}` : ''})
         </div>
         <div style={{ display: 'flex', gap: '6px' }}>
           <button
@@ -463,6 +476,23 @@ export default function POsPage() {
             {showCreate ? 'Cancel' : '+ New PO'}
           </button>
         </div>
+      </div>
+
+      {/* Search bar */}
+      <div style={{ position: 'relative', marginBottom: '10px' }}>
+        <input
+          value={poSearch}
+          onChange={(e) => setPoSearch(e.target.value)}
+          placeholder="Search PO #, part #, or customer..."
+          style={{ width: '100%', padding: '9px 12px 9px 32px', borderRadius: '8px', border: '1px solid #1e2d3d', background: '#0f1720', color: '#e8ecf1', fontSize: '12px', outline: 'none' }}
+        />
+        <span style={{ position: 'absolute', left: '10px', top: '50%', transform: 'translateY(-50%)', color: '#4a5f78', fontSize: '13px', pointerEvents: 'none' }}>🔍</span>
+        {poSearch && (
+          <button
+            onClick={() => setPoSearch('')}
+            style={{ position: 'absolute', right: '8px', top: '50%', transform: 'translateY(-50%)', background: 'none', border: 'none', color: '#6b7a8d', fontSize: '14px', cursor: 'pointer', padding: '0 4px' }}
+          >×</button>
+        )}
       </div>
 
       {/* Gmail Email Import Panel */}
@@ -950,7 +980,13 @@ export default function POsPage() {
         </div>
       )}
 
-      {pos.map((po) => {
+      {pos.length > 0 && filteredPos.length === 0 && poSearch && (
+        <div style={{ textAlign: 'center', padding: '24px 0', color: '#4a5f78' }}>
+          <div style={{ fontSize: '12px' }}>No POs matching &quot;{poSearch}&quot;</div>
+        </div>
+      )}
+
+      {filteredPos.map((po) => {
         const totalQty = po.line_items.reduce((s, l) => s + l.quantity, 0);
         const totalInstalled = po.line_items.reduce((s, l) => s + l.installed, 0);
         const totalValue = po.line_items.reduce((s, l) => s + l.quantity * l.unit_price, 0);
