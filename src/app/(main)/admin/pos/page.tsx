@@ -61,6 +61,9 @@ export default function POsPage() {
   // NetSuite SO creation state
   const [creatingSOForPo, setCreatingSOForPo] = useState<string | null>(null);
   const [soResults, setSoResults] = useState<Record<string, any>>({});
+  // Catalog add state for unmatched parts
+  const [addingToCatalog, setAddingToCatalog] = useState<string | null>(null); // part_number being added
+  const [catalogAddResults, setCatalogAddResults] = useState<Record<string, 'added' | 'error'>>({});
 
   useEffect(() => {
     if (!isAdmin) { router.push('/home'); return; }
@@ -480,6 +483,39 @@ export default function POsPage() {
     }
   };
 
+  const addPartToCatalog = async (part: { part_number: string; description: string; unit_price: number }, customer: string) => {
+    setAddingToCatalog(part.part_number);
+    try {
+      const { data, error } = await supabase
+        .from('catalog')
+        .insert({
+          part_number: part.part_number,
+          customer: customer || 'Masterack',
+          end_customer: '',
+          vehicle_type: '',
+          graphic_package: part.description,
+          price: part.unit_price,
+          proof_pages: 0,
+          active: true,
+        })
+        .select()
+        .single();
+
+      if (error) {
+        console.error('Failed to add to catalog:', error);
+        setCatalogAddResults(prev => ({ ...prev, [part.part_number]: 'error' }));
+      } else {
+        setCatalogAddResults(prev => ({ ...prev, [part.part_number]: 'added' }));
+        // Refresh catalog list
+        const { data: catData } = await supabase.from('catalog').select('*').order('part_number');
+        setCatalog((catData as CatalogItem[]) || []);
+      }
+    } catch (err) {
+      setCatalogAddResults(prev => ({ ...prev, [part.part_number]: 'error' }));
+    }
+    setAddingToCatalog(null);
+  };
+
   const fmt = (n: number) => '$' + n.toFixed(2).replace(/\B(?=(\d{3})+(?!\d))/g, ',');
 
   // Sort by PO number and filter by search
@@ -664,6 +700,45 @@ export default function POsPage() {
                       </div>
                       {failed && result.error && (
                         <div style={{ fontSize: '10px', color: '#ef4444', marginTop: '4px' }}>{result.error}</div>
+                      )}
+                      {/* Unmatched parts — offer to add to catalog */}
+                      {justImported && result?.unmatchedParts?.length > 0 && (
+                        <div style={{ marginTop: '8px', padding: '8px', borderRadius: '6px', background: 'rgba(251,191,36,0.08)', border: '1px solid rgba(251,191,36,0.2)' }}>
+                          <div style={{ fontSize: '10px', fontWeight: 700, color: '#fbbf24', marginBottom: '6px' }}>
+                            {result.unmatchedParts.length} part{result.unmatchedParts.length !== 1 ? 's' : ''} not in catalog
+                          </div>
+                          {result.unmatchedParts.map((part: any) => {
+                            const added = catalogAddResults[part.part_number] === 'added';
+                            const errored = catalogAddResults[part.part_number] === 'error';
+                            const isAdding = addingToCatalog === part.part_number;
+                            return (
+                              <div key={part.part_number} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '4px 0', borderBottom: '1px solid rgba(255,255,255,0.05)' }}>
+                                <div style={{ flex: 1, minWidth: 0 }}>
+                                  <span style={{ fontSize: '11px', fontWeight: 700, color: '#e8ecf1' }}>{part.part_number}</span>
+                                  <span style={{ fontSize: '10px', color: '#4a5f78', marginLeft: '8px' }}>{part.description}</span>
+                                  <span style={{ fontSize: '10px', color: '#94a3b8', marginLeft: '8px' }}>${part.unit_price.toFixed(2)}</span>
+                                </div>
+                                {added ? (
+                                  <span style={{ fontSize: '10px', fontWeight: 700, color: '#4ade80' }}>Added</span>
+                                ) : errored ? (
+                                  <span style={{ fontSize: '10px', fontWeight: 600, color: '#ef4444' }}>Error</span>
+                                ) : (
+                                  <button
+                                    onClick={() => addPartToCatalog(part, result.customer || 'Masterack')}
+                                    disabled={isAdding}
+                                    style={{
+                                      padding: '3px 8px', borderRadius: '4px', fontSize: '10px', fontWeight: 700,
+                                      background: isAdding ? '#1e2d3d' : 'rgba(59,130,246,0.15)', border: '1px solid rgba(59,130,246,0.3)',
+                                      color: '#60a5fa', cursor: 'pointer', whiteSpace: 'nowrap',
+                                    }}
+                                  >
+                                    {isAdding ? 'Adding...' : 'Add to Catalog'}
+                                  </button>
+                                )}
+                              </div>
+                            );
+                          })}
+                        </div>
                       )}
                     </div>
                   );

@@ -398,12 +398,28 @@ export async function POST(req: NextRequest) {
         raw_extraction: extracted,
       }, { onConflict: 'message_id' });
 
+      // Identify unmatched parts for catalog addition
+      const unmatchedParts = extractedLines
+        .filter((l: any) => {
+          const partNum = l.supplier_part || l.part_number;
+          return !catalogItems.find((c: any) =>
+            c.part_number.toUpperCase() === (partNum || '').toUpperCase() ||
+            c.part_number.toUpperCase() === (l.part_number || '').toUpperCase()
+          );
+        })
+        .map((l: any) => ({
+          part_number: l.supplier_part || l.part_number,
+          description: l.description || '',
+          unit_price: parseFloat(l.unit_price) || 0,
+        }));
+
       return NextResponse.json({
         status: 'updated',
         poNumber,
         poId: existingPO.id,
         customer: extracted.customer || existingPO.customer,
         lineCount: lineInserts.length,
+        unmatchedParts,
         extracted,
       });
     }
@@ -486,12 +502,28 @@ export async function POST(req: NextRequest) {
         raw_extraction: extracted,
       }, { onConflict: 'message_id' });
 
+      // Identify unmatched parts for catalog addition
+      const unmatchedParts = extractedLines
+        .filter((l: any) => {
+          const partNum = l.supplier_part || l.part_number;
+          return !catalogItems.find((c: any) =>
+            c.part_number.toUpperCase() === (partNum || '').toUpperCase() ||
+            c.part_number.toUpperCase() === (l.part_number || '').toUpperCase()
+          );
+        })
+        .map((l: any) => ({
+          part_number: l.supplier_part || l.part_number,
+          description: l.description || '',
+          unit_price: parseFloat(l.unit_price) || 0,
+        }));
+
       return NextResponse.json({
         status: 'imported',
         poNumber,
         poId: newPO.id,
         customer,
         lineCount: lineInserts.length,
+        unmatchedParts,
         extracted,
       });
     }
