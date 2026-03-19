@@ -310,15 +310,31 @@ export async function POST(req: NextRequest) {
 
     // Overwrite existing PO if forceOverwrite is true
     if (existingPO && forceOverwrite) {
+      // Clear FK references from scanned_vehicles before deleting line items
+      const existingLineIds = (existingPO.po_line_items || []).map((li: any) => li.id);
+      if (existingLineIds.length > 0) {
+        await supabase
+          .from('scanned_vehicles')
+          .update({ po_line_item_id: null })
+          .in('po_line_item_id', existingLineIds);
+      }
+
       // Delete old line items
-      await supabase.from('po_line_items').delete().eq('po_id', existingPO.id);
+      const { error: deleteErr } = await supabase.from('po_line_items').delete().eq('po_id', existingPO.id);
+      if (deleteErr) {
+        console.error('Failed to delete old line items:', deleteErr);
+        return NextResponse.json({ error: `Failed to update PO: ${deleteErr.message}` }, { status: 500 });
+      }
 
       // Update PO header
       const customer = extracted.customer || existingPO.customer || 'Unknown';
-      await supabase.from('purchase_orders').update({
+      const { error: updateErr } = await supabase.from('purchase_orders').update({
         customer,
         notes: extracted.notes ? String(extracted.notes) : existingPO.notes,
       }).eq('id', existingPO.id);
+      if (updateErr) {
+        console.error('Failed to update PO header:', updateErr);
+      }
 
       // Get catalog for part matching
       const { data: catalogData } = await supabase.from('catalog').select('*').eq('active', true);
@@ -341,7 +357,11 @@ export async function POST(req: NextRequest) {
       });
 
       if (lineInserts.length > 0) {
-        await supabase.from('po_line_items').insert(lineInserts);
+        const { error: insertErr } = await supabase.from('po_line_items').insert(lineInserts);
+        if (insertErr) {
+          console.error('Failed to insert new line items:', insertErr);
+          return NextResponse.json({ error: `Failed to insert updated line items: ${insertErr.message}` }, { status: 500 });
+        }
       }
 
       await supabase.from('gmail_po_imports').upsert({
