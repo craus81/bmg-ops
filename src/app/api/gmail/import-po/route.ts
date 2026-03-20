@@ -351,6 +351,7 @@ export async function POST(req: NextRequest) {
       const customer = extracted.customer || existingPO.customer || 'Unknown';
       const { error: updateErr } = await supabase.from('purchase_orders').update({
         customer,
+        ordered_date: extracted.ordered_date || existingPO.ordered_date || null,
         notes: extracted.notes ? String(extracted.notes) : existingPO.notes,
       }).eq('id', existingPO.id);
       if (updateErr) {
@@ -442,6 +443,7 @@ export async function POST(req: NextRequest) {
       const insertPayload: any = {
         po_number: String(poNumber),
         customer,
+        ordered_date: extracted.ordered_date || null,
         notes: extracted.notes ? String(extracted.notes) : null,
       };
       if (adminUser?.id) {

@@ -39,6 +39,7 @@ export interface PurchaseOrder {
   po_number: string;
   customer: string;
   status: 'open' | 'complete' | 'cancelled';
+  ordered_date: string | null;
   notes: string | null;
   created_by: string;
   created_at: string;

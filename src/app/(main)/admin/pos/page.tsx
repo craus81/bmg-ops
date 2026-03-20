@@ -172,7 +172,7 @@ export default function POsPage() {
     // Create PO
     const { data: po, error } = await supabase
       .from('purchase_orders')
-      .insert({ po_number: parsedPO.po_number, customer: 'Masterack', created_by: user.id })
+      .insert({ po_number: parsedPO.po_number, customer: parsedPO.customer || 'Masterack', ordered_date: parsedPO.ordered_date || null, created_by: user.id })
       .select()
       .single();
 
@@ -258,6 +258,7 @@ export default function POsPage() {
     // Update PO header
     await supabase.from('purchase_orders').update({
       customer: parsedPO.customer || existingPo.customer,
+      ordered_date: parsedPO.ordered_date || existingPo.ordered_date || null,
     }).eq('id', existingPo.id);
 
     // Auto-create catalog entries for unmatched parts
@@ -301,7 +302,7 @@ export default function POsPage() {
     // Update local state
     setPos((prev) => prev.map((p) =>
       p.id === existingPo.id
-        ? { ...p, line_items: (items as POLineItem[]) || [], customer: parsedPO.customer || p.customer }
+        ? { ...p, line_items: (items as POLineItem[]) || [], customer: parsedPO.customer || p.customer, ordered_date: parsedPO.ordered_date || p.ordered_date }
         : p
     ));
     setParsedPO(null);
@@ -1216,7 +1217,7 @@ export default function POsPage() {
         const pct = totalQty > 0 ? (totalInstalled / totalQty) * 100 : 0;
         const isExpanded = expandedPo === po.id;
         const isEditingPO = editPoId === po.id;
-        const createdDate = new Date(po.created_at);
+        const displayDate = po.ordered_date ? new Date(po.ordered_date + 'T00:00:00') : new Date(po.created_at);
 
         return (
           <SwipeToDelete
@@ -1280,7 +1281,7 @@ export default function POsPage() {
                   ) : (
                     <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '6px' }}>
                       <div style={{ fontSize: '10px', color: '#4a5f78' }}>
-                        Created {createdDate.toLocaleDateString([], { month: 'short', day: 'numeric', year: 'numeric' })}
+                        {po.ordered_date ? 'PO Date' : 'Imported'} {displayDate.toLocaleDateString([], { month: 'short', day: 'numeric', year: 'numeric' })}
                         {(po as any).netsuite_so_number && (
                           <span style={{ color: '#a78bfa', marginLeft: '6px' }}>
                             · NS SO #{(po as any).netsuite_so_number}
