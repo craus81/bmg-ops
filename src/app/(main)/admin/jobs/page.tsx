@@ -1137,6 +1137,21 @@ function BulkVINUpload() {
   const invalidCount = parsedVINs.filter(v => !v.valid).length;
   const duplicateCount = parsedVINs.filter(v => v.duplicate).length;
   const existsCount = parsedVINs.filter(v => v.existsInDb).length;
+
+  // For worksheet mode: every VIN must have a part (customer + end customer + part#)
+  // A VIN has a part if it has a per-page matched partNumber OR the global selectedPart is set
+  const worksheetMissingPart = inputMode === 'worksheet' && parsedVINs.length > 0 && (() => {
+    const vinsWithoutPart = parsedVINs.filter(v => v.valid && !v.duplicate && !v.existsInDb).filter(v => {
+      if (v.partNumber) {
+        // Has per-page part — check it matches a catalog item
+        const match = catalogItems.find(c => c.part_number === v.partNumber);
+        return !match;
+      }
+      return !selectedPart;
+    });
+    return vinsWithoutPart.length > 0;
+  })();
+  const canUpload = validCount > 0 && !worksheetMissingPart;
   const successCount = results.filter(r => r.success).length;
   const failCount = results.filter(r => !r.success).length;
   const poMatchCount = results.filter(r => r.poMatch).length;
@@ -1243,11 +1258,13 @@ function BulkVINUpload() {
 
       {/* Part Selection */}
       <div style={{ marginBottom: '12px' }}>
-        <label style={{ display: 'block', fontSize: '10px', fontWeight: 700, color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.5px', marginBottom: '6px' }}>Assign Part (optional)</label>
+        <label style={{ display: 'block', fontSize: '10px', fontWeight: 700, color: inputMode === 'worksheet' && !selectedPart ? 'var(--error)' : 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.5px', marginBottom: '6px' }}>
+          Assign Part {inputMode === 'worksheet' ? '(required)' : '(optional)'}
+        </label>
         <select
           value={selectedPartId}
           onChange={(e) => setSelectedPartId(e.target.value)}
-          style={{ width: '100%', padding: '10px 12px', borderRadius: '10px', border: '1px solid var(--border)', background: 'var(--card)', color: 'var(--text-primary)', fontSize: '13px', fontWeight: 600 }}
+          style={{ width: '100%', padding: '10px 12px', borderRadius: '10px', border: `1px solid ${inputMode === 'worksheet' && !selectedPart && parsedVINs.length > 0 ? 'var(--error)' : 'var(--border)'}`, background: 'var(--card)', color: 'var(--text-primary)', fontSize: '13px', fontWeight: 600 }}
         >
           <option value="">No part selected</option>
           {catalogItems.map(c => (
@@ -1565,13 +1582,24 @@ function BulkVINUpload() {
             style={{ width: '100%', padding: '8px', borderRadius: '8px', border: '1px dashed var(--border)', background: 'transparent', color: 'var(--text-muted)', fontSize: '12px', fontWeight: 600, cursor: 'pointer', marginBottom: '12px' }}
           >+ Add VIN</button>
 
+          {/* Required fields warning */}
+          {worksheetMissingPart && (
+            <div style={{ padding: '10px 12px', borderRadius: '10px', background: 'var(--error-bg)', border: '1px solid var(--error-border)', marginBottom: '10px', display: 'flex', alignItems: 'center', gap: '8px' }}>
+              <span style={{ fontSize: '16px' }}>⚠️</span>
+              <div>
+                <div style={{ fontSize: '12px', fontWeight: 700, color: 'var(--error)' }}>Part selection required</div>
+                <div style={{ fontSize: '11px', color: 'var(--error)', opacity: 0.8 }}>Customer, End Customer, and Part# are required. Select a part above to auto-fill these fields.</div>
+              </div>
+            </div>
+          )}
+
           {/* Action Buttons */}
           <div style={{ display: 'flex', gap: '8px' }}>
             <button onClick={reset} style={{ flex: 1, padding: '12px', borderRadius: '10px', border: '1px solid var(--border)', background: 'transparent', color: 'var(--text-secondary)', fontSize: '13px', fontWeight: 700, cursor: 'pointer' }}>Clear</button>
             <button
               onClick={processVINs}
-              disabled={validCount === 0}
-              style={{ flex: 2, padding: '12px', borderRadius: '10px', border: 'none', background: validCount === 0 ? 'var(--border)' : 'var(--success)', color: validCount === 0 ? 'var(--text-muted)' : '#fff', fontSize: '14px', fontWeight: 700, cursor: 'pointer' }}
+              disabled={!canUpload}
+              style={{ flex: 2, padding: '12px', borderRadius: '10px', border: 'none', background: !canUpload ? 'var(--border)' : 'var(--success)', color: !canUpload ? 'var(--text-muted)' : '#fff', fontSize: '14px', fontWeight: 700, cursor: 'pointer' }}
             >Upload {validCount} VIN{validCount !== 1 ? 's' : ''}</button>
           </div>
         </div>
