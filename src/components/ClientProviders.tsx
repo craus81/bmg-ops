@@ -7,6 +7,7 @@ import { AppProvider, useApp } from '@/components/AppProvider';
 import { ThemeProvider } from '@/components/ThemeProvider';
 import Header from '@/components/Header';
 import BottomNav from '@/components/BottomNav';
+import AiChat from '@/components/AiChat';
 
 function PendingScreen() {
   const { signOut } = useAuth();
@@ -90,6 +91,7 @@ function AppShell({ children }: { children: React.ReactNode }) {
         {children}
       </div>
       <BottomNav clockStatus={clockStatus} />
+      <AiChat />
     </div>
   );
 }
