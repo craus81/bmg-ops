@@ -478,7 +478,7 @@ export async function findItems(partNumbers: string[]): Promise<Record<string, {
 
   const conditions = partNumbers.map(p => `UPPER(i.itemid) = UPPER('${p.replace(/'/g, "''")}')`).join(' OR ');
   const query = `
-    SELECT i.id, i.itemid, i.displayname, i.salesdescription, i.description
+    SELECT i.id, i.itemid, i.displayname, i.description
     FROM item i
     WHERE ${conditions}
   `;
@@ -492,7 +492,7 @@ export async function findItems(partNumbers: string[]): Promise<Record<string, {
       id: item.id?.toString(),
       name: item.itemid,
       displayName: item.displayname || item.itemid,
-      description: item.salesdescription || item.description || item.displayname || item.itemid,
+      description: item.description || item.displayname || item.itemid,
     };
   }
 

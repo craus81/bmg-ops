@@ -142,7 +142,7 @@ ITEMS & INVENTORY
 
 9. item (i)
    - i.id, i.itemid (part/SKU number), i.displayname, i.fullname
-   - i.description, i.salesdescription, i.purchasedescription
+   - i.description, i.purchasedescription
    - i.baseprice (base/list price), i.cost (average cost)
    - i.type — item types: 'InvtPart' (Inventory), 'NonInvtPart' (Non-Inventory), 'Service', 'Kit', 'Assembly', 'OthCharge' (Other Charge), 'Discount', 'Markup', 'Payment', 'Subtotal', 'Group', 'Description'
    - i.isinactive ('T'/'F')
