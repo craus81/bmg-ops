@@ -44,6 +44,7 @@ export default function POsPage() {
   const [importLines, setImportLines] = useState<ImportLine[]>([]);
   const [parseError, setParseError] = useState('');
   const [importing, setImporting] = useState(false);
+  const [pdfOverwriteExisting, setPdfOverwriteExisting] = useState<any>(null); // existing PO to overwrite
 
   // Gmail Import state
   const [showEmailImport, setShowEmailImport] = useState(false);
@@ -105,11 +106,12 @@ export default function POsPage() {
         return;
       }
 
-      // Check for duplicate PO
+      // Check for duplicate PO — if exists, prompt for overwrite instead of blocking
       const existing = pos.find((p) => p.po_number === parsed.po_number);
       if (existing) {
-        setParseError(`PO #${parsed.po_number} already exists`);
-        return;
+        setPdfOverwriteExisting(existing);
+      } else {
+        setPdfOverwriteExisting(null);
       }
 
       // Match lines to catalog
@@ -222,6 +224,89 @@ export default function POsPage() {
     setPos((prev) => [{ ...po, line_items: (items as POLineItem[]) || [] }, ...prev]);
     setParsedPO(null);
     setImportLines([]);
+    setPdfOverwriteExisting(null);
+    setShowImport(false);
+    setImporting(false);
+  };
+
+  // Overwrite existing PO with new PDF data
+  const handleOverwritePO = async () => {
+    if (!parsedPO || !user || !pdfOverwriteExisting) return;
+    const linesToImport = importLines.filter((l) => l.include);
+    if (linesToImport.length === 0) return;
+
+    setImporting(true);
+    const existingPo = pdfOverwriteExisting;
+
+    // Clear FK references from scanned_vehicles before deleting line items
+    const existingLineIds = (existingPo.line_items || []).map((li: any) => li.id);
+    if (existingLineIds.length > 0) {
+      await supabase
+        .from('scanned_vehicles')
+        .update({ po_line_item_id: null })
+        .in('po_line_item_id', existingLineIds);
+    }
+
+    // Delete old line items
+    const { error: deleteErr } = await supabase.from('po_line_items').delete().eq('po_id', existingPo.id);
+    if (deleteErr) {
+      alert('Error removing old line items: ' + deleteErr.message);
+      setImporting(false);
+      return;
+    }
+
+    // Update PO header
+    await supabase.from('purchase_orders').update({
+      customer: parsedPO.customer || existingPo.customer,
+    }).eq('id', existingPo.id);
+
+    // Auto-create catalog entries for unmatched parts
+    for (const l of linesToImport) {
+      if (!l.catalog_match) {
+        const { data: newCat } = await supabase
+          .from('catalog')
+          .insert({
+            part_number: l.part_number,
+            customer: parsedPO.customer || 'Masterack',
+            end_customer: l.new_end_customer || '',
+            vehicle_type: l.new_vehicle_type || '',
+            graphic_package: l.new_graphic_package || l.description || '',
+            price: l.final_price,
+            proof_pages: 1,
+            active: true,
+          })
+          .select()
+          .single();
+
+        if (newCat) {
+          l.catalog_match = newCat as CatalogItem;
+          setCatalog((prev) => [...prev, newCat as CatalogItem]);
+        }
+      }
+    }
+
+    // Insert new line items
+    const { data: items } = await supabase
+      .from('po_line_items')
+      .insert(linesToImport.map((l) => ({
+        po_id: existingPo.id,
+        catalog_id: l.catalog_match?.id || null,
+        part_number: l.part_number,
+        description: l.description || null,
+        quantity: l.quantity,
+        unit_price: l.final_price,
+      })))
+      .select();
+
+    // Update local state
+    setPos((prev) => prev.map((p) =>
+      p.id === existingPo.id
+        ? { ...p, line_items: (items as POLineItem[]) || [], customer: parsedPO.customer || p.customer }
+        : p
+    ));
+    setParsedPO(null);
+    setImportLines([]);
+    setPdfOverwriteExisting(null);
     setShowImport(false);
     setImporting(false);
   };
@@ -230,6 +315,7 @@ export default function POsPage() {
     setParsedPO(null);
     setImportLines([]);
     setParseError('');
+    setPdfOverwriteExisting(null);
     setShowImport(false);
   };
 
@@ -892,8 +978,21 @@ export default function POsPage() {
                 )}
               </div>
             </div>
-            <div style={{ fontSize: '11px', color: '#60a5fa', fontWeight: 700 }}>REVIEW</div>
+            <div style={{ fontSize: '11px', color: pdfOverwriteExisting ? '#f59e0b' : '#60a5fa', fontWeight: 700 }}>{pdfOverwriteExisting ? 'OVERWRITE' : 'REVIEW'}</div>
           </div>
+
+          {/* Overwrite warning */}
+          {pdfOverwriteExisting && (
+            <div style={{ padding: '10px 12px', borderRadius: '8px', background: 'rgba(245,158,11,0.1)', border: '1px solid rgba(245,158,11,0.3)', marginBottom: '10px', display: 'flex', alignItems: 'center', gap: '10px' }}>
+              <span style={{ fontSize: '18px' }}>⚠️</span>
+              <div>
+                <div style={{ fontSize: '12px', fontWeight: 700, color: '#f59e0b' }}>PO #{parsedPO.po_number} already exists</div>
+                <div style={{ fontSize: '11px', color: '#a08332' }}>
+                  Current: {pdfOverwriteExisting.line_items?.length || 0} line items • New: {importLines.filter((l) => l.include).length} line items. Importing will replace all existing line items.
+                </div>
+              </div>
+            </div>
+          )}
 
           {/* Line items to review */}
           {importLines.map((line, idx) => (
@@ -1014,15 +1113,16 @@ export default function POsPage() {
 
           <div style={{ display: 'flex', gap: '8px', marginTop: '8px' }}>
             <button
-              onClick={handleImportPO}
+              onClick={pdfOverwriteExisting ? handleOverwritePO : handleImportPO}
               disabled={importing || importLines.filter((l) => l.include).length === 0}
               style={{
-                flex: 1, padding: '12px', borderRadius: '10px', background: '#22c55e',
+                flex: 1, padding: '12px', borderRadius: '10px',
+                background: pdfOverwriteExisting ? '#f59e0b' : '#22c55e',
                 color: '#fff', fontWeight: 800, fontSize: '14px', border: 'none',
                 opacity: importing || importLines.filter((l) => l.include).length === 0 ? 0.4 : 1,
               }}
             >
-              {importing ? 'Importing...' : 'Import PO'}
+              {importing ? (pdfOverwriteExisting ? 'Overwriting...' : 'Importing...') : (pdfOverwriteExisting ? 'Overwrite PO' : 'Import PO')}
             </button>
             <button
               onClick={cancelImport}
