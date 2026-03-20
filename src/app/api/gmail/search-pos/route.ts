@@ -2,6 +2,8 @@ import { NextRequest, NextResponse } from 'next/server';
 import { searchPOEmails, getMessage, getPdfAttachments, getHeader } from '@/lib/google';
 import { createClient } from '@supabase/supabase-js';
 
+export const dynamic = 'force-dynamic';
+
 // Search Gmail for PO emails and return unimported ones
 export async function GET(req: NextRequest) {
   try {
