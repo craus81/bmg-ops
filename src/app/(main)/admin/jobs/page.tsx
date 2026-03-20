@@ -1356,11 +1356,10 @@ function BulkVINUpload() {
                   <div style={{ fontSize: '10px', color: 'var(--text-muted)' }}>{wp.vinCount} VIN{wp.vinCount !== 1 ? 's' : ''} · tap to edit</div>
                 </div>
                 <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '4px', fontSize: '11px' }}>
-                  {(['part_number', 'customer', 'po_number', 'date'] as const).map(field => {
-                    const labels: Record<string, string> = { part_number: 'Part#', customer: 'Customer', date: 'Date', po_number: 'PO#' };
+                  {(['vendor_name', 'part_number', 'customer', 'po_number', 'date'] as const).map(field => {
+                    const labels: Record<string, string> = { vendor_name: 'Vendor', part_number: 'Part#', customer: 'Customer', date: 'Date', po_number: 'PO#' };
                     const val = (h as any)[field];
                     const isEditing = isEditingThisPage && editingHeaderField === field;
-                    if (!val && !isEditing) return null;
                     return (
                       <div key={field}>
                         <span style={{ color: 'var(--text-muted)' }}>{labels[field]}:</span>{' '}
@@ -1376,11 +1375,16 @@ function BulkVINUpload() {
                             <button onClick={commitEditHeader} style={{ fontSize: '9px', padding: '2px 3px', border: 'none', background: 'var(--success)', color: '#fff', borderRadius: '3px', cursor: 'pointer' }}>✓</button>
                             <button onClick={cancelEditHeader} style={{ fontSize: '9px', padding: '2px 3px', border: '1px solid var(--border)', background: 'transparent', color: 'var(--text-muted)', borderRadius: '3px', cursor: 'pointer' }}>✕</button>
                           </span>
-                        ) : (
+                        ) : val ? (
                           <span
                             onClick={() => startEditHeader(field, wp.pageNum)}
                             style={{ fontWeight: 700, color: 'var(--text-primary)', cursor: 'pointer', borderBottom: '1px dashed var(--border)', paddingBottom: '1px' }}
                           >{val}</span>
+                        ) : (
+                          <span
+                            onClick={() => startEditHeader(field, wp.pageNum)}
+                            style={{ fontWeight: 600, color: 'var(--text-muted)', cursor: 'pointer', borderBottom: '1px dashed var(--border)', paddingBottom: '1px', fontStyle: 'italic', fontSize: '10px' }}
+                          >tap to add</span>
                         )}
                       </div>
                     );
@@ -1405,10 +1409,9 @@ function BulkVINUpload() {
             <div style={{ fontSize: '10px', color: 'var(--text-muted)' }}>tap to edit</div>
           </div>
           <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '6px', fontSize: '12px' }}>
-            {(['part_number', 'customer', 'date', 'po_number'] as const).map(field => {
-              const labels: Record<string, string> = { part_number: 'Part#', customer: 'Customer', date: 'Date', po_number: 'PO#' };
+            {(['vendor_name', 'part_number', 'customer', 'date', 'po_number'] as const).map(field => {
+              const labels: Record<string, string> = { vendor_name: 'Vendor', part_number: 'Part#', customer: 'Customer', date: 'Date', po_number: 'PO#' };
               const val = (worksheetHeader as any)[field];
-              if (!val && editingHeaderField !== field) return null;
               return (
                 <div key={field}>
                   <span style={{ color: 'var(--text-muted)' }}>{labels[field]}:</span>{' '}
@@ -1424,11 +1427,16 @@ function BulkVINUpload() {
                       <button onClick={commitEditHeader} style={{ fontSize: '10px', padding: '2px 4px', border: 'none', background: 'var(--success)', color: '#fff', borderRadius: '3px', cursor: 'pointer' }}>✓</button>
                       <button onClick={cancelEditHeader} style={{ fontSize: '10px', padding: '2px 4px', border: '1px solid var(--border)', background: 'transparent', color: 'var(--text-muted)', borderRadius: '3px', cursor: 'pointer' }}>✕</button>
                     </span>
-                  ) : (
+                  ) : val ? (
                     <span
                       onClick={() => startEditHeader(field)}
                       style={{ fontWeight: 700, color: 'var(--text-primary)', cursor: 'pointer', borderBottom: '1px dashed var(--border)', paddingBottom: '1px' }}
                     >{val}</span>
+                  ) : (
+                    <span
+                      onClick={() => startEditHeader(field)}
+                      style={{ fontWeight: 600, color: 'var(--text-muted)', cursor: 'pointer', borderBottom: '1px dashed var(--border)', paddingBottom: '1px', fontStyle: 'italic', fontSize: '11px' }}
+                    >tap to add</span>
                   )}
                 </div>
               );
