@@ -118,13 +118,15 @@ export async function POST(req: NextRequest) {
 
     // Check if Claude wants to execute queries
     const trimmed = reply.trim();
+    // Strip markdown code blocks if present (```json ... ``` or ``` ... ```)
+    const stripped = trimmed.replace(/^```(?:json)?\s*\n?/i, '').replace(/\n?```\s*$/i, '').trim();
     let parsed: any = null;
     try {
-      // Try to parse the entire response as JSON
-      parsed = JSON.parse(trimmed);
+      // Try to parse the stripped response as JSON
+      parsed = JSON.parse(stripped);
     } catch {
       // Also try to extract JSON from the response if it has surrounding text
-      const jsonMatch = trimmed.match(/\{[\s\S]*"queries"[\s\S]*\}/);
+      const jsonMatch = stripped.match(/\{[\s\S]*"queries"[\s\S]*\}/);
       if (jsonMatch) {
         try {
           parsed = JSON.parse(jsonMatch[0]);
