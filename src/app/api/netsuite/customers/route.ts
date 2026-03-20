@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { suiteqlQuery } from '@/lib/netsuite';
+import { suiteqlQuery, suiteqlQueryAll } from '@/lib/netsuite';
 import { createClient } from '@supabase/supabase-js';
 
 export async function GET(req: NextRequest) {
@@ -12,7 +12,7 @@ export async function GET(req: NextRequest) {
     const currentYear = new Date().getFullYear();
     const lastYear = currentYear - 1;
 
-    // Fetch customers from NetSuite via SuiteQL
+    // Fetch ALL active customers from NetSuite via paginated SuiteQL
     const customerQuery = `
       SELECT
         c.id,
@@ -25,11 +25,9 @@ export async function GET(req: NextRequest) {
       FROM customer c
       WHERE c.isinactive = 'F'
       ORDER BY c.companyname
-      FETCH FIRST 500 ROWS ONLY
     `;
 
-    const result = await suiteqlQuery(customerQuery);
-    const nsCustomers = result?.items || [];
+    const nsCustomers = await suiteqlQueryAll(customerQuery);
 
     // Fetch all-time spend data per customer
     const allTimeQuery = `
@@ -76,13 +74,13 @@ export async function GET(req: NextRequest) {
     const lastYearMap: Record<string, SpendRow> = {};
 
     try {
-      const [allTimeRes, ytdRes, lastYearRes] = await Promise.all([
-        suiteqlQuery(allTimeQuery),
-        suiteqlQuery(ytdQuery),
-        suiteqlQuery(lastYearQuery),
+      const [allTimeItems, ytdItems, lastYearItems] = await Promise.all([
+        suiteqlQueryAll(allTimeQuery),
+        suiteqlQueryAll(ytdQuery),
+        suiteqlQueryAll(lastYearQuery),
       ]);
 
-      for (const row of (allTimeRes?.items || [])) {
+      for (const row of allTimeItems) {
         allTimeMap[row.customer_id?.toString()] = {
           customer_id: row.customer_id?.toString(),
           order_count: parseInt(row.order_count) || 0,
@@ -90,14 +88,14 @@ export async function GET(req: NextRequest) {
           last_order_date: row.last_order_date || null,
         };
       }
-      for (const row of (ytdRes?.items || [])) {
+      for (const row of ytdItems) {
         ytdMap[row.customer_id?.toString()] = {
           customer_id: row.customer_id?.toString(),
           order_count: parseInt(row.order_count) || 0,
           total_spend: parseFloat(row.total_spend) || 0,
         };
       }
-      for (const row of (lastYearRes?.items || [])) {
+      for (const row of lastYearItems) {
         lastYearMap[row.customer_id?.toString()] = {
           customer_id: row.customer_id?.toString(),
           order_count: parseInt(row.order_count) || 0,

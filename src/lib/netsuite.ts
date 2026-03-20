@@ -91,6 +91,29 @@ export async function suiteqlQuery(query: string, limit: number = 1000, offset: 
 }
 
 /**
+ * Execute a paginated SuiteQL query — fetches all rows across multiple pages
+ */
+export async function suiteqlQueryAll(query: string, pageSize: number = 1000): Promise<any[]> {
+  let allItems: any[] = [];
+  let offset = 0;
+  let hasMore = true;
+
+  while (hasMore) {
+    const result = await suiteqlQuery(query, pageSize, offset);
+    const items = result?.items || [];
+    allItems = allItems.concat(items);
+
+    if (items.length < pageSize) {
+      hasMore = false;
+    } else {
+      offset += pageSize;
+    }
+  }
+
+  return allItems;
+}
+
+/**
  * Call a NetSuite RESTlet
  */
 export async function callRestlet(
