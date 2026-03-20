@@ -12,8 +12,8 @@ export async function GET(req: NextRequest) {
       process.env.SUPABASE_SERVICE_ROLE_KEY!
     );
 
-    // Get days parameter (default 7 for manual search, cron uses 1)
-    const days = parseInt(req.nextUrl.searchParams.get('days') || '7');
+    // Get days parameter (default 90 for manual search, cron uses 1)
+    const days = parseInt(req.nextUrl.searchParams.get('days') || '90');
     const afterDate = new Date();
     afterDate.setDate(afterDate.getDate() - days);
     const afterStr = `${afterDate.getFullYear()}/${afterDate.getMonth() + 1}/${afterDate.getDate()}`;

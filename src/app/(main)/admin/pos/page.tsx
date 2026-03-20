@@ -213,6 +213,7 @@ export default function POsPage() {
         po_id: po.id,
         catalog_id: l.catalog_match?.id || null,
         part_number: l.part_number,
+        description: l.description || null,
         quantity: l.quantity,
         unit_price: l.final_price,
       })))
@@ -337,7 +338,7 @@ export default function POsPage() {
   };
 
   // Gmail import functions
-  const searchGmailPOs = async (days = 30) => {
+  const searchGmailPOs = async (days = 90) => {
     setEmailLoading(true);
     setEmailError('');
     setEmailNeedsAuth(false);
@@ -584,11 +585,12 @@ export default function POsPage() {
             <div style={{ fontSize: '13px', fontWeight: 700, color: '#e8ecf1' }}>Import POs from Gmail</div>
             <div style={{ display: 'flex', gap: '6px' }}>
               <select
+                defaultValue="90"
                 onChange={(e) => searchGmailPOs(parseInt(e.target.value))}
                 style={{ padding: '4px 8px', borderRadius: '6px', background: '#1e2d3d', border: '1px solid #2a3a4d', color: '#e8ecf1', fontSize: '11px' }}
               >
                 <option value="7">Last 7 days</option>
-                <option value="30" selected>Last 30 days</option>
+                <option value="30">Last 30 days</option>
                 <option value="90">Last 90 days</option>
               </select>
               <button
