@@ -232,8 +232,8 @@ export default function AiChat() {
             position: 'fixed',
             bottom: '76px',
             right: '12px',
-            width: '56px',
-            height: '56px',
+            width: '72px',
+            height: '72px',
             borderRadius: '50%',
             background: '#0a1128',
             border: '2px solid #1e3a8a',
@@ -256,7 +256,7 @@ export default function AiChat() {
             e.currentTarget.style.boxShadow = '0 4px 20px rgba(30,58,138,0.5)';
           }}
         >
-          <MascotSvg thinking={sending} size={48} />
+          <MascotSvg thinking={sending} size={62} />
         </button>
       )}
 
@@ -288,12 +288,12 @@ export default function AiChat() {
           }}>
             <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
               <div style={{
-                width: '36px', height: '36px', borderRadius: '50%',
+                width: '48px', height: '48px', borderRadius: '50%',
                 background: '#060d1f', border: '1.5px solid #1e3a8a',
                 display: 'flex', alignItems: 'center', justifyContent: 'center',
                 overflow: 'hidden',
               }}>
-                <MascotSvg thinking={sending} size={32} />
+                <MascotSvg thinking={sending} size={42} />
               </div>
               <div>
                 <div style={{ fontSize: '13px', fontWeight: 800, color: '#e8ecf1' }}>
