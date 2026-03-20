@@ -473,25 +473,26 @@ export async function findCustomer(name: string): Promise<{
 /**
  * Look up NetSuite items by part number
  */
-export async function findItems(partNumbers: string[]): Promise<Record<string, { id: string; name: string; displayName: string }>> {
+export async function findItems(partNumbers: string[]): Promise<Record<string, { id: string; name: string; displayName: string; description: string }>> {
   if (partNumbers.length === 0) return {};
 
   const conditions = partNumbers.map(p => `UPPER(i.itemid) = UPPER('${p.replace(/'/g, "''")}')`).join(' OR ');
   const query = `
-    SELECT i.id, i.itemid, i.displayname
+    SELECT i.id, i.itemid, i.displayname, i.salesdescription, i.description
     FROM item i
     WHERE ${conditions}
   `;
 
   const result = await suiteqlQuery(query);
   const items = result?.items || [];
-  const map: Record<string, { id: string; name: string; displayName: string }> = {};
+  const map: Record<string, { id: string; name: string; displayName: string; description: string }> = {};
 
   for (const item of items) {
     map[item.itemid?.toUpperCase()] = {
       id: item.id?.toString(),
       name: item.itemid,
       displayName: item.displayname || item.itemid,
+      description: item.salesdescription || item.description || item.displayname || item.itemid,
     };
   }
 

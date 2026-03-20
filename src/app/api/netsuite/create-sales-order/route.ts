@@ -71,11 +71,13 @@ export async function POST(req: NextRequest) {
       const nsItem = partKey ? itemMap[partKey] : null;
 
       if (nsItem) {
+        // Use the item's sales description from NetSuite, fall back to PO line description, then part number
+        const itemDescription = nsItem.description || li.description || nsItem.displayName || li.part_number;
         soLineItems.push({
           itemId: nsItem.id,
           quantity: li.quantity,
           rate: li.unit_price,
-          description: `PO #${po.po_number} - ${li.part_number}`,
+          description: itemDescription,
         });
       } else {
         unmatchedParts.push(li.part_number);
