@@ -73,6 +73,7 @@ export async function getGmailClient() {
 }
 
 // Search Gmail for PO emails with PDF attachments
+// Paginates through all results to avoid the default 50-result cap
 export async function searchPOEmails(after?: string) {
   const gmail = await getGmailClient();
 
@@ -82,13 +83,23 @@ export async function searchPOEmails(after?: string) {
     q += ` after:${after}`;
   }
 
-  const res = await gmail.users.messages.list({
-    userId: 'me',
-    q,
-    maxResults: 50,
-  });
+  const allMessages: any[] = [];
+  let pageToken: string | undefined;
 
-  return res.data.messages || [];
+  do {
+    const res = await gmail.users.messages.list({
+      userId: 'me',
+      q,
+      maxResults: 200,
+      ...(pageToken ? { pageToken } : {}),
+    });
+
+    const messages = res.data.messages || [];
+    allMessages.push(...messages);
+    pageToken = res.data.nextPageToken || undefined;
+  } while (pageToken && allMessages.length < 500); // safety cap at 500
+
+  return allMessages;
 }
 
 // Get full message details

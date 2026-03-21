@@ -14,13 +14,50 @@ export default function ReportsPage() {
   const [exporting, setExporting] = useState(false);
   const [exported, setExported] = useState(false);
   const [exportedCount, setExportedCount] = useState(0);
-  const [tab, setTab] = useState<'pending' | 'archive'>('pending');
+  const [tab, setTab] = useState<'review' | 'pending' | 'archive'>('review');
   const [archives, setArchives] = useState<any[]>([]);
   const [loadingArchive, setLoadingArchive] = useState(false);
 
+  // Review Matches state
+  const [reviewVehicles, setReviewVehicles] = useState<any[]>([]);
+  const [loadingReview, setLoadingReview] = useState(false);
+  const [availablePoLines, setAvailablePoLines] = useState<any[]>([]);
+  const [editingVehicleId, setEditingVehicleId] = useState<string | null>(null);
+  const [savingMatch, setSavingMatch] = useState<string | null>(null);
+  const [matchMessage, setMatchMessage] = useState<{ type: 'success' | 'error'; text: string } | null>(null);
+
   useEffect(() => {
-    if (user) loadPending();
+    if (user) {
+      loadReview();
+      loadPending();
+    }
   }, [user]);
+
+  var loadReview = async () => {
+    setLoadingReview(true);
+    // Load all pending vehicles with their PO matches
+    let query = supabase
+      .from('scanned_vehicles')
+      .select('*, po_line_items(id, po_id, part_number, quantity, installed, purchase_orders(id, po_number, customer, status))')
+      .is('exported_at', null)
+      .order('scanned_at', { ascending: false });
+
+    if (!isAdmin) {
+      query = query.eq('scanned_by', user!.id);
+    }
+
+    var { data } = await query;
+    setReviewVehicles(data || []);
+
+    // Also load all open PO lines for the dropdown
+    var { data: poLines } = await supabase
+      .from('po_line_items')
+      .select('id, po_id, part_number, description, quantity, installed, purchase_orders!inner(id, po_number, customer, status)')
+      .eq('purchase_orders.status', 'open');
+
+    setAvailablePoLines(poLines || []);
+    setLoadingReview(false);
+  };
 
   var loadPending = async () => {
     setLoading(true);
@@ -56,10 +93,87 @@ export default function ReportsPage() {
     setLoadingArchive(false);
   };
 
-  var switchTab = (t: 'pending' | 'archive') => {
+  var switchTab = (t: 'review' | 'pending' | 'archive') => {
     setTab(t);
     if (t === 'archive') loadArchive();
+    if (t === 'review') loadReview();
+    if (t === 'pending') loadPending();
   };
+
+  // ─── Match Review Functions ──────────────────────────────
+  var handleChangeMatch = async (vehicleId: string, newPoLineItemId: string) => {
+    var vehicle = reviewVehicles.find((v: any) => v.id === vehicleId);
+    if (!vehicle) return;
+
+    var oldPoLineItemId = vehicle.po_line_item_id;
+    if (oldPoLineItemId === newPoLineItemId) return;
+
+    setSavingMatch(vehicleId);
+    setMatchMessage(null);
+
+    try {
+      var res = await fetch('/api/vehicles/update-match', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          vehicleId,
+          newPoLineItemId: newPoLineItemId || null,
+          oldPoLineItemId: oldPoLineItemId || null,
+        }),
+      });
+
+      if (!res.ok) {
+        var err = await res.json();
+        setMatchMessage({ type: 'error', text: err.error || 'Failed to update match' });
+        return;
+      }
+
+      setMatchMessage({ type: 'success', text: 'Match updated' });
+      setTimeout(() => setMatchMessage(null), 2000);
+
+      // Reload data to reflect changes
+      await loadReview();
+      await loadPending();
+      setEditingVehicleId(null);
+    } catch (e: any) {
+      setMatchMessage({ type: 'error', text: e.message || 'Failed to update' });
+    } finally {
+      setSavingMatch(null);
+    }
+  };
+
+  // Get available PO lines filtered for a vehicle's part number
+  var getMatchOptions = (vehicle: any) => {
+    // Show all open PO lines that match this vehicle's part number
+    // Also show lines from any PO if user wants to override
+    var partNumber = vehicle.part_number?.toUpperCase();
+    var matchingLines = availablePoLines.filter((line: any) => {
+      var linePartUpper = line.part_number?.toUpperCase();
+      return linePartUpper === partNumber;
+    });
+
+    // Also include all other open lines grouped separately
+    var otherLines = availablePoLines.filter((line: any) => {
+      var linePartUpper = line.part_number?.toUpperCase();
+      return linePartUpper !== partNumber;
+    });
+
+    return { matchingLines, otherLines };
+  };
+
+  var getPoLabel = (line: any) => {
+    var po = line.purchase_orders;
+    var remaining = line.quantity - line.installed;
+    return `PO #${po?.po_number || '?'} — ${line.part_number} (${remaining} remaining of ${line.quantity})`;
+  };
+
+  var getCurrentMatchLabel = (vehicle: any) => {
+    if (!vehicle.po_line_items) return 'No match';
+    var po = vehicle.po_line_items.purchase_orders;
+    return `PO #${po?.po_number || '?'} — ${vehicle.po_line_items.part_number}`;
+  };
+
+  // ─── Export Functions ──────────────────────────────
 
   // Group vehicles by customer
   var grouped: Record<string, any[]> = {};
@@ -69,7 +183,6 @@ export default function ReportsPage() {
     grouped[key].push(v);
   });
 
-  // Extract PO number from the nested Supabase join
   function getPONumber(v: any): string {
     return v.po_line_items?.purchase_orders?.po_number || '';
   }
@@ -107,7 +220,6 @@ export default function ReportsPage() {
       var filename = 'BMG-Export-' + dateStr + '.xlsx';
       XLSX.writeFile(wb, filename);
 
-      // Mark all as exported
       var ids = vehicles.map(function(v: any) { return v.id; });
       await supabase
         .from('scanned_vehicles')
@@ -222,7 +334,18 @@ export default function ReportsPage() {
     archiveGroups[key].push(v);
   });
 
-  if (loading) {
+  // Group review vehicles by customer for organization
+  var reviewGrouped: Record<string, any[]> = {};
+  reviewVehicles.forEach(function(v) {
+    var key = v.customer || 'No Customer';
+    if (!reviewGrouped[key]) reviewGrouped[key] = [];
+    reviewGrouped[key].push(v);
+  });
+
+  // Count unmatched vehicles
+  var unmatchedCount = reviewVehicles.filter((v: any) => !v.po_line_item_id).length;
+
+  if (loading && loadingReview) {
     return <div style={{ textAlign: 'center', padding: '40px', color: 'var(--text-muted)' }}>Loading...</div>;
   }
 
@@ -233,11 +356,27 @@ export default function ReportsPage() {
       </div>
 
       <div style={{ display: 'flex', gap: '4px', marginBottom: '12px', background: 'var(--card)', borderRadius: '10px', padding: '3px' }}>
-        <button onClick={function() { switchTab('pending'); }} style={{ flex: 1, padding: '8px', borderRadius: '6px', fontSize: '12px', fontWeight: 700, background: tab === 'pending' ? 'var(--tab-active-bg)' : 'transparent', border: 'none', color: tab === 'pending' ? 'var(--navy)' : 'var(--text-muted)' }}>
-          Ready to Export {vehicles.length > 0 ? '(' + vehicles.length + ')' : ''}
+        <button onClick={function() { switchTab('review'); }} style={{ flex: 1, padding: '8px', borderRadius: '6px', fontSize: '11px', fontWeight: 700, background: tab === 'review' ? 'var(--tab-active-bg)' : 'transparent', border: 'none', color: tab === 'review' ? 'var(--navy)' : 'var(--text-muted)' }}>
+          Review {unmatchedCount > 0 ? '(' + unmatchedCount + ')' : ''}
         </button>
-        <button onClick={function() { switchTab('archive'); }} style={{ flex: 1, padding: '8px', borderRadius: '6px', fontSize: '12px', fontWeight: 700, background: tab === 'archive' ? 'var(--tab-active-bg)' : 'transparent', border: 'none', color: tab === 'archive' ? 'var(--navy)' : 'var(--text-muted)' }}>Archive</button>
+        <button onClick={function() { switchTab('pending'); }} style={{ flex: 1, padding: '8px', borderRadius: '6px', fontSize: '11px', fontWeight: 700, background: tab === 'pending' ? 'var(--tab-active-bg)' : 'transparent', border: 'none', color: tab === 'pending' ? 'var(--navy)' : 'var(--text-muted)' }}>
+          Export {vehicles.length > 0 ? '(' + vehicles.length + ')' : ''}
+        </button>
+        <button onClick={function() { switchTab('archive'); }} style={{ flex: 1, padding: '8px', borderRadius: '6px', fontSize: '11px', fontWeight: 700, background: tab === 'archive' ? 'var(--tab-active-bg)' : 'transparent', border: 'none', color: tab === 'archive' ? 'var(--navy)' : 'var(--text-muted)' }}>Archive</button>
       </div>
+
+      {matchMessage && (
+        <div style={{
+          padding: '10px 12px',
+          background: matchMessage.type === 'success' ? 'var(--success-bg)' : 'rgba(239,68,68,0.08)',
+          border: matchMessage.type === 'success' ? '1px solid rgba(52,211,153,0.15)' : '1px solid rgba(239,68,68,0.15)',
+          borderRadius: '10px',
+          color: matchMessage.type === 'success' ? 'var(--success)' : '#ef4444',
+          fontSize: '13px', fontWeight: 700, marginBottom: '12px', textAlign: 'center'
+        }}>
+          {matchMessage.text}
+        </div>
+      )}
 
       {exported && (
         <div style={{ padding: '10px 12px', background: 'var(--success-bg)', border: '1px solid rgba(52,211,153,0.15)', borderRadius: '10px', color: 'var(--success)', fontSize: '13px', fontWeight: 700, marginBottom: '12px', textAlign: 'center' }}>
@@ -245,11 +384,153 @@ export default function ReportsPage() {
         </div>
       )}
 
+      {/* ─── Review Matches Tab ──────────────────────────────── */}
+      {tab === 'review' && (
+        <div>
+          {loadingReview ? (
+            <div style={{ textAlign: 'center', padding: '20px', color: 'var(--text-muted)' }}>Loading matches...</div>
+          ) : reviewVehicles.length === 0 ? (
+            <div style={{ textAlign: 'center', padding: '32px 0', color: 'var(--text-muted)' }}>
+              <div style={{ fontSize: '36px', marginBottom: '6px', opacity: 0.4 }}>&#10003;</div>
+              <div style={{ fontWeight: 600, fontSize: '13px' }}>No vehicles pending review</div>
+            </div>
+          ) : (
+            <div>
+              {/* Summary banner */}
+              <div style={{ padding: '10px 12px', background: 'var(--card)', border: '1px solid #1e2d3d', borderRadius: '10px', marginBottom: '12px', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                <div>
+                  <div style={{ fontWeight: 800, fontSize: '14px' }}>{reviewVehicles.length} vehicles pending</div>
+                  <div style={{ fontSize: '11px', color: 'var(--text-muted)', marginTop: '2px' }}>
+                    {reviewVehicles.length - unmatchedCount} matched &middot; {unmatchedCount > 0 ? <span style={{ color: '#fbbf24' }}>{unmatchedCount} unmatched</span> : <span style={{ color: 'var(--success)' }}>all matched</span>}
+                  </div>
+                </div>
+                <button
+                  onClick={loadReview}
+                  style={{ padding: '6px 12px', borderRadius: '8px', background: 'rgba(238,49,32,0.06)', border: '1px solid rgba(238,49,32,0.15)', color: 'var(--navy)', fontSize: '11px', fontWeight: 700 }}
+                >
+                  Refresh
+                </button>
+              </div>
+
+              {/* Vehicles grouped by customer */}
+              {Object.keys(reviewGrouped).map(function(customer) {
+                var custVehicles = reviewGrouped[customer];
+                var custUnmatched = custVehicles.filter((v: any) => !v.po_line_item_id).length;
+                return (
+                  <div key={customer} style={{ background: 'var(--card)', border: '1px solid #1e2d3d', borderRadius: '14px', padding: '12px', marginBottom: '8px' }}>
+                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '8px' }}>
+                      <div>
+                        <div style={{ fontWeight: 800, fontSize: '14px' }}>{customer}</div>
+                        <div style={{ fontSize: '11px', color: 'var(--text-muted)', marginTop: '1px' }}>
+                          {custVehicles.length} vehicle{custVehicles.length !== 1 ? 's' : ''}
+                          {custUnmatched > 0 && <span style={{ color: '#fbbf24', marginLeft: '6px' }}>{custUnmatched} unmatched</span>}
+                        </div>
+                      </div>
+                    </div>
+
+                    {custVehicles.map(function(v: any) {
+                      var title = [v.vehicle_year, v.vehicle_make, v.vehicle_model].filter(Boolean).join(' ') || 'Unknown';
+                      var isEditing = editingVehicleId === v.id;
+                      var isSaving = savingMatch === v.id;
+                      var hasMatch = !!v.po_line_item_id;
+                      var { matchingLines, otherLines } = getMatchOptions(v);
+
+                      return (
+                        <div key={v.id} style={{ padding: '8px 0', borderTop: '1px solid rgba(30,45,61,0.5)' }}>
+                          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
+                            <div style={{ flex: 1, minWidth: 0 }}>
+                              <div style={{ fontWeight: 600, fontSize: '12px', color: 'var(--text-primary)' }}>{title}</div>
+                              <div style={{ fontFamily: 'monospace', fontSize: '10px', color: 'var(--text-muted)', marginTop: '2px' }}>{v.vin}</div>
+                              {v.part_number && <div style={{ fontSize: '10px', color: 'var(--navy-light)', marginTop: '2px' }}>{v.part_number}</div>}
+                            </div>
+                            <div style={{ textAlign: 'right', flexShrink: 0, marginLeft: '8px' }}>
+                              {!isEditing ? (
+                                <div>
+                                  <div style={{
+                                    fontSize: '10px',
+                                    fontWeight: 700,
+                                    color: hasMatch ? 'var(--success)' : '#fbbf24',
+                                    padding: '2px 8px',
+                                    borderRadius: '6px',
+                                    background: hasMatch ? 'var(--success-bg)' : 'rgba(251,191,36,0.08)',
+                                    border: hasMatch ? '1px solid rgba(52,211,153,0.15)' : '1px solid rgba(251,191,36,0.15)',
+                                    display: 'inline-block',
+                                    marginBottom: '4px',
+                                  }}>
+                                    {hasMatch ? getCurrentMatchLabel(v) : 'Unmatched'}
+                                  </div>
+                                  <div>
+                                    <button
+                                      onClick={() => setEditingVehicleId(v.id)}
+                                      style={{ padding: '4px 10px', borderRadius: '6px', background: 'transparent', border: '1px solid rgba(238,49,32,0.2)', color: 'var(--navy)', fontSize: '10px', fontWeight: 700 }}
+                                    >
+                                      {hasMatch ? 'Change' : 'Assign'}
+                                    </button>
+                                  </div>
+                                </div>
+                              ) : (
+                                <div style={{ minWidth: '200px' }}>
+                                  <select
+                                    disabled={isSaving}
+                                    defaultValue={v.po_line_item_id || ''}
+                                    onChange={(e) => handleChangeMatch(v.id, e.target.value)}
+                                    style={{
+                                      width: '100%',
+                                      padding: '6px 8px',
+                                      borderRadius: '8px',
+                                      border: '1px solid rgba(238,49,32,0.3)',
+                                      background: 'var(--bg)',
+                                      color: 'var(--text-primary)',
+                                      fontSize: '10px',
+                                      fontWeight: 600,
+                                    }}
+                                  >
+                                    <option value="">-- No Match --</option>
+                                    {matchingLines.length > 0 && (
+                                      <optgroup label="Matching Part Number">
+                                        {matchingLines.map((line: any) => (
+                                          <option key={line.id} value={line.id}>{getPoLabel(line)}</option>
+                                        ))}
+                                      </optgroup>
+                                    )}
+                                    {otherLines.length > 0 && (
+                                      <optgroup label="Other Open PO Lines">
+                                        {otherLines.map((line: any) => (
+                                          <option key={line.id} value={line.id}>{getPoLabel(line)}</option>
+                                        ))}
+                                      </optgroup>
+                                    )}
+                                  </select>
+                                  <div style={{ marginTop: '4px' }}>
+                                    <button
+                                      onClick={() => setEditingVehicleId(null)}
+                                      style={{ padding: '3px 8px', borderRadius: '6px', background: 'transparent', border: '1px solid #1e2d3d', color: 'var(--text-muted)', fontSize: '10px', fontWeight: 600 }}
+                                    >
+                                      Cancel
+                                    </button>
+                                  </div>
+                                  {isSaving && <div style={{ fontSize: '10px', color: 'var(--navy)', marginTop: '4px' }}>Saving...</div>}
+                                </div>
+                              )}
+                            </div>
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </div>
+                );
+              })}
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* ─── Export (Pending) Tab ──────────────────────────────── */}
       {tab === 'pending' && (
         <div>
           {vehicles.length === 0 && !exported && (
             <div style={{ textAlign: 'center', padding: '32px 0', color: 'var(--text-muted)' }}>
-              <div style={{ fontSize: '36px', marginBottom: '6px', opacity: 0.4 }}>✓</div>
+              <div style={{ fontSize: '36px', marginBottom: '6px', opacity: 0.4 }}>&#10003;</div>
               <div style={{ fontWeight: 600, fontSize: '13px' }}>All caught up - nothing to export</div>
             </div>
           )}
@@ -302,13 +583,14 @@ export default function ReportsPage() {
         </div>
       )}
 
+      {/* ─── Archive Tab ──────────────────────────────── */}
       {tab === 'archive' && (
         <div>
           {loadingArchive ? (
             <div style={{ textAlign: 'center', padding: '20px', color: 'var(--text-muted)' }}>Loading archive...</div>
           ) : Object.keys(archiveGroups).length === 0 ? (
             <div style={{ textAlign: 'center', padding: '32px 0', color: 'var(--text-muted)' }}>
-              <div style={{ fontSize: '36px', marginBottom: '6px', opacity: 0.4 }}>📁</div>
+              <div style={{ fontSize: '36px', marginBottom: '6px', opacity: 0.4 }}>&#128193;</div>
               <div style={{ fontWeight: 600, fontSize: '13px' }}>No exports yet</div>
             </div>
           ) : (
@@ -324,7 +606,7 @@ export default function ReportsPage() {
                         {date.toLocaleDateString([], { month: 'short', day: 'numeric', year: 'numeric' })} at {date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
                       </div>
                       <div style={{ fontSize: '11px', color: 'var(--text-muted)', marginTop: '2px' }}>
-                        {batch.length} vehicles — {customers.join(', ')}
+                        {batch.length} vehicles &mdash; {customers.join(', ')}
                       </div>
                     </div>
                     <button

@@ -101,9 +101,43 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ error: 'No PDF attachment found' }, { status: 400 });
     }
 
-    // Download the first (or largest) PDF
-    const targetPdf = pdfs.reduce((a, b) => a.size > b.size ? a : b);
-    const pdfBase64 = await getAttachment(messageId, targetPdf.attachmentId);
+    // Download ALL PDF attachments so Claude can find the PO in any of them
+    // Sort: filenames containing "PO" or "purchase" first, then by size descending
+    const sortedPdfs = [...pdfs].sort((a, b) => {
+      const aIsPO = /\b(po|purchase.?order)\b/i.test(a.filename) ? 1 : 0;
+      const bIsPO = /\b(po|purchase.?order)\b/i.test(b.filename) ? 1 : 0;
+      if (aIsPO !== bIsPO) return bIsPO - aIsPO;
+      return b.size - a.size;
+    });
+
+    // Build document content blocks for all PDFs
+    const documentBlocks: any[] = [];
+    const pdfFilenames: string[] = [];
+    for (const pdf of sortedPdfs) {
+      try {
+        const pdfBase64 = await getAttachment(messageId, pdf.attachmentId);
+        documentBlocks.push({
+          type: 'document',
+          source: {
+            type: 'base64',
+            media_type: 'application/pdf',
+            data: pdfBase64,
+          },
+        });
+        pdfFilenames.push(pdf.filename);
+      } catch (err) {
+        console.warn(`Failed to download attachment ${pdf.filename}:`, err);
+      }
+    }
+
+    if (documentBlocks.length === 0) {
+      return NextResponse.json({ error: 'Failed to download any PDF attachments' }, { status: 400 });
+    }
+
+    // Build the prompt — if multiple PDFs, tell Claude to find the PO
+    const multiPdfNote = documentBlocks.length > 1
+      ? `\n\nIMPORTANT: This email has ${documentBlocks.length} PDF attachments (${pdfFilenames.join(', ')}). One of them is the Purchase Order — find it and extract the data from it. Ignore non-PO attachments (spec sheets, drawings, BOLs, etc.).`
+      : '';
 
     // Send to Claude API for extraction using native PDF support (with retry)
     const anthropicRes = await callAnthropicWithRetry({
@@ -112,17 +146,10 @@ export async function POST(req: NextRequest) {
       messages: [{
         role: 'user',
         content: [
-          {
-            type: 'document',
-            source: {
-              type: 'base64',
-              media_type: 'application/pdf',
-              data: pdfBase64,
-            },
-          },
+          ...documentBlocks,
           {
             type: 'text',
-            text: PO_EXTRACTION_PROMPT,
+            text: PO_EXTRACTION_PROMPT + multiPdfNote,
           },
         ],
       }],
@@ -138,7 +165,7 @@ export async function POST(req: NextRequest) {
         subject,
         from_email: from,
         received_at: date ? new Date(date).toISOString() : null,
-        attachment_filename: targetPdf.filename,
+        attachment_filename: pdfFilenames.join(', '),
         status: 'error',
         error_message: `AI extraction failed: ${anthropicRes.status}`,
       }, { onConflict: 'message_id' });
@@ -169,7 +196,7 @@ export async function POST(req: NextRequest) {
         subject,
         from_email: from,
         received_at: date ? new Date(date).toISOString() : null,
-        attachment_filename: targetPdf.filename,
+        attachment_filename: pdfFilenames.join(', '),
         status: 'error',
         error_message: 'Failed to parse AI extraction',
         raw_extraction: { raw: aiText },
@@ -206,7 +233,7 @@ export async function POST(req: NextRequest) {
         from_email: from,
         received_at: date ? new Date(date).toISOString() : null,
         po_number: String(poNumber),
-        attachment_filename: targetPdf.filename,
+        attachment_filename: pdfFilenames.join(', '),
         status: 'error',
         error_message: 'AI extracted PO number but no line items — possible rate limit or degraded response',
         raw_extraction: extracted,
@@ -227,7 +254,7 @@ export async function POST(req: NextRequest) {
         from_email: from,
         received_at: date ? new Date(date).toISOString() : null,
         po_number: String(poNumber),
-        attachment_filename: targetPdf.filename,
+        attachment_filename: pdfFilenames.join(', '),
         status: 'error',
         error_message: `AI extracted ${extractedLines.length} line items but all prices are $0.00 — degraded response, try again`,
         raw_extraction: extracted,
@@ -312,7 +339,7 @@ export async function POST(req: NextRequest) {
         received_at: date ? new Date(date).toISOString() : null,
         po_number: String(poNumber),
         po_id: existingPO.id,
-        attachment_filename: targetPdf.filename,
+        attachment_filename: pdfFilenames.join(', '),
         status: 'pending',
         raw_extraction: extracted,
       }, { onConflict: 'message_id' });
@@ -395,7 +422,7 @@ export async function POST(req: NextRequest) {
         received_at: date ? new Date(date).toISOString() : null,
         po_number: String(poNumber),
         po_id: existingPO.id,
-        attachment_filename: targetPdf.filename,
+        attachment_filename: pdfFilenames.join(', '),
         status: 'imported',
         raw_extraction: extracted,
       }, { onConflict: 'message_id' });
@@ -464,7 +491,7 @@ export async function POST(req: NextRequest) {
           from_email: from,
           received_at: date ? new Date(date).toISOString() : null,
           po_number: String(poNumber),
-          attachment_filename: targetPdf.filename,
+          attachment_filename: pdfFilenames.join(', '),
           status: 'error',
           error_message: `Failed to create PO: ${poError?.message}`,
           raw_extraction: extracted,
@@ -501,7 +528,7 @@ export async function POST(req: NextRequest) {
         received_at: date ? new Date(date).toISOString() : null,
         po_number: String(poNumber),
         po_id: newPO.id,
-        attachment_filename: targetPdf.filename,
+        attachment_filename: pdfFilenames.join(', '),
         status: 'imported',
         raw_extraction: extracted,
       }, { onConflict: 'message_id' });
@@ -540,7 +567,7 @@ export async function POST(req: NextRequest) {
       from_email: from,
       received_at: date ? new Date(date).toISOString() : null,
       po_number: String(poNumber),
-      attachment_filename: targetPdf.filename,
+      attachment_filename: pdfFilenames.join(', '),
       status: 'pending',
       raw_extraction: extracted,
     }, { onConflict: 'message_id' });

@@ -62,6 +62,10 @@ export default function POsPage() {
   // NetSuite SO creation state
   const [creatingSOForPo, setCreatingSOForPo] = useState<string | null>(null);
   const [soResults, setSoResults] = useState<Record<string, any>>({});
+  // NetSuite Invoice state
+  const [selectedForInvoice, setSelectedForInvoice] = useState<Set<string>>(new Set());
+  const [creatingInvoices, setCreatingInvoices] = useState(false);
+  const [invoiceResults, setInvoiceResults] = useState<any>(null);
   // Catalog add state for unmatched parts
   const [addingToCatalog, setAddingToCatalog] = useState<string | null>(null); // part_number being added
   const [catalogAddResults, setCatalogAddResults] = useState<Record<string, 'added' | 'error'>>({});
@@ -559,6 +563,67 @@ export default function POsPage() {
     }
     setCreatingSOForPo(null);
   };
+
+  // Toggle PO selection for batch invoicing
+  const toggleInvoiceSelection = (poId: string) => {
+    setSelectedForInvoice(prev => {
+      const next = new Set(prev);
+      if (next.has(poId)) next.delete(poId);
+      else next.add(poId);
+      return next;
+    });
+  };
+
+  // Batch create invoices from selected POs
+  const createBatchInvoices = async () => {
+    if (selectedForInvoice.size === 0) return;
+    setCreatingInvoices(true);
+    setInvoiceResults(null);
+
+    // Get the NetSuite SO IDs for the selected POs
+    const salesOrderIds = pos
+      .filter(po => selectedForInvoice.has(po.id) && (po as any).netsuite_so_id)
+      .map(po => (po as any).netsuite_so_id);
+
+    try {
+      const res = await fetch('/api/netsuite/create-invoice', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ salesOrderIds }),
+      });
+      const data = await res.json();
+
+      if (!res.ok) {
+        setInvoiceResults({ error: data.error || 'Failed to create invoices' });
+      } else {
+        setInvoiceResults(data);
+        // Update local PO data with invoice info
+        if (data.results) {
+          for (const result of data.results) {
+            if (result.status === 'success' && result.invoiceId) {
+              setPos(prev => prev.map(po =>
+                po.id === result.poId
+                  ? { ...po, netsuite_invoice_id: result.invoiceId, netsuite_invoice_number: result.invoiceNumber } as any
+                  : po
+              ));
+            }
+          }
+        }
+        setSelectedForInvoice(new Set());
+      }
+    } catch (err: any) {
+      setInvoiceResults({ error: err.message || 'Network error' });
+    }
+    setCreatingInvoices(false);
+  };
+
+  // Get POs that are eligible for invoicing (have SO, have installed qty, no invoice yet)
+  const invoiceablePOs = pos.filter(po => {
+    const hasNsSO = !!(po as any).netsuite_so_id;
+    const noInvoice = !(po as any).netsuite_invoice_id;
+    const hasInstalled = po.line_items.some(li => li.installed > 0);
+    return hasNsSO && noInvoice && hasInstalled;
+  });
 
   const importAllNewPOs = async () => {
     const newEmails = emailEmails.filter(e => !e.alreadyImported && !e.alreadyInSystem && e.pdfs.length > 0 && !emailImportResults[e.messageId]);
@@ -1210,6 +1275,69 @@ export default function POsPage() {
         </div>
       )}
 
+      {/* Batch Invoice Controls */}
+      {invoiceablePOs.length > 0 && (
+        <div style={{ background: '#141e2b', border: '1px solid rgba(167,139,250,0.25)', borderRadius: '10px', padding: '10px 12px', marginBottom: '10px' }}>
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+            <div>
+              <div style={{ fontSize: '12px', fontWeight: 700, color: '#a78bfa' }}>
+                Batch Invoice {selectedForInvoice.size > 0 ? `(${selectedForInvoice.size} selected)` : ''}
+              </div>
+              <div style={{ fontSize: '10px', color: '#4a5f78', marginTop: '2px' }}>
+                {invoiceablePOs.length} PO{invoiceablePOs.length !== 1 ? 's' : ''} ready to invoice (have SO + installed qty)
+              </div>
+            </div>
+            <div style={{ display: 'flex', gap: '6px' }}>
+              <button
+                onClick={() => {
+                  if (selectedForInvoice.size === invoiceablePOs.length) {
+                    setSelectedForInvoice(new Set());
+                  } else {
+                    setSelectedForInvoice(new Set(invoiceablePOs.map(p => p.id)));
+                  }
+                }}
+                style={{ padding: '5px 10px', borderRadius: '6px', background: 'rgba(167,139,250,0.1)', border: '1px solid rgba(167,139,250,0.25)', color: '#a78bfa', fontSize: '10px', fontWeight: 700 }}
+              >
+                {selectedForInvoice.size === invoiceablePOs.length ? 'Deselect All' : 'Select All'}
+              </button>
+              {selectedForInvoice.size > 0 && (
+                <button
+                  onClick={createBatchInvoices}
+                  disabled={creatingInvoices}
+                  style={{ padding: '5px 12px', borderRadius: '6px', background: '#a78bfa', border: 'none', color: '#fff', fontSize: '10px', fontWeight: 700 }}
+                >
+                  {creatingInvoices ? 'Creating...' : `Create ${selectedForInvoice.size} Invoice${selectedForInvoice.size !== 1 ? 's' : ''}`}
+                </button>
+              )}
+            </div>
+          </div>
+
+          {invoiceResults && (
+            <div style={{ marginTop: '8px', padding: '8px', borderRadius: '6px', background: invoiceResults.error ? 'rgba(239,68,68,0.06)' : 'rgba(52,211,153,0.06)', border: invoiceResults.error ? '1px solid rgba(239,68,68,0.15)' : '1px solid rgba(52,211,153,0.15)' }}>
+              {invoiceResults.error ? (
+                <div style={{ fontSize: '11px', color: '#ef4444' }}>{invoiceResults.error}</div>
+              ) : invoiceResults.summary ? (
+                <div style={{ fontSize: '11px' }}>
+                  <span style={{ color: '#34d399', fontWeight: 700 }}>{invoiceResults.summary.success} created</span>
+                  {invoiceResults.summary.errors > 0 && <span style={{ color: '#ef4444', marginLeft: '8px' }}>{invoiceResults.summary.errors} failed</span>}
+                  {invoiceResults.summary.skipped > 0 && <span style={{ color: '#fbbf24', marginLeft: '8px' }}>{invoiceResults.summary.skipped} skipped</span>}
+                  {invoiceResults.results?.filter((r: any) => r.status === 'success').map((r: any) => (
+                    <div key={r.poId} style={{ fontSize: '10px', color: '#4a5f78', marginTop: '2px' }}>
+                      PO #{r.poNumber} → Invoice #{r.invoiceNumber}
+                    </div>
+                  ))}
+                  {invoiceResults.results?.filter((r: any) => r.status === 'error').map((r: any) => (
+                    <div key={r.poId || r.soId} style={{ fontSize: '10px', color: '#ef4444', marginTop: '2px' }}>
+                      PO #{r.poNumber || '?'}: {r.error}
+                    </div>
+                  ))}
+                </div>
+              ) : null}
+            </div>
+          )}
+        </div>
+      )}
+
       {filteredPos.map((po) => {
         const totalQty = po.line_items.reduce((s, l) => s + l.quantity, 0);
         const totalInstalled = po.line_items.reduce((s, l) => s + l.installed, 0);
@@ -1228,16 +1356,43 @@ export default function POsPage() {
             <div style={{ background: '#141e2b', border: '1px solid #1e2d3d', borderRadius: '10px', marginBottom: '6px', overflow: 'hidden' }}>
               <div onClick={() => toggleExpand(po.id)} style={{ padding: '12px', cursor: 'pointer' }}>
                 <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'start' }}>
-                  <div>
-                    <div style={{ fontWeight: 800, fontSize: '15px' }}>PO #{po.po_number}</div>
-                    <div style={{ fontSize: '12px', color: '#4a5f78', marginTop: '1px' }}>
-                      {po.customer} • {po.line_items.length} item{po.line_items.length !== 1 ? 's' : ''}
-                      {po.status === 'complete' && <span style={{ color: '#4ade80', marginLeft: '6px' }}>✓ Complete</span>}
+                  <div style={{ display: 'flex', alignItems: 'start', gap: '8px' }}>
+                    {/* Invoice checkbox — only show for invoiceable POs */}
+                    {(() => {
+                      const isInvoiceable = invoiceablePOs.some(p => p.id === po.id);
+                      const hasInvoice = !!(po as any).netsuite_invoice_id;
+                      if (isInvoiceable) {
+                        return (
+                          <input
+                            type="checkbox"
+                            checked={selectedForInvoice.has(po.id)}
+                            onChange={(e) => { e.stopPropagation(); toggleInvoiceSelection(po.id); }}
+                            onClick={(e) => e.stopPropagation()}
+                            style={{ marginTop: '4px', width: '16px', height: '16px', accentColor: '#a78bfa', cursor: 'pointer', flexShrink: 0 }}
+                          />
+                        );
+                      }
+                      if (hasInvoice) {
+                        return (
+                          <div style={{ marginTop: '3px', width: '16px', height: '16px', borderRadius: '4px', background: 'rgba(52,211,153,0.15)', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}>
+                            <span style={{ fontSize: '10px', color: '#34d399' }}>$</span>
+                          </div>
+                        );
+                      }
+                      return null;
+                    })()}
+                    <div>
+                      <div style={{ fontWeight: 800, fontSize: '15px' }}>PO #{po.po_number}</div>
+                      <div style={{ fontSize: '12px', color: '#4a5f78', marginTop: '1px' }}>
+                        {po.customer} • {po.line_items.length} item{po.line_items.length !== 1 ? 's' : ''}
+                        {po.status === 'complete' && <span style={{ color: '#4ade80', marginLeft: '6px' }}>&#10003; Complete</span>}
+                        {(po as any).netsuite_invoice_number && <span style={{ color: '#34d399', marginLeft: '6px' }}>INV #{(po as any).netsuite_invoice_number}</span>}
+                      </div>
                     </div>
                   </div>
                   <div style={{ textAlign: 'right' }}>
                     <div style={{ fontSize: '14px', fontWeight: 800, color: '#60a5fa' }}>{fmt(totalValue)}</div>
-                    <div style={{ fontSize: '10px', color: '#4a5f78', marginTop: '1px' }}>{isExpanded ? '▲' : '▼'} Details</div>
+                    <div style={{ fontSize: '10px', color: '#4a5f78', marginTop: '1px' }}>{isExpanded ? '&#9650;' : '&#9660;'} Details</div>
                   </div>
                 </div>
                 <div style={{ marginTop: '8px' }}>

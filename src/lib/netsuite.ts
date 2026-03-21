@@ -499,6 +499,128 @@ export async function findItems(partNumbers: string[]): Promise<Record<string, {
   return map;
 }
 
+/**
+ * Create an Invoice in NetSuite by transforming a Sales Order
+ * Uses: POST /services/rest/record/v1/invoice
+ * The transform endpoint creates an invoice from an existing SO
+ * If installedQuantities is provided, only those quantities are billed
+ */
+export async function createInvoiceFromSO(payload: {
+  salesOrderId: string;
+  installedQuantities?: Record<number, number>; // lineNumber -> installed qty
+  memo?: string;
+}): Promise<{
+  success: boolean;
+  invoiceId?: string;
+  invoiceNumber?: string;
+  error?: string;
+}> {
+  const config = getConfig();
+  const baseUrl = getBaseUrl(config.accountId);
+
+  // Step 1: Transform the Sales Order into an Invoice
+  // NetSuite REST API: POST /invoice with transform params
+  const transformUrl = `${baseUrl}/services/rest/record/v1/invoice?replace=item&transform=salesOrder&id=${payload.salesOrderId}`;
+  const { oauth, token } = createOAuth(config);
+  const authHeader = getAuthHeader(oauth, token, { url: transformUrl, method: 'POST' });
+
+  // First, get the SO line items to build the invoice with installed quantities
+  let lineOverrides: any[] | undefined;
+
+  if (payload.installedQuantities && Object.keys(payload.installedQuantities).length > 0) {
+    // Get SO line details first to map line numbers to items
+    try {
+      const linesQuery = `
+        SELECT tl.linesequencenumber, tl.item, tl.quantity, tl.rate
+        FROM transactionline tl
+        WHERE tl.transaction = ${payload.salesOrderId}
+        AND tl.mainline = 'F'
+        AND tl.taxline = 'F'
+        ORDER BY tl.linesequencenumber
+      `;
+      const linesResult = await suiteqlQuery(linesQuery);
+      const soLines = linesResult?.items || [];
+
+      lineOverrides = soLines
+        .filter((line: any) => {
+          const lineNum = parseInt(line.linesequencenumber);
+          const installedQty = payload.installedQuantities![lineNum];
+          return installedQty !== undefined && installedQty > 0;
+        })
+        .map((line: any) => {
+          const lineNum = parseInt(line.linesequencenumber);
+          return {
+            item: { id: line.item },
+            quantity: payload.installedQuantities![lineNum],
+            rate: parseFloat(line.rate || '0'),
+          };
+        });
+    } catch (e) {
+      console.warn('Could not fetch SO lines for partial invoice, will invoice full SO:', e);
+    }
+  }
+
+  const body: any = {};
+  if (payload.memo) {
+    body.memo = payload.memo;
+  }
+  if (lineOverrides && lineOverrides.length > 0) {
+    body.item = { items: lineOverrides };
+  }
+
+  try {
+    const response = await fetch(transformUrl, {
+      method: 'POST',
+      headers: {
+        'Authorization': authHeader,
+        'Content-Type': 'application/json',
+        'Prefer': 'respondAsync=false',
+      },
+      body: JSON.stringify(body),
+    });
+
+    if (!response.ok) {
+      const text = await response.text();
+      console.error('NetSuite create invoice error:', text);
+      return { success: false, error: `NetSuite error (${response.status}): ${text}` };
+    }
+
+    const location = response.headers.get('Location');
+    let invoiceId = '';
+
+    if (location) {
+      const match = location.match(/\/(\d+)$/);
+      invoiceId = match?.[1] || '';
+    }
+
+    let invoiceNumber = '';
+    try {
+      const result = await response.json();
+      invoiceId = invoiceId || result.id?.toString() || '';
+      invoiceNumber = result.tranId || result.tranid || '';
+    } catch {
+      // 204 No Content
+    }
+
+    if (invoiceId && !invoiceNumber) {
+      try {
+        const lookup = await suiteqlQuery(`SELECT tranid FROM transaction WHERE id = ${invoiceId}`);
+        invoiceNumber = lookup?.items?.[0]?.tranid || '';
+      } catch {
+        // Non-critical
+      }
+    }
+
+    return {
+      success: true,
+      invoiceId,
+      invoiceNumber,
+    };
+  } catch (e: any) {
+    return { success: false, error: `Failed to create invoice: ${e.message}` };
+  }
+}
+
 export async function getSalesOrderPdf(salesOrderId: string): Promise<{
   success: boolean;
   pdfBase64?: string;

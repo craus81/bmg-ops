@@ -7,6 +7,13 @@ export const metadata: Metadata = {
   title: 'BMG FleetSuite',
   description: 'BMG Fleet Installations Operations',
   manifest: '/manifest.json',
+  icons: {
+    icon: [
+      { url: '/icon.svg', type: 'image/svg+xml' },
+      { url: '/icon-192.png', sizes: '192x192', type: 'image/png' },
+    ],
+    apple: '/icon-192.png',
+  },
   appleWebApp: {
     capable: true,
     statusBarStyle: 'black-translucent',
