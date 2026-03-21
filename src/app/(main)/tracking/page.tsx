@@ -135,11 +135,14 @@ export default function TrackingPage() {
   const deleteVehicle = async (vehicleId: string) => {
     setDeletingId(vehicleId);
     try {
-      // Delete status history first (FK)
-      await supabase.from('vehicle_status_history').delete().eq('vehicle_id', vehicleId);
-      const { error } = await supabase.from('fleet_checkins').delete().eq('id', vehicleId);
-      if (error) {
-        alert('Delete failed: ' + error.message);
+      const res = await fetch('/api/vehicles/delete', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ vehicleId }),
+      });
+      const data = await res.json();
+      if (!res.ok) {
+        alert('Delete failed: ' + (data.error || 'Unknown error'));
       } else {
         setVehicles(prev => prev.filter(v => v.id !== vehicleId));
         setExpandedId(null);
@@ -155,12 +158,14 @@ export default function TrackingPage() {
   const archiveVehicle = async (vehicleId: string, unarchive = false) => {
     setArchivingId(vehicleId);
     try {
-      const { error } = await supabase
-        .from('fleet_checkins')
-        .update({ archived_at: unarchive ? null : new Date().toISOString() })
-        .eq('id', vehicleId);
-      if (error) {
-        alert('Archive failed: ' + error.message);
+      const res = await fetch('/api/vehicles/archive', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ vehicleId, unarchive }),
+      });
+      const data = await res.json();
+      if (!res.ok) {
+        alert('Archive failed: ' + (data.error || 'Unknown error'));
       } else {
         setVehicles(prev => prev.map(v =>
           v.id === vehicleId ? { ...v, archived_at: unarchive ? null : new Date().toISOString() } as any : v
