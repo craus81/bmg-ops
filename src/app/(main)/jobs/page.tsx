@@ -173,7 +173,7 @@ export default function MyJobsPage() {
       .single();
 
     if (invoiceErr || !invoice) {
-      alert('Failed to create invoice: ' + (invoiceErr?.message || 'Unknown error'));
+      alert('Failed to create bill: ' + (invoiceErr?.message || 'Unknown error'));
       setSubmittingInvoice(false);
       return;
     }
@@ -198,7 +198,7 @@ export default function MyJobsPage() {
         .insert(admins.map((admin: any) => ({
           user_id: admin.id,
           type: 'invoice_submitted',
-          title: `Invoice #${invoiceNumber.trim()} from ${companyName}`,
+          title: `Bill #${invoiceNumber.trim()} from ${companyName}`,
           body: `${selectedJobs.size} vehicle${selectedJobs.size !== 1 ? 's' : ''} included`,
         })));
 
@@ -283,9 +283,9 @@ export default function MyJobsPage() {
     return (
       <div style={{ textAlign: 'center', padding: '40px 0' }}>
         <div style={{ fontSize: '48px', marginBottom: '12px' }}>✅</div>
-        <div style={{ fontSize: '18px', fontWeight: 800, color: 'var(--text-primary)' }}>Invoice Submitted</div>
+        <div style={{ fontSize: '18px', fontWeight: 800, color: 'var(--text-primary)' }}>Bill Submitted</div>
         <div style={{ fontSize: '13px', color: 'var(--text-muted)', marginTop: '6px' }}>
-          Invoice #{invoiceNumber} with {selectedJobs.size} vehicle{selectedJobs.size !== 1 ? 's' : ''} has been submitted for review.
+          Bill #{invoiceNumber} with {selectedJobs.size} vehicle{selectedJobs.size !== 1 ? 's' : ''} has been submitted for review.
         </div>
         <button
           onClick={resetInvoiceMode}
@@ -304,7 +304,7 @@ export default function MyJobsPage() {
     return (
       <div>
         <div style={{ fontSize: '11px', fontWeight: 700, color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.8px', marginBottom: '12px' }}>
-          Create Invoice
+          Create Bill
         </div>
 
         {invoiceableJobs.length === 0 ? (
@@ -422,7 +422,7 @@ export default function MyJobsPage() {
                 opacity: submittingInvoice || selectedJobs.size === 0 || !invoiceNumber.trim() ? 0.4 : 1,
               }}
             >
-              {submittingInvoice ? 'Submitting...' : `Submit Invoice (${selectedJobs.size} job${selectedJobs.size !== 1 ? 's' : ''})`}
+              {submittingInvoice ? 'Submitting...' : `Submit Bill (${selectedJobs.size} job${selectedJobs.size !== 1 ? 's' : ''})`}
             </button>
           </>
         )}
@@ -458,7 +458,7 @@ export default function MyJobsPage() {
             display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '8px',
           }}
         >
-          💰 Create Invoice ({invoiceableJobs.length} job{invoiceableJobs.length !== 1 ? 's' : ''} ready)
+          💰 Create Bill ({invoiceableJobs.length} job{invoiceableJobs.length !== 1 ? 's' : ''} ready)
         </button>
       )}
 

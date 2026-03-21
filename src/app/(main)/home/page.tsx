@@ -242,7 +242,7 @@ function DashboardOverview() {
       }}>
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'start' }}>
           <div>
-            <div style={{ fontSize: '10px', fontWeight: 700, color: 'var(--warning)', textTransform: 'uppercase', letterSpacing: '0.8px' }}>Outstanding Invoices</div>
+            <div style={{ fontSize: '10px', fontWeight: 700, color: 'var(--warning)', textTransform: 'uppercase', letterSpacing: '0.8px' }}>Outstanding Bills</div>
             <div style={{ fontSize: '28px', fontWeight: 800, color: theme.textPrimary, marginTop: '4px', letterSpacing: '-1px' }}>{stats.unpaidInvoiceCount}</div>
             <div style={{ fontSize: '11px', color: theme.textMuted, marginTop: '2px' }}>
               Approved, awaiting payment
@@ -261,7 +261,7 @@ function DashboardOverview() {
             }}>
               <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
                 <div>
-                  <div style={{ fontWeight: 800, fontSize: '13px' }}>Invoice #{inv.invoice_number}</div>
+                  <div style={{ fontWeight: 800, fontSize: '13px' }}>Bill #{inv.invoice_number}</div>
                   <div style={{ color: theme.textMuted, marginTop: '1px' }}>{inv.company_name} • {inv.vehicle_count} vehicle{inv.vehicle_count !== 1 ? 's' : ''}</div>
                 </div>
                 <div style={{ fontSize: '10px', color: theme.textMuted }}>
@@ -282,7 +282,7 @@ function DashboardOverview() {
         }}>
           <div style={{ fontSize: '10px', fontWeight: 700, color: 'var(--success)', textTransform: 'uppercase', letterSpacing: '0.5px' }}>Paid to Date</div>
           <div style={{ fontSize: '22px', fontWeight: 800, color: theme.textPrimary, marginTop: '4px', letterSpacing: '-0.5px' }}>{fmt(stats.paidTotal)}</div>
-          <div style={{ fontSize: '10px', color: theme.textMuted, marginTop: '2px' }}>{stats.paidCount} invoice{stats.paidCount !== 1 ? 's' : ''}</div>
+          <div style={{ fontSize: '10px', color: theme.textMuted, marginTop: '2px' }}>{stats.paidCount} bill{stats.paidCount !== 1 ? 's' : ''}</div>
         </div>
 
         {/* Pending Review */}
@@ -292,7 +292,7 @@ function DashboardOverview() {
         }}>
           <div style={{ fontSize: '10px', fontWeight: 700, color: theme.textMuted, textTransform: 'uppercase', letterSpacing: '0.5px' }}>Pending Review</div>
           <div style={{ fontSize: '22px', fontWeight: 800, color: stats.pendingInvoiceCount > 0 ? 'var(--warning)' : theme.textPrimary, marginTop: '4px', letterSpacing: '-0.5px' }}>{stats.pendingInvoiceCount}</div>
-          <div style={{ fontSize: '10px', color: theme.textMuted, marginTop: '2px' }}>invoice{stats.pendingInvoiceCount !== 1 ? 's' : ''} to review</div>
+          <div style={{ fontSize: '10px', color: theme.textMuted, marginTop: '2px' }}>bill{stats.pendingInvoiceCount !== 1 ? 's' : ''} to review</div>
         </button>
       </div>
 
@@ -327,8 +327,8 @@ function DashboardOverview() {
         }}>
           <div style={{ width: '40px', height: '40px', borderRadius: '10px', background: 'rgba(238,49,32,0.08)', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: '18px', flexShrink: 0 }}>📋</div>
           <div>
-            <div style={{ fontWeight: 700, fontSize: '14px', color: theme.textPrimary }}>Jobs & Invoices</div>
-            <div style={{ fontSize: '11px', color: theme.textMuted, marginTop: '1px' }}>Review jobs, manage invoices</div>
+            <div style={{ fontWeight: 700, fontSize: '14px', color: theme.textPrimary }}>Jobs & Bills</div>
+            <div style={{ fontSize: '11px', color: theme.textMuted, marginTop: '1px' }}>Review jobs, manage bills</div>
           </div>
         </button>
         <button onClick={() => router.push('/admin/schedule')} style={{

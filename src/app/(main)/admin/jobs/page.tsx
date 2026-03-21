@@ -133,7 +133,7 @@ export default function AllJobsPage() {
     const invoice = invoices.find((i) => i.id === invoiceId);
     await supabase.from('invoices').update({ status: 'approved', review_notes: null, reviewed_by: user.id, reviewed_at: new Date().toISOString() }).eq('id', invoiceId);
     if (invoice) {
-      await supabase.from('notifications').insert({ user_id: invoice.submitted_by, type: 'invoice_approved', title: `Invoice #${invoice.invoice_number} Approved`, body: `Your invoice for ${invoice.vehicles.length} vehicle${invoice.vehicles.length !== 1 ? 's' : ''} has been approved.` });
+      await supabase.from('notifications').insert({ user_id: invoice.submitted_by, type: 'invoice_approved', title: `Bill #${invoice.invoice_number} Approved`, body: `Your bill for ${invoice.vehicles.length} vehicle${invoice.vehicles.length !== 1 ? 's' : ''} has been approved.` });
       if (invoice.submitter_email) {
         try {
           const { data: { session } } = await supabase.auth.getSession();
@@ -157,7 +157,7 @@ export default function AllJobsPage() {
     await supabase.from('invoices').update({ status: 'denied', review_notes: denyNotes.trim(), reviewed_by: user.id, reviewed_at: new Date().toISOString() }).eq('id', invoiceId);
     await supabase.from('invoice_vehicles').delete().eq('invoice_id', invoiceId);
     if (invoice) {
-      await supabase.from('notifications').insert({ user_id: invoice.submitted_by, type: 'invoice_denied', title: `Invoice #${invoice.invoice_number} Issue`, body: denyNotes.trim() });
+      await supabase.from('notifications').insert({ user_id: invoice.submitted_by, type: 'invoice_denied', title: `Bill #${invoice.invoice_number} Issue`, body: denyNotes.trim() });
       if (invoice.submitter_email) {
         try {
           const { data: { session } } = await supabase.auth.getSession();
@@ -193,7 +193,7 @@ export default function AllJobsPage() {
       await supabase.from('notifications').insert({
         user_id: invoice.submitted_by,
         type: 'invoice_paid',
-        title: `Invoice #${invoice.invoice_number} Paid`,
+        title: `Bill #${invoice.invoice_number} Paid`,
         body: `Payment of $${parseFloat(payAmount).toFixed(2)} via ${payMethod} on ${new Date(payDate + 'T12:00:00').toLocaleDateString([], { month: 'short', day: 'numeric', year: 'numeric' })}`,
       });
     }
@@ -264,7 +264,7 @@ export default function AllJobsPage() {
       <div style={{ display: 'flex', gap: '4px', marginBottom: '14px', background: 'var(--card)', borderRadius: '10px', padding: '3px' }}>
         <button onClick={() => setTab('jobs')} style={{ flex: 1, padding: '10px', borderRadius: '8px', fontSize: '13px', fontWeight: 700, background: tab === 'jobs' ? 'var(--tab-active-bg)' : 'transparent', border: 'none', color: tab === 'jobs' ? 'var(--text-primary)' : 'var(--text-muted)' }}>📋 Jobs</button>
         <button onClick={() => setTab('invoices')} style={{ flex: 1, padding: '10px', borderRadius: '8px', fontSize: '13px', fontWeight: 700, background: tab === 'invoices' ? 'var(--tab-active-bg)' : 'transparent', border: 'none', color: tab === 'invoices' ? 'var(--text-primary)' : 'var(--text-muted)', position: 'relative' }}>
-          💰 Invoices
+          💰 Bills
           {pendingInvoiceCount > 0 && <span style={{ position: 'absolute', top: '4px', right: '8px', width: '18px', height: '18px', borderRadius: '50%', background: 'var(--orange)', color: '#fff', fontSize: '10px', fontWeight: 800, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>{pendingInvoiceCount}</span>}
         </button>
         <button onClick={() => setTab('bulk')} style={{ flex: 1, padding: '10px', borderRadius: '8px', fontSize: '13px', fontWeight: 700, background: tab === 'bulk' ? 'var(--tab-active-bg)' : 'transparent', border: 'none', color: tab === 'bulk' ? 'var(--text-primary)' : 'var(--text-muted)' }}>📤 Bulk VIN</button>
@@ -314,7 +314,7 @@ export default function AllJobsPage() {
       {tab === 'invoices' && (
         <div>
           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '12px' }}>
-            <div style={{ fontSize: '11px', fontWeight: 700, color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.8px' }}>Invoices ({filteredInvoices.length})</div>
+            <div style={{ fontSize: '11px', fontWeight: 700, color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.8px' }}>Bills ({filteredInvoices.length})</div>
             {pendingInvoiceCount > 0 && <div style={{ padding: '4px 10px', borderRadius: '8px', fontSize: '11px', fontWeight: 700, background: 'var(--warning-bg)', border: '1px solid var(--warning-border)', color: 'var(--warning)' }}>{pendingInvoiceCount} pending</div>}
           </div>
           <div style={{ display: 'flex', gap: '4px', marginBottom: '12px' }}>
@@ -322,7 +322,7 @@ export default function AllJobsPage() {
               <button key={f.id} onClick={() => setInvoiceFilter(f.id)} style={{ padding: '6px 12px', borderRadius: '8px', fontSize: '11px', fontWeight: 700, background: invoiceFilter === f.id ? 'var(--tab-active-bg)' : 'transparent', border: invoiceFilter === f.id ? '1px solid var(--tab-active-border)' : '1px solid var(--border)', color: invoiceFilter === f.id ? 'var(--tab-active-color)' : 'var(--text-muted)' }}>{f.label}</button>
             ))}
           </div>
-          {filteredInvoices.length === 0 && <div style={{ textAlign: 'center', padding: '32px 0', color: 'var(--text-muted)' }}><div style={{ fontSize: '36px', marginBottom: '6px', opacity: 0.4 }}>{invoiceFilter === 'pending' ? '✅' : '💰'}</div><div style={{ fontWeight: 600, fontSize: '13px' }}>{invoiceFilter === 'pending' ? 'No pending invoices — all caught up!' : `No ${invoiceFilter} invoices`}</div></div>}
+          {filteredInvoices.length === 0 && <div style={{ textAlign: 'center', padding: '32px 0', color: 'var(--text-muted)' }}><div style={{ fontSize: '36px', marginBottom: '6px', opacity: 0.4 }}>{invoiceFilter === 'pending' ? '✅' : '💰'}</div><div style={{ fontWeight: 600, fontSize: '13px' }}>{invoiceFilter === 'pending' ? 'No pending bills — all caught up!' : `No ${invoiceFilter} bills`}</div></div>}
           <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
             {filteredInvoices.map((inv) => {
               const isExpanded = expandedInvoice === inv.id;
@@ -338,7 +338,7 @@ export default function AllJobsPage() {
                   <button onClick={() => { setExpandedInvoice(isExpanded ? null : inv.id); setDenyNotes(''); }} style={{ width: '100%', padding: '14px', textAlign: 'left', background: 'transparent', border: 'none', color: 'var(--text-primary)' }}>
                     <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'start' }}>
                       <div>
-                        <div style={{ fontWeight: 800, fontSize: '15px' }}>Invoice #{inv.invoice_number}</div>
+                        <div style={{ fontWeight: 800, fontSize: '15px' }}>Bill #{inv.invoice_number}</div>
                         <div style={{ fontSize: '12px', color: 'var(--text-muted)', marginTop: '2px' }}>🏢 {inv.company_name} • {inv.submitter_name}</div>
                         <div style={{ fontSize: '11px', color: 'var(--text-muted)', marginTop: '2px' }}>{inv.vehicles.length} vehicle{inv.vehicles.length !== 1 ? 's' : ''}{inv.file_name ? ` • 📎 ${inv.file_name}` : ''}</div>
                       </div>
