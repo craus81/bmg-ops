@@ -68,6 +68,7 @@ export default function FleetPage() {
   const [proofs, setProofs] = useState<GraphicsProof[]>([]);
   const [proofLoading, setProofLoading] = useState(false);
   const [selectedProof, setSelectedProof] = useState<GraphicsProof | null>(null);
+  const [proofSearch, setProofSearch] = useState('');
 
   // Final
   const [saving, setSaving] = useState(false);
@@ -226,12 +227,14 @@ export default function FleetPage() {
   const selectSalesOrder = (order: NetsuiteSalesOrder) => {
     setSelectedOrder(order);
     setStep(2);
+    setProofSearch(order.customer_name || '');
     loadProofs(order.customer_name);
   };
 
   const skipSalesOrder = () => {
     setSelectedOrder(null);
     setStep(2);
+    setProofSearch('');
     loadProofs('');
   };
 
@@ -677,6 +680,40 @@ export default function FleetPage() {
         <div style={{ fontSize: '11px', fontWeight: 700, color: theme.textMuted, textTransform: 'uppercase', letterSpacing: '0.5px', marginBottom: '8px' }}>
           Select Graphics Proof
         </div>
+
+        {/* Proof search — search by end user / different customer */}
+        <div style={{ display: 'flex', gap: '6px', marginBottom: '10px' }}>
+          <input
+            type="text"
+            value={proofSearch}
+            onChange={(e) => setProofSearch(e.target.value)}
+            placeholder="Search by end user name (e.g. Jerry Kelly)"
+            onKeyDown={(e) => {
+              if (e.key === 'Enter' && proofSearch.trim()) loadProofs(proofSearch.trim());
+            }}
+            style={{
+              flex: 1, padding: '10px 12px', borderRadius: '10px',
+              border: `1px solid ${theme.border}`, background: theme.card,
+              color: theme.textPrimary, fontSize: '13px', fontWeight: 600,
+            }}
+          />
+          <button
+            onClick={() => loadProofs(proofSearch.trim())}
+            style={{
+              padding: '10px 14px', borderRadius: '10px', fontWeight: 700, fontSize: '13px',
+              background: theme.navy, color: '#fff', border: 'none', whiteSpace: 'nowrap',
+            }}
+          >Search</button>
+        </div>
+        {selectedOrder?.customer_name && proofSearch && proofSearch !== selectedOrder.customer_name && (
+          <button
+            onClick={() => { setProofSearch(''); loadProofs(selectedOrder.customer_name); }}
+            style={{
+              marginBottom: '10px', padding: '6px 10px', borderRadius: '8px', fontSize: '11px', fontWeight: 600,
+              background: 'transparent', border: `1px solid ${theme.border}`, color: theme.textMuted,
+            }}
+          >Reset to {selectedOrder.customer_name}</button>
+        )}
 
         {proofLoading ? (
           <div style={{ textAlign: 'center', padding: '20px 0' }}>

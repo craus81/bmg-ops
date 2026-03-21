@@ -26,6 +26,11 @@ export default function ReportsPage() {
   const [savingMatch, setSavingMatch] = useState<string | null>(null);
   const [matchMessage, setMatchMessage] = useState<{ type: 'success' | 'error'; text: string } | null>(null);
 
+  // Direct invoice state
+  const [selectedForInvoice, setSelectedForInvoice] = useState<Set<string>>(new Set());
+  const [creatingInvoice, setCreatingInvoice] = useState(false);
+  const [invoiceResults, setInvoiceResults] = useState<any>(null);
+
   useEffect(() => {
     if (user) {
       loadReview();
@@ -171,6 +176,61 @@ export default function ReportsPage() {
     if (!vehicle.po_line_items) return 'No match';
     var po = vehicle.po_line_items.purchase_orders;
     return `PO #${po?.po_number || '?'} — ${vehicle.po_line_items.part_number}`;
+  };
+
+  // ─── Direct Invoice Functions ──────────────────────────────
+
+  var toggleInvoiceSelect = (vehicleId: string) => {
+    setSelectedForInvoice(prev => {
+      var next = new Set(prev);
+      if (next.has(vehicleId)) next.delete(vehicleId);
+      else next.add(vehicleId);
+      return next;
+    });
+  };
+
+  var selectAllForInvoice = (customer: string) => {
+    var custVehicles = reviewGrouped[customer] || [];
+    // Only select vehicles that don't have a PO match and haven't been invoiced
+    var eligibleIds = custVehicles
+      .filter((v: any) => !v.po_line_item_id && !v.netsuite_invoice_id)
+      .map((v: any) => v.id);
+
+    setSelectedForInvoice(prev => {
+      var next = new Set(prev);
+      var allSelected = eligibleIds.every((id: string) => next.has(id));
+      if (allSelected) {
+        eligibleIds.forEach((id: string) => next.delete(id));
+      } else {
+        eligibleIds.forEach((id: string) => next.add(id));
+      }
+      return next;
+    });
+  };
+
+  var handleCreateDirectInvoice = async () => {
+    if (selectedForInvoice.size === 0) return;
+    setCreatingInvoice(true);
+    setInvoiceResults(null);
+
+    try {
+      var res = await fetch('/api/netsuite/invoice-vehicles', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ vehicleIds: Array.from(selectedForInvoice) }),
+      });
+
+      var data = await res.json();
+      setInvoiceResults(data);
+
+      if (data.results?.some((r: any) => r.status === 'success')) {
+        setSelectedForInvoice(new Set());
+        await loadReview();
+      }
+    } catch (e: any) {
+      setInvoiceResults({ error: e.message || 'Failed to create invoices' });
+    }
+    setCreatingInvoice(false);
   };
 
   // ─── Export Functions ──────────────────────────────
@@ -397,19 +457,54 @@ export default function ReportsPage() {
           ) : (
             <div>
               {/* Summary banner */}
-              <div style={{ padding: '10px 12px', background: 'var(--card)', border: '1px solid #1e2d3d', borderRadius: '10px', marginBottom: '12px', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                <div>
-                  <div style={{ fontWeight: 800, fontSize: '14px' }}>{reviewVehicles.length} vehicles pending</div>
-                  <div style={{ fontSize: '11px', color: 'var(--text-muted)', marginTop: '2px' }}>
-                    {reviewVehicles.length - unmatchedCount} matched &middot; {unmatchedCount > 0 ? <span style={{ color: '#fbbf24' }}>{unmatchedCount} unmatched</span> : <span style={{ color: 'var(--success)' }}>all matched</span>}
+              <div style={{ padding: '10px 12px', background: 'var(--card)', border: '1px solid #1e2d3d', borderRadius: '10px', marginBottom: '12px' }}>
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                  <div>
+                    <div style={{ fontWeight: 800, fontSize: '14px' }}>{reviewVehicles.length} vehicles pending</div>
+                    <div style={{ fontSize: '11px', color: 'var(--text-muted)', marginTop: '2px' }}>
+                      {reviewVehicles.length - unmatchedCount} matched &middot; {unmatchedCount > 0 ? <span style={{ color: '#fbbf24' }}>{unmatchedCount} unmatched</span> : <span style={{ color: 'var(--success)' }}>all matched</span>}
+                    </div>
                   </div>
+                  <button
+                    onClick={loadReview}
+                    style={{ padding: '6px 12px', borderRadius: '8px', background: 'rgba(238,49,32,0.06)', border: '1px solid rgba(238,49,32,0.15)', color: 'var(--navy)', fontSize: '11px', fontWeight: 700 }}
+                  >
+                    Refresh
+                  </button>
                 </div>
-                <button
-                  onClick={loadReview}
-                  style={{ padding: '6px 12px', borderRadius: '8px', background: 'rgba(238,49,32,0.06)', border: '1px solid rgba(238,49,32,0.15)', color: 'var(--navy)', fontSize: '11px', fontWeight: 700 }}
-                >
-                  Refresh
-                </button>
+
+                {/* Direct invoice controls */}
+                {selectedForInvoice.size > 0 && (
+                  <div style={{ marginTop: '8px', paddingTop: '8px', borderTop: '1px solid rgba(30,45,61,0.5)', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                    <div style={{ fontSize: '12px', fontWeight: 700, color: '#a78bfa' }}>
+                      {selectedForInvoice.size} selected for invoice
+                    </div>
+                    <button
+                      onClick={handleCreateDirectInvoice}
+                      disabled={creatingInvoice}
+                      style={{ padding: '6px 14px', borderRadius: '8px', background: '#a78bfa', border: 'none', color: '#fff', fontSize: '11px', fontWeight: 700 }}
+                    >
+                      {creatingInvoice ? 'Creating...' : 'Create Invoice'}
+                    </button>
+                  </div>
+                )}
+
+                {/* Invoice results */}
+                {invoiceResults && (
+                  <div style={{ marginTop: '8px', paddingTop: '8px', borderTop: '1px solid rgba(30,45,61,0.5)' }}>
+                    {invoiceResults.error ? (
+                      <div style={{ fontSize: '11px', color: '#ef4444' }}>{invoiceResults.error}</div>
+                    ) : invoiceResults.results ? (
+                      <div style={{ fontSize: '11px' }}>
+                        {invoiceResults.results.map((r: any, i: number) => (
+                          <div key={i} style={{ marginTop: i > 0 ? '4px' : 0, color: r.status === 'success' ? '#34d399' : '#ef4444' }}>
+                            {r.customer}: {r.status === 'success' ? `Invoice #${r.invoiceNumber} (${r.vehicleCount} vehicles)` : r.error}
+                          </div>
+                        ))}
+                      </div>
+                    ) : null}
+                  </div>
+                )}
               </div>
 
               {/* Vehicles grouped by customer */}
@@ -426,6 +521,20 @@ export default function ReportsPage() {
                           {custUnmatched > 0 && <span style={{ color: '#fbbf24', marginLeft: '6px' }}>{custUnmatched} unmatched</span>}
                         </div>
                       </div>
+                      {/* Select unmatched vehicles for direct invoicing */}
+                      {(() => {
+                        var invoiceableInGroup = custVehicles.filter((v: any) => !v.po_line_item_id && !v.netsuite_invoice_id);
+                        if (invoiceableInGroup.length === 0) return null;
+                        var allSelected = invoiceableInGroup.every((v: any) => selectedForInvoice.has(v.id));
+                        return (
+                          <button
+                            onClick={() => selectAllForInvoice(customer)}
+                            style={{ padding: '4px 10px', borderRadius: '6px', background: allSelected ? 'rgba(167,139,250,0.15)' : 'rgba(167,139,250,0.06)', border: '1px solid rgba(167,139,250,0.25)', color: '#a78bfa', fontSize: '10px', fontWeight: 700 }}
+                          >
+                            {allSelected ? 'Deselect' : 'Select'} for Invoice ({invoiceableInGroup.length})
+                          </button>
+                        );
+                      })()}
                     </div>
 
                     {custVehicles.map(function(v: any) {
@@ -433,15 +542,28 @@ export default function ReportsPage() {
                       var isEditing = editingVehicleId === v.id;
                       var isSaving = savingMatch === v.id;
                       var hasMatch = !!v.po_line_item_id;
+                      var isInvoiced = !!v.netsuite_invoice_id;
+                      var canInvoiceDirect = !hasMatch && !isInvoiced;
                       var { matchingLines, otherLines } = getMatchOptions(v);
 
                       return (
                         <div key={v.id} style={{ padding: '8px 0', borderTop: '1px solid rgba(30,45,61,0.5)' }}>
                           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
-                            <div style={{ flex: 1, minWidth: 0 }}>
-                              <div style={{ fontWeight: 600, fontSize: '12px', color: 'var(--text-primary)' }}>{title}</div>
-                              <div style={{ fontFamily: 'monospace', fontSize: '10px', color: 'var(--text-muted)', marginTop: '2px' }}>{v.vin}</div>
-                              {v.part_number && <div style={{ fontSize: '10px', color: 'var(--navy-light)', marginTop: '2px' }}>{v.part_number}</div>}
+                            <div style={{ display: 'flex', alignItems: 'flex-start', gap: '8px', flex: 1, minWidth: 0 }}>
+                              {/* Invoice checkbox for unmatched, uninvoiced vehicles */}
+                              {canInvoiceDirect && (
+                                <input
+                                  type="checkbox"
+                                  checked={selectedForInvoice.has(v.id)}
+                                  onChange={() => toggleInvoiceSelect(v.id)}
+                                  style={{ marginTop: '2px', width: '14px', height: '14px', accentColor: '#a78bfa', cursor: 'pointer', flexShrink: 0 }}
+                                />
+                              )}
+                              <div>
+                                <div style={{ fontWeight: 600, fontSize: '12px', color: 'var(--text-primary)' }}>{title}</div>
+                                <div style={{ fontFamily: 'monospace', fontSize: '10px', color: 'var(--text-muted)', marginTop: '2px' }}>{v.vin}</div>
+                                {v.part_number && <div style={{ fontSize: '10px', color: 'var(--navy-light)', marginTop: '2px' }}>{v.part_number}</div>}
+                              </div>
                             </div>
                             <div style={{ textAlign: 'right', flexShrink: 0, marginLeft: '8px' }}>
                               {!isEditing ? (
@@ -449,15 +571,15 @@ export default function ReportsPage() {
                                   <div style={{
                                     fontSize: '10px',
                                     fontWeight: 700,
-                                    color: hasMatch ? 'var(--success)' : '#fbbf24',
+                                    color: isInvoiced ? '#a78bfa' : hasMatch ? 'var(--success)' : '#fbbf24',
                                     padding: '2px 8px',
                                     borderRadius: '6px',
-                                    background: hasMatch ? 'var(--success-bg)' : 'rgba(251,191,36,0.08)',
-                                    border: hasMatch ? '1px solid rgba(52,211,153,0.15)' : '1px solid rgba(251,191,36,0.15)',
+                                    background: isInvoiced ? 'rgba(167,139,250,0.08)' : hasMatch ? 'var(--success-bg)' : 'rgba(251,191,36,0.08)',
+                                    border: isInvoiced ? '1px solid rgba(167,139,250,0.15)' : hasMatch ? '1px solid rgba(52,211,153,0.15)' : '1px solid rgba(251,191,36,0.15)',
                                     display: 'inline-block',
                                     marginBottom: '4px',
                                   }}>
-                                    {hasMatch ? getCurrentMatchLabel(v) : 'Unmatched'}
+                                    {isInvoiced ? 'Invoiced' : hasMatch ? getCurrentMatchLabel(v) : 'Unmatched'}
                                   </div>
                                   <div>
                                     <button

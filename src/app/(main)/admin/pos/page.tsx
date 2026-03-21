@@ -4,7 +4,6 @@ import { useState, useEffect, useRef } from 'react';
 import { useRouter } from 'next/navigation';
 import { createClient } from '@/lib/supabase-browser';
 import { useAuth } from '@/components/AuthProvider';
-import SwipeToDelete from '@/components/SwipeToDelete';
 import { parseMasterackPO, type ParsedPO, type ParsedPOLine } from '@/lib/parsePO';
 import type { PurchaseOrder, POLineItem, CatalogItem } from '@/lib/types';
 
@@ -24,7 +23,7 @@ export default function POsPage() {
   const { isAdmin, user } = useAuth();
   const supabase = createClient();
 
-  const [pos, setPos] = useState<(PurchaseOrder & { line_items: POLineItem[] })[]>([]);
+  const [pos, setPos] = useState<(PurchaseOrder & { line_items: POLineItem[]; po_invoices?: any[] })[]>([]);
   const [catalog, setCatalog] = useState<CatalogItem[]>([]);
   const [loading, setLoading] = useState(true);
   const [showCreate, setShowCreate] = useState(false);
@@ -69,18 +68,25 @@ export default function POsPage() {
   // Catalog add state for unmatched parts
   const [addingToCatalog, setAddingToCatalog] = useState<string | null>(null); // part_number being added
   const [catalogAddResults, setCatalogAddResults] = useState<Record<string, 'added' | 'error'>>({});
+  // Batch delete state
+  const [editMode, setEditMode] = useState(false);
+  const [selectedForDelete, setSelectedForDelete] = useState<Set<string>>(new Set());
+  const [deletingBatch, setDeletingBatch] = useState(false);
 
   useEffect(() => {
     if (!isAdmin) { router.push('/home'); return; }
     const load = async () => {
       const { data: poData } = await supabase
         .from('purchase_orders')
-        .select('*, po_line_items(*)')
+        .select('*, po_line_items(*), po_invoices(*)')
         .order('created_at', { ascending: false });
 
       const mapped = (poData || []).map((po: any) => ({
         ...po,
         line_items: po.po_line_items || [],
+        po_invoices: (po.po_invoices || []).sort((a: any, b: any) =>
+          new Date(b.created_at).getTime() - new Date(a.created_at).getTime()
+        ),
       }));
       setPos(mapped);
 
@@ -352,11 +358,42 @@ export default function POsPage() {
   };
 
   const handleDeletePO = async (poId: string) => {
+    // Clear FK references from scanned_vehicles first
+    const po = pos.find(p => p.id === poId);
+    if (po) {
+      const lineIds = po.line_items.map(li => li.id);
+      if (lineIds.length > 0) {
+        await supabase.from('scanned_vehicles').update({ po_line_item_id: null }).in('po_line_item_id', lineIds);
+      }
+    }
     await supabase.from('po_line_items').delete().eq('po_id', poId);
     const { error } = await supabase.from('purchase_orders').delete().eq('id', poId);
     if (!error) {
       setPos((prev) => prev.filter((p) => p.id !== poId));
     }
+  };
+
+  const toggleDeleteSelection = (poId: string) => {
+    setSelectedForDelete(prev => {
+      const next = new Set(prev);
+      if (next.has(poId)) next.delete(poId);
+      else next.add(poId);
+      return next;
+    });
+  };
+
+  const handleBatchDelete = async () => {
+    if (selectedForDelete.size === 0) return;
+    const count = selectedForDelete.size;
+    if (!window.confirm(`Delete ${count} PO${count !== 1 ? 's' : ''} and all their line items? This cannot be undone.`)) return;
+
+    setDeletingBatch(true);
+    for (const poId of selectedForDelete) {
+      await handleDeletePO(poId);
+    }
+    setSelectedForDelete(new Set());
+    setEditMode(false);
+    setDeletingBatch(false);
   };
 
   const handleDeleteLineItem = async (lineId: string, poId: string) => {
@@ -601,11 +638,23 @@ export default function POsPage() {
         if (data.results) {
           for (const result of data.results) {
             if (result.status === 'success' && result.invoiceId) {
-              setPos(prev => prev.map(po =>
-                po.id === result.poId
-                  ? { ...po, netsuite_invoice_id: result.invoiceId, netsuite_invoice_number: result.invoiceNumber } as any
-                  : po
-              ));
+              setPos(prev => prev.map(po => {
+                if (po.id !== result.poId) return po;
+                const newInvoice = {
+                  netsuite_invoice_id: result.invoiceId,
+                  netsuite_invoice_number: result.invoiceNumber,
+                  created_at: new Date().toISOString(),
+                  total_qty: null,
+                  line_count: null,
+                  memo: `PO #${po.po_number}`,
+                };
+                return {
+                  ...po,
+                  netsuite_invoice_id: result.invoiceId,
+                  netsuite_invoice_number: result.invoiceNumber,
+                  po_invoices: [newInvoice, ...((po as any).po_invoices || [])],
+                } as any;
+              }));
             }
           }
         }
@@ -692,24 +741,64 @@ export default function POsPage() {
           Purchase Orders ({filteredPos.length}{poSearch ? ` of ${pos.length}` : ''})
         </div>
         <div style={{ display: 'flex', gap: '6px' }}>
-          <button
-            onClick={() => { setShowEmailImport(!showEmailImport); setShowImport(false); setShowCreate(false); if (!showEmailImport) searchGmailPOs(); }}
-            style={{ padding: '6px 12px', borderRadius: '8px', background: showEmailImport ? '#1e2d3d' : 'rgba(34,197,94,0.1)', border: '1px solid rgba(34,197,94,0.25)', color: '#4ade80', fontSize: '12px', fontWeight: 700 }}
-          >
-            {showEmailImport ? 'Cancel' : '📧 Email Import'}
-          </button>
-          <button
-            onClick={() => { setShowImport(!showImport); setShowCreate(false); setShowEmailImport(false); setParsedPO(null); setImportLines([]); setParseError(''); }}
-            style={{ padding: '6px 12px', borderRadius: '8px', background: showImport ? '#1e2d3d' : 'rgba(59,130,246,0.1)', border: '1px solid rgba(59,130,246,0.25)', color: '#60a5fa', fontSize: '12px', fontWeight: 700 }}
-          >
-            {showImport ? 'Cancel' : '📄 Import PDF'}
-          </button>
-          <button
-            onClick={() => { setShowCreate(!showCreate); setShowImport(false); setShowEmailImport(false); }}
-            style={{ padding: '6px 12px', borderRadius: '8px', background: '#3b82f6', color: '#fff', fontSize: '12px', fontWeight: 700, border: 'none' }}
-          >
-            {showCreate ? 'Cancel' : '+ New PO'}
-          </button>
+          {!editMode ? (
+            <>
+              <button
+                onClick={() => { setEditMode(true); setSelectedForDelete(new Set()); }}
+                style={{ padding: '6px 12px', borderRadius: '8px', background: 'rgba(248,113,113,0.1)', border: '1px solid rgba(248,113,113,0.25)', color: '#f87171', fontSize: '12px', fontWeight: 700 }}
+              >
+                Edit
+              </button>
+              <button
+                onClick={() => { setShowEmailImport(!showEmailImport); setShowImport(false); setShowCreate(false); if (!showEmailImport) searchGmailPOs(); }}
+                style={{ padding: '6px 12px', borderRadius: '8px', background: showEmailImport ? '#1e2d3d' : 'rgba(34,197,94,0.1)', border: '1px solid rgba(34,197,94,0.25)', color: '#4ade80', fontSize: '12px', fontWeight: 700 }}
+              >
+                {showEmailImport ? 'Cancel' : '📧 Email'}
+              </button>
+              <button
+                onClick={() => { setShowImport(!showImport); setShowCreate(false); setShowEmailImport(false); setParsedPO(null); setImportLines([]); setParseError(''); }}
+                style={{ padding: '6px 12px', borderRadius: '8px', background: showImport ? '#1e2d3d' : 'rgba(59,130,246,0.1)', border: '1px solid rgba(59,130,246,0.25)', color: '#60a5fa', fontSize: '12px', fontWeight: 700 }}
+              >
+                {showImport ? 'Cancel' : '📄 PDF'}
+              </button>
+              <button
+                onClick={() => { setShowCreate(!showCreate); setShowImport(false); setShowEmailImport(false); }}
+                style={{ padding: '6px 12px', borderRadius: '8px', background: '#3b82f6', color: '#fff', fontSize: '12px', fontWeight: 700, border: 'none' }}
+              >
+                {showCreate ? 'Cancel' : '+ New'}
+              </button>
+            </>
+          ) : (
+            <>
+              <button
+                onClick={() => {
+                  if (selectedForDelete.size === filteredPos.length) {
+                    setSelectedForDelete(new Set());
+                  } else {
+                    setSelectedForDelete(new Set(filteredPos.map(p => p.id)));
+                  }
+                }}
+                style={{ padding: '6px 12px', borderRadius: '8px', background: 'rgba(248,113,113,0.1)', border: '1px solid rgba(248,113,113,0.25)', color: '#f87171', fontSize: '12px', fontWeight: 700 }}
+              >
+                {selectedForDelete.size === filteredPos.length ? 'Deselect All' : 'Select All'}
+              </button>
+              {selectedForDelete.size > 0 && (
+                <button
+                  onClick={handleBatchDelete}
+                  disabled={deletingBatch}
+                  style={{ padding: '6px 12px', borderRadius: '8px', background: '#ef4444', color: '#fff', fontSize: '12px', fontWeight: 700, border: 'none' }}
+                >
+                  {deletingBatch ? 'Deleting...' : `Delete (${selectedForDelete.size})`}
+                </button>
+              )}
+              <button
+                onClick={() => { setEditMode(false); setSelectedForDelete(new Set()); }}
+                style={{ padding: '6px 12px', borderRadius: '8px', background: '#1e2d3d', border: '1px solid #1e2d3d', color: '#6b7a8d', fontSize: '12px', fontWeight: 700 }}
+              >
+                Done
+              </button>
+            </>
+          )}
         </div>
       </div>
 
@@ -1348,17 +1437,22 @@ export default function POsPage() {
         const displayDate = po.ordered_date ? new Date(po.ordered_date + 'T00:00:00') : new Date(po.created_at);
 
         return (
-          <SwipeToDelete
-            key={po.id}
-            onDelete={() => handleDeletePO(po.id)}
-            confirmMessage={`Delete PO #${po.po_number} and all its line items? This cannot be undone.`}
-          >
-            <div style={{ background: '#141e2b', border: '1px solid #1e2d3d', borderRadius: '10px', marginBottom: '6px', overflow: 'hidden' }}>
-              <div onClick={() => toggleExpand(po.id)} style={{ padding: '12px', cursor: 'pointer' }}>
+            <div key={po.id} style={{ background: '#141e2b', border: editMode && selectedForDelete.has(po.id) ? '1px solid rgba(248,113,113,0.5)' : '1px solid #1e2d3d', borderRadius: '10px', marginBottom: '6px', overflow: 'hidden' }}>
+              <div onClick={() => editMode ? toggleDeleteSelection(po.id) : toggleExpand(po.id)} style={{ padding: '12px', cursor: 'pointer' }}>
                 <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'start' }}>
                   <div style={{ display: 'flex', alignItems: 'start', gap: '8px' }}>
-                    {/* Invoice checkbox — only show for invoiceable POs */}
-                    {(() => {
+                    {/* Edit mode: delete checkbox */}
+                    {editMode && (
+                      <input
+                        type="checkbox"
+                        checked={selectedForDelete.has(po.id)}
+                        onChange={(e) => { e.stopPropagation(); toggleDeleteSelection(po.id); }}
+                        onClick={(e) => e.stopPropagation()}
+                        style={{ marginTop: '4px', width: '16px', height: '16px', accentColor: '#ef4444', cursor: 'pointer', flexShrink: 0 }}
+                      />
+                    )}
+                    {/* Invoice checkbox — only show for invoiceable POs when not in edit mode */}
+                    {!editMode && (() => {
                       const isInvoiceable = invoiceablePOs.some(p => p.id === po.id);
                       const hasInvoice = !!(po as any).netsuite_invoice_id;
                       if (isInvoiceable) {
@@ -1554,10 +1648,80 @@ export default function POsPage() {
                     <div style={{ width: '55px', textAlign: 'right', fontWeight: 800, color: '#60a5fa' }}>{fmt(totalValue)}</div>
                     <div style={{ width: '24px' }}></div>
                   </div>
+
+                  {/* Invoices linked to this PO */}
+                  {(() => {
+                    const invoices = (po as any).po_invoices || [];
+                    if (invoices.length === 0 && !(po as any).netsuite_invoice_id) return null;
+
+                    // If we have po_invoices records, show them; otherwise fall back to the legacy single field
+                    const invoiceList = invoices.length > 0 ? invoices : (po as any).netsuite_invoice_id ? [{
+                      netsuite_invoice_id: (po as any).netsuite_invoice_id,
+                      netsuite_invoice_number: (po as any).netsuite_invoice_number,
+                      created_at: null,
+                      total_qty: null,
+                      line_count: null,
+                      memo: null,
+                    }] : [];
+
+                    if (invoiceList.length === 0) return null;
+
+                    return (
+                      <div style={{ marginTop: '10px', padding: '8px', borderRadius: '8px', background: 'rgba(52,211,153,0.04)', border: '1px solid rgba(52,211,153,0.15)' }}>
+                        <div style={{ fontSize: '10px', fontWeight: 700, color: '#34d399', textTransform: 'uppercase', letterSpacing: '0.3px', marginBottom: '6px' }}>
+                          Invoices ({invoiceList.length})
+                        </div>
+                        {invoiceList.map((inv: any, idx: number) => (
+                          <div key={inv.netsuite_invoice_id || idx} style={{
+                            display: 'flex', justifyContent: 'space-between', alignItems: 'center',
+                            padding: '6px 8px', borderRadius: '6px', marginBottom: idx < invoiceList.length - 1 ? '4px' : 0,
+                            background: 'rgba(52,211,153,0.06)',
+                          }}>
+                            <div>
+                              <a
+                                href={`https://system.netsuite.com/app/accounting/transactions/custinvc.nl?id=${inv.netsuite_invoice_id}`}
+                                target="_blank"
+                                rel="noopener noreferrer"
+                                onClick={(e) => e.stopPropagation()}
+                                style={{ color: '#34d399', fontWeight: 700, fontSize: '12px', textDecoration: 'none' }}
+                              >
+                                INV #{inv.netsuite_invoice_number || inv.netsuite_invoice_id}
+                              </a>
+                              {inv.memo && (
+                                <div style={{ fontSize: '10px', color: '#4a5f78', marginTop: '2px' }}>{inv.memo}</div>
+                              )}
+                            </div>
+                            <div style={{ textAlign: 'right' }}>
+                              {inv.total_qty != null && (
+                                <div style={{ fontSize: '11px', color: '#6b7a8d', fontWeight: 600 }}>{inv.total_qty} unit{inv.total_qty !== 1 ? 's' : ''}</div>
+                              )}
+                              {inv.created_at && (
+                                <div style={{ fontSize: '9px', color: '#4a5f78' }}>
+                                  {new Date(inv.created_at).toLocaleDateString([], { month: 'short', day: 'numeric' })}
+                                </div>
+                              )}
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+                    );
+                  })()}
+
+                  {/* Delete PO button in expanded view */}
+                  <button
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      if (window.confirm(`Delete PO #${po.po_number} and all its line items? This cannot be undone.`)) {
+                        handleDeletePO(po.id);
+                      }
+                    }}
+                    style={{ width: '100%', marginTop: '10px', padding: '8px', borderRadius: '8px', background: 'rgba(248,113,113,0.08)', border: '1px solid rgba(248,113,113,0.2)', color: '#f87171', fontSize: '12px', fontWeight: 700, cursor: 'pointer' }}
+                  >
+                    Delete PO
+                  </button>
                 </div>
               )}
             </div>
-          </SwipeToDelete>
         );
       })}
 

@@ -26,6 +26,9 @@ export default function TrackingPage() {
   const [profiles, setProfiles] = useState<Record<string, string>>({});
   const [searchTerm, setSearchTerm] = useState('');
   const [updateSuccess, setUpdateSuccess] = useState<string | null>(null);
+  const [showArchived, setShowArchived] = useState(false);
+  const [deletingId, setDeletingId] = useState<string | null>(null);
+  const [archivingId, setArchivingId] = useState<string | null>(null);
 
   useEffect(() => {
     loadVehicles();
@@ -129,8 +132,54 @@ export default function TrackingPage() {
     setUpdatingId(null);
   }, [statusNote, expandedId, profile]);
 
+  const deleteVehicle = async (vehicleId: string) => {
+    setDeletingId(vehicleId);
+    try {
+      // Delete status history first (FK)
+      await supabase.from('vehicle_status_history').delete().eq('vehicle_id', vehicleId);
+      const { error } = await supabase.from('fleet_checkins').delete().eq('id', vehicleId);
+      if (error) {
+        alert('Delete failed: ' + error.message);
+      } else {
+        setVehicles(prev => prev.filter(v => v.id !== vehicleId));
+        setExpandedId(null);
+        setUpdateSuccess('Vehicle deleted');
+        setTimeout(() => setUpdateSuccess(null), 2000);
+      }
+    } catch {
+      alert('Network error — please try again');
+    }
+    setDeletingId(null);
+  };
+
+  const archiveVehicle = async (vehicleId: string, unarchive = false) => {
+    setArchivingId(vehicleId);
+    try {
+      const { error } = await supabase
+        .from('fleet_checkins')
+        .update({ archived_at: unarchive ? null : new Date().toISOString() })
+        .eq('id', vehicleId);
+      if (error) {
+        alert('Archive failed: ' + error.message);
+      } else {
+        setVehicles(prev => prev.map(v =>
+          v.id === vehicleId ? { ...v, archived_at: unarchive ? null : new Date().toISOString() } as any : v
+        ));
+        setExpandedId(null);
+        setUpdateSuccess(unarchive ? 'Vehicle restored' : 'Vehicle archived');
+        setTimeout(() => setUpdateSuccess(null), 2000);
+      }
+    } catch {
+      alert('Network error — please try again');
+    }
+    setArchivingId(null);
+  };
+
   // Filter & search
-  const filtered = vehicles.filter(v => {
+  const activeVehicles = vehicles.filter(v => !(v as any).archived_at);
+  const archivedVehicles = vehicles.filter(v => !!(v as any).archived_at);
+
+  const filtered = (showArchived ? archivedVehicles : activeVehicles).filter(v => {
     const status = v.status as VehicleTrackingStatus;
     if (filterStatus === 'stuck') return status === 'stuck_parts' || status === 'stuck_graphics';
     if (filterStatus !== 'all') return status === filterStatus;
@@ -142,10 +191,10 @@ export default function TrackingPage() {
     return v.vin.toLowerCase().includes(s) || title.includes(s) || (v.customer_name || '').toLowerCase().includes(s);
   });
 
-  // Pipeline counts
+  // Pipeline counts (active vehicles only)
   const statusCounts: Record<string, number> = {};
   VEHICLE_STATUS_PIPELINE.forEach(s => { statusCounts[s] = 0; });
-  vehicles.forEach(v => { if (statusCounts[v.status] !== undefined) statusCounts[v.status]++; });
+  activeVehicles.forEach(v => { if (statusCounts[v.status] !== undefined) statusCounts[v.status]++; });
   const stuckCount = (statusCounts['stuck_parts'] || 0) + (statusCounts['stuck_graphics'] || 0);
 
   const vehicleTitle = (v: FleetCheckin) =>
@@ -187,8 +236,8 @@ export default function TrackingPage() {
         <div style={{
           background: 'var(--card)', border: '1px solid var(--border)', borderRadius: '12px', padding: '12px', textAlign: 'center',
         }}>
-          <div style={{ fontSize: '24px', fontWeight: 800, color: 'var(--text-primary)' }}>{vehicles.length}</div>
-          <div style={{ fontSize: '10px', fontWeight: 700, color: 'var(--text-muted)', textTransform: 'uppercase' }}>Total</div>
+          <div style={{ fontSize: '24px', fontWeight: 800, color: 'var(--text-primary)' }}>{activeVehicles.length}</div>
+          <div style={{ fontSize: '10px', fontWeight: 700, color: 'var(--text-muted)', textTransform: 'uppercase' }}>Active</div>
         </div>
         <div
           onClick={() => setFilterStatus(filterStatus === 'stuck' ? 'all' : 'stuck')}
@@ -249,19 +298,35 @@ export default function TrackingPage() {
         })}
       </div>
 
-      {/* Search */}
-      <input
-        type="text"
-        value={searchTerm}
-        onChange={(e) => setSearchTerm(e.target.value)}
-        placeholder="Search by VIN, vehicle, or customer..."
-        style={{
-          width: '100%', padding: '10px 12px', borderRadius: '10px',
-          border: '1px solid var(--border)', background: 'var(--card)',
-          color: 'var(--text-primary)', fontSize: '13px', fontWeight: 600,
-          marginBottom: '12px', boxSizing: 'border-box',
-        }}
-      />
+      {/* Search + Archive Toggle */}
+      <div style={{ display: 'flex', gap: '8px', marginBottom: '12px' }}>
+        <input
+          type="text"
+          value={searchTerm}
+          onChange={(e) => setSearchTerm(e.target.value)}
+          placeholder="Search by VIN, vehicle, or customer..."
+          style={{
+            flex: 1, padding: '10px 12px', borderRadius: '10px',
+            border: '1px solid var(--border)', background: 'var(--card)',
+            color: 'var(--text-primary)', fontSize: '13px', fontWeight: 600,
+            boxSizing: 'border-box',
+          }}
+        />
+        {archivedVehicles.length > 0 && (
+          <button
+            onClick={() => { setShowArchived(!showArchived); setFilterStatus('all'); }}
+            style={{
+              padding: '10px 12px', borderRadius: '10px', fontSize: '11px', fontWeight: 700,
+              background: showArchived ? 'rgba(167,139,250,0.1)' : 'var(--card)',
+              border: `1px solid ${showArchived ? 'rgba(167,139,250,0.3)' : 'var(--border)'}`,
+              color: showArchived ? '#a78bfa' : 'var(--text-muted)',
+              cursor: 'pointer', whiteSpace: 'nowrap',
+            }}
+          >
+            {showArchived ? `Active (${activeVehicles.length})` : `Archived (${archivedVehicles.length})`}
+          </button>
+        )}
+      </div>
 
       {/* Success Toast */}
       {updateSuccess && (
@@ -274,6 +339,17 @@ export default function TrackingPage() {
         </div>
       )}
 
+      {/* Archived banner */}
+      {showArchived && (
+        <div style={{
+          padding: '8px 14px', marginBottom: '10px', borderRadius: '10px',
+          background: 'rgba(167,139,250,0.06)', border: '1px solid rgba(167,139,250,0.15)',
+          color: '#a78bfa', fontSize: '12px', fontWeight: 700, textAlign: 'center',
+        }}>
+          Viewing Archived Vehicles
+        </div>
+      )}
+
       {/* Vehicle List */}
       {filtered.length === 0 ? (
         <div style={{
@@ -282,7 +358,7 @@ export default function TrackingPage() {
         }}>
           <div style={{ fontSize: '28px', marginBottom: '8px' }}>🚚</div>
           <div style={{ color: 'var(--text-muted)', fontSize: '14px', fontWeight: 600 }}>
-            {searchTerm ? 'No vehicles match your search' : 'No vehicles in this status'}
+            {showArchived ? 'No archived vehicles' : searchTerm ? 'No vehicles match your search' : 'No vehicles in this status'}
           </div>
         </div>
       ) : (
@@ -469,6 +545,50 @@ export default function TrackingPage() {
                         </div>
                       )}
                     </div>
+
+                    {/* Archive & Delete Actions */}
+                    {isAdmin && (
+                      <div style={{ display: 'flex', gap: '8px', marginTop: '12px' }}>
+                        {(vehicle as any).archived_at ? (
+                          <button
+                            onClick={(e) => { e.stopPropagation(); archiveVehicle(vehicle.id, true); }}
+                            disabled={archivingId === vehicle.id}
+                            style={{
+                              flex: 1, padding: '10px', borderRadius: '10px', fontSize: '12px', fontWeight: 700, cursor: 'pointer',
+                              background: 'rgba(167,139,250,0.08)', border: '1px solid rgba(167,139,250,0.2)', color: '#a78bfa',
+                            }}
+                          >
+                            {archivingId === vehicle.id ? 'Restoring...' : 'Restore from Archive'}
+                          </button>
+                        ) : (
+                          <button
+                            onClick={(e) => { e.stopPropagation(); archiveVehicle(vehicle.id); }}
+                            disabled={archivingId === vehicle.id}
+                            style={{
+                              flex: 1, padding: '10px', borderRadius: '10px', fontSize: '12px', fontWeight: 700, cursor: 'pointer',
+                              background: 'rgba(167,139,250,0.08)', border: '1px solid rgba(167,139,250,0.2)', color: '#a78bfa',
+                            }}
+                          >
+                            {archivingId === vehicle.id ? 'Archiving...' : 'Archive Vehicle'}
+                          </button>
+                        )}
+                        <button
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            if (window.confirm(`Permanently delete this vehicle (${vehicle.vin})? This cannot be undone.`)) {
+                              deleteVehicle(vehicle.id);
+                            }
+                          }}
+                          disabled={deletingId === vehicle.id}
+                          style={{
+                            padding: '10px 16px', borderRadius: '10px', fontSize: '12px', fontWeight: 700, cursor: 'pointer',
+                            background: 'rgba(248,113,113,0.08)', border: '1px solid rgba(248,113,113,0.2)', color: '#f87171',
+                          }}
+                        >
+                          {deletingId === vehicle.id ? 'Deleting...' : 'Delete'}
+                        </button>
+                      </div>
+                    )}
                   </div>
                 )}
               </div>

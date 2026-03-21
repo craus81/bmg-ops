@@ -500,6 +500,94 @@ export async function findItems(partNumbers: string[]): Promise<Record<string, {
 }
 
 /**
+ * Create a standalone Invoice in NetSuite (no SO required)
+ * Used for direct invoicing of scanned vehicles without PO/SO flow
+ */
+export async function createDirectInvoice(payload: {
+  customerId: string | number;
+  locationId?: string | number;
+  memo?: string;
+  lineItems: {
+    itemId: string | number;
+    quantity: number;
+    rate: number;
+    description?: string;
+  }[];
+}): Promise<{
+  success: boolean;
+  invoiceId?: string;
+  invoiceNumber?: string;
+  error?: string;
+}> {
+  const config = getConfig();
+  const baseUrl = getBaseUrl(config.accountId);
+  const url = `${baseUrl}/services/rest/record/v1/invoice`;
+  const { oauth, token } = createOAuth(config);
+  const authHeader = getAuthHeader(oauth, token, { url, method: 'POST' });
+
+  const items = payload.lineItems.map((li) => ({
+    item: { id: li.itemId },
+    quantity: li.quantity,
+    rate: li.rate,
+    ...(li.description ? { description: li.description } : {}),
+  }));
+
+  const body: any = {
+    entity: { id: payload.customerId },
+    item: { items },
+    ...(payload.locationId ? { location: { id: payload.locationId } } : {}),
+    ...(payload.memo ? { memo: payload.memo } : {}),
+  };
+
+  try {
+    const response = await fetch(url, {
+      method: 'POST',
+      headers: {
+        'Authorization': authHeader,
+        'Content-Type': 'application/json',
+        'Prefer': 'respondAsync=false',
+      },
+      body: JSON.stringify(body),
+    });
+
+    if (!response.ok) {
+      const text = await response.text();
+      console.error('NetSuite create direct invoice error:', text);
+      return { success: false, error: `NetSuite error (${response.status}): ${text}` };
+    }
+
+    const location = response.headers.get('Location');
+    let invoiceId = '';
+    if (location) {
+      const match = location.match(/\/(\d+)$/);
+      invoiceId = match?.[1] || '';
+    }
+
+    let invoiceNumber = '';
+    try {
+      const result = await response.json();
+      invoiceId = invoiceId || result.id?.toString() || '';
+      invoiceNumber = result.tranId || result.tranid || '';
+    } catch {
+      // 204 No Content
+    }
+
+    if (invoiceId && !invoiceNumber) {
+      try {
+        const lookup = await suiteqlQuery(`SELECT tranid FROM transaction WHERE id = ${invoiceId}`);
+        invoiceNumber = lookup?.items?.[0]?.tranid || '';
+      } catch {
+        // Non-critical
+      }
+    }
+
+    return { success: true, invoiceId, invoiceNumber };
+  } catch (e: any) {
+    return { success: false, error: `Failed to create invoice: ${e.message}` };
+  }
+}
+
+/**
  * Create an Invoice in NetSuite by transforming a Sales Order
  * Uses: POST /services/rest/record/v1/invoice
  * The transform endpoint creates an invoice from an existing SO
@@ -518,9 +606,9 @@ export async function createInvoiceFromSO(payload: {
   const config = getConfig();
   const baseUrl = getBaseUrl(config.accountId);
 
-  // Step 1: Transform the Sales Order into an Invoice
-  // NetSuite REST API: POST /invoice with transform params
-  const transformUrl = `${baseUrl}/services/rest/record/v1/invoice?replace=item&transform=salesOrder&id=${payload.salesOrderId}`;
+  // Step 1: Initialize an Invoice from a Sales Order
+  // NetSuite REST API uses 'init' (not 'transform') to create from existing record
+  const transformUrl = `${baseUrl}/services/rest/record/v1/invoice?init=salesOrder&id=${payload.salesOrderId}&replace=item`;
   const { oauth, token } = createOAuth(config);
   const authHeader = getAuthHeader(oauth, token, { url: transformUrl, method: 'POST' });
 

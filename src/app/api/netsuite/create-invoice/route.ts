@@ -120,7 +120,7 @@ export async function POST(req: NextRequest) {
         });
 
         if (invoiceResult.success) {
-          // Store invoice reference on the PO
+          // Store invoice reference on the PO (legacy single-invoice field)
           await supabase
             .from('purchase_orders')
             .update({
@@ -128,6 +128,18 @@ export async function POST(req: NextRequest) {
               netsuite_invoice_number: invoiceResult.invoiceNumber,
             })
             .eq('id', po.id);
+
+          // Also insert into po_invoices for multi-invoice tracking
+          const installedLineCount = Object.keys(installedQuantities).length;
+          const installedTotalQty = Object.values(installedQuantities).reduce((a, b) => a + b, 0);
+          await supabase.from('po_invoices').insert({
+            purchase_order_id: po.id,
+            netsuite_invoice_id: invoiceResult.invoiceId,
+            netsuite_invoice_number: invoiceResult.invoiceNumber,
+            line_count: installedLineCount,
+            total_qty: installedTotalQty,
+            memo: `PO #${po.po_number} — ${installedTotalQty} unit${installedTotalQty !== 1 ? 's' : ''} across ${installedLineCount} line${installedLineCount !== 1 ? 's' : ''}`,
+          });
 
           results.push({
             poId: po.id,
