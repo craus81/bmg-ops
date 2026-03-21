@@ -2984,30 +2984,40 @@ function TemplatesManager() {
           {templates.map(t => (
             <div key={t.id} style={{
               background: theme.card, border: `1px solid ${theme.border}`, borderRadius: '12px',
-              padding: '12px', display: 'flex', alignItems: 'center', gap: '12px',
+              overflow: 'hidden',
             }}>
-              {t.template_image_path ? (
-                <img
-                  src={supabase.storage.from('vehicle-templates').getPublicUrl(t.template_image_path).data.publicUrl}
-                  alt={t.name}
-                  style={{ width: '300px', height: '180px', objectFit: 'contain', borderRadius: '8px', background: '#fff', flexShrink: 0 }}
-                />
-              ) : (
-                <div style={{ width: '300px', height: '180px', borderRadius: '8px', background: theme.inputBg, display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: '48px', flexShrink: 0 }}>🚐</div>
-              )}
-              <div style={{ flex: 1, minWidth: 0 }}>
-                <div style={{ fontSize: '14px', fontWeight: 700, color: theme.textPrimary }}>{t.name}</div>
-                <div style={{ fontSize: '12px', color: theme.textMuted }}>{t.year} {t.make} {t.model}</div>
-                {t.overall_length_in && (
-                  <div style={{ fontSize: '11px', color: theme.textMuted, marginTop: '2px' }}>
-                    {t.overall_length_in}&quot; L × {t.wheelbase_in}&quot; WB
-                  </div>
+              <div style={{ padding: '12px', display: 'flex', alignItems: 'center', gap: '12px' }}>
+                {t.template_image_path ? (
+                  <img
+                    src={supabase.storage.from('vehicle-templates').getPublicUrl(t.template_image_path).data.publicUrl}
+                    alt={t.name}
+                    style={{ width: '300px', height: '180px', objectFit: 'contain', borderRadius: '8px', background: '#fff', flexShrink: 0 }}
+                  />
+                ) : (
+                  <div style={{ width: '300px', height: '180px', borderRadius: '8px', background: theme.inputBg, display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: '48px', flexShrink: 0 }}>🚐</div>
                 )}
+                <div style={{ flex: 1, minWidth: 0 }}>
+                  <div style={{ fontSize: '14px', fontWeight: 700, color: theme.textPrimary }}>{t.name}</div>
+                  <div style={{ fontSize: '12px', color: theme.textMuted }}>{t.year} {t.make} {t.model}</div>
+                  {t.overall_length_in && (
+                    <div style={{ fontSize: '11px', color: theme.textMuted, marginTop: '2px' }}>
+                      {t.overall_length_in}&quot; L × {t.wheelbase_in}&quot; WB
+                    </div>
+                  )}
+                  <button
+                    onClick={() => {
+                      if (window.confirm(`Delete template "${t.name}"? This cannot be undone.`)) deleteTemplate(t.id);
+                    }}
+                    style={{
+                      marginTop: '8px', padding: '6px 14px', borderRadius: '8px',
+                      background: 'rgba(248,113,113,0.08)', border: '1px solid rgba(248,113,113,0.2)',
+                      color: '#f87171', fontSize: '11px', fontWeight: 700, cursor: 'pointer',
+                    }}
+                  >
+                    Delete Template
+                  </button>
+                </div>
               </div>
-              <button
-                onClick={() => deleteTemplate(t.id)}
-                style={{ background: 'none', border: 'none', fontSize: '18px', cursor: 'pointer', padding: '4px', color: theme.textMuted }}
-              >🗑️</button>
             </div>
           ))}
         </div>

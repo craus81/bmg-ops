@@ -4,7 +4,6 @@ import { useState, useEffect } from 'react';
 import { useRouter } from 'next/navigation';
 import { createClient } from '@/lib/supabase-browser';
 import { useAuth } from '@/components/AuthProvider';
-import SwipeToDelete from '@/components/SwipeToDelete';
 import { theme } from '@/lib/theme';
 import type { ScannedVehicle } from '@/lib/types';
 
@@ -15,6 +14,8 @@ export default function VehiclesPage() {
   const [loading, setLoading] = useState(true);
   const [editId, setEditId] = useState<string | null>(null);
   const [editForm, setEditForm] = useState({ vin: '', vehicle_year: '', vehicle_make: '', vehicle_model: '', part_number: '', end_customer: '' });
+  const [expandedId, setExpandedId] = useState<string | null>(null);
+  const [deletingId, setDeletingId] = useState<string | null>(null);
   const [submittingAll, setSubmittingAll] = useState(false);
   const [submitResult, setSubmitResult] = useState<{ count: number } | null>(null);
   const supabase = createClient();
@@ -124,9 +125,22 @@ export default function VehiclesPage() {
   };
 
   const handleDelete = async (id: string) => {
-    await supabase.from('vehicle_photos').delete().eq('vehicle_id', id);
-    const { error } = await supabase.from('scanned_vehicles').delete().eq('id', id);
-    if (!error) setVehicles((prev) => prev.filter((v) => v.id !== id));
+    setDeletingId(id);
+    try {
+      const res = await fetch('/api/vehicles/delete-scanned', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ vehicleId: id }),
+      });
+      const data = await res.json();
+      if (data.success) {
+        setVehicles((prev) => prev.filter((v) => v.id !== id));
+        setExpandedId(null);
+      }
+    } catch {
+      alert('Delete failed — please try again');
+    }
+    setDeletingId(null);
   };
 
   const startEdit = (v: ScannedVehicle) => {
@@ -197,15 +211,15 @@ export default function VehiclesPage() {
           const isSubmitted = (v as any).submitted_for_review;
           const reviewStatus = (v as any).review_status;
 
+          const isExpanded = expandedId === v.id;
           return (
-            <SwipeToDelete key={v.id} onDelete={() => handleDelete(v.id)}>
-              <div style={{
+              <div key={v.id} style={{
                 background: theme.card,
                 border: `1px solid ${isSubmitted && reviewStatus === 'pending' ? 'var(--warning-border)' : reviewStatus === 'approved' ? 'var(--success-border)' : reviewStatus === 'denied' ? 'var(--error-border)' : theme.border}`,
-                borderRadius: '14px', padding: '14px 16px', boxShadow: theme.shadowSm,
+                borderRadius: '14px', overflow: 'hidden', boxShadow: theme.shadowSm,
               }}>
                 {isEditing ? (
-                  <div>
+                  <div style={{ padding: '14px 16px' }}>
                     <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '8px' }}>
                       <EditInput label="VIN" value={editForm.vin} onChange={(v) => setEditForm({ ...editForm, vin: v })} />
                       <EditInput label="Year" value={editForm.vehicle_year} onChange={(v) => setEditForm({ ...editForm, vehicle_year: v })} />
@@ -220,39 +234,72 @@ export default function VehiclesPage() {
                     </div>
                   </div>
                 ) : (
-                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'start' }}>
-                    <div style={{ flex: 1 }} onClick={() => startEdit(v)}>
-                      <div style={{ display: 'flex', alignItems: 'center', gap: '8px', flexWrap: 'wrap' }}>
-                        <div style={{ fontWeight: 700, fontSize: '15px', color: theme.textPrimary, letterSpacing: '-0.2px' }}>{title}</div>
-                        {isSubmitted && (
-                          <span style={{
-                            padding: '2px 7px', borderRadius: '6px', fontSize: '9px', fontWeight: 700,
-                            background: reviewStatus === 'approved' ? 'var(--success-bg)' : reviewStatus === 'denied' ? 'var(--error-bg)' : 'var(--warning-bg)',
-                            border: `1px solid ${reviewStatus === 'approved' ? 'var(--success-border)' : reviewStatus === 'denied' ? 'var(--error-border)' : 'var(--warning-border)'}`,
-                            color: reviewStatus === 'approved' ? 'var(--success)' : reviewStatus === 'denied' ? 'var(--error)' : 'var(--warning)',
-                          }}>
-                            {reviewStatus === 'approved' ? '✅' : reviewStatus === 'denied' ? '❌' : '⏳'} {reviewStatus === 'approved' ? 'Approved' : reviewStatus === 'denied' ? 'Rework' : 'Pending'}
-                          </span>
-                        )}
-                      </div>
-                      <div style={{ fontSize: '11px', fontFamily: "'SF Mono', 'Fira Code', monospace", color: theme.textMuted, marginTop: '3px', letterSpacing: '0.3px' }}>{v.vin}</div>
-                      {v.part_number && (
-                        <div style={{ fontSize: '12px', color: theme.navyLight, fontWeight: 600, marginTop: '4px' }}>{v.part_number} — {v.end_customer}</div>
-                      )}
-                      <div style={{ fontSize: '10px', color: theme.textMuted, marginTop: '4px' }}>
-                        {time.toLocaleDateString([], { month: 'short', day: 'numeric' })} at {time.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
-                        <span style={{ marginLeft: '8px', color: theme.navy }}>tap to edit</span>
+                  <>
+                    <div
+                      onClick={() => setExpandedId(isExpanded ? null : v.id)}
+                      style={{ padding: '14px 16px', cursor: 'pointer' }}
+                    >
+                      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'start' }}>
+                        <div style={{ flex: 1 }}>
+                          <div style={{ display: 'flex', alignItems: 'center', gap: '8px', flexWrap: 'wrap' }}>
+                            <div style={{ fontWeight: 700, fontSize: '15px', color: theme.textPrimary, letterSpacing: '-0.2px' }}>{title}</div>
+                            {isSubmitted && (
+                              <span style={{
+                                padding: '2px 7px', borderRadius: '6px', fontSize: '9px', fontWeight: 700,
+                                background: reviewStatus === 'approved' ? 'var(--success-bg)' : reviewStatus === 'denied' ? 'var(--error-bg)' : 'var(--warning-bg)',
+                                border: `1px solid ${reviewStatus === 'approved' ? 'var(--success-border)' : reviewStatus === 'denied' ? 'var(--error-border)' : 'var(--warning-border)'}`,
+                                color: reviewStatus === 'approved' ? 'var(--success)' : reviewStatus === 'denied' ? 'var(--error)' : 'var(--warning)',
+                              }}>
+                                {reviewStatus === 'approved' ? '✅' : reviewStatus === 'denied' ? '❌' : '⏳'} {reviewStatus === 'approved' ? 'Approved' : reviewStatus === 'denied' ? 'Rework' : 'Pending'}
+                              </span>
+                            )}
+                          </div>
+                          <div style={{ fontSize: '11px', fontFamily: "'SF Mono', 'Fira Code', monospace", color: theme.textMuted, marginTop: '3px', letterSpacing: '0.3px' }}>{v.vin}</div>
+                          {v.part_number && (
+                            <div style={{ fontSize: '12px', color: theme.navyLight, fontWeight: 600, marginTop: '4px' }}>{v.part_number} — {v.end_customer}</div>
+                          )}
+                          <div style={{ fontSize: '10px', color: theme.textMuted, marginTop: '4px' }}>
+                            {time.toLocaleDateString([], { month: 'short', day: 'numeric' })} at {time.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+                          </div>
+                        </div>
+                        <div style={{ fontSize: '10px', color: theme.textMuted, marginTop: '4px' }}>
+                          {isExpanded ? '▲' : '▼'}
+                        </div>
                       </div>
                     </div>
-                    <button onClick={() => router.push(`/photos?id=${v.id}`)} style={{
-                      background: 'rgba(30,74,94,0.08)', border: '1px solid rgba(30,74,94,0.15)',
-                      borderRadius: '10px', padding: '8px 12px', color: theme.navyLight,
-                      fontSize: '11px', fontWeight: 700, flexShrink: 0,
-                    }}>📸 Photos</button>
-                  </div>
+
+                    {isExpanded && (
+                      <div style={{ borderTop: `1px solid ${theme.border}`, padding: '12px 16px' }}>
+                        <div style={{ display: 'flex', gap: '8px' }}>
+                          <button onClick={() => startEdit(v)} style={{
+                            flex: 1, padding: '10px', borderRadius: '10px',
+                            background: 'rgba(59,130,246,0.08)', border: '1px solid rgba(59,130,246,0.2)',
+                            color: '#60a5fa', fontSize: '12px', fontWeight: 700, cursor: 'pointer',
+                          }}>Edit</button>
+                          <button onClick={() => router.push(`/photos?id=${v.id}`)} style={{
+                            flex: 1, padding: '10px', borderRadius: '10px',
+                            background: 'rgba(30,74,94,0.08)', border: '1px solid rgba(30,74,94,0.15)',
+                            color: theme.navyLight, fontSize: '12px', fontWeight: 700, cursor: 'pointer',
+                          }}>📸 Photos</button>
+                        </div>
+                        <button
+                          onClick={() => {
+                            if (window.confirm(`Delete this vehicle (${v.vin})? This cannot be undone.`)) handleDelete(v.id);
+                          }}
+                          disabled={deletingId === v.id}
+                          style={{
+                            width: '100%', marginTop: '8px', padding: '10px', borderRadius: '10px',
+                            background: 'rgba(248,113,113,0.08)', border: '1px solid rgba(248,113,113,0.2)',
+                            color: '#f87171', fontSize: '12px', fontWeight: 700, cursor: 'pointer',
+                          }}
+                        >
+                          {deletingId === v.id ? 'Deleting...' : 'Delete Vehicle'}
+                        </button>
+                      </div>
+                    )}
+                  </>
                 )}
               </div>
-            </SwipeToDelete>
           );
         })}
       </div>

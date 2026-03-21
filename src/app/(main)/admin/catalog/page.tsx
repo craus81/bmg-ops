@@ -4,7 +4,6 @@ import { useState, useEffect, useRef } from 'react';
 import { useRouter } from 'next/navigation';
 import { createClient } from '@/lib/supabase-browser';
 import { useAuth } from '@/components/AuthProvider';
-import SwipeToDelete from '@/components/SwipeToDelete';
 import type { CatalogItem, CatalogProof } from '@/lib/types';
 
 export default function CatalogPage() {
@@ -254,8 +253,7 @@ export default function CatalogPage() {
           const proofs = proofMap[c.id] || [];
 
           return (
-            <SwipeToDelete key={c.id} onDelete={() => handleDelete(c.id)} confirmMessage={`Delete part ${c.part_number}? This cannot be undone.`}>
-              <div style={{ background: 'var(--card)', border: '1px solid var(--border)', borderRadius: '14px', padding: '12px' }}>
+            <div key={c.id} style={{ background: 'var(--card)', border: '1px solid var(--border)', borderRadius: '14px', padding: '12px' }}>
                 {isEditing ? (
                   <div>
                     <Input label="Part Number" value={form.part_number} onChange={(v) => setForm({ ...form, part_number: v })} />
@@ -369,10 +367,22 @@ export default function CatalogPage() {
                         </button>
                       </div>
                     )}
+                    {/* Delete Part button inside expanded proofs panel */}
+                    <button
+                      onClick={() => {
+                        if (window.confirm(`Delete part ${c.part_number}? This cannot be undone.`)) handleDelete(c.id);
+                      }}
+                      style={{
+                        width: '100%', marginTop: '8px', padding: '8px', borderRadius: '10px',
+                        background: 'rgba(248,113,113,0.08)', border: '1px solid rgba(248,113,113,0.2)',
+                        color: '#f87171', fontSize: '12px', fontWeight: 700, cursor: 'pointer',
+                      }}
+                    >
+                      Delete Part
+                    </button>
                   </div>
                 )}
               </div>
-            </SwipeToDelete>
           );
         })}
       </div>
