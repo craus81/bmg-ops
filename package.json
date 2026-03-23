@@ -8,6 +8,7 @@
     "start": "next start"
   },
   "dependencies": {
+    "@sendgrid/mail": "^8.1.6",
     "@supabase/ssr": "^0.4.0",
     "@supabase/supabase-js": "^2.43.4",
     "@zxing/browser": "^0.1.5",
@@ -23,6 +24,7 @@
     "pdfjs-dist": "^5.4.624",
     "react": "^18.3.0",
     "react-dom": "^18.3.0",
+    "twilio": "^5.13.0",
     "xlsx": "^0.18.5"
   },
   "devDependencies": {

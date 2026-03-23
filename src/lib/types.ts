@@ -2,7 +2,7 @@ export interface Profile {
   id: string;
   full_name: string;
   email: string;
-  role: 'admin' | 'installer';
+  role: 'admin' | 'installer' | 'production' | 'sales';
   status?: 'pending' | 'approved' | 'denied';
   requested_role?: string;
   company_id?: string;
@@ -344,4 +344,134 @@ export interface NetsuiteSalesOrderLine {
   quantity: number;
   rate: number;
   amount: number;
+}
+
+// ═══════════ GRAPHICS PRODUCTION ═══════════
+
+export type GraphicsJobStatus =
+  | 'flagged'
+  | 'received'
+  | 'designing'
+  | 'revision'
+  | 'printing'
+  | 'outgassing'
+  | 'cutting'
+  | 'packing'
+  | 'ready'
+  | 'shipped'
+  | 'installed'
+  | 'cancelled';
+
+export const GRAPHICS_STATUS_LABELS: Record<GraphicsJobStatus, string> = {
+  flagged: 'Flagged for Review',
+  received: 'Job Received',
+  designing: 'Designing',
+  revision: 'In Revision',
+  printing: 'Printing',
+  outgassing: 'Outgassing',
+  cutting: 'Cutting',
+  packing: 'Packing',
+  ready: 'Ready to Install',
+  shipped: 'Shipped',
+  installed: 'Installed',
+  cancelled: 'Cancelled',
+};
+
+export const GRAPHICS_STATUS_COLORS: Record<GraphicsJobStatus, string> = {
+  flagged: '#f59e0b',
+  received: '#60a5fa',
+  designing: '#a78bfa',
+  revision: '#f97316',
+  printing: '#34d399',
+  outgassing: '#67e8f9',
+  cutting: '#fbbf24',
+  packing: '#c084fc',
+  ready: '#4ade80',
+  shipped: '#3b82f6',
+  installed: '#22c55e',
+  cancelled: '#6b7280',
+};
+
+export const GRAPHICS_STATUS_ORDER: GraphicsJobStatus[] = [
+  'flagged', 'received', 'designing', 'revision', 'printing',
+  'outgassing', 'cutting', 'packing', 'ready', 'shipped', 'installed', 'cancelled',
+];
+
+export interface GraphicsJob {
+  id: string;
+  po_id: string | null;
+  po_line_item_id: string | null;
+  job_number: string | null;
+  title: string;
+  part_number: string | null;
+  customer: string | null;
+  quantity: number;
+  content: string | null;
+  notes: string | null;
+  vinyl_type: string | null;
+  vinyl_color: string | null;
+  laminate: string | null;
+  print_method: string | null;
+  cut_method: string | null;
+  premask: string | null;
+  status: GraphicsJobStatus;
+  tracking_number: string | null;
+  carrier: string | null;
+  ship_to: string | null;
+  priority: 'low' | 'normal' | 'high' | 'rush';
+  due_date: string | null;
+  scheduled_install_date: string | null;
+  calendar_event_id: string | null;
+  created_by: string | null;
+  assigned_to: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface GraphicsStatusHistory {
+  id: string;
+  job_id: string;
+  from_status: string | null;
+  to_status: string;
+  changed_by: string | null;
+  note: string | null;
+  created_at: string;
+}
+
+export interface NotificationPreferences {
+  id: string;
+  user_id: string;
+  notify_new_job: boolean;
+  notify_status_change: boolean;
+  notify_ready: boolean;
+  notify_shipped: boolean;
+  notify_in_app: boolean;
+  notify_email: boolean;
+  notify_sms: boolean;
+  phone_number: string | null;
+  custom_statuses: string[] | null;
+  sms_messages: boolean;
+  sms_messages_mode: 'always' | 'unread_only';
+  email_messages: boolean;
+}
+
+// ═══════════ MESSAGING ═══════════
+
+export interface Conversation {
+  id: string;
+  participant_1: string;
+  participant_2: string;
+  last_message_at: string;
+  created_at: string;
+}
+
+export interface Message {
+  id: string;
+  conversation_id: string;
+  sender_id: string;
+  body: string;
+  read_at: string | null;
+  created_at: string;
+  via_sms?: boolean;
+  sms_sid?: string | null;
 }

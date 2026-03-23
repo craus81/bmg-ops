@@ -146,7 +146,10 @@ function MascotSvg({ thinking, size = 52 }: { thinking?: boolean; size?: number 
 }
 
 export default function AiChat() {
-  const { isAdmin } = useAuth();
+  const { isAdmin, profile } = useAuth();
+  const isSales = profile?.role === 'sales' || isAdmin;
+  const isProduction = profile?.role === 'production' || isAdmin;
+  const hasAccess = isAdmin || isSales || isProduction;
   const [isOpen, setIsOpen] = useState(false);
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [input, setInput] = useState('');
@@ -154,7 +157,7 @@ export default function AiChat() {
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLInputElement>(null);
 
-  if (!isAdmin) return null;
+  if (!hasAccess) return null;
 
   const scrollToBottom = () => {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
@@ -181,7 +184,7 @@ export default function AiChat() {
       const res = await fetch('/api/ai-agent/chat', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ messages: history }),
+        body: JSON.stringify({ messages: history, userRole: profile?.role }),
       });
 
       const data = await res.json();
@@ -300,7 +303,7 @@ export default function AiChat() {
                   FleetSuite AI
                 </div>
                 <div style={{ fontSize: '10px', color: sending ? '#60a5fa' : '#4a5f78' }}>
-                  {sending ? 'Thinking...' : 'Ask anything about your data'}
+                  {sending ? 'Thinking...' : 'Ask anything or tell me to do something'}
                 </div>
               </div>
             </div>
@@ -348,14 +351,28 @@ export default function AiChat() {
                   <MascotSvg size={80} />
                 </div>
                 <div style={{ fontSize: '12px', color: '#4a5f78', lineHeight: '1.5' }}>
-                  Ask me about customers, orders, pricing, invoices...
+                  {isAdmin
+                    ? 'Ask about data, graphics jobs, customers, or tell me to do something'
+                    : isProduction
+                    ? 'Ask about graphics jobs, production status, or schedules'
+                    : 'Ask about customers, estimates, or graphics status'}
                 </div>
                 <div style={{ marginTop: '12px', display: 'flex', flexDirection: 'column', gap: '4px' }}>
-                  {[
-                    'How much did we charge Pundmann for the last wrap?',
+                  {(isAdmin ? [
+                    'How many graphics jobs are in printing right now?',
                     'Who are our top 5 customers this year?',
+                    'Create a graphics job for 10 unit number decals for Masterack',
                     'What open invoices does Enterprise have?',
-                  ].map((suggestion, i) => (
+                  ] : isProduction ? [
+                    'What jobs are behind schedule?',
+                    'How many jobs are in each status right now?',
+                    'Move all outgassing jobs to cutting',
+                    'What graphics jobs are due this week?',
+                  ] : [
+                    'What open invoices does Enterprise have?',
+                    'Who are our top 5 customers this year?',
+                    'What graphics jobs are ready to ship?',
+                  ]).map((suggestion, i) => (
                     <button
                       key={i}
                       onClick={() => {

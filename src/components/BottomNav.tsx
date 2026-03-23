@@ -1,26 +1,45 @@
 'use client';
 
 import { usePathname, useRouter } from 'next/navigation';
+import { useAuth } from '@/components/AuthProvider';
 import { theme } from '@/lib/theme';
 
 interface BottomNavProps {
   clockStatus: 'out' | 'in' | 'break';
 }
 
-const tabs = [
+type AppRole = 'admin' | 'installer' | 'production' | 'sales';
+
+interface Tab {
+  id: string;
+  path: string;
+  label: string;
+  icon: string;
+  roles?: AppRole[];
+}
+
+const allTabs: Tab[] = [
   { id: 'home', path: '/home', label: 'Home', icon: '🏠' },
   { id: 'time', path: '/time', label: 'Time', icon: '⏰' },
+  { id: 'graphics', path: '/graphics', label: 'Graphics', icon: '🎨', roles: ['admin', 'production', 'sales'] },
   { id: 'fleet', path: '/fleet', label: 'Fleet', icon: '🚚' },
   { id: 'tracking', path: '/tracking', label: 'Tracking', icon: '📋' },
   { id: 'vehicles', path: '/vehicles', label: 'Vehicles', icon: '🚐' },
+  { id: 'messages', path: '/messages', label: 'Chat', icon: '💬' },
   { id: 'more', path: '/more', label: 'More', icon: '⋯' },
 ];
 
 export default function BottomNav({ clockStatus }: BottomNavProps) {
   const pathname = usePathname();
   const router = useRouter();
+  const { profile } = useAuth();
 
-  const getIcon = (tab: typeof tabs[0]) => {
+  const userRole = profile?.role || 'installer';
+
+  // Filter tabs by role (no roles = visible to all)
+  const tabs = allTabs.filter(tab => !tab.roles || tab.roles.includes(userRole));
+
+  const getIcon = (tab: Tab) => {
     if (tab.id === 'time') {
       if (clockStatus === 'in') return '🟢';
       if (clockStatus === 'break') return '🟡';
@@ -28,10 +47,11 @@ export default function BottomNav({ clockStatus }: BottomNavProps) {
     return tab.icon;
   };
 
-  const isActive = (tab: typeof tabs[0]) => {
+  const isActive = (tab: Tab) => {
     if (tab.path === '/home') return pathname === '/home' || pathname === '/scan' || pathname === '/select-part' || pathname === '/photos';
     if (tab.path === '/fleet') return pathname === '/fleet' || pathname === '/fleet/update';
     if (tab.path === '/tracking') return pathname === '/tracking';
+    if (tab.path === '/graphics') return pathname.startsWith('/graphics');
     return pathname.startsWith(tab.path);
   };
 

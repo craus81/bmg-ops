@@ -2,7 +2,10 @@
 import { google } from 'googleapis';
 import { createClient } from '@supabase/supabase-js';
 
-const SCOPES = ['https://www.googleapis.com/auth/gmail.readonly'];
+const SCOPES = [
+  'https://www.googleapis.com/auth/gmail.readonly',
+  'https://www.googleapis.com/auth/calendar',
+];
 
 function getOAuth2Client() {
   return new google.auth.OAuth2(
@@ -164,4 +167,112 @@ export function getHeader(message: any, name: string): string {
   const headers = message.payload?.headers || [];
   const h = headers.find((h: any) => h.name.toLowerCase() === name.toLowerCase());
   return h?.value || '';
+}
+
+// ═══════════ GOOGLE CALENDAR ═══════════
+
+// The shared company calendar ID — set via env var or default to primary
+const CALENDAR_ID = process.env.GOOGLE_CALENDAR_ID || 'primary';
+
+// Get an authenticated Calendar client using stored refresh token
+async function getCalendarClient() {
+  const supabase = createClient(
+    process.env.NEXT_PUBLIC_SUPABASE_URL!,
+    process.env.SUPABASE_SERVICE_ROLE_KEY!
+  );
+
+  const { data: tokenRow } = await supabase
+    .from('google_tokens')
+    .select('*')
+    .order('created_at', { ascending: false })
+    .limit(1)
+    .single();
+
+  if (!tokenRow) {
+    throw new Error('NO_GOOGLE_TOKEN');
+  }
+
+  const client = getOAuth2Client();
+  client.setCredentials({
+    refresh_token: tokenRow.refresh_token,
+    access_token: tokenRow.access_token,
+    expiry_date: tokenRow.expiry_date ? new Date(tokenRow.expiry_date).getTime() : undefined,
+  });
+
+  client.on('tokens', async (tokens) => {
+    const updates: any = {};
+    if (tokens.access_token) updates.access_token = tokens.access_token;
+    if (tokens.expiry_date) updates.expiry_date = new Date(tokens.expiry_date).toISOString();
+    if (Object.keys(updates).length > 0) {
+      await supabase.from('google_tokens').update(updates).eq('id', tokenRow.id);
+    }
+  });
+
+  return google.calendar({ version: 'v3', auth: client });
+}
+
+/**
+ * Create or update a Google Calendar event for a graphics job install date.
+ * Returns the event ID.
+ */
+export async function syncCalendarEvent(params: {
+  eventId?: string | null;
+  title: string;
+  date: string; // YYYY-MM-DD
+  description?: string;
+  location?: string;
+}): Promise<string | null> {
+  try {
+    const calendar = await getCalendarClient();
+
+    const eventBody = {
+      summary: `🎨 Install: ${params.title}`,
+      description: params.description || '',
+      location: params.location || '',
+      start: {
+        date: params.date, // All-day event
+      },
+      end: {
+        date: params.date,
+      },
+      colorId: '6', // Orange — matches BMG brand
+    };
+
+    if (params.eventId) {
+      // Update existing event
+      const res = await calendar.events.update({
+        calendarId: CALENDAR_ID,
+        eventId: params.eventId,
+        requestBody: eventBody,
+      });
+      return res.data.id || params.eventId;
+    } else {
+      // Create new event
+      const res = await calendar.events.insert({
+        calendarId: CALENDAR_ID,
+        requestBody: eventBody,
+      });
+      return res.data.id || null;
+    }
+  } catch (err) {
+    console.error('Google Calendar sync failed:', err);
+    return null;
+  }
+}
+
+/**
+ * Delete a Google Calendar event.
+ */
+export async function deleteCalendarEvent(eventId: string): Promise<boolean> {
+  try {
+    const calendar = await getCalendarClient();
+    await calendar.events.delete({
+      calendarId: CALENDAR_ID,
+      eventId,
+    });
+    return true;
+  } catch (err) {
+    console.error('Google Calendar delete failed:', err);
+    return false;
+  }
 }

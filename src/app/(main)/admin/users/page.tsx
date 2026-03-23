@@ -89,7 +89,7 @@ export default function UsersPage() {
       const company = companies.find((c) => c.id === companyId);
       setUsers((prev) => prev.map((u) =>
         u.id === userId
-          ? { ...u, status: 'approved' as const, role: role as 'admin' | 'installer', company_id: companyId, company_name: company?.name || '' }
+          ? { ...u, status: 'approved' as const, role: role as 'admin' | 'installer' | 'production' | 'sales', company_id: companyId, company_name: company?.name || '' }
           : u
       ));
       setPendingCompanies((prev) => { const next = { ...prev }; delete next[userId]; return next; });
@@ -114,7 +114,7 @@ export default function UsersPage() {
       .eq('id', userId);
 
     if (!error) {
-      setUsers((prev) => prev.map((u) => u.id === userId ? { ...u, role: newRole as 'admin' | 'installer' } : u));
+      setUsers((prev) => prev.map((u) => u.id === userId ? { ...u, role: newRole as 'admin' | 'installer' | 'production' | 'sales' } : u));
     }
   };
 
@@ -421,17 +421,21 @@ export default function UsersPage() {
                     </div>
                   )}
 
-                  <div style={{ display: 'flex', gap: '6px' }}>
-                    <button
-                      onClick={() => handleChangeRole(user.id, user.role === 'admin' ? 'installer' : 'admin')}
+                  <div style={{ display: 'flex', gap: '6px', alignItems: 'center' }}>
+                    <select
+                      value={user.role}
+                      onChange={(e) => handleChangeRole(user.id, e.target.value)}
                       style={{
-                        padding: '6px 12px', borderRadius: '8px', fontSize: '10px', fontWeight: 700,
+                        padding: '6px 10px', borderRadius: '8px', fontSize: '10px', fontWeight: 700,
                         background: 'var(--subtle-bg)', border: '1px solid var(--border)',
                         color: 'var(--text-secondary)',
                       }}
                     >
-                      Switch to {user.role === 'admin' ? 'Installer' : 'Admin'}
-                    </button>
+                      <option value="admin">Admin</option>
+                      <option value="installer">Installer</option>
+                      <option value="production">Production</option>
+                      <option value="sales">Sales</option>
+                    </select>
                     <button
                       onClick={() => { if (window.confirm(`Revoke access for ${user.full_name}?`)) handleResetStatus(user.id, 'denied'); }}
                       style={{

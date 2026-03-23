@@ -32,7 +32,7 @@ export default function POsPage() {
   const [editPoId, setEditPoId] = useState<string | null>(null);
   const [editPoForm, setEditPoForm] = useState({ po_number: '', customer: '', status: '' as string });
   const [editLineId, setEditLineId] = useState<string | null>(null);
-  const [editLineForm, setEditLineForm] = useState({ quantity: '', unit_price: '' });
+  const [editLineForm, setEditLineForm] = useState({ part_number: '', quantity: '', unit_price: '' });
   const [form, setForm] = useState({ po_number: '', customer: 'Masterack' });
   const [lineItems, setLineItems] = useState<{ catalog_id: string; part_number: string; quantity: number; unit_price: number }[]>([]);
   const fileRef = useRef<HTMLInputElement>(null);
@@ -58,6 +58,8 @@ export default function POsPage() {
   const [overwriteData, setOverwriteData] = useState<any>(null);
   const [overwriteMessageId, setOverwriteMessageId] = useState<string | null>(null);
   const [overwriting, setOverwriting] = useState(false);
+  // Email PO review/edit state
+  const [reviewingExtraction, setReviewingExtraction] = useState<{ messageId: string; extracted: any } | null>(null);
   // NetSuite SO creation state
   const [creatingSOForPo, setCreatingSOForPo] = useState<string | null>(null);
   const [soResults, setSoResults] = useState<Record<string, any>>({});
@@ -435,23 +437,24 @@ export default function POsPage() {
 
   const startEditLine = (li: POLineItem) => {
     setEditLineId(li.id);
-    setEditLineForm({ quantity: li.quantity.toString(), unit_price: li.unit_price.toString() });
+    setEditLineForm({ part_number: li.part_number || '', quantity: li.quantity.toString(), unit_price: li.unit_price.toString() });
   };
 
   const saveEditLine = async (poId: string) => {
     if (!editLineId) return;
+    const partNum = editLineForm.part_number.trim();
     const qty = parseInt(editLineForm.quantity) || 1;
     const price = parseFloat(editLineForm.unit_price) || 0;
     const { error } = await supabase
       .from('po_line_items')
-      .update({ quantity: qty, unit_price: price })
+      .update({ part_number: partNum, quantity: qty, unit_price: price })
       .eq('id', editLineId);
 
     if (!error) {
       setPos((prev) =>
         prev.map((po) =>
           po.id === poId
-            ? { ...po, line_items: po.line_items.map((li) => li.id === editLineId ? { ...li, quantity: qty, unit_price: price } : li) }
+            ? { ...po, line_items: po.line_items.map((li) => li.id === editLineId ? { ...li, part_number: partNum, quantity: qty, unit_price: price } : li) }
             : po
         )
       );
@@ -488,19 +491,26 @@ export default function POsPage() {
     setEmailLoading(false);
   };
 
-  const importEmailPO = async (messageId: string) => {
+  const importEmailPO = async (messageId: string, skipReview = false) => {
     setImportingEmailId(messageId);
     try {
       const res = await fetch('/api/gmail/import-po', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ messageId, autoCreate: true }),
+        body: JSON.stringify({ messageId, autoCreate: skipReview, extractOnly: !skipReview }),
       });
       const data = await res.json();
 
       // Normalize error responses — API returns { error: '...' } on non-200
       if (!res.ok || data.error) {
         setEmailImportResults(prev => ({ ...prev, [messageId]: { status: 'error', error: data.error || `Request failed (${res.status})` } }));
+        setImportingEmailId(null);
+        return;
+      }
+
+      // Extract-only mode: show review panel
+      if (data.status === 'review') {
+        setReviewingExtraction({ messageId, extracted: data.extracted });
         setImportingEmailId(null);
         return;
       }
@@ -520,15 +530,73 @@ export default function POsPage() {
       if (data.status === 'imported' || data.status === 'updated') {
         const { data: poData } = await supabase
           .from('purchase_orders')
-          .select('*, po_line_items(*)')
+          .select('*, po_line_items(*), po_invoices(*)')
           .order('created_at', { ascending: false });
-        const mapped = (poData || []).map((po: any) => ({ ...po, line_items: po.po_line_items || [] }));
+        const mapped = (poData || []).map((po: any) => ({ ...po, line_items: po.po_line_items || [], po_invoices: (po.po_invoices || []).sort((a: any, b: any) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime()) }));
         setPos(mapped);
       }
     } catch (err: any) {
       setEmailImportResults(prev => ({ ...prev, [messageId]: { status: 'error', error: err.message || 'Network error' } }));
     }
     setImportingEmailId(null);
+  };
+
+  // Confirm import with reviewed/edited extraction data
+  const confirmReviewedImport = async () => {
+    if (!reviewingExtraction) return;
+    const { messageId, extracted } = reviewingExtraction;
+    setImportingEmailId(messageId);
+    try {
+      const res = await fetch('/api/gmail/import-po', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ messageId, preExtracted: extracted }),
+      });
+      const data = await res.json();
+
+      if (!res.ok || data.error) {
+        setEmailImportResults(prev => ({ ...prev, [messageId]: { status: 'error', error: data.error || `Request failed (${res.status})` } }));
+      } else if (data.status === 'exists') {
+        setOverwriteData(data);
+        setOverwriteMessageId(messageId);
+        setShowOverwriteConfirm(true);
+      } else {
+        setEmailImportResults(prev => ({ ...prev, [messageId]: data }));
+        if (data.status === 'imported' || data.status === 'updated') {
+          const { data: poData } = await supabase
+            .from('purchase_orders')
+            .select('*, po_line_items(*), po_invoices(*)')
+            .order('created_at', { ascending: false });
+          const mapped = (poData || []).map((po: any) => ({ ...po, line_items: po.po_line_items || [], po_invoices: (po.po_invoices || []).sort((a: any, b: any) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime()) }));
+          setPos(mapped);
+        }
+      }
+    } catch (err: any) {
+      setEmailImportResults(prev => ({ ...prev, [messageId]: { status: 'error', error: err.message || 'Network error' } }));
+    }
+    setReviewingExtraction(null);
+    setImportingEmailId(null);
+  };
+
+  // Update a line in the reviewed extraction
+  const updateReviewLine = (lineIdx: number, field: string, value: any) => {
+    if (!reviewingExtraction) return;
+    setReviewingExtraction(prev => {
+      if (!prev) return prev;
+      const updated = { ...prev, extracted: { ...prev.extracted, lines: [...prev.extracted.lines] } };
+      updated.extracted.lines[lineIdx] = { ...updated.extracted.lines[lineIdx], [field]: value };
+      return updated;
+    });
+  };
+
+  // Remove a line from reviewed extraction
+  const removeReviewLine = (lineIdx: number) => {
+    if (!reviewingExtraction) return;
+    setReviewingExtraction(prev => {
+      if (!prev) return prev;
+      const updated = { ...prev, extracted: { ...prev.extracted, lines: prev.extracted.lines.filter((_: any, i: number) => i !== lineIdx) } };
+      return updated;
+    });
   };
 
   const confirmOverwrite = async () => {
@@ -995,6 +1063,174 @@ export default function POsPage() {
               No PO emails found in the selected timeframe.
             </div>
           )}
+        </div>
+      )}
+
+      {/* Email PO Review/Edit Panel */}
+      {reviewingExtraction && (
+        <div style={{ position: 'fixed', top: 0, left: 0, right: 0, bottom: 0, background: 'rgba(0,0,0,0.7)', zIndex: 1000, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '16px' }}>
+          <div style={{ background: '#141e2b', border: '1px solid rgba(59,130,246,0.3)', borderRadius: '14px', padding: '18px', maxWidth: '520px', width: '100%', maxHeight: '85vh', overflowY: 'auto' }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '14px' }}>
+              <div>
+                <div style={{ fontSize: '16px', fontWeight: 800, color: '#e8ecf1' }}>Review PO Import</div>
+                <div style={{ fontSize: '11px', color: '#4a5f78', marginTop: '2px' }}>
+                  PO #{reviewingExtraction.extracted.po_number} · {reviewingExtraction.extracted.customer || 'Unknown'} · {reviewingExtraction.extracted.lines?.length || 0} line items
+                </div>
+              </div>
+              <button onClick={() => setReviewingExtraction(null)} style={{ background: 'none', border: 'none', color: '#4a5f78', fontSize: '18px', cursor: 'pointer', padding: '4px' }}>✕</button>
+            </div>
+
+            {/* PO header fields */}
+            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: '8px', marginBottom: '14px' }}>
+              <div>
+                <div style={{ fontSize: '9px', fontWeight: 700, color: '#4a5f78', textTransform: 'uppercase', marginBottom: '3px' }}>PO Number</div>
+                <input
+                  value={reviewingExtraction.extracted.po_number || ''}
+                  onChange={e => setReviewingExtraction(prev => prev ? { ...prev, extracted: { ...prev.extracted, po_number: e.target.value } } : prev)}
+                  style={{ width: '100%', padding: '6px 8px', borderRadius: '6px', border: '1px solid #2a3a4d', background: '#0f1720', color: '#e8ecf1', fontSize: '12px', fontWeight: 700 }}
+                />
+              </div>
+              <div>
+                <div style={{ fontSize: '9px', fontWeight: 700, color: '#4a5f78', textTransform: 'uppercase', marginBottom: '3px' }}>Customer</div>
+                <input
+                  value={reviewingExtraction.extracted.customer || ''}
+                  onChange={e => setReviewingExtraction(prev => prev ? { ...prev, extracted: { ...prev.extracted, customer: e.target.value } } : prev)}
+                  style={{ width: '100%', padding: '6px 8px', borderRadius: '6px', border: '1px solid #2a3a4d', background: '#0f1720', color: '#e8ecf1', fontSize: '12px' }}
+                />
+              </div>
+              <div>
+                <div style={{ fontSize: '9px', fontWeight: 700, color: '#4a5f78', textTransform: 'uppercase', marginBottom: '3px' }}>Order Date</div>
+                <input
+                  value={reviewingExtraction.extracted.ordered_date || ''}
+                  onChange={e => setReviewingExtraction(prev => prev ? { ...prev, extracted: { ...prev.extracted, ordered_date: e.target.value } } : prev)}
+                  style={{ width: '100%', padding: '6px 8px', borderRadius: '6px', border: '1px solid #2a3a4d', background: '#0f1720', color: '#e8ecf1', fontSize: '12px' }}
+                />
+              </div>
+            </div>
+
+            {/* Line items */}
+            <div style={{ fontSize: '11px', fontWeight: 700, color: '#60a5fa', marginBottom: '8px' }}>
+              Line Items ({reviewingExtraction.extracted.lines?.length || 0})
+            </div>
+
+            {(reviewingExtraction.extracted.lines || []).map((line: any, idx: number) => {
+              const catalogMatch = catalog.find(c =>
+                c.part_number.toUpperCase() === (line.supplier_part || '').toUpperCase() ||
+                c.part_number.toUpperCase() === (line.part_number || '').toUpperCase()
+              );
+              return (
+                <div key={idx} style={{
+                  padding: '10px', marginBottom: '6px', borderRadius: '8px',
+                  background: catalogMatch ? 'rgba(34,197,94,0.04)' : 'rgba(251,191,36,0.04)',
+                  border: `1px solid ${catalogMatch ? 'rgba(34,197,94,0.2)' : 'rgba(251,191,36,0.2)'}`,
+                }}>
+                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '6px' }}>
+                    <div style={{ fontSize: '10px', fontWeight: 700, color: '#4a5f78' }}>Line {line.line_no || idx + 1}</div>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+                      {catalogMatch && <span style={{ fontSize: '9px', color: '#4ade80', fontWeight: 600 }}>✓ Catalog match</span>}
+                      {!catalogMatch && <span style={{ fontSize: '9px', color: '#fbbf24', fontWeight: 600 }}>No catalog match</span>}
+                      <button
+                        onClick={() => removeReviewLine(idx)}
+                        style={{ background: 'none', border: 'none', color: '#ef4444', fontSize: '12px', cursor: 'pointer', padding: '2px 4px' }}
+                        title="Remove line"
+                      >✕</button>
+                    </div>
+                  </div>
+                  <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '6px', marginBottom: '6px' }}>
+                    <div>
+                      <div style={{ fontSize: '9px', fontWeight: 700, color: '#4a5f78', textTransform: 'uppercase', marginBottom: '2px' }}>Part Number</div>
+                      <input
+                        value={line.part_number || ''}
+                        onChange={e => updateReviewLine(idx, 'part_number', e.target.value)}
+                        style={{ width: '100%', padding: '5px 7px', borderRadius: '5px', border: '1px solid #2a3a4d', background: '#0f1720', color: '#e8ecf1', fontSize: '12px', fontWeight: 700 }}
+                      />
+                    </div>
+                    <div>
+                      <div style={{ fontSize: '9px', fontWeight: 700, color: '#4a5f78', textTransform: 'uppercase', marginBottom: '2px' }}>Supplier Part</div>
+                      <input
+                        value={line.supplier_part || ''}
+                        onChange={e => updateReviewLine(idx, 'supplier_part', e.target.value)}
+                        style={{ width: '100%', padding: '5px 7px', borderRadius: '5px', border: '1px solid #2a3a4d', background: '#0f1720', color: '#e8ecf1', fontSize: '12px', fontWeight: 700 }}
+                      />
+                    </div>
+                  </div>
+                  <div style={{ marginBottom: '6px' }}>
+                    <div style={{ fontSize: '9px', fontWeight: 700, color: '#4a5f78', textTransform: 'uppercase', marginBottom: '2px' }}>Description</div>
+                    <input
+                      value={line.description || ''}
+                      onChange={e => updateReviewLine(idx, 'description', e.target.value)}
+                      style={{ width: '100%', padding: '5px 7px', borderRadius: '5px', border: '1px solid #2a3a4d', background: '#0f1720', color: '#e8ecf1', fontSize: '11px' }}
+                    />
+                  </div>
+                  <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: '6px' }}>
+                    <div>
+                      <div style={{ fontSize: '9px', fontWeight: 700, color: '#4a5f78', textTransform: 'uppercase', marginBottom: '2px' }}>Qty</div>
+                      <input
+                        type="number"
+                        value={line.quantity ?? ''}
+                        onChange={e => updateReviewLine(idx, 'quantity', parseInt(e.target.value) || 0)}
+                        style={{ width: '100%', padding: '5px 7px', borderRadius: '5px', border: '1px solid #2a3a4d', background: '#0f1720', color: '#e8ecf1', fontSize: '12px' }}
+                      />
+                    </div>
+                    <div>
+                      <div style={{ fontSize: '9px', fontWeight: 700, color: '#4a5f78', textTransform: 'uppercase', marginBottom: '2px' }}>Unit Price</div>
+                      <input
+                        type="number"
+                        step="0.01"
+                        value={line.unit_price ?? ''}
+                        onChange={e => updateReviewLine(idx, 'unit_price', parseFloat(e.target.value) || 0)}
+                        style={{ width: '100%', padding: '5px 7px', borderRadius: '5px', border: '1px solid #2a3a4d', background: '#0f1720', color: '#e8ecf1', fontSize: '12px' }}
+                      />
+                    </div>
+                    <div>
+                      <div style={{ fontSize: '9px', fontWeight: 700, color: '#4a5f78', textTransform: 'uppercase', marginBottom: '2px' }}>Delivery</div>
+                      <input
+                        value={line.delivery_date || ''}
+                        onChange={e => updateReviewLine(idx, 'delivery_date', e.target.value)}
+                        style={{ width: '100%', padding: '5px 7px', borderRadius: '5px', border: '1px solid #2a3a4d', background: '#0f1720', color: '#e8ecf1', fontSize: '11px' }}
+                      />
+                    </div>
+                  </div>
+                  {line.drawing_number && (
+                    <div style={{ marginTop: '4px', fontSize: '10px', color: '#4a5f78' }}>
+                      Drawing: {line.drawing_number}
+                    </div>
+                  )}
+                </div>
+              );
+            })}
+
+            {/* Total summary */}
+            {reviewingExtraction.extracted.lines?.length > 0 && (
+              <div style={{ padding: '8px 10px', borderRadius: '6px', background: 'rgba(59,130,246,0.06)', border: '1px solid rgba(59,130,246,0.15)', marginTop: '8px', marginBottom: '12px' }}>
+                <div style={{ fontSize: '11px', color: '#60a5fa', fontWeight: 700 }}>
+                  Total: {reviewingExtraction.extracted.lines.reduce((sum: number, l: any) => sum + (parseInt(l.quantity) || 0), 0)} units · ${reviewingExtraction.extracted.lines.reduce((sum: number, l: any) => sum + ((parseInt(l.quantity) || 0) * (parseFloat(l.unit_price) || 0)), 0).toFixed(2)}
+                </div>
+              </div>
+            )}
+
+            {/* Action buttons */}
+            <div style={{ display: 'flex', gap: '8px' }}>
+              <button
+                onClick={confirmReviewedImport}
+                disabled={importingEmailId !== null || !reviewingExtraction.extracted.lines?.length}
+                style={{
+                  flex: 1, padding: '12px', borderRadius: '10px',
+                  background: importingEmailId ? '#1e2d3d' : '#22c55e',
+                  color: '#fff', fontWeight: 800, fontSize: '13px', border: 'none', cursor: 'pointer',
+                  opacity: importingEmailId || !reviewingExtraction.extracted.lines?.length ? 0.5 : 1,
+                }}
+              >
+                {importingEmailId ? 'Importing...' : `Import ${reviewingExtraction.extracted.lines?.length || 0} Lines`}
+              </button>
+              <button
+                onClick={() => setReviewingExtraction(null)}
+                style={{ flex: 1, padding: '12px', borderRadius: '10px', background: 'transparent', border: '1px solid #1e2d3d', color: '#6b7a8d', fontWeight: 700, fontSize: '13px', cursor: 'pointer' }}
+              >
+                Cancel
+              </button>
+            </div>
+          </div>
         </div>
       )}
 
@@ -1598,7 +1834,10 @@ export default function POsPage() {
                     if (isEditingLine) {
                       return (
                         <div key={li.id} style={{ padding: '8px 0', borderBottom: '1px solid rgba(30,45,61,0.5)' }}>
-                          <div style={{ fontSize: '12px', fontWeight: 700, marginBottom: '4px' }}>{li.part_number}</div>
+                          <div style={{ marginBottom: '6px' }}>
+                            <label style={{ ...labelStyle, fontSize: '9px' }}>Part Number</label>
+                            <input value={editLineForm.part_number} onChange={(e) => setEditLineForm({ ...editLineForm, part_number: e.target.value })} style={{ ...inputStyle, padding: '6px 8px', fontSize: '12px', fontWeight: 700 }} />
+                          </div>
                           <div style={{ display: 'flex', gap: '6px', alignItems: 'end' }}>
                             <div style={{ flex: 1 }}>
                               <label style={{ ...labelStyle, fontSize: '9px' }}>Qty</label>

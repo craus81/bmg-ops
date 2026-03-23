@@ -44,7 +44,7 @@ const emptyContact = { name: '', email: '', phone: '', title: '', address: '', n
 
 export default function CustomersPage() {
   const router = useRouter();
-  const { isAdmin } = useAuth();
+  const { isAdmin, isSales } = useAuth();
   const supabase = createClient();
 
   const [customers, setCustomers] = useState<Customer[]>([]);
@@ -69,9 +69,9 @@ export default function CustomersPage() {
   const [saving, setSaving] = useState(false);
 
   useEffect(() => {
-    if (!isAdmin) { router.push('/home'); return; }
+    if (!isAdmin && !isSales) { router.push('/home'); return; }
     loadData();
-  }, [isAdmin]);
+  }, [isAdmin, isSales]);
 
   const loadData = async () => {
     const [custRes, contRes] = await Promise.all([

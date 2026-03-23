@@ -95,11 +95,11 @@ function fmtCurrency(n: number) {
 
 // ============ Main Page ============
 export default function QuotesPage() {
-  const { user, isAdmin } = useAuth();
+  const { user, isAdmin, isSales } = useAuth();
   const [tab, setTab] = useState<'quotes' | 'templates' | 'new'>('quotes');
   const [editQuote, setEditQuote] = useState<Quote | null>(null);
 
-  if (!isAdmin) {
+  if (!isAdmin && !isSales) {
     return (
       <div style={{ textAlign: 'center', padding: '60px 20px', color: theme.textSecondary }}>
         <div style={{ fontSize: '48px', marginBottom: '12px' }}>🔒</div>

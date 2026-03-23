@@ -1,6 +1,7 @@
 'use client';
 
 import { useState, useRef, useEffect } from 'react';
+import { useRouter } from 'next/navigation';
 import { useAuth } from '@/components/AuthProvider';
 import { theme } from '@/lib/theme';
 
@@ -22,6 +23,7 @@ interface Notification {
 
 export default function Header({ clockStatus, activePartNumber, activeEndCustomer }: HeaderProps) {
   const { user, profile, isAdmin, signOut } = useAuth();
+  const router = useRouter();
   const [showMenu, setShowMenu] = useState(false);
   const [showSwitchModal, setShowSwitchModal] = useState(false);
   const [switchEmail, setSwitchEmail] = useState('');
@@ -36,6 +38,9 @@ export default function Header({ clockStatus, activePartNumber, activeEndCustome
   const [unreadCount, setUnreadCount] = useState(0);
   const [loadingNotifs, setLoadingNotifs] = useState(false);
   const notifRef = useRef<HTMLDivElement>(null);
+
+  // Messaging unread count
+  const [unreadMessages, setUnreadMessages] = useState(0);
 
   const { createClient } = require('@/lib/supabase-browser');
   const supabase = createClient();
@@ -75,6 +80,51 @@ export default function Header({ clockStatus, activePartNumber, activeEndCustome
       .eq('user_id', user.id)
       .is('read_at', null);
     setUnreadCount(count || 0);
+  };
+
+  // Load unread message count and subscribe to realtime changes
+  useEffect(() => {
+    if (!user) return;
+    loadUnreadMessages();
+    const interval = setInterval(loadUnreadMessages, 30000);
+
+    // Subscribe to new messages for instant badge updates
+    const channel = supabase
+      .channel('header-messages')
+      .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'messages' }, (payload: any) => {
+        if (payload.new && payload.new.sender_id !== user.id) {
+          setUnreadMessages((c: number) => c + 1);
+        }
+      })
+      .on('postgres_changes', { event: 'UPDATE', schema: 'public', table: 'messages' }, () => {
+        // A message was marked as read — refresh count
+        loadUnreadMessages();
+      })
+      .subscribe();
+
+    return () => {
+      clearInterval(interval);
+      supabase.removeChannel(channel);
+    };
+  }, [user]);
+
+  const loadUnreadMessages = async () => {
+    if (!user) return;
+    // Count messages where I'm the recipient (not sender) and read_at is null
+    // First get my conversations
+    const { data: convos } = await supabase
+      .from('conversations')
+      .select('id')
+      .or(`participant_1.eq.${user.id},participant_2.eq.${user.id}`);
+    if (!convos || convos.length === 0) { setUnreadMessages(0); return; }
+    const convoIds = convos.map((c: any) => c.id);
+    const { count } = await supabase
+      .from('messages')
+      .select('*', { count: 'exact', head: true })
+      .in('conversation_id', convoIds)
+      .neq('sender_id', user.id)
+      .is('read_at', null);
+    setUnreadMessages(count || 0);
   };
 
   const loadNotifications = async () => {
@@ -271,6 +321,34 @@ export default function Header({ clockStatus, activePartNumber, activeEndCustome
         </div>
 
         <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+          {/* Chat / Messages */}
+          <button
+            onClick={() => router.push('/messages')}
+            style={{
+              background: 'transparent',
+              border: '1px solid transparent', borderRadius: '8px',
+              padding: '6px 8px', fontSize: '16px', position: 'relative',
+              cursor: 'pointer', transition: 'all 0.15s',
+              lineHeight: 1,
+            }}
+          >
+            💬
+            {unreadMessages > 0 && (
+              <span style={{
+                position: 'absolute', top: '2px', right: '2px',
+                background: '#3b82f6', color: '#fff',
+                fontSize: '9px', fontWeight: 800,
+                minWidth: '16px', height: '16px',
+                borderRadius: '8px', display: 'flex',
+                alignItems: 'center', justifyContent: 'center',
+                padding: '0 4px',
+                boxShadow: '0 2px 6px rgba(59,130,246,0.4)',
+              }}>
+                {unreadMessages > 99 ? '99+' : unreadMessages}
+              </span>
+            )}
+          </button>
+
           {/* Notification bell */}
           <div ref={notifRef} style={{ position: 'relative' }}>
             <button onClick={handleBellClick} style={{

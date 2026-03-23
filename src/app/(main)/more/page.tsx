@@ -8,7 +8,7 @@ import { createClient } from '@/lib/supabase-browser';
 
 export default function MorePage() {
   const router = useRouter();
-  const { isAdmin, profile, signOut } = useAuth();
+  const { isAdmin, isSales, profile, signOut } = useAuth();
   const { mode, setMode, resolvedTheme } = useTheme();
   const supabase = createClient();
   const [pendingUserCount, setPendingUserCount] = useState(0);
@@ -53,6 +53,12 @@ export default function MorePage() {
         <MenuBtn icon="🔄" title="Update Vehicle Status" sub="Scan VIN to update status" onClick={() => router.push('/fleet/update')} />
         <MenuBtn icon="🔧" title="My Jobs" sub="View your company's work" onClick={() => router.push('/jobs')} />
         <MenuBtn icon="📊" title="Export Reports" sub="Download vehicle spreadsheets" onClick={() => router.push('/reports')} />
+        {/* Sales + Admin tools */}
+        {(isAdmin || isSales) && (<>
+          <MenuBtn icon="🏢" title="Customers" sub="Customers & contacts from NetSuite" onClick={() => router.push('/admin/customers')} />
+          <MenuBtn icon="📐" title="Estimating" sub="AI-powered vinyl wrap quoting" onClick={() => router.push('/admin/quotes')} />
+        </>)}
+        {/* Admin-only tools */}
         {isAdmin && (<>
           <MenuBtn
             icon="🚚"
@@ -67,7 +73,6 @@ export default function MorePage() {
           <MenuBtn icon="📦" title="Part Catalog" sub="Manage part numbers" onClick={() => router.push('/admin/catalog')} />
           <MenuBtn icon="📤" title="Bulk Upload" sub="Import templates & proofs from ZIP" onClick={() => router.push('/admin/bulk-upload')} />
           <MenuBtn icon="📋" title="Purchase Orders" sub="Manage POs" onClick={() => router.push('/admin/pos')} />
-          <MenuBtn icon="🏢" title="Customers" sub="Customers & contacts from NetSuite" onClick={() => router.push('/admin/customers')} />
           <MenuBtn
             icon="📸"
             title="Photo Reviews"
@@ -82,9 +87,12 @@ export default function MorePage() {
             onClick={() => router.push('/admin/users')}
             badge={pendingUserCount > 0 ? pendingUserCount : undefined}
           />
-          <MenuBtn icon="📐" title="Estimating" sub="AI-powered vinyl wrap quoting" onClick={() => router.push('/admin/quotes')} />
         </>)}
+        {isAdmin && (
+          <MenuBtn icon="📚" title="Knowledge Base" sub="SOPs and docs for AI agent" onClick={() => router.push('/admin/knowledge')} />
+        )}
         <MenuBtn icon="📝" title="Quick Job (No PO)" sub="Start scanning without a PO" onClick={() => router.push('/scan')} />
+        <MenuBtn icon="🔔" title="Notification Settings" sub="Configure your alert preferences" onClick={() => router.push('/settings')} />
       </div>
 
       {/* Theme Toggle */}
