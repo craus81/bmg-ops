@@ -1,44 +1,40 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { createClient } from '@supabase/supabase-js';
-import mammoth from 'mammoth';
-import * as XLSX from 'xlsx';
 
-// PDF.js for server-side PDF text extraction
-async function getPdfJs() {
-  const pdfjsLib = await import('pdfjs-dist/legacy/build/pdf.mjs');
-  return pdfjsLib;
-}
+export const dynamic = 'force-dynamic';
+export const maxDuration = 60;
 
-const supabase = createClient(
-  process.env.NEXT_PUBLIC_SUPABASE_URL!,
-  process.env.SUPABASE_SERVICE_ROLE_KEY!
-);
-
-// ─── Text Extraction Functions ───
-
+// Dynamic imports to avoid bundling issues on serverless
 async function extractPdfText(buffer: Buffer): Promise<string> {
-  const pdfjsLib = await getPdfJs();
-  const data = new Uint8Array(buffer);
-  const doc = await pdfjsLib.getDocument({ data, useSystemFonts: true }).promise;
+  try {
+    const pdfjsLib = await import('pdfjs-dist/legacy/build/pdf.mjs');
+    const data = new Uint8Array(buffer);
+    const doc = await pdfjsLib.getDocument({ data, useSystemFonts: true }).promise;
 
-  const pages: string[] = [];
-  for (let i = 1; i <= doc.numPages; i++) {
-    const page = await doc.getPage(i);
-    const content = await page.getTextContent();
-    const text = content.items
-      .map((item: any) => item.str)
-      .join(' ');
-    if (text.trim()) pages.push(text.trim());
+    const pages: string[] = [];
+    for (let i = 1; i <= doc.numPages; i++) {
+      const page = await doc.getPage(i);
+      const content = await page.getTextContent();
+      const text = content.items
+        .map((item: any) => item.str)
+        .join(' ');
+      if (text.trim()) pages.push(text.trim());
+    }
+    return pages.join('\n\n');
+  } catch (err: any) {
+    console.error('PDF extraction error:', err);
+    return `[PDF text extraction failed: ${err.message}]`;
   }
-  return pages.join('\n\n');
 }
 
 async function extractDocxText(buffer: Buffer): Promise<string> {
+  const mammoth = (await import('mammoth')).default;
   const result = await mammoth.extractRawText({ buffer });
   return result.value;
 }
 
-function extractXlsxText(buffer: Buffer): string {
+async function extractXlsxText(buffer: Buffer): Promise<string> {
+  const XLSX = await import('xlsx');
   const workbook = XLSX.read(buffer, { type: 'buffer' });
   const sheets: string[] = [];
 
@@ -51,6 +47,11 @@ function extractXlsxText(buffer: Buffer): string {
   }
   return sheets.join('\n\n');
 }
+
+const supabase = createClient(
+  process.env.NEXT_PUBLIC_SUPABASE_URL!,
+  process.env.SUPABASE_SERVICE_ROLE_KEY!
+);
 
 function extractCsvText(buffer: Buffer): string {
   return buffer.toString('utf-8');
@@ -67,8 +68,8 @@ function getExtractor(fileName: string): ((buffer: Buffer) => Promise<string> | 
     pdf: extractPdfText,
     docx: extractDocxText,
     doc: extractDocxText,
-    xlsx: extractXlsxText,
-    xls: extractXlsxText,
+    xlsx: (b) => extractXlsxText(b),
+    xls: (b) => extractXlsxText(b),
     csv: extractCsvText,
     tsv: extractCsvText,
     txt: extractPlainText,
