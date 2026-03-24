@@ -127,116 +127,158 @@ export default function KnowledgePage() {
     setShowUploadForm(true);
   };
 
+  // Split a PDF into chunks of N pages each, returns array of File objects
+  const splitPdfIntoChunks = async (file: File, pagesPerChunk: number = 10): Promise<File[]> => {
+    const { PDFDocument } = await import('pdf-lib');
+    const arrayBuffer = await file.arrayBuffer();
+    const srcDoc = await PDFDocument.load(arrayBuffer);
+    const totalPages = srcDoc.getPageCount();
+    const chunks: File[] = [];
+    const baseName = file.name.replace(/\.pdf$/i, '');
+
+    for (let start = 0; start < totalPages; start += pagesPerChunk) {
+      const end = Math.min(start + pagesPerChunk, totalPages);
+      const newDoc = await PDFDocument.create();
+      const pages = await newDoc.copyPages(srcDoc, Array.from({ length: end - start }, (_, i) => start + i));
+      pages.forEach(p => newDoc.addPage(p));
+      const pdfBytes = await newDoc.save();
+      const chunkFile = new File(
+        [pdfBytes],
+        `${baseName}_pages_${start + 1}-${end}.pdf`,
+        { type: 'application/pdf' }
+      );
+      chunks.push(chunkFile);
+    }
+    return chunks;
+  };
+
+  // Upload a single file chunk to the API and return the result
+  const uploadSingleFile = async (file: File, title: string, category: string, tags: string): Promise<{ success: boolean; extractedLength: number; usedVision: boolean; error?: string }> => {
+    const formData = new FormData();
+    formData.append('file', file);
+    formData.append('title', title);
+    formData.append('category', category);
+    formData.append('tags', tags);
+    formData.append('userId', user?.id || '');
+
+    const res = await fetch('/api/knowledge/upload', {
+      method: 'POST',
+      body: formData,
+    });
+
+    const ct = res.headers.get('content-type') || '';
+    if (!ct.includes('application/json')) {
+      return { success: false, extractedLength: 0, usedVision: false, error: 'Server error (non-JSON response)' };
+    }
+    const data = await res.json();
+    if (!res.ok) {
+      return { success: false, extractedLength: 0, usedVision: false, error: data.error || 'Unknown error' };
+    }
+    return { success: true, extractedLength: data.extractedLength || 0, usedVision: data.usedVision || false };
+  };
+
   const handleUpload = async () => {
     if (!uploadFile) return;
 
     const FILE_SIZE_MB = uploadFile.size / (1024 * 1024);
     const MAX_API_SIZE = 20; // MB — max for serverless function processing
-    const MAX_STORAGE_SIZE = 200; // MB — max for direct storage upload
-
-    if (FILE_SIZE_MB > MAX_STORAGE_SIZE) {
-      alert(`File is too large (${FILE_SIZE_MB.toFixed(1)} MB). Maximum file size is ${MAX_STORAGE_SIZE} MB.`);
-      return;
-    }
+    const isPdf = uploadFile.name.toLowerCase().endsWith('.pdf');
 
     setUploading(true);
 
     try {
-      // Large files (>20MB): upload directly to Supabase Storage, then create DB record
-      if (FILE_SIZE_MB > MAX_API_SIZE) {
-        setUploadProgress(`Uploading large file (${FILE_SIZE_MB.toFixed(1)} MB) to storage...`);
+      // Large PDFs: split into chunks client-side, upload each for AI extraction
+      if (FILE_SIZE_MB > MAX_API_SIZE && isPdf) {
+        setUploadProgress('Splitting PDF into chunks...');
 
-        const timestamp = Date.now();
-        const safeName = uploadFile.name.replace(/[^a-zA-Z0-9._-]/g, '_');
-        const storagePath = `uploads/${timestamp}_${safeName}`;
+        const chunks = await splitPdfIntoChunks(uploadFile, 10);
+        const totalChunks = chunks.length;
+        let totalExtracted = 0;
+        let successCount = 0;
+        let failCount = 0;
+        const baseName = uploadFile.name.replace(/\.pdf$/i, '');
+        const baseTitle = uploadForm.title.trim() || baseName;
 
-        // Upload directly to Supabase Storage from client
-        const { error: storageError } = await supabase.storage
-          .from('knowledge-files')
-          .upload(storagePath, uploadFile, {
-            contentType: uploadFile.type || 'application/octet-stream',
-            upsert: false,
-          });
+        for (let i = 0; i < chunks.length; i++) {
+          const chunkSizeMB = chunks[i].size / (1024 * 1024);
 
-        if (storageError) {
-          // Try creating the bucket first
-          try {
-            await supabase.storage.createBucket('knowledge-files', { public: true });
-            const { error: retryErr } = await supabase.storage
-              .from('knowledge-files')
-              .upload(storagePath, uploadFile, {
-                contentType: uploadFile.type || 'application/octet-stream',
-                upsert: false,
-              });
-            if (retryErr) throw retryErr;
-          } catch (bucketErr: any) {
-            alert('Storage upload failed: ' + (storageError.message || bucketErr.message));
-            return;
+          // If a single chunk is still too large (>20MB), skip AI extraction and just store it
+          if (chunkSizeMB > MAX_API_SIZE) {
+            setUploadProgress(`Chunk ${i + 1}/${totalChunks} too large (${chunkSizeMB.toFixed(1)} MB), storing without extraction...`);
+            // Upload to storage directly
+            const timestamp = Date.now();
+            const safeName = chunks[i].name.replace(/[^a-zA-Z0-9._-]/g, '_');
+            const storagePath = `uploads/${timestamp}_${safeName}`;
+            await supabase.storage.from('knowledge-files').upload(storagePath, chunks[i], {
+              contentType: 'application/pdf', upsert: false,
+            });
+            // Create DB record
+            await fetch('/api/knowledge/upload', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({
+                title: `${baseTitle} (pages ${i * 10 + 1}-${Math.min((i + 1) * 10, totalChunks * 10)})`,
+                category: uploadForm.category,
+                tags: uploadForm.tags,
+                userId: user?.id || '',
+                fileName: chunks[i].name,
+                fileType: 'application/pdf',
+                fileSize: chunks[i].size,
+                storagePath,
+                largeFile: true,
+              }),
+            });
+            successCount++;
+            continue;
           }
-        }
 
-        setUploadProgress('Creating knowledge base entry...');
+          setUploadProgress(`Analyzing chunk ${i + 1} of ${totalChunks} with AI vision...`);
+          const result = await uploadSingleFile(
+            chunks[i],
+            `${baseTitle} (pages ${i * 10 + 1}-${Math.min((i + 1) * 10, totalChunks * 10)})`,
+            uploadForm.category,
+            uploadForm.tags
+          );
 
-        // Create DB record via a lightweight API call (no file in body)
-        const res = await fetch('/api/knowledge/upload', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            title: uploadForm.title.trim() || uploadFile.name,
-            category: uploadForm.category,
-            tags: uploadForm.tags,
-            userId: user?.id || '',
-            fileName: uploadFile.name,
-            fileType: uploadFile.type || 'application/octet-stream',
-            fileSize: uploadFile.size,
-            storagePath,
-            largeFile: true,
-          }),
-        });
-
-        const contentType = res.headers.get('content-type') || '';
-        if (!contentType.includes('application/json')) {
-          alert('Failed to create knowledge entry — server error.');
-        } else {
-          const data = await res.json();
-          if (!res.ok) {
-            alert('Failed to create entry: ' + (data.error || 'Unknown error'));
+          if (result.success) {
+            successCount++;
+            totalExtracted += result.extractedLength;
           } else {
-            setUploadProgress(`File stored (${FILE_SIZE_MB.toFixed(1)} MB) — too large for AI text extraction, available for download.`);
+            failCount++;
+            console.error(`Chunk ${i + 1} failed:`, result.error);
           }
         }
+
+        if (failCount > 0) {
+          setUploadProgress(`Done: ${successCount}/${totalChunks} chunks processed (${totalExtracted.toLocaleString()} chars extracted). ${failCount} chunk(s) failed.`);
+        } else {
+          setUploadProgress(`All ${totalChunks} chunks processed — ${totalExtracted.toLocaleString()} characters extracted with AI vision.`);
+        }
+
+        // Keep modal open briefly to show final status
+        await new Promise(r => setTimeout(r, 2000));
+
+      } else if (FILE_SIZE_MB > MAX_API_SIZE) {
+        // Non-PDF large files: can't split, just reject
+        alert(`File is too large (${FILE_SIZE_MB.toFixed(1)} MB). Non-PDF files must be under ${MAX_API_SIZE} MB.`);
+        return;
       } else {
         // Normal path: send file to API for processing + AI extraction
-        setUploadProgress(uploadFile.type === 'application/pdf' || uploadFile.name.match(/\.(png|jpg|jpeg|gif|webp|bmp|tiff)$/i)
-          ? 'Uploading and analyzing with AI vision...'
-          : 'Uploading and extracting text...');
+        const isVisual = isPdf || !!uploadFile.name.match(/\.(png|jpg|jpeg|gif|webp|bmp|tiff)$/i);
+        setUploadProgress(isVisual ? 'Uploading and analyzing with AI vision...' : 'Uploading and extracting text...');
 
-        const formData = new FormData();
-        formData.append('file', uploadFile);
-        formData.append('title', uploadForm.title.trim() || uploadFile.name);
-        formData.append('category', uploadForm.category);
-        formData.append('tags', uploadForm.tags);
-        formData.append('userId', user?.id || '');
+        const result = await uploadSingleFile(
+          uploadFile,
+          uploadForm.title.trim() || uploadFile.name,
+          uploadForm.category,
+          uploadForm.tags
+        );
 
-        const res = await fetch('/api/knowledge/upload', {
-          method: 'POST',
-          body: formData,
-        });
-
-        // Handle non-JSON responses (server crash returns HTML)
-        const contentType = res.headers.get('content-type') || '';
-        if (!contentType.includes('application/json')) {
-          const text = await res.text();
-          console.error('Non-JSON response:', text.substring(0, 500));
-          alert('Upload failed — server error. Check console for details.');
+        if (!result.success) {
+          alert('Upload failed: ' + result.error);
         } else {
-          const data = await res.json();
-          if (!res.ok) {
-            alert('Upload failed: ' + (data.error || 'Unknown error'));
-          } else {
-            const method = data.usedVision ? ' (AI vision)' : '';
-            setUploadProgress(`Extracted ${data.extractedLength?.toLocaleString() || 0} characters${method}`);
-          }
+          const method = result.usedVision ? ' (AI vision)' : '';
+          setUploadProgress(`Extracted ${result.extractedLength.toLocaleString()} characters${method}`);
         }
       }
     } catch (err: any) {
