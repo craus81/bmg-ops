@@ -42,6 +42,9 @@ export default function UsersPage() {
   });
   const [creating, setCreating] = useState(false);
   const [createMessage, setCreateMessage] = useState('');
+  const [inviteLink, setInviteLink] = useState('');
+  const [linkCopied, setLinkCopied] = useState(false);
+  const [resending, setResending] = useState<string | null>(null);
 
   useEffect(() => {
     if (!isAdmin) { router.push('/home'); return; }
@@ -115,6 +118,9 @@ export default function UsersPage() {
         setCreateMessage(data.error || 'Failed to create user');
       } else {
         setCreateMessage(data.message || 'User created successfully');
+        if (data.inviteLink) {
+          setInviteLink(data.inviteLink);
+        }
         setShowCreateForm(false);
         setCreateForm({ fullName: '', email: '', password: '', role: 'installer', companyId: '', sendInvite: true });
         loadData();
@@ -123,6 +129,49 @@ export default function UsersPage() {
       setCreateMessage('Error: ' + err.message);
     } finally {
       setCreating(false);
+      setTimeout(() => setCreateMessage(''), 5000);
+    }
+  };
+
+  const copyInviteLink = async (link: string) => {
+    try {
+      await navigator.clipboard.writeText(link);
+      setLinkCopied(true);
+      setTimeout(() => setLinkCopied(false), 2000);
+    } catch {
+      // fallback
+      const input = document.createElement('input');
+      input.value = link;
+      document.body.appendChild(input);
+      input.select();
+      document.execCommand('copy');
+      document.body.removeChild(input);
+      setLinkCopied(true);
+      setTimeout(() => setLinkCopied(false), 2000);
+    }
+  };
+
+  const handleResendInvite = async (userId: string, email: string, fullName: string) => {
+    setResending(userId);
+    try {
+      const res = await fetch('/api/admin/resend-invite', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ userId, email, fullName }),
+      });
+      const data = await res.json();
+      if (!res.ok) {
+        setCreateMessage(data.error || 'Failed to resend invite');
+      } else {
+        if (data.inviteLink) {
+          setInviteLink(data.inviteLink);
+        }
+        setCreateMessage(data.emailSent ? `Invite re-sent to ${email}` : `Link generated for ${email} (email not configured)`);
+      }
+    } catch (err: any) {
+      setCreateMessage('Error: ' + err.message);
+    } finally {
+      setResending(null);
       setTimeout(() => setCreateMessage(''), 5000);
     }
   };
@@ -277,6 +326,57 @@ export default function UsersPage() {
           fontSize: '12px', fontWeight: 600,
         }}>
           {createMessage}
+        </div>
+      )}
+
+      {/* Invite link banner */}
+      {inviteLink && (
+        <div style={{
+          padding: '12px', borderRadius: '10px', marginBottom: '10px',
+          background: 'rgba(59,130,246,0.08)', border: '1px solid rgba(59,130,246,0.2)',
+        }}>
+          <div style={{ fontSize: '11px', fontWeight: 700, color: '#60a5fa', marginBottom: '6px', textTransform: 'uppercase' }}>
+            Invite Link
+          </div>
+          <div style={{
+            display: 'flex', gap: '6px', alignItems: 'center',
+          }}>
+            <input
+              readOnly
+              value={inviteLink}
+              style={{
+                flex: 1, padding: '8px 10px', borderRadius: '8px', fontSize: '11px',
+                border: '1px solid rgba(59,130,246,0.2)', background: 'var(--bg)',
+                color: 'var(--text-secondary)', overflow: 'hidden', textOverflow: 'ellipsis',
+              }}
+              onClick={e => (e.target as HTMLInputElement).select()}
+            />
+            <button
+              onClick={() => copyInviteLink(inviteLink)}
+              style={{
+                padding: '8px 14px', borderRadius: '8px', fontSize: '11px', fontWeight: 700,
+                background: linkCopied ? 'rgba(16,185,129,0.15)' : 'var(--accent)',
+                border: linkCopied ? '1px solid rgba(16,185,129,0.3)' : 'none',
+                color: linkCopied ? '#34d399' : '#fff',
+                cursor: 'pointer', whiteSpace: 'nowrap',
+              }}
+            >
+              {linkCopied ? '✓ Copied' : 'Copy'}
+            </button>
+            <button
+              onClick={() => setInviteLink('')}
+              style={{
+                padding: '8px', borderRadius: '8px', fontSize: '14px',
+                background: 'transparent', border: '1px solid var(--border)',
+                color: 'var(--text-muted)', cursor: 'pointer',
+              }}
+            >
+              ✕
+            </button>
+          </div>
+          <div style={{ fontSize: '10px', color: 'var(--text-muted)', marginTop: '6px' }}>
+            Share this link with the user so they can log in instantly. It expires in 24 hours.
+          </div>
         </div>
       )}
 
@@ -542,6 +642,18 @@ export default function UsersPage() {
                         Assign Jobs
                       </button>
                     )}
+                    <button
+                      onClick={() => handleResendInvite(user.id, user.email, user.full_name || '')}
+                      disabled={resending === user.id}
+                      style={{
+                        padding: '6px 12px', borderRadius: '8px', fontSize: '10px', fontWeight: 700,
+                        background: 'rgba(59,130,246,0.1)', border: '1px solid rgba(59,130,246,0.2)',
+                        color: '#60a5fa', cursor: resending === user.id ? 'not-allowed' : 'pointer',
+                        opacity: resending === user.id ? 0.5 : 1,
+                      }}
+                    >
+                      {resending === user.id ? 'Sending...' : 'Resend Invite'}
+                    </button>
                     <button
                       onClick={() => { if (window.confirm(`Revoke access for ${user.full_name}?`)) handleResetStatus(user.id, 'denied'); }}
                       style={{

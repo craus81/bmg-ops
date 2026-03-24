@@ -265,13 +265,14 @@ export default function PartsPage() {
         <div style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
           {/* Column headers */}
           <div style={{
-            display: 'grid', gridTemplateColumns: '1fr 70px 60px',
+            display: 'grid', gridTemplateColumns: '1fr 70px 50px 50px',
             padding: '6px 12px', fontSize: '9px', fontWeight: 700,
             color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.3px',
           }}>
             <div>Part</div>
             <div style={{ textAlign: 'right' }}>Sale $</div>
             <div style={{ textAlign: 'right' }}>Qty</div>
+            <div style={{ textAlign: 'right' }}>Labor</div>
           </div>
 
           {filtered.map(part => {
@@ -291,7 +292,7 @@ export default function PartsPage() {
                 <div
                   onClick={() => setExpandedId(isExpanded ? null : part.id)}
                   style={{
-                    display: 'grid', gridTemplateColumns: '1fr 70px 60px',
+                    display: 'grid', gridTemplateColumns: '1fr 70px 50px 50px',
                     padding: '10px 12px', cursor: 'pointer', alignItems: 'center',
                   }}
                 >
@@ -308,6 +309,9 @@ export default function PartsPage() {
                   </div>
                   <div style={{ textAlign: 'right', fontSize: '12px', fontWeight: 600, color: part.quantity_on_hand > 0 ? 'var(--text-primary)' : 'var(--error)' }}>
                     {formatQty(part.quantity_on_hand)}
+                  </div>
+                  <div style={{ textAlign: 'right', fontSize: '12px', fontWeight: 600, color: part.labor_hours > 0 ? '#c084fc' : 'var(--text-muted)' }}>
+                    {part.labor_hours > 0 ? `${part.labor_hours}h` : '—'}
                   </div>
                 </div>
 

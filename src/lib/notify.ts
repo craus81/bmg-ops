@@ -161,6 +161,7 @@ async function sendInApp(payload: NotifyPayload): Promise<boolean> {
       type: payload.type,
       title: payload.title,
       body: payload.body,
+      url: payload.url || null,
     });
     return !error;
   } catch {

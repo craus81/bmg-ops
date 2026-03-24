@@ -20,10 +20,11 @@ interface Tab {
 
 const allTabs: Tab[] = [
   { id: 'home', path: '/home', label: 'Home', icon: '🏠', roles: ['admin', 'installer', 'production', 'sales'] },
+  { id: 'my-jobs', path: '/my-jobs', label: 'My Jobs', icon: '📋', roles: ['installer', 'production'] },
   { id: 'time', path: '/time', label: 'Time', icon: '⏰', roles: ['admin', 'installer', 'production', 'sales'] },
   { id: 'graphics', path: '/graphics', label: 'Graphics', icon: '🎨', roles: ['admin', 'production', 'sales'] },
   { id: 'fleet', path: '/fleet', label: 'Fleet', icon: '🚚', roles: ['admin', 'installer', 'production', 'sales'] },
-  { id: 'tracking', path: '/tracking', label: 'Tracking', icon: '📋', roles: ['admin', 'installer', 'production', 'sales'] },
+  { id: 'tracking', path: '/tracking', label: 'Tracking', icon: '📋', roles: ['admin'] },
   { id: 'vehicles', path: '/vehicles', label: 'Vehicles', icon: '🚐', roles: ['admin', 'installer', 'production', 'sales'] },
   { id: 'messages', path: '/messages', label: 'Chat', icon: '💬' },
   { id: 'more', path: '/more', label: 'More', icon: '⋯', roles: ['admin', 'installer', 'production', 'sales'] },
@@ -54,6 +55,7 @@ export default function BottomNav({ clockStatus }: BottomNavProps) {
     if (tab.path === '/home') return pathname === '/home' || pathname === '/scan' || pathname === '/select-part' || pathname === '/photos';
     if (tab.path === '/fleet') return pathname === '/fleet' || pathname === '/fleet/update';
     if (tab.path === '/tracking') return pathname === '/tracking';
+    if (tab.path === '/my-jobs') return pathname === '/my-jobs' || pathname.startsWith('/jobs/');
     if (tab.path === '/graphics') return pathname.startsWith('/graphics');
     if (tab.path === '/customer/dashboard') return pathname.startsWith('/customer');
     return pathname.startsWith(tab.path);

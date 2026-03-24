@@ -84,7 +84,7 @@ export async function POST(req: NextRequest) {
     // Get pricing from the pricing matrix table and cost/qty from item table
     // Try multiple approaches since NetSuite SuiteQL table names vary
     let pricingMap: Record<string, number> = {};
-    let costMap: Record<string, { purchasePrice: number; quantityOnHand: number }> = {};
+    let costMap: Record<string, { purchasePrice: number; quantityOnHand: number; quantityAvailable: number }> = {};
 
     // 1. Get cost and quantity from item table
     try {
@@ -93,8 +93,8 @@ export async function POST(req: NextRequest) {
           i.id,
           i.baseprice,
           i.cost AS purchase_price,
-          i.quantityonhand,
-          i.quantityavailable,
+          i.totalquantityonhand,
+          i.totalquantityavailable,
           i.quantityonorder
         FROM item i
         WHERE i.itemtype IN ('InvtPart', 'NonInvtPart', 'Service', 'Kit', 'Assembly')
@@ -109,14 +109,15 @@ export async function POST(req: NextRequest) {
           const id = c.id.toString();
           const bp = parseFloat(c.baseprice || '0');
           if (bp > 0) { pricingMap[id] = bp; basePriceCount++; }
-          // Try multiple quantity fields — quantityavailable is often more accurate
-          const qtyOnHand = parseFloat(c.quantityonhand || '0');
-          const qtyAvailable = parseFloat(c.quantityavailable || '0');
+          // Use totalquantityonhand and totalquantityavailable — the aggregate fields across all locations
+          const qtyOnHand = parseFloat(c.totalquantityonhand || '0');
+          const qtyAvailable = parseFloat(c.totalquantityavailable || '0');
           const qty = qtyOnHand || qtyAvailable;
           if (qty > 0) qtyCount++;
           costMap[id] = {
             purchasePrice: parseFloat(c.purchase_price || '0'),
-            quantityOnHand: qty,
+            quantityOnHand: qtyOnHand,
+            quantityAvailable: qtyAvailable,
           };
         }
       }
@@ -170,7 +171,7 @@ export async function POST(req: NextRequest) {
         const className = item.class_name || '';
         const catalog = determineCatalog(itemNumber, className);
         const pricing = pricingMap[nsId] || 0;
-        const costInfo = costMap[nsId] || { purchasePrice: 0, quantityOnHand: 0 };
+        const costInfo = costMap[nsId] || { purchasePrice: 0, quantityOnHand: 0, quantityAvailable: 0 };
 
         return {
           netsuite_id: nsId,
@@ -182,7 +183,7 @@ export async function POST(req: NextRequest) {
           sales_price: pricing,
           purchase_price: costInfo.purchasePrice,
           quantity_on_hand: costInfo.quantityOnHand,
-          quantity_available: costInfo.quantityOnHand, // Can be refined later
+          quantity_available: costInfo.quantityAvailable,
           labor_hours: parseFloat(item.labor_hours || '0'),
           ns_class: className || null,
           ns_category: null,

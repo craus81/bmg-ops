@@ -16,6 +16,7 @@ interface Notification {
   type: string;
   title: string;
   body: string;
+  url?: string | null;
   vehicle_id?: string;
   read_at: string | null;
   created_at: string;
@@ -424,16 +425,23 @@ export default function Header({ clockStatus, activePartNumber, activeEndCustome
                   ) : (
                     notifications.map((n) => {
                       const isUnread = !n.read_at;
+                      const hasLink = !!n.url;
                       return (
                         <button
                           key={n.id}
-                          onClick={() => { if (isUnread) markAsRead(n.id); }}
+                          onClick={() => {
+                            if (isUnread) markAsRead(n.id);
+                            if (hasLink) {
+                              setShowNotifications(false);
+                              router.push(n.url!);
+                            }
+                          }}
                           style={{
                             width: '100%', textAlign: 'left', padding: '12px 14px',
                             background: isUnread ? 'rgba(238,49,32,0.03)' : 'transparent',
                             borderBottom: '1px solid var(--border)', border: 'none',
                             borderLeft: isUnread ? '3px solid var(--orange)' : '3px solid transparent',
-                            cursor: isUnread ? 'pointer' : 'default',
+                            cursor: (isUnread || hasLink) ? 'pointer' : 'default',
                             transition: 'background 0.15s',
                             display: 'flex', gap: '10px', alignItems: 'start',
                           }}
