@@ -111,7 +111,12 @@ export default function PartsPage() {
       if (!res.ok) {
         setSyncMessage(`Sync failed: ${data.error || 'Unknown error'}`);
       } else {
-        setSyncMessage(`Synced ${data.synced} parts from NetSuite`);
+        const details = [
+          `${data.synced} parts synced`,
+          data.itemsWithPrice ? `${data.itemsWithPrice} with price` : null,
+          data.itemsWithQty ? `${data.itemsWithQty} with qty` : null,
+        ].filter(Boolean).join(', ');
+        setSyncMessage(details);
         loadParts();
         loadLastSync();
       }

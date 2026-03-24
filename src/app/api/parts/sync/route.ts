@@ -93,7 +93,9 @@ export async function POST(req: NextRequest) {
           i.id,
           i.baseprice,
           i.cost AS purchase_price,
-          i.quantityonhand
+          i.quantityonhand,
+          i.quantityavailable,
+          i.quantityonorder
         FROM item i
         WHERE i.itemtype IN ('InvtPart', 'NonInvtPart', 'Service', 'Kit', 'Assembly')
         AND i.isinactive = 'F'
@@ -101,18 +103,24 @@ export async function POST(req: NextRequest) {
       const costItems = await suiteqlQueryAll(costQuery);
       console.log(`[parts-sync] Fetched cost/qty for ${costItems.length} items`);
       let basePriceCount = 0;
+      let qtyCount = 0;
       for (const c of costItems) {
         if (c.id) {
           const id = c.id.toString();
           const bp = parseFloat(c.baseprice || '0');
           if (bp > 0) { pricingMap[id] = bp; basePriceCount++; }
+          // Try multiple quantity fields — quantityavailable is often more accurate
+          const qtyOnHand = parseFloat(c.quantityonhand || '0');
+          const qtyAvailable = parseFloat(c.quantityavailable || '0');
+          const qty = qtyOnHand || qtyAvailable;
+          if (qty > 0) qtyCount++;
           costMap[id] = {
             purchasePrice: parseFloat(c.purchase_price || '0'),
-            quantityOnHand: parseFloat(c.quantityonhand || '0'),
+            quantityOnHand: qty,
           };
         }
       }
-      console.log(`[parts-sync] baseprice found on ${basePriceCount}/${costItems.length} items`);
+      console.log(`[parts-sync] baseprice found on ${basePriceCount}/${costItems.length} items, qty on ${qtyCount} items`);
     } catch (err: any) {
       console.error('[parts-sync] Cost query failed:', err.message || err);
     }
@@ -222,11 +230,14 @@ export async function POST(req: NextRequest) {
     }
 
     const finalWithPrice = Object.values(pricingMap).filter(p => p > 0).length;
+    const finalWithQty = Object.values(costMap).filter(c => c.quantityOnHand > 0).length;
+    console.log(`[parts-sync] Final: ${finalWithPrice} with price, ${finalWithQty} with qty, ${Object.values(costMap).filter(c => c.purchasePrice > 0).length} with cost`);
     return NextResponse.json({
       success: true,
       synced: nsItems.length,
       total: totalCount || nsItems.length,
       itemsWithPrice: finalWithPrice,
+      itemsWithQty: finalWithQty,
       itemsWithCost: Object.values(costMap).filter(c => c.purchasePrice > 0).length,
     });
   } catch (err: any) {
