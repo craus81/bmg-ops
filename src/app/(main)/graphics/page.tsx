@@ -16,6 +16,28 @@ import {
 type ViewMode = 'pipeline' | 'list';
 type FilterStatus = GraphicsJobStatus | 'all' | 'active';
 
+// Parse a date string as local date (avoids UTC timezone shift)
+function parseLocalDate(dateStr: string | null | undefined): Date | null {
+  if (!dateStr) return null;
+  // Handle ISO strings like "2025-03-26T00:00:00.000Z" or plain "2025-03-26"
+  const parts = dateStr.substring(0, 10).split('-');
+  if (parts.length !== 3) return new Date(dateStr);
+  return new Date(parseInt(parts[0]), parseInt(parts[1]) - 1, parseInt(parts[2]));
+}
+
+// Format a date string for display without timezone shift
+function displayDate(dateStr: string | null | undefined): string {
+  const d = parseLocalDate(dateStr);
+  if (!d) return '';
+  return d.toLocaleDateString();
+}
+
+// Extract YYYY-MM-DD for date input value
+function toDateInputValue(dateStr: string | null | undefined): string {
+  if (!dateStr) return '';
+  return dateStr.substring(0, 10);
+}
+
 // Active statuses (not terminal)
 const ACTIVE_STATUSES: GraphicsJobStatus[] = ['flagged', 'received', 'designing', 'revision', 'printing', 'outgassing', 'cutting', 'packing', 'ready'];
 
@@ -499,8 +521,8 @@ export default function GraphicsPage() {
                         {job.customer && <span>{job.customer}</span>}
                         {job.part_number && <span>{job.part_number}</span>}
                         <span>Qty: {job.quantity}</span>
-                        {job.due_date && <span style={{ color: new Date(job.due_date) < new Date() ? '#ef4444' : '#fbbf24' }}>Due: {new Date(job.due_date).toLocaleDateString()}</span>}
-                        {job.scheduled_install_date && <span style={{ color: '#22d3ee' }}>Install: {new Date(job.scheduled_install_date).toLocaleDateString()}</span>}
+                        {job.due_date && <span style={{ color: (parseLocalDate(job.due_date) || new Date()) < new Date() ? '#ef4444' : '#fbbf24' }}>Due: {displayDate(job.due_date)}</span>}
+                        {job.scheduled_install_date && <span style={{ color: '#22d3ee' }}>Install: {displayDate(job.scheduled_install_date)}</span>}
                       </div>
                     </div>
                     <div style={{
@@ -589,8 +611,8 @@ export default function GraphicsPage() {
                         {/* Dates & Metadata */}
                         <div style={{ fontSize: '10px', color: '#4a5f78', display: 'flex', gap: '12px', flexWrap: 'wrap', marginBottom: '10px' }}>
                           <span>Created: {new Date(job.created_at).toLocaleDateString()}</span>
-                          {job.due_date && <span style={{ color: new Date(job.due_date) < new Date() ? '#ef4444' : '#fbbf24' }}>Due: {new Date(job.due_date).toLocaleDateString()}</span>}
-                          {job.scheduled_install_date && <span style={{ color: '#22d3ee' }}>Install: {new Date(job.scheduled_install_date).toLocaleDateString()}{job.calendar_event_id ? ' 📅' : ''}</span>}
+                          {job.due_date && <span style={{ color: (parseLocalDate(job.due_date) || new Date()) < new Date() ? '#ef4444' : '#fbbf24' }}>Due: {displayDate(job.due_date)}</span>}
+                          {job.scheduled_install_date && <span style={{ color: '#22d3ee' }}>Install: {displayDate(job.scheduled_install_date)}{job.calendar_event_id ? ' 📅' : ''}</span>}
                           {getProfileName(job.assigned_to) && <span>Assigned: {getProfileName(job.assigned_to)}</span>}
                           {getProfileName(job.created_by) && <span>By: {getProfileName(job.created_by)}</span>}
                         </div>
@@ -682,11 +704,11 @@ export default function GraphicsPage() {
                           </div>
                           <div>
                             <div style={labelStyle}>Due Date</div>
-                            <input type="date" style={inputStyle} value={editJob!.due_date || ''} onChange={e => setEditingJob({ ...editJob!, due_date: e.target.value })} />
+                            <input type="date" style={inputStyle} value={toDateInputValue(editJob!.due_date)} onChange={e => setEditingJob({ ...editJob!, due_date: e.target.value })} />
                           </div>
                           <div>
                             <div style={labelStyle}>Scheduled Install Date</div>
-                            <input type="date" style={inputStyle} value={editJob!.scheduled_install_date || ''} onChange={e => setEditingJob({ ...editJob!, scheduled_install_date: e.target.value })} />
+                            <input type="date" style={inputStyle} value={toDateInputValue(editJob!.scheduled_install_date)} onChange={e => setEditingJob({ ...editJob!, scheduled_install_date: e.target.value })} />
                             {editJob!.calendar_event_id && <div style={{ fontSize: '9px', color: '#22d3ee', marginTop: '2px' }}>Synced to Google Calendar</div>}
                           </div>
                           <div>
