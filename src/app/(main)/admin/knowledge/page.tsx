@@ -129,35 +129,114 @@ export default function KnowledgePage() {
 
   const handleUpload = async () => {
     if (!uploadFile) return;
+
+    const FILE_SIZE_MB = uploadFile.size / (1024 * 1024);
+    const MAX_API_SIZE = 20; // MB — max for serverless function processing
+    const MAX_STORAGE_SIZE = 200; // MB — max for direct storage upload
+
+    if (FILE_SIZE_MB > MAX_STORAGE_SIZE) {
+      alert(`File is too large (${FILE_SIZE_MB.toFixed(1)} MB). Maximum file size is ${MAX_STORAGE_SIZE} MB.`);
+      return;
+    }
+
     setUploading(true);
-    setUploadProgress('Uploading and extracting text...');
 
     try {
-      const formData = new FormData();
-      formData.append('file', uploadFile);
-      formData.append('title', uploadForm.title.trim() || uploadFile.name);
-      formData.append('category', uploadForm.category);
-      formData.append('tags', uploadForm.tags);
-      formData.append('userId', user?.id || '');
+      // Large files (>20MB): upload directly to Supabase Storage, then create DB record
+      if (FILE_SIZE_MB > MAX_API_SIZE) {
+        setUploadProgress(`Uploading large file (${FILE_SIZE_MB.toFixed(1)} MB) to storage...`);
 
-      const res = await fetch('/api/knowledge/upload', {
-        method: 'POST',
-        body: formData,
-      });
+        const timestamp = Date.now();
+        const safeName = uploadFile.name.replace(/[^a-zA-Z0-9._-]/g, '_');
+        const storagePath = `uploads/${timestamp}_${safeName}`;
 
-      // Handle non-JSON responses (server crash returns HTML)
-      const contentType = res.headers.get('content-type') || '';
-      if (!contentType.includes('application/json')) {
-        const text = await res.text();
-        console.error('Non-JSON response:', text.substring(0, 500));
-        alert('Upload failed — server error. Check console for details.');
-      } else {
-        const data = await res.json();
-        if (!res.ok) {
-          alert('Upload failed: ' + (data.error || 'Unknown error'));
+        // Upload directly to Supabase Storage from client
+        const { error: storageError } = await supabase.storage
+          .from('knowledge-files')
+          .upload(storagePath, uploadFile, {
+            contentType: uploadFile.type || 'application/octet-stream',
+            upsert: false,
+          });
+
+        if (storageError) {
+          // Try creating the bucket first
+          try {
+            await supabase.storage.createBucket('knowledge-files', { public: true });
+            const { error: retryErr } = await supabase.storage
+              .from('knowledge-files')
+              .upload(storagePath, uploadFile, {
+                contentType: uploadFile.type || 'application/octet-stream',
+                upsert: false,
+              });
+            if (retryErr) throw retryErr;
+          } catch (bucketErr: any) {
+            alert('Storage upload failed: ' + (storageError.message || bucketErr.message));
+            return;
+          }
+        }
+
+        setUploadProgress('Creating knowledge base entry...');
+
+        // Create DB record via a lightweight API call (no file in body)
+        const res = await fetch('/api/knowledge/upload', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            title: uploadForm.title.trim() || uploadFile.name,
+            category: uploadForm.category,
+            tags: uploadForm.tags,
+            userId: user?.id || '',
+            fileName: uploadFile.name,
+            fileType: uploadFile.type || 'application/octet-stream',
+            fileSize: uploadFile.size,
+            storagePath,
+            largeFile: true,
+          }),
+        });
+
+        const contentType = res.headers.get('content-type') || '';
+        if (!contentType.includes('application/json')) {
+          alert('Failed to create knowledge entry — server error.');
         } else {
-          const method = data.usedVision ? ' (AI vision)' : '';
-          setUploadProgress(`Extracted ${data.extractedLength?.toLocaleString() || 0} characters${method}`);
+          const data = await res.json();
+          if (!res.ok) {
+            alert('Failed to create entry: ' + (data.error || 'Unknown error'));
+          } else {
+            setUploadProgress(`File stored (${FILE_SIZE_MB.toFixed(1)} MB) — too large for AI text extraction, available for download.`);
+          }
+        }
+      } else {
+        // Normal path: send file to API for processing + AI extraction
+        setUploadProgress(uploadFile.type === 'application/pdf' || uploadFile.name.match(/\.(png|jpg|jpeg|gif|webp|bmp|tiff)$/i)
+          ? 'Uploading and analyzing with AI vision...'
+          : 'Uploading and extracting text...');
+
+        const formData = new FormData();
+        formData.append('file', uploadFile);
+        formData.append('title', uploadForm.title.trim() || uploadFile.name);
+        formData.append('category', uploadForm.category);
+        formData.append('tags', uploadForm.tags);
+        formData.append('userId', user?.id || '');
+
+        const res = await fetch('/api/knowledge/upload', {
+          method: 'POST',
+          body: formData,
+        });
+
+        // Handle non-JSON responses (server crash returns HTML)
+        const contentType = res.headers.get('content-type') || '';
+        if (!contentType.includes('application/json')) {
+          const text = await res.text();
+          console.error('Non-JSON response:', text.substring(0, 500));
+          alert('Upload failed — server error. Check console for details.');
+        } else {
+          const data = await res.json();
+          if (!res.ok) {
+            alert('Upload failed: ' + (data.error || 'Unknown error'));
+          } else {
+            const method = data.usedVision ? ' (AI vision)' : '';
+            setUploadProgress(`Extracted ${data.extractedLength?.toLocaleString() || 0} characters${method}`);
+          }
         }
       }
     } catch (err: any) {

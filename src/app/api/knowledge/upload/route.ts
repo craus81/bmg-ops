@@ -5,28 +5,6 @@ export const dynamic = 'force-dynamic';
 export const maxDuration = 60;
 
 // Dynamic imports to avoid bundling issues on serverless
-async function extractPdfText(buffer: Buffer): Promise<string> {
-  try {
-    const pdfjsLib = await import('pdfjs-dist/legacy/build/pdf.mjs');
-    const data = new Uint8Array(buffer);
-    const doc = await pdfjsLib.getDocument({ data, useSystemFonts: true }).promise;
-
-    const pages: string[] = [];
-    for (let i = 1; i <= doc.numPages; i++) {
-      const page = await doc.getPage(i);
-      const content = await page.getTextContent();
-      const text = content.items
-        .map((item: any) => item.str)
-        .join(' ');
-      if (text.trim()) pages.push(text.trim());
-    }
-    return pages.join('\n\n');
-  } catch (err: any) {
-    console.error('PDF extraction error:', err);
-    return `[PDF text extraction failed: ${err.message}]`;
-  }
-}
-
 async function extractDocxText(buffer: Buffer): Promise<string> {
   const mammoth = (await import('mammoth')).default;
   const result = await mammoth.extractRawText({ buffer });
@@ -62,10 +40,11 @@ function extractPlainText(buffer: Buffer): string {
 }
 
 // Map file extensions to extraction functions
+// NOTE: PDF is intentionally excluded — we use Claude vision for PDFs
+// because pdfjs-dist crashes Vercel serverless functions
 function getExtractor(fileName: string): ((buffer: Buffer) => Promise<string> | string) | null {
   const ext = fileName.toLowerCase().split('.').pop() || '';
   const map: Record<string, (buffer: Buffer) => Promise<string> | string> = {
-    pdf: extractPdfText,
     docx: extractDocxText,
     doc: extractDocxText,
     xlsx: (b) => extractXlsxText(b),
@@ -166,6 +145,47 @@ async function extractWithVision(buffer: Buffer, fileName: string, fileType: str
 
 export async function POST(req: NextRequest) {
   try {
+    const contentType = req.headers.get('content-type') || '';
+
+    // ─── Large file path: JSON body with metadata only (file already in storage) ───
+    if (contentType.includes('application/json')) {
+      const body = await req.json();
+      const { title, category, tags, userId, fileName, fileType, fileSize, storagePath } = body;
+
+      const docTitle = (title || '').trim() || (fileName || 'Untitled').replace(/\.[^/.]+$/, '');
+      const { data: doc, error: insertError } = await supabase
+        .from('knowledge_docs')
+        .insert({
+          title: docTitle,
+          category: category || 'other',
+          content: `[Large file: ${fileName} (${(fileSize / 1024 / 1024).toFixed(1)} MB) — stored for download, too large for text extraction]`,
+          tags: tags ? tags.split(',').map((t: string) => t.trim()).filter(Boolean) : null,
+          file_name: fileName,
+          file_type: fileType,
+          file_size: fileSize,
+          file_path: storagePath,
+          uploaded_by: userId || null,
+          updated_at: new Date().toISOString(),
+        })
+        .select()
+        .single();
+
+      if (insertError) {
+        return NextResponse.json({ error: 'Failed to save document: ' + insertError.message }, { status: 500 });
+      }
+
+      const { data: urlData } = supabase.storage.from('knowledge-files').getPublicUrl(storagePath);
+      return NextResponse.json({
+        success: true,
+        doc,
+        fileUrl: urlData?.publicUrl || null,
+        extractedLength: 0,
+        usedVision: false,
+        largeFile: true,
+      });
+    }
+
+    // ─── Normal path: FormData with file ───
     const formData = await req.formData();
     const file = formData.get('file') as File | null;
     const title = (formData.get('title') as string) || '';
@@ -220,38 +240,25 @@ export async function POST(req: NextRequest) {
     let usedVision = false;
     const extractor = getExtractor(fileName);
 
-    if (extractor) {
+    if (isPdf(fileName) || isImage(fileName)) {
+      // Use Claude AI vision for PDFs and images — much more reliable than pdfjs on serverless
+      try {
+        extractedText = await extractWithVision(buffer, fileName, fileType);
+        if (extractedText && !extractedText.startsWith('[')) {
+          usedVision = true;
+        } else {
+          extractedText = extractedText || `[No text extracted from ${fileName}]`;
+        }
+      } catch (err: any) {
+        console.error('AI vision extraction error:', err);
+        extractedText = `[AI extraction failed for ${fileName}: ${err.message}]`;
+      }
+    } else if (extractor) {
       try {
         extractedText = await extractor(buffer);
       } catch (err: any) {
         console.error('Text extraction error:', err);
-        extractedText = '';
-      }
-
-      // If PDF had little/no text, it's likely a scanned document — use AI vision
-      if (isPdf(fileName)) {
-        const cleanText = extractedText.replace(/\[.*?\]/g, '').trim();
-        if (cleanText.length < 100) {
-          console.log(`PDF text extraction yielded only ${cleanText.length} chars — falling back to AI vision`);
-          try {
-            const visionText = await extractWithVision(buffer, fileName, fileType);
-            if (visionText && !visionText.startsWith('[')) {
-              extractedText = visionText;
-              usedVision = true;
-            }
-          } catch (visionErr: any) {
-            console.warn('Vision fallback failed:', visionErr.message);
-          }
-        }
-      }
-    } else if (isImage(fileName)) {
-      // Use AI vision for images
-      try {
-        extractedText = await extractWithVision(buffer, fileName, fileType);
-        usedVision = true;
-      } catch (err: any) {
-        console.error('Image vision extraction error:', err);
-        extractedText = `[Image file: ${fileName} — AI extraction failed]`;
+        extractedText = `[Text extraction failed for ${fileName}]`;
       }
     } else {
       // Try plain text as fallback
