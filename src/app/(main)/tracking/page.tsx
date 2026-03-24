@@ -5,6 +5,7 @@ import { useRouter } from 'next/navigation';
 import { createClient } from '@/lib/supabase-browser';
 import { useAuth } from '@/components/AuthProvider';
 import StatusBadge from '@/components/StatusBadge';
+import AssignmentPicker from '@/components/AssignmentPicker';
 import type { FleetCheckin, VehicleTrackingStatus, VehicleStatusHistory } from '@/lib/types';
 import { VEHICLE_STATUS_PIPELINE, VEHICLE_STATUS_LABELS, VEHICLE_STATUS_COLORS } from '@/lib/types';
 
@@ -29,6 +30,8 @@ export default function TrackingPage() {
   const [showArchived, setShowArchived] = useState(false);
   const [deletingId, setDeletingId] = useState<string | null>(null);
   const [archivingId, setArchivingId] = useState<string | null>(null);
+  const [vehicleAssignments, setVehicleAssignments] = useState<Record<string, string[]>>({});
+  const [assignmentSaving, setAssignmentSaving] = useState(false);
 
   useEffect(() => {
     loadVehicles();
@@ -65,6 +68,44 @@ export default function TrackingPage() {
     setHistoryLoading(false);
   };
 
+  const loadAssignments = async (vehicleId: string) => {
+    const { data } = await supabase
+      .from('job_assignments')
+      .select('user_id')
+      .eq('job_type', 'scanned_vehicle')
+      .eq('job_id', vehicleId);
+    if (data) {
+      setVehicleAssignments(prev => ({
+        ...prev,
+        [vehicleId]: data.map((a: any) => a.user_id),
+      }));
+    }
+  };
+
+  const saveAssignments = async (vehicleId: string, userIds: string[]) => {
+    setVehicleAssignments(prev => ({ ...prev, [vehicleId]: userIds }));
+    setAssignmentSaving(true);
+    try {
+      await fetch('/api/jobs/assign', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          jobType: 'scanned_vehicle',
+          jobId: vehicleId,
+          userIds,
+          assignedBy: user?.id,
+          notifyUsers: true,
+          jobTitle: vehicles.find(v => v.id === vehicleId)
+            ? [vehicles.find(v => v.id === vehicleId)!.vehicle_year, vehicles.find(v => v.id === vehicleId)!.vehicle_make, vehicles.find(v => v.id === vehicleId)!.vehicle_model].filter(Boolean).join(' ')
+            : undefined,
+        }),
+      });
+    } catch (err) {
+      console.error('Assignment save error:', err);
+    }
+    setAssignmentSaving(false);
+  };
+
   const toggleExpand = (id: string) => {
     if (expandedId === id) {
       setExpandedId(null);
@@ -74,6 +115,7 @@ export default function TrackingPage() {
       setExpandedId(id);
       setStatusNote('');
       loadHistory(id);
+      loadAssignments(id);
     }
   };
 
@@ -502,6 +544,20 @@ export default function TrackingPage() {
                         </div>
                       )}
                     </div>
+
+                    {/* Installer Assignment */}
+                    {isAdmin && (
+                      <div style={{ marginBottom: '12px' }}>
+                        <AssignmentPicker
+                          jobType="scanned_vehicle"
+                          jobId={vehicle.id}
+                          selectedIds={vehicleAssignments[vehicle.id] || []}
+                          onChange={(ids) => saveAssignments(vehicle.id, ids)}
+                          roles={['installer', 'admin']}
+                          label="Assigned Installers"
+                        />
+                      </div>
+                    )}
 
                     {/* Status History */}
                     <div>

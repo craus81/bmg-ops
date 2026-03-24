@@ -2,7 +2,7 @@ export interface Profile {
   id: string;
   full_name: string;
   email: string;
-  role: 'admin' | 'installer' | 'production' | 'sales';
+  role: 'admin' | 'installer' | 'production' | 'sales' | 'customer';
   status?: 'pending' | 'approved' | 'denied';
   requested_role?: string;
   company_id?: string;

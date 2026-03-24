@@ -8,7 +8,7 @@ interface BottomNavProps {
   clockStatus: 'out' | 'in' | 'break';
 }
 
-type AppRole = 'admin' | 'installer' | 'production' | 'sales';
+type AppRole = 'admin' | 'installer' | 'production' | 'sales' | 'customer';
 
 interface Tab {
   id: string;
@@ -19,14 +19,17 @@ interface Tab {
 }
 
 const allTabs: Tab[] = [
-  { id: 'home', path: '/home', label: 'Home', icon: '🏠' },
-  { id: 'time', path: '/time', label: 'Time', icon: '⏰' },
+  { id: 'home', path: '/home', label: 'Home', icon: '🏠', roles: ['admin', 'installer', 'production', 'sales'] },
+  { id: 'time', path: '/time', label: 'Time', icon: '⏰', roles: ['admin', 'installer', 'production', 'sales'] },
   { id: 'graphics', path: '/graphics', label: 'Graphics', icon: '🎨', roles: ['admin', 'production', 'sales'] },
-  { id: 'fleet', path: '/fleet', label: 'Fleet', icon: '🚚' },
-  { id: 'tracking', path: '/tracking', label: 'Tracking', icon: '📋' },
-  { id: 'vehicles', path: '/vehicles', label: 'Vehicles', icon: '🚐' },
+  { id: 'fleet', path: '/fleet', label: 'Fleet', icon: '🚚', roles: ['admin', 'installer', 'production', 'sales'] },
+  { id: 'tracking', path: '/tracking', label: 'Tracking', icon: '📋', roles: ['admin', 'installer', 'production', 'sales'] },
+  { id: 'vehicles', path: '/vehicles', label: 'Vehicles', icon: '🚐', roles: ['admin', 'installer', 'production', 'sales'] },
   { id: 'messages', path: '/messages', label: 'Chat', icon: '💬' },
-  { id: 'more', path: '/more', label: 'More', icon: '⋯' },
+  { id: 'more', path: '/more', label: 'More', icon: '⋯', roles: ['admin', 'installer', 'production', 'sales'] },
+  // Customer-only tabs
+  { id: 'customer-dashboard', path: '/customer/dashboard', label: 'My Jobs', icon: '📋', roles: ['customer'] },
+  { id: 'customer-settings', path: '/settings', label: 'Settings', icon: '⚙️', roles: ['customer'] },
 ];
 
 export default function BottomNav({ clockStatus }: BottomNavProps) {
@@ -52,6 +55,7 @@ export default function BottomNav({ clockStatus }: BottomNavProps) {
     if (tab.path === '/fleet') return pathname === '/fleet' || pathname === '/fleet/update';
     if (tab.path === '/tracking') return pathname === '/tracking';
     if (tab.path === '/graphics') return pathname.startsWith('/graphics');
+    if (tab.path === '/customer/dashboard') return pathname.startsWith('/customer');
     return pathname.startsWith(tab.path);
   };
 

@@ -56,6 +56,8 @@ export default function MorePage() {
         {/* Sales + Admin tools */}
         {(isAdmin || isSales) && (<>
           <MenuBtn icon="🏢" title="Customers" sub="Customers & contacts from NetSuite" onClick={() => router.push('/admin/customers')} />
+          <MenuBtn icon="🔩" title="Parts Catalog" sub="Upfit & graphic parts from NetSuite" onClick={() => router.push('/parts')} />
+          <MenuBtn icon="💰" title="Estimates" sub="Build estimates & push to NetSuite" onClick={() => router.push('/estimates')} />
           <MenuBtn icon="📐" title="Estimating" sub="AI-powered vinyl wrap quoting" onClick={() => router.push('/admin/quotes')} />
         </>)}
         {/* Admin-only tools */}

@@ -119,12 +119,13 @@ SUPABASE TABLES (BMG Fleet App)
 14. po_invoices
     - id, po_id (FK), invoice_number, invoice_date, amount, status, notes
 
-15. knowledge_docs — KNOWLEDGE BASE (SOPs, specs, guides)
+15. knowledge_docs — KNOWLEDGE BASE (SOPs, specs, guides, uploaded files)
     - id, title, category ('SOP'|'spec'|'pricing'|'process'|'policy')
-    - content (full text), tags (text array)
-    - uploaded_by (FK profiles), file_path, created_at
+    - content (full text — extracted from uploaded files or manually entered), tags (text array)
+    - file_name, file_type, file_size, file_path (if uploaded from a file)
+    - uploaded_by (FK profiles), created_at
 
-Use the "knowledge" source to search these docs when users ask about procedures, specs, pricing rules, or company policies. Example: {"id": "vinyl_spec", "source": "knowledge", "search": "vinyl specifications"}
+Use the "knowledge" source to search these docs when users ask about procedures, specs, pricing rules, or company policies. Knowledge docs may be uploaded PDFs, Word docs, Excel files, or manually entered text. When a result has a source file, mention the file name so the user knows where the info came from. Example: {"id": "vinyl_spec", "source": "knowledge", "search": "vinyl specifications"}
 
 SUPABASE QUERY SYNTAX:
 - Standard PostgreSQL syntax (NOT SuiteQL)
@@ -315,15 +316,17 @@ async function executeQuery(q: QuerySpec): Promise<any> {
     // Full-text search against knowledge base
     const { data, error } = await supabase
       .from('knowledge_docs')
-      .select('id, title, category, content, tags, created_at')
+      .select('id, title, category, content, tags, file_name, file_type, file_size, file_path, created_at')
       .or(`title.ilike.%${q.search}%,content.ilike.%${q.search}%`)
       .order('created_at', { ascending: false })
       .limit(5);
     if (error) throw new Error(`Knowledge search failed: ${error.message}`);
-    // Truncate content for context window
+    // Truncate content for context window, include file info
     const items = (data || []).map(d => ({
       ...d,
       content: d.content?.length > 1000 ? d.content.substring(0, 1000) + '...' : d.content,
+      has_file: !!d.file_path,
+      source_file: d.file_name || null,
     }));
     return { items };
   }

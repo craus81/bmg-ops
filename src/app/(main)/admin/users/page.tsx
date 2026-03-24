@@ -11,6 +11,18 @@ interface Company {
   name: string;
 }
 
+const ROLES = [
+  { value: 'admin', label: '👔 Admin', color: 'var(--orange)' },
+  { value: 'installer', label: '🔧 Installer', color: 'var(--text-muted)' },
+  { value: 'production', label: '🏭 Production', color: '#c084fc' },
+  { value: 'sales', label: '💼 Sales', color: '#60a5fa' },
+  { value: 'customer', label: '🏢 Customer', color: '#34d399' },
+];
+
+function getRoleInfo(role: string) {
+  return ROLES.find(r => r.value === role) || ROLES[1];
+}
+
 export default function UsersPage() {
   const router = useRouter();
   const { isAdmin } = useAuth();
@@ -22,6 +34,14 @@ export default function UsersPage() {
   const [pendingCompanies, setPendingCompanies] = useState<Record<string, string>>({});
   const [newCompanyName, setNewCompanyName] = useState('');
   const [showNewCompany, setShowNewCompany] = useState<string | null>(null);
+
+  // Create user form
+  const [showCreateForm, setShowCreateForm] = useState(false);
+  const [createForm, setCreateForm] = useState({
+    fullName: '', email: '', password: '', role: 'installer', companyId: '', sendInvite: true,
+  });
+  const [creating, setCreating] = useState(false);
+  const [createMessage, setCreateMessage] = useState('');
 
   useEffect(() => {
     if (!isAdmin) { router.push('/home'); return; }
@@ -66,6 +86,54 @@ export default function UsersPage() {
     return data.id;
   };
 
+  const handleCreateUser = async () => {
+    if (!createForm.fullName.trim() || !createForm.email.trim() || !createForm.password.trim()) {
+      setCreateMessage('Please fill in all required fields.');
+      return;
+    }
+
+    setCreating(true);
+    setCreateMessage('');
+
+    try {
+      const res = await fetch('/api/admin/create-user', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          email: createForm.email.trim(),
+          password: createForm.password.trim(),
+          fullName: createForm.fullName.trim(),
+          role: createForm.role,
+          companyId: createForm.companyId || null,
+          sendInvite: createForm.sendInvite,
+        }),
+      });
+
+      const data = await res.json();
+
+      if (!res.ok) {
+        setCreateMessage(data.error || 'Failed to create user');
+      } else {
+        setCreateMessage(data.message || 'User created successfully');
+        setShowCreateForm(false);
+        setCreateForm({ fullName: '', email: '', password: '', role: 'installer', companyId: '', sendInvite: true });
+        loadData();
+      }
+    } catch (err: any) {
+      setCreateMessage('Error: ' + err.message);
+    } finally {
+      setCreating(false);
+      setTimeout(() => setCreateMessage(''), 5000);
+    }
+  };
+
+  const generatePassword = () => {
+    const chars = 'ABCDEFGHJKLMNPQRSTUVWXYZabcdefghjkmnpqrstuvwxyz23456789';
+    let pass = '';
+    for (let i = 0; i < 10; i++) pass += chars.charAt(Math.floor(Math.random() * chars.length));
+    setCreateForm({ ...createForm, password: pass });
+  };
+
   const handleApprove = async (userId: string, role: string) => {
     let companyId = pendingCompanies[userId];
 
@@ -74,7 +142,6 @@ export default function UsersPage() {
       return;
     }
 
-    // Handle "new company" flow
     if (companyId === '__new__') {
       alert('Please create the new company first.');
       return;
@@ -89,7 +156,7 @@ export default function UsersPage() {
       const company = companies.find((c) => c.id === companyId);
       setUsers((prev) => prev.map((u) =>
         u.id === userId
-          ? { ...u, status: 'approved' as const, role: role as 'admin' | 'installer' | 'production' | 'sales', company_id: companyId, company_name: company?.name || '' }
+          ? { ...u, status: 'approved' as const, role: role as any, company_id: companyId, company_name: company?.name || '' }
           : u
       ));
       setPendingCompanies((prev) => { const next = { ...prev }; delete next[userId]; return next; });
@@ -114,7 +181,7 @@ export default function UsersPage() {
       .eq('id', userId);
 
     if (!error) {
-      setUsers((prev) => prev.map((u) => u.id === userId ? { ...u, role: newRole as 'admin' | 'installer' | 'production' | 'sales' } : u));
+      setUsers((prev) => prev.map((u) => u.id === userId ? { ...u, role: newRole as any } : u));
     }
   };
 
@@ -156,6 +223,18 @@ export default function UsersPage() {
   const pendingCount = users.filter((u) => u.status === 'pending').length;
   const filtered = filter === 'all' ? users : users.filter((u) => u.status === filter);
 
+  const inputStyle: React.CSSProperties = {
+    width: '100%', padding: '10px 12px', borderRadius: '10px',
+    border: '1px solid var(--border)', background: 'var(--bg)',
+    color: 'var(--text-primary)', fontSize: '13px',
+  };
+
+  const labelStyle: React.CSSProperties = {
+    display: 'block', fontSize: '10px', fontWeight: 700,
+    color: 'var(--text-muted)', textTransform: 'uppercase',
+    letterSpacing: '0.5px', marginBottom: '4px',
+  };
+
   if (loading) return <div style={{ textAlign: 'center', padding: '40px', color: 'var(--text-muted)' }}>Loading...</div>;
 
   return (
@@ -164,15 +243,42 @@ export default function UsersPage() {
         <div style={{ fontSize: '11px', fontWeight: 700, color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.5px' }}>
           User Management ({users.length})
         </div>
-        {pendingCount > 0 && (
-          <div style={{
-            padding: '4px 10px', borderRadius: '8px', fontSize: '11px', fontWeight: 700,
-            background: 'var(--warning-bg)', border: '1px solid var(--warning-border)', color: 'var(--warning)',
-          }}>
-            {pendingCount} pending
-          </div>
-        )}
+        <div style={{ display: 'flex', gap: '6px', alignItems: 'center' }}>
+          {pendingCount > 0 && (
+            <div style={{
+              padding: '4px 10px', borderRadius: '8px', fontSize: '11px', fontWeight: 700,
+              background: 'var(--warning-bg)', border: '1px solid var(--warning-border)', color: 'var(--warning)',
+            }}>
+              {pendingCount} pending
+            </div>
+          )}
+          <button
+            onClick={() => setShowCreateForm(true)}
+            style={{
+              padding: '6px 12px', borderRadius: '8px', fontSize: '11px', fontWeight: 800,
+              background: 'var(--accent)', color: '#fff', border: 'none', cursor: 'pointer',
+            }}
+          >
+            + Create User
+          </button>
+        </div>
       </div>
+
+      {/* Status message */}
+      {createMessage && (
+        <div style={{
+          padding: '8px 12px', borderRadius: '8px', marginBottom: '10px',
+          background: createMessage.includes('Error') || createMessage.includes('Failed') || createMessage.includes('Please')
+            ? 'var(--error-bg)' : 'rgba(16,185,129,0.1)',
+          border: `1px solid ${createMessage.includes('Error') || createMessage.includes('Failed') || createMessage.includes('Please')
+            ? 'var(--error-border)' : 'rgba(16,185,129,0.2)'}`,
+          color: createMessage.includes('Error') || createMessage.includes('Failed') || createMessage.includes('Please')
+            ? 'var(--error)' : '#34d399',
+          fontSize: '12px', fontWeight: 600,
+        }}>
+          {createMessage}
+        </div>
+      )}
 
       {/* Filter tabs */}
       <div style={{ display: 'flex', gap: '4px', marginBottom: '12px' }}>
@@ -213,6 +319,7 @@ export default function UsersPage() {
           const statusBg = isPending ? 'var(--warning-bg)' : isDenied ? 'var(--error-bg)' : 'var(--success-bg)';
           const statusBorder = isPending ? 'var(--warning-border)' : isDenied ? 'var(--error-border)' : 'var(--success-border)';
           const selectedCompany = pendingCompanies[user.id] || '';
+          const roleInfo = getRoleInfo(user.role);
 
           return (
             <div key={user.id} style={{
@@ -234,9 +341,9 @@ export default function UsersPage() {
                       padding: '2px 8px', borderRadius: '6px', fontSize: '10px', fontWeight: 700,
                       background: user.role === 'admin' ? 'var(--orange-soft)' : 'var(--subtle-bg)',
                       border: `1px solid ${user.role === 'admin' ? 'rgba(238,49,32,0.2)' : 'var(--border)'}`,
-                      color: user.role === 'admin' ? 'var(--orange)' : 'var(--text-muted)',
+                      color: roleInfo.color,
                     }}>
-                      {user.role === 'admin' ? '👔 Admin' : '🔧 Installer'}
+                      {roleInfo.label}
                     </span>
                     {user.company_name && (
                       <span style={{
@@ -258,11 +365,8 @@ export default function UsersPage() {
               {/* Pending actions */}
               {isPending && (
                 <div style={{ marginTop: '12px' }}>
-                  {/* Company selector */}
                   <div style={{ marginBottom: '8px' }}>
-                    <label style={{ display: 'block', fontSize: '10px', fontWeight: 700, color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.5px', marginBottom: '4px' }}>
-                      Assign Company
-                    </label>
+                    <label style={labelStyle}>Assign Company</label>
                     <select
                       value={selectedCompany}
                       onChange={(e) => {
@@ -275,11 +379,7 @@ export default function UsersPage() {
                           setPendingCompanies((prev) => ({ ...prev, [user.id]: val }));
                         }
                       }}
-                      style={{
-                        width: '100%', padding: '10px 12px', borderRadius: '10px',
-                        border: '1px solid var(--border)', background: 'var(--bg)',
-                        color: 'var(--text-primary)', fontSize: '13px', fontWeight: 600,
-                      }}
+                      style={inputStyle}
                     >
                       <option value="">Select company...</option>
                       {companies.map((c) => (
@@ -289,7 +389,6 @@ export default function UsersPage() {
                     </select>
                   </div>
 
-                  {/* New company input */}
                   {showNewCompany === user.id && (
                     <div style={{ display: 'flex', gap: '6px', marginBottom: '8px' }}>
                       <input
@@ -297,11 +396,7 @@ export default function UsersPage() {
                         value={newCompanyName}
                         onChange={(e) => setNewCompanyName(e.target.value)}
                         placeholder="Company name..."
-                        style={{
-                          flex: 1, padding: '10px 12px', borderRadius: '10px',
-                          border: '1px solid var(--border)', background: 'var(--bg)',
-                          color: 'var(--text-primary)', fontSize: '13px',
-                        }}
+                        style={{ ...inputStyle, flex: 1 }}
                         onKeyDown={(e) => { if (e.key === 'Enter') handleCreateAndSelect(user.id); }}
                       />
                       <button
@@ -330,7 +425,7 @@ export default function UsersPage() {
                         opacity: !selectedCompany || selectedCompany === '__new__' ? 0.4 : 1,
                       }}
                     >
-                      ✓ Approve as {user.requested_role === 'admin' ? 'Admin' : 'Installer'}
+                      ✓ Approve as {user.requested_role === 'admin' ? 'Admin' : user.requested_role || 'Installer'}
                     </button>
                     <button
                       onClick={() => handleDeny(user.id)}
@@ -349,7 +444,6 @@ export default function UsersPage() {
               {/* Approved user actions */}
               {isApproved && (
                 <div style={{ marginTop: '10px' }}>
-                  {/* Company changer */}
                   <div style={{ display: 'flex', gap: '6px', alignItems: 'center', marginBottom: '8px' }}>
                     <select
                       value={user.company_id || ''}
@@ -374,7 +468,6 @@ export default function UsersPage() {
                     </select>
                   </div>
 
-                  {/* New company input for approved users */}
                   {showNewCompany === user.id && (
                     <div style={{ display: 'flex', gap: '6px', marginBottom: '8px' }}>
                       <input
@@ -435,7 +528,20 @@ export default function UsersPage() {
                       <option value="installer">Installer</option>
                       <option value="production">Production</option>
                       <option value="sales">Sales</option>
+                      <option value="customer">Customer</option>
                     </select>
+                    {user.role === 'customer' && (
+                      <button
+                        onClick={() => router.push(`/admin/users/${user.id}/assignments`)}
+                        style={{
+                          padding: '6px 12px', borderRadius: '8px', fontSize: '10px', fontWeight: 700,
+                          background: 'rgba(16,185,129,0.1)', border: '1px solid rgba(16,185,129,0.2)',
+                          color: '#34d399', cursor: 'pointer',
+                        }}
+                      >
+                        Assign Jobs
+                      </button>
+                    )}
                     <button
                       onClick={() => { if (window.confirm(`Revoke access for ${user.full_name}?`)) handleResetStatus(user.id, 'denied'); }}
                       style={{
@@ -469,6 +575,126 @@ export default function UsersPage() {
           );
         })}
       </div>
+
+      {/* Create User Modal */}
+      {showCreateForm && (
+        <div style={{ position: 'fixed', top: 0, left: 0, right: 0, bottom: 0, background: 'rgba(0,0,0,0.7)', zIndex: 1000, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '16px' }}>
+          <div style={{ background: 'var(--card)', border: '1px solid var(--border)', borderRadius: '14px', padding: '18px', maxWidth: '480px', width: '100%', maxHeight: '80vh', overflowY: 'auto' }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '14px' }}>
+              <div style={{ fontSize: '16px', fontWeight: 800, color: 'var(--text-primary)' }}>Create New User</div>
+              <button onClick={() => setShowCreateForm(false)} style={{ background: 'none', border: 'none', color: 'var(--text-muted)', fontSize: '18px', cursor: 'pointer' }}>✕</button>
+            </div>
+
+            <div style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
+              <div>
+                <label style={labelStyle}>Full Name *</label>
+                <input
+                  style={inputStyle}
+                  value={createForm.fullName}
+                  onChange={e => setCreateForm({ ...createForm, fullName: e.target.value })}
+                  placeholder="John Smith"
+                />
+              </div>
+
+              <div>
+                <label style={labelStyle}>Email *</label>
+                <input
+                  type="email"
+                  style={inputStyle}
+                  value={createForm.email}
+                  onChange={e => setCreateForm({ ...createForm, email: e.target.value })}
+                  placeholder="john@example.com"
+                />
+              </div>
+
+              <div>
+                <label style={labelStyle}>Password *</label>
+                <div style={{ display: 'flex', gap: '6px' }}>
+                  <input
+                    type="text"
+                    style={{ ...inputStyle, flex: 1 }}
+                    value={createForm.password}
+                    onChange={e => setCreateForm({ ...createForm, password: e.target.value })}
+                    placeholder="Min 6 characters"
+                  />
+                  <button
+                    onClick={generatePassword}
+                    style={{
+                      padding: '10px 14px', borderRadius: '10px', whiteSpace: 'nowrap',
+                      background: 'var(--subtle-bg)', border: '1px solid var(--border)',
+                      color: 'var(--text-secondary)', fontSize: '11px', fontWeight: 700, cursor: 'pointer',
+                    }}
+                  >
+                    Generate
+                  </button>
+                </div>
+              </div>
+
+              <div>
+                <label style={labelStyle}>Role *</label>
+                <select
+                  style={inputStyle}
+                  value={createForm.role}
+                  onChange={e => setCreateForm({ ...createForm, role: e.target.value })}
+                >
+                  {ROLES.map(r => (
+                    <option key={r.value} value={r.value}>{r.label}</option>
+                  ))}
+                </select>
+              </div>
+
+              <div>
+                <label style={labelStyle}>Company</label>
+                <select
+                  style={inputStyle}
+                  value={createForm.companyId}
+                  onChange={e => setCreateForm({ ...createForm, companyId: e.target.value })}
+                >
+                  <option value="">No company</option>
+                  {companies.map(c => (
+                    <option key={c.id} value={c.id}>{c.name}</option>
+                  ))}
+                </select>
+              </div>
+
+              <label style={{ display: 'flex', alignItems: 'center', gap: '8px', cursor: 'pointer', padding: '4px 0' }}>
+                <input
+                  type="checkbox"
+                  checked={createForm.sendInvite}
+                  onChange={e => setCreateForm({ ...createForm, sendInvite: e.target.checked })}
+                  style={{ width: '18px', height: '18px', accentColor: 'var(--accent)' }}
+                />
+                <span style={{ fontSize: '13px', color: 'var(--text-primary)', fontWeight: 600 }}>
+                  Send invite email with credentials
+                </span>
+              </label>
+
+              {createForm.role === 'customer' && (
+                <div style={{
+                  padding: '10px', borderRadius: '8px',
+                  background: 'rgba(16,185,129,0.05)', border: '1px solid rgba(16,185,129,0.15)',
+                  fontSize: '11px', color: '#34d399', lineHeight: 1.5,
+                }}>
+                  Customer users get a dedicated dashboard showing only their assigned jobs. You can assign jobs after creating the user.
+                </div>
+              )}
+
+              <button
+                onClick={handleCreateUser}
+                disabled={creating || !createForm.fullName.trim() || !createForm.email.trim() || !createForm.password.trim()}
+                style={{
+                  width: '100%', padding: '12px', borderRadius: '10px',
+                  background: 'var(--accent)', color: '#fff', fontWeight: 800, fontSize: '13px',
+                  border: 'none', cursor: 'pointer',
+                  opacity: creating || !createForm.fullName.trim() || !createForm.email.trim() || !createForm.password.trim() ? 0.5 : 1,
+                }}
+              >
+                {creating ? 'Creating...' : 'Create User'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
 
       <button onClick={() => router.push('/more')} style={{
         width: '100%', padding: '10px', borderRadius: '14px', marginTop: '14px',

@@ -5,6 +5,7 @@ import { useRouter } from 'next/navigation';
 import { createClient } from '@/lib/supabase-browser';
 import { useAuth } from '@/components/AuthProvider';
 import { theme } from '@/lib/theme';
+import AssignmentPicker from '@/components/AssignmentPicker';
 import type {
   GraphicsJob, GraphicsJobStatus, GraphicsStatusHistory, Profile,
 } from '@/lib/types';
@@ -44,7 +45,11 @@ export default function GraphicsPage() {
     scheduled_install_date: '',
     ship_to: '',
   });
+  const [createAssignees, setCreateAssignees] = useState<string[]>([]);
   const [creating, setCreating] = useState(false);
+
+  // Job assignments
+  const [jobAssignments, setJobAssignments] = useState<Record<string, string[]>>({});
 
   // Saving state
   const [saving, setSaving] = useState(false);
@@ -80,6 +85,41 @@ export default function GraphicsPage() {
       .eq('job_id', jobId)
       .order('created_at', { ascending: false });
     setStatusHistory((data as GraphicsStatusHistory[]) || []);
+  };
+
+  const loadJobAssignments = async (jobId: string) => {
+    const { data } = await supabase
+      .from('job_assignments')
+      .select('user_id')
+      .eq('job_type', 'graphics_job')
+      .eq('job_id', jobId);
+    if (data) {
+      setJobAssignments(prev => ({
+        ...prev,
+        [jobId]: data.map((a: any) => a.user_id),
+      }));
+    }
+  };
+
+  const saveJobAssignments = async (jobId: string, userIds: string[], jobTitle?: string) => {
+    setJobAssignments(prev => ({ ...prev, [jobId]: userIds }));
+    try {
+      await fetch('/api/jobs/assign', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          jobType: 'graphics_job',
+          jobId,
+          userIds,
+          assignedBy: user?.id,
+          notifyUsers: true,
+          notifyTeam: false,
+          jobTitle,
+        }),
+      });
+    } catch (err) {
+      console.error('Assignment save error:', err);
+    }
   };
 
   // Change job status
@@ -236,6 +276,23 @@ export default function GraphicsPage() {
         }
       }
 
+      // Assign team members if any selected
+      if (createAssignees.length > 0) {
+        await fetch('/api/jobs/assign', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            jobType: 'graphics_job',
+            jobId: data.id,
+            userIds: createAssignees,
+            assignedBy: user?.id,
+            notifyUsers: true,
+            notifyTeam: true,
+            jobTitle: createForm.title || 'Untitled Job',
+          }),
+        }).catch(() => {});
+      }
+
       setJobs(prev => [data as GraphicsJob, ...prev]);
       setShowCreate(false);
       setCreateForm({
@@ -244,6 +301,7 @@ export default function GraphicsPage() {
         vinyl_type: '', vinyl_color: '', laminate: '', print_method: '', cut_method: '', premask: '',
         priority: 'normal', due_date: '', scheduled_install_date: '', ship_to: '',
       });
+      setCreateAssignees([]);
     }
     setCreating(false);
   };
@@ -419,6 +477,7 @@ export default function GraphicsPage() {
                     } else {
                       setExpandedJobId(job.id);
                       loadHistory(job.id);
+                      loadJobAssignments(job.id);
                     }
                   }}
                   style={{ padding: '12px', cursor: 'pointer' }}
@@ -552,6 +611,19 @@ export default function GraphicsPage() {
                             </div>
                           </div>
                         )}
+
+                        {/* Team Assignment */}
+                        <div style={{ marginBottom: '10px' }}>
+                          <AssignmentPicker
+                            jobType="graphics_job"
+                            jobId={job.id}
+                            selectedIds={jobAssignments[job.id] || []}
+                            onChange={(ids) => saveJobAssignments(job.id, ids, job.title)}
+                            roles={['production', 'admin', 'installer']}
+                            label="Assigned Team"
+                            compact
+                          />
+                        </div>
 
                         {/* Action buttons */}
                         <div style={{ display: 'flex', gap: '6px' }}>
@@ -810,6 +882,17 @@ export default function GraphicsPage() {
             <div style={{ marginBottom: '12px' }}>
               <div style={labelStyle}>Internal Notes</div>
               <textarea style={{ ...inputStyle, minHeight: '40px', resize: 'vertical' }} value={createForm.notes} onChange={e => setCreateForm({ ...createForm, notes: e.target.value })} />
+            </div>
+
+            {/* Assign Team Members */}
+            <div style={{ marginBottom: '12px' }}>
+              <AssignmentPicker
+                jobType="graphics_job"
+                selectedIds={createAssignees}
+                onChange={setCreateAssignees}
+                roles={['production', 'admin', 'installer']}
+                label="Assign Team Members"
+              />
             </div>
 
             <div style={{ display: 'flex', gap: '8px' }}>

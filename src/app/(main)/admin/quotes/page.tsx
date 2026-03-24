@@ -237,10 +237,21 @@ function QuotesList({ onEdit }: { onEdit: (q: Quote) => void }) {
 
 // ============ Quote Detail View ============
 function QuoteDetail({ quote, onBack, onEdit }: { quote: Quote; onBack: () => void; onEdit: (q: Quote) => void }) {
+  const { user } = useAuth();
   const [panels, setPanels] = useState<QuotePanel[]>([]);
   const [elements, setElements] = useState<QuoteElement[]>([]);
   const [loading, setLoading] = useState(true);
   const [proofUrl, setProofUrl] = useState<string | null>(null);
+
+  // NetSuite push state
+  const [custSearch, setCustSearch] = useState('');
+  const [custResults, setCustResults] = useState<{ id: string; netsuite_id: string; company_name: string; entity_id: string }[]>([]);
+  const [showCustDrop, setShowCustDrop] = useState(false);
+  const [selectedCustId, setSelectedCustId] = useState<string | null>((quote as any).customer_id || null);
+  const [selectedCustNsId, setSelectedCustNsId] = useState<string | null>((quote as any).customer_netsuite_id || null);
+  const [selectedCustName, setSelectedCustName] = useState<string>('');
+  const [pushing, setPushing] = useState(false);
+  const isPushed = !!(quote as any).netsuite_estimate_id;
 
   useEffect(() => {
     loadPanels();
@@ -248,10 +259,32 @@ function QuoteDetail({ quote, onBack, onEdit }: { quote: Quote; onBack: () => vo
       const { data } = supabase.storage.from('quote-proofs').getPublicUrl(quote.proof_image_path);
       setProofUrl(data.publicUrl);
     }
+    // Load linked customer name if already set
+    if ((quote as any).customer_id) {
+      supabase.from('customers').select('company_name, netsuite_id').eq('id', (quote as any).customer_id).single().then(({ data }) => {
+        if (data) {
+          setSelectedCustName(data.company_name);
+          setSelectedCustNsId(data.netsuite_id);
+        }
+      });
+    }
   }, [quote]);
 
+  // Customer search
+  useEffect(() => {
+    if (custSearch.length < 2) { setCustResults([]); return; }
+    const t = setTimeout(async () => {
+      const { data } = await supabase
+        .from('customers')
+        .select('id, netsuite_id, company_name, entity_id')
+        .or(`company_name.ilike.%${custSearch}%,entity_id.ilike.%${custSearch}%`)
+        .limit(8);
+      setCustResults(data || []);
+    }, 300);
+    return () => clearTimeout(t);
+  }, [custSearch]);
+
   async function loadPanels() {
-    // Load elements if this is an element-based quote
     if (quote.analysis_version === 'individual_elements') {
       const { data } = await supabase
         .from('quote_elements')
@@ -260,7 +293,6 @@ function QuoteDetail({ quote, onBack, onEdit }: { quote: Quote; onBack: () => vo
         .order('sort_order');
       setElements((data as QuoteElement[]) || []);
     } else {
-      // Load panels for panel-based quotes
       const { data } = await supabase
         .from('quote_panels')
         .select('*')
@@ -275,6 +307,34 @@ function QuoteDetail({ quote, onBack, onEdit }: { quote: Quote; onBack: () => vo
     await supabase.from('quotes').update({ status, updated_at: new Date().toISOString() }).eq('id', quote.id);
     quote.status = status as Quote['status'];
     onBack();
+  }
+
+  async function pushToNetSuite() {
+    if (!selectedCustNsId) { alert('Please select a customer first'); return; }
+    if (!window.confirm('Push this quote to NetSuite as an Estimate?')) return;
+    setPushing(true);
+    try {
+      const res = await fetch('/api/quotes/push', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          quoteId: quote.id,
+          customerId: selectedCustId,
+          customerNsId: selectedCustNsId,
+          userId: user?.id,
+        }),
+      });
+      const data = await res.json();
+      if (data.success) {
+        alert(`Pushed to NetSuite!\nEstimate #: ${data.netsuite_estimate_number || data.netsuite_estimate_id}`);
+        onBack();
+      } else {
+        alert('Push failed: ' + (data.error || 'Unknown error'));
+      }
+    } catch {
+      alert('Network error — please try again');
+    }
+    setPushing(false);
   }
 
   return (
@@ -417,6 +477,113 @@ function QuoteDetail({ quote, onBack, onEdit }: { quote: Quote; onBack: () => vo
           )}
         </div>
       )}
+
+      {/* ══════ PUSH TO NETSUITE SECTION ══════ */}
+      <div style={{ background: theme.card, border: `1px solid ${theme.border}`, borderRadius: '12px', padding: '16px', marginTop: '12px' }}>
+        <div style={{ fontSize: '14px', fontWeight: 700, color: theme.textPrimary, marginBottom: '10px' }}>
+          Push to NetSuite
+        </div>
+
+        {isPushed ? (
+          <div style={{ padding: '12px', borderRadius: '10px', background: 'rgba(167,139,250,0.08)', border: '1px solid rgba(167,139,250,0.2)', textAlign: 'center' }}>
+            <div style={{ fontSize: '13px', fontWeight: 700, color: '#a78bfa', marginBottom: '4px' }}>
+              Already Pushed to NetSuite
+            </div>
+            <div style={{ fontSize: '11px', color: theme.textMuted }}>
+              NS Estimate #: {(quote as any).netsuite_estimate_number || (quote as any).netsuite_estimate_id || 'N/A'}
+            </div>
+            {(quote as any).pushed_at && (
+              <div style={{ fontSize: '10px', color: theme.textMuted, marginTop: '2px' }}>
+                Pushed: {new Date((quote as any).pushed_at).toLocaleString()}
+              </div>
+            )}
+          </div>
+        ) : (
+          <>
+            {/* Customer Selection */}
+            <div style={{ marginBottom: '10px', position: 'relative' }}>
+              <div style={{ fontSize: '10px', fontWeight: 700, color: theme.textMuted, textTransform: 'uppercase', letterSpacing: '0.3px', marginBottom: '4px' }}>
+                Link NetSuite Customer
+              </div>
+              {selectedCustName ? (
+                <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                  <div style={{
+                    flex: 1, padding: '8px 10px', borderRadius: '8px',
+                    background: 'rgba(59,130,246,0.08)', border: '1px solid rgba(59,130,246,0.2)',
+                    color: theme.textPrimary, fontSize: '12px', fontWeight: 700,
+                  }}>
+                    {selectedCustName}
+                    {selectedCustNsId && <span style={{ color: theme.textMuted, fontWeight: 400, marginLeft: '6px' }}>NS #{selectedCustNsId}</span>}
+                  </div>
+                  <button
+                    onClick={() => { setSelectedCustId(null); setSelectedCustNsId(null); setSelectedCustName(''); setCustSearch(''); }}
+                    style={{ padding: '6px 10px', borderRadius: '6px', background: 'rgba(248,113,113,0.08)', border: '1px solid rgba(248,113,113,0.2)', color: '#f87171', fontSize: '11px', fontWeight: 700, cursor: 'pointer' }}
+                  >
+                    Change
+                  </button>
+                </div>
+              ) : (
+                <div>
+                  <input
+                    placeholder="Search customers..."
+                    value={custSearch}
+                    onChange={e => { setCustSearch(e.target.value); setShowCustDrop(true); }}
+                    onFocus={() => setShowCustDrop(true)}
+                    style={{
+                      width: '100%', padding: '8px 10px', borderRadius: '8px',
+                      border: `1px solid ${theme.border}`, background: theme.inputBg,
+                      color: theme.textPrimary, fontSize: '12px',
+                    }}
+                  />
+                  {showCustDrop && custResults.length > 0 && (
+                    <div style={{
+                      position: 'absolute', left: 0, right: 0, zIndex: 50,
+                      background: theme.card, border: `1px solid ${theme.border}`, borderRadius: '8px',
+                      maxHeight: '200px', overflowY: 'auto', marginTop: '2px',
+                    }}>
+                      {custResults.map(c => (
+                        <button
+                          key={c.id}
+                          onClick={() => {
+                            setSelectedCustId(c.id);
+                            setSelectedCustNsId(c.netsuite_id);
+                            setSelectedCustName(c.company_name);
+                            setCustSearch('');
+                            setShowCustDrop(false);
+                          }}
+                          style={{
+                            width: '100%', textAlign: 'left', padding: '8px 10px', border: 'none',
+                            background: 'transparent', color: theme.textPrimary, fontSize: '12px',
+                            cursor: 'pointer', borderBottom: `1px solid ${theme.border}`,
+                          }}
+                        >
+                          <div style={{ fontWeight: 700 }}>{c.company_name}</div>
+                          <div style={{ fontSize: '10px', color: theme.textMuted }}>{c.entity_id} · NS #{c.netsuite_id}</div>
+                        </button>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              )}
+            </div>
+
+            <button
+              onClick={pushToNetSuite}
+              disabled={pushing || !selectedCustNsId}
+              style={{
+                width: '100%', padding: '12px', borderRadius: '10px',
+                background: pushing ? theme.subtleBg : (!selectedCustNsId ? theme.subtleBg : 'rgba(167,139,250,0.15)'),
+                border: `1px solid ${!selectedCustNsId ? theme.border : 'rgba(167,139,250,0.3)'}`,
+                color: !selectedCustNsId ? theme.textMuted : '#a78bfa',
+                fontWeight: 800, fontSize: '13px', cursor: !selectedCustNsId ? 'default' : 'pointer',
+                opacity: pushing ? 0.5 : 1,
+              }}
+            >
+              {pushing ? 'Pushing to NetSuite...' : '🚀 Push to NetSuite as Estimate'}
+            </button>
+          </>
+        )}
+      </div>
     </div>
   );
 }

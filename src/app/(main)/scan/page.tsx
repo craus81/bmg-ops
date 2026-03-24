@@ -3,6 +3,7 @@
 import { useState, useRef, useEffect } from 'react';
 import { useRouter } from 'next/navigation';
 import { createClient } from '@/lib/supabase-browser';
+import AssignmentPicker from '@/components/AssignmentPicker';
 import { useApp } from '@/components/AppProvider';
 import { useAuth } from '@/components/AuthProvider';
 import { decodeVIN, isValidVIN } from '@/lib/vin-decoder';
@@ -29,6 +30,8 @@ export default function ScanPage() {
   const [notes, setNotes] = useState('');
   const [savingNotes, setSavingNotes] = useState(false);
   const [notesSaved, setNotesSaved] = useState(false);
+  const [assignedInstallers, setAssignedInstallers] = useState<string[]>([]);
+  const [assignmentSaved, setAssignmentSaved] = useState(false);
   const ref = useRef<HTMLInputElement>(null);
   const videoRef = useRef<HTMLVideoElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
@@ -432,6 +435,55 @@ export default function ScanPage() {
             )}
           </div>
         </div>
+
+        {/* Assign Installers */}
+        {savedVehicleId && (
+          <div style={{ marginTop: '16px', textAlign: 'left' }}>
+            <div style={{
+              background: 'var(--card)', border: '1px solid var(--border)', borderRadius: '14px',
+              padding: '14px', boxShadow: 'var(--shadow-sm)',
+            }}>
+              <AssignmentPicker
+                jobType="scanned_vehicle"
+                selectedIds={assignedInstallers}
+                onChange={setAssignedInstallers}
+                roles={['installer', 'admin', 'production']}
+                label="Assign Installers (optional)"
+              />
+              {assignedInstallers.length > 0 && !assignmentSaved && (
+                <button
+                  onClick={async () => {
+                    await fetch('/api/jobs/assign', {
+                      method: 'POST',
+                      headers: { 'Content-Type': 'application/json' },
+                      body: JSON.stringify({
+                        jobType: 'scanned_vehicle',
+                        jobId: savedVehicleId,
+                        userIds: assignedInstallers,
+                        assignedBy: user?.id,
+                        notifyUsers: true,
+                        jobTitle: title,
+                      }),
+                    });
+                    setAssignmentSaved(true);
+                  }}
+                  style={{
+                    marginTop: '8px', width: '100%', padding: '10px', borderRadius: '10px',
+                    background: 'var(--accent)', color: '#fff', fontSize: '12px', fontWeight: 700,
+                    border: 'none', cursor: 'pointer',
+                  }}
+                >
+                  Assign & Notify
+                </button>
+              )}
+              {assignmentSaved && (
+                <div style={{ marginTop: '8px', fontSize: '12px', color: 'var(--success)', fontWeight: 700, textAlign: 'center' }}>
+                  ✅ Installers assigned & notified
+                </div>
+              )}
+            </div>
+          </div>
+        )}
 
         <div style={{ marginTop: '16px', display: 'flex', flexDirection: 'column', gap: '8px' }}>
           <button onClick={() => router.push('/photos?id=' + savedVehicleId)} style={{ width: '100%', padding: '14px', borderRadius: '14px', background: 'var(--navy)', color: '#fff', fontWeight: 800, fontSize: '14px', border: 'none' }}>Add Completion Photos</button>

@@ -893,11 +893,14 @@ function DashboardAnalytics() {
 function InstallerHome() {
   const router = useRouter();
   const { clockStatus, activePart } = useApp();
+  const { user } = useAuth();
   const supabase = createClient();
 
   const [proofs, setProofs] = useState<CatalogProof[]>([]);
   const [viewingProof, setViewingProof] = useState(false);
   const [viewIdx, setViewIdx] = useState(0);
+  const [assignedVehicles, setAssignedVehicles] = useState<any[]>([]);
+  const [assignedLoading, setAssignedLoading] = useState(true);
 
   useEffect(() => {
     if (!activePart) { setProofs([]); return; }
@@ -911,6 +914,33 @@ function InstallerHome() {
     };
     load();
   }, [activePart?.id]);
+
+  // Load vehicles assigned to this installer
+  useEffect(() => {
+    if (!user?.id) return;
+    const loadAssigned = async () => {
+      setAssignedLoading(true);
+      const { data: assignments } = await supabase
+        .from('job_assignments')
+        .select('job_id')
+        .eq('job_type', 'scanned_vehicle')
+        .eq('user_id', user.id);
+
+      if (assignments && assignments.length > 0) {
+        const jobIds = assignments.map((a: any) => a.job_id);
+        const { data: vehicles } = await supabase
+          .from('fleet_checkins')
+          .select('id, vin, vehicle_year, vehicle_make, vehicle_model, customer_name, status, updated_at')
+          .in('id', jobIds)
+          .order('updated_at', { ascending: false });
+        setAssignedVehicles(vehicles || []);
+      } else {
+        setAssignedVehicles([]);
+      }
+      setAssignedLoading(false);
+    };
+    loadAssigned();
+  }, [user?.id]);
 
   const getProofUrl = (proof: CatalogProof) => {
     const { data } = supabase.storage.from('proofs').getPublicUrl(proof.file_path);
@@ -999,6 +1029,60 @@ function InstallerHome() {
         }}>
           ⏰ Not clocked in — tap to start your day
         </button>
+      )}
+
+      {/* My Assigned Vehicles */}
+      {!assignedLoading && assignedVehicles.length > 0 && (
+        <div style={{ marginBottom: '14px' }}>
+          <div style={{
+            fontSize: '10px', fontWeight: 700, color: theme.textMuted,
+            textTransform: 'uppercase', letterSpacing: '0.5px', marginBottom: '6px',
+          }}>
+            My Assigned Vehicles ({assignedVehicles.filter(v => v.status !== 'complete').length} active)
+          </div>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
+            {assignedVehicles.filter(v => v.status !== 'complete').slice(0, 5).map(v => (
+              <button
+                key={v.id}
+                onClick={() => router.push('/tracking')}
+                style={{
+                  display: 'flex', justifyContent: 'space-between', alignItems: 'center',
+                  width: '100%', textAlign: 'left',
+                  padding: '10px 14px', borderRadius: '10px',
+                  background: theme.card, border: `1px solid ${theme.border}`,
+                  color: theme.textPrimary, fontSize: '12px',
+                }}
+              >
+                <div>
+                  <div style={{ fontWeight: 700, fontSize: '13px' }}>
+                    {[v.vehicle_year, v.vehicle_make, v.vehicle_model].filter(Boolean).join(' ') || 'Unknown'}
+                  </div>
+                  <div style={{ fontSize: '10px', color: theme.textMuted, fontFamily: 'monospace', marginTop: '1px' }}>{v.vin}</div>
+                  {v.customer_name && <div style={{ fontSize: '10px', color: theme.textSecondary, marginTop: '1px' }}>{v.customer_name}</div>}
+                </div>
+                <div style={{
+                  padding: '3px 8px', borderRadius: '6px', fontSize: '9px', fontWeight: 700,
+                  background: 'rgba(59,130,246,0.1)', border: '1px solid rgba(59,130,246,0.2)',
+                  color: '#60a5fa', textTransform: 'uppercase',
+                }}>
+                  {(v.status || 'received').replace(/_/g, ' ')}
+                </div>
+              </button>
+            ))}
+            {assignedVehicles.filter(v => v.status !== 'complete').length > 5 && (
+              <button
+                onClick={() => router.push('/tracking')}
+                style={{
+                  padding: '8px', borderRadius: '8px', fontSize: '11px', fontWeight: 700,
+                  background: 'transparent', border: `1px solid ${theme.border}`,
+                  color: theme.textMuted, textAlign: 'center',
+                }}
+              >
+                View all {assignedVehicles.filter(v => v.status !== 'complete').length} assigned vehicles →
+              </button>
+            )}
+          </div>
+        </div>
       )}
 
       {activePart && (
@@ -1109,9 +1193,18 @@ function ActionBtn({ icon, title, sub, onClick, primary, highlight, disabled }: 
 
 // ─── Main Export ────────────────────────────────────────────────
 export default function HomePage() {
-  const { isAdmin } = useAuth();
+  const router = useRouter();
+  const { isAdmin, profile } = useAuth();
   const [mode, setMode] = useState<'admin' | 'installer'>(isAdmin ? 'admin' : 'installer');
 
+  // Redirect customer users to their dedicated dashboard
+  useEffect(() => {
+    if (profile?.role === 'customer') {
+      router.replace('/customer/dashboard');
+    }
+  }, [profile?.role]);
+
+  if (profile?.role === 'customer') return null;
   if (!isAdmin) return <InstallerHome />;
 
   return (
