@@ -82,10 +82,86 @@ function getExtractor(fileName: string): ((buffer: Buffer) => Promise<string> | 
   return map[ext] || null;
 }
 
-// Image extensions (store only, no text extraction)
+// Image extensions
 function isImage(fileName: string): boolean {
   const ext = fileName.toLowerCase().split('.').pop() || '';
   return ['png', 'jpg', 'jpeg', 'gif', 'webp', 'svg', 'bmp', 'tiff'].includes(ext);
+}
+
+function isPdf(fileName: string): boolean {
+  return fileName.toLowerCase().endsWith('.pdf');
+}
+
+// ─── AI Vision/Document Extraction via Claude ───
+// Sends PDFs natively or images as base64 to Claude for OCR/reading
+async function extractWithVision(buffer: Buffer, fileName: string, fileType: string): Promise<string> {
+  const apiKey = process.env.ANTHROPIC_API_KEY;
+  if (!apiKey) {
+    return '[AI vision extraction unavailable — ANTHROPIC_API_KEY not configured]';
+  }
+
+  try {
+    // Build the content blocks for Claude
+    const contentBlocks: any[] = [];
+
+    if (isPdf(fileName)) {
+      // Claude natively supports PDF documents — send the raw bytes directly
+      const base64 = buffer.toString('base64');
+      contentBlocks.push({
+        type: 'document',
+        source: { type: 'base64', media_type: 'application/pdf', data: base64 },
+      });
+    } else if (isImage(fileName)) {
+      // Send the image directly as base64
+      const mediaType = fileType.startsWith('image/') ? fileType : 'image/png';
+      const base64 = buffer.toString('base64');
+      contentBlocks.push({
+        type: 'image',
+        source: { type: 'base64', media_type: mediaType, data: base64 },
+      });
+    }
+
+    if (contentBlocks.length === 0) {
+      return '[No visual content could be extracted]';
+    }
+
+    // Add the extraction prompt
+    contentBlocks.push({
+      type: 'text',
+      text: 'Extract ALL text content from this document. Include every heading, paragraph, list item, table, label, caption, and any other visible text. Preserve the document structure with headings and paragraphs. If there are tables, format them clearly. Output ONLY the extracted text content — no commentary or descriptions.',
+    });
+
+    // Send to Claude for reading
+    const response = await fetch('https://api.anthropic.com/v1/messages', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'x-api-key': apiKey,
+        'anthropic-version': '2023-06-01',
+      },
+      body: JSON.stringify({
+        model: 'claude-sonnet-4-5-20250929',
+        max_tokens: 8000,
+        messages: [{
+          role: 'user',
+          content: contentBlocks,
+        }],
+      }),
+    });
+
+    if (!response.ok) {
+      const errText = await response.text();
+      console.error('Claude vision API error:', errText);
+      return `[AI vision extraction failed: ${response.status}]`;
+    }
+
+    const result = await response.json();
+    const text = result.content?.[0]?.text || '';
+    return text;
+  } catch (err: any) {
+    console.error('Vision extraction error:', err);
+    return `[AI vision extraction failed: ${err.message}]`;
+  }
 }
 
 export async function POST(req: NextRequest) {
@@ -141,6 +217,7 @@ export async function POST(req: NextRequest) {
 
     // Extract text from the file
     let extractedText = '';
+    let usedVision = false;
     const extractor = getExtractor(fileName);
 
     if (extractor) {
@@ -148,15 +225,38 @@ export async function POST(req: NextRequest) {
         extractedText = await extractor(buffer);
       } catch (err: any) {
         console.error('Text extraction error:', err);
-        extractedText = `[Text extraction failed for ${fileName}: ${err.message}]`;
+        extractedText = '';
+      }
+
+      // If PDF had little/no text, it's likely a scanned document — use AI vision
+      if (isPdf(fileName)) {
+        const cleanText = extractedText.replace(/\[.*?\]/g, '').trim();
+        if (cleanText.length < 100) {
+          console.log(`PDF text extraction yielded only ${cleanText.length} chars — falling back to AI vision`);
+          try {
+            const visionText = await extractWithVision(buffer, fileName, fileType);
+            if (visionText && !visionText.startsWith('[')) {
+              extractedText = visionText;
+              usedVision = true;
+            }
+          } catch (visionErr: any) {
+            console.warn('Vision fallback failed:', visionErr.message);
+          }
+        }
       }
     } else if (isImage(fileName)) {
-      extractedText = `[Image file: ${fileName}]`;
+      // Use AI vision for images
+      try {
+        extractedText = await extractWithVision(buffer, fileName, fileType);
+        usedVision = true;
+      } catch (err: any) {
+        console.error('Image vision extraction error:', err);
+        extractedText = `[Image file: ${fileName} — AI extraction failed]`;
+      }
     } else {
       // Try plain text as fallback
       try {
         extractedText = buffer.toString('utf-8');
-        // If it looks like binary garbage, mark it
         if (extractedText.includes('\0') || extractedText.includes('\ufffd')) {
           extractedText = `[Binary file: ${fileName} — content not extractable]`;
         }
@@ -206,6 +306,7 @@ export async function POST(req: NextRequest) {
       doc,
       fileUrl: urlData?.publicUrl || null,
       extractedLength: extractedText.length,
+      usedVision,
     });
   } catch (err: any) {
     console.error('Knowledge upload error:', err);

@@ -156,7 +156,8 @@ export default function KnowledgePage() {
         if (!res.ok) {
           alert('Upload failed: ' + (data.error || 'Unknown error'));
         } else {
-          setUploadProgress(`Extracted ${data.extractedLength?.toLocaleString() || 0} characters of text`);
+          const method = data.usedVision ? ' (AI vision)' : '';
+          setUploadProgress(`Extracted ${data.extractedLength?.toLocaleString() || 0} characters${method}`);
         }
       }
     } catch (err: any) {
