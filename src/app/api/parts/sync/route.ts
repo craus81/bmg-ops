@@ -81,66 +81,70 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ success: true, synced: 0, added: 0, updated: 0 });
     }
 
-    // Get pricing, cost, and quantity data in a single query from item table
-    // This avoids the itemPrice table which may not always have entries
-    const detailQuery = `
-      SELECT
-        i.id,
-        i.baseprice,
-        i.cost AS purchase_price,
-        i.totalvalue,
-        i.quantityonhand
-      FROM item i
-      WHERE i.itemtype IN ('InvtPart', 'NonInvtPart', 'Service', 'Kit', 'Assembly')
-      AND i.isinactive = 'F'
-    `;
-
+    // Get pricing from the pricing matrix table and cost/qty from item table
+    // Try multiple approaches since NetSuite SuiteQL table names vary
     let pricingMap: Record<string, number> = {};
     let costMap: Record<string, { purchasePrice: number; quantityOnHand: number }> = {};
 
+    // 1. Get cost and quantity from item table
     try {
-      const detailItems = await suiteqlQueryAll(detailQuery);
-      console.log(`Fetched pricing/cost details for ${detailItems.length} items`);
-      for (const item of detailItems) {
-        if (item.id) {
-          const id = item.id.toString();
-          pricingMap[id] = parseFloat(item.baseprice || '0');
+      const costQuery = `
+        SELECT
+          i.id,
+          i.baseprice,
+          i.cost AS purchase_price,
+          i.quantityonhand
+        FROM item i
+        WHERE i.itemtype IN ('InvtPart', 'NonInvtPart', 'Service', 'Kit', 'Assembly')
+        AND i.isinactive = 'F'
+      `;
+      const costItems = await suiteqlQueryAll(costQuery);
+      console.log(`[parts-sync] Fetched cost/qty for ${costItems.length} items`);
+      let basePriceCount = 0;
+      for (const c of costItems) {
+        if (c.id) {
+          const id = c.id.toString();
+          const bp = parseFloat(c.baseprice || '0');
+          if (bp > 0) { pricingMap[id] = bp; basePriceCount++; }
           costMap[id] = {
-            purchasePrice: parseFloat(item.purchase_price || '0'),
-            quantityOnHand: parseFloat(item.quantityonhand || '0'),
+            purchasePrice: parseFloat(c.purchase_price || '0'),
+            quantityOnHand: parseFloat(c.quantityonhand || '0'),
           };
         }
       }
-    } catch (err) {
-      console.error('Could not fetch item detail data:', err);
+      console.log(`[parts-sync] baseprice found on ${basePriceCount}/${costItems.length} items`);
+    } catch (err: any) {
+      console.error('[parts-sync] Cost query failed:', err.message || err);
     }
 
-    // If baseprice was mostly 0, try itemPrice table as fallback
-    const nonZeroPrices = Object.values(pricingMap).filter(p => p > 0).length;
-    if (nonZeroPrices < Object.keys(pricingMap).length * 0.1) {
-      console.log(`Only ${nonZeroPrices}/${Object.keys(pricingMap).length} items have baseprice — trying itemPrice table`);
+    // 2. Get sales prices from pricing matrix — try "pricing" table first, then "itemPrice"
+    const pricingQueries = [
+      { name: 'pricing', sql: `SELECT p.item AS item_id, p.unitprice AS sales_price FROM pricing p WHERE p.pricelevel = 1` },
+      { name: 'itemPrice', sql: `SELECT ip.item AS item_id, ip.unitprice AS sales_price FROM itemPrice ip WHERE ip.pricelevel = 1` },
+    ];
+
+    for (const pq of pricingQueries) {
       try {
-        const pricingQuery = `
-          SELECT
-            ip.item AS item_id,
-            ip.unitprice AS sales_price
-          FROM itemPrice ip
-          WHERE ip.pricelevel = 1
-        `;
-        const pricingItems = await suiteqlQueryAll(pricingQuery);
+        const pricingItems = await suiteqlQueryAll(pq.sql);
+        let count = 0;
         for (const p of pricingItems) {
           if (p.item_id) {
             const price = parseFloat(p.sales_price || '0');
             if (price > 0) {
               pricingMap[p.item_id.toString()] = price;
+              count++;
             }
           }
         }
-        console.log(`itemPrice fallback added prices for ${pricingItems.length} items`);
-      } catch (err) {
-        console.warn('itemPrice fallback also failed:', err);
+        console.log(`[parts-sync] ${pq.name} table: found ${count} prices from ${pricingItems.length} rows`);
+        if (count > 0) break; // Got prices, no need to try next table
+      } catch (err: any) {
+        console.warn(`[parts-sync] ${pq.name} table query failed: ${err.message || err}`);
       }
     }
+
+    const totalWithPrice = Object.values(pricingMap).filter(p => p > 0).length;
+    console.log(`[parts-sync] Final pricing: ${totalWithPrice} items with non-zero prices`);
 
     // Build upsert batch
     let added = 0;
@@ -217,10 +221,13 @@ export async function POST(req: NextRequest) {
       }).eq('id', logId);
     }
 
+    const totalWithPrice = Object.values(pricingMap).filter(p => p > 0).length;
     return NextResponse.json({
       success: true,
       synced: nsItems.length,
       total: totalCount || nsItems.length,
+      itemsWithPrice: totalWithPrice,
+      itemsWithCost: Object.values(costMap).filter(c => c.purchasePrice > 0).length,
     });
   } catch (err: any) {
     console.error('Parts sync error:', err);
