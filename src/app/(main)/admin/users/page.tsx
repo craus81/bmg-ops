@@ -4,14 +4,14 @@ import { useState, useEffect } from 'react';
 import { useRouter } from 'next/navigation';
 import { createClient } from '@/lib/supabase-browser';
 import { useAuth } from '@/components/AuthProvider';
-import type { Profile } from '@/lib/types';
+import type { Profile, AppRole } from '@/lib/types';
 
 interface Company {
   id: string;
   name: string;
 }
 
-const ROLES = [
+const ROLES: { value: AppRole; label: string; color: string }[] = [
   { value: 'admin', label: '👔 Admin', color: 'var(--orange)' },
   { value: 'installer', label: '🔧 Installer', color: 'var(--text-muted)' },
   { value: 'production', label: '🏭 Production', color: '#c084fc' },
@@ -23,6 +23,12 @@ function getRoleInfo(role: string) {
   return ROLES.find(r => r.value === role) || ROLES[1];
 }
 
+function getUserRoles(user: Profile): AppRole[] {
+  if (user.roles && user.roles.length > 0) return user.roles;
+  if (user.role) return [user.role];
+  return [];
+}
+
 export default function UsersPage() {
   const router = useRouter();
   const { isAdmin } = useAuth();
@@ -30,7 +36,7 @@ export default function UsersPage() {
   const [users, setUsers] = useState<(Profile & { company_id?: string; company_name?: string })[]>([]);
   const [companies, setCompanies] = useState<Company[]>([]);
   const [loading, setLoading] = useState(true);
-  const [filter, setFilter] = useState<'all' | 'pending' | 'approved' | 'denied'>('all');
+  const [filter, setFilter] = useState<'all' | 'pending' | 'approved' | 'denied' | 'deactivated'>('all');
   const [pendingCompanies, setPendingCompanies] = useState<Record<string, string>>({});
   const [newCompanyName, setNewCompanyName] = useState('');
   const [showNewCompany, setShowNewCompany] = useState<string | null>(null);
@@ -38,13 +44,18 @@ export default function UsersPage() {
   // Create user form
   const [showCreateForm, setShowCreateForm] = useState(false);
   const [createForm, setCreateForm] = useState({
-    fullName: '', email: '', password: '', role: 'installer', companyId: '', sendInvite: true,
+    fullName: '', email: '', password: '', roles: ['installer'] as AppRole[], companyId: '', sendInvite: true,
   });
   const [creating, setCreating] = useState(false);
   const [createMessage, setCreateMessage] = useState('');
   const [inviteLink, setInviteLink] = useState('');
   const [linkCopied, setLinkCopied] = useState(false);
   const [resending, setResending] = useState<string | null>(null);
+
+  // Edit user modal
+  const [editUser, setEditUser] = useState<(Profile & { company_id?: string; company_name?: string }) | null>(null);
+  const [editForm, setEditForm] = useState({ fullName: '', email: '', roles: [] as AppRole[], companyId: '' });
+  const [saving, setSaving] = useState(false);
 
   useEffect(() => {
     if (!isAdmin) { router.push('/home'); return; }
@@ -89,6 +100,22 @@ export default function UsersPage() {
     return data.id;
   };
 
+  const toggleCreateRole = (role: AppRole) => {
+    setCreateForm(prev => {
+      const has = prev.roles.includes(role);
+      const next = has ? prev.roles.filter(r => r !== role) : [...prev.roles, role];
+      return { ...prev, roles: next.length > 0 ? next : prev.roles }; // must have at least 1
+    });
+  };
+
+  const toggleEditRole = (role: AppRole) => {
+    setEditForm(prev => {
+      const has = prev.roles.includes(role);
+      const next = has ? prev.roles.filter(r => r !== role) : [...prev.roles, role];
+      return { ...prev, roles: next.length > 0 ? next : prev.roles };
+    });
+  };
+
   const handleCreateUser = async () => {
     if (!createForm.fullName.trim() || !createForm.email.trim() || !createForm.password.trim()) {
       setCreateMessage('Please fill in all required fields.');
@@ -106,7 +133,8 @@ export default function UsersPage() {
           email: createForm.email.trim(),
           password: createForm.password.trim(),
           fullName: createForm.fullName.trim(),
-          role: createForm.role,
+          role: createForm.roles[0], // primary role for backward compat
+          roles: createForm.roles,
           companyId: createForm.companyId || null,
           sendInvite: createForm.sendInvite,
         }),
@@ -122,7 +150,7 @@ export default function UsersPage() {
           setInviteLink(data.inviteLink);
         }
         setShowCreateForm(false);
-        setCreateForm({ fullName: '', email: '', password: '', role: 'installer', companyId: '', sendInvite: true });
+        setCreateForm({ fullName: '', email: '', password: '', roles: ['installer'], companyId: '', sendInvite: true });
         loadData();
       }
     } catch (err: any) {
@@ -139,7 +167,6 @@ export default function UsersPage() {
       setLinkCopied(true);
       setTimeout(() => setLinkCopied(false), 2000);
     } catch {
-      // fallback
       const input = document.createElement('input');
       input.value = link;
       document.body.appendChild(input);
@@ -198,14 +225,14 @@ export default function UsersPage() {
 
     const { error } = await supabase
       .from('profiles')
-      .update({ status: 'approved', role, company_id: companyId })
+      .update({ status: 'approved', role, roles: [role], company_id: companyId })
       .eq('id', userId);
 
     if (!error) {
       const company = companies.find((c) => c.id === companyId);
       setUsers((prev) => prev.map((u) =>
         u.id === userId
-          ? { ...u, status: 'approved' as const, role: role as any, company_id: companyId, company_name: company?.name || '' }
+          ? { ...u, status: 'approved' as const, role: role as any, roles: [role as AppRole], company_id: companyId, company_name: company?.name || '' }
           : u
       ));
       setPendingCompanies((prev) => { const next = { ...prev }; delete next[userId]; return next; });
@@ -223,14 +250,15 @@ export default function UsersPage() {
     }
   };
 
-  const handleChangeRole = async (userId: string, newRole: string) => {
+  const handleUpdateRoles = async (userId: string, roles: AppRole[]) => {
+    const primaryRole = roles.includes('admin') ? 'admin' : roles[0];
     const { error } = await supabase
       .from('profiles')
-      .update({ role: newRole })
+      .update({ role: primaryRole, roles })
       .eq('id', userId);
 
     if (!error) {
-      setUsers((prev) => prev.map((u) => u.id === userId ? { ...u, role: newRole as any } : u));
+      setUsers((prev) => prev.map((u) => u.id === userId ? { ...u, role: primaryRole as any, roles } : u));
     }
   };
 
@@ -246,6 +274,77 @@ export default function UsersPage() {
         u.id === userId ? { ...u, company_id: companyId, company_name: company?.name || '' } : u
       ));
     }
+  };
+
+  const handleDeactivate = async (userId: string, userName: string) => {
+    if (!window.confirm(`Deactivate ${userName}? They will no longer be able to log in.`)) return;
+
+    const { error } = await supabase
+      .from('profiles')
+      .update({ deactivated: true, deactivated_at: new Date().toISOString() })
+      .eq('id', userId);
+
+    if (!error) {
+      setUsers((prev) => prev.map((u) => u.id === userId ? { ...u, deactivated: true } : u));
+      setCreateMessage(`${userName} has been deactivated.`);
+      setTimeout(() => setCreateMessage(''), 3000);
+    }
+  };
+
+  const handleReactivate = async (userId: string) => {
+    const { error } = await supabase
+      .from('profiles')
+      .update({ deactivated: false, deactivated_at: null, deactivated_by: null })
+      .eq('id', userId);
+
+    if (!error) {
+      setUsers((prev) => prev.map((u) => u.id === userId ? { ...u, deactivated: false } : u));
+      setCreateMessage('User reactivated.');
+      setTimeout(() => setCreateMessage(''), 3000);
+    }
+  };
+
+  const openEditModal = (user: Profile & { company_id?: string; company_name?: string }) => {
+    setEditUser(user);
+    setEditForm({
+      fullName: user.full_name || '',
+      email: user.email || '',
+      roles: getUserRoles(user),
+      companyId: user.company_id || '',
+    });
+  };
+
+  const handleSaveEdit = async () => {
+    if (!editUser) return;
+    setSaving(true);
+
+    const primaryRole = editForm.roles.includes('admin') ? 'admin' : editForm.roles[0];
+
+    const { error } = await supabase
+      .from('profiles')
+      .update({
+        full_name: editForm.fullName.trim(),
+        email: editForm.email.trim(),
+        role: primaryRole,
+        roles: editForm.roles,
+        company_id: editForm.companyId || null,
+      })
+      .eq('id', editUser.id);
+
+    if (!error) {
+      const company = companies.find(c => c.id === editForm.companyId);
+      setUsers((prev) => prev.map((u) =>
+        u.id === editUser.id
+          ? { ...u, full_name: editForm.fullName.trim(), email: editForm.email.trim(), role: primaryRole as any, roles: editForm.roles, company_id: editForm.companyId || undefined, company_name: company?.name || '' }
+          : u
+      ));
+      setEditUser(null);
+      setCreateMessage('User updated.');
+      setTimeout(() => setCreateMessage(''), 3000);
+    } else {
+      alert('Failed to update: ' + error.message);
+    }
+    setSaving(false);
   };
 
   const handleResetStatus = async (userId: string, newStatus: string) => {
@@ -270,7 +369,15 @@ export default function UsersPage() {
   };
 
   const pendingCount = users.filter((u) => u.status === 'pending').length;
-  const filtered = filter === 'all' ? users : users.filter((u) => u.status === filter);
+  const deactivatedCount = users.filter((u) => u.deactivated).length;
+  const activeUsers = users.filter(u => !u.deactivated);
+  const deactivatedUsers = users.filter(u => u.deactivated);
+
+  const filtered = filter === 'deactivated'
+    ? deactivatedUsers
+    : filter === 'all'
+      ? activeUsers
+      : activeUsers.filter((u) => u.status === filter);
 
   const inputStyle: React.CSSProperties = {
     width: '100%', padding: '10px 12px', borderRadius: '10px',
@@ -290,7 +397,7 @@ export default function UsersPage() {
     <div>
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '12px' }}>
         <div style={{ fontSize: '11px', fontWeight: 700, color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.5px' }}>
-          User Management ({users.length})
+          User Management ({activeUsers.length})
         </div>
         <div style={{ display: 'flex', gap: '6px', alignItems: 'center' }}>
           {pendingCount > 0 && (
@@ -338,9 +445,7 @@ export default function UsersPage() {
           <div style={{ fontSize: '11px', fontWeight: 700, color: '#60a5fa', marginBottom: '6px', textTransform: 'uppercase' }}>
             Invite Link
           </div>
-          <div style={{
-            display: 'flex', gap: '6px', alignItems: 'center',
-          }}>
+          <div style={{ display: 'flex', gap: '6px', alignItems: 'center' }}>
             <input
               readOnly
               value={inviteLink}
@@ -381,12 +486,13 @@ export default function UsersPage() {
       )}
 
       {/* Filter tabs */}
-      <div style={{ display: 'flex', gap: '4px', marginBottom: '12px' }}>
+      <div style={{ display: 'flex', gap: '4px', marginBottom: '12px', flexWrap: 'wrap' }}>
         {([
           { id: 'all' as const, label: 'All' },
           { id: 'pending' as const, label: `Pending${pendingCount > 0 ? ` (${pendingCount})` : ''}` },
           { id: 'approved' as const, label: 'Approved' },
           { id: 'denied' as const, label: 'Denied' },
+          { id: 'deactivated' as const, label: `Deactivated${deactivatedCount > 0 ? ` (${deactivatedCount})` : ''}` },
         ]).map((f) => (
           <button
             key={f.id}
@@ -415,36 +521,46 @@ export default function UsersPage() {
           const isPending = user.status === 'pending';
           const isDenied = user.status === 'denied';
           const isApproved = user.status === 'approved';
-          const statusColor = isPending ? 'var(--warning)' : isDenied ? 'var(--error)' : 'var(--success)';
-          const statusBg = isPending ? 'var(--warning-bg)' : isDenied ? 'var(--error-bg)' : 'var(--success-bg)';
-          const statusBorder = isPending ? 'var(--warning-border)' : isDenied ? 'var(--error-border)' : 'var(--success-border)';
+          const isDeactivated = !!user.deactivated;
+          const statusColor = isPending ? 'var(--warning)' : isDenied ? 'var(--error)' : isDeactivated ? 'var(--text-muted)' : 'var(--success)';
+          const statusBg = isPending ? 'var(--warning-bg)' : isDenied ? 'var(--error-bg)' : isDeactivated ? 'var(--subtle-bg)' : 'var(--success-bg)';
+          const statusBorder = isPending ? 'var(--warning-border)' : isDenied ? 'var(--error-border)' : isDeactivated ? 'var(--border)' : 'var(--success-border)';
           const selectedCompany = pendingCompanies[user.id] || '';
-          const roleInfo = getRoleInfo(user.role);
+          const userRoles = getUserRoles(user);
 
           return (
             <div key={user.id} style={{
               background: 'var(--card)', border: `1px solid ${isPending ? 'var(--warning-border)' : 'var(--border)'}`,
               borderRadius: '14px', padding: '14px', boxShadow: 'var(--shadow-sm)',
+              opacity: isDeactivated ? 0.6 : 1,
             }}>
               <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'start' }}>
-                <div>
-                  <div style={{ fontWeight: 800, fontSize: '15px', color: 'var(--text-primary)' }}>{user.full_name || 'No name'}</div>
+                <div style={{ flex: 1 }}>
+                  <div style={{ fontWeight: 800, fontSize: '15px', color: 'var(--text-primary)' }}>
+                    {user.full_name || 'No name'}
+                    {isDeactivated && <span style={{ fontSize: '11px', color: 'var(--text-muted)', fontWeight: 600, marginLeft: '6px' }}>(Deactivated)</span>}
+                  </div>
                   <div style={{ fontSize: '12px', color: 'var(--text-muted)', marginTop: '2px' }}>{user.email}</div>
                   <div style={{ display: 'flex', gap: '6px', marginTop: '6px', alignItems: 'center', flexWrap: 'wrap' }}>
                     <span style={{
                       padding: '2px 8px', borderRadius: '6px', fontSize: '10px', fontWeight: 700,
                       background: statusBg, border: `1px solid ${statusBorder}`, color: statusColor,
                     }}>
-                      {isPending ? '⏳ Pending' : isDenied ? '🚫 Denied' : '✓ Approved'}
+                      {isDeactivated ? '⛔ Deactivated' : isPending ? '⏳ Pending' : isDenied ? '🚫 Denied' : '✓ Approved'}
                     </span>
-                    <span style={{
-                      padding: '2px 8px', borderRadius: '6px', fontSize: '10px', fontWeight: 700,
-                      background: user.role === 'admin' ? 'var(--orange-soft)' : 'var(--subtle-bg)',
-                      border: `1px solid ${user.role === 'admin' ? 'rgba(238,49,32,0.2)' : 'var(--border)'}`,
-                      color: roleInfo.color,
-                    }}>
-                      {roleInfo.label}
-                    </span>
+                    {userRoles.map(r => {
+                      const info = getRoleInfo(r);
+                      return (
+                        <span key={r} style={{
+                          padding: '2px 8px', borderRadius: '6px', fontSize: '10px', fontWeight: 700,
+                          background: r === 'admin' ? 'var(--orange-soft)' : 'var(--subtle-bg)',
+                          border: `1px solid ${r === 'admin' ? 'rgba(238,49,32,0.2)' : 'var(--border)'}`,
+                          color: info.color,
+                        }}>
+                          {info.label}
+                        </span>
+                      );
+                    })}
                     {user.company_name && (
                       <span style={{
                         padding: '2px 8px', borderRadius: '6px', fontSize: '10px', fontWeight: 700,
@@ -460,10 +576,23 @@ export default function UsersPage() {
                     )}
                   </div>
                 </div>
+                {/* Edit button - always visible for non-deactivated */}
+                {!isDeactivated && (
+                  <button
+                    onClick={() => openEditModal(user)}
+                    style={{
+                      padding: '4px 10px', borderRadius: '8px', fontSize: '11px', fontWeight: 700,
+                      background: 'var(--subtle-bg)', border: '1px solid var(--border)',
+                      color: 'var(--text-secondary)', cursor: 'pointer', marginLeft: '8px', flexShrink: 0,
+                    }}
+                  >
+                    Edit
+                  </button>
+                )}
               </div>
 
               {/* Pending actions */}
-              {isPending && (
+              {isPending && !isDeactivated && (
                 <div style={{ marginTop: '12px' }}>
                   <div style={{ marginBottom: '8px' }}>
                     <label style={labelStyle}>Assign Company</label>
@@ -542,8 +671,38 @@ export default function UsersPage() {
               )}
 
               {/* Approved user actions */}
-              {isApproved && (
+              {isApproved && !isDeactivated && (
                 <div style={{ marginTop: '10px' }}>
+                  {/* Role checkboxes */}
+                  <div style={{ marginBottom: '8px' }}>
+                    <label style={labelStyle}>Roles</label>
+                    <div style={{ display: 'flex', gap: '4px', flexWrap: 'wrap' }}>
+                      {ROLES.map(r => {
+                        const active = userRoles.includes(r.value);
+                        return (
+                          <button
+                            key={r.value}
+                            onClick={() => {
+                              const next = active
+                                ? userRoles.filter(x => x !== r.value)
+                                : [...userRoles, r.value];
+                              if (next.length > 0) handleUpdateRoles(user.id, next);
+                            }}
+                            style={{
+                              padding: '4px 10px', borderRadius: '8px', fontSize: '10px', fontWeight: 700,
+                              background: active ? (r.value === 'admin' ? 'var(--orange-soft)' : 'rgba(99,102,241,0.1)') : 'var(--bg)',
+                              border: `1px solid ${active ? (r.value === 'admin' ? 'rgba(238,49,32,0.3)' : 'rgba(99,102,241,0.25)') : 'var(--border)'}`,
+                              color: active ? r.color : 'var(--text-muted)',
+                              cursor: 'pointer', transition: 'all 0.15s',
+                            }}
+                          >
+                            {active ? '✓ ' : ''}{r.label}
+                          </button>
+                        );
+                      })}
+                    </div>
+                  </div>
+
                   <div style={{ display: 'flex', gap: '6px', alignItems: 'center', marginBottom: '8px' }}>
                     <select
                       value={user.company_id || ''}
@@ -614,23 +773,8 @@ export default function UsersPage() {
                     </div>
                   )}
 
-                  <div style={{ display: 'flex', gap: '6px', alignItems: 'center' }}>
-                    <select
-                      value={user.role}
-                      onChange={(e) => handleChangeRole(user.id, e.target.value)}
-                      style={{
-                        padding: '6px 10px', borderRadius: '8px', fontSize: '10px', fontWeight: 700,
-                        background: 'var(--subtle-bg)', border: '1px solid var(--border)',
-                        color: 'var(--text-secondary)',
-                      }}
-                    >
-                      <option value="admin">Admin</option>
-                      <option value="installer">Installer</option>
-                      <option value="production">Production</option>
-                      <option value="sales">Sales</option>
-                      <option value="customer">Customer</option>
-                    </select>
-                    {user.role === 'customer' && (
+                  <div style={{ display: 'flex', gap: '6px', alignItems: 'center', flexWrap: 'wrap' }}>
+                    {userRoles.includes('customer') && (
                       <button
                         onClick={() => router.push(`/admin/users/${user.id}/assignments`)}
                         style={{
@@ -655,21 +799,37 @@ export default function UsersPage() {
                       {resending === user.id ? 'Sending...' : 'Resend Invite'}
                     </button>
                     <button
-                      onClick={() => { if (window.confirm(`Revoke access for ${user.full_name}?`)) handleResetStatus(user.id, 'denied'); }}
+                      onClick={() => handleDeactivate(user.id, user.full_name || 'this user')}
                       style={{
                         padding: '6px 12px', borderRadius: '8px', fontSize: '10px', fontWeight: 700,
                         background: 'transparent', border: '1px solid var(--error-border)',
-                        color: 'var(--error)',
+                        color: 'var(--error)', cursor: 'pointer',
                       }}
                     >
-                      Revoke Access
+                      Deactivate
                     </button>
                   </div>
                 </div>
               )}
 
+              {/* Deactivated user actions */}
+              {isDeactivated && (
+                <div style={{ marginTop: '10px' }}>
+                  <button
+                    onClick={() => handleReactivate(user.id)}
+                    style={{
+                      padding: '6px 12px', borderRadius: '8px', fontSize: '10px', fontWeight: 700,
+                      background: 'rgba(16,185,129,0.1)', border: '1px solid rgba(16,185,129,0.2)',
+                      color: '#34d399', cursor: 'pointer',
+                    }}
+                  >
+                    Reactivate
+                  </button>
+                </div>
+              )}
+
               {/* Denied user actions */}
-              {isDenied && (
+              {isDenied && !isDeactivated && (
                 <div style={{ marginTop: '10px' }}>
                   <button
                     onClick={() => handleApprove(user.id, user.requested_role || 'installer')}
@@ -743,16 +903,28 @@ export default function UsersPage() {
               </div>
 
               <div>
-                <label style={labelStyle}>Role *</label>
-                <select
-                  style={inputStyle}
-                  value={createForm.role}
-                  onChange={e => setCreateForm({ ...createForm, role: e.target.value })}
-                >
-                  {ROLES.map(r => (
-                    <option key={r.value} value={r.value}>{r.label}</option>
-                  ))}
-                </select>
+                <label style={labelStyle}>Roles *</label>
+                <div style={{ display: 'flex', gap: '6px', flexWrap: 'wrap' }}>
+                  {ROLES.map(r => {
+                    const active = createForm.roles.includes(r.value);
+                    return (
+                      <button
+                        key={r.value}
+                        type="button"
+                        onClick={() => toggleCreateRole(r.value)}
+                        style={{
+                          padding: '8px 14px', borderRadius: '10px', fontSize: '12px', fontWeight: 700,
+                          background: active ? (r.value === 'admin' ? 'rgba(238,49,32,0.08)' : 'rgba(99,102,241,0.08)') : 'var(--bg)',
+                          border: `1px solid ${active ? (r.value === 'admin' ? 'rgba(238,49,32,0.25)' : 'rgba(99,102,241,0.2)') : 'var(--border)'}`,
+                          color: active ? r.color : 'var(--text-muted)',
+                          cursor: 'pointer', transition: 'all 0.15s',
+                        }}
+                      >
+                        {active ? '✓ ' : ''}{r.label}
+                      </button>
+                    );
+                  })}
+                </div>
               </div>
 
               <div>
@@ -781,7 +953,7 @@ export default function UsersPage() {
                 </span>
               </label>
 
-              {createForm.role === 'customer' && (
+              {createForm.roles.includes('customer') && (
                 <div style={{
                   padding: '10px', borderRadius: '8px',
                   background: 'rgba(16,185,129,0.05)', border: '1px solid rgba(16,185,129,0.15)',
@@ -803,6 +975,103 @@ export default function UsersPage() {
               >
                 {creating ? 'Creating...' : 'Create User'}
               </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Edit User Modal */}
+      {editUser && (
+        <div style={{ position: 'fixed', top: 0, left: 0, right: 0, bottom: 0, background: 'rgba(0,0,0,0.7)', zIndex: 1000, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '16px' }}>
+          <div style={{ background: 'var(--card)', border: '1px solid var(--border)', borderRadius: '14px', padding: '18px', maxWidth: '480px', width: '100%', maxHeight: '80vh', overflowY: 'auto' }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '14px' }}>
+              <div style={{ fontSize: '16px', fontWeight: 800, color: 'var(--text-primary)' }}>Edit User</div>
+              <button onClick={() => setEditUser(null)} style={{ background: 'none', border: 'none', color: 'var(--text-muted)', fontSize: '18px', cursor: 'pointer' }}>✕</button>
+            </div>
+
+            <div style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
+              <div>
+                <label style={labelStyle}>Full Name</label>
+                <input
+                  style={inputStyle}
+                  value={editForm.fullName}
+                  onChange={e => setEditForm({ ...editForm, fullName: e.target.value })}
+                />
+              </div>
+
+              <div>
+                <label style={labelStyle}>Email</label>
+                <input
+                  type="email"
+                  style={inputStyle}
+                  value={editForm.email}
+                  onChange={e => setEditForm({ ...editForm, email: e.target.value })}
+                />
+              </div>
+
+              <div>
+                <label style={labelStyle}>Roles</label>
+                <div style={{ display: 'flex', gap: '6px', flexWrap: 'wrap' }}>
+                  {ROLES.map(r => {
+                    const active = editForm.roles.includes(r.value);
+                    return (
+                      <button
+                        key={r.value}
+                        type="button"
+                        onClick={() => toggleEditRole(r.value)}
+                        style={{
+                          padding: '8px 14px', borderRadius: '10px', fontSize: '12px', fontWeight: 700,
+                          background: active ? (r.value === 'admin' ? 'rgba(238,49,32,0.08)' : 'rgba(99,102,241,0.08)') : 'var(--bg)',
+                          border: `1px solid ${active ? (r.value === 'admin' ? 'rgba(238,49,32,0.25)' : 'rgba(99,102,241,0.2)') : 'var(--border)'}`,
+                          color: active ? r.color : 'var(--text-muted)',
+                          cursor: 'pointer', transition: 'all 0.15s',
+                        }}
+                      >
+                        {active ? '✓ ' : ''}{r.label}
+                      </button>
+                    );
+                  })}
+                </div>
+              </div>
+
+              <div>
+                <label style={labelStyle}>Company</label>
+                <select
+                  style={inputStyle}
+                  value={editForm.companyId}
+                  onChange={e => setEditForm({ ...editForm, companyId: e.target.value })}
+                >
+                  <option value="">No company</option>
+                  {companies.map(c => (
+                    <option key={c.id} value={c.id}>{c.name}</option>
+                  ))}
+                </select>
+              </div>
+
+              <div style={{ display: 'flex', gap: '8px', marginTop: '4px' }}>
+                <button
+                  onClick={handleSaveEdit}
+                  disabled={saving || !editForm.fullName.trim() || !editForm.email.trim()}
+                  style={{
+                    flex: 1, padding: '12px', borderRadius: '10px',
+                    background: 'var(--accent)', color: '#fff', fontWeight: 800, fontSize: '13px',
+                    border: 'none', cursor: 'pointer',
+                    opacity: saving || !editForm.fullName.trim() || !editForm.email.trim() ? 0.5 : 1,
+                  }}
+                >
+                  {saving ? 'Saving...' : 'Save Changes'}
+                </button>
+                <button
+                  onClick={() => setEditUser(null)}
+                  style={{
+                    padding: '12px 20px', borderRadius: '10px',
+                    background: 'transparent', border: '1px solid var(--border)',
+                    color: 'var(--text-muted)', fontWeight: 700, fontSize: '13px', cursor: 'pointer',
+                  }}
+                >
+                  Cancel
+                </button>
+              </div>
             </div>
           </div>
         </div>

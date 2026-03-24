@@ -46,7 +46,7 @@ export default function LoginPage() {
     if (password.length < 6) { setError('Password must be at least 6 characters'); return; }
     setLoading(true); setError('');
 
-    const { error } = await supabase.auth.signUp({
+    const { data, error } = await supabase.auth.signUp({
       email,
       password,
       options: {
@@ -58,12 +58,34 @@ export default function LoginPage() {
       },
     });
 
-    setLoading(false);
     if (error) {
+      setLoading(false);
       setError(error.message);
-    } else {
-      setSignupDone(true);
+      return;
     }
+
+    // Create the profile record so admins can see and approve the request
+    const userId = data.user?.id;
+    if (userId) {
+      try {
+        await fetch('/api/auth/signup', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            userId,
+            email: email.trim(),
+            fullName: fullName.trim(),
+            requestedRole,
+          }),
+        });
+      } catch (profileErr: any) {
+        console.warn('Profile creation failed:', profileErr.message);
+        // Don't block signup — auth user exists, profile can be created manually
+      }
+    }
+
+    setLoading(false);
+    setSignupDone(true);
   };
 
   const labelStyle: React.CSSProperties = { display: 'block', fontSize: '11px', fontWeight: 700, color: 'var(--login-label, rgba(255,255,255,0.45))', textTransform: 'uppercase', letterSpacing: '0.8px', marginBottom: '8px' };

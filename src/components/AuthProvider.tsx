@@ -12,12 +12,14 @@ interface AuthContextType {
   isProduction: boolean;
   isSales: boolean;
   isCustomer: boolean;
+  isInstaller: boolean;
+  hasRole: (role: string) => boolean;
   loading: boolean;
   signOut: () => Promise<void>;
 }
 
 const AuthContext = createContext<AuthContextType>({
-  user: null, profile: null, isAdmin: false, isProduction: false, isSales: false, isCustomer: false, loading: true, signOut: async () => {},
+  user: null, profile: null, isAdmin: false, isProduction: false, isSales: false, isCustomer: false, isInstaller: false, hasRole: () => false, loading: true, signOut: async () => {},
 });
 
 export function AuthProvider({ children }: { children: ReactNode }) {
@@ -68,7 +70,20 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       if (!mountedRef.current) return;
       const u = session?.user ?? null;
       setUser(u);
-      if (!u) setProfile(null);
+      if (!u) {
+        setProfile(null);
+      } else if (event === 'SIGNED_IN') {
+        // Re-fetch profile on sign-in (handles magic links, signup redirect, etc.)
+        supabase
+          .from('profiles')
+          .select('*')
+          .eq('id', u.id)
+          .maybeSingle()
+          .then(({ data: profileData }: any) => {
+            if (mountedRef.current) setProfile(profileData);
+          })
+          .catch(() => {});
+      }
       if (mountedRef.current) setLoading(false);
     });
 
@@ -86,8 +101,17 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     setProfile(null);
   };
 
+  // Multi-role check: uses roles[] array if present, falls back to legacy role field
+  const userRoles = profile?.roles?.length ? profile.roles : (profile?.role ? [profile.role] : []);
+  const hasRole = (r: string) => userRoles.includes(r as any);
+  const isAdmin = hasRole('admin');
+  const isProduction = hasRole('production') || isAdmin;
+  const isSales = hasRole('sales') || isAdmin;
+  const isCustomer = hasRole('customer');
+  const isInstaller = hasRole('installer') || isAdmin;
+
   return (
-    <AuthContext.Provider value={{ user, profile, isAdmin: profile?.role === 'admin', isProduction: profile?.role === 'production' || profile?.role === 'admin', isSales: profile?.role === 'sales' || profile?.role === 'admin', isCustomer: profile?.role === 'customer', loading, signOut }}>
+    <AuthContext.Provider value={{ user, profile, isAdmin, isProduction, isSales, isCustomer, isInstaller, hasRole, loading, signOut }}>
       {children}
     </AuthContext.Provider>
   );

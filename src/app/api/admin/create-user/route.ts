@@ -54,9 +54,13 @@ function buildInviteEmailHtml(fullName: string, email: string, password: string,
 
 export async function POST(req: NextRequest) {
   try {
-    const { email, password, fullName, role, companyId, sendInvite } = await req.json();
+    const { email, password, fullName, role, roles, companyId, sendInvite } = await req.json();
 
-    if (!email || !password || !fullName || !role) {
+    // Accept roles array or fall back to single role
+    const userRoles: string[] = (roles && roles.length > 0) ? roles : (role ? [role] : []);
+    const primaryRole = userRoles.includes('admin') ? 'admin' : (userRoles[0] || 'installer');
+
+    if (!email || !password || !fullName || userRoles.length === 0) {
       return NextResponse.json({ error: 'Missing required fields' }, { status: 400 });
     }
 
@@ -86,7 +90,8 @@ export async function POST(req: NextRequest) {
         id: userId,
         email,
         full_name: fullName,
-        role,
+        role: primaryRole,
+        roles: userRoles,
         status: 'approved', // Admin-created users are auto-approved
         company_id: companyId || null,
       }, { onConflict: 'id' });

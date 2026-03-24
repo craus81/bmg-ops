@@ -1,11 +1,15 @@
+export type AppRole = 'admin' | 'installer' | 'production' | 'sales' | 'customer';
+
 export interface Profile {
   id: string;
   full_name: string;
   email: string;
-  role: 'admin' | 'installer' | 'production' | 'sales' | 'customer';
+  role: AppRole;
+  roles?: AppRole[];
   status?: 'pending' | 'approved' | 'denied';
   requested_role?: string;
   company_id?: string;
+  deactivated?: boolean;
 }
 
 export interface CatalogItem {

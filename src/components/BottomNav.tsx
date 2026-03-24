@@ -38,10 +38,13 @@ export default function BottomNav({ clockStatus }: BottomNavProps) {
   const router = useRouter();
   const { profile } = useAuth();
 
-  const userRole = profile?.role || 'installer';
+  // Multi-role: check roles[] array first, fall back to legacy role field
+  const userRoles: AppRole[] = (profile?.roles && profile.roles.length > 0)
+    ? profile.roles as AppRole[]
+    : (profile?.role ? [profile.role as AppRole] : ['installer']);
 
-  // Filter tabs by role (no roles = visible to all)
-  const tabs = allTabs.filter(tab => !tab.roles || tab.roles.includes(userRole));
+  // Filter tabs: show if tab has no role restriction, or user has any matching role
+  const tabs = allTabs.filter(tab => !tab.roles || tab.roles.some(r => userRoles.includes(r)));
 
   const getIcon = (tab: Tab) => {
     if (tab.id === 'time') {
