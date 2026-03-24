@@ -221,12 +221,12 @@ export async function POST(req: NextRequest) {
       }).eq('id', logId);
     }
 
-    const totalWithPrice = Object.values(pricingMap).filter(p => p > 0).length;
+    const finalWithPrice = Object.values(pricingMap).filter(p => p > 0).length;
     return NextResponse.json({
       success: true,
       synced: nsItems.length,
       total: totalCount || nsItems.length,
-      itemsWithPrice: totalWithPrice,
+      itemsWithPrice: finalWithPrice,
       itemsWithCost: Object.values(costMap).filter(c => c.purchasePrice > 0).length,
     });
   } catch (err: any) {
