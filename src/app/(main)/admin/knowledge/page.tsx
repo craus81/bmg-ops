@@ -142,8 +142,9 @@ export default function KnowledgePage() {
       const pages = await newDoc.copyPages(srcDoc, Array.from({ length: end - start }, (_, i) => start + i));
       pages.forEach(p => newDoc.addPage(p));
       const pdfBytes = await newDoc.save();
+      const blob = new Blob([pdfBytes.buffer], { type: 'application/pdf' });
       const chunkFile = new File(
-        [pdfBytes],
+        [blob],
         `${baseName}_pages_${start + 1}-${end}.pdf`,
         { type: 'application/pdf' }
       );
