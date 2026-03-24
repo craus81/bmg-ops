@@ -64,7 +64,7 @@ export default function AllJobsPage() {
   const [statusFilter, setStatusFilter] = useState<'all' | 'pending' | 'approved' | 'denied' | 'not_submitted'>('all');
   const [invoices, setInvoices] = useState<Invoice[]>([]);
   const [invoicesLoading, setInvoicesLoading] = useState(true);
-  const [invoiceFilter, setInvoiceFilter] = useState<'pending' | 'approved' | 'paid' | 'denied' | 'all'>('pending');
+  const [invoiceFilter, setInvoiceFilter] = useState<'no_invoice' | 'pending' | 'approved' | 'paid' | 'denied' | 'all'>('no_invoice');
   const [expandedInvoice, setExpandedInvoice] = useState<string | null>(null);
   const [denyNotes, setDenyNotes] = useState('');
   const [processingInvoice, setProcessingInvoice] = useState<string | null>(null);
@@ -76,11 +76,14 @@ export default function AllJobsPage() {
   const [payMethod, setPayMethod] = useState('');
   const [payNotes, setPayNotes] = useState('');
   const [savingPayment, setSavingPayment] = useState(false);
+  // Jobs that have been approved but don't have a vendor invoice uploaded
+  const [jobsWithoutInvoice, setJobsWithoutInvoice] = useState<Job[]>([]);
 
   useEffect(() => {
     if (!isAdmin) { router.push('/home'); return; }
     loadData();
     loadInvoices();
+    loadJobsWithoutInvoice();
   }, [isAdmin]);
 
   const loadData = async () => {
@@ -125,6 +128,31 @@ export default function AllJobsPage() {
     );
     setInvoices(enriched);
     setInvoicesLoading(false);
+  };
+
+  // Load approved jobs that don't yet have a vendor invoice linked
+  const loadJobsWithoutInvoice = async () => {
+    // Get all vehicle IDs that already have invoices
+    const { data: invoiceVehicles } = await supabase.from('invoice_vehicles').select('vehicle_id');
+    const invoicedVehicleIds = new Set((invoiceVehicles || []).map((iv: any) => iv.vehicle_id));
+
+    // Get all approved jobs
+    const { data: approvedJobs } = await supabase
+      .from('scanned_vehicles')
+      .select('*, profiles!scanned_vehicles_scanned_by_fkey(full_name), companies(name)')
+      .eq('review_status', 'approved')
+      .order('scanned_at', { ascending: false });
+
+    // Filter to those without invoices
+    const withoutInvoice = (approvedJobs || [])
+      .filter((j: any) => !invoicedVehicleIds.has(j.id))
+      .map((j: any) => ({
+        ...j,
+        scanner_name: j.profiles?.full_name || 'Unknown',
+        company_name: j.companies?.name || 'Unassigned',
+      }));
+
+    setJobsWithoutInvoice(withoutInvoice);
   };
 
   const handleApproveInvoice = async (invoiceId: string) => {
@@ -228,9 +256,10 @@ export default function AllJobsPage() {
     return acc;
   }, {});
 
-  const filteredInvoices = invoiceFilter === 'all' ? invoices : invoices.filter((i) => i.status === invoiceFilter);
+  const filteredInvoices = invoiceFilter === 'all' ? invoices : invoiceFilter === 'no_invoice' ? [] : invoices.filter((i) => i.status === invoiceFilter);
   const pendingInvoiceCount = invoices.filter((i) => i.status === 'pending').length;
   const unpaidCount = invoices.filter((i) => i.status === 'approved').length;
+  const noInvoiceCount = jobsWithoutInvoice.length;
 
   const jobStatusBadge = (v: Job) => {
     if (!v.submitted_for_review) return <span style={{ padding: '2px 7px', borderRadius: '6px', fontSize: '10px', fontWeight: 700, background: 'var(--subtle-bg)', border: '1px solid var(--border)', color: 'var(--text-muted)' }}>Not Submitted</span>;
@@ -264,7 +293,7 @@ export default function AllJobsPage() {
       <div style={{ display: 'flex', gap: '4px', marginBottom: '14px', background: 'var(--card)', borderRadius: '10px', padding: '3px' }}>
         <button onClick={() => setTab('jobs')} style={{ flex: 1, padding: '10px', borderRadius: '8px', fontSize: '13px', fontWeight: 700, background: tab === 'jobs' ? 'var(--tab-active-bg)' : 'transparent', border: 'none', color: tab === 'jobs' ? 'var(--text-primary)' : 'var(--text-muted)' }}>📋 Jobs</button>
         <button onClick={() => setTab('invoices')} style={{ flex: 1, padding: '10px', borderRadius: '8px', fontSize: '13px', fontWeight: 700, background: tab === 'invoices' ? 'var(--tab-active-bg)' : 'transparent', border: 'none', color: tab === 'invoices' ? 'var(--text-primary)' : 'var(--text-muted)', position: 'relative' }}>
-          💰 Bills
+          💰 Vendor Payments
           {pendingInvoiceCount > 0 && <span style={{ position: 'absolute', top: '4px', right: '8px', width: '18px', height: '18px', borderRadius: '50%', background: 'var(--orange)', color: '#fff', fontSize: '10px', fontWeight: 800, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>{pendingInvoiceCount}</span>}
         </button>
         <button onClick={() => setTab('bulk')} style={{ flex: 1, padding: '10px', borderRadius: '8px', fontSize: '13px', fontWeight: 700, background: tab === 'bulk' ? 'var(--tab-active-bg)' : 'transparent', border: 'none', color: tab === 'bulk' ? 'var(--text-primary)' : 'var(--text-muted)' }}>📤 Bulk VIN</button>
@@ -314,16 +343,51 @@ export default function AllJobsPage() {
       {tab === 'invoices' && (
         <div>
           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '12px' }}>
-            <div style={{ fontSize: '11px', fontWeight: 700, color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.8px' }}>Bills ({filteredInvoices.length})</div>
+            <div style={{ fontSize: '11px', fontWeight: 700, color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.8px' }}>Vendor Payments ({invoiceFilter === 'no_invoice' ? noInvoiceCount : filteredInvoices.length})</div>
             {pendingInvoiceCount > 0 && <div style={{ padding: '4px 10px', borderRadius: '8px', fontSize: '11px', fontWeight: 700, background: 'var(--warning-bg)', border: '1px solid var(--warning-border)', color: 'var(--warning)' }}>{pendingInvoiceCount} pending</div>}
           </div>
-          <div style={{ display: 'flex', gap: '4px', marginBottom: '12px' }}>
-            {([{ id: 'pending' as const, label: `Pending${pendingInvoiceCount > 0 ? ` (${pendingInvoiceCount})` : ''}` }, { id: 'approved' as const, label: `Unpaid${unpaidCount > 0 ? ` (${unpaidCount})` : ''}` }, { id: 'paid' as const, label: 'Paid' }, { id: 'denied' as const, label: 'Denied' }, { id: 'all' as const, label: 'All' }]).map((f) => (
-              <button key={f.id} onClick={() => setInvoiceFilter(f.id)} style={{ padding: '6px 12px', borderRadius: '8px', fontSize: '11px', fontWeight: 700, background: invoiceFilter === f.id ? 'var(--tab-active-bg)' : 'transparent', border: invoiceFilter === f.id ? '1px solid var(--tab-active-border)' : '1px solid var(--border)', color: invoiceFilter === f.id ? 'var(--tab-active-color)' : 'var(--text-muted)' }}>{f.label}</button>
+          <div style={{ display: 'flex', gap: '4px', marginBottom: '12px', overflowX: 'auto' }}>
+            {([{ id: 'no_invoice' as const, label: `No Invoice${noInvoiceCount > 0 ? ` (${noInvoiceCount})` : ''}` }, { id: 'pending' as const, label: `Pending${pendingInvoiceCount > 0 ? ` (${pendingInvoiceCount})` : ''}` }, { id: 'approved' as const, label: `Unpaid${unpaidCount > 0 ? ` (${unpaidCount})` : ''}` }, { id: 'paid' as const, label: 'Paid' }, { id: 'denied' as const, label: 'Denied' }, { id: 'all' as const, label: 'All' }]).map((f) => (
+              <button key={f.id} onClick={() => setInvoiceFilter(f.id)} style={{ padding: '6px 12px', borderRadius: '8px', fontSize: '11px', fontWeight: 700, whiteSpace: 'nowrap', background: invoiceFilter === f.id ? 'var(--tab-active-bg)' : 'transparent', border: invoiceFilter === f.id ? '1px solid var(--tab-active-border)' : '1px solid var(--border)', color: invoiceFilter === f.id ? 'var(--tab-active-color)' : 'var(--text-muted)' }}>{f.label}</button>
             ))}
           </div>
-          {filteredInvoices.length === 0 && <div style={{ textAlign: 'center', padding: '32px 0', color: 'var(--text-muted)' }}><div style={{ fontSize: '36px', marginBottom: '6px', opacity: 0.4 }}>{invoiceFilter === 'pending' ? '✅' : '💰'}</div><div style={{ fontWeight: 600, fontSize: '13px' }}>{invoiceFilter === 'pending' ? 'No pending bills — all caught up!' : `No ${invoiceFilter} bills`}</div></div>}
-          <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
+
+          {/* No Invoice view — approved jobs without a vendor invoice */}
+          {invoiceFilter === 'no_invoice' && (
+            <>
+              {jobsWithoutInvoice.length === 0 ? (
+                <div style={{ textAlign: 'center', padding: '32px 0', color: 'var(--text-muted)' }}>
+                  <div style={{ fontSize: '36px', marginBottom: '6px', opacity: 0.4 }}>✅</div>
+                  <div style={{ fontWeight: 600, fontSize: '13px' }}>All approved jobs have vendor invoices</div>
+                </div>
+              ) : (
+                <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
+                  {jobsWithoutInvoice.map((j) => (
+                    <div key={j.id} style={{
+                      padding: '12px 14px', borderRadius: '12px',
+                      border: '1px solid var(--warning-border)', background: 'var(--warning-bg)',
+                    }}>
+                      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'start' }}>
+                        <div>
+                          <div style={{ fontSize: '13px', fontWeight: 700, color: 'var(--text-primary)', fontFamily: 'monospace' }}>{j.vin}</div>
+                          <div style={{ fontSize: '11px', color: 'var(--text-muted)', marginTop: '2px' }}>
+                            {[j.vehicle_year, j.vehicle_make, j.vehicle_model].filter(Boolean).join(' ') || 'Unknown Vehicle'}
+                          </div>
+                        </div>
+                        <span style={{ padding: '2px 8px', borderRadius: '6px', fontSize: '10px', fontWeight: 700, background: 'var(--warning-bg)', border: '1px solid var(--warning-border)', color: 'var(--warning)' }}>No Invoice</span>
+                      </div>
+                      <div style={{ fontSize: '10px', color: 'var(--text-muted)', marginTop: '4px' }}>
+                        {j.company_name} · {j.scanner_name} · {new Date(j.scanned_at).toLocaleDateString()}
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </>
+          )}
+
+          {invoiceFilter !== 'no_invoice' && filteredInvoices.length === 0 && <div style={{ textAlign: 'center', padding: '32px 0', color: 'var(--text-muted)' }}><div style={{ fontSize: '36px', marginBottom: '6px', opacity: 0.4 }}>{invoiceFilter === 'pending' ? '✅' : '💰'}</div><div style={{ fontWeight: 600, fontSize: '13px' }}>{invoiceFilter === 'pending' ? 'No pending payments — all caught up!' : `No ${invoiceFilter} payments`}</div></div>}
+          {invoiceFilter !== 'no_invoice' && <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
             {filteredInvoices.map((inv) => {
               const isExpanded = expandedInvoice === inv.id;
               const isPending = inv.status === 'pending';
@@ -445,7 +509,7 @@ export default function AllJobsPage() {
                 </div>
               );
             })}
-          </div>
+          </div>}
         </div>
       )}
 

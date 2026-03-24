@@ -33,6 +33,9 @@ export default function ProofHygienePage() {
   const [saving, setSaving] = useState(false);
   const [searchTerm, setSearchTerm] = useState('');
   const [stats, setStats] = useState({ total: 0, review: 0, synced: 0 });
+  // Customer autocomplete for proof assignment
+  const [customerSuggestions, setCustomerSuggestions] = useState<string[]>([]);
+  const [showSuggestions, setShowSuggestions] = useState(false);
 
   useEffect(() => {
     if (!isAdmin) { router.push('/home'); return; }
@@ -63,6 +66,20 @@ export default function ProofHygienePage() {
       supabase.from('graphics_proofs').select('*', { count: 'exact', head: true }).eq('sync_status', 'synced'),
     ]);
     setStats({ total: total || 0, review: review || 0, synced: synced || 0 });
+  };
+
+  // Search customers for autocomplete in proof assignment
+  const searchCustomers = async (term: string) => {
+    if (term.length < 2) { setCustomerSuggestions([]); setShowSuggestions(false); return; }
+    const { data } = await supabase
+      .from('customers')
+      .select('company_name')
+      .ilike('company_name', `%${term}%`)
+      .eq('active', true)
+      .limit(8);
+    const names = (data || []).map((c: any) => c.company_name);
+    setCustomerSuggestions(names);
+    setShowSuggestions(names.length > 0);
   };
 
   const startEdit = (proof: ProofRecord) => {
@@ -259,19 +276,41 @@ export default function ProofHygienePage() {
                 {/* Edit / Assign UI */}
                 {isEditing ? (
                   <div style={{ marginTop: '10px', padding: '10px', background: 'var(--subtle-bg)', borderRadius: '10px' }}>
-                    <div style={{ marginBottom: '6px' }}>
+                    <div style={{ marginBottom: '6px', position: 'relative' }}>
                       <label style={{ fontSize: '10px', fontWeight: 700, color: 'var(--text-muted)', textTransform: 'uppercase' }}>Customer Name</label>
                       <input
                         type="text"
                         value={editCustomer}
-                        onChange={(e) => setEditCustomer(e.target.value)}
-                        placeholder="Enter customer name"
+                        onChange={(e) => { setEditCustomer(e.target.value); searchCustomers(e.target.value); }}
+                        onFocus={() => { if (customerSuggestions.length > 0) setShowSuggestions(true); }}
+                        placeholder="Search or type customer name..."
                         style={{
                           width: '100%', padding: '8px 10px', borderRadius: '8px', marginTop: '3px',
                           border: '1px solid var(--border)', background: 'var(--input-bg)',
                           color: 'var(--text-primary)', fontSize: '13px', boxSizing: 'border-box',
                         }}
                       />
+                      {showSuggestions && customerSuggestions.length > 0 && (
+                        <div style={{
+                          position: 'absolute', top: '100%', left: 0, right: 0, zIndex: 20,
+                          background: 'var(--card)', border: '1px solid var(--border)',
+                          borderRadius: '8px', marginTop: '2px', maxHeight: '180px', overflowY: 'auto',
+                          boxShadow: '0 8px 24px rgba(0,0,0,0.2)',
+                        }}>
+                          {customerSuggestions.map((name) => (
+                            <button
+                              key={name}
+                              onClick={() => { setEditCustomer(name); setShowSuggestions(false); }}
+                              style={{
+                                width: '100%', padding: '8px 10px', textAlign: 'left',
+                                background: 'transparent', border: 'none', borderBottom: '1px solid var(--border)',
+                                color: 'var(--text-primary)', fontSize: '12px', fontWeight: 600,
+                                cursor: 'pointer',
+                              }}
+                            >{name}</button>
+                          ))}
+                        </div>
+                      )}
                     </div>
                     <div style={{ marginBottom: '8px' }}>
                       <label style={{ fontSize: '10px', fontWeight: 700, color: 'var(--text-muted)', textTransform: 'uppercase' }}>Vehicle Type (optional)</label>

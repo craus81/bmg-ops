@@ -81,31 +81,12 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ success: true, synced: 0, added: 0, updated: 0 });
     }
 
-    // Now get pricing info — base price from pricing table
-    const pricingQuery = `
-      SELECT
-        ip.item AS item_id,
-        ip.unitprice AS sales_price
-      FROM itemPrice ip
-      WHERE ip.pricelevel = 1
-    `;
-
-    let pricingMap: Record<string, number> = {};
-    try {
-      const pricingItems = await suiteqlQueryAll(pricingQuery);
-      for (const p of pricingItems) {
-        if (p.item_id) {
-          pricingMap[p.item_id.toString()] = parseFloat(p.sales_price || '0');
-        }
-      }
-    } catch (err) {
-      console.warn('Could not fetch pricing, will use 0:', err);
-    }
-
-    // Get purchase/cost prices
-    const costQuery = `
+    // Get pricing, cost, and quantity data in a single query from item table
+    // This avoids the itemPrice table which may not always have entries
+    const detailQuery = `
       SELECT
         i.id,
+        i.baseprice,
         i.cost AS purchase_price,
         i.totalvalue,
         i.quantityonhand
@@ -114,19 +95,51 @@ export async function POST(req: NextRequest) {
       AND i.isinactive = 'F'
     `;
 
+    let pricingMap: Record<string, number> = {};
     let costMap: Record<string, { purchasePrice: number; quantityOnHand: number }> = {};
+
     try {
-      const costItems = await suiteqlQueryAll(costQuery);
-      for (const c of costItems) {
-        if (c.id) {
-          costMap[c.id.toString()] = {
-            purchasePrice: parseFloat(c.purchase_price || '0'),
-            quantityOnHand: parseFloat(c.quantityonhand || '0'),
+      const detailItems = await suiteqlQueryAll(detailQuery);
+      console.log(`Fetched pricing/cost details for ${detailItems.length} items`);
+      for (const item of detailItems) {
+        if (item.id) {
+          const id = item.id.toString();
+          pricingMap[id] = parseFloat(item.baseprice || '0');
+          costMap[id] = {
+            purchasePrice: parseFloat(item.purchase_price || '0'),
+            quantityOnHand: parseFloat(item.quantityonhand || '0'),
           };
         }
       }
     } catch (err) {
-      console.warn('Could not fetch cost data, will use 0:', err);
+      console.error('Could not fetch item detail data:', err);
+    }
+
+    // If baseprice was mostly 0, try itemPrice table as fallback
+    const nonZeroPrices = Object.values(pricingMap).filter(p => p > 0).length;
+    if (nonZeroPrices < Object.keys(pricingMap).length * 0.1) {
+      console.log(`Only ${nonZeroPrices}/${Object.keys(pricingMap).length} items have baseprice — trying itemPrice table`);
+      try {
+        const pricingQuery = `
+          SELECT
+            ip.item AS item_id,
+            ip.unitprice AS sales_price
+          FROM itemPrice ip
+          WHERE ip.pricelevel = 1
+        `;
+        const pricingItems = await suiteqlQueryAll(pricingQuery);
+        for (const p of pricingItems) {
+          if (p.item_id) {
+            const price = parseFloat(p.sales_price || '0');
+            if (price > 0) {
+              pricingMap[p.item_id.toString()] = price;
+            }
+          }
+        }
+        console.log(`itemPrice fallback added prices for ${pricingItems.length} items`);
+      } catch (err) {
+        console.warn('itemPrice fallback also failed:', err);
+      }
     }
 
     // Build upsert batch

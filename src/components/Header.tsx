@@ -289,7 +289,10 @@ export default function Header({ clockStatus, activePartNumber, activeEndCustome
         position: 'sticky', top: 0, zIndex: 100,
         borderBottom: `1px solid ${theme.border}`,
       }}>
-        <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+        <div
+          onClick={() => router.push('/home')}
+          style={{ display: 'flex', alignItems: 'center', gap: '10px', cursor: 'pointer' }}
+        >
           <div style={{
             height: '36px', padding: '4px 10px', borderRadius: '10px',
             background: 'rgba(255,255,255,0.08)', backdropFilter: 'blur(10px)',

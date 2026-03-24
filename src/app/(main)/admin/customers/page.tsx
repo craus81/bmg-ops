@@ -74,12 +74,29 @@ export default function CustomersPage() {
   }, [isAdmin, isSales]);
 
   const loadData = async () => {
-    const [custRes, contRes] = await Promise.all([
-      supabase.from('customers').select('*').eq('active', true).order('company_name'),
-      supabase.from('contacts').select('*').order('name'),
-    ]);
-    setCustomers((custRes.data as Customer[]) || []);
-    setContacts((contRes.data as Contact[]) || []);
+    // Supabase returns max 1000 rows by default — paginate to get all customers
+    let allCustomers: Customer[] = [];
+    let page = 0;
+    const pageSize = 1000;
+    let hasMore = true;
+    while (hasMore) {
+      const from = page * pageSize;
+      const to = from + pageSize - 1;
+      const { data } = await supabase
+        .from('customers')
+        .select('*')
+        .eq('active', true)
+        .order('company_name')
+        .range(from, to);
+      const batch = (data || []) as Customer[];
+      allCustomers = allCustomers.concat(batch);
+      hasMore = batch.length === pageSize;
+      page++;
+    }
+
+    const { data: contData } = await supabase.from('contacts').select('*').order('name');
+    setCustomers(allCustomers);
+    setContacts((contData as Contact[]) || []);
     setLoading(false);
   };
 
