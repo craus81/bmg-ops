@@ -109,21 +109,34 @@ export async function POST(req: NextRequest) {
     const arrayBuffer = await file.arrayBuffer();
     const buffer = Buffer.from(arrayBuffer);
 
-    // Upload original file to Supabase Storage
+    // Upload original file to Supabase Storage (best-effort — bucket may not exist yet)
     const timestamp = Date.now();
     const safeName = fileName.replace(/[^a-zA-Z0-9._-]/g, '_');
     const storagePath = `uploads/${timestamp}_${safeName}`;
+    let fileStored = false;
 
-    const { error: uploadError } = await supabase.storage
-      .from('knowledge-files')
-      .upload(storagePath, buffer, {
-        contentType: fileType,
-        upsert: false,
-      });
+    try {
+      // Ensure the bucket exists
+      const { data: buckets } = await supabase.storage.listBuckets();
+      const exists = buckets?.some(b => b.name === 'knowledge-files');
+      if (!exists) {
+        await supabase.storage.createBucket('knowledge-files', { public: true });
+      }
 
-    if (uploadError) {
-      console.error('Storage upload error:', uploadError);
-      return NextResponse.json({ error: 'Failed to upload file: ' + uploadError.message }, { status: 500 });
+      const { error: uploadError } = await supabase.storage
+        .from('knowledge-files')
+        .upload(storagePath, buffer, {
+          contentType: fileType,
+          upsert: false,
+        });
+
+      if (uploadError) {
+        console.error('Storage upload error:', uploadError);
+      } else {
+        fileStored = true;
+      }
+    } catch (storageErr: any) {
+      console.error('Storage error (non-fatal):', storageErr.message);
     }
 
     // Extract text from the file
@@ -171,7 +184,7 @@ export async function POST(req: NextRequest) {
         file_name: fileName,
         file_type: fileType,
         file_size: fileSize,
-        file_path: storagePath,
+        file_path: fileStored ? storagePath : null,
         uploaded_by: userId || null,
         updated_at: new Date().toISOString(),
       })

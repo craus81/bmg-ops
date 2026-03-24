@@ -145,12 +145,19 @@ export default function KnowledgePage() {
         body: formData,
       });
 
-      const data = await res.json();
-
-      if (!res.ok) {
-        alert('Upload failed: ' + (data.error || 'Unknown error'));
+      // Handle non-JSON responses (server crash returns HTML)
+      const contentType = res.headers.get('content-type') || '';
+      if (!contentType.includes('application/json')) {
+        const text = await res.text();
+        console.error('Non-JSON response:', text.substring(0, 500));
+        alert('Upload failed — server error. Check console for details.');
       } else {
-        setUploadProgress(`Extracted ${data.extractedLength?.toLocaleString() || 0} characters of text`);
+        const data = await res.json();
+        if (!res.ok) {
+          alert('Upload failed: ' + (data.error || 'Unknown error'));
+        } else {
+          setUploadProgress(`Extracted ${data.extractedLength?.toLocaleString() || 0} characters of text`);
+        }
       }
     } catch (err: any) {
       alert('Upload error: ' + err.message);
