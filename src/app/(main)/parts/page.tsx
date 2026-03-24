@@ -61,13 +61,27 @@ export default function PartsPage() {
 
   const loadParts = async () => {
     setLoading(true);
-    const { data } = await supabase
-      .from('netsuite_parts')
-      .select('*')
-      .eq('catalog', catalog)
-      .eq('is_active', true)
-      .order('item_number', { ascending: true });
-    setParts((data as Part[]) || []);
+    // Supabase returns max 1000 rows by default — paginate to get all
+    let allParts: Part[] = [];
+    let page = 0;
+    const pageSize = 1000;
+    let hasMore = true;
+    while (hasMore) {
+      const from = page * pageSize;
+      const to = from + pageSize - 1;
+      const { data } = await supabase
+        .from('netsuite_parts')
+        .select('*')
+        .eq('catalog', catalog)
+        .eq('is_active', true)
+        .order('item_number', { ascending: true })
+        .range(from, to);
+      const batch = (data || []) as Part[];
+      allParts = allParts.concat(batch);
+      hasMore = batch.length === pageSize;
+      page++;
+    }
+    setParts(allParts);
     setLoading(false);
   };
 
