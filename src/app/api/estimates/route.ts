@@ -23,9 +23,9 @@ function computeTotals(lines: any[], taxRate: number, taxExempt: boolean, laborR
   const autoLaborHours = lines.reduce((sum: number, l: any) => sum + parseFloat(l.labor_hours || 0), 0);
   const effectiveLaborHours = laborHoursOverride !== null && laborHoursOverride !== undefined ? laborHoursOverride : autoLaborHours;
   const laborTotal = effectiveLaborHours * laborRate;
-  const taxableAmount = subtotal + laborTotal;
+  const taxableAmount = subtotal; // Tax on parts/materials only, not labor
   const taxAmount = taxExempt ? 0 : taxableAmount * taxRate;
-  const grandTotal = taxableAmount + taxAmount;
+  const grandTotal = subtotal + laborTotal + taxAmount;
 
   return {
     subtotal: Math.round(subtotal * 100) / 100,
@@ -185,14 +185,39 @@ export async function POST(req: NextRequest) {
   }
 }
 
-// DELETE — delete an estimate
+// DELETE — delete an estimate (also deletes from NetSuite if pushed)
 export async function DELETE(req: NextRequest) {
   try {
     const supabase = getSupabase();
     const { id } = await req.json();
     if (!id) return NextResponse.json({ error: 'Missing estimate id' }, { status: 400 });
 
-    // Line items cascade delete
+    // Check if this estimate has been pushed to NetSuite
+    const { data: estimate } = await supabase
+      .from('estimates')
+      .select('netsuite_estimate_id')
+      .eq('id', id)
+      .single();
+
+    // If pushed to NetSuite, delete from NS first
+    if (estimate?.netsuite_estimate_id) {
+      try {
+        const res = await fetch(new URL('/api/estimates/push', req.url).toString(), {
+          method: 'DELETE',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ estimateId: id }),
+        });
+        const nsResult = await res.json();
+        if (!nsResult.success) {
+          return NextResponse.json({ error: `Failed to delete from NetSuite: ${nsResult.error}` }, { status: 500 });
+        }
+      } catch (nsErr: any) {
+        return NextResponse.json({ error: `NetSuite delete failed: ${nsErr.message}` }, { status: 500 });
+      }
+    }
+
+    // Delete line items then estimate from Supabase
+    await supabase.from('estimate_line_items').delete().eq('estimate_id', id);
     const { error } = await supabase.from('estimates').delete().eq('id', id);
     if (error) return NextResponse.json({ error: error.message }, { status: 500 });
 

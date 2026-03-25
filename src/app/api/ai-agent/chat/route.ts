@@ -45,7 +45,7 @@ SUPABASE TABLES (BMG Fleet App)
 ═══════════════════════════════════════════
 
 1. profiles
-   - id (uuid), full_name, email, role ('admin'|'installer'|'production'|'sales')
+   - id (uuid), full_name, email, role ('admin'|'installer'|'field_tech'|'shop_tech'|'sales'|'graphics_production'|'customer')
    - status ('pending'|'approved'|'denied'), company_id, phone_number
    - created_at
 
@@ -500,8 +500,12 @@ export async function POST(req: NextRequest) {
     let systemPrompt = SYSTEM_PROMPT;
     if (userRole === 'sales') {
       systemPrompt += '\n\nIMPORTANT: This user has a "sales" role. They can view customer data, estimates, graphics production, and vehicle tracking. They should NOT be able to modify user accounts, delete records, or access admin-only settings. Focus on helping them with customer info, quotes, and production status.';
-    } else if (userRole === 'production') {
-      systemPrompt += '\n\nIMPORTANT: This user has a "production" role. They primarily work with graphics jobs, production schedules, and the production pipeline. Focus on helping them with job statuses, vinyl specs, production metrics, and scheduling.';
+    } else if (userRole === 'production' || userRole === 'graphics_production') {
+      systemPrompt += '\n\nIMPORTANT: This user has a "graphics_production" role. They primarily work with graphics jobs, production schedules, and the production pipeline. Focus on helping them with job statuses, vinyl specs, production metrics, and scheduling.';
+    } else if (userRole === 'field_tech') {
+      systemPrompt += '\n\nIMPORTANT: This user has a "field_tech" role. They work outside the O\'Fallon shop as an installer/contractor. They can scan VINs and view vehicles assigned to them. Focus on helping them with VIN lookups, vehicle status, and installation details.';
+    } else if (userRole === 'shop_tech') {
+      systemPrompt += '\n\nIMPORTANT: This user has a "shop_tech" role. They work at the O\'Fallon shop. They can view the fleet dashboard, vehicle tracking, and shop status. Focus on helping them with vehicle statuses, production pipeline, and shop operations.';
     }
 
     const claudeMessages: any[] = messages.map(m => ({ role: m.role, content: m.content }));

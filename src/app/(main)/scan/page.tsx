@@ -447,7 +447,7 @@ export default function ScanPage() {
                 jobType="scanned_vehicle"
                 selectedIds={assignedInstallers}
                 onChange={setAssignedInstallers}
-                roles={['installer', 'admin', 'production']}
+                roles={['installer', 'admin', 'field_tech', 'shop_tech', 'graphics_production', 'production']}
                 label="Assign Installers (optional)"
               />
               {assignedInstallers.length > 0 && !assignmentSaved && (

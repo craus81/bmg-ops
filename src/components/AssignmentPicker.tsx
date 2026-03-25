@@ -55,7 +55,7 @@ export default function AssignmentPicker({
       query = query.in('role', roles);
     } else {
       // Default: show installers, production, and admin
-      query = query.in('role', ['admin', 'installer', 'production']);
+      query = query.in('role', ['admin', 'installer', 'field_tech', 'shop_tech', 'graphics_production', 'production']);
     }
 
     const { data } = await query;

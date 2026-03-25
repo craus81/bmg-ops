@@ -7,14 +7,16 @@ import { useAuth } from '@/components/AuthProvider';
 import { theme } from '@/lib/theme';
 import AssignmentPicker from '@/components/AssignmentPicker';
 import type {
-  GraphicsJob, GraphicsJobStatus, GraphicsStatusHistory, Profile,
+  GraphicsJob, GraphicsJobStatus, GraphicsJobCategory, GraphicsStatusHistory, Profile,
 } from '@/lib/types';
 import {
   GRAPHICS_STATUS_LABELS, GRAPHICS_STATUS_COLORS, GRAPHICS_STATUS_ORDER,
+  GRAPHICS_CATEGORY_LABELS, GRAPHICS_CATEGORY_COLORS,
 } from '@/lib/types';
 
 type ViewMode = 'pipeline' | 'list';
 type FilterStatus = GraphicsJobStatus | 'all' | 'active';
+type FilterCategory = GraphicsJobCategory | 'all';
 
 // Parse a date string as local date (avoids UTC timezone shift)
 function parseLocalDate(dateStr: string | null | undefined): Date | null {
@@ -51,6 +53,7 @@ export default function GraphicsPage() {
   const [loading, setLoading] = useState(true);
   const [viewMode, setViewMode] = useState<ViewMode>('pipeline');
   const [filterStatus, setFilterStatus] = useState<FilterStatus>('active');
+  const [filterCategory, setFilterCategory] = useState<FilterCategory>('all');
   const [search, setSearch] = useState('');
   const [expandedJobId, setExpandedJobId] = useState<string | null>(null);
   const [editingJob, setEditingJob] = useState<GraphicsJob | null>(null);
@@ -58,7 +61,9 @@ export default function GraphicsPage() {
 
   // Create job state
   const [showCreate, setShowCreate] = useState(false);
+  const [createStep, setCreateStep] = useState<'category' | 'details'>('category');
   const [createForm, setCreateForm] = useState({
+    job_category: '' as GraphicsJobCategory | '',
     title: '', part_number: '', customer: '', quantity: 1,
     content: '', notes: '',
     vinyl_type: '', vinyl_color: '', laminate: '', print_method: '', cut_method: '', premask: '',
@@ -228,28 +233,32 @@ export default function GraphicsPage() {
   // Create new job
   const createJob = async () => {
     setCreating(true);
-    const jobNumber = `GFX-${Date.now().toString(36).toUpperCase()}`;
+    const cat = createForm.job_category || 'production';
+    const prefix = cat === 'proofing' ? 'PRF' : cat === 'internal' ? 'INT' : 'GFX';
+    const jobNumber = `${prefix}-${Date.now().toString(36).toUpperCase()}`;
+    const initialStatus: GraphicsJobStatus = cat === 'proofing' ? 'designing' : 'received';
     const { data, error } = await supabase
       .from('graphics_jobs')
       .insert({
         job_number: jobNumber,
+        job_category: cat,
         title: createForm.title || 'Untitled Job',
         part_number: createForm.part_number || null,
         customer: createForm.customer || null,
         quantity: createForm.quantity || 1,
         content: createForm.content || null,
         notes: createForm.notes || null,
-        vinyl_type: createForm.vinyl_type || null,
-        vinyl_color: createForm.vinyl_color || null,
-        laminate: createForm.laminate || null,
-        print_method: createForm.print_method || null,
-        cut_method: createForm.cut_method || null,
-        premask: createForm.premask || null,
+        vinyl_type: cat === 'production' ? (createForm.vinyl_type || null) : null,
+        vinyl_color: cat === 'production' ? (createForm.vinyl_color || null) : null,
+        laminate: cat === 'production' ? (createForm.laminate || null) : null,
+        print_method: cat === 'production' ? (createForm.print_method || null) : null,
+        cut_method: cat === 'production' ? (createForm.cut_method || null) : null,
+        premask: cat === 'production' ? (createForm.premask || null) : null,
         priority: createForm.priority,
         due_date: createForm.due_date || null,
-        scheduled_install_date: createForm.scheduled_install_date || null,
-        ship_to: createForm.ship_to || null,
-        status: 'received',
+        scheduled_install_date: cat !== 'internal' ? (createForm.scheduled_install_date || null) : null,
+        ship_to: cat === 'production' ? (createForm.ship_to || null) : null,
+        status: initialStatus,
         created_by: user?.id,
       })
       .select()
@@ -260,9 +269,9 @@ export default function GraphicsPage() {
       await supabase.from('graphics_status_history').insert({
         job_id: data.id,
         from_status: null,
-        to_status: 'received',
+        to_status: initialStatus,
         changed_by: user?.id,
-        note: 'Job created manually',
+        note: `${GRAPHICS_CATEGORY_LABELS[cat]} job created`,
       });
 
       // Sync install date to Google Calendar if set
@@ -317,8 +326,9 @@ export default function GraphicsPage() {
 
       setJobs(prev => [data as GraphicsJob, ...prev]);
       setShowCreate(false);
+      setCreateStep('category');
       setCreateForm({
-        title: '', part_number: '', customer: '', quantity: 1,
+        job_category: '', title: '', part_number: '', customer: '', quantity: 1,
         content: '', notes: '',
         vinyl_type: '', vinyl_color: '', laminate: '', print_method: '', cut_method: '', premask: '',
         priority: 'normal', due_date: '', scheduled_install_date: '', ship_to: '',
@@ -341,6 +351,9 @@ export default function GraphicsPage() {
 
   // Filter jobs
   const filteredJobs = jobs.filter(j => {
+    // Category filter
+    if (filterCategory !== 'all' && (j.job_category || 'production') !== filterCategory) return false;
+    // Status filter
     if (filterStatus === 'active') {
       if (!ACTIVE_STATUSES.includes(j.status)) return false;
     } else if (filterStatus !== 'all') {
@@ -412,6 +425,33 @@ export default function GraphicsPage() {
         >
           + New Job
         </button>
+      </div>
+
+      {/* Category Filter */}
+      <div style={{ display: 'flex', gap: '4px', marginBottom: '8px' }}>
+        {([
+          { id: 'all' as const, label: 'All Types', color: '#60a5fa' },
+          { id: 'production' as const, label: 'Production', color: GRAPHICS_CATEGORY_COLORS.production },
+          { id: 'proofing' as const, label: 'Proofing', color: GRAPHICS_CATEGORY_COLORS.proofing },
+          { id: 'internal' as const, label: 'Internal', color: GRAPHICS_CATEGORY_COLORS.internal },
+        ]).map(c => {
+          const count = c.id === 'all' ? jobs.length : jobs.filter(j => (j.job_category || 'production') === c.id).length;
+          return (
+            <button
+              key={c.id}
+              onClick={() => setFilterCategory(c.id)}
+              style={{
+                padding: '5px 10px', borderRadius: '6px', fontSize: '10px', fontWeight: 700,
+                background: filterCategory === c.id ? `${c.color}22` : '#141e2b',
+                border: `1px solid ${filterCategory === c.id ? `${c.color}55` : '#1e2d3d'}`,
+                color: filterCategory === c.id ? c.color : '#4a5f78',
+                cursor: 'pointer', whiteSpace: 'nowrap',
+              }}
+            >
+              {c.label} ({count})
+            </button>
+          );
+        })}
       </div>
 
       {/* Status Pipeline Summary */}
@@ -516,7 +556,18 @@ export default function GraphicsPage() {
                           {job.title}
                         </div>
                       </div>
-                      <div style={{ fontSize: '10px', color: '#4a5f78', display: 'flex', gap: '8px', flexWrap: 'wrap' }}>
+                      <div style={{ fontSize: '10px', color: '#4a5f78', display: 'flex', gap: '8px', flexWrap: 'wrap', alignItems: 'center' }}>
+                        {(job.job_category && job.job_category !== 'production') && (
+                          <span style={{
+                            padding: '1px 6px', borderRadius: '4px', fontSize: '9px', fontWeight: 700,
+                            background: `${GRAPHICS_CATEGORY_COLORS[job.job_category]}18`,
+                            border: `1px solid ${GRAPHICS_CATEGORY_COLORS[job.job_category]}44`,
+                            color: GRAPHICS_CATEGORY_COLORS[job.job_category],
+                            textTransform: 'uppercase', letterSpacing: '0.3px',
+                          }}>
+                            {GRAPHICS_CATEGORY_LABELS[job.job_category]}
+                          </span>
+                        )}
                         {job.job_number && <span>#{job.job_number}</span>}
                         {job.customer && <span>{job.customer}</span>}
                         {job.part_number && <span>{job.part_number}</span>}
@@ -641,7 +692,7 @@ export default function GraphicsPage() {
                             jobId={job.id}
                             selectedIds={jobAssignments[job.id] || []}
                             onChange={(ids) => saveJobAssignments(job.id, ids, job.title)}
-                            roles={['production', 'admin', 'installer']}
+                            roles={['graphics_production', 'production', 'admin', 'field_tech', 'shop_tech', 'installer']}
                             label="Assigned Team"
                             compact
                           />
@@ -715,7 +766,7 @@ export default function GraphicsPage() {
                             <div style={labelStyle}>Assigned To</div>
                             <select style={inputStyle} value={editJob!.assigned_to || ''} onChange={e => setEditingJob({ ...editJob!, assigned_to: e.target.value || null })}>
                               <option value="">— Unassigned —</option>
-                              {profiles.filter(p => p.role === 'admin' || p.role === 'production').map(p => (
+                              {profiles.filter(p => ['admin', 'production', 'graphics_production', 'shop_tech'].includes(p.role)).map(p => (
                                 <option key={p.id} value={p.id}>{p.full_name || p.email}</option>
                               ))}
                             </select>
@@ -821,117 +872,215 @@ export default function GraphicsPage() {
       {showCreate && (
         <div style={{ position: 'fixed', top: 0, left: 0, right: 0, bottom: 0, background: 'rgba(0,0,0,0.7)', zIndex: 1000, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '16px' }}>
           <div style={{ background: '#141e2b', border: '1px solid rgba(59,130,246,0.3)', borderRadius: '14px', padding: '18px', maxWidth: '500px', width: '100%', maxHeight: '85vh', overflowY: 'auto' }}>
-            <div style={{ fontSize: '16px', fontWeight: 800, color: '#e8ecf1', marginBottom: '14px' }}>New Graphics Job</div>
 
-            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '8px', marginBottom: '10px' }}>
-              <div style={{ gridColumn: '1 / -1' }}>
-                <div style={labelStyle}>Job Title *</div>
-                <input style={inputStyle} value={createForm.title} onChange={e => setCreateForm({ ...createForm, title: e.target.value })} placeholder="e.g. GRAPHIC KIT - FORD TRANSIT" />
-              </div>
-              <div>
-                <div style={labelStyle}>Part Number</div>
-                <input style={inputStyle} value={createForm.part_number} onChange={e => setCreateForm({ ...createForm, part_number: e.target.value })} placeholder="e.g. 02T278" />
-              </div>
-              <div>
-                <div style={labelStyle}>Customer</div>
-                <input style={inputStyle} value={createForm.customer} onChange={e => setCreateForm({ ...createForm, customer: e.target.value })} placeholder="e.g. Masterack" />
-              </div>
-              <div>
-                <div style={labelStyle}>Quantity</div>
-                <input type="number" style={inputStyle} value={createForm.quantity} onChange={e => setCreateForm({ ...createForm, quantity: parseInt(e.target.value) || 1 })} />
-              </div>
-              <div>
-                <div style={labelStyle}>Priority</div>
-                <select style={inputStyle} value={createForm.priority} onChange={e => setCreateForm({ ...createForm, priority: e.target.value as any })}>
-                  <option value="low">Low</option>
-                  <option value="normal">Normal</option>
-                  <option value="high">High</option>
-                  <option value="rush">Rush</option>
-                </select>
-              </div>
-              <div>
-                <div style={labelStyle}>Due Date</div>
-                <input type="date" style={inputStyle} value={createForm.due_date} onChange={e => setCreateForm({ ...createForm, due_date: e.target.value })} />
-              </div>
-              <div>
-                <div style={labelStyle}>Scheduled Install Date</div>
-                <input type="date" style={inputStyle} value={createForm.scheduled_install_date} onChange={e => setCreateForm({ ...createForm, scheduled_install_date: e.target.value })} />
-              </div>
-              <div>
-                <div style={labelStyle}>Ship To</div>
-                <input style={inputStyle} value={createForm.ship_to} onChange={e => setCreateForm({ ...createForm, ship_to: e.target.value })} />
-              </div>
-            </div>
+            {/* ─── STEP 1: Choose Job Type ─── */}
+            {createStep === 'category' && (
+              <>
+                <div style={{ fontSize: '16px', fontWeight: 800, color: '#e8ecf1', marginBottom: '6px' }}>New Job</div>
+                <div style={{ fontSize: '12px', color: '#4a5f78', marginBottom: '16px' }}>What type of job is this?</div>
 
-            <div style={{ marginBottom: '10px' }}>
-              <div style={labelStyle}>Content / Special Instructions</div>
-              <textarea
-                style={{ ...inputStyle, minHeight: '60px', resize: 'vertical' }}
-                value={createForm.content}
-                onChange={e => setCreateForm({ ...createForm, content: e.target.value })}
-                placeholder="Unit numbers, addresses, custom text per unit..."
-              />
-            </div>
+                <div style={{ display: 'flex', flexDirection: 'column', gap: '8px', marginBottom: '14px' }}>
+                  {([
+                    { id: 'production' as const, icon: '🏭', title: 'Production', desc: 'Full production job — printing, cutting, packing, shipping, install' },
+                    { id: 'proofing' as const, icon: '🎨', title: 'Proofing', desc: 'Design and proof approval only — no production steps yet' },
+                    { id: 'internal' as const, icon: '🔧', title: 'Internal Project', desc: 'Internal work like T-Mobile design, samples, or R&D' },
+                  ]).map(cat => (
+                    <button
+                      key={cat.id}
+                      onClick={() => {
+                        setCreateForm({ ...createForm, job_category: cat.id });
+                        setCreateStep('details');
+                      }}
+                      style={{
+                        padding: '16px', borderRadius: '12px', textAlign: 'left', cursor: 'pointer',
+                        background: '#0f1720', border: `1px solid ${GRAPHICS_CATEGORY_COLORS[cat.id]}33`,
+                        transition: 'all 0.15s',
+                      }}
+                      onMouseEnter={e => { (e.target as HTMLElement).style.borderColor = GRAPHICS_CATEGORY_COLORS[cat.id]; }}
+                      onMouseLeave={e => { (e.target as HTMLElement).style.borderColor = `${GRAPHICS_CATEGORY_COLORS[cat.id]}33`; }}
+                    >
+                      <div style={{ display: 'flex', alignItems: 'center', gap: '10px', marginBottom: '4px' }}>
+                        <span style={{ fontSize: '20px' }}>{cat.icon}</span>
+                        <span style={{ fontSize: '14px', fontWeight: 800, color: GRAPHICS_CATEGORY_COLORS[cat.id] }}>{cat.title}</span>
+                      </div>
+                      <div style={{ fontSize: '11px', color: '#6b7a8d', lineHeight: 1.4, paddingLeft: '30px' }}>{cat.desc}</div>
+                    </button>
+                  ))}
+                </div>
 
-            <div style={labelStyle}>Vinyl Specifications</div>
-            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: '6px', marginBottom: '10px' }}>
-              <div>
-                <div style={{ ...labelStyle, fontSize: '8px' }}>Vinyl Type</div>
-                <input style={inputStyle} value={createForm.vinyl_type} onChange={e => setCreateForm({ ...createForm, vinyl_type: e.target.value })} placeholder="e.g. 3M IJ180Cv3" />
-              </div>
-              <div>
-                <div style={{ ...labelStyle, fontSize: '8px' }}>Color</div>
-                <input style={inputStyle} value={createForm.vinyl_color} onChange={e => setCreateForm({ ...createForm, vinyl_color: e.target.value })} placeholder="e.g. White" />
-              </div>
-              <div>
-                <div style={{ ...labelStyle, fontSize: '8px' }}>Laminate</div>
-                <input style={inputStyle} value={createForm.laminate} onChange={e => setCreateForm({ ...createForm, laminate: e.target.value })} placeholder="e.g. 3M 8518" />
-              </div>
-              <div>
-                <div style={{ ...labelStyle, fontSize: '8px' }}>Print</div>
-                <input style={inputStyle} value={createForm.print_method} onChange={e => setCreateForm({ ...createForm, print_method: e.target.value })} placeholder="e.g. Solvent" />
-              </div>
-              <div>
-                <div style={{ ...labelStyle, fontSize: '8px' }}>Cut</div>
-                <input style={inputStyle} value={createForm.cut_method} onChange={e => setCreateForm({ ...createForm, cut_method: e.target.value })} placeholder="e.g. Contour" />
-              </div>
-              <div>
-                <div style={{ ...labelStyle, fontSize: '8px' }}>Premask</div>
-                <input style={inputStyle} value={createForm.premask} onChange={e => setCreateForm({ ...createForm, premask: e.target.value })} placeholder="e.g. R-Tape 4075" />
-              </div>
-            </div>
+                <button
+                  onClick={() => { setShowCreate(false); setCreateStep('category'); }}
+                  style={{ width: '100%', padding: '10px', borderRadius: '10px', background: 'transparent', border: '1px solid #1e2d3d', color: '#6b7a8d', fontWeight: 700, fontSize: '13px', cursor: 'pointer' }}
+                >
+                  Cancel
+                </button>
+              </>
+            )}
 
-            <div style={{ marginBottom: '12px' }}>
-              <div style={labelStyle}>Internal Notes</div>
-              <textarea style={{ ...inputStyle, minHeight: '40px', resize: 'vertical' }} value={createForm.notes} onChange={e => setCreateForm({ ...createForm, notes: e.target.value })} />
-            </div>
+            {/* ─── STEP 2: Job Details (conditional on category) ─── */}
+            {createStep === 'details' && (
+              <>
+                <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '14px' }}>
+                  <button
+                    onClick={() => setCreateStep('category')}
+                    style={{ background: 'none', border: 'none', color: '#4a5f78', fontSize: '16px', cursor: 'pointer', padding: '0' }}
+                  >
+                    ←
+                  </button>
+                  <div style={{ fontSize: '16px', fontWeight: 800, color: '#e8ecf1' }}>
+                    New {GRAPHICS_CATEGORY_LABELS[createForm.job_category as GraphicsJobCategory]} Job
+                  </div>
+                  <span style={{
+                    padding: '2px 8px', borderRadius: '6px', fontSize: '10px', fontWeight: 700,
+                    background: `${GRAPHICS_CATEGORY_COLORS[createForm.job_category as GraphicsJobCategory]}18`,
+                    color: GRAPHICS_CATEGORY_COLORS[createForm.job_category as GraphicsJobCategory],
+                  }}>
+                    {GRAPHICS_CATEGORY_LABELS[createForm.job_category as GraphicsJobCategory]}
+                  </span>
+                </div>
 
-            {/* Assign Team Members */}
-            <div style={{ marginBottom: '12px' }}>
-              <AssignmentPicker
-                jobType="graphics_job"
-                selectedIds={createAssignees}
-                onChange={setCreateAssignees}
-                roles={['production', 'admin', 'installer']}
-                label="Assign Team Members"
-              />
-            </div>
+                <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '8px', marginBottom: '10px' }}>
+                  <div style={{ gridColumn: '1 / -1' }}>
+                    <div style={labelStyle}>{createForm.job_category === 'internal' ? 'Project Name *' : 'Job Title *'}</div>
+                    <input style={inputStyle} value={createForm.title} onChange={e => setCreateForm({ ...createForm, title: e.target.value })}
+                      placeholder={createForm.job_category === 'internal' ? 'e.g. T-Mobile Spring Campaign' : createForm.job_category === 'proofing' ? 'e.g. PROOF - Fleet Graphics Redesign' : 'e.g. GRAPHIC KIT - FORD TRANSIT'}
+                    />
+                  </div>
+                  <div>
+                    <div style={labelStyle}>Part Number</div>
+                    <input style={inputStyle} value={createForm.part_number} onChange={e => setCreateForm({ ...createForm, part_number: e.target.value })} placeholder="e.g. 02T278" />
+                  </div>
+                  <div>
+                    <div style={labelStyle}>{createForm.job_category === 'internal' ? 'Department / Requestor' : 'Customer'}</div>
+                    <input style={inputStyle} value={createForm.customer} onChange={e => setCreateForm({ ...createForm, customer: e.target.value })}
+                      placeholder={createForm.job_category === 'internal' ? 'e.g. Marketing' : 'e.g. Masterack'}
+                    />
+                  </div>
+                  <div>
+                    <div style={labelStyle}>Quantity</div>
+                    <input type="number" style={inputStyle} value={createForm.quantity} onChange={e => setCreateForm({ ...createForm, quantity: parseInt(e.target.value) || 1 })} />
+                  </div>
+                  <div>
+                    <div style={labelStyle}>Priority</div>
+                    <select style={inputStyle} value={createForm.priority} onChange={e => setCreateForm({ ...createForm, priority: e.target.value as any })}>
+                      <option value="low">Low</option>
+                      <option value="normal">Normal</option>
+                      <option value="high">High</option>
+                      <option value="rush">Rush</option>
+                    </select>
+                  </div>
+                  <div>
+                    <div style={labelStyle}>Due Date</div>
+                    <input type="date" style={inputStyle} value={createForm.due_date} onChange={e => setCreateForm({ ...createForm, due_date: e.target.value })} />
+                  </div>
+                  {/* Production & Proofing get install date */}
+                  {createForm.job_category !== 'internal' && (
+                    <div>
+                      <div style={labelStyle}>Scheduled Install Date</div>
+                      <input type="date" style={inputStyle} value={createForm.scheduled_install_date} onChange={e => setCreateForm({ ...createForm, scheduled_install_date: e.target.value })} />
+                    </div>
+                  )}
+                  {/* Production gets ship-to */}
+                  {createForm.job_category === 'production' && (
+                    <div>
+                      <div style={labelStyle}>Ship To</div>
+                      <input style={inputStyle} value={createForm.ship_to} onChange={e => setCreateForm({ ...createForm, ship_to: e.target.value })} />
+                    </div>
+                  )}
+                </div>
 
-            <div style={{ display: 'flex', gap: '8px' }}>
-              <button
-                onClick={createJob}
-                disabled={creating || !createForm.title.trim()}
-                style={{ flex: 1, padding: '12px', borderRadius: '10px', background: creating ? '#1e2d3d' : '#22c55e', color: '#fff', fontWeight: 800, fontSize: '13px', border: 'none', cursor: 'pointer', opacity: creating || !createForm.title.trim() ? 0.5 : 1 }}
-              >
-                {creating ? 'Creating...' : 'Create Job'}
-              </button>
-              <button
-                onClick={() => setShowCreate(false)}
-                style={{ flex: 1, padding: '12px', borderRadius: '10px', background: 'transparent', border: '1px solid #1e2d3d', color: '#6b7a8d', fontWeight: 700, fontSize: '13px', cursor: 'pointer' }}
-              >
-                Cancel
-              </button>
-            </div>
+                <div style={{ marginBottom: '10px' }}>
+                  <div style={labelStyle}>{createForm.job_category === 'proofing' ? 'Design Brief / Instructions' : 'Content / Special Instructions'}</div>
+                  <textarea
+                    style={{ ...inputStyle, minHeight: '60px', resize: 'vertical' }}
+                    value={createForm.content}
+                    onChange={e => setCreateForm({ ...createForm, content: e.target.value })}
+                    placeholder={createForm.job_category === 'proofing' ? 'Describe what needs to be designed or proofed...' : 'Unit numbers, addresses, custom text per unit...'}
+                  />
+                </div>
+
+                {/* Vinyl specs — production only */}
+                {createForm.job_category === 'production' && (
+                  <>
+                    <div style={labelStyle}>Vinyl Specifications</div>
+                    <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: '6px', marginBottom: '10px' }}>
+                      <div>
+                        <div style={{ ...labelStyle, fontSize: '8px' }}>Vinyl Type</div>
+                        <input style={inputStyle} value={createForm.vinyl_type} onChange={e => setCreateForm({ ...createForm, vinyl_type: e.target.value })} placeholder="e.g. 3M IJ180Cv3" />
+                      </div>
+                      <div>
+                        <div style={{ ...labelStyle, fontSize: '8px' }}>Color</div>
+                        <input style={inputStyle} value={createForm.vinyl_color} onChange={e => setCreateForm({ ...createForm, vinyl_color: e.target.value })} placeholder="e.g. White" />
+                      </div>
+                      <div>
+                        <div style={{ ...labelStyle, fontSize: '8px' }}>Laminate</div>
+                        <input style={inputStyle} value={createForm.laminate} onChange={e => setCreateForm({ ...createForm, laminate: e.target.value })} placeholder="e.g. 3M 8518" />
+                      </div>
+                      <div>
+                        <div style={{ ...labelStyle, fontSize: '8px' }}>Print</div>
+                        <input style={inputStyle} value={createForm.print_method} onChange={e => setCreateForm({ ...createForm, print_method: e.target.value })} placeholder="e.g. Solvent" />
+                      </div>
+                      <div>
+                        <div style={{ ...labelStyle, fontSize: '8px' }}>Cut</div>
+                        <input style={inputStyle} value={createForm.cut_method} onChange={e => setCreateForm({ ...createForm, cut_method: e.target.value })} placeholder="e.g. Contour" />
+                      </div>
+                      <div>
+                        <div style={{ ...labelStyle, fontSize: '8px' }}>Premask</div>
+                        <input style={inputStyle} value={createForm.premask} onChange={e => setCreateForm({ ...createForm, premask: e.target.value })} placeholder="e.g. R-Tape 4075" />
+                      </div>
+                    </div>
+                  </>
+                )}
+
+                <div style={{ marginBottom: '12px' }}>
+                  <div style={labelStyle}>Internal Notes</div>
+                  <textarea style={{ ...inputStyle, minHeight: '40px', resize: 'vertical' }} value={createForm.notes} onChange={e => setCreateForm({ ...createForm, notes: e.target.value })} />
+                </div>
+
+                {/* Assign Team Members */}
+                <div style={{ marginBottom: '12px' }}>
+                  <AssignmentPicker
+                    jobType="graphics_job"
+                    selectedIds={createAssignees}
+                    onChange={setCreateAssignees}
+                    roles={['graphics_production', 'production', 'admin', 'field_tech', 'shop_tech', 'installer']}
+                    label="Assign Team Members"
+                  />
+                </div>
+
+                {/* Priority note for internal */}
+                {createForm.job_category === 'internal' && (
+                  <div style={{
+                    padding: '10px', borderRadius: '8px', marginBottom: '12px',
+                    background: 'rgba(245,158,11,0.06)', border: '1px solid rgba(245,158,11,0.15)',
+                    fontSize: '11px', color: '#f59e0b', lineHeight: 1.5,
+                  }}>
+                    Internal projects are lower priority unless marked as High or Rush.
+                  </div>
+                )}
+
+                <div style={{ display: 'flex', gap: '8px' }}>
+                  <button
+                    onClick={createJob}
+                    disabled={creating || !createForm.title.trim()}
+                    style={{
+                      flex: 1, padding: '12px', borderRadius: '10px',
+                      background: creating ? '#1e2d3d' : GRAPHICS_CATEGORY_COLORS[createForm.job_category as GraphicsJobCategory] || '#22c55e',
+                      color: '#fff', fontWeight: 800, fontSize: '13px', border: 'none', cursor: 'pointer',
+                      opacity: creating || !createForm.title.trim() ? 0.5 : 1,
+                    }}
+                  >
+                    {creating ? 'Creating...' : `Create ${GRAPHICS_CATEGORY_LABELS[createForm.job_category as GraphicsJobCategory]} Job`}
+                  </button>
+                  <button
+                    onClick={() => { setShowCreate(false); setCreateStep('category'); }}
+                    style={{ flex: 1, padding: '12px', borderRadius: '10px', background: 'transparent', border: '1px solid #1e2d3d', color: '#6b7a8d', fontWeight: 700, fontSize: '13px', cursor: 'pointer' }}
+                  >
+                    Cancel
+                  </button>
+                </div>
+              </>
+            )}
           </div>
         </div>
       )}

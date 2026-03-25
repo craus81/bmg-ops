@@ -89,7 +89,7 @@ function genKey() {
 
 export default function EstimatesPage() {
   const router = useRouter();
-  const { user, isAdmin, isSales, profile } = useAuth();
+  const { user, isAdmin, isSales, isGraphicsProduction, profile } = useAuth();
   const supabase = createClient();
 
   const [view, setView] = useState<ViewMode>('list');
@@ -111,6 +111,8 @@ export default function EstimatesPage() {
   const [lines, setLines] = useState<LineItem[]>([]);
   const [saving, setSaving] = useState(false);
   const [pushing, setPushing] = useState(false);
+  const [syncing, setSyncing] = useState(false);
+  const [deleting, setDeleting] = useState(false);
 
   // Part search
   const [partSearch, setPartSearch] = useState('');
@@ -126,9 +128,9 @@ export default function EstimatesPage() {
 
   useEffect(() => {
     if (!user) return;
-    if (!isAdmin && !isSales) { router.push('/home'); return; }
+    if (!isAdmin && !isSales && !isGraphicsProduction) { router.push('/home'); return; }
     loadEstimates();
-  }, [user, isAdmin, isSales]);
+  }, [user, isAdmin, isSales, isGraphicsProduction]);
 
   const loadEstimates = async () => {
     setLoading(true);
@@ -223,9 +225,9 @@ export default function EstimatesPage() {
   const autoLaborHours = lines.reduce((s, l) => s + (l.labor_hours * l.quantity), 0);
   const effectiveLaborHours = laborOverride !== null ? laborOverride : autoLaborHours;
   const laborTotal = effectiveLaborHours * laborRate;
-  const taxableAmount = subtotal + laborTotal;
+  const taxableAmount = subtotal; // Tax on parts/materials only, not labor
   const taxAmount = taxExempt ? 0 : taxableAmount * taxRate;
-  const grandTotal = taxableAmount + taxAmount;
+  const grandTotal = subtotal + laborTotal + taxAmount;
 
   // ── Save estimate ──
   const saveEstimate = async (status: string = 'draft') => {
@@ -273,8 +275,8 @@ export default function EstimatesPage() {
     setSaving(false);
   };
 
-  // ── Push to NetSuite ──
-  const pushToNetSuite = async () => {
+  // ── Push to NetSuite (initial push or sync update) ──
+  const pushToNetSuite = async (isSync: boolean = false) => {
     if (!editingId) {
       alert('Please save the estimate first');
       return;
@@ -287,12 +289,21 @@ export default function EstimatesPage() {
       alert('Please add at least one line item');
       return;
     }
-    if (!window.confirm('Push this estimate to NetSuite? This will create an Estimate record in NetSuite.')) return;
+
+    const confirmMsg = isSync
+      ? 'Sync changes to NetSuite? This will update the existing Estimate in NetSuite.'
+      : 'Push this estimate to NetSuite? This will create an Estimate record in NetSuite.';
+    if (!window.confirm(confirmMsg)) return;
 
     // Save first to ensure latest data
-    await saveEstimate('draft');
+    await saveEstimate(isSync ? 'pushed' : 'draft');
 
-    setPushing(true);
+    if (isSync) {
+      setSyncing(true);
+    } else {
+      setPushing(true);
+    }
+
     try {
       const res = await fetch('/api/estimates/push', {
         method: 'POST',
@@ -301,17 +312,21 @@ export default function EstimatesPage() {
       });
       const data = await res.json();
       if (data.success) {
-        alert(`Estimate pushed to NetSuite!\nEstimate #: ${data.netsuite_estimate_number || data.netsuite_estimate_id}`);
+        const msg = data.updated
+          ? 'Estimate synced to NetSuite!'
+          : `Estimate pushed to NetSuite!\nEstimate #: ${data.netsuite_estimate_number || data.netsuite_estimate_id}`;
+        alert(msg);
         await loadEstimates();
         resetBuilder();
         setView('list');
       } else {
-        alert('Push failed: ' + (data.error || 'Unknown error'));
+        alert((isSync ? 'Sync' : 'Push') + ' failed: ' + (data.error || 'Unknown error'));
       }
     } catch {
       alert('Network error — please try again');
     }
     setPushing(false);
+    setSyncing(false);
   };
 
   // ── Open estimate for editing ──
@@ -367,13 +382,27 @@ export default function EstimatesPage() {
     setCustResults([]);
   };
 
-  const deleteEstimate = async (id: string) => {
-    if (!window.confirm('Delete this estimate? This cannot be undone.')) return;
-    await fetch('/api/estimates', {
-      method: 'DELETE',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ id }),
-    });
+  const deleteEstimate = async (id: string, hasNsId: boolean = false) => {
+    const msg = hasNsId
+      ? 'Delete this estimate? This will ALSO delete it from NetSuite. This cannot be undone.'
+      : 'Delete this estimate? This cannot be undone.';
+    if (!window.confirm(msg)) return;
+
+    setDeleting(true);
+    try {
+      const res = await fetch('/api/estimates', {
+        method: 'DELETE',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ id }),
+      });
+      const data = await res.json();
+      if (!data.success && data.error) {
+        alert('Delete failed: ' + data.error);
+      }
+    } catch {
+      alert('Network error — please try again');
+    }
+    setDeleting(false);
     await loadEstimates();
   };
 
@@ -471,13 +500,15 @@ export default function EstimatesPage() {
                       }}>
                         {STATUS_LABELS[est.status] || est.status}
                       </div>
-                      {est.status === 'draft' && isAdmin && (
+                      {isAdmin && (
                         <button
-                          onClick={(e) => { e.stopPropagation(); deleteEstimate(est.id); }}
+                          onClick={(e) => { e.stopPropagation(); deleteEstimate(est.id, !!est.netsuite_estimate_id); }}
+                          disabled={deleting}
                           style={{
                             padding: '4px 8px', borderRadius: '6px', fontSize: '10px', fontWeight: 700,
                             background: 'rgba(248,113,113,0.08)', border: '1px solid rgba(248,113,113,0.2)',
                             color: '#f87171', cursor: 'pointer',
+                            opacity: deleting ? 0.5 : 1,
                           }}
                         >
                           Del
@@ -525,7 +556,7 @@ export default function EstimatesPage() {
               {customerName}
               {customerNsId && <span style={{ color: '#4a5f78', fontWeight: 400, marginLeft: '6px' }}>NS #{customerNsId}</span>}
             </div>
-            {!isPushed && (
+            {(
               <button
                 onClick={() => { setCustomerId(null); setCustomerName(''); setCustomerNsId(null); setCustSearch(''); }}
                 style={{ padding: '6px 10px', borderRadius: '6px', background: 'rgba(248,113,113,0.08)', border: '1px solid rgba(248,113,113,0.2)', color: '#f87171', fontSize: '11px', fontWeight: 700, cursor: 'pointer' }}
@@ -584,7 +615,7 @@ export default function EstimatesPage() {
             value={title}
             onChange={e => setTitle(e.target.value)}
             placeholder="e.g. Fleet Upfit — 10 Transits"
-            readOnly={!!isPushed}
+
           />
         </div>
         <div>
@@ -594,7 +625,7 @@ export default function EstimatesPage() {
             value={notes}
             onChange={e => setNotes(e.target.value)}
             placeholder="Notes (not pushed to NS)"
-            readOnly={!!isPushed}
+
           />
         </div>
       </div>
@@ -603,7 +634,7 @@ export default function EstimatesPage() {
       <div style={{ marginBottom: '8px' }}>
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '6px' }}>
           <div style={labelStyle}>Line Items</div>
-          {!isPushed && (
+          {(
             <button
               onClick={addCustomLine}
               style={{ padding: '3px 8px', borderRadius: '5px', fontSize: '10px', fontWeight: 700, background: 'rgba(59,130,246,0.1)', border: '1px solid rgba(59,130,246,0.2)', color: '#60a5fa', cursor: 'pointer' }}
@@ -614,7 +645,7 @@ export default function EstimatesPage() {
         </div>
 
         {/* Part search */}
-        {!isPushed && (
+        {(
           <div style={{ position: 'relative', marginBottom: '8px' }}>
             <input
               ref={partSearchRef}
@@ -684,7 +715,7 @@ export default function EstimatesPage() {
                   padding: '6px 0', borderBottom: '1px solid #1e2d3d',
                 }}
               >
-                {line.is_custom && !isPushed ? (
+                {line.is_custom ? (
                   <input
                     style={{ ...inputStyle, padding: '4px 6px', fontSize: '11px' }}
                     value={line.item_number}
@@ -698,7 +729,7 @@ export default function EstimatesPage() {
                   </div>
                 )}
 
-                {line.is_custom && !isPushed ? (
+                {line.is_custom ? (
                   <input
                     style={{ ...inputStyle, padding: '4px 6px', fontSize: '11px' }}
                     value={line.description}
@@ -714,7 +745,7 @@ export default function EstimatesPage() {
                   style={{ ...inputStyle, padding: '4px 6px', fontSize: '11px', textAlign: 'center' }}
                   value={line.quantity}
                   onChange={e => updateLine(line.key, 'quantity', parseFloat(e.target.value) || 0)}
-                  readOnly={!!isPushed}
+      
                   min={0}
                 />
 
@@ -723,7 +754,7 @@ export default function EstimatesPage() {
                   style={{ ...inputStyle, padding: '4px 6px', fontSize: '11px', textAlign: 'right' }}
                   value={line.unit_price}
                   onChange={e => updateLine(line.key, 'unit_price', parseFloat(e.target.value) || 0)}
-                  readOnly={!!isPushed}
+      
                   step={0.01}
                 />
 
@@ -735,7 +766,7 @@ export default function EstimatesPage() {
                   {line.labor_hours > 0 ? `${(line.labor_hours * line.quantity).toFixed(1)}h` : '—'}
                 </div>
 
-                {!isPushed && (
+                {(
                   <button
                     onClick={() => removeLine(line.key)}
                     style={{ background: 'transparent', border: 'none', color: '#f87171', fontSize: '14px', cursor: 'pointer', padding: '2px' }}
@@ -762,7 +793,7 @@ export default function EstimatesPage() {
               style={inputStyle}
               value={laborRate}
               onChange={e => setLaborRate(parseFloat(e.target.value) || 0)}
-              readOnly={!!isPushed}
+  
               step={0.01}
             />
           </div>
@@ -784,7 +815,7 @@ export default function EstimatesPage() {
                 setLaborOverride(v === '' ? null : parseFloat(v) || 0);
               }}
               placeholder={autoLaborHours.toFixed(1)}
-              readOnly={!!isPushed}
+  
               step={0.1}
             />
           </div>
@@ -798,17 +829,18 @@ export default function EstimatesPage() {
               style={inputStyle}
               value={(taxRate * 100).toFixed(2)}
               onChange={e => setTaxRate((parseFloat(e.target.value) || 0) / 100)}
-              readOnly={!!isPushed}
+  
               step={0.01}
             />
           </div>
           <div style={{ paddingTop: '14px' }}>
-            <label style={{ display: 'flex', alignItems: 'center', gap: '6px', cursor: isPushed ? 'default' : 'pointer' }}>
+            <label style={{ display: 'flex', alignItems: 'center', gap: '6px', cursor: 'pointer' }}>
               <input
                 type="checkbox"
                 checked={taxExempt}
                 onChange={e => setTaxExempt(e.target.checked)}
-                disabled={!!isPushed}
+
+
                 style={{ width: '16px', height: '16px', accentColor: theme.orange }}
               />
               <span style={{ fontSize: '12px', fontWeight: 700, color: taxExempt ? '#22c55e' : '#4a5f78' }}>
@@ -830,7 +862,7 @@ export default function EstimatesPage() {
           </div>
           {!taxExempt && (
             <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '12px', color: '#6b7a8d', marginBottom: '4px' }}>
-              <span>Sales Tax ({(taxRate * 100).toFixed(2)}%)</span>
+              <span>Sales Tax on Parts ({(taxRate * 100).toFixed(2)}%)</span>
               <span>{fmt(taxAmount)}</span>
             </div>
           )}
@@ -851,63 +883,87 @@ export default function EstimatesPage() {
       </div>
 
       {/* ── ACTION BUTTONS ── */}
-      {!isPushed ? (
-        <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
-          <div style={{ display: 'flex', gap: '6px' }}>
-            <button
-              onClick={() => saveEstimate('draft')}
-              disabled={saving}
-              style={{
-                flex: 1, padding: '12px', borderRadius: '10px',
-                background: saving ? '#1e2d3d' : '#22c55e',
-                color: '#fff', fontWeight: 800, fontSize: '13px', border: 'none', cursor: 'pointer',
-                opacity: saving ? 0.5 : 1,
-              }}
-            >
-              {saving ? 'Saving...' : (editingId ? 'Save Changes' : 'Save Draft')}
-            </button>
-            <button
-              onClick={() => { setView('list'); }}
-              style={{
-                padding: '12px 20px', borderRadius: '10px',
-                background: 'transparent', border: '1px solid #1e2d3d',
-                color: '#6b7a8d', fontWeight: 700, fontSize: '13px', cursor: 'pointer',
-              }}
-            >
-              Cancel
-            </button>
+      <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
+        {/* NS status banner for pushed estimates */}
+        {isPushed && (
+          <div style={{
+            padding: '10px 14px', borderRadius: '10px',
+            background: 'rgba(167,139,250,0.08)', border: '1px solid rgba(167,139,250,0.2)',
+            display: 'flex', justifyContent: 'space-between', alignItems: 'center',
+          }}>
+            <div>
+              <div style={{ fontSize: '12px', fontWeight: 700, color: '#a78bfa' }}>
+                Pushed to NetSuite
+              </div>
+              <div style={{ fontSize: '10px', color: '#4a5f78' }}>
+                NS Estimate #: {estimates.find(e => e.id === editingId)?.netsuite_estimate_number || 'N/A'}
+              </div>
+            </div>
+            <div style={{ fontSize: '10px', color: '#4a5f78' }}>
+              Edit below &amp; sync changes
+            </div>
           </div>
+        )}
 
-          {editingId && customerNsId && lines.length > 0 && (
-            <button
-              onClick={pushToNetSuite}
-              disabled={pushing}
-              style={{
-                width: '100%', padding: '12px', borderRadius: '10px',
-                background: pushing ? '#1e2d3d' : 'rgba(167,139,250,0.15)',
-                border: '1px solid rgba(167,139,250,0.3)',
-                color: '#a78bfa', fontWeight: 800, fontSize: '13px', cursor: 'pointer',
-                opacity: pushing ? 0.5 : 1,
-              }}
-            >
-              {pushing ? 'Pushing to NetSuite...' : '🚀 Push to NetSuite as Estimate'}
-            </button>
-          )}
+        <div style={{ display: 'flex', gap: '6px' }}>
+          <button
+            onClick={() => saveEstimate(isPushed ? 'pushed' : 'draft')}
+            disabled={saving}
+            style={{
+              flex: 1, padding: '12px', borderRadius: '10px',
+              background: saving ? '#1e2d3d' : '#22c55e',
+              color: '#fff', fontWeight: 800, fontSize: '13px', border: 'none', cursor: 'pointer',
+              opacity: saving ? 0.5 : 1,
+            }}
+          >
+            {saving ? 'Saving...' : (editingId ? 'Save Changes' : 'Save Draft')}
+          </button>
+          <button
+            onClick={() => { setView('list'); }}
+            style={{
+              padding: '12px 20px', borderRadius: '10px',
+              background: 'transparent', border: '1px solid #1e2d3d',
+              color: '#6b7a8d', fontWeight: 700, fontSize: '13px', cursor: 'pointer',
+            }}
+          >
+            Cancel
+          </button>
         </div>
-      ) : (
-        <div style={{
-          padding: '14px', borderRadius: '10px',
-          background: 'rgba(167,139,250,0.08)', border: '1px solid rgba(167,139,250,0.2)',
-          textAlign: 'center',
-        }}>
-          <div style={{ fontSize: '13px', fontWeight: 700, color: '#a78bfa', marginBottom: '4px' }}>
-            Pushed to NetSuite
-          </div>
-          <div style={{ fontSize: '11px', color: '#4a5f78' }}>
-            NS Estimate #: {estimates.find(e => e.id === editingId)?.netsuite_estimate_number || 'N/A'}
-          </div>
-        </div>
-      )}
+
+        {/* Push or Sync to NetSuite */}
+        {editingId && customerNsId && lines.length > 0 && (
+          <button
+            onClick={() => pushToNetSuite(!!isPushed)}
+            disabled={pushing || syncing}
+            style={{
+              width: '100%', padding: '12px', borderRadius: '10px',
+              background: (pushing || syncing) ? '#1e2d3d' : 'rgba(167,139,250,0.15)',
+              border: '1px solid rgba(167,139,250,0.3)',
+              color: '#a78bfa', fontWeight: 800, fontSize: '13px', cursor: 'pointer',
+              opacity: (pushing || syncing) ? 0.5 : 1,
+            }}
+          >
+            {pushing ? 'Pushing to NetSuite...' : syncing ? 'Syncing to NetSuite...' : isPushed ? '🔄 Sync Changes to NetSuite' : '🚀 Push to NetSuite as Estimate'}
+          </button>
+        )}
+
+        {/* Delete — only for saved estimates */}
+        {editingId && isAdmin && (
+          <button
+            onClick={() => deleteEstimate(editingId, !!isPushed)}
+            disabled={deleting}
+            style={{
+              width: '100%', padding: '10px', borderRadius: '10px',
+              background: deleting ? '#1e2d3d' : 'rgba(248,113,113,0.08)',
+              border: '1px solid rgba(248,113,113,0.2)',
+              color: '#f87171', fontWeight: 700, fontSize: '12px', cursor: 'pointer',
+              opacity: deleting ? 0.5 : 1,
+            }}
+          >
+            {deleting ? 'Deleting...' : isPushed ? '🗑️ Delete Estimate (Supabase + NetSuite)' : '🗑️ Delete Estimate'}
+          </button>
+        )}
+      </div>
     </div>
   );
 }

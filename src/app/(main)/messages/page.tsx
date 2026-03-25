@@ -312,8 +312,10 @@ export default function MessagesPage() {
   const roleColor = (role: string) => {
     switch (role) {
       case 'admin': return '#60a5fa';
-      case 'production': return '#a78bfa';
+      case 'production': case 'graphics_production': return '#a78bfa';
       case 'sales': return '#4ade80';
+      case 'field_tech': return '#fbbf24';
+      case 'shop_tech': return '#38bdf8';
       default: return '#6b7a8d';
     }
   };

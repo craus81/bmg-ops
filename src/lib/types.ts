@@ -1,4 +1,20 @@
-export type AppRole = 'admin' | 'installer' | 'production' | 'sales' | 'customer';
+export type AppRole = 'admin' | 'installer' | 'field_tech' | 'shop_tech' | 'sales' | 'graphics_production' | 'customer';
+
+// Human-readable labels for roles
+export const ROLE_LABELS: Record<AppRole, string> = {
+  admin: 'Admin',
+  installer: 'Installer (Pre-Approval)',
+  field_tech: 'Field Tech',
+  shop_tech: 'Shop Tech (O\'Fallon)',
+  sales: 'Sales',
+  graphics_production: 'Graphics / Production',
+  customer: 'Customer',
+};
+
+// Legacy role mapping for backward compatibility
+export const LEGACY_ROLE_MAP: Record<string, AppRole> = {
+  production: 'graphics_production',
+};
 
 export interface Profile {
   id: string;
@@ -401,11 +417,26 @@ export const GRAPHICS_STATUS_ORDER: GraphicsJobStatus[] = [
   'outgassing', 'cutting', 'packing', 'ready', 'shipped', 'installed', 'cancelled',
 ];
 
+export type GraphicsJobCategory = 'production' | 'proofing' | 'internal';
+
+export const GRAPHICS_CATEGORY_LABELS: Record<GraphicsJobCategory, string> = {
+  production: 'Production',
+  proofing: 'Proofing',
+  internal: 'Internal',
+};
+
+export const GRAPHICS_CATEGORY_COLORS: Record<GraphicsJobCategory, string> = {
+  production: '#22c55e',
+  proofing: '#a78bfa',
+  internal: '#f59e0b',
+};
+
 export interface GraphicsJob {
   id: string;
   po_id: string | null;
   po_line_item_id: string | null;
   job_number: string | null;
+  job_category: GraphicsJobCategory;
   title: string;
   part_number: string | null;
   customer: string | null;

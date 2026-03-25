@@ -8,7 +8,7 @@ import { createClient } from '@/lib/supabase-browser';
 
 export default function MorePage() {
   const router = useRouter();
-  const { isAdmin, isSales, profile, signOut } = useAuth();
+  const { isAdmin, isSales, isGraphicsProduction, isFieldTech, isShopTech, hasRole, profile, signOut } = useAuth();
   const { mode, setMode, resolvedTheme } = useTheme();
   const supabase = createClient();
   const [pendingUserCount, setPendingUserCount] = useState(0);
@@ -50,11 +50,17 @@ export default function MorePage() {
         More
       </div>
       <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
-        <MenuBtn icon="🔄" title="Update Vehicle Status" sub="Scan VIN to update status" onClick={() => router.push('/fleet/update')} />
-        <MenuBtn icon="🔧" title="My Jobs" sub="View your company's work" onClick={() => router.push('/jobs')} />
-        <MenuBtn icon="📊" title="Export Reports" sub="Download vehicle spreadsheets" onClick={() => router.push('/reports')} />
-        {/* Sales + Admin tools */}
-        {(isAdmin || isSales) && (<>
+        {(isAdmin || isShopTech) && (
+          <MenuBtn icon="🔄" title="Update Vehicle Status" sub="Scan VIN to update status" onClick={() => router.push('/fleet/update')} />
+        )}
+        {(isAdmin || isFieldTech || isShopTech) && (
+          <MenuBtn icon="🔧" title="My Jobs" sub="View your company's work" onClick={() => router.push('/jobs')} />
+        )}
+        {isAdmin && (
+          <MenuBtn icon="📊" title="Export Reports" sub="Download vehicle spreadsheets" onClick={() => router.push('/reports')} />
+        )}
+        {/* Sales + Graphics Production + Admin tools */}
+        {(isAdmin || isSales || isGraphicsProduction) && (<>
           <MenuBtn icon="🏢" title="Customers" sub="Customers & contacts from NetSuite" onClick={() => router.push('/admin/customers')} />
           <MenuBtn icon="🔩" title="Parts Catalog" sub="Upfit & graphic parts from NetSuite" onClick={() => router.push('/parts')} />
           <MenuBtn icon="💰" title="Estimates" sub="Build estimates & push to NetSuite" onClick={() => router.push('/estimates')} />
@@ -140,7 +146,20 @@ export default function MorePage() {
         <div style={{ fontSize: '14px', fontWeight: 700, color: 'var(--text-primary)' }}>{profile?.full_name}</div>
         <div style={{ fontSize: '12px', color: 'var(--text-muted)', marginTop: '3px' }}>{profile?.email}</div>
         <div style={{ fontSize: '11px', color: isAdmin ? 'var(--orange)' : 'var(--navy-light)', marginTop: '3px', fontWeight: 600 }}>
-          {isAdmin ? 'Administrator' : 'Installer'}
+          {(() => {
+            if (isAdmin) return 'Administrator';
+            const roles = (profile?.roles?.length ? profile.roles : [profile?.role]).filter(Boolean);
+            const labelMap: Record<string, string> = {
+              field_tech: 'Field Tech',
+              shop_tech: 'Shop Tech',
+              sales: 'Sales',
+              graphics_production: 'Graphics / Production',
+              production: 'Graphics / Production',
+              installer: 'Installer',
+              customer: 'Customer',
+            };
+            return roles.map((r: any) => labelMap[r] || r).join(', ') || 'Installer';
+          })()}
         </div>
         <button onClick={signOut} style={{
           marginTop: '14px', width: '100%', padding: '12px', borderRadius: '10px',

@@ -22,13 +22,7 @@ function getNetSuiteConfig() {
   return { accountId, consumerKey, consumerSecret, tokenId, tokenSecret };
 }
 
-async function createNetSuiteEstimate(config: ReturnType<typeof getNetSuiteConfig>, payload: {
-  customerId: string;
-  memo?: string;
-  lineItems: { itemId: string; quantity: number; rate: number; description?: string }[];
-  taxExempt: boolean;
-}) {
-  // Dynamic import for oauth
+async function getOAuthHelpers(config: ReturnType<typeof getNetSuiteConfig>) {
   const OAuth = (await import('oauth-1.0a')).default;
   const CryptoJS = (await import('crypto-js')).default;
 
@@ -41,14 +35,23 @@ async function createNetSuiteEstimate(config: ReturnType<typeof getNetSuiteConfi
     realm: config.accountId,
   });
   const token = { key: config.tokenId, secret: config.tokenSecret };
-
   const formatted = config.accountId.toLowerCase().replace(/_/g, '-');
-  const url = `https://${formatted}.suitetalk.api.netsuite.com/services/rest/record/v1/estimate`;
+  const baseUrl = `https://${formatted}.suitetalk.api.netsuite.com/services/rest/record/v1/estimate`;
+
+  return { oauth, token, baseUrl };
+}
+
+async function createNetSuiteEstimate(config: ReturnType<typeof getNetSuiteConfig>, payload: {
+  customerId: string;
+  memo?: string;
+  lineItems: { itemId: string; quantity: number; rate: number; description?: string }[];
+  taxExempt: boolean;
+}) {
+  const { oauth, token, baseUrl: url } = await getOAuthHelpers(config);
 
   const authData = oauth.authorize({ url, method: 'POST' }, token);
   const authHeader = oauth.toHeader(authData).Authorization;
 
-  // Build line items
   const items = payload.lineItems.map((li) => ({
     item: { id: li.itemId },
     quantity: li.quantity,
@@ -64,10 +67,6 @@ async function createNetSuiteEstimate(config: ReturnType<typeof getNetSuiteConfi
   if (payload.memo) {
     body.memo = payload.memo;
   }
-
-  // If tax exempt, set the isTaxable flag or tax override
-  // NetSuite handles tax exemption at the customer or transaction level
-  // We'll let the NS tax engine handle it based on the customer's tax status
 
   const response = await fetch(url, {
     method: 'POST',
@@ -100,7 +99,6 @@ async function createNetSuiteEstimate(config: ReturnType<typeof getNetSuiteConfi
     // 204 No Content
   }
 
-  // Look up the estimate number if we didn't get it
   if (estimateId && !estimateNumber) {
     try {
       const { suiteqlQuery } = await import('@/lib/netsuite');
@@ -112,6 +110,76 @@ async function createNetSuiteEstimate(config: ReturnType<typeof getNetSuiteConfi
   }
 
   return { success: true, estimateId, estimateNumber };
+}
+
+// ── Update an existing NetSuite estimate via PATCH ──
+async function updateNetSuiteEstimate(config: ReturnType<typeof getNetSuiteConfig>, nsEstimateId: string, payload: {
+  customerId: string;
+  memo?: string;
+  lineItems: { itemId: string; quantity: number; rate: number; description?: string }[];
+}) {
+  const { oauth, token, baseUrl } = await getOAuthHelpers(config);
+  const url = `${baseUrl}/${nsEstimateId}`;
+
+  const authData = oauth.authorize({ url, method: 'PATCH' }, token);
+  const authHeader = oauth.toHeader(authData).Authorization;
+
+  const items = payload.lineItems.map((li) => ({
+    item: { id: li.itemId },
+    quantity: li.quantity,
+    rate: li.rate,
+    ...(li.description ? { description: li.description } : {}),
+  }));
+
+  const body: any = {
+    entity: { id: payload.customerId },
+    item: { items, replaceAll: true },
+  };
+
+  if (payload.memo) {
+    body.memo = payload.memo;
+  }
+
+  const response = await fetch(url, {
+    method: 'PATCH',
+    headers: {
+      'Authorization': authHeader,
+      'Content-Type': 'application/json',
+      'Prefer': 'respondAsync=false',
+    },
+    body: JSON.stringify(body),
+  });
+
+  if (!response.ok) {
+    const text = await response.text();
+    return { success: false, error: `NetSuite PATCH error (${response.status}): ${text}` };
+  }
+
+  return { success: true };
+}
+
+// ── Delete a NetSuite estimate ──
+async function deleteNetSuiteEstimate(config: ReturnType<typeof getNetSuiteConfig>, nsEstimateId: string) {
+  const { oauth, token, baseUrl } = await getOAuthHelpers(config);
+  const url = `${baseUrl}/${nsEstimateId}`;
+
+  const authData = oauth.authorize({ url, method: 'DELETE' }, token);
+  const authHeader = oauth.toHeader(authData).Authorization;
+
+  const response = await fetch(url, {
+    method: 'DELETE',
+    headers: {
+      'Authorization': authHeader,
+      'Content-Type': 'application/json',
+    },
+  });
+
+  if (!response.ok) {
+    const text = await response.text();
+    return { success: false, error: `NetSuite DELETE error (${response.status}): ${text}` };
+  }
+
+  return { success: true };
 }
 
 // POST — push estimate to NetSuite
@@ -135,9 +203,7 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ error: 'Estimate not found' }, { status: 404 });
     }
 
-    if (estimate.netsuite_estimate_id) {
-      return NextResponse.json({ error: 'Estimate already pushed to NetSuite' }, { status: 400 });
-    }
+    const isUpdate = !!estimate.netsuite_estimate_id;
 
     if (!estimate.customer_netsuite_id) {
       return NextResponse.json({ error: 'No NetSuite customer linked to this estimate' }, { status: 400 });
@@ -205,9 +271,42 @@ export async function POST(req: NextRequest) {
     }
 
     const config = getNetSuiteConfig();
+    const memo = [estimate.title, estimate.notes].filter(Boolean).join(' — ');
+
+    if (isUpdate) {
+      // ── UPDATE existing NetSuite estimate via PATCH ──
+      const updateResult = await updateNetSuiteEstimate(config, estimate.netsuite_estimate_id, {
+        customerId: estimate.customer_netsuite_id,
+        memo,
+        lineItems: nsLineItems,
+      });
+
+      if (!updateResult.success) {
+        return NextResponse.json({ error: updateResult.error }, { status: 500 });
+      }
+
+      await supabase
+        .from('estimates')
+        .update({
+          status: 'pushed',
+          updated_at: new Date().toISOString(),
+          pushed_at: new Date().toISOString(),
+          pushed_by: userId || null,
+        })
+        .eq('id', estimateId);
+
+      return NextResponse.json({
+        success: true,
+        updated: true,
+        netsuite_estimate_id: estimate.netsuite_estimate_id,
+        netsuite_estimate_number: estimate.netsuite_estimate_number,
+      });
+    }
+
+    // ── CREATE new NetSuite estimate ──
     const result = await createNetSuiteEstimate(config, {
       customerId: estimate.customer_netsuite_id,
-      memo: [estimate.title, estimate.notes].filter(Boolean).join(' — '),
+      memo,
       lineItems: nsLineItems,
       taxExempt: estimate.tax_exempt,
     });
@@ -236,6 +335,57 @@ export async function POST(req: NextRequest) {
     });
   } catch (err: any) {
     console.error('Push estimate error:', err);
+    return NextResponse.json({ error: err.message }, { status: 500 });
+  }
+}
+
+// DELETE — delete estimate from NetSuite
+export async function DELETE(req: NextRequest) {
+  try {
+    const supabase = getSupabase();
+    const { estimateId } = await req.json();
+
+    if (!estimateId) {
+      return NextResponse.json({ error: 'Missing estimateId' }, { status: 400 });
+    }
+
+    const { data: estimate, error: estErr } = await supabase
+      .from('estimates')
+      .select('id, netsuite_estimate_id')
+      .eq('id', estimateId)
+      .single();
+
+    if (estErr || !estimate) {
+      return NextResponse.json({ error: 'Estimate not found' }, { status: 404 });
+    }
+
+    if (!estimate.netsuite_estimate_id) {
+      return NextResponse.json({ error: 'Estimate has not been pushed to NetSuite' }, { status: 400 });
+    }
+
+    const config = getNetSuiteConfig();
+    const result = await deleteNetSuiteEstimate(config, estimate.netsuite_estimate_id);
+
+    if (!result.success) {
+      return NextResponse.json({ error: result.error }, { status: 500 });
+    }
+
+    // Clear NS fields from local record (don't delete the local estimate here — that's done by the main estimates API)
+    await supabase
+      .from('estimates')
+      .update({
+        netsuite_estimate_id: null,
+        netsuite_estimate_number: null,
+        status: 'draft',
+        pushed_at: null,
+        pushed_by: null,
+        updated_at: new Date().toISOString(),
+      })
+      .eq('id', estimateId);
+
+    return NextResponse.json({ success: true });
+  } catch (err: any) {
+    console.error('Delete NS estimate error:', err);
     return NextResponse.json({ error: err.message }, { status: 500 });
   }
 }

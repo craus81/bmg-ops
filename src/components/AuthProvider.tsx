@@ -10,16 +10,19 @@ interface AuthContextType {
   profile: Profile | null;
   isAdmin: boolean;
   isProduction: boolean;
+  isGraphicsProduction: boolean;
   isSales: boolean;
   isCustomer: boolean;
   isInstaller: boolean;
+  isFieldTech: boolean;
+  isShopTech: boolean;
   hasRole: (role: string) => boolean;
   loading: boolean;
   signOut: () => Promise<void>;
 }
 
 const AuthContext = createContext<AuthContextType>({
-  user: null, profile: null, isAdmin: false, isProduction: false, isSales: false, isCustomer: false, isInstaller: false, hasRole: () => false, loading: true, signOut: async () => {},
+  user: null, profile: null, isAdmin: false, isProduction: false, isGraphicsProduction: false, isSales: false, isCustomer: false, isInstaller: false, isFieldTech: false, isShopTech: false, hasRole: () => false, loading: true, signOut: async () => {},
 });
 
 export function AuthProvider({ children }: { children: ReactNode }) {
@@ -102,16 +105,21 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   };
 
   // Multi-role check: uses roles[] array if present, falls back to legacy role field
-  const userRoles = profile?.roles?.length ? profile.roles : (profile?.role ? [profile.role] : []);
-  const hasRole = (r: string) => userRoles.includes(r as any);
+  // Map legacy 'production' role to 'graphics_production' for backward compatibility
+  const rawRoles = profile?.roles?.length ? profile.roles : (profile?.role ? [profile.role] : []);
+  const userRoles = rawRoles.map((r: string) => r === 'production' ? 'graphics_production' : r);
+  const hasRole = (r: string) => userRoles.includes(r as any) || (r === 'production' && userRoles.includes('graphics_production'));
   const isAdmin = hasRole('admin');
-  const isProduction = hasRole('production') || isAdmin;
+  const isGraphicsProduction = hasRole('graphics_production') || isAdmin;
+  const isProduction = isGraphicsProduction; // backward compat alias
   const isSales = hasRole('sales') || isAdmin;
   const isCustomer = hasRole('customer');
   const isInstaller = hasRole('installer') || isAdmin;
+  const isFieldTech = hasRole('field_tech') || isAdmin;
+  const isShopTech = hasRole('shop_tech') || isAdmin;
 
   return (
-    <AuthContext.Provider value={{ user, profile, isAdmin, isProduction, isSales, isCustomer, isInstaller, hasRole, loading, signOut }}>
+    <AuthContext.Provider value={{ user, profile, isAdmin, isProduction, isGraphicsProduction, isSales, isCustomer, isInstaller, isFieldTech, isShopTech, hasRole, loading, signOut }}>
       {children}
     </AuthContext.Provider>
   );

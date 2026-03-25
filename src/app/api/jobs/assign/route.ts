@@ -72,7 +72,7 @@ export async function POST(req: NextRequest) {
       const { data: teamMembers } = await supabase
         .from('profiles')
         .select('id')
-        .in('role', ['production', 'admin'])
+        .in('role', ['production', 'graphics_production', 'admin'])
         .eq('status', 'approved');
 
       if (teamMembers && teamMembers.length > 0) {

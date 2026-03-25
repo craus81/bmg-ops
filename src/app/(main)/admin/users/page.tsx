@@ -14,19 +14,22 @@ interface Company {
 const ROLES: { value: AppRole; label: string; color: string }[] = [
   { value: 'admin', label: '👔 Admin', color: 'var(--orange)' },
   { value: 'installer', label: '🔧 Installer', color: 'var(--text-muted)' },
-  { value: 'production', label: '🏭 Production', color: '#c084fc' },
+  { value: 'field_tech', label: '🚐 Field Tech', color: '#fbbf24' },
+  { value: 'shop_tech', label: '🏗️ Shop Tech', color: '#38bdf8' },
   { value: 'sales', label: '💼 Sales', color: '#60a5fa' },
+  { value: 'graphics_production', label: '🎨 Graphics / Production', color: '#c084fc' },
   { value: 'customer', label: '🏢 Customer', color: '#34d399' },
 ];
 
 function getRoleInfo(role: string) {
-  return ROLES.find(r => r.value === role) || ROLES[1];
+  const mapped = role === 'production' ? 'graphics_production' : role;
+  return ROLES.find(r => r.value === mapped) || ROLES[1];
 }
 
 function getUserRoles(user: Profile): AppRole[] {
-  if (user.roles && user.roles.length > 0) return user.roles;
-  if (user.role) return [user.role];
-  return [];
+  const raw = (user.roles && user.roles.length > 0) ? user.roles : (user.role ? [user.role] : []);
+  // Map legacy 'production' to 'graphics_production'
+  return raw.map(r => (r === 'production' as any ? 'graphics_production' : r)) as AppRole[];
 }
 
 export default function UsersPage() {

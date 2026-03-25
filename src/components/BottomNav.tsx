@@ -8,7 +8,7 @@ interface BottomNavProps {
   clockStatus: 'out' | 'in' | 'break';
 }
 
-type AppRole = 'admin' | 'installer' | 'production' | 'sales' | 'customer';
+import type { AppRole } from '@/lib/types';
 
 interface Tab {
   id: string;
@@ -18,16 +18,26 @@ interface Tab {
   roles?: AppRole[];
 }
 
+// ── Role-based tab visibility ──
+// admin:               everything
+// field_tech:          home (VIN scanner), vehicles, time, chat, more
+// shop_tech:           home, fleet, tracking, time, chat, more
+// sales:              home, fleet (read-only), graphics, estimates, time, chat, more
+// graphics_production: home, fleet (read-only), graphics, estimates, time, chat, more
+// installer:           home, time, chat, more (pre-approval limited)
+// customer:            customer dashboard, settings
+
 const allTabs: Tab[] = [
-  { id: 'home', path: '/home', label: 'Home', icon: '🏠', roles: ['admin', 'installer', 'production', 'sales'] },
-  { id: 'my-jobs', path: '/my-jobs', label: 'My Jobs', icon: '📋', roles: ['installer', 'production'] },
-  { id: 'time', path: '/time', label: 'Time', icon: '⏰', roles: ['admin', 'installer', 'production', 'sales'] },
-  { id: 'graphics', path: '/graphics', label: 'Graphics', icon: '🎨', roles: ['admin', 'production', 'sales'] },
-  { id: 'fleet', path: '/fleet', label: 'Fleet', icon: '🚚', roles: ['admin', 'installer', 'production', 'sales'] },
-  { id: 'tracking', path: '/tracking', label: 'Tracking', icon: '📋', roles: ['admin'] },
-  { id: 'vehicles', path: '/vehicles', label: 'Vehicles', icon: '🚐', roles: ['admin', 'installer', 'production', 'sales'] },
+  { id: 'home', path: '/home', label: 'Home', icon: '🏠', roles: ['admin', 'installer', 'field_tech', 'shop_tech', 'sales', 'graphics_production'] },
+  { id: 'my-jobs', path: '/my-jobs', label: 'My Jobs', icon: '📋', roles: ['field_tech', 'shop_tech'] },
+  { id: 'time', path: '/time', label: 'Time', icon: '⏰', roles: ['admin', 'installer', 'field_tech', 'shop_tech', 'sales', 'graphics_production'] },
+  { id: 'graphics', path: '/graphics', label: 'Graphics', icon: '🎨', roles: ['admin', 'graphics_production', 'sales'] },
+  { id: 'fleet', path: '/fleet', label: 'Fleet', icon: '🚚', roles: ['admin', 'shop_tech', 'sales', 'graphics_production'] },
+  { id: 'tracking', path: '/tracking', label: 'Tracking', icon: '📋', roles: ['admin', 'shop_tech'] },
+  { id: 'vehicles', path: '/vehicles', label: 'Vehicles', icon: '🚐', roles: ['admin', 'field_tech'] },
+  { id: 'estimates', path: '/estimates', label: 'Estimates', icon: '📝', roles: ['admin', 'sales', 'graphics_production'] },
   { id: 'messages', path: '/messages', label: 'Chat', icon: '💬' },
-  { id: 'more', path: '/more', label: 'More', icon: '⋯', roles: ['admin', 'installer', 'production', 'sales'] },
+  { id: 'more', path: '/more', label: 'More', icon: '⋯', roles: ['admin', 'installer', 'field_tech', 'shop_tech', 'sales', 'graphics_production'] },
   // Customer-only tabs
   { id: 'customer-dashboard', path: '/customer/dashboard', label: 'My Jobs', icon: '📋', roles: ['customer'] },
   { id: 'customer-settings', path: '/settings', label: 'Settings', icon: '⚙️', roles: ['customer'] },
@@ -39,9 +49,11 @@ export default function BottomNav({ clockStatus }: BottomNavProps) {
   const { profile } = useAuth();
 
   // Multi-role: check roles[] array first, fall back to legacy role field
-  const userRoles: AppRole[] = (profile?.roles && profile.roles.length > 0)
-    ? profile.roles as AppRole[]
-    : (profile?.role ? [profile.role as AppRole] : ['installer']);
+  // Map legacy 'production' to 'graphics_production'
+  const rawRoles: string[] = (profile?.roles && profile.roles.length > 0)
+    ? profile.roles as string[]
+    : (profile?.role ? [profile.role as string] : ['installer']);
+  const userRoles: AppRole[] = rawRoles.map(r => (r === 'production' ? 'graphics_production' : r)) as AppRole[];
 
   // Filter tabs: show if tab has no role restriction, or user has any matching role
   const tabs = allTabs.filter(tab => !tab.roles || tab.roles.some(r => userRoles.includes(r)));
@@ -60,6 +72,7 @@ export default function BottomNav({ clockStatus }: BottomNavProps) {
     if (tab.path === '/tracking') return pathname === '/tracking';
     if (tab.path === '/my-jobs') return pathname === '/my-jobs' || pathname.startsWith('/jobs/');
     if (tab.path === '/graphics') return pathname.startsWith('/graphics');
+    if (tab.path === '/estimates') return pathname.startsWith('/estimates');
     if (tab.path === '/customer/dashboard') return pathname.startsWith('/customer');
     return pathname.startsWith(tab.path);
   };
