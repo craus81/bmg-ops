@@ -3,6 +3,7 @@
 import { useState, useEffect } from 'react';
 import { useRouter, useParams } from 'next/navigation';
 import { createClient } from '@/lib/supabase-browser';
+import { storage } from '@/lib/storage';
 import { useAuth } from '@/components/AuthProvider';
 import {
   VEHICLE_STATUS_LABELS,
@@ -488,7 +489,7 @@ export default function JobDetailPage() {
                 background: 'var(--subtle-bg)', border: '1px solid var(--border)',
               }}>
                 <img
-                  src={`${process.env.NEXT_PUBLIC_SUPABASE_URL}/storage/v1/object/public/vehicle-photos/${photo.storage_path}`}
+                  src={storage.from('photos').getPublicUrl(photo.storage_path).data.publicUrl}
                   alt={photo.photo_type}
                   style={{ width: '100%', height: '100%', objectFit: 'cover' }}
                   onError={(e) => { (e.target as HTMLImageElement).style.display = 'none'; }}

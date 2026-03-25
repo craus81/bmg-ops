@@ -6,6 +6,7 @@ import { useApp } from '@/components/AppProvider';
 import { useAuth } from '@/components/AuthProvider';
 import { createClient } from '@/lib/supabase-browser';
 import { theme } from '@/lib/theme';
+import { storage } from '@/lib/storage';
 import type { CatalogProof } from '@/lib/types';
 
 // ─── Admin Dashboard Wrapper with tabs ─────────────────────────
@@ -943,7 +944,7 @@ function InstallerHome() {
   }, [user?.id]);
 
   const getProofUrl = (proof: CatalogProof) => {
-    const { data } = supabase.storage.from('proofs').getPublicUrl(proof.file_path);
+    const { data } = storage.from('proofs').getPublicUrl(proof.file_path);
     return data.publicUrl;
   };
 

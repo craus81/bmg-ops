@@ -4,6 +4,7 @@ import { useState, useEffect, useRef } from 'react';
 import { useRouter } from 'next/navigation';
 import { createClient } from '@/lib/supabase-browser';
 import { useAuth } from '@/components/AuthProvider';
+import { storage } from '@/lib/storage';
 
 interface KnowledgeDoc {
   id: string;
@@ -211,7 +212,7 @@ export default function KnowledgePage() {
             const timestamp = Date.now();
             const safeName = chunks[i].name.replace(/[^a-zA-Z0-9._-]/g, '_');
             const storagePath = `uploads/${timestamp}_${safeName}`;
-            await supabase.storage.from('knowledge-files').upload(storagePath, chunks[i], {
+            await storage.from('knowledge-files').upload(storagePath, chunks[i], {
               contentType: 'application/pdf', upsert: false,
             });
             // Create DB record
@@ -301,7 +302,7 @@ export default function KnowledgePage() {
 
     // Delete file from storage if it exists
     if (filePath) {
-      await supabase.storage.from('knowledge-files').remove([filePath]);
+      await storage.from('knowledge-files').remove([filePath]);
     }
 
     await supabase.from('knowledge_docs').delete().eq('id', id);
@@ -320,7 +321,7 @@ export default function KnowledgePage() {
   };
 
   const getFileUrl = (filePath: string) => {
-    const { data } = supabase.storage.from('knowledge-files').getPublicUrl(filePath);
+    const { data } = storage.from('knowledge-files').getPublicUrl(filePath);
     return data?.publicUrl || '';
   };
 

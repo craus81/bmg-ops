@@ -4,6 +4,7 @@ import { useState, useEffect, useRef } from 'react';
 import { useRouter } from 'next/navigation';
 import { createClient } from '@/lib/supabase-browser';
 import { useAuth } from '@/components/AuthProvider';
+import { storage } from '@/lib/storage';
 import type { CatalogItem, CatalogProof } from '@/lib/types';
 
 export default function CatalogPage() {
@@ -55,7 +56,7 @@ export default function CatalogPage() {
       const safeName = file.name.replace(/[^a-zA-Z0-9._-]/g, '_');
       const storagePath = `${partNumber}/${Date.now()}_${safeName}`;
 
-      const { error: uploadError } = await supabase.storage
+      const { error: uploadError } = await storage
         .from('proofs')
         .upload(storagePath, file, { contentType: file.type });
 
@@ -93,7 +94,7 @@ export default function CatalogPage() {
 
   const handleDeleteProof = async (catalogId: string, proof: CatalogProof) => {
     // Delete from storage
-    await supabase.storage.from('proofs').remove([proof.file_path]);
+    await storage.from('proofs').remove([proof.file_path]);
     // Delete from DB
     await supabase.from('catalog_proofs').delete().eq('id', proof.id);
     // Update local state
@@ -104,7 +105,7 @@ export default function CatalogPage() {
   };
 
   const getProofUrl = (proof: CatalogProof) => {
-    const { data } = supabase.storage.from('proofs').getPublicUrl(proof.file_path);
+    const { data } = storage.from('proofs').getPublicUrl(proof.file_path);
     return data.publicUrl;
   };
 
@@ -132,7 +133,7 @@ export default function CatalogPage() {
     // Delete all proofs for this catalog item first
     const proofs = proofMap[id] || [];
     if (proofs.length > 0) {
-      await supabase.storage.from('proofs').remove(proofs.map((p) => p.file_path));
+      await storage.from('proofs').remove(proofs.map((p) => p.file_path));
       await supabase.from('catalog_proofs').delete().eq('catalog_id', id);
     }
     const { error } = await supabase.from('catalog').delete().eq('id', id);

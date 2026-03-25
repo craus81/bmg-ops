@@ -3,6 +3,7 @@
 import { useState, useEffect, useRef } from 'react';
 import { useRouter } from 'next/navigation';
 import { createClient } from '@/lib/supabase-browser';
+import { storage } from '@/lib/storage';
 import { useAuth } from '@/components/AuthProvider';
 
 interface Job {
@@ -148,7 +149,7 @@ export default function MyJobsPage() {
       filePath = `${profile.company_id}/${Date.now()}.${ext}`;
       fileName = invoiceFile.name;
 
-      const { error: uploadErr } = await supabase.storage
+      const { error: uploadErr } = await storage
         .from('invoices')
         .upload(filePath, invoiceFile, { contentType: invoiceFile.type });
 

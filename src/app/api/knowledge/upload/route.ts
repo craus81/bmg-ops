@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { createClient } from '@supabase/supabase-js';
+import { r2Upload, r2Delete, r2PublicUrl } from '@/lib/r2';
 
 export const dynamic = 'force-dynamic';
 export const maxDuration = 60;
@@ -174,11 +175,11 @@ export async function POST(req: NextRequest) {
         return NextResponse.json({ error: 'Failed to save document: ' + insertError.message }, { status: 500 });
       }
 
-      const { data: urlData } = supabase.storage.from('knowledge-files').getPublicUrl(storagePath);
+      const fileUrl = r2PublicUrl('knowledge-files', storagePath);
       return NextResponse.json({
         success: true,
         doc,
-        fileUrl: urlData?.publicUrl || null,
+        fileUrl,
         extractedLength: 0,
         usedVision: false,
         largeFile: true,
@@ -205,32 +206,15 @@ export async function POST(req: NextRequest) {
     const arrayBuffer = await file.arrayBuffer();
     const buffer = Buffer.from(arrayBuffer);
 
-    // Upload original file to Supabase Storage (best-effort — bucket may not exist yet)
+    // Upload original file to R2 (best-effort)
     const timestamp = Date.now();
     const safeName = fileName.replace(/[^a-zA-Z0-9._-]/g, '_');
     const storagePath = `uploads/${timestamp}_${safeName}`;
     let fileStored = false;
 
     try {
-      // Ensure the bucket exists
-      const { data: buckets } = await supabase.storage.listBuckets();
-      const exists = buckets?.some(b => b.name === 'knowledge-files');
-      if (!exists) {
-        await supabase.storage.createBucket('knowledge-files', { public: true });
-      }
-
-      const { error: uploadError } = await supabase.storage
-        .from('knowledge-files')
-        .upload(storagePath, buffer, {
-          contentType: fileType,
-          upsert: false,
-        });
-
-      if (uploadError) {
-        console.error('Storage upload error:', uploadError);
-      } else {
-        fileStored = true;
-      }
+      await r2Upload('knowledge-files', storagePath, buffer, fileType);
+      fileStored = true;
     } catch (storageErr: any) {
       console.error('Storage error (non-fatal):', storageErr.message);
     }
@@ -304,14 +288,12 @@ export async function POST(req: NextRequest) {
     }
 
     // Get public URL for the file
-    const { data: urlData } = supabase.storage
-      .from('knowledge-files')
-      .getPublicUrl(storagePath);
+    const fileUrl = fileStored ? r2PublicUrl('knowledge-files', storagePath) : null;
 
     return NextResponse.json({
       success: true,
       doc,
-      fileUrl: urlData?.publicUrl || null,
+      fileUrl,
       extractedLength: extractedText.length,
       usedVision,
     });

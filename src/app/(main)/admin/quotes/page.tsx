@@ -3,6 +3,7 @@
 import { useState, useEffect, useRef, useCallback } from 'react';
 import { useAuth } from '@/components/AuthProvider';
 import { createClient } from '@/lib/supabase-browser';
+import { storage } from '@/lib/storage';
 import { theme } from '@/lib/theme';
 import type { VehicleTemplate, Quote, QuotePanel, QuoteElement, AIAnalysisResult, GraphicElement, RollNestingResult } from '@/lib/types';
 import { applyBleed, nestElementsOnRoll, recalcFromPositions } from '@/lib/nesting-algorithm';
@@ -256,7 +257,7 @@ function QuoteDetail({ quote, onBack, onEdit }: { quote: Quote; onBack: () => vo
   useEffect(() => {
     loadPanels();
     if (quote.proof_image_path) {
-      const { data } = supabase.storage.from('quote-proofs').getPublicUrl(quote.proof_image_path);
+      const { data } = storage.from('quote-proofs').getPublicUrl(quote.proof_image_path);
       setProofUrl(data.publicUrl);
     }
     // Load linked customer name if already set
@@ -679,7 +680,7 @@ function NewQuote({ onCreated, editQuote }: { onCreated: () => void; editQuote?:
       const proofs = data
         .filter((q: any) => q.proof_image_path)
         .map((q: any) => {
-          const { data: urlData } = supabase.storage.from('quote-proofs').getPublicUrl(q.proof_image_path);
+          const { data: urlData } = storage.from('quote-proofs').getPublicUrl(q.proof_image_path);
           return {
             url: urlData.publicUrl,
             path: q.proof_image_path,
@@ -739,7 +740,7 @@ function NewQuote({ onCreated, editQuote }: { onCreated: () => void; editQuote?:
 
     // Proof image from storage
     if (editQuote.proof_image_path) {
-      const { data } = supabase.storage.from('quote-proofs').getPublicUrl(editQuote.proof_image_path);
+      const { data } = storage.from('quote-proofs').getPublicUrl(editQuote.proof_image_path);
       setProofPreview(data.publicUrl);
       setProofPreviewForReview(data.publicUrl);
     }
@@ -1690,7 +1691,7 @@ function NewQuote({ onCreated, editQuote }: { onCreated: () => void; editQuote?:
                 >
                   {t.template_image_path && (
                     <img
-                      src={supabase.storage.from('vehicle-templates').getPublicUrl(t.template_image_path).data.publicUrl}
+                      src={storage.from('vehicle-templates').getPublicUrl(t.template_image_path).data.publicUrl}
                       alt={t.name}
                       style={{ width: '100%', maxWidth: '400px', height: '250px', objectFit: 'contain', borderRadius: '8px', background: '#fff' }}
                     />
@@ -3007,14 +3008,14 @@ function TemplatesManager() {
       // Upload original EPS
       if (epsFile) {
         const epsName = `${slug}.eps`;
-        const { error } = await supabase.storage.from('vehicle-templates').upload(`originals/${epsName}`, epsFile);
+        const { error } = await storage.from('vehicle-templates').upload(`originals/${epsName}`, epsFile);
         if (!error) originalFilePath = `originals/${epsName}`;
       }
 
       // Upload PNG preview (user can provide a pre-converted PNG, or we handle it)
       if (pngFile) {
         const pngName = `${slug}.png`;
-        const { error } = await supabase.storage.from('vehicle-templates').upload(`previews/${pngName}`, pngFile);
+        const { error } = await storage.from('vehicle-templates').upload(`previews/${pngName}`, pngFile);
         if (!error) templateImagePath = `previews/${pngName}`;
       }
 
@@ -3156,7 +3157,7 @@ function TemplatesManager() {
               <div style={{ padding: '12px', display: 'flex', alignItems: 'center', gap: '12px' }}>
                 {t.template_image_path ? (
                   <img
-                    src={supabase.storage.from('vehicle-templates').getPublicUrl(t.template_image_path).data.publicUrl}
+                    src={storage.from('vehicle-templates').getPublicUrl(t.template_image_path).data.publicUrl}
                     alt={t.name}
                     style={{ width: '300px', height: '180px', objectFit: 'contain', borderRadius: '8px', background: '#fff', flexShrink: 0 }}
                   />

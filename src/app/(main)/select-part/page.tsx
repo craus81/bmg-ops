@@ -3,6 +3,7 @@
 import { useState, useEffect } from 'react';
 import { useRouter } from 'next/navigation';
 import { createClient } from '@/lib/supabase-browser';
+import { storage } from '@/lib/storage';
 import { useApp } from '@/components/AppProvider';
 import type { CatalogItem, CatalogProof } from '@/lib/types';
 
@@ -51,7 +52,7 @@ export default function SelectPartPage() {
   };
 
   const getProofUrl = (proof: CatalogProof) => {
-    const { data } = supabase.storage.from('proofs').getPublicUrl(proof.file_path);
+    const { data } = storage.from('proofs').getPublicUrl(proof.file_path);
     return data.publicUrl;
   };
 

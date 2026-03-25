@@ -4,6 +4,7 @@ import { useState, useEffect } from 'react';
 import { useRouter } from 'next/navigation';
 import { createClient } from '@/lib/supabase-browser';
 import { useAuth } from '@/components/AuthProvider';
+import { storage } from '@/lib/storage';
 
 interface ReviewVehicle {
   id: string;
@@ -59,7 +60,7 @@ export default function ReviewsPage() {
           .order('taken_at');
 
         const photosWithUrls = (photos || []).map((p: any) => {
-          const { data: urlData } = supabase.storage.from('photos').getPublicUrl(p.storage_path);
+          const { data: urlData } = storage.from('photos').getPublicUrl(p.storage_path);
           return { ...p, url: urlData.publicUrl };
         });
 

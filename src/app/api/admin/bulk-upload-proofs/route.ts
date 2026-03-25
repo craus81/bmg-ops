@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import JSZip from 'jszip';
 import { createClient } from '@supabase/supabase-js';
+import { r2Upload, r2Delete, r2PublicUrl } from '@/lib/r2';
 
 interface ProofEntry {
   path: string;
@@ -56,13 +57,11 @@ export async function POST(req: NextRequest) {
           .toLowerCase().replace(/[^a-z0-9.]+/g, '-').replace(/-+/g, '-').slice(0, 100);
         const storagePath = `${entry.catalogId}/${slug}`;
 
-        // Upload to Supabase storage
-        const { error: uploadError } = await supabase.storage
-          .from('proofs')
-          .upload(storagePath, fileData, { contentType: 'application/pdf', upsert: true });
-
-        if (uploadError) {
-          results.push({ name: entry.name, status: 'error', error: uploadError.message });
+        // Upload to R2
+        try {
+          await r2Upload('proofs', storagePath, Buffer.from(fileData), 'application/pdf');
+        } catch (uploadErr: any) {
+          results.push({ name: entry.name, status: 'error', error: uploadErr.message });
           continue;
         }
 

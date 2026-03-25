@@ -3,6 +3,7 @@
 import { useState, useEffect, useRef } from 'react';
 import { useRouter } from 'next/navigation';
 import { createClient } from '@/lib/supabase-browser';
+import { storage } from '@/lib/storage';
 import { useAuth } from '@/components/AuthProvider';
 import { decodeVIN, isValidVIN } from '@/lib/vin-decoder';
 import type { CatalogItem } from '@/lib/types';
@@ -120,7 +121,7 @@ export default function AllJobsPage() {
         }
         let fileUrl: string | undefined;
         if (inv.file_path) {
-          const { data: sd } = await supabase.storage.from('invoices').createSignedUrl(inv.file_path, 3600);
+          const { data: sd } = await storage.from('invoices').createSignedUrl(inv.file_path, 3600);
           fileUrl = sd?.signedUrl;
         }
         return { ...inv, company_name: company?.name || 'Unknown', submitter_name: submitter?.full_name || 'Unknown', submitter_email: submitter?.email || '', vehicles, file_url: fileUrl };

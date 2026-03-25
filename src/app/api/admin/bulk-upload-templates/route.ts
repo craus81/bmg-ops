@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import JSZip from 'jszip';
 import { createClient } from '@supabase/supabase-js';
+import { r2Upload, r2Delete, r2PublicUrl } from '@/lib/r2';
 
 interface TemplateEntry {
   path: string;
@@ -60,27 +61,31 @@ export async function POST(req: NextRequest) {
         // Upload the EPS/original file
         const epsEntry = zip.files[entry.path];
         if (epsEntry) {
-          const epsData = await epsEntry.async('uint8array');
-          const ext = entry.path.split('.').pop()?.toLowerCase() || 'eps';
-          const storagePath = `originals/${entry.make}/${entry.model}/${entry.year}/${slug}.${ext}`;
-          const { error } = await supabase.storage
-            .from('vehicle-templates')
-            .upload(storagePath, epsData, { contentType: 'application/postscript', upsert: true });
-          if (!error) originalFilePath = storagePath;
+          try {
+            const epsData = await epsEntry.async('uint8array');
+            const ext = entry.path.split('.').pop()?.toLowerCase() || 'eps';
+            const storagePath = `originals/${entry.make}/${entry.model}/${entry.year}/${slug}.${ext}`;
+            await r2Upload('vehicle-templates', storagePath, Buffer.from(epsData), 'application/postscript');
+            originalFilePath = storagePath;
+          } catch (err: any) {
+            console.error('EPS upload error:', err);
+          }
         }
 
         // Upload the thumbnail if it exists
         if (entry.thumbnailPath) {
           const thumbEntry = zip.files[entry.thumbnailPath];
           if (thumbEntry) {
-            const thumbData = await thumbEntry.async('uint8array');
-            const thumbExt = entry.thumbnailPath.split('.').pop()?.toLowerCase() || 'jpg';
-            const contentType = thumbExt === 'png' ? 'image/png' : 'image/jpeg';
-            const thumbStoragePath = `previews/${entry.make}/${entry.model}/${entry.year}/${slug}.${thumbExt}`;
-            const { error } = await supabase.storage
-              .from('vehicle-templates')
-              .upload(thumbStoragePath, thumbData, { contentType, upsert: true });
-            if (!error) templateImagePath = thumbStoragePath;
+            try {
+              const thumbData = await thumbEntry.async('uint8array');
+              const thumbExt = entry.thumbnailPath.split('.').pop()?.toLowerCase() || 'jpg';
+              const contentType = thumbExt === 'png' ? 'image/png' : 'image/jpeg';
+              const thumbStoragePath = `previews/${entry.make}/${entry.model}/${entry.year}/${slug}.${thumbExt}`;
+              await r2Upload('vehicle-templates', thumbStoragePath, Buffer.from(thumbData), contentType);
+              templateImagePath = thumbStoragePath;
+            } catch (err: any) {
+              console.error('Thumbnail upload error:', err);
+            }
           }
         }
 

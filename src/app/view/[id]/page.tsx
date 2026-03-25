@@ -3,6 +3,7 @@
 import { useState, useEffect } from 'react';
 import { useParams } from 'next/navigation';
 import { createClient } from '@/lib/supabase-browser';
+import { storage } from '@/lib/storage';
 
 interface Photo {
   id: string;
@@ -46,7 +47,7 @@ export default function PublicVehicleView() {
 
       var photosWithUrls = await Promise.all(
         (p || []).map(async function(photo: Photo) {
-          var { data } = supabase.storage.from('photos').getPublicUrl(photo.storage_path);
+          var { data } = storage.from('photos').getPublicUrl(photo.storage_path);
           return { ...photo, url: data.publicUrl };
         })
       );

@@ -4,6 +4,7 @@ import { useState, useEffect, useRef } from 'react';
 import { useRouter, useSearchParams } from 'next/navigation';
 import { createClient } from '@/lib/supabase-browser';
 import { useAuth } from '@/components/AuthProvider';
+import { storage } from '@/lib/storage';
 
 interface Photo {
   id: string;
@@ -46,7 +47,7 @@ export default function PhotosPage() {
 
       const photosWithUrls = await Promise.all(
         (p || []).map(async (photo: Photo) => {
-          const { data } = supabase.storage.from('photos').getPublicUrl(photo.storage_path);
+          const { data } = storage.from('photos').getPublicUrl(photo.storage_path);
           return { ...photo, url: data.publicUrl };
         })
       );
@@ -63,7 +64,7 @@ export default function PhotosPage() {
     const ext = file.name.split('.').pop() || 'jpg';
     const path = `${vehicleId}/${Date.now()}.${ext}`;
 
-    const { error: upErr } = await supabase.storage
+    const { error: upErr } = await storage
       .from('photos')
       .upload(path, file, { contentType: file.type });
 
@@ -85,7 +86,7 @@ export default function PhotosPage() {
       .single();
 
     if (record) {
-      const { data: urlData } = supabase.storage.from('photos').getPublicUrl(path);
+      const { data: urlData } = storage.from('photos').getPublicUrl(path);
       setPhotos((prev) => [...prev, { ...record, url: urlData.publicUrl }]);
     }
     setUploading(false);
