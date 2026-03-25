@@ -211,7 +211,9 @@ export default function UsersPage() {
   };
 
   const handleApprove = async (userId: string, role: string) => {
-    let companyId = pendingCompanies[userId];
+    // Check pendingCompanies state first, then fall back to user's existing company_id
+    const existingUser = users.find(u => u.id === userId);
+    let companyId = pendingCompanies[userId] || existingUser?.company_id;
 
     if (!companyId) {
       alert('Please select a company before approving.');
