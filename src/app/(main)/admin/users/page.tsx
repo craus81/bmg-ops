@@ -306,6 +306,29 @@ export default function UsersPage() {
     }
   };
 
+  const handleDeleteUser = async (userId: string, userName: string) => {
+    if (!window.confirm(`Permanently delete ${userName}? This cannot be undone.`)) return;
+    if (!window.confirm(`Are you absolutely sure? This will remove ${userName} from the system entirely.`)) return;
+
+    try {
+      const res = await fetch('/api/admin/delete-user', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ userId }),
+      });
+      const data = await res.json();
+      if (!res.ok) {
+        setCreateMessage(data.error || 'Failed to delete user');
+      } else {
+        setUsers((prev) => prev.filter((u) => u.id !== userId));
+        setCreateMessage(`${userName} has been permanently deleted.`);
+      }
+    } catch (err: any) {
+      setCreateMessage('Error: ' + err.message);
+    }
+    setTimeout(() => setCreateMessage(''), 5000);
+  };
+
   const openEditModal = (user: Profile & { company_id?: string; company_name?: string }) => {
     setEditUser(user);
     setEditForm({
@@ -816,7 +839,7 @@ export default function UsersPage() {
 
               {/* Deactivated user actions */}
               {isDeactivated && (
-                <div style={{ marginTop: '10px' }}>
+                <div style={{ marginTop: '10px', display: 'flex', gap: '6px', flexWrap: 'wrap' }}>
                   <button
                     onClick={() => handleReactivate(user.id)}
                     style={{
@@ -826,6 +849,28 @@ export default function UsersPage() {
                     }}
                   >
                     Reactivate
+                  </button>
+                  <button
+                    onClick={() => handleResendInvite(user.id, user.email, user.full_name || '')}
+                    disabled={resending === user.id}
+                    style={{
+                      padding: '6px 12px', borderRadius: '8px', fontSize: '10px', fontWeight: 700,
+                      background: 'rgba(59,130,246,0.1)', border: '1px solid rgba(59,130,246,0.2)',
+                      color: '#60a5fa', cursor: resending === user.id ? 'not-allowed' : 'pointer',
+                      opacity: resending === user.id ? 0.5 : 1,
+                    }}
+                  >
+                    {resending === user.id ? 'Sending...' : 'Resend Invite'}
+                  </button>
+                  <button
+                    onClick={() => handleDeleteUser(user.id, user.full_name || 'this user')}
+                    style={{
+                      padding: '6px 12px', borderRadius: '8px', fontSize: '10px', fontWeight: 700,
+                      background: 'transparent', border: '1px solid var(--error-border)',
+                      color: 'var(--error)', cursor: 'pointer',
+                    }}
+                  >
+                    Delete Permanently
                   </button>
                 </div>
               )}
