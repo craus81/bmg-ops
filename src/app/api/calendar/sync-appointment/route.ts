@@ -25,7 +25,7 @@ export async function POST(req: NextRequest) {
       .from('installer_appointments')
       .select(`
         *,
-        outside_installer:outside_installers(id, name, company_name, phone),
+        certified_installer:certified_network_installers(id, name, company_name, phone),
         graphics_job:graphics_jobs(id, title, job_number, customer)
       `)
       .eq('id', appointmentId)
@@ -44,7 +44,7 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ synced: false, reason: 'cancelled' });
     }
 
-    const installer = appt.outside_installer;
+    const installer = appt.certified_installer;
     const installerName = installer ? `${installer.name}${installer.company_name ? ` (${installer.company_name})` : ''}` : 'Unknown Installer';
 
     const descLines = [

@@ -1,9 +1,9 @@
 -- Migration 030: Calendar feature
--- Adds: outside_installers table, installer_appointments table
+-- Adds: certified_network_installers table, installer_appointments table
 -- Adds: due_date, production_schedule_date, calendar_event_id columns to fleet_checkins
 
--- ─── Outside installer subcontractors ───────────────────────────────────────
-CREATE TABLE IF NOT EXISTS outside_installers (
+-- ─── Certified network installer subcontractors ───────────────────────────────
+CREATE TABLE IF NOT EXISTS certified_network_installers (
   id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
   name TEXT NOT NULL,
   company_name TEXT,
@@ -14,22 +14,22 @@ CREATE TABLE IF NOT EXISTS outside_installers (
   created_at TIMESTAMPTZ DEFAULT NOW()
 );
 
-ALTER TABLE outside_installers ENABLE ROW LEVEL SECURITY;
+ALTER TABLE certified_network_installers ENABLE ROW LEVEL SECURITY;
 
 -- Admin full access
-CREATE POLICY "admin_all_outside_installers" ON outside_installers
+CREATE POLICY "admin_all_certified_network_installers" ON certified_network_installers
   FOR ALL USING (
     EXISTS (SELECT 1 FROM profiles WHERE id = auth.uid() AND role = 'admin')
   );
 
 -- Internal staff read
-CREATE POLICY "internal_read_outside_installers" ON outside_installers
+CREATE POLICY "internal_read_certified_network_installers" ON certified_network_installers
   FOR SELECT USING (is_internal_staff());
 
 -- ─── Installer appointments ───────────────────────────────────────────────────
 CREATE TABLE IF NOT EXISTS installer_appointments (
   id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-  outside_installer_id UUID NOT NULL REFERENCES outside_installers(id) ON DELETE CASCADE,
+  certified_network_installer_id UUID NOT NULL REFERENCES certified_network_installers(id) ON DELETE CASCADE,
   graphics_job_id UUID REFERENCES graphics_jobs(id) ON DELETE SET NULL,
   title TEXT NOT NULL,
   description TEXT,

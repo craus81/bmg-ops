@@ -4,7 +4,7 @@ import { useState, useEffect } from 'react';
 import { useRouter } from 'next/navigation';
 import { useAuth } from '@/components/AuthProvider';
 import { theme } from '@/lib/theme';
-import type { OutsideInstaller } from '@/lib/types';
+import type { CertifiedNetworkInstaller } from '@/lib/types';
 
 // ─── Form ─────────────────────────────────────────────────────────────────────
 
@@ -106,7 +106,7 @@ function InstallerCard({
   onEdit,
   onToggleActive,
 }: {
-  installer: OutsideInstaller;
+  installer: CertifiedNetworkInstaller;
   onEdit: () => void;
   onToggleActive: () => void;
 }) {
@@ -164,13 +164,13 @@ function InstallerCard({
 
 // ─── Main Page ────────────────────────────────────────────────────────────────
 
-export default function InstallerAdminPage() {
+export default function CertifiedInstallersAdminPage() {
   const { profile } = useAuth();
   const router = useRouter();
 
   const isAdmin = profile?.role === 'admin' || (profile?.roles || []).includes('admin' as any);
 
-  const [installers, setInstallers] = useState<OutsideInstaller[]>([]);
+  const [installers, setInstallers] = useState<CertifiedNetworkInstaller[]>([]);
   const [loading, setLoading] = useState(true);
   const [showInactive, setShowInactive] = useState(false);
   const [creating, setCreating] = useState(false);
@@ -185,7 +185,7 @@ export default function InstallerAdminPage() {
 
   const load = async () => {
     setLoading(true);
-    const res = await fetch('/api/installers?active=false');
+    const res = await fetch('/api/certified-installers?active=false');
     if (res.ok) setInstallers(await res.json());
     setLoading(false);
   };
@@ -196,7 +196,7 @@ export default function InstallerAdminPage() {
     setSaving(true);
     setError('');
     try {
-      const res = await fetch('/api/installers', {
+      const res = await fetch('/api/certified-installers', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(form),
@@ -215,7 +215,7 @@ export default function InstallerAdminPage() {
     setSaving(true);
     setError('');
     try {
-      const res = await fetch(`/api/installers/${id}`, {
+      const res = await fetch(`/api/certified-installers/${id}`, {
         method: 'PATCH',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(form),
@@ -230,9 +230,9 @@ export default function InstallerAdminPage() {
     setSaving(false);
   };
 
-  const handleToggleActive = async (installer: OutsideInstaller) => {
+  const handleToggleActive = async (installer: CertifiedNetworkInstaller) => {
     try {
-      const res = await fetch(`/api/installers/${installer.id}`, {
+      const res = await fetch(`/api/certified-installers/${installer.id}`, {
         method: 'PATCH',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ active: !installer.active }),
@@ -252,7 +252,7 @@ export default function InstallerAdminPage() {
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '16px' }}>
         <div>
           <div style={{ fontSize: '11px', fontWeight: 700, color: theme.textMuted, textTransform: 'uppercase', letterSpacing: '0.5px' }}>Admin</div>
-          <h1 style={{ fontSize: '20px', fontWeight: 800, margin: '0' }}>Outside Installers</h1>
+          <h1 style={{ fontSize: '20px', fontWeight: 800, margin: '0' }}>Certified Network Installers</h1>
         </div>
         {!creating && (
           <button
@@ -278,7 +278,9 @@ export default function InstallerAdminPage() {
           background: theme.card, border: `1px solid ${theme.border}`, borderRadius: '14px',
           padding: '16px', marginBottom: '16px',
         }}>
-          <div style={{ fontSize: '13px', fontWeight: 700, marginBottom: '12px', color: theme.textSecondary }}>New Installer</div>
+          <div style={{ fontSize: '13px', fontWeight: 700, marginBottom: '12px', color: theme.textSecondary }}>
+            New Certified Network Installer
+          </div>
           <InstallerForm
             initial={emptyForm()}
             onSave={handleCreate}
@@ -310,7 +312,9 @@ export default function InstallerAdminPage() {
           border: `1px solid ${theme.border}`, borderRadius: '14px',
           color: theme.textMuted, fontSize: '14px',
         }}>
-          {installers.length === 0 ? 'No outside installers yet. Add one to get started.' : 'No active installers.'}
+          {installers.length === 0
+            ? 'No certified network installers yet. Add one to get started.'
+            : 'No active certified network installers.'}
         </div>
       ) : (
         <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>

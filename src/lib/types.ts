@@ -323,9 +323,9 @@ export interface FleetCheckin {
   updated_at: string;
 }
 
-// ═══════════ OUTSIDE INSTALLERS ═══════════
+// ═══════════ CERTIFIED NETWORK INSTALLERS ═══════════
 
-export interface OutsideInstaller {
+export interface CertifiedNetworkInstaller {
   id: string;
   name: string;
   company_name: string | null;
@@ -347,7 +347,7 @@ export const APPOINTMENT_STATUS_LABELS: Record<AppointmentStatus, string> = {
 
 export interface InstallerAppointment {
   id: string;
-  outside_installer_id: string;
+  certified_network_installer_id: string;
   graphics_job_id: string | null;
   title: string;
   description: string | null;
@@ -358,7 +358,7 @@ export interface InstallerAppointment {
   calendar_event_id: string | null;
   created_at: string;
   updated_at: string;
-  outside_installer?: OutsideInstaller;
+  certified_installer?: CertifiedNetworkInstaller;
   graphics_job?: Pick<GraphicsJob, 'id' | 'title' | 'job_number' | 'customer'>;
 }
 

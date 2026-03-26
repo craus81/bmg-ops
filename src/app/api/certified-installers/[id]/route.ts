@@ -6,7 +6,7 @@ const supabase = createClient(
   process.env.SUPABASE_SERVICE_ROLE_KEY!
 );
 
-/** PATCH /api/installers/[id] — update installer */
+/** PATCH /api/certified-installers/[id] — update certified network installer */
 export async function PATCH(req: NextRequest, { params }: { params: { id: string } }) {
   try {
     const body = await req.json();
@@ -17,7 +17,7 @@ export async function PATCH(req: NextRequest, { params }: { params: { id: string
     }
 
     const { data, error } = await supabase
-      .from('outside_installers')
+      .from('certified_network_installers')
       .update(updates)
       .eq('id', params.id)
       .select()

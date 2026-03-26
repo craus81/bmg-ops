@@ -6,13 +6,13 @@ const supabase = createClient(
   process.env.SUPABASE_SERVICE_ROLE_KEY!
 );
 
-/** GET /api/installers — list all outside installers */
+/** GET /api/certified-installers — list all certified network installers */
 export async function GET(req: NextRequest) {
   const { searchParams } = new URL(req.url);
   const activeOnly = searchParams.get('active') !== 'false';
 
   let query = supabase
-    .from('outside_installers')
+    .from('certified_network_installers')
     .select('*')
     .order('name');
 
@@ -25,7 +25,7 @@ export async function GET(req: NextRequest) {
   return NextResponse.json(data);
 }
 
-/** POST /api/installers — create outside installer */
+/** POST /api/certified-installers — create certified network installer */
 export async function POST(req: NextRequest) {
   try {
     const body = await req.json();
@@ -36,7 +36,7 @@ export async function POST(req: NextRequest) {
     }
 
     const { data, error } = await supabase
-      .from('outside_installers')
+      .from('certified_network_installers')
       .insert({ name: name.trim(), company_name: company_name || null, phone: phone || null, email: email || null, notes: notes || null })
       .select()
       .single();

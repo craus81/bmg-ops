@@ -4,7 +4,7 @@ import { useState, useEffect, useCallback } from 'react';
 import { useAuth } from '@/components/AuthProvider';
 import { createClient } from '@/lib/supabase-browser';
 import { theme } from '@/lib/theme';
-import type { InstallerAppointment, OutsideInstaller, GraphicsJob } from '@/lib/types';
+import type { InstallerAppointment, CertifiedNetworkInstaller } from '@/lib/types';
 
 // ─── Event types ──────────────────────────────────────────────────────────────
 
@@ -91,14 +91,14 @@ function EventPill({ event, onClick }: { event: CalendarEvent; onClick: () => vo
 
 // ─── Event detail modal ───────────────────────────────────────────────────────
 
-function EventModal({ event, onClose, isAdmin }: { event: CalendarEvent; onClose: () => void; isAdmin: boolean }) {
+function EventModal({ event, onClose }: { event: CalendarEvent; onClose: () => void }) {
   const c = EVENT_COLORS[event.type];
   const d = event.data;
 
   const typeLabel = {
     graphics_install: '🔵 Graphics Install',
     production_schedule: '🟢 Production Schedule',
-    installer_appointment: '🟠 Installer Appointment',
+    installer_appointment: '🟠 Certified Network Installer Appointment',
   }[event.type];
 
   return (
@@ -158,13 +158,13 @@ function EventModal({ event, onClose, isAdmin }: { event: CalendarEvent; onClose
 
         {event.type === 'installer_appointment' && (
           <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
-            {d.outside_installer && (
+            {d.certified_installer && (
               <DetailRow
                 label="Installer"
-                value={`${d.outside_installer.name}${d.outside_installer.company_name ? ` — ${d.outside_installer.company_name}` : ''}`}
+                value={`${d.certified_installer.name}${d.certified_installer.company_name ? ` — ${d.certified_installer.company_name}` : ''}`}
               />
             )}
-            {d.outside_installer?.phone && <DetailRow label="Phone" value={d.outside_installer.phone} />}
+            {d.certified_installer?.phone && <DetailRow label="Phone" value={d.certified_installer.phone} />}
             {(d.start_time || d.end_time) && (
               <DetailRow
                 label="Time"
@@ -207,22 +207,19 @@ function DetailRow({ label, value }: { label: string; value: string }) {
 // ─── New Appointment Modal ────────────────────────────────────────────────────
 
 interface NewApptModalProps {
-  installers: OutsideInstaller[];
+  certifiedInstallers: CertifiedNetworkInstaller[];
   initialDate?: string;
   onClose: () => void;
   onCreated: (appt: InstallerAppointment) => void;
-  isAdmin: boolean;
 }
 
-function NewAppointmentModal({ installers, initialDate, onClose, onCreated, isAdmin }: NewApptModalProps) {
+function NewAppointmentModal({ certifiedInstallers, initialDate, onClose, onCreated }: NewApptModalProps) {
   const [installerId, setInstallerId] = useState('');
   const [title, setTitle] = useState('');
   const [description, setDescription] = useState('');
   const [date, setDate] = useState(initialDate || toYMD(new Date()));
   const [startTime, setStartTime] = useState('');
   const [endTime, setEndTime] = useState('');
-  const [linkedJobSearch, setLinkedJobSearch] = useState('');
-  const [linkedJobId, setLinkedJobId] = useState('');
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState('');
 
@@ -237,13 +234,12 @@ function NewAppointmentModal({ installers, initialDate, onClose, onCreated, isAd
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          outside_installer_id: installerId,
+          certified_network_installer_id: installerId,
           title: title.trim(),
           description: description.trim() || null,
           scheduled_date: date,
           start_time: startTime || null,
           end_time: endTime || null,
-          graphics_job_id: linkedJobId || null,
         }),
       });
       const data = await res.json();
@@ -283,16 +279,16 @@ function NewAppointmentModal({ installers, initialDate, onClose, onCreated, isAd
         )}
 
         <div style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
-          {/* Installer picker */}
+          {/* Certified Network Installer picker */}
           <div>
-            <label style={labelStyle}>Outside Installer *</label>
+            <label style={labelStyle}>Certified Network Installer *</label>
             <select
               value={installerId}
               onChange={(e) => setInstallerId(e.target.value)}
               style={inputStyle}
             >
               <option value="">Select installer...</option>
-              {installers.map(i => (
+              {certifiedInstallers.map(i => (
                 <option key={i.id} value={i.id}>
                   {i.name}{i.company_name ? ` — ${i.company_name}` : ''}
                 </option>
@@ -393,7 +389,7 @@ export default function CalendarPage() {
   const [selectedEvent, setSelectedEvent] = useState<CalendarEvent | null>(null);
   const [showNewAppt, setShowNewAppt] = useState(false);
   const [newApptDate, setNewApptDate] = useState<string | undefined>();
-  const [installers, setInstallers] = useState<OutsideInstaller[]>([]);
+  const [certifiedInstallers, setCertifiedInstallers] = useState<CertifiedNetworkInstaller[]>([]);
 
   // Compute visible date range
   const visibleRange = useCallback((): { start: Date; end: Date } => {
@@ -458,12 +454,12 @@ export default function CalendarPage() {
       });
     }
 
-    // 3. Installer appointments
+    // 3. Certified network installer appointments
     const { data: appts } = await supabase
       .from('installer_appointments')
       .select(`
         *,
-        outside_installer:outside_installers(id, name, company_name, phone),
+        certified_installer:certified_network_installers(id, name, company_name, phone),
         graphics_job:graphics_jobs(id, title, job_number, customer)
       `)
       .neq('status', 'cancelled')
@@ -471,7 +467,7 @@ export default function CalendarPage() {
       .lte('scheduled_date', endStr);
 
     for (const a of appts || []) {
-      const installer = a.outside_installer;
+      const installer = a.certified_installer;
       collected.push({
         id: `appt-${a.id}`,
         date: a.scheduled_date,
@@ -488,11 +484,11 @@ export default function CalendarPage() {
     setLoading(false);
   }, [visibleRange, supabase]);
 
-  const loadInstallers = useCallback(async () => {
-    const res = await fetch('/api/installers');
+  const loadCertifiedInstallers = useCallback(async () => {
+    const res = await fetch('/api/certified-installers');
     if (res.ok) {
       const data = await res.json();
-      setInstallers(data);
+      setCertifiedInstallers(data);
     }
   }, []);
 
@@ -501,8 +497,8 @@ export default function CalendarPage() {
   }, [loadEvents]);
 
   useEffect(() => {
-    loadInstallers();
-  }, [loadInstallers]);
+    loadCertifiedInstallers();
+  }, [loadCertifiedInstallers]);
 
   const eventsOnDate = (dateStr: string) => events.filter(e => e.date === dateStr);
 
@@ -649,7 +645,7 @@ export default function CalendarPage() {
       {([
         { type: 'graphics_install', label: 'Graphics Install' },
         { type: 'production_schedule', label: 'Production' },
-        { type: 'installer_appointment', label: 'Installer Appt' },
+        { type: 'installer_appointment', label: 'Certified Installer' },
       ] as const).map(({ type, label }) => {
         const c = EVENT_COLORS[type];
         return (
@@ -749,20 +745,18 @@ export default function CalendarPage() {
         <EventModal
           event={selectedEvent}
           onClose={() => setSelectedEvent(null)}
-          isAdmin={isAdmin}
         />
       )}
 
       {showNewAppt && isAdmin && (
         <NewAppointmentModal
-          installers={installers}
+          certifiedInstallers={certifiedInstallers}
           initialDate={newApptDate}
           onClose={() => setShowNewAppt(false)}
-          onCreated={(appt) => {
+          onCreated={() => {
             setShowNewAppt(false);
             loadEvents();
           }}
-          isAdmin={isAdmin}
         />
       )}
     </div>

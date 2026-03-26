@@ -10,7 +10,7 @@ const supabase = createClient(
 export async function PATCH(req: NextRequest, { params }: { params: { id: string } }) {
   try {
     const body = await req.json();
-    const allowed = ['title', 'description', 'scheduled_date', 'start_time', 'end_time', 'status', 'graphics_job_id', 'outside_installer_id'];
+    const allowed = ['title', 'description', 'scheduled_date', 'start_time', 'end_time', 'status', 'graphics_job_id', 'certified_network_installer_id'];
     const updates: Record<string, any> = {};
     for (const key of allowed) {
       if (key in body) updates[key] = body[key];
@@ -22,7 +22,7 @@ export async function PATCH(req: NextRequest, { params }: { params: { id: string
       .eq('id', params.id)
       .select(`
         *,
-        outside_installer:outside_installers(id, name, company_name, phone, email),
+        certified_installer:certified_network_installers(id, name, company_name, phone, email),
         graphics_job:graphics_jobs(id, title, job_number, customer)
       `)
       .single();

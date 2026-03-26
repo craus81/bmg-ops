@@ -16,7 +16,7 @@ export async function GET(req: NextRequest) {
     .from('installer_appointments')
     .select(`
       *,
-      outside_installer:outside_installers(id, name, company_name, phone, email),
+      certified_installer:certified_network_installers(id, name, company_name, phone, email),
       graphics_job:graphics_jobs(id, title, job_number, customer)
     `)
     .order('scheduled_date')
@@ -34,16 +34,16 @@ export async function GET(req: NextRequest) {
 export async function POST(req: NextRequest) {
   try {
     const body = await req.json();
-    const { outside_installer_id, graphics_job_id, title, description, scheduled_date, start_time, end_time } = body;
+    const { certified_network_installer_id, graphics_job_id, title, description, scheduled_date, start_time, end_time } = body;
 
-    if (!outside_installer_id || !title?.trim() || !scheduled_date) {
-      return NextResponse.json({ error: 'outside_installer_id, title, and scheduled_date are required' }, { status: 400 });
+    if (!certified_network_installer_id || !title?.trim() || !scheduled_date) {
+      return NextResponse.json({ error: 'certified_network_installer_id, title, and scheduled_date are required' }, { status: 400 });
     }
 
     const { data, error } = await supabase
       .from('installer_appointments')
       .insert({
-        outside_installer_id,
+        certified_network_installer_id,
         graphics_job_id: graphics_job_id || null,
         title: title.trim(),
         description: description || null,
@@ -54,7 +54,7 @@ export async function POST(req: NextRequest) {
       })
       .select(`
         *,
-        outside_installer:outside_installers(id, name, company_name, phone, email),
+        certified_installer:certified_network_installers(id, name, company_name, phone, email),
         graphics_job:graphics_jobs(id, title, job_number, customer)
       `)
       .single();
