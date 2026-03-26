@@ -68,13 +68,14 @@ export async function POST(req: NextRequest) {
       `\nStatus: ${job.status}`,
     ].filter(Boolean).join('\n');
 
-    // Sync to Google Calendar
+    // Sync to Google Calendar — blue for graphics install events
     const eventId = await syncCalendarEvent({
       eventId: job.calendar_event_id,
       title: `${job.title}${job.customer ? ` — ${job.customer}` : ''}`,
       date: job.scheduled_install_date,
       description: descLines,
       location: job.ship_to || '',
+      colorId: '1', // Blue
     });
 
     if (eventId) {

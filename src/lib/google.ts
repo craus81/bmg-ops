@@ -212,30 +212,39 @@ async function getCalendarClient() {
 }
 
 /**
- * Create or update a Google Calendar event for a graphics job install date.
+ * Create or update a Google Calendar all-day event.
  * Returns the event ID.
+ *
+ * colorId reference: 1=blue(lavender), 2=green(sage), 6=orange(tangerine)
  */
 export async function syncCalendarEvent(params: {
   eventId?: string | null;
   title: string;
+  summary?: string; // Full event title override — if omitted, uses "🎨 Install: {title}"
   date: string; // YYYY-MM-DD
   description?: string;
   location?: string;
+  colorId?: string; // Google Calendar colorId (default '1' blue)
 }): Promise<string | null> {
   try {
     const calendar = await getCalendarClient();
 
+    // Google Calendar all-day events require end date to be the *next* day (exclusive)
+    const endDate = new Date(params.date + 'T00:00:00');
+    endDate.setDate(endDate.getDate() + 1);
+    const endDateStr = endDate.toISOString().split('T')[0];
+
     const eventBody = {
-      summary: `🎨 Install: ${params.title}`,
+      summary: params.summary ?? `🎨 Install: ${params.title}`,
       description: params.description || '',
       location: params.location || '',
       start: {
         date: params.date, // All-day event
       },
       end: {
-        date: params.date,
+        date: endDateStr, // Next day — required by Google Calendar API
       },
-      colorId: '6', // Orange — matches BMG brand
+      colorId: params.colorId || '1', // Blue by default
     };
 
     if (params.eventId) {

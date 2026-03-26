@@ -316,8 +316,50 @@ export interface FleetCheckin {
   customer_portal_token: string | null;
   checked_in_by: string;
   company_id?: string;
+  due_date: string | null;
+  production_schedule_date: string | null;
+  calendar_event_id: string | null;
   created_at: string;
   updated_at: string;
+}
+
+// ═══════════ OUTSIDE INSTALLERS ═══════════
+
+export interface OutsideInstaller {
+  id: string;
+  name: string;
+  company_name: string | null;
+  phone: string | null;
+  email: string | null;
+  notes: string | null;
+  active: boolean;
+  created_at: string;
+}
+
+export type AppointmentStatus = 'scheduled' | 'confirmed' | 'completed' | 'cancelled';
+
+export const APPOINTMENT_STATUS_LABELS: Record<AppointmentStatus, string> = {
+  scheduled: 'Scheduled',
+  confirmed: 'Confirmed',
+  completed: 'Completed',
+  cancelled: 'Cancelled',
+};
+
+export interface InstallerAppointment {
+  id: string;
+  outside_installer_id: string;
+  graphics_job_id: string | null;
+  title: string;
+  description: string | null;
+  scheduled_date: string;
+  start_time: string | null;
+  end_time: string | null;
+  status: AppointmentStatus;
+  calendar_event_id: string | null;
+  created_at: string;
+  updated_at: string;
+  outside_installer?: OutsideInstaller;
+  graphics_job?: Pick<GraphicsJob, 'id' | 'title' | 'job_number' | 'customer'>;
 }
 
 export interface VehicleStatusHistory {

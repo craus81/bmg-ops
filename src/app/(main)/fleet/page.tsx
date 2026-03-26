@@ -75,6 +75,8 @@ export default function FleetPage() {
   const [saved, setSaved] = useState(false);
   const [savedCheckin, setSavedCheckin] = useState<FleetCheckin | null>(null);
   const [notes, setNotes] = useState('');
+  const [dueDate, setDueDate] = useState('');
+  const [productionScheduleDate, setProductionScheduleDate] = useState('');
 
   // Recent check-ins
   const [recentCheckins, setRecentCheckins] = useState<FleetCheckin[]>([]);
@@ -281,6 +283,8 @@ export default function FleetPage() {
         proof_file_path: selectedProof?.storage_path || null,
         proof_file_name: selectedProof?.file_name || null,
         notes: notes.trim() || null,
+        due_date: dueDate || null,
+        production_schedule_date: productionScheduleDate || null,
         status: 'received',
         checked_in_by: user.id,
         company_id: profile?.company_id || null,
@@ -316,6 +320,8 @@ export default function FleetPage() {
     setSaved(false);
     setSavedCheckin(null);
     setNotes('');
+    setDueDate('');
+    setProductionScheduleDate('');
     setLastScanned('');
     foundVinRef.current = false;
     setScanCount(0);
@@ -757,25 +763,59 @@ export default function FleetPage() {
           </div>
         )}
 
-        {/* Notes */}
+        {/* Notes + Dates */}
         <div style={{
           background: theme.card, border: `1px solid ${theme.border}`, borderRadius: '14px',
-          padding: '14px', marginBottom: '14px',
+          padding: '14px', marginBottom: '14px', display: 'flex', flexDirection: 'column', gap: '12px',
         }}>
-          <label style={{ display: 'block', fontSize: '10px', fontWeight: 700, color: theme.textMuted, textTransform: 'uppercase', letterSpacing: '0.5px', marginBottom: '6px' }}>
-            Notes / Comments
-          </label>
-          <textarea
-            value={notes}
-            onChange={(e) => setNotes(e.target.value)}
-            placeholder="Any notes about this check-in..."
-            rows={2}
-            style={{
-              width: '100%', padding: '10px', borderRadius: '10px',
-              border: `1px solid ${theme.border}`, background: theme.bg,
-              color: theme.textPrimary, fontSize: '13px', resize: 'vertical',
-            }}
-          />
+          <div>
+            <label style={{ display: 'block', fontSize: '10px', fontWeight: 700, color: theme.textMuted, textTransform: 'uppercase', letterSpacing: '0.5px', marginBottom: '6px' }}>
+              Notes / Comments
+            </label>
+            <textarea
+              value={notes}
+              onChange={(e) => setNotes(e.target.value)}
+              placeholder="Any notes about this check-in..."
+              rows={2}
+              style={{
+                width: '100%', padding: '10px', borderRadius: '10px',
+                border: `1px solid ${theme.border}`, background: theme.bg,
+                color: theme.textPrimary, fontSize: '13px', resize: 'vertical',
+              }}
+            />
+          </div>
+          <div style={{ display: 'flex', gap: '10px' }}>
+            <div style={{ flex: 1 }}>
+              <label style={{ display: 'block', fontSize: '10px', fontWeight: 700, color: theme.textMuted, textTransform: 'uppercase', letterSpacing: '0.5px', marginBottom: '6px' }}>
+                Due Date
+              </label>
+              <input
+                type="date"
+                value={dueDate}
+                onChange={(e) => setDueDate(e.target.value)}
+                style={{
+                  width: '100%', padding: '10px', borderRadius: '10px',
+                  border: `1px solid ${theme.border}`, background: theme.bg,
+                  color: theme.textPrimary, fontSize: '13px',
+                }}
+              />
+            </div>
+            <div style={{ flex: 1 }}>
+              <label style={{ display: 'block', fontSize: '10px', fontWeight: 700, color: theme.textMuted, textTransform: 'uppercase', letterSpacing: '0.5px', marginBottom: '6px' }}>
+                Production Schedule
+              </label>
+              <input
+                type="date"
+                value={productionScheduleDate}
+                onChange={(e) => setProductionScheduleDate(e.target.value)}
+                style={{
+                  width: '100%', padding: '10px', borderRadius: '10px',
+                  border: `1px solid ${theme.border}`, background: theme.bg,
+                  color: theme.textPrimary, fontSize: '13px',
+                }}
+              />
+            </div>
+          </div>
         </div>
 
         {/* Actions */}

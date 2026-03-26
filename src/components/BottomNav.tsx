@@ -36,6 +36,7 @@ const allTabs: Tab[] = [
   { id: 'tracking', path: '/tracking', label: 'Tracking', icon: '📋', roles: ['admin', 'shop_tech'] },
   { id: 'vehicles', path: '/vehicles', label: 'Vehicles', icon: '🚐', roles: ['admin', 'field_tech'] },
   { id: 'estimates', path: '/estimates', label: 'Estimates', icon: '📝', roles: ['admin', 'sales', 'graphics_production'] },
+  { id: 'calendar', path: '/calendar', label: 'Calendar', icon: '📅', roles: ['admin', 'installer', 'field_tech', 'shop_tech', 'sales', 'graphics_production'] },
   { id: 'messages', path: '/messages', label: 'Chat', icon: '💬' },
   { id: 'more', path: '/more', label: 'More', icon: '⋯', roles: ['admin', 'installer', 'field_tech', 'shop_tech', 'sales', 'graphics_production'] },
   // Customer-only tabs
