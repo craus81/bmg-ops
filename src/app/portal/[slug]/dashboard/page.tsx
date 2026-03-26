@@ -150,17 +150,20 @@ export default function PortalDashboardPage() {
             </div>
           </div>
 
-          <button
-            onClick={handleSignOut}
-            style={{
-              padding: '7px 14px', borderRadius: '8px',
-              border: '1px solid var(--border, rgba(255,255,255,0.1))',
-              background: 'transparent', color: 'rgba(255,255,255,0.5)',
-              fontSize: '13px', fontWeight: 600, cursor: 'pointer',
-            }}
-          >
-            Sign Out
-          </button>
+          <div style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>
+            <a href={`/portal/${slug}/dashboard`} style={{ padding: '7px 14px', borderRadius: '8px', fontSize: '13px', fontWeight: 600, color: '#fff', background: 'rgba(255,255,255,0.08)', border: '1px solid rgba(255,255,255,0.12)', textDecoration: 'none' }}>
+              Catalog
+            </a>
+            <a href={`/portal/${slug}/orders`} style={{ padding: '7px 14px', borderRadius: '8px', fontSize: '13px', fontWeight: 600, color: 'rgba(255,255,255,0.5)', background: 'transparent', border: '1px solid transparent', textDecoration: 'none' }}>
+              Orders
+            </a>
+            <button
+              onClick={handleSignOut}
+              style={{ padding: '7px 14px', borderRadius: '8px', border: '1px solid var(--border, rgba(255,255,255,0.1))', background: 'transparent', color: 'rgba(255,255,255,0.5)', fontSize: '13px', fontWeight: 600, cursor: 'pointer' }}
+            >
+              Sign Out
+            </button>
+          </div>
         </div>
       </header>
 
@@ -188,7 +191,7 @@ export default function PortalDashboardPage() {
         ) : (
           <div style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
             {assignedProofs.map((item) => (
-              <ProofCard key={item.id} item={item} accentColor={accentColor} />
+              <ProofCard key={item.id} item={item} accentColor={accentColor} slug={slug} />
             ))}
           </div>
         )}
@@ -197,7 +200,7 @@ export default function PortalDashboardPage() {
   );
 }
 
-function ProofCard({ item, accentColor }: { item: AssignedProof; accentColor: string }) {
+function ProofCard({ item, accentColor, slug }: { item: AssignedProof; accentColor: string; slug: string }) {
   const [expanded, setExpanded] = useState(false);
 
   return (
@@ -311,14 +314,18 @@ function ProofCard({ item, accentColor }: { item: AssignedProof; accentColor: st
                 </div>
               ))}
 
-              {/* Order CTA — Phase 2 */}
-              <div style={{ marginTop: '14px', padding: '14px', borderRadius: '10px', background: `${accentColor}11`, border: `1px solid ${accentColor}33`, textAlign: 'center' }}>
-                <div style={{ fontSize: '13px', color: 'rgba(255,255,255,0.5)', marginBottom: '2px' }}>
-                  Ready to place an order?
-                </div>
-                <div style={{ fontSize: '12px', color: 'rgba(255,255,255,0.3)' }}>
-                  Online ordering coming soon — contact your BMG Fleet rep
-                </div>
+              {/* Order CTA */}
+              <div style={{ marginTop: '14px' }}>
+                <a
+                  href={`/portal/${slug}/order/${item.proof_id}`}
+                  style={{
+                    display: 'block', padding: '13px', borderRadius: '10px',
+                    background: accentColor, textAlign: 'center', textDecoration: 'none',
+                    fontSize: '14px', fontWeight: 700, color: '#fff',
+                  }}
+                >
+                  Order Now
+                </a>
               </div>
             </div>
           )}

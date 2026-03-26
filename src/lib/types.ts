@@ -546,9 +546,13 @@ export interface PortalOrder {
   ship_to_address: ShipToAddress | null;
   status: PortalOrderStatus;
   notes: string | null;
+  netsuite_so_id: string | null;
+  netsuite_so_number: string | null;
+  created_by: string | null;
   created_at: string;
   updated_at: string;
   lines?: PortalOrderLine[];
+  portal_customer?: PortalCustomer;
 }
 
 export interface PortalOrderLine {

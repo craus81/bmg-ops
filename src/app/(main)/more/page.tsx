@@ -81,6 +81,7 @@ export default function MorePage() {
           <MenuBtn icon="📦" title="Part Catalog" sub="Manage part numbers" onClick={() => router.push('/admin/catalog')} />
           <MenuBtn icon="📤" title="Bulk Upload" sub="Import templates & proofs from ZIP" onClick={() => router.push('/admin/bulk-upload')} />
           <MenuBtn icon="📋" title="Purchase Orders" sub="Manage POs" onClick={() => router.push('/admin/pos')} />
+          <MenuBtn icon="🛒" title="Portal Orders" sub="Customer portal order queue" onClick={() => router.push('/admin/portal-orders')} />
           <MenuBtn
             icon="📸"
             title="Photo Reviews"
