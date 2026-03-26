@@ -46,7 +46,7 @@ export async function POST(req: NextRequest) {
     // Send the invite email
     let emailSent = false;
     try {
-      const { sendEmail } = await import('@/lib/sendgrid');
+      const { sendEmail } = await import('@/lib/resend');
       emailSent = await sendEmail(
         email,
         'FleetSuite — Your Login Link',

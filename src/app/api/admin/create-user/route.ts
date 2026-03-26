@@ -124,7 +124,7 @@ export async function POST(req: NextRequest) {
     let emailSent = false;
     if (sendInvite) {
       try {
-        const { sendEmail } = await import('@/lib/sendgrid');
+        const { sendEmail } = await import('@/lib/resend');
         emailSent = await sendEmail(
           email,
           'Welcome to FleetSuite — Your Account is Ready',
