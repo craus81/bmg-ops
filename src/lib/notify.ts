@@ -222,7 +222,7 @@ async function sendViaEmail(payload: NotifyPayload): Promise<boolean> {
     if (!profile?.email) return false;
 
     const subject = `[BMG Fleet] ${payload.title}`;
-    const appUrl = process.env.NEXT_PUBLIC_APP_URL || 'https://app.bmgfleet.com';
+    const appUrl = process.env.NEXT_PUBLIC_APP_URL || (process.env.VERCEL_URL ? `https://${process.env.VERCEL_URL}` : 'https://bmg-ops.vercel.app');
     const ctaUrl = payload.url ? `${appUrl}${payload.url}` : appUrl;
 
     const html = buildNotificationEmail(

@@ -10,7 +10,7 @@ const supabase = createClient(
 
 const appUrl = process.env.NEXT_PUBLIC_APP_URL || (process.env.VERCEL_URL
   ? `https://${process.env.VERCEL_URL}`
-  : 'https://app.bmgfleet.com');
+  : 'https://bmg-ops.vercel.app');
 
 function buildInviteEmailHtml(fullName: string, email: string, password: string, inviteLink: string): string {
   return `
