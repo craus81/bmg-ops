@@ -1,6 +1,6 @@
 import { createClient } from '@supabase/supabase-js';
 import { sendSMS } from '@/lib/twilio';
-import { sendEmail, buildNotificationEmail } from '@/lib/sendgrid';
+import { sendEmail, buildNotificationEmail } from '@/lib/resend';
 
 const supabase = createClient(
   process.env.NEXT_PUBLIC_SUPABASE_URL!,
