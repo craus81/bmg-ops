@@ -490,6 +490,77 @@ export interface NotificationPreferences {
   email_messages: boolean;
 }
 
+// ═══════════ PORTAL ═══════════
+
+export interface PortalCustomer {
+  id: string;
+  company_name: string;
+  slug: string;
+  logo_url: string | null;
+  primary_color: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface ProofPart {
+  id: string;
+  proof_id: string;
+  part_name: string;
+  part_number: string | null;
+  description: string | null;
+  unit_price: number;
+  sort_order: number;
+  created_at: string;
+}
+
+export interface CustomerProofAssignment {
+  id: string;
+  portal_customer_id: string;
+  proof_id: string;
+  created_at: string;
+  proof?: GraphicsProof;
+}
+
+export interface PortalCustomerUser {
+  id: string;
+  portal_customer_id: string;
+  user_id: string;
+  role: 'admin' | 'user';
+  created_at: string;
+  profile?: Profile;
+}
+
+export type PortalOrderStatus = 'pending' | 'confirmed' | 'in_production' | 'shipped' | 'completed';
+
+export interface ShipToAddress {
+  street: string;
+  city: string;
+  state: string;
+  zip: string;
+}
+
+export interface PortalOrder {
+  id: string;
+  portal_customer_id: string;
+  po_number: string | null;
+  ship_to_address: ShipToAddress | null;
+  status: PortalOrderStatus;
+  notes: string | null;
+  created_at: string;
+  updated_at: string;
+  lines?: PortalOrderLine[];
+}
+
+export interface PortalOrderLine {
+  id: string;
+  portal_order_id: string;
+  proof_part_id: string;
+  quantity: number;
+  unit_price: number;
+  created_at: string;
+  proof_part?: ProofPart;
+}
+
 // ═══════════ MESSAGING ═══════════
 
 export interface Conversation {
