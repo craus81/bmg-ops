@@ -1335,23 +1335,22 @@ function NewQuote({ onCreated, editQuote }: { onCreated: () => void; editQuote?:
     setAnalysisError('');
 
     try {
-      // Get template image from storage
+      const hasDimensions = selectedTemplate.panel_data && selectedTemplate.panel_data.length > 0;
+
+      // Only fetch template image if no dimension data (legacy fallback)
       let templateBase64 = '';
       let templateMediaType = 'image/png';
 
-      if (selectedTemplate.template_image_path) {
+      if (!hasDimensions && selectedTemplate.template_image_path) {
         try {
           const { data } = supabase.storage
             .from('vehicle-templates')
             .getPublicUrl(selectedTemplate.template_image_path);
 
-          // Save URL for Step 4 display
           setTemplatePreviewUrl(data.publicUrl);
 
           const imgResponse = await fetch(data.publicUrl);
-          if (!imgResponse.ok) {
-            throw new Error(`Failed to fetch template image: ${imgResponse.status}`);
-          }
+          if (!imgResponse.ok) throw new Error(`Failed to fetch template image: ${imgResponse.status}`);
           const imgBlob = await imgResponse.blob();
           templateBase64 = await new Promise<string>((resolve) => {
             const reader = new FileReader();
@@ -1361,30 +1360,29 @@ function NewQuote({ onCreated, editQuote }: { onCreated: () => void; editQuote?:
           templateMediaType = imgBlob.type || 'image/png';
         } catch (fetchErr: any) {
           console.error('Template image fetch error:', fetchErr);
-          throw new Error('Could not load template image from storage. Make sure the template has a PNG preview uploaded.');
+          throw new Error('No panel dimensions and could not load template image. Run the extract-dimensions script first.');
         }
-      } else {
-        throw new Error('Selected template has no image. Please upload a PNG preview for this template in the Templates tab first.');
+      } else if (!hasDimensions) {
+        throw new Error('This vehicle has no panel dimensions. Run: node scripts/extract-dimensions.mjs');
       }
 
-      // Compress proof file (resize large user uploads to max 2048px wide)
+      // Compress proof file
       const proofCompressed = await compressImage(proofFile, 2048, 0.8);
       const proofBase64 = proofCompressed.base64;
       const proofMediaType = proofCompressed.mediaType;
 
-      // Save proof preview for Step 4 display
       setProofPreviewForReview(`data:${proofMediaType};base64,${proofBase64}`);
 
-      // Call our API route
+      // Call API — only send template image if no dimensions
       const response = await fetch('/api/analyze-quote', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          templateImageBase64: templateBase64,
+          templateImageBase64: hasDimensions ? undefined : templateBase64,
           proofImageBase64: proofBase64,
-          templateMediaType,
+          templateMediaType: hasDimensions ? undefined : templateMediaType,
           proofMediaType,
-          vehicleDimensions: selectedTemplate ? {
+          vehicleDimensions: hasDimensions ? {
             make: selectedTemplate.make,
             model: selectedTemplate.model,
             year: selectedTemplate.year,
@@ -1698,18 +1696,23 @@ function NewQuote({ onCreated, editQuote }: { onCreated: () => void; editQuote?:
                     cursor: 'pointer', textAlign: 'left', width: '100%',
                   }}
                 >
-                  {t.template_image_path && (
-                    <img
-                      src={storage.from('vehicle-templates').getPublicUrl(t.template_image_path).data.publicUrl}
-                      alt={t.name}
-                      style={{ width: '100%', maxWidth: '400px', height: '250px', objectFit: 'contain', borderRadius: '8px', background: '#fff' }}
-                    />
-                  )}
                   <div>
                     <div style={{ fontSize: '15px', fontWeight: 700, color: theme.textPrimary }}>{t.name}</div>
                     <div style={{ fontSize: '13px', color: theme.textMuted }}>
                       {t.year} {t.make} {t.model} {t.variant || ''}
                     </div>
+                    {t.panel_data && t.panel_data.length > 0 && (
+                      <div style={{ fontSize: '11px', color: theme.textMuted, marginTop: '4px' }}>
+                        {t.panel_data.length} panels · {t.overall_length_in ? `${t.overall_length_in}" L` : ''}{t.wheelbase_in ? ` · ${t.wheelbase_in}" WB` : ''}
+                        {' · '}
+                        {t.panel_data.reduce((s, p) => s + (p.area_sqft || 0), 0).toFixed(0)} sq ft total
+                      </div>
+                    )}
+                    {(!t.panel_data || t.panel_data.length === 0) && (
+                      <div style={{ fontSize: '11px', color: '#fbbf24', marginTop: '4px' }}>
+                        No dimensions yet — run extract-dimensions script
+                      </div>
+                    )}
                   </div>
                 </button>
               ))}

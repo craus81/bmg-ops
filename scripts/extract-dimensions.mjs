@@ -2,8 +2,9 @@
 /**
  * Extract vehicle wrap dimensions from PDFs in R2 knowledge_files folder.
  *
- * Scans R2 for wrap dimension PDFs, sends each to Claude Vision to extract
- * panel dimensions, and upserts into the vehicle_templates table.
+ * Each PDF contains MULTIPLE vehicles (e.g., 25-30 per file, ~550 total across ~20 files).
+ * The script sends each PDF to Claude, extracts ALL vehicles and their panel dimensions,
+ * and upserts each into the vehicle_templates table.
  *
  * Usage:
  *   node scripts/extract-dimensions.mjs                    # Process all files
@@ -11,7 +12,7 @@
  *   node scripts/extract-dimensions.mjs --prefix "Ford"    # Only process files matching prefix
  *   node scripts/extract-dimensions.mjs --file "Transit_wrapdimensions.pdf"  # Process single file
  *
- * Required env vars:
+ * Required env vars (in .env.local):
  *   R2_ACCOUNT_ID, R2_ACCESS_KEY_ID, R2_SECRET_ACCESS_KEY
  *   ANTHROPIC_API_KEY
  *   NEXT_PUBLIC_SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY
@@ -26,21 +27,20 @@ const R2_ACCOUNT_ID = process.env.R2_ACCOUNT_ID;
 const R2_ACCESS_KEY_ID = process.env.R2_ACCESS_KEY_ID;
 const R2_SECRET_ACCESS_KEY = process.env.R2_SECRET_ACCESS_KEY;
 const R2_BUCKET = process.env.R2_BUCKET_NAME || 'fleetsuite';
-const R2_PUBLIC_URL = process.env.R2_PUBLIC_URL || '';
 const ANTHROPIC_API_KEY = process.env.ANTHROPIC_API_KEY;
 const SUPABASE_URL = process.env.NEXT_PUBLIC_SUPABASE_URL;
 const SUPABASE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY;
 
 if (!R2_ACCOUNT_ID || !R2_ACCESS_KEY_ID || !R2_SECRET_ACCESS_KEY) {
-  console.error('Missing R2 environment variables');
+  console.error('❌ Missing R2 environment variables');
   process.exit(1);
 }
 if (!ANTHROPIC_API_KEY) {
-  console.error('Missing ANTHROPIC_API_KEY');
+  console.error('❌ Missing ANTHROPIC_API_KEY');
   process.exit(1);
 }
 if (!SUPABASE_URL || !SUPABASE_KEY) {
-  console.error('Missing Supabase environment variables');
+  console.error('❌ Missing Supabase environment variables');
   process.exit(1);
 }
 
@@ -57,50 +57,71 @@ const s3 = new S3Client({
 
 const supabase = createClient(SUPABASE_URL, SUPABASE_KEY);
 
-// ── Claude Vision extraction prompt ──
-const EXTRACTION_PROMPT = `You are analyzing a vehicle wrap dimensions template sheet. This is a technical document showing a vehicle from multiple angles (driver side, passenger side, front, rear, top/roof) with exact panel dimensions.
+// ── Claude extraction prompt for MULTI-VEHICLE PDFs ──
+const EXTRACTION_PROMPT = `You are analyzing a PDF that contains wrap dimension sheets for MULTIPLE vehicles. Each vehicle typically takes 1 page and shows the vehicle from multiple angles (driver side, passenger side, front, rear, top/roof) with a dimension table.
 
-Extract ALL of the following information:
+You MUST extract ALL vehicles in this document — there may be 20-40+ vehicles per file.
+
+For EACH vehicle in the document, extract:
 
 1. VEHICLE INFO:
-   - make (e.g., "Chevrolet", "Ford", "Mercedes-Benz")
-   - model (e.g., "Express", "Transit", "Sprinter")
+   - make (e.g., "Chevrolet", "Ford", "Mercedes-Benz", "RAM", "GMC")
+   - model (e.g., "Express", "Transit", "Sprinter", "ProMaster")
    - year_range (e.g., "2003-Present", "2015-2023")
-   - variant (e.g., "Short Wheelbase", "Long Wheelbase", "High Roof", "Extended") or null
-   - overall_length_in: overall vehicle length in inches (from the dimension labels)
+   - variant (e.g., "Short Wheelbase", "Long Wheelbase", "High Roof", "Extended", "Crew Cab") or null
+   - overall_length_in: overall vehicle length in inches
    - overall_height_in: overall height in inches
    - wheelbase_in: wheelbase in inches
 
-2. PANEL DIMENSIONS:
-   Look for a dimension table or labeled panels (usually labeled A through H or similar).
-   For EACH panel, extract:
-   - name: descriptive name ("Driver Side", "Passenger Side", "Rear", "Hood/Front", "Roof", "Rear Upper", "Rear Quarter", etc.)
+2. PANEL DIMENSIONS (from the dimension table, usually labeled A through H):
+   - name: descriptive name ("Driver Side", "Passenger Side", "Rear", "Hood/Front", "Roof", etc.)
    - label: the letter label (A, B, C, etc.)
    - width_in: width in inches
    - height_in: height in inches
-   - area_sqft: total square feet (if listed), otherwise calculate: (width_in × height_in) / 144
+   - area_sqft: total square feet (from the table, or calculate: width_in × height_in / 144)
 
-Return ONLY valid JSON, no markdown, no backticks:
+Return ONLY valid JSON, no markdown, no backticks. The response must be a JSON array of ALL vehicles:
 {
-  "make": "Chevrolet",
-  "model": "Express",
-  "year_range": "2003-Present",
-  "variant": "Short Wheelbase",
-  "overall_length_in": 217.4,
-  "overall_height_in": 72,
-  "wheelbase_in": 135,
-  "panels": [
-    {"name": "Driver Side", "label": "A", "width_in": 222, "height_in": 72, "area_sqft": 111.00},
-    {"name": "Passenger Side", "label": "B", "width_in": 222, "height_in": 72, "area_sqft": 111.00}
+  "vehicles": [
+    {
+      "make": "Chevrolet",
+      "model": "Express",
+      "year_range": "2003-Present",
+      "variant": "Short Wheelbase",
+      "overall_length_in": 217.4,
+      "overall_height_in": 72,
+      "wheelbase_in": 135,
+      "panels": [
+        {"name": "Driver Side", "label": "A", "width_in": 222, "height_in": 72, "area_sqft": 111.00},
+        {"name": "Passenger Side", "label": "B", "width_in": 222, "height_in": 72, "area_sqft": 111.00}
+      ],
+      "page_number": 1
+    },
+    {
+      "make": "Ford",
+      "model": "Transit",
+      "year_range": "2015-Present",
+      "variant": "Long Wheelbase High Roof",
+      "overall_length_in": 263.9,
+      "overall_height_in": 110,
+      "wheelbase_in": 148,
+      "panels": [
+        {"name": "Driver Side", "label": "A", "width_in": 270, "height_in": 96, "area_sqft": 180.00}
+      ],
+      "page_number": 2
+    }
   ],
-  "source_notes": "Art Station template, file Exp_year_01"
+  "total_vehicles_found": 2,
+  "source_file": "filename.pdf"
 }
 
-IMPORTANT:
-- Extract dimensions in INCHES (convert from mm if needed: mm ÷ 25.4 = inches)
-- If a panel is listed as "N/A", skip it
-- Include ALL panels shown in the dimension table
-- If there are window film dimensions, include those panels separately with "(Window Film)" in the name`;
+CRITICAL RULES:
+- Extract EVERY vehicle in the document. Do not stop early.
+- Dimensions must be in INCHES (convert from mm if needed: mm ÷ 25.4 = inches)
+- Skip panels listed as "N/A"
+- Include window film panels separately with "(Window Film)" in the name
+- If a vehicle has multiple variants (e.g., short vs long wheelbase), list each as a separate vehicle
+- page_number should be the approximate page in the PDF where this vehicle appears`;
 
 // ── List R2 files ──
 async function listFiles() {
@@ -120,15 +141,13 @@ async function listFiles() {
       const key = obj.Key || '';
       const fileName = key.replace(prefix, '');
 
-      // Filter to dimension/wrap files (PDFs and images)
       if (!fileName) continue;
-      const isRelevant = /wrap.*dim|dim.*wrap|template|_wd\b/i.test(fileName) ||
-                          /\.(pdf|png|jpg|jpeg)$/i.test(fileName);
 
       if (SINGLE_FILE && !fileName.includes(SINGLE_FILE)) continue;
-      if (PREFIX_FILTER && !fileName.toLowerCase().startsWith(PREFIX_FILTER.toLowerCase())) continue;
+      if (PREFIX_FILTER && !fileName.toLowerCase().includes(PREFIX_FILTER.toLowerCase())) continue;
 
-      if (isRelevant) {
+      // Accept PDFs, PNGs, JPGs in the knowledge_files folder
+      if (/\.(pdf|png|jpg|jpeg)$/i.test(fileName)) {
         files.push({ key, fileName, size: obj.Size });
       }
     }
@@ -151,8 +170,11 @@ async function downloadFile(key) {
   };
 }
 
-// ── Send to Claude Vision ──
-async function extractDimensions(base64Data, mediaType) {
+// ── Send to Claude ──
+async function extractFromPDF(base64Data, mediaType, fileName) {
+  // For large PDFs (>5MB base64), Claude may need more tokens
+  const maxTokens = 16384;
+
   const res = await fetch('https://api.anthropic.com/v1/messages', {
     method: 'POST',
     headers: {
@@ -163,7 +185,7 @@ async function extractDimensions(base64Data, mediaType) {
     },
     body: JSON.stringify({
       model: 'claude-sonnet-4-5-20250929',
-      max_tokens: 4096,
+      max_tokens: maxTokens,
       messages: [{
         role: 'user',
         content: [
@@ -175,7 +197,10 @@ async function extractDimensions(base64Data, mediaType) {
               data: base64Data,
             },
           },
-          { type: 'text', text: EXTRACTION_PROMPT },
+          {
+            type: 'text',
+            text: `${EXTRACTION_PROMPT}\n\nSource file: ${fileName}`,
+          },
         ],
       }],
     }),
@@ -183,24 +208,54 @@ async function extractDimensions(base64Data, mediaType) {
 
   if (!res.ok) {
     const errText = await res.text();
-    throw new Error(`Claude API error ${res.status}: ${errText}`);
+    throw new Error(`Claude API error ${res.status}: ${errText.substring(0, 500)}`);
   }
 
   const data = await res.json();
   const text = data.content?.[0]?.text || '';
 
-  // Parse JSON from response
+  // Check if response was truncated (hit token limit)
+  const stopReason = data.stop_reason;
+  if (stopReason === 'max_tokens') {
+    console.warn(`  ⚠ Response was truncated (hit ${maxTokens} token limit). Some vehicles may be missing.`);
+  }
+
+  // Parse JSON — look for the vehicles array
   const jsonMatch = text.match(/\{[\s\S]*\}/);
   if (!jsonMatch) throw new Error('No JSON in Claude response');
-  return JSON.parse(jsonMatch[0]);
+
+  let parsed;
+  try {
+    parsed = JSON.parse(jsonMatch[0]);
+  } catch (e) {
+    // If JSON was truncated, try to salvage what we can
+    const partialMatch = text.match(/\{[\s\S]*"vehicles"\s*:\s*\[([\s\S]*)\]/);
+    if (partialMatch) {
+      // Try to find the last complete vehicle object
+      const vehiclesStr = partialMatch[1];
+      const lastBrace = vehiclesStr.lastIndexOf('}');
+      if (lastBrace > 0) {
+        const trimmed = vehiclesStr.substring(0, lastBrace + 1);
+        try {
+          parsed = { vehicles: JSON.parse(`[${trimmed}]`) };
+          console.warn(`  ⚠ Salvaged ${parsed.vehicles.length} vehicles from truncated response`);
+        } catch {
+          throw new Error('Could not parse truncated JSON response');
+        }
+      }
+    }
+    if (!parsed) throw new Error(`JSON parse error: ${e.message}`);
+  }
+
+  return parsed;
 }
 
-// ── Upsert into vehicle_templates ──
-async function upsertTemplate(extracted, sourceFile) {
-  const { make, model, year_range, variant, overall_length_in, overall_height_in, wheelbase_in, panels } = extracted;
+// ── Upsert one vehicle into vehicle_templates ──
+async function upsertTemplate(vehicle, sourceFile) {
+  const { make, model, year_range, variant, overall_length_in, overall_height_in, wheelbase_in, panels } = vehicle;
 
   if (!make || !model) {
-    console.warn(`  ⚠ Skipping — no make/model extracted`);
+    console.warn(`    ⚠ Skipping — no make/model extracted`);
     return null;
   }
 
@@ -213,13 +268,13 @@ async function upsertTemplate(extracted, sourceFile) {
     area_sqft: parseFloat(p.area_sqft) || Math.round((p.width_in * p.height_in) / 144 * 100) / 100,
   }));
 
-  // Parse year from year_range (take the first year)
+  // Parse year from year_range
   const yearMatch = year_range?.match(/(\d{4})/);
   const year = yearMatch ? yearMatch[1] : null;
 
   const templateName = [make, model, variant, year_range].filter(Boolean).join(' ');
 
-  // Check if template already exists for this make/model/variant
+  // Check for existing template (make + model + variant)
   let query = supabase
     .from('vehicle_templates')
     .select('id')
@@ -227,9 +282,9 @@ async function upsertTemplate(extracted, sourceFile) {
     .ilike('model', model);
 
   if (variant) {
-    query = query.ilike('variant', variant);
+    query = query.ilike('variant', `%${variant}%`);
   } else {
-    query = query.is('variant', null);
+    query = query.or('variant.is.null,variant.eq.');
   }
 
   const { data: existing } = await query.limit(1);
@@ -245,21 +300,20 @@ async function upsertTemplate(extracted, sourceFile) {
     overall_height_in: parseFloat(overall_height_in) || null,
     wheelbase_in: parseFloat(wheelbase_in) || null,
     panel_data: panelData,
+    template_image_path: null,
+    original_file_path: null,
     updated_at: new Date().toISOString(),
   };
 
   if (existing && existing.length > 0) {
-    // Update existing
     const { error } = await supabase
       .from('vehicle_templates')
       .update(record)
       .eq('id', existing[0].id);
 
     if (error) throw new Error(`Update failed: ${error.message}`);
-    console.log(`  ✅ Updated: ${templateName} (${panelData.length} panels)`);
-    return existing[0].id;
+    return { action: 'updated', id: existing[0].id, name: templateName, panels: panelData.length };
   } else {
-    // Insert new
     const { data: inserted, error } = await supabase
       .from('vehicle_templates')
       .insert({ ...record, created_at: new Date().toISOString() })
@@ -267,72 +321,108 @@ async function upsertTemplate(extracted, sourceFile) {
       .single();
 
     if (error) throw new Error(`Insert failed: ${error.message}`);
-    console.log(`  ✅ Created: ${templateName} (${panelData.length} panels)`);
-    return inserted.id;
+    return { action: 'created', id: inserted.id, name: templateName, panels: panelData.length };
   }
 }
 
 // ── Main ──
 async function main() {
-  console.log('🔍 Scanning R2 for wrap dimension files...');
-  if (DRY_RUN) console.log('   (DRY RUN — no database writes)');
+  console.log('🔍 Scanning R2 knowledge_files/ for wrap dimension files...\n');
+  if (DRY_RUN) console.log('   ⚡ DRY RUN — no database writes\n');
 
   const files = await listFiles();
-  console.log(`📄 Found ${files.length} dimension files\n`);
+  console.log(`📄 Found ${files.length} files\n`);
 
   if (files.length === 0) {
-    console.log('No matching files found. Try without --prefix or --file filters.');
-    console.log('Files should be in: knowledge_files/ prefix in R2');
+    console.log('No files found. Check your R2 knowledge_files/ folder.');
+    console.log('Filters: --prefix, --file');
     return;
   }
 
-  let processed = 0;
-  let errors = 0;
+  let totalVehicles = 0;
+  let totalCreated = 0;
+  let totalUpdated = 0;
+  let totalErrors = 0;
+  let fileErrors = 0;
 
-  for (const file of files) {
-    console.log(`📋 Processing: ${file.fileName} (${(file.size / 1024).toFixed(0)} KB)`);
+  for (let i = 0; i < files.length; i++) {
+    const file = files[i];
+    const sizeMB = (file.size / 1024 / 1024).toFixed(1);
+    console.log(`\n═══ [${i + 1}/${files.length}] ${file.fileName} (${sizeMB} MB) ═══`);
 
     try {
-      // Skip files over 20MB (Claude's limit per document)
-      if (file.size > 20 * 1024 * 1024) {
-        console.log(`  ⚠ Skipping — file too large (${(file.size / 1024 / 1024).toFixed(1)} MB). Max 20MB per file.`);
+      // Claude's PDF limit is ~32MB
+      if (file.size > 32 * 1024 * 1024) {
+        console.log(`  ⚠ Skipping — too large (${sizeMB} MB). Max ~32MB per PDF.`);
+        fileErrors++;
         continue;
       }
 
-      // Download
+      // Download from R2
+      console.log(`  📥 Downloading...`);
       const { buffer, contentType } = await downloadFile(file.key);
       const base64 = buffer.toString('base64');
 
-      // Determine media type
       let mediaType = contentType;
       if (file.fileName.endsWith('.pdf')) mediaType = 'application/pdf';
       else if (file.fileName.endsWith('.png')) mediaType = 'image/png';
       else if (file.fileName.match(/\.jpe?g$/)) mediaType = 'image/jpeg';
 
-      // Extract via Claude Vision
-      const extracted = await extractDimensions(base64, mediaType);
-      console.log(`  📐 Extracted: ${extracted.make} ${extracted.model} ${extracted.variant || ''} — ${(extracted.panels || []).length} panels`);
+      // Extract all vehicles from this file
+      console.log(`  🤖 Sending to Claude for extraction...`);
+      const result = await extractFromPDF(base64, mediaType, file.fileName);
+      const vehicles = result.vehicles || [];
+      console.log(`  📐 Found ${vehicles.length} vehicles in this file`);
 
-      if (DRY_RUN) {
-        console.log(`  📊 Panels:`);
-        for (const p of (extracted.panels || [])) {
-          console.log(`     ${p.label || '?'}) ${p.name}: ${p.width_in}" × ${p.height_in}" = ${p.area_sqft} sqft`);
+      // Process each extracted vehicle
+      for (const vehicle of vehicles) {
+        const label = `${vehicle.make} ${vehicle.model} ${vehicle.variant || ''}`.trim();
+        const panelCount = (vehicle.panels || []).length;
+
+        if (DRY_RUN) {
+          console.log(`    📊 ${label} (${vehicle.year_range || '?'}) — ${panelCount} panels`);
+          for (const p of (vehicle.panels || [])) {
+            console.log(`       ${p.label || '?'}) ${p.name}: ${p.width_in}" × ${p.height_in}" = ${p.area_sqft} sqft`);
+          }
+          totalVehicles++;
+        } else {
+          try {
+            const result = await upsertTemplate(vehicle, file.fileName);
+            if (result) {
+              const icon = result.action === 'created' ? '✅' : '🔄';
+              console.log(`    ${icon} ${result.action}: ${result.name} (${result.panels} panels)`);
+              if (result.action === 'created') totalCreated++;
+              else totalUpdated++;
+              totalVehicles++;
+            }
+          } catch (err) {
+            console.error(`    ❌ ${label}: ${err.message}`);
+            totalErrors++;
+          }
         }
-      } else {
-        await upsertTemplate(extracted, file.fileName);
       }
 
-      processed++;
-
-      // Rate limit: 1 second between API calls
-      await new Promise(r => setTimeout(r, 1000));
+      // Rate limit between files (Claude rate limits)
+      if (i < files.length - 1) {
+        console.log(`  ⏳ Waiting 2s before next file...`);
+        await new Promise(r => setTimeout(r, 2000));
+      }
     } catch (err) {
-      console.error(`  ❌ Error: ${err.message}`);
-      errors++;
+      console.error(`  ❌ File error: ${err.message}`);
+      fileErrors++;
     }
   }
 
-  console.log(`\n✅ Done! Processed ${processed} files, ${errors} errors.`);
+  console.log('\n═══════════════════════════════════════════');
+  console.log(`✅ Done!`);
+  console.log(`   Files processed: ${files.length - fileErrors}/${files.length}`);
+  console.log(`   Vehicles found: ${totalVehicles}`);
+  if (!DRY_RUN) {
+    console.log(`   Created: ${totalCreated}`);
+    console.log(`   Updated: ${totalUpdated}`);
+    console.log(`   Errors: ${totalErrors}`);
+  }
+  console.log('═══════════════════════════════════════════');
 }
 
 main().catch(err => {

@@ -117,16 +117,43 @@ export async function POST(request: NextRequest) {
   try {
     const { templateImageBase64, proofImageBase64, templateMediaType, proofMediaType, vehicleDimensions } = await request.json();
 
-    if (!templateImageBase64 || !proofImageBase64) {
+    if (!proofImageBase64) {
       return NextResponse.json(
-        { error: 'Both template and proof images are required' },
+        { error: 'Proof image is required' },
         { status: 400 }
       );
     }
 
-    const prompt = buildPrompt(vehicleDimensions as VehicleDimensions | undefined);
+    const dims = vehicleDimensions as VehicleDimensions | undefined;
+    const hasDimensions = dims?.panels && dims.panels.length > 0;
 
-    // Call Claude Vision API with both images
+    if (!hasDimensions && !templateImageBase64) {
+      return NextResponse.json(
+        { error: 'Either vehicle dimensions or a template image is required' },
+        { status: 400 }
+      );
+    }
+
+    const prompt = buildPrompt(dims);
+
+    // Build message content — only include template image if no dimensions
+    const messageContent: any[] = [];
+
+    if (templateImageBase64 && !hasDimensions) {
+      // Legacy flow: template image + proof
+      messageContent.push(
+        { type: 'text', text: 'Here is the vehicle TEMPLATE (technical drawing with panel dimensions):' },
+        { type: 'image', source: { type: 'base64', media_type: templateMediaType || 'image/png', data: templateImageBase64 } },
+      );
+    }
+
+    messageContent.push(
+      { type: 'text', text: 'Here is the PROOF/DESIGN showing the proposed vinyl wrap:' },
+      { type: 'image', source: { type: 'base64', media_type: proofMediaType || 'image/png', data: proofImageBase64 } },
+      { type: 'text', text: prompt },
+    );
+
+    // Call Claude Vision API
     const response = await fetch('https://api.anthropic.com/v1/messages', {
       method: 'POST',
       headers: {
@@ -137,41 +164,7 @@ export async function POST(request: NextRequest) {
       body: JSON.stringify({
         model: 'claude-sonnet-4-5-20250929',
         max_tokens: 4096,
-        messages: [
-          {
-            role: 'user',
-            content: [
-              {
-                type: 'text',
-                text: 'Here is the vehicle TEMPLATE (technical drawing with panel dimensions):',
-              },
-              {
-                type: 'image',
-                source: {
-                  type: 'base64',
-                  media_type: templateMediaType || 'image/png',
-                  data: templateImageBase64,
-                },
-              },
-              {
-                type: 'text',
-                text: 'Here is the PROOF/DESIGN showing the proposed vinyl wrap:',
-              },
-              {
-                type: 'image',
-                source: {
-                  type: 'base64',
-                  media_type: proofMediaType || 'image/png',
-                  data: proofImageBase64,
-                },
-              },
-              {
-                type: 'text',
-                text: prompt,
-              },
-            ],
-          },
-        ],
+        messages: [{ role: 'user', content: messageContent }],
       }),
     });
 
