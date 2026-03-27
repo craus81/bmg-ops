@@ -19,6 +19,9 @@ export default function ReportsPage() {
   const [loadingArchive, setLoadingArchive] = useState(false);
   const [archiveSearch, setArchiveSearch] = useState('');
   const [expandedBatch, setExpandedBatch] = useState<string | null>(null);
+  const [editingArchiveVehicle, setEditingArchiveVehicle] = useState<string | null>(null);
+  const [archiveEditValues, setArchiveEditValues] = useState<Record<string, string>>({});
+  const [savingArchiveEdit, setSavingArchiveEdit] = useState(false);
 
   // Review Matches state
   const [reviewVehicles, setReviewVehicles] = useState<any[]>([]);
@@ -390,6 +393,45 @@ export default function ReportsPage() {
     } catch (e: any) {
       console.error('Re-download error:', e);
     }
+  };
+
+  // Start editing an archived vehicle
+  var startArchiveEdit = function(v: any) {
+    setEditingArchiveVehicle(v.id);
+    setArchiveEditValues({
+      vin: v.vin || '',
+      part_number: v.part_number || '',
+      customer: v.customer || '',
+      end_customer: v.end_customer || '',
+      install_location: v.install_location || '',
+      vehicle_year: v.vehicle_year || '',
+      vehicle_make: v.vehicle_make || '',
+      vehicle_model: v.vehicle_model || '',
+    });
+  };
+
+  // Save archive vehicle edits to DB and update local state
+  var saveArchiveEdit = async function(vehicleId: string) {
+    setSavingArchiveEdit(true);
+    try {
+      var updates: any = {};
+      var fields = ['vin', 'part_number', 'customer', 'end_customer', 'install_location', 'vehicle_year', 'vehicle_make', 'vehicle_model'];
+      fields.forEach(function(f) {
+        updates[f] = archiveEditValues[f] || null;
+      });
+      await supabase.from('scanned_vehicles').update(updates).eq('id', vehicleId);
+      // Update local state
+      setArchives(function(prev) {
+        return prev.map(function(v) {
+          if (v.id === vehicleId) return { ...v, ...updates };
+          return v;
+        });
+      });
+      setEditingArchiveVehicle(null);
+    } catch (e: any) {
+      console.error('Save error:', e);
+    }
+    setSavingArchiveEdit(false);
   };
 
   // Group archives by export timestamp, with search filtering
@@ -806,12 +848,55 @@ export default function ReportsPage() {
                     </div>
                   </div>
                   {isExpanded && (
-                    <div style={{ borderTop: '1px solid var(--border)', padding: '8px', maxHeight: '300px', overflowY: 'auto' }}>
+                    <div style={{ borderTop: '1px solid var(--border)', padding: '8px', maxHeight: '400px', overflowY: 'auto' }}>
                       <div style={{ display: 'grid', gridTemplateColumns: '1fr', gap: '3px' }}>
                         {batch.map(function(v: any) {
                           var vinMatch = searchLower && (v.vin || '').toLowerCase().includes(searchLower);
+                          var isEditing = editingArchiveVehicle === v.id;
+                          if (isEditing) {
+                            var editFieldStyle: React.CSSProperties = { fontSize: '11px', padding: '4px 6px', borderRadius: '5px', border: '1px solid var(--border-strong)', background: 'var(--input-bg)', color: 'var(--text-primary)', width: '100%' };
+                            var editLabelStyle: React.CSSProperties = { fontSize: '9px', fontWeight: 700, color: 'var(--text-muted)', textTransform: 'uppercase' as const, letterSpacing: '0.3px', marginBottom: '2px' };
+                            return (
+                              <div key={v.id} style={{ padding: '10px', borderRadius: '8px', background: 'var(--card)', border: '1px solid var(--border-strong)' }}>
+                                <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '6px', marginBottom: '8px' }}>
+                                  <div>
+                                    <div style={editLabelStyle}>VIN</div>
+                                    <input style={editFieldStyle} value={archiveEditValues.vin || ''} onChange={function(e) { setArchiveEditValues(function(p) { return { ...p, vin: e.target.value }; }); }} />
+                                  </div>
+                                  <div>
+                                    <div style={editLabelStyle}>Part #</div>
+                                    <input style={editFieldStyle} value={archiveEditValues.part_number || ''} onChange={function(e) { setArchiveEditValues(function(p) { return { ...p, part_number: e.target.value }; }); }} />
+                                  </div>
+                                  <div>
+                                    <div style={editLabelStyle}>Customer</div>
+                                    <input style={editFieldStyle} value={archiveEditValues.customer || ''} onChange={function(e) { setArchiveEditValues(function(p) { return { ...p, customer: e.target.value }; }); }} />
+                                  </div>
+                                  <div>
+                                    <div style={editLabelStyle}>End Customer</div>
+                                    <input style={editFieldStyle} value={archiveEditValues.end_customer || ''} onChange={function(e) { setArchiveEditValues(function(p) { return { ...p, end_customer: e.target.value }; }); }} />
+                                  </div>
+                                  <div>
+                                    <div style={editLabelStyle}>Location</div>
+                                    <input style={editFieldStyle} value={archiveEditValues.install_location || ''} onChange={function(e) { setArchiveEditValues(function(p) { return { ...p, install_location: e.target.value }; }); }} />
+                                  </div>
+                                  <div>
+                                    <div style={editLabelStyle}>Year / Make / Model</div>
+                                    <div style={{ display: 'flex', gap: '4px' }}>
+                                      <input style={{ ...editFieldStyle, width: '50px' }} value={archiveEditValues.vehicle_year || ''} onChange={function(e) { setArchiveEditValues(function(p) { return { ...p, vehicle_year: e.target.value }; }); }} placeholder="Year" />
+                                      <input style={{ ...editFieldStyle, flex: 1 }} value={archiveEditValues.vehicle_make || ''} onChange={function(e) { setArchiveEditValues(function(p) { return { ...p, vehicle_make: e.target.value }; }); }} placeholder="Make" />
+                                      <input style={{ ...editFieldStyle, flex: 1 }} value={archiveEditValues.vehicle_model || ''} onChange={function(e) { setArchiveEditValues(function(p) { return { ...p, vehicle_model: e.target.value }; }); }} placeholder="Model" />
+                                    </div>
+                                  </div>
+                                </div>
+                                <div style={{ display: 'flex', gap: '6px', justifyContent: 'flex-end' }}>
+                                  <button onClick={function() { setEditingArchiveVehicle(null); }} style={{ padding: '5px 12px', borderRadius: '6px', border: '1px solid var(--border)', background: 'transparent', color: 'var(--text-muted)', fontSize: '11px', fontWeight: 700, cursor: 'pointer' }}>Cancel</button>
+                                  <button onClick={function() { saveArchiveEdit(v.id); }} disabled={savingArchiveEdit} style={{ padding: '5px 12px', borderRadius: '6px', border: 'none', background: 'var(--success)', color: '#fff', fontSize: '11px', fontWeight: 700, cursor: 'pointer', opacity: savingArchiveEdit ? 0.6 : 1 }}>{savingArchiveEdit ? 'Saving...' : 'Save'}</button>
+                                </div>
+                              </div>
+                            );
+                          }
                           return (
-                            <div key={v.id} style={{ padding: '6px 8px', borderRadius: '6px', fontSize: '11px', background: vinMatch ? 'var(--warning-bg)' : 'var(--subtle-bg)', border: vinMatch ? '1px solid var(--warning-border)' : '1px solid transparent', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                            <div key={v.id} onClick={function() { startArchiveEdit(v); }} style={{ padding: '6px 8px', borderRadius: '6px', fontSize: '11px', background: vinMatch ? 'var(--warning-bg)' : 'var(--subtle-bg)', border: vinMatch ? '1px solid var(--warning-border)' : '1px solid transparent', display: 'flex', justifyContent: 'space-between', alignItems: 'center', cursor: 'pointer' }} title="Click to edit">
                               <div>
                                 <span style={{ fontFamily: 'monospace', fontWeight: 700, color: 'var(--text-primary)', fontSize: '12px' }}>{v.vin}</span>
                                 <span style={{ color: 'var(--text-muted)', marginLeft: '8px' }}>
@@ -822,10 +907,20 @@ export default function ReportsPage() {
                                 {v.part_number && <span style={{ padding: '1px 5px', borderRadius: '4px', background: 'var(--subtle-bg)', border: '1px solid var(--border)' }}>{v.part_number}</span>}
                                 {v.install_location && <span>📍 {v.install_location}</span>}
                                 {getPONumber(v) && <span style={{ color: 'var(--warning)' }}>PO #{getPONumber(v)}</span>}
+                                <span style={{ fontSize: '12px', opacity: 0.4 }}>✏️</span>
                               </div>
                             </div>
                           );
                         })}
+                      </div>
+                      {/* Re-export button */}
+                      <div style={{ marginTop: '8px', paddingTop: '8px', borderTop: '1px solid var(--border)' }}>
+                        <button
+                          onClick={function(e) { e.stopPropagation(); handleRedownload(exportDate); }}
+                          style={{ width: '100%', padding: '10px', borderRadius: '8px', border: 'none', background: 'var(--navy)', color: '#fff', fontSize: '12px', fontWeight: 700, cursor: 'pointer' }}
+                        >
+                          Re-export Updated List
+                        </button>
                       </div>
                     </div>
                   )}
