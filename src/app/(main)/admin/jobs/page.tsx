@@ -595,6 +595,10 @@ function BulkVINUpload() {
   const [worksheetError, setWorksheetError] = useState('');
   const [worksheetNotes, setWorksheetNotes] = useState('');
 
+  // Location state
+  const [locations, setLocations] = useState<string[]>([]);
+  const [selectedLocation, setSelectedLocation] = useState<string>('');
+
   // Editing state
   const [editingRow, setEditingRow] = useState<number | null>(null);
   const [editingField, setEditingField] = useState<'vin' | 'unit' | null>(null);
@@ -616,6 +620,23 @@ function BulkVINUpload() {
       setCatalogItems(data || []);
     };
     load();
+  }, []);
+
+  // Load distinct locations from PO ship_to data
+  useEffect(() => {
+    const loadLocations = async () => {
+      const { data } = await supabase.from('purchase_orders').select('ship_to').not('ship_to', 'is', null);
+      if (data) {
+        const citySet = new Set<string>();
+        data.forEach((po: any) => {
+          if (po.ship_to?.city) {
+            citySet.add(po.ship_to.city.trim());
+          }
+        });
+        setLocations(Array.from(citySet).sort());
+      }
+    };
+    loadLocations();
   }, []);
 
   const selectedPart = catalogItems.find(c => c.id === selectedPartId) || null;
@@ -1201,6 +1222,7 @@ function BulkVINUpload() {
           customer: part?.customer || null,
           end_customer: part?.end_customer || null,
           po_line_item_id: matchedPoLineId,
+          install_location: selectedLocation || null,
           scanned_by: user!.id,
           company_id: profile?.company_id || null,
         };
@@ -1392,7 +1414,7 @@ function BulkVINUpload() {
         <select
           value={selectedPartId}
           onChange={(e) => setSelectedPartId(e.target.value)}
-          style={{ width: '100%', padding: '10px 12px', borderRadius: '10px', border: `1px solid ${inputMode === 'worksheet' && !selectedPart && parsedVINs.length > 0 ? 'var(--error)' : 'var(--border)'}`, background: 'var(--card)', color: 'var(--text-primary)', fontSize: '13px', fontWeight: 600 }}
+          style={{ width: '100%', padding: '10px 12px', borderRadius: '10px', border: '1px solid var(--border)', background: 'var(--card)', color: 'var(--text-primary)', fontSize: '13px', fontWeight: 600 }}
         >
           <option value="">No part selected</option>
           {catalogItems.map(c => (
@@ -1400,6 +1422,23 @@ function BulkVINUpload() {
           ))}
         </select>
         {hasPartNumberColumn && <div style={{ fontSize: '10px', color: 'var(--warning)', marginTop: '4px', fontWeight: 600 }}>Part number column detected in file — per-VIN parts will override this selection</div>}
+      </div>
+
+      {/* Location Selection */}
+      <div style={{ marginBottom: '12px' }}>
+        <label style={{ display: 'block', fontSize: '10px', fontWeight: 700, color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.5px', marginBottom: '6px' }}>
+          Install Location
+        </label>
+        <select
+          value={selectedLocation}
+          onChange={(e) => setSelectedLocation(e.target.value)}
+          style={{ width: '100%', padding: '10px 12px', borderRadius: '10px', border: '1px solid var(--border)', background: 'var(--card)', color: 'var(--text-primary)', fontSize: '13px', fontWeight: 600 }}
+        >
+          <option value="">No location selected</option>
+          {locations.map(loc => (
+            <option key={loc} value={loc}>{loc}</option>
+          ))}
+        </select>
       </div>
 
       {/* Input Mode Toggle */}
