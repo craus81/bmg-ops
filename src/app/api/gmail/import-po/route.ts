@@ -237,6 +237,7 @@ export async function POST(req: NextRequest) {
           customer,
           ordered_date: extracted.ordered_date || existingPO.ordered_date || null,
           notes: extracted.notes ? String(extracted.notes) : existingPO.notes,
+          ship_to: extracted.ship_to || existingPO.ship_to || null,
         }).eq('id', existingPO.id);
 
         const { data: catalogData } = await supabase.from('catalog').select('*').eq('active', true);
@@ -295,6 +296,7 @@ export async function POST(req: NextRequest) {
         po_number: String(poNumber), customer,
         ordered_date: extracted.ordered_date || null,
         notes: extracted.notes ? String(extracted.notes) : null,
+        ship_to: extracted.ship_to || null,
       };
       if (adminUser?.id) insertPayload.created_by = adminUser.id;
 
@@ -636,6 +638,7 @@ export async function POST(req: NextRequest) {
         customer,
         ordered_date: extracted.ordered_date || existingPO.ordered_date || null,
         notes: extracted.notes ? String(extracted.notes) : existingPO.notes,
+        ship_to: extracted.ship_to || existingPO.ship_to || null,
       }).eq('id', existingPO.id);
       if (updateErr) {
         console.error('Failed to update PO header:', updateErr);
