@@ -1488,75 +1488,15 @@ function BulkVINUpload() {
         </div>
       )}
 
-      {/* Worksheet Header Info — Per-page when multi-page, single card when single page */}
+      {/* Worksheet Header Info — only show as standalone card for single-page worksheets */}
+      {/* Multi-page headers are shown inline with VINs below */}
       {worksheetPages.length > 1 ? (
-        <div style={{ display: 'flex', flexDirection: 'column', gap: '8px', marginBottom: '12px' }}>
+        <div style={{ marginBottom: '8px' }}>
           <div style={{ fontSize: '11px', fontWeight: 700, color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.5px' }}>
             {worksheetPages.length} Pages Scanned
           </div>
-          {worksheetPages.map((wp) => {
-            const h = wp.header;
-            const matchedPagePart = (() => {
-              if (!h.part_number) return null;
-              const cleaned = h.part_number.replace(/\s+/g, '').toUpperCase();
-              return catalogItems.find(ci =>
-                ci.part_number.replace(/\s+/g, '').toUpperCase() === cleaned ||
-                ci.part_number.replace(/\s+/g, '').toUpperCase().includes(cleaned) ||
-                cleaned.includes(ci.part_number.replace(/\s+/g, '').toUpperCase())
-              ) || null;
-            })();
-            const isEditingThisPage = editingPageNum === wp.pageNum;
-            return (
-              <div key={wp.pageNum} style={{ background: 'var(--card)', border: '1px solid var(--border)', borderRadius: '12px', padding: '10px 12px' }}>
-                <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '6px' }}>
-                  <div style={{ fontSize: '11px', fontWeight: 700, color: 'var(--orange)' }}>Page {wp.pageNum}</div>
-                  <div style={{ fontSize: '10px', color: 'var(--text-muted)' }}>{wp.vinCount} VIN{wp.vinCount !== 1 ? 's' : ''} · tap to edit</div>
-                </div>
-                <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '4px', fontSize: '11px' }}>
-                  {(['part_number', 'customer', 'date'] as const).map(field => {
-                    const labels: Record<string, string> = { part_number: 'Part#', customer: 'Customer', date: 'Date' };
-                    const val = (h as any)[field];
-                    const isEditing = isEditingThisPage && editingHeaderField === field;
-                    return (
-                      <div key={field}>
-                        <span style={{ color: 'var(--text-muted)' }}>{labels[field]}:</span>{' '}
-                        {isEditing ? (
-                          <span style={{ display: 'inline-flex', gap: '3px', alignItems: 'center' }}>
-                            <input
-                              autoFocus
-                              value={editHeaderValue}
-                              onChange={e => setEditHeaderValue(e.target.value)}
-                              onKeyDown={e => { if (e.key === 'Enter') commitEditHeader(); if (e.key === 'Escape') cancelEditHeader(); }}
-                              style={{ fontSize: '11px', fontWeight: 700, padding: '2px 5px', border: '1px solid var(--primary)', borderRadius: '4px', background: 'var(--subtle-bg)', color: 'var(--text-primary)', width: '90px', outline: 'none' }}
-                            />
-                            <button onClick={commitEditHeader} style={{ fontSize: '9px', padding: '2px 3px', border: 'none', background: 'var(--success)', color: '#fff', borderRadius: '3px', cursor: 'pointer' }}>✓</button>
-                            <button onClick={cancelEditHeader} style={{ fontSize: '9px', padding: '2px 3px', border: '1px solid var(--border)', background: 'transparent', color: 'var(--text-muted)', borderRadius: '3px', cursor: 'pointer' }}>✕</button>
-                          </span>
-                        ) : val ? (
-                          <span
-                            onClick={() => startEditHeader(field, wp.pageNum)}
-                            style={{ fontWeight: 700, color: 'var(--text-primary)', cursor: 'pointer', borderBottom: '1px dashed var(--border)', paddingBottom: '1px' }}
-                          >{val}</span>
-                        ) : (
-                          <span
-                            onClick={() => startEditHeader(field, wp.pageNum)}
-                            style={{ fontWeight: 600, color: 'var(--text-muted)', cursor: 'pointer', borderBottom: '1px dashed var(--border)', paddingBottom: '1px', fontStyle: 'italic', fontSize: '10px' }}
-                          >tap to add</span>
-                        )}
-                      </div>
-                    );
-                  })}
-                </div>
-                {matchedPagePart && (
-                  <div style={{ marginTop: '4px', padding: '3px 6px', borderRadius: '5px', background: 'var(--success-bg)', border: '1px solid var(--success-border)', fontSize: '10px', color: 'var(--success)', fontWeight: 600 }}>
-                    ✓ Matched: {matchedPagePart.part_number}
-                  </div>
-                )}
-              </div>
-            );
-          })}
           {worksheetNotes && (
-            <div style={{ fontSize: '10px', color: 'var(--text-muted)', fontStyle: 'italic' }}>{worksheetNotes}</div>
+            <div style={{ marginTop: '4px', fontSize: '10px', color: 'var(--text-muted)', fontStyle: 'italic' }}>{worksheetNotes}</div>
           )}
         </div>
       ) : worksheetHeader && (
@@ -1635,16 +1575,69 @@ function BulkVINUpload() {
               const pageInfo = showPageDivider ? worksheetPages.find(wp => wp.pageNum === pv.pageNum) : null;
               return (
                 <div key={i}>
-                {pageInfo && (
-                  <div style={{ padding: '6px 10px', marginTop: i > 0 ? '8px' : '0', marginBottom: '4px', borderRadius: '8px', background: 'var(--orange)', color: '#fff' }}>
-                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                      <span style={{ fontSize: '11px', fontWeight: 800 }}>Page {pageInfo.pageNum}</span>
-                      <span style={{ fontSize: '10px', fontWeight: 600 }}>
-                        {[pageInfo.header.part_number, pageInfo.header.customer].filter(Boolean).join(' · ')}
-                      </span>
+                {pageInfo && (() => {
+                  const h = pageInfo.header;
+                  const isEditingThisPage = editingPageNum === pageInfo.pageNum;
+                  const matchedPagePart = (() => {
+                    if (!h.part_number) return null;
+                    const cleaned = h.part_number.replace(/\s+/g, '').toUpperCase();
+                    return catalogItems.find(ci =>
+                      ci.part_number.replace(/\s+/g, '').toUpperCase() === cleaned ||
+                      ci.part_number.replace(/\s+/g, '').toUpperCase().includes(cleaned) ||
+                      cleaned.includes(ci.part_number.replace(/\s+/g, '').toUpperCase())
+                    ) || null;
+                  })();
+                  return (
+                    <div style={{ marginTop: i > 0 ? '12px' : '0', marginBottom: '4px', borderRadius: '10px', overflow: 'hidden', border: '1px solid var(--orange)' }}>
+                      <div style={{ padding: '6px 10px', background: 'var(--orange)', color: '#fff', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                        <span style={{ fontSize: '11px', fontWeight: 800 }}>Page {pageInfo.pageNum}</span>
+                        <span style={{ fontSize: '10px', fontWeight: 600 }}>{pageInfo.vinCount} VIN{pageInfo.vinCount !== 1 ? 's' : ''} · tap to edit</span>
+                      </div>
+                      <div style={{ padding: '8px 10px', background: 'var(--card)' }}>
+                        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '4px', fontSize: '11px' }}>
+                          {(['part_number', 'customer', 'date'] as const).map(field => {
+                            const labels: Record<string, string> = { part_number: 'Part#', customer: 'Customer', date: 'Date' };
+                            const val = (h as any)[field];
+                            const isEditing = isEditingThisPage && editingHeaderField === field;
+                            return (
+                              <div key={field}>
+                                <span style={{ color: 'var(--text-muted)' }}>{labels[field]}:</span>{' '}
+                                {isEditing ? (
+                                  <span style={{ display: 'inline-flex', gap: '3px', alignItems: 'center' }}>
+                                    <input
+                                      autoFocus
+                                      value={editHeaderValue}
+                                      onChange={e => setEditHeaderValue(e.target.value)}
+                                      onKeyDown={e => { if (e.key === 'Enter') commitEditHeader(); if (e.key === 'Escape') cancelEditHeader(); }}
+                                      style={{ fontSize: '11px', fontWeight: 700, padding: '2px 5px', border: '1px solid var(--primary)', borderRadius: '4px', background: 'var(--subtle-bg)', color: 'var(--text-primary)', width: '90px', outline: 'none' }}
+                                    />
+                                    <button onClick={commitEditHeader} style={{ fontSize: '9px', padding: '2px 3px', border: 'none', background: 'var(--success)', color: '#fff', borderRadius: '3px', cursor: 'pointer' }}>✓</button>
+                                    <button onClick={cancelEditHeader} style={{ fontSize: '9px', padding: '2px 3px', border: '1px solid var(--border)', background: 'transparent', color: 'var(--text-muted)', borderRadius: '3px', cursor: 'pointer' }}>✕</button>
+                                  </span>
+                                ) : val ? (
+                                  <span
+                                    onClick={() => startEditHeader(field, pageInfo.pageNum)}
+                                    style={{ fontWeight: 700, color: 'var(--text-primary)', cursor: 'pointer', borderBottom: '1px dashed var(--border)', paddingBottom: '1px' }}
+                                  >{val}</span>
+                                ) : (
+                                  <span
+                                    onClick={() => startEditHeader(field, pageInfo.pageNum)}
+                                    style={{ fontWeight: 600, color: 'var(--text-muted)', cursor: 'pointer', borderBottom: '1px dashed var(--border)', paddingBottom: '1px', fontStyle: 'italic', fontSize: '10px' }}
+                                  >tap to add</span>
+                                )}
+                              </div>
+                            );
+                          })}
+                        </div>
+                        {matchedPagePart && (
+                          <div style={{ marginTop: '4px', padding: '3px 6px', borderRadius: '5px', background: 'var(--success-bg)', border: '1px solid var(--success-border)', fontSize: '10px', color: 'var(--success)', fontWeight: 600 }}>
+                            ✓ Matched: {matchedPagePart.part_number}
+                          </div>
+                        )}
+                      </div>
                     </div>
-                  </div>
-                )}
+                  );
+                })()}
                 <div style={{ display: 'flex', alignItems: 'center', gap: '6px', padding: '8px 10px', borderRadius: '8px', border: `1px solid ${borderColor}`, background: bgColor }}>
                   <span style={{ fontSize: '14px', width: '20px', textAlign: 'center', flexShrink: 0 }}>{!pv.valid ? '❌' : skipped ? '⏭️' : '✅'}</span>
                   <div style={{ flex: 1, minWidth: 0 }}>
