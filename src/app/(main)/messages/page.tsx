@@ -316,7 +316,7 @@ export default function MessagesPage() {
       case 'sales': return '#4ade80';
       case 'field_tech': return '#fbbf24';
       case 'shop_tech': return '#38bdf8';
-      default: return '#6b7a8d';
+      default: return '#b4c8db';
     }
   };
 
@@ -330,7 +330,7 @@ export default function MessagesPage() {
     return (
       <div style={{ textAlign: 'center', padding: '40px 0' }}>
         <div style={{ width: '36px', height: '36px', border: '3px solid #1e2d3d', borderTopColor: theme.orange, borderRadius: '50%', margin: '0 auto', animation: 'spin 1s linear infinite' }} />
-        <div style={{ color: '#4a5f78', marginTop: '12px', fontSize: '13px', fontWeight: 600 }}>Loading messages...</div>
+        <div style={{ color: '#a8bfd4', marginTop: '12px', fontSize: '13px', fontWeight: 600 }}>Loading messages...</div>
       </div>
     );
   }
@@ -366,7 +366,7 @@ export default function MessagesPage() {
         {/* Messages */}
         <div style={{ flex: 1, overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: '4px', paddingBottom: '8px' }}>
           {messages.length === 0 && (
-            <div style={{ textAlign: 'center', padding: '40px 0', color: '#4a5f78', fontSize: '13px' }}>
+            <div style={{ textAlign: 'center', padding: '40px 0', color: '#a8bfd4', fontSize: '13px' }}>
               Start a conversation with {convo?.otherUser?.full_name || 'this person'}
             </div>
           )}
@@ -378,7 +378,7 @@ export default function MessagesPage() {
             return (
               <div key={msg.id}>
                 {showTimestamp && (
-                  <div style={{ textAlign: 'center', fontSize: '10px', color: '#4a5f78', margin: '8px 0 4px', fontWeight: 600 }}>
+                  <div style={{ textAlign: 'center', fontSize: '10px', color: '#a8bfd4', margin: '8px 0 4px', fontWeight: 600 }}>
                     {formatTime(msg.created_at)}
                   </div>
                 )}
@@ -452,7 +452,7 @@ export default function MessagesPage() {
         <div style={{ textAlign: 'center', padding: '40px 0' }}>
           <div style={{ fontSize: '40px', marginBottom: '8px' }}>💬</div>
           <div style={{ fontSize: '14px', fontWeight: 700, color: '#e8ecf1', marginBottom: '4px' }}>No messages yet</div>
-          <div style={{ fontSize: '12px', color: '#4a5f78' }}>Start a conversation with a team member</div>
+          <div style={{ fontSize: '12px', color: '#a8bfd4' }}>Start a conversation with a team member</div>
         </div>
       )}
 
@@ -491,14 +491,14 @@ export default function MessagesPage() {
                     {convo.otherUser.full_name || convo.otherUser.email}
                   </div>
                   {convo.lastMessage && (
-                    <div style={{ fontSize: '10px', color: '#4a5f78', flexShrink: 0, marginLeft: '8px' }}>
+                    <div style={{ fontSize: '10px', color: '#a8bfd4', flexShrink: 0, marginLeft: '8px' }}>
                       {formatTime(convo.lastMessage.created_at)}
                     </div>
                   )}
                 </div>
                 <div style={{
                   fontSize: '11px', marginTop: '2px',
-                  color: convo.unreadCount > 0 ? '#e8ecf1' : '#4a5f78',
+                  color: convo.unreadCount > 0 ? '#e8ecf1' : '#a8bfd4',
                   fontWeight: convo.unreadCount > 0 ? 600 : 400,
                   overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
                 }}>
@@ -530,7 +530,7 @@ export default function MessagesPage() {
           <div style={{ background: '#141e2b', border: '1px solid rgba(59,130,246,0.3)', borderRadius: '14px', padding: '18px', maxWidth: '400px', width: '100%', maxHeight: '70vh', overflowY: 'auto' }}>
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '12px' }}>
               <div style={{ fontSize: '16px', fontWeight: 800, color: '#e8ecf1' }}>New Message</div>
-              <button onClick={() => { setShowNewConvo(false); setUserSearch(''); }} style={{ background: 'none', border: 'none', color: '#4a5f78', fontSize: '18px', cursor: 'pointer' }}>✕</button>
+              <button onClick={() => { setShowNewConvo(false); setUserSearch(''); }} style={{ background: 'none', border: 'none', color: '#a8bfd4', fontSize: '18px', cursor: 'pointer' }}>✕</button>
             </div>
 
             <input
@@ -576,7 +576,7 @@ export default function MessagesPage() {
                 </button>
               ))}
               {filteredUsers.length === 0 && (
-                <div style={{ textAlign: 'center', padding: '16px', fontSize: '12px', color: '#4a5f78' }}>
+                <div style={{ textAlign: 'center', padding: '16px', fontSize: '12px', color: '#a8bfd4' }}>
                   {userSearch ? 'No matching users found.' : 'No other users available.'}
                 </div>
               )}

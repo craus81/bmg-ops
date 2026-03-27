@@ -63,7 +63,7 @@ export default function PublicVehicleView() {
         <div style={{ textAlign: 'center' }}>
           <div style={{ width: '36px', height: '36px', border: '3px solid #1e2d3d', borderTopColor: '#3b82f6', borderRadius: '50%', margin: '0 auto', animation: 'spin 1s linear infinite' }} />
           <style>{`@keyframes spin { to { transform: rotate(360deg); } }`}</style>
-          <div style={{ color: '#4a5f78', marginTop: '12px', fontSize: '13px' }}>Loading...</div>
+          <div style={{ color: '#a8bfd4', marginTop: '12px', fontSize: '13px' }}>Loading...</div>
         </div>
       </div>
     );
@@ -75,7 +75,7 @@ export default function PublicVehicleView() {
         <div style={{ textAlign: 'center' }}>
           <div style={{ fontSize: '48px', marginBottom: '12px', opacity: 0.4 }}>🚫</div>
           <div style={{ fontWeight: 700, fontSize: '16px' }}>Vehicle Not Found</div>
-          <div style={{ color: '#4a5f78', fontSize: '13px', marginTop: '4px' }}>This link may be invalid or expired.</div>
+          <div style={{ color: '#a8bfd4', fontSize: '13px', marginTop: '4px' }}>This link may be invalid or expired.</div>
         </div>
       </div>
     );
@@ -92,21 +92,21 @@ export default function PublicVehicleView() {
         <div style={{ display: 'flex', alignItems: 'center', gap: '10px', marginBottom: '20px' }}>
           <div style={{ width: '40px', height: '40px', borderRadius: '10px', background: 'rgba(59,130,246,0.1)', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: '18px', fontWeight: 800, color: '#3b82f6' }}>B</div>
           <div>
-            <div style={{ fontWeight: 800, fontSize: '11px', color: '#4a5f78', textTransform: 'uppercase', letterSpacing: '1px' }}>BMG FleetSuite</div>
+            <div style={{ fontWeight: 800, fontSize: '11px', color: '#a8bfd4', textTransform: 'uppercase', letterSpacing: '1px' }}>BMG FleetSuite</div>
             <div style={{ fontSize: '10px', color: '#3a4a5c' }}>Vehicle Completion Report</div>
           </div>
         </div>
 
         {/* Vehicle info */}
         <div style={{ background: 'linear-gradient(135deg, #1a2a3f, #1e3350)', border: '1px solid #2a4a6f', borderRadius: '14px', padding: '18px', marginBottom: '16px' }}>
-          <div style={{ fontSize: '10px', color: '#4a5f78', fontWeight: 600, letterSpacing: '1px', textTransform: 'uppercase' }}>VIN</div>
+          <div style={{ fontSize: '10px', color: '#a8bfd4', fontWeight: 600, letterSpacing: '1px', textTransform: 'uppercase' }}>VIN</div>
           <div style={{ fontSize: '13px', fontFamily: 'monospace', color: '#93c5fd', fontWeight: 700, letterSpacing: '1.5px', marginTop: '2px', marginBottom: '10px', wordBreak: 'break-all' }}>{vehicle.vin}</div>
           <div style={{ fontSize: '20px', fontWeight: 800 }}>{title || 'Unknown Vehicle'}</div>
-          {vehicle.body_class && <div style={{ fontSize: '13px', color: '#6b7a8d', marginTop: '2px' }}>{vehicle.body_class}</div>}
+          {vehicle.body_class && <div style={{ fontSize: '13px', color: '#b4c8db', marginTop: '2px' }}>{vehicle.body_class}</div>}
           {vehicle.part_number && (
             <div style={{ marginTop: '10px', paddingTop: '10px', borderTop: '1px solid rgba(42,74,111,0.5)' }}>
               <div style={{ fontSize: '12px', color: '#60a5fa', fontWeight: 700 }}>{vehicle.part_number}</div>
-              {vehicle.end_customer && <div style={{ fontSize: '11px', color: '#4a5f78' }}>{vehicle.end_customer}</div>}
+              {vehicle.end_customer && <div style={{ fontSize: '11px', color: '#a8bfd4' }}>{vehicle.end_customer}</div>}
             </div>
           )}
           {vehicle.scanned_at && (
@@ -119,7 +119,7 @@ export default function PublicVehicleView() {
         {/* Photos */}
         {photos.length > 0 ? (
           <div>
-            <div style={{ fontSize: '11px', fontWeight: 700, color: '#4a5f78', textTransform: 'uppercase', letterSpacing: '0.5px', marginBottom: '10px' }}>
+            <div style={{ fontSize: '11px', fontWeight: 700, color: '#a8bfd4', textTransform: 'uppercase', letterSpacing: '0.5px', marginBottom: '10px' }}>
               Completion Photos ({photos.length})
             </div>
             <div style={{ display: 'grid', gridTemplateColumns: 'repeat(2, 1fr)', gap: '6px' }}>
@@ -139,7 +139,7 @@ export default function PublicVehicleView() {
             </div>
           </div>
         ) : (
-          <div style={{ textAlign: 'center', padding: '28px 0', color: '#4a5f78' }}>
+          <div style={{ textAlign: 'center', padding: '28px 0', color: '#a8bfd4' }}>
             <div style={{ fontSize: '13px', fontWeight: 600 }}>No completion photos available</div>
           </div>
         )}

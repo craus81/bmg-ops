@@ -64,7 +64,7 @@ export function buildNotificationEmail(title: string, body: string, ctaUrl?: str
       </div>
       <!-- Footer -->
       <div style="padding:16px 24px;border-top:1px solid #1e2d3d;text-align:center;">
-        <div style="font-size:10px;color:#4a5f78;">You received this because of your notification settings in BMG Fleet.</div>
+        <div style="font-size:10px;color:#a8bfd4;">You received this because of your notification settings in BMG Fleet.</div>
       </div>
     </div>
   </div>

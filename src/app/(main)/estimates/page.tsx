@@ -414,7 +414,7 @@ export default function EstimatesPage() {
     color: '#e8ecf1', fontSize: '12px',
   };
   const labelStyle: React.CSSProperties = {
-    fontSize: '9px', fontWeight: 700, color: '#8ea3b8',
+    fontSize: '9px', fontWeight: 700, color: '#a8bfd4',
     textTransform: 'uppercase', letterSpacing: '0.3px', marginBottom: '3px',
   };
 
@@ -422,7 +422,7 @@ export default function EstimatesPage() {
     return (
       <div style={{ textAlign: 'center', padding: '40px 0' }}>
         <div style={{ width: '36px', height: '36px', border: '3px solid #1e2d3d', borderTopColor: theme.orange, borderRadius: '50%', margin: '0 auto', animation: 'spin 1s linear infinite' }} />
-        <div style={{ color: '#8ea3b8', marginTop: '12px', fontSize: '13px', fontWeight: 600 }}>Loading estimates...</div>
+        <div style={{ color: '#a8bfd4', marginTop: '12px', fontSize: '13px', fontWeight: 600 }}>Loading estimates...</div>
       </div>
     );
   }
@@ -459,7 +459,7 @@ export default function EstimatesPage() {
         />
 
         {filteredEstimates.length === 0 ? (
-          <div style={{ textAlign: 'center', padding: '30px 0', color: '#8ea3b8', fontSize: '13px' }}>
+          <div style={{ textAlign: 'center', padding: '30px 0', color: '#a8bfd4', fontSize: '13px' }}>
             {search ? 'No matching estimates.' : 'No estimates yet. Create one to get started.'}
           </div>
         ) : (
@@ -484,7 +484,7 @@ export default function EstimatesPage() {
                           {est.title || est.estimate_number}
                         </div>
                       </div>
-                      <div style={{ fontSize: '10px', color: '#8ea3b8', display: 'flex', gap: '8px', flexWrap: 'wrap' }}>
+                      <div style={{ fontSize: '10px', color: '#a8bfd4', display: 'flex', gap: '8px', flexWrap: 'wrap' }}>
                         <span>#{est.estimate_number}</span>
                         {est.customer_name && <span>{est.customer_name}</span>}
                         <span style={{ color: '#e8ecf1', fontWeight: 700 }}>{fmt(est.grand_total)}</span>
@@ -538,7 +538,7 @@ export default function EstimatesPage() {
         >
           ← Back to Estimates
         </button>
-        <div style={{ fontSize: '10px', color: '#8ea3b8' }}>
+        <div style={{ fontSize: '10px', color: '#a8bfd4' }}>
           {editingId ? 'Editing' : 'New Estimate'}
         </div>
       </div>
@@ -554,7 +554,7 @@ export default function EstimatesPage() {
               color: '#e8ecf1', fontSize: '12px', fontWeight: 700,
             }}>
               {customerName}
-              {customerNsId && <span style={{ color: '#8ea3b8', fontWeight: 400, marginLeft: '6px' }}>NS #{customerNsId}</span>}
+              {customerNsId && <span style={{ color: '#a8bfd4', fontWeight: 400, marginLeft: '6px' }}>NS #{customerNsId}</span>}
             </div>
             {(
               <button
@@ -597,7 +597,7 @@ export default function EstimatesPage() {
                     }}
                   >
                     <div style={{ fontWeight: 700 }}>{c.company_name}</div>
-                    <div style={{ fontSize: '10px', color: '#8ea3b8' }}>{c.entity_id} · NS #{c.netsuite_id}</div>
+                    <div style={{ fontSize: '10px', color: '#a8bfd4' }}>{c.entity_id} · NS #{c.netsuite_id}</div>
                   </button>
                 ))}
               </div>
@@ -673,12 +673,12 @@ export default function EstimatesPage() {
                     <div style={{ display: 'flex', justifyContent: 'space-between' }}>
                       <div>
                         <span style={{ fontWeight: 700 }}>{p.item_number}</span>
-                        <span style={{ color: '#8ea3b8', marginLeft: '8px' }}>{p.display_name || p.description}</span>
+                        <span style={{ color: '#a8bfd4', marginLeft: '8px' }}>{p.display_name || p.description}</span>
                       </div>
                       <div style={{ display: 'flex', gap: '10px', flexShrink: 0 }}>
                         <span style={{ color: '#22c55e', fontWeight: 700 }}>{fmt(p.sales_price)}</span>
                         {p.labor_hours > 0 && <span style={{ color: '#fbbf24', fontSize: '10px' }}>{p.labor_hours}h labor</span>}
-                        <span style={{ color: '#8ea3b8', fontSize: '10px', textTransform: 'uppercase' }}>{p.catalog}</span>
+                        <span style={{ color: '#a8bfd4', fontSize: '10px', textTransform: 'uppercase' }}>{p.catalog}</span>
                       </div>
                     </div>
                   </button>
@@ -690,13 +690,13 @@ export default function EstimatesPage() {
 
         {/* Line item rows */}
         {lines.length === 0 ? (
-          <div style={{ textAlign: 'center', padding: '20px', color: '#8ea3b8', fontSize: '12px', border: '1px dashed #1e2d3d', borderRadius: '8px' }}>
+          <div style={{ textAlign: 'center', padding: '20px', color: '#a8bfd4', fontSize: '12px', border: '1px dashed #1e2d3d', borderRadius: '8px' }}>
             Search for parts above or add a custom line item
           </div>
         ) : (
           <div style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
             {/* Header row */}
-            <div style={{ display: 'grid', gridTemplateColumns: '1fr 2fr 60px 80px 80px 60px 30px', gap: '4px', padding: '4px 0', fontSize: '9px', fontWeight: 700, color: '#8ea3b8', textTransform: 'uppercase' }}>
+            <div style={{ display: 'grid', gridTemplateColumns: '1fr 2fr 60px 80px 80px 60px 30px', gap: '4px', padding: '4px 0', fontSize: '9px', fontWeight: 700, color: '#a8bfd4', textTransform: 'uppercase' }}>
               <div>Item #</div>
               <div>Description</div>
               <div style={{ textAlign: 'center' }}>Qty</div>
@@ -737,7 +737,7 @@ export default function EstimatesPage() {
                     placeholder="Description"
                   />
                 ) : (
-                  <div style={{ fontSize: '11px', color: '#9fb3c8', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{line.description}</div>
+                  <div style={{ fontSize: '11px', color: '#b4c8db', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{line.description}</div>
                 )}
 
                 <input
@@ -762,7 +762,7 @@ export default function EstimatesPage() {
                   {fmt(line.quantity * line.unit_price)}
                 </div>
 
-                <div style={{ fontSize: '10px', color: line.labor_hours > 0 ? '#fbbf24' : '#8ea3b8', textAlign: 'center' }}>
+                <div style={{ fontSize: '10px', color: line.labor_hours > 0 ? '#fbbf24' : '#a8bfd4', textAlign: 'center' }}>
                   {line.labor_hours > 0 ? `${(line.labor_hours * line.quantity).toFixed(1)}h` : '—'}
                 </div>
 
@@ -801,7 +801,7 @@ export default function EstimatesPage() {
             <div style={labelStyle}>Auto Labor Hours</div>
             <div style={{ padding: '8px 10px', borderRadius: '8px', border: '1px solid #2a3a4d', background: '#0a0f14', color: '#fbbf24', fontSize: '12px', fontWeight: 700 }}>
               {autoLaborHours.toFixed(1)}h
-              <span style={{ color: '#8ea3b8', fontWeight: 400, fontSize: '10px', marginLeft: '4px' }}>(from parts)</span>
+              <span style={{ color: '#a8bfd4', fontWeight: 400, fontSize: '10px', marginLeft: '4px' }}>(from parts)</span>
             </div>
           </div>
           <div>
@@ -843,7 +843,7 @@ export default function EstimatesPage() {
 
                 style={{ width: '16px', height: '16px', accentColor: theme.orange }}
               />
-              <span style={{ fontSize: '12px', fontWeight: 700, color: taxExempt ? '#22c55e' : '#8ea3b8' }}>
+              <span style={{ fontSize: '12px', fontWeight: 700, color: taxExempt ? '#22c55e' : '#a8bfd4' }}>
                 Tax Exempt
               </span>
             </label>
@@ -852,7 +852,7 @@ export default function EstimatesPage() {
 
         {/* Totals */}
         <div style={{ borderTop: '1px solid #1e2d3d', paddingTop: '10px' }}>
-          <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '12px', color: '#9fb3c8', marginBottom: '4px' }}>
+          <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '12px', color: '#b4c8db', marginBottom: '4px' }}>
             <span>Parts Subtotal</span>
             <span>{fmt(subtotal)}</span>
           </div>
@@ -861,7 +861,7 @@ export default function EstimatesPage() {
             <span>{fmt(laborTotal)}</span>
           </div>
           {!taxExempt && (
-            <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '12px', color: '#9fb3c8', marginBottom: '4px' }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '12px', color: '#b4c8db', marginBottom: '4px' }}>
               <span>Sales Tax on Parts ({(taxRate * 100).toFixed(2)}%)</span>
               <span>{fmt(taxAmount)}</span>
             </div>
@@ -895,11 +895,11 @@ export default function EstimatesPage() {
               <div style={{ fontSize: '12px', fontWeight: 700, color: '#a78bfa' }}>
                 Pushed to NetSuite
               </div>
-              <div style={{ fontSize: '10px', color: '#8ea3b8' }}>
+              <div style={{ fontSize: '10px', color: '#a8bfd4' }}>
                 NS Estimate #: {estimates.find(e => e.id === editingId)?.netsuite_estimate_number || 'N/A'}
               </div>
             </div>
-            <div style={{ fontSize: '10px', color: '#8ea3b8' }}>
+            <div style={{ fontSize: '10px', color: '#a8bfd4' }}>
               Edit below &amp; sync changes
             </div>
           </div>
@@ -923,7 +923,7 @@ export default function EstimatesPage() {
             style={{
               padding: '12px 20px', borderRadius: '10px',
               background: 'transparent', border: '1px solid #1e2d3d',
-              color: '#9fb3c8', fontWeight: 700, fontSize: '13px', cursor: 'pointer',
+              color: '#b4c8db', fontWeight: 700, fontSize: '13px', cursor: 'pointer',
             }}
           >
             Cancel

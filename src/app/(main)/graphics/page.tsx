@@ -401,7 +401,7 @@ export default function GraphicsPage() {
   };
 
   const labelStyle: React.CSSProperties = {
-    fontSize: '9px', fontWeight: 700, color: '#4a5f78',
+    fontSize: '9px', fontWeight: 700, color: '#a8bfd4',
     textTransform: 'uppercase', letterSpacing: '0.3px', marginBottom: '3px',
   };
 
@@ -409,7 +409,7 @@ export default function GraphicsPage() {
     return (
       <div style={{ textAlign: 'center', padding: '40px 0' }}>
         <div style={{ width: '36px', height: '36px', border: '3px solid #1e2d3d', borderTopColor: theme.orange, borderRadius: '50%', margin: '0 auto', animation: 'spin 1s linear infinite' }} />
-        <div style={{ color: '#4a5f78', marginTop: '12px', fontSize: '13px', fontWeight: 600 }}>Loading graphics jobs...</div>
+        <div style={{ color: '#a8bfd4', marginTop: '12px', fontSize: '13px', fontWeight: 600 }}>Loading graphics jobs...</div>
       </div>
     );
   }
@@ -444,7 +444,7 @@ export default function GraphicsPage() {
                 padding: '5px 10px', borderRadius: '6px', fontSize: '10px', fontWeight: 700,
                 background: filterCategory === c.id ? `${c.color}22` : '#141e2b',
                 border: `1px solid ${filterCategory === c.id ? `${c.color}55` : '#1e2d3d'}`,
-                color: filterCategory === c.id ? c.color : '#4a5f78',
+                color: filterCategory === c.id ? c.color : '#a8bfd4',
                 cursor: 'pointer', whiteSpace: 'nowrap',
               }}
             >
@@ -465,7 +465,7 @@ export default function GraphicsPage() {
             padding: '6px 10px', borderRadius: '6px', fontSize: '10px', fontWeight: 700,
             background: filterStatus === 'active' ? 'rgba(59,130,246,0.2)' : '#141e2b',
             border: `1px solid ${filterStatus === 'active' ? 'rgba(59,130,246,0.4)' : '#1e2d3d'}`,
-            color: filterStatus === 'active' ? '#60a5fa' : '#4a5f78',
+            color: filterStatus === 'active' ? '#60a5fa' : '#a8bfd4',
             whiteSpace: 'nowrap', cursor: 'pointer', flexShrink: 0,
           }}
         >
@@ -479,7 +479,7 @@ export default function GraphicsPage() {
               padding: '6px 10px', borderRadius: '6px', fontSize: '10px', fontWeight: 700,
               background: filterStatus === s ? `${GRAPHICS_STATUS_COLORS[s]}22` : '#141e2b',
               border: `1px solid ${filterStatus === s ? `${GRAPHICS_STATUS_COLORS[s]}66` : '#1e2d3d'}`,
-              color: filterStatus === s ? GRAPHICS_STATUS_COLORS[s] : '#4a5f78',
+              color: filterStatus === s ? GRAPHICS_STATUS_COLORS[s] : '#a8bfd4',
               whiteSpace: 'nowrap', cursor: 'pointer', flexShrink: 0,
             }}
           >
@@ -492,7 +492,7 @@ export default function GraphicsPage() {
             padding: '6px 10px', borderRadius: '6px', fontSize: '10px', fontWeight: 700,
             background: filterStatus === 'all' ? 'rgba(59,130,246,0.2)' : '#141e2b',
             border: `1px solid ${filterStatus === 'all' ? 'rgba(59,130,246,0.4)' : '#1e2d3d'}`,
-            color: filterStatus === 'all' ? '#60a5fa' : '#4a5f78',
+            color: filterStatus === 'all' ? '#60a5fa' : '#a8bfd4',
             whiteSpace: 'nowrap', cursor: 'pointer', flexShrink: 0,
           }}
         >
@@ -513,7 +513,7 @@ export default function GraphicsPage() {
 
       {/* Job List */}
       {filteredJobs.length === 0 ? (
-        <div style={{ textAlign: 'center', padding: '30px 0', color: '#4a5f78', fontSize: '13px' }}>
+        <div style={{ textAlign: 'center', padding: '30px 0', color: '#a8bfd4', fontSize: '13px' }}>
           {search ? 'No matching jobs found.' : 'No graphics jobs yet.'}
         </div>
       ) : (
@@ -556,7 +556,7 @@ export default function GraphicsPage() {
                           {job.title}
                         </div>
                       </div>
-                      <div style={{ fontSize: '10px', color: '#4a5f78', display: 'flex', gap: '8px', flexWrap: 'wrap', alignItems: 'center' }}>
+                      <div style={{ fontSize: '10px', color: '#a8bfd4', display: 'flex', gap: '8px', flexWrap: 'wrap', alignItems: 'center' }}>
                         {(job.job_category && job.job_category !== 'production') && (
                           <span style={{
                             padding: '1px 6px', borderRadius: '4px', fontSize: '9px', fontWeight: 700,
@@ -603,7 +603,7 @@ export default function GraphicsPage() {
                               padding: '4px 8px', borderRadius: '5px', fontSize: '9px', fontWeight: 700,
                               background: job.status === s ? `${GRAPHICS_STATUS_COLORS[s]}33` : '#0f1720',
                               border: `1px solid ${job.status === s ? GRAPHICS_STATUS_COLORS[s] : '#1e2d3d'}`,
-                              color: job.status === s ? GRAPHICS_STATUS_COLORS[s] : '#4a5f78',
+                              color: job.status === s ? GRAPHICS_STATUS_COLORS[s] : '#a8bfd4',
                               cursor: job.status === s ? 'default' : 'pointer',
                               opacity: job.status === s ? 1 : 0.7,
                             }}
@@ -630,12 +630,12 @@ export default function GraphicsPage() {
                           <div style={{ marginBottom: '10px' }}>
                             <div style={labelStyle}>Vinyl Specifications</div>
                             <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: '4px', marginTop: '4px' }}>
-                              {job.vinyl_type && <div style={{ padding: '4px 6px', borderRadius: '4px', background: '#0f1720', fontSize: '10px' }}><span style={{ color: '#4a5f78' }}>Type:</span> <span style={{ color: '#e8ecf1' }}>{job.vinyl_type}</span></div>}
-                              {job.vinyl_color && <div style={{ padding: '4px 6px', borderRadius: '4px', background: '#0f1720', fontSize: '10px' }}><span style={{ color: '#4a5f78' }}>Color:</span> <span style={{ color: '#e8ecf1' }}>{job.vinyl_color}</span></div>}
-                              {job.laminate && <div style={{ padding: '4px 6px', borderRadius: '4px', background: '#0f1720', fontSize: '10px' }}><span style={{ color: '#4a5f78' }}>Lam:</span> <span style={{ color: '#e8ecf1' }}>{job.laminate}</span></div>}
-                              {job.print_method && <div style={{ padding: '4px 6px', borderRadius: '4px', background: '#0f1720', fontSize: '10px' }}><span style={{ color: '#4a5f78' }}>Print:</span> <span style={{ color: '#e8ecf1' }}>{job.print_method}</span></div>}
-                              {job.cut_method && <div style={{ padding: '4px 6px', borderRadius: '4px', background: '#0f1720', fontSize: '10px' }}><span style={{ color: '#4a5f78' }}>Cut:</span> <span style={{ color: '#e8ecf1' }}>{job.cut_method}</span></div>}
-                              {job.premask && <div style={{ padding: '4px 6px', borderRadius: '4px', background: '#0f1720', fontSize: '10px' }}><span style={{ color: '#4a5f78' }}>Premask:</span> <span style={{ color: '#e8ecf1' }}>{job.premask}</span></div>}
+                              {job.vinyl_type && <div style={{ padding: '4px 6px', borderRadius: '4px', background: '#0f1720', fontSize: '10px' }}><span style={{ color: '#a8bfd4' }}>Type:</span> <span style={{ color: '#e8ecf1' }}>{job.vinyl_type}</span></div>}
+                              {job.vinyl_color && <div style={{ padding: '4px 6px', borderRadius: '4px', background: '#0f1720', fontSize: '10px' }}><span style={{ color: '#a8bfd4' }}>Color:</span> <span style={{ color: '#e8ecf1' }}>{job.vinyl_color}</span></div>}
+                              {job.laminate && <div style={{ padding: '4px 6px', borderRadius: '4px', background: '#0f1720', fontSize: '10px' }}><span style={{ color: '#a8bfd4' }}>Lam:</span> <span style={{ color: '#e8ecf1' }}>{job.laminate}</span></div>}
+                              {job.print_method && <div style={{ padding: '4px 6px', borderRadius: '4px', background: '#0f1720', fontSize: '10px' }}><span style={{ color: '#a8bfd4' }}>Print:</span> <span style={{ color: '#e8ecf1' }}>{job.print_method}</span></div>}
+                              {job.cut_method && <div style={{ padding: '4px 6px', borderRadius: '4px', background: '#0f1720', fontSize: '10px' }}><span style={{ color: '#a8bfd4' }}>Cut:</span> <span style={{ color: '#e8ecf1' }}>{job.cut_method}</span></div>}
+                              {job.premask && <div style={{ padding: '4px 6px', borderRadius: '4px', background: '#0f1720', fontSize: '10px' }}><span style={{ color: '#a8bfd4' }}>Premask:</span> <span style={{ color: '#e8ecf1' }}>{job.premask}</span></div>}
                             </div>
                           </div>
                         )}
@@ -647,7 +647,7 @@ export default function GraphicsPage() {
                             <div style={{ display: 'flex', gap: '8px', fontSize: '11px', flexWrap: 'wrap' }}>
                               {job.carrier && <span style={{ color: '#e8ecf1' }}>{job.carrier}</span>}
                               {job.tracking_number && <span style={{ color: '#60a5fa', fontWeight: 700 }}>{job.tracking_number}</span>}
-                              {job.ship_to && <span style={{ color: '#4a5f78' }}>→ {job.ship_to}</span>}
+                              {job.ship_to && <span style={{ color: '#a8bfd4' }}>→ {job.ship_to}</span>}
                             </div>
                           </div>
                         )}
@@ -655,12 +655,12 @@ export default function GraphicsPage() {
                         {job.notes && (
                           <div style={{ marginBottom: '10px' }}>
                             <div style={labelStyle}>Notes</div>
-                            <div style={{ fontSize: '11px', color: '#6b7a8d', whiteSpace: 'pre-wrap' }}>{job.notes}</div>
+                            <div style={{ fontSize: '11px', color: '#b4c8db', whiteSpace: 'pre-wrap' }}>{job.notes}</div>
                           </div>
                         )}
 
                         {/* Dates & Metadata */}
-                        <div style={{ fontSize: '10px', color: '#4a5f78', display: 'flex', gap: '12px', flexWrap: 'wrap', marginBottom: '10px' }}>
+                        <div style={{ fontSize: '10px', color: '#a8bfd4', display: 'flex', gap: '12px', flexWrap: 'wrap', marginBottom: '10px' }}>
                           <span>Created: {new Date(job.created_at).toLocaleDateString()}</span>
                           {job.due_date && <span style={{ color: (parseLocalDate(job.due_date) || new Date()) < new Date() ? '#ef4444' : '#fbbf24' }}>Due: {displayDate(job.due_date)}</span>}
                           {job.scheduled_install_date && <span style={{ color: '#22d3ee' }}>Install: {displayDate(job.scheduled_install_date)}{job.calendar_event_id ? ' 📅' : ''}</span>}
@@ -674,9 +674,9 @@ export default function GraphicsPage() {
                             <div style={labelStyle}>Status History</div>
                             <div style={{ display: 'flex', flexDirection: 'column', gap: '2px', marginTop: '4px', maxHeight: '120px', overflowY: 'auto' }}>
                               {statusHistory.map(h => (
-                                <div key={h.id} style={{ fontSize: '10px', color: '#4a5f78', display: 'flex', gap: '6px' }}>
-                                  <span style={{ color: '#6b7a8d' }}>{new Date(h.created_at).toLocaleString()}</span>
-                                  {h.from_status && <span><span style={{ color: GRAPHICS_STATUS_COLORS[h.from_status as GraphicsJobStatus] || '#6b7a8d' }}>{GRAPHICS_STATUS_LABELS[h.from_status as GraphicsJobStatus] || h.from_status}</span> →</span>}
+                                <div key={h.id} style={{ fontSize: '10px', color: '#a8bfd4', display: 'flex', gap: '6px' }}>
+                                  <span style={{ color: '#b4c8db' }}>{new Date(h.created_at).toLocaleString()}</span>
+                                  {h.from_status && <span><span style={{ color: GRAPHICS_STATUS_COLORS[h.from_status as GraphicsJobStatus] || '#b4c8db' }}>{GRAPHICS_STATUS_LABELS[h.from_status as GraphicsJobStatus] || h.from_status}</span> →</span>}
                                   <span style={{ color: GRAPHICS_STATUS_COLORS[h.to_status as GraphicsJobStatus] || '#e8ecf1', fontWeight: 700 }}>{GRAPHICS_STATUS_LABELS[h.to_status as GraphicsJobStatus] || h.to_status}</span>
                                   {getProfileName(h.changed_by) && <span>by {getProfileName(h.changed_by)}</span>}
                                 </div>
@@ -853,7 +853,7 @@ export default function GraphicsPage() {
                           </button>
                           <button
                             onClick={() => setEditingJob(null)}
-                            style={{ flex: 1, padding: '10px', borderRadius: '8px', background: 'transparent', border: '1px solid #1e2d3d', color: '#6b7a8d', fontSize: '12px', fontWeight: 700, cursor: 'pointer' }}
+                            style={{ flex: 1, padding: '10px', borderRadius: '8px', background: 'transparent', border: '1px solid #1e2d3d', color: '#b4c8db', fontSize: '12px', fontWeight: 700, cursor: 'pointer' }}
                           >
                             Cancel
                           </button>
@@ -877,7 +877,7 @@ export default function GraphicsPage() {
             {createStep === 'category' && (
               <>
                 <div style={{ fontSize: '16px', fontWeight: 800, color: '#e8ecf1', marginBottom: '6px' }}>New Job</div>
-                <div style={{ fontSize: '12px', color: '#4a5f78', marginBottom: '16px' }}>What type of job is this?</div>
+                <div style={{ fontSize: '12px', color: '#a8bfd4', marginBottom: '16px' }}>What type of job is this?</div>
 
                 <div style={{ display: 'flex', flexDirection: 'column', gap: '8px', marginBottom: '14px' }}>
                   {([
@@ -903,14 +903,14 @@ export default function GraphicsPage() {
                         <span style={{ fontSize: '20px' }}>{cat.icon}</span>
                         <span style={{ fontSize: '14px', fontWeight: 800, color: GRAPHICS_CATEGORY_COLORS[cat.id] }}>{cat.title}</span>
                       </div>
-                      <div style={{ fontSize: '11px', color: '#6b7a8d', lineHeight: 1.4, paddingLeft: '30px' }}>{cat.desc}</div>
+                      <div style={{ fontSize: '11px', color: '#b4c8db', lineHeight: 1.4, paddingLeft: '30px' }}>{cat.desc}</div>
                     </button>
                   ))}
                 </div>
 
                 <button
                   onClick={() => { setShowCreate(false); setCreateStep('category'); }}
-                  style={{ width: '100%', padding: '10px', borderRadius: '10px', background: 'transparent', border: '1px solid #1e2d3d', color: '#6b7a8d', fontWeight: 700, fontSize: '13px', cursor: 'pointer' }}
+                  style={{ width: '100%', padding: '10px', borderRadius: '10px', background: 'transparent', border: '1px solid #1e2d3d', color: '#b4c8db', fontWeight: 700, fontSize: '13px', cursor: 'pointer' }}
                 >
                   Cancel
                 </button>
@@ -923,7 +923,7 @@ export default function GraphicsPage() {
                 <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '14px' }}>
                   <button
                     onClick={() => setCreateStep('category')}
-                    style={{ background: 'none', border: 'none', color: '#4a5f78', fontSize: '16px', cursor: 'pointer', padding: '0' }}
+                    style={{ background: 'none', border: 'none', color: '#a8bfd4', fontSize: '16px', cursor: 'pointer', padding: '0' }}
                   >
                     ←
                   </button>
@@ -1074,7 +1074,7 @@ export default function GraphicsPage() {
                   </button>
                   <button
                     onClick={() => { setShowCreate(false); setCreateStep('category'); }}
-                    style={{ flex: 1, padding: '12px', borderRadius: '10px', background: 'transparent', border: '1px solid #1e2d3d', color: '#6b7a8d', fontWeight: 700, fontSize: '13px', cursor: 'pointer' }}
+                    style={{ flex: 1, padding: '12px', borderRadius: '10px', background: 'transparent', border: '1px solid #1e2d3d', color: '#b4c8db', fontWeight: 700, fontSize: '13px', cursor: 'pointer' }}
                   >
                     Cancel
                   </button>

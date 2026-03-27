@@ -300,7 +300,7 @@ export default function AiChat() {
                 <div style={{ fontSize: '13px', fontWeight: 800, color: '#e8ecf1' }}>
                   FleetSuite AI
                 </div>
-                <div style={{ fontSize: '10px', color: sending ? '#60a5fa' : '#4a5f78' }}>
+                <div style={{ fontSize: '10px', color: sending ? '#60a5fa' : '#a8bfd4' }}>
                   {sending ? 'Thinking...' : 'Ask anything or tell me to do something'}
                 </div>
               </div>
@@ -310,12 +310,12 @@ export default function AiChat() {
                 <button
                   onClick={clearChat}
                   style={{
-                    background: 'none', border: 'none', color: '#4a5f78',
+                    background: 'none', border: 'none', color: '#a8bfd4',
                     fontSize: '10px', cursor: 'pointer', fontWeight: 600,
                     padding: '4px 8px', borderRadius: '4px',
                   }}
                   onMouseEnter={e => (e.currentTarget.style.color = '#f87171')}
-                  onMouseLeave={e => (e.currentTarget.style.color = '#4a5f78')}
+                  onMouseLeave={e => (e.currentTarget.style.color = '#a8bfd4')}
                 >
                   Clear
                 </button>
@@ -323,7 +323,7 @@ export default function AiChat() {
               <button
                 onClick={() => setIsOpen(false)}
                 style={{
-                  background: 'none', border: 'none', color: '#4a5f78',
+                  background: 'none', border: 'none', color: '#a8bfd4',
                   fontSize: '18px', cursor: 'pointer', lineHeight: 1, padding: '0 4px',
                 }}
               >
@@ -348,7 +348,7 @@ export default function AiChat() {
                 <div style={{ marginBottom: '12px' }}>
                   <MascotSvg size={80} />
                 </div>
-                <div style={{ fontSize: '12px', color: '#4a5f78', lineHeight: '1.5' }}>
+                <div style={{ fontSize: '12px', color: '#a8bfd4', lineHeight: '1.5' }}>
                   {isAdmin
                     ? 'Ask about data, graphics jobs, customers, or tell me to do something'
                     : isGraphicsProduction
