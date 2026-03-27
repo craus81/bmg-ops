@@ -83,14 +83,22 @@ export default function VehiclesPage() {
       if (count && count > 0) withPhotos.push(v);
     }
 
-    if (withPhotos.length === 0) {
-      alert('No unsubmitted vehicles have photos to submit.');
-      setSubmittingAll(false);
-      return;
+    // Warn if some or all vehicles have no photos, but allow submission
+    const withoutPhotos = unsubmittedVehicles.filter((v) => !withPhotos.find((wp) => wp.id === v.id));
+    if (withoutPhotos.length > 0) {
+      const msg = withPhotos.length === 0
+        ? `None of the ${unsubmittedVehicles.length} vehicle(s) have photos. Submit anyway?`
+        : `${withoutPhotos.length} of ${unsubmittedVehicles.length} vehicle(s) have no photos. Submit all anyway?`;
+      if (!confirm(msg)) {
+        setSubmittingAll(false);
+        return;
+      }
     }
 
+    // Submit all unsubmitted vehicles (with or without photos)
+    const toSubmit = unsubmittedVehicles;
     const now = new Date().toISOString();
-    const ids = withPhotos.map((v) => v.id);
+    const ids = toSubmit.map((v) => v.id);
 
     // Batch update all vehicles
     await supabase
@@ -116,8 +124,8 @@ export default function VehiclesPage() {
         .insert(admins.map((admin: any) => ({
           user_id: admin.id,
           type: 'review_submitted',
-          title: `Batch submission: ${withPhotos.length} vehicle${withPhotos.length !== 1 ? 's' : ''}`,
-          body: `${withPhotos.length} vehicle${withPhotos.length !== 1 ? 's' : ''} submitted for photo review`,
+          title: `Batch submission: ${toSubmit.length} vehicle${toSubmit.length !== 1 ? 's' : ''}`,
+          body: `${toSubmit.length} vehicle${toSubmit.length !== 1 ? 's' : ''} submitted for review${withoutPhotos.length > 0 ? ` (${withoutPhotos.length} without photos)` : ''}`,
         })));
 
       // Send batch email notification
@@ -132,9 +140,9 @@ export default function VehiclesPage() {
           },
           body: JSON.stringify({
             type: 'submitted',
-            vehicle_info: `Batch: ${withPhotos.length} vehicles`,
-            vin: withPhotos.map((v) => v.vin).join(', '),
-            photo_count: withPhotos.length,
+            vehicle_info: `Batch: ${toSubmit.length} vehicles${withoutPhotos.length > 0 ? ` (${withoutPhotos.length} without photos)` : ''}`,
+            vin: toSubmit.map((v) => v.vin).join(', '),
+            photo_count: toSubmit.length,
             submitted_by: user.id,
             admin_emails: admins.map((a: any) => a.email),
           }),
@@ -151,7 +159,7 @@ export default function VehiclesPage() {
       )
     );
 
-    setSubmitResult({ count: withPhotos.length });
+    setSubmitResult({ count: toSubmit.length });
     setSubmittingAll(false);
     setTimeout(() => setSubmitResult(null), 5000);
   };
