@@ -22,7 +22,8 @@ IMPORTANT RULES:
 - The Part# field often contains codes like "065058", "06CS900008", "06T278", etc.
 - If a field is empty or illegible, use null
 - Only include rows that have data (skip empty numbered rows)
-- If there appear to be multiple part numbers (e.g., crossed out and rewritten), include both separated by "/"
+- The Part# field may contain MULTIPLE part numbers separated by "/" or written side by side (e.g., "06T887 / 065646"). Include ALL part numbers exactly as written, separated by "/"
+- Part numbers typically start with "06" and are 6+ characters long
 
 Return JSON only, no other text, in this exact format:
 {

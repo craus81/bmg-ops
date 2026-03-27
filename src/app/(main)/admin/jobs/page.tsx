@@ -560,6 +560,18 @@ interface WorksheetHeader {
   customer?: string | null;
 }
 
+// Split a part number string into individual part numbers
+// Detects multiple 06-prefixed part numbers separated by /, comma, dash, or space
+function splitPartNumbers(partStr: string | null | undefined): string[] {
+  if (!partStr) return [];
+  // Split on common separators: / , - and whitespace
+  const parts = partStr.split(/[\/,\-\s]+/).map(p => p.trim().toUpperCase()).filter(Boolean);
+  // Filter to only valid-looking part numbers (6+ chars starting with 06)
+  const valid = parts.filter(p => /^06\w{4,}/.test(p));
+  // If we found multiple valid parts, return them; otherwise return the original as-is
+  return valid.length > 0 ? valid : [partStr.trim()];
+}
+
 function BulkVINUpload() {
   const { user, profile } = useAuth();
   const supabase = createClient();
@@ -790,31 +802,50 @@ function BulkVINUpload() {
           const pageHeader: WorksheetHeader = data.header || {};
           if (data.notes) allNotes.push(`Page ${pageNum}: ${data.notes}`);
 
-          // Auto-match part for this page's header
-          let pagePartNumber = pageHeader.part_number || '';
-          let matchedPart: CatalogItem | null = null;
-          if (pagePartNumber) {
-            const cleaned = pagePartNumber.replace(/\s+/g, '').toUpperCase();
-            matchedPart = catalogItems.find(ci =>
+          // Auto-match part(s) for this page's header — may have multiple part numbers
+          const pagePartNumbers = splitPartNumbers(pageHeader.part_number);
+          const matchedParts: CatalogItem[] = [];
+          for (const pn of pagePartNumbers) {
+            const cleaned = pn.replace(/\s+/g, '').toUpperCase();
+            const match = catalogItems.find(ci =>
               ci.part_number.replace(/\s+/g, '').toUpperCase() === cleaned ||
               ci.part_number.replace(/\s+/g, '').toUpperCase().includes(cleaned) ||
               cleaned.includes(ci.part_number.replace(/\s+/g, '').toUpperCase())
-            ) || null;
+            );
+            if (match) matchedParts.push(match);
           }
 
           let pageVinCount = 0;
           (data.rows || []).forEach((row: any) => {
             if (row.partial_vin) {
               pageVinCount++;
-              allResults.push({
-                raw: row.partial_vin,
-                vin: row.partial_vin.toUpperCase().replace(/[^A-HJ-NPR-Z0-9]/g, ''),
-                valid: true,
-                isPartial: true,
-                unitNumber: row.unit_number || undefined,
-                pageNum,
-                partNumber: matchedPart?.part_number || undefined,
-              });
+              const vin = row.partial_vin.toUpperCase().replace(/[^A-HJ-NPR-Z0-9]/g, '');
+              const unitNum = row.unit_number || undefined;
+
+              if (matchedParts.length > 1) {
+                // Multiple part numbers — create a separate entry per part
+                for (const mp of matchedParts) {
+                  allResults.push({
+                    raw: row.partial_vin,
+                    vin,
+                    valid: true,
+                    isPartial: true,
+                    unitNumber: unitNum,
+                    pageNum,
+                    partNumber: mp.part_number,
+                  });
+                }
+              } else {
+                allResults.push({
+                  raw: row.partial_vin,
+                  vin,
+                  valid: true,
+                  isPartial: true,
+                  unitNumber: unitNum,
+                  pageNum,
+                  partNumber: matchedParts[0]?.part_number || undefined,
+                });
+              }
             }
           });
 
@@ -864,19 +895,60 @@ function BulkVINUpload() {
       // Set header info
       if (data.header) {
         setWorksheetHeader(data.header);
-        autoMatchPart(data.header.part_number || '');
+        // Check for multiple part numbers
+        const headerParts = splitPartNumbers(data.header.part_number);
+        if (headerParts.length === 1) {
+          autoMatchPart(headerParts[0]);
+        }
       }
       if (data.notes) setWorksheetNotes(data.notes);
 
-      // Parse rows into VINs
-      const vins: ParsedVIN[] = (data.rows || []).map((row: any) => ({
-        raw: row.partial_vin || '',
-        vin: (row.partial_vin || '').toUpperCase().replace(/[^A-HJ-NPR-Z0-9]/g, ''),
-        valid: !!(row.partial_vin && row.partial_vin.trim().length >= 4),
-        isPartial: true,
-        unitNumber: row.unit_number || undefined,
-        reason: (!row.partial_vin || row.partial_vin.trim().length < 4) ? 'Too short or empty' : undefined,
-      }));
+      // Match part numbers from header
+      const headerParts = splitPartNumbers(data.header?.part_number);
+      const matchedParts: CatalogItem[] = [];
+      for (const pn of headerParts) {
+        const cleaned = pn.replace(/\s+/g, '').toUpperCase();
+        const match = catalogItems.find(ci =>
+          ci.part_number.replace(/\s+/g, '').toUpperCase() === cleaned ||
+          ci.part_number.replace(/\s+/g, '').toUpperCase().includes(cleaned) ||
+          cleaned.includes(ci.part_number.replace(/\s+/g, '').toUpperCase())
+        );
+        if (match) matchedParts.push(match);
+      }
+
+      // Parse rows into VINs — duplicate per part number if multiple
+      const vins: ParsedVIN[] = [];
+      (data.rows || []).forEach((row: any) => {
+        const vin = (row.partial_vin || '').toUpperCase().replace(/[^A-HJ-NPR-Z0-9]/g, '');
+        const valid = !!(row.partial_vin && row.partial_vin.trim().length >= 4);
+        const unitNum = row.unit_number || undefined;
+        const reason = (!row.partial_vin || row.partial_vin.trim().length < 4) ? 'Too short or empty' : undefined;
+
+        if (matchedParts.length > 1 && valid) {
+          // Multiple part numbers — create a separate entry per part
+          for (const mp of matchedParts) {
+            vins.push({
+              raw: row.partial_vin || '',
+              vin,
+              valid,
+              isPartial: true,
+              unitNumber: unitNum,
+              partNumber: mp.part_number,
+              reason,
+            });
+          }
+        } else {
+          vins.push({
+            raw: row.partial_vin || '',
+            vin,
+            valid,
+            isPartial: true,
+            unitNumber: unitNum,
+            partNumber: matchedParts[0]?.part_number || undefined,
+            reason,
+          });
+        }
+      });
 
       await markDuplicatesAndExisting(vins);
       setParsedVINs(vins);
@@ -899,30 +971,33 @@ function BulkVINUpload() {
   };
 
   // Mark duplicates within list and check DB existence
+  // Uses VIN + partNumber as key so same VIN with different parts is NOT a duplicate
   const markDuplicatesAndExisting = async (vins: ParsedVIN[]) => {
     const seen = new Set<string>();
     vins.forEach(v => {
       if (v.valid) {
-        if (seen.has(v.vin)) v.duplicate = true;
-        seen.add(v.vin);
+        const key = `${v.vin}::${v.partNumber || ''}`;
+        if (seen.has(key)) v.duplicate = true;
+        seen.add(key);
       }
     });
     const validVins = vins.filter(v => v.valid).map(v => v.vin);
     if (validVins.length > 0) {
-      // For partial VINs, check if any existing VIN ends with this partial
-      const { data: allVehicles } = await supabase.from('scanned_vehicles').select('vin');
+      // For partial VINs, check if any existing VIN+part combo already exists
+      const { data: allVehicles } = await supabase.from('scanned_vehicles').select('vin, part_number');
       if (allVehicles) {
-        const existingSet = new Set<string>();
         vins.forEach(v => {
           if (v.isPartial) {
-            const match = allVehicles.find((ev: any) => ev.vin.endsWith(v.vin));
-            if (match) existingSet.add(v.vin);
+            const match = allVehicles.find((ev: any) =>
+              ev.vin.endsWith(v.vin) && (!v.partNumber || ev.part_number === v.partNumber)
+            );
+            if (match) v.existsInDb = true;
           } else {
-            if (allVehicles.find((ev: any) => ev.vin === v.vin)) existingSet.add(v.vin);
+            const match = allVehicles.find((ev: any) =>
+              ev.vin === v.vin && (!v.partNumber || ev.part_number === v.partNumber)
+            );
+            if (match) v.existsInDb = true;
           }
-        });
-        vins.forEach(v => {
-          if (existingSet.has(v.vin)) v.existsInDb = true;
         });
       }
     }
