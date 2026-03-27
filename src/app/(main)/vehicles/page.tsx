@@ -6,6 +6,7 @@ import { createClient } from '@/lib/supabase-browser';
 import { useAuth } from '@/components/AuthProvider';
 import { theme } from '@/lib/theme';
 import type { ScannedVehicle } from '@/lib/types';
+import AssignPOModal from '@/components/AssignPOModal';
 
 export default function VehiclesPage() {
   const router = useRouter();
@@ -18,6 +19,8 @@ export default function VehiclesPage() {
   const [deletingId, setDeletingId] = useState<string | null>(null);
   const [submittingAll, setSubmittingAll] = useState(false);
   const [submitResult, setSubmitResult] = useState<{ count: number } | null>(null);
+  const [assignVehicle, setAssignVehicle] = useState<ScannedVehicle | null>(null);
+  const [poInfo, setPoInfo] = useState<Record<string, { po_number: string; customer: string }>>({});
   const supabase = createClient();
 
   useEffect(() => {
@@ -28,7 +31,36 @@ export default function VehiclesPage() {
         query = query.eq('scanned_by', user.id);
       }
       const { data } = await query;
-      setVehicles((data as ScannedVehicle[]) || []);
+      const vehicleList = (data as ScannedVehicle[]) || [];
+      setVehicles(vehicleList);
+
+      // Fetch PO info for linked vehicles
+      const linkedIds = vehicleList
+        .filter((v) => v.po_line_item_id)
+        .map((v) => v.po_line_item_id!);
+      if (linkedIds.length > 0) {
+        const uniqueIds = [...new Set(linkedIds)];
+        const { data: lineItems } = await supabase
+          .from('po_line_items')
+          .select('id, po_id')
+          .in('id', uniqueIds);
+        if (lineItems && lineItems.length > 0) {
+          const poIds = [...new Set(lineItems.map((l: any) => l.po_id))];
+          const { data: pos } = await supabase
+            .from('purchase_orders')
+            .select('id, po_number, customer')
+            .in('id', poIds);
+          if (pos) {
+            const poMap: Record<string, { po_number: string; customer: string }> = {};
+            for (const li of lineItems) {
+              const po = pos.find((p: any) => p.id === li.po_id);
+              if (po) poMap[li.id] = { po_number: po.po_number, customer: po.customer };
+            }
+            setPoInfo(poMap);
+          }
+        }
+      }
+
       setLoading(false);
     };
     load();
@@ -253,6 +285,23 @@ export default function VehiclesPage() {
                                 {reviewStatus === 'approved' ? '✅' : reviewStatus === 'denied' ? '❌' : '⏳'} {reviewStatus === 'approved' ? 'Approved' : reviewStatus === 'denied' ? 'Rework' : 'Pending'}
                               </span>
                             )}
+                            {v.po_line_item_id && poInfo[v.po_line_item_id] ? (
+                              <span style={{
+                                padding: '2px 7px', borderRadius: '6px', fontSize: '9px', fontWeight: 700,
+                                background: 'rgba(96,165,250,0.08)', border: '1px solid rgba(96,165,250,0.2)',
+                                color: '#60a5fa',
+                              }}>
+                                PO #{poInfo[v.po_line_item_id].po_number}
+                              </span>
+                            ) : !v.po_line_item_id ? (
+                              <span style={{
+                                padding: '2px 7px', borderRadius: '6px', fontSize: '9px', fontWeight: 700,
+                                background: 'rgba(251,191,36,0.08)', border: '1px solid rgba(251,191,36,0.2)',
+                                color: '#fbbf24',
+                              }}>
+                                No PO
+                              </span>
+                            ) : null}
                           </div>
                           <div style={{ fontSize: '11px', fontFamily: "'SF Mono', 'Fira Code', monospace", color: theme.textMuted, marginTop: '3px', letterSpacing: '0.3px' }}>{v.vin}</div>
                           {v.part_number && (
@@ -270,6 +319,38 @@ export default function VehiclesPage() {
 
                     {isExpanded && (
                       <div style={{ borderTop: `1px solid ${theme.border}`, padding: '12px 16px' }}>
+                        {/* PO info or assign button */}
+                        {v.po_line_item_id && poInfo[v.po_line_item_id] ? (
+                          <div style={{
+                            padding: '8px 12px', borderRadius: '10px', marginBottom: '8px',
+                            background: 'rgba(96,165,250,0.06)', border: '1px solid rgba(96,165,250,0.12)',
+                            display: 'flex', justifyContent: 'space-between', alignItems: 'center',
+                          }}>
+                            <div>
+                              <div style={{ fontSize: '10px', fontWeight: 700, color: '#60a5fa', textTransform: 'uppercase', letterSpacing: '0.3px' }}>Assigned PO</div>
+                              <div style={{ fontSize: '13px', fontWeight: 700, color: '#e8ecf1', marginTop: '2px' }}>
+                                PO #{poInfo[v.po_line_item_id].po_number} — {poInfo[v.po_line_item_id].customer}
+                              </div>
+                            </div>
+                            <button
+                              onClick={(e) => { e.stopPropagation(); setAssignVehicle(v); }}
+                              style={{
+                                padding: '6px 12px', borderRadius: '8px', border: '1px solid rgba(96,165,250,0.2)',
+                                background: 'transparent', color: '#60a5fa', fontSize: '11px', fontWeight: 700, cursor: 'pointer',
+                              }}
+                            >Reassign</button>
+                          </div>
+                        ) : (
+                          <button
+                            onClick={(e) => { e.stopPropagation(); setAssignVehicle(v); }}
+                            style={{
+                              width: '100%', padding: '10px', borderRadius: '10px', marginBottom: '8px',
+                              background: 'rgba(251,191,36,0.08)', border: '1px solid rgba(251,191,36,0.2)',
+                              color: '#fbbf24', fontSize: '12px', fontWeight: 700, cursor: 'pointer',
+                            }}
+                          >📋 Assign Purchase Order</button>
+                        )}
+
                         <div style={{ display: 'flex', gap: '8px' }}>
                           <button onClick={() => startEdit(v)} style={{
                             flex: 1, padding: '10px', borderRadius: '10px',
@@ -303,6 +384,33 @@ export default function VehiclesPage() {
           );
         })}
       </div>
+
+      {/* Assign PO Modal */}
+      {assignVehicle && (
+        <AssignPOModal
+          open={!!assignVehicle}
+          onClose={() => setAssignVehicle(null)}
+          vehicleId={assignVehicle.id}
+          vehiclePartNumber={assignVehicle.part_number}
+          vehicleVin={assignVehicle.vin}
+          onAssigned={(result) => {
+            // Update local PO info
+            if (assignVehicle.po_line_item_id || result.matched_line_item_id) {
+              setPoInfo((prev) => ({
+                ...prev,
+                [result.matched_line_item_id]: { po_number: result.po_number, customer: result.customer },
+              }));
+            }
+            // Update vehicle's po_line_item_id locally
+            setVehicles((prev) =>
+              prev.map((v) =>
+                v.id === assignVehicle.id ? { ...v, po_line_item_id: result.matched_line_item_id } : v
+              )
+            );
+            setAssignVehicle(null);
+          }}
+        />
+      )}
     </div>
   );
 }
