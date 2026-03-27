@@ -495,25 +495,9 @@ export async function POST(req: NextRequest) {
       }, { status: 422 });
     }
 
+    // Note: $0.00 pricing is allowed — some POs arrive without pricing and can be edited after import
     if (!hasPricing && hasLines) {
-      await supabase.from('gmail_po_imports').upsert({
-        message_id: messageId,
-        thread_id: message.threadId,
-        subject,
-        from_email: from,
-        received_at: date ? new Date(date).toISOString() : null,
-        po_number: String(poNumber),
-        attachment_filename: pdfFilenames.join(', '),
-        status: 'error',
-        error_message: `AI extracted ${extractedLines.length} line items but all prices are $0.00 — degraded response, try again`,
-        raw_extraction: extracted,
-      }, { onConflict: 'message_id' });
-
-      return NextResponse.json({
-        error: `Extracted PO #${poNumber} with ${extractedLines.length} lines but all prices are $0.00. This is likely a degraded API response — try importing again.`,
-        extracted,
-        warning: 'missing_pricing',
-      }, { status: 422 });
+      console.log(`PO ${poNumber}: all prices are $0.00 — proceeding (pricing can be added after import)`);
     }
 
     // If extractOnly mode, return the extracted data for user review/editing — don't create anything
