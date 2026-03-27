@@ -17,6 +17,8 @@ export default function ReportsPage() {
   const [tab, setTab] = useState<'review' | 'pending' | 'archive'>('review');
   const [archives, setArchives] = useState<any[]>([]);
   const [loadingArchive, setLoadingArchive] = useState(false);
+  const [archiveSearch, setArchiveSearch] = useState('');
+  const [expandedBatch, setExpandedBatch] = useState<string | null>(null);
 
   // Review Matches state
   const [reviewVehicles, setReviewVehicles] = useState<any[]>([]);
@@ -87,7 +89,8 @@ export default function ReportsPage() {
       .from('scanned_vehicles')
       .select('*, po_line_items(po_id, purchase_orders(po_number))')
       .not('exported_at', 'is', null)
-      .order('exported_at', { ascending: false });
+      .order('exported_at', { ascending: false })
+      .limit(5000);
 
     if (!isAdmin) {
       query = query.eq('scanned_by', user!.id);
@@ -263,6 +266,7 @@ export default function ReportsPage() {
           'Part Number': v.part_number || '',
           'Customer': v.customer || '',
           'End Customer': v.end_customer || '',
+          'Location': v.install_location || '',
           'Year': v.vehicle_year || '',
           'Make': v.vehicle_make || '',
           'Model': v.vehicle_model || '',
@@ -272,7 +276,7 @@ export default function ReportsPage() {
       });
 
       var ws = XLSX.utils.json_to_sheet(rows);
-      ws['!cols'] = [{ wch: 14 }, { wch: 20 }, { wch: 16 }, { wch: 16 }, { wch: 18 }, { wch: 6 }, { wch: 14 }, { wch: 16 }, { wch: 12 }, { wch: 40 }];
+      ws['!cols'] = [{ wch: 14 }, { wch: 20 }, { wch: 16 }, { wch: 16 }, { wch: 18 }, { wch: 16 }, { wch: 6 }, { wch: 14 }, { wch: 16 }, { wch: 12 }, { wch: 40 }];
       var wb = XLSX.utils.book_new();
       XLSX.utils.book_append_sheet(wb, ws, 'Vehicles');
 
@@ -312,6 +316,7 @@ export default function ReportsPage() {
           'Part Number': v.part_number || '',
           'Customer': v.customer || '',
           'End Customer': v.end_customer || '',
+          'Location': v.install_location || '',
           'Year': v.vehicle_year || '',
           'Make': v.vehicle_make || '',
           'Model': v.vehicle_model || '',
@@ -321,7 +326,7 @@ export default function ReportsPage() {
       });
 
       var ws = XLSX.utils.json_to_sheet(rows);
-      ws['!cols'] = [{ wch: 14 }, { wch: 20 }, { wch: 16 }, { wch: 16 }, { wch: 18 }, { wch: 6 }, { wch: 14 }, { wch: 16 }, { wch: 12 }, { wch: 40 }];
+      ws['!cols'] = [{ wch: 14 }, { wch: 20 }, { wch: 16 }, { wch: 16 }, { wch: 18 }, { wch: 16 }, { wch: 6 }, { wch: 14 }, { wch: 16 }, { wch: 12 }, { wch: 40 }];
       var wb = XLSX.utils.book_new();
       XLSX.utils.book_append_sheet(wb, ws, 'Vehicles');
 
@@ -366,6 +371,7 @@ export default function ReportsPage() {
           'Part Number': v.part_number || '',
           'Customer': v.customer || '',
           'End Customer': v.end_customer || '',
+          'Location': v.install_location || '',
           'Year': v.vehicle_year || '',
           'Make': v.vehicle_make || '',
           'Model': v.vehicle_model || '',
@@ -375,7 +381,7 @@ export default function ReportsPage() {
       });
 
       var ws = XLSX.utils.json_to_sheet(rows);
-      ws['!cols'] = [{ wch: 14 }, { wch: 20 }, { wch: 16 }, { wch: 16 }, { wch: 18 }, { wch: 6 }, { wch: 14 }, { wch: 16 }, { wch: 12 }, { wch: 40 }];
+      ws['!cols'] = [{ wch: 14 }, { wch: 20 }, { wch: 16 }, { wch: 16 }, { wch: 18 }, { wch: 16 }, { wch: 6 }, { wch: 14 }, { wch: 16 }, { wch: 12 }, { wch: 40 }];
       var wb = XLSX.utils.book_new();
       XLSX.utils.book_append_sheet(wb, ws, 'Vehicles');
 
@@ -386,13 +392,46 @@ export default function ReportsPage() {
     }
   };
 
-  // Group archives by export timestamp
+  // Group archives by export timestamp, with search filtering
   var archiveGroups: Record<string, any[]> = {};
+  var searchLower = archiveSearch.toLowerCase().trim();
   archives.forEach(function(v) {
     var key = v.exported_at?.slice(0, 19) || 'unknown';
     if (!archiveGroups[key]) archiveGroups[key] = [];
     archiveGroups[key].push(v);
   });
+  // Filter groups by search term — match batch metadata or individual VINs
+  if (searchLower) {
+    var filtered: Record<string, any[]> = {};
+    Object.keys(archiveGroups).forEach(function(key) {
+      var batch = archiveGroups[key];
+      var batchDate = new Date(key);
+      var dateStr = batchDate.toLocaleDateString([], { month: 'short', day: 'numeric', year: 'numeric' }).toLowerCase();
+      var customers = batch.map(function(v: any) { return (v.customer || '').toLowerCase(); }).join(' ');
+      var locations = batch.map(function(v: any) { return (v.install_location || '').toLowerCase(); }).join(' ');
+      // Check if batch-level metadata matches
+      var batchMatch = dateStr.includes(searchLower) || customers.includes(searchLower) || locations.includes(searchLower);
+      if (batchMatch) {
+        filtered[key] = batch;
+      } else {
+        // Check individual VINs within the batch
+        var matchingVins = batch.filter(function(v: any) {
+          return (v.vin || '').toLowerCase().includes(searchLower) ||
+            (v.part_number || '').toLowerCase().includes(searchLower) ||
+            (v.vehicle_make || '').toLowerCase().includes(searchLower) ||
+            (v.vehicle_model || '').toLowerCase().includes(searchLower) ||
+            (v.install_location || '').toLowerCase().includes(searchLower) ||
+            (v.customer || '').toLowerCase().includes(searchLower) ||
+            (v.end_customer || '').toLowerCase().includes(searchLower) ||
+            (getPONumber(v) || '').toLowerCase().includes(searchLower);
+        });
+        if (matchingVins.length > 0) {
+          filtered[key] = batch; // Show full batch but auto-expand it
+        }
+      }
+    });
+    archiveGroups = filtered;
+  }
 
   // Group review vehicles by customer for organization
   var reviewGrouped: Record<string, any[]> = {};
@@ -708,36 +747,88 @@ export default function ReportsPage() {
       {/* ─── Archive Tab ──────────────────────────────── */}
       {tab === 'archive' && (
         <div>
+          {/* Search bar */}
+          <div style={{ marginBottom: '12px' }}>
+            <input
+              value={archiveSearch}
+              onChange={function(e) { setArchiveSearch(e.target.value); }}
+              placeholder="Search by VIN, customer, location, part#, PO..."
+              style={{ width: '100%', padding: '10px 12px', borderRadius: '10px', border: '1px solid var(--border)', background: 'var(--card)', color: 'var(--text-primary)', fontSize: '13px' }}
+            />
+            {searchLower && (
+              <div style={{ fontSize: '10px', color: 'var(--text-muted)', marginTop: '4px' }}>
+                {Object.keys(archiveGroups).length} batch{Object.keys(archiveGroups).length !== 1 ? 'es' : ''} · {Object.values(archiveGroups).reduce(function(sum, b) { return sum + b.length; }, 0)} vehicles matched
+              </div>
+            )}
+          </div>
+
           {loadingArchive ? (
             <div style={{ textAlign: 'center', padding: '20px', color: 'var(--text-muted)' }}>Loading archive...</div>
           ) : Object.keys(archiveGroups).length === 0 ? (
             <div style={{ textAlign: 'center', padding: '32px 0', color: 'var(--text-muted)' }}>
               <div style={{ fontSize: '36px', marginBottom: '6px', opacity: 0.4 }}>&#128193;</div>
-              <div style={{ fontWeight: 600, fontSize: '13px' }}>No exports yet</div>
+              <div style={{ fontWeight: 600, fontSize: '13px' }}>{searchLower ? 'No results found' : 'No exports yet'}</div>
             </div>
           ) : (
             Object.keys(archiveGroups).map(function(exportDate) {
               var batch = archiveGroups[exportDate];
               var date = new Date(exportDate);
               var customers = Array.from(new Set(batch.map(function(v: any) { return v.customer || 'Unknown'; })));
+              var locations = Array.from(new Set(batch.filter(function(v: any) { return v.install_location; }).map(function(v: any) { return v.install_location; })));
+              var isExpanded = expandedBatch === exportDate;
               return (
-                <div key={exportDate} style={{ background: 'var(--card)', border: '1px solid #1e2d3d', borderRadius: '14px', padding: '12px', marginBottom: '8px' }}>
-                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                    <div>
-                      <div style={{ fontWeight: 700, fontSize: '13px' }}>
+                <div key={exportDate} style={{ background: 'var(--card)', border: '1px solid var(--border-strong)', borderRadius: '14px', marginBottom: '8px', overflow: 'hidden' }}>
+                  <div
+                    onClick={function() { setExpandedBatch(isExpanded ? null : exportDate); }}
+                    style={{ padding: '12px', cursor: 'pointer', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}
+                  >
+                    <div style={{ flex: 1 }}>
+                      <div style={{ fontWeight: 700, fontSize: '13px', color: 'var(--text-primary)' }}>
                         {date.toLocaleDateString([], { month: 'short', day: 'numeric', year: 'numeric' })} at {date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
                       </div>
                       <div style={{ fontSize: '11px', color: 'var(--text-muted)', marginTop: '2px' }}>
-                        {batch.length} vehicles &mdash; {customers.join(', ')}
+                        {batch.length} vehicle{batch.length !== 1 ? 's' : ''} &mdash; {customers.join(', ')}
+                      </div>
+                      {locations.length > 0 && (
+                        <div style={{ fontSize: '10px', color: 'var(--text-muted)', marginTop: '2px' }}>
+                          📍 {locations.join(', ')}
+                        </div>
+                      )}
+                    </div>
+                    <div style={{ display: 'flex', gap: '6px', alignItems: 'center' }}>
+                      <button
+                        onClick={function(e) { e.stopPropagation(); handleRedownload(exportDate); }}
+                        style={{ padding: '6px 12px', borderRadius: '8px', background: 'var(--orange-soft)', border: '1px solid rgba(238,49,32,0.15)', color: 'var(--text-label)', fontSize: '11px', fontWeight: 700, cursor: 'pointer' }}
+                      >
+                        Download
+                      </button>
+                      <span style={{ fontSize: '16px', color: 'var(--text-muted)', transform: isExpanded ? 'rotate(180deg)' : 'rotate(0deg)', transition: 'transform 0.2s' }}>▾</span>
+                    </div>
+                  </div>
+                  {isExpanded && (
+                    <div style={{ borderTop: '1px solid var(--border)', padding: '8px', maxHeight: '300px', overflowY: 'auto' }}>
+                      <div style={{ display: 'grid', gridTemplateColumns: '1fr', gap: '3px' }}>
+                        {batch.map(function(v: any) {
+                          var vinMatch = searchLower && (v.vin || '').toLowerCase().includes(searchLower);
+                          return (
+                            <div key={v.id} style={{ padding: '6px 8px', borderRadius: '6px', fontSize: '11px', background: vinMatch ? 'var(--warning-bg)' : 'var(--subtle-bg)', border: vinMatch ? '1px solid var(--warning-border)' : '1px solid transparent', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                              <div>
+                                <span style={{ fontFamily: 'monospace', fontWeight: 700, color: 'var(--text-primary)', fontSize: '12px' }}>{v.vin}</span>
+                                <span style={{ color: 'var(--text-muted)', marginLeft: '8px' }}>
+                                  {v.vehicle_year} {v.vehicle_make} {v.vehicle_model}
+                                </span>
+                              </div>
+                              <div style={{ display: 'flex', gap: '6px', alignItems: 'center', fontSize: '10px', color: 'var(--text-muted)' }}>
+                                {v.part_number && <span style={{ padding: '1px 5px', borderRadius: '4px', background: 'var(--subtle-bg)', border: '1px solid var(--border)' }}>{v.part_number}</span>}
+                                {v.install_location && <span>📍 {v.install_location}</span>}
+                                {getPONumber(v) && <span style={{ color: 'var(--warning)' }}>PO #{getPONumber(v)}</span>}
+                              </div>
+                            </div>
+                          );
+                        })}
                       </div>
                     </div>
-                    <button
-                      onClick={function() { handleRedownload(exportDate); }}
-                      style={{ padding: '8px 14px', borderRadius: '10px', background: 'rgba(238,49,32,0.06)', border: '1px solid rgba(238,49,32,0.15)', color: 'var(--navy)', fontSize: '12px', fontWeight: 700 }}
-                    >
-                      Re-download
-                    </button>
-                  </div>
+                  )}
                 </div>
               );
             })
