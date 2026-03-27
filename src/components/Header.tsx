@@ -4,6 +4,7 @@ import { useState, useRef, useEffect } from 'react';
 import { useRouter } from 'next/navigation';
 import { useAuth } from '@/components/AuthProvider';
 import { theme } from '@/lib/theme';
+import UniversalSearch from '@/components/UniversalSearch';
 
 interface HeaderProps {
   clockStatus: 'out' | 'in' | 'break';
@@ -39,6 +40,9 @@ export default function Header({ clockStatus, activePartNumber, activeEndCustome
   const [unreadCount, setUnreadCount] = useState(0);
   const [loadingNotifs, setLoadingNotifs] = useState(false);
   const notifRef = useRef<HTMLDivElement>(null);
+
+  // Search
+  const [showSearch, setShowSearch] = useState(false);
 
   // Messaging unread count
   const [unreadMessages, setUnreadMessages] = useState(0);
@@ -325,6 +329,20 @@ export default function Header({ clockStatus, activePartNumber, activeEndCustome
         </div>
 
         <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+          {/* Universal Search */}
+          <button
+            onClick={() => setShowSearch(true)}
+            style={{
+              background: 'transparent',
+              border: '1px solid transparent', borderRadius: '8px',
+              padding: '6px 8px', fontSize: '16px',
+              cursor: 'pointer', transition: 'all 0.15s',
+              lineHeight: 1,
+            }}
+          >
+            🔍
+          </button>
+
           {/* Chat / Messages */}
           <button
             onClick={() => router.push('/messages')}
@@ -533,6 +551,7 @@ export default function Header({ clockStatus, activePartNumber, activeEndCustome
           </div>
         </div>
       </header>
+      <UniversalSearch open={showSearch} onClose={() => setShowSearch(false)} />
     </>
   );
 }
