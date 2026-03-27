@@ -61,6 +61,7 @@ export interface PurchaseOrder {
   status: 'open' | 'complete' | 'cancelled';
   ordered_date: string | null;
   notes: string | null;
+  ship_to: { name?: string; address?: string; city?: string; state?: string; zip?: string } | null;
   created_by: string;
   created_at: string;
   line_items?: POLineItem[];
