@@ -1218,7 +1218,7 @@ function BulkVINUpload() {
           fuel_type: vehicle.fuelType || null,
           gvwr: vehicle.gvwr || null,
           catalog_id: part?.id || null,
-          part_number: part?.part_number || null,
+          part_number: part?.part_number || pv.partNumber || null,
           customer: part?.customer || null,
           end_customer: part?.end_customer || null,
           po_line_item_id: matchedPoLineId,
