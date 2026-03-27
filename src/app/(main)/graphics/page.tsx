@@ -401,7 +401,7 @@ export default function GraphicsPage() {
   };
 
   const labelStyle: React.CSSProperties = {
-    fontSize: '9px', fontWeight: 700, color: '#d0dcea',
+    fontSize: '9px', fontWeight: 700, color: '#e8f0f8',
     textTransform: 'uppercase', letterSpacing: '0.3px', marginBottom: '3px',
   };
 
@@ -409,7 +409,7 @@ export default function GraphicsPage() {
     return (
       <div style={{ textAlign: 'center', padding: '40px 0' }}>
         <div style={{ width: '36px', height: '36px', border: '3px solid #1e2d3d', borderTopColor: theme.orange, borderRadius: '50%', margin: '0 auto', animation: 'spin 1s linear infinite' }} />
-        <div style={{ color: '#d0dcea', marginTop: '12px', fontSize: '13px', fontWeight: 600 }}>Loading graphics jobs...</div>
+        <div style={{ color: '#e8f0f8', marginTop: '12px', fontSize: '13px', fontWeight: 600 }}>Loading graphics jobs...</div>
       </div>
     );
   }
@@ -444,7 +444,7 @@ export default function GraphicsPage() {
                 padding: '5px 10px', borderRadius: '6px', fontSize: '10px', fontWeight: 700,
                 background: filterCategory === c.id ? `${c.color}22` : '#141e2b',
                 border: `1px solid ${filterCategory === c.id ? `${c.color}55` : '#1e2d3d'}`,
-                color: filterCategory === c.id ? c.color : '#d0dcea',
+                color: filterCategory === c.id ? c.color : '#e8f0f8',
                 cursor: 'pointer', whiteSpace: 'nowrap',
               }}
             >
@@ -465,7 +465,7 @@ export default function GraphicsPage() {
             padding: '6px 10px', borderRadius: '6px', fontSize: '10px', fontWeight: 700,
             background: filterStatus === 'active' ? 'rgba(59,130,246,0.2)' : '#141e2b',
             border: `1px solid ${filterStatus === 'active' ? 'rgba(59,130,246,0.4)' : '#1e2d3d'}`,
-            color: filterStatus === 'active' ? '#60a5fa' : '#d0dcea',
+            color: filterStatus === 'active' ? '#60a5fa' : '#e8f0f8',
             whiteSpace: 'nowrap', cursor: 'pointer', flexShrink: 0,
           }}
         >
@@ -479,7 +479,7 @@ export default function GraphicsPage() {
               padding: '6px 10px', borderRadius: '6px', fontSize: '10px', fontWeight: 700,
               background: filterStatus === s ? `${GRAPHICS_STATUS_COLORS[s]}22` : '#141e2b',
               border: `1px solid ${filterStatus === s ? `${GRAPHICS_STATUS_COLORS[s]}66` : '#1e2d3d'}`,
-              color: filterStatus === s ? GRAPHICS_STATUS_COLORS[s] : '#d0dcea',
+              color: filterStatus === s ? GRAPHICS_STATUS_COLORS[s] : '#e8f0f8',
               whiteSpace: 'nowrap', cursor: 'pointer', flexShrink: 0,
             }}
           >
@@ -492,7 +492,7 @@ export default function GraphicsPage() {
             padding: '6px 10px', borderRadius: '6px', fontSize: '10px', fontWeight: 700,
             background: filterStatus === 'all' ? 'rgba(59,130,246,0.2)' : '#141e2b',
             border: `1px solid ${filterStatus === 'all' ? 'rgba(59,130,246,0.4)' : '#1e2d3d'}`,
-            color: filterStatus === 'all' ? '#60a5fa' : '#d0dcea',
+            color: filterStatus === 'all' ? '#60a5fa' : '#e8f0f8',
             whiteSpace: 'nowrap', cursor: 'pointer', flexShrink: 0,
           }}
         >
@@ -513,7 +513,7 @@ export default function GraphicsPage() {
 
       {/* Job List */}
       {filteredJobs.length === 0 ? (
-        <div style={{ textAlign: 'center', padding: '30px 0', color: '#d0dcea', fontSize: '13px' }}>
+        <div style={{ textAlign: 'center', padding: '30px 0', color: '#e8f0f8', fontSize: '13px' }}>
           {search ? 'No matching jobs found.' : 'No graphics jobs yet.'}
         </div>
       ) : (
@@ -556,7 +556,7 @@ export default function GraphicsPage() {
                           {job.title}
                         </div>
                       </div>
-                      <div style={{ fontSize: '10px', color: '#d0dcea', display: 'flex', gap: '8px', flexWrap: 'wrap', alignItems: 'center' }}>
+                      <div style={{ fontSize: '10px', color: '#e8f0f8', display: 'flex', gap: '8px', flexWrap: 'wrap', alignItems: 'center' }}>
                         {(job.job_category && job.job_category !== 'production') && (
                           <span style={{
                             padding: '1px 6px', borderRadius: '4px', fontSize: '9px', fontWeight: 700,
@@ -603,7 +603,7 @@ export default function GraphicsPage() {
                               padding: '4px 8px', borderRadius: '5px', fontSize: '9px', fontWeight: 700,
                               background: job.status === s ? `${GRAPHICS_STATUS_COLORS[s]}33` : '#0f1720',
                               border: `1px solid ${job.status === s ? GRAPHICS_STATUS_COLORS[s] : '#1e2d3d'}`,
-                              color: job.status === s ? GRAPHICS_STATUS_COLORS[s] : '#d0dcea',
+                              color: job.status === s ? GRAPHICS_STATUS_COLORS[s] : '#e8f0f8',
                               cursor: job.status === s ? 'default' : 'pointer',
                               opacity: job.status === s ? 1 : 0.7,
                             }}
@@ -630,12 +630,12 @@ export default function GraphicsPage() {
                           <div style={{ marginBottom: '10px' }}>
                             <div style={labelStyle}>Vinyl Specifications</div>
                             <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: '4px', marginTop: '4px' }}>
-                              {job.vinyl_type && <div style={{ padding: '4px 6px', borderRadius: '4px', background: '#0f1720', fontSize: '10px' }}><span style={{ color: '#d0dcea' }}>Type:</span> <span style={{ color: '#f5f8fc' }}>{job.vinyl_type}</span></div>}
-                              {job.vinyl_color && <div style={{ padding: '4px 6px', borderRadius: '4px', background: '#0f1720', fontSize: '10px' }}><span style={{ color: '#d0dcea' }}>Color:</span> <span style={{ color: '#f5f8fc' }}>{job.vinyl_color}</span></div>}
-                              {job.laminate && <div style={{ padding: '4px 6px', borderRadius: '4px', background: '#0f1720', fontSize: '10px' }}><span style={{ color: '#d0dcea' }}>Lam:</span> <span style={{ color: '#f5f8fc' }}>{job.laminate}</span></div>}
-                              {job.print_method && <div style={{ padding: '4px 6px', borderRadius: '4px', background: '#0f1720', fontSize: '10px' }}><span style={{ color: '#d0dcea' }}>Print:</span> <span style={{ color: '#f5f8fc' }}>{job.print_method}</span></div>}
-                              {job.cut_method && <div style={{ padding: '4px 6px', borderRadius: '4px', background: '#0f1720', fontSize: '10px' }}><span style={{ color: '#d0dcea' }}>Cut:</span> <span style={{ color: '#f5f8fc' }}>{job.cut_method}</span></div>}
-                              {job.premask && <div style={{ padding: '4px 6px', borderRadius: '4px', background: '#0f1720', fontSize: '10px' }}><span style={{ color: '#d0dcea' }}>Premask:</span> <span style={{ color: '#f5f8fc' }}>{job.premask}</span></div>}
+                              {job.vinyl_type && <div style={{ padding: '4px 6px', borderRadius: '4px', background: '#0f1720', fontSize: '10px' }}><span style={{ color: '#e8f0f8' }}>Type:</span> <span style={{ color: '#f5f8fc' }}>{job.vinyl_type}</span></div>}
+                              {job.vinyl_color && <div style={{ padding: '4px 6px', borderRadius: '4px', background: '#0f1720', fontSize: '10px' }}><span style={{ color: '#e8f0f8' }}>Color:</span> <span style={{ color: '#f5f8fc' }}>{job.vinyl_color}</span></div>}
+                              {job.laminate && <div style={{ padding: '4px 6px', borderRadius: '4px', background: '#0f1720', fontSize: '10px' }}><span style={{ color: '#e8f0f8' }}>Lam:</span> <span style={{ color: '#f5f8fc' }}>{job.laminate}</span></div>}
+                              {job.print_method && <div style={{ padding: '4px 6px', borderRadius: '4px', background: '#0f1720', fontSize: '10px' }}><span style={{ color: '#e8f0f8' }}>Print:</span> <span style={{ color: '#f5f8fc' }}>{job.print_method}</span></div>}
+                              {job.cut_method && <div style={{ padding: '4px 6px', borderRadius: '4px', background: '#0f1720', fontSize: '10px' }}><span style={{ color: '#e8f0f8' }}>Cut:</span> <span style={{ color: '#f5f8fc' }}>{job.cut_method}</span></div>}
+                              {job.premask && <div style={{ padding: '4px 6px', borderRadius: '4px', background: '#0f1720', fontSize: '10px' }}><span style={{ color: '#e8f0f8' }}>Premask:</span> <span style={{ color: '#f5f8fc' }}>{job.premask}</span></div>}
                             </div>
                           </div>
                         )}
@@ -647,7 +647,7 @@ export default function GraphicsPage() {
                             <div style={{ display: 'flex', gap: '8px', fontSize: '11px', flexWrap: 'wrap' }}>
                               {job.carrier && <span style={{ color: '#f5f8fc' }}>{job.carrier}</span>}
                               {job.tracking_number && <span style={{ color: '#60a5fa', fontWeight: 700 }}>{job.tracking_number}</span>}
-                              {job.ship_to && <span style={{ color: '#d0dcea' }}>→ {job.ship_to}</span>}
+                              {job.ship_to && <span style={{ color: '#e8f0f8' }}>→ {job.ship_to}</span>}
                             </div>
                           </div>
                         )}
@@ -660,7 +660,7 @@ export default function GraphicsPage() {
                         )}
 
                         {/* Dates & Metadata */}
-                        <div style={{ fontSize: '10px', color: '#d0dcea', display: 'flex', gap: '12px', flexWrap: 'wrap', marginBottom: '10px' }}>
+                        <div style={{ fontSize: '10px', color: '#e8f0f8', display: 'flex', gap: '12px', flexWrap: 'wrap', marginBottom: '10px' }}>
                           <span>Created: {new Date(job.created_at).toLocaleDateString()}</span>
                           {job.due_date && <span style={{ color: (parseLocalDate(job.due_date) || new Date()) < new Date() ? '#ef4444' : '#fbbf24' }}>Due: {displayDate(job.due_date)}</span>}
                           {job.scheduled_install_date && <span style={{ color: '#22d3ee' }}>Install: {displayDate(job.scheduled_install_date)}{job.calendar_event_id ? ' 📅' : ''}</span>}
@@ -674,7 +674,7 @@ export default function GraphicsPage() {
                             <div style={labelStyle}>Status History</div>
                             <div style={{ display: 'flex', flexDirection: 'column', gap: '2px', marginTop: '4px', maxHeight: '120px', overflowY: 'auto' }}>
                               {statusHistory.map(h => (
-                                <div key={h.id} style={{ fontSize: '10px', color: '#d0dcea', display: 'flex', gap: '6px' }}>
+                                <div key={h.id} style={{ fontSize: '10px', color: '#e8f0f8', display: 'flex', gap: '6px' }}>
                                   <span style={{ color: '#dce6f0' }}>{new Date(h.created_at).toLocaleString()}</span>
                                   {h.from_status && <span><span style={{ color: GRAPHICS_STATUS_COLORS[h.from_status as GraphicsJobStatus] || '#dce6f0' }}>{GRAPHICS_STATUS_LABELS[h.from_status as GraphicsJobStatus] || h.from_status}</span> →</span>}
                                   <span style={{ color: GRAPHICS_STATUS_COLORS[h.to_status as GraphicsJobStatus] || '#f5f8fc', fontWeight: 700 }}>{GRAPHICS_STATUS_LABELS[h.to_status as GraphicsJobStatus] || h.to_status}</span>
@@ -877,7 +877,7 @@ export default function GraphicsPage() {
             {createStep === 'category' && (
               <>
                 <div style={{ fontSize: '16px', fontWeight: 800, color: '#f5f8fc', marginBottom: '6px' }}>New Job</div>
-                <div style={{ fontSize: '12px', color: '#d0dcea', marginBottom: '16px' }}>What type of job is this?</div>
+                <div style={{ fontSize: '12px', color: '#e8f0f8', marginBottom: '16px' }}>What type of job is this?</div>
 
                 <div style={{ display: 'flex', flexDirection: 'column', gap: '8px', marginBottom: '14px' }}>
                   {([
@@ -923,7 +923,7 @@ export default function GraphicsPage() {
                 <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '14px' }}>
                   <button
                     onClick={() => setCreateStep('category')}
-                    style={{ background: 'none', border: 'none', color: '#d0dcea', fontSize: '16px', cursor: 'pointer', padding: '0' }}
+                    style={{ background: 'none', border: 'none', color: '#e8f0f8', fontSize: '16px', cursor: 'pointer', padding: '0' }}
                   >
                     ←
                   </button>

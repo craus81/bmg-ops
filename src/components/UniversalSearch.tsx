@@ -286,7 +286,7 @@ export default function UniversalSearch({ open, onClose }: UniversalSearchProps)
         {/* Results */}
         <div style={{ flex: 1, overflowY: 'auto' }}>
           {searching && (
-            <div style={{ padding: '32px', textAlign: 'center', color: '#d0dcea', fontSize: '13px' }}>
+            <div style={{ padding: '32px', textAlign: 'center', color: '#e8f0f8', fontSize: '13px' }}>
               Searching...
             </div>
           )}
@@ -294,7 +294,7 @@ export default function UniversalSearch({ open, onClose }: UniversalSearchProps)
           {!searching && query.length >= 2 && totalResults === 0 && (
             <div style={{ padding: '40px 20px', textAlign: 'center' }}>
               <div style={{ fontSize: '32px', opacity: 0.3, marginBottom: '8px' }}>🔍</div>
-              <div style={{ fontSize: '14px', fontWeight: 700, color: '#d0dcea' }}>No results found</div>
+              <div style={{ fontSize: '14px', fontWeight: 700, color: '#e8f0f8' }}>No results found</div>
               <div style={{ fontSize: '12px', color: '#3a4a5d', marginTop: '4px' }}>Try a different search term</div>
             </div>
           )}
@@ -302,7 +302,7 @@ export default function UniversalSearch({ open, onClose }: UniversalSearchProps)
           {!searching && query.length < 2 && (
             <div style={{ padding: '40px 20px', textAlign: 'center' }}>
               <div style={{ fontSize: '32px', opacity: 0.3, marginBottom: '8px' }}>🔍</div>
-              <div style={{ fontSize: '14px', fontWeight: 700, color: '#d0dcea' }}>Search everything</div>
+              <div style={{ fontSize: '14px', fontWeight: 700, color: '#e8f0f8' }}>Search everything</div>
               <div style={{ fontSize: '12px', color: '#3a4a5d', marginTop: '4px' }}>POs, vehicles, graphics jobs, estimates, parts, customers, messages, quotes</div>
             </div>
           )}
@@ -324,7 +324,7 @@ export default function UniversalSearch({ open, onClose }: UniversalSearchProps)
                   <span style={{ fontSize: '11px', fontWeight: 800, color: config.color, textTransform: 'uppercase', letterSpacing: '0.5px' }}>
                     {config.label}
                   </span>
-                  <span style={{ fontSize: '10px', color: '#d0dcea', fontWeight: 600 }}>
+                  <span style={{ fontSize: '10px', color: '#e8f0f8', fontWeight: 600 }}>
                     ({items.length})
                   </span>
                 </div>

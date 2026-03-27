@@ -165,7 +165,7 @@ export default function AssignPOModal({ open, onClose, vehicleId, vehiclePartNum
         {/* Results */}
         <div style={{ flex: 1, overflowY: 'auto' }}>
           {searching && (
-            <div style={{ padding: '32px', textAlign: 'center', color: '#d0dcea', fontSize: '13px' }}>
+            <div style={{ padding: '32px', textAlign: 'center', color: '#e8f0f8', fontSize: '13px' }}>
               Loading POs...
             </div>
           )}
@@ -173,7 +173,7 @@ export default function AssignPOModal({ open, onClose, vehicleId, vehiclePartNum
           {!searching && pos.length === 0 && (
             <div style={{ padding: '40px 20px', textAlign: 'center' }}>
               <div style={{ fontSize: '32px', opacity: 0.3, marginBottom: '8px' }}>📋</div>
-              <div style={{ fontSize: '14px', fontWeight: 700, color: '#d0dcea' }}>No POs found</div>
+              <div style={{ fontSize: '14px', fontWeight: 700, color: '#e8f0f8' }}>No POs found</div>
               <div style={{ fontSize: '12px', color: '#3a4a5d', marginTop: '4px' }}>Try a different search term</div>
             </div>
           )}
@@ -218,7 +218,7 @@ export default function AssignPOModal({ open, onClose, vehicleId, vehiclePartNum
                       <div style={{ marginTop: '6px' }}>
                         {po.po_line_items.slice(0, 3).map((li) => (
                           <div key={li.id} style={{
-                            fontSize: '10px', color: '#d0dcea', marginTop: '2px',
+                            fontSize: '10px', color: '#e8f0f8', marginTop: '2px',
                             display: 'flex', gap: '6px', alignItems: 'center',
                           }}>
                             <span style={{

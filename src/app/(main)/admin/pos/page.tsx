@@ -826,12 +826,12 @@ export default function POsPage() {
     })
     .sort((a, b) => a.po_number.localeCompare(b.po_number, undefined, { numeric: true }));
 
-  if (loading) return <div style={{ textAlign: 'center', padding: '40px', color: '#d0dcea' }}>Loading...</div>;
+  if (loading) return <div style={{ textAlign: 'center', padding: '40px', color: '#e8f0f8' }}>Loading...</div>;
 
   return (
     <div>
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '8px' }}>
-        <div style={{ fontSize: '11px', fontWeight: 700, color: '#d0dcea', textTransform: 'uppercase', letterSpacing: '0.5px' }}>
+        <div style={{ fontSize: '11px', fontWeight: 700, color: '#e8f0f8', textTransform: 'uppercase', letterSpacing: '0.5px' }}>
           Purchase Orders ({filteredPos.length}{poSearch ? ` of ${pos.length}` : ''})
         </div>
         <div style={{ display: 'flex', gap: '6px' }}>
@@ -904,7 +904,7 @@ export default function POsPage() {
           placeholder="Search PO #, part #, or customer..."
           style={{ width: '100%', padding: '9px 12px 9px 32px', borderRadius: '8px', border: '1px solid #1e2d3d', background: '#0f1720', color: '#f5f8fc', fontSize: '12px', outline: 'none' }}
         />
-        <span style={{ position: 'absolute', left: '10px', top: '50%', transform: 'translateY(-50%)', color: '#d0dcea', fontSize: '13px', pointerEvents: 'none' }}>🔍</span>
+        <span style={{ position: 'absolute', left: '10px', top: '50%', transform: 'translateY(-50%)', color: '#e8f0f8', fontSize: '13px', pointerEvents: 'none' }}>🔍</span>
         {poSearch && (
           <button
             onClick={() => setPoSearch('')}
@@ -951,7 +951,7 @@ export default function POsPage() {
 
           {emailLoading && (
             <div style={{ textAlign: 'center', padding: '20px' }}>
-              <div style={{ fontSize: '12px', color: '#d0dcea' }}>Searching Gmail for PO emails...</div>
+              <div style={{ fontSize: '12px', color: '#e8f0f8' }}>Searching Gmail for PO emails...</div>
             </div>
           )}
 
@@ -970,7 +970,7 @@ export default function POsPage() {
                     >Import All</button>
                   </div>
                 ) : (
-                  <div style={{ fontSize: '11px', color: '#d0dcea', marginBottom: '8px' }}>All PO emails have been imported or already exist.</div>
+                  <div style={{ fontSize: '11px', color: '#e8f0f8', marginBottom: '8px' }}>All PO emails have been imported or already exist.</div>
                 );
               })()}
 
@@ -994,11 +994,11 @@ export default function POsPage() {
                           <div style={{ fontSize: '12px', fontWeight: 700, color: '#f5f8fc', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
                             {email.poNumber ? `PO #${email.poNumber}` : email.subject}
                           </div>
-                          <div style={{ fontSize: '10px', color: '#d0dcea', marginTop: '2px' }}>
+                          <div style={{ fontSize: '10px', color: '#e8f0f8', marginTop: '2px' }}>
                             {email.customer} · {email.from} · {new Date(email.date).toLocaleDateString()}
                           </div>
                           {email.pdfs.length > 0 && (
-                            <div style={{ fontSize: '10px', color: '#d0dcea', marginTop: '1px' }}>
+                            <div style={{ fontSize: '10px', color: '#e8f0f8', marginTop: '1px' }}>
                               📎 {email.pdfs.map((p: any) => p.filename).join(', ')}
                             </div>
                           )}
@@ -1031,7 +1031,7 @@ export default function POsPage() {
                             </button>
                           )}
                           {!hasPdfs && (
-                            <span style={{ fontSize: '10px', color: '#d0dcea' }}>No PDF</span>
+                            <span style={{ fontSize: '10px', color: '#e8f0f8' }}>No PDF</span>
                           )}
                         </div>
                       </div>
@@ -1052,7 +1052,7 @@ export default function POsPage() {
                               <div key={part.part_number} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '4px 0', borderBottom: '1px solid rgba(255,255,255,0.05)' }}>
                                 <div style={{ flex: 1, minWidth: 0 }}>
                                   <span style={{ fontSize: '11px', fontWeight: 700, color: '#f5f8fc' }}>{part.part_number}</span>
-                                  <span style={{ fontSize: '10px', color: '#d0dcea', marginLeft: '8px' }}>{part.description}</span>
+                                  <span style={{ fontSize: '10px', color: '#e8f0f8', marginLeft: '8px' }}>{part.description}</span>
                                   <span style={{ fontSize: '10px', color: '#94a3b8', marginLeft: '8px' }}>${part.unit_price.toFixed(2)}</span>
                                 </div>
                                 {added ? (
@@ -1085,7 +1085,7 @@ export default function POsPage() {
           )}
 
           {!emailLoading && !emailNeedsAuth && emailEmails.length === 0 && (
-            <div style={{ textAlign: 'center', padding: '16px', fontSize: '12px', color: '#d0dcea' }}>
+            <div style={{ textAlign: 'center', padding: '16px', fontSize: '12px', color: '#e8f0f8' }}>
               No PO emails found in the selected timeframe.
             </div>
           )}
@@ -1099,17 +1099,17 @@ export default function POsPage() {
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '14px' }}>
               <div>
                 <div style={{ fontSize: '16px', fontWeight: 800, color: '#f5f8fc' }}>Review PO Import</div>
-                <div style={{ fontSize: '11px', color: '#d0dcea', marginTop: '2px' }}>
+                <div style={{ fontSize: '11px', color: '#e8f0f8', marginTop: '2px' }}>
                   PO #{reviewingExtraction.extracted.po_number} · {reviewingExtraction.extracted.customer || 'Unknown'} · {reviewingExtraction.extracted.lines?.length || 0} line items
                 </div>
               </div>
-              <button onClick={() => setReviewingExtraction(null)} style={{ background: 'none', border: 'none', color: '#d0dcea', fontSize: '18px', cursor: 'pointer', padding: '4px' }}>✕</button>
+              <button onClick={() => setReviewingExtraction(null)} style={{ background: 'none', border: 'none', color: '#e8f0f8', fontSize: '18px', cursor: 'pointer', padding: '4px' }}>✕</button>
             </div>
 
             {/* PO header fields */}
             <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: '8px', marginBottom: '14px' }}>
               <div>
-                <div style={{ fontSize: '9px', fontWeight: 700, color: '#d0dcea', textTransform: 'uppercase', marginBottom: '3px' }}>PO Number</div>
+                <div style={{ fontSize: '9px', fontWeight: 700, color: '#e8f0f8', textTransform: 'uppercase', marginBottom: '3px' }}>PO Number</div>
                 <input
                   value={reviewingExtraction.extracted.po_number || ''}
                   onChange={e => setReviewingExtraction(prev => prev ? { ...prev, extracted: { ...prev.extracted, po_number: e.target.value } } : prev)}
@@ -1117,7 +1117,7 @@ export default function POsPage() {
                 />
               </div>
               <div>
-                <div style={{ fontSize: '9px', fontWeight: 700, color: '#d0dcea', textTransform: 'uppercase', marginBottom: '3px' }}>Customer</div>
+                <div style={{ fontSize: '9px', fontWeight: 700, color: '#e8f0f8', textTransform: 'uppercase', marginBottom: '3px' }}>Customer</div>
                 <input
                   value={reviewingExtraction.extracted.customer || ''}
                   onChange={e => setReviewingExtraction(prev => prev ? { ...prev, extracted: { ...prev.extracted, customer: e.target.value } } : prev)}
@@ -1125,7 +1125,7 @@ export default function POsPage() {
                 />
               </div>
               <div>
-                <div style={{ fontSize: '9px', fontWeight: 700, color: '#d0dcea', textTransform: 'uppercase', marginBottom: '3px' }}>Order Date</div>
+                <div style={{ fontSize: '9px', fontWeight: 700, color: '#e8f0f8', textTransform: 'uppercase', marginBottom: '3px' }}>Order Date</div>
                 <input
                   value={reviewingExtraction.extracted.ordered_date || ''}
                   onChange={e => setReviewingExtraction(prev => prev ? { ...prev, extracted: { ...prev.extracted, ordered_date: e.target.value } } : prev)}
@@ -1151,7 +1151,7 @@ export default function POsPage() {
                   border: `1px solid ${catalogMatch ? 'rgba(34,197,94,0.2)' : 'rgba(251,191,36,0.2)'}`,
                 }}>
                   <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '6px' }}>
-                    <div style={{ fontSize: '10px', fontWeight: 700, color: '#d0dcea' }}>Line {line.line_no || idx + 1}</div>
+                    <div style={{ fontSize: '10px', fontWeight: 700, color: '#e8f0f8' }}>Line {line.line_no || idx + 1}</div>
                     <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
                       {catalogMatch && <span style={{ fontSize: '9px', color: '#4ade80', fontWeight: 600 }}>✓ Catalog match</span>}
                       {!catalogMatch && <span style={{ fontSize: '9px', color: '#fbbf24', fontWeight: 600 }}>No catalog match</span>}
@@ -1164,7 +1164,7 @@ export default function POsPage() {
                   </div>
                   <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '6px', marginBottom: '6px' }}>
                     <div>
-                      <div style={{ fontSize: '9px', fontWeight: 700, color: '#d0dcea', textTransform: 'uppercase', marginBottom: '2px' }}>Part Number</div>
+                      <div style={{ fontSize: '9px', fontWeight: 700, color: '#e8f0f8', textTransform: 'uppercase', marginBottom: '2px' }}>Part Number</div>
                       <input
                         value={line.part_number || ''}
                         onChange={e => updateReviewLine(idx, 'part_number', e.target.value)}
@@ -1172,7 +1172,7 @@ export default function POsPage() {
                       />
                     </div>
                     <div>
-                      <div style={{ fontSize: '9px', fontWeight: 700, color: '#d0dcea', textTransform: 'uppercase', marginBottom: '2px' }}>Supplier Part</div>
+                      <div style={{ fontSize: '9px', fontWeight: 700, color: '#e8f0f8', textTransform: 'uppercase', marginBottom: '2px' }}>Supplier Part</div>
                       <input
                         value={line.supplier_part || ''}
                         onChange={e => updateReviewLine(idx, 'supplier_part', e.target.value)}
@@ -1181,7 +1181,7 @@ export default function POsPage() {
                     </div>
                   </div>
                   <div style={{ marginBottom: '6px' }}>
-                    <div style={{ fontSize: '9px', fontWeight: 700, color: '#d0dcea', textTransform: 'uppercase', marginBottom: '2px' }}>Description</div>
+                    <div style={{ fontSize: '9px', fontWeight: 700, color: '#e8f0f8', textTransform: 'uppercase', marginBottom: '2px' }}>Description</div>
                     <input
                       value={line.description || ''}
                       onChange={e => updateReviewLine(idx, 'description', e.target.value)}
@@ -1190,7 +1190,7 @@ export default function POsPage() {
                   </div>
                   <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: '6px' }}>
                     <div>
-                      <div style={{ fontSize: '9px', fontWeight: 700, color: '#d0dcea', textTransform: 'uppercase', marginBottom: '2px' }}>Qty</div>
+                      <div style={{ fontSize: '9px', fontWeight: 700, color: '#e8f0f8', textTransform: 'uppercase', marginBottom: '2px' }}>Qty</div>
                       <input
                         type="number"
                         value={line.quantity ?? ''}
@@ -1199,7 +1199,7 @@ export default function POsPage() {
                       />
                     </div>
                     <div>
-                      <div style={{ fontSize: '9px', fontWeight: 700, color: '#d0dcea', textTransform: 'uppercase', marginBottom: '2px' }}>Unit Price</div>
+                      <div style={{ fontSize: '9px', fontWeight: 700, color: '#e8f0f8', textTransform: 'uppercase', marginBottom: '2px' }}>Unit Price</div>
                       <input
                         type="number"
                         step="0.01"
@@ -1209,7 +1209,7 @@ export default function POsPage() {
                       />
                     </div>
                     <div>
-                      <div style={{ fontSize: '9px', fontWeight: 700, color: '#d0dcea', textTransform: 'uppercase', marginBottom: '2px' }}>Delivery</div>
+                      <div style={{ fontSize: '9px', fontWeight: 700, color: '#e8f0f8', textTransform: 'uppercase', marginBottom: '2px' }}>Delivery</div>
                       <input
                         value={line.delivery_date || ''}
                         onChange={e => updateReviewLine(idx, 'delivery_date', e.target.value)}
@@ -1218,7 +1218,7 @@ export default function POsPage() {
                     </div>
                   </div>
                   {line.drawing_number && (
-                    <div style={{ marginTop: '4px', fontSize: '10px', color: '#d0dcea' }}>
+                    <div style={{ marginTop: '4px', fontSize: '10px', color: '#e8f0f8' }}>
                       Drawing: {line.drawing_number}
                     </div>
                   )}
@@ -1267,7 +1267,7 @@ export default function POsPage() {
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '12px' }}>
               <div>
                 <div style={{ fontSize: '15px', fontWeight: 800, color: '#fbbf24' }}>PO #{overwriteData.poNumber} Already Exists</div>
-                <div style={{ fontSize: '11px', color: '#d0dcea', marginTop: '2px' }}>
+                <div style={{ fontSize: '11px', color: '#e8f0f8', marginTop: '2px' }}>
                   {overwriteData.existingLineCount} existing line{overwriteData.existingLineCount !== 1 ? 's' : ''} vs {overwriteData.newLineCount} in new PDF
                 </div>
               </div>
@@ -1284,7 +1284,7 @@ export default function POsPage() {
                     {overwriteData.changes.filter((c: any) => c.type === 'added').map((c: any, i: number) => (
                       <div key={`add-${i}`} style={{ padding: '6px 8px', marginBottom: '3px', borderRadius: '6px', background: 'rgba(34,197,94,0.08)', border: '1px solid rgba(34,197,94,0.2)' }}>
                         <div style={{ fontSize: '12px', fontWeight: 700, color: '#4ade80' }}>{c.part_number}</div>
-                        <div style={{ fontSize: '10px', color: '#d0dcea' }}>{c.description}</div>
+                        <div style={{ fontSize: '10px', color: '#e8f0f8' }}>{c.description}</div>
                         <div style={{ fontSize: '11px', color: '#f5f8fc', marginTop: '2px' }}>Qty: {c.quantity} × ${c.unit_price?.toFixed(2)}</div>
                       </div>
                     ))}
@@ -1298,7 +1298,7 @@ export default function POsPage() {
                     {overwriteData.changes.filter((c: any) => c.type === 'changed').map((c: any, i: number) => (
                       <div key={`chg-${i}`} style={{ padding: '6px 8px', marginBottom: '3px', borderRadius: '6px', background: 'rgba(251,191,36,0.08)', border: '1px solid rgba(251,191,36,0.2)' }}>
                         <div style={{ fontSize: '12px', fontWeight: 700, color: '#fbbf24' }}>{c.part_number}</div>
-                        <div style={{ fontSize: '10px', color: '#d0dcea' }}>{c.description}</div>
+                        <div style={{ fontSize: '10px', color: '#e8f0f8' }}>{c.description}</div>
                         <div style={{ display: 'flex', gap: '12px', marginTop: '3px' }}>
                           {c.quantity_changed && (
                             <div style={{ fontSize: '11px' }}>
@@ -1334,7 +1334,7 @@ export default function POsPage() {
             ) : (
               <div style={{ padding: '12px', borderRadius: '8px', background: 'rgba(59,130,246,0.08)', border: '1px solid rgba(59,130,246,0.2)', marginBottom: '8px' }}>
                 <div style={{ fontSize: '12px', color: '#60a5fa', fontWeight: 600 }}>No changes detected</div>
-                <div style={{ fontSize: '11px', color: '#d0dcea', marginTop: '2px' }}>The new PDF has the same line items as the existing PO. You can still overwrite to refresh the data.</div>
+                <div style={{ fontSize: '11px', color: '#e8f0f8', marginTop: '2px' }}>The new PDF has the same line items as the existing PO. You can still overwrite to refresh the data.</div>
               </div>
             )}
 
@@ -1362,7 +1362,7 @@ export default function POsPage() {
       {showImport && !parsedPO && (
         <div style={{ background: '#141e2b', border: '1px solid #1e2d3d', borderRadius: '10px', padding: '14px', marginBottom: '12px' }}>
           <div style={{ fontSize: '13px', fontWeight: 700, color: '#f5f8fc', marginBottom: '6px' }}>Import Masterack PO from PDF</div>
-          <div style={{ fontSize: '11px', color: '#d0dcea', marginBottom: '10px' }}>
+          <div style={{ fontSize: '11px', color: '#e8f0f8', marginBottom: '10px' }}>
             Upload a Masterack PO PDF. Part numbers, quantities, and prices will be extracted. You can review and edit before saving.
           </div>
           <input
@@ -1386,7 +1386,7 @@ export default function POsPage() {
           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '10px' }}>
             <div>
               <div style={{ fontSize: '15px', fontWeight: 800, color: '#f5f8fc' }}>PO #{parsedPO.po_number}</div>
-              <div style={{ fontSize: '11px', color: '#d0dcea' }}>
+              <div style={{ fontSize: '11px', color: '#e8f0f8' }}>
                 Masterack • {parsedPO.ordered_date} • {importLines.filter((l) => l.include).length} lines
                 {importLines.filter((l) => l.include && !l.catalog_match).length > 0 && (
                   <span style={{ color: '#fbbf24', marginLeft: '6px' }}>
@@ -1425,7 +1425,7 @@ export default function POsPage() {
               <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'start', marginBottom: '6px' }}>
                 <div style={{ flex: 1 }}>
                   <div style={{ fontWeight: 800, fontSize: '14px', color: '#f5f8fc' }}>{line.part_number}</div>
-                  <div style={{ fontSize: '11px', color: '#d0dcea', marginTop: '1px' }}>{line.description}</div>
+                  <div style={{ fontSize: '11px', color: '#e8f0f8', marginTop: '1px' }}>{line.description}</div>
                   {line.catalog_match ? (
                     <div style={{ fontSize: '10px', color: '#4ade80', marginTop: '3px' }}>✓ Found in catalog: {line.catalog_match.graphic_package || line.catalog_match.part_number}</div>
                   ) : (
@@ -1434,7 +1434,7 @@ export default function POsPage() {
                       {line.include && (
                         <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '4px' }}>
                           <div>
-                            <label style={{ display: 'block', fontSize: '8px', fontWeight: 700, color: '#d0dcea', textTransform: 'uppercase', marginBottom: '2px' }}>End Customer</label>
+                            <label style={{ display: 'block', fontSize: '8px', fontWeight: 700, color: '#e8f0f8', textTransform: 'uppercase', marginBottom: '2px' }}>End Customer</label>
                             <input
                               value={line.new_end_customer}
                               onChange={(e) => setImportLines((prev) => prev.map((l, j) => j === idx ? { ...l, new_end_customer: e.target.value } : l))}
@@ -1443,7 +1443,7 @@ export default function POsPage() {
                             />
                           </div>
                           <div>
-                            <label style={{ display: 'block', fontSize: '8px', fontWeight: 700, color: '#d0dcea', textTransform: 'uppercase', marginBottom: '2px' }}>Vehicle Type</label>
+                            <label style={{ display: 'block', fontSize: '8px', fontWeight: 700, color: '#e8f0f8', textTransform: 'uppercase', marginBottom: '2px' }}>Vehicle Type</label>
                             <input
                               value={line.new_vehicle_type}
                               onChange={(e) => setImportLines((prev) => prev.map((l, j) => j === idx ? { ...l, new_vehicle_type: e.target.value } : l))}
@@ -1452,7 +1452,7 @@ export default function POsPage() {
                             />
                           </div>
                           <div style={{ gridColumn: 'span 2' }}>
-                            <label style={{ display: 'block', fontSize: '8px', fontWeight: 700, color: '#d0dcea', textTransform: 'uppercase', marginBottom: '2px' }}>Graphic Package</label>
+                            <label style={{ display: 'block', fontSize: '8px', fontWeight: 700, color: '#e8f0f8', textTransform: 'uppercase', marginBottom: '2px' }}>Graphic Package</label>
                             <input
                               value={line.new_graphic_package}
                               onChange={(e) => setImportLines((prev) => prev.map((l, j) => j === idx ? { ...l, new_graphic_package: e.target.value } : l))}
@@ -1480,12 +1480,12 @@ export default function POsPage() {
               {line.include && (
                 <div style={{ display: 'flex', gap: '8px', alignItems: 'end' }}>
                   <div>
-                    <label style={{ display: 'block', fontSize: '9px', fontWeight: 700, color: '#d0dcea', textTransform: 'uppercase', marginBottom: '2px' }}>Qty</label>
+                    <label style={{ display: 'block', fontSize: '9px', fontWeight: 700, color: '#e8f0f8', textTransform: 'uppercase', marginBottom: '2px' }}>Qty</label>
                     <div style={{ fontSize: '14px', fontWeight: 700, color: '#f5f8fc' }}>{line.quantity}</div>
                   </div>
 
                   <div style={{ flex: 1 }}>
-                    <label style={{ display: 'block', fontSize: '9px', fontWeight: 700, color: '#d0dcea', textTransform: 'uppercase', marginBottom: '2px' }}>Price</label>
+                    <label style={{ display: 'block', fontSize: '9px', fontWeight: 700, color: '#e8f0f8', textTransform: 'uppercase', marginBottom: '2px' }}>Price</label>
                     <div style={{ display: 'flex', gap: '4px', alignItems: 'center' }}>
                       <input
                         type="number"
@@ -1510,7 +1510,7 @@ export default function POsPage() {
                   </div>
 
                   <div style={{ textAlign: 'right' }}>
-                    <label style={{ display: 'block', fontSize: '9px', fontWeight: 700, color: '#d0dcea', textTransform: 'uppercase', marginBottom: '2px' }}>Total</label>
+                    <label style={{ display: 'block', fontSize: '9px', fontWeight: 700, color: '#e8f0f8', textTransform: 'uppercase', marginBottom: '2px' }}>Total</label>
                     <div style={{ fontSize: '14px', fontWeight: 800, color: '#60a5fa' }}>{fmt(line.quantity * line.final_price)}</div>
                   </div>
                 </div>
@@ -1523,7 +1523,7 @@ export default function POsPage() {
             <div style={{ fontSize: '14px', fontWeight: 800, color: '#f5f8fc' }}>
               Grand Total: <span style={{ color: '#60a5fa' }}>{fmt(importLines.filter((l) => l.include).reduce((s, l) => s + l.quantity * l.final_price, 0))}</span>
             </div>
-            <div style={{ fontSize: '11px', color: '#d0dcea' }}>
+            <div style={{ fontSize: '11px', color: '#e8f0f8' }}>
               {importLines.filter((l) => l.include).length} of {importLines.length} lines
             </div>
           </div>
@@ -1579,7 +1579,7 @@ export default function POsPage() {
               {lineItems.map((li, i) => (
                 <div key={i} style={{ display: 'flex', alignItems: 'center', gap: '8px', padding: '6px 0', borderBottom: '1px solid #1e2d3d' }}>
                   <div style={{ flex: 1, fontSize: '13px', fontWeight: 700 }}>{li.part_number}</div>
-                  <div style={{ fontSize: '12px', color: '#d0dcea' }}>{fmt(li.unit_price)}</div>
+                  <div style={{ fontSize: '12px', color: '#e8f0f8' }}>{fmt(li.unit_price)}</div>
                   <input
                     type="number"
                     value={li.quantity}
@@ -1614,14 +1614,14 @@ export default function POsPage() {
       )}
 
       {pos.length === 0 && !showImport && !showCreate && (
-        <div style={{ textAlign: 'center', padding: '32px 0', color: '#d0dcea' }}>
+        <div style={{ textAlign: 'center', padding: '32px 0', color: '#e8f0f8' }}>
           <div style={{ fontSize: '36px', marginBottom: '6px', opacity: 0.4 }}>📋</div>
           <div style={{ fontWeight: 600, fontSize: '13px' }}>No purchase orders yet</div>
         </div>
       )}
 
       {pos.length > 0 && filteredPos.length === 0 && poSearch && (
-        <div style={{ textAlign: 'center', padding: '24px 0', color: '#d0dcea' }}>
+        <div style={{ textAlign: 'center', padding: '24px 0', color: '#e8f0f8' }}>
           <div style={{ fontSize: '12px' }}>No POs matching &quot;{poSearch}&quot;</div>
         </div>
       )}
@@ -1634,7 +1634,7 @@ export default function POsPage() {
               <div style={{ fontSize: '12px', fontWeight: 700, color: '#a78bfa' }}>
                 Batch Invoice {selectedForInvoice.size > 0 ? `(${selectedForInvoice.size} selected)` : ''}
               </div>
-              <div style={{ fontSize: '10px', color: '#d0dcea', marginTop: '2px' }}>
+              <div style={{ fontSize: '10px', color: '#e8f0f8', marginTop: '2px' }}>
                 {invoiceablePOs.length} PO{invoiceablePOs.length !== 1 ? 's' : ''} ready to invoice (have SO + installed qty)
               </div>
             </div>
@@ -1673,7 +1673,7 @@ export default function POsPage() {
                   {invoiceResults.summary.errors > 0 && <span style={{ color: '#ef4444', marginLeft: '8px' }}>{invoiceResults.summary.errors} failed</span>}
                   {invoiceResults.summary.skipped > 0 && <span style={{ color: '#fbbf24', marginLeft: '8px' }}>{invoiceResults.summary.skipped} skipped</span>}
                   {invoiceResults.results?.filter((r: any) => r.status === 'success').map((r: any) => (
-                    <div key={r.poId} style={{ fontSize: '10px', color: '#d0dcea', marginTop: '2px' }}>
+                    <div key={r.poId} style={{ fontSize: '10px', color: '#e8f0f8', marginTop: '2px' }}>
                       PO #{r.poNumber} → Invoice #{r.invoiceNumber}
                     </div>
                   ))}
@@ -1739,7 +1739,7 @@ export default function POsPage() {
                     })()}
                     <div>
                       <div style={{ fontWeight: 800, fontSize: '15px' }}>PO #{po.po_number}</div>
-                      <div style={{ fontSize: '12px', color: '#d0dcea', marginTop: '1px' }}>
+                      <div style={{ fontSize: '12px', color: '#e8f0f8', marginTop: '1px' }}>
                         {po.customer} • {po.line_items.length} item{po.line_items.length !== 1 ? 's' : ''}
                         {po.status === 'complete' && <span style={{ color: '#4ade80', marginLeft: '6px' }}>&#10003; Complete</span>}
                         {(po as any).netsuite_invoice_number && <span style={{ color: '#34d399', marginLeft: '6px' }}>INV #{(po as any).netsuite_invoice_number}</span>}
@@ -1748,12 +1748,12 @@ export default function POsPage() {
                   </div>
                   <div style={{ textAlign: 'right' }}>
                     <div style={{ fontSize: '14px', fontWeight: 800, color: '#60a5fa' }}>{fmt(totalValue)}</div>
-                    <div style={{ fontSize: '10px', color: '#d0dcea', marginTop: '1px' }}>{isExpanded ? '▲' : '▼'} Details</div>
+                    <div style={{ fontSize: '10px', color: '#e8f0f8', marginTop: '1px' }}>{isExpanded ? '▲' : '▼'} Details</div>
                   </div>
                 </div>
                 <div style={{ marginTop: '8px' }}>
                   <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '11px', marginBottom: '3px' }}>
-                    <span style={{ color: '#d0dcea' }}>Progress</span>
+                    <span style={{ color: '#e8f0f8' }}>Progress</span>
                     <span style={{ color: pct >= 100 ? '#4ade80' : '#60a5fa', fontWeight: 700 }}>{totalInstalled}/{totalQty}</span>
                   </div>
                   <div style={{ height: '6px', background: '#1e2d3d', borderRadius: '3px' }}>
@@ -1791,7 +1791,7 @@ export default function POsPage() {
                     </div>
                   ) : (
                     <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '6px' }}>
-                      <div style={{ fontSize: '10px', color: '#d0dcea' }}>
+                      <div style={{ fontSize: '10px', color: '#e8f0f8' }}>
                         {po.ordered_date ? 'PO Date' : 'Imported'} {displayDate.toLocaleDateString([], { month: 'short', day: 'numeric', year: 'numeric' })}
                         {(po as any).netsuite_so_number && (
                           <span style={{ color: '#a78bfa', marginLeft: '6px' }}>
@@ -1850,7 +1850,7 @@ export default function POsPage() {
                     </div>
                   )}
 
-                  <div style={{ display: 'flex', gap: '4px', padding: '8px 0 4px', borderBottom: '1px solid #1e2d3d', fontSize: '10px', fontWeight: 700, color: '#d0dcea', textTransform: 'uppercase', letterSpacing: '0.3px' }}>
+                  <div style={{ display: 'flex', gap: '4px', padding: '8px 0 4px', borderBottom: '1px solid #1e2d3d', fontSize: '10px', fontWeight: 700, color: '#e8f0f8', textTransform: 'uppercase', letterSpacing: '0.3px' }}>
                     <div style={{ flex: 1 }}>Part #</div>
                     <div style={{ width: '36px', textAlign: 'center' }}>Qty</div>
                     <div style={{ width: '42px', textAlign: 'center' }}>Done</div>
@@ -1892,7 +1892,7 @@ export default function POsPage() {
                         <div style={{ flex: 1 }} onClick={() => startEditLine(li)}>
                           <div style={{ fontWeight: 700, color: '#f5f8fc' }}>{li.part_number}</div>
                           {li.description && (
-                            <div style={{ fontSize: '10px', color: '#d0dcea', marginTop: '1px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{li.description}</div>
+                            <div style={{ fontSize: '10px', color: '#e8f0f8', marginTop: '1px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{li.description}</div>
                           )}
                           <div style={{ height: '3px', background: '#1e2d3d', borderRadius: '2px', marginTop: '3px', width: '80%' }}>
                             <div style={{ height: '100%', width: `${Math.min(linePct, 100)}%`, background: linePct >= 100 ? '#22c55e' : '#3b82f6', borderRadius: '2px' }} />
@@ -1960,7 +1960,7 @@ export default function POsPage() {
                                 INV #{inv.netsuite_invoice_number || inv.netsuite_invoice_id}
                               </a>
                               {inv.memo && (
-                                <div style={{ fontSize: '10px', color: '#d0dcea', marginTop: '2px' }}>{inv.memo}</div>
+                                <div style={{ fontSize: '10px', color: '#e8f0f8', marginTop: '2px' }}>{inv.memo}</div>
                               )}
                             </div>
                             <div style={{ textAlign: 'right' }}>
@@ -1968,7 +1968,7 @@ export default function POsPage() {
                                 <div style={{ fontSize: '11px', color: '#dce6f0', fontWeight: 600 }}>{inv.total_qty} unit{inv.total_qty !== 1 ? 's' : ''}</div>
                               )}
                               {inv.created_at && (
-                                <div style={{ fontSize: '9px', color: '#d0dcea' }}>
+                                <div style={{ fontSize: '9px', color: '#e8f0f8' }}>
                                   {new Date(inv.created_at).toLocaleDateString([], { month: 'short', day: 'numeric' })}
                                 </div>
                               )}
@@ -2004,5 +2004,5 @@ export default function POsPage() {
   );
 }
 
-const labelStyle: React.CSSProperties = { display: 'block', fontSize: '10px', fontWeight: 700, color: '#d0dcea', textTransform: 'uppercase', letterSpacing: '0.5px', marginBottom: '4px' };
+const labelStyle: React.CSSProperties = { display: 'block', fontSize: '10px', fontWeight: 700, color: '#e8f0f8', textTransform: 'uppercase', letterSpacing: '0.5px', marginBottom: '4px' };
 const inputStyle: React.CSSProperties = { width: '100%', padding: '10px 12px', borderRadius: '8px', border: '1px solid #1e2d3d', background: '#0f1720', color: '#f5f8fc', fontSize: '13px' };

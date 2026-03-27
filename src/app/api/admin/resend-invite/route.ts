@@ -54,7 +54,7 @@ export async function POST(req: NextRequest) {
           <div style="font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; max-width: 480px; margin: 0 auto; background: #0a1017; color: #f5f8fc; padding: 32px; border-radius: 16px;">
             <div style="text-align: center; margin-bottom: 24px;">
               <div style="font-size: 28px; font-weight: 800; color: #ffffff;">FleetSuite</div>
-              <div style="font-size: 13px; color: #d0dcea; margin-top: 4px;">by BMG Fleet</div>
+              <div style="font-size: 13px; color: #e8f0f8; margin-top: 4px;">by BMG Fleet</div>
             </div>
 
             <div style="background: #141e2b; border: 1px solid #1e2d3d; border-radius: 12px; padding: 20px; margin-bottom: 20px;">
@@ -72,7 +72,7 @@ export async function POST(req: NextRequest) {
               </p>
             </div>
 
-            <div style="text-align: center; font-size: 11px; color: #d0dcea;">
+            <div style="text-align: center; font-size: 11px; color: #e8f0f8;">
               BMG Fleet Graphics &amp; Upfitting
             </div>
           </div>
