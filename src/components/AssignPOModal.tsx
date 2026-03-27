@@ -122,14 +122,14 @@ export default function AssignPOModal({ open, onClose, vehicleId, vehiclePartNum
         }}>
           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '10px' }}>
             <div>
-              <div style={{ fontSize: '15px', fontWeight: 800, color: '#f5f8fc' }}>Assign Purchase Order</div>
-              <div style={{ fontSize: '11px', color: '#dce6f0', marginTop: '2px' }}>
+              <div style={{ fontSize: '15px', fontWeight: 800, color: 'var(--text-body)' }}>Assign Purchase Order</div>
+              <div style={{ fontSize: '11px', color: 'var(--text-body)', marginTop: '2px' }}>
                 VIN: {vehicleVin}{vehiclePartNumber ? ` · Part: ${vehiclePartNumber}` : ''}
               </div>
             </div>
             <button onClick={onClose} style={{
               background: 'transparent', border: '1px solid #1e2d3d', borderRadius: '6px',
-              padding: '4px 10px', color: '#dce6f0', fontSize: '11px', fontWeight: 700, cursor: 'pointer',
+              padding: '4px 10px', color: 'var(--text-body)', fontSize: '11px', fontWeight: 700, cursor: 'pointer',
             }}>ESC</button>
           </div>
 
@@ -145,7 +145,7 @@ export default function AssignPOModal({ open, onClose, vehicleId, vehiclePartNum
               style={{
                 flex: 1, background: 'rgba(255,255,255,0.04)', border: '1px solid #1e2d3d',
                 borderRadius: '10px', padding: '10px 12px', outline: 'none',
-                color: '#f5f8fc', fontSize: '14px', fontWeight: 600,
+                color: 'var(--text-body)', fontSize: '14px', fontWeight: 600,
               }}
             />
           </div>
@@ -165,7 +165,7 @@ export default function AssignPOModal({ open, onClose, vehicleId, vehiclePartNum
         {/* Results */}
         <div style={{ flex: 1, overflowY: 'auto' }}>
           {searching && (
-            <div style={{ padding: '32px', textAlign: 'center', color: '#e8f0f8', fontSize: '13px' }}>
+            <div style={{ padding: '32px', textAlign: 'center', color: 'var(--text-label)', fontSize: '13px' }}>
               Loading POs...
             </div>
           )}
@@ -173,7 +173,7 @@ export default function AssignPOModal({ open, onClose, vehicleId, vehiclePartNum
           {!searching && pos.length === 0 && (
             <div style={{ padding: '40px 20px', textAlign: 'center' }}>
               <div style={{ fontSize: '32px', opacity: 0.3, marginBottom: '8px' }}>📋</div>
-              <div style={{ fontSize: '14px', fontWeight: 700, color: '#e8f0f8' }}>No POs found</div>
+              <div style={{ fontSize: '14px', fontWeight: 700, color: 'var(--text-label)' }}>No POs found</div>
               <div style={{ fontSize: '12px', color: '#3a4a5d', marginTop: '4px' }}>Try a different search term</div>
             </div>
           )}
@@ -195,7 +195,7 @@ export default function AssignPOModal({ open, onClose, vehicleId, vehiclePartNum
                 <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'start', marginBottom: '6px' }}>
                   <div style={{ flex: 1 }}>
                     <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-                      <span style={{ fontSize: '13px', fontWeight: 700, color: '#f5f8fc' }}>PO #{po.po_number}</span>
+                      <span style={{ fontSize: '13px', fontWeight: 700, color: 'var(--text-body)' }}>PO #{po.po_number}</span>
                       <span style={{
                         fontSize: '10px', fontWeight: 700,
                         color: po.status === 'open' ? '#fbbf24' : '#4ade80',
@@ -209,7 +209,7 @@ export default function AssignPOModal({ open, onClose, vehicleId, vehiclePartNum
                         }}>PART MATCH</span>
                       )}
                     </div>
-                    <div style={{ fontSize: '11px', color: '#dce6f0', marginTop: '2px' }}>
+                    <div style={{ fontSize: '11px', color: 'var(--text-body)', marginTop: '2px' }}>
                       {po.customer}{lineCount > 0 ? ` · ${lineCount} items` : ''}
                       {totalValue > 0 ? ` · $${totalValue.toFixed(2).replace(/\B(?=(\d{3})+(?!\d))/g, ',')}` : ''}
                     </div>
@@ -218,11 +218,11 @@ export default function AssignPOModal({ open, onClose, vehicleId, vehiclePartNum
                       <div style={{ marginTop: '6px' }}>
                         {po.po_line_items.slice(0, 3).map((li) => (
                           <div key={li.id} style={{
-                            fontSize: '10px', color: '#e8f0f8', marginTop: '2px',
+                            fontSize: '10px', color: 'var(--text-label)', marginTop: '2px',
                             display: 'flex', gap: '6px', alignItems: 'center',
                           }}>
                             <span style={{
-                              color: li.part_number?.toLowerCase() === vehiclePartNumber?.toLowerCase() ? '#4ade80' : '#dce6f0',
+                              color: li.part_number?.toLowerCase() === vehiclePartNumber?.toLowerCase() ? '#4ade80' : 'var(--text-body)',
                               fontWeight: li.part_number?.toLowerCase() === vehiclePartNumber?.toLowerCase() ? 700 : 400,
                             }}>
                               {li.part_number}

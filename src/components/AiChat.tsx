@@ -297,10 +297,10 @@ export default function AiChat() {
                 <MascotSvg thinking={sending} size={42} />
               </div>
               <div>
-                <div style={{ fontSize: '13px', fontWeight: 800, color: '#f5f8fc' }}>
+                <div style={{ fontSize: '13px', fontWeight: 800, color: 'var(--text-body)' }}>
                   FleetSuite AI
                 </div>
-                <div style={{ fontSize: '10px', color: sending ? '#60a5fa' : '#e8f0f8' }}>
+                <div style={{ fontSize: '10px', color: sending ? '#60a5fa' : 'var(--text-label)' }}>
                   {sending ? 'Thinking...' : 'Ask anything or tell me to do something'}
                 </div>
               </div>
@@ -310,12 +310,12 @@ export default function AiChat() {
                 <button
                   onClick={clearChat}
                   style={{
-                    background: 'none', border: 'none', color: '#e8f0f8',
+                    background: 'none', border: 'none', color: 'var(--text-label)',
                     fontSize: '10px', cursor: 'pointer', fontWeight: 600,
                     padding: '4px 8px', borderRadius: '4px',
                   }}
                   onMouseEnter={e => (e.currentTarget.style.color = '#f87171')}
-                  onMouseLeave={e => (e.currentTarget.style.color = '#e8f0f8')}
+                  onMouseLeave={e => (e.currentTarget.style.color = 'var(--text-label)')}
                 >
                   Clear
                 </button>
@@ -323,7 +323,7 @@ export default function AiChat() {
               <button
                 onClick={() => setIsOpen(false)}
                 style={{
-                  background: 'none', border: 'none', color: '#e8f0f8',
+                  background: 'none', border: 'none', color: 'var(--text-label)',
                   fontSize: '18px', cursor: 'pointer', lineHeight: 1, padding: '0 4px',
                 }}
               >
@@ -348,7 +348,7 @@ export default function AiChat() {
                 <div style={{ marginBottom: '12px' }}>
                   <MascotSvg size={80} />
                 </div>
-                <div style={{ fontSize: '12px', color: '#e8f0f8', lineHeight: '1.5' }}>
+                <div style={{ fontSize: '12px', color: 'var(--text-label)', lineHeight: '1.5' }}>
                   {isAdmin
                     ? 'Ask about data, graphics jobs, customers, or tell me to do something'
                     : isGraphicsProduction
@@ -452,7 +452,7 @@ export default function AiChat() {
                 borderRadius: '8px',
                 border: '1px solid #1e2d3d',
                 background: '#0a1018',
-                color: '#f5f8fc',
+                color: 'var(--text-body)',
                 fontSize: '12px',
                 outline: 'none',
               }}

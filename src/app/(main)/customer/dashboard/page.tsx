@@ -46,11 +46,11 @@ const VEHICLE_STATUS_MAP: Record<string, { label: string; color: string; bg: str
   stuck_parts: { label: 'Waiting on Parts', color: '#ef4444', bg: 'rgba(239,68,68,0.1)' },
   stuck_graphics: { label: 'Waiting on Graphics', color: '#c084fc', bg: 'rgba(192,132,252,0.1)' },
   completed: { label: 'Completed', color: '#34d399', bg: 'rgba(16,185,129,0.1)' },
-  delivered: { label: 'Delivered', color: '#dce6f0', bg: 'rgba(107,122,141,0.1)' },
+  delivered: { label: 'Delivered', color: 'var(--text-body)', bg: 'rgba(107,122,141,0.1)' },
 };
 
 const GRAPHICS_STATUS_MAP: Record<string, { label: string; color: string; bg: string }> = {
-  pending: { label: 'Pending', color: '#dce6f0', bg: 'rgba(107,122,141,0.1)' },
+  pending: { label: 'Pending', color: 'var(--text-body)', bg: 'rgba(107,122,141,0.1)' },
   in_design: { label: 'In Design', color: '#60a5fa', bg: 'rgba(96,165,250,0.1)' },
   proof_sent: { label: 'Proof Sent', color: '#c084fc', bg: 'rgba(192,132,252,0.1)' },
   approved: { label: 'Approved', color: '#34d399', bg: 'rgba(16,185,129,0.1)' },
@@ -224,7 +224,7 @@ export default function CustomerDashboard() {
           )}
           <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
             {vehicleJobs.map(job => {
-              const status = VEHICLE_STATUS_MAP[job.status] || { label: job.status, color: '#dce6f0', bg: 'rgba(107,122,141,0.1)' };
+              const status = VEHICLE_STATUS_MAP[job.status] || { label: job.status, color: 'var(--text-body)', bg: 'rgba(107,122,141,0.1)' };
               const isExpanded = expandedId === `v-${job.id}`;
               const isComplete = ['completed', 'delivered'].includes(job.status);
 
@@ -307,7 +307,7 @@ export default function CustomerDashboard() {
           )}
           <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
             {graphicsJobs.map(job => {
-              const status = GRAPHICS_STATUS_MAP[job.status] || { label: job.status, color: '#dce6f0', bg: 'rgba(107,122,141,0.1)' };
+              const status = GRAPHICS_STATUS_MAP[job.status] || { label: job.status, color: 'var(--text-body)', bg: 'rgba(107,122,141,0.1)' };
               const isExpanded = expandedId === `g-${job.id}`;
               const isComplete = job.status === 'completed';
 

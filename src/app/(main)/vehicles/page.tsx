@@ -336,7 +336,7 @@ export default function VehiclesPage() {
                           }}>
                             <div>
                               <div style={{ fontSize: '10px', fontWeight: 700, color: '#60a5fa', textTransform: 'uppercase', letterSpacing: '0.3px' }}>Assigned PO</div>
-                              <div style={{ fontSize: '13px', fontWeight: 700, color: '#f5f8fc', marginTop: '2px' }}>
+                              <div style={{ fontSize: '13px', fontWeight: 700, color: 'var(--text-body)', marginTop: '2px' }}>
                                 PO #{poInfo[v.po_line_item_id].po_number} — {poInfo[v.po_line_item_id].customer}
                               </div>
                             </div>

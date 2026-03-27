@@ -337,16 +337,16 @@ export default function KnowledgePage() {
   const inputStyle: React.CSSProperties = {
     width: '100%', padding: '8px 10px', borderRadius: '8px',
     border: '1px solid #2a3a4d', background: '#0f1720',
-    color: '#f5f8fc', fontSize: '12px',
+    color: 'var(--text-body)', fontSize: '12px',
   };
 
   const labelStyle: React.CSSProperties = {
-    fontSize: '9px', fontWeight: 700, color: '#e8f0f8',
+    fontSize: '9px', fontWeight: 700, color: 'var(--text-label)',
     textTransform: 'uppercase', letterSpacing: '0.3px', marginBottom: '3px',
   };
 
   if (loading) {
-    return <div style={{ textAlign: 'center', padding: '40px', color: '#e8f0f8' }}>Loading knowledge base...</div>;
+    return <div style={{ textAlign: 'center', padding: '40px', color: 'var(--text-label)' }}>Loading knowledge base...</div>;
   }
 
   return (
@@ -354,7 +354,7 @@ export default function KnowledgePage() {
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '14px' }}>
         <div>
           <div style={{ fontSize: '22px', fontWeight: 800 }}>Knowledge Base</div>
-          <div style={{ fontSize: '11px', color: '#e8f0f8', marginTop: '2px' }}>
+          <div style={{ fontSize: '11px', color: 'var(--text-label)', marginTop: '2px' }}>
             Upload files or add docs the AI agent can reference
           </div>
         </div>
@@ -374,7 +374,7 @@ export default function KnowledgePage() {
         >
           <span style={{ fontSize: '22px' }}>📁</span>
           <span>Upload File</span>
-          <span style={{ fontSize: '9px', color: '#e8f0f8', fontWeight: 400 }}>
+          <span style={{ fontSize: '9px', color: 'var(--text-label)', fontWeight: 400 }}>
             PDF, Word, Excel, CSV, TXT, Images
           </span>
           <input
@@ -399,7 +399,7 @@ export default function KnowledgePage() {
         >
           <span style={{ fontSize: '22px' }}>✏️</span>
           <span>Type / Paste</span>
-          <span style={{ fontSize: '9px', color: '#e8f0f8', fontWeight: 400 }}>
+          <span style={{ fontSize: '9px', color: 'var(--text-label)', fontWeight: 400 }}>
             Manually enter content
           </span>
         </button>
@@ -425,7 +425,7 @@ export default function KnowledgePage() {
 
       {/* Doc list */}
       {filtered.length === 0 && (
-        <div style={{ textAlign: 'center', padding: '40px', color: '#e8f0f8' }}>
+        <div style={{ textAlign: 'center', padding: '40px', color: 'var(--text-label)' }}>
           <div style={{ fontSize: '28px', marginBottom: '8px' }}>📚</div>
           <div style={{ fontSize: '13px', fontWeight: 700 }}>{docs.length === 0 ? 'No documents yet' : 'No matching documents'}</div>
           <div style={{ fontSize: '11px', marginTop: '4px' }}>
@@ -450,11 +450,11 @@ export default function KnowledgePage() {
                 <div style={{ flex: 1, minWidth: 0 }}>
                   <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
                     <span style={{ fontSize: '16px' }}>{getFileIcon(doc.file_type)}</span>
-                    <div style={{ fontSize: '13px', fontWeight: 800, color: '#f5f8fc', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                    <div style={{ fontSize: '13px', fontWeight: 800, color: 'var(--text-body)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
                       {doc.title}
                     </div>
                   </div>
-                  <div style={{ fontSize: '10px', color: '#e8f0f8', display: 'flex', gap: '8px', marginTop: '2px', flexWrap: 'wrap' }}>
+                  <div style={{ fontSize: '10px', color: 'var(--text-label)', display: 'flex', gap: '8px', marginTop: '2px', flexWrap: 'wrap' }}>
                     {doc.category && (
                       <span style={{ padding: '1px 6px', borderRadius: '4px', background: 'rgba(59,130,246,0.1)', border: '1px solid rgba(59,130,246,0.2)', color: '#60a5fa', fontSize: '9px', fontWeight: 700, textTransform: 'uppercase' }}>
                         {doc.category}
@@ -470,7 +470,7 @@ export default function KnowledgePage() {
                     <span>{new Date(doc.updated_at).toLocaleDateString()}</span>
                   </div>
                 </div>
-                <span style={{ fontSize: '12px', color: '#e8f0f8', marginLeft: '8px' }}>{isExpanded ? '▲' : '▼'}</span>
+                <span style={{ fontSize: '12px', color: 'var(--text-label)', marginLeft: '8px' }}>{isExpanded ? '▲' : '▼'}</span>
               </div>
 
               {isExpanded && (
@@ -500,7 +500,7 @@ export default function KnowledgePage() {
                     maxHeight: '200px', overflowY: 'auto', whiteSpace: 'pre-wrap',
                   }}>
                     {hasFile && (
-                      <div style={{ fontSize: '9px', color: '#e8f0f8', marginBottom: '6px', fontWeight: 700, textTransform: 'uppercase' }}>
+                      <div style={{ fontSize: '9px', color: 'var(--text-label)', marginBottom: '6px', fontWeight: 700, textTransform: 'uppercase' }}>
                         Extracted Text Preview
                       </div>
                     )}
@@ -510,7 +510,7 @@ export default function KnowledgePage() {
                   {doc.tags && doc.tags.length > 0 && (
                     <div style={{ display: 'flex', gap: '4px', flexWrap: 'wrap', marginTop: '6px' }}>
                       {doc.tags.map((t, i) => (
-                        <span key={i} style={{ fontSize: '9px', padding: '2px 6px', borderRadius: '4px', background: '#1e2d3d', color: '#dce6f0' }}>
+                        <span key={i} style={{ fontSize: '9px', padding: '2px 6px', borderRadius: '4px', background: '#1e2d3d', color: 'var(--text-body)' }}>
                           {t}
                         </span>
                       ))}
@@ -537,8 +537,8 @@ export default function KnowledgePage() {
         <div style={{ position: 'fixed', top: 0, left: 0, right: 0, bottom: 0, background: 'rgba(0,0,0,0.7)', zIndex: 1000, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '16px' }}>
           <div style={{ background: '#141e2b', border: '1px solid #1e2d3d', borderRadius: '14px', padding: '18px', maxWidth: '480px', width: '100%' }}>
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '12px' }}>
-              <div style={{ fontSize: '16px', fontWeight: 800, color: '#f5f8fc' }}>Upload File</div>
-              <button onClick={() => { setShowUploadForm(false); setUploadFile(null); if (fileInputRef.current) fileInputRef.current.value = ''; }} style={{ background: 'none', border: 'none', color: '#e8f0f8', fontSize: '18px', cursor: 'pointer' }}>✕</button>
+              <div style={{ fontSize: '16px', fontWeight: 800, color: 'var(--text-body)' }}>Upload File</div>
+              <button onClick={() => { setShowUploadForm(false); setUploadFile(null); if (fileInputRef.current) fileInputRef.current.value = ''; }} style={{ background: 'none', border: 'none', color: 'var(--text-label)', fontSize: '18px', cursor: 'pointer' }}>✕</button>
             </div>
 
             {/* File preview */}
@@ -548,8 +548,8 @@ export default function KnowledgePage() {
             }}>
               <span style={{ fontSize: '28px' }}>{getFileIcon(uploadFile.type)}</span>
               <div>
-                <div style={{ fontSize: '13px', fontWeight: 700, color: '#f5f8fc' }}>{uploadFile.name}</div>
-                <div style={{ fontSize: '10px', color: '#e8f0f8' }}>{formatFileSize(uploadFile.size)}</div>
+                <div style={{ fontSize: '13px', fontWeight: 700, color: 'var(--text-body)' }}>{uploadFile.name}</div>
+                <div style={{ fontSize: '10px', color: 'var(--text-label)' }}>{formatFileSize(uploadFile.size)}</div>
               </div>
             </div>
 
@@ -597,10 +597,10 @@ export default function KnowledgePage() {
         <div style={{ position: 'fixed', top: 0, left: 0, right: 0, bottom: 0, background: 'rgba(0,0,0,0.7)', zIndex: 1000, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '16px' }}>
           <div style={{ background: '#141e2b', border: '1px solid #1e2d3d', borderRadius: '14px', padding: '18px', maxWidth: '480px', width: '100%', maxHeight: '80vh', overflowY: 'auto' }}>
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '12px' }}>
-              <div style={{ fontSize: '16px', fontWeight: 800, color: '#f5f8fc' }}>
+              <div style={{ fontSize: '16px', fontWeight: 800, color: 'var(--text-body)' }}>
                 {editingDoc ? 'Edit Document' : 'Add Knowledge Document'}
               </div>
-              <button onClick={() => { setShowForm(false); setEditingDoc(null); }} style={{ background: 'none', border: 'none', color: '#e8f0f8', fontSize: '18px', cursor: 'pointer' }}>✕</button>
+              <button onClick={() => { setShowForm(false); setEditingDoc(null); }} style={{ background: 'none', border: 'none', color: 'var(--text-label)', fontSize: '18px', cursor: 'pointer' }}>✕</button>
             </div>
 
             <div style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
@@ -650,7 +650,7 @@ export default function KnowledgePage() {
         style={{
           width: '100%', padding: '10px', borderRadius: '10px', marginTop: '12px',
           border: '1px solid #1e2d3d', background: 'transparent',
-          color: '#dce6f0', fontSize: '13px', fontWeight: 700, cursor: 'pointer',
+          color: 'var(--text-body)', fontSize: '13px', fontWeight: 700, cursor: 'pointer',
         }}
       >
         ← Back
