@@ -1278,20 +1278,8 @@ function BulkVINUpload() {
   const duplicateCount = parsedVINs.filter(v => v.duplicate).length;
   const existsCount = parsedVINs.filter(v => v.existsInDb).length;
 
-  // For worksheet mode: every VIN must have a part (customer + end customer + part#)
-  // A VIN has a part if it has a per-page matched partNumber OR the global selectedPart is set
-  const worksheetMissingPart = inputMode === 'worksheet' && parsedVINs.length > 0 && (() => {
-    const vinsWithoutPart = parsedVINs.filter(v => v.valid && !v.duplicate && !v.existsInDb).filter(v => {
-      if (v.partNumber) {
-        // Has per-page part — check it matches a catalog item
-        const match = catalogItems.find(c => c.part_number === v.partNumber);
-        return !match;
-      }
-      return !selectedPart;
-    });
-    return vinsWithoutPart.length > 0;
-  })();
-  const canUpload = validCount > 0 && !worksheetMissingPart;
+  // Part validation is handled per-page-header, not globally
+  const canUpload = validCount > 0;
   const successCount = results.filter(r => r.success).length;
   const failCount = results.filter(r => !r.success).length;
   const poMatchCount = results.filter(r => r.poMatch).length;
@@ -1398,8 +1386,8 @@ function BulkVINUpload() {
 
       {/* Part Selection */}
       <div style={{ marginBottom: '12px' }}>
-        <label style={{ display: 'block', fontSize: '10px', fontWeight: 700, color: inputMode === 'worksheet' && !selectedPart ? 'var(--error)' : 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.5px', marginBottom: '6px' }}>
-          Assign Part {inputMode === 'worksheet' ? '(required)' : '(optional)'}
+        <label style={{ display: 'block', fontSize: '10px', fontWeight: 700, color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.5px', marginBottom: '6px' }}>
+          Assign Part (optional)
         </label>
         <select
           value={selectedPartId}
@@ -1539,9 +1527,13 @@ function BulkVINUpload() {
               );
             })}
           </div>
-          {selectedPart && (
+          {selectedPart ? (
             <div style={{ marginTop: '6px', padding: '4px 8px', borderRadius: '6px', background: 'var(--success-bg)', border: '1px solid var(--success-border)', fontSize: '11px', color: 'var(--success)', fontWeight: 600 }}>
               ✓ Auto-matched to: {selectedPart.part_number}
+            </div>
+          ) : (
+            <div style={{ marginTop: '6px', padding: '4px 8px', borderRadius: '6px', background: 'var(--warning-bg)', border: '1px solid var(--warning-border)', fontSize: '11px', color: 'var(--warning)', fontWeight: 600 }}>
+              ⚠ No part matched — select a part above or edit Part#
             </div>
           )}
           {worksheetNotes && (
@@ -1629,9 +1621,13 @@ function BulkVINUpload() {
                             );
                           })}
                         </div>
-                        {matchedPagePart && (
+                        {matchedPagePart ? (
                           <div style={{ marginTop: '4px', padding: '3px 6px', borderRadius: '5px', background: 'var(--success-bg)', border: '1px solid var(--success-border)', fontSize: '10px', color: 'var(--success)', fontWeight: 600 }}>
                             ✓ Matched: {matchedPagePart.part_number}
+                          </div>
+                        ) : (
+                          <div style={{ marginTop: '4px', padding: '3px 6px', borderRadius: '5px', background: 'var(--warning-bg)', border: '1px solid var(--warning-border)', fontSize: '10px', color: 'var(--warning)', fontWeight: 600 }}>
+                            ⚠ No part matched — tap Part# above to set
                           </div>
                         )}
                       </div>
@@ -1715,16 +1711,7 @@ function BulkVINUpload() {
             style={{ width: '100%', padding: '8px', borderRadius: '8px', border: '1px dashed var(--border)', background: 'transparent', color: 'var(--text-muted)', fontSize: '12px', fontWeight: 600, cursor: 'pointer', marginBottom: '12px' }}
           >+ Add VIN</button>
 
-          {/* Required fields warning */}
-          {worksheetMissingPart && (
-            <div style={{ padding: '10px 12px', borderRadius: '10px', background: 'var(--error-bg)', border: '1px solid var(--error-border)', marginBottom: '10px', display: 'flex', alignItems: 'center', gap: '8px' }}>
-              <span style={{ fontSize: '16px' }}>⚠️</span>
-              <div>
-                <div style={{ fontSize: '12px', fontWeight: 700, color: 'var(--error)' }}>Part selection required</div>
-                <div style={{ fontSize: '11px', color: 'var(--error)', opacity: 0.8 }}>Customer, End Customer, and Part# are required. Select a part above to auto-fill these fields.</div>
-              </div>
-            </div>
-          )}
+          {/* Per-page part warnings are shown in page header dividers */}
 
           {/* Action Buttons */}
           <div style={{ display: 'flex', gap: '8px' }}>
