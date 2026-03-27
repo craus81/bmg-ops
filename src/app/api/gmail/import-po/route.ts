@@ -133,7 +133,8 @@ COLUMN IDENTIFICATION — THIS IS CRITICAL:
 The PO table has multiple columns that contain part-number-like codes. You MUST use the correct columns:
 - "Part Number" or "Part Number Supplier Part Number" column: This is the CORRECT column for the buyer/Masterack part number. Use this value for part_number.
 - "Supplier Part" row below a line item: This is BMG's part number. Use this for supplier_part.
-- "Drawing Number" or "Drawing Number and Revision" column: DO NOT use values from this column. These are engineering drawing references, NOT part numbers. They may look similar to part numbers but they are NOT the same.
+- "Drawing Number" or "Drawing Number and Revision" column: COMPLETELY IGNORE THIS COLUMN. Do NOT extract values from it. Do NOT put drawing numbers or revision numbers into part_number or supplier_part. These are engineering drawing references that have nothing to do with part numbers.
+- "Revision" column: COMPLETELY IGNORE THIS COLUMN. Revision numbers are NOT part numbers.
 
 Return ONLY valid JSON, no markdown, no backticks, no other text:
 {
@@ -152,7 +153,6 @@ Return ONLY valid JSON, no markdown, no backticks, no other text:
       "line_no": "1.000",
       "part_number": "06T278",
       "supplier_part": "06T278",
-      "drawing_number": "DWG-12345 Rev A",
       "description": "GRAPHIC KIT-FORD TRANSIT",
       "quantity": 10,
       "unit_price": 45.00,
@@ -166,8 +166,7 @@ RULES:
 - Extract EVERY line item row — do not skip any
 - part_number: The Masterack/buyer part number from the "Part Number" column (e.g., RM530432, 06T278). This is the PRIMARY identifier.
 - supplier_part: BMG's supplier part number, often shown on the line below the main item row. If not present, copy part_number.
-- drawing_number: The value from the "Drawing Number and Revision" column, if present. This is for reference only — it is NOT the part number.
-- DO NOT confuse drawing numbers with part numbers. They are different columns.
+- DO NOT include drawing numbers or revision numbers anywhere. Ignore those columns entirely. Only extract from the "Part Number" and "Supplier Part" columns.
 - quantity: Integer only
 - unit_price: Decimal number, no $ sign (e.g., 45.00)
 - delivery_date: The requested delivery date for that line, if shown
