@@ -360,18 +360,20 @@ export default function POsPage() {
   };
 
   const handleDeletePO = async (poId: string) => {
-    // Clear FK references from scanned_vehicles first
-    const po = pos.find(p => p.id === poId);
-    if (po) {
-      const lineIds = po.line_items.map(li => li.id);
-      if (lineIds.length > 0) {
-        await supabase.from('scanned_vehicles').update({ po_line_item_id: null }).in('po_line_item_id', lineIds);
+    try {
+      const res = await fetch('/api/pos/delete', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ poIds: [poId] }),
+      });
+      const data = await res.json();
+      if (data.success) {
+        setPos((prev) => prev.filter((p) => p.id !== poId));
+      } else {
+        alert(`Failed to delete PO: ${data.results?.[0]?.error || data.error || 'Unknown error'}`);
       }
-    }
-    await supabase.from('po_line_items').delete().eq('po_id', poId);
-    const { error } = await supabase.from('purchase_orders').delete().eq('id', poId);
-    if (!error) {
-      setPos((prev) => prev.filter((p) => p.id !== poId));
+    } catch {
+      alert('Delete failed — please try again');
     }
   };
 
@@ -390,8 +392,23 @@ export default function POsPage() {
     if (!window.confirm(`Delete ${count} PO${count !== 1 ? 's' : ''} and all their line items? This cannot be undone.`)) return;
 
     setDeletingBatch(true);
-    for (const poId of selectedForDelete) {
-      await handleDeletePO(poId);
+    try {
+      const res = await fetch('/api/pos/delete', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ poIds: Array.from(selectedForDelete) }),
+      });
+      const data = await res.json();
+      if (data.deleted > 0) {
+        const deletedIds = data.results.filter((r: any) => r.success).map((r: any) => r.id);
+        setPos((prev) => prev.filter((p) => !deletedIds.includes(p.id)));
+      }
+      if (!data.success) {
+        const failed = data.results.filter((r: any) => !r.success);
+        alert(`${data.deleted} of ${data.total} POs deleted. ${failed.length} failed.`);
+      }
+    } catch {
+      alert('Batch delete failed — please try again');
     }
     setSelectedForDelete(new Set());
     setEditMode(false);
@@ -399,15 +416,24 @@ export default function POsPage() {
   };
 
   const handleDeleteLineItem = async (lineId: string, poId: string) => {
-    const { error } = await supabase.from('po_line_items').delete().eq('id', lineId);
-    if (!error) {
-      setPos((prev) =>
-        prev.map((po) =>
-          po.id === poId
-            ? { ...po, line_items: po.line_items.filter((li) => li.id !== lineId) }
-            : po
-        )
-      );
+    try {
+      const res = await fetch('/api/pos/delete-line', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ lineId }),
+      });
+      const data = await res.json();
+      if (data.success) {
+        setPos((prev) =>
+          prev.map((po) =>
+            po.id === poId
+              ? { ...po, line_items: po.line_items.filter((li) => li.id !== lineId) }
+              : po
+          )
+        );
+      }
+    } catch {
+      alert('Failed to delete line item');
     }
   };
 
@@ -1722,7 +1748,7 @@ export default function POsPage() {
                   </div>
                   <div style={{ textAlign: 'right' }}>
                     <div style={{ fontSize: '14px', fontWeight: 800, color: '#60a5fa' }}>{fmt(totalValue)}</div>
-                    <div style={{ fontSize: '10px', color: '#4a5f78', marginTop: '1px' }}>{isExpanded ? '&#9650;' : '&#9660;'} Details</div>
+                    <div style={{ fontSize: '10px', color: '#4a5f78', marginTop: '1px' }}>{isExpanded ? '▲' : '▼'} Details</div>
                   </div>
                 </div>
                 <div style={{ marginTop: '8px' }}>
