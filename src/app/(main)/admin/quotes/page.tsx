@@ -1384,6 +1384,15 @@ function NewQuote({ onCreated, editQuote }: { onCreated: () => void; editQuote?:
           proofImageBase64: proofBase64,
           templateMediaType,
           proofMediaType,
+          vehicleDimensions: selectedTemplate ? {
+            make: selectedTemplate.make,
+            model: selectedTemplate.model,
+            year: selectedTemplate.year,
+            overall_length_in: selectedTemplate.overall_length_in,
+            overall_height_in: selectedTemplate.overall_height_in,
+            wheelbase_in: selectedTemplate.wheelbase_in,
+            panels: selectedTemplate.panel_data || [],
+          } : undefined,
         }),
       });
 

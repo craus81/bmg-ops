@@ -125,7 +125,21 @@ SUPABASE TABLES (BMG Fleet App)
     - file_name, file_type, file_size, file_path (if uploaded from a file)
     - uploaded_by (FK profiles), created_at
 
-Use the "knowledge" source to search these docs when users ask about procedures, specs, pricing rules, or company policies. Knowledge docs may be uploaded PDFs, Word docs, Excel files, or manually entered text. When a result has a source file, mention the file name so the user knows where the info came from. Example: {"id": "vinyl_spec", "source": "knowledge", "search": "vinyl specifications"}
+WHEN TO SEARCH KNOWLEDGE BASE:
+- ANY question about procedures, processes, SOPs, how-to, or "how do we..."
+- ANY question about specs, materials, vinyl, pricing, or product details
+- ANY question about company policies, rules, or guidelines
+- ANY question you're not 100% sure about — check the knowledge base first
+- When the user asks "what do we know about X" or "do we have info on X"
+- When answering questions about install procedures, material handling, or quality standards
+
+HOW TO USE KNOWLEDGE RESULTS:
+- Always cite the source document title/file name so the user knows where the info came from
+- If multiple docs are relevant, synthesize the information across them
+- If the knowledge base doesn't have an answer, say so — don't make things up
+- You can combine knowledge base results with database queries for richer answers
+
+Example: {"id": "vinyl_spec", "source": "knowledge", "search": "vinyl specifications"}
 
 SUPABASE QUERY SYNTAX:
 - Standard PostgreSQL syntax (NOT SuiteQL)
@@ -313,20 +327,63 @@ async function executeQuery(q: QuerySpec): Promise<any> {
 
   if (source === 'knowledge') {
     if (!q.search) throw new Error('No search terms provided for knowledge query');
-    // Full-text search against knowledge base
+
+    // Split search into individual terms for broader matching
+    const searchTerms = q.search.trim().split(/\s+/).filter(Boolean);
+    const fullPhrase = q.search.trim();
+
+    // Build OR conditions: match full phrase OR any individual term in title, content, tags, category
+    const conditions: string[] = [];
+    conditions.push(`title.ilike.%${fullPhrase}%`);
+    conditions.push(`content.ilike.%${fullPhrase}%`);
+    for (const term of searchTerms) {
+      if (term.length >= 3) {
+        conditions.push(`title.ilike.%${term}%`);
+        conditions.push(`content.ilike.%${term}%`);
+        conditions.push(`category.ilike.%${term}%`);
+      }
+    }
+
     const { data, error } = await supabase
       .from('knowledge_docs')
       .select('id, title, category, content, tags, file_name, file_type, file_size, file_path, created_at')
-      .or(`title.ilike.%${q.search}%,content.ilike.%${q.search}%`)
+      .or(conditions.join(','))
       .order('created_at', { ascending: false })
-      .limit(5);
+      .limit(8);
+
     if (error) throw new Error(`Knowledge search failed: ${error.message}`);
-    // Truncate content for context window, include file info
-    const items = (data || []).map(d => ({
-      ...d,
-      content: d.content?.length > 1000 ? d.content.substring(0, 1000) + '...' : d.content,
-      has_file: !!d.file_path,
+
+    // Score results by relevance (full phrase match > partial term match)
+    const scored = (data || []).map(d => {
+      let score = 0;
+      const titleLow = (d.title || '').toLowerCase();
+      const contentLow = (d.content || '').toLowerCase();
+      const phraseLow = fullPhrase.toLowerCase();
+
+      if (titleLow.includes(phraseLow)) score += 10;
+      if (contentLow.includes(phraseLow)) score += 5;
+      for (const term of searchTerms) {
+        if (titleLow.includes(term.toLowerCase())) score += 3;
+        if (contentLow.includes(term.toLowerCase())) score += 1;
+        if ((d.tags || []).some((t: string) => t.toLowerCase().includes(term.toLowerCase()))) score += 4;
+      }
+      return { ...d, _score: score };
+    });
+
+    // Sort by relevance score, take top results
+    scored.sort((a, b) => b._score - a._score);
+    const topResults = scored.slice(0, 5);
+
+    // Return generous content (up to 4000 chars per doc) so AI has enough context
+    const items = topResults.map(d => ({
+      id: d.id,
+      title: d.title,
+      category: d.category,
+      content: d.content?.length > 4000 ? d.content.substring(0, 4000) + '\n... [truncated — document continues]' : d.content,
+      tags: d.tags,
       source_file: d.file_name || null,
+      file_type: d.file_type,
+      has_file: !!d.file_path,
     }));
     return { items };
   }
