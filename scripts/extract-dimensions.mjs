@@ -2,15 +2,15 @@
 /**
  * Extract vehicle wrap dimensions from PDFs in R2 knowledge_files folder.
  *
- * Each PDF contains MULTIPLE vehicles (e.g., 25-30 per file, ~550 total across ~20 files).
- * The script sends each PDF to Claude, extracts ALL vehicles and their panel dimensions,
- * and upserts each into the vehicle_templates table.
+ * Processes PDFs PAGE-BY-PAGE to avoid truncation issues.
+ * Each page typically has 1 vehicle with its dimension table.
  *
  * Usage:
  *   node scripts/extract-dimensions.mjs                    # Process all files
  *   node scripts/extract-dimensions.mjs --dry-run          # Preview without writing to DB
+ *   node scripts/extract-dimensions.mjs --fix-empty        # Only re-process vehicles with empty panel_data
  *   node scripts/extract-dimensions.mjs --prefix "Ford"    # Only process files matching prefix
- *   node scripts/extract-dimensions.mjs --file "Transit_wrapdimensions.pdf"  # Process single file
+ *   node scripts/extract-dimensions.mjs --file "pages_1-10"  # Process single file
  *
  * Required env vars (in .env.local):
  *   R2_ACCOUNT_ID, R2_ACCESS_KEY_ID, R2_SECRET_ACCESS_KEY
@@ -21,6 +21,7 @@
 import 'dotenv/config';
 import { S3Client, ListObjectsV2Command, GetObjectCommand } from '@aws-sdk/client-s3';
 import { createClient } from '@supabase/supabase-js';
+import { PDFDocument } from 'pdf-lib';
 
 // ── Config ──
 const R2_ACCOUNT_ID = process.env.R2_ACCOUNT_ID;
@@ -46,6 +47,7 @@ if (!SUPABASE_URL || !SUPABASE_KEY) {
 
 const args = process.argv.slice(2);
 const DRY_RUN = args.includes('--dry-run');
+const FIX_EMPTY = args.includes('--fix-empty');
 const PREFIX_FILTER = args.includes('--prefix') ? args[args.indexOf('--prefix') + 1] : null;
 const SINGLE_FILE = args.includes('--file') ? args[args.indexOf('--file') + 1] : null;
 
@@ -57,12 +59,10 @@ const s3 = new S3Client({
 
 const supabase = createClient(SUPABASE_URL, SUPABASE_KEY);
 
-// ── Claude extraction prompt for MULTI-VEHICLE PDFs ──
-const EXTRACTION_PROMPT = `You are analyzing a PDF that contains wrap dimension sheets for MULTIPLE vehicles. Each vehicle typically takes 1 page and shows the vehicle from multiple angles (driver side, passenger side, front, rear, top/roof) with a dimension table.
+// ── Claude extraction prompt for a SINGLE PAGE ──
+const EXTRACTION_PROMPT = `You are analyzing a SINGLE PAGE from a vehicle wrap dimension sheet. This page shows ONE vehicle (possibly with variants) from multiple angles (driver side, passenger side, front, rear, top/roof) with a dimension table.
 
-You MUST extract ALL vehicles in this document — there may be 20-40+ vehicles per file.
-
-For EACH vehicle in the document, extract:
+Extract the following:
 
 1. VEHICLE INFO:
    - make (e.g., "Chevrolet", "Ford", "Mercedes-Benz", "RAM", "GMC")
@@ -73,14 +73,14 @@ For EACH vehicle in the document, extract:
    - overall_height_in: overall height in inches
    - wheelbase_in: wheelbase in inches
 
-2. PANEL DIMENSIONS (from the dimension table, usually labeled A through H):
+2. PANEL DIMENSIONS (from the dimension table, usually labeled A through H or more):
    - name: descriptive name ("Driver Side", "Passenger Side", "Rear", "Hood/Front", "Roof", etc.)
    - label: the letter label (A, B, C, etc.)
    - width_in: width in inches
    - height_in: height in inches
    - area_sqft: total square feet (from the table, or calculate: width_in × height_in / 144)
 
-Return ONLY valid JSON, no markdown, no backticks. The response must be a JSON array of ALL vehicles:
+Return ONLY valid JSON, no markdown, no backticks:
 {
   "vehicles": [
     {
@@ -94,38 +94,22 @@ Return ONLY valid JSON, no markdown, no backticks. The response must be a JSON a
       "panels": [
         {"name": "Driver Side", "label": "A", "width_in": 222, "height_in": 72, "area_sqft": 111.00},
         {"name": "Passenger Side", "label": "B", "width_in": 222, "height_in": 72, "area_sqft": 111.00}
-      ],
-      "page_number": 1
-    },
-    {
-      "make": "Ford",
-      "model": "Transit",
-      "year_range": "2015-Present",
-      "variant": "Long Wheelbase High Roof",
-      "overall_length_in": 263.9,
-      "overall_height_in": 110,
-      "wheelbase_in": 148,
-      "panels": [
-        {"name": "Driver Side", "label": "A", "width_in": 270, "height_in": 96, "area_sqft": 180.00}
-      ],
-      "page_number": 2
+      ]
     }
-  ],
-  "total_vehicles_found": 2,
-  "source_file": "filename.pdf"
+  ]
 }
 
 CRITICAL RULES:
-- Extract EVERY vehicle in the document. Do not stop early.
+- If this page has MULTIPLE variants (e.g., short vs long wheelbase), list each as a separate vehicle entry
 - Dimensions must be in INCHES (convert from mm if needed: mm ÷ 25.4 = inches)
 - Skip panels listed as "N/A"
 - Include window film panels separately with "(Window Film)" in the name
-- If a vehicle has multiple variants (e.g., short vs long wheelbase), list each as a separate vehicle
-- page_number should be the approximate page in the PDF where this vehicle appears`;
+- If the page doesn't contain any vehicle dimension data, return: {"vehicles": []}
+- Extract ALL panels from the dimension table — do not skip any`;
 
 // ── List R2 files ──
 async function listFiles() {
-  const prefix = 'knowledge_files/';
+  const prefix = 'knowledge-files/uploads/';
   const files = [];
   let continuationToken;
 
@@ -146,8 +130,7 @@ async function listFiles() {
       if (SINGLE_FILE && !fileName.includes(SINGLE_FILE)) continue;
       if (PREFIX_FILTER && !fileName.toLowerCase().includes(PREFIX_FILTER.toLowerCase())) continue;
 
-      // Accept PDFs, PNGs, JPGs in the knowledge_files folder
-      if (/\.(pdf|png|jpg|jpeg)$/i.test(fileName)) {
+      if (/\.pdf$/i.test(fileName)) {
         files.push({ key, fileName, size: obj.Size });
       }
     }
@@ -164,17 +147,31 @@ async function downloadFile(key) {
   for await (const chunk of result.Body) {
     chunks.push(chunk);
   }
-  return {
-    buffer: Buffer.concat(chunks),
-    contentType: result.ContentType || 'application/octet-stream',
-  };
+  return Buffer.concat(chunks);
 }
 
-// ── Send to Claude ──
-async function extractFromPDF(base64Data, mediaType, fileName) {
-  // For large PDFs (>5MB base64), Claude may need more tokens
-  const maxTokens = 16384;
+// ── Split PDF into individual pages ──
+async function splitPDF(pdfBuffer) {
+  const srcDoc = await PDFDocument.load(pdfBuffer);
+  const pageCount = srcDoc.getPageCount();
+  const pages = [];
 
+  for (let i = 0; i < pageCount; i++) {
+    const newDoc = await PDFDocument.create();
+    const [copiedPage] = await newDoc.copyPages(srcDoc, [i]);
+    newDoc.addPage(copiedPage);
+    const bytes = await newDoc.save();
+    pages.push({
+      pageNum: i + 1,
+      buffer: Buffer.from(bytes),
+    });
+  }
+
+  return { pages, totalPages: pageCount };
+}
+
+// ── Send single page to Claude ──
+async function extractFromPage(base64Data, fileName, pageNum) {
   const res = await fetch('https://api.anthropic.com/v1/messages', {
     method: 'POST',
     headers: {
@@ -185,21 +182,21 @@ async function extractFromPDF(base64Data, mediaType, fileName) {
     },
     body: JSON.stringify({
       model: 'claude-sonnet-4-5-20250929',
-      max_tokens: maxTokens,
+      max_tokens: 4096,
       messages: [{
         role: 'user',
         content: [
           {
-            type: mediaType === 'application/pdf' ? 'document' : 'image',
+            type: 'document',
             source: {
               type: 'base64',
-              media_type: mediaType,
+              media_type: 'application/pdf',
               data: base64Data,
             },
           },
           {
             type: 'text',
-            text: `${EXTRACTION_PROMPT}\n\nSource file: ${fileName}`,
+            text: `${EXTRACTION_PROMPT}\n\nSource: ${fileName}, page ${pageNum}`,
           },
         ],
       }],
@@ -214,39 +211,11 @@ async function extractFromPDF(base64Data, mediaType, fileName) {
   const data = await res.json();
   const text = data.content?.[0]?.text || '';
 
-  // Check if response was truncated (hit token limit)
-  const stopReason = data.stop_reason;
-  if (stopReason === 'max_tokens') {
-    console.warn(`  ⚠ Response was truncated (hit ${maxTokens} token limit). Some vehicles may be missing.`);
-  }
-
-  // Parse JSON — look for the vehicles array
+  // Parse JSON
   const jsonMatch = text.match(/\{[\s\S]*\}/);
   if (!jsonMatch) throw new Error('No JSON in Claude response');
 
-  let parsed;
-  try {
-    parsed = JSON.parse(jsonMatch[0]);
-  } catch (e) {
-    // If JSON was truncated, try to salvage what we can
-    const partialMatch = text.match(/\{[\s\S]*"vehicles"\s*:\s*\[([\s\S]*)\]/);
-    if (partialMatch) {
-      // Try to find the last complete vehicle object
-      const vehiclesStr = partialMatch[1];
-      const lastBrace = vehiclesStr.lastIndexOf('}');
-      if (lastBrace > 0) {
-        const trimmed = vehiclesStr.substring(0, lastBrace + 1);
-        try {
-          parsed = { vehicles: JSON.parse(`[${trimmed}]`) };
-          console.warn(`  ⚠ Salvaged ${parsed.vehicles.length} vehicles from truncated response`);
-        } catch {
-          throw new Error('Could not parse truncated JSON response');
-        }
-      }
-    }
-    if (!parsed) throw new Error(`JSON parse error: ${e.message}`);
-  }
-
+  const parsed = JSON.parse(jsonMatch[0]);
   return parsed;
 }
 
@@ -255,7 +224,7 @@ async function upsertTemplate(vehicle, sourceFile) {
   const { make, model, year_range, variant, overall_length_in, overall_height_in, wheelbase_in, panels } = vehicle;
 
   if (!make || !model) {
-    console.warn(`    ⚠ Skipping — no make/model extracted`);
+    console.warn(`      ⚠ Skipping — no make/model extracted`);
     return null;
   }
 
@@ -268,6 +237,11 @@ async function upsertTemplate(vehicle, sourceFile) {
     area_sqft: parseFloat(p.area_sqft) || Math.round((p.width_in * p.height_in) / 144 * 100) / 100,
   }));
 
+  if (panelData.length === 0) {
+    console.warn(`      ⚠ Skipping — no panel dimensions extracted`);
+    return null;
+  }
+
   // Parse year from year_range
   const yearMatch = year_range?.match(/(\d{4})/);
   const year = yearMatch ? yearMatch[1] : null;
@@ -277,7 +251,7 @@ async function upsertTemplate(vehicle, sourceFile) {
   // Check for existing template (make + model + variant)
   let query = supabase
     .from('vehicle_templates')
-    .select('id')
+    .select('id, panel_data')
     .ilike('make', make)
     .ilike('model', model);
 
@@ -288,6 +262,17 @@ async function upsertTemplate(vehicle, sourceFile) {
   }
 
   const { data: existing } = await query.limit(1);
+
+  // In --fix-empty mode, skip vehicles that already have VALID panel_data
+  if (FIX_EMPTY && existing?.length > 0) {
+    const existingPanels = existing[0].panel_data;
+    // Only skip if panels exist AND have actual non-zero dimensions
+    const hasValidPanels = Array.isArray(existingPanels) && existingPanels.length > 0 &&
+      existingPanels.some(p => p.width_in > 0 && p.height_in > 0);
+    if (hasValidPanels) {
+      return { action: 'skipped', id: existing[0].id, name: templateName, panels: existingPanels.length };
+    }
+  }
 
   const record = {
     name: templateName,
@@ -327,14 +312,15 @@ async function upsertTemplate(vehicle, sourceFile) {
 
 // ── Main ──
 async function main() {
-  console.log('🔍 Scanning R2 knowledge_files/ for wrap dimension files...\n');
+  console.log('🔍 Scanning R2 for wrap dimension PDFs...\n');
   if (DRY_RUN) console.log('   ⚡ DRY RUN — no database writes\n');
+  if (FIX_EMPTY) console.log('   🔧 FIX-EMPTY mode — only updating vehicles with missing panel_data\n');
 
   const files = await listFiles();
-  console.log(`📄 Found ${files.length} files\n`);
+  console.log(`📄 Found ${files.length} PDF files\n`);
 
   if (files.length === 0) {
-    console.log('No files found. Check your R2 knowledge_files/ folder.');
+    console.log('No files found. Check your R2 knowledge-files/uploads/ folder.');
     console.log('Filters: --prefix, --file');
     return;
   }
@@ -342,7 +328,9 @@ async function main() {
   let totalVehicles = 0;
   let totalCreated = 0;
   let totalUpdated = 0;
+  let totalSkipped = 0;
   let totalErrors = 0;
+  let totalPages = 0;
   let fileErrors = 0;
 
   for (let i = 0; i < files.length; i++) {
@@ -351,60 +339,77 @@ async function main() {
     console.log(`\n═══ [${i + 1}/${files.length}] ${file.fileName} (${sizeMB} MB) ═══`);
 
     try {
-      // Claude's PDF limit is ~32MB
-      if (file.size > 32 * 1024 * 1024) {
-        console.log(`  ⚠ Skipping — too large (${sizeMB} MB). Max ~32MB per PDF.`);
-        fileErrors++;
-        continue;
-      }
-
       // Download from R2
       console.log(`  📥 Downloading...`);
-      const { buffer, contentType } = await downloadFile(file.key);
-      const base64 = buffer.toString('base64');
+      const pdfBuffer = await downloadFile(file.key);
 
-      let mediaType = contentType;
-      if (file.fileName.endsWith('.pdf')) mediaType = 'application/pdf';
-      else if (file.fileName.endsWith('.png')) mediaType = 'image/png';
-      else if (file.fileName.match(/\.jpe?g$/)) mediaType = 'image/jpeg';
+      // Split into individual pages
+      console.log(`  📄 Splitting PDF into pages...`);
+      const { pages, totalPages: pageCount } = await splitPDF(pdfBuffer);
+      console.log(`  📄 ${pageCount} pages found`);
+      totalPages += pageCount;
 
-      // Extract all vehicles from this file
-      console.log(`  🤖 Sending to Claude for extraction...`);
-      const result = await extractFromPDF(base64, mediaType, file.fileName);
-      const vehicles = result.vehicles || [];
-      console.log(`  📐 Found ${vehicles.length} vehicles in this file`);
+      // Process each page individually
+      for (const page of pages) {
+        console.log(`\n    ── Page ${page.pageNum}/${pageCount} ──`);
+        const base64 = page.buffer.toString('base64');
 
-      // Process each extracted vehicle
-      for (const vehicle of vehicles) {
-        const label = `${vehicle.make} ${vehicle.model} ${vehicle.variant || ''}`.trim();
-        const panelCount = (vehicle.panels || []).length;
+        try {
+          console.log(`    🤖 Extracting...`);
+          const result = await extractFromPage(base64, file.fileName, page.pageNum);
+          const vehicles = result.vehicles || [];
 
-        if (DRY_RUN) {
-          console.log(`    📊 ${label} (${vehicle.year_range || '?'}) — ${panelCount} panels`);
-          for (const p of (vehicle.panels || [])) {
-            console.log(`       ${p.label || '?'}) ${p.name}: ${p.width_in}" × ${p.height_in}" = ${p.area_sqft} sqft`);
+          if (vehicles.length === 0) {
+            console.log(`    📭 No vehicles on this page`);
+            continue;
           }
-          totalVehicles++;
-        } else {
-          try {
-            const result = await upsertTemplate(vehicle, file.fileName);
-            if (result) {
-              const icon = result.action === 'created' ? '✅' : '🔄';
-              console.log(`    ${icon} ${result.action}: ${result.name} (${result.panels} panels)`);
-              if (result.action === 'created') totalCreated++;
-              else totalUpdated++;
+
+          for (const vehicle of vehicles) {
+            const label = `${vehicle.make} ${vehicle.model} ${vehicle.variant || ''}`.trim();
+            const panelCount = (vehicle.panels || []).length;
+
+            if (DRY_RUN) {
+              console.log(`      📊 ${label} (${vehicle.year_range || '?'}) — ${panelCount} panels`);
+              for (const p of (vehicle.panels || [])) {
+                console.log(`         ${p.label || '?'}) ${p.name}: ${p.width_in}" × ${p.height_in}" = ${p.area_sqft} sqft`);
+              }
               totalVehicles++;
+            } else {
+              try {
+                const result = await upsertTemplate(vehicle, file.fileName);
+                if (result) {
+                  if (result.action === 'skipped') {
+                    console.log(`      ⏭ skipped: ${result.name} (already has ${result.panels} panels)`);
+                    totalSkipped++;
+                  } else {
+                    const icon = result.action === 'created' ? '✅' : '🔄';
+                    console.log(`      ${icon} ${result.action}: ${result.name} (${result.panels} panels)`);
+                    if (result.action === 'created') totalCreated++;
+                    else totalUpdated++;
+                  }
+                  totalVehicles++;
+                }
+              } catch (err) {
+                console.error(`      ❌ ${label}: ${err.message}`);
+                totalErrors++;
+              }
             }
-          } catch (err) {
-            console.error(`    ❌ ${label}: ${err.message}`);
-            totalErrors++;
           }
+
+          // Rate limit between pages (1s between pages, less aggressive than between files)
+          await new Promise(r => setTimeout(r, 1000));
+
+        } catch (err) {
+          console.error(`    ❌ Page ${page.pageNum} error: ${err.message}`);
+          totalErrors++;
+          // Continue to next page
+          await new Promise(r => setTimeout(r, 1000));
         }
       }
 
-      // Rate limit between files (Claude rate limits)
+      // Extra pause between files
       if (i < files.length - 1) {
-        console.log(`  ⏳ Waiting 2s before next file...`);
+        console.log(`\n  ⏳ Waiting 2s before next file...`);
         await new Promise(r => setTimeout(r, 2000));
       }
     } catch (err) {
@@ -416,10 +421,12 @@ async function main() {
   console.log('\n═══════════════════════════════════════════');
   console.log(`✅ Done!`);
   console.log(`   Files processed: ${files.length - fileErrors}/${files.length}`);
+  console.log(`   Pages processed: ${totalPages}`);
   console.log(`   Vehicles found: ${totalVehicles}`);
   if (!DRY_RUN) {
     console.log(`   Created: ${totalCreated}`);
     console.log(`   Updated: ${totalUpdated}`);
+    if (FIX_EMPTY) console.log(`   Skipped (already had data): ${totalSkipped}`);
     console.log(`   Errors: ${totalErrors}`);
   }
   console.log('═══════════════════════════════════════════');

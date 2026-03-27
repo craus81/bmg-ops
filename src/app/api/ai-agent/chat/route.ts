@@ -125,6 +125,29 @@ SUPABASE TABLES (BMG Fleet App)
     - file_name, file_type, file_size, file_path (if uploaded from a file)
     - uploaded_by (FK profiles), created_at
 
+16. vehicle_templates — VEHICLE WRAP DIMENSIONS (panel sizes for quoting)
+    - id (uuid), name (full display name e.g. "Ford Transit Long Wheelbase High Roof 2015-Present")
+    - make, model, year, variant (e.g. "Long Wheelbase", "High Roof", "Extended")
+    - overall_length_in, overall_height_in, wheelbase_in
+    - panel_data (JSONB array of panels, each with: name, label, width_in, height_in, area_sqft)
+    - Panel labels: A=Driver Side, B=Passenger Side, C=Rear, D=Front/Hood, E=Roof/Hood, F=Roof, G-K=Window Film panels
+    - ~550 vehicles with full wrap dimension data
+
+WHEN TO SEARCH VEHICLE TEMPLATES:
+- ANY question about vehicle dimensions, panel sizes, or wrap measurements
+- "How big is a [vehicle]?", "What are the dimensions for a [vehicle]?"
+- "How much vinyl do I need for a [vehicle]?"
+- Calculating total square footage for a wrap quote
+- Comparing vehicle sizes
+- Any mention of specific vehicle makes/models in the context of wraps or dimensions
+
+Use source "vehicle_search" with a search term:
+Example: {"id": "transit_dims", "source": "vehicle_search", "search": "Ford Transit"}
+Example: {"id": "sprinter_dims", "source": "vehicle_search", "search": "Sprinter High Roof"}
+
+Or use a Supabase SQL query for more complex lookups:
+Example: {"id": "big_vehicles", "source": "supabase", "sql": "SELECT name, panel_data FROM vehicle_templates WHERE overall_length_in > 240 ORDER BY overall_length_in DESC LIMIT 10"}
+
 WHEN TO SEARCH KNOWLEDGE BASE:
 - ANY question about procedures, processes, SOPs, how-to, or "how do we..."
 - ANY question about specs, materials, vinyl, pricing, or product details
@@ -270,7 +293,7 @@ interface Message {
 
 interface QuerySpec {
   id: string;
-  source?: 'netsuite' | 'supabase' | 'action' | 'knowledge';
+  source?: 'netsuite' | 'supabase' | 'action' | 'knowledge' | 'vehicle_search';
   sql?: string;
   search?: string;
   action?: string;
@@ -385,6 +408,80 @@ async function executeQuery(q: QuerySpec): Promise<any> {
       file_type: d.file_type,
       has_file: !!d.file_path,
     }));
+    return { items };
+  }
+
+  if (source === 'vehicle_search') {
+    if (!q.search) throw new Error('No search terms provided for vehicle search');
+
+    const searchTerms = q.search.trim().split(/\s+/).filter(Boolean);
+
+    // Build OR conditions across make, model, variant, name
+    const conditions: string[] = [];
+    for (const term of searchTerms) {
+      if (term.length >= 2) {
+        conditions.push(`name.ilike.%${term}%`);
+        conditions.push(`make.ilike.%${term}%`);
+        conditions.push(`model.ilike.%${term}%`);
+        conditions.push(`variant.ilike.%${term}%`);
+      }
+    }
+
+    if (conditions.length === 0) {
+      return { items: [], message: 'Search terms too short' };
+    }
+
+    const { data, error } = await supabase
+      .from('vehicle_templates')
+      .select('id, name, make, model, year, variant, overall_length_in, overall_height_in, wheelbase_in, panel_data')
+      .or(conditions.join(','))
+      .limit(10);
+
+    if (error) throw new Error(`Vehicle search failed: ${error.message}`);
+
+    // Score results — prioritize exact make+model matches
+    const scored = (data || []).map(d => {
+      let score = 0;
+      const nameLow = (d.name || '').toLowerCase();
+      const searchLow = q.search!.toLowerCase();
+
+      if (nameLow.includes(searchLow)) score += 10;
+      for (const term of searchTerms) {
+        const tLow = term.toLowerCase();
+        if ((d.make || '').toLowerCase() === tLow) score += 5;
+        if ((d.model || '').toLowerCase() === tLow) score += 5;
+        if ((d.variant || '').toLowerCase().includes(tLow)) score += 3;
+        if (nameLow.includes(tLow)) score += 1;
+      }
+      return { ...d, _score: score };
+    });
+
+    scored.sort((a, b) => b._score - a._score);
+
+    // Format panel data for readability
+    const items = scored.map(d => {
+      const panels = (d.panel_data || []).map((p: any) => ({
+        label: p.label,
+        name: p.name,
+        dimensions: `${p.width_in}" × ${p.height_in}"`,
+        area_sqft: p.area_sqft,
+      }));
+      const totalSqft = (d.panel_data || []).reduce((sum: number, p: any) => sum + (p.area_sqft || 0), 0);
+
+      return {
+        name: d.name,
+        make: d.make,
+        model: d.model,
+        variant: d.variant,
+        overall_length_in: d.overall_length_in,
+        overall_height_in: d.overall_height_in,
+        wheelbase_in: d.wheelbase_in,
+        total_sqft: Math.round(totalSqft * 100) / 100,
+        panel_count: panels.length,
+        panels,
+      };
+    });
+
     return { items };
   }
 
