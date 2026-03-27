@@ -323,16 +323,16 @@ export default function CustomersPage() {
 
   const inputStyle: React.CSSProperties = {
     width: '100%', padding: '8px 10px', borderRadius: '6px', border: '1px solid #1e2d3d',
-    background: '#0a1018', color: '#e8ecf1', fontSize: '13px', outline: 'none',
+    background: '#0a1018', color: '#f5f8fc', fontSize: '13px', outline: 'none',
   };
 
   const labelStyle: React.CSSProperties = {
-    display: 'block', fontSize: '10px', fontWeight: 700, color: '#4a5f78',
+    display: 'block', fontSize: '10px', fontWeight: 700, color: '#d0dcea',
     marginBottom: '3px', textTransform: 'uppercase', letterSpacing: '0.05em',
   };
 
   if (loading) {
-    return <div style={{ padding: '24px', textAlign: 'center', color: '#4a5f78' }}>Loading...</div>;
+    return <div style={{ padding: '24px', textAlign: 'center', color: '#d0dcea' }}>Loading...</div>;
   }
 
   return (
@@ -340,8 +340,8 @@ export default function CustomersPage() {
       {/* Header */}
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '16px' }}>
         <div>
-          <h1 style={{ fontSize: '20px', fontWeight: 800, color: '#e8ecf1', margin: 0 }}>Customers & Contacts</h1>
-          <div style={{ fontSize: '12px', color: '#4a5f78', marginTop: '2px' }}>{customers.length} customers · {contacts.length} contacts</div>
+          <h1 style={{ fontSize: '20px', fontWeight: 800, color: '#f5f8fc', margin: 0 }}>Customers & Contacts</h1>
+          <div style={{ fontSize: '12px', color: '#d0dcea', marginTop: '2px' }}>{customers.length} customers · {contacts.length} contacts</div>
         </div>
         <button
           onClick={syncFromNetSuite}
@@ -418,10 +418,10 @@ export default function CustomersPage() {
                 }}
               >
                 <div style={{ flex: 1, minWidth: 0 }}>
-                  <div style={{ fontSize: '14px', fontWeight: 700, color: '#e8ecf1' }}>
+                  <div style={{ fontSize: '14px', fontWeight: 700, color: '#f5f8fc' }}>
                     {customer.company_name}
                   </div>
-                  <div style={{ fontSize: '11px', color: '#4a5f78', marginTop: '2px' }}>
+                  <div style={{ fontSize: '11px', color: '#d0dcea', marginTop: '2px' }}>
                     {customer.entity_id && <span>{customer.entity_id} · </span>}
                     {customer.email && <span>{customer.email} · </span>}
                     {customer.phone && <span>{customer.phone} · </span>}
@@ -433,22 +433,22 @@ export default function CustomersPage() {
                   {(customer.ytd_spend > 0) && (
                     <div style={{ textAlign: 'right' }}>
                       <div style={{ fontSize: '13px', fontWeight: 800, color: '#4ade80' }}>{fmtK(customer.ytd_spend)}</div>
-                      <div style={{ fontSize: '9px', color: '#4a5f78', textTransform: 'uppercase' }}>YTD</div>
+                      <div style={{ fontSize: '9px', color: '#d0dcea', textTransform: 'uppercase' }}>YTD</div>
                     </div>
                   )}
                   {(customer.total_spend > 0) && (
                     <div style={{ textAlign: 'right' }}>
                       <div style={{ fontSize: '13px', fontWeight: 800, color: '#60a5fa' }}>{fmtK(customer.total_spend)}</div>
-                      <div style={{ fontSize: '9px', color: '#4a5f78', textTransform: 'uppercase' }}>All-Time</div>
+                      <div style={{ fontSize: '9px', color: '#d0dcea', textTransform: 'uppercase' }}>All-Time</div>
                     </div>
                   )}
                   {(customer.total_orders > 0) && (
                     <div style={{ textAlign: 'right' }}>
                       <div style={{ fontSize: '13px', fontWeight: 800, color: '#fbbf24' }}>{customer.total_orders}</div>
-                      <div style={{ fontSize: '9px', color: '#4a5f78', textTransform: 'uppercase' }}>Orders</div>
+                      <div style={{ fontSize: '9px', color: '#d0dcea', textTransform: 'uppercase' }}>Orders</div>
                     </div>
                   )}
-                  <div style={{ fontSize: '16px', color: '#4a5f78', transform: isExpanded ? 'rotate(180deg)' : 'rotate(0deg)', transition: 'transform 0.2s' }}>
+                  <div style={{ fontSize: '16px', color: '#d0dcea', transform: isExpanded ? 'rotate(180deg)' : 'rotate(0deg)', transition: 'transform 0.2s' }}>
                     ▾
                   </div>
                 </div>
@@ -462,28 +462,28 @@ export default function CustomersPage() {
                     <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: '8px', padding: '10px 0', borderBottom: '1px solid rgba(30,45,61,0.5)' }}>
                       <div style={{ textAlign: 'center', padding: '8px', borderRadius: '6px', background: 'rgba(34,197,94,0.08)' }}>
                         <div style={{ fontSize: '15px', fontWeight: 800, color: '#4ade80' }}>{fmtK(customer.ytd_spend || 0)}</div>
-                        <div style={{ fontSize: '9px', color: '#4a5f78', textTransform: 'uppercase', marginTop: '2px' }}>YTD Spend</div>
-                        {customer.ytd_orders > 0 && <div style={{ fontSize: '9px', color: '#6b7a8d' }}>{customer.ytd_orders} orders</div>}
+                        <div style={{ fontSize: '9px', color: '#d0dcea', textTransform: 'uppercase', marginTop: '2px' }}>YTD Spend</div>
+                        {customer.ytd_orders > 0 && <div style={{ fontSize: '9px', color: '#dce6f0' }}>{customer.ytd_orders} orders</div>}
                       </div>
                       <div style={{ textAlign: 'center', padding: '8px', borderRadius: '6px', background: 'rgba(251,191,36,0.08)' }}>
                         <div style={{ fontSize: '15px', fontWeight: 800, color: '#fbbf24' }}>{fmtK(customer.last_year_spend || 0)}</div>
-                        <div style={{ fontSize: '9px', color: '#4a5f78', textTransform: 'uppercase', marginTop: '2px' }}>Last Year</div>
-                        {customer.last_year_orders > 0 && <div style={{ fontSize: '9px', color: '#6b7a8d' }}>{customer.last_year_orders} orders</div>}
+                        <div style={{ fontSize: '9px', color: '#d0dcea', textTransform: 'uppercase', marginTop: '2px' }}>Last Year</div>
+                        {customer.last_year_orders > 0 && <div style={{ fontSize: '9px', color: '#dce6f0' }}>{customer.last_year_orders} orders</div>}
                       </div>
                       <div style={{ textAlign: 'center', padding: '8px', borderRadius: '6px', background: 'rgba(59,130,246,0.08)' }}>
                         <div style={{ fontSize: '15px', fontWeight: 800, color: '#60a5fa' }}>{fmtK(customer.total_spend || 0)}</div>
-                        <div style={{ fontSize: '9px', color: '#4a5f78', textTransform: 'uppercase', marginTop: '2px' }}>All-Time</div>
-                        {customer.total_orders > 0 && <div style={{ fontSize: '9px', color: '#6b7a8d' }}>{customer.total_orders} orders</div>}
+                        <div style={{ fontSize: '9px', color: '#d0dcea', textTransform: 'uppercase', marginTop: '2px' }}>All-Time</div>
+                        {customer.total_orders > 0 && <div style={{ fontSize: '9px', color: '#dce6f0' }}>{customer.total_orders} orders</div>}
                       </div>
                       <div style={{ textAlign: 'center', padding: '8px', borderRadius: '6px', background: 'rgba(168,85,247,0.08)' }}>
                         <div style={{ fontSize: '15px', fontWeight: 800, color: '#a855f7' }}>{fmtK(customer.avg_order_value || 0)}</div>
-                        <div style={{ fontSize: '9px', color: '#4a5f78', textTransform: 'uppercase', marginTop: '2px' }}>Avg Order</div>
+                        <div style={{ fontSize: '9px', color: '#d0dcea', textTransform: 'uppercase', marginTop: '2px' }}>Avg Order</div>
                       </div>
                     </div>
                   )}
 
                   {/* Customer details */}
-                  <div style={{ display: 'flex', gap: '16px', flexWrap: 'wrap', padding: '8px 0', borderBottom: '1px solid rgba(30,45,61,0.5)', fontSize: '11px', color: '#6b7a8d', alignItems: 'center' }}>
+                  <div style={{ display: 'flex', gap: '16px', flexWrap: 'wrap', padding: '8px 0', borderBottom: '1px solid rgba(30,45,61,0.5)', fontSize: '11px', color: '#dce6f0', alignItems: 'center' }}>
                     {customer.address && <span>{customer.address}</span>}
                     {customer.last_order_date && (
                       <span>Last order: <strong style={{ color: '#94a3b8' }}>{new Date(customer.last_order_date).toLocaleDateString()}</strong></span>
@@ -494,7 +494,7 @@ export default function CustomersPage() {
                         target="_blank"
                         rel="noopener noreferrer"
                         onClick={(e) => e.stopPropagation()}
-                        style={{ color: '#4a5f78', textDecoration: 'none', fontWeight: 600, fontSize: '10px' }}
+                        style={{ color: '#d0dcea', textDecoration: 'none', fontWeight: 600, fontSize: '10px' }}
                       >
                         NetSuite ↗
                       </a>
@@ -504,10 +504,10 @@ export default function CustomersPage() {
                   {/* Purchase Report */}
                   {customer.netsuite_id && (
                     <div style={{ padding: '10px 0', borderBottom: '1px solid rgba(30,45,61,0.5)' }}>
-                      <div style={{ fontSize: '10px', fontWeight: 700, color: '#4a5f78', textTransform: 'uppercase', marginBottom: '6px' }}>Purchase Report</div>
+                      <div style={{ fontSize: '10px', fontWeight: 700, color: '#d0dcea', textTransform: 'uppercase', marginBottom: '6px' }}>Purchase Report</div>
                       <div style={{ display: 'flex', gap: '8px', alignItems: 'center', flexWrap: 'wrap' }}>
                         <div style={{ display: 'flex', alignItems: 'center', gap: '4px' }}>
-                          <label style={{ fontSize: '10px', color: '#6b7a8d' }}>From</label>
+                          <label style={{ fontSize: '10px', color: '#dce6f0' }}>From</label>
                           <input
                             type="date"
                             value={reportCustomer === customer.id ? reportStartDate : `${new Date().getFullYear()}-01-01`}
@@ -515,12 +515,12 @@ export default function CustomersPage() {
                             onChange={(e) => { setReportCustomer(customer.id); setReportStartDate(e.target.value); }}
                             style={{
                               padding: '4px 8px', borderRadius: '5px', border: '1px solid #1e2d3d',
-                              background: '#0a1018', color: '#e8ecf1', fontSize: '11px', outline: 'none',
+                              background: '#0a1018', color: '#f5f8fc', fontSize: '11px', outline: 'none',
                             }}
                           />
                         </div>
                         <div style={{ display: 'flex', alignItems: 'center', gap: '4px' }}>
-                          <label style={{ fontSize: '10px', color: '#6b7a8d' }}>To</label>
+                          <label style={{ fontSize: '10px', color: '#dce6f0' }}>To</label>
                           <input
                             type="date"
                             value={reportCustomer === customer.id ? reportEndDate : new Date().toISOString().slice(0, 10)}
@@ -528,7 +528,7 @@ export default function CustomersPage() {
                             onChange={(e) => { setReportCustomer(customer.id); setReportEndDate(e.target.value); }}
                             style={{
                               padding: '4px 8px', borderRadius: '5px', border: '1px solid #1e2d3d',
-                              background: '#0a1018', color: '#e8ecf1', fontSize: '11px', outline: 'none',
+                              background: '#0a1018', color: '#f5f8fc', fontSize: '11px', outline: 'none',
                             }}
                           />
                         </div>
@@ -546,7 +546,7 @@ export default function CustomersPage() {
                           style={{
                             padding: '5px 14px', borderRadius: '6px', fontSize: '11px', fontWeight: 700,
                             background: generatingReport ? '#1e2d3d' : 'rgba(59,130,246,0.15)',
-                            border: '1px solid rgba(59,130,246,0.3)', color: generatingReport ? '#4a5f78' : '#60a5fa',
+                            border: '1px solid rgba(59,130,246,0.3)', color: generatingReport ? '#d0dcea' : '#60a5fa',
                             cursor: generatingReport ? 'not-allowed' : 'pointer',
                           }}
                         >
@@ -559,7 +559,7 @@ export default function CustomersPage() {
                   {/* Contacts list */}
                   {custContacts.length > 0 ? (
                     <div style={{ marginTop: '8px' }}>
-                      <div style={{ fontSize: '10px', fontWeight: 700, color: '#4a5f78', textTransform: 'uppercase', marginBottom: '6px' }}>Contacts</div>
+                      <div style={{ fontSize: '10px', fontWeight: 700, color: '#d0dcea', textTransform: 'uppercase', marginBottom: '6px' }}>Contacts</div>
                       {custContacts.map(contact => (
                         <div key={contact.id} style={{
                           padding: '8px 10px', borderRadius: '6px', background: 'rgba(59,130,246,0.05)',
@@ -567,20 +567,20 @@ export default function CustomersPage() {
                         }}>
                           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
                             <div>
-                              <div style={{ fontSize: '13px', fontWeight: 700, color: '#e8ecf1' }}>
+                              <div style={{ fontSize: '13px', fontWeight: 700, color: '#f5f8fc' }}>
                                 {contact.name}
-                                {contact.title && <span style={{ fontSize: '11px', fontWeight: 400, color: '#6b7a8d', marginLeft: '8px' }}>{contact.title}</span>}
+                                {contact.title && <span style={{ fontSize: '11px', fontWeight: 400, color: '#dce6f0', marginLeft: '8px' }}>{contact.title}</span>}
                               </div>
-                              <div style={{ fontSize: '11px', color: '#4a5f78', marginTop: '2px' }}>
+                              <div style={{ fontSize: '11px', color: '#d0dcea', marginTop: '2px' }}>
                                 {contact.email && <span>{contact.email}</span>}
                                 {contact.email && contact.phone && <span> · </span>}
                                 {contact.phone && <span>{contact.phone}</span>}
                               </div>
                               {contact.address && (
-                                <div style={{ fontSize: '11px', color: '#4a5f78', marginTop: '1px' }}>{contact.address}</div>
+                                <div style={{ fontSize: '11px', color: '#d0dcea', marginTop: '1px' }}>{contact.address}</div>
                               )}
                               {contact.notes && (
-                                <div style={{ fontSize: '11px', color: '#6b7a8d', marginTop: '2px', fontStyle: 'italic' }}>{contact.notes}</div>
+                                <div style={{ fontSize: '11px', color: '#dce6f0', marginTop: '2px', fontStyle: 'italic' }}>{contact.notes}</div>
                               )}
                             </div>
                             <div style={{ display: 'flex', gap: '4px', flexShrink: 0 }}>
@@ -598,7 +598,7 @@ export default function CustomersPage() {
                       ))}
                     </div>
                   ) : (
-                    <div style={{ fontSize: '11px', color: '#4a5f78', padding: '12px 0' }}>No contacts yet</div>
+                    <div style={{ fontSize: '11px', color: '#d0dcea', padding: '12px 0' }}>No contacts yet</div>
                   )}
 
                   {/* Add/Edit contact form */}
@@ -666,7 +666,7 @@ export default function CustomersPage() {
                       <div style={{ display: 'flex', gap: '6px', marginTop: '8px', justifyContent: 'flex-end' }}>
                         <button
                           onClick={() => { setShowAddContact(null); setEditingContact(null); setContactForm(emptyContact); }}
-                          style={{ padding: '6px 12px', borderRadius: '6px', background: '#1e2d3d', border: 'none', color: '#6b7a8d', fontSize: '12px', fontWeight: 600, cursor: 'pointer' }}
+                          style={{ padding: '6px 12px', borderRadius: '6px', background: '#1e2d3d', border: 'none', color: '#dce6f0', fontSize: '12px', fontWeight: 600, cursor: 'pointer' }}
                         >Cancel</button>
                         <button
                           onClick={() => saveContact(customer.id)}
@@ -695,7 +695,7 @@ export default function CustomersPage() {
       </div>
 
       {filteredCustomers.length === 0 && (
-        <div style={{ textAlign: 'center', padding: '32px', color: '#4a5f78' }}>
+        <div style={{ textAlign: 'center', padding: '32px', color: '#d0dcea' }}>
           {customers.length === 0
             ? <div><div style={{ fontSize: '14px', marginBottom: '8px' }}>No customers yet</div><div style={{ fontSize: '12px' }}>Click "Sync from NetSuite" to import your customer list</div></div>
             : <div style={{ fontSize: '13px' }}>No customers match "{search}"</div>

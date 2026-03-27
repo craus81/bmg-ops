@@ -35,7 +35,7 @@ function statusColor(status: string): string {
   if (['complete', 'pushed', 'accepted', 'shipped', 'installed', 'ready'].includes(s)) return '#4ade80';
   if (['cancelled', 'denied', 'rejected', 'expired'].includes(s)) return '#ef4444';
   if (['designing', 'printing', 'cutting', 'packing', 'outgassing'].includes(s)) return '#60a5fa';
-  return '#b4c8db';
+  return '#dce6f0';
 }
 
 function renderResult(group: string, item: any, router: any, onClose: () => void) {
@@ -165,11 +165,11 @@ const resultBtnStyle: React.CSSProperties = {
 };
 
 const titleStyle: React.CSSProperties = {
-  fontSize: '13px', fontWeight: 700, color: '#e8ecf1',
+  fontSize: '13px', fontWeight: 700, color: '#f5f8fc',
 };
 
 const subtitleStyle: React.CSSProperties = {
-  fontSize: '11px', color: '#b4c8db', marginTop: '2px',
+  fontSize: '11px', color: '#dce6f0', marginTop: '2px',
 };
 
 const statusBadge: React.CSSProperties = {
@@ -266,19 +266,19 @@ export default function UniversalSearch({ open, onClose }: UniversalSearchProps)
             placeholder="Search POs, vehicles, jobs, parts, customers..."
             style={{
               flex: 1, background: 'transparent', border: 'none', outline: 'none',
-              color: '#e8ecf1', fontSize: '16px', fontWeight: 600,
+              color: '#f5f8fc', fontSize: '16px', fontWeight: 600,
             }}
           />
           {query && (
             <button onClick={() => { setQuery(''); setResults({}); inputRef.current?.focus(); }} style={{
               background: 'rgba(255,255,255,0.1)', border: 'none', borderRadius: '50%',
-              width: '24px', height: '24px', color: '#b4c8db', fontSize: '12px',
+              width: '24px', height: '24px', color: '#dce6f0', fontSize: '12px',
               cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center',
             }}>✕</button>
           )}
           <button onClick={onClose} style={{
             background: 'transparent', border: '1px solid #1e2d3d', borderRadius: '6px',
-            padding: '4px 10px', color: '#b4c8db', fontSize: '11px', fontWeight: 700,
+            padding: '4px 10px', color: '#dce6f0', fontSize: '11px', fontWeight: 700,
             cursor: 'pointer',
           }}>ESC</button>
         </div>
@@ -286,7 +286,7 @@ export default function UniversalSearch({ open, onClose }: UniversalSearchProps)
         {/* Results */}
         <div style={{ flex: 1, overflowY: 'auto' }}>
           {searching && (
-            <div style={{ padding: '32px', textAlign: 'center', color: '#a8bfd4', fontSize: '13px' }}>
+            <div style={{ padding: '32px', textAlign: 'center', color: '#d0dcea', fontSize: '13px' }}>
               Searching...
             </div>
           )}
@@ -294,7 +294,7 @@ export default function UniversalSearch({ open, onClose }: UniversalSearchProps)
           {!searching && query.length >= 2 && totalResults === 0 && (
             <div style={{ padding: '40px 20px', textAlign: 'center' }}>
               <div style={{ fontSize: '32px', opacity: 0.3, marginBottom: '8px' }}>🔍</div>
-              <div style={{ fontSize: '14px', fontWeight: 700, color: '#a8bfd4' }}>No results found</div>
+              <div style={{ fontSize: '14px', fontWeight: 700, color: '#d0dcea' }}>No results found</div>
               <div style={{ fontSize: '12px', color: '#3a4a5d', marginTop: '4px' }}>Try a different search term</div>
             </div>
           )}
@@ -302,13 +302,13 @@ export default function UniversalSearch({ open, onClose }: UniversalSearchProps)
           {!searching && query.length < 2 && (
             <div style={{ padding: '40px 20px', textAlign: 'center' }}>
               <div style={{ fontSize: '32px', opacity: 0.3, marginBottom: '8px' }}>🔍</div>
-              <div style={{ fontSize: '14px', fontWeight: 700, color: '#a8bfd4' }}>Search everything</div>
+              <div style={{ fontSize: '14px', fontWeight: 700, color: '#d0dcea' }}>Search everything</div>
               <div style={{ fontSize: '12px', color: '#3a4a5d', marginTop: '4px' }}>POs, vehicles, graphics jobs, estimates, parts, customers, messages, quotes</div>
             </div>
           )}
 
           {groupKeys.map((group) => {
-            const config = GROUP_CONFIG[group] || { label: group, icon: '📄', color: '#b4c8db' };
+            const config = GROUP_CONFIG[group] || { label: group, icon: '📄', color: '#dce6f0' };
             const items = results[group] || [];
             if (items.length === 0) return null;
 
@@ -324,7 +324,7 @@ export default function UniversalSearch({ open, onClose }: UniversalSearchProps)
                   <span style={{ fontSize: '11px', fontWeight: 800, color: config.color, textTransform: 'uppercase', letterSpacing: '0.5px' }}>
                     {config.label}
                   </span>
-                  <span style={{ fontSize: '10px', color: '#a8bfd4', fontWeight: 600 }}>
+                  <span style={{ fontSize: '10px', color: '#d0dcea', fontWeight: 600 }}>
                     ({items.length})
                   </span>
                 </div>

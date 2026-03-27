@@ -14,10 +14,10 @@ const appUrl = process.env.NEXT_PUBLIC_APP_URL || (process.env.VERCEL_URL
 
 function buildInviteEmailHtml(fullName: string, email: string, password: string, inviteLink: string): string {
   return `
-    <div style="font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; max-width: 480px; margin: 0 auto; background: #0a1017; color: #e8ecf1; padding: 32px; border-radius: 16px;">
+    <div style="font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; max-width: 480px; margin: 0 auto; background: #0a1017; color: #f5f8fc; padding: 32px; border-radius: 16px;">
       <div style="text-align: center; margin-bottom: 24px;">
         <div style="font-size: 28px; font-weight: 800; color: #ffffff;">FleetSuite</div>
-        <div style="font-size: 13px; color: #4a5f78; margin-top: 4px;">by BMG Fleet</div>
+        <div style="font-size: 13px; color: #d0dcea; margin-top: 4px;">by BMG Fleet</div>
       </div>
 
       <div style="background: #141e2b; border: 1px solid #1e2d3d; border-radius: 12px; padding: 20px; margin-bottom: 20px;">
@@ -31,21 +31,21 @@ function buildInviteEmailHtml(fullName: string, email: string, password: string,
         </a>
 
         <div style="background: #0f1720; border-radius: 8px; padding: 14px; margin-bottom: 10px;">
-          <div style="font-size: 11px; color: #4a5f78; text-transform: uppercase; font-weight: 700; margin-bottom: 4px;">Email</div>
+          <div style="font-size: 11px; color: #d0dcea; text-transform: uppercase; font-weight: 700; margin-bottom: 4px;">Email</div>
           <div style="font-size: 15px; font-weight: 700; color: #60a5fa;">${email}</div>
         </div>
 
         <div style="background: #0f1720; border-radius: 8px; padding: 14px; margin-bottom: 10px;">
-          <div style="font-size: 11px; color: #4a5f78; text-transform: uppercase; font-weight: 700; margin-bottom: 4px;">Password</div>
+          <div style="font-size: 11px; color: #d0dcea; text-transform: uppercase; font-weight: 700; margin-bottom: 4px;">Password</div>
           <div style="font-size: 15px; font-weight: 700; color: #60a5fa;">${password}</div>
         </div>
 
-        <p style="color: #6b7a8d; font-size: 12px; margin: 0;">
+        <p style="color: #dce6f0; font-size: 12px; margin: 0;">
           We recommend changing your password after your first login.
         </p>
       </div>
 
-      <div style="text-align: center; margin-top: 20px; font-size: 11px; color: #4a5f78;">
+      <div style="text-align: center; margin-top: 20px; font-size: 11px; color: #d0dcea;">
         BMG Fleet Graphics &amp; Upfitting
       </div>
     </div>

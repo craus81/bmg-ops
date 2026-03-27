@@ -55,7 +55,7 @@ export function buildNotificationEmail(title: string, body: string, ctaUrl?: str
       </div>
       <!-- Body -->
       <div style="padding:24px;">
-        <div style="font-size:16px;font-weight:800;color:#e8ecf1;margin-bottom:8px;">${escapeHtml(title)}</div>
+        <div style="font-size:16px;font-weight:800;color:#f5f8fc;margin-bottom:8px;">${escapeHtml(title)}</div>
         <div style="font-size:14px;color:#8899aa;line-height:1.5;">${escapeHtml(body)}</div>
         ${ctaUrl ? `
         <div style="margin-top:20px;">
@@ -64,7 +64,7 @@ export function buildNotificationEmail(title: string, body: string, ctaUrl?: str
       </div>
       <!-- Footer -->
       <div style="padding:16px 24px;border-top:1px solid #1e2d3d;text-align:center;">
-        <div style="font-size:10px;color:#a8bfd4;">You received this because of your notification settings in BMG Fleet.</div>
+        <div style="font-size:10px;color:#d0dcea;">You received this because of your notification settings in BMG Fleet.</div>
       </div>
     </div>
   </div>
