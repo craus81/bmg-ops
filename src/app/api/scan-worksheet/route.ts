@@ -4,34 +4,28 @@ export const maxDuration = 60;
 
 const ANTHROPIC_API_KEY = process.env.ANTHROPIC_API_KEY;
 
-const WORKSHEET_PROMPT = `You are reading a handwritten fleet vehicle worksheet/log sheet. Extract ALL data from this document. If the document has MULTIPLE PAGES, extract data from EVERY page and combine all rows into a single list.
+const WORKSHEET_PROMPT = `You are reading a handwritten fleet vehicle worksheet/log sheet. Extract the data as fast and accurately as possible.
 
-The worksheet has:
-1. A HEADER section at the top with fields like: Vendor Name, Part# (or Part Number), Date, PO# (or PO Number), Customer
-2. A TABLE with numbered rows. Each row typically has:
-   - A row number
-   - A partial VIN (usually the last 8 digits of the vehicle identification number)
-   - A unit number (asset/fleet identifier, or sometimes a location like "Joliet, IL")
-   - Sometimes additional columns like Order #
+Focus on:
+1. The Part# (Part Number) field in the header — this is the most important header field
+2. The Customer field in the header
+3. The TABLE rows: each row has a partial VIN and a unit number
 
 IMPORTANT RULES:
 - Read the handwriting as carefully as possible
 - Extract ALL rows from ALL pages of the document
 - VIN digits are alphanumeric (0-9 and A-Z, excluding I, O, Q)
-- Common handwriting confusions to watch for: 5/S, 0/O, 1/I, 8/B, 6/G, 2/Z
-- The Part# field often contains codes like "065058", "06CS900008", "06T278", etc.
+- Common handwriting confusions: 5/S, 0/O, 1/I, 8/B, 6/G, 2/Z
 - If a field is empty or illegible, use null
 - Only include rows that have data (skip empty numbered rows)
 - The Part# field may contain MULTIPLE part numbers separated by "/" or written side by side (e.g., "06T887 / 065646"). Include ALL part numbers exactly as written, separated by "/"
 - Part numbers typically start with "06" and are 6+ characters long
+- IGNORE the Vendor Name and PO# fields — do not extract them
 
 Return JSON only, no other text, in this exact format:
 {
   "header": {
-    "vendor_name": "BMG",
     "part_number": "065058",
-    "date": "3/6",
-    "po_number": "12345",
     "customer": "DISH"
   },
   "rows": [
@@ -39,11 +33,6 @@ Return JSON only, no other text, in this exact format:
       "row_number": 1,
       "partial_vin": "SE539318",
       "unit_number": "41A575"
-    },
-    {
-      "row_number": 2,
-      "partial_vin": "SE539326",
-      "unit_number": "41A576"
     }
   ],
   "notes": "Any observations about legibility or ambiguous characters"

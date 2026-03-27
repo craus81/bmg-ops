@@ -1513,8 +1513,8 @@ function BulkVINUpload() {
                   <div style={{ fontSize: '10px', color: 'var(--text-muted)' }}>{wp.vinCount} VIN{wp.vinCount !== 1 ? 's' : ''} · tap to edit</div>
                 </div>
                 <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '4px', fontSize: '11px' }}>
-                  {(['vendor_name', 'part_number', 'customer', 'po_number', 'date'] as const).map(field => {
-                    const labels: Record<string, string> = { vendor_name: 'Vendor', part_number: 'Part#', customer: 'Customer', date: 'Date', po_number: 'PO#' };
+                  {(['part_number', 'customer', 'date'] as const).map(field => {
+                    const labels: Record<string, string> = { part_number: 'Part#', customer: 'Customer', date: 'Date' };
                     const val = (h as any)[field];
                     const isEditing = isEditingThisPage && editingHeaderField === field;
                     return (
@@ -1566,8 +1566,8 @@ function BulkVINUpload() {
             <div style={{ fontSize: '10px', color: 'var(--text-muted)' }}>tap to edit</div>
           </div>
           <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '6px', fontSize: '12px' }}>
-            {(['vendor_name', 'part_number', 'customer', 'date', 'po_number'] as const).map(field => {
-              const labels: Record<string, string> = { vendor_name: 'Vendor', part_number: 'Part#', customer: 'Customer', date: 'Date', po_number: 'PO#' };
+            {(['part_number', 'customer', 'date'] as const).map(field => {
+              const labels: Record<string, string> = { part_number: 'Part#', customer: 'Customer', date: 'Date' };
               const val = (worksheetHeader as any)[field];
               return (
                 <div key={field}>
@@ -1640,7 +1640,7 @@ function BulkVINUpload() {
                     <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
                       <span style={{ fontSize: '11px', fontWeight: 800 }}>Page {pageInfo.pageNum}</span>
                       <span style={{ fontSize: '10px', fontWeight: 600 }}>
-                        {[pageInfo.header.part_number, pageInfo.header.customer, pageInfo.header.po_number ? `PO: ${pageInfo.header.po_number}` : null].filter(Boolean).join(' · ')}
+                        {[pageInfo.header.part_number, pageInfo.header.customer].filter(Boolean).join(' · ')}
                       </span>
                     </div>
                   </div>
