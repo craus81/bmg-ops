@@ -97,6 +97,9 @@ export default function MorePage() {
           />
         </>)}
         {isAdmin && (
+          <MenuBtn icon="👷" title="CNI Management" sub="Certified Network Installer jobs & profiles" onClick={() => router.push('/admin/cni')} />
+        )}
+        {isAdmin && (
           <MenuBtn icon="📚" title="Knowledge Base" sub="SOPs and docs for AI agent" onClick={() => router.push('/admin/knowledge')} />
         )}
         <MenuBtn icon="📝" title="Quick Job (No PO)" sub="Start scanning without a PO" onClick={() => router.push('/scan')} />

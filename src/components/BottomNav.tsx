@@ -30,6 +30,7 @@ interface Tab {
 const allTabs: Tab[] = [
   { id: 'home', path: '/home', label: 'Home', icon: '🏠', roles: ['admin', 'installer', 'field_tech', 'shop_tech', 'sales', 'graphics_production'] },
   { id: 'my-jobs', path: '/my-jobs', label: 'My Jobs', icon: '📋', roles: ['field_tech', 'shop_tech'] },
+  { id: 'installer-portal', path: '/installer', label: 'CNI Jobs', icon: '👷', roles: ['installer'] },
   { id: 'time', path: '/time', label: 'Time', icon: '⏰', roles: ['admin', 'installer', 'field_tech', 'shop_tech', 'sales', 'graphics_production'] },
   { id: 'graphics', path: '/graphics', label: 'Graphics', icon: '🎨', roles: ['admin', 'graphics_production', 'sales'] },
   { id: 'fleet', path: '/fleet', label: 'Fleet', icon: '🚚', roles: ['admin', 'shop_tech', 'sales', 'graphics_production'] },
@@ -71,6 +72,7 @@ export default function BottomNav({ clockStatus }: BottomNavProps) {
     if (tab.path === '/fleet') return pathname === '/fleet' || pathname === '/fleet/update';
     if (tab.path === '/tracking') return pathname === '/tracking';
     if (tab.path === '/my-jobs') return pathname === '/my-jobs' || pathname.startsWith('/jobs/');
+    if (tab.path === '/installer') return pathname.startsWith('/installer');
     if (tab.path === '/graphics') return pathname.startsWith('/graphics');
     if (tab.path === '/estimates') return pathname.startsWith('/estimates');
     if (tab.path === '/customer/dashboard') return pathname.startsWith('/customer');

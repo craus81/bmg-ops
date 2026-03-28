@@ -125,7 +125,31 @@ SUPABASE TABLES (BMG Fleet App)
     - file_name, file_type, file_size, file_path (if uploaded from a file)
     - uploaded_by (FK profiles), created_at
 
-16. vehicle_templates — VEHICLE WRAP DIMENSIONS (panel sizes for quoting)
+16. netsuite_parts — PARTS CATALOG (synced from NetSuite)
+    - id (uuid), netsuite_id (text), item_number (text), display_name (text)
+    - description (text), item_type ('InventoryItem'|'NonInventoryItem'|'ServiceItem')
+    - catalog ('upfit'|'graphics'), sales_price (numeric), purchase_price (numeric)
+    - labor_hours (numeric — hours needed to install this part)
+    - quantity_on_hand (numeric), quantity_available (numeric)
+    - is_active (boolean), last_synced_at, created_at
+    - USE THIS TABLE to look up parts before creating estimates
+
+17. estimates — ESTIMATES / QUOTES
+    - id (uuid), estimate_number (text, e.g. 'EST-2603-0001')
+    - customer_id (FK customers), customer_name, customer_netsuite_id
+    - title, notes, status ('draft'|'sent'|'accepted'|'rejected'|'pushed')
+    - tax_rate (numeric), tax_exempt (boolean), labor_rate (numeric, default $120/hr)
+    - labor_hours (numeric, auto-summed), subtotal, labor_total, tax_amount, grand_total
+    - netsuite_estimate_id, netsuite_estimate_number (after push)
+    - created_by (FK profiles), created_at, updated_at
+
+18. estimate_line_items — ESTIMATE LINE ITEMS
+    - id (uuid), estimate_id (FK estimates), sort_order (int)
+    - part_id (FK netsuite_parts), netsuite_item_id (text)
+    - item_number, description, quantity (numeric), unit_price (numeric)
+    - line_total (numeric), labor_hours (numeric), is_custom (boolean)
+
+19. vehicle_templates — VEHICLE WRAP DIMENSIONS (panel sizes for quoting)
     - id (uuid), name (full display name e.g. "Ford Transit Long Wheelbase High Roof 2015-Present")
     - make, model, year, variant (e.g. "Long Wheelbase", "High Roof", "Extended")
     - overall_length_in, overall_height_in, wheelbase_in
@@ -192,11 +216,38 @@ Actions let you modify data in the app. Use them when the user asks you to DO so
 4. create_notification — Send a notification to a user
    params: { user_id, type, title, body }
 
+5. create_estimate — Create a draft estimate with line items
+   params: {
+     customer_name: string (will auto-lookup in customers table),
+     customer_netsuite_id?: string (NetSuite internal ID, optional if name provided),
+     title?: string (estimate title/description),
+     notes?: string,
+     tax_rate?: number (default 0.0795 = 7.95%),
+     tax_exempt?: boolean (default false),
+     labor_rate?: number (default $120/hour),
+     created_by?: string (user UUID),
+     line_items: [
+       {
+         item_number or part_number: string (will auto-match from netsuite_parts catalog),
+         description?: string (auto-filled from catalog if matched),
+         quantity: number (default 1),
+         unit_price?: number (auto-filled from catalog sales_price if matched),
+         labor_hours?: number (auto-filled from catalog if matched),
+         netsuite_item_id?: string (optional, auto-resolved from catalog)
+       }
+     ]
+   }
+   IMPORTANT: Always search the parts catalog FIRST (query netsuite_parts) to find exact item_numbers before creating the estimate. Use the actual item_number values from the catalog in your line_items.
+   The estimate is created as a DRAFT. Tell the user to open the Estimates page to review, modify, and push to NetSuite.
+
 WHEN TO USE ACTIONS:
 - "Create a graphics job for..." → use create_graphics_job
 - "Move job X to printing" → query for the job first, then update_graphics_status
 - "Tell Craig that..." → query for Craig's user ID, then send_message
 - "Notify the production team..." → query production users, then create_notification for each
+- "Create an estimate for..." → search netsuite_parts first for matching parts, then use create_estimate with resolved item_numbers
+- "Quote X for customer Y" → same as create an estimate
+- "Build an estimate with parts A, B, C" → search parts catalog, then create_estimate
 
 ═══════════════════════════════════════════
 NETSUITE TABLES (SuiteQL)
@@ -604,6 +655,152 @@ async function executeAction(action: string, params: Record<string, any>): Promi
       });
       if (error) throw new Error(`Failed to create notification: ${error.message}`);
       return { success: true, message: `Notification sent` };
+    }
+
+    case 'create_estimate': {
+      const {
+        customer_name, customer_netsuite_id, title: estTitle, notes,
+        tax_rate, tax_exempt, labor_rate, line_items, created_by
+      } = params;
+
+      if (!line_items || !Array.isArray(line_items) || line_items.length === 0) {
+        throw new Error('line_items array is required with at least one item');
+      }
+
+      // Generate estimate number: EST-YYMM-XXXX
+      const now = new Date();
+      const prefix = `EST-${now.getFullYear().toString().slice(2)}${String(now.getMonth() + 1).padStart(2, '0')}`;
+      const { count } = await supabase
+        .from('estimates')
+        .select('*', { count: 'exact', head: true })
+        .like('estimate_number', `${prefix}%`);
+      const seq = String((count || 0) + 1).padStart(4, '0');
+      const estimateNumber = `${prefix}-${seq}`;
+
+      // Look up customer by name if netsuite ID not provided
+      let customerId: string | null = null;
+      let custNsId: string | null = customer_netsuite_id || null;
+      if (customer_name && !custNsId) {
+        const { data: custData } = await supabase
+          .from('customers')
+          .select('id, netsuite_id')
+          .ilike('name', `%${customer_name}%`)
+          .limit(1)
+          .maybeSingle();
+        if (custData) {
+          customerId = custData.id;
+          custNsId = custData.netsuite_id;
+        }
+      }
+
+      // Resolve line items — look up parts from netsuite_parts catalog
+      const resolvedItems: any[] = [];
+      let totalLaborHours = 0;
+      let subtotal = 0;
+
+      for (let i = 0; i < line_items.length; i++) {
+        const li = line_items[i];
+        let partId: string | null = null;
+        let nsItemId: string | null = li.netsuite_item_id || null;
+        let itemNumber = li.item_number || li.part_number || '';
+        let description = li.description || '';
+        let unitPrice = li.unit_price != null ? Number(li.unit_price) : 0;
+        let laborHours = li.labor_hours != null ? Number(li.labor_hours) : 0;
+        let isCustom = true;
+
+        // Try to match from parts catalog
+        if (itemNumber) {
+          const { data: part } = await supabase
+            .from('netsuite_parts')
+            .select('id, netsuite_id, item_number, display_name, description, sales_price, labor_hours')
+            .or(`item_number.ilike.%${itemNumber}%,display_name.ilike.%${itemNumber}%`)
+            .eq('is_active', true)
+            .limit(1)
+            .maybeSingle();
+
+          if (part) {
+            partId = part.id;
+            nsItemId = part.netsuite_id;
+            itemNumber = part.item_number;
+            description = description || part.display_name || part.description || '';
+            if (unitPrice === 0) unitPrice = Number(part.sales_price) || 0;
+            if (laborHours === 0) laborHours = Number(part.labor_hours) || 0;
+            isCustom = false;
+          }
+        }
+
+        const qty = Number(li.quantity) || 1;
+        const lineTotal = qty * unitPrice;
+        subtotal += lineTotal;
+        totalLaborHours += laborHours * qty;
+
+        resolvedItems.push({
+          sort_order: i,
+          part_id: partId,
+          netsuite_item_id: nsItemId,
+          item_number: itemNumber,
+          description,
+          quantity: qty,
+          unit_price: unitPrice,
+          line_total: lineTotal,
+          labor_hours: laborHours,
+          is_custom: isCustom,
+        });
+      }
+
+      const effectiveLaborRate = Number(labor_rate) || 120;
+      const effectiveTaxRate = tax_exempt ? 0 : (Number(tax_rate) || 0.0795);
+      const laborTotal = totalLaborHours * effectiveLaborRate;
+      const taxAmount = subtotal * effectiveTaxRate;
+      const grandTotal = subtotal + laborTotal + taxAmount;
+
+      // Insert estimate
+      const { data: estimate, error: estError } = await supabase
+        .from('estimates')
+        .insert({
+          estimate_number: estimateNumber,
+          customer_id: customerId,
+          customer_name: customer_name || null,
+          customer_netsuite_id: custNsId,
+          title: estTitle || null,
+          notes: notes || null,
+          status: 'draft',
+          tax_rate: effectiveTaxRate,
+          tax_exempt: !!tax_exempt,
+          labor_rate: effectiveLaborRate,
+          labor_hours: totalLaborHours,
+          subtotal,
+          labor_total: laborTotal,
+          tax_amount: taxAmount,
+          grand_total: grandTotal,
+          created_by: created_by || null,
+        })
+        .select()
+        .single();
+
+      if (estError) throw new Error(`Failed to create estimate: ${estError.message}`);
+
+      // Insert line items
+      if (resolvedItems.length > 0) {
+        const lineItemsToInsert = resolvedItems.map(li => ({
+          ...li,
+          estimate_id: estimate.id,
+        }));
+        const { error: liError } = await supabase
+          .from('estimate_line_items')
+          .insert(lineItemsToInsert);
+        if (liError) console.error('Line item insert error:', liError);
+      }
+
+      const matchedCount = resolvedItems.filter(li => !li.is_custom).length;
+      const customCount = resolvedItems.filter(li => li.is_custom).length;
+
+      return {
+        success: true,
+        estimate_id: estimate.id,
+        estimate_number: estimateNumber,
+        message: `Created draft estimate ${estimateNumber}${customer_name ? ` for ${customer_name}` : ''} — ${resolvedItems.length} line item(s) (${matchedCount} from catalog, ${customCount} custom), subtotal $${subtotal.toLocaleString('en-US', { minimumFractionDigits: 2 })}, labor $${laborTotal.toLocaleString('en-US', { minimumFractionDigits: 2 })} (${totalLaborHours}h), grand total $${grandTotal.toLocaleString('en-US', { minimumFractionDigits: 2 })}. The user can review and push to NetSuite on the Estimates page.`,
+      };
     }
 
     default:
