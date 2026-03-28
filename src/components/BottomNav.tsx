@@ -20,10 +20,10 @@ interface Tab {
 
 // ── Role-based tab visibility ──
 // admin:               everything
-// field_tech:          home (VIN scanner), vehicles, time, chat, more
-// shop_tech:           home, fleet, tracking, time, chat, more
-// sales:              home, fleet (read-only), graphics, estimates, time, chat, more
-// graphics_production: home, fleet (read-only), graphics, estimates, time, chat, more
+// field_tech:          home, vehicles, time, chat, more
+// shop_tech:           home, scan & install, vehicle check in, in-shop, time, chat, more
+// sales:              home, scan & install, vehicle check in (read-only), graphics production, estimates, time, chat, more
+// graphics_production: home, vehicle check in (read-only), graphics production, estimates, time, chat, more
 // installer:           home, time, chat, more (pre-approval limited)
 // customer:            customer dashboard, settings
 
@@ -31,10 +31,11 @@ const allTabs: Tab[] = [
   { id: 'home', path: '/home', label: 'Home', icon: '🏠', roles: ['admin', 'installer', 'field_tech', 'shop_tech', 'sales', 'graphics_production'] },
   { id: 'my-jobs', path: '/my-jobs', label: 'My Jobs', icon: '📋', roles: ['field_tech', 'shop_tech'] },
   { id: 'installer-portal', path: '/installer', label: 'CNI Jobs', icon: '👷', roles: ['installer'] },
+  { id: 'scan-install', path: '/scan-install', label: 'Scan & Install', icon: '📷', roles: ['admin', 'sales', 'shop_tech'] },
   { id: 'time', path: '/time', label: 'Time', icon: '⏰', roles: ['admin', 'installer', 'field_tech', 'shop_tech', 'sales', 'graphics_production'] },
-  { id: 'graphics', path: '/graphics', label: 'Graphics', icon: '🎨', roles: ['admin', 'graphics_production', 'sales'] },
-  { id: 'fleet', path: '/fleet', label: 'Fleet', icon: '🚚', roles: ['admin', 'shop_tech', 'sales', 'graphics_production'] },
-  { id: 'tracking', path: '/tracking', label: 'Tracking', icon: '📋', roles: ['admin', 'shop_tech'] },
+  { id: 'graphics', path: '/graphics', label: 'Graphics Production', icon: '🎨', roles: ['admin', 'graphics_production', 'sales'] },
+  { id: 'fleet', path: '/fleet', label: 'Vehicle Check In', icon: '🚚', roles: ['admin', 'shop_tech', 'sales', 'graphics_production'] },
+  { id: 'tracking', path: '/tracking', label: 'In-Shop', icon: '🏭', roles: ['admin', 'shop_tech'] },
   { id: 'vehicles', path: '/vehicles', label: 'Vehicles', icon: '🚐', roles: ['admin', 'field_tech'] },
   { id: 'estimates', path: '/estimates', label: 'Estimates', icon: '📝', roles: ['admin', 'sales', 'graphics_production'] },
   { id: 'messages', path: '/messages', label: 'Chat', icon: '💬' },
@@ -68,7 +69,8 @@ export default function BottomNav({ clockStatus }: BottomNavProps) {
   };
 
   const isActive = (tab: Tab) => {
-    if (tab.path === '/home') return pathname === '/home' || pathname === '/scan' || pathname === '/select-part' || pathname === '/photos';
+    if (tab.path === '/home') return pathname === '/home' || pathname === '/photos';
+    if (tab.path === '/scan-install') return pathname === '/scan-install' || pathname === '/scan' || pathname === '/select-part';
     if (tab.path === '/fleet') return pathname === '/fleet' || pathname === '/fleet/update';
     if (tab.path === '/tracking') return pathname === '/tracking';
     if (tab.path === '/my-jobs') return pathname === '/my-jobs' || pathname.startsWith('/jobs/');

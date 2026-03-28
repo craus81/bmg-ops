@@ -4,12 +4,28 @@ import { useState, useEffect } from 'react';
 import { useRouter, useParams } from 'next/navigation';
 import { createClient } from '@/lib/supabase-browser';
 import { useAuth } from '@/components/AuthProvider';
+import { theme } from '@/lib/theme';
 
 const RISK_TAG_OPTIONS = [
   { id: 'preferred', label: 'Preferred', color: 'var(--success)' },
   { id: 'at_risk', label: 'At Risk', color: 'var(--warning)' },
   { id: 'needs_review', label: 'Needs Review', color: '#60a5fa' },
   { id: 'do_not_assign', label: 'Do Not Assign', color: 'var(--error)' },
+];
+
+const SERVICE_TYPE_OPTIONS = [
+  { id: 'graphics_install', label: 'Graphics Installation' },
+  { id: 'tech_install', label: 'Technology Installation' },
+  { id: 'upfitting', label: 'Upfitting' },
+  { id: 'removal_rebrand', label: 'Removal / Rebrand' },
+];
+
+const EQUIPMENT_OPTIONS = [
+  { id: 'indoor', label: 'Indoor' },
+  { id: 'outdoor', label: 'Outdoor Only' },
+  { id: 'lift_bucket', label: 'Lift / Bucket' },
+  { id: 'shop', label: 'Shop' },
+  { id: 'mobile', label: 'Mobile' },
 ];
 
 export default function CniInstallerDetailPage() {
@@ -27,6 +43,8 @@ export default function CniInstallerDetailPage() {
   const [newNoteType, setNewNoteType] = useState('general');
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
+  const [message, setMessage] = useState('');
+  const [messageType, setMessageType] = useState<'success' | 'error'>('success');
 
   // Editable internal fields
   const [completionReliability, setCompletionReliability] = useState('good');
@@ -34,10 +52,29 @@ export default function CniInstallerDetailPage() {
   const [communicationRating, setCommunicationRating] = useState('responsive');
   const [riskTags, setRiskTags] = useState<string[]>([]);
 
+  // Edit mode
+  const [isEditing, setIsEditing] = useState(false);
+  const [editForm, setEditForm] = useState({
+    fullName: '', email: '', companyName: '', phone: '',
+    street: '', city: '', state: '', zip: '',
+    coverageRadius: '', serviceTypes: [] as string[], equipmentCapabilities: [] as string[],
+    availabilityStatus: 'available',
+  });
+
+  // Action states
+  const [resending, setResending] = useState(false);
+  const [deleting, setDeleting] = useState(false);
+
   useEffect(() => {
     if (!isAdmin) { router.push('/home'); return; }
     loadData();
   }, [isAdmin, userId]);
+
+  const showMessage = (msg: string, type: 'success' | 'error' = 'success') => {
+    setMessage(msg);
+    setMessageType(type);
+    setTimeout(() => setMessage(''), 4000);
+  };
 
   const loadData = async () => {
     const { data: cniData } = await supabase
@@ -56,7 +93,7 @@ export default function CniInstallerDetailPage() {
 
     const { data: userData } = await supabase
       .from('profiles')
-      .select('full_name, email')
+      .select('full_name, email, deactivated, deactivated_at')
       .eq('id', userId)
       .single();
     setUserProfile(userData);
@@ -69,7 +106,6 @@ export default function CniInstallerDetailPage() {
       .limit(20);
     setJobs(jobsData || []);
 
-    // Load internal notes
     const { data: notesData } = await supabase
       .from('cni_internal_notes')
       .select('*')
@@ -96,6 +132,160 @@ export default function CniInstallerDetailPage() {
       updated_at: new Date().toISOString(),
     }).eq('user_id', userId);
     setSaving(false);
+    showMessage('Internal fields saved');
+  };
+
+  // ── Edit Profile ──
+  const startEditing = () => {
+    const addr = profile?.business_address || {};
+    setEditForm({
+      fullName: userProfile?.full_name || '',
+      email: userProfile?.email || '',
+      companyName: profile?.company_name || '',
+      phone: profile?.phone || '',
+      street: addr.street || '',
+      city: addr.city || '',
+      state: addr.state || '',
+      zip: addr.zip || '',
+      coverageRadius: profile?.coverage_radius_miles?.toString() || '',
+      serviceTypes: profile?.service_types || [],
+      equipmentCapabilities: profile?.equipment_capabilities || [],
+      availabilityStatus: profile?.availability_status || 'available',
+    });
+    setIsEditing(true);
+  };
+
+  const saveEdit = async () => {
+    if (!editForm.fullName.trim() || !editForm.email.trim()) {
+      showMessage('Name and email are required', 'error');
+      return;
+    }
+    setSaving(true);
+
+    // Update profiles table (name, email)
+    const { error: profileErr } = await supabase.from('profiles').update({
+      full_name: editForm.fullName.trim(),
+      email: editForm.email.trim().toLowerCase(),
+    }).eq('id', userId);
+
+    if (profileErr) {
+      showMessage('Failed to update profile: ' + profileErr.message, 'error');
+      setSaving(false);
+      return;
+    }
+
+    // Update cni_profiles table
+    const { error: cniErr } = await supabase.from('cni_profiles').update({
+      company_name: editForm.companyName.trim() || null,
+      phone: editForm.phone.trim() || null,
+      business_address: {
+        street: editForm.street.trim(),
+        city: editForm.city.trim(),
+        state: editForm.state.trim(),
+        zip: editForm.zip.trim(),
+      },
+      coverage_radius_miles: editForm.coverageRadius ? parseInt(editForm.coverageRadius) : null,
+      service_types: editForm.serviceTypes,
+      equipment_capabilities: editForm.equipmentCapabilities,
+      availability_status: editForm.availabilityStatus,
+      updated_at: new Date().toISOString(),
+    }).eq('user_id', userId);
+
+    if (cniErr) {
+      showMessage('Failed to update CNI profile: ' + cniErr.message, 'error');
+      setSaving(false);
+      return;
+    }
+
+    setSaving(false);
+    setIsEditing(false);
+    showMessage('Profile updated successfully');
+    await loadData();
+  };
+
+  const toggleEditItem = (list: string[], item: string) => {
+    return list.includes(item) ? list.filter(i => i !== item) : [...list, item];
+  };
+
+  // ── Deactivate / Reactivate ──
+  const handleDeactivate = async () => {
+    const name = userProfile?.full_name || 'this installer';
+    if (!window.confirm(`Deactivate ${name}? They will no longer be able to log in.`)) return;
+
+    const { error } = await supabase.from('profiles')
+      .update({ deactivated: true, deactivated_at: new Date().toISOString() })
+      .eq('id', userId);
+
+    if (error) {
+      showMessage('Failed to deactivate: ' + error.message, 'error');
+    } else {
+      showMessage(`${name} has been deactivated`);
+      await loadData();
+    }
+  };
+
+  const handleReactivate = async () => {
+    const { error } = await supabase.from('profiles')
+      .update({ deactivated: false, deactivated_at: null, deactivated_by: null })
+      .eq('id', userId);
+
+    if (error) {
+      showMessage('Failed to reactivate: ' + error.message, 'error');
+    } else {
+      showMessage('Installer reactivated');
+      await loadData();
+    }
+  };
+
+  // ── Delete ──
+  const handleDelete = async () => {
+    const name = userProfile?.full_name || 'this installer';
+    if (!window.confirm(`Permanently delete ${name}? This cannot be undone.`)) return;
+    if (!window.confirm(`Are you absolutely sure? This will remove ${name} and all their CNI data from the system entirely.`)) return;
+
+    setDeleting(true);
+    try {
+      const res = await fetch('/api/cni/delete-installer', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ userId }),
+      });
+      const data = await res.json();
+      if (!res.ok) {
+        showMessage(data.error || 'Failed to delete installer', 'error');
+        setDeleting(false);
+      } else {
+        router.push('/admin/cni/installers');
+      }
+    } catch (err: any) {
+      showMessage('Error: ' + err.message, 'error');
+      setDeleting(false);
+    }
+  };
+
+  // ── Resend Invite ──
+  const handleResendInvite = async () => {
+    setResending(true);
+    try {
+      const res = await fetch('/api/cni/resend-invite', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          userId,
+          email: userProfile?.email,
+          fullName: userProfile?.full_name,
+        }),
+      });
+      const data = await res.json();
+      if (!res.ok) {
+        showMessage(data.error || 'Failed to resend invite', 'error');
+      } else {
+        showMessage(data.emailSent ? 'Invite email sent!' : 'Link generated (email may not have sent)');
+      }
+    } catch (err: any) {
+      showMessage('Error: ' + err.message, 'error');
+    }
+    setResending(false);
   };
 
   if (loading) {
@@ -106,42 +296,100 @@ export default function CniInstallerDetailPage() {
     return (
       <div style={{ padding: '20px', textAlign: 'center' }}>
         <div style={{ color: 'var(--text-muted)', marginBottom: '12px' }}>CNI profile not found</div>
-        <button onClick={() => router.push('/admin/cni/installers')} style={{ color: 'var(--orange)', fontWeight: 600 }}>← Back</button>
+        <button onClick={() => router.push('/admin/cni/installers')} style={{ color: 'var(--orange)', fontWeight: 600, background: 'none', border: 'none', cursor: 'pointer' }}>← Back</button>
       </div>
     );
   }
 
   const addr = profile.business_address || {};
+  const isDeactivated = !!userProfile.deactivated;
+  const isProfileIncomplete = !profile.profile_complete;
+
   const sectionStyle: React.CSSProperties = {
     padding: '14px 16px', borderRadius: '12px', marginBottom: '14px',
     background: 'var(--card)', border: '1px solid var(--border)',
   };
 
+  const inputStyle: React.CSSProperties = {
+    width: '100%', padding: '10px 12px', borderRadius: '8px', fontSize: '13px',
+    border: '1px solid var(--border)', background: 'var(--input-bg)', color: 'var(--text-body)',
+  };
+
+  const labelStyle: React.CSSProperties = {
+    fontSize: '11px', fontWeight: 700, color: 'var(--text-muted)', marginBottom: '4px', display: 'block',
+  };
+
   return (
     <div>
+      {/* Message Banner */}
+      {message && (
+        <div style={{
+          padding: '10px 14px', borderRadius: '10px', marginBottom: '12px', fontSize: '13px', fontWeight: 600,
+          background: messageType === 'success' ? 'var(--success-bg)' : 'var(--error-bg)',
+          border: `1px solid ${messageType === 'success' ? 'var(--success-border)' : 'var(--error-border)'}`,
+          color: messageType === 'success' ? 'var(--success)' : 'var(--error)',
+        }}>
+          {message}
+        </div>
+      )}
+
       {/* Header */}
-      <div style={{ display: 'flex', alignItems: 'center', gap: '12px', marginBottom: '16px' }}>
-        <button onClick={() => router.push('/admin/cni/installers')} style={{ fontSize: '20px', color: 'var(--text-muted)' }}>←</button>
-        <div>
-          <div style={{ fontSize: '18px', fontWeight: 800, color: 'var(--text-primary)' }}>{userProfile.full_name}</div>
+      <div style={{ display: 'flex', alignItems: 'center', gap: '12px', marginBottom: '12px' }}>
+        <button onClick={() => router.push('/admin/cni/installers')} style={{
+          fontSize: '20px', color: 'var(--text-muted)', background: 'none', border: 'none', cursor: 'pointer',
+        }}>←</button>
+        <div style={{ flex: 1 }}>
+          <div style={{
+            fontSize: '18px', fontWeight: 800, color: 'var(--text-primary)',
+            opacity: isDeactivated ? 0.5 : 1,
+          }}>
+            {userProfile.full_name}
+          </div>
           <div style={{ fontSize: '12px', color: 'var(--text-muted)' }}>
             {profile.company_name || 'Independent'} • {userProfile.email}
           </div>
         </div>
+        {!isEditing && (
+          <button onClick={startEditing} style={{
+            padding: '6px 14px', borderRadius: '8px', fontSize: '11px', fontWeight: 700,
+            background: 'var(--subtle-bg)', border: '1px solid var(--border)',
+            color: theme.textPrimary, cursor: 'pointer',
+          }}>
+            Edit
+          </button>
+        )}
       </div>
 
-      {/* Tags */}
+      {/* Status Badges */}
       <div style={{ display: 'flex', gap: '6px', marginBottom: '14px', flexWrap: 'wrap' }}>
-        <span style={{
-          fontSize: '11px', fontWeight: 700, padding: '4px 10px', borderRadius: '6px',
-          textTransform: 'capitalize',
-          background: profile.availability_status === 'available' ? 'var(--success-bg)' :
-                     profile.availability_status === 'limited' ? 'var(--warning-bg)' : 'var(--error-bg)',
-          color: profile.availability_status === 'available' ? 'var(--success)' :
-                 profile.availability_status === 'limited' ? 'var(--warning)' : 'var(--error)',
-        }}>
-          {profile.availability_status}
-        </span>
+        {isDeactivated && (
+          <span style={{
+            fontSize: '11px', fontWeight: 700, padding: '4px 10px', borderRadius: '6px',
+            background: 'var(--error-bg)', color: 'var(--error)',
+          }}>
+            DEACTIVATED
+          </span>
+        )}
+        {isProfileIncomplete && (
+          <span style={{
+            fontSize: '11px', fontWeight: 700, padding: '4px 10px', borderRadius: '6px',
+            background: 'var(--warning-bg)', color: 'var(--warning)',
+          }}>
+            PENDING SETUP
+          </span>
+        )}
+        {!isDeactivated && (
+          <span style={{
+            fontSize: '11px', fontWeight: 700, padding: '4px 10px', borderRadius: '6px',
+            textTransform: 'capitalize',
+            background: profile.availability_status === 'available' ? 'var(--success-bg)' :
+                       profile.availability_status === 'limited' ? 'var(--warning-bg)' : 'var(--error-bg)',
+            color: profile.availability_status === 'available' ? 'var(--success)' :
+                   profile.availability_status === 'limited' ? 'var(--warning)' : 'var(--error)',
+          }}>
+            {profile.availability_status}
+          </span>
+        )}
         {riskTags.map(tag => {
           const opt = RISK_TAG_OPTIONS.find(o => o.id === tag);
           return (
@@ -156,46 +404,171 @@ export default function CniInstallerDetailPage() {
         })}
       </div>
 
-      {/* Basic Info */}
-      <div style={sectionStyle}>
-        <div style={{ fontSize: '12px', fontWeight: 700, color: 'var(--text-muted)', marginBottom: '10px' }}>PROFILE</div>
-        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '10px' }}>
-          <div>
-            <div style={{ fontSize: '11px', color: 'var(--text-muted)', fontWeight: 600 }}>Phone</div>
-            <div style={{ fontSize: '13px', color: 'var(--text-primary)' }}>{profile.phone || '—'}</div>
+      {/* ── EDIT MODE ── */}
+      {isEditing ? (
+        <div style={sectionStyle}>
+          <div style={{ fontSize: '12px', fontWeight: 700, color: theme.textPrimary, marginBottom: '14px' }}>
+            Edit Installer Profile
           </div>
-          <div>
-            <div style={{ fontSize: '11px', color: 'var(--text-muted)', fontWeight: 600 }}>Coverage</div>
-            <div style={{ fontSize: '13px', color: 'var(--text-primary)' }}>{profile.coverage_radius_miles ? `${profile.coverage_radius_miles} mi` : '—'}</div>
-          </div>
-          <div>
-            <div style={{ fontSize: '11px', color: 'var(--text-muted)', fontWeight: 600 }}>Location</div>
-            <div style={{ fontSize: '13px', color: 'var(--text-primary)' }}>
-              {addr.city ? `${addr.city}, ${addr.state || ''}` : '—'}
+
+          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '10px', marginBottom: '12px' }}>
+            <div>
+              <label style={labelStyle}>Full Name *</label>
+              <input style={inputStyle} value={editForm.fullName} onChange={e => setEditForm({ ...editForm, fullName: e.target.value })} />
+            </div>
+            <div>
+              <label style={labelStyle}>Email *</label>
+              <input style={inputStyle} value={editForm.email} onChange={e => setEditForm({ ...editForm, email: e.target.value })} />
+            </div>
+            <div>
+              <label style={labelStyle}>Company Name</label>
+              <input style={inputStyle} value={editForm.companyName} onChange={e => setEditForm({ ...editForm, companyName: e.target.value })} />
+            </div>
+            <div>
+              <label style={labelStyle}>Phone</label>
+              <input style={inputStyle} value={editForm.phone} onChange={e => setEditForm({ ...editForm, phone: e.target.value })} />
             </div>
           </div>
-          <div>
-            <div style={{ fontSize: '11px', color: 'var(--text-muted)', fontWeight: 600 }}>Jobs Completed</div>
-            <div style={{ fontSize: '13px', fontWeight: 700, color: 'var(--text-primary)' }}>{profile.jobs_completed || 0}</div>
+
+          {/* Address */}
+          <div style={{ marginBottom: '12px' }}>
+            <label style={labelStyle}>Street Address</label>
+            <input style={inputStyle} value={editForm.street} onChange={e => setEditForm({ ...editForm, street: e.target.value })} />
+          </div>
+          <div style={{ display: 'grid', gridTemplateColumns: '2fr 1fr 1fr', gap: '8px', marginBottom: '12px' }}>
+            <div>
+              <label style={labelStyle}>City</label>
+              <input style={inputStyle} value={editForm.city} onChange={e => setEditForm({ ...editForm, city: e.target.value })} />
+            </div>
+            <div>
+              <label style={labelStyle}>State</label>
+              <input style={inputStyle} value={editForm.state} onChange={e => setEditForm({ ...editForm, state: e.target.value })} maxLength={2} />
+            </div>
+            <div>
+              <label style={labelStyle}>Zip</label>
+              <input style={inputStyle} value={editForm.zip} onChange={e => setEditForm({ ...editForm, zip: e.target.value })} />
+            </div>
+          </div>
+
+          <div style={{ marginBottom: '12px' }}>
+            <label style={labelStyle}>Coverage Radius (miles)</label>
+            <input style={inputStyle} type="number" value={editForm.coverageRadius} onChange={e => setEditForm({ ...editForm, coverageRadius: e.target.value })} />
+          </div>
+
+          {/* Availability */}
+          <div style={{ marginBottom: '14px' }}>
+            <label style={labelStyle}>Availability Status</label>
+            <select
+              value={editForm.availabilityStatus}
+              onChange={e => setEditForm({ ...editForm, availabilityStatus: e.target.value })}
+              style={{ ...inputStyle, cursor: 'pointer' }}
+            >
+              <option value="available">Available</option>
+              <option value="limited">Limited</option>
+              <option value="unavailable">Unavailable</option>
+            </select>
+          </div>
+
+          {/* Service Types */}
+          <div style={{ marginBottom: '14px' }}>
+            <label style={labelStyle}>Service Types</label>
+            <div style={{ display: 'flex', flexWrap: 'wrap', gap: '6px', marginTop: '4px' }}>
+              {SERVICE_TYPE_OPTIONS.map(opt => {
+                const active = editForm.serviceTypes.includes(opt.id);
+                return (
+                  <button key={opt.id} onClick={() => setEditForm({ ...editForm, serviceTypes: toggleEditItem(editForm.serviceTypes, opt.id) })} style={{
+                    padding: '8px 12px', borderRadius: '8px', fontSize: '11px', fontWeight: 700, cursor: 'pointer',
+                    background: active ? 'color-mix(in srgb, var(--orange) 12%, transparent)' : 'var(--input-bg)',
+                    border: `1px solid ${active ? 'var(--orange)' : 'var(--border)'}`,
+                    color: active ? 'var(--orange)' : 'var(--text-muted)',
+                  }}>
+                    {opt.label}
+                  </button>
+                );
+              })}
+            </div>
+          </div>
+
+          {/* Equipment */}
+          <div style={{ marginBottom: '16px' }}>
+            <label style={labelStyle}>Equipment &amp; Capabilities</label>
+            <div style={{ display: 'flex', flexWrap: 'wrap', gap: '6px', marginTop: '4px' }}>
+              {EQUIPMENT_OPTIONS.map(opt => {
+                const active = editForm.equipmentCapabilities.includes(opt.id);
+                return (
+                  <button key={opt.id} onClick={() => setEditForm({ ...editForm, equipmentCapabilities: toggleEditItem(editForm.equipmentCapabilities, opt.id) })} style={{
+                    padding: '8px 12px', borderRadius: '8px', fontSize: '11px', fontWeight: 700, cursor: 'pointer',
+                    background: active ? 'color-mix(in srgb, #2a6178 15%, transparent)' : 'var(--input-bg)',
+                    border: `1px solid ${active ? '#2a6178' : 'var(--border)'}`,
+                    color: active ? '#5cb8d4' : 'var(--text-muted)',
+                  }}>
+                    {opt.label}
+                  </button>
+                );
+              })}
+            </div>
+          </div>
+
+          {/* Save / Cancel */}
+          <div style={{ display: 'flex', gap: '8px' }}>
+            <button onClick={saveEdit} disabled={saving} style={{
+              flex: 1, padding: '12px', borderRadius: '10px', fontSize: '13px', fontWeight: 700,
+              background: saving ? 'var(--text-muted)' : 'var(--orange)', color: '#fff', border: 'none', cursor: saving ? 'default' : 'pointer',
+            }}>
+              {saving ? 'Saving...' : 'Save Changes'}
+            </button>
+            <button onClick={() => setIsEditing(false)} style={{
+              padding: '12px 20px', borderRadius: '10px', fontSize: '13px', fontWeight: 700,
+              background: 'var(--subtle-bg)', border: '1px solid var(--border)', color: 'var(--text-muted)', cursor: 'pointer',
+            }}>
+              Cancel
+            </button>
           </div>
         </div>
-        {profile.service_types?.length > 0 && (
-          <div style={{ marginTop: '10px' }}>
-            <div style={{ fontSize: '11px', color: 'var(--text-muted)', fontWeight: 600 }}>Services</div>
-            <div style={{ fontSize: '13px', color: 'var(--text-primary)', marginTop: '2px' }}>
-              {profile.service_types.map((s: string) => s.replace(/_/g, ' ')).join(', ')}
+      ) : (
+        <>
+          {/* ── VIEW MODE: Basic Info ── */}
+          <div style={sectionStyle}>
+            <div style={{ fontSize: '12px', fontWeight: 700, color: 'var(--text-muted)', marginBottom: '10px' }}>PROFILE</div>
+            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '10px' }}>
+              <div>
+                <div style={{ fontSize: '11px', color: 'var(--text-muted)', fontWeight: 600 }}>Phone</div>
+                <div style={{ fontSize: '13px', color: 'var(--text-primary)' }}>{profile.phone || '—'}</div>
+              </div>
+              <div>
+                <div style={{ fontSize: '11px', color: 'var(--text-muted)', fontWeight: 600 }}>Coverage</div>
+                <div style={{ fontSize: '13px', color: 'var(--text-primary)' }}>{profile.coverage_radius_miles ? `${profile.coverage_radius_miles} mi` : '—'}</div>
+              </div>
+              <div>
+                <div style={{ fontSize: '11px', color: 'var(--text-muted)', fontWeight: 600 }}>Location</div>
+                <div style={{ fontSize: '13px', color: 'var(--text-primary)' }}>
+                  {addr.city ? `${addr.city}, ${addr.state || ''}` : '—'}
+                </div>
+              </div>
+              <div>
+                <div style={{ fontSize: '11px', color: 'var(--text-muted)', fontWeight: 600 }}>Jobs Completed</div>
+                <div style={{ fontSize: '13px', fontWeight: 700, color: 'var(--text-primary)' }}>{profile.jobs_completed || 0}</div>
+              </div>
             </div>
+            {profile.service_types?.length > 0 && (
+              <div style={{ marginTop: '10px' }}>
+                <div style={{ fontSize: '11px', color: 'var(--text-muted)', fontWeight: 600 }}>Services</div>
+                <div style={{ fontSize: '13px', color: 'var(--text-primary)', marginTop: '2px' }}>
+                  {profile.service_types.map((s: string) => s.replace(/_/g, ' ')).join(', ')}
+                </div>
+              </div>
+            )}
+            {profile.equipment_capabilities?.length > 0 && (
+              <div style={{ marginTop: '8px' }}>
+                <div style={{ fontSize: '11px', color: 'var(--text-muted)', fontWeight: 600 }}>Equipment</div>
+                <div style={{ fontSize: '13px', color: 'var(--text-primary)', marginTop: '2px' }}>
+                  {profile.equipment_capabilities.map((s: string) => s.replace(/_/g, ' ')).join(', ')}
+                </div>
+              </div>
+            )}
           </div>
-        )}
-        {profile.equipment_capabilities?.length > 0 && (
-          <div style={{ marginTop: '8px' }}>
-            <div style={{ fontSize: '11px', color: 'var(--text-muted)', fontWeight: 600 }}>Equipment</div>
-            <div style={{ fontSize: '13px', color: 'var(--text-primary)', marginTop: '2px' }}>
-              {profile.equipment_capabilities.map((s: string) => s.replace(/_/g, ' ')).join(', ')}
-            </div>
-          </div>
-        )}
-      </div>
+        </>
+      )}
 
       {/* Compliance */}
       <div style={sectionStyle}>
@@ -280,7 +653,7 @@ export default function CniInstallerDetailPage() {
                 key={opt.id}
                 onClick={() => toggleTag(opt.id)}
                 style={{
-                  padding: '6px 12px', borderRadius: '8px', fontSize: '11px', fontWeight: 700,
+                  padding: '6px 12px', borderRadius: '8px', fontSize: '11px', fontWeight: 700, cursor: 'pointer',
                   background: riskTags.includes(opt.id) ? `color-mix(in srgb, ${opt.color} 15%, transparent)` : 'var(--input-bg)',
                   color: riskTags.includes(opt.id) ? opt.color : 'var(--text-muted)',
                   border: riskTags.includes(opt.id) ? `1px solid ${opt.color}` : '1px solid var(--border)',
@@ -297,7 +670,7 @@ export default function CniInstallerDetailPage() {
           disabled={saving}
           style={{
             width: '100%', padding: '12px', borderRadius: '10px', fontSize: '13px', fontWeight: 700,
-            background: saving ? 'var(--text-muted)' : 'var(--orange)', color: '#fff', border: 'none',
+            background: saving ? 'var(--text-muted)' : 'var(--orange)', color: '#fff', border: 'none', cursor: saving ? 'default' : 'pointer',
           }}
         >
           {saving ? 'Saving...' : 'Save Internal Fields'}
@@ -349,7 +722,7 @@ export default function CniInstallerDetailPage() {
               style={{
                 display: 'block', width: '100%', textAlign: 'left',
                 padding: '10px 12px', borderRadius: '8px', marginBottom: '6px',
-                background: 'var(--input-bg)', border: '1px solid var(--border)',
+                background: 'var(--input-bg)', border: '1px solid var(--border)', cursor: 'pointer',
               }}
             >
               <div style={{ display: 'flex', justifyContent: 'space-between' }}>
@@ -414,6 +787,18 @@ export default function CniInstallerDetailPage() {
                 flex: 1, padding: '8px 12px', borderRadius: '8px', fontSize: '12px',
                 border: '1px solid var(--border)', background: 'var(--input-bg)', color: 'var(--text-body)',
               }}
+              onKeyDown={async (e) => {
+                if (e.key === 'Enter' && newNote.trim()) {
+                  await supabase.from('cni_internal_notes').insert({
+                    installer_id: userId,
+                    note_type: newNoteType,
+                    content: newNote.trim(),
+                    created_by: user?.id,
+                  });
+                  setNewNote('');
+                  await loadData();
+                }
+              }}
             />
             <button
               onClick={async () => {
@@ -429,7 +814,7 @@ export default function CniInstallerDetailPage() {
               }}
               style={{
                 padding: '8px 14px', borderRadius: '8px', fontSize: '12px', fontWeight: 700,
-                background: 'var(--orange)', color: '#fff', border: 'none',
+                background: 'var(--orange)', color: '#fff', border: 'none', cursor: 'pointer',
               }}
             >
               Add
@@ -468,6 +853,72 @@ export default function CniInstallerDetailPage() {
             ))}
           </div>
         )}
+      </div>
+
+      {/* ── Account Actions ── */}
+      <div style={{
+        ...sectionStyle,
+        background: 'var(--subtle-bg)',
+        border: '1px solid var(--border)',
+      }}>
+        <div style={{ fontSize: '12px', fontWeight: 700, color: 'var(--text-muted)', marginBottom: '12px' }}>
+          ACCOUNT ACTIONS
+        </div>
+
+        <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
+          {/* Resend Invite */}
+          <button
+            onClick={handleResendInvite}
+            disabled={resending}
+            style={{
+              width: '100%', padding: '12px', borderRadius: '10px', fontSize: '13px', fontWeight: 700,
+              background: 'var(--card)', border: '1px solid var(--border)',
+              color: theme.textPrimary, cursor: resending ? 'default' : 'pointer',
+              opacity: resending ? 0.6 : 1,
+            }}
+          >
+            {resending ? 'Sending...' : isProfileIncomplete ? 'Resend CNI Invite Email' : 'Send Login Link'}
+          </button>
+
+          {/* Deactivate / Reactivate */}
+          {isDeactivated ? (
+            <button
+              onClick={handleReactivate}
+              style={{
+                width: '100%', padding: '12px', borderRadius: '10px', fontSize: '13px', fontWeight: 700,
+                background: 'var(--success-bg)', border: '1px solid var(--success-border)',
+                color: 'var(--success)', cursor: 'pointer',
+              }}
+            >
+              Reactivate Installer
+            </button>
+          ) : (
+            <button
+              onClick={handleDeactivate}
+              style={{
+                width: '100%', padding: '12px', borderRadius: '10px', fontSize: '13px', fontWeight: 700,
+                background: 'var(--warning-bg)', border: '1px solid var(--warning-border)',
+                color: 'var(--warning)', cursor: 'pointer',
+              }}
+            >
+              Deactivate Installer
+            </button>
+          )}
+
+          {/* Delete */}
+          <button
+            onClick={handleDelete}
+            disabled={deleting}
+            style={{
+              width: '100%', padding: '12px', borderRadius: '10px', fontSize: '13px', fontWeight: 700,
+              background: 'var(--error-bg)', border: '1px solid var(--error-border)',
+              color: 'var(--error)', cursor: deleting ? 'default' : 'pointer',
+              opacity: deleting ? 0.6 : 1,
+            }}
+          >
+            {deleting ? 'Deleting...' : 'Delete Permanently'}
+          </button>
+        </div>
       </div>
 
       <div style={{ height: '80px' }} />
