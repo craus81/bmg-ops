@@ -595,9 +595,11 @@ function BulkVINUpload() {
   const [worksheetError, setWorksheetError] = useState('');
   const [worksheetNotes, setWorksheetNotes] = useState('');
 
-  // Location state
+  // Location & customer state
   const [locations, setLocations] = useState<string[]>([]);
   const [selectedLocation, setSelectedLocation] = useState<string>('');
+  const [customers, setCustomers] = useState<string[]>([]);
+  const [selectedCustomer, setSelectedCustomer] = useState<string>('');
 
   // Editing state
   const [editingRow, setEditingRow] = useState<number | null>(null);
@@ -618,6 +620,12 @@ function BulkVINUpload() {
     const load = async () => {
       const { data } = await supabase.from('catalog').select('*').eq('active', true).order('part_number');
       setCatalogItems(data || []);
+      // Extract distinct customers
+      if (data) {
+        const custSet = new Set<string>();
+        data.forEach((c: any) => { if (c.customer) custSet.add(c.customer.trim()); });
+        setCustomers(Array.from(custSet).sort());
+      }
     };
     load();
   }, []);
@@ -1219,7 +1227,7 @@ function BulkVINUpload() {
           gvwr: vehicle.gvwr || null,
           catalog_id: part?.id || null,
           part_number: part?.part_number || pv.partNumber || null,
-          customer: part?.customer || null,
+          customer: part?.customer || selectedCustomer || null,
           end_customer: part?.end_customer || null,
           po_line_item_id: matchedPoLineId,
           install_location: selectedLocation || null,
@@ -1405,6 +1413,23 @@ function BulkVINUpload() {
   return (
     <div>
       <div style={{ fontSize: '11px', fontWeight: 700, color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.8px', marginBottom: '12px' }}>Bulk VIN Upload</div>
+
+      {/* Customer Selection */}
+      <div style={{ marginBottom: '12px' }}>
+        <label style={{ display: 'block', fontSize: '10px', fontWeight: 700, color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.5px', marginBottom: '6px' }}>
+          Customer
+        </label>
+        <select
+          value={selectedCustomer}
+          onChange={(e) => setSelectedCustomer(e.target.value)}
+          style={{ width: '100%', padding: '10px 12px', borderRadius: '10px', border: '1px solid var(--border)', background: 'var(--card)', color: 'var(--text-primary)', fontSize: '13px', fontWeight: 600 }}
+        >
+          <option value="">No customer selected</option>
+          {customers.map(c => (
+            <option key={c} value={c}>{c}</option>
+          ))}
+        </select>
+      </div>
 
       {/* Part Selection */}
       <div style={{ marginBottom: '12px' }}>
