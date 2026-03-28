@@ -1,0 +1,35 @@
+'use client';
+
+import { useRouter } from 'next/navigation';
+import { theme } from '@/lib/theme';
+import WidgetShell from './WidgetShell';
+
+const ACTIONS = [
+  { icon: '📋', label: 'Jobs & Bills', path: '/jobs', desc: 'Review jobs' },
+  { icon: '📅', label: 'Scheduler', path: '/admin/schedule', desc: 'Assign work' },
+  { icon: '📸', label: 'Photo Reviews', path: '/admin/reviews', desc: 'Approve photos' },
+  { icon: '🔧', label: 'CNI Dashboard', path: '/admin/cni', desc: 'Installer program' },
+  { icon: '👥', label: 'Customers', path: '/admin/customers', desc: 'Customer directory' },
+  { icon: '📊', label: 'Reports', path: '/reports', desc: 'Analytics' },
+];
+
+export default function QuickActionsWidget() {
+  const router = useRouter();
+
+  return (
+    <WidgetShell title="Quick Actions" icon="⚡" loading={false}>
+      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '6px' }}>
+        {ACTIONS.map(a => (
+          <button key={a.path} onClick={() => router.push(a.path)} style={{
+            display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '4px',
+            padding: '10px 6px', borderRadius: '10px', border: 'none', textAlign: 'center',
+            background: 'var(--subtle-bg)', cursor: 'pointer',
+          }}>
+            <span style={{ fontSize: '20px' }}>{a.icon}</span>
+            <span style={{ fontSize: '11px', fontWeight: 700, color: theme.textPrimary }}>{a.label}</span>
+          </button>
+        ))}
+      </div>
+    </WidgetShell>
+  );
+}

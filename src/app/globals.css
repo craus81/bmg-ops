@@ -206,3 +206,57 @@ button {
   0%, 100% { opacity: 1; }
   50% { opacity: 0.7; }
 }
+
+/* ═══ react-grid-layout ═══ */
+.react-grid-layout {
+  position: relative;
+  transition: height 200ms ease;
+}
+.react-grid-item {
+  transition: all 200ms ease;
+  transition-property: left, top, width, height;
+}
+.react-grid-item.cssTransforms {
+  transition-property: transform, width, height;
+}
+.react-grid-item.resizing {
+  transition: none;
+  z-index: 1;
+  will-change: width, height;
+}
+.react-grid-item.react-draggable-dragging {
+  transition: none;
+  z-index: 3;
+  will-change: transform;
+  opacity: 0.92;
+  box-shadow: 0 8px 32px rgba(0,0,0,0.25);
+  border-radius: 14px;
+}
+.react-grid-item > .react-resizable-handle {
+  position: absolute;
+  width: 20px;
+  height: 20px;
+  bottom: 2px;
+  right: 2px;
+  cursor: se-resize;
+  z-index: 10;
+}
+.react-grid-item > .react-resizable-handle::after {
+  content: '';
+  position: absolute;
+  right: 4px;
+  bottom: 4px;
+  width: 8px;
+  height: 8px;
+  border-right: 2px solid var(--text-muted);
+  border-bottom: 2px solid var(--text-muted);
+  opacity: 0.35;
+  border-radius: 0 0 2px 0;
+}
+.react-grid-placeholder {
+  background: var(--orange) !important;
+  opacity: 0.08 !important;
+  border-radius: 14px;
+  transition-duration: 100ms;
+  z-index: 2;
+}

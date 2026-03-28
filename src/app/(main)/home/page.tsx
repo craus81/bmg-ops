@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useEffect } from 'react';
+import { useState, useEffect, lazy, Suspense } from 'react';
 import { useRouter } from 'next/navigation';
 import { useApp } from '@/components/AppProvider';
 import { useAuth } from '@/components/AuthProvider';
@@ -9,25 +9,35 @@ import { theme } from '@/lib/theme';
 import { storage } from '@/lib/storage';
 import type { CatalogProof } from '@/lib/types';
 
+const DashboardGrid = lazy(() => import('@/components/widgets/DashboardGrid'));
+
 // ─── Admin Dashboard Wrapper with tabs ─────────────────────────
 function AdminDashboard() {
-  const [dashTab, setDashTab] = useState<'overview' | 'analytics'>('overview');
+  const [dashTab, setDashTab] = useState<'dashboard' | 'analytics'>('dashboard');
 
   return (
     <div>
       <div style={{ display: 'flex', gap: '4px', marginBottom: '14px', background: 'var(--card)', borderRadius: '10px', padding: '3px' }}>
-        <button onClick={() => setDashTab('overview')} style={{
+        <button onClick={() => setDashTab('dashboard')} style={{
           flex: 1, padding: '10px', borderRadius: '8px', fontSize: '13px', fontWeight: 700,
-          background: dashTab === 'overview' ? 'var(--tab-active-bg)' : 'transparent', border: 'none',
-          color: dashTab === 'overview' ? 'var(--text-primary)' : 'var(--text-muted)',
-        }}>Overview</button>
+          background: dashTab === 'dashboard' ? 'var(--tab-active-bg)' : 'transparent', border: 'none',
+          color: dashTab === 'dashboard' ? 'var(--text-primary)' : 'var(--text-muted)',
+        }}>Dashboard</button>
         <button onClick={() => setDashTab('analytics')} style={{
           flex: 1, padding: '10px', borderRadius: '8px', fontSize: '13px', fontWeight: 700,
           background: dashTab === 'analytics' ? 'var(--tab-active-bg)' : 'transparent', border: 'none',
           color: dashTab === 'analytics' ? 'var(--text-primary)' : 'var(--text-muted)',
         }}>Analytics</button>
       </div>
-      {dashTab === 'overview' ? <DashboardOverview /> : <DashboardAnalytics />}
+      {dashTab === 'dashboard' ? (
+        <Suspense fallback={
+          <div style={{ textAlign: 'center', padding: '60px 0' }}>
+            <div style={{ width: '36px', height: '36px', border: '3px solid var(--border)', borderTopColor: 'var(--navy)', borderRadius: '50%', margin: '0 auto', animation: 'spin 1s linear infinite' }} />
+          </div>
+        }>
+          <DashboardGrid />
+        </Suspense>
+      ) : <DashboardAnalytics />}
     </div>
   );
 }
