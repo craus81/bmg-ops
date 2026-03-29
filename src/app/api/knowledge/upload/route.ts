@@ -105,10 +105,25 @@ async function extractWithVision(buffer: Buffer, fileName: string, fileType: str
       return '[No visual content could be extracted]';
     }
 
-    // Add the extraction prompt
+    // Add the extraction prompt — captures both text AND visual content
     contentBlocks.push({
       type: 'text',
-      text: 'Extract ALL text content from this document. Include every heading, paragraph, list item, table, label, caption, and any other visible text. Preserve the document structure with headings and paragraphs. If there are tables, format them clearly. Output ONLY the extracted text content — no commentary or descriptions.',
+      text: `Extract ALL content from this document — both text AND visual elements.
+
+TEXT: Include every heading, paragraph, list item, table, label, caption, and any other visible text. Preserve the document structure with headings and paragraphs. If there are tables, format them clearly.
+
+VISUAL ELEMENTS: For any diagrams, line drawings, vehicle layouts, floor plans, schematics, photos, charts, or illustrations:
+- Describe what the image shows (e.g. "Vehicle layout diagram: Ford Transit 148\" wheelbase, high roof")
+- Extract ALL dimensions, measurements, and annotations visible in the drawing
+- Note the spatial relationships (e.g. "driver-side door 36\" from front bumper", "rear cargo area 120\" x 70\"")
+- Describe any color coding, labels, arrows, or callouts
+- For vehicle wraps/graphics layouts, note panel names, seam lines, and graphic placement zones
+
+Format visual descriptions in a clear section like:
+[DIAGRAM: brief title]
+Description and all extracted measurements/details
+
+Output the extracted text first, then any visual element descriptions. Be thorough with measurements and spatial details — this content will be searched by an AI agent answering questions about vehicle specs, dimensions, and layouts.`,
     });
 
     // Send to Claude for reading
@@ -121,7 +136,7 @@ async function extractWithVision(buffer: Buffer, fileName: string, fileType: str
       },
       body: JSON.stringify({
         model: 'claude-sonnet-4-5-20250929',
-        max_tokens: 8000,
+        max_tokens: 16000,
         messages: [{
           role: 'user',
           content: contentBlocks,

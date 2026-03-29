@@ -64,12 +64,13 @@ export default function KnowledgePage() {
   const [form, setForm] = useState({ title: '', category: 'SOP', content: '', tags: '' });
   const [saving, setSaving] = useState(false);
 
-  // File upload
-  const [uploading, setUploading] = useState(false);
-  const [uploadProgress, setUploadProgress] = useState('');
+  // File upload (supports multiple files)
   const [showUploadForm, setShowUploadForm] = useState(false);
-  const [uploadFile, setUploadFile] = useState<File | null>(null);
-  const [uploadForm, setUploadForm] = useState({ title: '', category: 'SOP', tags: '' });
+  const [uploadFiles, setUploadFiles] = useState<File[]>([]);
+  const [uploadForm, setUploadForm] = useState({ category: 'SOP', tags: '' });
+
+  // Background upload status
+  const [bgStatus, setBgStatus] = useState<{ message: string; type: 'processing' | 'success' | 'error' } | null>(null);
 
   // Expanded view
   const [expandedId, setExpandedId] = useState<string | null>(null);
@@ -119,12 +120,9 @@ export default function KnowledgePage() {
   // ─── File upload ───
 
   const handleFileSelect = (e: React.ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0];
-    if (!file) return;
-    setUploadFile(file);
-    // Pre-fill title from filename
-    const nameWithoutExt = file.name.replace(/\.[^/.]+$/, '').replace(/[_-]/g, ' ');
-    setUploadForm({ ...uploadForm, title: nameWithoutExt });
+    const files = e.target.files;
+    if (!files || files.length === 0) return;
+    setUploadFiles(Array.from(files));
     setShowUploadForm(true);
   };
 
@@ -181,120 +179,129 @@ export default function KnowledgePage() {
   };
 
   const handleUpload = async () => {
-    if (!uploadFile) return;
+    if (uploadFiles.length === 0) return;
 
-    const FILE_SIZE_MB = uploadFile.size / (1024 * 1024);
     const MAX_API_SIZE = 4; // MB — Vercel serverless body limit is ~4.5MB, stay under it
-    const isPdf = uploadFile.name.toLowerCase().endsWith('.pdf');
 
-    setUploading(true);
-
-    try {
-      // Large PDFs: split into chunks client-side, upload each for AI extraction
-      if (FILE_SIZE_MB > MAX_API_SIZE && isPdf) {
-        setUploadProgress('Splitting PDF into chunks...');
-
-        const chunks = await splitPdfIntoChunks(uploadFile, 10);
-        const totalChunks = chunks.length;
-        let totalExtracted = 0;
-        let successCount = 0;
-        let failCount = 0;
-        const baseName = uploadFile.name.replace(/\.pdf$/i, '');
-        const baseTitle = uploadForm.title.trim() || baseName;
-
-        for (let i = 0; i < chunks.length; i++) {
-          const chunkSizeMB = chunks[i].size / (1024 * 1024);
-
-          // If a single chunk is still too large (>20MB), skip AI extraction and just store it
-          if (chunkSizeMB > MAX_API_SIZE) {
-            setUploadProgress(`Chunk ${i + 1}/${totalChunks} too large (${chunkSizeMB.toFixed(1)} MB), storing without extraction...`);
-            // Upload to storage directly
-            const timestamp = Date.now();
-            const safeName = chunks[i].name.replace(/[^a-zA-Z0-9._-]/g, '_');
-            const storagePath = `uploads/${timestamp}_${safeName}`;
-            await storage.from('knowledge-files').upload(storagePath, chunks[i], {
-              contentType: 'application/pdf', upsert: false,
-            });
-            // Create DB record
-            await fetch('/api/knowledge/upload', {
-              method: 'POST',
-              headers: { 'Content-Type': 'application/json' },
-              body: JSON.stringify({
-                title: `${baseTitle} (pages ${i * 10 + 1}-${Math.min((i + 1) * 10, totalChunks * 10)})`,
-                category: uploadForm.category,
-                tags: uploadForm.tags,
-                userId: user?.id || '',
-                fileName: chunks[i].name,
-                fileType: 'application/pdf',
-                fileSize: chunks[i].size,
-                storagePath,
-                largeFile: true,
-              }),
-            });
-            successCount++;
-            continue;
-          }
-
-          setUploadProgress(`Analyzing chunk ${i + 1} of ${totalChunks} with AI vision...`);
-          const result = await uploadSingleFile(
-            chunks[i],
-            `${baseTitle} (pages ${i * 10 + 1}-${Math.min((i + 1) * 10, totalChunks * 10)})`,
-            uploadForm.category,
-            uploadForm.tags
-          );
-
-          if (result.success) {
-            successCount++;
-            totalExtracted += result.extractedLength;
-          } else {
-            failCount++;
-            console.error(`Chunk ${i + 1} failed:`, result.error);
-          }
-        }
-
-        if (failCount > 0) {
-          setUploadProgress(`Done: ${successCount}/${totalChunks} chunks processed (${totalExtracted.toLocaleString()} chars extracted). ${failCount} chunk(s) failed.`);
-        } else {
-          setUploadProgress(`All ${totalChunks} chunks processed — ${totalExtracted.toLocaleString()} characters extracted with AI vision.`);
-        }
-
-        // Keep modal open briefly to show final status
-        await new Promise(r => setTimeout(r, 2000));
-
-      } else if (FILE_SIZE_MB > MAX_API_SIZE) {
-        // Non-PDF large files: can't split, just reject
-        alert(`File is too large (${FILE_SIZE_MB.toFixed(1)} MB). Non-PDF files must be under ${MAX_API_SIZE} MB.`);
-        return;
-      } else {
-        // Normal path: send file to API for processing + AI extraction
-        const isVisual = isPdf || !!uploadFile.name.match(/\.(png|jpg|jpeg|gif|webp|bmp|tiff)$/i);
-        setUploadProgress(isVisual ? 'Uploading and analyzing with AI vision...' : 'Uploading and extracting text...');
-
-        const result = await uploadSingleFile(
-          uploadFile,
-          uploadForm.title.trim() || uploadFile.name,
-          uploadForm.category,
-          uploadForm.tags
-        );
-
-        if (!result.success) {
-          alert('Upload failed: ' + result.error);
-        } else {
-          const method = result.usedVision ? ' (AI vision)' : '';
-          setUploadProgress(`Extracted ${result.extractedLength.toLocaleString()} characters${method}`);
-        }
-      }
-    } catch (err: any) {
-      alert('Upload error: ' + err.message);
-    } finally {
-      setUploading(false);
-      setUploadProgress('');
-      setShowUploadForm(false);
-      setUploadFile(null);
-      setUploadForm({ title: '', category: 'SOP', tags: '' });
-      if (fileInputRef.current) fileInputRef.current.value = '';
-      loadDocs();
+    // Check for oversized non-PDF files before closing modal
+    const oversized = uploadFiles.filter(f => f.size / (1024 * 1024) > MAX_API_SIZE && !f.name.toLowerCase().endsWith('.pdf'));
+    if (oversized.length > 0) {
+      alert(`These files are too large (non-PDF files must be under ${MAX_API_SIZE} MB):\n${oversized.map(f => f.name).join('\n')}`);
+      return;
     }
+
+    // Capture values before closing modal
+    const filesToProcess = [...uploadFiles];
+    const formCategory = uploadForm.category;
+    const formTags = uploadForm.tags;
+    const totalFiles = filesToProcess.length;
+
+    // Close modal immediately — processing continues in background
+    setShowUploadForm(false);
+    setUploadFiles([]);
+    setUploadForm({ category: 'SOP', tags: '' });
+    if (fileInputRef.current) fileInputRef.current.value = '';
+
+    setBgStatus({ message: `Processing ${totalFiles} file${totalFiles > 1 ? 's' : ''}...`, type: 'processing' });
+
+    let filesCompleted = 0;
+    let filesFailed = 0;
+
+    // Process each file sequentially in background
+    for (const fileToUpload of filesToProcess) {
+      const fileName = fileToUpload.name;
+      const fileSizeMB = fileToUpload.size / (1024 * 1024);
+      const isPdfFile = fileName.toLowerCase().endsWith('.pdf');
+      const formTitle = fileName.replace(/\.[^/.]+$/, '').replace(/[_-]/g, ' ');
+
+      setBgStatus({
+        message: totalFiles > 1
+          ? `Processing "${fileName}" (${filesCompleted + 1}/${totalFiles})...`
+          : `Processing "${fileName}"...`,
+        type: 'processing',
+      });
+
+      try {
+        if (fileSizeMB > MAX_API_SIZE && isPdfFile) {
+          // Large PDF: split into chunks
+          const chunks = await splitPdfIntoChunks(fileToUpload, 10);
+          const totalChunks = chunks.length;
+
+          for (let i = 0; i < chunks.length; i++) {
+            const chunkSizeMB = chunks[i].size / (1024 * 1024);
+            const chunkTitle = `${formTitle} (pages ${i * 10 + 1}-${Math.min((i + 1) * 10, totalChunks * 10)})`;
+
+            setBgStatus({
+              message: totalFiles > 1
+                ? `"${fileName}" chunk ${i + 1}/${totalChunks} (file ${filesCompleted + 1}/${totalFiles})...`
+                : `"${fileName}" — analyzing chunk ${i + 1} of ${totalChunks}...`,
+              type: 'processing',
+            });
+
+            if (chunkSizeMB > MAX_API_SIZE) {
+              const timestamp = Date.now();
+              const safeName = chunks[i].name.replace(/[^a-zA-Z0-9._-]/g, '_');
+              const storagePath = `uploads/${timestamp}_${safeName}`;
+              await storage.from('knowledge-files').upload(storagePath, chunks[i], {
+                contentType: 'application/pdf', upsert: false,
+              });
+              await fetch('/api/knowledge/upload', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                  title: chunkTitle, category: formCategory, tags: formTags,
+                  userId: user?.id || '', fileName: chunks[i].name,
+                  fileType: 'application/pdf', fileSize: chunks[i].size,
+                  storagePath, largeFile: true,
+                }),
+              });
+            } else {
+              await uploadSingleFile(chunks[i], chunkTitle, formCategory, formTags);
+            }
+
+            // Refresh list after each chunk
+            loadDocs();
+          }
+
+          filesCompleted++;
+        } else {
+          // Normal single file
+          const result = await uploadSingleFile(fileToUpload, formTitle, formCategory, formTags);
+          if (!result.success) {
+            filesFailed++;
+            console.error(`Upload failed for ${fileName}:`, result.error);
+          } else {
+            filesCompleted++;
+          }
+          loadDocs();
+        }
+      } catch (err: any) {
+        filesFailed++;
+        console.error(`Upload error for ${fileName}:`, err);
+      }
+    }
+
+    // Final status
+    if (filesFailed > 0) {
+      setBgStatus({
+        message: `${filesCompleted} of ${totalFiles} file${totalFiles > 1 ? 's' : ''} processed. ${filesFailed} failed.`,
+        type: 'error',
+      });
+    } else {
+      setBgStatus({
+        message: totalFiles > 1
+          ? `All ${totalFiles} files processed successfully`
+          : `"${filesToProcess[0].name}" processed successfully`,
+        type: 'success',
+      });
+    }
+
+    loadDocs();
+
+    // Auto-dismiss after 5 seconds (unless still processing)
+    setTimeout(() => {
+      setBgStatus(prev => prev?.type === 'processing' ? prev : null);
+    }, 5000);
   };
 
   const deleteDoc = async (id: string, filePath?: string | null) => {
@@ -323,6 +330,80 @@ export default function KnowledgePage() {
   const getFileUrl = (filePath: string) => {
     const { data } = storage.from('knowledge-files').getPublicUrl(filePath);
     return data?.publicUrl || '';
+  };
+
+  // ─── Re-process a single doc with AI vision ───
+  const reprocessDoc = async (docId: string, title: string): Promise<boolean> => {
+    try {
+      const res = await fetch('/api/knowledge/reprocess', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ docId }),
+      });
+      const ct = res.headers.get('content-type') || '';
+      if (!ct.includes('application/json')) {
+        console.error(`Reprocess "${title}" got non-JSON response`);
+        return false;
+      }
+      const data = await res.json();
+      if (!res.ok) {
+        console.error(`Reprocess "${title}" failed:`, data.error);
+        return false;
+      }
+      return true;
+    } catch (err: any) {
+      console.error(`Reprocess "${title}" error:`, err);
+      return false;
+    }
+  };
+
+  const handleReprocess = async (docId: string, title: string) => {
+    setBgStatus({ message: `Re-processing "${title}"...`, type: 'processing' });
+    const success = await reprocessDoc(docId, title);
+    if (success) {
+      setBgStatus({ message: `"${title}" re-processed with visual extraction`, type: 'success' });
+    } else {
+      setBgStatus({ message: `Failed to re-process "${title}"`, type: 'error' });
+    }
+    loadDocs();
+    setTimeout(() => setBgStatus(prev => prev?.type === 'processing' ? prev : null), 5000);
+  };
+
+  const handleReprocessAll = async () => {
+    // Only re-process docs that have files (PDFs and images)
+    const reprocessable = docs.filter(d => d.file_path && d.file_name && (
+      d.file_name.toLowerCase().endsWith('.pdf') ||
+      !!d.file_name.match(/\.(png|jpg|jpeg|gif|webp|bmp|tiff)$/i)
+    ));
+
+    if (reprocessable.length === 0) {
+      setBgStatus({ message: 'No PDF or image files to re-process', type: 'error' });
+      setTimeout(() => setBgStatus(null), 3000);
+      return;
+    }
+
+    if (!confirm(`Re-process ${reprocessable.length} file${reprocessable.length > 1 ? 's' : ''} with updated AI vision? This will replace existing extracted text.`)) return;
+
+    let completed = 0;
+    let failed = 0;
+
+    for (const doc of reprocessable) {
+      setBgStatus({ message: `Re-processing "${doc.title}" (${completed + 1}/${reprocessable.length})...`, type: 'processing' });
+      const success = await reprocessDoc(doc.id, doc.title);
+      if (success) {
+        completed++;
+      } else {
+        failed++;
+      }
+      loadDocs();
+    }
+
+    if (failed > 0) {
+      setBgStatus({ message: `Re-processed ${completed} of ${reprocessable.length} files. ${failed} failed.`, type: 'error' });
+    } else {
+      setBgStatus({ message: `All ${completed} files re-processed with visual extraction`, type: 'success' });
+    }
+    setTimeout(() => setBgStatus(prev => prev?.type === 'processing' ? prev : null), 5000);
   };
 
   const filtered = docs.filter(d => {
@@ -360,6 +441,40 @@ export default function KnowledgePage() {
         </div>
       </div>
 
+      {/* Background upload status bar */}
+      {bgStatus && (
+        <div style={{
+          padding: '10px 14px', borderRadius: '10px', marginBottom: '12px',
+          fontSize: '12px', fontWeight: 600,
+          display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '8px',
+          background: bgStatus.type === 'processing' ? 'rgba(59,130,246,0.1)' :
+                     bgStatus.type === 'success' ? 'var(--success-bg)' : 'var(--error-bg)',
+          border: `1px solid ${bgStatus.type === 'processing' ? 'rgba(59,130,246,0.25)' :
+                  bgStatus.type === 'success' ? 'var(--success-border)' : 'var(--error-border)'}`,
+          color: bgStatus.type === 'processing' ? '#60a5fa' :
+                 bgStatus.type === 'success' ? 'var(--success)' : 'var(--error)',
+        }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+            {bgStatus.type === 'processing' && (
+              <div style={{
+                width: '14px', height: '14px', borderRadius: '50%',
+                border: '2px solid rgba(59,130,246,0.3)', borderTopColor: '#60a5fa',
+                animation: 'spin 0.8s linear infinite',
+              }} />
+            )}
+            {bgStatus.type === 'success' && <span>✓</span>}
+            {bgStatus.type === 'error' && <span>✕</span>}
+            <span>{bgStatus.message}</span>
+          </div>
+          {bgStatus.type !== 'processing' && (
+            <button
+              onClick={() => setBgStatus(null)}
+              style={{ background: 'none', border: 'none', color: 'inherit', fontSize: '14px', cursor: 'pointer', padding: '0 4px' }}
+            >✕</button>
+          )}
+        </div>
+      )}
+
       {/* Action buttons */}
       <div style={{ display: 'flex', gap: '8px', marginBottom: '12px' }}>
         <label
@@ -380,6 +495,7 @@ export default function KnowledgePage() {
           <input
             ref={fileInputRef}
             type="file"
+            multiple
             accept=".pdf,.docx,.doc,.xlsx,.xls,.csv,.tsv,.txt,.md,.json,.xml,.html,.png,.jpg,.jpeg,.gif,.webp,.svg"
             onChange={handleFileSelect}
             style={{ display: 'none' }}
@@ -404,6 +520,22 @@ export default function KnowledgePage() {
           </span>
         </button>
       </div>
+
+      {/* Re-process all button */}
+      {docs.some(d => d.file_path && d.file_name && (d.file_name.toLowerCase().endsWith('.pdf') || !!d.file_name.match(/\.(png|jpg|jpeg|gif|webp|bmp|tiff)$/i))) && (
+        <button
+          onClick={handleReprocessAll}
+          disabled={bgStatus?.type === 'processing'}
+          style={{
+            width: '100%', padding: '8px', borderRadius: '8px', marginBottom: '12px',
+            background: 'rgba(16,185,129,0.06)', border: '1px solid rgba(16,185,129,0.2)',
+            color: '#34d399', fontSize: '11px', fontWeight: 700, cursor: 'pointer',
+            opacity: bgStatus?.type === 'processing' ? 0.5 : 1,
+          }}
+        >
+          Re-process All Files with AI Vision
+        </button>
+      )}
 
       {/* Search + filter */}
       <div style={{ display: 'flex', gap: '8px', marginBottom: '12px' }}>
@@ -517,7 +649,12 @@ export default function KnowledgePage() {
                     </div>
                   )}
 
-                  <div style={{ display: 'flex', gap: '6px', marginTop: '8px' }}>
+                  <div style={{ display: 'flex', gap: '6px', marginTop: '8px', flexWrap: 'wrap' }}>
+                    {hasFile && doc.file_name && (doc.file_name.toLowerCase().endsWith('.pdf') || !!doc.file_name.match(/\.(png|jpg|jpeg|gif|webp|bmp|tiff)$/i)) && (
+                      <button onClick={() => handleReprocess(doc.id, doc.title)} style={{ padding: '6px 12px', borderRadius: '6px', background: 'rgba(16,185,129,0.1)', border: '1px solid rgba(16,185,129,0.2)', color: '#34d399', fontSize: '11px', fontWeight: 700, cursor: 'pointer' }}>
+                        Re-process with AI
+                      </button>
+                    )}
                     <button onClick={() => startEdit(doc)} style={{ padding: '6px 12px', borderRadius: '6px', background: 'rgba(59,130,246,0.1)', border: '1px solid rgba(59,130,246,0.2)', color: '#60a5fa', fontSize: '11px', fontWeight: 700, cursor: 'pointer' }}>
                       Edit Text
                     </button>
@@ -533,59 +670,61 @@ export default function KnowledgePage() {
       </div>
 
       {/* File Upload Modal */}
-      {showUploadForm && uploadFile && (
+      {showUploadForm && uploadFiles.length > 0 && (
         <div style={{ position: 'fixed', top: 0, left: 0, right: 0, bottom: 0, background: 'rgba(0,0,0,0.7)', zIndex: 1000, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '16px' }}>
           <div style={{ background: 'var(--card)', border: '1px solid var(--border)', borderRadius: '14px', padding: '18px', maxWidth: '480px', width: '100%' }}>
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '12px' }}>
-              <div style={{ fontSize: '16px', fontWeight: 800, color: 'var(--text-body)' }}>Upload File</div>
-              <button onClick={() => { setShowUploadForm(false); setUploadFile(null); if (fileInputRef.current) fileInputRef.current.value = ''; }} style={{ background: 'none', border: 'none', color: 'var(--text-label)', fontSize: '18px', cursor: 'pointer' }}>✕</button>
+              <div style={{ fontSize: '16px', fontWeight: 800, color: 'var(--text-body)' }}>
+                Upload {uploadFiles.length > 1 ? `${uploadFiles.length} Files` : 'File'}
+              </div>
+              <button onClick={() => { setShowUploadForm(false); setUploadFiles([]); if (fileInputRef.current) fileInputRef.current.value = ''; }} style={{ background: 'none', border: 'none', color: 'var(--text-label)', fontSize: '18px', cursor: 'pointer' }}>✕</button>
             </div>
 
-            {/* File preview */}
+            {/* File list */}
             <div style={{
-              padding: '10px', borderRadius: '8px', background: 'var(--input-bg)',
-              marginBottom: '12px', display: 'flex', alignItems: 'center', gap: '10px',
+              borderRadius: '8px', background: 'var(--input-bg)', marginBottom: '12px',
+              maxHeight: '180px', overflowY: 'auto',
             }}>
-              <span style={{ fontSize: '28px' }}>{getFileIcon(uploadFile.type)}</span>
-              <div>
-                <div style={{ fontSize: '13px', fontWeight: 700, color: 'var(--text-body)' }}>{uploadFile.name}</div>
-                <div style={{ fontSize: '10px', color: 'var(--text-label)' }}>{formatFileSize(uploadFile.size)}</div>
-              </div>
+              {uploadFiles.map((file, idx) => (
+                <div key={idx} style={{
+                  padding: '8px 10px', display: 'flex', alignItems: 'center', gap: '8px',
+                  borderBottom: idx < uploadFiles.length - 1 ? '1px solid var(--border)' : 'none',
+                }}>
+                  <span style={{ fontSize: '20px' }}>{getFileIcon(file.type)}</span>
+                  <div style={{ flex: 1, minWidth: 0 }}>
+                    <div style={{ fontSize: '12px', fontWeight: 700, color: 'var(--text-body)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{file.name}</div>
+                    <div style={{ fontSize: '10px', color: 'var(--text-label)' }}>{formatFileSize(file.size)}</div>
+                  </div>
+                  <button onClick={() => {
+                    const updated = uploadFiles.filter((_, i) => i !== idx);
+                    if (updated.length === 0) { setShowUploadForm(false); setUploadFiles([]); }
+                    else setUploadFiles(updated);
+                  }} style={{ background: 'none', border: 'none', color: 'var(--text-label)', fontSize: '14px', cursor: 'pointer', padding: '2px 6px' }}>✕</button>
+                </div>
+              ))}
             </div>
 
             <div style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
               <div>
-                <div style={labelStyle}>Title (auto-filled from filename)</div>
-                <input style={inputStyle} value={uploadForm.title} onChange={e => setUploadForm({ ...uploadForm, title: e.target.value })} />
-              </div>
-              <div>
-                <div style={labelStyle}>Category</div>
+                <div style={labelStyle}>Category (applied to all)</div>
                 <select style={inputStyle} value={uploadForm.category} onChange={e => setUploadForm({ ...uploadForm, category: e.target.value })}>
                   {CATEGORIES.map(c => <option key={c} value={c}>{c.toUpperCase()}</option>)}
                 </select>
               </div>
               <div>
-                <div style={labelStyle}>Tags (comma-separated, optional)</div>
+                <div style={labelStyle}>Tags (comma-separated, optional — applied to all)</div>
                 <input style={inputStyle} value={uploadForm.tags} onChange={e => setUploadForm({ ...uploadForm, tags: e.target.value })} placeholder="e.g. vinyl, 3M, specs" />
               </div>
 
-              {uploadProgress && (
-                <div style={{ fontSize: '11px', color: '#60a5fa', textAlign: 'center', padding: '4px' }}>
-                  {uploadProgress}
-                </div>
-              )}
-
               <button
                 onClick={handleUpload}
-                disabled={uploading}
                 style={{
                   width: '100%', padding: '12px', borderRadius: '10px',
                   background: '#3b82f6', color: '#fff', fontWeight: 800, fontSize: '13px',
                   border: 'none', cursor: 'pointer',
-                  opacity: uploading ? 0.5 : 1,
                 }}
               >
-                {uploading ? 'Uploading & Extracting Text...' : 'Upload & Process'}
+                Upload & Process{uploadFiles.length > 1 ? ` (${uploadFiles.length} files)` : ''}
               </button>
             </div>
           </div>
