@@ -184,7 +184,7 @@ export default function KnowledgePage() {
     if (!uploadFile) return;
 
     const FILE_SIZE_MB = uploadFile.size / (1024 * 1024);
-    const MAX_API_SIZE = 20; // MB — max for serverless function processing
+    const MAX_API_SIZE = 4; // MB — Vercel serverless body limit is ~4.5MB, stay under it
     const isPdf = uploadFile.name.toLowerCase().endsWith('.pdf');
 
     setUploading(true);
@@ -336,7 +336,7 @@ export default function KnowledgePage() {
 
   const inputStyle: React.CSSProperties = {
     width: '100%', padding: '8px 10px', borderRadius: '8px',
-    border: '1px solid #2a3a4d', background: '#0f1720',
+    border: '1px solid var(--border)', background: 'var(--input-bg)',
     color: 'var(--text-body)', fontSize: '12px',
   };
 
@@ -441,7 +441,7 @@ export default function KnowledgePage() {
           return (
             <div key={doc.id} style={{
               padding: '12px', borderRadius: '12px',
-              background: '#141e2b', border: '1px solid #1e2d3d',
+              background: 'var(--card)', border: '1px solid var(--border)',
             }}>
               <div
                 onClick={() => setExpandedId(isExpanded ? null : doc.id)}
@@ -495,8 +495,8 @@ export default function KnowledgePage() {
 
                   {/* Extracted text preview */}
                   <div style={{
-                    padding: '10px', borderRadius: '8px', background: '#0f1720',
-                    fontSize: '12px', color: '#c8d6e5', lineHeight: 1.6,
+                    padding: '10px', borderRadius: '8px', background: 'var(--input-bg)',
+                    fontSize: '12px', color: 'var(--text-body)', lineHeight: 1.6,
                     maxHeight: '200px', overflowY: 'auto', whiteSpace: 'pre-wrap',
                   }}>
                     {hasFile && (
@@ -510,7 +510,7 @@ export default function KnowledgePage() {
                   {doc.tags && doc.tags.length > 0 && (
                     <div style={{ display: 'flex', gap: '4px', flexWrap: 'wrap', marginTop: '6px' }}>
                       {doc.tags.map((t, i) => (
-                        <span key={i} style={{ fontSize: '9px', padding: '2px 6px', borderRadius: '4px', background: '#1e2d3d', color: 'var(--text-body)' }}>
+                        <span key={i} style={{ fontSize: '9px', padding: '2px 6px', borderRadius: '4px', background: 'var(--subtle-bg)', color: 'var(--text-body)' }}>
                           {t}
                         </span>
                       ))}
@@ -535,7 +535,7 @@ export default function KnowledgePage() {
       {/* File Upload Modal */}
       {showUploadForm && uploadFile && (
         <div style={{ position: 'fixed', top: 0, left: 0, right: 0, bottom: 0, background: 'rgba(0,0,0,0.7)', zIndex: 1000, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '16px' }}>
-          <div style={{ background: '#141e2b', border: '1px solid #1e2d3d', borderRadius: '14px', padding: '18px', maxWidth: '480px', width: '100%' }}>
+          <div style={{ background: 'var(--card)', border: '1px solid var(--border)', borderRadius: '14px', padding: '18px', maxWidth: '480px', width: '100%' }}>
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '12px' }}>
               <div style={{ fontSize: '16px', fontWeight: 800, color: 'var(--text-body)' }}>Upload File</div>
               <button onClick={() => { setShowUploadForm(false); setUploadFile(null); if (fileInputRef.current) fileInputRef.current.value = ''; }} style={{ background: 'none', border: 'none', color: 'var(--text-label)', fontSize: '18px', cursor: 'pointer' }}>✕</button>
@@ -543,7 +543,7 @@ export default function KnowledgePage() {
 
             {/* File preview */}
             <div style={{
-              padding: '10px', borderRadius: '8px', background: '#0f1720',
+              padding: '10px', borderRadius: '8px', background: 'var(--input-bg)',
               marginBottom: '12px', display: 'flex', alignItems: 'center', gap: '10px',
             }}>
               <span style={{ fontSize: '28px' }}>{getFileIcon(uploadFile.type)}</span>
@@ -595,7 +595,7 @@ export default function KnowledgePage() {
       {/* Create/Edit Text Modal */}
       {showForm && (
         <div style={{ position: 'fixed', top: 0, left: 0, right: 0, bottom: 0, background: 'rgba(0,0,0,0.7)', zIndex: 1000, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '16px' }}>
-          <div style={{ background: '#141e2b', border: '1px solid #1e2d3d', borderRadius: '14px', padding: '18px', maxWidth: '480px', width: '100%', maxHeight: '80vh', overflowY: 'auto' }}>
+          <div style={{ background: 'var(--card)', border: '1px solid var(--border)', borderRadius: '14px', padding: '18px', maxWidth: '480px', width: '100%', maxHeight: '80vh', overflowY: 'auto' }}>
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '12px' }}>
               <div style={{ fontSize: '16px', fontWeight: 800, color: 'var(--text-body)' }}>
                 {editingDoc ? 'Edit Document' : 'Add Knowledge Document'}
@@ -649,7 +649,7 @@ export default function KnowledgePage() {
         onClick={() => router.push('/more')}
         style={{
           width: '100%', padding: '10px', borderRadius: '10px', marginTop: '12px',
-          border: '1px solid #1e2d3d', background: 'transparent',
+          border: '1px solid var(--border)', background: 'transparent',
           color: 'var(--text-body)', fontSize: '13px', fontWeight: 700, cursor: 'pointer',
         }}
       >
