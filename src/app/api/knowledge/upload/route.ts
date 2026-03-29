@@ -3,7 +3,7 @@ import { createClient } from '@supabase/supabase-js';
 import { r2Upload, r2Delete, r2PublicUrl } from '@/lib/r2';
 
 export const dynamic = 'force-dynamic';
-export const maxDuration = 60;
+export const maxDuration = 120;
 
 // Dynamic imports to avoid bundling issues on serverless
 async function extractDocxText(buffer: Buffer): Promise<string> {

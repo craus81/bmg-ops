@@ -223,13 +223,17 @@ export default function KnowledgePage() {
 
       try {
         if (fileSizeMB > MAX_API_SIZE && isPdfFile) {
-          // Large PDF: split into chunks
-          const chunks = await splitPdfIntoChunks(fileToUpload, 10);
+          // Large PDF: split into small chunks (3 pages each to stay well under Vercel body limit)
+          const PAGES_PER_CHUNK = 3;
+          const chunks = await splitPdfIntoChunks(fileToUpload, PAGES_PER_CHUNK);
           const totalChunks = chunks.length;
+          let chunksFailed = 0;
 
           for (let i = 0; i < chunks.length; i++) {
             const chunkSizeMB = chunks[i].size / (1024 * 1024);
-            const chunkTitle = `${formTitle} (pages ${i * 10 + 1}-${Math.min((i + 1) * 10, totalChunks * 10)})`;
+            const startPage = i * PAGES_PER_CHUNK + 1;
+            const endPage = Math.min((i + 1) * PAGES_PER_CHUNK, totalChunks * PAGES_PER_CHUNK);
+            const chunkTitle = `${formTitle} (pages ${startPage}-${endPage})`;
 
             setBgStatus({
               message: totalFiles > 1
@@ -238,37 +242,52 @@ export default function KnowledgePage() {
               type: 'processing',
             });
 
-            if (chunkSizeMB > MAX_API_SIZE) {
-              const timestamp = Date.now();
-              const safeName = chunks[i].name.replace(/[^a-zA-Z0-9._-]/g, '_');
-              const storagePath = `uploads/${timestamp}_${safeName}`;
-              await storage.from('knowledge-files').upload(storagePath, chunks[i], {
-                contentType: 'application/pdf', upsert: false,
-              });
-              await fetch('/api/knowledge/upload', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({
-                  title: chunkTitle, category: formCategory, tags: formTags,
-                  userId: user?.id || '', fileName: chunks[i].name,
-                  fileType: 'application/pdf', fileSize: chunks[i].size,
-                  storagePath, largeFile: true,
-                }),
-              });
-            } else {
-              await uploadSingleFile(chunks[i], chunkTitle, formCategory, formTags);
+            try {
+              if (chunkSizeMB > MAX_API_SIZE) {
+                // Chunk still too large — store without AI extraction
+                const timestamp = Date.now();
+                const safeName = chunks[i].name.replace(/[^a-zA-Z0-9._-]/g, '_');
+                const storagePath = `uploads/${timestamp}_${safeName}`;
+                await storage.from('knowledge-files').upload(storagePath, chunks[i], {
+                  contentType: 'application/pdf', upsert: false,
+                });
+                await fetch('/api/knowledge/upload', {
+                  method: 'POST',
+                  headers: { 'Content-Type': 'application/json' },
+                  body: JSON.stringify({
+                    title: chunkTitle, category: formCategory, tags: formTags,
+                    userId: user?.id || '', fileName: chunks[i].name,
+                    fileType: 'application/pdf', fileSize: chunks[i].size,
+                    storagePath, largeFile: true,
+                  }),
+                });
+              } else {
+                const result = await uploadSingleFile(chunks[i], chunkTitle, formCategory, formTags);
+                if (!result.success) {
+                  chunksFailed++;
+                  console.error(`Chunk ${i + 1} of "${fileName}" failed:`, result.error);
+                }
+              }
+            } catch (chunkErr: any) {
+              chunksFailed++;
+              console.error(`Chunk ${i + 1} of "${fileName}" error:`, chunkErr);
             }
 
             // Refresh list after each chunk
             loadDocs();
           }
 
-          filesCompleted++;
+          if (chunksFailed > 0 && chunksFailed === totalChunks) {
+            filesFailed++;
+          } else {
+            filesCompleted++;
+          }
         } else {
-          // Normal single file
+          // Normal single file (under 4MB)
           const result = await uploadSingleFile(fileToUpload, formTitle, formCategory, formTags);
           if (!result.success) {
             filesFailed++;
+            setBgStatus({ message: `"${fileName}" failed: ${result.error}`, type: 'error' });
             console.error(`Upload failed for ${fileName}:`, result.error);
           } else {
             filesCompleted++;
