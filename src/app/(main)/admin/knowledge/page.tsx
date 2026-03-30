@@ -169,7 +169,10 @@ export default function KnowledgePage() {
 
     const ct = res.headers.get('content-type') || '';
     if (!ct.includes('application/json')) {
-      return { success: false, extractedLength: 0, usedVision: false, error: 'Server error (non-JSON response)' };
+      // Capture partial body to understand the error (Vercel often returns HTML for body-too-large)
+      let bodySnippet = '';
+      try { bodySnippet = (await res.text()).substring(0, 200); } catch {}
+      return { success: false, extractedLength: 0, usedVision: false, error: `Server error ${res.status} (non-JSON). ${bodySnippet}` };
     }
     const data = await res.json();
     if (!res.ok) {
@@ -266,11 +269,14 @@ export default function KnowledgePage() {
                 if (!result.success) {
                   chunksFailed++;
                   console.error(`Chunk ${i + 1} of "${fileName}" failed:`, result.error);
+                  setBgStatus({ message: `"${fileName}" chunk ${i + 1}/${totalChunks} failed: ${result.error}`, type: 'error' });
                 }
               }
             } catch (chunkErr: any) {
               chunksFailed++;
+              const chunkErrMsg = chunkErr?.message || String(chunkErr);
               console.error(`Chunk ${i + 1} of "${fileName}" error:`, chunkErr);
+              setBgStatus({ message: `"${fileName}" chunk ${i + 1}/${totalChunks} error: ${chunkErrMsg}`, type: 'error' });
             }
 
             // Refresh list after each chunk
@@ -296,7 +302,9 @@ export default function KnowledgePage() {
         }
       } catch (err: any) {
         filesFailed++;
+        const errMsg = err?.message || String(err);
         console.error(`Upload error for ${fileName}:`, err);
+        setBgStatus({ message: `"${fileName}" error: ${errMsg}`, type: 'error' });
       }
     }
 
@@ -317,9 +325,9 @@ export default function KnowledgePage() {
 
     loadDocs();
 
-    // Auto-dismiss after 5 seconds (unless still processing)
+    // Auto-dismiss success after 5 seconds — keep errors visible so user can read them
     setTimeout(() => {
-      setBgStatus(prev => prev?.type === 'processing' ? prev : null);
+      setBgStatus(prev => prev?.type === 'success' ? null : prev);
     }, 5000);
   };
 
@@ -352,7 +360,7 @@ export default function KnowledgePage() {
   };
 
   // ─── Re-process a single doc with AI vision ───
-  const reprocessDoc = async (docId: string, title: string): Promise<boolean> => {
+  const reprocessDoc = async (docId: string, title: string): Promise<{ success: boolean; error?: string }> => {
     try {
       const res = await fetch('/api/knowledge/reprocess', {
         method: 'POST',
@@ -361,31 +369,30 @@ export default function KnowledgePage() {
       });
       const ct = res.headers.get('content-type') || '';
       if (!ct.includes('application/json')) {
-        console.error(`Reprocess "${title}" got non-JSON response`);
-        return false;
+        let bodySnippet = '';
+        try { bodySnippet = (await res.text()).substring(0, 200); } catch {}
+        return { success: false, error: `Server error ${res.status} (non-JSON). ${bodySnippet}` };
       }
       const data = await res.json();
       if (!res.ok) {
-        console.error(`Reprocess "${title}" failed:`, data.error);
-        return false;
+        return { success: false, error: data.error || 'Unknown error' };
       }
-      return true;
+      return { success: true };
     } catch (err: any) {
-      console.error(`Reprocess "${title}" error:`, err);
-      return false;
+      return { success: false, error: err?.message || String(err) };
     }
   };
 
   const handleReprocess = async (docId: string, title: string) => {
     setBgStatus({ message: `Re-processing "${title}"...`, type: 'processing' });
-    const success = await reprocessDoc(docId, title);
-    if (success) {
+    const result = await reprocessDoc(docId, title);
+    if (result.success) {
       setBgStatus({ message: `"${title}" re-processed with visual extraction`, type: 'success' });
     } else {
-      setBgStatus({ message: `Failed to re-process "${title}"`, type: 'error' });
+      setBgStatus({ message: `Re-process "${title}" failed: ${result.error}`, type: 'error' });
     }
     loadDocs();
-    setTimeout(() => setBgStatus(prev => prev?.type === 'processing' ? prev : null), 5000);
+    setTimeout(() => setBgStatus(prev => prev?.type === 'success' ? null : prev), 5000);
   };
 
   const handleReprocessAll = async () => {
@@ -408,11 +415,12 @@ export default function KnowledgePage() {
 
     for (const doc of reprocessable) {
       setBgStatus({ message: `Re-processing "${doc.title}" (${completed + 1}/${reprocessable.length})...`, type: 'processing' });
-      const success = await reprocessDoc(doc.id, doc.title);
-      if (success) {
+      const result = await reprocessDoc(doc.id, doc.title);
+      if (result.success) {
         completed++;
       } else {
         failed++;
+        console.error(`Reprocess "${doc.title}" failed:`, result.error);
       }
       loadDocs();
     }
@@ -422,7 +430,7 @@ export default function KnowledgePage() {
     } else {
       setBgStatus({ message: `All ${completed} files re-processed with visual extraction`, type: 'success' });
     }
-    setTimeout(() => setBgStatus(prev => prev?.type === 'processing' ? prev : null), 5000);
+    setTimeout(() => setBgStatus(prev => prev?.type === 'success' ? null : prev), 5000);
   };
 
   const filtered = docs.filter(d => {
@@ -473,17 +481,17 @@ export default function KnowledgePage() {
           color: bgStatus.type === 'processing' ? '#60a5fa' :
                  bgStatus.type === 'success' ? 'var(--success)' : 'var(--error)',
         }}>
-          <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: '8px', flex: 1, minWidth: 0 }}>
             {bgStatus.type === 'processing' && (
               <div style={{
-                width: '14px', height: '14px', borderRadius: '50%',
+                width: '14px', height: '14px', borderRadius: '50%', flexShrink: 0,
                 border: '2px solid rgba(59,130,246,0.3)', borderTopColor: '#60a5fa',
                 animation: 'spin 0.8s linear infinite',
               }} />
             )}
-            {bgStatus.type === 'success' && <span>✓</span>}
-            {bgStatus.type === 'error' && <span>✕</span>}
-            <span>{bgStatus.message}</span>
+            {bgStatus.type === 'success' && <span style={{ flexShrink: 0 }}>✓</span>}
+            {bgStatus.type === 'error' && <span style={{ flexShrink: 0 }}>✕</span>}
+            <span style={{ wordBreak: 'break-word' }}>{bgStatus.message}</span>
           </div>
           {bgStatus.type !== 'processing' && (
             <button

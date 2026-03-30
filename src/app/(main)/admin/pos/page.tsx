@@ -845,13 +845,13 @@ export default function POsPage() {
               </button>
               <button
                 onClick={() => { setShowEmailImport(!showEmailImport); setShowImport(false); setShowCreate(false); if (!showEmailImport) searchGmailPOs(); }}
-                style={{ padding: '6px 12px', borderRadius: '8px', background: showEmailImport ? '#1e2d3d' : 'rgba(34,197,94,0.1)', border: '1px solid rgba(34,197,94,0.25)', color: '#4ade80', fontSize: '12px', fontWeight: 700 }}
+                style={{ padding: '6px 12px', borderRadius: '8px', background: showEmailImport ? 'var(--subtle-bg)' : 'rgba(34,197,94,0.1)', border: '1px solid rgba(34,197,94,0.25)', color: '#4ade80', fontSize: '12px', fontWeight: 700 }}
               >
                 {showEmailImport ? 'Cancel' : '📧 Email'}
               </button>
               <button
                 onClick={() => { setShowImport(!showImport); setShowCreate(false); setShowEmailImport(false); setParsedPO(null); setImportLines([]); setParseError(''); }}
-                style={{ padding: '6px 12px', borderRadius: '8px', background: showImport ? '#1e2d3d' : 'rgba(59,130,246,0.1)', border: '1px solid rgba(59,130,246,0.25)', color: '#60a5fa', fontSize: '12px', fontWeight: 700 }}
+                style={{ padding: '6px 12px', borderRadius: '8px', background: showImport ? 'var(--subtle-bg)' : 'rgba(59,130,246,0.1)', border: '1px solid rgba(59,130,246,0.25)', color: '#60a5fa', fontSize: '12px', fontWeight: 700 }}
               >
                 {showImport ? 'Cancel' : '📄 PDF'}
               </button>
@@ -887,7 +887,7 @@ export default function POsPage() {
               )}
               <button
                 onClick={() => { setEditMode(false); setSelectedForDelete(new Set()); }}
-                style={{ padding: '6px 12px', borderRadius: '8px', background: '#1e2d3d', border: '1px solid #1e2d3d', color: 'var(--text-body)', fontSize: '12px', fontWeight: 700 }}
+                style={{ padding: '6px 12px', borderRadius: '8px', background: 'var(--subtle-bg)', border: '1px solid var(--border)', color: 'var(--text-body)', fontSize: '12px', fontWeight: 700 }}
               >
                 Done
               </button>
@@ -902,7 +902,7 @@ export default function POsPage() {
           value={poSearch}
           onChange={(e) => setPoSearch(e.target.value)}
           placeholder="Search PO #, part #, or customer..."
-          style={{ width: '100%', padding: '9px 12px 9px 32px', borderRadius: '8px', border: '1px solid #1e2d3d', background: '#0f1720', color: 'var(--text-body)', fontSize: '12px', outline: 'none' }}
+          style={{ width: '100%', padding: '9px 12px 9px 32px', borderRadius: '8px', border: '1px solid var(--border)', background: 'var(--input-bg)', color: 'var(--text-body)', fontSize: '12px', outline: 'none' }}
         />
         <span style={{ position: 'absolute', left: '10px', top: '50%', transform: 'translateY(-50%)', color: 'var(--text-label)', fontSize: '13px', pointerEvents: 'none' }}>🔍</span>
         {poSearch && (
@@ -915,14 +915,14 @@ export default function POsPage() {
 
       {/* Gmail Email Import Panel */}
       {showEmailImport && (
-        <div style={{ background: '#141e2b', border: '1px solid rgba(34,197,94,0.25)', borderRadius: '10px', padding: '14px', marginBottom: '12px' }}>
+        <div style={{ background: 'var(--subtle-bg)', border: '1px solid rgba(34,197,94,0.25)', borderRadius: '10px', padding: '14px', marginBottom: '12px' }}>
           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '8px' }}>
             <div style={{ fontSize: '13px', fontWeight: 700, color: 'var(--text-body)' }}>Import POs from Gmail</div>
             <div style={{ display: 'flex', gap: '6px' }}>
               <select
                 defaultValue="90"
                 onChange={(e) => searchGmailPOs(parseInt(e.target.value))}
-                style={{ padding: '4px 8px', borderRadius: '6px', background: '#1e2d3d', border: '1px solid #2a3a4d', color: 'var(--text-body)', fontSize: '11px' }}
+                style={{ padding: '4px 8px', borderRadius: '6px', background: 'var(--subtle-bg)', border: '1px solid var(--border)', color: 'var(--text-body)', fontSize: '11px' }}
               >
                 <option value="7">Last 7 days</option>
                 <option value="30">Last 30 days</option>
@@ -930,7 +930,7 @@ export default function POsPage() {
               </select>
               <button
                 onClick={() => searchGmailPOs()}
-                style={{ padding: '4px 10px', borderRadius: '6px', background: '#2a3a4d', border: 'none', color: '#60a5fa', fontSize: '11px', fontWeight: 700, cursor: 'pointer' }}
+                style={{ padding: '4px 10px', borderRadius: '6px', background: 'var(--border)', border: 'none', color: '#60a5fa', fontSize: '11px', fontWeight: 700, cursor: 'pointer' }}
               >Refresh</button>
             </div>
           </div>
@@ -985,7 +985,7 @@ export default function POsPage() {
                   const hasPdfs = email.pdfs.length > 0;
 
                   const borderColor = justImported ? 'rgba(34,197,94,0.3)' : failed ? 'rgba(239,68,68,0.3)' : existsInSystem ? 'rgba(34,197,94,0.2)' : 'rgba(59,130,246,0.2)';
-                  const bgColor = justImported ? 'rgba(34,197,94,0.05)' : failed ? 'rgba(239,68,68,0.05)' : '#0f1720';
+                  const bgColor = justImported ? 'rgba(34,197,94,0.05)' : failed ? 'rgba(239,68,68,0.05)' : 'var(--input-bg)';
 
                   return (
                     <div key={email.messageId} style={{ padding: '10px', borderRadius: '8px', border: `1px solid ${borderColor}`, background: bgColor }}>
@@ -1022,7 +1022,7 @@ export default function POsPage() {
                               disabled={isImporting}
                               style={{
                                 padding: '4px 10px', borderRadius: '5px', fontSize: '10px', fontWeight: 700, cursor: 'pointer',
-                                background: isImporting ? '#1e2d3d' : (existsInSystem || justImported) ? 'rgba(251,191,36,0.15)' : '#3b82f6',
+                                background: isImporting ? 'var(--subtle-bg)' : (existsInSystem || justImported) ? 'rgba(251,191,36,0.15)' : '#3b82f6',
                                 border: (existsInSystem || justImported) ? '1px solid rgba(251,191,36,0.3)' : 'none',
                                 color: (existsInSystem || justImported) ? '#fbbf24' : '#fff',
                               }}
@@ -1065,7 +1065,7 @@ export default function POsPage() {
                                     disabled={isAdding}
                                     style={{
                                       padding: '3px 8px', borderRadius: '4px', fontSize: '10px', fontWeight: 700,
-                                      background: isAdding ? '#1e2d3d' : 'rgba(59,130,246,0.15)', border: '1px solid rgba(59,130,246,0.3)',
+                                      background: isAdding ? 'var(--subtle-bg)' : 'rgba(59,130,246,0.15)', border: '1px solid rgba(59,130,246,0.3)',
                                       color: '#60a5fa', cursor: 'pointer', whiteSpace: 'nowrap',
                                     }}
                                   >
@@ -1095,7 +1095,7 @@ export default function POsPage() {
       {/* Email PO Review/Edit Panel */}
       {reviewingExtraction && (
         <div style={{ position: 'fixed', top: 0, left: 0, right: 0, bottom: 0, background: 'rgba(0,0,0,0.7)', zIndex: 1000, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '16px' }}>
-          <div style={{ background: '#141e2b', border: '1px solid rgba(59,130,246,0.3)', borderRadius: '14px', padding: '18px', maxWidth: '520px', width: '100%', maxHeight: '85vh', overflowY: 'auto' }}>
+          <div style={{ background: 'var(--subtle-bg)', border: '1px solid rgba(59,130,246,0.3)', borderRadius: '14px', padding: '18px', maxWidth: '520px', width: '100%', maxHeight: '85vh', overflowY: 'auto' }}>
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '14px' }}>
               <div>
                 <div style={{ fontSize: '16px', fontWeight: 800, color: 'var(--text-body)' }}>Review PO Import</div>
@@ -1113,7 +1113,7 @@ export default function POsPage() {
                 <input
                   value={reviewingExtraction.extracted.po_number || ''}
                   onChange={e => setReviewingExtraction(prev => prev ? { ...prev, extracted: { ...prev.extracted, po_number: e.target.value } } : prev)}
-                  style={{ width: '100%', padding: '6px 8px', borderRadius: '6px', border: '1px solid #2a3a4d', background: '#0f1720', color: 'var(--text-body)', fontSize: '12px', fontWeight: 700 }}
+                  style={{ width: '100%', padding: '6px 8px', borderRadius: '6px', border: '1px solid var(--border)', background: 'var(--input-bg)', color: 'var(--text-body)', fontSize: '12px', fontWeight: 700 }}
                 />
               </div>
               <div>
@@ -1121,7 +1121,7 @@ export default function POsPage() {
                 <input
                   value={reviewingExtraction.extracted.customer || ''}
                   onChange={e => setReviewingExtraction(prev => prev ? { ...prev, extracted: { ...prev.extracted, customer: e.target.value } } : prev)}
-                  style={{ width: '100%', padding: '6px 8px', borderRadius: '6px', border: '1px solid #2a3a4d', background: '#0f1720', color: 'var(--text-body)', fontSize: '12px' }}
+                  style={{ width: '100%', padding: '6px 8px', borderRadius: '6px', border: '1px solid var(--border)', background: 'var(--input-bg)', color: 'var(--text-body)', fontSize: '12px' }}
                 />
               </div>
               <div>
@@ -1129,7 +1129,7 @@ export default function POsPage() {
                 <input
                   value={reviewingExtraction.extracted.ordered_date || ''}
                   onChange={e => setReviewingExtraction(prev => prev ? { ...prev, extracted: { ...prev.extracted, ordered_date: e.target.value } } : prev)}
-                  style={{ width: '100%', padding: '6px 8px', borderRadius: '6px', border: '1px solid #2a3a4d', background: '#0f1720', color: 'var(--text-body)', fontSize: '12px' }}
+                  style={{ width: '100%', padding: '6px 8px', borderRadius: '6px', border: '1px solid var(--border)', background: 'var(--input-bg)', color: 'var(--text-body)', fontSize: '12px' }}
                 />
               </div>
             </div>
@@ -1168,7 +1168,7 @@ export default function POsPage() {
                       <input
                         value={line.part_number || ''}
                         onChange={e => updateReviewLine(idx, 'part_number', e.target.value)}
-                        style={{ width: '100%', padding: '5px 7px', borderRadius: '5px', border: '1px solid #2a3a4d', background: '#0f1720', color: 'var(--text-body)', fontSize: '12px', fontWeight: 700 }}
+                        style={{ width: '100%', padding: '5px 7px', borderRadius: '5px', border: '1px solid var(--border)', background: 'var(--input-bg)', color: 'var(--text-body)', fontSize: '12px', fontWeight: 700 }}
                       />
                     </div>
                     <div>
@@ -1176,7 +1176,7 @@ export default function POsPage() {
                       <input
                         value={line.supplier_part || ''}
                         onChange={e => updateReviewLine(idx, 'supplier_part', e.target.value)}
-                        style={{ width: '100%', padding: '5px 7px', borderRadius: '5px', border: '1px solid #2a3a4d', background: '#0f1720', color: 'var(--text-body)', fontSize: '12px', fontWeight: 700 }}
+                        style={{ width: '100%', padding: '5px 7px', borderRadius: '5px', border: '1px solid var(--border)', background: 'var(--input-bg)', color: 'var(--text-body)', fontSize: '12px', fontWeight: 700 }}
                       />
                     </div>
                   </div>
@@ -1185,7 +1185,7 @@ export default function POsPage() {
                     <input
                       value={line.description || ''}
                       onChange={e => updateReviewLine(idx, 'description', e.target.value)}
-                      style={{ width: '100%', padding: '5px 7px', borderRadius: '5px', border: '1px solid #2a3a4d', background: '#0f1720', color: 'var(--text-body)', fontSize: '11px' }}
+                      style={{ width: '100%', padding: '5px 7px', borderRadius: '5px', border: '1px solid var(--border)', background: 'var(--input-bg)', color: 'var(--text-body)', fontSize: '11px' }}
                     />
                   </div>
                   <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: '6px' }}>
@@ -1195,7 +1195,7 @@ export default function POsPage() {
                         type="number"
                         value={line.quantity ?? ''}
                         onChange={e => updateReviewLine(idx, 'quantity', parseInt(e.target.value) || 0)}
-                        style={{ width: '100%', padding: '5px 7px', borderRadius: '5px', border: '1px solid #2a3a4d', background: '#0f1720', color: 'var(--text-body)', fontSize: '12px' }}
+                        style={{ width: '100%', padding: '5px 7px', borderRadius: '5px', border: '1px solid var(--border)', background: 'var(--input-bg)', color: 'var(--text-body)', fontSize: '12px' }}
                       />
                     </div>
                     <div>
@@ -1205,7 +1205,7 @@ export default function POsPage() {
                         step="0.01"
                         value={line.unit_price ?? ''}
                         onChange={e => updateReviewLine(idx, 'unit_price', parseFloat(e.target.value) || 0)}
-                        style={{ width: '100%', padding: '5px 7px', borderRadius: '5px', border: '1px solid #2a3a4d', background: '#0f1720', color: 'var(--text-body)', fontSize: '12px' }}
+                        style={{ width: '100%', padding: '5px 7px', borderRadius: '5px', border: '1px solid var(--border)', background: 'var(--input-bg)', color: 'var(--text-body)', fontSize: '12px' }}
                       />
                     </div>
                     <div>
@@ -1213,7 +1213,7 @@ export default function POsPage() {
                       <input
                         value={line.delivery_date || ''}
                         onChange={e => updateReviewLine(idx, 'delivery_date', e.target.value)}
-                        style={{ width: '100%', padding: '5px 7px', borderRadius: '5px', border: '1px solid #2a3a4d', background: '#0f1720', color: 'var(--text-body)', fontSize: '11px' }}
+                        style={{ width: '100%', padding: '5px 7px', borderRadius: '5px', border: '1px solid var(--border)', background: 'var(--input-bg)', color: 'var(--text-body)', fontSize: '11px' }}
                       />
                     </div>
                   </div>
@@ -1242,7 +1242,7 @@ export default function POsPage() {
                 disabled={importingEmailId !== null || !reviewingExtraction.extracted.lines?.length}
                 style={{
                   flex: 1, padding: '12px', borderRadius: '10px',
-                  background: importingEmailId ? '#1e2d3d' : '#22c55e',
+                  background: importingEmailId ? 'var(--subtle-bg)' : '#22c55e',
                   color: '#fff', fontWeight: 800, fontSize: '13px', border: 'none', cursor: 'pointer',
                   opacity: importingEmailId || !reviewingExtraction.extracted.lines?.length ? 0.5 : 1,
                 }}
@@ -1251,7 +1251,7 @@ export default function POsPage() {
               </button>
               <button
                 onClick={() => setReviewingExtraction(null)}
-                style={{ flex: 1, padding: '12px', borderRadius: '10px', background: 'transparent', border: '1px solid #1e2d3d', color: 'var(--text-body)', fontWeight: 700, fontSize: '13px', cursor: 'pointer' }}
+                style={{ flex: 1, padding: '12px', borderRadius: '10px', background: 'transparent', border: '1px solid var(--border)', color: 'var(--text-body)', fontWeight: 700, fontSize: '13px', cursor: 'pointer' }}
               >
                 Cancel
               </button>
@@ -1263,7 +1263,7 @@ export default function POsPage() {
       {/* PO Overwrite Confirmation Dialog */}
       {showOverwriteConfirm && overwriteData && (
         <div style={{ position: 'fixed', top: 0, left: 0, right: 0, bottom: 0, background: 'rgba(0,0,0,0.7)', zIndex: 1000, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '16px' }}>
-          <div style={{ background: '#141e2b', border: '1px solid rgba(251,191,36,0.3)', borderRadius: '14px', padding: '18px', maxWidth: '420px', width: '100%', maxHeight: '80vh', overflowY: 'auto' }}>
+          <div style={{ background: 'var(--subtle-bg)', border: '1px solid rgba(251,191,36,0.3)', borderRadius: '14px', padding: '18px', maxWidth: '420px', width: '100%', maxHeight: '80vh', overflowY: 'auto' }}>
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '12px' }}>
               <div>
                 <div style={{ fontSize: '15px', fontWeight: 800, color: '#fbbf24' }}>PO #{overwriteData.poNumber} Already Exists</div>
@@ -1342,14 +1342,14 @@ export default function POsPage() {
               <button
                 onClick={confirmOverwrite}
                 disabled={overwriting}
-                style={{ flex: 1, padding: '12px', borderRadius: '10px', background: overwriting ? '#1e2d3d' : '#f59e0b', color: '#fff', fontWeight: 800, fontSize: '13px', border: 'none', cursor: 'pointer' }}
+                style={{ flex: 1, padding: '12px', borderRadius: '10px', background: overwriting ? 'var(--subtle-bg)' : '#f59e0b', color: '#fff', fontWeight: 800, fontSize: '13px', border: 'none', cursor: 'pointer' }}
               >
                 {overwriting ? 'Updating...' : overwriteData.hasChanges ? 'Apply Changes' : 'Overwrite Anyway'}
               </button>
               <button
                 onClick={cancelOverwrite}
                 disabled={overwriting}
-                style={{ flex: 1, padding: '12px', borderRadius: '10px', background: 'transparent', border: '1px solid #1e2d3d', color: 'var(--text-body)', fontWeight: 700, fontSize: '13px', cursor: 'pointer' }}
+                style={{ flex: 1, padding: '12px', borderRadius: '10px', background: 'transparent', border: '1px solid var(--border)', color: 'var(--text-body)', fontWeight: 700, fontSize: '13px', cursor: 'pointer' }}
               >
                 Keep Existing
               </button>
@@ -1360,7 +1360,7 @@ export default function POsPage() {
 
       {/* PDF Import Panel */}
       {showImport && !parsedPO && (
-        <div style={{ background: '#141e2b', border: '1px solid #1e2d3d', borderRadius: '10px', padding: '14px', marginBottom: '12px' }}>
+        <div style={{ background: 'var(--subtle-bg)', border: '1px solid var(--border)', borderRadius: '10px', padding: '14px', marginBottom: '12px' }}>
           <div style={{ fontSize: '13px', fontWeight: 700, color: 'var(--text-body)', marginBottom: '6px' }}>Import Masterack PO from PDF</div>
           <div style={{ fontSize: '11px', color: 'var(--text-label)', marginBottom: '10px' }}>
             Upload a Masterack PO PDF. Part numbers, quantities, and prices will be extracted. You can review and edit before saving.
@@ -1382,7 +1382,7 @@ export default function POsPage() {
 
       {/* Review imported PO before saving */}
       {parsedPO && (
-        <div style={{ background: '#141e2b', border: '1px solid rgba(59,130,246,0.3)', borderRadius: '10px', padding: '14px', marginBottom: '12px' }}>
+        <div style={{ background: 'var(--subtle-bg)', border: '1px solid rgba(59,130,246,0.3)', borderRadius: '10px', padding: '14px', marginBottom: '12px' }}>
           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '10px' }}>
             <div>
               <div style={{ fontSize: '15px', fontWeight: 800, color: 'var(--text-body)' }}>PO #{parsedPO.po_number}</div>
@@ -1439,7 +1439,7 @@ export default function POsPage() {
                               value={line.new_end_customer}
                               onChange={(e) => setImportLines((prev) => prev.map((l, j) => j === idx ? { ...l, new_end_customer: e.target.value } : l))}
                               placeholder="e.g. Glass America"
-                              style={{ width: '100%', padding: '5px 8px', borderRadius: '6px', border: '1px solid #1e2d3d', background: '#0f1720', color: 'var(--text-body)', fontSize: '11px' }}
+                              style={{ width: '100%', padding: '5px 8px', borderRadius: '6px', border: '1px solid var(--border)', background: 'var(--input-bg)', color: 'var(--text-body)', fontSize: '11px' }}
                             />
                           </div>
                           <div>
@@ -1448,7 +1448,7 @@ export default function POsPage() {
                               value={line.new_vehicle_type}
                               onChange={(e) => setImportLines((prev) => prev.map((l, j) => j === idx ? { ...l, new_vehicle_type: e.target.value } : l))}
                               placeholder="e.g. Transit"
-                              style={{ width: '100%', padding: '5px 8px', borderRadius: '6px', border: '1px solid #1e2d3d', background: '#0f1720', color: 'var(--text-body)', fontSize: '11px' }}
+                              style={{ width: '100%', padding: '5px 8px', borderRadius: '6px', border: '1px solid var(--border)', background: 'var(--input-bg)', color: 'var(--text-body)', fontSize: '11px' }}
                             />
                           </div>
                           <div style={{ gridColumn: 'span 2' }}>
@@ -1457,7 +1457,7 @@ export default function POsPage() {
                               value={line.new_graphic_package}
                               onChange={(e) => setImportLines((prev) => prev.map((l, j) => j === idx ? { ...l, new_graphic_package: e.target.value } : l))}
                               placeholder="e.g. Install decals"
-                              style={{ width: '100%', padding: '5px 8px', borderRadius: '6px', border: '1px solid #1e2d3d', background: '#0f1720', color: 'var(--text-body)', fontSize: '11px' }}
+                              style={{ width: '100%', padding: '5px 8px', borderRadius: '6px', border: '1px solid var(--border)', background: 'var(--input-bg)', color: 'var(--text-body)', fontSize: '11px' }}
                             />
                           </div>
                         </div>
@@ -1492,7 +1492,7 @@ export default function POsPage() {
                         value={line.final_price}
                         onChange={(e) => updateFinalPrice(idx, e.target.value)}
                         step="0.01"
-                        style={{ width: '90px', padding: '6px 8px', borderRadius: '6px', border: '1px solid #1e2d3d', background: '#0f1720', color: 'var(--text-body)', fontSize: '13px' }}
+                        style={{ width: '90px', padding: '6px 8px', borderRadius: '6px', border: '1px solid var(--border)', background: 'var(--input-bg)', color: 'var(--text-body)', fontSize: '13px' }}
                       />
                       {line.catalog_match && line.catalog_match.price > 0 && (
                         <button
@@ -1519,7 +1519,7 @@ export default function POsPage() {
           ))}
 
           {/* Totals and actions */}
-          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '10px 0 6px', borderTop: '1px solid #1e2d3d', marginTop: '6px' }}>
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '10px 0 6px', borderTop: '1px solid var(--border)', marginTop: '6px' }}>
             <div style={{ fontSize: '14px', fontWeight: 800, color: 'var(--text-body)' }}>
               Grand Total: <span style={{ color: '#60a5fa' }}>{fmt(importLines.filter((l) => l.include).reduce((s, l) => s + l.quantity * l.final_price, 0))}</span>
             </div>
@@ -1543,7 +1543,7 @@ export default function POsPage() {
             </button>
             <button
               onClick={cancelImport}
-              style={{ padding: '12px 20px', borderRadius: '10px', background: 'transparent', border: '1px solid #1e2d3d', color: 'var(--text-body)', fontWeight: 700, fontSize: '14px' }}
+              style={{ padding: '12px 20px', borderRadius: '10px', background: 'transparent', border: '1px solid var(--border)', color: 'var(--text-body)', fontWeight: 700, fontSize: '14px' }}
             >
               Cancel
             </button>
@@ -1553,7 +1553,7 @@ export default function POsPage() {
 
       {/* Manual create form */}
       {showCreate && (
-        <div style={{ background: '#141e2b', border: '1px solid #1e2d3d', borderRadius: '10px', padding: '14px', marginBottom: '12px' }}>
+        <div style={{ background: 'var(--subtle-bg)', border: '1px solid var(--border)', borderRadius: '10px', padding: '14px', marginBottom: '12px' }}>
           <div style={{ marginBottom: '8px' }}>
             <label style={labelStyle}>PO Number</label>
             <input value={form.po_number} onChange={(e) => setForm({ ...form, po_number: e.target.value })} style={inputStyle} />
@@ -1577,7 +1577,7 @@ export default function POsPage() {
           {lineItems.length > 0 && (
             <div style={{ marginBottom: '8px' }}>
               {lineItems.map((li, i) => (
-                <div key={i} style={{ display: 'flex', alignItems: 'center', gap: '8px', padding: '6px 0', borderBottom: '1px solid #1e2d3d' }}>
+                <div key={i} style={{ display: 'flex', alignItems: 'center', gap: '8px', padding: '6px 0', borderBottom: '1px solid var(--border)' }}>
                   <div style={{ flex: 1, fontSize: '13px', fontWeight: 700 }}>{li.part_number}</div>
                   <div style={{ fontSize: '12px', color: 'var(--text-label)' }}>{fmt(li.unit_price)}</div>
                   <input
@@ -1628,7 +1628,7 @@ export default function POsPage() {
 
       {/* Batch Invoice Controls */}
       {invoiceablePOs.length > 0 && (
-        <div style={{ background: '#141e2b', border: '1px solid rgba(167,139,250,0.25)', borderRadius: '10px', padding: '10px 12px', marginBottom: '10px' }}>
+        <div style={{ background: 'var(--subtle-bg)', border: '1px solid rgba(167,139,250,0.25)', borderRadius: '10px', padding: '10px 12px', marginBottom: '10px' }}>
           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
             <div>
               <div style={{ fontSize: '12px', fontWeight: 700, color: '#a78bfa' }}>
@@ -1699,7 +1699,7 @@ export default function POsPage() {
         const displayDate = po.ordered_date ? new Date(po.ordered_date + 'T00:00:00') : new Date(po.created_at);
 
         return (
-            <div key={po.id} style={{ background: '#141e2b', border: editMode && selectedForDelete.has(po.id) ? '1px solid rgba(248,113,113,0.5)' : '1px solid #1e2d3d', borderRadius: '10px', marginBottom: '6px', overflow: 'hidden' }}>
+            <div key={po.id} style={{ background: 'var(--subtle-bg)', border: editMode && selectedForDelete.has(po.id) ? '1px solid rgba(248,113,113,0.5)' : '1px solid var(--border)', borderRadius: '10px', marginBottom: '6px', overflow: 'hidden' }}>
               <div onClick={() => editMode ? toggleDeleteSelection(po.id) : toggleExpand(po.id)} style={{ padding: '12px', cursor: 'pointer' }}>
                 <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'start' }}>
                   <div style={{ display: 'flex', alignItems: 'start', gap: '8px' }}>
@@ -1756,14 +1756,14 @@ export default function POsPage() {
                     <span style={{ color: 'var(--text-label)' }}>Progress</span>
                     <span style={{ color: pct >= 100 ? '#4ade80' : '#60a5fa', fontWeight: 700 }}>{totalInstalled}/{totalQty}</span>
                   </div>
-                  <div style={{ height: '6px', background: '#1e2d3d', borderRadius: '3px' }}>
+                  <div style={{ height: '6px', background: 'var(--subtle-bg)', borderRadius: '3px' }}>
                     <div style={{ height: '100%', width: `${Math.min(pct, 100)}%`, background: pct >= 100 ? '#22c55e' : '#3b82f6', borderRadius: '3px', transition: 'width 0.3s' }} />
                   </div>
                 </div>
               </div>
 
               {isExpanded && (
-                <div style={{ borderTop: '1px solid #1e2d3d', padding: '10px 12px' }}>
+                <div style={{ borderTop: '1px solid var(--border)', padding: '10px 12px' }}>
                   {isEditingPO ? (
                     <div style={{ marginBottom: '10px', padding: '8px', background: 'rgba(59,130,246,0.05)', borderRadius: '8px' }}>
                       <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '6px' }}>
@@ -1786,7 +1786,7 @@ export default function POsPage() {
                       </div>
                       <div style={{ display: 'flex', gap: '6px', marginTop: '8px' }}>
                         <button onClick={saveEditPO} style={{ flex: 1, padding: '8px', borderRadius: '8px', background: '#22c55e', color: '#fff', fontSize: '12px', fontWeight: 700, border: 'none' }}>Save</button>
-                        <button onClick={() => setEditPoId(null)} style={{ flex: 1, padding: '8px', borderRadius: '8px', background: 'transparent', border: '1px solid #1e2d3d', color: 'var(--text-body)', fontSize: '12px', fontWeight: 700 }}>Cancel</button>
+                        <button onClick={() => setEditPoId(null)} style={{ flex: 1, padding: '8px', borderRadius: '8px', background: 'transparent', border: '1px solid var(--border)', color: 'var(--text-body)', fontSize: '12px', fontWeight: 700 }}>Cancel</button>
                       </div>
                     </div>
                   ) : (
@@ -1850,7 +1850,7 @@ export default function POsPage() {
                     </div>
                   )}
 
-                  <div style={{ display: 'flex', gap: '4px', padding: '8px 0 4px', borderBottom: '1px solid #1e2d3d', fontSize: '10px', fontWeight: 700, color: 'var(--text-label)', textTransform: 'uppercase', letterSpacing: '0.3px' }}>
+                  <div style={{ display: 'flex', gap: '4px', padding: '8px 0 4px', borderBottom: '1px solid var(--border)', fontSize: '10px', fontWeight: 700, color: 'var(--text-label)', textTransform: 'uppercase', letterSpacing: '0.3px' }}>
                     <div style={{ flex: 1 }}>Part #</div>
                     <div style={{ width: '36px', textAlign: 'center' }}>Qty</div>
                     <div style={{ width: '42px', textAlign: 'center' }}>Done</div>
@@ -1881,7 +1881,7 @@ export default function POsPage() {
                               <input type="number" value={editLineForm.unit_price} onChange={(e) => setEditLineForm({ ...editLineForm, unit_price: e.target.value })} style={{ ...inputStyle, padding: '6px 8px', fontSize: '12px' }} step="0.01" />
                             </div>
                             <button onClick={() => saveEditLine(po.id)} style={{ padding: '6px 10px', borderRadius: '6px', background: '#22c55e', color: '#fff', fontSize: '11px', fontWeight: 700, border: 'none' }}>✓</button>
-                            <button onClick={() => setEditLineId(null)} style={{ padding: '6px 10px', borderRadius: '6px', background: 'transparent', border: '1px solid #1e2d3d', color: 'var(--text-body)', fontSize: '11px', fontWeight: 700 }}>✕</button>
+                            <button onClick={() => setEditLineId(null)} style={{ padding: '6px 10px', borderRadius: '6px', background: 'transparent', border: '1px solid var(--border)', color: 'var(--text-body)', fontSize: '11px', fontWeight: 700 }}>✕</button>
                           </div>
                         </div>
                       );
@@ -1894,7 +1894,7 @@ export default function POsPage() {
                           {li.description && (
                             <div style={{ fontSize: '10px', color: 'var(--text-label)', marginTop: '1px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{li.description}</div>
                           )}
-                          <div style={{ height: '3px', background: '#1e2d3d', borderRadius: '2px', marginTop: '3px', width: '80%' }}>
+                          <div style={{ height: '3px', background: 'var(--subtle-bg)', borderRadius: '2px', marginTop: '3px', width: '80%' }}>
                             <div style={{ height: '100%', width: `${Math.min(linePct, 100)}%`, background: linePct >= 100 ? '#22c55e' : '#3b82f6', borderRadius: '2px' }} />
                           </div>
                         </div>
@@ -1997,7 +1997,7 @@ export default function POsPage() {
         );
       })}
 
-      <button onClick={() => router.push('/more')} style={{ width: '100%', padding: '10px', borderRadius: '10px', marginTop: '14px', border: '1px solid #1e2d3d', background: 'transparent', color: 'var(--text-body)', fontSize: '13px', fontWeight: 700 }}>
+      <button onClick={() => router.push('/more')} style={{ width: '100%', padding: '10px', borderRadius: '10px', marginTop: '14px', border: '1px solid var(--border)', background: 'transparent', color: 'var(--text-body)', fontSize: '13px', fontWeight: 700 }}>
         ← Back
       </button>
     </div>
@@ -2005,4 +2005,4 @@ export default function POsPage() {
 }
 
 const labelStyle: React.CSSProperties = { display: 'block', fontSize: '10px', fontWeight: 700, color: 'var(--text-label)', textTransform: 'uppercase', letterSpacing: '0.5px', marginBottom: '4px' };
-const inputStyle: React.CSSProperties = { width: '100%', padding: '10px 12px', borderRadius: '8px', border: '1px solid #1e2d3d', background: '#0f1720', color: 'var(--text-body)', fontSize: '13px' };
+const inputStyle: React.CSSProperties = { width: '100%', padding: '10px 12px', borderRadius: '8px', border: '1px solid var(--border)', background: 'var(--input-bg)', color: 'var(--text-body)', fontSize: '13px' };

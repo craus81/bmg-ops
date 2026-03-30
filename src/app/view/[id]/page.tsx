@@ -59,9 +59,9 @@ export default function PublicVehicleView() {
 
   if (loading) {
     return (
-      <div style={{ minHeight: '100vh', background: '#0a1017', color: 'var(--text-body)', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+      <div style={{ minHeight: '100vh', background: 'var(--bg)', color: 'var(--text-body)', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
         <div style={{ textAlign: 'center' }}>
-          <div style={{ width: '36px', height: '36px', border: '3px solid #1e2d3d', borderTopColor: '#3b82f6', borderRadius: '50%', margin: '0 auto', animation: 'spin 1s linear infinite' }} />
+          <div style={{ width: '36px', height: '36px', border: '3px solid var(--border)', borderTopColor: '#3b82f6', borderRadius: '50%', margin: '0 auto', animation: 'spin 1s linear infinite' }} />
           <style>{`@keyframes spin { to { transform: rotate(360deg); } }`}</style>
           <div style={{ color: 'var(--text-label)', marginTop: '12px', fontSize: '13px' }}>Loading...</div>
         </div>
@@ -71,7 +71,7 @@ export default function PublicVehicleView() {
 
   if (notFound) {
     return (
-      <div style={{ minHeight: '100vh', background: '#0a1017', color: 'var(--text-body)', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+      <div style={{ minHeight: '100vh', background: 'var(--bg)', color: 'var(--text-body)', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
         <div style={{ textAlign: 'center' }}>
           <div style={{ fontSize: '48px', marginBottom: '12px', opacity: 0.4 }}>🚫</div>
           <div style={{ fontWeight: 700, fontSize: '16px' }}>Vehicle Not Found</div>
@@ -86,7 +86,7 @@ export default function PublicVehicleView() {
     : 'Vehicle';
 
   return (
-    <div style={{ minHeight: '100vh', background: '#0a1017', color: 'var(--text-body)' }}>
+    <div style={{ minHeight: '100vh', background: 'var(--bg)', color: 'var(--text-body)' }}>
       <div style={{ maxWidth: '600px', margin: '0 auto', padding: '20px 16px' }}>
         {/* Header */}
         <div style={{ display: 'flex', alignItems: 'center', gap: '10px', marginBottom: '20px' }}>
@@ -125,7 +125,7 @@ export default function PublicVehicleView() {
             <div style={{ display: 'grid', gridTemplateColumns: 'repeat(2, 1fr)', gap: '6px' }}>
               {photos.map(function(p) {
                 return (
-                  <div key={p.id} onClick={function() { setLightbox(p.url || null); }} style={{ position: 'relative', paddingTop: '75%', borderRadius: '10px', overflow: 'hidden', background: '#141e2b', cursor: 'pointer' }}>
+                  <div key={p.id} onClick={function() { setLightbox(p.url || null); }} style={{ position: 'relative', paddingTop: '75%', borderRadius: '10px', overflow: 'hidden', background: 'var(--subtle-bg)', cursor: 'pointer' }}>
                     {p.url && (
                       <img
                         src={p.url}
@@ -145,7 +145,7 @@ export default function PublicVehicleView() {
         )}
 
         {/* Footer */}
-        <div style={{ textAlign: 'center', marginTop: '32px', paddingTop: '16px', borderTop: '1px solid #1e2d3d' }}>
+        <div style={{ textAlign: 'center', marginTop: '32px', paddingTop: '16px', borderTop: '1px solid var(--border)' }}>
           <div style={{ fontSize: '11px', color: '#3a4a5c' }}>BMG Fleet Installations LLC · FleetSuite</div>
         </div>
       </div>

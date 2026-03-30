@@ -131,7 +131,7 @@ function renderResult(group: string, item: any, router: any, onClose: () => void
     case 'messages':
       return (
         <button key={item.id} onClick={() => navigate('/messages')} style={resultBtnStyle}>
-          <div style={{ ...subtitleStyle, fontSize: '12px', color: '#c8d6e5' }}>
+          <div style={{ ...subtitleStyle, fontSize: '12px', color: 'var(--text-secondary)' }}>
             {(item.body || '').length > 120 ? item.body.substring(0, 120) + '...' : item.body}
           </div>
           <div style={{ ...subtitleStyle, fontSize: '10px', marginTop: '2px' }}>{formatDate(item.created_at)}</div>
@@ -160,7 +160,7 @@ function renderResult(group: string, item: any, router: any, onClose: () => void
 // Styles
 const resultBtnStyle: React.CSSProperties = {
   width: '100%', textAlign: 'left', padding: '10px 14px',
-  background: 'transparent', border: 'none', borderBottom: '1px solid rgba(30,45,61,0.5)',
+  background: 'transparent', border: 'none', borderBottom: '1px solid rgba(var(--border-rgb),0.5)',
   cursor: 'pointer', display: 'block',
 };
 
@@ -248,14 +248,14 @@ export default function UniversalSearch({ open, onClose }: UniversalSearchProps)
         style={{
           width: '100%', maxWidth: '500px', margin: '0 auto',
           maxHeight: '100vh', display: 'flex', flexDirection: 'column',
-          background: '#0f1720',
+          background: 'var(--bg)',
         }}
       >
         {/* Search input */}
         <div style={{
-          padding: '12px 16px', borderBottom: '1px solid #1e2d3d',
+          padding: '12px 16px', borderBottom: '1px solid var(--border)',
           display: 'flex', alignItems: 'center', gap: '10px',
-          position: 'sticky', top: 0, background: '#0f1720', zIndex: 1,
+          position: 'sticky', top: 0, background: 'var(--bg)', zIndex: 1,
         }}>
           <span style={{ fontSize: '18px', opacity: 0.5 }}>🔍</span>
           <input
@@ -277,7 +277,7 @@ export default function UniversalSearch({ open, onClose }: UniversalSearchProps)
             }}>✕</button>
           )}
           <button onClick={onClose} style={{
-            background: 'transparent', border: '1px solid #1e2d3d', borderRadius: '6px',
+            background: 'transparent', border: '1px solid var(--border)', borderRadius: '6px',
             padding: '4px 10px', color: 'var(--text-body)', fontSize: '11px', fontWeight: 700,
             cursor: 'pointer',
           }}>ESC</button>
@@ -295,7 +295,7 @@ export default function UniversalSearch({ open, onClose }: UniversalSearchProps)
             <div style={{ padding: '40px 20px', textAlign: 'center' }}>
               <div style={{ fontSize: '32px', opacity: 0.3, marginBottom: '8px' }}>🔍</div>
               <div style={{ fontSize: '14px', fontWeight: 700, color: 'var(--text-label)' }}>No results found</div>
-              <div style={{ fontSize: '12px', color: '#3a4a5d', marginTop: '4px' }}>Try a different search term</div>
+              <div style={{ fontSize: '12px', color: 'var(--text-secondary)', marginTop: '4px' }}>Try a different search term</div>
             </div>
           )}
 
@@ -303,7 +303,7 @@ export default function UniversalSearch({ open, onClose }: UniversalSearchProps)
             <div style={{ padding: '40px 20px', textAlign: 'center' }}>
               <div style={{ fontSize: '32px', opacity: 0.3, marginBottom: '8px' }}>🔍</div>
               <div style={{ fontSize: '14px', fontWeight: 700, color: 'var(--text-label)' }}>Search everything</div>
-              <div style={{ fontSize: '12px', color: '#3a4a5d', marginTop: '4px' }}>POs, vehicles, graphics jobs, estimates, parts, customers, messages, quotes</div>
+              <div style={{ fontSize: '12px', color: 'var(--text-secondary)', marginTop: '4px' }}>POs, vehicles, graphics jobs, estimates, parts, customers, messages, quotes</div>
             </div>
           )}
 
@@ -317,8 +317,8 @@ export default function UniversalSearch({ open, onClose }: UniversalSearchProps)
                 {/* Group header */}
                 <div style={{
                   padding: '10px 14px 6px', display: 'flex', alignItems: 'center', gap: '6px',
-                  position: 'sticky', top: 0, background: '#0f1720', zIndex: 1,
-                  borderBottom: '1px solid rgba(30,45,61,0.3)',
+                  position: 'sticky', top: 0, background: 'var(--bg)', zIndex: 1,
+                  borderBottom: '1px solid rgba(var(--border-rgb),0.3)',
                 }}>
                   <span style={{ fontSize: '14px' }}>{config.icon}</span>
                   <span style={{ fontSize: '11px', fontWeight: 800, color: config.color, textTransform: 'uppercase', letterSpacing: '0.5px' }}>

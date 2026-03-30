@@ -98,7 +98,7 @@ export default function SettingsPage() {
 
   const inputStyle: React.CSSProperties = {
     width: '100%', padding: '8px 10px', borderRadius: '8px',
-    border: '1px solid #2a3a4d', background: '#0f1720',
+    border: '1px solid var(--border)', background: 'var(--input-bg)',
     color: 'var(--text-body)', fontSize: '12px',
   };
 
@@ -108,8 +108,8 @@ export default function SettingsPage() {
   };
 
   const sectionStyle: React.CSSProperties = {
-    padding: '14px', borderRadius: '12px', background: '#141e2b',
-    border: '1px solid #1e2d3d', marginBottom: '10px',
+    padding: '14px', borderRadius: '12px', background: 'var(--subtle-bg)',
+    border: '1px solid var(--border)', marginBottom: '10px',
   };
 
   if (loading || !prefs) {
@@ -174,8 +174,8 @@ export default function SettingsPage() {
                   onClick={() => toggleCustomStatus(s)}
                   style={{
                     padding: '4px 8px', borderRadius: '5px', fontSize: '10px', fontWeight: 700,
-                    background: isSelected ? `${GRAPHICS_STATUS_COLORS[s]}22` : '#0f1720',
-                    border: `1px solid ${isSelected ? GRAPHICS_STATUS_COLORS[s] : '#1e2d3d'}`,
+                    background: isSelected ? `${GRAPHICS_STATUS_COLORS[s]}22` : 'var(--input-bg)',
+                    border: `1px solid ${isSelected ? GRAPHICS_STATUS_COLORS[s] : 'var(--border)'}`,
                     color: isSelected ? GRAPHICS_STATUS_COLORS[s] : 'var(--text-label)',
                     cursor: 'pointer',
                   }}
@@ -266,8 +266,8 @@ export default function SettingsPage() {
                   onClick={() => setPrefs({ ...prefs, sms_messages_mode: 'always' })}
                   style={{
                     padding: '6px 12px', borderRadius: '8px', fontSize: '11px', fontWeight: 700,
-                    background: prefs.sms_messages_mode === 'always' ? 'rgba(59,130,246,0.15)' : '#0f1720',
-                    border: `1px solid ${prefs.sms_messages_mode === 'always' ? '#3b82f6' : '#1e2d3d'}`,
+                    background: prefs.sms_messages_mode === 'always' ? 'rgba(59,130,246,0.15)' : 'var(--input-bg)',
+                    border: `1px solid ${prefs.sms_messages_mode === 'always' ? '#3b82f6' : 'var(--border)'}`,
                     color: prefs.sms_messages_mode === 'always' ? '#60a5fa' : 'var(--text-label)',
                     cursor: 'pointer',
                   }}
@@ -278,8 +278,8 @@ export default function SettingsPage() {
                   onClick={() => setPrefs({ ...prefs, sms_messages_mode: 'unread_only' })}
                   style={{
                     padding: '6px 12px', borderRadius: '8px', fontSize: '11px', fontWeight: 700,
-                    background: prefs.sms_messages_mode === 'unread_only' ? 'rgba(59,130,246,0.15)' : '#0f1720',
-                    border: `1px solid ${prefs.sms_messages_mode === 'unread_only' ? '#3b82f6' : '#1e2d3d'}`,
+                    background: prefs.sms_messages_mode === 'unread_only' ? 'rgba(59,130,246,0.15)' : 'var(--input-bg)',
+                    border: `1px solid ${prefs.sms_messages_mode === 'unread_only' ? '#3b82f6' : 'var(--border)'}`,
                     color: prefs.sms_messages_mode === 'unread_only' ? '#60a5fa' : 'var(--text-label)',
                     cursor: 'pointer',
                   }}
@@ -324,7 +324,7 @@ export default function SettingsPage() {
         onClick={() => router.push('/more')}
         style={{
           width: '100%', padding: '10px', borderRadius: '10px', marginTop: '8px',
-          border: '1px solid #1e2d3d', background: 'transparent',
+          border: '1px solid var(--border)', background: 'transparent',
           color: 'var(--text-body)', fontSize: '13px', fontWeight: 700, cursor: 'pointer',
         }}
       >

@@ -1,11 +1,13 @@
 'use client';
 
 import { useState, useRef, useEffect } from 'react';
+import { useRouter } from 'next/navigation';
 import { useAuth } from '@/components/AuthProvider';
 import { createClient } from '@/lib/supabase-browser';
 import { decodeVIN, isValidVIN } from '@/lib/vin-decoder';
 import { theme } from '@/lib/theme';
 import type { NetsuiteSalesOrder, GraphicsProof, FleetCheckin } from '@/lib/types';
+import SalesOrderPdf from '@/components/SalesOrderPdf';
 
 // ─── Step indicator ────────────────────────────────────────────
 function StepIndicator({ current }: { current: number }) {
@@ -32,6 +34,7 @@ function StepIndicator({ current }: { current: number }) {
 // ─── Main Fleet Page ───────────────────────────────────────────
 export default function FleetPage() {
   const { user, profile } = useAuth();
+  const router = useRouter();
   const supabase = createClient();
 
   // Workflow state
@@ -362,6 +365,13 @@ export default function FleetPage() {
             }}>Proof: {savedCheckin.proof_file_name}</div>
           )}
         </div>
+
+        {/* Sales Order PDF Viewer */}
+        <SalesOrderPdf
+          salesOrderId={savedCheckin.netsuite_sales_order_id}
+          salesOrderNumber={savedCheckin.sales_order_number}
+        />
+
         <div style={{ display: 'flex', flexDirection: 'column', gap: '8px', marginTop: '16px' }}>
           <button onClick={resetAll} style={{
             width: '100%', padding: '16px', borderRadius: '14px',
@@ -488,18 +498,22 @@ export default function FleetPage() {
           {showRecent && recentCheckins.length > 0 && (
             <div style={{ marginTop: '8px', display: 'flex', flexDirection: 'column', gap: '6px' }}>
               {recentCheckins.map(ci => (
-                <div key={ci.id} style={{
-                  background: theme.card, border: `1px solid ${theme.border}`, borderRadius: '10px',
-                  padding: '10px 12px',
-                }}>
+                <div
+                  key={ci.id}
+                  onClick={() => router.push(`/tracking?vehicle=${ci.id}`)}
+                  style={{
+                    background: theme.card, border: `1px solid ${theme.border}`, borderRadius: '10px',
+                    padding: '10px 12px', cursor: 'pointer',
+                  }}
+                >
                   <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                    <div>
+                    <div style={{ flex: 1 }}>
                       <div style={{ fontWeight: 700, fontSize: '13px' }}>
                         {[ci.vehicle_year, ci.vehicle_make, ci.vehicle_model].filter(Boolean).join(' ') || 'Unknown'}
                       </div>
                       <div style={{ fontSize: '11px', fontFamily: 'monospace', color: theme.textMuted }}>{ci.vin}</div>
                     </div>
-                    <div style={{ textAlign: 'right' }}>
+                    <div style={{ textAlign: 'right', marginRight: '8px' }}>
                       {ci.sales_order_number && (
                         <div style={{ fontSize: '11px', fontWeight: 700, color: theme.success }}>SO #{ci.sales_order_number}</div>
                       )}
@@ -507,6 +521,7 @@ export default function FleetPage() {
                         {new Date(ci.created_at).toLocaleDateString([], { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' })}
                       </div>
                     </div>
+                    <span style={{ color: theme.textMuted, fontSize: '14px' }}>›</span>
                   </div>
                 </div>
               ))}

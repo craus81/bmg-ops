@@ -538,7 +538,7 @@ export default function ReportsPage() {
           ) : (
             <div>
               {/* Summary banner */}
-              <div style={{ padding: '10px 12px', background: 'var(--card)', border: '1px solid #1e2d3d', borderRadius: '10px', marginBottom: '12px' }}>
+              <div style={{ padding: '10px 12px', background: 'var(--card)', border: '1px solid var(--border)', borderRadius: '10px', marginBottom: '12px' }}>
                 <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
                   <div>
                     <div style={{ fontWeight: 800, fontSize: '14px' }}>{reviewVehicles.length} vehicles pending</div>
@@ -593,7 +593,7 @@ export default function ReportsPage() {
                 var custVehicles = reviewGrouped[customer];
                 var custUnmatched = custVehicles.filter((v: any) => !v.po_line_item_id).length;
                 return (
-                  <div key={customer} style={{ background: 'var(--card)', border: '1px solid #1e2d3d', borderRadius: '14px', padding: '12px', marginBottom: '8px' }}>
+                  <div key={customer} style={{ background: 'var(--card)', border: '1px solid var(--border)', borderRadius: '14px', padding: '12px', marginBottom: '8px' }}>
                     <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '8px' }}>
                       <div>
                         <div style={{ fontWeight: 800, fontSize: '14px' }}>{customer}</div>
@@ -707,7 +707,7 @@ export default function ReportsPage() {
                                   <div style={{ marginTop: '4px' }}>
                                     <button
                                       onClick={() => setEditingVehicleId(null)}
-                                      style={{ padding: '3px 8px', borderRadius: '6px', background: 'transparent', border: '1px solid #1e2d3d', color: 'var(--text-muted)', fontSize: '10px', fontWeight: 600 }}
+                                      style={{ padding: '3px 8px', borderRadius: '6px', background: 'transparent', border: '1px solid var(--border)', color: 'var(--text-muted)', fontSize: '10px', fontWeight: 600 }}
                                     >
                                       Cancel
                                     </button>
@@ -751,7 +751,7 @@ export default function ReportsPage() {
               {Object.keys(grouped).map(function(customer) {
                 var custVehicles = grouped[customer];
                 return (
-                  <div key={customer} style={{ background: 'var(--card)', border: '1px solid #1e2d3d', borderRadius: '14px', padding: '12px', marginBottom: '8px' }}>
+                  <div key={customer} style={{ background: 'var(--card)', border: '1px solid var(--border)', borderRadius: '14px', padding: '12px', marginBottom: '8px' }}>
                     <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '8px' }}>
                       <div>
                         <div style={{ fontWeight: 800, fontSize: '14px' }}>{customer}</div>
@@ -931,7 +931,7 @@ export default function ReportsPage() {
         </div>
       )}
 
-      <button onClick={function() { router.push('/more'); }} style={{ width: '100%', padding: '10px', borderRadius: '14px', marginTop: '12px', border: '1px solid #1e2d3d', background: 'transparent', color: 'var(--text-secondary)', fontSize: '13px', fontWeight: 700 }}>Back</button>
+      <button onClick={function() { router.push('/more'); }} style={{ width: '100%', padding: '10px', borderRadius: '14px', marginTop: '12px', border: '1px solid var(--border)', background: 'transparent', color: 'var(--text-secondary)', fontSize: '13px', fontWeight: 700 }}>Back</button>
     </div>
   );
 }

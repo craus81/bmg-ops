@@ -322,8 +322,8 @@ export default function CustomersPage() {
     });
 
   const inputStyle: React.CSSProperties = {
-    width: '100%', padding: '8px 10px', borderRadius: '6px', border: '1px solid #1e2d3d',
-    background: '#0a1018', color: 'var(--text-body)', fontSize: '13px', outline: 'none',
+    width: '100%', padding: '8px 10px', borderRadius: '6px', border: '1px solid var(--border)',
+    background: 'var(--input-bg)', color: 'var(--text-body)', fontSize: '13px', outline: 'none',
   };
 
   const labelStyle: React.CSSProperties = {
@@ -348,7 +348,7 @@ export default function CustomersPage() {
           disabled={syncing}
           style={{
             padding: '8px 16px', borderRadius: '8px', fontSize: '12px', fontWeight: 700,
-            background: syncing ? '#1e2d3d' : '#3b82f6', border: 'none', color: '#fff', cursor: 'pointer',
+            background: syncing ? 'var(--border)' : '#3b82f6', border: 'none', color: '#fff', cursor: 'pointer',
           }}
         >
           {syncing ? 'Syncing...' : 'Sync from NetSuite'}
@@ -403,7 +403,7 @@ export default function CustomersPage() {
 
           return (
             <div key={customer.id} style={{
-              borderRadius: '10px', border: '1px solid #1e2d3d', background: '#0f1720', overflow: 'hidden',
+              borderRadius: '10px', border: '1px solid var(--border)', background: 'var(--bg)', overflow: 'hidden',
             }}>
               {/* Customer header */}
               <div
@@ -456,7 +456,7 @@ export default function CustomersPage() {
 
               {/* Expanded: contacts */}
               {isExpanded && (
-                <div style={{ padding: '0 14px 14px 14px', borderTop: '1px solid #1e2d3d' }}>
+                <div style={{ padding: '0 14px 14px 14px', borderTop: '1px solid var(--border)' }}>
                   {/* Spend breakdown */}
                   {(customer.total_spend > 0 || customer.ytd_spend > 0) && (
                     <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: '8px', padding: '10px 0', borderBottom: '1px solid rgba(30,45,61,0.5)' }}>
@@ -514,8 +514,8 @@ export default function CustomersPage() {
                             onClick={(e) => { e.stopPropagation(); setReportCustomer(customer.id); }}
                             onChange={(e) => { setReportCustomer(customer.id); setReportStartDate(e.target.value); }}
                             style={{
-                              padding: '4px 8px', borderRadius: '5px', border: '1px solid #1e2d3d',
-                              background: '#0a1018', color: 'var(--text-body)', fontSize: '11px', outline: 'none',
+                              padding: '4px 8px', borderRadius: '5px', border: '1px solid var(--border)',
+                              background: 'var(--input-bg)', color: 'var(--text-body)', fontSize: '11px', outline: 'none',
                             }}
                           />
                         </div>
@@ -527,8 +527,8 @@ export default function CustomersPage() {
                             onClick={(e) => { e.stopPropagation(); setReportCustomer(customer.id); }}
                             onChange={(e) => { setReportCustomer(customer.id); setReportEndDate(e.target.value); }}
                             style={{
-                              padding: '4px 8px', borderRadius: '5px', border: '1px solid #1e2d3d',
-                              background: '#0a1018', color: 'var(--text-body)', fontSize: '11px', outline: 'none',
+                              padding: '4px 8px', borderRadius: '5px', border: '1px solid var(--border)',
+                              background: 'var(--input-bg)', color: 'var(--text-body)', fontSize: '11px', outline: 'none',
                             }}
                           />
                         </div>
@@ -545,7 +545,7 @@ export default function CustomersPage() {
                           disabled={generatingReport}
                           style={{
                             padding: '5px 14px', borderRadius: '6px', fontSize: '11px', fontWeight: 700,
-                            background: generatingReport ? '#1e2d3d' : 'rgba(59,130,246,0.15)',
+                            background: generatingReport ? 'var(--border)' : 'rgba(59,130,246,0.15)',
                             border: '1px solid rgba(59,130,246,0.3)', color: generatingReport ? 'var(--text-label)' : '#60a5fa',
                             cursor: generatingReport ? 'not-allowed' : 'pointer',
                           }}
@@ -666,14 +666,14 @@ export default function CustomersPage() {
                       <div style={{ display: 'flex', gap: '6px', marginTop: '8px', justifyContent: 'flex-end' }}>
                         <button
                           onClick={() => { setShowAddContact(null); setEditingContact(null); setContactForm(emptyContact); }}
-                          style={{ padding: '6px 12px', borderRadius: '6px', background: '#1e2d3d', border: 'none', color: 'var(--text-body)', fontSize: '12px', fontWeight: 600, cursor: 'pointer' }}
+                          style={{ padding: '6px 12px', borderRadius: '6px', background: 'var(--border)', border: 'none', color: 'var(--text-body)', fontSize: '12px', fontWeight: 600, cursor: 'pointer' }}
                         >Cancel</button>
                         <button
                           onClick={() => saveContact(customer.id)}
                           disabled={saving || !contactForm.name.trim()}
                           style={{
                             padding: '6px 14px', borderRadius: '6px', border: 'none', fontSize: '12px', fontWeight: 700, cursor: 'pointer',
-                            background: saving ? '#1e2d3d' : '#3b82f6', color: '#fff',
+                            background: saving ? 'var(--border)' : '#3b82f6', color: '#fff',
                           }}
                         >{saving ? 'Saving...' : editingContact ? 'Update' : 'Add Contact'}</button>
                       </div>

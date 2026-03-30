@@ -112,13 +112,13 @@ export default function AssignPOModal({ open, onClose, vehicleId, vehiclePartNum
         style={{
           width: '100%', maxWidth: '500px', margin: '0 auto',
           maxHeight: '100vh', display: 'flex', flexDirection: 'column',
-          background: '#0f1720',
+          background: 'var(--bg)',
         }}
       >
         {/* Header */}
         <div style={{
-          padding: '14px 16px', borderBottom: '1px solid #1e2d3d',
-          position: 'sticky', top: 0, background: '#0f1720', zIndex: 1,
+          padding: '14px 16px', borderBottom: '1px solid var(--border)',
+          position: 'sticky', top: 0, background: 'var(--bg)', zIndex: 1,
         }}>
           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '10px' }}>
             <div>
@@ -128,7 +128,7 @@ export default function AssignPOModal({ open, onClose, vehicleId, vehiclePartNum
               </div>
             </div>
             <button onClick={onClose} style={{
-              background: 'transparent', border: '1px solid #1e2d3d', borderRadius: '6px',
+              background: 'transparent', border: '1px solid var(--border)', borderRadius: '6px',
               padding: '4px 10px', color: 'var(--text-body)', fontSize: '11px', fontWeight: 700, cursor: 'pointer',
             }}>ESC</button>
           </div>
@@ -143,7 +143,7 @@ export default function AssignPOModal({ open, onClose, vehicleId, vehiclePartNum
               onChange={(e) => handleInput(e.target.value)}
               placeholder="Search by PO number or customer..."
               style={{
-                flex: 1, background: 'rgba(255,255,255,0.04)', border: '1px solid #1e2d3d',
+                flex: 1, background: 'rgba(255,255,255,0.04)', border: '1px solid var(--border)',
                 borderRadius: '10px', padding: '10px 12px', outline: 'none',
                 color: 'var(--text-body)', fontSize: '14px', fontWeight: 600,
               }}
@@ -174,7 +174,7 @@ export default function AssignPOModal({ open, onClose, vehicleId, vehiclePartNum
             <div style={{ padding: '40px 20px', textAlign: 'center' }}>
               <div style={{ fontSize: '32px', opacity: 0.3, marginBottom: '8px' }}>📋</div>
               <div style={{ fontSize: '14px', fontWeight: 700, color: 'var(--text-label)' }}>No POs found</div>
-              <div style={{ fontSize: '12px', color: '#3a4a5d', marginTop: '4px' }}>Try a different search term</div>
+              <div style={{ fontSize: '12px', color: 'var(--text-secondary)', marginTop: '4px' }}>Try a different search term</div>
             </div>
           )}
 
@@ -189,7 +189,7 @@ export default function AssignPOModal({ open, onClose, vehicleId, vehiclePartNum
 
             return (
               <div key={po.id} style={{
-                borderBottom: '1px solid rgba(30,45,61,0.5)',
+                borderBottom: '1px solid rgba(var(--border-rgb), 0.5)',
                 padding: '12px 16px',
               }}>
                 <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'start', marginBottom: '6px' }}>
@@ -232,7 +232,7 @@ export default function AssignPOModal({ open, onClose, vehicleId, vehiclePartNum
                           </div>
                         ))}
                         {po.po_line_items.length > 3 && (
-                          <div style={{ fontSize: '10px', color: '#3a4a5d', marginTop: '2px' }}>
+                          <div style={{ fontSize: '10px', color: 'var(--text-secondary)', marginTop: '2px' }}>
                             +{po.po_line_items.length - 3} more items
                           </div>
                         )}

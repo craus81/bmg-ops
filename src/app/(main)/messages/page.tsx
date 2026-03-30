@@ -322,14 +322,14 @@ export default function MessagesPage() {
 
   const inputStyle: React.CSSProperties = {
     width: '100%', padding: '10px 12px', borderRadius: '10px',
-    border: '1px solid #2a3a4d', background: '#0f1720',
+    border: '1px solid var(--border)', background: 'var(--bg)',
     color: 'var(--text-body)', fontSize: '14px', outline: 'none',
   };
 
   if (loading) {
     return (
       <div style={{ textAlign: 'center', padding: '40px 0' }}>
-        <div style={{ width: '36px', height: '36px', border: '3px solid #1e2d3d', borderTopColor: theme.orange, borderRadius: '50%', margin: '0 auto', animation: 'spin 1s linear infinite' }} />
+        <div style={{ width: '36px', height: '36px', border: '3px solid var(--border)', borderTopColor: theme.orange, borderRadius: '50%', margin: '0 auto', animation: 'spin 1s linear infinite' }} />
         <div style={{ color: 'var(--text-label)', marginTop: '12px', fontSize: '13px', fontWeight: 600 }}>Loading messages...</div>
       </div>
     );
@@ -343,7 +343,7 @@ export default function MessagesPage() {
         {/* Chat header */}
         <div style={{
           display: 'flex', alignItems: 'center', gap: '10px', padding: '10px 0',
-          borderBottom: '1px solid #1e2d3d', marginBottom: '8px', flexShrink: 0,
+          borderBottom: '1px solid var(--border)', marginBottom: '8px', flexShrink: 0,
         }}>
           <button
             onClick={() => { setActiveConvoId(null); loadConversations(); }}
@@ -385,7 +385,7 @@ export default function MessagesPage() {
                 <div style={{ display: 'flex', justifyContent: isMe ? 'flex-end' : 'flex-start' }}>
                   <div style={{
                     maxWidth: '80%', padding: '8px 12px', borderRadius: '14px',
-                    background: isMe ? '#3b82f6' : '#1e2d3d',
+                    background: isMe ? '#3b82f6' : 'var(--border)',
                     color: isMe ? '#fff' : 'var(--text-body)',
                     fontSize: '13px', lineHeight: 1.4,
                     borderBottomRightRadius: isMe ? '4px' : '14px',
@@ -404,7 +404,7 @@ export default function MessagesPage() {
         </div>
 
         {/* Input */}
-        <div style={{ display: 'flex', gap: '8px', padding: '8px 0', borderTop: '1px solid #1e2d3d', flexShrink: 0 }}>
+        <div style={{ display: 'flex', gap: '8px', padding: '8px 0', borderTop: '1px solid var(--border)', flexShrink: 0 }}>
           <input
             ref={inputRef}
             value={newMessage}
@@ -418,7 +418,7 @@ export default function MessagesPage() {
             disabled={!newMessage.trim() || sending}
             style={{
               padding: '10px 16px', borderRadius: '10px',
-              background: !newMessage.trim() ? '#1e2d3d' : '#3b82f6',
+              background: !newMessage.trim() ? 'var(--border)' : '#3b82f6',
               color: '#fff', fontWeight: 800, fontSize: '14px',
               border: 'none', cursor: 'pointer', flexShrink: 0,
               opacity: !newMessage.trim() ? 0.5 : 1,
@@ -465,8 +465,8 @@ export default function MessagesPage() {
               style={{
                 display: 'flex', alignItems: 'center', gap: '10px',
                 padding: '12px', borderRadius: '12px',
-                background: convo.unreadCount > 0 ? 'rgba(59,130,246,0.06)' : '#141e2b',
-                border: `1px solid ${convo.unreadCount > 0 ? 'rgba(59,130,246,0.2)' : '#1e2d3d'}`,
+                background: convo.unreadCount > 0 ? 'rgba(59,130,246,0.06)' : 'var(--subtle-bg)',
+                border: `1px solid ${convo.unreadCount > 0 ? 'rgba(59,130,246,0.2)' : 'var(--border)'}`,
                 cursor: 'pointer', textAlign: 'left', width: '100%',
               }}
             >
@@ -527,7 +527,7 @@ export default function MessagesPage() {
       {/* New Conversation Modal */}
       {showNewConvo && (
         <div style={{ position: 'fixed', top: 0, left: 0, right: 0, bottom: 0, background: 'rgba(0,0,0,0.7)', zIndex: 1000, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '16px' }}>
-          <div style={{ background: '#141e2b', border: '1px solid rgba(59,130,246,0.3)', borderRadius: '14px', padding: '18px', maxWidth: '400px', width: '100%', maxHeight: '70vh', overflowY: 'auto' }}>
+          <div style={{ background: 'var(--subtle-bg)', border: '1px solid rgba(59,130,246,0.3)', borderRadius: '14px', padding: '18px', maxWidth: '400px', width: '100%', maxHeight: '70vh', overflowY: 'auto' }}>
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '12px' }}>
               <div style={{ fontSize: '16px', fontWeight: 800, color: 'var(--text-body)' }}>New Message</div>
               <button onClick={() => { setShowNewConvo(false); setUserSearch(''); }} style={{ background: 'none', border: 'none', color: 'var(--text-label)', fontSize: '18px', cursor: 'pointer' }}>✕</button>
@@ -553,7 +553,7 @@ export default function MessagesPage() {
                   style={{
                     display: 'flex', alignItems: 'center', gap: '10px',
                     padding: '10px', borderRadius: '8px',
-                    background: '#0f1720', border: '1px solid #1e2d3d',
+                    background: 'var(--bg)', border: '1px solid var(--border)',
                     cursor: 'pointer', textAlign: 'left', width: '100%',
                   }}
                 >

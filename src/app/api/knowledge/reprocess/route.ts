@@ -95,16 +95,34 @@ Output the extracted text first, then any visual element descriptions. Be thorou
   }
 }
 
-// Stream-to-buffer helper
-async function streamToBuffer(stream: ReadableStream): Promise<Buffer> {
-  const reader = stream.getReader();
-  const chunks: Uint8Array[] = [];
-  while (true) {
-    const { done, value } = await reader.read();
-    if (done) break;
-    if (value) chunks.push(value);
+// Stream-to-buffer helper — handles both Node.js Readable and Web ReadableStream
+async function streamToBuffer(stream: any): Promise<Buffer> {
+  // AWS SDK v3 on Node.js returns a Node.js Readable, not a web ReadableStream
+  if (typeof stream.transformToByteArray === 'function') {
+    // AWS SDK v3 SdkStream has a built-in helper
+    const bytes = await stream.transformToByteArray();
+    return Buffer.from(bytes);
   }
-  return Buffer.concat(chunks);
+  if (typeof stream[Symbol.asyncIterator] === 'function') {
+    // Node.js Readable stream
+    const chunks: Buffer[] = [];
+    for await (const chunk of stream) {
+      chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
+    }
+    return Buffer.concat(chunks);
+  }
+  if (typeof stream.getReader === 'function') {
+    // Web ReadableStream fallback
+    const reader = stream.getReader();
+    const chunks: Uint8Array[] = [];
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      if (value) chunks.push(value);
+    }
+    return Buffer.concat(chunks);
+  }
+  throw new Error('Unknown stream type — cannot convert to buffer');
 }
 
 export async function POST(req: NextRequest) {
@@ -144,7 +162,21 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ error: 'Failed to download file from storage' }, { status: 500 });
     }
 
-    const buffer = await streamToBuffer(r2Result.body);
+    let buffer: Buffer;
+    try {
+      buffer = await streamToBuffer(r2Result.body);
+    } catch (streamErr: any) {
+      console.error('Stream conversion error:', streamErr);
+      return NextResponse.json({ error: 'Failed to read file stream: ' + streamErr.message }, { status: 500 });
+    }
+
+    const fileSizeMB = buffer.length / (1024 * 1024);
+    console.log(`Reprocessing "${fileName}" — ${fileSizeMB.toFixed(1)} MB`);
+
+    // Claude API has a ~25MB base64 limit; warn if file is very large
+    if (fileSizeMB > 20) {
+      return NextResponse.json({ error: `File too large for AI processing (${fileSizeMB.toFixed(1)} MB). Re-upload as smaller chunks.` }, { status: 400 });
+    }
 
     // Re-extract with vision
     const extractedText = await extractWithVision(buffer, fileName, fileType);

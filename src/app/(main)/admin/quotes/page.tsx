@@ -642,6 +642,11 @@ function NewQuote({ onCreated, editQuote }: { onCreated: () => void; editQuote?:
   const touchStartTime = useRef<number>(0);
   const touchMovedEnough = useRef(false);
 
+  // Draw new manual element state
+  const [drawingNewElement, setDrawingNewElement] = useState(false);
+  const [newElementStart, setNewElementStart] = useState<{ x: number; y: number } | null>(null);
+  const [newElementEnd, setNewElementEnd] = useState<{ x: number; y: number } | null>(null);
+
   // Drag-and-drop state for nesting diagram
   const [draggingIdx, setDraggingIdx] = useState<number | null>(null);
   const [dragOffset, setDragOffset] = useState<{ x: number; y: number }>({ x: 0, y: 0 });
@@ -767,6 +772,49 @@ function NewQuote({ onCreated, editQuote }: { onCreated: () => void; editQuote?:
     return elements.filter(el => includedElements.has(el.element_name));
   }
 
+  // Finalize a manually drawn new element box
+  function finalizeNewElement(imgEl: HTMLImageElement, sx: number, sy: number, sw: number, sh: number) {
+    if (!analysis?.graphic_elements || sw < 5 || sh < 5) return;
+    const rect = imgEl.getBoundingClientRect();
+    const xPct = (sx / rect.width) * 100;
+    const yPct = (sy / rect.height) * 100;
+    const wPct = (sw / rect.width) * 100;
+    const hPct = (sh / rect.height) * 100;
+
+    const dims = boxPctToInches(wPct, hPct);
+    const nextNum = analysis.graphic_elements.length + 1;
+    const newEl: GraphicElement = {
+      element_name: `Custom Element ${nextNum}`,
+      element_type: 'custom',
+      width_in: dims?.width_in || 0,
+      height_in: dims?.height_in || 0,
+      description: 'Manually drawn element',
+      crop_x_pct: xPct,
+      crop_y_pct: yPct,
+      crop_w_pct: wPct,
+      crop_h_pct: hPct,
+    };
+    const updatedElements = [...analysis.graphic_elements, newEl];
+    setAnalysis({ ...analysis, graphic_elements: updatedElements });
+    // Auto-include it
+    setIncludedElements(prev => new Set(prev).add(newEl.element_name));
+    setSelectedBboxIdx(updatedElements.length - 1);
+    setDrawingNewElement(false);
+  }
+
+  // Calculate real-world inches from a bounding box's percentage of the proof image
+  // Uses the template's overall vehicle dimensions as the scale reference
+  function boxPctToInches(widthPct: number, heightPct: number): { width_in: number; height_in: number } | null {
+    if (!selectedTemplate) return null;
+    const vehicleW = selectedTemplate.overall_length_in;
+    const vehicleH = selectedTemplate.overall_height_in;
+    if (!vehicleW || !vehicleH) return null;
+    return {
+      width_in: Math.round(vehicleW * (widthPct / 100) * 10) / 10,
+      height_in: Math.round(vehicleH * (heightPct / 100) * 10) / 10,
+    };
+  }
+
   // Bounding box drag/resize handlers
   function handleBboxMouseDown(e: React.MouseEvent, idx: number, mode: 'move' | 'n' | 's' | 'e' | 'w' | 'ne' | 'nw' | 'se' | 'sw') {
     e.stopPropagation();
@@ -840,12 +888,20 @@ function NewQuote({ onCreated, editQuote }: { onCreated: () => void; editQuote?:
     const { idx, mode, origBox } = bboxDragging;
     const el = analysis.graphic_elements[idx];
 
-    // If resized (not just moved), scale physical dimensions proportionally
+    // If resized (not just moved), recalculate physical dimensions from the box size
     if (mode !== 'move') {
-      const wRatio = (el.crop_w_pct || 1) / (origBox.w || 1);
-      const hRatio = (el.crop_h_pct || 1) / (origBox.h || 1);
-      el.width_in = Math.round(el.width_in * wRatio * 10) / 10;
-      el.height_in = Math.round(el.height_in * hRatio * 10) / 10;
+      const fromTemplate = boxPctToInches(el.crop_w_pct || 0, el.crop_h_pct || 0);
+      if (fromTemplate) {
+        // Use template-scaled dimensions — the box IS the size
+        el.width_in = fromTemplate.width_in;
+        el.height_in = fromTemplate.height_in;
+      } else {
+        // Fallback: scale proportionally from AI guess (no template dims available)
+        const wRatio = (el.crop_w_pct || 1) / (origBox.w || 1);
+        const hRatio = (el.crop_h_pct || 1) / (origBox.h || 1);
+        el.width_in = Math.round(el.width_in * wRatio * 10) / 10;
+        el.height_in = Math.round(el.height_in * hRatio * 10) / 10;
+      }
       setAnalysis({ ...analysis });
     }
 
@@ -959,15 +1015,21 @@ function NewQuote({ onCreated, editQuote }: { onCreated: () => void; editQuote?:
     // Clear long press timer
     if (longPressTimer.current) { clearTimeout(longPressTimer.current); longPressTimer.current = null; }
 
-    // Pinch end — update physical dimensions
+    // Pinch end — recalculate physical dimensions from box size
     if (pinchIdx.current !== null && pinchStartBox.current && analysis?.graphic_elements) {
       const el = analysis.graphic_elements[pinchIdx.current];
       const orig = pinchStartBox.current;
       if (el.crop_w_pct && el.crop_h_pct) {
-        const wRatio = el.crop_w_pct / (orig.w || 1);
-        const hRatio = el.crop_h_pct / (orig.h || 1);
-        el.width_in = Math.round(el.width_in * wRatio * 10) / 10;
-        el.height_in = Math.round(el.height_in * hRatio * 10) / 10;
+        const fromTemplate = boxPctToInches(el.crop_w_pct, el.crop_h_pct);
+        if (fromTemplate) {
+          el.width_in = fromTemplate.width_in;
+          el.height_in = fromTemplate.height_in;
+        } else {
+          const wRatio = el.crop_w_pct / (orig.w || 1);
+          const hRatio = el.crop_h_pct / (orig.h || 1);
+          el.width_in = Math.round(el.width_in * wRatio * 10) / 10;
+          el.height_in = Math.round(el.height_in * hRatio * 10) / 10;
+        }
         setAnalysis({ ...analysis });
       }
       pinchStartDist.current = null;
@@ -999,14 +1061,21 @@ function NewQuote({ onCreated, editQuote }: { onCreated: () => void; editQuote?:
     if (bboxDragging || touchDragging) return;
     // Deselect bbox when touching background
     setSelectedBboxIdx(null);
-    if (!croppingElement || !proofImgRef.current || e.touches.length !== 1) return;
+    if (!proofImgRef.current || e.touches.length !== 1) return;
+    // Allow touch drawing for new element mode OR crop mode
+    if (!drawingNewElement && !croppingElement) return;
     e.preventDefault();
     const t = e.touches[0];
     const rect = proofImgRef.current.getBoundingClientRect();
     const x = t.clientX - rect.left;
     const y = t.clientY - rect.top;
-    setCropStart({ x, y });
-    setCropEnd({ x, y });
+    if (drawingNewElement) {
+      setNewElementStart({ x, y });
+      setNewElementEnd({ x, y });
+    } else {
+      setCropStart({ x, y });
+      setCropEnd({ x, y });
+    }
     setIsDragging(true);
   }
 
@@ -1017,15 +1086,33 @@ function NewQuote({ onCreated, editQuote }: { onCreated: () => void; editQuote?:
     const rect = proofImgRef.current.getBoundingClientRect();
     const x = Math.max(0, Math.min(t.clientX - rect.left, rect.width));
     const y = Math.max(0, Math.min(t.clientY - rect.top, rect.height));
-    setCropEnd({ x, y });
+    if (drawingNewElement) {
+      setNewElementEnd({ x, y });
+    } else {
+      setCropEnd({ x, y });
+    }
   }
 
   function handleProofTouchEnd() {
-    if (!isDragging || !cropStart || !cropEnd || !croppingElement || !proofImgRef.current) {
+    if (!isDragging || !proofImgRef.current) {
       setIsDragging(false);
       return;
     }
     setIsDragging(false);
+
+    // Finalize new element drawing
+    if (drawingNewElement && newElementStart && newElementEnd) {
+      const sx = Math.min(newElementStart.x, newElementEnd.x);
+      const sy = Math.min(newElementStart.y, newElementEnd.y);
+      const sw = Math.abs(newElementEnd.x - newElementStart.x);
+      const sh = Math.abs(newElementEnd.y - newElementStart.y);
+      finalizeNewElement(proofImgRef.current, sx, sy, sw, sh);
+      setNewElementStart(null);
+      setNewElementEnd(null);
+      return;
+    }
+
+    if (!cropStart || !cropEnd || !croppingElement) return;
     const sx = Math.min(cropStart.x, cropEnd.x);
     const sy = Math.min(cropStart.y, cropEnd.y);
     const sw = Math.abs(cropEnd.x - cropStart.x);
@@ -1986,7 +2073,9 @@ function NewQuote({ onCreated, editQuote }: { onCreated: () => void; editQuote?:
             <div>
               <div style={{ fontSize: '14px', fontWeight: 800, color: theme.textPrimary }}>{templateOnly ? 'Tag Panels' : 'Tag Elements'}</div>
               <div style={{ fontSize: '11px', color: theme.textMuted }}>
-                {croppingElement
+                {drawingNewElement
+                  ? 'Draw a box around the element'
+                  : croppingElement
                   ? `Drawing: ${croppingElement}`
                   : `${includedElements.size} of ${analysis.graphic_elements!.length} included`}
               </div>
@@ -2057,19 +2146,46 @@ function NewQuote({ onCreated, editQuote }: { onCreated: () => void; editQuote?:
                 </button>
               );
             })}
+            {/* Draw new element button */}
+            <button
+              onClick={() => {
+                setDrawingNewElement(!drawingNewElement);
+                setCroppingElement(null);
+                setSelectedBboxIdx(null);
+              }}
+              style={{
+                height: '32px', borderRadius: '16px', fontSize: '11px', fontWeight: 800,
+                cursor: 'pointer', flexShrink: 0, padding: '0 12px',
+                border: drawingNewElement ? '2px solid #10b981' : `2px dashed ${theme.border}`,
+                background: drawingNewElement ? 'rgba(16,185,129,0.15)' : theme.inputBg,
+                color: drawingNewElement ? '#10b981' : theme.textMuted,
+                display: 'flex', alignItems: 'center', gap: '4px',
+              }}
+              title="Draw a new element on the proof"
+            >
+              ✏️ {drawingNewElement ? 'Drawing...' : '+ New'}
+            </button>
           </div>
 
           {/* Proof image — fills remaining space */}
           <div
             style={{
               flex: 1, overflow: 'auto', position: 'relative', userSelect: 'none',
-              cursor: bboxDragging ? (bboxDragging.mode === 'move' ? 'grabbing' : 'nwse-resize') : croppingElement ? 'crosshair' : 'default',
+              cursor: bboxDragging ? (bboxDragging.mode === 'move' ? 'grabbing' : 'nwse-resize') : (croppingElement || drawingNewElement) ? 'crosshair' : 'default',
               touchAction: (bboxDragging || touchDragging) ? 'none' : 'auto',
             }}
             onMouseDown={(e) => {
               if (bboxDragging) return;
               // Deselect bbox when clicking background
               setSelectedBboxIdx(null);
+              // Draw new element mode
+              if (drawingNewElement && proofImgRef.current) {
+                const rect = proofImgRef.current.getBoundingClientRect();
+                setNewElementStart({ x: e.clientX - rect.left, y: e.clientY - rect.top });
+                setNewElementEnd({ x: e.clientX - rect.left, y: e.clientY - rect.top });
+                setIsDragging(true);
+                return;
+              }
               if (!croppingElement || !proofImgRef.current) return;
               const rect = proofImgRef.current.getBoundingClientRect();
               const x = e.clientX - rect.left;
@@ -2088,12 +2204,28 @@ function NewQuote({ onCreated, editQuote }: { onCreated: () => void; editQuote?:
               const rect = proofImgRef.current.getBoundingClientRect();
               const x = Math.max(0, Math.min(e.clientX - rect.left, rect.width));
               const y = Math.max(0, Math.min(e.clientY - rect.top, rect.height));
-              setCropEnd({ x, y });
+              if (drawingNewElement) {
+                setNewElementEnd({ x, y });
+              } else {
+                setCropEnd({ x, y });
+              }
             }}
             onMouseUp={() => {
               // Bbox drag/resize
               if (bboxDragging) {
                 handleBboxMouseUp();
+                return;
+              }
+              // Finalize drawing new element
+              if (drawingNewElement && newElementStart && newElementEnd && proofImgRef.current) {
+                setIsDragging(false);
+                const sx = Math.min(newElementStart.x, newElementEnd.x);
+                const sy = Math.min(newElementStart.y, newElementEnd.y);
+                const sw = Math.abs(newElementEnd.x - newElementStart.x);
+                const sh = Math.abs(newElementEnd.y - newElementStart.y);
+                finalizeNewElement(proofImgRef.current, sx, sy, sw, sh);
+                setNewElementStart(null);
+                setNewElementEnd(null);
                 return;
               }
               if (!isDragging || !cropStart || !cropEnd || !croppingElement || !proofImgRef.current) {
@@ -2250,11 +2382,22 @@ function NewQuote({ onCreated, editQuote }: { onCreated: () => void; editQuote?:
                     }}>
                       {isIncluded ? '✓' : i + 1}
                     </div>
+                    {/* Dimension label — shown when selected */}
+                    {isSelected && (
+                      <div style={{
+                        position: 'absolute', bottom: '-18px', left: '50%', transform: 'translateX(-50%)',
+                        fontSize: '10px', fontWeight: 800, color: '#fff',
+                        background: 'rgba(0,0,0,0.75)', padding: '1px 6px', borderRadius: '4px',
+                        pointerEvents: 'none', whiteSpace: 'nowrap', zIndex: 22,
+                      }}>
+                        {el.width_in}"×{el.height_in}"
+                      </div>
+                    )}
                   </div>
                 );
               })}
               {/* Crop selection rectangle */}
-              {isDragging && cropStart && cropEnd && (
+              {isDragging && cropStart && cropEnd && !drawingNewElement && (
                 <div style={{
                   position: 'absolute',
                   left: Math.min(cropStart.x, cropEnd.x),
@@ -2268,6 +2411,39 @@ function NewQuote({ onCreated, editQuote }: { onCreated: () => void; editQuote?:
                   zIndex: 20,
                 }} />
               )}
+
+              {/* New element drawing rectangle */}
+              {isDragging && drawingNewElement && newElementStart && newElementEnd && (() => {
+                const sx = Math.min(newElementStart.x, newElementEnd.x);
+                const sy = Math.min(newElementStart.y, newElementEnd.y);
+                const sw = Math.abs(newElementEnd.x - newElementStart.x);
+                const sh = Math.abs(newElementEnd.y - newElementStart.y);
+                // Show live dimensions as you draw
+                const imgEl = proofImgRef.current;
+                const wPct = imgEl ? (sw / imgEl.getBoundingClientRect().width) * 100 : 0;
+                const hPct = imgEl ? (sh / imgEl.getBoundingClientRect().height) * 100 : 0;
+                const dims = boxPctToInches(wPct, hPct);
+                return (
+                  <>
+                    <div style={{
+                      position: 'absolute', left: sx, top: sy, width: sw, height: sh,
+                      border: '2px dashed #10b981',
+                      background: 'rgba(16, 185, 129, 0.15)',
+                      pointerEvents: 'none', borderRadius: '2px', zIndex: 20,
+                    }} />
+                    {dims && sw > 30 && sh > 20 && (
+                      <div style={{
+                        position: 'absolute', left: sx + 4, top: sy + 4,
+                        fontSize: '11px', fontWeight: 800, color: '#10b981',
+                        background: 'rgba(0,0,0,0.7)', padding: '2px 6px', borderRadius: '4px',
+                        pointerEvents: 'none', zIndex: 21, whiteSpace: 'nowrap',
+                      }}>
+                        {dims.width_in}" × {dims.height_in}"
+                      </div>
+                    )}
+                  </>
+                );
+              })()}
             </div>
           </div>
 
@@ -2303,13 +2479,55 @@ function NewQuote({ onCreated, editQuote }: { onCreated: () => void; editQuote?:
                 )}
                 {/* Element info */}
                 <div style={{ flex: 1, minWidth: 0 }}>
-                  <div style={{ fontSize: '13px', fontWeight: 700, color: theme.textPrimary, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-                    {sel.element_name}
-                  </div>
+                  {sel.element_type === 'custom' ? (
+                    <input
+                      value={sel.element_name}
+                      onChange={(e) => {
+                        const oldName = sel.element_name;
+                        const newName = e.target.value;
+                        sel.element_name = newName;
+                        setAnalysis({ ...analysis });
+                        // Update includedElements set
+                        setIncludedElements(prev => {
+                          const next = new Set(prev);
+                          if (next.has(oldName)) { next.delete(oldName); next.add(newName); }
+                          return next;
+                        });
+                      }}
+                      style={{
+                        fontSize: '13px', fontWeight: 700, color: theme.textPrimary, width: '100%',
+                        background: theme.inputBg, border: `1px solid ${theme.border}`, borderRadius: '6px',
+                        padding: '3px 6px',
+                      }}
+                      placeholder="Element name"
+                    />
+                  ) : (
+                    <div style={{ fontSize: '13px', fontWeight: 700, color: theme.textPrimary, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                      {sel.element_name}
+                    </div>
+                  )}
                   <div style={{ fontSize: '11px', color: theme.textMuted, marginTop: '1px' }}>
                     {sel.element_type} — {sel.width_in}"×{sel.height_in}"
                   </div>
                 </div>
+                {/* Delete custom element */}
+                {sel.element_type === 'custom' && (
+                  <button
+                    onClick={() => {
+                      const elements = analysis.graphic_elements!.filter((_, i) => i !== selectedBboxIdx);
+                      setIncludedElements(prev => { const next = new Set(prev); next.delete(sel.element_name); return next; });
+                      setAnalysis({ ...analysis, graphic_elements: elements });
+                      setSelectedBboxIdx(null);
+                    }}
+                    style={{
+                      padding: '6px 10px', borderRadius: '6px', fontSize: '11px', fontWeight: 700,
+                      border: `1px solid rgba(239,68,68,0.3)`, background: 'rgba(239,68,68,0.1)',
+                      color: '#ef4444', cursor: 'pointer', flexShrink: 0,
+                    }}
+                  >
+                    🗑
+                  </button>
+                )}
                 {/* Include/exclude button */}
                 <button
                   onClick={() => toggleElement(sel.element_name)}

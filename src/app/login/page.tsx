@@ -139,9 +139,9 @@ export default function LoginPage() {
           <div style={{ background: 'var(--success-bg)', border: '1px solid var(--success-border)', borderRadius: '14px', padding: '24px', textAlign: 'center' }}>
             <div style={{ fontSize: '36px', marginBottom: '8px' }}>✅</div>
             <div style={{ fontWeight: 700, fontSize: '16px', color: 'var(--success)' }}>Request Submitted!</div>
-            <div style={{ fontSize: '13px', color: 'rgba(255,255,255,0.5)', marginTop: '6px' }}>
-              Your account has been created. An admin will review and approve your access.
-              You&apos;ll be able to sign in once approved.
+            <div style={{ fontSize: '13px', color: 'var(--text-secondary)', marginTop: '8px', lineHeight: '1.6' }}>
+              Your request has been sent to an administrator for approval.
+              You&apos;ll receive an email once your access has been approved, and then you can sign in.
             </div>
             <button onClick={() => { setSignupDone(false); setMode('password'); setEmail(''); setPassword(''); setFullName(''); }} style={{ marginTop: '16px', padding: '10px 20px', borderRadius: '8px', border: '1px solid rgba(255,255,255,0.12)', color: 'rgba(255,255,255,0.5)', fontSize: '13px', fontWeight: 600, background: 'transparent' }}>
               Back to Sign In

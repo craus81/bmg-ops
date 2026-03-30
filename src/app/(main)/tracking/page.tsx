@@ -1,18 +1,20 @@
 'use client';
 
 import { useState, useEffect, useCallback } from 'react';
-import { useRouter } from 'next/navigation';
+import { useRouter, useSearchParams } from 'next/navigation';
 import { createClient } from '@/lib/supabase-browser';
 import { useAuth } from '@/components/AuthProvider';
 import StatusBadge from '@/components/StatusBadge';
 import AssignmentPicker from '@/components/AssignmentPicker';
 import type { FleetCheckin, VehicleTrackingStatus, VehicleStatusHistory } from '@/lib/types';
 import { VEHICLE_STATUS_PIPELINE, VEHICLE_STATUS_LABELS, VEHICLE_STATUS_COLORS } from '@/lib/types';
+import SalesOrderPdf from '@/components/SalesOrderPdf';
 
 type FilterStatus = VehicleTrackingStatus | 'all' | 'stuck';
 
 export default function TrackingPage() {
   const router = useRouter();
+  const searchParams = useSearchParams();
   const { isAdmin, user, profile } = useAuth();
   const supabase = createClient();
 
@@ -37,6 +39,17 @@ export default function TrackingPage() {
     loadVehicles();
     loadProfiles();
   }, []);
+
+  // Auto-expand vehicle from URL param (deep link from check-in page)
+  useEffect(() => {
+    if (loading) return;
+    const vehicleId = searchParams.get('vehicle');
+    if (vehicleId && vehicles.some(v => v.id === vehicleId)) {
+      setExpandedId(vehicleId);
+      loadHistory(vehicleId);
+      loadAssignments(vehicleId);
+    }
+  }, [loading]);
 
   const loadVehicles = async () => {
     setLoading(true);
@@ -460,9 +473,8 @@ export default function TrackingPage() {
                     onClick={(e) => e.stopPropagation()}
                     style={{ borderTop: '1px solid var(--border)', padding: '14px' }}
                   >
-                    {/* Status Update Buttons */}
-                    {isAdmin && (
-                      <div style={{ marginBottom: '12px' }}>
+                    {/* Status Update Buttons — available to all roles */}
+                    <div style={{ marginBottom: '12px' }}>
                         <div style={{ fontSize: '10px', fontWeight: 700, color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.5px', marginBottom: '6px' }}>
                           Update Status
                         </div>
@@ -513,7 +525,6 @@ export default function TrackingPage() {
                           }}
                         />
                       </div>
-                    )}
 
                     {/* Vehicle Info */}
                     <div style={{
@@ -544,6 +555,16 @@ export default function TrackingPage() {
                         </div>
                       )}
                     </div>
+
+                    {/* Sales Order PDF */}
+                    {vehicle.netsuite_sales_order_id && vehicle.sales_order_number && (
+                      <div style={{ marginBottom: '12px' }}>
+                        <SalesOrderPdf
+                          salesOrderId={vehicle.netsuite_sales_order_id}
+                          salesOrderNumber={vehicle.sales_order_number}
+                        />
+                      </div>
+                    )}
 
                     {/* Installer Assignment */}
                     {isAdmin && (

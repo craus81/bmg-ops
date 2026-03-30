@@ -236,8 +236,8 @@ export default function AiChat() {
             width: '72px',
             height: '72px',
             borderRadius: '50%',
-            background: '#0a1128',
-            border: '2px solid #1e3a8a',
+            background: 'var(--card)',
+            border: '2px solid var(--border-strong, rgba(255,255,255,0.1))',
             cursor: 'pointer',
             boxShadow: '0 4px 20px rgba(30,58,138,0.5)',
             zIndex: 1000,
@@ -270,8 +270,8 @@ export default function AiChat() {
           width: '340px',
           maxHeight: '500px',
           borderRadius: '16px',
-          background: '#0b1219',
-          border: '1px solid #1e2d3d',
+          background: 'var(--card)',
+          border: '1px solid var(--border)',
           boxShadow: '0 8px 40px rgba(0,0,0,0.5)',
           zIndex: 1000,
           display: 'flex',
@@ -281,16 +281,16 @@ export default function AiChat() {
           {/* Header with mascot */}
           <div style={{
             padding: '8px 14px',
-            borderBottom: '1px solid #1e2d3d',
+            borderBottom: '1px solid var(--border)',
             display: 'flex',
             justifyContent: 'space-between',
             alignItems: 'center',
-            background: 'linear-gradient(135deg, rgba(15,27,61,0.8), rgba(10,17,40,0.8))',
+            background: 'var(--subtle-bg)',
           }}>
             <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
               <div style={{
                 width: '48px', height: '48px', borderRadius: '50%',
-                background: '#060d1f', border: '1.5px solid #1e3a8a',
+                background: 'var(--input-bg)', border: '1.5px solid var(--border)',
                 display: 'flex', alignItems: 'center', justifyContent: 'center',
                 overflow: 'hidden',
               }}>
@@ -410,8 +410,8 @@ export default function AiChat() {
                 <div style={{
                   padding: '8px 12px',
                   borderRadius: msg.role === 'user' ? '12px 12px 2px 12px' : '12px 12px 12px 2px',
-                  background: msg.role === 'user' ? '#3b82f6' : '#1a2535',
-                  color: msg.role === 'user' ? '#fff' : '#c8d6e5',
+                  background: msg.role === 'user' ? '#3b82f6' : 'var(--subtle-bg)',
+                  color: msg.role === 'user' ? '#fff' : 'var(--text-body)',
                   fontSize: '12px',
                   lineHeight: '1.5',
                   whiteSpace: 'pre-wrap',
@@ -434,7 +434,7 @@ export default function AiChat() {
           {/* Input */}
           <div style={{
             padding: '10px 12px',
-            borderTop: '1px solid #1e2d3d',
+            borderTop: '1px solid var(--border)',
             display: 'flex',
             gap: '8px',
           }}>
@@ -450,8 +450,8 @@ export default function AiChat() {
                 flex: 1,
                 padding: '8px 12px',
                 borderRadius: '8px',
-                border: '1px solid #1e2d3d',
-                background: '#0a1018',
+                border: '1px solid var(--border)',
+                background: 'var(--input-bg)',
                 color: 'var(--text-body)',
                 fontSize: '12px',
                 outline: 'none',
@@ -464,7 +464,7 @@ export default function AiChat() {
                 padding: '8px 14px',
                 borderRadius: '8px',
                 border: 'none',
-                background: sending || !input.trim() ? '#1e2d3d' : '#3b82f6',
+                background: sending || !input.trim() ? 'var(--border)' : '#3b82f6',
                 color: '#fff',
                 fontSize: '12px',
                 fontWeight: 700,

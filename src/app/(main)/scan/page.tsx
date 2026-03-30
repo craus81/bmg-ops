@@ -317,7 +317,7 @@ export default function ScanPage() {
       <div>
         <div style={{ fontSize: '11px', fontWeight: 700, color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.5px', marginBottom: '12px' }}>Scan VIN</div>
         {activePart && (
-          <div style={{ background: 'var(--card)', border: '1px solid #1e2d3d', borderRadius: '14px', padding: '10px 12px', marginBottom: '12px' }}>
+          <div style={{ background: 'var(--card)', border: '1px solid var(--border)', borderRadius: '14px', padding: '10px 12px', marginBottom: '12px' }}>
             <div style={{ fontWeight: 800, fontSize: '14px' }}>{activePart.part_number} - {activePart.end_customer}</div>
             <div style={{ fontSize: '11px', color: 'var(--text-muted)', marginTop: '1px' }}>{activePart.graphic_package} | {activePart.vehicle_type}</div>
           </div>
@@ -359,7 +359,7 @@ export default function ScanPage() {
           </div>
         ) : (
           <div>
-            <input ref={ref} type="text" value={vin} onChange={(e) => setVin(e.target.value.toUpperCase().replace(/[^A-HJ-NPR-Z0-9]/gi, '').slice(0, 17))} placeholder="Enter or scan 17-char VIN" maxLength={17} style={{ width: '100%', padding: '10px 12px', borderRadius: '10px', border: '1px solid #1e2d3d', background: 'var(--card)', color: 'var(--text-primary)', fontSize: '18px', letterSpacing: '2px', fontWeight: 700, textAlign: 'center' }} onKeyDown={(e) => { if (e.key === 'Enter' && vin.length === 17) handleScan(); }} />
+            <input ref={ref} type="text" value={vin} onChange={(e) => setVin(e.target.value.toUpperCase().replace(/[^A-HJ-NPR-Z0-9]/gi, '').slice(0, 17))} placeholder="Enter or scan 17-char VIN" maxLength={17} style={{ width: '100%', padding: '10px 12px', borderRadius: '10px', border: '1px solid var(--border)', background: 'var(--card)', color: 'var(--text-primary)', fontSize: '18px', letterSpacing: '2px', fontWeight: 700, textAlign: 'center' }} onKeyDown={(e) => { if (e.key === 'Enter' && vin.length === 17) handleScan(); }} />
             <div style={{ textAlign: 'center', marginTop: '4px', fontSize: '13px', fontWeight: 600, color: vin.length === 17 ? 'var(--success)' : 'var(--text-muted)' }}>{vin.length}/17 {vin.length === 17 ? 'OK' : ''}</div>
           </div>
         )}
@@ -367,7 +367,7 @@ export default function ScanPage() {
         {mode === 'text' && (
           <button onClick={handleScan} disabled={vin.length !== 17} style={{ width: '100%', padding: '16px', borderRadius: '14px', marginTop: '14px', background: vin.length === 17 ? 'var(--navy)' : 'var(--border)', color: '#fff', fontSize: '16px', fontWeight: 800, opacity: vin.length === 17 ? 1 : 0.4, border: 'none' }}>Decode VIN</button>
         )}
-        <button onClick={() => router.push('/home')} style={{ width: '100%', padding: '10px', borderRadius: '14px', marginTop: '8px', border: '1px solid #1e2d3d', background: 'transparent', color: 'var(--text-secondary)', fontSize: '13px', fontWeight: 700 }}>Back</button>
+        <button onClick={() => router.push('/home')} style={{ width: '100%', padding: '10px', borderRadius: '14px', marginTop: '8px', border: '1px solid var(--border)', background: 'transparent', color: 'var(--text-secondary)', fontSize: '13px', fontWeight: 700 }}>Back</button>
       </div>
     );
   }
@@ -375,7 +375,7 @@ export default function ScanPage() {
   if (loading) {
     return (
       <div style={{ textAlign: 'center', padding: '60px 0' }}>
-        <div style={{ width: '36px', height: '36px', border: '3px solid #1e2d3d', borderTopColor: 'var(--navy)', borderRadius: '50%', margin: '0 auto', animation: 'spin 1s linear infinite' }} />
+        <div style={{ width: '36px', height: '36px', border: '3px solid var(--border)', borderTopColor: 'var(--navy)', borderRadius: '50%', margin: '0 auto', animation: 'spin 1s linear infinite' }} />
         <div style={{ color: 'var(--navy-light)', fontWeight: 600, marginTop: '12px' }}>Decoding VIN...</div>
       </div>
     );
@@ -488,7 +488,7 @@ export default function ScanPage() {
         <div style={{ marginTop: '16px', display: 'flex', flexDirection: 'column', gap: '8px' }}>
           <button onClick={() => router.push('/photos?id=' + savedVehicleId)} style={{ width: '100%', padding: '14px', borderRadius: '14px', background: 'var(--navy)', color: '#fff', fontWeight: 800, fontSize: '14px', border: 'none' }}>Add Completion Photos</button>
           <button onClick={() => resetScan()} style={{ width: '100%', padding: '16px', borderRadius: '14px', background: 'var(--navy)', color: '#fff', fontWeight: 800, fontSize: '16px', border: 'none' }}>Scan Next VIN</button>
-          <button onClick={() => router.push('/home')} style={{ width: '100%', padding: '10px', borderRadius: '14px', border: '1px solid #1e2d3d', background: 'transparent', color: 'var(--text-secondary)', fontSize: '13px', fontWeight: 700 }}>Home</button>
+          <button onClick={() => router.push('/home')} style={{ width: '100%', padding: '10px', borderRadius: '14px', border: '1px solid var(--border)', background: 'transparent', color: 'var(--text-secondary)', fontSize: '13px', fontWeight: 700 }}>Home</button>
         </div>
       </div>
     );
@@ -497,14 +497,14 @@ export default function ScanPage() {
   return (
     <div>
       <div style={{ fontSize: '11px', fontWeight: 700, color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.5px', marginBottom: '12px' }}>Vehicle Identified</div>
-      <div style={{ background: 'var(--card)', border: '1px solid #2a4a6f', borderRadius: '14px', padding: '18px', marginBottom: '12px' }}>
+      <div style={{ background: 'var(--card)', border: '1px solid var(--border)', borderRadius: '14px', padding: '18px', marginBottom: '12px' }}>
         <div style={{ fontSize: '10px', color: 'var(--text-muted)', fontWeight: 600, letterSpacing: '1px', textTransform: 'uppercase' }}>VIN</div>
         <div style={{ fontSize: '13px', fontFamily: 'monospace', color: 'var(--navy-light)', fontWeight: 700, letterSpacing: '1.5px', marginTop: '2px', marginBottom: '10px' }}>{result.vin}</div>
         <div style={{ fontSize: '20px', fontWeight: 800 }}>{title || 'Unknown'}</div>
         {result.vehicle.bodyClass && <div style={{ fontSize: '13px', color: 'var(--text-secondary)', marginTop: '2px' }}>{result.vehicle.bodyClass}</div>}
       </div>
       {activePart && (
-        <div style={{ background: 'var(--card)', border: '1px solid #1e2d3d', borderRadius: '14px', padding: '10px 12px', marginBottom: '12px', fontSize: '12px' }}>
+        <div style={{ background: 'var(--card)', border: '1px solid var(--border)', borderRadius: '14px', padding: '10px 12px', marginBottom: '12px', fontSize: '12px' }}>
           <span style={{ color: 'var(--text-muted)' }}>Recording as </span>
           <span style={{ fontWeight: 700, color: 'var(--navy)' }}>{activePart.part_number}</span>
           <span style={{ color: 'var(--text-muted)' }}> - {activePart.end_customer}</span>
@@ -513,7 +513,7 @@ export default function ScanPage() {
       {error && <div style={{ marginTop: '8px', padding: '8px 12px', background: 'var(--error-bg)', border: '1px solid rgba(248,113,113,0.15)', borderRadius: '10px', color: 'var(--error)', fontSize: '12px', marginBottom: '12px' }}>{error}</div>}
       <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
         <button onClick={handleConfirm} style={{ width: '100%', padding: '16px', borderRadius: '14px', background: 'var(--success)', color: '#fff', fontSize: '16px', fontWeight: 800, border: 'none' }}>Confirm - Record Vehicle</button>
-        <button onClick={() => { setResult(null); setVin(''); }} style={{ width: '100%', padding: '10px', borderRadius: '14px', border: '1px solid #1e2d3d', background: 'transparent', color: 'var(--text-secondary)', fontSize: '13px', fontWeight: 700 }}>Scan Different VIN</button>
+        <button onClick={() => { setResult(null); setVin(''); }} style={{ width: '100%', padding: '10px', borderRadius: '14px', border: '1px solid var(--border)', background: 'transparent', color: 'var(--text-secondary)', fontSize: '13px', fontWeight: 700 }}>Scan Different VIN</button>
       </div>
     </div>
   );

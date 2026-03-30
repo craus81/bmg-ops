@@ -410,7 +410,7 @@ export default function EstimatesPage() {
 
   const inputStyle: React.CSSProperties = {
     width: '100%', padding: '8px 10px', borderRadius: '8px',
-    border: '1px solid #2a3a4d', background: '#0f1720',
+    border: '1px solid var(--border)', background: 'var(--input-bg)',
     color: 'var(--text-body)', fontSize: '12px',
   };
   const labelStyle: React.CSSProperties = {
@@ -421,7 +421,7 @@ export default function EstimatesPage() {
   if (loading) {
     return (
       <div style={{ textAlign: 'center', padding: '40px 0' }}>
-        <div style={{ width: '36px', height: '36px', border: '3px solid #1e2d3d', borderTopColor: theme.orange, borderRadius: '50%', margin: '0 auto', animation: 'spin 1s linear infinite' }} />
+        <div style={{ width: '36px', height: '36px', border: '3px solid var(--border)', borderTopColor: theme.orange, borderRadius: '50%', margin: '0 auto', animation: 'spin 1s linear infinite' }} />
         <div style={{ color: 'var(--text-label)', marginTop: '12px', fontSize: '13px', fontWeight: 600 }}>Loading estimates...</div>
       </div>
     );
@@ -455,7 +455,7 @@ export default function EstimatesPage() {
           placeholder="Search estimates..."
           value={search}
           onChange={e => setSearch(e.target.value)}
-          style={{ ...inputStyle, marginBottom: '12px', background: '#141e2b', border: '1px solid #1e2d3d' }}
+          style={{ ...inputStyle, marginBottom: '12px', background: 'var(--subtle-bg)', border: '1px solid var(--border)' }}
         />
 
         {filteredEstimates.length === 0 ? (
@@ -473,7 +473,7 @@ export default function EstimatesPage() {
                   style={{
                     width: '100%', textAlign: 'left',
                     borderRadius: '12px', overflow: 'hidden',
-                    border: `1px solid #1e2d3d`, background: '#141e2b',
+                    border: `1px solid var(--border)`, background: 'var(--subtle-bg)',
                     padding: '12px', cursor: 'pointer',
                   }}
                 >
@@ -577,7 +577,7 @@ export default function EstimatesPage() {
             {showCustDropdown && custResults.length > 0 && (
               <div style={{
                 position: 'absolute', top: '100%', left: 0, right: 0, zIndex: 50,
-                background: '#141e2b', border: '1px solid #2a3a4d', borderRadius: '8px',
+                background: 'var(--subtle-bg)', border: '1px solid var(--border)', borderRadius: '8px',
                 maxHeight: '200px', overflowY: 'auto', marginTop: '2px',
               }}>
                 {custResults.map(c => (
@@ -593,7 +593,7 @@ export default function EstimatesPage() {
                     style={{
                       width: '100%', textAlign: 'left', padding: '8px 10px', border: 'none',
                       background: 'transparent', color: 'var(--text-body)', fontSize: '12px',
-                      cursor: 'pointer', borderBottom: '1px solid #1e2d3d',
+                      cursor: 'pointer', borderBottom: '1px solid var(--border)',
                     }}
                   >
                     <div style={{ fontWeight: 700 }}>{c.company_name}</div>
@@ -652,12 +652,12 @@ export default function EstimatesPage() {
               placeholder="Search parts catalog to add..."
               value={partSearch}
               onChange={e => setPartSearch(e.target.value)}
-              style={{ ...inputStyle, background: '#141e2b' }}
+              style={{ ...inputStyle, background: 'var(--subtle-bg)' }}
             />
             {partResults.length > 0 && (
               <div style={{
                 position: 'absolute', top: '100%', left: 0, right: 0, zIndex: 50,
-                background: '#141e2b', border: '1px solid #2a3a4d', borderRadius: '8px',
+                background: 'var(--subtle-bg)', border: '1px solid var(--border)', borderRadius: '8px',
                 maxHeight: '250px', overflowY: 'auto', marginTop: '2px',
               }}>
                 {partResults.map(p => (
@@ -667,7 +667,7 @@ export default function EstimatesPage() {
                     style={{
                       width: '100%', textAlign: 'left', padding: '8px 10px', border: 'none',
                       background: 'transparent', color: 'var(--text-body)', fontSize: '12px',
-                      cursor: 'pointer', borderBottom: '1px solid #1e2d3d',
+                      cursor: 'pointer', borderBottom: '1px solid var(--border)',
                     }}
                   >
                     <div style={{ display: 'flex', justifyContent: 'space-between' }}>
@@ -690,7 +690,7 @@ export default function EstimatesPage() {
 
         {/* Line item rows */}
         {lines.length === 0 ? (
-          <div style={{ textAlign: 'center', padding: '20px', color: 'var(--text-label)', fontSize: '12px', border: '1px dashed #1e2d3d', borderRadius: '8px' }}>
+          <div style={{ textAlign: 'center', padding: '20px', color: 'var(--text-label)', fontSize: '12px', border: '1px dashed var(--border)', borderRadius: '8px' }}>
             Search for parts above or add a custom line item
           </div>
         ) : (
@@ -712,7 +712,7 @@ export default function EstimatesPage() {
                 style={{
                   display: 'grid', gridTemplateColumns: '1fr 2fr 60px 80px 80px 60px 30px',
                   gap: '4px', alignItems: 'center',
-                  padding: '6px 0', borderBottom: '1px solid #1e2d3d',
+                  padding: '6px 0', borderBottom: '1px solid var(--border)',
                 }}
               >
                 {line.is_custom ? (
@@ -782,7 +782,7 @@ export default function EstimatesPage() {
 
       {/* ── LABOR & TAX SECTION ── */}
       <div style={{
-        background: '#141e2b', border: '1px solid #1e2d3d', borderRadius: '10px',
+        background: 'var(--subtle-bg)', border: '1px solid var(--border)', borderRadius: '10px',
         padding: '12px', marginBottom: '12px',
       }}>
         <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: '8px', marginBottom: '10px' }}>
@@ -799,7 +799,7 @@ export default function EstimatesPage() {
           </div>
           <div>
             <div style={labelStyle}>Auto Labor Hours</div>
-            <div style={{ padding: '8px 10px', borderRadius: '8px', border: '1px solid #2a3a4d', background: '#0a0f14', color: '#fbbf24', fontSize: '12px', fontWeight: 700 }}>
+            <div style={{ padding: '8px 10px', borderRadius: '8px', border: '1px solid var(--border)', background: 'var(--input-bg)', color: '#fbbf24', fontSize: '12px', fontWeight: 700 }}>
               {autoLaborHours.toFixed(1)}h
               <span style={{ color: 'var(--text-label)', fontWeight: 400, fontSize: '10px', marginLeft: '4px' }}>(from parts)</span>
             </div>
@@ -851,7 +851,7 @@ export default function EstimatesPage() {
         </div>
 
         {/* Totals */}
-        <div style={{ borderTop: '1px solid #1e2d3d', paddingTop: '10px' }}>
+        <div style={{ borderTop: '1px solid var(--border)', paddingTop: '10px' }}>
           <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '12px', color: 'var(--text-body)', marginBottom: '4px' }}>
             <span>Parts Subtotal</span>
             <span>{fmt(subtotal)}</span>
@@ -874,7 +874,7 @@ export default function EstimatesPage() {
           )}
           <div style={{
             display: 'flex', justifyContent: 'space-between', fontSize: '16px', fontWeight: 800,
-            color: 'var(--text-body)', borderTop: '1px solid #2a3a4d', paddingTop: '8px', marginTop: '4px',
+            color: 'var(--text-body)', borderTop: '1px solid var(--border)', paddingTop: '8px', marginTop: '4px',
           }}>
             <span>Total</span>
             <span>{fmt(grandTotal)}</span>
@@ -911,7 +911,7 @@ export default function EstimatesPage() {
             disabled={saving}
             style={{
               flex: 1, padding: '12px', borderRadius: '10px',
-              background: saving ? '#1e2d3d' : '#22c55e',
+              background: saving ? 'var(--subtle-bg)' : '#22c55e',
               color: '#fff', fontWeight: 800, fontSize: '13px', border: 'none', cursor: 'pointer',
               opacity: saving ? 0.5 : 1,
             }}
@@ -922,7 +922,7 @@ export default function EstimatesPage() {
             onClick={() => { setView('list'); }}
             style={{
               padding: '12px 20px', borderRadius: '10px',
-              background: 'transparent', border: '1px solid #1e2d3d',
+              background: 'transparent', border: '1px solid var(--border)',
               color: 'var(--text-body)', fontWeight: 700, fontSize: '13px', cursor: 'pointer',
             }}
           >
@@ -937,7 +937,7 @@ export default function EstimatesPage() {
             disabled={pushing || syncing}
             style={{
               width: '100%', padding: '12px', borderRadius: '10px',
-              background: (pushing || syncing) ? '#1e2d3d' : 'rgba(167,139,250,0.15)',
+              background: (pushing || syncing) ? 'var(--subtle-bg)' : 'rgba(167,139,250,0.15)',
               border: '1px solid rgba(167,139,250,0.3)',
               color: '#a78bfa', fontWeight: 800, fontSize: '13px', cursor: 'pointer',
               opacity: (pushing || syncing) ? 0.5 : 1,
@@ -954,7 +954,7 @@ export default function EstimatesPage() {
             disabled={deleting}
             style={{
               width: '100%', padding: '10px', borderRadius: '10px',
-              background: deleting ? '#1e2d3d' : 'rgba(248,113,113,0.08)',
+              background: deleting ? 'var(--subtle-bg)' : 'rgba(248,113,113,0.08)',
               border: '1px solid rgba(248,113,113,0.2)',
               color: '#f87171', fontWeight: 700, fontSize: '12px', cursor: 'pointer',
               opacity: deleting ? 0.5 : 1,
