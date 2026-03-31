@@ -146,8 +146,8 @@ function MascotSvg({ thinking, size = 52 }: { thinking?: boolean; size?: number 
 }
 
 export default function AiChat() {
-  const { isAdmin, isSales, isGraphicsProduction, profile } = useAuth();
-  const hasAccess = isAdmin || isSales || isGraphicsProduction;
+  const { isAdmin, isSales, isGraphicsProduction, isInstaller, profile } = useAuth();
+  const hasAccess = isAdmin || isSales || isGraphicsProduction || isInstaller;
   const [isOpen, setIsOpen] = useState(false);
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [input, setInput] = useState('');
@@ -351,6 +351,8 @@ export default function AiChat() {
                 <div style={{ fontSize: '12px', color: 'var(--text-label)', lineHeight: '1.5' }}>
                   {isAdmin
                     ? 'Ask about data, graphics jobs, customers, or tell me to do something'
+                    : isInstaller
+                    ? 'Ask about vehicle specs, install techniques, or your assigned vehicles'
                     : isGraphicsProduction
                     ? 'Ask about graphics jobs, production status, or schedules'
                     : 'Ask about customers, estimates, or graphics status'}
@@ -361,6 +363,11 @@ export default function AiChat() {
                     'Who are our top 5 customers this year?',
                     'Create a graphics job for 10 unit number decals for Masterack',
                     'What open invoices does Enterprise have?',
+                  ] : isInstaller ? [
+                    'What vehicles are assigned to me?',
+                    'What are the wrap dimensions for a 2024 Ford Transit?',
+                    'How do I install graphics on a curved surface?',
+                    'What vehicles are in the shop right now?',
                   ] : isGraphicsProduction ? [
                     'What jobs are behind schedule?',
                     'How many jobs are in each status right now?',

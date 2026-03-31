@@ -837,6 +837,7 @@ async function callClaude(apiKey: string, messages: any[], systemPrompt?: string
 export async function POST(req: NextRequest) {
   try {
     const { messages, userRole } = await req.json() as { messages: Message[]; userRole?: string };
+    const isInstallerRole = userRole === 'installer' || userRole === 'field_tech' || userRole === 'shop_tech';
 
     if (!messages?.length) {
       return NextResponse.json({ error: 'No messages provided' }, { status: 400 });
@@ -857,6 +858,8 @@ export async function POST(req: NextRequest) {
       systemPrompt += '\n\nIMPORTANT: This user has a "field_tech" role. They work outside the O\'Fallon shop as an installer/contractor. They can scan VINs and view vehicles assigned to them. Focus on helping them with VIN lookups, vehicle status, and installation details.';
     } else if (userRole === 'shop_tech') {
       systemPrompt += '\n\nIMPORTANT: This user has a "shop_tech" role. They work at the O\'Fallon shop. They can view the fleet dashboard, vehicle tracking, and shop status. Focus on helping them with vehicle statuses, production pipeline, and shop operations.';
+    } else if (userRole === 'installer') {
+      systemPrompt += '\n\nIMPORTANT: This user has an "installer" role. They are a vehicle graphics installer.\n\nACCESS RESTRICTIONS:\n- You MUST NOT query NetSuite at all — no sales orders, invoices, customer financials, or pricing data. If they ask about financials, politely say you cannot access that data with their role.\n- You CAN query the BMG Fleet app database (supabase) for: fleet_checkins (vehicle tracking), vehicle_notes, vehicle_photos, job_assignments, graphics_jobs, vehicle_templates (wrap dimensions and panel data), profiles, and schedule_entries.\n- You CAN search the knowledge base for: installation SOPs, vehicle specs, wrap dimensions, techniques, and product information.\n- You CANNOT create estimates, view customer financial data, or access admin settings.\n\nFOCUS AREAS — help installers with:\n- Vehicle wrap dimensions and panel sizes (search vehicle_templates)\n- Installation techniques and best practices (search knowledge base)\n- Their assigned vehicles and current status\n- Vehicles currently in the shop (fleet_checkins)\n- Installation notes and photos for vehicles\n- Graphics job details (what graphics are needed for a vehicle)\n- Product specs from the knowledge base (SOPs, specs, pricing guides for materials)';
     }
 
     const claudeMessages: any[] = messages.map(m => ({ role: m.role, content: m.content }));
@@ -882,6 +885,12 @@ export async function POST(req: NextRequest) {
       // Execute all queries/actions
       const results: Record<string, any> = {};
       for (const q of queryBlock.queries) {
+        // Server-side enforcement: block NetSuite queries for installer roles
+        if (isInstallerRole && q.source === 'netsuite') {
+          results[q.id] = { error: 'NetSuite access is not available for your role. Use the knowledge base or app database instead.' };
+          totalQueriesExecuted++;
+          continue;
+        }
         try {
           results[q.id] = await executeQuery(q);
           totalQueriesExecuted++;
