@@ -600,6 +600,10 @@ function BulkVINUpload() {
   const [selectedLocation, setSelectedLocation] = useState<string>('');
   const [customers, setCustomers] = useState<string[]>([]);
   const [selectedCustomer, setSelectedCustomer] = useState<string>('');
+  const [nsSearchOpen, setNsSearchOpen] = useState(false);
+  const [nsSearchTerm, setNsSearchTerm] = useState('');
+  const [nsSearchResults, setNsSearchResults] = useState<{ id: string; company_name: string; entity_id: string; email: string | null }[]>([]);
+  const [nsSearching, setNsSearching] = useState(false);
 
   // Editing state
   const [editingRow, setEditingRow] = useState<number | null>(null);
@@ -648,6 +652,31 @@ function BulkVINUpload() {
   }, []);
 
   const selectedPart = catalogItems.find(c => c.id === selectedPartId) || null;
+
+  // Search NetSuite customers
+  const searchNetSuiteCustomers = async (term: string) => {
+    if (term.length < 2) { setNsSearchResults([]); return; }
+    setNsSearching(true);
+    try {
+      const res = await fetch(`/api/netsuite/customers/search?q=${encodeURIComponent(term)}`);
+      const data = await res.json();
+      setNsSearchResults(data.results || []);
+    } catch { setNsSearchResults([]); }
+    setNsSearching(false);
+  };
+
+  // Add a NetSuite customer to the local dropdown
+  const addNetSuiteCustomer = (name: string) => {
+    const trimmed = name.trim();
+    if (!trimmed) return;
+    if (!customers.includes(trimmed)) {
+      setCustomers(prev => [...prev, trimmed].sort());
+    }
+    setSelectedCustomer(trimmed);
+    setNsSearchOpen(false);
+    setNsSearchTerm('');
+    setNsSearchResults([]);
+  };
 
   // Parse VINs from text input
   const parseFromText = async (text: string) => {
@@ -1419,16 +1448,68 @@ function BulkVINUpload() {
         <label style={{ display: 'block', fontSize: '10px', fontWeight: 700, color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.5px', marginBottom: '6px' }}>
           Customer
         </label>
-        <select
-          value={selectedCustomer}
-          onChange={(e) => setSelectedCustomer(e.target.value)}
-          style={{ width: '100%', padding: '10px 12px', borderRadius: '10px', border: '1px solid var(--border)', background: 'var(--card)', color: 'var(--text-primary)', fontSize: '13px', fontWeight: 600 }}
-        >
-          <option value="">No customer selected</option>
-          {customers.map(c => (
-            <option key={c} value={c}>{c}</option>
-          ))}
-        </select>
+        <div style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>
+          <select
+            value={selectedCustomer}
+            onChange={(e) => setSelectedCustomer(e.target.value)}
+            style={{ flex: 1, padding: '10px 12px', borderRadius: '10px', border: '1px solid var(--border)', background: 'var(--card)', color: 'var(--text-primary)', fontSize: '13px', fontWeight: 600 }}
+          >
+            <option value="">No customer selected</option>
+            {customers.map(c => (
+              <option key={c} value={c}>{c}</option>
+            ))}
+          </select>
+          <button
+            onClick={() => setNsSearchOpen(!nsSearchOpen)}
+            style={{ padding: '10px 14px', borderRadius: '10px', border: '1px dashed var(--border)', background: nsSearchOpen ? 'var(--tab-active-bg)' : 'var(--card)', color: 'var(--text-primary)', fontSize: '12px', fontWeight: 700, cursor: 'pointer', whiteSpace: 'nowrap' }}
+          >
+            + NetSuite
+          </button>
+        </div>
+        {nsSearchOpen && (
+          <div style={{ marginTop: '8px', padding: '12px', borderRadius: '10px', border: '1px solid var(--border)', background: 'var(--subtle-bg)' }}>
+            <div style={{ fontSize: '10px', fontWeight: 700, color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.5px', marginBottom: '6px' }}>
+              Search NetSuite Customers
+            </div>
+            <input
+              type="text"
+              value={nsSearchTerm}
+              onChange={(e) => {
+                setNsSearchTerm(e.target.value);
+                searchNetSuiteCustomers(e.target.value);
+              }}
+              placeholder="Type customer name..."
+              autoFocus
+              style={{ width: '100%', padding: '8px 12px', borderRadius: '8px', border: '1px solid var(--border)', background: 'var(--input-bg)', color: 'var(--text-primary)', fontSize: '13px', boxSizing: 'border-box' }}
+            />
+            {nsSearching && (
+              <div style={{ fontSize: '11px', color: 'var(--text-muted)', padding: '8px 0' }}>Searching NetSuite...</div>
+            )}
+            {!nsSearching && nsSearchResults.length > 0 && (
+              <div style={{ maxHeight: '200px', overflowY: 'auto', marginTop: '6px', display: 'flex', flexDirection: 'column', gap: '2px' }}>
+                {nsSearchResults.map((c) => (
+                  <button
+                    key={c.id}
+                    onClick={() => addNetSuiteCustomer(c.company_name)}
+                    style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '8px 10px', borderRadius: '8px', border: 'none', background: customers.includes(c.company_name) ? 'var(--tab-active-bg)' : 'var(--card)', cursor: 'pointer', textAlign: 'left', width: '100%' }}
+                  >
+                    <div>
+                      <div style={{ fontSize: '13px', fontWeight: 600, color: 'var(--text-primary)' }}>{c.company_name}</div>
+                      {c.entity_id && <div style={{ fontSize: '10px', color: 'var(--text-muted)' }}>{c.entity_id}</div>}
+                    </div>
+                    {customers.includes(c.company_name)
+                      ? <span style={{ fontSize: '10px', color: 'var(--success)', fontWeight: 700 }}>Added</span>
+                      : <span style={{ fontSize: '10px', color: 'var(--text-muted)' }}>+ Add</span>
+                    }
+                  </button>
+                ))}
+              </div>
+            )}
+            {!nsSearching && nsSearchTerm.length >= 2 && nsSearchResults.length === 0 && (
+              <div style={{ fontSize: '11px', color: 'var(--text-muted)', padding: '8px 0' }}>No customers found</div>
+            )}
+          </div>
+        )}
       </div>
 
       {/* Part Selection */}
