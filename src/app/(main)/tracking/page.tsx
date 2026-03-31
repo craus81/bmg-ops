@@ -151,12 +151,19 @@ export default function TrackingPage() {
         return;
       }
 
-      await supabase.from('vehicle_photos').insert({
+      const { error: dbErr } = await supabase.from('vehicle_photos').insert({
         vehicle_id: vehicleId,
         storage_path: path,
         photo_type: 'completion',
         taken_by: user?.id,
       });
+
+      if (dbErr) {
+        console.error('Photo DB insert error:', dbErr.message);
+        alert('Photo saved to storage but failed to record: ' + dbErr.message);
+        setPhotoUploading(false);
+        return;
+      }
 
       await loadPhotos(vehicleId);
     } catch (err: any) {
