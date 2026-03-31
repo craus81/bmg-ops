@@ -70,18 +70,18 @@ export async function POST(req: NextRequest) {
 
     if (action === 'clear-paths') {
       // Null out all file_path values so broken download links stop showing
-      const { error, count } = await supabase
+      const { error, data } = await supabase
         .from('knowledge_docs')
         .update({ file_path: null, file_name: null, file_type: null, file_size: null })
         .not('file_path', 'is', null)
-        .select('id', { count: 'exact', head: true });
+        .select('id');
 
       if (error) return NextResponse.json({ error: error.message }, { status: 500 });
 
       return NextResponse.json({
         success: true,
         action: 'clear-paths',
-        updatedCount: count,
+        updatedCount: data?.length || 0,
         message: 'Cleared all file_path references. Knowledge base search still works using extracted content.',
       });
     }
