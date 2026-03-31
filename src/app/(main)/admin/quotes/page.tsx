@@ -1430,8 +1430,7 @@ function NewQuote({ onCreated, editQuote }: { onCreated: () => void; editQuote?:
 
       if (!hasDimensions && selectedTemplate.template_image_path) {
         try {
-          const { data } = supabase.storage
-            .from('vehicle-templates')
+          const { data } = storage.from('vehicle-templates')
             .getPublicUrl(selectedTemplate.template_image_path);
 
           setTemplatePreviewUrl(data.publicUrl);
@@ -1522,8 +1521,7 @@ function NewQuote({ onCreated, editQuote }: { onCreated: () => void; editQuote?:
         throw new Error('Selected template has no image. Please upload a PNG preview first.');
       }
 
-      const { data } = supabase.storage
-        .from('vehicle-templates')
+      const { data } = storage.from('vehicle-templates')
         .getPublicUrl(selectedTemplate.template_image_path);
 
       setTemplatePreviewUrl(data.publicUrl);
@@ -1602,8 +1600,7 @@ function NewQuote({ onCreated, editQuote }: { onCreated: () => void; editQuote?:
       let proofPath = isEditing ? (editQuote.proof_image_path || '') : '';
       if (proofFile) {
         const fileName = `${quoteNum}-proof-${Date.now()}.${proofFile.name.split('.').pop()}`;
-        const { error: uploadError } = await supabase.storage
-          .from('quote-proofs')
+        const { error: uploadError } = await storage.from('quote-proofs')
           .upload(fileName, proofFile);
         if (!uploadError) proofPath = fileName;
       }
