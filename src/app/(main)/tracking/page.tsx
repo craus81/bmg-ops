@@ -44,6 +44,20 @@ export default function TrackingPage() {
   const photoInputRef = useRef<HTMLInputElement>(null);
   const cameraInputRef = useRef<HTMLInputElement>(null);
 
+  // Notes state
+  interface VehicleNote {
+    id: string;
+    vehicle_id: string;
+    note: string;
+    created_by: string;
+    created_by_name: string;
+    created_at: string;
+  }
+  const [vehicleNotes, setVehicleNotes] = useState<Record<string, VehicleNote[]>>({});
+  const [notesLoading, setNotesLoading] = useState<Record<string, boolean>>({});
+  const [noteInput, setNoteInput] = useState<Record<string, string>>({});
+  const [noteSaving, setNoteSaving] = useState(false);
+
   useEffect(() => {
     loadVehicles();
     loadProfiles();
@@ -58,6 +72,7 @@ export default function TrackingPage() {
       loadHistory(vehicleId);
       loadAssignments(vehicleId);
       loadPhotos(vehicleId);
+      loadNotes(vehicleId);
     }
   }, [loading]);
 
@@ -165,6 +180,42 @@ export default function TrackingPage() {
     await loadPhotos(vehicleId);
   };
 
+  const loadNotes = async (vehicleId: string) => {
+    setNotesLoading(prev => ({ ...prev, [vehicleId]: true }));
+    const { data } = await supabase
+      .from('vehicle_notes')
+      .select('*')
+      .eq('vehicle_id', vehicleId)
+      .order('created_at', { ascending: false });
+    if (data) setVehicleNotes(prev => ({ ...prev, [vehicleId]: data }));
+    setNotesLoading(prev => ({ ...prev, [vehicleId]: false }));
+  };
+
+  const addNote = async (vehicleId: string) => {
+    const text = (noteInput[vehicleId] || '').trim();
+    if (!text) return;
+    setNoteSaving(true);
+    try {
+      await supabase.from('vehicle_notes').insert({
+        vehicle_id: vehicleId,
+        note: text,
+        created_by: user?.id,
+        created_by_name: profile?.full_name || 'Unknown',
+      });
+      setNoteInput(prev => ({ ...prev, [vehicleId]: '' }));
+      await loadNotes(vehicleId);
+    } catch (err) {
+      console.error('Note save error:', err);
+    }
+    setNoteSaving(false);
+  };
+
+  const deleteNote = async (vehicleId: string, noteId: string) => {
+    if (!confirm('Delete this note?')) return;
+    await supabase.from('vehicle_notes').delete().eq('id', noteId);
+    await loadNotes(vehicleId);
+  };
+
   const saveAssignments = async (vehicleId: string, userIds: string[]) => {
     setVehicleAssignments(prev => ({ ...prev, [vehicleId]: userIds }));
     setAssignmentSaving(true);
@@ -200,6 +251,7 @@ export default function TrackingPage() {
       loadHistory(id);
       loadAssignments(id);
       loadPhotos(id);
+      loadNotes(id);
     }
   };
 
@@ -838,6 +890,88 @@ export default function TrackingPage() {
                         />
                       </div>
                     )}
+
+                    {/* Install Notes */}
+                    <div style={{ marginBottom: '12px' }}>
+                      <div style={{
+                        fontSize: '10px', fontWeight: 700, color: 'var(--text-muted)',
+                        textTransform: 'uppercase', letterSpacing: '0.5px', marginBottom: '6px',
+                      }}>
+                        Install Notes {(vehicleNotes[vehicle.id]?.length || 0) > 0 ? `(${vehicleNotes[vehicle.id].length})` : ''}
+                      </div>
+
+                      {/* Add note input */}
+                      <div style={{ display: 'flex', gap: '6px', marginBottom: '8px' }}>
+                        <input
+                          type="text"
+                          value={noteInput[vehicle.id] || ''}
+                          onChange={(e) => setNoteInput(prev => ({ ...prev, [vehicle.id]: e.target.value }))}
+                          onClick={(e) => e.stopPropagation()}
+                          onKeyDown={(e) => { if (e.key === 'Enter' && !noteSaving) addNote(vehicle.id); }}
+                          placeholder="Add a note... (measurements, brackets, techniques, etc.)"
+                          style={{
+                            flex: 1, padding: '8px 10px', borderRadius: '8px',
+                            border: '1px solid var(--border)', background: 'var(--input-bg)',
+                            color: 'var(--text-primary)', fontSize: '12px', boxSizing: 'border-box',
+                          }}
+                        />
+                        <button
+                          onClick={(e) => { e.stopPropagation(); addNote(vehicle.id); }}
+                          disabled={noteSaving || !(noteInput[vehicle.id] || '').trim()}
+                          style={{
+                            padding: '8px 14px', borderRadius: '8px', fontSize: '12px', fontWeight: 700,
+                            background: (noteInput[vehicle.id] || '').trim() ? 'rgba(59,130,246,0.15)' : 'var(--subtle-bg)',
+                            border: `1px solid ${(noteInput[vehicle.id] || '').trim() ? 'rgba(59,130,246,0.3)' : 'var(--border)'}`,
+                            color: (noteInput[vehicle.id] || '').trim() ? '#3b82f6' : 'var(--text-muted)',
+                            cursor: noteSaving || !(noteInput[vehicle.id] || '').trim() ? 'default' : 'pointer',
+                          }}
+                        >
+                          {noteSaving ? '...' : 'Add'}
+                        </button>
+                      </div>
+
+                      {/* Notes list */}
+                      {notesLoading[vehicle.id] ? (
+                        <div style={{ fontSize: '12px', color: 'var(--text-muted)', padding: '8px 0' }}>Loading notes...</div>
+                      ) : (vehicleNotes[vehicle.id]?.length || 0) === 0 ? (
+                        <div style={{
+                          fontSize: '12px', color: 'var(--text-muted)', padding: '12px',
+                          textAlign: 'center', borderRadius: '8px',
+                          background: 'var(--subtle-bg)', border: '1px dashed var(--border)',
+                        }}>
+                          No install notes yet
+                        </div>
+                      ) : (
+                        <div style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
+                          {vehicleNotes[vehicle.id].map(n => (
+                            <div key={n.id} style={{
+                              padding: '8px 10px', borderRadius: '8px',
+                              background: 'var(--subtle-bg)', border: '1px solid var(--border)',
+                            }}>
+                              <div style={{ fontSize: '12px', color: 'var(--text-primary)', whiteSpace: 'pre-wrap', wordBreak: 'break-word' }}>
+                                {n.note}
+                              </div>
+                              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginTop: '4px' }}>
+                                <div style={{ fontSize: '10px', color: 'var(--text-muted)' }}>
+                                  {n.created_by_name} · {new Date(n.created_at).toLocaleDateString([], { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' })}
+                                </div>
+                                {n.created_by === user?.id && (
+                                  <button
+                                    onClick={(e) => { e.stopPropagation(); deleteNote(vehicle.id, n.id); }}
+                                    style={{
+                                      fontSize: '10px', color: 'var(--text-muted)', background: 'none',
+                                      border: 'none', cursor: 'pointer', padding: '2px 4px',
+                                    }}
+                                  >
+                                    Delete
+                                  </button>
+                                )}
+                              </div>
+                            </div>
+                          ))}
+                        </div>
+                      )}
+                    </div>
 
                     {/* Status History */}
                     <div>
