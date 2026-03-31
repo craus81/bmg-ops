@@ -109,6 +109,7 @@ export default function FleetPage() {
   const stopCamera = () => {
     if (intervalRef.current) { clearInterval(intervalRef.current); intervalRef.current = null; }
     if ((streamRef as any)?._refocusInterval) { clearInterval((streamRef as any)._refocusInterval); (streamRef as any)._refocusInterval = null; }
+    if ((streamRef as any)?._focusKickInterval) { clearInterval((streamRef as any)._focusKickInterval); (streamRef as any)._focusKickInterval = null; }
     if (streamRef.current) { streamRef.current.getTracks().forEach(t => t.stop()); streamRef.current = null; }
     if (videoRef.current) videoRef.current.srcObject = null;
     setCameraActive(false);
@@ -135,13 +136,10 @@ export default function FleetPage() {
       reader.setHints(hints);
       readerRef.current = reader;
 
+      // Start with basic constraints — don't include focusMode in getUserMedia
+      // as some Android devices reject or ignore it entirely
       const stream = await navigator.mediaDevices.getUserMedia({
-        video: {
-          facingMode: 'environment', width: { ideal: 1920 }, height: { ideal: 1080 },
-          // @ts-ignore — focusMode is valid for Android but not in all TS definitions
-          focusMode: 'continuous',
-          advanced: [{ focusMode: 'continuous' } as any],
-        }
+        video: { facingMode: 'environment', width: { ideal: 1280 }, height: { ideal: 720 } }
       });
       streamRef.current = stream;
       if (!videoRef.current) return;
@@ -149,24 +147,40 @@ export default function FleetPage() {
       await videoRef.current.play();
       setCameraActive(true);
 
-      // Android autofocus: use track capabilities to force continuous focus
+      // Android autofocus: apply focus AFTER stream starts via track constraints
       const track = stream.getVideoTracks()[0];
       if (track) {
         try {
           const caps = track.getCapabilities?.() as any;
-          if (caps?.focusMode?.includes?.('continuous')) {
+          const supportedModes: string[] = caps?.focusMode || [];
+          console.log('[Camera] Focus capabilities:', supportedModes);
+
+          if (supportedModes.includes('continuous')) {
             await (track as any).applyConstraints({ advanced: [{ focusMode: 'continuous' }] });
-          } else if (caps?.focusMode?.includes?.('auto')) {
-            // Fallback: trigger auto-focus periodically
+            console.log('[Camera] Set continuous focus');
+          } else if (supportedModes.includes('single-shot')) {
+            // Trigger single-shot autofocus repeatedly
             const refocusInterval = setInterval(async () => {
               try {
-                await (track as any).applyConstraints({ advanced: [{ focusMode: 'auto' }] });
-              } catch { /* ignore */ }
-            }, 1500);
-            // Store for cleanup
+                await (track as any).applyConstraints({ advanced: [{ focusMode: 'single-shot' }] });
+              } catch { }
+            }, 2000);
             (streamRef as any)._refocusInterval = refocusInterval;
+            console.log('[Camera] Using periodic single-shot focus');
           }
-        } catch { /* focus control not supported */ }
+
+          // Also try ImageCapture API for devices that support it
+          if (typeof ImageCapture !== 'undefined') {
+            const imgCapture = new (ImageCapture as any)(track);
+            const photoCapabilities = await imgCapture.getPhotoCapabilities?.().catch(() => null);
+            console.log('[Camera] ImageCapture available, photo caps:', photoCapabilities);
+            // grabFrame forces many Android cameras to autofocus
+            const focusKick = setInterval(async () => {
+              try { await imgCapture.grabFrame(); } catch { }
+            }, 3000);
+            (streamRef as any)._focusKickInterval = focusKick;
+          }
+        } catch (e) { console.log('[Camera] Focus setup error:', e); }
       }
 
       intervalRef.current = setInterval(() => scanFrame(zxingLibrary), 200);

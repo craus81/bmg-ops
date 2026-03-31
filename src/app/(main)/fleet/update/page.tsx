@@ -57,6 +57,7 @@ export default function FleetUpdatePage() {
   const stopCamera = () => {
     if (intervalRef.current) { clearInterval(intervalRef.current); intervalRef.current = null; }
     if ((streamRef as any)?._refocusInterval) { clearInterval((streamRef as any)._refocusInterval); (streamRef as any)._refocusInterval = null; }
+    if ((streamRef as any)?._focusKickInterval) { clearInterval((streamRef as any)._focusKickInterval); (streamRef as any)._focusKickInterval = null; }
     if (streamRef.current) { streamRef.current.getTracks().forEach(t => t.stop()); streamRef.current = null; }
     if (videoRef.current) videoRef.current.srcObject = null;
     setCameraActive(false);
@@ -80,12 +81,7 @@ export default function FleetUpdatePage() {
       readerRef.current = reader;
 
       const stream = await navigator.mediaDevices.getUserMedia({
-        video: {
-          facingMode: 'environment', width: { ideal: 1920 }, height: { ideal: 1080 },
-          // @ts-ignore — focusMode is valid for Android but not in all TS definitions
-          focusMode: 'continuous',
-          advanced: [{ focusMode: 'continuous' } as any],
-        },
+        video: { facingMode: 'environment', width: { ideal: 1280 }, height: { ideal: 720 } },
       });
       streamRef.current = stream;
       if (!videoRef.current) return;
@@ -93,18 +89,26 @@ export default function FleetUpdatePage() {
       await videoRef.current.play();
       setCameraActive(true);
 
-      // Android autofocus: use track capabilities to force continuous focus
+      // Android autofocus: apply focus AFTER stream starts via track constraints
       const track = stream.getVideoTracks()[0];
       if (track) {
         try {
           const caps = track.getCapabilities?.() as any;
-          if (caps?.focusMode?.includes?.('continuous')) {
+          const supportedModes: string[] = caps?.focusMode || [];
+          if (supportedModes.includes('continuous')) {
             await (track as any).applyConstraints({ advanced: [{ focusMode: 'continuous' }] });
-          } else if (caps?.focusMode?.includes?.('auto')) {
+          } else if (supportedModes.includes('single-shot')) {
             const refocusInterval = setInterval(async () => {
-              try { await (track as any).applyConstraints({ advanced: [{ focusMode: 'auto' }] }); } catch { }
-            }, 1500);
+              try { await (track as any).applyConstraints({ advanced: [{ focusMode: 'single-shot' }] }); } catch { }
+            }, 2000);
             (streamRef as any)._refocusInterval = refocusInterval;
+          }
+          if (typeof ImageCapture !== 'undefined') {
+            const imgCapture = new (ImageCapture as any)(track);
+            const focusKick = setInterval(async () => {
+              try { await imgCapture.grabFrame(); } catch { }
+            }, 3000);
+            (streamRef as any)._focusKickInterval = focusKick;
           }
         } catch { }
       }
