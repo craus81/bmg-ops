@@ -181,6 +181,16 @@ export default function KnowledgePage() {
     return { success: true, extractedLength: data.extractedLength || 0, usedVision: data.usedVision || false };
   };
 
+  // Check if a doc with good AI content already exists for a given title
+  const existingDocHasGoodContent = (title: string): boolean => {
+    const match = docs.find(d => d.title === title);
+    if (!match) return false;
+    const c = (match.content || '').trim();
+    // Placeholder content starts with [ or is very short
+    if (!c || c.startsWith('[') || c.length < 50) return false;
+    return true;
+  };
+
   const handleUpload = async () => {
     if (uploadFiles.length === 0) return;
 
@@ -191,6 +201,26 @@ export default function KnowledgePage() {
     if (oversized.length > 0) {
       alert(`These files are too large (non-PDF files must be under ${MAX_API_SIZE} MB):\n${oversized.map(f => f.name).join('\n')}`);
       return;
+    }
+
+    // Check for duplicates — warn but allow
+    const dupeNames: string[] = [];
+    for (const f of uploadFiles) {
+      const baseName = f.name.replace(/\.[^/.]+$/, '').replace(/[_-]/g, ' ');
+      const matchingDocs = docs.filter(d =>
+        d.title === baseName ||
+        d.title.startsWith(baseName + ' (pages ')
+      );
+      if (matchingDocs.length > 0) {
+        dupeNames.push(`${f.name} (${matchingDocs.length} existing chunk${matchingDocs.length > 1 ? 's' : ''})`);
+      }
+    }
+
+    if (dupeNames.length > 0) {
+      const proceed = confirm(
+        `These files already exist in the knowledge base:\n\n${dupeNames.join('\n')}\n\nOnly chunks with missing or failed AI content will be re-processed (saving API credits).\n\nContinue?`
+      );
+      if (!proceed) return;
     }
 
     // Capture values before closing modal
@@ -231,46 +261,37 @@ export default function KnowledgePage() {
           const chunks = await splitPdfIntoChunks(fileToUpload, PAGES_PER_CHUNK);
           const totalChunks = chunks.length;
           let chunksFailed = 0;
+          let chunksSkipped = 0;
 
           for (let i = 0; i < chunks.length; i++) {
-            const chunkSizeMB = chunks[i].size / (1024 * 1024);
             const startPage = i * PAGES_PER_CHUNK + 1;
             const endPage = Math.min((i + 1) * PAGES_PER_CHUNK, totalChunks * PAGES_PER_CHUNK);
             const chunkTitle = `${formTitle} (pages ${startPage}-${endPage})`;
 
+            // Skip chunks that already have good AI-extracted content
+            if (existingDocHasGoodContent(chunkTitle)) {
+              chunksSkipped++;
+              setBgStatus({
+                message: `"${fileName}" — chunk ${i + 1}/${totalChunks} already processed, skipping...`,
+                type: 'processing',
+              });
+              continue;
+            }
+
             setBgStatus({
               message: totalFiles > 1
                 ? `"${fileName}" chunk ${i + 1}/${totalChunks} (file ${filesCompleted + 1}/${totalFiles})...`
-                : `"${fileName}" — analyzing chunk ${i + 1} of ${totalChunks}...`,
+                : `"${fileName}" — analyzing chunk ${i + 1} of ${totalChunks}${chunksSkipped > 0 ? ` (${chunksSkipped} skipped)` : ''}...`,
               type: 'processing',
             });
 
             try {
-              if (chunkSizeMB > MAX_API_SIZE) {
-                // Chunk still too large — store without AI extraction
-                const timestamp = Date.now();
-                const safeName = chunks[i].name.replace(/[^a-zA-Z0-9._-]/g, '_');
-                const storagePath = `uploads/${timestamp}_${safeName}`;
-                await storage.from('knowledge-files').upload(storagePath, chunks[i], {
-                  contentType: 'application/pdf', upsert: false,
-                });
-                await fetch('/api/knowledge/upload', {
-                  method: 'POST',
-                  headers: { 'Content-Type': 'application/json' },
-                  body: JSON.stringify({
-                    title: chunkTitle, category: formCategory, tags: formTags,
-                    userId: user?.id || '', fileName: chunks[i].name,
-                    fileType: 'application/pdf', fileSize: chunks[i].size,
-                    storagePath, largeFile: true,
-                  }),
-                });
-              } else {
-                const result = await uploadSingleFile(chunks[i], chunkTitle, formCategory, formTags);
-                if (!result.success) {
-                  chunksFailed++;
-                  console.error(`Chunk ${i + 1} of "${fileName}" failed:`, result.error);
-                  setBgStatus({ message: `"${fileName}" chunk ${i + 1}/${totalChunks} failed: ${result.error}`, type: 'error' });
-                }
+              // All chunks go through uploadSingleFile which handles R2 upload + AI extraction
+              const result = await uploadSingleFile(chunks[i], chunkTitle, formCategory, formTags);
+              if (!result.success) {
+                chunksFailed++;
+                console.error(`Chunk ${i + 1} of "${fileName}" failed:`, result.error);
+                setBgStatus({ message: `"${fileName}" chunk ${i + 1}/${totalChunks} failed: ${result.error}`, type: 'error' });
               }
             } catch (chunkErr: any) {
               chunksFailed++;
@@ -283,13 +304,22 @@ export default function KnowledgePage() {
             loadDocs();
           }
 
-          if (chunksFailed > 0 && chunksFailed === totalChunks) {
+          if (chunksSkipped === totalChunks) {
+            // All chunks already existed with good content
+            filesCompleted++;
+          } else if (chunksFailed > 0 && chunksFailed === (totalChunks - chunksSkipped)) {
             filesFailed++;
           } else {
             filesCompleted++;
           }
         } else {
-          // Normal single file (under 4MB)
+          // Normal single file (under 4MB) — check for existing content
+          if (existingDocHasGoodContent(formTitle)) {
+            setBgStatus({ message: `"${fileName}" already processed, skipping...`, type: 'processing' });
+            filesCompleted++;
+            continue;
+          }
+
           const result = await uploadSingleFile(fileToUpload, formTitle, formCategory, formTags);
           if (!result.success) {
             filesFailed++;
