@@ -159,8 +159,8 @@ export default function TrackingPage() {
       });
 
       if (dbErr) {
-        console.error('Photo DB insert error:', dbErr.message, 'vehicleId:', vehicleId);
-        alert(`Photo DB error: ${dbErr.message}\n\nVehicle ID: ${vehicleId}\nUser ID: ${user?.id || 'none'}`);
+        console.error('Photo DB insert error:', dbErr.message);
+        alert('Photo upload failed: ' + dbErr.message);
         setPhotoUploading(false);
         return;
       }
