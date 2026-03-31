@@ -15,95 +15,149 @@ interface VehicleDimensions {
   panels?: { name: string; width_in: number; height_in: number; area_sqft: number }[];
 }
 
-function buildPrompt(dims?: VehicleDimensions): string {
-  // Build the calibration section from known dimensions
-  let calibrationSection = '';
+interface CalibrationRegion {
+  panel_name: string;
+  width_in: number;
+  height_in: number;
+  // Where this panel appears on the proof image (percentage of image)
+  img_x_pct: number;
+  img_y_pct: number;
+  img_w_pct: number;
+  img_h_pct: number;
+  // Derived scale: inches per 1% of image
+  in_per_pct_x: number;
+  in_per_pct_y: number;
+}
 
-  if (dims && dims.panels && dims.panels.length > 0) {
-    calibrationSection = `
-═══════════════════════════════════════════
-KNOWN VEHICLE DIMENSIONS — USE THESE AS YOUR GROUND TRUTH
-═══════════════════════════════════════════
+function buildCalibrationPrompt(dims: VehicleDimensions): string {
+  const panelList = (dims.panels || []).map(p =>
+    `- ${p.name}: ${p.width_in}" wide × ${p.height_in}" tall`
+  ).join('\n');
 
+  return `You are a vehicle wrap estimation expert analyzing a PROOF/DESIGN image.
+
+KNOWN VEHICLE PANELS:
 Vehicle: ${dims.make || ''} ${dims.model || ''} ${dims.year || ''}
-Overall Length: ${dims.overall_length_in ? dims.overall_length_in + '"' : 'unknown'}
-Overall Height: ${dims.overall_height_in ? dims.overall_height_in + '"' : 'unknown'}
-Wheelbase: ${dims.wheelbase_in ? dims.wheelbase_in + '"' : 'unknown'}
+${panelList}
 
-PANEL DIMENSIONS (exact measurements):
-${dims.panels.map(p => `- ${p.name}: ${p.width_in}" wide × ${p.height_in}" tall (${p.area_sqft} sq ft)`).join('\n')}
+YOUR TASK HAS TWO PARTS:
 
-CRITICAL: You MUST use these panel dimensions as your reference to calculate graphic element sizes.
-For example, if the driver side panel is 222" wide and a graphic spans 25% of that panel width, the graphic is 55.5" wide.
+═══ PART 1: CALIBRATION ═══
+Find where each known vehicle panel appears on this proof image. For each panel visible in the image, provide a tight bounding box around the FULL paintable surface of that panel (excluding windows, bumpers, wheels).
 
-MEASUREMENT METHOD:
-1. Identify which panel each graphic element is on (driver side, passenger side, rear, etc.)
-2. Estimate what PERCENTAGE of that panel's width and height the graphic covers
-3. MULTIPLY: element_width = panel_width × (percentage / 100)
-4. MULTIPLY: element_height = panel_height × (percentage / 100)
-5. Show your math in the description field
+═══ PART 2: GRAPHIC ELEMENTS ═══
+Identify each individual graphic element (logo, stripe, text, decal, large graphic panel, etc.) and provide its bounding box on the proof image. Do NOT calculate inch dimensions — just provide the image position.
 
-DO NOT eyeball dimensions. DO NOT guess. Calculate from the known panel sizes.
-`;
-  } else {
-    calibrationSection = `
-NOTE: No exact vehicle dimensions were provided. Use the template drawing's labeled dimensions (if visible) to estimate scale. If no dimensions are labeled, use the 1:20 scale convention and estimate based on typical vehicle proportions.
-`;
-  }
-
-  return `You are a vehicle wrap estimation expert. You are analyzing two images:
-
-1. A VEHICLE TEMPLATE - a technical line drawing showing the vehicle's body panels from multiple angles (driver side, passenger side, front, rear, top).
-
-2. A PROOF/DESIGN FILE - showing the proposed vinyl graphics wrap design on the same vehicle. The colored/designed areas represent vinyl graphics. White/uncolored areas are bare paint. Dark tinted areas are windows. Gray areas at the bottom are bumpers.
-${calibrationSection}
-Your task: Identify each INDIVIDUAL GRAPHIC ELEMENT in the proof and calculate its bounding box dimensions in inches.
-
-For each distinct graphic piece (logo, stripe, text block, side graphic panel, door graphic, etc.):
-1. Give it a descriptive name (e.g. "Driver Side Logo", "Rear Door Text", "Side Body Stripe")
-2. Classify the type: "logo", "stripe", "text_block", "graphic", "full_panel", "decal"
-3. Identify which vehicle panel it's on (e.g. "Driver Side", "Passenger Side", "Rear Doors")
-4. Estimate what percentage of that panel's width and height the element covers
-5. Calculate WIDTH and HEIGHT in INCHES using: element_size = panel_size × (percentage / 100)
-6. Show your calculation in the description
-7. Estimate where this element appears on the PROOF image as a percentage bounding box:
-   - crop_x_pct: left edge as % of image width (0-100)
-   - crop_y_pct: top edge as % of image height (0-100)
-   - crop_w_pct: width as % of image width (0-100)
-   - crop_h_pct: height as % of image height (0-100)
+For each graphic element:
+1. Descriptive name (e.g. "Driver Side Logo", "Rear Door Text")
+2. Type: "logo", "stripe", "text_block", "graphic", "full_panel", "decal"
+3. Which vehicle panel it sits on (must match a panel name from the calibration)
+4. Its bounding box on the proof image as percentages (0-100)
 
 IMPORTANT RULES:
-- Identify EACH separate printed piece, not panels
-- If the same graphic appears on both sides (driver + passenger), list them as SEPARATE elements
-- Measure the BOUNDING BOX (smallest rectangle enclosing the graphic), not the total panel
-- Be conservative — measure only actual vinyl, not bare paint or windows
-- ALWAYS show your math: "Logo spans ~20% of driver side width (222"), so 222 × 0.20 = 44.4 inches"
+- Identify EACH separate printed piece, not whole panels
+- If the same graphic appears on both sides, list as SEPARATE elements
+- Measure the BOUNDING BOX of the graphic only, not bare paint
+- Be conservative — only include actual vinyl/printed areas
+- Panel calibration boxes should cover the entire paintable body panel surface
 
-Return JSON only, no other text, in this exact format:
+Return JSON only, no other text:
 {
+  "calibration_regions": [
+    {
+      "panel_name": "Driver Side",
+      "img_x_pct": 5.0,
+      "img_y_pct": 2.0,
+      "img_w_pct": 45.0,
+      "img_h_pct": 30.0
+    }
+  ],
   "graphic_elements": [
     {
       "element_name": "Driver Side Company Logo",
       "element_type": "logo",
       "panel": "Driver Side",
-      "width_in": 44.4,
-      "height_in": 14.4,
-      "width_pct_of_panel": 20.0,
-      "height_pct_of_panel": 20.0,
-      "description": "KinderCare logo on driver side upper body. Spans ~20% of driver side width (222 × 0.20 = 44.4in) and ~20% of height (72 × 0.20 = 14.4in).",
+      "crop_x_pct": 10.0,
+      "crop_y_pct": 5.0,
+      "crop_w_pct": 15.0,
+      "crop_h_pct": 8.0
+    }
+  ]
+}`;
+}
+
+function buildLegacyPrompt(): string {
+  return `You are a vehicle wrap estimation expert. Analyze this proof/design image.
+
+Identify each individual graphic element and provide its bounding box position on the image.
+
+For each element:
+1. Descriptive name
+2. Type: "logo", "stripe", "text_block", "graphic", "full_panel", "decal"
+3. Which side/panel it's on
+4. Bounding box as percentages of image (0-100)
+5. Estimate width and height in inches based on typical vehicle proportions
+
+Return JSON only:
+{
+  "graphic_elements": [
+    {
+      "element_name": "Driver Side Logo",
+      "element_type": "logo",
+      "panel": "Driver Side",
+      "width_in": 44.0,
+      "height_in": 14.0,
       "crop_x_pct": 10.0,
       "crop_y_pct": 5.0,
       "crop_w_pct": 25.0,
       "crop_h_pct": 12.0
     }
   ],
-  "total_vinyl_sqft": 45.2,
-  "total_vehicle_sqft": 350.0,
-  "overall_coverage_pct": 12.9,
-  "confidence": "high",
-  "notes": "Measurements calculated from known panel dimensions.",
-  "analysis_version": "dimension_calibrated"
+  "total_vinyl_sqft": 45.0,
+  "confidence": "medium",
+  "notes": "Estimated without calibration dimensions."
 }`;
+}
+
+function calculateCalibratedDimensions(
+  calibrationRegions: CalibrationRegion[],
+  elements: any[]
+): any[] {
+  // For each element, find which calibration region it belongs to and calculate inches
+  return elements.map(el => {
+    const panelName = (el.panel || '').toLowerCase();
+
+    // Find matching calibration region
+    const region = calibrationRegions.find(r =>
+      r.panel_name.toLowerCase() === panelName ||
+      panelName.includes(r.panel_name.toLowerCase()) ||
+      r.panel_name.toLowerCase().includes(panelName)
+    );
+
+    if (region && el.crop_w_pct && el.crop_h_pct) {
+      // Calculate inches using calibration scale
+      const width_in = Math.round(el.crop_w_pct * region.in_per_pct_x * 10) / 10;
+      const height_in = Math.round(el.crop_h_pct * region.in_per_pct_y * 10) / 10;
+
+      return {
+        ...el,
+        width_in,
+        height_in,
+        width_pct_of_panel: Math.round((el.crop_w_pct / region.img_w_pct) * 100 * 10) / 10,
+        height_pct_of_panel: Math.round((el.crop_h_pct / region.img_h_pct) * 100 * 10) / 10,
+        calibrated: true,
+        calibration_panel: region.panel_name,
+      };
+    }
+
+    // No calibration match — return as-is (inches will be 0 if not provided)
+    return {
+      ...el,
+      width_in: el.width_in || 0,
+      height_in: el.height_in || 0,
+      calibrated: false,
+    };
+  });
 }
 
 export async function POST(request: NextRequest) {
@@ -134,13 +188,12 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    const prompt = buildPrompt(dims);
+    const prompt = hasDimensions ? buildCalibrationPrompt(dims!) : buildLegacyPrompt();
 
-    // Build message content — only include template image if no dimensions
+    // Build message content
     const messageContent: any[] = [];
 
     if (templateImageBase64 && !hasDimensions) {
-      // Legacy flow: template image + proof
       messageContent.push(
         { type: 'text', text: 'Here is the vehicle TEMPLATE (technical drawing with panel dimensions):' },
         { type: 'image', source: { type: 'base64', media_type: templateMediaType || 'image/png', data: templateImageBase64 } },
@@ -181,13 +234,12 @@ export async function POST(request: NextRequest) {
     const aiText = result.content?.[0]?.text || '';
 
     // Parse the JSON from Claude's response
-    let analysis;
+    let parsed;
     try {
-      // Strip markdown code fences if present
       let cleanText = aiText.replace(/^```(?:json)?\s*\n?/i, '').replace(/\n?```\s*$/i, '');
       const jsonMatch = cleanText.match(/\{[\s\S]*\}/);
       if (jsonMatch) {
-        analysis = JSON.parse(jsonMatch[0]);
+        parsed = JSON.parse(jsonMatch[0]);
       } else {
         throw new Error('No JSON found in AI response');
       }
@@ -199,54 +251,70 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    // Post-process: validate dimensions against known panels if available
-    if (vehicleDimensions?.panels?.length && analysis?.graphic_elements) {
-      const panelMap: Record<string, { width_in: number; height_in: number }> = {};
-      for (const p of vehicleDimensions.panels) {
-        panelMap[p.name.toLowerCase()] = { width_in: p.width_in, height_in: p.height_in };
+    // Build calibration regions from AI panel detection + known dimensions
+    let calibrationRegions: CalibrationRegion[] = [];
+
+    if (hasDimensions && parsed.calibration_regions) {
+      const panelMap: Record<string, { width_in: number; height_in: number; area_sqft: number }> = {};
+      for (const p of dims!.panels!) {
+        panelMap[p.name.toLowerCase()] = p;
       }
 
-      for (const el of analysis.graphic_elements) {
-        // If the AI provided panel percentages, recalculate dimensions as a sanity check
-        if (el.width_pct_of_panel && el.height_pct_of_panel && el.panel) {
-          const panelKey = el.panel.toLowerCase();
-          // Try exact match first, then partial match
+      calibrationRegions = parsed.calibration_regions
+        .map((cr: any) => {
+          const panelKey = (cr.panel_name || '').toLowerCase();
           const panel = panelMap[panelKey] ||
             Object.entries(panelMap).find(([k]) => panelKey.includes(k) || k.includes(panelKey))?.[1];
 
-          if (panel) {
-            const calcWidth = Math.round(panel.width_in * (el.width_pct_of_panel / 100) * 10) / 10;
-            const calcHeight = Math.round(panel.height_in * (el.height_pct_of_panel / 100) * 10) / 10;
+          if (!panel || !cr.img_w_pct || !cr.img_h_pct) return null;
 
-            // If AI's inch values deviate >20% from the calculated values, override
-            if (Math.abs(el.width_in - calcWidth) / calcWidth > 0.2) {
-              el.width_in_original = el.width_in;
-              el.width_in = calcWidth;
-              el.corrected = true;
-            }
-            if (Math.abs(el.height_in - calcHeight) / calcHeight > 0.2) {
-              el.height_in_original = el.height_in;
-              el.height_in = calcHeight;
-              el.corrected = true;
-            }
-          }
-        }
-      }
-
-      // Recalculate total vinyl sqft from corrected element dimensions
-      const totalSqIn = analysis.graphic_elements.reduce(
-        (sum: number, el: any) => sum + (el.width_in * el.height_in), 0
-      );
-      analysis.total_vinyl_sqft = Math.round(totalSqIn / 144 * 10) / 10;
-
-      const totalVehicleSqft = vehicleDimensions.panels.reduce(
-        (sum: number, p: any) => sum + (p.area_sqft || 0), 0
-      );
-      if (totalVehicleSqft > 0) {
-        analysis.total_vehicle_sqft = totalVehicleSqft;
-        analysis.overall_coverage_pct = Math.round(analysis.total_vinyl_sqft / totalVehicleSqft * 1000) / 10;
-      }
+          return {
+            panel_name: cr.panel_name,
+            width_in: panel.width_in,
+            height_in: panel.height_in,
+            img_x_pct: cr.img_x_pct || 0,
+            img_y_pct: cr.img_y_pct || 0,
+            img_w_pct: cr.img_w_pct,
+            img_h_pct: cr.img_h_pct,
+            // Key calculation: how many inches per 1% of image
+            in_per_pct_x: panel.width_in / cr.img_w_pct,
+            in_per_pct_y: panel.height_in / cr.img_h_pct,
+          } as CalibrationRegion;
+        })
+        .filter(Boolean) as CalibrationRegion[];
     }
+
+    // Calculate element dimensions using calibration
+    let elements = parsed.graphic_elements || [];
+    if (calibrationRegions.length > 0) {
+      elements = calculateCalibratedDimensions(calibrationRegions, elements);
+    }
+
+    // Calculate totals
+    const totalSqIn = elements.reduce(
+      (sum: number, el: any) => sum + ((el.width_in || 0) * (el.height_in || 0)), 0
+    );
+    const totalVinylSqft = Math.round(totalSqIn / 144 * 10) / 10;
+
+    let totalVehicleSqft = 0;
+    if (dims?.panels?.length) {
+      totalVehicleSqft = dims.panels.reduce((sum, p) => sum + (p.area_sqft || 0), 0);
+    }
+
+    const analysis = {
+      graphic_elements: elements,
+      calibration_regions: calibrationRegions,
+      total_vinyl_sqft: totalVinylSqft,
+      total_vehicle_sqft: totalVehicleSqft || parsed.total_vehicle_sqft || 0,
+      overall_coverage_pct: totalVehicleSqft > 0
+        ? Math.round(totalVinylSqft / totalVehicleSqft * 1000) / 10
+        : (parsed.overall_coverage_pct || 0),
+      confidence: calibrationRegions.length > 0 ? 'calibrated' : (parsed.confidence || 'low'),
+      notes: calibrationRegions.length > 0
+        ? `Calibrated using ${calibrationRegions.length} panel region(s): ${calibrationRegions.map(r => r.panel_name).join(', ')}.`
+        : (parsed.notes || ''),
+      analysis_version: 'calibrated_v2',
+    };
 
     return NextResponse.json({ analysis });
   } catch (error: any) {

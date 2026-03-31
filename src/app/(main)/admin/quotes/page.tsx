@@ -642,6 +642,19 @@ function NewQuote({ onCreated, editQuote }: { onCreated: () => void; editQuote?:
   const touchStartTime = useRef<number>(0);
   const touchMovedEnough = useRef(false);
 
+  // Calibration regions — maps panel edges on proof image to known dimensions
+  const [calibrationRegions, setCalibrationRegions] = useState<{
+    panel_name: string;
+    width_in: number;
+    height_in: number;
+    img_x_pct: number;
+    img_y_pct: number;
+    img_w_pct: number;
+    img_h_pct: number;
+    in_per_pct_x: number; // inches per 1% of image width
+    in_per_pct_y: number; // inches per 1% of image height
+  }[]>([]);
+
   // Draw new manual element state
   const [drawingNewElement, setDrawingNewElement] = useState(false);
   const [newElementStart, setNewElementStart] = useState<{ x: number; y: number } | null>(null);
@@ -781,7 +794,7 @@ function NewQuote({ onCreated, editQuote }: { onCreated: () => void; editQuote?:
     const wPct = (sw / rect.width) * 100;
     const hPct = (sh / rect.height) * 100;
 
-    const dims = boxPctToInches(wPct, hPct);
+    const dims = boxPctToInches(wPct, hPct, xPct, yPct);
     const nextNum = analysis.graphic_elements.length + 1;
     const newEl: GraphicElement = {
       element_name: `Custom Element ${nextNum}`,
@@ -802,9 +815,38 @@ function NewQuote({ onCreated, editQuote }: { onCreated: () => void; editQuote?:
     setDrawingNewElement(false);
   }
 
-  // Calculate real-world inches from a bounding box's percentage of the proof image
-  // Uses the template's overall vehicle dimensions as the scale reference
-  function boxPctToInches(widthPct: number, heightPct: number): { width_in: number; height_in: number } | null {
+  // Calculate real-world inches from a bounding box's position/size on the proof image.
+  // Uses calibration regions (panel edges mapped to known dimensions) for accuracy.
+  // Falls back to overall vehicle dimensions if no calibration is available.
+  function boxPctToInches(
+    widthPct: number, heightPct: number,
+    boxXPct?: number, boxYPct?: number
+  ): { width_in: number; height_in: number } | null {
+    // Try calibration regions first — find which region this box overlaps most
+    if (calibrationRegions.length > 0 && boxXPct !== undefined && boxYPct !== undefined) {
+      const boxCenterX = boxXPct + widthPct / 2;
+      const boxCenterY = boxYPct + heightPct / 2;
+
+      // Find the calibration region whose center is closest to the box center
+      let bestRegion = calibrationRegions[0];
+      let bestDist = Infinity;
+      for (const region of calibrationRegions) {
+        const regionCenterX = region.img_x_pct + region.img_w_pct / 2;
+        const regionCenterY = region.img_y_pct + region.img_h_pct / 2;
+        const dist = Math.hypot(boxCenterX - regionCenterX, boxCenterY - regionCenterY);
+        if (dist < bestDist) {
+          bestDist = dist;
+          bestRegion = region;
+        }
+      }
+
+      return {
+        width_in: Math.round(widthPct * bestRegion.in_per_pct_x * 10) / 10,
+        height_in: Math.round(heightPct * bestRegion.in_per_pct_y * 10) / 10,
+      };
+    }
+
+    // Fallback: use overall vehicle dimensions
     if (!selectedTemplate) return null;
     const vehicleW = selectedTemplate.overall_length_in;
     const vehicleH = selectedTemplate.overall_height_in;
@@ -888,9 +930,9 @@ function NewQuote({ onCreated, editQuote }: { onCreated: () => void; editQuote?:
     const { idx, mode, origBox } = bboxDragging;
     const el = analysis.graphic_elements[idx];
 
-    // If resized (not just moved), recalculate physical dimensions from the box size
-    if (mode !== 'move') {
-      const fromTemplate = boxPctToInches(el.crop_w_pct || 0, el.crop_h_pct || 0);
+    // Recalculate physical dimensions from the box size (for both move and resize)
+    {
+      const fromTemplate = boxPctToInches(el.crop_w_pct || 0, el.crop_h_pct || 0, el.crop_x_pct || 0, el.crop_y_pct || 0);
       if (fromTemplate) {
         // Use template-scaled dimensions — the box IS the size
         el.width_in = fromTemplate.width_in;
@@ -1020,7 +1062,7 @@ function NewQuote({ onCreated, editQuote }: { onCreated: () => void; editQuote?:
       const el = analysis.graphic_elements[pinchIdx.current];
       const orig = pinchStartBox.current;
       if (el.crop_w_pct && el.crop_h_pct) {
-        const fromTemplate = boxPctToInches(el.crop_w_pct, el.crop_h_pct);
+        const fromTemplate = boxPctToInches(el.crop_w_pct, el.crop_h_pct, el.crop_x_pct || 0, el.crop_y_pct || 0);
         if (fromTemplate) {
           el.width_in = fromTemplate.width_in;
           el.height_in = fromTemplate.height_in;
@@ -1486,6 +1528,11 @@ function NewQuote({ onCreated, editQuote }: { onCreated: () => void; editQuote?:
       }
 
       const result = await response.json();
+
+      // Store calibration regions for accurate dimension calculations
+      if (result.analysis.calibration_regions?.length) {
+        setCalibrationRegions(result.analysis.calibration_regions);
+      }
 
       setAnalysis(result.analysis);
 
@@ -2275,6 +2322,41 @@ function NewQuote({ onCreated, editQuote }: { onCreated: () => void; editQuote?:
                 style={{ width: '100%', display: 'block', pointerEvents: 'none' }}
                 draggable={false}
               />
+              {/* Calibration status badge */}
+              {calibrationRegions.length > 0 && (
+                <div style={{
+                  position: 'absolute', top: 6, right: 6, zIndex: 25,
+                  background: 'rgba(16,185,129,0.85)', color: '#fff',
+                  fontSize: '10px', fontWeight: 700, padding: '2px 8px',
+                  borderRadius: '4px', pointerEvents: 'none',
+                }}>
+                  Calibrated · {calibrationRegions.length} panel{calibrationRegions.length !== 1 ? 's' : ''}
+                </div>
+              )}
+              {/* Calibration region outlines — shows where panels were detected */}
+              {calibrationRegions.map((region, i) => (
+                <div
+                  key={`cal-${i}`}
+                  style={{
+                    position: 'absolute',
+                    left: `${region.img_x_pct}%`,
+                    top: `${region.img_y_pct}%`,
+                    width: `${region.img_w_pct}%`,
+                    height: `${region.img_h_pct}%`,
+                    border: '1px dashed rgba(255,255,255,0.3)',
+                    pointerEvents: 'none',
+                    zIndex: 0,
+                  }}
+                >
+                  <div style={{
+                    position: 'absolute', top: '-14px', left: '2px',
+                    fontSize: '9px', color: 'rgba(255,255,255,0.5)',
+                    whiteSpace: 'nowrap', pointerEvents: 'none',
+                  }}>
+                    {region.panel_name} ({region.width_in}&quot;×{region.height_in}&quot;)
+                  </div>
+                </div>
+              ))}
               {/* AI-detected bounding boxes overlay — clean minimal UI */}
               {analysis.graphic_elements!.map((el, i) => {
                 if (!el.crop_x_pct && el.crop_x_pct !== 0) return null;
@@ -2417,9 +2499,12 @@ function NewQuote({ onCreated, editQuote }: { onCreated: () => void; editQuote?:
                 const sh = Math.abs(newElementEnd.y - newElementStart.y);
                 // Show live dimensions as you draw
                 const imgEl = proofImgRef.current;
-                const wPct = imgEl ? (sw / imgEl.getBoundingClientRect().width) * 100 : 0;
-                const hPct = imgEl ? (sh / imgEl.getBoundingClientRect().height) * 100 : 0;
-                const dims = boxPctToInches(wPct, hPct);
+                const imgRect = imgEl?.getBoundingClientRect();
+                const wPct = imgRect ? (sw / imgRect.width) * 100 : 0;
+                const hPct = imgRect ? (sh / imgRect.height) * 100 : 0;
+                const xPct = imgRect ? (sx / imgRect.width) * 100 : 0;
+                const yPct = imgRect ? (sy / imgRect.height) * 100 : 0;
+                const dims = boxPctToInches(wPct, hPct, xPct, yPct);
                 return (
                   <>
                     <div style={{
