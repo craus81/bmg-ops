@@ -96,6 +96,9 @@ export default function ScanPage() {
           facingMode: 'environment',
           width: { ideal: 1920 },
           height: { ideal: 1080 },
+          // @ts-ignore — focusMode is valid for Android but not in all TS definitions
+          focusMode: 'continuous',
+          advanced: [{ focusMode: 'continuous' } as any],
         }
       });
       streamRef.current = stream;
