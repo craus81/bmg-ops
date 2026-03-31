@@ -58,6 +58,13 @@ export default function TrackingPage() {
   const [noteInput, setNoteInput] = useState<Record<string, string>>({});
   const [noteSaving, setNoteSaving] = useState(false);
 
+  // Sales order linking state
+  const [soSearchOpen, setSoSearchOpen] = useState<string | null>(null); // vehicleId
+  const [soSearchTerm, setSoSearchTerm] = useState('');
+  const [soSearchResults, setSoSearchResults] = useState<any[]>([]);
+  const [soSearching, setSoSearching] = useState(false);
+  const [soLinking, setSoLinking] = useState(false);
+
   useEffect(() => {
     loadVehicles();
     loadProfiles();
@@ -223,6 +230,85 @@ export default function TrackingPage() {
     await loadNotes(vehicleId);
   };
 
+  // Sales order search & link
+  const searchSalesOrders = async () => {
+    if (!soSearchTerm.trim()) return;
+    setSoSearching(true);
+    setSoSearchResults([]);
+    try {
+      const res = await fetch(`/api/netsuite/sales-orders?customer=${encodeURIComponent(soSearchTerm.trim())}`);
+      const data = await res.json();
+      if (data.found && data.data) {
+        setSoSearchResults(data.data);
+      }
+    } catch (err) {
+      console.error('SO search error:', err);
+    }
+    setSoSearching(false);
+  };
+
+  const linkSalesOrder = async (vehicleId: string, order: any) => {
+    setSoLinking(true);
+    try {
+      const { error } = await supabase.from('fleet_checkins').update({
+        netsuite_sales_order_id: order.id,
+        sales_order_number: order.sales_order_number,
+        customer_name: order.customer_name,
+        sales_order_memo: order.memo || null,
+        sales_order_total: order.total || null,
+      }).eq('id', vehicleId);
+
+      if (error) {
+        alert('Failed to link sales order: ' + error.message);
+      } else {
+        // Update local state
+        setVehicles(prev => prev.map(v =>
+          v.id === vehicleId ? {
+            ...v,
+            netsuite_sales_order_id: order.id,
+            sales_order_number: order.sales_order_number,
+            customer_name: order.customer_name,
+            sales_order_memo: order.memo || null,
+            sales_order_total: order.total || null,
+          } : v
+        ));
+        setSoSearchOpen(null);
+        setSoSearchTerm('');
+        setSoSearchResults([]);
+        setUpdateSuccess('Sales order linked');
+        setTimeout(() => setUpdateSuccess(null), 2000);
+      }
+    } catch (err) {
+      console.error('Link SO error:', err);
+      alert('Failed to link sales order');
+    }
+    setSoLinking(false);
+  };
+
+  const unlinkSalesOrder = async (vehicleId: string) => {
+    if (!confirm('Remove the linked sales order from this vehicle?')) return;
+    const { error } = await supabase.from('fleet_checkins').update({
+      netsuite_sales_order_id: null,
+      sales_order_number: null,
+      sales_order_memo: null,
+      sales_order_total: null,
+    }).eq('id', vehicleId);
+
+    if (!error) {
+      setVehicles(prev => prev.map(v =>
+        v.id === vehicleId ? {
+          ...v,
+          netsuite_sales_order_id: null,
+          sales_order_number: null,
+          sales_order_memo: null,
+          sales_order_total: null,
+        } as any : v
+      ));
+      setUpdateSuccess('Sales order unlinked');
+      setTimeout(() => setUpdateSuccess(null), 2000);
+    }
+  };
+
   const saveAssignments = async (vehicleId: string, userIds: string[]) => {
     setVehicleAssignments(prev => ({ ...prev, [vehicleId]: userIds }));
     setAssignmentSaving(true);
@@ -378,8 +464,10 @@ export default function TrackingPage() {
   const filtered = (showArchived ? archivedVehicles : activeVehicles).filter(v => {
     const status = v.status as VehicleTrackingStatus;
     if (filterStatus === 'stuck') return status === 'stuck_parts' || status === 'stuck_graphics';
+    if (filterStatus === 'shipped') return status === 'shipped';
     if (filterStatus !== 'all') return status === filterStatus;
-    return true;
+    // "All" tab excludes shipped — shipped only shows on its own tab
+    return status !== 'shipped';
   }).filter(v => {
     if (!searchTerm) return true;
     const s = searchTerm.toLowerCase();
@@ -432,8 +520,8 @@ export default function TrackingPage() {
         <div style={{
           background: 'var(--card)', border: '1px solid var(--border)', borderRadius: '12px', padding: '12px', textAlign: 'center',
         }}>
-          <div style={{ fontSize: '24px', fontWeight: 800, color: 'var(--text-primary)' }}>{activeVehicles.length}</div>
-          <div style={{ fontSize: '10px', fontWeight: 700, color: 'var(--text-muted)', textTransform: 'uppercase' }}>Active</div>
+          <div style={{ fontSize: '24px', fontWeight: 800, color: 'var(--text-primary)' }}>{activeVehicles.filter(v => v.status !== 'shipped').length}</div>
+          <div style={{ fontSize: '10px', fontWeight: 700, color: 'var(--text-muted)', textTransform: 'uppercase' }}>In Shop</div>
         </div>
         <div
           onClick={() => setFilterStatus(filterStatus === 'stuck' ? 'all' : 'stuck')}
@@ -471,7 +559,7 @@ export default function TrackingPage() {
             border: 'none', color: filterStatus === 'all' ? 'var(--text-primary)' : 'var(--text-muted)',
             whiteSpace: 'nowrap',
           }}
-        >All ({vehicles.length})</button>
+        >On Ground ({activeVehicles.filter(v => v.status !== 'shipped').length})</button>
         {VEHICLE_STATUS_PIPELINE.map(status => {
           const count = statusCounts[status] || 0;
           const colors = VEHICLE_STATUS_COLORS[status];
@@ -692,13 +780,102 @@ export default function TrackingPage() {
                       )}
                     </div>
 
-                    {/* Sales Order PDF */}
-                    {vehicle.netsuite_sales_order_id && vehicle.sales_order_number && (
+                    {/* Sales Order Section */}
+                    {vehicle.netsuite_sales_order_id && vehicle.sales_order_number ? (
                       <div style={{ marginBottom: '12px' }}>
                         <SalesOrderPdf
                           salesOrderId={vehicle.netsuite_sales_order_id}
                           salesOrderNumber={vehicle.sales_order_number}
                         />
+                        {isAdmin && (
+                          <button
+                            onClick={() => unlinkSalesOrder(vehicle.id)}
+                            style={{
+                              marginTop: '4px', padding: '4px 10px', fontSize: '10px', fontWeight: 600,
+                              background: 'transparent', border: '1px solid var(--border)', borderRadius: '6px',
+                              color: 'var(--text-muted)', cursor: 'pointer',
+                            }}
+                          >Unlink Sales Order</button>
+                        )}
+                      </div>
+                    ) : (
+                      <div style={{ marginBottom: '12px' }}>
+                        {soSearchOpen === vehicle.id ? (
+                          <div style={{
+                            padding: '12px', borderRadius: '10px',
+                            background: 'var(--subtle-bg)', border: '1px solid var(--border)',
+                          }}>
+                            <div style={{ fontSize: '11px', fontWeight: 700, color: 'var(--text-muted)', textTransform: 'uppercase', marginBottom: '6px' }}>
+                              Search NetSuite Sales Orders
+                            </div>
+                            <div style={{ display: 'flex', gap: '6px', marginBottom: '8px' }}>
+                              <input
+                                value={soSearchTerm}
+                                onChange={(e) => setSoSearchTerm(e.target.value)}
+                                onKeyDown={(e) => { if (e.key === 'Enter') searchSalesOrders(); }}
+                                placeholder="Customer name..."
+                                style={{
+                                  flex: 1, padding: '8px 10px', borderRadius: '8px', fontSize: '13px',
+                                  border: '1px solid var(--border)', background: 'var(--input-bg)',
+                                  color: 'var(--text-primary)',
+                                }}
+                              />
+                              <button
+                                onClick={searchSalesOrders}
+                                disabled={soSearching || !soSearchTerm.trim()}
+                                style={{
+                                  padding: '8px 14px', borderRadius: '8px', fontSize: '12px', fontWeight: 700,
+                                  background: 'var(--navy)', color: '#fff', border: 'none',
+                                  opacity: soSearching || !soSearchTerm.trim() ? 0.5 : 1, cursor: 'pointer',
+                                }}
+                              >{soSearching ? '...' : 'Search'}</button>
+                              <button
+                                onClick={() => { setSoSearchOpen(null); setSoSearchTerm(''); setSoSearchResults([]); }}
+                                style={{
+                                  padding: '8px 10px', borderRadius: '8px', fontSize: '12px', fontWeight: 700,
+                                  background: 'transparent', border: '1px solid var(--border)',
+                                  color: 'var(--text-muted)', cursor: 'pointer',
+                                }}
+                              >Cancel</button>
+                            </div>
+                            {soSearchResults.length > 0 && (
+                              <div style={{ display: 'flex', flexDirection: 'column', gap: '4px', maxHeight: '200px', overflowY: 'auto' }}>
+                                {soSearchResults.map((so: any) => (
+                                  <div
+                                    key={so.id}
+                                    onClick={() => linkSalesOrder(vehicle.id, so)}
+                                    style={{
+                                      padding: '8px 10px', borderRadius: '8px', cursor: 'pointer',
+                                      background: 'var(--card)', border: '1px solid var(--border)',
+                                    }}
+                                  >
+                                    <div style={{ fontSize: '12px', fontWeight: 700, color: 'var(--text-primary)' }}>
+                                      SO #{so.sales_order_number}
+                                    </div>
+                                    <div style={{ fontSize: '11px', color: 'var(--text-secondary)' }}>
+                                      {so.customer_name} · {so.date} · ${so.total?.toLocaleString() || '0'}
+                                    </div>
+                                    {so.memo && (
+                                      <div style={{ fontSize: '10px', color: 'var(--text-muted)', marginTop: '2px' }}>{so.memo}</div>
+                                    )}
+                                  </div>
+                                ))}
+                              </div>
+                            )}
+                            {soSearching && (
+                              <div style={{ fontSize: '11px', color: 'var(--text-muted)', padding: '8px 0' }}>Searching NetSuite...</div>
+                            )}
+                          </div>
+                        ) : (
+                          <button
+                            onClick={() => setSoSearchOpen(vehicle.id)}
+                            style={{
+                              width: '100%', padding: '10px', borderRadius: '8px', fontSize: '12px', fontWeight: 700,
+                              background: 'rgba(59,130,246,0.08)', border: '1px dashed rgba(59,130,246,0.3)',
+                              color: 'rgb(59,130,246)', cursor: 'pointer',
+                            }}
+                          >+ Link Sales Order</button>
+                        )}
                       </div>
                     )}
 

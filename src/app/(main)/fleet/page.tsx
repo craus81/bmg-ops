@@ -78,6 +78,7 @@ export default function FleetPage() {
   const [saved, setSaved] = useState(false);
   const [savedCheckin, setSavedCheckin] = useState<FleetCheckin | null>(null);
   const [notes, setNotes] = useState('');
+  const [manualCustomerName, setManualCustomerName] = useState('');
 
   // Recent check-ins
   const [recentCheckins, setRecentCheckins] = useState<FleetCheckin[]>([]);
@@ -283,7 +284,7 @@ export default function FleetPage() {
         body_class: vehicleData.vehicle.bodyClass || null,
         netsuite_sales_order_id: selectedOrder?.id || null,
         sales_order_number: selectedOrder?.sales_order_number || null,
-        customer_name: selectedOrder?.customer_name || null,
+        customer_name: selectedOrder?.customer_name || manualCustomerName.trim() || null,
         sales_order_memo: selectedOrder?.memo || null,
         sales_order_total: selectedOrder?.total || null,
         proof_file_path: selectedProof?.storage_path || null,
@@ -355,13 +356,19 @@ export default function FleetPage() {
           <div style={{ fontSize: '18px', fontWeight: 800 }}>Vehicle Checked In</div>
           <div style={{ color: theme.textSecondary, fontSize: '13px', marginTop: '4px' }}>{vehicleTitle}</div>
           <div style={{ fontFamily: 'monospace', fontSize: '11px', color: theme.textMuted }}>{savedCheckin.vin}</div>
-          {savedCheckin.sales_order_number && (
+          {savedCheckin.sales_order_number ? (
             <div style={{
               marginTop: '8px', padding: '8px 12px', background: theme.successBg,
               border: `1px solid ${theme.successBorder}`, borderRadius: '10px',
               color: theme.success, fontSize: '12px', fontWeight: 700,
             }}>SO #{savedCheckin.sales_order_number} — {savedCheckin.customer_name}</div>
-          )}
+          ) : savedCheckin.customer_name ? (
+            <div style={{
+              marginTop: '8px', padding: '8px 12px', background: theme.card,
+              border: `1px solid ${theme.border}`, borderRadius: '10px',
+              color: theme.textSecondary, fontSize: '12px', fontWeight: 700,
+            }}>Customer: {savedCheckin.customer_name}</div>
+          ) : null}
           {savedCheckin.proof_file_name && (
             <div style={{
               marginTop: '6px', padding: '6px 12px', background: theme.card,
@@ -774,6 +781,31 @@ export default function FleetPage() {
             color: theme.textMuted, fontSize: '13px', marginBottom: '12px',
           }}>
             No proofs found. You can upload proofs in the admin section.
+          </div>
+        )}
+
+        {/* Customer Name — shown when no sales order is linked */}
+        {!selectedOrder && (
+          <div style={{
+            background: theme.card, border: `1px solid ${theme.border}`, borderRadius: '14px',
+            padding: '14px', marginBottom: '14px',
+          }}>
+            <label style={{ display: 'block', fontSize: '10px', fontWeight: 700, color: theme.textMuted, textTransform: 'uppercase', letterSpacing: '0.5px', marginBottom: '6px' }}>
+              Customer Name
+            </label>
+            <input
+              value={manualCustomerName}
+              onChange={(e) => setManualCustomerName(e.target.value)}
+              placeholder="Enter customer name..."
+              style={{
+                width: '100%', padding: '10px', borderRadius: '10px',
+                border: `1px solid ${theme.border}`, background: theme.bg,
+                color: theme.textPrimary, fontSize: '13px',
+              }}
+            />
+            <div style={{ fontSize: '10px', color: theme.textMuted, marginTop: '4px' }}>
+              Will be replaced if a sales order is matched later
+            </div>
           </div>
         )}
 
