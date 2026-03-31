@@ -1,12 +1,13 @@
 'use client';
 
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, useRef } from 'react';
 import { useRouter, useSearchParams } from 'next/navigation';
 import { createClient } from '@/lib/supabase-browser';
 import { useAuth } from '@/components/AuthProvider';
+import { storage } from '@/lib/storage';
 import StatusBadge from '@/components/StatusBadge';
 import AssignmentPicker from '@/components/AssignmentPicker';
-import type { FleetCheckin, VehicleTrackingStatus, VehicleStatusHistory } from '@/lib/types';
+import type { FleetCheckin, VehicleTrackingStatus, VehicleStatusHistory, VehiclePhoto } from '@/lib/types';
 import { VEHICLE_STATUS_PIPELINE, VEHICLE_STATUS_LABELS, VEHICLE_STATUS_COLORS } from '@/lib/types';
 import SalesOrderPdf from '@/components/SalesOrderPdf';
 
@@ -35,6 +36,14 @@ export default function TrackingPage() {
   const [vehicleAssignments, setVehicleAssignments] = useState<Record<string, string[]>>({});
   const [assignmentSaving, setAssignmentSaving] = useState(false);
 
+  // Photos state
+  const [vehiclePhotos, setVehiclePhotos] = useState<Record<string, (VehiclePhoto & { url?: string })[]>>({});
+  const [photosLoading, setPhotosLoading] = useState<Record<string, boolean>>({});
+  const [photoUploading, setPhotoUploading] = useState(false);
+  const [showCompletionPrompt, setShowCompletionPrompt] = useState<string | null>(null); // vehicleId
+  const photoInputRef = useRef<HTMLInputElement>(null);
+  const cameraInputRef = useRef<HTMLInputElement>(null);
+
   useEffect(() => {
     loadVehicles();
     loadProfiles();
@@ -48,6 +57,7 @@ export default function TrackingPage() {
       setExpandedId(vehicleId);
       loadHistory(vehicleId);
       loadAssignments(vehicleId);
+      loadPhotos(vehicleId);
     }
   }, [loading]);
 
@@ -95,6 +105,66 @@ export default function TrackingPage() {
     }
   };
 
+  const loadPhotos = async (vehicleId: string) => {
+    setPhotosLoading(prev => ({ ...prev, [vehicleId]: true }));
+    const { data } = await supabase
+      .from('vehicle_photos')
+      .select('*')
+      .eq('vehicle_id', vehicleId)
+      .order('taken_at', { ascending: false });
+
+    if (data) {
+      const photosWithUrls = data.map((p: VehiclePhoto) => ({
+        ...p,
+        url: storage.from('photos').getPublicUrl(p.storage_path).data.publicUrl,
+      }));
+      setVehiclePhotos(prev => ({ ...prev, [vehicleId]: photosWithUrls }));
+    }
+    setPhotosLoading(prev => ({ ...prev, [vehicleId]: false }));
+  };
+
+  const uploadPhoto = async (vehicleId: string, file: File) => {
+    setPhotoUploading(true);
+    try {
+      const ext = file.name.split('.').pop()?.toLowerCase() || 'jpg';
+      const path = `${vehicleId}/${Date.now()}.${ext}`;
+      const { error: uploadErr } = await storage.from('photos').upload(path, file, { contentType: file.type });
+      if (uploadErr) {
+        console.error('Photo upload error:', uploadErr.message);
+        alert('Photo upload failed: ' + uploadErr.message);
+        setPhotoUploading(false);
+        return;
+      }
+
+      await supabase.from('vehicle_photos').insert({
+        vehicle_id: vehicleId,
+        storage_path: path,
+        photo_type: 'completion',
+        taken_by: user?.id,
+      });
+
+      await loadPhotos(vehicleId);
+    } catch (err: any) {
+      console.error('Photo upload error:', err);
+      alert('Photo upload failed');
+    }
+    setPhotoUploading(false);
+  };
+
+  const handlePhotoFiles = async (vehicleId: string, files: FileList | null) => {
+    if (!files || files.length === 0) return;
+    for (let i = 0; i < files.length; i++) {
+      await uploadPhoto(vehicleId, files[i]);
+    }
+  };
+
+  const deletePhoto = async (vehicleId: string, photoId: string, storagePath: string) => {
+    if (!confirm('Delete this photo?')) return;
+    await storage.from('photos').remove([storagePath]);
+    await supabase.from('vehicle_photos').delete().eq('id', photoId);
+    await loadPhotos(vehicleId);
+  };
+
   const saveAssignments = async (vehicleId: string, userIds: string[]) => {
     setVehicleAssignments(prev => ({ ...prev, [vehicleId]: userIds }));
     setAssignmentSaving(true);
@@ -129,6 +199,7 @@ export default function TrackingPage() {
       setStatusNote('');
       loadHistory(id);
       loadAssignments(id);
+      loadPhotos(id);
     }
   };
 
@@ -181,6 +252,12 @@ export default function TrackingPage() {
       setTimeout(() => setUpdateSuccess(null), 2000);
       await loadVehicles();
       if (expandedId === vehicleId) loadHistory(vehicleId);
+
+      // Prompt for completion photos when marking as complete
+      if (newStatus === 'complete') {
+        setShowCompletionPrompt(vehicleId);
+        loadPhotos(vehicleId);
+      }
     } catch (err) {
       alert('Network error — please try again');
     }
@@ -565,6 +642,188 @@ export default function TrackingPage() {
                         />
                       </div>
                     )}
+
+                    {/* Completion Photos */}
+                    <div style={{ marginBottom: '12px' }}>
+                      {/* Completion prompt banner */}
+                      {showCompletionPrompt === vehicle.id && (
+                        <div style={{
+                          padding: '12px', borderRadius: '10px', marginBottom: '10px',
+                          background: 'rgba(34,197,94,0.08)', border: '1px solid rgba(34,197,94,0.25)',
+                        }}>
+                          <div style={{ fontSize: '13px', fontWeight: 700, color: '#22c55e', marginBottom: '4px' }}>
+                            Vehicle marked as complete!
+                          </div>
+                          <div style={{ fontSize: '12px', color: 'var(--text-secondary)', marginBottom: '10px' }}>
+                            Add completion photos to document the finished work. The more photos, the better!
+                          </div>
+                          <div style={{ display: 'flex', gap: '8px' }}>
+                            <button
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                cameraInputRef.current?.click();
+                              }}
+                              style={{
+                                flex: 1, padding: '10px', borderRadius: '8px', fontSize: '12px', fontWeight: 700,
+                                background: 'rgba(34,197,94,0.15)', border: '1px solid rgba(34,197,94,0.3)',
+                                color: '#22c55e', cursor: 'pointer',
+                              }}
+                            >
+                              📷 Take Photos
+                            </button>
+                            <button
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                photoInputRef.current?.click();
+                              }}
+                              style={{
+                                flex: 1, padding: '10px', borderRadius: '8px', fontSize: '12px', fontWeight: 700,
+                                background: 'rgba(34,197,94,0.15)', border: '1px solid rgba(34,197,94,0.3)',
+                                color: '#22c55e', cursor: 'pointer',
+                              }}
+                            >
+                              🖼 From Gallery
+                            </button>
+                            <button
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                setShowCompletionPrompt(null);
+                              }}
+                              style={{
+                                padding: '10px 14px', borderRadius: '8px', fontSize: '12px', fontWeight: 700,
+                                background: 'var(--subtle-bg)', border: '1px solid var(--border)',
+                                color: 'var(--text-muted)', cursor: 'pointer',
+                              }}
+                            >
+                              Skip
+                            </button>
+                          </div>
+                        </div>
+                      )}
+
+                      <div style={{
+                        fontSize: '10px', fontWeight: 700, color: 'var(--text-muted)',
+                        textTransform: 'uppercase', letterSpacing: '0.5px', marginBottom: '6px',
+                        display: 'flex', justifyContent: 'space-between', alignItems: 'center',
+                      }}>
+                        <span>Completion Photos {(vehiclePhotos[vehicle.id]?.length || 0) > 0 ? `(${vehiclePhotos[vehicle.id].length})` : ''}</span>
+                        {showCompletionPrompt !== vehicle.id && (
+                          <div style={{ display: 'flex', gap: '6px' }}>
+                            <button
+                              onClick={(e) => { e.stopPropagation(); cameraInputRef.current?.click(); }}
+                              disabled={photoUploading}
+                              style={{
+                                padding: '4px 10px', borderRadius: '6px', fontSize: '11px', fontWeight: 700,
+                                background: 'rgba(59,130,246,0.1)', border: '1px solid rgba(59,130,246,0.2)',
+                                color: '#3b82f6', cursor: photoUploading ? 'wait' : 'pointer',
+                              }}
+                            >
+                              📷 Camera
+                            </button>
+                            <button
+                              onClick={(e) => { e.stopPropagation(); photoInputRef.current?.click(); }}
+                              disabled={photoUploading}
+                              style={{
+                                padding: '4px 10px', borderRadius: '6px', fontSize: '11px', fontWeight: 700,
+                                background: 'rgba(59,130,246,0.1)', border: '1px solid rgba(59,130,246,0.2)',
+                                color: '#3b82f6', cursor: photoUploading ? 'wait' : 'pointer',
+                              }}
+                            >
+                              🖼 Gallery
+                            </button>
+                          </div>
+                        )}
+                      </div>
+
+                      {/* Hidden file inputs */}
+                      <input
+                        ref={cameraInputRef}
+                        type="file"
+                        accept="image/*"
+                        capture="environment"
+                        multiple
+                        style={{ display: 'none' }}
+                        onChange={(e) => { handlePhotoFiles(vehicle.id, e.target.files); e.target.value = ''; }}
+                      />
+                      <input
+                        ref={photoInputRef}
+                        type="file"
+                        accept="image/*"
+                        multiple
+                        style={{ display: 'none' }}
+                        onChange={(e) => { handlePhotoFiles(vehicle.id, e.target.files); e.target.value = ''; }}
+                      />
+
+                      {/* Upload progress */}
+                      {photoUploading && (
+                        <div style={{
+                          padding: '10px', borderRadius: '8px', marginBottom: '8px',
+                          background: 'var(--subtle-bg)', border: '1px solid var(--border)',
+                          fontSize: '12px', color: 'var(--text-secondary)', textAlign: 'center',
+                        }}>
+                          Uploading photo...
+                        </div>
+                      )}
+
+                      {/* Photo grid */}
+                      {photosLoading[vehicle.id] ? (
+                        <div style={{ fontSize: '12px', color: 'var(--text-muted)', padding: '8px 0' }}>Loading photos...</div>
+                      ) : (vehiclePhotos[vehicle.id]?.length || 0) === 0 ? (
+                        <div style={{
+                          fontSize: '12px', color: 'var(--text-muted)', padding: '16px',
+                          textAlign: 'center', borderRadius: '8px',
+                          background: 'var(--subtle-bg)', border: '1px dashed var(--border)',
+                        }}>
+                          No photos yet — add photos to document the work
+                        </div>
+                      ) : (
+                        <div style={{
+                          display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: '6px',
+                        }}>
+                          {vehiclePhotos[vehicle.id].map(photo => (
+                            <div key={photo.id} style={{ position: 'relative' }}>
+                              <div style={{
+                                paddingTop: '100%', position: 'relative', borderRadius: '8px',
+                                overflow: 'hidden', background: 'var(--subtle-bg)',
+                              }}>
+                                <img
+                                  src={photo.url}
+                                  alt="Completion photo"
+                                  style={{
+                                    position: 'absolute', top: 0, left: 0, width: '100%', height: '100%',
+                                    objectFit: 'cover',
+                                  }}
+                                  onClick={(e) => {
+                                    e.stopPropagation();
+                                    window.open(photo.url, '_blank');
+                                  }}
+                                />
+                              </div>
+                              <button
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  deletePhoto(vehicle.id, photo.id, photo.storage_path);
+                                }}
+                                style={{
+                                  position: 'absolute', top: '4px', right: '4px',
+                                  width: '22px', height: '22px', borderRadius: '50%',
+                                  background: 'rgba(0,0,0,0.6)', border: 'none',
+                                  color: '#fff', fontSize: '12px', cursor: 'pointer',
+                                  display: 'flex', alignItems: 'center', justifyContent: 'center',
+                                }}
+                              >
+                                ×
+                              </button>
+                              <div style={{
+                                fontSize: '9px', color: 'var(--text-muted)', marginTop: '2px', textAlign: 'center',
+                              }}>
+                                {new Date(photo.taken_at).toLocaleDateString([], { month: 'short', day: 'numeric' })}
+                              </div>
+                            </div>
+                          ))}
+                        </div>
+                      )}
+                    </div>
 
                     {/* Installer Assignment */}
                     {isAdmin && (
