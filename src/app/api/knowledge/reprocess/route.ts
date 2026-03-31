@@ -83,8 +83,10 @@ Output the extracted text first, then any visual element descriptions. Be thorou
 
     if (!response.ok) {
       const errText = await response.text();
-      console.error('Claude vision API error:', errText);
-      return `[AI vision extraction failed: ${response.status}]`;
+      console.error('Claude vision API error:', response.status, errText);
+      // Include truncated error body so the caller can see the actual API error
+      const shortErr = errText.length > 200 ? errText.substring(0, 200) + '...' : errText;
+      return `[AI vision extraction failed: HTTP ${response.status} — ${shortErr}]`;
     }
 
     const result = await response.json();
@@ -159,7 +161,7 @@ export async function POST(req: NextRequest) {
     // Download file from R2
     const r2Result = await r2Get('knowledge-files', doc.file_path);
     if (!r2Result.success || !r2Result.body) {
-      return NextResponse.json({ error: 'Failed to download file from storage' }, { status: 500 });
+      return NextResponse.json({ error: `Failed to download file from storage: ${r2Result.error || 'no body returned'} (path: ${doc.file_path})` }, { status: 500 });
     }
 
     let buffer: Buffer;
