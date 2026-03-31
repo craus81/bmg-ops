@@ -108,6 +108,7 @@ export default function FleetPage() {
   // ─── Camera / Scanner ──────────────────────────────────────
   const stopCamera = () => {
     if (intervalRef.current) { clearInterval(intervalRef.current); intervalRef.current = null; }
+    if ((streamRef as any)?._refocusInterval) { clearInterval((streamRef as any)._refocusInterval); (streamRef as any)._refocusInterval = null; }
     if (streamRef.current) { streamRef.current.getTracks().forEach(t => t.stop()); streamRef.current = null; }
     if (videoRef.current) videoRef.current.srcObject = null;
     setCameraActive(false);
@@ -147,6 +148,27 @@ export default function FleetPage() {
       videoRef.current.srcObject = stream;
       await videoRef.current.play();
       setCameraActive(true);
+
+      // Android autofocus: use track capabilities to force continuous focus
+      const track = stream.getVideoTracks()[0];
+      if (track) {
+        try {
+          const caps = track.getCapabilities?.() as any;
+          if (caps?.focusMode?.includes?.('continuous')) {
+            await (track as any).applyConstraints({ advanced: [{ focusMode: 'continuous' }] });
+          } else if (caps?.focusMode?.includes?.('auto')) {
+            // Fallback: trigger auto-focus periodically
+            const refocusInterval = setInterval(async () => {
+              try {
+                await (track as any).applyConstraints({ advanced: [{ focusMode: 'auto' }] });
+              } catch { /* ignore */ }
+            }, 1500);
+            // Store for cleanup
+            (streamRef as any)._refocusInterval = refocusInterval;
+          }
+        } catch { /* focus control not supported */ }
+      }
+
       intervalRef.current = setInterval(() => scanFrame(zxingLibrary), 200);
     } catch (e: any) {
       if (e?.name === 'NotAllowedError') setCameraError('Camera permission denied.');
