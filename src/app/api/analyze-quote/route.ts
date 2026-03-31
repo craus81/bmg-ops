@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 
 // App Router: set max duration for long AI calls (Vercel Pro allows up to 300s)
-export const maxDuration = 60;
+export const maxDuration = 120;
 
 const ANTHROPIC_API_KEY = process.env.ANTHROPIC_API_KEY;
 
