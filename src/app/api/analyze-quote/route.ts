@@ -163,7 +163,7 @@ export async function POST(request: NextRequest) {
       },
       body: JSON.stringify({
         model: 'claude-sonnet-4-6',
-        max_tokens: 4096,
+        max_tokens: 8192,
         messages: [{ role: 'user', content: messageContent }],
       }),
     });
@@ -183,7 +183,9 @@ export async function POST(request: NextRequest) {
     // Parse the JSON from Claude's response
     let analysis;
     try {
-      const jsonMatch = aiText.match(/\{[\s\S]*\}/);
+      // Strip markdown code fences if present
+      let cleanText = aiText.replace(/^```(?:json)?\s*\n?/i, '').replace(/\n?```\s*$/i, '');
+      const jsonMatch = cleanText.match(/\{[\s\S]*\}/);
       if (jsonMatch) {
         analysis = JSON.parse(jsonMatch[0]);
       } else {
