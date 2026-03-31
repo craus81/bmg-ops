@@ -391,7 +391,7 @@ export async function POST(req: NextRequest) {
 
     // Send to Claude API for extraction using native PDF support (with retry)
     const anthropicRes = await callAnthropicWithRetry({
-      model: 'claude-sonnet-4-5-20250929',
+      model: 'claude-sonnet-4-6',
       max_tokens: 8192,
       messages: [{
         role: 'user',

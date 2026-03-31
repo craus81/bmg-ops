@@ -412,21 +412,27 @@ export default function KnowledgePage() {
 
     let completed = 0;
     let failed = 0;
+    let lastError = '';
 
     for (const doc of reprocessable) {
-      setBgStatus({ message: `Re-processing "${doc.title}" (${completed + 1}/${reprocessable.length})...`, type: 'processing' });
+      setBgStatus({ message: `Re-processing "${doc.title}" (${completed + failed + 1}/${reprocessable.length}) — ${completed} done, ${failed} failed...`, type: 'processing' });
       const result = await reprocessDoc(doc.id, doc.title);
       if (result.success) {
         completed++;
       } else {
         failed++;
+        lastError = result.error || 'Unknown error';
         console.error(`Reprocess "${doc.title}" failed:`, result.error);
       }
       loadDocs();
+      // Small delay between calls to avoid API rate limits
+      if (completed + failed < reprocessable.length) {
+        await new Promise(r => setTimeout(r, 500));
+      }
     }
 
     if (failed > 0) {
-      setBgStatus({ message: `Re-processed ${completed} of ${reprocessable.length} files. ${failed} failed.`, type: 'error' });
+      setBgStatus({ message: `Re-processed ${completed} of ${reprocessable.length} files. ${failed} failed. Last error: ${lastError}`, type: 'error' });
     } else {
       setBgStatus({ message: `All ${completed} files re-processed with visual extraction`, type: 'success' });
     }
