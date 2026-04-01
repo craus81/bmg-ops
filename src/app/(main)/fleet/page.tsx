@@ -4,7 +4,7 @@ import { useState, useRef, useEffect } from 'react';
 import { useRouter } from 'next/navigation';
 import { useAuth } from '@/components/AuthProvider';
 import { createClient } from '@/lib/supabase-browser';
-import { decodeVIN } from '@/lib/vin-decoder';
+import { decodeVIN, isValidVIN } from '@/lib/vin-decoder';
 import VinScanner from '@/components/VinScanner';
 import { theme } from '@/lib/theme';
 import type { NetsuiteSalesOrder, GraphicsProof, FleetCheckin } from '@/lib/types';
