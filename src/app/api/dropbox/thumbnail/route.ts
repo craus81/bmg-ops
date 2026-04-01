@@ -18,7 +18,7 @@ export async function GET(req: NextRequest) {
 
     const { buffer, contentType } = await getThumbnail(path, size);
 
-    return new NextResponse(buffer, {
+    return new NextResponse(new Uint8Array(buffer), {
       headers: {
         'Content-Type': contentType,
         'Cache-Control': 'public, max-age=3600', // cache 1hr
