@@ -385,14 +385,15 @@ export default function CustomersPage() {
     setScanningCard(false);
   };
 
-  const saveProspect = async () => {
+  const saveProspect = async (pushType?: 'customer' | 'lead' | 'prospect') => {
     if (!prospectForm.company_name.trim()) { alert('Company name is required'); return; }
     setSavingProspect(true);
     try {
       const method = editingProspect ? 'PUT' : 'POST';
+      const source = scanningCard ? 'business_card' : 'manual';
       const body = editingProspect
         ? { id: editingProspect, ...prospectForm }
-        : { ...prospectForm, source: 'manual', created_by: user?.id };
+        : { ...prospectForm, source, created_by: user?.id };
       const res = await fetch('/api/prospects', {
         method,
         headers: { 'Content-Type': 'application/json' },
@@ -405,6 +406,14 @@ export default function CustomersPage() {
         } else {
           setProspects(prev => [data.prospect, ...prev]);
         }
+
+        // If pushType specified, immediately push to NetSuite
+        if (pushType && data.prospect?.id) {
+          await pushToNetSuite(data.prospect.id, pushType);
+          // Refresh customers list so the new entry shows up
+          await loadData();
+        }
+
         setShowAddProspect(false);
         setEditingProspect(null);
         setProspectForm(emptyProspect);
@@ -501,6 +510,17 @@ export default function CustomersPage() {
           </div>
         </div>
         <div style={{ display: 'flex', gap: '6px' }}>
+          <button
+            onClick={() => { setTab('prospects'); fileInputRef.current?.click(); }}
+            disabled={scanningCard}
+            style={{
+              padding: '8px 12px', borderRadius: '8px', fontSize: '12px', fontWeight: 700,
+              background: scanningCard ? 'var(--border)' : 'rgba(251,191,36,0.15)', border: '1px solid rgba(251,191,36,0.25)',
+              color: '#fbbf24', cursor: 'pointer',
+            }}
+          >
+            {scanningCard ? 'Scanning...' : '📷 Scan Card'}
+          </button>
           {tab === 'customers' ? (
             <button
               onClick={syncFromNetSuite}
@@ -520,7 +540,7 @@ export default function CustomersPage() {
                 background: '#4ade80', border: 'none', color: '#000', cursor: 'pointer',
               }}
             >
-              + Add Prospect
+              + Add New
             </button>
           )}
         </div>
@@ -990,19 +1010,58 @@ export default function CustomersPage() {
                   onChange={e => setProspectForm(f => ({ ...f, notes: e.target.value }))} placeholder="Notes..." />
               </div>
             </div>
-            <div style={{ display: 'flex', gap: '8px', marginTop: '12px', justifyContent: 'flex-end' }}>
-              <button
-                onClick={() => { setShowAddProspect(false); setEditingProspect(null); setProspectForm(emptyProspect); }}
-                style={{ padding: '8px 14px', borderRadius: '8px', border: '1px solid var(--border)', background: 'transparent', color: 'var(--text-label)', fontSize: '12px', fontWeight: 700, cursor: 'pointer' }}
-              >Cancel</button>
-              <button
-                onClick={saveProspect}
-                disabled={savingProspect || !prospectForm.company_name.trim()}
-                style={{
-                  padding: '8px 18px', borderRadius: '8px', border: 'none', fontSize: '12px', fontWeight: 700, cursor: 'pointer',
-                  background: savingProspect ? 'var(--border)' : '#3b82f6', color: '#fff',
-                }}
-              >{savingProspect ? 'Saving...' : editingProspect ? 'Update' : 'Save Prospect'}</button>
+            <div style={{ marginTop: '12px' }}>
+              {!editingProspect && (
+                <div style={{ fontSize: '10px', fontWeight: 700, color: 'var(--text-label)', textTransform: 'uppercase', letterSpacing: '0.05em', marginBottom: '6px' }}>
+                  Save & push to NetSuite as:
+                </div>
+              )}
+              <div style={{ display: 'flex', gap: '6px', flexWrap: 'wrap' }}>
+                <button
+                  onClick={() => { setShowAddProspect(false); setEditingProspect(null); setProspectForm(emptyProspect); }}
+                  style={{ padding: '8px 14px', borderRadius: '8px', border: '1px solid var(--border)', background: 'transparent', color: 'var(--text-label)', fontSize: '12px', fontWeight: 700, cursor: 'pointer' }}
+                >Cancel</button>
+                {editingProspect ? (
+                  <button
+                    onClick={() => saveProspect()}
+                    disabled={savingProspect || !prospectForm.company_name.trim()}
+                    style={{
+                      padding: '8px 18px', borderRadius: '8px', border: 'none', fontSize: '12px', fontWeight: 700, cursor: 'pointer',
+                      background: savingProspect ? 'var(--border)' : '#3b82f6', color: '#fff',
+                    }}
+                  >{savingProspect ? 'Saving...' : 'Update'}</button>
+                ) : (
+                  <>
+                    <button
+                      onClick={() => saveProspect()}
+                      disabled={savingProspect || !prospectForm.company_name.trim()}
+                      style={{
+                        padding: '8px 14px', borderRadius: '8px', fontSize: '12px', fontWeight: 700, cursor: 'pointer',
+                        background: savingProspect ? 'var(--border)' : 'rgba(59,130,246,0.1)',
+                        border: '1px solid rgba(59,130,246,0.2)', color: '#60a5fa',
+                      }}
+                    >{savingProspect ? 'Saving...' : 'Save as Prospect'}</button>
+                    <button
+                      onClick={() => saveProspect('lead')}
+                      disabled={savingProspect || !prospectForm.company_name.trim()}
+                      style={{
+                        padding: '8px 14px', borderRadius: '8px', fontSize: '12px', fontWeight: 700, cursor: 'pointer',
+                        background: savingProspect ? 'var(--border)' : 'rgba(251,191,36,0.1)',
+                        border: '1px solid rgba(251,191,36,0.2)', color: '#fbbf24',
+                      }}
+                    >Save as Lead</button>
+                    <button
+                      onClick={() => saveProspect('customer')}
+                      disabled={savingProspect || !prospectForm.company_name.trim()}
+                      style={{
+                        padding: '8px 14px', borderRadius: '8px', fontSize: '12px', fontWeight: 700, cursor: 'pointer',
+                        background: savingProspect ? 'var(--border)' : 'rgba(34,197,94,0.1)',
+                        border: '1px solid rgba(34,197,94,0.2)', color: '#4ade80',
+                      }}
+                    >Save as Customer</button>
+                  </>
+                )}
+              </div>
             </div>
           </div>
         )}
