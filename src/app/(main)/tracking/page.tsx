@@ -10,6 +10,7 @@ import AssignmentPicker from '@/components/AssignmentPicker';
 import type { FleetCheckin, VehicleTrackingStatus, VehicleStatusHistory, VehiclePhoto } from '@/lib/types';
 import { VEHICLE_STATUS_PIPELINE, VEHICLE_STATUS_LABELS, VEHICLE_STATUS_COLORS } from '@/lib/types';
 import SalesOrderPdf from '@/components/SalesOrderPdf';
+import ProofThumbnail from '@/components/ProofThumbnail';
 
 type FilterStatus = VehicleTrackingStatus | 'all' | 'stuck';
 
@@ -964,7 +965,13 @@ export default function TrackingPage() {
                       </div>
                       {(vehicle as any).proof_url ? (
                         <div style={{ display: 'flex', alignItems: 'center', gap: '8px', padding: '8px 10px', borderRadius: '8px', background: 'rgba(34,197,94,0.06)', border: '1px solid rgba(34,197,94,0.2)' }}>
-                          <span style={{ fontSize: '16px' }}>📄</span>
+                          <ProofThumbnail
+                            pdfUrl={(vehicle as any).proof_url}
+                            dropboxPath={(vehicle as any).proof_dropbox_path || undefined}
+                            label={(vehicle as any).proof_filename || 'Proof'}
+                            thumbSize={48}
+                            expandedSize={300}
+                          />
                           <div style={{ flex: 1, minWidth: 0 }}>
                             <a
                               href={(vehicle as any).proof_url}
@@ -1037,7 +1044,7 @@ export default function TrackingPage() {
                                       disabled={dbxCopying}
                                       style={{ display: 'flex', alignItems: 'center', gap: '8px', padding: '8px 10px', borderRadius: '8px', cursor: dbxCopying ? 'wait' : 'pointer', background: 'var(--card)', border: '1px solid var(--border)', textAlign: 'left', width: '100%' }}
                                     >
-                                      <span style={{ fontSize: '16px', flexShrink: 0 }}>📄</span>
+                                      <ProofThumbnail dropboxPath={file.path} label={file.name} thumbSize={48} expandedSize={280} />
                                       <div style={{ flex: 1, minWidth: 0 }}>
                                         <div style={{ fontSize: '12px', fontWeight: 700, color: 'var(--text-primary)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{file.name}</div>
                                         <div style={{ fontSize: '10px', color: 'var(--text-muted)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>

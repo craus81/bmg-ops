@@ -218,6 +218,36 @@ export async function downloadFile(path: string): Promise<{ buffer: Buffer; name
   };
 }
 
+// ── Get Thumbnail ──
+
+export async function getThumbnail(
+  path: string,
+  size: 'w32h32' | 'w64h64' | 'w128h128' | 'w256h256' | 'w480h320' | 'w640h480' = 'w256h256'
+): Promise<{ buffer: Buffer; contentType: string }> {
+  const token = await getAccessToken();
+
+  const res = await fetch('https://content.dropboxapi.com/2/files/get_thumbnail_v2', {
+    method: 'POST',
+    headers: {
+      'Authorization': `Bearer ${token}`,
+      'Dropbox-API-Arg': JSON.stringify({
+        resource: { '.tag': 'path', path },
+        format: { '.tag': 'png' },
+        size: { '.tag': size },
+        mode: { '.tag': 'bestfit' },
+      }),
+    },
+  });
+
+  if (!res.ok) {
+    const err = await res.text();
+    throw new Error(`Dropbox thumbnail failed: ${err}`);
+  }
+
+  const buffer = Buffer.from(await res.arrayBuffer());
+  return { buffer, contentType: 'image/png' };
+}
+
 // ── Check Connection Status ──
 
 export async function isConnected(): Promise<boolean> {

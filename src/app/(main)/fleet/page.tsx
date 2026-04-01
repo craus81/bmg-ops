@@ -8,6 +8,7 @@ import { decodeVIN, isValidVIN } from '@/lib/vin-decoder';
 import { theme } from '@/lib/theme';
 import type { NetsuiteSalesOrder, GraphicsProof, FleetCheckin } from '@/lib/types';
 import SalesOrderPdf from '@/components/SalesOrderPdf';
+import ProofThumbnail from '@/components/ProofThumbnail';
 
 // ─── Step indicator ────────────────────────────────────────────
 function StepIndicator({ current }: { current: number }) {
@@ -889,7 +890,7 @@ export default function FleetPage() {
             </div>
           ) : dbxSelected ? (
             <div style={{ display: 'flex', alignItems: 'center', gap: '8px', padding: '8px 10px', borderRadius: '8px', background: 'rgba(0,97,254,0.06)', border: '1px solid rgba(0,97,254,0.2)' }}>
-              <span style={{ fontSize: '16px' }}>📄</span>
+              <ProofThumbnail dropboxPath={dbxSelected.path} label={dbxSelected.name} thumbSize={48} expandedSize={280} />
               <div style={{ flex: 1, minWidth: 0 }}>
                 <div style={{ fontSize: '12px', fontWeight: 700, color: theme.textPrimary }}>{dbxSelected.name}</div>
                 <div style={{ fontSize: '10px', color: theme.textMuted, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{dbxSelected.path}</div>
@@ -911,7 +912,7 @@ export default function FleetPage() {
                     background: theme.card, border: `1px solid ${theme.border}`,
                   }}
                 >
-                  <span style={{ fontSize: '14px', flexShrink: 0 }}>📄</span>
+                  <ProofThumbnail dropboxPath={file.path} label={file.name} thumbSize={48} expandedSize={280} />
                   <div style={{ flex: 1, minWidth: 0 }}>
                     <div style={{ fontSize: '12px', fontWeight: 700, color: theme.textPrimary, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{file.name}</div>
                     <div style={{ fontSize: '10px', color: theme.textMuted, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
