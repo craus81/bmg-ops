@@ -13,7 +13,6 @@ export default function MorePage() {
   const supabase = createClient();
   const [pendingUserCount, setPendingUserCount] = useState(0);
   const [pendingReviewCount, setPendingReviewCount] = useState(0);
-  const [stuckVehicleCount, setStuckVehicleCount] = useState(0);
 
   useEffect(() => {
     if (!isAdmin) return;
@@ -31,15 +30,6 @@ export default function MorePage() {
         .eq('submitted_for_review', true);
       setPendingReviewCount(reviewCount || 0);
 
-      const { count: stuckParts } = await supabase
-        .from('fleet_checkins')
-        .select('*', { count: 'exact', head: true })
-        .eq('status', 'stuck_parts');
-      const { count: stuckGraphics } = await supabase
-        .from('fleet_checkins')
-        .select('*', { count: 'exact', head: true })
-        .eq('status', 'stuck_graphics');
-      setStuckVehicleCount((stuckParts || 0) + (stuckGraphics || 0));
     };
     load();
   }, [isAdmin]);
@@ -68,13 +58,6 @@ export default function MorePage() {
         </>)}
         {/* Admin-only tools */}
         {isAdmin && (<>
-          <MenuBtn
-            icon="🚚"
-            title="Vehicle Tracking"
-            sub={stuckVehicleCount > 0 ? `${stuckVehicleCount} stuck — needs attention` : 'Track all shop vehicles'}
-            onClick={() => router.push('/admin/tracking')}
-            badge={stuckVehicleCount > 0 ? stuckVehicleCount : undefined}
-          />
           <MenuBtn icon="📄" title="Proof Hygiene" sub="Assign unmatched proof files from NAS" onClick={() => router.push('/admin/proofs')} />
           <MenuBtn icon="📋" title="All Jobs" sub="View all jobs by company" onClick={() => router.push('/admin/jobs')} />
           <MenuBtn icon="📅" title="Schedule" sub="Assign jobs to installers" onClick={() => router.push('/admin/schedule')} />

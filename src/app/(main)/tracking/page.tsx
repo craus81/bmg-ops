@@ -65,9 +65,25 @@ export default function TrackingPage() {
   const [soSearching, setSoSearching] = useState(false);
   const [soLinking, setSoLinking] = useState(false);
 
+  // Dropbox proof search state
+  const [dbxSearchOpen, setDbxSearchOpen] = useState<string | null>(null); // vehicleId
+  const [dbxSearchTerm, setDbxSearchTerm] = useState('');
+  const [dbxResults, setDbxResults] = useState<{ id: string; name: string; path: string; size: number; modified: string; folder: string }[]>([]);
+  const [dbxSearching, setDbxSearching] = useState(false);
+  const [dbxCopying, setDbxCopying] = useState(false);
+  const [dbxConnected, setDbxConnected] = useState<boolean | null>(null); // null = unknown
+
   useEffect(() => {
     loadVehicles();
     loadProfiles();
+
+    // Handle Dropbox OAuth redirect
+    const dbxParam = searchParams.get('dropbox');
+    if (dbxParam === 'connected') {
+      setDbxConnected(true);
+      setUpdateSuccess('Dropbox connected successfully');
+      setTimeout(() => setUpdateSuccess(null), 3000);
+    }
   }, []);
 
   // Auto-expand vehicle from URL param (deep link from check-in page)
@@ -309,6 +325,68 @@ export default function TrackingPage() {
     }
   };
 
+  // ── Dropbox Proof Search ──
+  const searchDropboxProofs = async (customerName?: string) => {
+    const term = customerName || dbxSearchTerm.trim();
+    if (!term) return;
+    setDbxSearching(true);
+    setDbxResults([]);
+    try {
+      const res = await fetch(`/api/dropbox/search?q=${encodeURIComponent(term)}`);
+      const data = await res.json();
+      if (data.connected === false) {
+        setDbxConnected(false);
+        setDbxSearching(false);
+        return;
+      }
+      setDbxConnected(true);
+      setDbxResults(data.results || []);
+    } catch { /* ignore */ }
+    setDbxSearching(false);
+  };
+
+  const copyProofToR2 = async (vehicleId: string, dropboxPath: string, customerName: string) => {
+    setDbxCopying(true);
+    try {
+      const res = await fetch('/api/dropbox/copy-to-r2', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ dropbox_path: dropboxPath, vehicle_id: vehicleId, customer_name: customerName }),
+      });
+      const data = await res.json();
+      if (data.success) {
+        // Update local state
+        setVehicles(prev => prev.map(v =>
+          v.id === vehicleId ? { ...v, proof_url: data.publicUrl, proof_filename: data.filename, proof_dropbox_path: dropboxPath } as any : v
+        ));
+        setDbxSearchOpen(null);
+        setDbxSearchTerm('');
+        setDbxResults([]);
+        setUpdateSuccess('Proof linked from Dropbox');
+        setTimeout(() => setUpdateSuccess(null), 3000);
+      } else {
+        alert(`Failed to copy proof: ${data.error}`);
+      }
+    } catch (err: any) {
+      alert(`Error: ${err.message}`);
+    }
+    setDbxCopying(false);
+  };
+
+  const connectDropbox = async () => {
+    try {
+      const res = await fetch('/api/dropbox/auth?action=url');
+      const data = await res.json();
+      if (data.authUrl) {
+        window.location.href = data.authUrl;
+      } else {
+        alert('Dropbox not configured. Add DROPBOX_APP_KEY and DROPBOX_APP_SECRET to environment variables.');
+      }
+    } catch {
+      alert('Failed to start Dropbox connection');
+    }
+  };
+
   const saveAssignments = async (vehicleId: string, userIds: string[]) => {
     setVehicleAssignments(prev => ({ ...prev, [vehicleId]: userIds }));
     setAssignmentSaving(true);
@@ -511,7 +589,7 @@ export default function TrackingPage() {
       {/* Page Header */}
       <div style={{ marginBottom: '16px' }}>
         <div style={{ fontSize: '22px', fontWeight: 800, color: 'var(--text-primary)' }}>
-          Vehicle Tracking
+          In-Shop
         </div>
       </div>
 
@@ -878,6 +956,119 @@ export default function TrackingPage() {
                         )}
                       </div>
                     )}
+
+                    {/* Proof File (Dropbox) */}
+                    <div style={{ marginBottom: '12px' }}>
+                      <div style={{ fontSize: '10px', fontWeight: 700, color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.5px', marginBottom: '6px' }}>
+                        Proof File
+                      </div>
+                      {(vehicle as any).proof_url ? (
+                        <div style={{ display: 'flex', alignItems: 'center', gap: '8px', padding: '8px 10px', borderRadius: '8px', background: 'rgba(34,197,94,0.06)', border: '1px solid rgba(34,197,94,0.2)' }}>
+                          <span style={{ fontSize: '16px' }}>📄</span>
+                          <div style={{ flex: 1, minWidth: 0 }}>
+                            <a
+                              href={(vehicle as any).proof_url}
+                              target="_blank"
+                              rel="noopener noreferrer"
+                              style={{ fontSize: '12px', fontWeight: 700, color: '#22c55e', textDecoration: 'none' }}
+                            >
+                              {(vehicle as any).proof_filename || 'View Proof'}
+                            </a>
+                            {(vehicle as any).proof_dropbox_path && (
+                              <div style={{ fontSize: '10px', color: 'var(--text-muted)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                                Dropbox: {(vehicle as any).proof_dropbox_path}
+                              </div>
+                            )}
+                          </div>
+                          <button
+                            onClick={() => {
+                              setDbxSearchOpen(vehicle.id);
+                              if (vehicle.customer_name) {
+                                setDbxSearchTerm(vehicle.customer_name);
+                                searchDropboxProofs(vehicle.customer_name);
+                              }
+                            }}
+                            style={{ padding: '4px 8px', borderRadius: '6px', fontSize: '10px', fontWeight: 700, background: 'transparent', border: '1px solid var(--border)', color: 'var(--text-muted)', cursor: 'pointer' }}
+                          >Replace</button>
+                        </div>
+                      ) : dbxSearchOpen === vehicle.id ? (
+                        <div style={{ padding: '12px', borderRadius: '10px', background: 'var(--subtle-bg)', border: '1px solid var(--border)' }}>
+                          {dbxConnected === false ? (
+                            <div style={{ textAlign: 'center', padding: '12px 0' }}>
+                              <div style={{ fontSize: '12px', color: 'var(--text-secondary)', marginBottom: '8px' }}>Dropbox is not connected yet</div>
+                              <button
+                                onClick={connectDropbox}
+                                style={{ padding: '10px 20px', borderRadius: '8px', fontSize: '13px', fontWeight: 700, background: '#0061fe', color: '#fff', border: 'none', cursor: 'pointer' }}
+                              >Connect Dropbox</button>
+                            </div>
+                          ) : (
+                            <>
+                              <div style={{ fontSize: '11px', fontWeight: 700, color: 'var(--text-muted)', textTransform: 'uppercase', marginBottom: '6px' }}>
+                                Search Dropbox for Proof
+                              </div>
+                              <div style={{ display: 'flex', gap: '6px', marginBottom: '8px' }}>
+                                <input
+                                  value={dbxSearchTerm}
+                                  onChange={(e) => setDbxSearchTerm(e.target.value)}
+                                  onKeyDown={(e) => { if (e.key === 'Enter') searchDropboxProofs(); }}
+                                  placeholder="Customer or file name..."
+                                  autoFocus
+                                  style={{ flex: 1, padding: '8px 10px', borderRadius: '8px', fontSize: '13px', border: '1px solid var(--border)', background: 'var(--input-bg)', color: 'var(--text-primary)' }}
+                                />
+                                <button
+                                  onClick={() => searchDropboxProofs()}
+                                  disabled={dbxSearching || !dbxSearchTerm.trim()}
+                                  style={{ padding: '8px 14px', borderRadius: '8px', fontSize: '12px', fontWeight: 700, background: '#0061fe', color: '#fff', border: 'none', opacity: dbxSearching || !dbxSearchTerm.trim() ? 0.5 : 1, cursor: 'pointer' }}
+                                >{dbxSearching ? '...' : 'Search'}</button>
+                                <button
+                                  onClick={() => { setDbxSearchOpen(null); setDbxSearchTerm(''); setDbxResults([]); }}
+                                  style={{ padding: '8px 10px', borderRadius: '8px', fontSize: '12px', fontWeight: 700, background: 'transparent', border: '1px solid var(--border)', color: 'var(--text-muted)', cursor: 'pointer' }}
+                                >Cancel</button>
+                              </div>
+                              {dbxSearching && (
+                                <div style={{ fontSize: '11px', color: 'var(--text-muted)', padding: '8px 0' }}>Searching Dropbox...</div>
+                              )}
+                              {!dbxSearching && dbxResults.length > 0 && (
+                                <div style={{ display: 'flex', flexDirection: 'column', gap: '4px', maxHeight: '250px', overflowY: 'auto' }}>
+                                  {dbxResults.map((file) => (
+                                    <button
+                                      key={file.id}
+                                      onClick={() => copyProofToR2(vehicle.id, file.path, vehicle.customer_name || '')}
+                                      disabled={dbxCopying}
+                                      style={{ display: 'flex', alignItems: 'center', gap: '8px', padding: '8px 10px', borderRadius: '8px', cursor: dbxCopying ? 'wait' : 'pointer', background: 'var(--card)', border: '1px solid var(--border)', textAlign: 'left', width: '100%' }}
+                                    >
+                                      <span style={{ fontSize: '16px', flexShrink: 0 }}>📄</span>
+                                      <div style={{ flex: 1, minWidth: 0 }}>
+                                        <div style={{ fontSize: '12px', fontWeight: 700, color: 'var(--text-primary)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{file.name}</div>
+                                        <div style={{ fontSize: '10px', color: 'var(--text-muted)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                                          {file.folder ? `📁 ${file.folder}` : file.path} · {(file.size / 1024).toFixed(0)} KB
+                                        </div>
+                                      </div>
+                                      <span style={{ fontSize: '10px', color: '#0061fe', fontWeight: 700, flexShrink: 0 }}>{dbxCopying ? 'Copying...' : 'Use This'}</span>
+                                    </button>
+                                  ))}
+                                </div>
+                              )}
+                              {!dbxSearching && dbxSearchTerm.length >= 2 && dbxResults.length === 0 && dbxConnected !== false && (
+                                <div style={{ fontSize: '11px', color: 'var(--text-muted)', padding: '8px 0' }}>No files found in Dropbox</div>
+                              )}
+                            </>
+                          )}
+                        </div>
+                      ) : (
+                        <button
+                          onClick={() => {
+                            setDbxSearchOpen(vehicle.id);
+                            // Auto-populate search with customer name
+                            if (vehicle.customer_name) {
+                              setDbxSearchTerm(vehicle.customer_name);
+                              searchDropboxProofs(vehicle.customer_name);
+                            }
+                          }}
+                          style={{ width: '100%', padding: '10px', borderRadius: '8px', fontSize: '12px', fontWeight: 700, background: 'rgba(0,97,254,0.08)', border: '1px dashed rgba(0,97,254,0.3)', color: '#0061fe', cursor: 'pointer' }}
+                        >📁 Find Proof in Dropbox</button>
+                      )}
+                    </div>
 
                     {/* Completion Photos */}
                     <div style={{ marginBottom: '12px' }}>

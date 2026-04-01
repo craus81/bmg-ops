@@ -73,6 +73,12 @@ export default function FleetPage() {
   const [selectedProof, setSelectedProof] = useState<GraphicsProof | null>(null);
   const [proofSearch, setProofSearch] = useState('');
 
+  // Dropbox proof search
+  const [dbxResults, setDbxResults] = useState<{ id: string; name: string; path: string; size: number; modified: string; folder: string }[]>([]);
+  const [dbxSearching, setDbxSearching] = useState(false);
+  const [dbxSelected, setDbxSelected] = useState<{ name: string; path: string } | null>(null);
+  const [dbxConnected, setDbxConnected] = useState<boolean | null>(null);
+
   // Final
   const [saving, setSaving] = useState(false);
   const [saved, setSaved] = useState(false);
@@ -274,6 +280,7 @@ export default function FleetPage() {
     setStep(2);
     setProofSearch(order.customer_name || '');
     loadProofs(order.customer_name);
+    if (order.customer_name) searchDropbox(order.customer_name);
   };
 
   const skipSalesOrder = () => {
@@ -281,6 +288,26 @@ export default function FleetPage() {
     setStep(2);
     setProofSearch('');
     loadProofs('');
+    setDbxResults([]);
+    setDbxSelected(null);
+  };
+
+  // ─── Dropbox Proof Search ─────────────────────────────────
+  const searchDropbox = async (term: string) => {
+    if (!term || term.length < 2) return;
+    setDbxSearching(true);
+    setDbxResults([]);
+    try {
+      const res = await fetch(`/api/dropbox/search?q=${encodeURIComponent(term)}`);
+      const data = await res.json();
+      if (data.connected === false) {
+        setDbxConnected(false);
+      } else {
+        setDbxConnected(true);
+        setDbxResults(data.results || []);
+      }
+    } catch { /* ignore */ }
+    setDbxSearching(false);
   };
 
   // ─── Step 3: Proof Selection ───────────────────────────────
@@ -325,6 +352,8 @@ export default function FleetPage() {
         sales_order_total: selectedOrder?.total || null,
         proof_file_path: selectedProof?.storage_path || null,
         proof_file_name: selectedProof?.file_name || null,
+        proof_dropbox_path: dbxSelected?.path || null,
+        proof_filename: dbxSelected?.name || null,
         notes: notes.trim() || null,
         status: 'received',
         checked_in_by: user.id,
@@ -337,6 +366,19 @@ export default function FleetPage() {
       setVinError('Failed to save: ' + error.message);
       setSaving(false);
       return;
+    }
+
+    // If a Dropbox proof was selected, copy it to R2 in the background
+    if (dbxSelected && data?.id) {
+      fetch('/api/dropbox/copy-to-r2', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          dropbox_path: dbxSelected.path,
+          vehicle_id: data.id,
+          customer_name: selectedOrder?.customer_name || manualCustomerName.trim() || '',
+        }),
+      }).catch(() => {}); // fire-and-forget — proof will be linked async
     }
 
     setSavedCheckin(data);
@@ -358,6 +400,8 @@ export default function FleetPage() {
     setExpandedOrder(null);
     setProofs([]);
     setSelectedProof(null);
+    setDbxResults([]);
+    setDbxSelected(null);
     setSaved(false);
     setSavedCheckin(null);
     setNotes('');
@@ -816,9 +860,92 @@ export default function FleetPage() {
             border: `1px solid ${theme.border}`, borderRadius: '10px',
             color: theme.textMuted, fontSize: '13px', marginBottom: '12px',
           }}>
-            No proofs found. You can upload proofs in the admin section.
+            No proofs found in app. Try searching Dropbox below.
           </div>
         )}
+
+        {/* Dropbox Proof Search */}
+        <div style={{
+          background: theme.card, border: `1px solid ${theme.border}`, borderRadius: '14px',
+          padding: '14px', marginBottom: '14px',
+        }}>
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '8px' }}>
+            <div style={{ fontSize: '10px', fontWeight: 700, color: theme.textMuted, textTransform: 'uppercase', letterSpacing: '0.5px' }}>
+              Dropbox Proofs
+            </div>
+            {dbxConnected === true && dbxResults.length > 0 && !dbxSearching && (
+              <span style={{ fontSize: '10px', color: theme.textMuted }}>{dbxResults.length} found</span>
+            )}
+          </div>
+
+          {dbxConnected === false ? (
+            <div style={{ fontSize: '12px', color: theme.textMuted, textAlign: 'center', padding: '8px 0' }}>
+              Dropbox not connected — proofs can be linked later from the vehicle record
+            </div>
+          ) : dbxSearching ? (
+            <div style={{ display: 'flex', alignItems: 'center', gap: '8px', padding: '8px 0' }}>
+              <div style={{ width: '16px', height: '16px', border: `2px solid ${theme.border}`, borderTopColor: '#0061fe', borderRadius: '50%', animation: 'spin 1s linear infinite' }} />
+              <span style={{ fontSize: '12px', color: theme.textMuted }}>Searching Dropbox...</span>
+            </div>
+          ) : dbxSelected ? (
+            <div style={{ display: 'flex', alignItems: 'center', gap: '8px', padding: '8px 10px', borderRadius: '8px', background: 'rgba(0,97,254,0.06)', border: '1px solid rgba(0,97,254,0.2)' }}>
+              <span style={{ fontSize: '16px' }}>📄</span>
+              <div style={{ flex: 1, minWidth: 0 }}>
+                <div style={{ fontSize: '12px', fontWeight: 700, color: theme.textPrimary }}>{dbxSelected.name}</div>
+                <div style={{ fontSize: '10px', color: theme.textMuted, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{dbxSelected.path}</div>
+              </div>
+              <button
+                onClick={() => setDbxSelected(null)}
+                style={{ padding: '4px 8px', borderRadius: '6px', fontSize: '10px', fontWeight: 700, background: 'transparent', border: `1px solid ${theme.border}`, color: theme.textMuted, cursor: 'pointer' }}
+              >Change</button>
+            </div>
+          ) : dbxResults.length > 0 ? (
+            <div style={{ display: 'flex', flexDirection: 'column', gap: '4px', maxHeight: '200px', overflowY: 'auto' }}>
+              {dbxResults.map((file) => (
+                <button
+                  key={file.id}
+                  onClick={() => { setDbxSelected({ name: file.name, path: file.path }); setSelectedProof(null); }}
+                  style={{
+                    display: 'flex', alignItems: 'center', gap: '8px', width: '100%',
+                    padding: '8px 10px', borderRadius: '8px', cursor: 'pointer', textAlign: 'left',
+                    background: theme.card, border: `1px solid ${theme.border}`,
+                  }}
+                >
+                  <span style={{ fontSize: '14px', flexShrink: 0 }}>📄</span>
+                  <div style={{ flex: 1, minWidth: 0 }}>
+                    <div style={{ fontSize: '12px', fontWeight: 700, color: theme.textPrimary, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{file.name}</div>
+                    <div style={{ fontSize: '10px', color: theme.textMuted, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                      {file.folder ? `📁 ${file.folder}` : file.path} · {(file.size / 1024).toFixed(0)} KB
+                    </div>
+                  </div>
+                  <span style={{ fontSize: '10px', color: '#0061fe', fontWeight: 700, flexShrink: 0 }}>Select</span>
+                </button>
+              ))}
+            </div>
+          ) : (
+            <div style={{ display: 'flex', gap: '6px' }}>
+              <input
+                value={proofSearch}
+                onChange={(e) => setProofSearch(e.target.value)}
+                onKeyDown={(e) => { if (e.key === 'Enter' && proofSearch.trim()) searchDropbox(proofSearch.trim()); }}
+                placeholder="Search Dropbox by customer..."
+                style={{
+                  flex: 1, padding: '8px 10px', borderRadius: '8px', fontSize: '12px',
+                  border: `1px solid ${theme.border}`, background: theme.bg, color: theme.textPrimary,
+                }}
+              />
+              <button
+                onClick={() => searchDropbox(proofSearch.trim())}
+                disabled={!proofSearch.trim()}
+                style={{
+                  padding: '8px 12px', borderRadius: '8px', fontSize: '11px', fontWeight: 700,
+                  background: '#0061fe', color: '#fff', border: 'none',
+                  opacity: !proofSearch.trim() ? 0.5 : 1, cursor: 'pointer',
+                }}
+              >Search</button>
+            </div>
+          )}
+        </div>
 
         {/* Customer Name — shown when no sales order is linked */}
         {!selectedOrder && (
