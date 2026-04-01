@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import { useRouter } from 'next/navigation';
 import { createClient } from '@/lib/supabase-browser';
 import { useAuth } from '@/components/AuthProvider';
@@ -40,11 +40,37 @@ interface Contact {
   created_at: string;
 }
 
+interface Prospect {
+  id: string;
+  company_name: string;
+  contact_name: string | null;
+  title: string | null;
+  email: string | null;
+  phone: string | null;
+  address: string | null;
+  city: string | null;
+  state: string | null;
+  zip: string | null;
+  website: string | null;
+  notes: string | null;
+  source: string;
+  netsuite_id: string | null;
+  netsuite_type: string | null;
+  netsuite_url: string | null;
+  pushed_at: string | null;
+  created_at: string;
+}
+
+const emptyProspect = {
+  company_name: '', contact_name: '', title: '', email: '', phone: '',
+  address: '', city: '', state: '', zip: '', website: '', notes: '',
+};
+
 const emptyContact = { name: '', email: '', phone: '', title: '', address: '', notes: '' };
 
 export default function CustomersPage() {
   const router = useRouter();
-  const { isAdmin, isSales } = useAuth();
+  const { user, isAdmin, isSales } = useAuth();
   const supabase = createClient();
 
   const [customers, setCustomers] = useState<Customer[]>([]);
@@ -54,6 +80,20 @@ export default function CustomersPage() {
   const [syncResult, setSyncResult] = useState<string | null>(null);
   const [search, setSearch] = useState('');
   const [sortBy, setSortBy] = useState<'name' | 'spend' | 'orders' | 'recent'>('name');
+
+  // Tab state
+  const [tab, setTab] = useState<'customers' | 'prospects'>('customers');
+
+  // Prospects state
+  const [prospects, setProspects] = useState<Prospect[]>([]);
+  const [showAddProspect, setShowAddProspect] = useState(false);
+  const [prospectForm, setProspectForm] = useState(emptyProspect);
+  const [savingProspect, setSavingProspect] = useState(false);
+  const [scanningCard, setScanningCard] = useState(false);
+  const [pushingToNS, setPushingToNS] = useState<string | null>(null);
+  const [pushTypeModal, setPushTypeModal] = useState<string | null>(null);
+  const [editingProspect, setEditingProspect] = useState<string | null>(null);
+  const fileInputRef = useRef<HTMLInputElement>(null);
 
   // Purchase report state
   const [reportCustomer, setReportCustomer] = useState<string | null>(null);
@@ -97,6 +137,14 @@ export default function CustomersPage() {
     const { data: contData } = await supabase.from('contacts').select('*').order('name');
     setCustomers(allCustomers);
     setContacts((contData as Contact[]) || []);
+
+    // Load prospects
+    try {
+      const pRes = await fetch('/api/prospects');
+      const pData = await pRes.json();
+      setProspects(pData.prospects || []);
+    } catch { /* prospects table may not exist yet */ }
+
     setLoading(false);
   };
 
@@ -294,6 +342,113 @@ export default function CustomersPage() {
     });
   };
 
+  // ── Prospect functions ──────────────────────────────────
+  const handleScanCard = async (file: File) => {
+    setScanningCard(true);
+    try {
+      const reader = new FileReader();
+      const base64 = await new Promise<string>((resolve) => {
+        reader.onload = () => {
+          const result = reader.result as string;
+          resolve(result.split(',')[1]); // strip data:image/...;base64,
+        };
+        reader.readAsDataURL(file);
+      });
+
+      const res = await fetch('/api/prospects/scan-card', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ image: base64, mimeType: file.type }),
+      });
+      const data = await res.json();
+      if (data.success && data.data) {
+        setProspectForm({
+          company_name: data.data.company_name || '',
+          contact_name: data.data.contact_name || '',
+          title: data.data.title || '',
+          email: data.data.email || '',
+          phone: data.data.phone || '',
+          address: data.data.address || '',
+          city: data.data.city || '',
+          state: data.data.state || '',
+          zip: data.data.zip || '',
+          website: data.data.website || '',
+          notes: '',
+        });
+        setShowAddProspect(true);
+      } else {
+        alert(data.error || 'Failed to scan card');
+      }
+    } catch (err: any) {
+      alert(err.message || 'Failed to scan card');
+    }
+    setScanningCard(false);
+  };
+
+  const saveProspect = async () => {
+    if (!prospectForm.company_name.trim()) { alert('Company name is required'); return; }
+    setSavingProspect(true);
+    try {
+      const method = editingProspect ? 'PUT' : 'POST';
+      const body = editingProspect
+        ? { id: editingProspect, ...prospectForm }
+        : { ...prospectForm, source: 'manual', created_by: user?.id };
+      const res = await fetch('/api/prospects', {
+        method,
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(body),
+      });
+      const data = await res.json();
+      if (data.success) {
+        if (editingProspect) {
+          setProspects(prev => prev.map(p => p.id === editingProspect ? data.prospect : p));
+        } else {
+          setProspects(prev => [data.prospect, ...prev]);
+        }
+        setShowAddProspect(false);
+        setEditingProspect(null);
+        setProspectForm(emptyProspect);
+      } else {
+        alert(data.error || 'Failed to save');
+      }
+    } catch (err: any) {
+      alert(err.message || 'Failed to save');
+    }
+    setSavingProspect(false);
+  };
+
+  const deleteProspect = async (id: string) => {
+    if (!window.confirm('Delete this prospect?')) return;
+    const res = await fetch(`/api/prospects?id=${id}`, { method: 'DELETE' });
+    if (res.ok) setProspects(prev => prev.filter(p => p.id !== id));
+  };
+
+  const pushToNetSuite = async (prospectId: string, type: 'customer' | 'lead' | 'prospect') => {
+    setPushingToNS(prospectId);
+    setPushTypeModal(null);
+    try {
+      const res = await fetch('/api/prospects/push-to-netsuite', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ prospectId, type, userId: user?.id }),
+      });
+      const data = await res.json();
+      if (data.success) {
+        setProspects(prev => prev.map(p =>
+          p.id === prospectId
+            ? { ...p, netsuite_id: data.customerId, netsuite_type: type, netsuite_url: data.netsuiteUrl, pushed_at: new Date().toISOString() }
+            : p
+        ));
+        // Also refresh customers list to show the new entry after next sync
+      } else {
+        alert(data.error || 'Failed to push to NetSuite');
+      }
+    } catch (err: any) {
+      alert(err.message || 'Failed to push');
+    }
+    setPushingToNS(null);
+  };
+
   const fmt = (n: number) => '$' + n.toFixed(2).replace(/\B(?=(\d{3})+(?!\d))/g, ',');
   const fmtK = (n: number) => n >= 1000 ? '$' + (n / 1000).toFixed(1) + 'k' : fmt(n);
 
@@ -338,23 +493,69 @@ export default function CustomersPage() {
   return (
     <div style={{ padding: '16px', maxWidth: '800px', margin: '0 auto' }}>
       {/* Header */}
-      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '16px' }}>
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '12px' }}>
         <div>
-          <h1 style={{ fontSize: '20px', fontWeight: 800, color: 'var(--text-body)', margin: 0 }}>Customers & Contacts</h1>
-          <div style={{ fontSize: '12px', color: 'var(--text-label)', marginTop: '2px' }}>{customers.length} customers · {contacts.length} contacts</div>
+          <h1 style={{ fontSize: '20px', fontWeight: 800, color: 'var(--text-body)', margin: 0 }}>Customers & Prospects</h1>
+          <div style={{ fontSize: '12px', color: 'var(--text-label)', marginTop: '2px' }}>
+            {customers.length} customers · {prospects.filter(p => !p.netsuite_id).length} prospects
+          </div>
         </div>
-        <button
-          onClick={syncFromNetSuite}
-          disabled={syncing}
-          style={{
-            padding: '8px 16px', borderRadius: '8px', fontSize: '12px', fontWeight: 700,
-            background: syncing ? 'var(--border)' : '#3b82f6', border: 'none', color: '#fff', cursor: 'pointer',
-          }}
-        >
-          {syncing ? 'Syncing...' : 'Sync from NetSuite'}
-        </button>
+        <div style={{ display: 'flex', gap: '6px' }}>
+          {tab === 'customers' ? (
+            <button
+              onClick={syncFromNetSuite}
+              disabled={syncing}
+              style={{
+                padding: '8px 16px', borderRadius: '8px', fontSize: '12px', fontWeight: 700,
+                background: syncing ? 'var(--border)' : '#3b82f6', border: 'none', color: '#fff', cursor: 'pointer',
+              }}
+            >
+              {syncing ? 'Syncing...' : 'Sync NetSuite'}
+            </button>
+          ) : (
+            <button
+              onClick={() => { setProspectForm(emptyProspect); setEditingProspect(null); setShowAddProspect(true); }}
+              style={{
+                padding: '8px 16px', borderRadius: '8px', fontSize: '12px', fontWeight: 700,
+                background: '#4ade80', border: 'none', color: '#000', cursor: 'pointer',
+              }}
+            >
+              + Add Prospect
+            </button>
+          )}
+        </div>
       </div>
 
+      {/* Tabs */}
+      <div style={{ display: 'flex', gap: '4px', marginBottom: '12px', background: 'var(--card)', borderRadius: '10px', padding: '3px' }}>
+        <button onClick={() => setTab('customers')} style={{
+          flex: 1, padding: '8px', borderRadius: '6px', fontSize: '12px', fontWeight: 700, border: 'none', cursor: 'pointer',
+          background: tab === 'customers' ? '#3b82f6' : 'transparent',
+          color: tab === 'customers' ? '#fff' : 'var(--text-label)',
+        }}>Customers ({customers.length})</button>
+        <button onClick={() => setTab('prospects')} style={{
+          flex: 1, padding: '8px', borderRadius: '6px', fontSize: '12px', fontWeight: 700, border: 'none', cursor: 'pointer',
+          background: tab === 'prospects' ? '#3b82f6' : 'transparent',
+          color: tab === 'prospects' ? '#fff' : 'var(--text-label)',
+        }}>Prospects ({prospects.length})</button>
+      </div>
+
+      {/* Hidden file input for card scanning */}
+      <input
+        ref={fileInputRef}
+        type="file"
+        accept="image/*"
+        capture="environment"
+        style={{ display: 'none' }}
+        onChange={(e) => {
+          const file = e.target.files?.[0];
+          if (file) handleScanCard(file);
+          e.target.value = '';
+        }}
+      />
+
+      {/* ══════ CUSTOMERS TAB ══════ */}
+      {tab === 'customers' && <>
       {syncResult && (
         <div style={{
           padding: '8px 12px', borderRadius: '6px', marginBottom: '12px', fontSize: '12px',
@@ -702,6 +903,240 @@ export default function CustomersPage() {
           }
         </div>
       )}
+      </>}
+
+      {/* ══════ PROSPECTS TAB ══════ */}
+      {tab === 'prospects' && <>
+        {/* Scan Card Button */}
+        <div style={{ display: 'flex', gap: '8px', marginBottom: '14px' }}>
+          <button
+            onClick={() => fileInputRef.current?.click()}
+            disabled={scanningCard}
+            style={{
+              flex: 1, padding: '14px', borderRadius: '12px', fontSize: '14px', fontWeight: 700,
+              background: scanningCard ? 'var(--border)' : 'var(--card)', border: '2px dashed var(--border)',
+              color: scanningCard ? 'var(--text-label)' : 'var(--text-body)', cursor: 'pointer', textAlign: 'center',
+            }}
+          >
+            {scanningCard ? 'Scanning card...' : '📷 Scan Business Card'}
+          </button>
+        </div>
+
+        {/* Add/Edit Prospect Form */}
+        {showAddProspect && (
+          <div style={{
+            background: 'var(--card)', border: '1px solid var(--border)', borderRadius: '12px',
+            padding: '16px', marginBottom: '14px',
+          }}>
+            <div style={{ fontSize: '13px', fontWeight: 800, color: 'var(--text-body)', marginBottom: '10px' }}>
+              {editingProspect ? 'Edit Prospect' : 'New Prospect'}
+            </div>
+            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '8px' }}>
+              <div style={{ gridColumn: '1 / -1' }}>
+                <label style={labelStyle}>Company Name *</label>
+                <input style={inputStyle} value={prospectForm.company_name}
+                  onChange={e => setProspectForm(f => ({ ...f, company_name: e.target.value }))} placeholder="Company name" />
+              </div>
+              <div>
+                <label style={labelStyle}>Contact Name</label>
+                <input style={inputStyle} value={prospectForm.contact_name}
+                  onChange={e => setProspectForm(f => ({ ...f, contact_name: e.target.value }))} placeholder="Full name" />
+              </div>
+              <div>
+                <label style={labelStyle}>Title</label>
+                <input style={inputStyle} value={prospectForm.title}
+                  onChange={e => setProspectForm(f => ({ ...f, title: e.target.value }))} placeholder="Job title" />
+              </div>
+              <div>
+                <label style={labelStyle}>Email</label>
+                <input style={inputStyle} type="email" value={prospectForm.email}
+                  onChange={e => setProspectForm(f => ({ ...f, email: e.target.value }))} placeholder="email@company.com" />
+              </div>
+              <div>
+                <label style={labelStyle}>Phone</label>
+                <input style={inputStyle} type="tel" value={prospectForm.phone}
+                  onChange={e => setProspectForm(f => ({ ...f, phone: e.target.value }))} placeholder="(555) 123-4567" />
+              </div>
+              <div style={{ gridColumn: '1 / -1' }}>
+                <label style={labelStyle}>Address</label>
+                <input style={inputStyle} value={prospectForm.address}
+                  onChange={e => setProspectForm(f => ({ ...f, address: e.target.value }))} placeholder="Street address" />
+              </div>
+              <div>
+                <label style={labelStyle}>City</label>
+                <input style={inputStyle} value={prospectForm.city}
+                  onChange={e => setProspectForm(f => ({ ...f, city: e.target.value }))} placeholder="City" />
+              </div>
+              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '6px' }}>
+                <div>
+                  <label style={labelStyle}>State</label>
+                  <input style={inputStyle} value={prospectForm.state}
+                    onChange={e => setProspectForm(f => ({ ...f, state: e.target.value }))} placeholder="ST" />
+                </div>
+                <div>
+                  <label style={labelStyle}>Zip</label>
+                  <input style={inputStyle} value={prospectForm.zip}
+                    onChange={e => setProspectForm(f => ({ ...f, zip: e.target.value }))} placeholder="12345" />
+                </div>
+              </div>
+              <div>
+                <label style={labelStyle}>Website</label>
+                <input style={inputStyle} value={prospectForm.website}
+                  onChange={e => setProspectForm(f => ({ ...f, website: e.target.value }))} placeholder="www.company.com" />
+              </div>
+              <div>
+                <label style={labelStyle}>Notes</label>
+                <input style={inputStyle} value={prospectForm.notes}
+                  onChange={e => setProspectForm(f => ({ ...f, notes: e.target.value }))} placeholder="Notes..." />
+              </div>
+            </div>
+            <div style={{ display: 'flex', gap: '8px', marginTop: '12px', justifyContent: 'flex-end' }}>
+              <button
+                onClick={() => { setShowAddProspect(false); setEditingProspect(null); setProspectForm(emptyProspect); }}
+                style={{ padding: '8px 14px', borderRadius: '8px', border: '1px solid var(--border)', background: 'transparent', color: 'var(--text-label)', fontSize: '12px', fontWeight: 700, cursor: 'pointer' }}
+              >Cancel</button>
+              <button
+                onClick={saveProspect}
+                disabled={savingProspect || !prospectForm.company_name.trim()}
+                style={{
+                  padding: '8px 18px', borderRadius: '8px', border: 'none', fontSize: '12px', fontWeight: 700, cursor: 'pointer',
+                  background: savingProspect ? 'var(--border)' : '#3b82f6', color: '#fff',
+                }}
+              >{savingProspect ? 'Saving...' : editingProspect ? 'Update' : 'Save Prospect'}</button>
+            </div>
+          </div>
+        )}
+
+        {/* Prospect list */}
+        <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
+          {prospects.map(p => (
+            <div key={p.id} style={{
+              borderRadius: '10px', border: '1px solid var(--border)', background: 'var(--card)', padding: '12px 14px',
+            }}>
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
+                <div style={{ flex: 1, minWidth: 0 }}>
+                  <div style={{ fontSize: '14px', fontWeight: 700, color: 'var(--text-body)' }}>{p.company_name}</div>
+                  <div style={{ fontSize: '12px', color: 'var(--text-label)', marginTop: '2px' }}>
+                    {p.contact_name && <span>{p.contact_name}</span>}
+                    {p.title && <span> · {p.title}</span>}
+                  </div>
+                  <div style={{ fontSize: '11px', color: 'var(--text-label)', marginTop: '2px' }}>
+                    {p.email && <span>{p.email} · </span>}
+                    {p.phone && <span>{p.phone}</span>}
+                  </div>
+                  {(p.city || p.state) && (
+                    <div style={{ fontSize: '11px', color: 'var(--text-label)', marginTop: '1px' }}>
+                      {[p.address, p.city, p.state, p.zip].filter(Boolean).join(', ')}
+                    </div>
+                  )}
+                </div>
+                <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-end', gap: '4px', flexShrink: 0 }}>
+                  {p.netsuite_id ? (
+                    <a
+                      href={p.netsuite_url || '#'}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      style={{
+                        padding: '4px 10px', borderRadius: '6px', fontSize: '10px', fontWeight: 700,
+                        background: 'rgba(34,197,94,0.1)', border: '1px solid rgba(34,197,94,0.2)', color: '#4ade80',
+                        textDecoration: 'none',
+                      }}
+                    >
+                      In NetSuite ({p.netsuite_type})
+                    </a>
+                  ) : (
+                    <button
+                      onClick={() => setPushTypeModal(p.id)}
+                      disabled={pushingToNS === p.id}
+                      style={{
+                        padding: '4px 10px', borderRadius: '6px', fontSize: '10px', fontWeight: 700,
+                        background: pushingToNS === p.id ? 'var(--border)' : 'rgba(59,130,246,0.1)',
+                        border: '1px solid rgba(59,130,246,0.2)', color: '#60a5fa', cursor: 'pointer',
+                      }}
+                    >
+                      {pushingToNS === p.id ? 'Pushing...' : 'Push to NetSuite'}
+                    </button>
+                  )}
+                  <div style={{ fontSize: '9px', color: 'var(--text-label)' }}>
+                    {new Date(p.created_at).toLocaleDateString()}
+                    {p.source === 'business_card' && ' · scanned'}
+                  </div>
+                </div>
+              </div>
+
+              {/* Push type modal */}
+              {pushTypeModal === p.id && (
+                <div style={{
+                  marginTop: '10px', padding: '10px', borderRadius: '8px',
+                  background: 'rgba(59,130,246,0.05)', border: '1px solid rgba(59,130,246,0.15)',
+                }}>
+                  <div style={{ fontSize: '11px', fontWeight: 700, color: 'var(--text-body)', marginBottom: '6px' }}>
+                    Create in NetSuite as:
+                  </div>
+                  <div style={{ display: 'flex', gap: '6px' }}>
+                    {(['customer', 'lead', 'prospect'] as const).map(type => (
+                      <button
+                        key={type}
+                        onClick={() => pushToNetSuite(p.id, type)}
+                        style={{
+                          flex: 1, padding: '8px', borderRadius: '6px', fontSize: '11px', fontWeight: 700,
+                          border: '1px solid var(--border)', cursor: 'pointer',
+                          background: type === 'customer' ? 'rgba(34,197,94,0.1)' : type === 'lead' ? 'rgba(251,191,36,0.1)' : 'rgba(59,130,246,0.1)',
+                          color: type === 'customer' ? '#4ade80' : type === 'lead' ? '#fbbf24' : '#60a5fa',
+                          textTransform: 'capitalize',
+                        }}
+                      >{type}</button>
+                    ))}
+                    <button
+                      onClick={() => setPushTypeModal(null)}
+                      style={{
+                        padding: '8px', borderRadius: '6px', fontSize: '11px', fontWeight: 700,
+                        border: '1px solid var(--border)', background: 'transparent', color: 'var(--text-label)', cursor: 'pointer',
+                      }}
+                    >Cancel</button>
+                  </div>
+                </div>
+              )}
+
+              {/* Edit/Delete buttons */}
+              {!p.netsuite_id && (
+                <div style={{ display: 'flex', gap: '6px', marginTop: '8px' }}>
+                  <button
+                    onClick={() => {
+                      setEditingProspect(p.id);
+                      setProspectForm({
+                        company_name: p.company_name, contact_name: p.contact_name || '', title: p.title || '',
+                        email: p.email || '', phone: p.phone || '', address: p.address || '',
+                        city: p.city || '', state: p.state || '', zip: p.zip || '',
+                        website: p.website || '', notes: p.notes || '',
+                      });
+                      setShowAddProspect(true);
+                    }}
+                    style={{
+                      padding: '4px 10px', borderRadius: '5px', fontSize: '10px', fontWeight: 700,
+                      background: 'rgba(59,130,246,0.1)', border: '1px solid rgba(59,130,246,0.15)', color: '#60a5fa', cursor: 'pointer',
+                    }}
+                  >Edit</button>
+                  <button
+                    onClick={() => deleteProspect(p.id)}
+                    style={{
+                      padding: '4px 10px', borderRadius: '5px', fontSize: '10px', fontWeight: 700,
+                      background: 'rgba(239,68,68,0.1)', border: '1px solid rgba(239,68,68,0.15)', color: '#ef4444', cursor: 'pointer',
+                    }}
+                  >Delete</button>
+                </div>
+              )}
+            </div>
+          ))}
+        </div>
+
+        {prospects.length === 0 && (
+          <div style={{ textAlign: 'center', padding: '32px', color: 'var(--text-label)' }}>
+            <div style={{ fontSize: '14px', marginBottom: '8px' }}>No prospects yet</div>
+            <div style={{ fontSize: '12px' }}>Add a prospect manually or scan a business card</div>
+          </div>
+        )}
+      </>}
     </div>
   );
 }

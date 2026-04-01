@@ -316,6 +316,117 @@ export async function findLocation(name: string): Promise<{ id: string; name: st
   return null;
 }
 
+/**
+ * Create a Customer or Lead record in NetSuite
+ * Uses the REST Record API: POST /services/rest/record/v1/customer
+ * The 'stage' field determines Customer vs Lead/Prospect
+ */
+export async function createCustomerOrLead(payload: {
+  companyName: string;
+  contactName?: string;
+  title?: string;
+  email?: string;
+  phone?: string;
+  address?: string;
+  city?: string;
+  state?: string;
+  zip?: string;
+  website?: string;
+  type: 'customer' | 'lead' | 'prospect';
+}): Promise<{
+  success: boolean;
+  customerId?: string;
+  entityId?: string;
+  netsuiteUrl?: string;
+  error?: string;
+}> {
+  const config = getConfig();
+  const baseUrl = getBaseUrl(config.accountId);
+  const url = `${baseUrl}/services/rest/record/v1/customer`;
+  const { oauth, token } = createOAuth(config);
+  const authHeader = getAuthHeader(oauth, token, { url, method: 'POST' });
+
+  // Map type to NetSuite stage value
+  const stageMap: Record<string, string> = {
+    customer: 'CUSTOMER',
+    lead: 'LEAD',
+    prospect: 'PROSPECT',
+  };
+
+  const body: any = {
+    companyName: payload.companyName,
+    stage: stageMap[payload.type] || 'LEAD',
+    isPerson: false,
+  };
+
+  if (payload.email) body.email = payload.email;
+  if (payload.phone) body.phone = payload.phone;
+  if (payload.website) body.url = payload.website;
+
+  // Default address
+  if (payload.address || payload.city || payload.state || payload.zip) {
+    body.addressBook = {
+      items: [
+        {
+          defaultBilling: true,
+          defaultShipping: true,
+          addressBookAddress: {
+            addr1: payload.address || '',
+            city: payload.city || '',
+            state: payload.state || '',
+            zip: payload.zip || '',
+            country: { id: 'US' },
+          },
+        },
+      ],
+    };
+  }
+
+  try {
+    const response = await fetch(url, {
+      method: 'POST',
+      headers: {
+        'Authorization': authHeader,
+        'Content-Type': 'application/json',
+        'Prefer': 'respondAsync=false',
+      },
+      body: JSON.stringify(body),
+    });
+
+    if (!response.ok) {
+      const text = await response.text();
+      console.error('NetSuite create customer error:', response.status, text);
+      return { success: false, error: `NetSuite error ${response.status}: ${text.slice(0, 200)}` };
+    }
+
+    // NetSuite returns the new record location in the header
+    const location = response.headers.get('location') || '';
+    const idMatch = location.match(/\/customer\/(\d+)/);
+    const customerId = idMatch ? idMatch[1] : undefined;
+
+    // Build the NetSuite URL
+    const accountForUrl = config.accountId.replace(/-/g, '_').toUpperCase();
+    const netsuiteUrl = customerId
+      ? `https://${accountForUrl}.app.netsuite.com/app/common/entity/custjob.nl?id=${customerId}`
+      : undefined;
+
+    // Fetch entity ID
+    let entityId: string | undefined;
+    if (customerId) {
+      try {
+        const q = `SELECT entityid FROM customer WHERE id = ${customerId}`;
+        const result = await suiteqlQuery(q);
+        entityId = result?.items?.[0]?.entityid;
+      } catch { /* non-critical */ }
+    }
+
+    return { success: true, customerId, entityId, netsuiteUrl };
+  } catch (error: any) {
+    console.error('NetSuite create customer exception:', error);
+    return { success: false, error: error?.message || 'Unknown error' };
+  }
+}
+
 export async function createSalesOrder(payload: {
   customerId: string | number;
   poNumber: string;
