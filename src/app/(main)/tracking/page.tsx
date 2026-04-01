@@ -1049,7 +1049,7 @@ export default function TrackingPage() {
                                   ))}
                                 </div>
                               )}
-                              {!dbxSearching && dbxSearchTerm.length >= 2 && dbxResults.length === 0 && dbxConnected !== false && (
+                              {!dbxSearching && dbxSearchTerm.length >= 2 && dbxResults.length === 0 && (
                                 <div style={{ fontSize: '11px', color: 'var(--text-muted)', padding: '8px 0' }}>No files found in Dropbox</div>
                               )}
                             </>
