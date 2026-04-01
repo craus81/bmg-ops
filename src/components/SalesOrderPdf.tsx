@@ -45,7 +45,7 @@ export default function SalesOrderPdf({ salesOrderId, salesOrderNumber }: SalesO
         canvas.width = scaledViewport.width;
         canvas.height = scaledViewport.height;
         const ctx = canvas.getContext('2d')!;
-        await page.render({ canvasContext: ctx, viewport: scaledViewport }).promise;
+        await page.render({ canvasContext: ctx, viewport: scaledViewport, canvas } as any).promise;
         setThumbSrc(canvas.toDataURL('image/png'));
       } catch (e) {
         console.warn('SO PDF thumbnail render failed:', e);

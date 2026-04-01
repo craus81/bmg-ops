@@ -4,7 +4,8 @@ import { useState, useRef, useEffect } from 'react';
 import { useRouter } from 'next/navigation';
 import { useAuth } from '@/components/AuthProvider';
 import { createClient } from '@/lib/supabase-browser';
-import { decodeVIN, isValidVIN } from '@/lib/vin-decoder';
+import { decodeVIN } from '@/lib/vin-decoder';
+import VinScanner from '@/components/VinScanner';
 import { theme } from '@/lib/theme';
 import type { NetsuiteSalesOrder, GraphicsProof, FleetCheckin } from '@/lib/types';
 import SalesOrderPdf from '@/components/SalesOrderPdf';
@@ -47,18 +48,7 @@ export default function FleetPage() {
   const [vinError, setVinError] = useState('');
   const [vehicleData, setVehicleData] = useState<any>(null);
   const [mode, setMode] = useState<'camera' | 'text'>('text');
-  const [cameraActive, setCameraActive] = useState(false);
-  const [cameraError, setCameraError] = useState('');
-  const [lastScanned, setLastScanned] = useState('');
-  const [scanCount, setScanCount] = useState(0);
   const inputRef = useRef<HTMLInputElement>(null);
-  const videoRef = useRef<HTMLVideoElement>(null);
-  const canvasRef = useRef<HTMLCanvasElement>(null);
-  const streamRef = useRef<MediaStream | null>(null);
-  const intervalRef = useRef<any>(null);
-  const foundVinRef = useRef(false);
-  const readerRef = useRef<any>(null);
-  const scanCountRef = useRef(0);
 
   // Step 2: Sales Order
   const [customerSearch, setCustomerSearch] = useState('');
@@ -113,127 +103,13 @@ export default function FleetPage() {
   };
 
   // ─── Camera / Scanner ──────────────────────────────────────
-  const stopCamera = () => {
-    if (intervalRef.current) { clearInterval(intervalRef.current); intervalRef.current = null; }
-    if ((streamRef as any)?._refocusInterval) { clearInterval((streamRef as any)._refocusInterval); (streamRef as any)._refocusInterval = null; }
-    if ((streamRef as any)?._focusKickInterval) { clearInterval((streamRef as any)._focusKickInterval); (streamRef as any)._focusKickInterval = null; }
-    if (streamRef.current) { streamRef.current.getTracks().forEach(t => t.stop()); streamRef.current = null; }
-    if (videoRef.current) videoRef.current.srcObject = null;
-    setCameraActive(false);
+  const handleCameraScan = (scannedVin: string) => {
+    setVin(scannedVin);
+    handleDecodeVin(scannedVin);
   };
 
-  const startCamera = async () => {
-    setCameraError('');
-    foundVinRef.current = false;
-    setLastScanned('');
-    setScanCount(0);
-    scanCountRef.current = 0;
-    try {
-      const zxingLibrary = await import('@zxing/library');
-      const formats = [
-        zxingLibrary.BarcodeFormat.CODE_128, zxingLibrary.BarcodeFormat.CODE_39,
-        zxingLibrary.BarcodeFormat.CODE_93, zxingLibrary.BarcodeFormat.DATA_MATRIX,
-        zxingLibrary.BarcodeFormat.QR_CODE, zxingLibrary.BarcodeFormat.PDF_417,
-        zxingLibrary.BarcodeFormat.ITF,
-      ];
-      const hints = new Map();
-      hints.set(zxingLibrary.DecodeHintType.POSSIBLE_FORMATS, formats);
-      hints.set(zxingLibrary.DecodeHintType.TRY_HARDER, true);
-      const reader = new zxingLibrary.MultiFormatReader();
-      reader.setHints(hints);
-      readerRef.current = reader;
-
-      // Start with basic constraints — don't include focusMode in getUserMedia
-      // as some Android devices reject or ignore it entirely
-      const stream = await navigator.mediaDevices.getUserMedia({
-        video: { facingMode: 'environment', width: { ideal: 1280 }, height: { ideal: 720 } }
-      });
-      streamRef.current = stream;
-      if (!videoRef.current) return;
-      videoRef.current.srcObject = stream;
-      await videoRef.current.play();
-      setCameraActive(true);
-
-      // Android autofocus: apply focus AFTER stream starts via track constraints
-      const track = stream.getVideoTracks()[0];
-      if (track) {
-        try {
-          const caps = track.getCapabilities?.() as any;
-          const supportedModes: string[] = caps?.focusMode || [];
-          console.log('[Camera] Focus capabilities:', supportedModes);
-
-          if (supportedModes.includes('continuous')) {
-            await (track as any).applyConstraints({ advanced: [{ focusMode: 'continuous' }] });
-            console.log('[Camera] Set continuous focus');
-          } else if (supportedModes.includes('single-shot')) {
-            // Trigger single-shot autofocus repeatedly
-            const refocusInterval = setInterval(async () => {
-              try {
-                await (track as any).applyConstraints({ advanced: [{ focusMode: 'single-shot' }] });
-              } catch { }
-            }, 2000);
-            (streamRef as any)._refocusInterval = refocusInterval;
-            console.log('[Camera] Using periodic single-shot focus');
-          }
-
-          // Also try ImageCapture API for devices that support it
-          if (typeof ImageCapture !== 'undefined') {
-            const imgCapture = new (ImageCapture as any)(track);
-            const photoCapabilities = await imgCapture.getPhotoCapabilities?.().catch(() => null);
-            console.log('[Camera] ImageCapture available, photo caps:', photoCapabilities);
-            // grabFrame forces many Android cameras to autofocus
-            const focusKick = setInterval(async () => {
-              try { await imgCapture.grabFrame(); } catch { }
-            }, 3000);
-            (streamRef as any)._focusKickInterval = focusKick;
-          }
-        } catch (e) { console.log('[Camera] Focus setup error:', e); }
-      }
-
-      intervalRef.current = setInterval(() => scanFrame(zxingLibrary), 200);
-    } catch (e: any) {
-      if (e?.name === 'NotAllowedError') setCameraError('Camera permission denied.');
-      else if (e?.name === 'NotFoundError') setCameraError('No camera found.');
-      else setCameraError('Camera error: ' + (e?.message || 'Unknown'));
-    }
-  };
-
-  const scanFrame = (zxingLibrary: any) => {
-    if (foundVinRef.current) return;
-    if (!videoRef.current || !canvasRef.current || !readerRef.current) return;
-    const video = videoRef.current;
-    if (video.readyState !== video.HAVE_ENOUGH_DATA) return;
-    const canvas = canvasRef.current;
-    const ctx = canvas.getContext('2d');
-    if (!ctx) return;
-    canvas.width = video.videoWidth;
-    canvas.height = video.videoHeight;
-    ctx.drawImage(video, 0, 0);
-    scanCountRef.current++;
-    setScanCount(scanCountRef.current);
-    try {
-      const imageData = ctx.getImageData(0, 0, canvas.width, canvas.height);
-      const len = imageData.data.length / 4;
-      const luminances = new Uint8ClampedArray(len);
-      for (let i = 0; i < len; i++) {
-        luminances[i] = Math.round(0.299 * imageData.data[i * 4] + 0.587 * imageData.data[i * 4 + 1] + 0.114 * imageData.data[i * 4 + 2]);
-      }
-      const source = new zxingLibrary.RGBLuminanceSource(luminances, canvas.width, canvas.height);
-      const bitmap = new zxingLibrary.BinaryBitmap(new zxingLibrary.HybridBinarizer(source));
-      const decoded = readerRef.current.decode(bitmap);
-      const raw = decoded.getText().trim().toUpperCase().replace(/[^A-HJ-NPR-Z0-9]/g, '');
-      setLastScanned(raw);
-      if (raw.length === 17 && isValidVIN(raw)) {
-        foundVinRef.current = true;
-        stopCamera();
-        setVin(raw);
-        handleDecodeVin(raw);
-      }
-    } catch { /* no barcode in frame */ }
-  };
-
-  const switchToCamera = () => { setMode('camera'); setTimeout(() => startCamera(), 300); };
-  const switchToText = () => { stopCamera(); setMode('text'); };
+  const switchToCamera = () => { setMode('camera'); };
+  const switchToText = () => { setMode('text'); };
 
   // ─── Step 1: VIN Decode ────────────────────────────────────
   const handleDecodeVin = async (v: string) => {
@@ -406,10 +282,7 @@ export default function FleetPage() {
     setSaved(false);
     setSavedCheckin(null);
     setNotes('');
-    setLastScanned('');
-    foundVinRef.current = false;
-    setScanCount(0);
-    scanCountRef.current = 0;
+    setMode('text');
   };
 
   // ─── Status Helpers ───────────────────────────────────────
@@ -501,36 +374,7 @@ export default function FleetPage() {
         </div>
 
         {mode === 'camera' ? (
-          <div>
-            {cameraError ? (
-              <div style={{ padding: '20px', textAlign: 'center', background: theme.errorBg, border: `1px solid ${theme.errorBorder}`, borderRadius: '14px' }}>
-                <div style={{ color: theme.error, fontSize: '13px', marginBottom: '12px' }}>{cameraError}</div>
-                <button onClick={switchToText} style={{ padding: '10px 20px', borderRadius: '10px', background: theme.navy, color: '#fff', fontWeight: 700, fontSize: '13px', border: 'none' }}>Switch to Text Input</button>
-              </div>
-            ) : (
-              <div>
-                <div style={{ position: 'relative', borderRadius: '12px', overflow: 'hidden', background: '#000', height: '300px', marginBottom: '8px' }}>
-                  <video ref={videoRef} playsInline muted style={{ width: '100%', height: '100%', objectFit: 'cover' }} />
-                  <div style={{ position: 'absolute', top: '50%', left: '3%', right: '3%', height: '70px', marginTop: '-35px', border: '3px solid rgba(238,49,32,0.7)', borderRadius: '10px', pointerEvents: 'none', boxShadow: '0 0 20px rgba(238,49,32,0.2)' }} />
-                  <div style={{ position: 'absolute', bottom: 0, left: 0, right: 0, padding: '10px', background: 'rgba(0,0,0,0.7)' }}>
-                    {cameraActive ? (
-                      <div style={{ textAlign: 'center' }}>
-                        <div style={{ fontSize: '13px', color: '#fff', fontWeight: 700 }}>Hold 4-8 in from barcode</div>
-                        {lastScanned ? (
-                          <div style={{ fontSize: '13px', color: theme.warning, marginTop: '3px', fontFamily: 'monospace', fontWeight: 800 }}>FOUND: {lastScanned} ({lastScanned.length} chars)</div>
-                        ) : (
-                          <div style={{ fontSize: '12px', color: '#9ca3af', marginTop: '3px' }}>Scanning... {scanCount} frames</div>
-                        )}
-                      </div>
-                    ) : (
-                      <div style={{ textAlign: 'center', fontSize: '13px', color: '#9ca3af' }}>Starting camera...</div>
-                    )}
-                  </div>
-                </div>
-                <canvas ref={canvasRef} style={{ display: 'none' }} />
-              </div>
-            )}
-          </div>
+          <VinScanner onScan={handleCameraScan} theme={theme} />
         ) : (
           <div>
             <input

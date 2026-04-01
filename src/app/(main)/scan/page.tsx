@@ -7,6 +7,7 @@ import AssignmentPicker from '@/components/AssignmentPicker';
 import { useApp } from '@/components/AppProvider';
 import { useAuth } from '@/components/AuthProvider';
 import { decodeVIN, isValidVIN } from '@/lib/vin-decoder';
+import VinScanner from '@/components/VinScanner';
 
 export default function ScanPage() {
   const router = useRouter();
@@ -23,166 +24,20 @@ export default function ScanPage() {
   const [poWarning, setPoWarning] = useState('');
   const [poMatch, setPoMatch] = useState('');
   const [mode, setMode] = useState<'camera' | 'text'>('text');
-  const [cameraActive, setCameraActive] = useState(false);
-  const [cameraError, setCameraError] = useState('');
-  const [lastScanned, setLastScanned] = useState('');
-  const [scanCount, setScanCount] = useState(0);
   const [notes, setNotes] = useState('');
   const [savingNotes, setSavingNotes] = useState(false);
   const [notesSaved, setNotesSaved] = useState(false);
   const [assignedInstallers, setAssignedInstallers] = useState<string[]>([]);
   const [assignmentSaved, setAssignmentSaved] = useState(false);
   const ref = useRef<HTMLInputElement>(null);
-  const videoRef = useRef<HTMLVideoElement>(null);
-  const canvasRef = useRef<HTMLCanvasElement>(null);
-  const streamRef = useRef<MediaStream | null>(null);
-  const intervalRef = useRef<any>(null);
-  const foundVinRef = useRef(false);
-  const readerRef = useRef<any>(null);
-  const scanCountRef = useRef(0);
 
   useEffect(() => {
     if (mode === 'text' && ref.current) ref.current.focus();
   }, [mode]);
 
-  useEffect(() => {
-    return () => { stopCamera(); };
-  }, []);
-
-  const stopCamera = () => {
-    if (intervalRef.current) {
-      clearInterval(intervalRef.current);
-      intervalRef.current = null;
-    }
-    if ((streamRef as any)?._refocusInterval) { clearInterval((streamRef as any)._refocusInterval); (streamRef as any)._refocusInterval = null; }
-    if ((streamRef as any)?._focusKickInterval) { clearInterval((streamRef as any)._focusKickInterval); (streamRef as any)._focusKickInterval = null; }
-    if (streamRef.current) {
-      streamRef.current.getTracks().forEach(function(t) { t.stop(); });
-      streamRef.current = null;
-    }
-    if (videoRef.current) {
-      videoRef.current.srcObject = null;
-    }
-    setCameraActive(false);
-  };
-
-  const startCamera = async () => {
-    setCameraError('');
-    foundVinRef.current = false;
-    setLastScanned('');
-    setScanCount(0);
-    scanCountRef.current = 0;
-    try {
-      var zxingLibrary = await import('@zxing/library');
-
-      var formats = [
-        zxingLibrary.BarcodeFormat.CODE_128,
-        zxingLibrary.BarcodeFormat.CODE_39,
-        zxingLibrary.BarcodeFormat.CODE_93,
-        zxingLibrary.BarcodeFormat.DATA_MATRIX,
-        zxingLibrary.BarcodeFormat.QR_CODE,
-        zxingLibrary.BarcodeFormat.PDF_417,
-        zxingLibrary.BarcodeFormat.ITF,
-      ];
-
-      var hints = new Map();
-      hints.set(zxingLibrary.DecodeHintType.POSSIBLE_FORMATS, formats);
-      hints.set(zxingLibrary.DecodeHintType.TRY_HARDER, true);
-
-      var reader = new zxingLibrary.MultiFormatReader();
-      reader.setHints(hints);
-      readerRef.current = reader;
-
-      var stream = await navigator.mediaDevices.getUserMedia({
-        video: { facingMode: 'environment', width: { ideal: 1280 }, height: { ideal: 720 } }
-      });
-      streamRef.current = stream;
-
-      if (!videoRef.current) return;
-      videoRef.current.srcObject = stream;
-      await videoRef.current.play();
-      setCameraActive(true);
-
-      // Android autofocus: apply focus AFTER stream starts via track constraints
-      const track = stream.getVideoTracks()[0];
-      if (track) {
-        try {
-          const caps = track.getCapabilities?.() as any;
-          const supportedModes: string[] = caps?.focusMode || [];
-          if (supportedModes.includes('continuous')) {
-            await (track as any).applyConstraints({ advanced: [{ focusMode: 'continuous' }] });
-          } else if (supportedModes.includes('single-shot')) {
-            const refocusInterval = setInterval(async () => {
-              try { await (track as any).applyConstraints({ advanced: [{ focusMode: 'single-shot' }] }); } catch { }
-            }, 2000);
-            (streamRef as any)._refocusInterval = refocusInterval;
-          }
-          if (typeof ImageCapture !== 'undefined') {
-            const imgCapture = new (ImageCapture as any)(track);
-            const focusKick = setInterval(async () => {
-              try { await imgCapture.grabFrame(); } catch { }
-            }, 3000);
-            (streamRef as any)._focusKickInterval = focusKick;
-          }
-        } catch { }
-      }
-
-      intervalRef.current = setInterval(function() {
-        scanFrame(zxingLibrary);
-      }, 200);
-
-    } catch (e: any) {
-      if (e?.name === 'NotAllowedError' || e?.message?.includes('Permission')) {
-        setCameraError('Camera permission denied. Allow camera access in your browser settings, or use text input.');
-      } else if (e?.name === 'NotFoundError') {
-        setCameraError('No camera found. Use text input instead.');
-      } else {
-        setCameraError('Camera error: ' + (e?.message || 'Unknown error'));
-      }
-    }
-  };
-
-  const scanFrame = (zxingLibrary: any) => {
-    if (foundVinRef.current) return;
-    if (!videoRef.current || !canvasRef.current || !readerRef.current) return;
-    var video = videoRef.current;
-    if (video.readyState !== video.HAVE_ENOUGH_DATA) return;
-
-    var canvas = canvasRef.current;
-    var ctx = canvas.getContext('2d');
-    if (!ctx) return;
-
-    canvas.width = video.videoWidth;
-    canvas.height = video.videoHeight;
-    ctx.drawImage(video, 0, 0);
-
-    scanCountRef.current = scanCountRef.current + 1;
-    setScanCount(scanCountRef.current);
-
-    try {
-      var imageData = ctx.getImageData(0, 0, canvas.width, canvas.height);
-      var len = imageData.data.length / 4;
-      var luminances = new Uint8ClampedArray(len);
-      for (var i = 0; i < len; i++) {
-        var r = imageData.data[i * 4];
-        var g = imageData.data[i * 4 + 1];
-        var b = imageData.data[i * 4 + 2];
-        luminances[i] = Math.round(0.299 * r + 0.587 * g + 0.114 * b);
-      }
-      var source = new zxingLibrary.RGBLuminanceSource(luminances, canvas.width, canvas.height);
-      var bitmap = new zxingLibrary.BinaryBitmap(new zxingLibrary.HybridBinarizer(source));
-      var decoded = readerRef.current.decode(bitmap);
-      var raw = decoded.getText().trim().toUpperCase().replace(/[^A-HJ-NPR-Z0-9]/g, '');
-      setLastScanned(raw);
-      if (raw.length === 17 && isValidVIN(raw)) {
-        foundVinRef.current = true;
-        stopCamera();
-        setVin(raw);
-        handleScanVin(raw);
-      }
-    } catch (e: any) {
-      // no barcode found in this frame
-    }
+  const handleCameraScan = (scannedVin: string) => {
+    setVin(scannedVin);
+    handleScanVin(scannedVin);
   };
 
   const handleScanVin = async (v: string) => {
@@ -210,11 +65,9 @@ export default function ScanPage() {
 
   const switchToCamera = () => {
     setMode('camera');
-    setTimeout(function() { startCamera(); }, 300);
   };
 
   const switchToText = () => {
-    stopCamera();
     setMode('text');
   };
 
@@ -322,14 +175,9 @@ export default function ScanPage() {
     setError('');
     setPoWarning('');
     setPoMatch('');
-    setLastScanned('');
     setNotes('');
     setNotesSaved(false);
-    foundVinRef.current = false;
-    setScanCount(0);
-    scanCountRef.current = 0;
     setMode('camera');
-    setTimeout(function() { startCamera(); }, 300);
   };
 
   var title = result ? [result.vehicle.year, result.vehicle.make, result.vehicle.model].filter(Boolean).join(' ') : '';
@@ -349,36 +197,7 @@ export default function ScanPage() {
           <button onClick={switchToText} style={{ flex: 1, padding: '8px', borderRadius: '6px', fontSize: '12px', fontWeight: 700, background: mode === 'text' ? 'var(--tab-active-bg)' : 'transparent', border: 'none', color: mode === 'text' ? 'var(--navy)' : 'var(--text-muted)' }}>Type / Scanner</button>
         </div>
         {mode === 'camera' ? (
-          <div>
-            {cameraError ? (
-              <div style={{ padding: '20px', textAlign: 'center', background: 'var(--error-bg)', border: '1px solid rgba(248,113,113,0.15)', borderRadius: '14px' }}>
-                <div style={{ color: 'var(--error)', fontSize: '13px', marginBottom: '12px' }}>{cameraError}</div>
-                <button onClick={switchToText} style={{ padding: '10px 20px', borderRadius: '10px', background: 'var(--navy)', color: '#fff', fontWeight: 700, fontSize: '13px', border: 'none' }}>Switch to Text Input</button>
-              </div>
-            ) : (
-              <div>
-                <div style={{ position: 'relative', borderRadius: '12px', overflow: 'hidden', background: '#000', height: '300px', marginBottom: '8px' }}>
-                  <video ref={videoRef} playsInline muted style={{ width: '100%', height: '100%', objectFit: 'cover' }} />
-                  <div style={{ position: 'absolute', top: '50%', left: '3%', right: '3%', height: '70px', marginTop: '-35px', border: '3px solid rgba(238,49,32,0.7)', borderRadius: '10px', pointerEvents: 'none', boxShadow: '0 0 20px rgba(238,49,32,0.2)' }} />
-                  <div style={{ position: 'absolute', bottom: '0', left: '0', right: '0', padding: '10px', background: 'rgba(0,0,0,0.7)' }}>
-                    {cameraActive ? (
-                      <div style={{ textAlign: 'center' }}>
-                        <div style={{ fontSize: '13px', color: '#fff', fontWeight: 700 }}>Hold 4-8 in from barcode</div>
-                        {lastScanned ? (
-                          <div style={{ fontSize: '13px', color: 'var(--warning)', marginTop: '3px', fontFamily: 'monospace', fontWeight: 800 }}>FOUND: {lastScanned} ({lastScanned.length} chars)</div>
-                        ) : (
-                          <div style={{ fontSize: '12px', color: '#9ca3af', marginTop: '3px' }}>Scanning... {scanCount} frames</div>
-                        )}
-                      </div>
-                    ) : (
-                      <div style={{ textAlign: 'center', fontSize: '13px', color: '#9ca3af' }}>Starting camera...</div>
-                    )}
-                  </div>
-                </div>
-                <canvas ref={canvasRef} style={{ display: 'none' }} />
-              </div>
-            )}
-          </div>
+          <VinScanner onScan={handleCameraScan} theme={{}} />
         ) : (
           <div>
             <input ref={ref} type="text" value={vin} onChange={(e) => setVin(e.target.value.toUpperCase().replace(/[^A-HJ-NPR-Z0-9]/gi, '').slice(0, 17))} placeholder="Enter or scan 17-char VIN" maxLength={17} style={{ width: '100%', padding: '10px 12px', borderRadius: '10px', border: '1px solid var(--border)', background: 'var(--card)', color: 'var(--text-primary)', fontSize: '18px', letterSpacing: '2px', fontWeight: 700, textAlign: 'center' }} onKeyDown={(e) => { if (e.key === 'Enter' && vin.length === 17) handleScan(); }} />

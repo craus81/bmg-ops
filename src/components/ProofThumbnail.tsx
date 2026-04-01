@@ -77,7 +77,7 @@ export default function ProofThumbnail({
         canvas.height = scaledViewport.height;
         const ctx = canvas.getContext('2d')!;
 
-        await page.render({ canvasContext: ctx, viewport: scaledViewport }).promise;
+        await page.render({ canvasContext: ctx, viewport: scaledViewport, canvas } as any).promise;
         setImgSrc(canvas.toDataURL('image/png'));
         rendered.current = true;
       } catch (e) {
