@@ -86,10 +86,6 @@ export default function FleetPage() {
   }, [mode]);
 
   useEffect(() => {
-    return () => { stopCamera(); };
-  }, []);
-
-  useEffect(() => {
     loadRecentCheckins();
   }, []);
 
