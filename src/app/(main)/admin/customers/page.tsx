@@ -233,16 +233,28 @@ export default function CustomersPage() {
     }
   };
 
-  const loadInvoices = async (customer: Customer) => {
+  const loadInvoices = async (customer: Customer, force = false) => {
     if (!customer.netsuite_id) return;
-    // Don't re-fetch if already loaded
-    if (invoices[customer.id]?.length) return;
+    // Don't re-fetch if already loaded (unless forced)
+    if (!force && invoices[customer.id]?.length) return;
     setLoadingInvoices(customer.id);
     try {
-      const res = await fetch(`/api/netsuite/customer-invoices?customerId=${customer.netsuite_id}`);
+      const res = await fetch(`/api/netsuite/invoices?customerId=${customer.netsuite_id}`);
       const data = await res.json();
-      if (data.success) {
-        setInvoices(prev => ({ ...prev, [customer.id]: data.invoices || [] }));
+      if (data.error) {
+        console.error('Invoice load error:', data.error);
+      } else {
+        // Map from /api/netsuite/invoices response format to CustomerInvoice
+        const mapped: CustomerInvoice[] = (data.invoices || []).map((inv: any) => ({
+          id: String(inv.id),
+          invoice_number: inv.invoiceNumber || '',
+          invoice_date: inv.date || '',
+          total: 0,
+          status: inv.status || '',
+          status_display: inv.status || '',
+          due_date: null,
+        }));
+        setInvoices(prev => ({ ...prev, [customer.id]: mapped }));
       }
     } catch (err) {
       console.error('Failed to load invoices:', err);
@@ -838,7 +850,7 @@ export default function CustomersPage() {
                       <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '6px' }}>
                         <div style={{ fontSize: '10px', fontWeight: 700, color: 'var(--text-label)', textTransform: 'uppercase' }}>Invoices</div>
                         <button
-                          onClick={(e) => { e.stopPropagation(); loadInvoices(customer); }}
+                          onClick={(e) => { e.stopPropagation(); loadInvoices(customer, !!invoices[customer.id]); }}
                           disabled={loadingInvoices === customer.id}
                           style={{
                             padding: '3px 10px', borderRadius: '5px', fontSize: '10px', fontWeight: 700,
@@ -871,12 +883,9 @@ export default function CustomersPage() {
                                   </span>
                                 </div>
                                 <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-                                  <span style={{ fontSize: '12px', fontWeight: 700, color: '#a855f7' }}>
-                                    ${Number(inv.total || 0).toLocaleString(undefined, { minimumFractionDigits: 2 })}
-                                  </span>
                                   <span style={{ fontSize: '9px', padding: '2px 6px', borderRadius: '4px', fontWeight: 700,
-                                    background: inv.status_display?.includes('Paid') ? 'rgba(34,197,94,0.12)' : 'rgba(251,191,36,0.12)',
-                                    color: inv.status_display?.includes('Paid') ? '#4ade80' : '#fbbf24',
+                                    background: inv.status_display?.toLowerCase().includes('paid') ? 'rgba(34,197,94,0.12)' : 'rgba(251,191,36,0.12)',
+                                    color: inv.status_display?.toLowerCase().includes('paid') ? '#4ade80' : '#fbbf24',
                                   }}>
                                     {inv.status_display || inv.status}
                                   </span>
