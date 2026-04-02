@@ -20,7 +20,6 @@ export async function GET(req: NextRequest) {
       searchFilter = `AND (
         UPPER(t.tranid) LIKE UPPER('%${term}%')
         OR UPPER(t.memo) LIKE UPPER('%${term}%')
-        OR UPPER(t.otherrefnum) LIKE UPPER('%${term}%')
       )`;
     }
 
@@ -30,11 +29,10 @@ export async function GET(req: NextRequest) {
         t.tranid AS invoice_number,
         t.trandate AS invoice_date,
         t.status,
-        BUILTIN.DF(t.status) AS status_display,
-        t.total,
         t.memo,
-        t.otherrefnum AS po_number
+        tl.netamount
       FROM transaction t
+      INNER JOIN transactionline tl ON tl.transaction = t.id AND tl.mainline = 'T'
       WHERE t.type = 'CustInvc'
         AND t.entity = ${customerId}
         ${searchFilter}
@@ -42,15 +40,20 @@ export async function GET(req: NextRequest) {
       FETCH FIRST 50 ROWS ONLY
     `;
 
+    // Map NetSuite invoice status codes to display names
+    const statusMap: Record<string, string> = {
+      'A': 'Open',
+      'B': 'Paid In Full',
+    };
+
     const result = await suiteqlQuery(query);
     const invoices = (result?.items || []).map((row: any) => ({
       id: row.id,
       invoiceNumber: row.invoice_number || '',
       date: row.invoice_date || '',
-      status: row.status_display || row.status || '',
-      total: parseFloat(row.total || '0'),
+      status: statusMap[row.status] || row.status || '',
+      total: Math.abs(parseFloat(row.netamount || '0')),
       memo: row.memo || '',
-      poNumber: row.po_number || '',
     }));
 
     return NextResponse.json({ invoices, count: invoices.length });
