@@ -71,9 +71,15 @@ export default function NetSuitePdf({ type, recordId, recordNumber, label }: Net
     setError('');
     try {
       const res = await fetch(`/api/netsuite/pdf?type=${encodeURIComponent(type)}&id=${encodeURIComponent(recordId)}`);
-      const data = await res.json();
+      const text = await res.text();
+      let data;
+      try { data = JSON.parse(text); } catch { setError(`Invalid response: ${text.slice(0, 100)}`); return; }
       if (!res.ok || !data.success) {
         setError(data.error || 'Failed to load PDF');
+        return;
+      }
+      if (!data.pdfBase64 || data.pdfBase64.length < 100) {
+        setError('PDF data is empty or too small — the invoice may not have a print template in NetSuite.');
         return;
       }
       setPdfBase64(data.pdfBase64);
@@ -85,16 +91,26 @@ export default function NetSuitePdf({ type, recordId, recordNumber, label }: Net
     }
   };
 
-  const pdfDataUrl = pdfBase64 ? `data:application/pdf;base64,${pdfBase64}` : null;
+  // Convert base64 to blob URL (works better than data: URLs on mobile)
+  const [blobUrl, setBlobUrl] = useState<string | null>(null);
+  useEffect(() => {
+    if (!pdfBase64) { setBlobUrl(null); return; }
+    try {
+      const raw = atob(pdfBase64);
+      const bytes = new Uint8Array(raw.length);
+      for (let i = 0; i < raw.length; i++) bytes[i] = raw.charCodeAt(i);
+      const blob = new Blob([bytes], { type: 'application/pdf' });
+      const url = URL.createObjectURL(blob);
+      setBlobUrl(url);
+      return () => URL.revokeObjectURL(url);
+    } catch (e) {
+      console.error('Failed to create PDF blob:', e);
+      setError('Failed to decode PDF data');
+    }
+  }, [pdfBase64]);
 
   const openInNewTab = () => {
-    if (!pdfBase64) return;
-    const raw = atob(pdfBase64);
-    const bytes = new Uint8Array(raw.length);
-    for (let i = 0; i < raw.length; i++) bytes[i] = raw.charCodeAt(i);
-    const blob = new Blob([bytes], { type: 'application/pdf' });
-    const blobUrl = URL.createObjectURL(blob);
-    window.open(blobUrl, '_blank');
+    if (blobUrl) window.open(blobUrl, '_blank');
   };
 
   return (
@@ -107,7 +123,7 @@ export default function NetSuitePdf({ type, recordId, recordNumber, label }: Net
           style={{
             flex: 1, padding: '10px 14px', borderRadius: '10px',
             border: '1px solid var(--border)',
-            background: pdfDataUrl && !collapsed ? 'rgba(59,130,246,0.08)' : 'var(--card)',
+            background: blobUrl && !collapsed ? 'rgba(59,130,246,0.08)' : 'var(--card)',
             color: loading ? 'var(--text-muted)' : '#60a5fa',
             fontSize: '12px', fontWeight: 700, cursor: loading ? 'wait' : 'pointer',
             display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '8px',
@@ -125,8 +141,8 @@ export default function NetSuitePdf({ type, recordId, recordNumber, label }: Net
           ) : (
             <>
               <span>📄</span>
-              {pdfDataUrl && !collapsed ? `Hide ${prefix} #${recordNumber}` : `View ${prefix} #${recordNumber} PDF`}
-              <span style={{ fontSize: '10px' }}>{pdfDataUrl && !collapsed ? '▲' : '▼'}</span>
+              {blobUrl && !collapsed ? `Hide ${prefix} #${recordNumber}` : `View ${prefix} #${recordNumber} PDF`}
+              <span style={{ fontSize: '10px' }}>{blobUrl && !collapsed ? '▲' : '▼'}</span>
             </>
           )}
         </button>
@@ -176,7 +192,7 @@ export default function NetSuitePdf({ type, recordId, recordNumber, label }: Net
       )}
 
       {/* Inline PDF viewer */}
-      {pdfDataUrl && !collapsed && (
+      {blobUrl && !collapsed && (
         <div style={{ marginTop: '8px' }}>
           <div
             onClick={openInNewTab}
@@ -199,7 +215,7 @@ export default function NetSuitePdf({ type, recordId, recordNumber, label }: Net
             }}
           >
             <iframe
-              src={pdfDataUrl}
+              src={blobUrl}
               style={{ width: '100%', height: '100%', border: 'none' }}
               title={`${prefix} ${recordNumber}`}
             />
