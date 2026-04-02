@@ -843,10 +843,19 @@ export async function getNetSuitePdf(
     const result = await callRestlet(restletUrl, 'GET', { [paramKey]: recordId });
 
     if (result?.success && result?.pdfBase64) {
+      let pdf64 = result.pdfBase64;
+
+      // Detect double-encoding: a valid PDF base64 starts with JVBERi0 (%PDF-).
+      // If it starts with SlZCRVJp, it's been base64-encoded twice.
+      if (pdf64.startsWith('SlZCRVJp')) {
+        // Double-encoded — decode one layer
+        pdf64 = Buffer.from(pdf64, 'base64').toString('utf-8');
+      }
+
       const prefix = type === 'invoice' ? 'Invoice' : 'SalesOrder';
       return {
         success: true,
-        pdfBase64: result.pdfBase64,
+        pdfBase64: pdf64,
         filename: result.filename || `${prefix}_${recordId}.pdf`,
       };
     }
