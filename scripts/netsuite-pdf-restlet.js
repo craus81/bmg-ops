@@ -19,7 +19,7 @@
  * @NApiVersion 2.1
  * @NScriptType Restlet
  */
-define(['N/render', 'N/record', 'N/encode'], function (render, record, encode) {
+define(['N/render', 'N/record'], function (render, record) {
 
   function onGet(requestParams) {
     var salesOrderId = requestParams.salesOrderId;
@@ -53,12 +53,8 @@ define(['N/render', 'N/record', 'N/encode'], function (render, record, encode) {
         printMode: render.PrintMode.PDF
       });
 
-      // Get base64 content
-      var pdfBase64 = encode.convert({
-        string: pdfFile.getContents(),
-        inputEncoding: encode.Encoding.UTF_8,
-        outputEncoding: encode.Encoding.BASE_64
-      });
+      // getContents() on a rendered PDF already returns base64
+      var pdfBase64 = pdfFile.getContents();
 
       // Try to get the transaction number for the filename
       var tranId = '';
