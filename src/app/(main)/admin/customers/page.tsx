@@ -876,7 +876,6 @@ export default function CustomersPage() {
                                       <div style={{ fontSize: '11px', color: 'var(--text-label)', marginTop: '2px' }}>
                                         {inv.date && <span>{new Date(inv.date + 'T00:00:00').toLocaleDateString()}</span>}
                                         {inv.poNumber && <span> · PO: {inv.poNumber}</span>}
-                                        {inv.dueDate && <span> · Due: {new Date(inv.dueDate + 'T00:00:00').toLocaleDateString()}</span>}
                                       </div>
                                       {inv.memo && (
                                         <div style={{ fontSize: '11px', color: 'var(--text-body)', marginTop: '2px', fontStyle: 'italic' }}>{inv.memo}</div>
