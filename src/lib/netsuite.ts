@@ -847,3 +847,31 @@ export async function getSalesOrderPdf(salesOrderId: string): Promise<{
     return { success: false, error: `Error generating PDF: ${e.message}` };
   }
 }
+
+export async function getInvoicePdf(invoiceId: string): Promise<{
+  success: boolean;
+  pdfBase64?: string;
+  filename?: string;
+  error?: string;
+}> {
+  const restletUrl = process.env.NETSUITE_PDF_RESTLET_URL;
+  if (!restletUrl) {
+    return { success: false, error: 'PDF RESTlet URL not configured' };
+  }
+
+  try {
+    const result = await callRestlet(restletUrl, 'GET', { invoiceId });
+
+    if (result?.success && result?.pdfBase64) {
+      return {
+        success: true,
+        pdfBase64: result.pdfBase64,
+        filename: result.filename || `Invoice_${invoiceId}.pdf`,
+      };
+    }
+
+    return { success: false, error: result?.error || 'Failed to generate PDF' };
+  } catch (e: any) {
+    return { success: false, error: `Error generating PDF: ${e.message}` };
+  }
+}
