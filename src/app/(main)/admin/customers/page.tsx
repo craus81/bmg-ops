@@ -102,6 +102,13 @@ export default function CustomersPage() {
   const [generatingReport, setGeneratingReport] = useState(false);
   const [expandedCustomer, setExpandedCustomer] = useState<string | null>(null);
 
+  // Invoice search state
+  const [invoiceCustomer, setInvoiceCustomer] = useState<string | null>(null);
+  const [invoiceSearch, setInvoiceSearch] = useState('');
+  const [invoices, setInvoices] = useState<any[]>([]);
+  const [loadingInvoices, setLoadingInvoices] = useState(false);
+  const [invoicesLoaded, setInvoicesLoaded] = useState<string | null>(null); // tracks which customer's invoices are loaded
+
   // Add/edit contact state
   const [showAddContact, setShowAddContact] = useState<string | null>(null); // customer_id
   const [editingContact, setEditingContact] = useState<string | null>(null);
@@ -215,6 +222,25 @@ export default function CustomersPage() {
     if (res.ok) {
       setContacts(prev => prev.filter(c => c.id !== id));
     }
+  };
+
+  const searchInvoices = async (netsuiteId: string, query?: string) => {
+    setLoadingInvoices(true);
+    try {
+      const params = new URLSearchParams({ customerId: netsuiteId });
+      if (query?.trim()) params.set('q', query.trim());
+      const res = await fetch(`/api/netsuite/invoices?${params}`);
+      const data = await res.json();
+      if (!res.ok || data.error) {
+        alert(data.error || 'Failed to fetch invoices');
+      } else {
+        setInvoices(data.invoices || []);
+        setInvoicesLoaded(netsuiteId);
+      }
+    } catch (err: any) {
+      alert(err.message || 'Failed to fetch invoices');
+    }
+    setLoadingInvoices(false);
   };
 
   const generatePurchaseReport = async (customer: Customer) => {
@@ -774,6 +800,98 @@ export default function CustomersPage() {
                           {generatingReport && reportCustomer === customer.id ? 'Generating...' : '📄 Download Report'}
                         </button>
                       </div>
+                    </div>
+                  )}
+
+                  {/* Invoice Search */}
+                  {customer.netsuite_id && (
+                    <div style={{ padding: '10px 0', borderBottom: '1px solid rgba(30,45,61,0.5)' }}>
+                      <div style={{ fontSize: '10px', fontWeight: 700, color: 'var(--text-label)', textTransform: 'uppercase', marginBottom: '6px' }}>Invoices</div>
+                      <div style={{ display: 'flex', gap: '6px', alignItems: 'center' }}>
+                        <input
+                          type="text"
+                          placeholder="Search by invoice #, PO #, or memo..."
+                          value={invoiceCustomer === customer.id ? invoiceSearch : ''}
+                          onClick={(e) => { e.stopPropagation(); setInvoiceCustomer(customer.id); }}
+                          onChange={(e) => { setInvoiceCustomer(customer.id); setInvoiceSearch(e.target.value); }}
+                          onKeyDown={(e) => {
+                            if (e.key === 'Enter') {
+                              e.stopPropagation();
+                              searchInvoices(customer.netsuite_id!, invoiceCustomer === customer.id ? invoiceSearch : '');
+                            }
+                          }}
+                          style={{
+                            flex: 1, padding: '6px 10px', borderRadius: '6px', border: '1px solid var(--border)',
+                            background: 'var(--input-bg)', color: 'var(--text-body)', fontSize: '12px', outline: 'none',
+                          }}
+                        />
+                        <button
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            if (invoiceCustomer !== customer.id) {
+                              setInvoiceCustomer(customer.id);
+                              setInvoiceSearch('');
+                            }
+                            searchInvoices(customer.netsuite_id!, invoiceCustomer === customer.id ? invoiceSearch : '');
+                          }}
+                          disabled={loadingInvoices}
+                          style={{
+                            padding: '6px 14px', borderRadius: '6px', fontSize: '11px', fontWeight: 700,
+                            background: loadingInvoices ? 'var(--border)' : 'rgba(168,85,247,0.15)',
+                            border: '1px solid rgba(168,85,247,0.3)', color: loadingInvoices ? 'var(--text-label)' : '#c084fc',
+                            cursor: loadingInvoices ? 'not-allowed' : 'pointer', whiteSpace: 'nowrap',
+                          }}
+                        >
+                          {loadingInvoices && invoiceCustomer === customer.id ? 'Searching...' : 'Search Invoices'}
+                        </button>
+                      </div>
+
+                      {/* Invoice results */}
+                      {invoiceCustomer === customer.id && invoicesLoaded === customer.netsuite_id && (
+                        <div style={{ marginTop: '8px' }}>
+                          {invoices.length === 0 ? (
+                            <div style={{ fontSize: '11px', color: 'var(--text-label)', padding: '8px 0' }}>No invoices found</div>
+                          ) : (
+                            <div style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
+                              <div style={{ fontSize: '10px', color: 'var(--text-label)', marginBottom: '2px' }}>{invoices.length} invoice{invoices.length !== 1 ? 's' : ''} found</div>
+                              {invoices.map((inv: any) => (
+                                <div key={inv.id} style={{
+                                  padding: '8px 10px', borderRadius: '6px',
+                                  background: 'rgba(168,85,247,0.05)', border: '1px solid rgba(168,85,247,0.1)',
+                                }}>
+                                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
+                                    <div style={{ minWidth: 0, flex: 1 }}>
+                                      <div style={{ display: 'flex', gap: '8px', alignItems: 'center', flexWrap: 'wrap' }}>
+                                        <span style={{ fontSize: '13px', fontWeight: 700, color: 'var(--text-body)' }}>
+                                          #{inv.invoiceNumber}
+                                        </span>
+                                        <span style={{
+                                          fontSize: '9px', fontWeight: 700, padding: '2px 6px', borderRadius: '4px',
+                                          background: inv.status?.toLowerCase().includes('paid') ? 'rgba(34,197,94,0.15)' : 'rgba(251,191,36,0.15)',
+                                          color: inv.status?.toLowerCase().includes('paid') ? '#4ade80' : '#fbbf24',
+                                        }}>
+                                          {inv.status}
+                                        </span>
+                                      </div>
+                                      <div style={{ fontSize: '11px', color: 'var(--text-label)', marginTop: '2px' }}>
+                                        {inv.date && <span>{new Date(inv.date + 'T00:00:00').toLocaleDateString()}</span>}
+                                        {inv.poNumber && <span> · PO: {inv.poNumber}</span>}
+                                        {inv.dueDate && <span> · Due: {new Date(inv.dueDate + 'T00:00:00').toLocaleDateString()}</span>}
+                                      </div>
+                                      {inv.memo && (
+                                        <div style={{ fontSize: '11px', color: 'var(--text-body)', marginTop: '2px', fontStyle: 'italic' }}>{inv.memo}</div>
+                                      )}
+                                    </div>
+                                    <div style={{ fontSize: '14px', fontWeight: 800, color: '#c084fc', flexShrink: 0, marginLeft: '12px' }}>
+                                      {fmt(inv.total)}
+                                    </div>
+                                  </div>
+                                </div>
+                              ))}
+                            </div>
+                          )}
+                        </div>
+                      )}
                     </div>
                   )}
 
