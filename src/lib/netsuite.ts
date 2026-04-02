@@ -749,7 +749,9 @@ export async function getInvoicePdf(invoiceId: string): Promise<{
   }
 
   try {
-    const result = await callRestlet(restletUrl, 'GET', { invoiceId });
+    // Pass as salesOrderId — the existing RESTlet uses render.transaction()
+    // which works for any transaction type given the internal ID
+    const result = await callRestlet(restletUrl, 'GET', { salesOrderId: invoiceId });
 
     if (result?.success && result?.pdfBase64) {
       return {
