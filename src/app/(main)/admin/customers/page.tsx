@@ -810,7 +810,7 @@ export default function CustomersPage() {
                       <div style={{ display: 'flex', gap: '6px', alignItems: 'center' }}>
                         <input
                           type="text"
-                          placeholder="Search by invoice #, PO #, or memo..."
+                          placeholder="Search by invoice # or memo..."
                           value={invoiceCustomer === customer.id ? invoiceSearch : ''}
                           onClick={(e) => { e.stopPropagation(); setInvoiceCustomer(customer.id); }}
                           onChange={(e) => { setInvoiceCustomer(customer.id); setInvoiceSearch(e.target.value); }}
@@ -875,11 +875,8 @@ export default function CustomersPage() {
                                       </div>
                                       <div style={{ fontSize: '11px', color: 'var(--text-label)', marginTop: '2px' }}>
                                         {inv.date && <span>{new Date(inv.date + 'T00:00:00').toLocaleDateString()}</span>}
-                                        {inv.poNumber && <span> · PO: {inv.poNumber}</span>}
+                                        {inv.memo && <span> · {inv.memo}</span>}
                                       </div>
-                                      {inv.memo && (
-                                        <div style={{ fontSize: '11px', color: 'var(--text-body)', marginTop: '2px', fontStyle: 'italic' }}>{inv.memo}</div>
-                                      )}
                                     </div>
                                     <div style={{ fontSize: '14px', fontWeight: 800, color: '#c084fc', flexShrink: 0, marginLeft: '12px' }}>
                                       {fmt(inv.total)}
