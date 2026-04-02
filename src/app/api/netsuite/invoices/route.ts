@@ -30,13 +30,10 @@ export async function GET(req: NextRequest) {
         t.tranid AS invoice_number,
         t.trandate AS invoice_date,
         t.status,
-        t.statusref AS status_ref,
         BUILTIN.DF(t.status) AS status_display,
         t.total,
-        t.foreigntotal,
         t.memo,
-        t.otherrefnum AS po_number,
-        t.duedate
+        t.otherrefnum AS po_number
       FROM transaction t
       WHERE t.type = 'CustInvc'
         AND t.entity = ${customerId}
@@ -51,10 +48,9 @@ export async function GET(req: NextRequest) {
       invoiceNumber: row.invoice_number || '',
       date: row.invoice_date || '',
       status: row.status_display || row.status || '',
-      total: parseFloat(row.foreigntotal || row.total || '0'),
+      total: parseFloat(row.total || '0'),
       memo: row.memo || '',
       poNumber: row.po_number || '',
-      dueDate: row.duedate || '',
     }));
 
     return NextResponse.json({ invoices, count: invoices.length });
