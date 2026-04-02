@@ -86,6 +86,7 @@ export default function MorePage() {
           <MenuBtn icon="📚" title="Knowledge Base" sub="SOPs and docs for AI agent" onClick={() => router.push('/admin/knowledge')} />
         )}
         <MenuBtn icon="📝" title="Quick Job (No PO)" sub="Start scanning without a PO" onClick={() => router.push('/scan')} />
+        <MenuBtn icon="📶" title="Offline Scanner" sub="Scan VINs underground — syncs when back online" onClick={() => router.push('/offline-scan')} />
         <MenuBtn icon="🔔" title="Notification Settings" sub="Configure your alert preferences" onClick={() => router.push('/settings')} />
       </div>
 
