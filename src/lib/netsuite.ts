@@ -820,7 +820,14 @@ export async function createInvoiceFromSO(payload: {
   }
 }
 
-export async function getSalesOrderPdf(salesOrderId: string): Promise<{
+/**
+ * Fetch a transaction PDF from the NetSuite RESTlet.
+ * Supports: salesOrder, invoice (matches the RESTlet's query params).
+ */
+export async function getNetSuitePdf(
+  type: 'salesOrder' | 'invoice',
+  recordId: string
+): Promise<{
   success: boolean;
   pdfBase64?: string;
   filename?: string;
@@ -832,13 +839,15 @@ export async function getSalesOrderPdf(salesOrderId: string): Promise<{
   }
 
   try {
-    const result = await callRestlet(restletUrl, 'GET', { salesOrderId });
+    const paramKey = type === 'invoice' ? 'invoiceId' : 'salesOrderId';
+    const result = await callRestlet(restletUrl, 'GET', { [paramKey]: recordId });
 
     if (result?.success && result?.pdfBase64) {
+      const prefix = type === 'invoice' ? 'Invoice' : 'SalesOrder';
       return {
         success: true,
         pdfBase64: result.pdfBase64,
-        filename: result.filename || `SalesOrder_${salesOrderId}.pdf`,
+        filename: result.filename || `${prefix}_${recordId}.pdf`,
       };
     }
 
@@ -848,31 +857,12 @@ export async function getSalesOrderPdf(salesOrderId: string): Promise<{
   }
 }
 
-export async function getInvoicePdf(invoiceId: string): Promise<{
-  success: boolean;
-  pdfBase64?: string;
-  filename?: string;
-  error?: string;
-}> {
-  const restletUrl = process.env.NETSUITE_PDF_RESTLET_URL;
-  if (!restletUrl) {
-    return { success: false, error: 'PDF RESTlet URL not configured' };
-  }
+/** @deprecated Use getNetSuitePdf('salesOrder', id) instead */
+export async function getSalesOrderPdf(salesOrderId: string) {
+  return getNetSuitePdf('salesOrder', salesOrderId);
+}
 
-  try {
-    // Pass invoiceId — requires the updated RESTlet (scripts/netsuite-pdf-restlet.js)
-    const result = await callRestlet(restletUrl, 'GET', { invoiceId });
-
-    if (result?.success && result?.pdfBase64) {
-      return {
-        success: true,
-        pdfBase64: result.pdfBase64,
-        filename: result.filename || `Invoice_${invoiceId}.pdf`,
-      };
-    }
-
-    return { success: false, error: result?.error || 'Failed to generate PDF' };
-  } catch (e: any) {
-    return { success: false, error: `Error generating PDF: ${e.message}` };
-  }
+/** @deprecated Use getNetSuitePdf('invoice', id) instead */
+export async function getInvoicePdf(invoiceId: string) {
+  return getNetSuitePdf('invoice', invoiceId);
 }

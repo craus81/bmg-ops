@@ -1,10 +1,23 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { getNetSuitePdf } from '@/lib/netsuite';
 
-/** @deprecated Use /api/netsuite/pdf?type=salesOrder&id=... instead */
+export const maxDuration = 60;
+
+/**
+ * GET /api/netsuite/pdf?type=salesOrder|invoice&id=123
+ * Generic PDF endpoint for any supported NetSuite transaction type.
+ */
 export async function GET(request: NextRequest) {
   const { searchParams } = new URL(request.url);
+  const type = searchParams.get('type') as 'salesOrder' | 'invoice' | null;
   const id = searchParams.get('id');
+
+  if (!type || !['salesOrder', 'invoice'].includes(type)) {
+    return NextResponse.json(
+      { success: false, error: 'Missing or invalid type parameter (salesOrder or invoice)' },
+      { status: 400 }
+    );
+  }
 
   if (!id) {
     return NextResponse.json(
@@ -14,7 +27,7 @@ export async function GET(request: NextRequest) {
   }
 
   try {
-    const result = await getNetSuitePdf('salesOrder', id);
+    const result = await getNetSuitePdf(type, id);
 
     if (!result.success) {
       return NextResponse.json(result, { status: 400 });

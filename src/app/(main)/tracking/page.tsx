@@ -9,7 +9,7 @@ import StatusBadge from '@/components/StatusBadge';
 import AssignmentPicker from '@/components/AssignmentPicker';
 import type { FleetCheckin, VehicleTrackingStatus, VehicleStatusHistory, VehiclePhoto } from '@/lib/types';
 import { VEHICLE_STATUS_PIPELINE, VEHICLE_STATUS_LABELS, VEHICLE_STATUS_COLORS } from '@/lib/types';
-import SalesOrderPdf from '@/components/SalesOrderPdf';
+import NetSuitePdf from '@/components/NetSuitePdf';
 import ProofThumbnail from '@/components/ProofThumbnail';
 
 type FilterStatus = VehicleTrackingStatus | 'all' | 'stuck';
@@ -862,9 +862,10 @@ export default function TrackingPage() {
                     {/* Sales Order Section */}
                     {vehicle.netsuite_sales_order_id && vehicle.sales_order_number ? (
                       <div style={{ marginBottom: '12px' }}>
-                        <SalesOrderPdf
-                          salesOrderId={vehicle.netsuite_sales_order_id}
-                          salesOrderNumber={vehicle.sales_order_number}
+                        <NetSuitePdf
+                          type="salesOrder"
+                          recordId={vehicle.netsuite_sales_order_id}
+                          recordNumber={vehicle.sales_order_number}
                         />
                         {isAdmin && (
                           <button

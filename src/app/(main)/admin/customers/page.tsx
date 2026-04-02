@@ -4,8 +4,19 @@ import { useState, useEffect, useRef } from 'react';
 import { useRouter } from 'next/navigation';
 import { createClient } from '@/lib/supabase-browser';
 import { useAuth } from '@/components/AuthProvider';
+import NetSuitePdf from '@/components/NetSuitePdf';
 import jsPDF from 'jspdf';
 import autoTable from 'jspdf-autotable';
+
+interface CustomerInvoice {
+  id: string;
+  invoice_number: string;
+  invoice_date: string;
+  total: number;
+  status: string;
+  status_display: string;
+  due_date: string | null;
+}
 
 interface Customer {
   id: string;
@@ -102,13 +113,10 @@ export default function CustomersPage() {
   const [generatingReport, setGeneratingReport] = useState(false);
   const [expandedCustomer, setExpandedCustomer] = useState<string | null>(null);
 
-  // Invoice search state
-  const [invoiceCustomer, setInvoiceCustomer] = useState<string | null>(null);
-  const [invoiceSearch, setInvoiceSearch] = useState('');
-  const [invoices, setInvoices] = useState<any[]>([]);
-  const [loadingInvoices, setLoadingInvoices] = useState(false);
-  const [invoicesLoaded, setInvoicesLoaded] = useState<string | null>(null);
-  const [downloadingPdf, setDownloadingPdf] = useState<string | null>(null);
+  // Invoice state
+  const [invoices, setInvoices] = useState<Record<string, CustomerInvoice[]>>({});
+  const [loadingInvoices, setLoadingInvoices] = useState<string | null>(null);
+  const [expandedInvoice, setExpandedInvoice] = useState<string | null>(null); // invoice id for PDF viewer
 
   // Add/edit contact state
   const [showAddContact, setShowAddContact] = useState<string | null>(null); // customer_id
@@ -225,54 +233,21 @@ export default function CustomersPage() {
     }
   };
 
-  const searchInvoices = async (netsuiteId: string, query?: string) => {
-    setLoadingInvoices(true);
+  const loadInvoices = async (customer: Customer) => {
+    if (!customer.netsuite_id) return;
+    // Don't re-fetch if already loaded
+    if (invoices[customer.id]?.length) return;
+    setLoadingInvoices(customer.id);
     try {
-      const params = new URLSearchParams({ customerId: netsuiteId });
-      if (query?.trim()) params.set('q', query.trim());
-      const res = await fetch(`/api/netsuite/invoices?${params}`);
+      const res = await fetch(`/api/netsuite/customer-invoices?customerId=${customer.netsuite_id}`);
       const data = await res.json();
-      if (!res.ok || data.error) {
-        alert(data.error || 'Failed to fetch invoices');
-      } else {
-        setInvoices(data.invoices || []);
-        setInvoicesLoaded(netsuiteId);
+      if (data.success) {
+        setInvoices(prev => ({ ...prev, [customer.id]: data.invoices || [] }));
       }
-    } catch (err: any) {
-      alert(err.message || 'Failed to fetch invoices');
+    } catch (err) {
+      console.error('Failed to load invoices:', err);
     }
-    setLoadingInvoices(false);
-  };
-
-  const downloadInvoicePdf = async (invoiceId: string, invoiceNumber: string) => {
-    setDownloadingPdf(invoiceId);
-    try {
-      const res = await fetch(`/api/netsuite/invoice-pdf?id=${invoiceId}`);
-      const data = await res.json();
-      if (!res.ok || !data.success) {
-        alert(data.error || 'Failed to download invoice PDF');
-        setDownloadingPdf(null);
-        return;
-      }
-      // Convert base64 to blob and download
-      const byteChars = atob(data.pdfBase64);
-      const byteNumbers = new Array(byteChars.length);
-      for (let i = 0; i < byteChars.length; i++) {
-        byteNumbers[i] = byteChars.charCodeAt(i);
-      }
-      const blob = new Blob([new Uint8Array(byteNumbers)], { type: 'application/pdf' });
-      const url = URL.createObjectURL(blob);
-      const a = document.createElement('a');
-      a.href = url;
-      a.download = data.filename || `Invoice_${invoiceNumber}.pdf`;
-      document.body.appendChild(a);
-      a.click();
-      document.body.removeChild(a);
-      URL.revokeObjectURL(url);
-    } catch (err: any) {
-      alert(err.message || 'Failed to download PDF');
-    }
-    setDownloadingPdf(null);
+    setLoadingInvoices(null);
   };
 
   const generatePurchaseReport = async (customer: Customer) => {
@@ -404,21 +379,43 @@ export default function CustomersPage() {
   const handleScanCard = async (file: File) => {
     setScanningCard(true);
     try {
-      const reader = new FileReader();
-      const base64 = await new Promise<string>((resolve) => {
-        reader.onload = () => {
-          const result = reader.result as string;
-          resolve(result.split(',')[1]); // strip data:image/...;base64,
+      // Compress image before sending (camera photos can be 5-10MB+)
+      const { base64, mediaType } = await new Promise<{ base64: string; mediaType: string }>((resolve, reject) => {
+        const img = new Image();
+        const url = URL.createObjectURL(file);
+        img.onload = () => {
+          URL.revokeObjectURL(url);
+          let w = img.width;
+          let h = img.height;
+          const maxPx = 1536; // Plenty for a business card
+          if (w > maxPx) {
+            h = Math.round(h * (maxPx / w));
+            w = maxPx;
+          }
+          if (h > maxPx) {
+            w = Math.round(w * (maxPx / h));
+            h = maxPx;
+          }
+          const canvas = document.createElement('canvas');
+          canvas.width = w;
+          canvas.height = h;
+          const ctx = canvas.getContext('2d')!;
+          ctx.drawImage(img, 0, 0, w, h);
+          const dataUrl = canvas.toDataURL('image/jpeg', 0.8);
+          resolve({ base64: dataUrl.split(',')[1], mediaType: 'image/jpeg' });
         };
-        reader.readAsDataURL(file);
+        img.onerror = () => { URL.revokeObjectURL(url); reject(new Error('Failed to load image')); };
+        img.src = url;
       });
 
       const res = await fetch('/api/prospects/scan-card', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ image: base64, mimeType: file.type }),
+        body: JSON.stringify({ image: base64, mimeType: mediaType }),
       });
-      const data = await res.json();
+      const text = await res.text();
+      let data;
+      try { data = JSON.parse(text); } catch { throw new Error(res.ok ? 'Invalid response from server' : `Server error (${res.status})`); }
       if (data.success && data.data) {
         setProspectForm({
           company_name: data.data.company_name || '',
@@ -835,100 +832,72 @@ export default function CustomersPage() {
                     </div>
                   )}
 
-                  {/* Invoice Search */}
+                  {/* Invoices */}
                   {customer.netsuite_id && (
                     <div style={{ padding: '10px 0', borderBottom: '1px solid rgba(30,45,61,0.5)' }}>
-                      <div style={{ fontSize: '10px', fontWeight: 700, color: 'var(--text-label)', textTransform: 'uppercase', marginBottom: '6px' }}>Invoices</div>
-                      <div style={{ display: 'flex', gap: '6px', alignItems: 'center' }}>
-                        <input
-                          type="text"
-                          placeholder="Search by invoice # or memo..."
-                          value={invoiceCustomer === customer.id ? invoiceSearch : ''}
-                          onClick={(e) => { e.stopPropagation(); setInvoiceCustomer(customer.id); }}
-                          onChange={(e) => { setInvoiceCustomer(customer.id); setInvoiceSearch(e.target.value); }}
-                          onKeyDown={(e) => {
-                            if (e.key === 'Enter') {
-                              e.stopPropagation();
-                              searchInvoices(customer.netsuite_id!, invoiceCustomer === customer.id ? invoiceSearch : '');
-                            }
-                          }}
-                          style={{
-                            flex: 1, padding: '6px 10px', borderRadius: '6px', border: '1px solid var(--border)',
-                            background: 'var(--input-bg)', color: 'var(--text-body)', fontSize: '12px', outline: 'none',
-                          }}
-                        />
+                      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '6px' }}>
+                        <div style={{ fontSize: '10px', fontWeight: 700, color: 'var(--text-label)', textTransform: 'uppercase' }}>Invoices</div>
                         <button
-                          onClick={(e) => {
-                            e.stopPropagation();
-                            if (invoiceCustomer !== customer.id) {
-                              setInvoiceCustomer(customer.id);
-                              setInvoiceSearch('');
-                            }
-                            searchInvoices(customer.netsuite_id!, invoiceCustomer === customer.id ? invoiceSearch : '');
-                          }}
-                          disabled={loadingInvoices}
+                          onClick={(e) => { e.stopPropagation(); loadInvoices(customer); }}
+                          disabled={loadingInvoices === customer.id}
                           style={{
-                            padding: '6px 14px', borderRadius: '6px', fontSize: '11px', fontWeight: 700,
-                            background: loadingInvoices ? 'var(--border)' : 'rgba(168,85,247,0.15)',
-                            border: '1px solid rgba(168,85,247,0.3)', color: loadingInvoices ? 'var(--text-label)' : '#c084fc',
-                            cursor: loadingInvoices ? 'not-allowed' : 'pointer', whiteSpace: 'nowrap',
+                            padding: '3px 10px', borderRadius: '5px', fontSize: '10px', fontWeight: 700,
+                            background: 'rgba(168,85,247,0.12)', border: '1px solid rgba(168,85,247,0.25)',
+                            color: loadingInvoices === customer.id ? 'var(--text-label)' : '#a855f7',
+                            cursor: loadingInvoices === customer.id ? 'not-allowed' : 'pointer',
                           }}
                         >
-                          {loadingInvoices && invoiceCustomer === customer.id ? 'Searching...' : 'Search Invoices'}
+                          {loadingInvoices === customer.id ? 'Loading...' : invoices[customer.id] ? 'Refresh' : 'Load Invoices'}
                         </button>
                       </div>
-
-                      {/* Invoice results */}
-                      {invoiceCustomer === customer.id && invoicesLoaded === customer.netsuite_id && (
-                        <div style={{ marginTop: '8px' }}>
-                          {invoices.length === 0 ? (
-                            <div style={{ fontSize: '11px', color: 'var(--text-label)', padding: '8px 0' }}>No invoices found</div>
-                          ) : (
-                            <div style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
-                              <div style={{ fontSize: '10px', color: 'var(--text-label)', marginBottom: '2px' }}>{invoices.length} invoice{invoices.length !== 1 ? 's' : ''} found</div>
-                              {invoices.map((inv: any) => (
-                                <div key={inv.id} style={{
-                                  padding: '8px 10px', borderRadius: '6px',
+                      {invoices[customer.id] && invoices[customer.id].length > 0 ? (
+                        <div style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
+                          {invoices[customer.id].map(inv => (
+                            <div key={inv.id}>
+                              <div
+                                onClick={(e) => { e.stopPropagation(); setExpandedInvoice(expandedInvoice === inv.id ? null : inv.id); }}
+                                style={{
+                                  padding: '8px 10px', borderRadius: '6px', cursor: 'pointer',
                                   background: 'rgba(168,85,247,0.05)', border: '1px solid rgba(168,85,247,0.1)',
-                                }}>
-                                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
-                                    <div style={{ minWidth: 0, flex: 1 }}>
-                                      <div style={{ display: 'flex', gap: '8px', alignItems: 'center', flexWrap: 'wrap' }}>
-                                        <span style={{ fontSize: '13px', fontWeight: 700, color: 'var(--text-body)' }}>
-                                          #{inv.invoiceNumber}
-                                        </span>
-                                        <span style={{
-                                          fontSize: '9px', fontWeight: 700, padding: '2px 6px', borderRadius: '4px',
-                                          background: inv.status?.toLowerCase().includes('paid') ? 'rgba(34,197,94,0.15)' : 'rgba(251,191,36,0.15)',
-                                          color: inv.status?.toLowerCase().includes('paid') ? '#4ade80' : '#fbbf24',
-                                        }}>
-                                          {inv.status}
-                                        </span>
-                                      </div>
-                                      <div style={{ fontSize: '11px', color: 'var(--text-label)', marginTop: '2px' }}>
-                                        {inv.date && <span>{new Date(inv.date).toLocaleDateString()}</span>}
-                                        {inv.memo && <span> · {inv.memo}</span>}
-                                      </div>
-                                    </div>
-                                    <button
-                                      onClick={(e) => { e.stopPropagation(); downloadInvoicePdf(inv.id, inv.invoiceNumber); }}
-                                      disabled={downloadingPdf === inv.id}
-                                      style={{
-                                        padding: '4px 10px', borderRadius: '5px', fontSize: '11px', fontWeight: 700,
-                                        background: downloadingPdf === inv.id ? 'var(--border)' : 'rgba(168,85,247,0.15)',
-                                        border: '1px solid rgba(168,85,247,0.3)', color: downloadingPdf === inv.id ? 'var(--text-label)' : '#c084fc',
-                                        cursor: downloadingPdf === inv.id ? 'not-allowed' : 'pointer', flexShrink: 0, marginLeft: '12px',
-                                      }}
-                                    >
-                                      {downloadingPdf === inv.id ? 'Downloading...' : 'PDF'}
-                                    </button>
-                                  </div>
+                                  display: 'flex', justifyContent: 'space-between', alignItems: 'center',
+                                }}
+                              >
+                                <div>
+                                  <span style={{ fontSize: '12px', fontWeight: 700, color: 'var(--text-body)' }}>
+                                    INV #{inv.invoice_number}
+                                  </span>
+                                  <span style={{ fontSize: '11px', color: 'var(--text-label)', marginLeft: '8px' }}>
+                                    {new Date(inv.invoice_date).toLocaleDateString()}
+                                  </span>
                                 </div>
-                              ))}
+                                <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                                  <span style={{ fontSize: '12px', fontWeight: 700, color: '#a855f7' }}>
+                                    ${Number(inv.total || 0).toLocaleString(undefined, { minimumFractionDigits: 2 })}
+                                  </span>
+                                  <span style={{ fontSize: '9px', padding: '2px 6px', borderRadius: '4px', fontWeight: 700,
+                                    background: inv.status_display?.includes('Paid') ? 'rgba(34,197,94,0.12)' : 'rgba(251,191,36,0.12)',
+                                    color: inv.status_display?.includes('Paid') ? '#4ade80' : '#fbbf24',
+                                  }}>
+                                    {inv.status_display || inv.status}
+                                  </span>
+                                  <span style={{ fontSize: '10px', color: 'var(--text-label)' }}>
+                                    {expandedInvoice === inv.id ? '▲' : '📄'}
+                                  </span>
+                                </div>
+                              </div>
+                              {expandedInvoice === inv.id && (
+                                <NetSuitePdf
+                                  type="invoice"
+                                  recordId={inv.id}
+                                  recordNumber={inv.invoice_number}
+                                />
+                              )}
                             </div>
-                          )}
+                          ))}
                         </div>
-                      )}
+                      ) : invoices[customer.id] ? (
+                        <div style={{ fontSize: '11px', color: 'var(--text-label)', padding: '4px 0' }}>No invoices found</div>
+                      ) : null}
                     </div>
                   )}
 

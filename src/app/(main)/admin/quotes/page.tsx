@@ -1563,52 +1563,96 @@ function NewQuote({ onCreated, editQuote }: { onCreated: () => void; editQuote?:
     setTemplateOnly(true);
 
     try {
-      // Get template image from storage
-      if (!selectedTemplate.template_image_path) {
-        throw new Error('Selected template has no image. Please upload a PNG preview first.');
-      }
+      const hasDimensions = selectedTemplate.panel_data && selectedTemplate.panel_data.length > 0;
 
-      const { data } = storage.from('vehicle-templates')
-        .getPublicUrl(selectedTemplate.template_image_path);
+      if (hasDimensions) {
+        // Build analysis directly from panel dimensions — no AI needed
+        const panels = selectedTemplate.panel_data;
+        const totalSqft = panels.reduce((sum, p) => sum + (p.area_sqft || 0), 0);
 
-      setTemplatePreviewUrl(data.publicUrl);
+        const graphicElements: GraphicElement[] = panels.map((p, i) => ({
+          element_name: p.name,
+          element_type: 'full_panel',
+          width_in: p.width_in,
+          height_in: p.height_in,
+          description: `${p.name} — ${p.width_in}" × ${p.height_in}" (${p.area_sqft.toFixed(1)} sq ft)`,
+          crop_x_pct: 0,
+          crop_y_pct: (i / panels.length) * 100,
+          crop_w_pct: 100,
+          crop_h_pct: (1 / panels.length) * 100,
+        }));
 
-      const imgResponse = await fetch(data.publicUrl);
-      if (!imgResponse.ok) throw new Error(`Failed to fetch template image: ${imgResponse.status}`);
+        const analysisResult: AIAnalysisResult = {
+          graphic_elements: graphicElements,
+          total_vinyl_sqft: totalSqft,
+          total_vehicle_sqft: totalSqft,
+          overall_coverage_pct: 100,
+          confidence: 'high',
+          notes: `Full wrap estimate from ${panels.length} panel dimensions for ${selectedTemplate.make} ${selectedTemplate.model}.`,
+          analysis_version: 'individual_elements',
+        };
 
-      const imgBlob = await imgResponse.blob();
-      const templateBase64 = await new Promise<string>((resolve) => {
-        const reader = new FileReader();
-        reader.onload = () => resolve((reader.result as string).split(',')[1]);
-        reader.readAsDataURL(imgBlob);
-      });
-      const templateMediaType = imgBlob.type || 'image/png';
+        // If template has an image, use it for the review UI
+        if (selectedTemplate.template_image_path) {
+          const { data } = storage.from('vehicle-templates')
+            .getPublicUrl(selectedTemplate.template_image_path);
+          setTemplatePreviewUrl(data.publicUrl);
+          setProofPreviewForReview(data.publicUrl);
+        }
 
-      // Use the template image as the "proof" image for the tagging UI
-      setProofPreviewForReview(data.publicUrl);
-
-      // Call template-only analysis API
-      const response = await fetch('/api/analyze-template', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ templateImageBase64: templateBase64, templateMediaType }),
-      });
-
-      if (!response.ok) {
-        const errorText = await response.text();
-        throw new Error(errorText || `Server error: ${response.status}`);
-      }
-
-      const result = await response.json();
-      setAnalysis(result.analysis);
-
-      if (result.analysis.graphic_elements?.length) {
-        // Start with all panels INCLUDED (since this is a full wrap)
-        setIncludedElements(new Set(result.analysis.graphic_elements.map((e: GraphicElement) => e.element_name)));
+        setAnalysis(analysisResult);
+        // All panels INCLUDED for full wrap
+        setIncludedElements(new Set(graphicElements.map(e => e.element_name)));
         setNestingResult(null);
-        setStep(4); // Go to tag/adjust panels
+        setStep(4);
       } else {
-        setStep(5); // Go straight to pricing
+        // No panel dimensions — fall back to AI vision on template image
+        if (!selectedTemplate.template_image_path) {
+          throw new Error('This vehicle has no panel dimensions and no template image. Run the extract-dimensions script or upload a template PNG first.');
+        }
+
+        const { data } = storage.from('vehicle-templates')
+          .getPublicUrl(selectedTemplate.template_image_path);
+
+        setTemplatePreviewUrl(data.publicUrl);
+
+        const imgResponse = await fetch(data.publicUrl);
+        if (!imgResponse.ok) throw new Error(`Failed to fetch template image: ${imgResponse.status}`);
+
+        const imgBlob = await imgResponse.blob();
+        const templateBase64 = await new Promise<string>((resolve) => {
+          const reader = new FileReader();
+          reader.onload = () => resolve((reader.result as string).split(',')[1]);
+          reader.readAsDataURL(imgBlob);
+        });
+        const templateMediaType = imgBlob.type || 'image/png';
+
+        // Use the template image as the "proof" image for the tagging UI
+        setProofPreviewForReview(data.publicUrl);
+
+        // Call template-only analysis API
+        const response = await fetch('/api/analyze-template', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ templateImageBase64: templateBase64, templateMediaType }),
+        });
+
+        if (!response.ok) {
+          const errorText = await response.text();
+          throw new Error(errorText || `Server error: ${response.status}`);
+        }
+
+        const result = await response.json();
+        setAnalysis(result.analysis);
+
+        if (result.analysis.graphic_elements?.length) {
+          // Start with all panels INCLUDED (since this is a full wrap)
+          setIncludedElements(new Set(result.analysis.graphic_elements.map((e: GraphicElement) => e.element_name)));
+          setNestingResult(null);
+          setStep(4); // Go to tag/adjust panels
+        } else {
+          setStep(5); // Go straight to pricing
+        }
       }
     } catch (err: any) {
       setAnalysisError(err.message || 'Template analysis failed.');

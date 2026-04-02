@@ -1,5 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 
+export const maxDuration = 60;
+
 /**
  * POST /api/prospects/scan-card
  * Accepts a base64 business card image, uses Claude vision to extract contact info

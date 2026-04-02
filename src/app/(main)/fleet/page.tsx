@@ -8,7 +8,7 @@ import { decodeVIN, isValidVIN } from '@/lib/vin-decoder';
 import VinScanner from '@/components/VinScanner';
 import { theme } from '@/lib/theme';
 import type { NetsuiteSalesOrder, GraphicsProof, FleetCheckin } from '@/lib/types';
-import SalesOrderPdf from '@/components/SalesOrderPdf';
+import NetSuitePdf from '@/components/NetSuitePdf';
 import ProofThumbnail from '@/components/ProofThumbnail';
 
 // ─── Step indicator ────────────────────────────────────────────
@@ -329,9 +329,10 @@ export default function FleetPage() {
         </div>
 
         {/* Sales Order PDF Viewer */}
-        <SalesOrderPdf
-          salesOrderId={savedCheckin.netsuite_sales_order_id}
-          salesOrderNumber={savedCheckin.sales_order_number}
+        <NetSuitePdf
+          type="salesOrder"
+          recordId={savedCheckin.netsuite_sales_order_id}
+          recordNumber={savedCheckin.sales_order_number}
         />
 
         <div style={{ display: 'flex', flexDirection: 'column', gap: '8px', marginTop: '16px' }}>
