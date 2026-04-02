@@ -67,7 +67,8 @@ export default function CustomersPage() {
   const [invoiceSearch, setInvoiceSearch] = useState('');
   const [invoices, setInvoices] = useState<any[]>([]);
   const [loadingInvoices, setLoadingInvoices] = useState(false);
-  const [invoicesLoaded, setInvoicesLoaded] = useState<string | null>(null); // tracks which customer's invoices are loaded
+  const [invoicesLoaded, setInvoicesLoaded] = useState<string | null>(null);
+  const [downloadingPdf, setDownloadingPdf] = useState<string | null>(null);
 
   // Add/edit contact state
   const [showAddContact, setShowAddContact] = useState<string | null>(null); // customer_id
@@ -193,6 +194,37 @@ export default function CustomersPage() {
       alert(err.message || 'Failed to fetch invoices');
     }
     setLoadingInvoices(false);
+  };
+
+  const downloadInvoicePdf = async (invoiceId: string, invoiceNumber: string) => {
+    setDownloadingPdf(invoiceId);
+    try {
+      const res = await fetch(`/api/netsuite/invoice-pdf?id=${invoiceId}`);
+      const data = await res.json();
+      if (!res.ok || !data.success) {
+        alert(data.error || 'Failed to download invoice PDF');
+        setDownloadingPdf(null);
+        return;
+      }
+      // Convert base64 to blob and download
+      const byteChars = atob(data.pdfBase64);
+      const byteNumbers = new Array(byteChars.length);
+      for (let i = 0; i < byteChars.length; i++) {
+        byteNumbers[i] = byteChars.charCodeAt(i);
+      }
+      const blob = new Blob([new Uint8Array(byteNumbers)], { type: 'application/pdf' });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = data.filename || `Invoice_${invoiceNumber}.pdf`;
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      URL.revokeObjectURL(url);
+    } catch (err: any) {
+      alert(err.message || 'Failed to download PDF');
+    }
+    setDownloadingPdf(null);
   };
 
   const generatePurchaseReport = async (customer: Customer) => {
@@ -657,9 +689,18 @@ export default function CustomersPage() {
                                         {inv.memo && <span> · {inv.memo}</span>}
                                       </div>
                                     </div>
-                                    <div style={{ fontSize: '14px', fontWeight: 800, color: '#c084fc', flexShrink: 0, marginLeft: '12px' }}>
-                                      {fmt(inv.total)}
-                                    </div>
+                                    <button
+                                      onClick={(e) => { e.stopPropagation(); downloadInvoicePdf(inv.id, inv.invoiceNumber); }}
+                                      disabled={downloadingPdf === inv.id}
+                                      style={{
+                                        padding: '4px 10px', borderRadius: '5px', fontSize: '11px', fontWeight: 700,
+                                        background: downloadingPdf === inv.id ? 'var(--border)' : 'rgba(168,85,247,0.15)',
+                                        border: '1px solid rgba(168,85,247,0.3)', color: downloadingPdf === inv.id ? 'var(--text-label)' : '#c084fc',
+                                        cursor: downloadingPdf === inv.id ? 'not-allowed' : 'pointer', flexShrink: 0, marginLeft: '12px',
+                                      }}
+                                    >
+                                      {downloadingPdf === inv.id ? 'Downloading...' : 'PDF'}
+                                    </button>
                                   </div>
                                 </div>
                               ))}
