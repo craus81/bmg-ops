@@ -860,9 +860,8 @@ export async function getInvoicePdf(invoiceId: string): Promise<{
   }
 
   try {
-    // Pass as salesOrderId — the existing RESTlet uses render.transaction()
-    // which works for any transaction type given the internal ID
-    const result = await callRestlet(restletUrl, 'GET', { salesOrderId: invoiceId });
+    // Pass invoiceId — requires the updated RESTlet (scripts/netsuite-pdf-restlet.js)
+    const result = await callRestlet(restletUrl, 'GET', { invoiceId });
 
     if (result?.success && result?.pdfBase64) {
       return {

@@ -906,7 +906,7 @@ export default function CustomersPage() {
                                         </span>
                                       </div>
                                       <div style={{ fontSize: '11px', color: 'var(--text-label)', marginTop: '2px' }}>
-                                        {inv.date && <span>{new Date(inv.date + 'T00:00:00').toLocaleDateString()}</span>}
+                                        {inv.date && <span>{new Date(inv.date).toLocaleDateString()}</span>}
                                         {inv.memo && <span> · {inv.memo}</span>}
                                       </div>
                                     </div>
