@@ -574,7 +574,6 @@ export default function GraphicsPage() {
                             {GRAPHICS_CATEGORY_LABELS[job.job_category]}
                           </span>
                         )}
-                        {job.job_number && <span>#{job.job_number}</span>}
                         {job.customer && <span>{job.customer}</span>}
                         {job.part_number && <span>{job.part_number}</span>}
                         <span>Qty: {job.quantity}</span>
@@ -672,6 +671,7 @@ export default function GraphicsPage() {
                           {job.scheduled_install_date && <span style={{ color: '#22d3ee' }}>Install: {displayDate(job.scheduled_install_date)}{job.calendar_event_id ? ' 📅' : ''}</span>}
                           {getProfileName(job.assigned_to) && <span>Assigned: {getProfileName(job.assigned_to)}</span>}
                           {getProfileName(job.created_by) && <span>By: {getProfileName(job.created_by)}</span>}
+                          {job.job_number && <span style={{ color: 'var(--text-muted)' }}>#{job.job_number}</span>}
                         </div>
 
                         {/* Status history */}
