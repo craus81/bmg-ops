@@ -14,6 +14,11 @@ interface ScheduleEntry {
   part_number?: string; customer?: string; end_customer?: string;
   vehicle_type?: string; graphic_package?: string; location_name?: string;
 }
+interface GraphicsInstall {
+  id: string; title: string; job_number: string; customer: string | null;
+  part_number: string | null; quantity: number; scheduled_install_date: string;
+  status: string; ship_to: string | null;
+}
 
 export default function SchedulePage() {
   const router = useRouter();
@@ -29,6 +34,7 @@ export default function SchedulePage() {
   const [locations, setLocations] = useState<Location[]>([]);
   const [catalogItems, setCatalogItems] = useState<CatalogItem[]>([]);
   const [entries, setEntries] = useState<ScheduleEntry[]>([]);
+  const [graphicsInstalls, setGraphicsInstalls] = useState<GraphicsInstall[]>([]);
   const [loading, setLoading] = useState(true);
 
   // Create state
@@ -73,13 +79,25 @@ export default function SchedulePage() {
 
   const loadEntries = async () => {
     const { start, end } = getDateRange();
-    const { data } = await supabase.from('schedule_entries').select('*').gte('scheduled_date', start.toISOString().split('T')[0]).lte('scheduled_date', end.toISOString().split('T')[0]);
-    if (!data) { setEntries([]); return; }
-    setEntries(data.map((e: any) => {
-      const cat = catalogItems.find((c) => c.id === e.catalog_id);
-      const loc = locations.find((l) => l.id === e.location_id);
-      return { ...e, part_number: cat?.part_number, customer: cat?.customer, end_customer: cat?.end_customer, vehicle_type: cat?.vehicle_type, graphic_package: cat?.graphic_package, location_name: loc?.name };
-    }));
+    const startStr = start.toISOString().split('T')[0];
+    const endStr = end.toISOString().split('T')[0];
+    const { data } = await supabase.from('schedule_entries').select('*').gte('scheduled_date', startStr).lte('scheduled_date', endStr);
+    if (!data) { setEntries([]); } else {
+      setEntries(data.map((e: any) => {
+        const cat = catalogItems.find((c) => c.id === e.catalog_id);
+        const loc = locations.find((l) => l.id === e.location_id);
+        return { ...e, part_number: cat?.part_number, customer: cat?.customer, end_customer: cat?.end_customer, vehicle_type: cat?.vehicle_type, graphic_package: cat?.graphic_package, location_name: loc?.name };
+      }));
+    }
+    // Load graphics jobs with install dates in this range
+    const { data: gfx } = await supabase
+      .from('graphics_jobs')
+      .select('id, title, job_number, customer, part_number, quantity, scheduled_install_date, status, ship_to')
+      .not('scheduled_install_date', 'is', null)
+      .neq('status', 'cancelled')
+      .gte('scheduled_install_date', startStr)
+      .lte('scheduled_install_date', endStr);
+    setGraphicsInstalls((gfx || []) as GraphicsInstall[]);
   };
 
   const getDateRange = () => {
@@ -102,6 +120,7 @@ export default function SchedulePage() {
   const ds = (d: Date) => d.toISOString().split('T')[0];
   const isToday = (d: Date) => ds(d) === ds(new Date());
   const getEnt = (iid: string, date: string) => entries.filter(e => e.installer_id === iid && e.scheduled_date === date);
+  const getGfx = (date: string) => graphicsInstalls.filter(g => g.scheduled_install_date === date);
 
   const openCreate = (iid: string, date: string) => { setCInstaller(iid); setCDate(date); setCCatalog(''); setCQty(1); setCLoc(locations.length > 0 ? locations[0].id : ''); setCNotes(''); setCatSearch(''); setShowCreate(true); setShowNewLoc(false); };
 
@@ -301,6 +320,29 @@ export default function SchedulePage() {
           </div>
         </div>
       ))}
+
+      {/* Graphics Install Dates */}
+      {graphicsInstalls.length > 0 && (
+        <div style={{ marginBottom: '14px' }}>
+          <div style={{ fontSize: '12px', fontWeight: 800, color: '#f97316', padding: '6px 0', borderBottom: '1px solid var(--border)', marginBottom: '6px' }}>
+            Graphics Installs
+          </div>
+          <div style={{ display: 'flex', gap: '4px' }}>
+            {weekDays.map(day => {
+              const d = ds(day); const dayGfx = getGfx(d); const today = isToday(day);
+              return (<div key={`gfx-${d}`} style={{ flex: 1, minWidth: '60px', borderRadius: '10px', padding: '6px', background: today ? 'rgba(30,74,94,0.08)' : 'var(--card)', border: `1px solid ${today ? 'rgba(30,74,94,0.25)' : 'var(--border)'}` }}>
+                <div style={{ fontSize: '9px', fontWeight: 700, color: today ? 'var(--navy)' : 'var(--text-muted)', textTransform: 'uppercase', textAlign: 'center', marginBottom: '4px' }}>{day.toLocaleDateString([], { weekday: 'short' })} {day.getDate()}</div>
+                {dayGfx.map(g => (
+                  <div key={g.id} style={{ width: '100%', padding: '4px 6px', borderRadius: '6px', marginBottom: '3px', background: 'rgba(249,115,22,0.1)', border: '1px solid rgba(249,115,22,0.25)', textAlign: 'left', fontSize: '9px', fontWeight: 700, color: '#f97316', lineHeight: '1.3' }}>
+                    <div style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{g.title}</div>
+                    <div style={{ fontSize: '8px', opacity: 0.7, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{g.customer}{g.quantity > 1 ? ` ×${g.quantity}` : ''}</div>
+                  </div>
+                ))}
+              </div>);
+            })}
+          </div>
+        </div>
+      )}
     </div>)}
 
     {/* MONTH VIEW */}
@@ -313,6 +355,8 @@ export default function SchedulePage() {
           if (!day) return <div key={`e-${i}`} />;
           const d = ds(day); const today = isToday(day);
           const dayEntries = entries.filter(e => e.scheduled_date === d);
+          const dayGfx = getGfx(d);
+          const totalItems = dayEntries.length + dayGfx.length;
           return (<div key={d} style={{ minHeight: '60px', borderRadius: '6px', padding: '4px', background: today ? 'rgba(30,74,94,0.08)' : 'var(--card)', border: `1px solid ${today ? 'rgba(30,74,94,0.25)' : 'var(--border)'}` }}>
             <div style={{ fontSize: '10px', fontWeight: 700, color: today ? 'var(--navy)' : 'var(--text-muted)', marginBottom: '2px' }}>{day.getDate()}</div>
             {dayEntries.slice(0, 3).map(e => {
@@ -322,7 +366,12 @@ export default function SchedulePage() {
                 {inst?.full_name?.split(' ')[0]}: {e.end_customer || e.part_number}
               </button>);
             })}
-            {dayEntries.length > 3 && <div style={{ fontSize: '7px', color: 'var(--text-muted)', textAlign: 'center' }}>+{dayEntries.length - 3}</div>}
+            {dayGfx.slice(0, Math.max(0, 3 - dayEntries.length)).map(g => (
+              <div key={g.id} style={{ width: '100%', padding: '2px 3px', borderRadius: '4px', marginBottom: '1px', background: 'rgba(249,115,22,0.1)', textAlign: 'left', fontSize: '7px', fontWeight: 700, color: '#f97316', lineHeight: '1.3', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                {g.title}
+              </div>
+            ))}
+            {totalItems > 3 && <div style={{ fontSize: '7px', color: 'var(--text-muted)', textAlign: 'center' }}>+{totalItems - 3}</div>}
           </div>);
         })}
       </div>
