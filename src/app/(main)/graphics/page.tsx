@@ -876,8 +876,10 @@ export default function GraphicsPage() {
 
       {/* ═══════════ CREATE JOB MODAL ═══════════ */}
       {showCreate && (
-        <div style={{ position: 'fixed', top: 0, left: 0, right: 0, bottom: 0, background: 'rgba(0,0,0,0.7)', zIndex: 1000, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '16px' }}>
-          <div style={{ background: 'var(--subtle-bg)', border: '1px solid rgba(59,130,246,0.3)', borderRadius: '14px', padding: '18px', maxWidth: '500px', width: '100%', maxHeight: '85vh', overflowY: 'auto' }}>
+        <div style={{ position: 'fixed', top: 0, left: 0, right: 0, bottom: 0, background: 'rgba(0,0,0,0.7)', zIndex: 1000, display: 'flex', alignItems: 'flex-end', justifyContent: 'center', padding: '0' }}
+          onClick={(e) => { if (e.target === e.currentTarget) { setShowCreate(false); setCreateStep('category'); } }}
+        >
+          <div style={{ background: 'var(--subtle-bg)', border: '1px solid rgba(59,130,246,0.3)', borderRadius: '14px 14px 0 0', padding: '18px', paddingBottom: 'calc(18px + env(safe-area-inset-bottom, 0px))', maxWidth: '500px', width: '100%', maxHeight: '90vh', overflowY: 'auto', WebkitOverflowScrolling: 'touch' }}>
 
             {/* ─── STEP 1: Choose Job Type ─── */}
             {createStep === 'category' && (
@@ -1066,22 +1068,23 @@ export default function GraphicsPage() {
                   </div>
                 )}
 
-                <div style={{ display: 'flex', gap: '8px' }}>
+                <div style={{ display: 'flex', flexDirection: 'column', gap: '8px', paddingTop: '4px' }}>
                   <button
                     onClick={createJob}
                     disabled={creating || !createForm.title.trim()}
                     style={{
-                      flex: 1, padding: '12px', borderRadius: '10px',
-                      background: creating ? 'var(--border)' : GRAPHICS_CATEGORY_COLORS[createForm.job_category as GraphicsJobCategory] || '#22c55e',
-                      color: '#fff', fontWeight: 800, fontSize: '13px', border: 'none', cursor: 'pointer',
+                      width: '100%', padding: '16px', borderRadius: '12px',
+                      background: creating || !createForm.title.trim() ? 'var(--border)' : GRAPHICS_CATEGORY_COLORS[createForm.job_category as GraphicsJobCategory] || '#22c55e',
+                      color: '#fff', fontWeight: 800, fontSize: '15px', border: 'none', cursor: 'pointer',
                       opacity: creating || !createForm.title.trim() ? 0.5 : 1,
+                      minHeight: '48px',
                     }}
                   >
-                    {creating ? 'Creating...' : `Create ${GRAPHICS_CATEGORY_LABELS[createForm.job_category as GraphicsJobCategory]} Job`}
+                    {creating ? 'Creating...' : !createForm.title.trim() ? 'Enter a title to continue' : `Create ${GRAPHICS_CATEGORY_LABELS[createForm.job_category as GraphicsJobCategory]} Job`}
                   </button>
                   <button
                     onClick={() => { setShowCreate(false); setCreateStep('category'); }}
-                    style={{ flex: 1, padding: '12px', borderRadius: '10px', background: 'transparent', border: '1px solid var(--border)', color: 'var(--text-body)', fontWeight: 700, fontSize: '13px', cursor: 'pointer' }}
+                    style={{ width: '100%', padding: '12px', borderRadius: '10px', background: 'transparent', border: '1px solid var(--border)', color: 'var(--text-body)', fontWeight: 700, fontSize: '13px', cursor: 'pointer' }}
                   >
                     Cancel
                   </button>
