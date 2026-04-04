@@ -376,6 +376,12 @@ export default function GraphicsPage() {
       );
     }
     return true;
+  }).sort((a, b) => {
+    // Sort by due date soonest first; no due date goes to the end
+    if (a.due_date && b.due_date) return a.due_date.localeCompare(b.due_date);
+    if (a.due_date && !b.due_date) return -1;
+    if (!a.due_date && b.due_date) return 1;
+    return 0;
   });
 
   // Pipeline counts
