@@ -264,7 +264,13 @@ export default function GraphicsPage() {
       .select()
       .single();
 
-    if (!error && data) {
+    if (error) {
+      alert('Failed to create job: ' + error.message);
+      setCreating(false);
+      return;
+    }
+
+    if (data) {
       // Log creation
       await supabase.from('graphics_status_history').insert({
         job_id: data.id,
@@ -896,8 +902,8 @@ export default function GraphicsPage() {
                         background: 'var(--bg)', border: `1px solid ${GRAPHICS_CATEGORY_COLORS[cat.id]}33`,
                         transition: 'all 0.15s',
                       }}
-                      onMouseEnter={e => { (e.target as HTMLElement).style.borderColor = GRAPHICS_CATEGORY_COLORS[cat.id]; }}
-                      onMouseLeave={e => { (e.target as HTMLElement).style.borderColor = `${GRAPHICS_CATEGORY_COLORS[cat.id]}33`; }}
+                      onMouseEnter={e => { (e.currentTarget as HTMLElement).style.borderColor = GRAPHICS_CATEGORY_COLORS[cat.id]; }}
+                      onMouseLeave={e => { (e.currentTarget as HTMLElement).style.borderColor = `${GRAPHICS_CATEGORY_COLORS[cat.id]}33`; }}
                     >
                       <div style={{ display: 'flex', alignItems: 'center', gap: '10px', marginBottom: '4px' }}>
                         <span style={{ fontSize: '20px' }}>{cat.icon}</span>
@@ -944,6 +950,7 @@ export default function GraphicsPage() {
                     <div style={labelStyle}>{createForm.job_category === 'internal' ? 'Project Name *' : 'Job Title *'}</div>
                     <input style={inputStyle} value={createForm.title} onChange={e => setCreateForm({ ...createForm, title: e.target.value })}
                       placeholder={createForm.job_category === 'internal' ? 'e.g. T-Mobile Spring Campaign' : createForm.job_category === 'proofing' ? 'e.g. PROOF - Fleet Graphics Redesign' : 'e.g. GRAPHIC KIT - FORD TRANSIT'}
+                      onKeyDown={e => { if (e.key === 'Enter' && createForm.title.trim() && !creating) createJob(); }}
                     />
                   </div>
                   <div>
