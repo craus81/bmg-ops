@@ -4,13 +4,18 @@ import { useState, useEffect } from 'react';
 import { useRouter } from 'next/navigation';
 import { createClient } from '@/lib/supabase-browser';
 import { theme } from '@/lib/theme';
+import { GRAPHICS_STATUS_LABELS, GRAPHICS_STATUS_COLORS } from '@/lib/types';
+import type { GraphicsJobStatus } from '@/lib/types';
 import WidgetShell from './WidgetShell';
+
+const ACTIVE_STATUSES = ['received', 'designing', 'revision', 'printing', 'outgassing', 'cutting', 'packing', 'ready', 'shipped'];
+const DONE_STATUSES = ['installed'];
 
 export default function ActiveJobsWidget() {
   const router = useRouter();
   const supabase = createClient();
   const [loading, setLoading] = useState(true);
-  const [stats, setStats] = useState({ total: 0, inProgress: 0, pending: 0, completed: 0 });
+  const [stats, setStats] = useState({ received: 0, active: 0, ready: 0 });
   const [recentJobs, setRecentJobs] = useState<any[]>([]);
 
   useEffect(() => { load(); }, []);
@@ -18,62 +23,66 @@ export default function ActiveJobsWidget() {
   const load = async () => {
     const { data: jobs } = await supabase
       .from('graphics_jobs')
-      .select('id, title, status, customer, created_at')
-      .order('created_at', { ascending: false })
+      .select('id, title, status, customer, part_number, quantity, due_date, created_at')
+      .in('status', ACTIVE_STATUSES)
+      .order('due_date', { ascending: true, nullsFirst: false })
       .limit(100);
 
     const all = jobs || [];
-    const inProgress = all.filter(j => j.status === 'in_progress' || j.status === 'assigned');
-    const pending = all.filter(j => j.status === 'pending' || j.status === 'queued');
-    const completed = all.filter(j => j.status === 'completed' || j.status === 'approved');
+    const received = all.filter(j => j.status === 'received');
+    const inProd = all.filter(j => ['designing', 'revision', 'printing', 'outgassing', 'cutting', 'packing'].includes(j.status));
+    const ready = all.filter(j => j.status === 'ready' || j.status === 'shipped');
 
     setStats({
-      total: all.length,
-      inProgress: inProgress.length,
-      pending: pending.length,
-      completed: completed.length,
+      received: received.length,
+      active: inProd.length,
+      ready: ready.length,
     });
-    setRecentJobs(all.filter(j => j.status !== 'completed' && j.status !== 'approved' && j.status !== 'cancelled').slice(0, 5));
+    setRecentJobs(all.slice(0, 6));
     setLoading(false);
   };
 
   return (
-    <WidgetShell title="Active Jobs" icon="" loading={loading}>
+    <WidgetShell title="Active Jobs" icon="" loading={loading} onHeaderClick={() => router.push('/graphics')}>
       <div>
         <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: '6px', marginBottom: '10px' }}>
           <div style={{ textAlign: 'center', background: 'var(--subtle-bg)', borderRadius: '8px', padding: '8px 4px' }}>
-            <div style={{ fontSize: '18px', fontWeight: 800, color: 'var(--warning)' }}>{stats.pending}</div>
-            <div style={{ fontSize: '9px', fontWeight: 600, color: theme.textMuted, textTransform: 'uppercase' }}>Pending</div>
+            <div style={{ fontSize: '18px', fontWeight: 800, color: '#60a5fa' }}>{stats.received}</div>
+            <div style={{ fontSize: '9px', fontWeight: 600, color: theme.textMuted, textTransform: 'uppercase' }}>Received</div>
           </div>
           <div style={{ textAlign: 'center', background: 'var(--subtle-bg)', borderRadius: '8px', padding: '8px 4px' }}>
-            <div style={{ fontSize: '18px', fontWeight: 800, color: 'var(--navy-light)' }}>{stats.inProgress}</div>
-            <div style={{ fontSize: '9px', fontWeight: 600, color: theme.textMuted, textTransform: 'uppercase' }}>Active</div>
+            <div style={{ fontSize: '18px', fontWeight: 800, color: 'var(--warning)' }}>{stats.active}</div>
+            <div style={{ fontSize: '9px', fontWeight: 600, color: theme.textMuted, textTransform: 'uppercase' }}>In Production</div>
           </div>
           <div style={{ textAlign: 'center', background: 'var(--subtle-bg)', borderRadius: '8px', padding: '8px 4px' }}>
-            <div style={{ fontSize: '18px', fontWeight: 800, color: 'var(--success)' }}>{stats.completed}</div>
-            <div style={{ fontSize: '9px', fontWeight: 600, color: theme.textMuted, textTransform: 'uppercase' }}>Done</div>
+            <div style={{ fontSize: '18px', fontWeight: 800, color: '#4ade80' }}>{stats.ready}</div>
+            <div style={{ fontSize: '9px', fontWeight: 600, color: theme.textMuted, textTransform: 'uppercase' }}>Ready/Shipped</div>
           </div>
         </div>
 
         {recentJobs.length > 0 && (
           <div style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
-            {recentJobs.map(job => (
-              <button key={job.id} onClick={() => router.push(`/jobs/${job.id}`)} style={{
-                display: 'flex', justifyContent: 'space-between', alignItems: 'center', width: '100%',
-                padding: '6px 8px', borderRadius: '6px', border: 'none', textAlign: 'left',
-                background: 'var(--subtle-bg)', cursor: 'pointer', fontSize: '11px',
-              }}>
-                <span style={{ fontWeight: 600, color: theme.textPrimary, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', maxWidth: '60%' }}>
-                  {job.title || job.customer || 'Untitled'}
-                </span>
-                <span style={{
-                  fontSize: '9px', fontWeight: 700, textTransform: 'uppercase',
-                  color: job.status === 'in_progress' ? 'var(--navy-light)' : 'var(--warning)',
-                  padding: '2px 6px', borderRadius: '4px',
-                  background: job.status === 'in_progress' ? 'rgba(42,97,120,0.1)' : 'var(--warning-bg)',
-                }}>{job.status?.replace(/_/g, ' ')}</span>
-              </button>
-            ))}
+            {recentJobs.map(job => {
+              const statusColor = GRAPHICS_STATUS_COLORS[job.status as GraphicsJobStatus] || 'var(--text-muted)';
+              const statusLabel = GRAPHICS_STATUS_LABELS[job.status as GraphicsJobStatus] || job.status;
+              return (
+                <button key={job.id} onClick={() => router.push('/graphics')} style={{
+                  display: 'flex', justifyContent: 'space-between', alignItems: 'center', width: '100%',
+                  padding: '6px 8px', borderRadius: '6px', border: 'none', textAlign: 'left',
+                  background: 'var(--subtle-bg)', cursor: 'pointer', fontSize: '11px',
+                }}>
+                  <span style={{ fontWeight: 600, color: theme.textPrimary, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', maxWidth: '60%' }}>
+                    {job.title || job.customer || 'Untitled'}
+                  </span>
+                  <span style={{
+                    fontSize: '9px', fontWeight: 700, textTransform: 'uppercase',
+                    color: statusColor,
+                    padding: '2px 6px', borderRadius: '4px',
+                    background: `${statusColor}18`,
+                  }}>{statusLabel}</span>
+                </button>
+              );
+            })}
           </div>
         )}
       </div>

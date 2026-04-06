@@ -89,9 +89,11 @@ export default function GraphicsPage() {
   }, [user, isAdmin, isProduction]);
 
   const loadJobs = async () => {
+    // Exclude installed/cancelled by default — they're archived
     const { data } = await supabase
       .from('graphics_jobs')
       .select('*')
+      .not('status', 'in', '("installed","cancelled")')
       .order('created_at', { ascending: false });
     setJobs((data as GraphicsJob[]) || []);
     setLoading(false);
