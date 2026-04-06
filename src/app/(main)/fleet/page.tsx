@@ -76,6 +76,7 @@ export default function FleetPage() {
   const [savedCheckin, setSavedCheckin] = useState<FleetCheckin | null>(null);
   const [notes, setNotes] = useState('');
   const [manualCustomerName, setManualCustomerName] = useState('');
+  const [scheduledUpfitDate, setScheduledUpfitDate] = useState('');
 
   // Recent check-ins
   const [recentCheckins, setRecentCheckins] = useState<FleetCheckin[]>([]);
@@ -231,6 +232,7 @@ export default function FleetPage() {
         status: 'received',
         checked_in_by: user.id,
         company_id: profile?.company_id || null,
+        scheduled_upfit_date: scheduledUpfitDate || null,
       })
       .select()
       .single();
@@ -239,6 +241,31 @@ export default function FleetPage() {
       setVinError('Failed to save: ' + error.message);
       setSaving(false);
       return;
+    }
+
+    // Auto-match graphics job by customer name
+    if (data?.id && (selectedOrder?.customer_name || manualCustomerName.trim())) {
+      const custName = selectedOrder?.customer_name || manualCustomerName.trim();
+      const { data: matchedJob } = await supabase
+        .from('graphics_jobs')
+        .select('id')
+        .ilike('customer', `%${custName}%`)
+        .not('status', 'in', '("installed","cancelled")')
+        .is('matched_vehicle_id', null)
+        .limit(1)
+        .maybeSingle();
+      if (matchedJob) {
+        await supabase.from('fleet_checkins').update({ matched_graphics_job_id: matchedJob.id }).eq('id', data.id);
+      }
+    }
+
+    // Sync upfit date to Google Calendar
+    if (data?.id && scheduledUpfitDate) {
+      fetch('/api/calendar/sync-upfit', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ checkinId: data.id }),
+      }).catch(() => {});
     }
 
     // If a Dropbox proof was selected, copy it to R2 in the background
@@ -278,6 +305,7 @@ export default function FleetPage() {
     setSaved(false);
     setSavedCheckin(null);
     setNotes('');
+    setScheduledUpfitDate('');
     setMode('text');
   };
 
@@ -813,6 +841,26 @@ export default function FleetPage() {
             </div>
           </div>
         )}
+
+        {/* Scheduled Upfit Date */}
+        <div style={{
+          background: theme.card, border: `1px solid ${theme.border}`, borderRadius: '14px',
+          padding: '14px', marginBottom: '14px',
+        }}>
+          <label style={{ display: 'block', fontSize: '10px', fontWeight: 700, color: theme.textMuted, textTransform: 'uppercase', letterSpacing: '0.5px', marginBottom: '6px' }}>
+            Scheduled Upfit Date
+          </label>
+          <input
+            type="date"
+            value={scheduledUpfitDate}
+            onChange={(e) => setScheduledUpfitDate(e.target.value)}
+            style={{
+              width: '100%', padding: '10px', borderRadius: '10px',
+              border: `1px solid ${theme.border}`, background: theme.bg,
+              color: theme.textPrimary, fontSize: '13px',
+            }}
+          />
+        </div>
 
         {/* Notes */}
         <div style={{

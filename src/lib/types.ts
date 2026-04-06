@@ -317,6 +317,9 @@ export interface FleetCheckin {
   customer_portal_token: string | null;
   checked_in_by: string;
   company_id?: string;
+  scheduled_upfit_date?: string | null;
+  matched_graphics_job_id?: string | null;
+  calendar_event_id?: string | null;
   created_at: string;
   updated_at: string;
 }

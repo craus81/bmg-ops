@@ -221,6 +221,7 @@ export async function syncCalendarEvent(params: {
   date: string; // YYYY-MM-DD
   description?: string;
   location?: string;
+  colorId?: string; // Google Calendar color: 6=orange(graphics), 9=blue(upfit), 10=green(CNI)
 }): Promise<string | null> {
   try {
     const calendar = await getCalendarClient();
@@ -231,7 +232,7 @@ export async function syncCalendarEvent(params: {
     const endDateStr = endDate.toISOString().split('T')[0];
 
     const eventBody = {
-      summary: `Install: ${params.title}`,
+      summary: params.title,
       description: params.description || '',
       location: params.location || '',
       start: {
@@ -240,7 +241,7 @@ export async function syncCalendarEvent(params: {
       end: {
         date: endDateStr, // Exclusive end date (next day)
       },
-      colorId: '6', // Orange — matches BMG brand
+      colorId: params.colorId || '6',
     };
 
     if (params.eventId) {

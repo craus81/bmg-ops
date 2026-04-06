@@ -11,7 +11,7 @@ interface ScheduleItem {
   date: string;
   title: string;
   subtitle: string;
-  type: 'schedule' | 'graphics';
+  type: 'schedule' | 'graphics' | 'upfit' | 'cni';
 }
 
 export default function UpcomingScheduleWidget() {
@@ -75,6 +75,52 @@ export default function UpcomingScheduleWidget() {
       }
     }
 
+    // Load upfit vehicles with scheduled dates
+    const { data: upfit } = await supabase
+      .from('fleet_checkins')
+      .select('id, vin, vehicle_year, vehicle_make, vehicle_model, customer_name, scheduled_upfit_date')
+      .not('scheduled_upfit_date', 'is', null)
+      .gte('scheduled_upfit_date', startStr)
+      .lte('scheduled_upfit_date', endStr)
+      .order('scheduled_upfit_date', { ascending: true })
+      .limit(20);
+
+    if (upfit) {
+      for (const u of upfit) {
+        const vehicle = [u.vehicle_year, u.vehicle_make, u.vehicle_model].filter(Boolean).join(' ');
+        combined.push({
+          id: u.id,
+          date: u.scheduled_upfit_date,
+          title: vehicle || u.vin,
+          subtitle: u.customer_name || '',
+          type: 'upfit',
+        });
+      }
+    }
+
+    // Load CNI jobs with deadlines
+    const { data: cni } = await supabase
+      .from('cni_jobs')
+      .select('id, title, customer_name, deadline')
+      .not('deadline', 'is', null)
+      .neq('status', 'cancelled')
+      .gte('deadline', startStr)
+      .lte('deadline', endStr)
+      .order('deadline', { ascending: true })
+      .limit(20);
+
+    if (cni) {
+      for (const c of cni) {
+        combined.push({
+          id: c.id,
+          date: c.deadline,
+          title: c.title || 'CNI Job',
+          subtitle: c.customer_name || '',
+          type: 'cni',
+        });
+      }
+    }
+
     // Sort by date
     combined.sort((a, b) => a.date.localeCompare(b.date));
     setItems(combined.slice(0, 10));
@@ -117,11 +163,12 @@ export default function UpcomingScheduleWidget() {
                   {item.subtitle}
                 </div>
               </div>
-              {item.type === 'graphics' && (
+              {item.type !== 'schedule' && (
                 <div style={{
                   fontSize: '8px', fontWeight: 700, padding: '2px 5px', borderRadius: '4px',
-                  background: 'rgba(249,115,22,0.1)', color: '#f97316',
-                }}>INSTALL</div>
+                  background: item.type === 'graphics' ? 'rgba(249,115,22,0.1)' : item.type === 'upfit' ? 'rgba(59,130,246,0.1)' : 'rgba(34,197,94,0.1)',
+                  color: item.type === 'graphics' ? '#f97316' : item.type === 'upfit' ? '#3b82f6' : '#22c55e',
+                }}>{item.type === 'graphics' ? 'GFX' : item.type === 'upfit' ? 'UPFIT' : 'CNI'}</div>
               )}
             </div>
           ))}

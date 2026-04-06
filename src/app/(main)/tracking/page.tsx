@@ -755,6 +755,9 @@ export default function TrackingPage() {
                       {vehicle.sales_order_number && (
                         <div style={{ fontSize: '11px', color: 'var(--text-muted)', marginTop: '1px' }}>SO #{vehicle.sales_order_number}</div>
                       )}
+                      {(vehicle as any).scheduled_upfit_date && (
+                        <div style={{ fontSize: '11px', color: '#3b82f6', fontWeight: 600, marginTop: '1px' }}>Upfit: {new Date((vehicle as any).scheduled_upfit_date + 'T12:00:00').toLocaleDateString()}</div>
+                      )}
                     </div>
                     <div style={{ textAlign: 'right', flexShrink: 0, marginLeft: '8px' }}>
                       <StatusBadge status={status} />
@@ -857,6 +860,34 @@ export default function TrackingPage() {
                           <div style={{ fontSize: '12px', color: 'var(--text-secondary)' }}>{vehicle.notes}</div>
                         </div>
                       )}
+                    </div>
+
+                    {/* Scheduled Upfit Date */}
+                    <div style={{ marginBottom: '12px' }}>
+                      <div style={{ fontSize: '9px', fontWeight: 700, color: 'var(--text-muted)', textTransform: 'uppercase', marginBottom: '4px' }}>Scheduled Upfit Date</div>
+                      <input
+                        type="date"
+                        value={(vehicle as any).scheduled_upfit_date || ''}
+                        onClick={(e) => e.stopPropagation()}
+                        onChange={async (e) => {
+                          const newDate = e.target.value || null;
+                          await supabase.from('fleet_checkins').update({ scheduled_upfit_date: newDate, updated_at: new Date().toISOString() }).eq('id', vehicle.id);
+                          setVehicles(prev => prev.map(v => v.id === vehicle.id ? { ...v, scheduled_upfit_date: newDate } as any : v));
+                          // Sync to Google Calendar
+                          if (newDate) {
+                            fetch('/api/calendar/sync-upfit', {
+                              method: 'POST',
+                              headers: { 'Content-Type': 'application/json' },
+                              body: JSON.stringify({ checkinId: vehicle.id }),
+                            }).catch(() => {});
+                          }
+                        }}
+                        style={{
+                          width: '100%', padding: '8px 10px', borderRadius: '8px',
+                          border: '1px solid var(--border)', background: 'var(--input-bg)',
+                          color: 'var(--text-primary)', fontSize: '12px',
+                        }}
+                      />
                     </div>
 
                     {/* Sales Order Section */}

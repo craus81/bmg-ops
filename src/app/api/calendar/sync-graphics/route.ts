@@ -71,10 +71,11 @@ export async function POST(req: NextRequest) {
     // Sync to Google Calendar
     const eventId = await syncCalendarEvent({
       eventId: job.calendar_event_id,
-      title: `${job.title}${job.customer ? ` — ${job.customer}` : ''}`,
+      title: `Graphics: ${job.title}${job.customer ? ` — ${job.customer}` : ''}`,
       date: job.scheduled_install_date,
       description: descLines,
       location: job.ship_to || '',
+      colorId: '6', // Orange for graphics
     });
 
     if (eventId) {

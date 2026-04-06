@@ -19,6 +19,15 @@ interface GraphicsInstall {
   part_number: string | null; quantity: number; scheduled_install_date: string;
   status: string; ship_to: string | null;
 }
+interface UpfitEntry {
+  id: string; vin: string; vehicle_year: string | null; vehicle_make: string | null;
+  vehicle_model: string | null; customer_name: string | null;
+  scheduled_upfit_date: string; status: string;
+}
+interface CniEntry {
+  id: string; job_number: string; title: string; customer_name: string | null;
+  deadline: string; status: string;
+}
 
 export default function SchedulePage() {
   const router = useRouter();
@@ -35,6 +44,8 @@ export default function SchedulePage() {
   const [catalogItems, setCatalogItems] = useState<CatalogItem[]>([]);
   const [entries, setEntries] = useState<ScheduleEntry[]>([]);
   const [graphicsInstalls, setGraphicsInstalls] = useState<GraphicsInstall[]>([]);
+  const [upfitEntries, setUpfitEntries] = useState<UpfitEntry[]>([]);
+  const [cniEntries, setCniEntries] = useState<CniEntry[]>([]);
   const [loading, setLoading] = useState(true);
 
   // Create state
@@ -51,6 +62,7 @@ export default function SchedulePage() {
   const [showNewLoc, setShowNewLoc] = useState(false);
 
   // Edit state
+  const [calendarFilter, setCalendarFilter] = useState<'all' | 'upfit' | 'graphics' | 'cni'>('all');
   const [editing, setEditing] = useState<ScheduleEntry | null>(null);
   const [eDate, setEDate] = useState('');
   const [eInstaller, setEInstaller] = useState('');
@@ -98,6 +110,25 @@ export default function SchedulePage() {
       .gte('scheduled_install_date', startStr)
       .lte('scheduled_install_date', endStr);
     setGraphicsInstalls((gfx || []) as GraphicsInstall[]);
+
+    // Load upfit vehicles with scheduled dates in range
+    const { data: upfit } = await supabase
+      .from('fleet_checkins')
+      .select('id, vin, vehicle_year, vehicle_make, vehicle_model, customer_name, scheduled_upfit_date, status')
+      .not('scheduled_upfit_date', 'is', null)
+      .gte('scheduled_upfit_date', startStr)
+      .lte('scheduled_upfit_date', endStr);
+    setUpfitEntries((upfit || []) as UpfitEntry[]);
+
+    // Load CNI jobs with deadlines in range
+    const { data: cni } = await supabase
+      .from('cni_jobs')
+      .select('id, job_number, title, customer_name, deadline, status')
+      .not('deadline', 'is', null)
+      .neq('status', 'cancelled')
+      .gte('deadline', startStr)
+      .lte('deadline', endStr);
+    setCniEntries((cni || []) as CniEntry[]);
   };
 
   const getDateRange = () => {
@@ -120,7 +151,9 @@ export default function SchedulePage() {
   const ds = (d: Date) => d.toISOString().split('T')[0];
   const isToday = (d: Date) => ds(d) === ds(new Date());
   const getEnt = (iid: string, date: string) => entries.filter(e => e.installer_id === iid && e.scheduled_date === date);
-  const getGfx = (date: string) => graphicsInstalls.filter(g => g.scheduled_install_date === date);
+  const getGfx = (date: string) => calendarFilter === 'upfit' || calendarFilter === 'cni' ? [] : graphicsInstalls.filter(g => g.scheduled_install_date === date);
+  const getUpfit = (date: string) => calendarFilter === 'graphics' || calendarFilter === 'cni' ? [] : upfitEntries.filter(u => u.scheduled_upfit_date === date);
+  const getCni = (date: string) => calendarFilter === 'graphics' || calendarFilter === 'upfit' ? [] : cniEntries.filter(c => c.deadline === date);
 
   const openCreate = (iid: string, date: string) => { setCInstaller(iid); setCDate(date); setCCatalog(''); setCQty(1); setCLoc(locations.length > 0 ? locations[0].id : ''); setCNotes(''); setCatSearch(''); setShowCreate(true); setShowNewLoc(false); };
 
@@ -256,7 +289,7 @@ export default function SchedulePage() {
           {(['scheduled', 'in_progress', 'complete'] as const).map(s => {
             const colors = sc[s] || sc.scheduled;
             return (<button key={s} onClick={() => setEStatus(s)} style={{ flex: 1, padding: '8px', borderRadius: '8px', fontSize: '11px', fontWeight: 700, background: eStatus === s ? colors.bg : 'transparent', border: `1px solid ${eStatus === s ? colors.border : 'var(--border)'}`, color: eStatus === s ? colors.color : 'var(--text-muted)' }}>
-              {s === 'scheduled' ? '📅' : s === 'in_progress' ? '🔧' : '✅'} {s.replace('_', ' ')}
+              {s.replace('_', ' ')}
             </button>);
           })}
         </div>
@@ -281,6 +314,23 @@ export default function SchedulePage() {
         <button onClick={() => setView('week')} style={{ padding: '4px 10px', borderRadius: '6px', fontSize: '10px', fontWeight: 700, background: view === 'week' ? 'var(--tab-active-bg)' : 'transparent', border: view === 'week' ? '1px solid var(--tab-active-border)' : '1px solid var(--border)', color: view === 'week' ? 'var(--tab-active-color)' : 'var(--text-muted)' }}>Week</button>
         <button onClick={() => setView('month')} style={{ padding: '4px 10px', borderRadius: '6px', fontSize: '10px', fontWeight: 700, background: view === 'month' ? 'var(--tab-active-bg)' : 'transparent', border: view === 'month' ? '1px solid var(--tab-active-border)' : '1px solid var(--border)', color: view === 'month' ? 'var(--tab-active-color)' : 'var(--text-muted)' }}>Month</button>
       </div>
+    </div>
+
+    {/* Category filter */}
+    <div style={{ display: 'flex', gap: '4px', marginBottom: '12px' }}>
+      {([
+        { id: 'all' as const, label: 'All', color: 'var(--text-primary)' },
+        { id: 'upfit' as const, label: 'Upfit', color: '#3b82f6' },
+        { id: 'graphics' as const, label: 'Graphics', color: '#f97316' },
+        { id: 'cni' as const, label: 'CNI', color: '#22c55e' },
+      ]).map(c => (
+        <button key={c.id} onClick={() => setCalendarFilter(c.id)} style={{
+          flex: 1, padding: '6px', borderRadius: '6px', fontSize: '10px', fontWeight: 700,
+          background: calendarFilter === c.id ? `${c.color}18` : 'transparent',
+          border: `1px solid ${calendarFilter === c.id ? c.color : 'var(--border)'}`,
+          color: calendarFilter === c.id ? c.color : 'var(--text-muted)',
+        }}>{c.label}</button>
+      ))}
     </div>
 
     <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '12px', gap: '8px' }}>
@@ -343,6 +393,52 @@ export default function SchedulePage() {
           </div>
         </div>
       )}
+
+      {/* Upfit Vehicles */}
+      {upfitEntries.length > 0 && (calendarFilter === 'all' || calendarFilter === 'upfit') && (
+        <div style={{ marginBottom: '14px' }}>
+          <div style={{ fontSize: '12px', fontWeight: 800, color: '#3b82f6', padding: '6px 0', borderBottom: '1px solid var(--border)', marginBottom: '6px' }}>
+            Upfit Schedule
+          </div>
+          <div style={{ display: 'flex', gap: '4px' }}>
+            {weekDays.map(day => {
+              const d = ds(day); const dayUpfit = getUpfit(d); const today = isToday(day);
+              return (<div key={`upfit-${d}`} style={{ flex: 1, minWidth: '60px', borderRadius: '10px', padding: '6px', background: today ? 'rgba(30,74,94,0.08)' : 'var(--card)', border: `1px solid ${today ? 'rgba(30,74,94,0.25)' : 'var(--border)'}` }}>
+                <div style={{ fontSize: '9px', fontWeight: 700, color: today ? 'var(--navy)' : 'var(--text-muted)', textTransform: 'uppercase', textAlign: 'center', marginBottom: '4px' }}>{day.toLocaleDateString([], { weekday: 'short' })} {day.getDate()}</div>
+                {dayUpfit.map(u => (
+                  <div key={u.id} style={{ width: '100%', padding: '4px 6px', borderRadius: '6px', marginBottom: '3px', background: 'rgba(59,130,246,0.1)', border: '1px solid rgba(59,130,246,0.25)', textAlign: 'left', fontSize: '9px', fontWeight: 700, color: '#3b82f6', lineHeight: '1.3' }}>
+                    <div style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{[u.vehicle_year, u.vehicle_make, u.vehicle_model].filter(Boolean).join(' ') || u.vin}</div>
+                    <div style={{ fontSize: '8px', opacity: 0.7, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{u.customer_name || ''}</div>
+                  </div>
+                ))}
+              </div>);
+            })}
+          </div>
+        </div>
+      )}
+
+      {/* CNI Jobs */}
+      {cniEntries.length > 0 && (calendarFilter === 'all' || calendarFilter === 'cni') && (
+        <div style={{ marginBottom: '14px' }}>
+          <div style={{ fontSize: '12px', fontWeight: 800, color: '#22c55e', padding: '6px 0', borderBottom: '1px solid var(--border)', marginBottom: '6px' }}>
+            CNI Deadlines
+          </div>
+          <div style={{ display: 'flex', gap: '4px' }}>
+            {weekDays.map(day => {
+              const d = ds(day); const dayCni = getCni(d); const today = isToday(day);
+              return (<div key={`cni-${d}`} style={{ flex: 1, minWidth: '60px', borderRadius: '10px', padding: '6px', background: today ? 'rgba(30,74,94,0.08)' : 'var(--card)', border: `1px solid ${today ? 'rgba(30,74,94,0.25)' : 'var(--border)'}` }}>
+                <div style={{ fontSize: '9px', fontWeight: 700, color: today ? 'var(--navy)' : 'var(--text-muted)', textTransform: 'uppercase', textAlign: 'center', marginBottom: '4px' }}>{day.toLocaleDateString([], { weekday: 'short' })} {day.getDate()}</div>
+                {dayCni.map(c => (
+                  <div key={c.id} style={{ width: '100%', padding: '4px 6px', borderRadius: '6px', marginBottom: '3px', background: 'rgba(34,197,94,0.1)', border: '1px solid rgba(34,197,94,0.25)', textAlign: 'left', fontSize: '9px', fontWeight: 700, color: '#22c55e', lineHeight: '1.3' }}>
+                    <div style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{c.title}</div>
+                    <div style={{ fontSize: '8px', opacity: 0.7, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{c.customer_name || ''}</div>
+                  </div>
+                ))}
+              </div>);
+            })}
+          </div>
+        </div>
+      )}
     </div>)}
 
     {/* MONTH VIEW */}
@@ -354,9 +450,11 @@ export default function SchedulePage() {
         {monthDays.map((day, i) => {
           if (!day) return <div key={`e-${i}`} />;
           const d = ds(day); const today = isToday(day);
-          const dayEntries = entries.filter(e => e.scheduled_date === d);
+          const dayEntries = calendarFilter === 'graphics' || calendarFilter === 'cni' ? [] : entries.filter(e => e.scheduled_date === d);
           const dayGfx = getGfx(d);
-          const totalItems = dayEntries.length + dayGfx.length;
+          const dayUpfit = getUpfit(d);
+          const dayCni = getCni(d);
+          const totalItems = dayEntries.length + dayGfx.length + dayUpfit.length + dayCni.length;
           return (<div key={d} style={{ minHeight: '60px', borderRadius: '6px', padding: '4px', background: today ? 'rgba(30,74,94,0.08)' : 'var(--card)', border: `1px solid ${today ? 'rgba(30,74,94,0.25)' : 'var(--border)'}` }}>
             <div style={{ fontSize: '10px', fontWeight: 700, color: today ? 'var(--navy)' : 'var(--text-muted)', marginBottom: '2px' }}>{day.getDate()}</div>
             {dayEntries.slice(0, 3).map(e => {
@@ -369,6 +467,16 @@ export default function SchedulePage() {
             {dayGfx.slice(0, Math.max(0, 3 - dayEntries.length)).map(g => (
               <div key={g.id} style={{ width: '100%', padding: '2px 3px', borderRadius: '4px', marginBottom: '1px', background: 'rgba(249,115,22,0.1)', textAlign: 'left', fontSize: '7px', fontWeight: 700, color: '#f97316', lineHeight: '1.3', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
                 {g.title}
+              </div>
+            ))}
+            {dayUpfit.slice(0, Math.max(0, 3 - dayEntries.length - dayGfx.length)).map(u => (
+              <div key={u.id} style={{ width: '100%', padding: '2px 3px', borderRadius: '4px', marginBottom: '1px', background: 'rgba(59,130,246,0.1)', textAlign: 'left', fontSize: '7px', fontWeight: 700, color: '#3b82f6', lineHeight: '1.3', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                {[u.vehicle_make, u.vehicle_model].filter(Boolean).join(' ') || 'Upfit'}
+              </div>
+            ))}
+            {dayCni.slice(0, Math.max(0, 3 - dayEntries.length - dayGfx.length - dayUpfit.length)).map(c => (
+              <div key={c.id} style={{ width: '100%', padding: '2px 3px', borderRadius: '4px', marginBottom: '1px', background: 'rgba(34,197,94,0.1)', textAlign: 'left', fontSize: '7px', fontWeight: 700, color: '#22c55e', lineHeight: '1.3', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                {c.title}
               </div>
             ))}
             {totalItems > 3 && <div style={{ fontSize: '7px', color: 'var(--text-muted)', textAlign: 'center' }}>+{totalItems - 3}</div>}
