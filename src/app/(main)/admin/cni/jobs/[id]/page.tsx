@@ -394,7 +394,7 @@ export default function CniJobDetailPage() {
         {job.assigned_installer_id ? (
           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
             <div>
-              <div style={{ fontSize: '14px', fontWeight: 700, color: 'var(--text-primary)' }}>👷 {installerName}</div>
+              <div style={{ fontSize: '14px', fontWeight: 700, color: 'var(--text-primary)' }}>{installerName}</div>
               <div style={{ fontSize: '11px', color: 'var(--text-muted)' }}>
                 Assigned {job.assigned_at ? new Date(job.assigned_at).toLocaleDateString() : ''}
               </div>
@@ -438,7 +438,7 @@ export default function CniJobDetailPage() {
                 background: 'var(--subtle-bg)', color: 'var(--text-primary)', border: '1px solid var(--border)',
               }}
             >
-              📨 Invite Installers {invitedIds.length > 0 ? `(${invitedIds.length})` : ''}
+              Invite Installers {invitedIds.length > 0 ? `(${invitedIds.length})` : ''}
             </button>
             {job.distribution_type !== 'published' ? (
               <button
@@ -449,7 +449,7 @@ export default function CniJobDetailPage() {
                   background: 'var(--orange)', color: '#fff', border: 'none',
                 }}
               >
-                📋 Publish to Board
+                Publish to Board
               </button>
             ) : (
               <div style={{
@@ -471,7 +471,7 @@ export default function CniJobDetailPage() {
                 color: 'var(--orange)', border: '1px solid var(--orange)',
               }}
             >
-              📊 Review Bids ({bidCount} response{bidCount !== 1 ? 's' : ''})
+              Review Bids ({bidCount} response{bidCount !== 1 ? 's' : ''})
             </button>
           )}
         </div>
@@ -485,7 +485,7 @@ export default function CniJobDetailPage() {
         }}>
           <div style={{ fontSize: '12px', fontWeight: 700, color: 'var(--text-muted)', marginBottom: '6px' }}>SCHEDULE</div>
           <div style={{ fontSize: '14px', fontWeight: 600, color: 'var(--text-primary)' }}>
-            📅 {new Date(job.confirmed_schedule_start).toLocaleDateString()}
+            {new Date(job.confirmed_schedule_start).toLocaleDateString()}
             {job.confirmed_schedule_end && job.confirmed_schedule_end !== job.confirmed_schedule_start
               ? ` — ${new Date(job.confirmed_schedule_end).toLocaleDateString()}`
               : ''}
@@ -504,7 +504,7 @@ export default function CniJobDetailPage() {
         }}>
           <div style={{ fontSize: '12px', fontWeight: 700, color: 'var(--text-muted)', marginBottom: '6px' }}>PROPOSED SCHEDULE</div>
           <div style={{ fontSize: '14px', fontWeight: 600, color: '#60a5fa' }}>
-            📅 {new Date(job.proposed_schedule_start).toLocaleDateString()}
+            {new Date(job.proposed_schedule_start).toLocaleDateString()}
             {job.proposed_schedule_end && job.proposed_schedule_end !== job.proposed_schedule_start
               ? ` — ${new Date(job.proposed_schedule_end).toLocaleDateString()}`
               : ''}
@@ -627,7 +627,7 @@ export default function CniJobDetailPage() {
               border: photoStats.pending > 0 ? '1px solid var(--warning)' : '1px solid var(--border)',
             }}
           >
-            <div style={{ fontSize: '20px', marginBottom: '4px' }}>📷</div>
+            <div style={{ fontSize: '12px', fontWeight: 700, color: 'var(--text-muted)', marginBottom: '4px' }}>Photos</div>
             <div style={{ fontSize: '12px', fontWeight: 700, color: 'var(--text-primary)' }}>
               Photos {photoStats.total > 0 ? `(${photoStats.total})` : ''}
             </div>
@@ -647,7 +647,7 @@ export default function CniJobDetailPage() {
               border: unreadMsgCount > 0 ? '1px solid var(--orange)' : '1px solid var(--border)',
             }}
           >
-            <div style={{ fontSize: '20px', marginBottom: '4px' }}>💬</div>
+            <div style={{ fontSize: '12px', fontWeight: 700, color: 'var(--text-muted)', marginBottom: '4px' }}>Msgs</div>
             <div style={{ fontSize: '12px', fontWeight: 700, color: 'var(--text-primary)' }}>Messages</div>
             {unreadMsgCount > 0 && (
               <div style={{ fontSize: '11px', fontWeight: 700, color: 'var(--orange)' }}>
@@ -671,9 +671,9 @@ export default function CniJobDetailPage() {
         }}>
           <div style={{ fontSize: '12px', fontWeight: 700, color: 'var(--text-muted)', marginBottom: '8px' }}>INVOICE</div>
           <div style={{ fontSize: '14px', fontWeight: 700, color: 'var(--text-primary)', marginBottom: '8px' }}>
-            {job.invoice_status === 'submitted' ? '📄 Submitted — Awaiting Your Review' :
-             job.invoice_status === 'approved' ? '✅ Approved — Create Bill in NetSuite' :
-             job.invoice_status === 'billed_in_netsuite' ? '💰 Billed in NetSuite' : job.invoice_status}
+            {job.invoice_status === 'submitted' ? 'Submitted — Awaiting Your Review' :
+             job.invoice_status === 'approved' ? 'Approved — Create Bill in NetSuite' :
+             job.invoice_status === 'billed_in_netsuite' ? 'Billed in NetSuite' : job.invoice_status}
           </div>
 
           {/* Budget comparison warning */}
@@ -697,7 +697,7 @@ export default function CniJobDetailPage() {
               background: 'var(--input-bg)', border: '1px solid var(--border)',
               display: 'flex', alignItems: 'center', gap: '8px',
             }}>
-              <span style={{ fontSize: '20px' }}>📄</span>
+              <span style={{ fontSize: '12px', fontWeight: 700, color: 'var(--text-muted)' }}>File</span>
               <div style={{ flex: 1, fontSize: '12px', color: 'var(--text-primary)' }}>
                 {job.invoice_file_path.split('/').pop()}
               </div>

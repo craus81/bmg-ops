@@ -103,7 +103,7 @@ export default function QuotesPage() {
   if (!isAdmin && !isSales) {
     return (
       <div style={{ textAlign: 'center', padding: '60px 20px', color: theme.textSecondary }}>
-        <div style={{ fontSize: '48px', marginBottom: '12px' }}>🔒</div>
+        <div style={{ fontSize: '16px', fontWeight: 700, marginBottom: '12px' }}>Access Restricted</div>
         <div style={{ fontSize: '16px', fontWeight: 700 }}>Admin Only</div>
       </div>
     );
@@ -119,7 +119,7 @@ export default function QuotesPage() {
     <div>
       <div style={{ marginBottom: '20px' }}>
         <h1 style={{ fontSize: '22px', fontWeight: 800, color: theme.textPrimary, margin: 0 }}>
-          📐 Estimating
+          Estimating
         </h1>
         <p style={{ fontSize: '13px', color: theme.textSecondary, margin: '4px 0 0' }}>
           AI-powered vinyl wrap quoting
@@ -178,7 +178,6 @@ function QuotesList({ onEdit }: { onEdit: (q: Quote) => void }) {
   if (quotes.length === 0) {
     return (
       <div style={{ textAlign: 'center', padding: '40px 20px', color: theme.textSecondary }}>
-        <div style={{ fontSize: '48px', marginBottom: '12px' }}>📐</div>
         <div style={{ fontSize: '15px', fontWeight: 600 }}>No quotes yet</div>
         <div style={{ fontSize: '13px', marginTop: '4px' }}>Create your first quote using the &quot;+ New Quote&quot; tab</div>
       </div>
@@ -580,7 +579,7 @@ function QuoteDetail({ quote, onBack, onEdit }: { quote: Quote; onBack: () => vo
                 opacity: pushing ? 0.5 : 1,
               }}
             >
-              {pushing ? 'Pushing to NetSuite...' : '🚀 Push to NetSuite as Estimate'}
+              {pushing ? 'Pushing to NetSuite...' : 'Push to NetSuite as Estimate'}
             </button>
           </>
         )}
@@ -1931,14 +1930,14 @@ function NewQuote({ onCreated, editQuote }: { onCreated: () => void; editQuote?:
                 {proofPreview ? (
                   <img src={proofPreview} alt="Proof" style={{ maxWidth: '100%', maxHeight: '200px', borderRadius: '8px', marginBottom: '8px' }} />
                 ) : (
-                  <div style={{ fontSize: '36px', marginBottom: '8px' }}>📄</div>
+                  <div style={{ fontSize: '14px', fontWeight: 700, color: theme.textMuted, marginBottom: '8px' }}>PDF</div>
                 )}
                 <div style={{ fontSize: '14px', fontWeight: 700, color: theme.success }}>✓ {proofFile.name}</div>
                 <div style={{ fontSize: '12px', color: theme.textMuted, marginTop: '4px' }}>Tap to change file</div>
               </>
             ) : (
               <>
-                <div style={{ fontSize: '36px', marginBottom: '8px' }}>📤</div>
+                <div style={{ fontSize: '14px', fontWeight: 700, color: theme.textMuted, marginBottom: '8px' }}>Upload</div>
                 <div style={{ fontSize: '14px', fontWeight: 700, color: theme.textPrimary }}>Tap to upload new proof</div>
                 <div style={{ fontSize: '12px', color: theme.textMuted, marginTop: '4px' }}>PDF, PNG, or JPG</div>
               </>
@@ -1955,7 +1954,7 @@ function NewQuote({ onCreated, editQuote }: { onCreated: () => void; editQuote?:
                 cursor: 'pointer', marginBottom: '16px',
               }}
             >
-              📂 Browse previous proofs
+              Browse previous proofs
             </button>
           )}
           {loadingLibrary && (
@@ -2020,7 +2019,6 @@ function NewQuote({ onCreated, editQuote }: { onCreated: () => void; editQuote?:
               marginBottom: '16px', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '8px',
             }}
           >
-            <span style={{ fontSize: '20px' }}>🎨</span>
             Full Wrap — Skip Proof
           </button>
           <div style={{ fontSize: '11px', color: theme.textMuted, textAlign: 'center', marginBottom: '16px' }}>
@@ -2078,14 +2076,14 @@ function NewQuote({ onCreated, editQuote }: { onCreated: () => void; editQuote?:
             <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '13px' }}>
               <span style={{ color: theme.textSecondary }}>Mode:</span>
               <span style={{ color: templateOnly ? theme.orange : theme.textPrimary, fontWeight: 700 }}>
-                {templateOnly ? '🎨 Full Wrap (No Proof)' : proofFile?.name || (editQuote?.proof_image_path ? 'Existing proof' : 'None')}
+                {templateOnly ? 'Full Wrap (No Proof)' : proofFile?.name || (editQuote?.proof_image_path ? 'Existing proof' : 'None')}
               </span>
             </div>
           </div>
 
           {analysisError && (
             <div style={{ background: theme.errorBg, border: `1px solid ${theme.errorBorder}`, borderRadius: '10px', padding: '12px', marginBottom: '16px', fontSize: '13px', color: theme.error }}>
-              ⚠️ {analysisError}
+              {analysisError}
             </div>
           )}
 
@@ -2097,7 +2095,7 @@ function NewQuote({ onCreated, editQuote }: { onCreated: () => void; editQuote?:
                 animation: 'spin 1s linear infinite',
               }} />
               <div style={{ color: theme.textPrimary, marginTop: '16px', fontSize: '15px', fontWeight: 700 }}>
-                🤖 {templateOnly ? 'AI is detecting panels...' : 'AI is analyzing your proof...'}
+                {templateOnly ? 'AI is detecting panels...' : 'AI is analyzing your proof...'}
               </div>
               <div style={{ color: theme.textMuted, marginTop: '6px', fontSize: '13px' }}>
                 {templateOnly
@@ -2126,7 +2124,7 @@ function NewQuote({ onCreated, editQuote }: { onCreated: () => void; editQuote?:
                   fontSize: '15px', fontWeight: 700, cursor: (templateOnly ? !selectedTemplate : (!proofFile || !selectedTemplate)) ? 'not-allowed' : 'pointer',
                 }}
               >
-                🤖 {templateOnly ? 'Detect Panels' : 'Run AI Analysis'}
+                {templateOnly ? 'Detect Panels' : 'Run AI Analysis'}
               </button>
               {/* When editing with existing analysis, allow skipping re-analysis */}
               {editQuote && analysis && (
@@ -2251,7 +2249,7 @@ function NewQuote({ onCreated, editQuote }: { onCreated: () => void; editQuote?:
               }}
               title="Draw a new element on the proof"
             >
-              ✏️ {drawingNewElement ? 'Drawing...' : '+ New'}
+              {drawingNewElement ? 'Drawing...' : '+ New'}
             </button>
           </div>
 
@@ -2651,7 +2649,7 @@ function NewQuote({ onCreated, editQuote }: { onCreated: () => void; editQuote?:
                       color: '#ef4444', cursor: 'pointer', flexShrink: 0,
                     }}
                   >
-                    🗑
+                    Delete
                   </button>
                 )}
                 {/* Include/exclude button */}
@@ -3140,7 +3138,7 @@ function NewQuote({ onCreated, editQuote }: { onCreated: () => void; editQuote?:
                   {/* AI's reasoning for this panel */}
                   {p.description && (
                     <div style={{ marginTop: '8px', padding: '8px 10px', background: theme.subtleBg, borderRadius: '8px', fontSize: '12px', color: theme.textSecondary, lineHeight: 1.5, borderLeft: `3px solid ${theme.orange}` }}>
-                      🤖 {p.description}
+                      {p.description}
                     </div>
                   )}
                 </div>
@@ -3151,7 +3149,7 @@ function NewQuote({ onCreated, editQuote }: { onCreated: () => void; editQuote?:
           {/* AI Notes */}
           {analysis.notes && (
             <div style={{ background: theme.subtleBg, borderRadius: '10px', padding: '12px', marginBottom: '12px', fontSize: '12px', color: theme.textSecondary, lineHeight: 1.5, borderLeft: `3px solid ${theme.navy}` }}>
-              📝 <strong>AI Notes:</strong> {analysis.notes}
+              <strong>AI Notes:</strong> {analysis.notes}
             </div>
           )}
 
@@ -3309,7 +3307,7 @@ function NewQuote({ onCreated, editQuote }: { onCreated: () => void; editQuote?:
                 color: '#fff', fontSize: '15px', fontWeight: 700, cursor: 'pointer',
               }}
             >
-              {saving ? 'Saving...' : `💾 ${editQuote ? 'Update' : 'Save'} Quote (${fmtCurrency(totalPrice)})`}
+              {saving ? 'Saving...' : `${editQuote ? 'Update' : 'Save'} Quote (${fmtCurrency(totalPrice)})`}
             </button>
           </div>
         </div>
@@ -3458,7 +3456,7 @@ function TemplatesManager() {
                 background: epsFile ? theme.successBg : theme.inputBg, cursor: 'pointer', fontSize: '12px',
               }}>
                 <input type="file" accept=".eps" onChange={e => setEpsFile(e.target.files?.[0] || null)} style={{ display: 'none' }} />
-                <span style={{ fontSize: '24px' }}>{epsFile ? '✓' : '📎'}</span>
+                <span style={{ fontSize: '14px', fontWeight: 700 }}>{epsFile ? '✓' : 'EPS'}</span>
                 <span style={{ fontWeight: 700, color: epsFile ? theme.success : theme.textSecondary, marginTop: '4px' }}>
                   {epsFile ? epsFile.name.slice(0, 20) : 'EPS File'}
                 </span>
@@ -3470,7 +3468,7 @@ function TemplatesManager() {
                 background: pngFile ? theme.successBg : theme.inputBg, cursor: 'pointer', fontSize: '12px',
               }}>
                 <input type="file" accept=".png,.jpg,.jpeg" onChange={e => setPngFile(e.target.files?.[0] || null)} style={{ display: 'none' }} />
-                <span style={{ fontSize: '24px' }}>{pngFile ? '✓' : '🖼️'}</span>
+                <span style={{ fontSize: '14px', fontWeight: 700 }}>{pngFile ? '✓' : 'IMG'}</span>
                 <span style={{ fontWeight: 700, color: pngFile ? theme.success : theme.textSecondary, marginTop: '4px' }}>
                   {pngFile ? pngFile.name.slice(0, 20) : 'PNG Preview'}
                 </span>
@@ -3478,7 +3476,7 @@ function TemplatesManager() {
             </div>
 
             <div style={{ fontSize: '11px', color: theme.textMuted, lineHeight: 1.4 }}>
-              💡 Upload the original EPS and a PNG preview. If you don&apos;t have a PNG, you can export one from Illustrator or use a converter.
+              Upload the original EPS and a PNG preview. If you don&apos;t have a PNG, you can export one from Illustrator or use a converter.
             </div>
 
             <button
@@ -3499,7 +3497,6 @@ function TemplatesManager() {
       {/* Templates List */}
       {templates.length === 0 ? (
         <div style={{ textAlign: 'center', padding: '40px 20px', color: theme.textSecondary }}>
-          <div style={{ fontSize: '48px', marginBottom: '12px' }}>🚐</div>
           <div style={{ fontSize: '15px', fontWeight: 600 }}>No templates yet</div>
           <div style={{ fontSize: '13px', marginTop: '4px' }}>Upload your 1:20 scale vehicle templates to get started</div>
         </div>
@@ -3518,7 +3515,7 @@ function TemplatesManager() {
                     style={{ width: '300px', height: '180px', objectFit: 'contain', borderRadius: '8px', background: '#fff', flexShrink: 0 }}
                   />
                 ) : (
-                  <div style={{ width: '300px', height: '180px', borderRadius: '8px', background: theme.inputBg, display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: '48px', flexShrink: 0 }}>🚐</div>
+                  <div style={{ width: '300px', height: '180px', borderRadius: '8px', background: theme.inputBg, display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: '14px', fontWeight: 700, color: theme.textMuted, flexShrink: 0 }}>No Preview</div>
                 )}
                 <div style={{ flex: 1, minWidth: 0 }}>
                   <div style={{ fontSize: '14px', fontWeight: 700, color: theme.textPrimary }}>{t.name}</div>

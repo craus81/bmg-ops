@@ -847,13 +847,13 @@ export default function POsPage() {
                 onClick={() => { setShowEmailImport(!showEmailImport); setShowImport(false); setShowCreate(false); if (!showEmailImport) searchGmailPOs(); }}
                 style={{ padding: '6px 12px', borderRadius: '8px', background: showEmailImport ? 'var(--subtle-bg)' : 'rgba(34,197,94,0.1)', border: '1px solid rgba(34,197,94,0.25)', color: '#4ade80', fontSize: '12px', fontWeight: 700 }}
               >
-                {showEmailImport ? 'Cancel' : '📧 Email'}
+                {showEmailImport ? 'Cancel' : 'Email'}
               </button>
               <button
                 onClick={() => { setShowImport(!showImport); setShowCreate(false); setShowEmailImport(false); setParsedPO(null); setImportLines([]); setParseError(''); }}
                 style={{ padding: '6px 12px', borderRadius: '8px', background: showImport ? 'var(--subtle-bg)' : 'rgba(59,130,246,0.1)', border: '1px solid rgba(59,130,246,0.25)', color: '#60a5fa', fontSize: '12px', fontWeight: 700 }}
               >
-                {showImport ? 'Cancel' : '📄 PDF'}
+                {showImport ? 'Cancel' : 'PDF'}
               </button>
               <button
                 onClick={() => { setShowCreate(!showCreate); setShowImport(false); setShowEmailImport(false); }}
@@ -902,9 +902,8 @@ export default function POsPage() {
           value={poSearch}
           onChange={(e) => setPoSearch(e.target.value)}
           placeholder="Search PO #, part #, or customer..."
-          style={{ width: '100%', padding: '9px 12px 9px 32px', borderRadius: '8px', border: '1px solid var(--border)', background: 'var(--input-bg)', color: 'var(--text-body)', fontSize: '12px', outline: 'none' }}
+          style={{ width: '100%', padding: '9px 12px', borderRadius: '8px', border: '1px solid var(--border)', background: 'var(--input-bg)', color: 'var(--text-body)', fontSize: '12px', outline: 'none' }}
         />
-        <span style={{ position: 'absolute', left: '10px', top: '50%', transform: 'translateY(-50%)', color: 'var(--text-label)', fontSize: '13px', pointerEvents: 'none' }}>🔍</span>
         {poSearch && (
           <button
             onClick={() => setPoSearch('')}
@@ -999,7 +998,7 @@ export default function POsPage() {
                           </div>
                           {email.pdfs.length > 0 && (
                             <div style={{ fontSize: '10px', color: 'var(--text-label)', marginTop: '1px' }}>
-                              📎 {email.pdfs.map((p: any) => p.filename).join(', ')}
+                              {email.pdfs.map((p: any) => p.filename).join(', ')}
                             </div>
                           )}
                         </div>
@@ -1401,7 +1400,7 @@ export default function POsPage() {
           {/* Overwrite warning */}
           {pdfOverwriteExisting && (
             <div style={{ padding: '10px 12px', borderRadius: '8px', background: 'rgba(245,158,11,0.1)', border: '1px solid rgba(245,158,11,0.3)', marginBottom: '10px', display: 'flex', alignItems: 'center', gap: '10px' }}>
-              <span style={{ fontSize: '18px' }}>⚠️</span>
+              <span style={{ fontSize: '14px', fontWeight: 700, color: '#f59e0b' }}>Warning</span>
               <div>
                 <div style={{ fontSize: '12px', fontWeight: 700, color: '#f59e0b' }}>PO #{parsedPO.po_number} already exists</div>
                 <div style={{ fontSize: '11px', color: '#a08332' }}>
@@ -1615,7 +1614,6 @@ export default function POsPage() {
 
       {pos.length === 0 && !showImport && !showCreate && (
         <div style={{ textAlign: 'center', padding: '32px 0', color: 'var(--text-label)' }}>
-          <div style={{ fontSize: '36px', marginBottom: '6px', opacity: 0.4 }}>📋</div>
           <div style={{ fontWeight: 600, fontSize: '13px' }}>No purchase orders yet</div>
         </div>
       )}
@@ -1825,7 +1823,7 @@ export default function POsPage() {
                           onClick={(e) => { e.stopPropagation(); startEditPO(po); }}
                           style={{ padding: '3px 8px', borderRadius: '6px', background: 'rgba(59,130,246,0.1)', border: '1px solid rgba(59,130,246,0.25)', color: '#60a5fa', fontSize: '10px', fontWeight: 700 }}
                         >
-                          ✏️ Edit PO
+                          Edit PO
                         </button>
                       </div>
                     </div>

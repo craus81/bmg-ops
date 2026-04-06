@@ -12,13 +12,13 @@ interface Company {
 }
 
 const ROLES: { value: AppRole; label: string; color: string }[] = [
-  { value: 'admin', label: '👔 Admin', color: 'var(--orange)' },
-  { value: 'installer', label: '🔧 Installer', color: 'var(--text-muted)' },
-  { value: 'field_tech', label: '🚐 Field Tech', color: '#fbbf24' },
-  { value: 'shop_tech', label: '🏗️ Shop Tech', color: '#38bdf8' },
-  { value: 'sales', label: '💼 Sales', color: '#60a5fa' },
-  { value: 'graphics_production', label: '🎨 Graphics / Production', color: '#c084fc' },
-  { value: 'customer', label: '🏢 Customer', color: '#34d399' },
+  { value: 'admin', label: 'Admin', color: 'var(--orange)' },
+  { value: 'installer', label: 'Installer', color: 'var(--text-muted)' },
+  { value: 'field_tech', label: 'Field Tech', color: '#fbbf24' },
+  { value: 'shop_tech', label: 'Shop Tech', color: '#38bdf8' },
+  { value: 'sales', label: 'Sales', color: '#60a5fa' },
+  { value: 'graphics_production', label: 'Graphics / Production', color: '#c084fc' },
+  { value: 'customer', label: 'Customer', color: '#34d399' },
 ];
 
 function getRoleInfo(role: string) {
@@ -539,7 +539,6 @@ export default function UsersPage() {
 
       {filtered.length === 0 && (
         <div style={{ textAlign: 'center', padding: '32px 0', color: 'var(--text-muted)' }}>
-          <div style={{ fontSize: '36px', marginBottom: '6px', opacity: 0.4 }}>👥</div>
           <div style={{ fontWeight: 600, fontSize: '13px' }}>No {filter !== 'all' ? filter : ''} users</div>
         </div>
       )}
@@ -574,7 +573,7 @@ export default function UsersPage() {
                       padding: '2px 8px', borderRadius: '6px', fontSize: '10px', fontWeight: 700,
                       background: statusBg, border: `1px solid ${statusBorder}`, color: statusColor,
                     }}>
-                      {isDeactivated ? '⛔ Deactivated' : isPending ? '⏳ Pending' : isDenied ? '🚫 Denied' : '✓ Approved'}
+                      {isDeactivated ? 'Deactivated' : isPending ? 'Pending' : isDenied ? 'Denied' : 'Approved'}
                     </span>
                     {userRoles.map(r => {
                       const info = getRoleInfo(r);
@@ -594,7 +593,7 @@ export default function UsersPage() {
                         padding: '2px 8px', borderRadius: '6px', fontSize: '10px', fontWeight: 700,
                         background: 'var(--subtle-bg)', border: '1px solid var(--border)', color: 'var(--text-secondary)',
                       }}>
-                        🏢 {user.company_name}
+                        {user.company_name}
                       </span>
                     )}
                     {isPending && user.requested_role && (

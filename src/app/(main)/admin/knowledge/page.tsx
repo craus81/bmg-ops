@@ -23,21 +23,21 @@ interface KnowledgeDoc {
 const CATEGORIES = ['SOP', 'spec', 'pricing', 'process', 'policy', 'other'];
 
 const FILE_ICONS: Record<string, string> = {
-  'application/pdf': '📄',
-  'application/vnd.openxmlformats-officedocument.wordprocessingml.document': '📝',
-  'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet': '📊',
-  'text/csv': '📊',
-  'text/plain': '📃',
-  'text/markdown': '📃',
-  'image/png': '🖼️',
-  'image/jpeg': '🖼️',
-  'image/gif': '🖼️',
-  'image/webp': '🖼️',
+  'application/pdf': 'PDF',
+  'application/vnd.openxmlformats-officedocument.wordprocessingml.document': 'DOC',
+  'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet': 'XLS',
+  'text/csv': 'CSV',
+  'text/plain': 'TXT',
+  'text/markdown': 'MD',
+  'image/png': 'IMG',
+  'image/jpeg': 'IMG',
+  'image/gif': 'IMG',
+  'image/webp': 'IMG',
 };
 
 function getFileIcon(fileType: string | null): string {
-  if (!fileType) return '📚';
-  return FILE_ICONS[fileType] || '📎';
+  if (!fileType) return 'DOC';
+  return FILE_ICONS[fileType] || 'FILE';
 }
 
 function formatFileSize(bytes: number | null): string {
@@ -550,7 +550,7 @@ export default function KnowledgePage() {
             display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '4px',
           }}
         >
-          <span style={{ fontSize: '22px' }}>📁</span>
+          <span style={{ fontSize: '14px', fontWeight: 700 }}>Upload</span>
           <span>Upload File</span>
           <span style={{ fontSize: '9px', color: 'var(--text-label)', fontWeight: 400 }}>
             PDF, Word, Excel, CSV, TXT, Images
@@ -576,7 +576,7 @@ export default function KnowledgePage() {
             display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '4px',
           }}
         >
-          <span style={{ fontSize: '22px' }}>✏️</span>
+          <span style={{ fontSize: '14px', fontWeight: 700 }}>Edit</span>
           <span>Type / Paste</span>
           <span style={{ fontSize: '9px', color: 'var(--text-label)', fontWeight: 400 }}>
             Manually enter content
@@ -621,7 +621,6 @@ export default function KnowledgePage() {
       {/* Doc list */}
       {filtered.length === 0 && (
         <div style={{ textAlign: 'center', padding: '40px', color: 'var(--text-label)' }}>
-          <div style={{ fontSize: '28px', marginBottom: '8px' }}>📚</div>
           <div style={{ fontSize: '13px', fontWeight: 700 }}>{docs.length === 0 ? 'No documents yet' : 'No matching documents'}</div>
           <div style={{ fontSize: '11px', marginTop: '4px' }}>
             {docs.length === 0 ? 'Upload files or add reference docs for the AI agent to use.' : 'Try different search terms.'}
@@ -684,7 +683,7 @@ export default function KnowledgePage() {
                         textDecoration: 'none',
                       }}
                     >
-                      ⬇️ Download {doc.file_name}
+                      Download {doc.file_name}
                     </a>
                   )}
 
