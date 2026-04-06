@@ -586,7 +586,7 @@ export default function CustomersPage() {
               color: '#fbbf24', cursor: 'pointer',
             }}
           >
-            {scanningCard ? 'Scanning...' : '📷 Scan Card'}
+            {scanningCard ? 'Scanning...' : 'Scan Card'}
           </button>
           {tab === 'customers' ? (
             <button
@@ -838,7 +838,7 @@ export default function CustomersPage() {
                             cursor: generatingReport ? 'not-allowed' : 'pointer',
                           }}
                         >
-                          {generatingReport && reportCustomer === customer.id ? 'Generating...' : '📄 Download Report'}
+                          {generatingReport && reportCustomer === customer.id ? 'Generating...' : 'Download Report'}
                         </button>
                       </div>
                     </div>
@@ -890,7 +890,7 @@ export default function CustomersPage() {
                                     {inv.status_display || inv.status}
                                   </span>
                                   <span style={{ fontSize: '10px', color: 'var(--text-label)' }}>
-                                    {expandedInvoice === inv.id ? '▲' : '📄'}
+                                    {expandedInvoice === inv.id ? '▲' : '▼'}
                                   </span>
                                 </div>
                               </div>
@@ -1071,7 +1071,7 @@ export default function CustomersPage() {
               color: scanningCard ? 'var(--text-label)' : 'var(--text-body)', cursor: 'pointer', textAlign: 'center',
             }}
           >
-            {scanningCard ? 'Scanning card...' : '📷 Scan Business Card'}
+            {scanningCard ? 'Scanning card...' : 'Scan Business Card'}
           </button>
         </div>
 

@@ -674,7 +674,7 @@ export default function GraphicsPage() {
                         <div style={{ fontSize: '10px', color: 'var(--text-label)', display: 'flex', gap: '12px', flexWrap: 'wrap', marginBottom: '10px' }}>
                           <span>Created: {new Date(job.created_at).toLocaleDateString()}</span>
                           {job.due_date && <span style={{ color: (parseLocalDate(job.due_date) || new Date()) < new Date() ? '#ef4444' : '#fbbf24' }}>Due: {displayDate(job.due_date)}</span>}
-                          {job.scheduled_install_date && <span style={{ color: '#22d3ee' }}>Install: {displayDate(job.scheduled_install_date)}{job.calendar_event_id ? ' 📅' : ''}</span>}
+                          {job.scheduled_install_date && <span style={{ color: '#22d3ee' }}>Install: {displayDate(job.scheduled_install_date)}{job.calendar_event_id ? '' : ''}</span>}
                           {getProfileName(job.assigned_to) && <span>Assigned: {getProfileName(job.assigned_to)}</span>}
                           {getProfileName(job.created_by) && <span>By: {getProfileName(job.created_by)}</span>}
                           {job.job_number && <span style={{ color: 'var(--text-muted)' }}>#{job.job_number}</span>}
@@ -895,9 +895,9 @@ export default function GraphicsPage() {
 
                 <div style={{ display: 'flex', flexDirection: 'column', gap: '8px', marginBottom: '14px' }}>
                   {([
-                    { id: 'production' as const, icon: '🏭', title: 'Production', desc: 'Full production job — printing, cutting, packing, shipping, install' },
-                    { id: 'proofing' as const, icon: '🎨', title: 'Proofing', desc: 'Design and proof approval only — no production steps yet' },
-                    { id: 'internal' as const, icon: '🔧', title: 'Internal Project', desc: 'Internal work like T-Mobile design, samples, or R&D' },
+                    { id: 'production' as const, title: 'Production', desc: 'Full production job — printing, cutting, packing, shipping, install' },
+                    { id: 'proofing' as const, title: 'Proofing', desc: 'Design and proof approval only — no production steps yet' },
+                    { id: 'internal' as const, title: 'Internal Project', desc: 'Internal work like T-Mobile design, samples, or R&D' },
                   ]).map(cat => (
                     <button
                       key={cat.id}
@@ -914,10 +914,9 @@ export default function GraphicsPage() {
                       onMouseLeave={e => { (e.currentTarget as HTMLElement).style.borderColor = `${GRAPHICS_CATEGORY_COLORS[cat.id]}33`; }}
                     >
                       <div style={{ display: 'flex', alignItems: 'center', gap: '10px', marginBottom: '4px' }}>
-                        <span style={{ fontSize: '20px' }}>{cat.icon}</span>
                         <span style={{ fontSize: '14px', fontWeight: 800, color: GRAPHICS_CATEGORY_COLORS[cat.id] }}>{cat.title}</span>
                       </div>
-                      <div style={{ fontSize: '11px', color: 'var(--text-body)', lineHeight: 1.4, paddingLeft: '30px' }}>{cat.desc}</div>
+                      <div style={{ fontSize: '11px', color: 'var(--text-body)', lineHeight: 1.4 }}>{cat.desc}</div>
                     </button>
                   ))}
                 </div>
