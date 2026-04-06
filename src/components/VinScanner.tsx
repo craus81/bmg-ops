@@ -343,7 +343,7 @@ export default function VinScanner({ onScan, theme }: VinScannerProps) {
                 background: torchOn ? 'rgba(250,204,21,0.9)' : 'rgba(0,0,0,0.6)',
                 border: 'none', cursor: 'pointer', lineHeight: 1,
               }}
-            >🔦</button>
+            >Light</button>
           )}
 
           {/* Scanner engine badge */}

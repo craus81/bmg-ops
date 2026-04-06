@@ -36,7 +36,7 @@ export default function RecentMessagesWidget() {
   };
 
   return (
-    <WidgetShell title="Recent Messages" icon="💬" loading={loading} onHeaderClick={() => router.push('/messages')}>
+    <WidgetShell title="Recent Messages" icon="" loading={loading} onHeaderClick={() => router.push('/messages')}>
       {messages.length === 0 ? (
         <div style={{ textAlign: 'center', color: theme.textMuted, fontSize: '12px', padding: '16px 0' }}>No messages yet</div>
       ) : (

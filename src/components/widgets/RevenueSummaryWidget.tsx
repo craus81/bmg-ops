@@ -50,7 +50,7 @@ export default function RevenueSummaryWidget() {
     : 0;
 
   return (
-    <WidgetShell title="Revenue Summary" icon="💰" loading={loading} accentColor="var(--success)">
+    <WidgetShell title="Revenue Summary" icon="" loading={loading} accentColor="var(--success)">
       <div>
         <div style={{ fontSize: '28px', fontWeight: 800, color: theme.textPrimary, letterSpacing: '-1px' }}>
           {fmt(stats.paidTotal)}

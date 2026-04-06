@@ -250,7 +250,7 @@ export default function MyJobsPage() {
         <span style={{
           padding: '2px 7px', borderRadius: '6px', fontSize: '10px', fontWeight: 700,
           background: 'var(--subtle-bg)', border: '1px solid var(--border)', color: 'var(--text-muted)',
-        }}>💰 Invoiced</span>
+        }}>Invoiced</span>
       );
     }
     if (!v.submitted_for_review) return null;
@@ -259,7 +259,7 @@ export default function MyJobsPage() {
     const color = isPending ? 'var(--warning)' : isApproved ? 'var(--success)' : 'var(--error)';
     const bg = isPending ? 'var(--warning-bg)' : isApproved ? 'var(--success-bg)' : 'var(--error-bg)';
     const border = isPending ? 'var(--warning-border)' : isApproved ? 'var(--success-border)' : 'var(--error-border)';
-    const label = isPending ? '⏳ Pending' : isApproved ? '✅ Approved' : '❌ Rework';
+    const label = isPending ? 'Pending' : isApproved ? 'Approved' : 'Rework';
     return (
       <span style={{
         padding: '2px 7px', borderRadius: '6px', fontSize: '10px', fontWeight: 700,
@@ -273,7 +273,7 @@ export default function MyJobsPage() {
   if (!profile?.company_id) {
     return (
       <div style={{ textAlign: 'center', padding: '40px', color: 'var(--text-muted)' }}>
-        <div style={{ fontSize: '36px', marginBottom: '8px', opacity: 0.4 }}>🏢</div>
+        <div style={{ fontSize: '14px', marginBottom: '8px', opacity: 0.4, fontWeight: 700, color: 'var(--text-muted)' }}>—</div>
         <div style={{ fontWeight: 600, fontSize: '14px' }}>No company assigned</div>
         <div style={{ fontSize: '12px', marginTop: '4px' }}>Ask an admin to assign you to a company.</div>
       </div>
@@ -283,7 +283,7 @@ export default function MyJobsPage() {
   if (invoiceSuccess) {
     return (
       <div style={{ textAlign: 'center', padding: '40px 0' }}>
-        <div style={{ fontSize: '48px', marginBottom: '12px' }}>✅</div>
+        <div style={{ fontSize: '18px', marginBottom: '12px', fontWeight: 800, color: 'var(--success)' }}>Submitted</div>
         <div style={{ fontSize: '18px', fontWeight: 800, color: 'var(--text-primary)' }}>Bill Submitted</div>
         <div style={{ fontSize: '13px', color: 'var(--text-muted)', marginTop: '6px' }}>
           Bill #{invoiceNumber} with {selectedJobs.size} vehicle{selectedJobs.size !== 1 ? 's' : ''} has been submitted for review.
@@ -310,7 +310,6 @@ export default function MyJobsPage() {
 
         {invoiceableJobs.length === 0 ? (
           <div style={{ textAlign: 'center', padding: '32px 0', color: 'var(--text-muted)' }}>
-            <div style={{ fontSize: '36px', marginBottom: '6px', opacity: 0.4 }}>📋</div>
             <div style={{ fontWeight: 600, fontSize: '13px' }}>No jobs ready to invoice</div>
             <div style={{ fontSize: '11px', marginTop: '4px' }}>Jobs must have approved photos before invoicing.</div>
           </div>
@@ -353,7 +352,7 @@ export default function MyJobsPage() {
                   fontSize: '13px', fontWeight: 600,
                 }}
               >
-                {invoiceFile ? `📎 ${invoiceFile.name}` : '📎 Tap to attach invoice file'}
+                {invoiceFile ? invoiceFile.name : 'Tap to attach invoice file'}
               </button>
             </div>
 
@@ -459,7 +458,7 @@ export default function MyJobsPage() {
             display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '8px',
           }}
         >
-          💰 Create Bill ({invoiceableJobs.length} job{invoiceableJobs.length !== 1 ? 's' : ''} ready)
+          Create Bill ({invoiceableJobs.length} job{invoiceableJobs.length !== 1 ? 's' : ''} ready)
         </button>
       )}
 
@@ -482,7 +481,6 @@ export default function MyJobsPage() {
 
       {filtered.length === 0 && (
         <div style={{ textAlign: 'center', padding: '32px 0', color: 'var(--text-muted)' }}>
-          <div style={{ fontSize: '36px', marginBottom: '6px', opacity: 0.4 }}>📋</div>
           <div style={{ fontWeight: 600, fontSize: '13px' }}>No jobs found</div>
         </div>
       )}
@@ -503,7 +501,7 @@ export default function MyJobsPage() {
               width: '44px', height: '44px', borderRadius: '12px',
               background: 'var(--subtle-bg)', display: 'flex',
               alignItems: 'center', justifyContent: 'center', fontSize: '20px', flexShrink: 0,
-            }}>🚐</div>
+            }}></div>
             <div style={{ flex: 1, minWidth: 0 }}>
               <div style={{ display: 'flex', alignItems: 'center', gap: '8px', flexWrap: 'wrap' }}>
                 <div style={{ fontWeight: 700, fontSize: '14px', color: 'var(--text-primary)', letterSpacing: '-0.2px' }}>

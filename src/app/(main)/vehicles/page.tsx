@@ -232,13 +232,13 @@ export default function VehiclesPage() {
           background: 'var(--success-bg)', border: '1px solid var(--success-border)',
           color: 'var(--success)', fontSize: '13px', fontWeight: 700, textAlign: 'center',
         }}>
-          ✅ Submitted {submitResult.count} vehicle{submitResult.count !== 1 ? 's' : ''} for review
+          Submitted {submitResult.count} vehicle{submitResult.count !== 1 ? 's' : ''} for review
         </div>
       )}
 
       {vehicles.length === 0 && (
         <div style={{ textAlign: 'center', padding: '40px 0', color: theme.textMuted }}>
-          <div style={{ fontSize: '40px', marginBottom: '8px', opacity: 0.3 }}>🚐</div>
+          <div style={{ fontSize: '14px', marginBottom: '8px', opacity: 0.3, fontWeight: 700 }}>—</div>
           <div style={{ fontWeight: 600, fontSize: '14px' }}>{isAdmin ? 'No vehicles scanned yet' : 'You haven\'t scanned any vehicles yet'}</div>
         </div>
       )}
@@ -290,7 +290,7 @@ export default function VehiclesPage() {
                                 border: `1px solid ${reviewStatus === 'approved' ? 'var(--success-border)' : reviewStatus === 'denied' ? 'var(--error-border)' : 'var(--warning-border)'}`,
                                 color: reviewStatus === 'approved' ? 'var(--success)' : reviewStatus === 'denied' ? 'var(--error)' : 'var(--warning)',
                               }}>
-                                {reviewStatus === 'approved' ? '✅' : reviewStatus === 'denied' ? '❌' : '⏳'} {reviewStatus === 'approved' ? 'Approved' : reviewStatus === 'denied' ? 'Rework' : 'Pending'}
+                                {reviewStatus === 'approved' ? 'Approved' : reviewStatus === 'denied' ? 'Rework' : 'Pending'}
                               </span>
                             )}
                             {v.po_line_item_id && poInfo[v.po_line_item_id] ? (
@@ -356,7 +356,7 @@ export default function VehiclesPage() {
                               background: 'rgba(251,191,36,0.08)', border: '1px solid rgba(251,191,36,0.2)',
                               color: '#fbbf24', fontSize: '12px', fontWeight: 700, cursor: 'pointer',
                             }}
-                          >📋 Assign Purchase Order</button>
+                          >Assign Purchase Order</button>
                         )}
 
                         <div style={{ display: 'flex', gap: '8px' }}>
@@ -369,7 +369,7 @@ export default function VehiclesPage() {
                             flex: 1, padding: '10px', borderRadius: '10px',
                             background: 'rgba(30,74,94,0.08)', border: '1px solid rgba(30,74,94,0.15)',
                             color: theme.navyLight, fontSize: '12px', fontWeight: 700, cursor: 'pointer',
-                          }}>📸 Photos</button>
+                          }}>Photos</button>
                         </div>
                         <button
                           onClick={() => {

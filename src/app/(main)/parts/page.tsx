@@ -191,7 +191,7 @@ export default function PartsPage() {
               whiteSpace: 'nowrap',
             }}
           >
-            {syncing ? '⏳ Syncing...' : '🔄 Sync Now'}
+            {syncing ? 'Syncing...' : 'Sync Now'}
           </button>
         )}
       </div>
@@ -219,8 +219,8 @@ export default function PartsPage() {
         borderRadius: '12px', marginBottom: '10px',
       }}>
         {([
-          { id: 'upfit' as const, label: '🔧 Upfit Parts', desc: 'Fleet & install' },
-          { id: 'graphics' as const, label: '🎨 Graphic Parts', desc: 'Decals & wraps' },
+          { id: 'upfit' as const, label: 'Upfit Parts', desc: 'Fleet & install' },
+          { id: 'graphics' as const, label: 'Graphic Parts', desc: 'Decals & wraps' },
         ]).map((tab) => (
           <button
             key={tab.id}
@@ -253,7 +253,7 @@ export default function PartsPage() {
         <div style={{ textAlign: 'center', padding: '40px', color: 'var(--text-muted)' }}>Loading parts...</div>
       ) : filtered.length === 0 ? (
         <div style={{ textAlign: 'center', padding: '40px', color: 'var(--text-muted)' }}>
-          <div style={{ fontSize: '28px', marginBottom: '8px' }}>{catalog === 'upfit' ? '🔧' : '🎨'}</div>
+          <div style={{ fontSize: '13px', marginBottom: '8px', fontWeight: 700, color: 'var(--text-muted)' }}>—</div>
           <div style={{ fontSize: '13px', fontWeight: 700 }}>
             {parts.length === 0 ? 'No parts synced yet' : 'No matching parts'}
           </div>
@@ -355,7 +355,7 @@ export default function PartsPage() {
                             style={{ fontSize: '14px', fontWeight: 700, color: '#c084fc', cursor: isAdmin ? 'pointer' : 'default' }}
                           >
                             {part.labor_hours > 0 ? `${part.labor_hours}h` : '—'}
-                            {isAdmin && <span style={{ fontSize: '9px', color: 'var(--text-muted)', marginLeft: '4px' }}>✏️</span>}
+                            {isAdmin && <span style={{ fontSize: '9px', color: 'var(--text-muted)', marginLeft: '4px' }}>Edit</span>}
                           </div>
                         )}
                       </div>

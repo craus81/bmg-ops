@@ -41,7 +41,7 @@ export default function UpcomingScheduleWidget() {
   };
 
   return (
-    <WidgetShell title="Upcoming Schedule" icon="📅" loading={loading} onHeaderClick={() => router.push('/admin/schedule')}>
+    <WidgetShell title="Upcoming Schedule" icon="" loading={loading} onHeaderClick={() => router.push('/admin/schedule')}>
       {entries.length === 0 ? (
         <div style={{ textAlign: 'center', color: theme.textMuted, fontSize: '12px', padding: '16px 0' }}>
           Nothing scheduled in the next 7 days

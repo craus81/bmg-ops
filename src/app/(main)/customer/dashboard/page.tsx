@@ -186,8 +186,8 @@ export default function CustomerDashboard() {
       }}>
         {([
           { id: 'all' as const, label: 'All Jobs', count: totalJobs },
-          { id: 'upfit' as const, label: '🔧 Upfit', count: vehicleJobs.length },
-          { id: 'graphics' as const, label: '🎨 Graphics', count: graphicsJobs.length },
+          { id: 'upfit' as const, label: 'Upfit', count: vehicleJobs.length },
+          { id: 'graphics' as const, label: 'Graphics', count: graphicsJobs.length },
         ]).map(t => (
           <button
             key={t.id}
@@ -208,7 +208,7 @@ export default function CustomerDashboard() {
       {/* Empty state */}
       {totalJobs === 0 && (
         <div style={{ textAlign: 'center', padding: '60px 20px', color: 'var(--text-muted)' }}>
-          <div style={{ fontSize: '40px', marginBottom: '12px' }}>📋</div>
+          <div style={{ fontSize: '15px', fontWeight: 700, color: 'var(--text-muted)', marginBottom: '12px' }}>--</div>
           <div style={{ fontSize: '15px', fontWeight: 700, color: 'var(--text-primary)' }}>No jobs assigned yet</div>
           <div style={{ fontSize: '12px', marginTop: '6px' }}>Your BMG Fleet team will assign jobs here as they come in.</div>
         </div>
@@ -219,7 +219,7 @@ export default function CustomerDashboard() {
         <div style={{ marginBottom: '16px' }}>
           {tab === 'all' && (
             <div style={{ fontSize: '11px', fontWeight: 700, color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.5px', marginBottom: '8px' }}>
-              🔧 Upfit / Parts Install ({vehicleJobs.length})
+              Upfit / Parts Install ({vehicleJobs.length})
             </div>
           )}
           <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>

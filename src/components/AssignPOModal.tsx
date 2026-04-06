@@ -135,7 +135,7 @@ export default function AssignPOModal({ open, onClose, vehicleId, vehiclePartNum
 
           {/* Search input */}
           <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
-            <span style={{ fontSize: '16px', opacity: 0.5 }}>📋</span>
+            <span style={{ fontSize: '14px', opacity: 0.5, fontWeight: 700 }}>PO</span>
             <input
               ref={inputRef}
               type="text"
@@ -172,7 +172,7 @@ export default function AssignPOModal({ open, onClose, vehicleId, vehiclePartNum
 
           {!searching && pos.length === 0 && (
             <div style={{ padding: '40px 20px', textAlign: 'center' }}>
-              <div style={{ fontSize: '32px', opacity: 0.3, marginBottom: '8px' }}>📋</div>
+              <div style={{ fontSize: '14px', opacity: 0.3, marginBottom: '8px', fontWeight: 700 }}>No Results</div>
               <div style={{ fontSize: '14px', fontWeight: 700, color: 'var(--text-label)' }}>No POs found</div>
               <div style={{ fontSize: '12px', color: 'var(--text-secondary)', marginTop: '4px' }}>Try a different search term</div>
             </div>

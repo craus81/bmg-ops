@@ -223,7 +223,7 @@ export default function MyJobsPage() {
       ) : filtered.length === 0 ? (
         <div style={{ textAlign: 'center', padding: '40px' }}>
           <div style={{ fontSize: '36px', marginBottom: '8px', opacity: 0.3 }}>
-            {filter === 'active' ? '✅' : '📋'}
+            {filter === 'active' ? '' : ''}
           </div>
           <div style={{ fontSize: '14px', fontWeight: 700, color: 'var(--text-primary)', marginBottom: '4px' }}>
             {filter === 'active' ? 'No active jobs' : 'No jobs found'}

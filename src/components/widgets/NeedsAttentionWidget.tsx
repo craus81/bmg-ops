@@ -75,7 +75,7 @@ export default function NeedsAttentionWidget() {
   const total = items.reduce((s, i) => s + i.count, 0);
 
   return (
-    <WidgetShell title="Needs Attention" icon="🔔" loading={loading} accentColor={total > 0 ? 'var(--warning)' : undefined}>
+    <WidgetShell title="Needs Attention" icon="" loading={loading} accentColor={total > 0 ? 'var(--warning)' : undefined}>
       {items.length === 0 ? (
         <div style={{ textAlign: 'center', color: 'var(--success)', fontWeight: 700, fontSize: '14px', paddingTop: '10px' }}>
           All caught up!

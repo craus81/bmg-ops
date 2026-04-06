@@ -99,7 +99,7 @@ export default function ScanInstallPage() {
               padding: '8px 14px', borderRadius: '10px', background: 'var(--orange)',
               color: '#fff', fontSize: '12px', fontWeight: 700, border: 'none',
               boxShadow: '0 2px 8px rgba(238,49,32,0.3)',
-            }}>🖨 Print</button>
+            }}>Print</button>
             <button onClick={() => setViewingProof(false)} style={{
               padding: '8px 14px', borderRadius: '10px', background: 'rgba(255,255,255,0.1)',
               color: '#fff', fontSize: '12px', fontWeight: 700, border: '1px solid rgba(255,255,255,0.15)',
@@ -257,10 +257,10 @@ export default function ScanInstallPage() {
 
       {/* Action Buttons */}
       <div style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
-        <ActionBtn icon="📷" title="Scan VIN"
+        <ActionBtn icon="" title="Scan VIN"
           sub={activePart ? `${activePart.part_number} — ${activePart.end_customer}` : 'Select a part number first'}
           onClick={() => router.push('/scan')} primary disabled={!activePart} />
-        <ActionBtn icon="🔧" title="Set Active Part Number"
+        <ActionBtn icon="" title="Set Active Part Number"
           sub={activePart ? 'Change what you\'re installing' : 'Choose before scanning'}
           onClick={() => router.push('/select-part')} highlight={!activePart} />
       </div>

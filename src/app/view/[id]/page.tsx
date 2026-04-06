@@ -73,7 +73,6 @@ export default function PublicVehicleView() {
     return (
       <div style={{ minHeight: '100vh', background: 'var(--bg)', color: 'var(--text-body)', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
         <div style={{ textAlign: 'center' }}>
-          <div style={{ fontSize: '48px', marginBottom: '12px', opacity: 0.4 }}>🚫</div>
           <div style={{ fontWeight: 700, fontSize: '16px' }}>Vehicle Not Found</div>
           <div style={{ color: 'var(--text-label)', fontSize: '13px', marginTop: '4px' }}>This link may be invalid or expired.</div>
         </div>

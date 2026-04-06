@@ -105,7 +105,7 @@ export default function SelectPartPage() {
           )}
           {!isImage && !isPdf && (
             <div style={{ textAlign: 'center', color: 'var(--text-muted)' }}>
-              <div style={{ fontSize: '40px', marginBottom: '8px' }}>📄</div>
+              <div style={{ fontSize: '14px', marginBottom: '8px', fontWeight: 700, color: 'var(--text-muted)' }}>File</div>
               <div style={{ fontSize: '13px', fontWeight: 600 }}>{proof.file_name}</div>
               <a href={url} target="_blank" rel="noopener noreferrer" style={{
                 display: 'inline-block', marginTop: '12px', padding: '10px 20px', borderRadius: '10px',
@@ -217,7 +217,7 @@ export default function SelectPartPage() {
                           background: 'var(--tab-active-bg)', color: 'var(--tab-active-color)',
                           border: '1px solid var(--tab-active-border)',
                         }}
-                      >📄 {proofs.length} proof{proofs.length > 1 ? 's' : ''}</button>
+                      >{proofs.length} proof{proofs.length > 1 ? 's' : ''}</button>
                     )}
                   </div>
                   <div style={{ fontSize: '12px', color: 'var(--navy-light)', marginTop: '1px' }}>

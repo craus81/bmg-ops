@@ -226,7 +226,7 @@ export async function syncCalendarEvent(params: {
     const calendar = await getCalendarClient();
 
     const eventBody = {
-      summary: `🎨 Install: ${params.title}`,
+      summary: `Install: ${params.title}`,
       description: params.description || '',
       location: params.location || '',
       start: {

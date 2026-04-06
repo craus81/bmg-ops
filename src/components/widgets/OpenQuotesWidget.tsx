@@ -35,7 +35,7 @@ export default function OpenQuotesWidget() {
   };
 
   return (
-    <WidgetShell title="Open Quotes" icon="📝" loading={loading} onHeaderClick={() => router.push('/admin/quotes')}>
+    <WidgetShell title="Open Quotes" icon="" loading={loading} onHeaderClick={() => router.push('/admin/quotes')}>
       {quotes.length === 0 ? (
         <div style={{ textAlign: 'center', color: theme.textMuted, fontSize: '12px', padding: '16px 0' }}>No open quotes</div>
       ) : (

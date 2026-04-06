@@ -48,7 +48,7 @@ export default function OpenPOsWidget() {
   const fmt = (n: number) => n.toLocaleString('en-US', { style: 'currency', currency: 'USD', minimumFractionDigits: 0, maximumFractionDigits: 0 });
 
   return (
-    <WidgetShell title="Open PO Balance" icon="📦" loading={loading} accentColor={theme.orange}>
+    <WidgetShell title="Open PO Balance" icon="" loading={loading} accentColor={theme.orange}>
       <div>
         <div style={{ fontSize: '28px', fontWeight: 800, color: theme.textPrimary, letterSpacing: '-1px' }}>
           {fmt(stats.remaining)}

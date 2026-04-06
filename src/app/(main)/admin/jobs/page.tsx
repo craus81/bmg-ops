@@ -269,7 +269,7 @@ export default function AllJobsPage() {
     const color = isPending ? 'var(--warning)' : isApproved ? 'var(--success)' : 'var(--error)';
     const bg = isPending ? 'var(--warning-bg)' : isApproved ? 'var(--success-bg)' : 'var(--error-bg)';
     const border = isPending ? 'var(--warning-border)' : isApproved ? 'var(--success-border)' : 'var(--error-border)';
-    const label = isPending ? '⏳ Pending' : isApproved ? '✅ Approved' : '❌ Rework';
+    const label = isPending ? 'Pending' : isApproved ? 'Approved' : 'Rework';
     return <span style={{ padding: '2px 7px', borderRadius: '6px', fontSize: '10px', fontWeight: 700, background: bg, border: `1px solid ${border}`, color }}>{label}</span>;
   };
 
@@ -292,12 +292,12 @@ export default function AllJobsPage() {
   return (
     <div>
       <div style={{ display: 'flex', gap: '4px', marginBottom: '14px', background: 'var(--card)', borderRadius: '10px', padding: '3px' }}>
-        <button onClick={() => setTab('jobs')} style={{ flex: 1, padding: '10px', borderRadius: '8px', fontSize: '13px', fontWeight: 700, background: tab === 'jobs' ? 'var(--tab-active-bg)' : 'transparent', border: 'none', color: tab === 'jobs' ? 'var(--text-primary)' : 'var(--text-muted)' }}>📋 Jobs</button>
+        <button onClick={() => setTab('jobs')} style={{ flex: 1, padding: '10px', borderRadius: '8px', fontSize: '13px', fontWeight: 700, background: tab === 'jobs' ? 'var(--tab-active-bg)' : 'transparent', border: 'none', color: tab === 'jobs' ? 'var(--text-primary)' : 'var(--text-muted)' }}>Jobs</button>
         <button onClick={() => setTab('invoices')} style={{ flex: 1, padding: '10px', borderRadius: '8px', fontSize: '13px', fontWeight: 700, background: tab === 'invoices' ? 'var(--tab-active-bg)' : 'transparent', border: 'none', color: tab === 'invoices' ? 'var(--text-primary)' : 'var(--text-muted)', position: 'relative' }}>
-          💰 Vendor Payments
+          Vendor Payments
           {pendingInvoiceCount > 0 && <span style={{ position: 'absolute', top: '4px', right: '8px', width: '18px', height: '18px', borderRadius: '50%', background: 'var(--orange)', color: '#fff', fontSize: '10px', fontWeight: 800, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>{pendingInvoiceCount}</span>}
         </button>
-        <button onClick={() => setTab('bulk')} style={{ flex: 1, padding: '10px', borderRadius: '8px', fontSize: '13px', fontWeight: 700, background: tab === 'bulk' ? 'var(--tab-active-bg)' : 'transparent', border: 'none', color: tab === 'bulk' ? 'var(--text-primary)' : 'var(--text-muted)' }}>📤 Bulk VIN</button>
+        <button onClick={() => setTab('bulk')} style={{ flex: 1, padding: '10px', borderRadius: '8px', fontSize: '13px', fontWeight: 700, background: tab === 'bulk' ? 'var(--tab-active-bg)' : 'transparent', border: 'none', color: tab === 'bulk' ? 'var(--text-primary)' : 'var(--text-muted)' }}>Bulk VIN</button>
       </div>
 
       {tab === 'jobs' && (
@@ -315,11 +315,11 @@ export default function AllJobsPage() {
               <button key={f.id} onClick={() => setStatusFilter(f.id)} style={{ padding: '6px 12px', borderRadius: '8px', fontSize: '11px', fontWeight: 700, whiteSpace: 'nowrap', background: statusFilter === f.id ? 'var(--tab-active-bg)' : 'transparent', border: statusFilter === f.id ? '1px solid var(--tab-active-border)' : '1px solid var(--border)', color: statusFilter === f.id ? 'var(--tab-active-color)' : 'var(--text-muted)' }}>{f.label}</button>
             ))}
           </div>
-          {filteredJobs.length === 0 && <div style={{ textAlign: 'center', padding: '32px 0', color: 'var(--text-muted)' }}><div style={{ fontSize: '36px', marginBottom: '6px', opacity: 0.4 }}>📋</div><div style={{ fontWeight: 600, fontSize: '13px' }}>No jobs match filters</div></div>}
+          {filteredJobs.length === 0 && <div style={{ textAlign: 'center', padding: '32px 0', color: 'var(--text-muted)' }}><div style={{ fontSize: '36px', marginBottom: '6px', opacity: 0.4 }}></div><div style={{ fontWeight: 600, fontSize: '13px' }}>No jobs match filters</div></div>}
           {Object.entries(grouped).sort(([a], [b]) => a.localeCompare(b)).map(([cn, cj]) => (
             <div key={cn} style={{ marginBottom: '16px' }}>
               <div style={{ fontSize: '12px', fontWeight: 800, color: 'var(--text-primary)', padding: '8px 0', borderBottom: '1px solid var(--border)', marginBottom: '8px', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                <span>🏢 {cn}</span>
+                <span>{cn}</span>
                 <span style={{ fontSize: '11px', fontWeight: 600, color: 'var(--text-muted)' }}>{cj.length} job{cj.length !== 1 ? 's' : ''}</span>
               </div>
               <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>

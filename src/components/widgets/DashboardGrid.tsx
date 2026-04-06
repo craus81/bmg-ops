@@ -256,7 +256,7 @@ export default function DashboardGrid() {
           textAlign: 'center', padding: '60px 20px',
           background: theme.card, border: `1px solid ${theme.border}`, borderRadius: '14px',
         }}>
-          <div style={{ fontSize: '32px', marginBottom: '8px' }}>📊</div>
+          <div style={{ fontSize: '32px', marginBottom: '8px' }}></div>
           <div style={{ fontSize: '14px', fontWeight: 700, color: theme.textPrimary }}>No widgets enabled</div>
           <div style={{ fontSize: '12px', color: theme.textMuted, marginTop: '4px' }}>
             Click &quot;Customize&quot; then &quot;+ Widgets&quot; to add some

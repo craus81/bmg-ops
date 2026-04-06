@@ -121,7 +121,7 @@ export default function ProofThumbnail({
           borderRadius: '6px', background: 'var(--subtle-bg)', border: '1px solid var(--border)',
           display: 'flex', alignItems: 'center', justifyContent: 'center',
           fontSize: '20px',
-        }}>📄</div>
+        }}>PDF</div>
       ) : src ? (
         <img
           src={src}
@@ -146,7 +146,7 @@ export default function ProofThumbnail({
           background: 'rgba(0,0,0,0.5)', display: 'flex',
           alignItems: 'center', justifyContent: 'center',
           fontSize: '9px', color: '#fff',
-        }}>🔍</div>
+        }}>+</div>
       )}
     </div>
   );

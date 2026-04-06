@@ -41,7 +41,7 @@ export default function CniOverviewWidget() {
   ];
 
   return (
-    <WidgetShell title="CNI Program" icon="🔧" loading={loading} onHeaderClick={() => router.push('/admin/cni')}>
+    <WidgetShell title="CNI Program" icon="" loading={loading} onHeaderClick={() => router.push('/admin/cni')}>
       {stats._total === undefined || stats._total === 0 ? (
         <div style={{ textAlign: 'center', color: theme.textMuted, fontSize: '12px', padding: '16px 0' }}>
           No CNI jobs yet

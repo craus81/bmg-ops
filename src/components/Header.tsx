@@ -190,13 +190,13 @@ export default function Header({ clockStatus, activePartNumber, activeEndCustome
   };
 
   const notifIcon = (type: string) => {
-    if (type.includes('approved')) return '✅';
-    if (type.includes('denied')) return '❌';
-    if (type.includes('paid')) return '💵';
-    if (type.includes('submitted') || type.includes('review')) return '📸';
-    if (type.includes('invoice')) return '📄';
-    if (type.includes('schedule')) return '📅';
-    return '🔔';
+    if (type.includes('approved')) return 'Approved';
+    if (type.includes('denied')) return 'Denied';
+    if (type.includes('paid')) return 'Paid';
+    if (type.includes('submitted') || type.includes('review')) return 'Review';
+    if (type.includes('invoice')) return 'Invoice';
+    if (type.includes('schedule')) return 'Schedule';
+    return '';
   };
 
   const handleSwitchUser = async () => {
@@ -217,9 +217,9 @@ export default function Header({ clockStatus, activePartNumber, activeEndCustome
   };
 
   const subtitle = clockStatus === 'in'
-    ? '🟢 Clocked In'
+    ? 'Clocked In'
     : clockStatus === 'break'
-    ? '🟡 On Break'
+    ? 'On Break'
     : activePartNumber
     ? `${activePartNumber} • ${activeEndCustomer}`
     : '';
@@ -340,7 +340,7 @@ export default function Header({ clockStatus, activePartNumber, activeEndCustome
               lineHeight: 1,
             }}
           >
-            🔍
+            Search
           </button>
 
           {/* Chat / Messages */}
@@ -354,7 +354,7 @@ export default function Header({ clockStatus, activePartNumber, activeEndCustome
               lineHeight: 1,
             }}
           >
-            💬
+            Chat
             {unreadMessages > 0 && (
               <span style={{
                 position: 'absolute', top: '2px', right: '2px',
@@ -380,7 +380,7 @@ export default function Header({ clockStatus, activePartNumber, activeEndCustome
               cursor: 'pointer', transition: 'all 0.15s',
               lineHeight: 1,
             }}>
-              🔔
+              Alerts
               {unreadCount > 0 && (
                 <span style={{
                   position: 'absolute', top: '2px', right: '2px',
@@ -437,7 +437,7 @@ export default function Header({ clockStatus, activePartNumber, activeEndCustome
                     <div style={{ padding: '24px', textAlign: 'center', color: 'var(--text-muted)', fontSize: '13px' }}>Loading...</div>
                   ) : notifications.length === 0 ? (
                     <div style={{ padding: '32px 16px', textAlign: 'center' }}>
-                      <div style={{ fontSize: '28px', opacity: 0.3, marginBottom: '6px' }}>🔔</div>
+                      <div style={{ fontSize: '28px', opacity: 0.3, marginBottom: '6px' }}></div>
                       <div style={{ fontSize: '13px', fontWeight: 600, color: 'var(--text-muted)' }}>No notifications yet</div>
                     </div>
                   ) : (
@@ -536,7 +536,7 @@ export default function Header({ clockStatus, activePartNumber, activeEndCustome
                   fontSize: '13px', fontWeight: 600, color: 'var(--text-primary)',
                   display: 'flex', alignItems: 'center', gap: '8px',
                 }}>
-                  🔄 Switch User
+                  Switch User
                 </button>
 
                 <button onClick={() => { setShowMenu(false); signOut(); }} style={{
@@ -544,7 +544,7 @@ export default function Header({ clockStatus, activePartNumber, activeEndCustome
                   border: 'none', fontSize: '13px', fontWeight: 600, color: 'var(--error)',
                   display: 'flex', alignItems: 'center', gap: '8px',
                 }}>
-                  🚪 Sign Out
+                  Sign Out
                 </button>
               </div>
             )}

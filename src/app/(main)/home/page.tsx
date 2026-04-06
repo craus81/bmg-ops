@@ -336,7 +336,7 @@ function DashboardOverview() {
           padding: '14px', borderRadius: '14px', textAlign: 'left',
           border: `1px solid ${theme.border}`, background: theme.card, boxShadow: theme.shadowSm,
         }}>
-          <div style={{ width: '40px', height: '40px', borderRadius: '10px', background: 'rgba(238,49,32,0.08)', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: '18px', flexShrink: 0 }}>📋</div>
+          <div style={{ width: '40px', height: '40px', borderRadius: '10px', background: 'rgba(238,49,32,0.08)', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: '18px', flexShrink: 0 }}></div>
           <div>
             <div style={{ fontWeight: 700, fontSize: '14px', color: theme.textPrimary }}>Jobs & Bills</div>
             <div style={{ fontSize: '11px', color: theme.textMuted, marginTop: '1px' }}>Review jobs, manage bills</div>
@@ -347,7 +347,7 @@ function DashboardOverview() {
           padding: '14px', borderRadius: '14px', textAlign: 'left',
           border: `1px solid ${theme.border}`, background: theme.card, boxShadow: theme.shadowSm,
         }}>
-          <div style={{ width: '40px', height: '40px', borderRadius: '10px', background: 'rgba(238,49,32,0.08)', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: '18px', flexShrink: 0 }}>📅</div>
+          <div style={{ width: '40px', height: '40px', borderRadius: '10px', background: 'rgba(238,49,32,0.08)', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: '18px', flexShrink: 0 }}></div>
           <div>
             <div style={{ fontWeight: 700, fontSize: '14px', color: theme.textPrimary }}>Scheduler</div>
             <div style={{ fontSize: '11px', color: theme.textMuted, marginTop: '1px' }}>Assign work to installers</div>
@@ -358,7 +358,7 @@ function DashboardOverview() {
           padding: '14px', borderRadius: '14px', textAlign: 'left',
           border: `1px solid ${theme.border}`, background: theme.card, boxShadow: theme.shadowSm,
         }}>
-          <div style={{ width: '40px', height: '40px', borderRadius: '10px', background: 'rgba(238,49,32,0.08)', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: '18px', flexShrink: 0 }}>📸</div>
+          <div style={{ width: '40px', height: '40px', borderRadius: '10px', background: 'rgba(238,49,32,0.08)', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: '18px', flexShrink: 0 }}></div>
           <div>
             <div style={{ fontWeight: 700, fontSize: '14px', color: theme.textPrimary }}>Photo Reviews</div>
             <div style={{ fontSize: '11px', color: theme.textMuted, marginTop: '1px' }}>Approve or deny submissions</div>
@@ -1164,10 +1164,10 @@ function InstallerHome() {
       )}
 
       <div style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
-        <ActionBtn icon="📷" title="Scan VIN"
+        <ActionBtn icon="" title="Scan VIN"
           sub={activePart ? `${activePart.part_number} — ${activePart.end_customer}` : 'Select a part number first'}
           onClick={() => router.push('/scan')} primary disabled={!activePart} />
-        <ActionBtn icon="🔧" title="Set Active Part Number"
+        <ActionBtn icon="" title="Set Active Part Number"
           sub={activePart ? 'Change what you\'re installing' : 'Choose before scanning'}
           onClick={() => router.push('/select-part')} highlight={!activePart} />
       </div>

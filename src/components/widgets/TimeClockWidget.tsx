@@ -36,7 +36,7 @@ export default function TimeClockWidget() {
   const formatTime = (d: string) => new Date(d).toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit' });
 
   return (
-    <WidgetShell title="Time Clock" icon="⏱️" loading={loading}>
+    <WidgetShell title="Time Clock" icon="" loading={loading}>
       <div>
         <div style={{ fontSize: '28px', fontWeight: 800, color: clockedIn.length > 0 ? 'var(--success)' : theme.textMuted, letterSpacing: '-1px' }}>
           {clockedIn.length}

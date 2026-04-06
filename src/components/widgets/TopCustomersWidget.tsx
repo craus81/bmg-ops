@@ -49,7 +49,7 @@ export default function TopCustomersWidget() {
   const maxRevenue = customers.length > 0 ? customers[0].revenue : 1;
 
   return (
-    <WidgetShell title="Top 5 Customers YTD" icon="🏆" loading={loading} accentColor="var(--warning)">
+    <WidgetShell title="Top 5 Customers YTD" icon="" loading={loading} accentColor="var(--warning)">
       {customers.length === 0 ? (
         <div style={{ textAlign: 'center', color: theme.textMuted, fontSize: '12px', padding: '16px 0' }}>No data yet this year</div>
       ) : (

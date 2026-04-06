@@ -121,7 +121,7 @@ export default function SalesOrderPdf({ salesOrderId, salesOrderNumber }: SalesO
             </>
           ) : (
             <>
-              <span>📄</span>
+              <span></span>
               {pdfDataUrl && !collapsed ? `Hide SO #${salesOrderNumber}` : `View SO #${salesOrderNumber} PDF`}
               <span style={{ fontSize: '10px' }}>{pdfDataUrl && !collapsed ? '▲' : '▼'}</span>
             </>
@@ -155,7 +155,7 @@ export default function SalesOrderPdf({ salesOrderId, salesOrderNumber }: SalesO
                 background: 'rgba(0,0,0,0.5)', display: 'flex',
                 alignItems: 'center', justifyContent: 'center',
                 fontSize: '8px', color: '#fff',
-              }}>🔍</div>
+              }}>+</div>
             )}
           </div>
         )}
@@ -185,7 +185,7 @@ export default function SalesOrderPdf({ salesOrderId, salesOrderNumber }: SalesO
               display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '6px',
             }}
           >
-            <span>🖨️</span> Tap to open in new window for printing
+            Tap to open in new window for printing
           </div>
           <div
             onClick={openInNewTab}

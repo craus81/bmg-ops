@@ -132,7 +132,7 @@ export default function NetSuitePdf({ type, recordId, recordNumber, label }: Net
             </>
           ) : (
             <>
-              <span>📄</span>
+              <span></span>
               {pdfDataUrl && !collapsed ? `Hide ${prefix} #${recordNumber}` : `View ${prefix} #${recordNumber} PDF`}
               <span style={{ fontSize: '10px' }}>{pdfDataUrl && !collapsed ? '▲' : '▼'}</span>
             </>
@@ -166,7 +166,7 @@ export default function NetSuitePdf({ type, recordId, recordNumber, label }: Net
                 background: 'rgba(0,0,0,0.5)', display: 'flex',
                 alignItems: 'center', justifyContent: 'center',
                 fontSize: '8px', color: '#fff',
-              }}>🔍</div>
+              }}>+</div>
             )}
           </div>
         )}
@@ -196,7 +196,7 @@ export default function NetSuitePdf({ type, recordId, recordNumber, label }: Net
               display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '6px',
             }}
           >
-            <span>🖨️</span> Tap to open in new window for printing
+            Tap to open in new window for printing
           </div>
           <div
             onClick={openInNewTab}

@@ -38,7 +38,7 @@ export default function ActiveJobsWidget() {
   };
 
   return (
-    <WidgetShell title="Active Jobs" icon="📋" loading={loading}>
+    <WidgetShell title="Active Jobs" icon="" loading={loading}>
       <div>
         <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: '6px', marginBottom: '10px' }}>
           <div style={{ textAlign: 'center', background: 'var(--subtle-bg)', borderRadius: '8px', padding: '8px 4px' }}>

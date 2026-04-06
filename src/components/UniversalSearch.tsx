@@ -9,14 +9,14 @@ interface UniversalSearchProps {
 }
 
 const GROUP_CONFIG: Record<string, { label: string; icon: string; color: string }> = {
-  purchase_orders: { label: 'Purchase Orders', icon: '📋', color: '#60a5fa' },
-  vehicles: { label: 'Vehicles', icon: '🚗', color: '#34d399' },
-  graphics_jobs: { label: 'Graphics Jobs', icon: '🎨', color: '#a78bfa' },
-  estimates: { label: 'Estimates', icon: '💰', color: '#fbbf24' },
-  parts: { label: 'Parts Catalog', icon: '🔧', color: '#f97316' },
-  customers: { label: 'Customers', icon: '🏢', color: '#06b6d4' },
-  messages: { label: 'Messages', icon: '💬', color: '#3b82f6' },
-  quotes: { label: 'Quotes', icon: '📊', color: '#8b5cf6' },
+  purchase_orders: { label: 'Purchase Orders', icon: '', color: '#60a5fa' },
+  vehicles: { label: 'Vehicles', icon: '', color: '#34d399' },
+  graphics_jobs: { label: 'Graphics Jobs', icon: '', color: '#a78bfa' },
+  estimates: { label: 'Estimates', icon: '', color: '#fbbf24' },
+  parts: { label: 'Parts Catalog', icon: '', color: '#f97316' },
+  customers: { label: 'Customers', icon: '', color: '#06b6d4' },
+  messages: { label: 'Messages', icon: '', color: '#3b82f6' },
+  quotes: { label: 'Quotes', icon: '', color: '#8b5cf6' },
 };
 
 function formatDate(dateStr: string) {
@@ -257,7 +257,7 @@ export default function UniversalSearch({ open, onClose }: UniversalSearchProps)
           display: 'flex', alignItems: 'center', gap: '10px',
           position: 'sticky', top: 0, background: 'var(--bg)', zIndex: 1,
         }}>
-          <span style={{ fontSize: '18px', opacity: 0.5 }}>🔍</span>
+          <span style={{ fontSize: '14px', opacity: 0.5, fontWeight: 700 }}>Search</span>
           <input
             ref={inputRef}
             type="text"
@@ -293,7 +293,6 @@ export default function UniversalSearch({ open, onClose }: UniversalSearchProps)
 
           {!searching && query.length >= 2 && totalResults === 0 && (
             <div style={{ padding: '40px 20px', textAlign: 'center' }}>
-              <div style={{ fontSize: '32px', opacity: 0.3, marginBottom: '8px' }}>🔍</div>
               <div style={{ fontSize: '14px', fontWeight: 700, color: 'var(--text-label)' }}>No results found</div>
               <div style={{ fontSize: '12px', color: 'var(--text-secondary)', marginTop: '4px' }}>Try a different search term</div>
             </div>
@@ -301,14 +300,13 @@ export default function UniversalSearch({ open, onClose }: UniversalSearchProps)
 
           {!searching && query.length < 2 && (
             <div style={{ padding: '40px 20px', textAlign: 'center' }}>
-              <div style={{ fontSize: '32px', opacity: 0.3, marginBottom: '8px' }}>🔍</div>
               <div style={{ fontSize: '14px', fontWeight: 700, color: 'var(--text-label)' }}>Search everything</div>
               <div style={{ fontSize: '12px', color: 'var(--text-secondary)', marginTop: '4px' }}>POs, vehicles, graphics jobs, estimates, parts, customers, messages, quotes</div>
             </div>
           )}
 
           {groupKeys.map((group) => {
-            const config = GROUP_CONFIG[group] || { label: group, icon: '📄', color: 'var(--text-body)' };
+            const config = GROUP_CONFIG[group] || { label: group, icon: '', color: 'var(--text-body)' };
             const items = results[group] || [];
             if (items.length === 0) return null;
 

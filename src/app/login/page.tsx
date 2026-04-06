@@ -124,7 +124,7 @@ export default function LoginPage() {
         {/* Magic link sent */}
         {sent ? (
           <div style={{ background: 'var(--success-bg)', border: '1px solid var(--success-border)', borderRadius: '14px', padding: '24px', textAlign: 'center' }}>
-            <div style={{ fontSize: '36px', marginBottom: '8px' }}>📧</div>
+            <div style={{ fontSize: '16px', fontWeight: 700, marginBottom: '8px', color: 'var(--text-muted)' }}>Email Sent</div>
             <div style={{ fontWeight: 700, fontSize: '16px', color: 'var(--success)' }}>Check your email</div>
             <div style={{ fontSize: '13px', color: 'rgba(255,255,255,0.5)', marginTop: '6px' }}>
               We sent a sign-in link to <strong style={{ color: '#fff' }}>{email}</strong>
@@ -137,8 +137,7 @@ export default function LoginPage() {
         /* Signup done */
         ) : signupDone ? (
           <div style={{ background: 'var(--success-bg)', border: '1px solid var(--success-border)', borderRadius: '14px', padding: '24px', textAlign: 'center' }}>
-            <div style={{ fontSize: '36px', marginBottom: '8px' }}>✅</div>
-            <div style={{ fontWeight: 700, fontSize: '16px', color: 'var(--success)' }}>Request Submitted!</div>
+            <div style={{ fontWeight: 700, fontSize: '16px', color: 'var(--success)' }}>OK — Request Submitted!</div>
             <div style={{ fontSize: '13px', color: 'var(--text-secondary)', marginTop: '8px', lineHeight: '1.6' }}>
               Your request has been sent to an administrator for approval.
               You&apos;ll receive an email once your access has been approved, and then you can sign in.
@@ -169,8 +168,8 @@ export default function LoginPage() {
                 <label style={labelStyle}>Role</label>
                 <div style={{ display: 'flex', gap: '6px' }}>
                   {([
-                    { id: 'installer', label: '🔧 Installer', desc: 'Scan VINs, track time' },
-                    { id: 'admin', label: '👔 Admin', desc: 'Full access' },
+                    { id: 'installer', label: 'Installer', desc: 'Scan VINs, track time' },
+                    { id: 'admin', label: 'Admin', desc: 'Full access' },
                   ]).map((r) => (
                     <button
                       key={r.id}

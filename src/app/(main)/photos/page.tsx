@@ -186,7 +186,7 @@ export default function PhotosPage() {
       {/* Review status banner */}
       {reviewStatus === 'pending' && (
         <div style={{ padding: '10px 14px', borderRadius: '10px', background: 'var(--warning-bg)', border: '1px solid var(--warning-border)', marginBottom: '12px', display: 'flex', alignItems: 'center', gap: '8px' }}>
-          <span style={{ fontSize: '16px' }}>⏳</span>
+          <span style={{ fontSize: '12px', fontWeight: 700 }}>Pending</span>
           <div>
             <div style={{ fontSize: '12px', fontWeight: 700, color: 'var(--warning)' }}>Pending Review</div>
             <div style={{ fontSize: '10px', color: 'var(--text-muted)' }}>Waiting for admin approval</div>
@@ -195,7 +195,7 @@ export default function PhotosPage() {
       )}
       {reviewStatus === 'approved' && (
         <div style={{ padding: '10px 14px', borderRadius: '10px', background: 'var(--success-bg)', border: '1px solid var(--success-border)', marginBottom: '12px', display: 'flex', alignItems: 'center', gap: '8px' }}>
-          <span style={{ fontSize: '16px' }}>✅</span>
+          <span style={{ fontSize: '12px', fontWeight: 700 }}>Approved</span>
           <div>
             <div style={{ fontSize: '12px', fontWeight: 700, color: 'var(--success)' }}>Approved</div>
             {vehicle?.review_notes && <div style={{ fontSize: '10px', color: 'var(--text-muted)' }}>{vehicle.review_notes}</div>}
@@ -205,7 +205,7 @@ export default function PhotosPage() {
       {reviewStatus === 'denied' && (
         <div style={{ padding: '10px 14px', borderRadius: '10px', background: 'var(--error-bg)', border: '1px solid var(--error-border)', marginBottom: '12px' }}>
           <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-            <span style={{ fontSize: '16px' }}>❌</span>
+            <span style={{ fontSize: '12px', fontWeight: 700 }}>Denied</span>
             <div>
               <div style={{ fontSize: '12px', fontWeight: 700, color: 'var(--error)' }}>Needs Rework</div>
               {vehicle?.review_notes && <div style={{ fontSize: '10px', color: 'var(--text-muted)', marginTop: '2px' }}>{vehicle.review_notes}</div>}
@@ -245,7 +245,7 @@ export default function PhotosPage() {
               opacity: uploading ? 0.5 : 1, border: 'none',
             }}
           >
-            {uploading ? 'Uploading...' : '📸 Take Photo'}
+            {uploading ? 'Uploading...' : 'Take Photo'}
           </button>
           <button
             onClick={() => {
@@ -262,14 +262,14 @@ export default function PhotosPage() {
               color: 'var(--text-muted)', fontWeight: 700, fontSize: '14px',
             }}
           >
-            📁
+            Browse
           </button>
         </div>
       )}
 
       {photos.length === 0 && (
         <div style={{ textAlign: 'center', padding: '28px 0', color: 'var(--text-muted)' }}>
-          <div style={{ fontSize: '36px', marginBottom: '6px', opacity: 0.4 }}>📷</div>
+          <div style={{ fontSize: '13px', marginBottom: '6px', opacity: 0.4 }}></div>
           <div style={{ fontWeight: 600, fontSize: '13px' }}>No photos yet — tap to add</div>
         </div>
       )}
@@ -312,7 +312,7 @@ export default function PhotosPage() {
             background: 'var(--warning-bg)', border: '1px solid var(--warning-border)',
             color: 'var(--warning)', fontWeight: 700, fontSize: '13px',
           }}>
-            ⏳ Submitted — waiting for admin review
+            Submitted — waiting for admin review
           </div>
         )}
 
@@ -324,7 +324,7 @@ export default function PhotosPage() {
             color: 'var(--tab-active-color)', fontWeight: 700, fontSize: '13px',
           }}
         >
-          📷 Scan Next VIN
+          Scan Next VIN
         </button>
         <button
           onClick={() => router.back()}

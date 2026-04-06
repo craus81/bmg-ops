@@ -28,21 +28,21 @@ interface Tab {
 // customer:            customer dashboard, settings
 
 const allTabs: Tab[] = [
-  { id: 'home', path: '/home', label: 'Home', icon: '🏠', roles: ['admin', 'installer', 'field_tech', 'shop_tech', 'sales', 'graphics_production'] },
-  { id: 'my-jobs', path: '/my-jobs', label: 'My Jobs', icon: '📋', roles: ['field_tech', 'shop_tech'] },
-  { id: 'installer-portal', path: '/installer', label: 'CNI Jobs', icon: '👷', roles: ['installer'] },
-  { id: 'scan-install', path: '/scan-install', label: 'Scan & Install', icon: '📷', roles: ['admin', 'sales', 'shop_tech'] },
-  { id: 'time', path: '/time', label: 'Time', icon: '⏰', roles: ['admin', 'installer', 'field_tech', 'shop_tech', 'sales', 'graphics_production'] },
-  { id: 'graphics', path: '/graphics', label: 'Graphics Production', icon: '🎨', roles: ['admin', 'graphics_production', 'sales'] },
-  { id: 'fleet', path: '/fleet', label: 'Vehicle Check In', icon: '🚚', roles: ['admin', 'shop_tech', 'sales', 'graphics_production'] },
-  { id: 'tracking', path: '/tracking', label: 'In-Shop', icon: '🏭', roles: ['admin', 'shop_tech'] },
-  { id: 'vehicles', path: '/vehicles', label: 'Vehicles', icon: '🚐', roles: ['admin', 'field_tech'] },
-  { id: 'estimates', path: '/estimates', label: 'Estimates', icon: '📝', roles: ['admin', 'sales', 'graphics_production'] },
-  { id: 'messages', path: '/messages', label: 'Chat', icon: '💬' },
+  { id: 'home', path: '/home', label: 'Home', icon: '', roles: ['admin', 'installer', 'field_tech', 'shop_tech', 'sales', 'graphics_production'] },
+  { id: 'my-jobs', path: '/my-jobs', label: 'My Jobs', icon: '', roles: ['field_tech', 'shop_tech'] },
+  { id: 'installer-portal', path: '/installer', label: 'CNI Jobs', icon: '', roles: ['installer'] },
+  { id: 'scan-install', path: '/scan-install', label: 'Scan & Install', icon: '', roles: ['admin', 'sales', 'shop_tech'] },
+  { id: 'time', path: '/time', label: 'Time', icon: '', roles: ['admin', 'installer', 'field_tech', 'shop_tech', 'sales', 'graphics_production'] },
+  { id: 'graphics', path: '/graphics', label: 'Graphics Production', icon: '', roles: ['admin', 'graphics_production', 'sales'] },
+  { id: 'fleet', path: '/fleet', label: 'Vehicle Check In', icon: '', roles: ['admin', 'shop_tech', 'sales', 'graphics_production'] },
+  { id: 'tracking', path: '/tracking', label: 'In-Shop', icon: '', roles: ['admin', 'shop_tech'] },
+  { id: 'vehicles', path: '/vehicles', label: 'Vehicles', icon: '', roles: ['admin', 'field_tech'] },
+  { id: 'estimates', path: '/estimates', label: 'Estimates', icon: '', roles: ['admin', 'sales', 'graphics_production'] },
+  { id: 'messages', path: '/messages', label: 'Chat', icon: '' },
   { id: 'more', path: '/more', label: 'More', icon: '⋯', roles: ['admin', 'installer', 'field_tech', 'shop_tech', 'sales', 'graphics_production'] },
   // Customer-only tabs
-  { id: 'customer-dashboard', path: '/customer/dashboard', label: 'My Jobs', icon: '📋', roles: ['customer'] },
-  { id: 'customer-settings', path: '/settings', label: 'Settings', icon: '⚙️', roles: ['customer'] },
+  { id: 'customer-dashboard', path: '/customer/dashboard', label: 'My Jobs', icon: '', roles: ['customer'] },
+  { id: 'customer-settings', path: '/settings', label: 'Settings', icon: '', roles: ['customer'] },
 ];
 
 export default function BottomNav({ clockStatus }: BottomNavProps) {
@@ -62,8 +62,8 @@ export default function BottomNav({ clockStatus }: BottomNavProps) {
 
   const getIcon = (tab: Tab) => {
     if (tab.id === 'time') {
-      if (clockStatus === 'in') return '🟢';
-      if (clockStatus === 'break') return '🟡';
+      if (clockStatus === 'in') return '';
+      if (clockStatus === 'break') return '';
     }
     return tab.icon;
   };

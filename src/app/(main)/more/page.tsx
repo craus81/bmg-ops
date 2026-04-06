@@ -41,38 +41,38 @@ export default function MorePage() {
       </div>
       <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
         {(isAdmin || isShopTech) && (
-          <MenuBtn icon="🔄" title="Update Vehicle Status" sub="Scan VIN to update status" onClick={() => router.push('/fleet/update')} />
+          <MenuBtn icon="" title="Update Vehicle Status" sub="Scan VIN to update status" onClick={() => router.push('/fleet/update')} />
         )}
         {(isAdmin || isFieldTech || isShopTech) && (
-          <MenuBtn icon="🔧" title="My Jobs" sub="View your company's work" onClick={() => router.push('/jobs')} />
+          <MenuBtn icon="" title="My Jobs" sub="View your company's work" onClick={() => router.push('/jobs')} />
         )}
         {isAdmin && (
-          <MenuBtn icon="📊" title="Export Reports" sub="Download vehicle spreadsheets" onClick={() => router.push('/reports')} />
+          <MenuBtn icon="" title="Export Reports" sub="Download vehicle spreadsheets" onClick={() => router.push('/reports')} />
         )}
         {/* Sales + Graphics Production + Admin tools */}
         {(isAdmin || isSales || isGraphicsProduction) && (<>
-          <MenuBtn icon="🏢" title="Customers" sub="Customers & contacts from NetSuite" onClick={() => router.push('/admin/customers')} />
-          <MenuBtn icon="🔩" title="Parts Catalog" sub="Upfit & graphic parts from NetSuite" onClick={() => router.push('/parts')} />
-          <MenuBtn icon="💰" title="Estimates" sub="Build estimates & push to NetSuite" onClick={() => router.push('/estimates')} />
-          <MenuBtn icon="📐" title="Estimating" sub="AI-powered vinyl wrap quoting" onClick={() => router.push('/admin/quotes')} />
+          <MenuBtn icon="" title="Customers" sub="Customers & contacts from NetSuite" onClick={() => router.push('/admin/customers')} />
+          <MenuBtn icon="" title="Parts Catalog" sub="Upfit & graphic parts from NetSuite" onClick={() => router.push('/parts')} />
+          <MenuBtn icon="" title="Estimates" sub="Build estimates & push to NetSuite" onClick={() => router.push('/estimates')} />
+          <MenuBtn icon="" title="Estimating" sub="AI-powered vinyl wrap quoting" onClick={() => router.push('/admin/quotes')} />
         </>)}
         {/* Admin-only tools */}
         {isAdmin && (<>
-          <MenuBtn icon="📄" title="Proof Hygiene" sub="Assign unmatched proof files from NAS" onClick={() => router.push('/admin/proofs')} />
-          <MenuBtn icon="📋" title="All Jobs" sub="View all jobs by company" onClick={() => router.push('/admin/jobs')} />
-          <MenuBtn icon="📅" title="Schedule" sub="Assign jobs to installers" onClick={() => router.push('/admin/schedule')} />
-          <MenuBtn icon="📦" title="Part Catalog" sub="Manage part numbers" onClick={() => router.push('/admin/catalog')} />
-          <MenuBtn icon="📤" title="Bulk Upload" sub="Import templates & proofs from ZIP" onClick={() => router.push('/admin/bulk-upload')} />
-          <MenuBtn icon="📋" title="Purchase Orders" sub="Manage POs" onClick={() => router.push('/admin/pos')} />
+          <MenuBtn icon="" title="Proof Hygiene" sub="Assign unmatched proof files from NAS" onClick={() => router.push('/admin/proofs')} />
+          <MenuBtn icon="" title="All Jobs" sub="View all jobs by company" onClick={() => router.push('/admin/jobs')} />
+          <MenuBtn icon="" title="Schedule" sub="Assign jobs to installers" onClick={() => router.push('/admin/schedule')} />
+          <MenuBtn icon="" title="Part Catalog" sub="Manage part numbers" onClick={() => router.push('/admin/catalog')} />
+          <MenuBtn icon="" title="Bulk Upload" sub="Import templates & proofs from ZIP" onClick={() => router.push('/admin/bulk-upload')} />
+          <MenuBtn icon="" title="Purchase Orders" sub="Manage POs" onClick={() => router.push('/admin/pos')} />
           <MenuBtn
-            icon="📸"
+            icon=""
             title="Photo Reviews"
             sub={pendingReviewCount > 0 ? `${pendingReviewCount} waiting for approval` : 'Review completion photos'}
             onClick={() => router.push('/admin/reviews')}
             badge={pendingReviewCount > 0 ? pendingReviewCount : undefined}
           />
           <MenuBtn
-            icon="👥"
+            icon=""
             title="User Management"
             sub={pendingUserCount > 0 ? `${pendingUserCount} pending approval` : 'Manage team access'}
             onClick={() => router.push('/admin/users')}
@@ -80,14 +80,14 @@ export default function MorePage() {
           />
         </>)}
         {isAdmin && (
-          <MenuBtn icon="👷" title="CNI Management" sub="Certified Network Installer jobs & profiles" onClick={() => router.push('/admin/cni')} />
+          <MenuBtn icon="" title="CNI Management" sub="Certified Network Installer jobs & profiles" onClick={() => router.push('/admin/cni')} />
         )}
         {isAdmin && (
-          <MenuBtn icon="📚" title="Knowledge Base" sub="SOPs and docs for AI agent" onClick={() => router.push('/admin/knowledge')} />
+          <MenuBtn icon="" title="Knowledge Base" sub="SOPs and docs for AI agent" onClick={() => router.push('/admin/knowledge')} />
         )}
-        <MenuBtn icon="📝" title="Quick Job (No PO)" sub="Start scanning without a PO" onClick={() => router.push('/scan')} />
-        <MenuBtn icon="📶" title="Offline Scanner" sub="Scan VINs underground — syncs when back online" onClick={() => router.push('/offline-scan')} />
-        <MenuBtn icon="🔔" title="Notification Settings" sub="Configure your alert preferences" onClick={() => router.push('/settings')} />
+        <MenuBtn icon="" title="Quick Job (No PO)" sub="Start scanning without a PO" onClick={() => router.push('/scan')} />
+        <MenuBtn icon="" title="Offline Scanner" sub="Scan VINs underground — syncs when back online" onClick={() => router.push('/offline-scan')} />
+        <MenuBtn icon="" title="Notification Settings" sub="Configure your alert preferences" onClick={() => router.push('/settings')} />
       </div>
 
       {/* Theme Toggle */}
@@ -101,9 +101,9 @@ export default function MorePage() {
           borderRadius: '14px', boxShadow: 'var(--shadow-sm)',
         }}>
           {([
-            { id: 'auto' as const, label: '🔄 Auto' },
-            { id: 'light' as const, label: '☀️ Light' },
-            { id: 'dark' as const, label: '🌙 Dark' },
+            { id: 'auto' as const, label: 'Auto' },
+            { id: 'light' as const, label: 'Light' },
+            { id: 'dark' as const, label: 'Dark' },
           ]).map((opt) => (
             <button
               key={opt.id}

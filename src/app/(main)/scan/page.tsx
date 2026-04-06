@@ -271,7 +271,7 @@ export default function ScanPage() {
             )}
             {notesSaved && (
               <div style={{ marginTop: '8px', fontSize: '12px', color: 'var(--success)', fontWeight: 700, textAlign: 'center' }}>
-                ✅ Notes saved
+                Notes saved
               </div>
             )}
           </div>
@@ -319,7 +319,7 @@ export default function ScanPage() {
               )}
               {assignmentSaved && (
                 <div style={{ marginTop: '8px', fontSize: '12px', color: 'var(--success)', fontWeight: 700, textAlign: 'center' }}>
-                  ✅ Installers assigned & notified
+                  Installers assigned & notified
                 </div>
               )}
             </div>
