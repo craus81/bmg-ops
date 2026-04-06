@@ -358,7 +358,6 @@ export default function AllJobsPage() {
             <>
               {jobsWithoutInvoice.length === 0 ? (
                 <div style={{ textAlign: 'center', padding: '32px 0', color: 'var(--text-muted)' }}>
-                  <div style={{ fontSize: '36px', marginBottom: '6px', opacity: 0.4 }}>✅</div>
                   <div style={{ fontWeight: 600, fontSize: '13px' }}>All approved jobs have vendor invoices</div>
                 </div>
               ) : (
@@ -387,7 +386,7 @@ export default function AllJobsPage() {
             </>
           )}
 
-          {invoiceFilter !== 'no_invoice' && filteredInvoices.length === 0 && <div style={{ textAlign: 'center', padding: '32px 0', color: 'var(--text-muted)' }}><div style={{ fontSize: '36px', marginBottom: '6px', opacity: 0.4 }}>{invoiceFilter === 'pending' ? '✅' : '💰'}</div><div style={{ fontWeight: 600, fontSize: '13px' }}>{invoiceFilter === 'pending' ? 'No pending payments — all caught up!' : `No ${invoiceFilter} payments`}</div></div>}
+          {invoiceFilter !== 'no_invoice' && filteredInvoices.length === 0 && <div style={{ textAlign: 'center', padding: '32px 0', color: 'var(--text-muted)' }}><div style={{ fontWeight: 600, fontSize: '13px' }}>{invoiceFilter === 'pending' ? 'No pending payments — all caught up!' : `No ${invoiceFilter} payments`}</div></div>}
           {invoiceFilter !== 'no_invoice' && <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
             {filteredInvoices.map((inv) => {
               const isExpanded = expandedInvoice === inv.id;
@@ -404,7 +403,7 @@ export default function AllJobsPage() {
                     <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'start' }}>
                       <div>
                         <div style={{ fontWeight: 800, fontSize: '15px' }}>Bill #{inv.invoice_number}</div>
-                        <div style={{ fontSize: '12px', color: 'var(--text-muted)', marginTop: '2px' }}>🏢 {inv.company_name} • {inv.submitter_name}</div>
+                        <div style={{ fontSize: '12px', color: 'var(--text-muted)', marginTop: '2px' }}>{inv.company_name} • {inv.submitter_name}</div>
                         <div style={{ fontSize: '11px', color: 'var(--text-muted)', marginTop: '2px' }}>{inv.vehicles.length} vehicle{inv.vehicles.length !== 1 ? 's' : ''}{inv.file_name ? ` • 📎 ${inv.file_name}` : ''}</div>
                       </div>
                       <div style={{ textAlign: 'right' }}>
