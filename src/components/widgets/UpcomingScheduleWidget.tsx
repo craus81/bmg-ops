@@ -17,7 +17,7 @@ export default function UpcomingScheduleWidget() {
   const load = async () => {
     const now = new Date();
     const weekOut = new Date(now);
-    weekOut.setDate(weekOut.getDate() + 7);
+    weekOut.setDate(weekOut.getDate() + 14);
 
     const { data } = await supabase
       .from('schedule_entries')
@@ -44,7 +44,7 @@ export default function UpcomingScheduleWidget() {
     <WidgetShell title="Upcoming Schedule" icon="" loading={loading} onHeaderClick={() => router.push('/admin/schedule')}>
       {entries.length === 0 ? (
         <div style={{ textAlign: 'center', color: theme.textMuted, fontSize: '12px', padding: '16px 0' }}>
-          Nothing scheduled in the next 7 days
+          Nothing scheduled in the next 14 days
         </div>
       ) : (
         <div style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
