@@ -57,9 +57,14 @@ export default function MorePage() {
           <MenuBtn icon="" title="Estimating" sub="AI-powered vinyl wrap quoting" onClick={() => router.push('/admin/quotes')} />
         </>)}
         {/* Admin-only tools */}
+        {isAdmin && (
+          <MenuBtn icon="" title="Scan & Install" sub="Scan VINs and assign parts" onClick={() => router.push('/scan-install')} />
+        )}
         {isAdmin && (<>
           <MenuBtn icon="" title="Proof Hygiene" sub="Assign unmatched proof files from NAS" onClick={() => router.push('/admin/proofs')} />
           <MenuBtn icon="" title="All Jobs" sub="View all jobs by company" onClick={() => router.push('/admin/jobs')} />
+          <MenuBtn icon="" title="Vendor Payments" sub="Manage installer invoices & payments" onClick={() => router.push('/admin/jobs?tab=invoices')} />
+          <MenuBtn icon="" title="Bulk VIN Upload" sub="Upload VINs in bulk via spreadsheet" onClick={() => router.push('/admin/jobs?tab=bulk')} />
           <MenuBtn icon="" title="Schedule" sub="Assign jobs to installers" onClick={() => router.push('/admin/schedule')} />
           <MenuBtn icon="" title="Part Catalog" sub="Manage part numbers" onClick={() => router.push('/admin/catalog')} />
           <MenuBtn icon="" title="Bulk Upload" sub="Import templates & proofs from ZIP" onClick={() => router.push('/admin/bulk-upload')} />

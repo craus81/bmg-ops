@@ -31,14 +31,13 @@ const allTabs: Tab[] = [
   { id: 'home', path: '/home', label: 'Home', icon: '', roles: ['admin', 'installer', 'field_tech', 'shop_tech', 'sales', 'graphics_production'] },
   { id: 'my-jobs', path: '/my-jobs', label: 'My Jobs', icon: '', roles: ['field_tech', 'shop_tech'] },
   { id: 'installer-portal', path: '/installer', label: 'CNI Jobs', icon: '', roles: ['installer'] },
-  { id: 'scan-install', path: '/scan-install', label: 'Scan & Install', icon: '', roles: ['admin', 'sales', 'shop_tech'] },
+  { id: 'scan-install', path: '/scan-install', label: 'Scan & Install', icon: '', roles: ['sales', 'shop_tech'] },
   { id: 'time', path: '/time', label: 'Time', icon: '', roles: ['admin', 'installer', 'field_tech', 'shop_tech', 'sales', 'graphics_production'] },
-  { id: 'graphics', path: '/graphics', label: 'Graphics Production', icon: '', roles: ['admin', 'graphics_production', 'sales'] },
-  { id: 'fleet', path: '/fleet', label: 'Vehicle Check In', icon: '', roles: ['admin', 'shop_tech', 'sales', 'graphics_production'] },
+  { id: 'graphics', path: '/graphics', label: 'Graphics', icon: '', roles: ['admin', 'graphics_production', 'sales'] },
+  { id: 'fleet', path: '/fleet', label: 'Check In', icon: '', roles: ['admin', 'shop_tech', 'sales', 'graphics_production'] },
   { id: 'tracking', path: '/tracking', label: 'In-Shop', icon: '', roles: ['admin', 'shop_tech'] },
   { id: 'vehicles', path: '/vehicles', label: 'Vehicles', icon: '', roles: ['admin', 'field_tech'] },
   { id: 'estimates', path: '/estimates', label: 'Estimates', icon: '', roles: ['admin', 'sales', 'graphics_production'] },
-  { id: 'messages', path: '/messages', label: 'Chat', icon: '' },
   { id: 'more', path: '/more', label: 'More', icon: '⋯', roles: ['admin', 'installer', 'field_tech', 'shop_tech', 'sales', 'graphics_production'] },
   // Customer-only tabs
   { id: 'customer-dashboard', path: '/customer/dashboard', label: 'My Jobs', icon: '', roles: ['customer'] },
@@ -87,6 +86,7 @@ export default function BottomNav({ clockStatus }: BottomNavProps) {
       background: theme.navBg,
       borderTop: `1px solid ${theme.border}`,
       display: 'flex', zIndex: 100,
+      padding: '0 12px',
       paddingBottom: 'env(safe-area-inset-bottom, 0px)',
     }}>
       {tabs.map((tab) => {

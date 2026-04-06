@@ -1,7 +1,7 @@
 'use client';
 
 import { useState, useEffect, useRef } from 'react';
-import { useRouter } from 'next/navigation';
+import { useRouter, useSearchParams } from 'next/navigation';
 import { createClient } from '@/lib/supabase-browser';
 import { storage } from '@/lib/storage';
 import { useAuth } from '@/components/AuthProvider';
@@ -57,7 +57,9 @@ export default function AllJobsPage() {
   const router = useRouter();
   const { isAdmin, user } = useAuth();
   const supabase = createClient();
-  const [tab, setTab] = useState<'jobs' | 'invoices' | 'bulk'>('jobs');
+  const searchParams = useSearchParams();
+  const initialTab = (['jobs', 'invoices', 'bulk'] as const).includes(searchParams.get('tab') as any) ? searchParams.get('tab') as 'jobs' | 'invoices' | 'bulk' : 'jobs';
+  const [tab, setTab] = useState<'jobs' | 'invoices' | 'bulk'>(initialTab);
   const [jobs, setJobs] = useState<Job[]>([]);
   const [companies, setCompanies] = useState<Company[]>([]);
   const [loading, setLoading] = useState(true);
@@ -404,10 +406,10 @@ export default function AllJobsPage() {
                       <div>
                         <div style={{ fontWeight: 800, fontSize: '15px' }}>Bill #{inv.invoice_number}</div>
                         <div style={{ fontSize: '12px', color: 'var(--text-muted)', marginTop: '2px' }}>{inv.company_name} • {inv.submitter_name}</div>
-                        <div style={{ fontSize: '11px', color: 'var(--text-muted)', marginTop: '2px' }}>{inv.vehicles.length} vehicle{inv.vehicles.length !== 1 ? 's' : ''}{inv.file_name ? ` • 📎 ${inv.file_name}` : ''}</div>
+                        <div style={{ fontSize: '11px', color: 'var(--text-muted)', marginTop: '2px' }}>{inv.vehicles.length} vehicle{inv.vehicles.length !== 1 ? 's' : ''}{inv.file_name ? ` • ${inv.file_name}` : ''}</div>
                       </div>
                       <div style={{ textAlign: 'right' }}>
-                        <span style={{ padding: '3px 8px', borderRadius: '6px', fontSize: '10px', fontWeight: 700, background: statusBg, border: `1px solid ${statusBorder}`, color: statusColor }}>{isPending ? '⏳ Pending' : isPaid ? '💵 Paid' : isApproved ? '✅ Approved' : '❌ Denied'}</span>
+                        <span style={{ padding: '3px 8px', borderRadius: '6px', fontSize: '10px', fontWeight: 700, background: statusBg, border: `1px solid ${statusBorder}`, color: statusColor }}>{isPending ? 'Pending' : isPaid ? 'Paid' : isApproved ? 'Approved' : 'Denied'}</span>
                         <div style={{ fontSize: '10px', color: 'var(--text-muted)', marginTop: '4px' }}>{new Date(inv.submitted_at).toLocaleDateString([], { month: 'short', day: 'numeric' })}</div>
                       </div>
                     </div>
@@ -415,7 +417,7 @@ export default function AllJobsPage() {
                   {isExpanded && (
                     <div style={{ borderTop: '1px solid var(--border)', padding: '14px' }}>
                       {inv.file_url && (
-                        <button onClick={() => setViewingFile(inv.file_url!)} style={{ width: '100%', padding: '12px', borderRadius: '10px', marginBottom: '10px', border: '1px solid var(--border)', background: 'var(--subtle-bg)', color: 'var(--text-primary)', fontSize: '13px', fontWeight: 700, display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '8px' }}>📄 View Invoice File</button>
+                        <button onClick={() => setViewingFile(inv.file_url!)} style={{ width: '100%', padding: '12px', borderRadius: '10px', marginBottom: '10px', border: '1px solid var(--border)', background: 'var(--subtle-bg)', color: 'var(--text-primary)', fontSize: '13px', fontWeight: 700, display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '8px' }}>View Invoice File</button>
                       )}
                       <div style={{ marginBottom: '12px' }}>
                         <div style={{ fontSize: '10px', fontWeight: 700, color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.5px', marginBottom: '6px' }}>Vehicles ({inv.vehicles.length})</div>
@@ -478,7 +480,7 @@ export default function AllJobsPage() {
                                 width: '100%', padding: '12px', borderRadius: '10px', marginBottom: '6px',
                                 background: 'var(--success)', color: '#fff', fontWeight: 800, fontSize: '14px', border: 'none',
                                 opacity: savingPayment || !payDate || !payAmount || !payMethod ? 0.4 : 1,
-                              }}>{savingPayment ? 'Saving...' : '💵 Mark as Paid'}</button>
+                              }}>{savingPayment ? 'Saving...' : 'Mark as Paid'}</button>
                               <button onClick={() => { setPayingInvoice(null); setPayDate(''); setPayAmount(''); setPayMethod(''); setPayNotes(''); }} style={{
                                 width: '100%', padding: '8px', borderRadius: '8px', border: '1px solid var(--border)',
                                 background: 'transparent', color: 'var(--text-muted)', fontSize: '12px', fontWeight: 700,
@@ -488,7 +490,7 @@ export default function AllJobsPage() {
                             <button onClick={() => { setPayingInvoice(inv.id); setPayDate(new Date().toISOString().split('T')[0]); }} style={{
                               width: '100%', padding: '12px', borderRadius: '10px',
                               background: 'var(--navy)', color: '#fff', fontWeight: 800, fontSize: '14px', border: 'none',
-                            }}>💵 Mark as Paid</button>
+                            }}>Mark as Paid</button>
                           )}
                         </div>
                       )}
@@ -1393,7 +1395,7 @@ function BulkVINUpload() {
                 <div style={{ padding: '10px 12px', borderRadius: '10px', border: `1px solid ${r.success ? 'var(--success-border)' : 'var(--error-border)'}`, background: r.success ? 'var(--success-bg)' : 'var(--error-bg)' }}>
                   <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
                     <div>
-                      <span style={{ fontSize: '12px', fontWeight: 700, color: 'var(--text-primary)' }}>{r.success ? '✅' : '❌'} {r.vehicleTitle || r.vin}</span>
+                      <span style={{ fontSize: '12px', fontWeight: 700, color: 'var(--text-primary)' }}>{r.success ? '✓' : '✕'} {r.vehicleTitle || r.vin}</span>
                       <div style={{ fontSize: '10px', color: 'var(--text-muted)', fontFamily: 'monospace' }}>{r.vin}</div>
                     </div>
                     {r.poMatch && <span style={{ fontSize: '10px', fontWeight: 700, color: 'var(--warning)', background: 'var(--warning-bg)', padding: '2px 6px', borderRadius: '4px' }}>{r.poMatch}</span>}
@@ -1428,7 +1430,7 @@ function BulkVINUpload() {
           <div style={{ maxHeight: '200px', overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: '2px' }}>
             {results.slice(-5).map((r, i) => (
               <div key={i} style={{ fontSize: '11px', color: r.success ? 'var(--success)' : 'var(--error)', padding: '4px 8px' }}>
-                {r.success ? '✅' : '❌'} {r.vin} — {r.success ? r.vehicleTitle : r.error}
+                {r.success ? '✓' : '✕'} {r.vin} — {r.success ? r.vehicleTitle : r.error}
               </div>
             ))}
           </div>
@@ -1582,7 +1584,7 @@ function BulkVINUpload() {
             onClick={() => fileInputRef.current?.click()}
             style={{ width: '100%', padding: '24px', borderRadius: '12px', border: '2px dashed var(--border)', background: 'var(--card)', color: 'var(--text-muted)', fontSize: '14px', fontWeight: 700, cursor: 'pointer', textAlign: 'center' }}
           >
-            {fileName ? `📄 ${fileName}` : '📁 Choose .csv, .xlsx, or .txt file'}
+            {fileName ? fileName : 'Choose .csv, .xlsx, or .txt file'}
           </button>
           <div style={{ fontSize: '10px', color: 'var(--text-muted)', marginTop: '6px', textAlign: 'center' }}>
             Supports CSV, Excel, and text files. Optionally include a &quot;part_number&quot; column for per-VIN part assignment.
@@ -1599,7 +1601,7 @@ function BulkVINUpload() {
           />
           {scanningWorksheet ? (
             <div style={{ width: '100%', padding: '32px', borderRadius: '12px', border: '2px dashed var(--border)', background: 'var(--card)', textAlign: 'center' }}>
-              <div style={{ fontSize: '28px', marginBottom: '8px' }}>🔍</div>
+              <div style={{ fontSize: '14px', fontWeight: 700, marginBottom: '8px', color: 'var(--text-muted)' }}>Scanning</div>
               <div style={{ fontSize: '14px', fontWeight: 700, color: 'var(--text-primary)' }}>Scanning worksheet...</div>
               <div style={{ fontSize: '12px', color: 'var(--text-muted)', marginTop: '4px' }}>{scanProgress || 'AI is reading the handwritten data'}</div>
             </div>
@@ -1608,7 +1610,7 @@ function BulkVINUpload() {
               onClick={() => worksheetInputRef.current?.click()}
               style={{ width: '100%', padding: '24px', borderRadius: '12px', border: '2px dashed var(--border)', background: 'var(--card)', color: 'var(--text-muted)', fontSize: '14px', fontWeight: 700, cursor: 'pointer', textAlign: 'center' }}
             >
-              {fileName ? `📄 ${fileName}` : '📷 Upload worksheet photo or PDF'}
+              {fileName ? fileName : 'Upload worksheet photo or PDF'}
             </button>
           )}
           <div style={{ fontSize: '10px', color: 'var(--text-muted)', marginTop: '6px', textAlign: 'center' }}>
@@ -1779,7 +1781,7 @@ function BulkVINUpload() {
                   );
                 })()}
                 <div style={{ display: 'flex', alignItems: 'center', gap: '6px', padding: '8px 10px', borderRadius: '8px', border: `1px solid ${borderColor}`, background: bgColor }}>
-                  <span style={{ fontSize: '14px', width: '20px', textAlign: 'center', flexShrink: 0 }}>{!pv.valid ? '❌' : skipped ? '⏭️' : '✅'}</span>
+                  <span style={{ fontSize: '14px', width: '20px', textAlign: 'center', flexShrink: 0 }}>{!pv.valid ? '✕' : skipped ? '—' : '✓'}</span>
                   <div style={{ flex: 1, minWidth: 0 }}>
                     {/* VIN — editable */}
                     {isEditingVin ? (
