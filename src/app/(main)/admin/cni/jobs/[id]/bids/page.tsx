@@ -275,7 +275,7 @@ export default function BidReviewPage() {
                     }}>
                       <div style={{ fontSize: '11px', color: 'var(--text-muted)', fontWeight: 600 }}>Proposed Schedule</div>
                       <div style={{ fontSize: '13px', fontWeight: 600, color: 'var(--text-primary)', marginTop: '2px' }}>
-                        📅 {new Date(bid.proposed_start).toLocaleDateString()}
+                        {new Date(bid.proposed_start).toLocaleDateString()}
                         {bid.proposed_end && bid.proposed_end !== bid.proposed_start
                           ? ` — ${new Date(bid.proposed_end).toLocaleDateString()}`
                           : ''}

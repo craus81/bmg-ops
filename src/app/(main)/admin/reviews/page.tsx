@@ -101,7 +101,7 @@ export default function ReviewsPage() {
         .insert({
           user_id: vehicle.scanned_by,
           type: 'review_approved',
-          title: 'Photos Approved ✅',
+          title: 'Photos Approved',
           body: `Your photos for ${vehicleTitle(vehicle)} have been approved.`,
           vehicle_id: vehicleId,
         });
@@ -167,7 +167,7 @@ export default function ReviewsPage() {
         .insert({
           user_id: vehicle.scanned_by,
           type: 'review_denied',
-          title: 'Photos Need Rework ❌',
+          title: 'Photos Need Rework',
           body: `${vehicleTitle(vehicle)}: ${denyNotes.trim()}`,
           vehicle_id: vehicleId,
         });
@@ -269,9 +269,6 @@ export default function ReviewsPage() {
 
       {filtered.length === 0 && (
         <div style={{ textAlign: 'center', padding: '32px 0', color: 'var(--text-muted)' }}>
-          <div style={{ fontSize: '36px', marginBottom: '6px', opacity: 0.4 }}>
-            {filter === 'pending' ? '✅' : '📷'}
-          </div>
           <div style={{ fontWeight: 600, fontSize: '13px' }}>
             {filter === 'pending' ? 'No pending reviews — all caught up!' : `No ${filter} reviews`}
           </div>
@@ -311,7 +308,7 @@ export default function ReviewsPage() {
                       padding: '3px 8px', borderRadius: '6px', fontSize: '10px', fontWeight: 700,
                       background: statusBg, border: `1px solid ${statusBorder}`, color: statusColor,
                     }}>
-                      {isPending ? '⏳ Pending' : isApproved ? '✅ Approved' : '❌ Denied'}
+                      {isPending ? 'Pending' : isApproved ? 'Approved' : 'Denied'}
                     </span>
                     {v.submitted_at && (
                       <div style={{ fontSize: '10px', color: 'var(--text-muted)', marginTop: '4px' }}>

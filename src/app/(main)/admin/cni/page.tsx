@@ -173,17 +173,17 @@ export default function CniDashboardPage() {
           <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
             {pendingPhotos > 0 && (
               <div style={{ fontSize: '13px', color: 'var(--text-primary)' }}>
-                📷 <strong>{pendingPhotos}</strong> photo{pendingPhotos !== 1 ? 's' : ''} awaiting review
+                <strong>{pendingPhotos}</strong> photo{pendingPhotos !== 1 ? 's' : ''} awaiting review
               </div>
             )}
             {pendingInvoices > 0 && (
               <div style={{ fontSize: '13px', color: 'var(--text-primary)' }}>
-                📄 <strong>{pendingInvoices}</strong> job{pendingInvoices !== 1 ? 's' : ''} pending completion review
+                <strong>{pendingInvoices}</strong> job{pendingInvoices !== 1 ? 's' : ''} pending completion review
               </div>
             )}
             {biddingJobs > 0 && (
               <div style={{ fontSize: '13px', color: 'var(--text-primary)' }}>
-                📊 <strong>{biddingJobs}</strong> job{biddingJobs !== 1 ? 's' : ''} with open bidding
+                <strong>{biddingJobs}</strong> job{biddingJobs !== 1 ? 's' : ''} with open bidding
               </div>
             )}
           </div>
@@ -192,8 +192,8 @@ export default function CniDashboardPage() {
 
       {/* Quick Links */}
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(2, 1fr)', gap: '10px', marginBottom: '20px' }}>
-        <QuickLink icon="📋" label="All Jobs" sub={`${jobs.length} total`} onClick={() => router.push('/admin/cni/jobs')} />
-        <QuickLink icon="👷" label="Installers" sub={`${installerCount} registered`} onClick={() => router.push('/admin/cni/installers')} />
+        <QuickLink icon="" label="All Jobs" sub={`${jobs.length} total`} onClick={() => router.push('/admin/cni/jobs')} />
+        <QuickLink icon="" label="Installers" sub={`${installerCount} registered`} onClick={() => router.push('/admin/cni/installers')} />
       </div>
 
       {/* Filter Tabs */}
@@ -264,10 +264,10 @@ export default function CniDashboardPage() {
                 </span>
               </div>
               <div style={{ display: 'flex', gap: '12px', marginTop: '8px', fontSize: '11px', color: 'var(--text-muted)' }}>
-                {job.installer_name && <span>👷 {job.installer_name}</span>}
+                {job.installer_name && <span>{job.installer_name}</span>}
                 {job.deadline && (
                   <span style={{ color: new Date(job.deadline) < new Date() && job.status !== 'approved_closed' ? 'var(--error)' : 'var(--text-muted)' }}>
-                    📅 {new Date(job.deadline).toLocaleDateString()}
+                    {new Date(job.deadline).toLocaleDateString()}
                   </span>
                 )}
               </div>
@@ -300,7 +300,7 @@ function QuickLink({ icon, label, sub, onClick }: { icon: string; label: string;
       background: 'var(--card)', border: '1px solid var(--border)',
       boxShadow: 'var(--shadow-sm)', width: '100%',
     }}>
-      <div style={{ fontSize: '20px' }}>{icon}</div>
+      {icon && <div style={{ fontSize: '20px' }}>{icon}</div>}
       <div>
         <div style={{ fontSize: '13px', fontWeight: 700, color: 'var(--text-primary)' }}>{label}</div>
         <div style={{ fontSize: '11px', color: 'var(--text-muted)' }}>{sub}</div>

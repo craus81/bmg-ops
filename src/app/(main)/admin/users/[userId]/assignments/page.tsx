@@ -162,7 +162,7 @@ export default function AssignmentsPage() {
             }}>
               <div style={{ flex: 1, minWidth: 0 }}>
                 <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
-                  <span style={{ fontSize: '14px' }}>{a.job_type === 'scanned_vehicle' ? '🔧' : '🎨'}</span>
+                  <span style={{ fontSize: '12px', fontWeight: 700, color: 'var(--text-muted)' }}>{a.job_type === 'scanned_vehicle' ? 'VEH' : 'GFX'}</span>
                   <div style={{ fontSize: '13px', fontWeight: 700, color: 'var(--text-primary)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
                     {a.jobLabel}
                   </div>
@@ -206,7 +206,7 @@ export default function AssignmentsPage() {
             color: addingType === 'scanned_vehicle' ? 'var(--text-primary)' : 'var(--text-muted)',
           }}
         >
-          🔧 Vehicles ({vehicles.filter(v => !assignedIds.has(v.id)).length})
+          Vehicles ({vehicles.filter(v => !assignedIds.has(v.id)).length})
         </button>
         <button
           onClick={() => { setAddingType('graphics_job'); setSearch(''); }}
@@ -217,7 +217,7 @@ export default function AssignmentsPage() {
             color: addingType === 'graphics_job' ? 'var(--text-primary)' : 'var(--text-muted)',
           }}
         >
-          🎨 Graphics ({graphicsJobs.filter(g => !assignedIds.has(g.id)).length})
+          Graphics ({graphicsJobs.filter(g => !assignedIds.has(g.id)).length})
         </button>
       </div>
 

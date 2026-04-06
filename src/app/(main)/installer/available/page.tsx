@@ -169,7 +169,7 @@ export default function AvailableJobsPage() {
           padding: '40px 20px', textAlign: 'center', borderRadius: '14px',
           background: 'var(--card)', border: '1px solid var(--border)',
         }}>
-          <div style={{ fontSize: '24px', marginBottom: '8px' }}>{tab === 'invites' ? '📬' : '📋'}</div>
+          <div style={{ fontSize: '14px', fontWeight: 700, color: 'var(--text-muted)', marginBottom: '8px' }}>--</div>
           <div style={{ fontSize: '14px', fontWeight: 600, color: 'var(--text-muted)' }}>
             {tab === 'invites' ? 'No job invites right now' : 'No open jobs on the board'}
           </div>
@@ -246,10 +246,10 @@ function JobCard({ job, onTap }: { job: AvailableJob; onTap: () => void }) {
 
       {/* Meta row */}
       <div style={{ display: 'flex', gap: '12px', marginTop: '10px', fontSize: '11px', color: 'var(--text-muted)' }}>
-        {addr.city && <span>📍 {addr.city}, {addr.state || ''}</span>}
-        {job.budget && <span>💰 ${Number(job.budget).toLocaleString()}</span>}
-        {job.vin_count > 0 && <span>🚐 {job.vin_count} vehicle{job.vin_count !== 1 ? 's' : ''}</span>}
-        {job.deadline && <span>📅 {new Date(job.deadline).toLocaleDateString()}</span>}
+        {addr.city && <span>{addr.city}, {addr.state || ''}</span>}
+        {job.budget && <span>${Number(job.budget).toLocaleString()}</span>}
+        {job.vin_count > 0 && <span>{job.vin_count} vehicle{job.vin_count !== 1 ? 's' : ''}</span>}
+        {job.deadline && <span>{new Date(job.deadline).toLocaleDateString()}</span>}
       </div>
     </button>
   );

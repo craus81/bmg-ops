@@ -943,7 +943,7 @@ export default function EstimatesPage() {
               opacity: (pushing || syncing) ? 0.5 : 1,
             }}
           >
-            {pushing ? 'Pushing to NetSuite...' : syncing ? 'Syncing to NetSuite...' : isPushed ? '🔄 Sync Changes to NetSuite' : '🚀 Push to NetSuite as Estimate'}
+            {pushing ? 'Pushing to NetSuite...' : syncing ? 'Syncing to NetSuite...' : isPushed ? 'Sync Changes to NetSuite' : 'Push to NetSuite as Estimate'}
           </button>
         )}
 

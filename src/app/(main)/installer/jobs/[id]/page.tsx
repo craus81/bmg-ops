@@ -201,7 +201,7 @@ export default function InstallerJobDetailPage() {
             Your Schedule Has Been Approved
           </div>
           <div style={{ fontSize: '13px', color: 'var(--text-primary)', marginBottom: '12px' }}>
-            📅 {job.proposed_schedule_start ? new Date(job.proposed_schedule_start).toLocaleDateString() : ''}
+            {job.proposed_schedule_start ? new Date(job.proposed_schedule_start).toLocaleDateString() : ''}
             {job.proposed_schedule_end && job.proposed_schedule_end !== job.proposed_schedule_start
               ? ` — ${new Date(job.proposed_schedule_end).toLocaleDateString()}`
               : ''}
@@ -224,7 +224,7 @@ export default function InstallerJobDetailPage() {
         <div style={sectionStyle}>
           <div style={{ fontSize: '12px', fontWeight: 700, color: 'var(--text-muted)', marginBottom: '6px' }}>CONFIRMED SCHEDULE</div>
           <div style={{ fontSize: '14px', fontWeight: 700, color: 'var(--success)' }}>
-            📅 {new Date(job.confirmed_schedule_start).toLocaleDateString()}
+            {new Date(job.confirmed_schedule_start).toLocaleDateString()}
             {job.confirmed_schedule_end && job.confirmed_schedule_end !== job.confirmed_schedule_start
               ? ` — ${new Date(job.confirmed_schedule_end).toLocaleDateString()}`
               : ''}
@@ -281,10 +281,10 @@ export default function InstallerJobDetailPage() {
           <div style={{ fontSize: '12px', fontWeight: 700, color: 'var(--text-muted)', marginBottom: '6px' }}>MATERIALS</div>
           <div style={{ fontSize: '13px', color: 'var(--text-primary)' }}>
             {job.material_delivered
-              ? '✅ Materials delivered'
+              ? 'Materials delivered'
               : job.tracking_number
-                ? `📦 In transit — ${job.carrier || ''} ${job.tracking_number}`
-                : '⏳ Awaiting shipment'}
+                ? `In transit — ${job.carrier || ''} ${job.tracking_number}`
+                : 'Awaiting shipment'}
           </div>
           {(shipAddr.street || shipAddr.city) && (
             <div style={{ fontSize: '12px', color: 'var(--text-muted)', marginTop: '4px' }}>
@@ -325,7 +325,7 @@ export default function InstallerJobDetailPage() {
               background: 'var(--card)', border: '1px solid var(--border)',
             }}
           >
-            <div style={{ fontSize: '20px', marginBottom: '4px' }}>📷</div>
+            <div style={{ fontSize: '12px', fontWeight: 700, color: 'var(--text-muted)', marginBottom: '4px' }}>Photos</div>
             <div style={{ fontSize: '12px', fontWeight: 700, color: 'var(--text-primary)' }}>Photos</div>
             <div style={{ fontSize: '11px', color: 'var(--text-muted)' }}>{photoCount} uploaded</div>
           </button>
@@ -339,7 +339,7 @@ export default function InstallerJobDetailPage() {
               border: unreadMsgCount > 0 ? '1px solid var(--orange)' : '1px solid var(--border)',
             }}
           >
-            <div style={{ fontSize: '20px', marginBottom: '4px' }}>💬</div>
+            <div style={{ fontSize: '12px', fontWeight: 700, color: 'var(--text-muted)', marginBottom: '4px' }}>Msgs</div>
             <div style={{ fontSize: '12px', fontWeight: 700, color: 'var(--text-primary)' }}>Messages</div>
             {unreadMsgCount > 0 && (
               <div style={{ fontSize: '11px', fontWeight: 700, color: 'var(--orange)' }}>{unreadMsgCount} new</div>
@@ -403,7 +403,7 @@ export default function InstallerJobDetailPage() {
                   background: 'var(--orange)', color: '#fff', border: 'none',
                 }}
               >
-                📄 Upload Invoice
+                Upload Invoice
               </button>
             ) : (
               <div style={{ fontSize: '13px', color: 'var(--text-muted)' }}>
@@ -414,9 +414,9 @@ export default function InstallerJobDetailPage() {
         ) : (
           <>
             <div style={{ fontSize: '14px', fontWeight: 700, color: 'var(--text-primary)', marginBottom: '6px' }}>
-              {job.invoice_status === 'submitted' ? '📄 Submitted — Under Review' :
-               job.invoice_status === 'approved' ? '✅ Approved — Bill Pending' :
-               job.invoice_status === 'billed_in_netsuite' ? '💰 Billed in NetSuite' :
+              {job.invoice_status === 'submitted' ? 'Submitted — Under Review' :
+               job.invoice_status === 'approved' ? 'Approved — Bill Pending' :
+               job.invoice_status === 'billed_in_netsuite' ? 'Billed in NetSuite' :
                job.invoice_status}
             </div>
             {job.netsuite_bill_id && (

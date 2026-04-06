@@ -247,7 +247,7 @@ export default function CustomerDashboard() {
                       </div>
                       <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
                         {job.customer_approved && (
-                          <span style={{ fontSize: '14px' }} title="Customer Approved">✅</span>
+                          <span style={{ fontSize: '12px', fontWeight: 700, color: 'var(--success)' }} title="Customer Approved">Approved</span>
                         )}
                         <span style={{
                           padding: '3px 8px', borderRadius: '6px', fontSize: '10px', fontWeight: 700,
@@ -285,7 +285,7 @@ export default function CustomerDashboard() {
                           background: 'rgba(16,185,129,0.05)', border: '1px solid rgba(16,185,129,0.15)',
                           fontSize: '11px', color: '#34d399', fontWeight: 700,
                         }}>
-                          ✅ Approved {job.customer_approved_at ? `on ${new Date(job.customer_approved_at).toLocaleDateString()}` : ''}
+                          Approved {job.customer_approved_at ? `on ${new Date(job.customer_approved_at).toLocaleDateString()}` : ''}
                         </div>
                       )}
                     </div>
@@ -302,7 +302,7 @@ export default function CustomerDashboard() {
         <div>
           {tab === 'all' && (
             <div style={{ fontSize: '11px', fontWeight: 700, color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.5px', marginBottom: '8px' }}>
-              🎨 Graphics Install ({graphicsJobs.length})
+              Graphics Install ({graphicsJobs.length})
             </div>
           )}
           <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
@@ -331,7 +331,7 @@ export default function CustomerDashboard() {
                       </div>
                       <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
                         {job.customer_approved && (
-                          <span style={{ fontSize: '14px' }} title="Customer Approved">✅</span>
+                          <span style={{ fontSize: '12px', fontWeight: 700, color: 'var(--success)' }} title="Customer Approved">Approved</span>
                         )}
                         <span style={{
                           padding: '3px 8px', borderRadius: '6px', fontSize: '10px', fontWeight: 700,
@@ -370,7 +370,7 @@ export default function CustomerDashboard() {
                           background: 'rgba(16,185,129,0.05)', border: '1px solid rgba(16,185,129,0.15)',
                           fontSize: '11px', color: '#34d399', fontWeight: 700,
                         }}>
-                          ✅ Approved {job.customer_approved_at ? `on ${new Date(job.customer_approved_at).toLocaleDateString()}` : ''}
+                          Approved {job.customer_approved_at ? `on ${new Date(job.customer_approved_at).toLocaleDateString()}` : ''}
                         </div>
                       )}
                     </div>

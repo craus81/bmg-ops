@@ -1049,7 +1049,7 @@ export default function TrackingPage() {
                                       <div style={{ flex: 1, minWidth: 0 }}>
                                         <div style={{ fontSize: '12px', fontWeight: 700, color: 'var(--text-primary)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{file.name}</div>
                                         <div style={{ fontSize: '10px', color: 'var(--text-muted)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-                                          {file.folder ? `📁 ${file.folder}` : file.path} · {(file.size / 1024).toFixed(0)} KB
+                                          {file.folder ? file.folder : file.path} · {(file.size / 1024).toFixed(0)} KB
                                         </div>
                                       </div>
                                       <span style={{ fontSize: '10px', color: '#0061fe', fontWeight: 700, flexShrink: 0 }}>{dbxCopying ? 'Copying...' : 'Use This'}</span>
@@ -1074,7 +1074,7 @@ export default function TrackingPage() {
                             }
                           }}
                           style={{ width: '100%', padding: '10px', borderRadius: '8px', fontSize: '12px', fontWeight: 700, background: 'rgba(0,97,254,0.08)', border: '1px dashed rgba(0,97,254,0.3)', color: '#0061fe', cursor: 'pointer' }}
-                        >📁 Find Proof in Dropbox</button>
+                        >Find Proof in Dropbox</button>
                       )}
                     </div>
 
@@ -1104,7 +1104,7 @@ export default function TrackingPage() {
                                 color: '#22c55e', cursor: 'pointer',
                               }}
                             >
-                              📷 Take Photos
+                              Take Photos
                             </button>
                             <button
                               onClick={(e) => {
@@ -1117,7 +1117,7 @@ export default function TrackingPage() {
                                 color: '#22c55e', cursor: 'pointer',
                               }}
                             >
-                              🖼 From Gallery
+                              From Gallery
                             </button>
                             <button
                               onClick={(e) => {
@@ -1153,7 +1153,7 @@ export default function TrackingPage() {
                                 color: '#3b82f6', cursor: photoUploading ? 'wait' : 'pointer',
                               }}
                             >
-                              📷 Camera
+                              Camera
                             </button>
                             <button
                               onClick={(e) => { e.stopPropagation(); photoInputRef.current?.click(); }}
@@ -1164,7 +1164,7 @@ export default function TrackingPage() {
                                 color: '#3b82f6', cursor: photoUploading ? 'wait' : 'pointer',
                               }}
                             >
-                              🖼 Gallery
+                              Gallery
                             </button>
                           </div>
                         )}

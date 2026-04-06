@@ -230,7 +230,7 @@ export default function PhotoReviewPage() {
           padding: '30px', textAlign: 'center', borderRadius: '14px',
           background: 'var(--card)', border: '1px solid var(--border)',
         }}>
-          <div style={{ fontSize: '24px', marginBottom: '8px' }}>📷</div>
+          <div style={{ fontSize: '13px', fontWeight: 600, marginBottom: '8px', color: 'var(--text-muted)' }}>No Photos</div>
           <div style={{ fontSize: '13px', color: 'var(--text-muted)' }}>No photos submitted for this VIN yet</div>
         </div>
       ) : (

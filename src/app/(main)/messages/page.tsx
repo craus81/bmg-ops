@@ -450,7 +450,7 @@ export default function MessagesPage() {
       {/* Conversation list */}
       {conversations.length === 0 && !showNewConvo && (
         <div style={{ textAlign: 'center', padding: '40px 0' }}>
-          <div style={{ fontSize: '40px', marginBottom: '8px' }}>💬</div>
+          <div style={{ fontSize: '14px', fontWeight: 700, color: 'var(--text-muted)', marginBottom: '8px' }}>--</div>
           <div style={{ fontSize: '14px', fontWeight: 700, color: 'var(--text-body)', marginBottom: '4px' }}>No messages yet</div>
           <div style={{ fontSize: '12px', color: 'var(--text-label)' }}>Start a conversation with a team member</div>
         </div>

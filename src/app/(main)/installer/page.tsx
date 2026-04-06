@@ -146,7 +146,7 @@ export default function InstallerPortalPage() {
             background: 'var(--card)', border: '1px solid var(--border)',
           }}
         >
-          <div style={{ fontSize: '20px', marginBottom: '6px' }}>👤</div>
+          <div style={{ fontSize: '12px', fontWeight: 700, color: 'var(--text-muted)', marginBottom: '6px' }}>Profile</div>
           <div style={{ fontSize: '12px', fontWeight: 700, color: 'var(--text-primary)' }}>My Profile</div>
         </button>
         <button
@@ -161,7 +161,7 @@ export default function InstallerPortalPage() {
               : '1px solid var(--border)',
           }}
         >
-          <div style={{ fontSize: '20px', marginBottom: '6px' }}>📬</div>
+          <div style={{ fontSize: '12px', fontWeight: 700, color: 'var(--text-muted)', marginBottom: '6px' }}>Invites</div>
           <div style={{ fontSize: '12px', fontWeight: 700, color: 'var(--text-primary)' }}>Available</div>
           <div style={{ fontSize: '11px', color: (inviteCount + openJobCount) > 0 ? 'var(--orange)' : 'var(--text-muted)' }}>
             {inviteCount + openJobCount} job{(inviteCount + openJobCount) !== 1 ? 's' : ''}
@@ -174,7 +174,7 @@ export default function InstallerPortalPage() {
             background: 'var(--card)', border: '1px solid var(--border)',
           }}
         >
-          <div style={{ fontSize: '20px', marginBottom: '6px' }}>📋</div>
+          <div style={{ fontSize: '12px', fontWeight: 700, color: 'var(--text-muted)', marginBottom: '6px' }}>Jobs</div>
           <div style={{ fontSize: '12px', fontWeight: 700, color: 'var(--text-primary)' }}>My Jobs</div>
           <div style={{ fontSize: '11px', color: 'var(--text-muted)' }}>{jobs.length} total</div>
         </button>
@@ -215,7 +215,7 @@ export default function InstallerPortalPage() {
               </div>
               <div style={{ fontSize: '11px', color: 'var(--text-muted)', marginTop: '4px' }}>
                 {job.job_number} {job.customer_name ? `• ${job.customer_name}` : ''}
-                {job.confirmed_schedule_start ? ` • 📅 ${new Date(job.confirmed_schedule_start).toLocaleDateString()}` : ''}
+                {job.confirmed_schedule_start ? ` • ${new Date(job.confirmed_schedule_start).toLocaleDateString()}` : ''}
               </div>
             </button>
           ))}

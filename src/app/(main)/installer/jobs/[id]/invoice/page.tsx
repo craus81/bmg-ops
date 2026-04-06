@@ -141,7 +141,7 @@ export default function InstallerInvoicePage() {
             background: 'var(--input-bg)', border: '1px solid var(--border)',
             display: 'flex', alignItems: 'center', gap: '10px',
           }}>
-            <div style={{ fontSize: '24px' }}>📄</div>
+            <div style={{ fontSize: '13px', fontWeight: 700, color: 'var(--text-muted)' }}>File</div>
             <div style={{ flex: 1 }}>
               <div style={{ fontSize: '13px', fontWeight: 600, color: 'var(--text-primary)' }}>
                 Invoice File
@@ -180,7 +180,7 @@ export default function InstallerInvoicePage() {
               background: uploading ? 'var(--text-muted)' : 'var(--orange)', color: '#fff', border: 'none',
             }}
           >
-            {uploading ? 'Uploading...' : job.invoice_file_path ? '📄 Replace Invoice File' : '📄 Upload Invoice File'}
+            {uploading ? 'Uploading...' : job.invoice_file_path ? 'Replace Invoice File' : 'Upload Invoice File'}
           </button>
         </div>
       )}

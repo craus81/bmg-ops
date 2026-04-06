@@ -757,7 +757,7 @@ export default function FleetPage() {
                   <div style={{ flex: 1, minWidth: 0 }}>
                     <div style={{ fontSize: '12px', fontWeight: 700, color: theme.textPrimary, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{file.name}</div>
                     <div style={{ fontSize: '10px', color: theme.textMuted, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-                      {file.folder ? `📁 ${file.folder}` : file.path} · {(file.size / 1024).toFixed(0)} KB
+                      {file.folder ? file.folder : file.path} · {(file.size / 1024).toFixed(0)} KB
                     </div>
                   </div>
                   <span style={{ fontSize: '10px', color: '#0061fe', fontWeight: 700, flexShrink: 0 }}>Select</span>

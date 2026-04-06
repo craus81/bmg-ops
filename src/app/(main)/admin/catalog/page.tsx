@@ -301,7 +301,7 @@ export default function CatalogPage() {
                           color: proofs.length > 0 ? 'var(--tab-active-color)' : 'var(--text-muted)',
                         }}
                       >
-                        📄 {proofs.length} proof{proofs.length !== 1 ? 's' : ''} {showingProofs ? '▴' : '▾'}
+                        {proofs.length} proof{proofs.length !== 1 ? 's' : ''} {showingProofs ? '▴' : '▾'}
                       </button>
                     </div>
 
@@ -326,7 +326,7 @@ export default function CatalogPage() {
                                     <img src={url} alt={p.file_name} style={{ width: '100%', height: '100%', objectFit: 'cover' }} />
                                   ) : (
                                     <div style={{ width: '100%', height: '100%', display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', padding: '4px' }}>
-                                      <div style={{ fontSize: '24px' }}>📄</div>
+                                      <div style={{ fontSize: '12px', fontWeight: 700, color: 'var(--text-muted)' }}>PDF</div>
                                       <div style={{ fontSize: '8px', color: 'var(--text-muted)', marginTop: '2px', textAlign: 'center', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', width: '100%' }}>{p.file_name}</div>
                                     </div>
                                   )}

@@ -833,7 +833,7 @@ export default function ReportsPage() {
                       </div>
                       {locations.length > 0 && (
                         <div style={{ fontSize: '10px', color: 'var(--text-muted)', marginTop: '2px' }}>
-                          📍 {locations.join(', ')}
+                          {locations.join(', ')}
                         </div>
                       )}
                     </div>
@@ -905,9 +905,9 @@ export default function ReportsPage() {
                               </div>
                               <div style={{ display: 'flex', gap: '6px', alignItems: 'center', fontSize: '10px', color: 'var(--text-muted)' }}>
                                 {v.part_number && <span style={{ padding: '1px 5px', borderRadius: '4px', background: 'var(--subtle-bg)', border: '1px solid var(--border)' }}>{v.part_number}</span>}
-                                {v.install_location && <span>📍 {v.install_location}</span>}
+                                {v.install_location && <span>{v.install_location}</span>}
                                 {getPONumber(v) && <span style={{ color: 'var(--warning)' }}>PO #{getPONumber(v)}</span>}
-                                <span style={{ fontSize: '12px', opacity: 0.4 }}>✏️</span>
+                                <span style={{ fontSize: '10px', opacity: 0.4, color: 'var(--text-muted)' }}>Edit</span>
                               </div>
                             </div>
                           );

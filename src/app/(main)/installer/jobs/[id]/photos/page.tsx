@@ -250,7 +250,7 @@ export default function InstallerPhotoUploadPage() {
                 background: uploading ? 'var(--text-muted)' : 'var(--orange)', color: '#fff', border: 'none',
               }}
             >
-              {uploading ? 'Uploading...' : '📷 Take / Choose Photo'}
+              {uploading ? 'Uploading...' : 'Take / Choose Photo'}
             </button>
           </div>
         </div>

@@ -315,7 +315,7 @@ export default function BulkUploadPage() {
               cursor: 'pointer', textAlign: 'center',
             }}
           >
-            📦 Select ZIP File
+            Select ZIP File
           </button>
         </div>
       )}
@@ -342,7 +342,7 @@ export default function BulkUploadPage() {
           {Object.entries(groupedTemplates).map(([group, rows]) => (
             <div key={group} style={{ marginBottom: '16px' }}>
               <div style={{ fontSize: '13px', fontWeight: 800, color: 'var(--text-primary)', marginBottom: '8px', padding: '6px 10px', background: 'var(--subtle-bg)', borderRadius: '8px' }}>
-                📁 {group} ({rows.length} file{rows.length !== 1 ? 's' : ''})
+                {group} ({rows.length} file{rows.length !== 1 ? 's' : ''})
               </div>
 
               {rows.map(row => {
@@ -471,7 +471,7 @@ export default function BulkUploadPage() {
           {Object.entries(groupedProofs).map(([customer, rows]) => (
             <div key={customer} style={{ marginBottom: '16px' }}>
               <div style={{ fontSize: '13px', fontWeight: 800, color: 'var(--text-primary)', marginBottom: '8px', padding: '6px 10px', background: 'var(--subtle-bg)', borderRadius: '8px' }}>
-                👤 {customer} ({rows.length} file{rows.length !== 1 ? 's' : ''})
+                {customer} ({rows.length} file{rows.length !== 1 ? 's' : ''})
               </div>
 
               {rows.map(row => {
