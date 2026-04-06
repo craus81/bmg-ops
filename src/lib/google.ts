@@ -225,6 +225,11 @@ export async function syncCalendarEvent(params: {
   try {
     const calendar = await getCalendarClient();
 
+    // Google Calendar all-day events: end date is exclusive, so add 1 day
+    const endDate = new Date(params.date + 'T12:00:00');
+    endDate.setDate(endDate.getDate() + 1);
+    const endDateStr = endDate.toISOString().split('T')[0];
+
     const eventBody = {
       summary: `Install: ${params.title}`,
       description: params.description || '',
@@ -233,7 +238,7 @@ export async function syncCalendarEvent(params: {
         date: params.date, // All-day event
       },
       end: {
-        date: params.date,
+        date: endDateStr, // Exclusive end date (next day)
       },
       colorId: '6', // Orange — matches BMG brand
     };

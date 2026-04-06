@@ -201,6 +201,15 @@ export default function GraphicsPage() {
         }
       }
 
+      // Sync calendar (updates status in description, or deletes if cancelled)
+      if (job.scheduled_install_date || job.calendar_event_id) {
+        fetch('/api/calendar/sync-graphics', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ jobId: job.id }),
+        }).catch(() => {});
+      }
+
       setJobs(prev => prev.map(j => j.id === job.id ? { ...j, status: newStatus, updated_at: new Date().toISOString() } : j));
       if (expandedJobId === job.id) loadHistory(job.id);
     }
