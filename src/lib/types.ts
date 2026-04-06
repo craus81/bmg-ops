@@ -421,18 +421,20 @@ export const GRAPHICS_STATUS_ORDER: GraphicsJobStatus[] = [
   'outgassing', 'cutting', 'packing', 'ready', 'shipped', 'installed', 'cancelled',
 ];
 
-export type GraphicsJobCategory = 'production' | 'proofing' | 'internal';
+export type GraphicsJobCategory = 'production' | 'proofing' | 'internal' | 'customer_supplied';
 
 export const GRAPHICS_CATEGORY_LABELS: Record<GraphicsJobCategory, string> = {
   production: 'Production',
   proofing: 'Proofing',
   internal: 'Internal',
+  customer_supplied: 'Customer Supplied',
 };
 
 export const GRAPHICS_CATEGORY_COLORS: Record<GraphicsJobCategory, string> = {
   production: '#22c55e',
   proofing: '#a78bfa',
   internal: '#f59e0b',
+  customer_supplied: '#3b82f6',
 };
 
 export interface GraphicsJob {
@@ -461,6 +463,8 @@ export interface GraphicsJob {
   due_date: string | null;
   scheduled_install_date: string | null;
   calendar_event_id: string | null;
+  supplier: string | null;
+  proof_url: string | null;
   created_by: string | null;
   assigned_to: string | null;
   created_at: string;
