@@ -12,55 +12,53 @@ interface BottomNavProps {
 interface Tab {
   id: string;
   path: string;
+  label: string;
   feature?: FeatureKey;
   alwaysShow?: boolean;
+  priority: number; // lower = more important, shown first
 }
 
+// All possible tabs with priority — only top 5 + More will show
 const allTabs: Tab[] = [
-  { id: 'home', path: '/home', feature: 'home' },
-  { id: 'my-jobs', path: '/my-jobs', feature: 'vehicles' },
-  { id: 'installer-portal', path: '/installer', feature: 'cni_management' },
-  { id: 'scan-install', path: '/scan-install', feature: 'scan_install' },
-  { id: 'time', path: '/time', feature: 'time' },
-  { id: 'graphics', path: '/graphics', feature: 'graphics' },
-  { id: 'fleet', path: '/fleet', feature: 'fleet_checkin' },
-  { id: 'tracking', path: '/tracking', feature: 'in_shop' },
-  { id: 'vehicles', path: '/vehicles', feature: 'vehicles' },
-  { id: 'estimates', path: '/estimates', feature: 'estimates' },
-  { id: 'more', path: '/more', alwaysShow: true },
+  { id: 'home', path: '/home', label: 'Home', feature: 'home', priority: 0 },
+  { id: 'graphics', path: '/graphics', label: 'Graphics', feature: 'graphics', priority: 1 },
+  { id: 'fleet', path: '/fleet', label: 'Check In', feature: 'fleet_checkin', priority: 2 },
+  { id: 'tracking', path: '/tracking', label: 'In-Shop', feature: 'in_shop', priority: 3 },
+  { id: 'time', path: '/time', label: 'Time', feature: 'time', priority: 4 },
+  { id: 'scan-install', path: '/scan-install', label: 'Scan', feature: 'scan_install', priority: 5 },
+  { id: 'vehicles', path: '/vehicles', label: 'Vehicles', feature: 'vehicles', priority: 6 },
+  { id: 'estimates', path: '/estimates', label: 'Estimates', feature: 'estimates', priority: 7 },
+  { id: 'installer-portal', path: '/installer', label: 'CNI Jobs', feature: 'cni_management', priority: 1 },
+  { id: 'my-jobs', path: '/my-jobs', label: 'My Jobs', feature: 'vehicles', priority: 1 },
   // Customer-only
-  { id: 'customer-dashboard', path: '/customer/dashboard', feature: 'home' },
-  { id: 'customer-settings', path: '/settings', alwaysShow: true },
+  { id: 'customer-dashboard', path: '/customer/dashboard', label: 'My Jobs', feature: 'home', priority: 0 },
 ];
 
-// Labels defined separately so tabs render cleanly
-const TAB_LABELS: Record<string, string> = {
-  home: 'Home', 'my-jobs': 'My Jobs', 'installer-portal': 'CNI Jobs',
-  'scan-install': 'Scan & Install', time: 'Time', graphics: 'Graphics',
-  fleet: 'Check In', tracking: 'In-Shop', vehicles: 'Vehicles',
-  estimates: 'Estimates', more: 'More',
-  'customer-dashboard': 'My Jobs', 'customer-settings': 'Settings',
-};
+const MAX_TABS = 5; // + More = 6 total
 
 export default function BottomNav({ clockStatus }: BottomNavProps) {
   const pathname = usePathname();
   const router = useRouter();
   const { hasFeature, isCustomer } = useAuth();
 
-  // Filter tabs by feature access
-  const tabs = allTabs.filter(tab => {
-    if (tab.alwaysShow) return true;
+  // Filter by feature access
+  let visibleTabs = allTabs.filter(tab => {
     if (!tab.feature) return true;
-    // Customer-only tabs
-    if (tab.id === 'customer-dashboard' || tab.id === 'customer-settings') {
-      return isCustomer;
-    }
-    // Hide customer tabs for non-customers
-    if (isCustomer && tab.id !== 'customer-dashboard' && tab.id !== 'customer-settings') {
-      return false;
-    }
+    if (tab.id === 'customer-dashboard') return isCustomer;
+    if (isCustomer && tab.id !== 'customer-dashboard') return false;
     return hasFeature(tab.feature);
   });
+
+  // Sort by priority, take top MAX_TABS
+  visibleTabs.sort((a, b) => a.priority - b.priority);
+  const tabs = visibleTabs.slice(0, MAX_TABS);
+
+  // Always add More at the end (unless customer)
+  if (!isCustomer) {
+    tabs.push({ id: 'more', path: '/more', label: 'More', alwaysShow: true, priority: 99 });
+  } else {
+    tabs.push({ id: 'customer-settings', path: '/settings', label: 'Settings', alwaysShow: true, priority: 99 });
+  }
 
   const isActive = (tab: Tab) => {
     if (tab.path === '/home') return pathname === '/home' || pathname === '/photos';
@@ -106,7 +104,7 @@ export default function BottomNav({ clockStatus }: BottomNavProps) {
               minWidth: 0,
             }}
           >
-            {TAB_LABELS[tab.id] || tab.id}
+            {tab.label}
           </button>
         );
       })}

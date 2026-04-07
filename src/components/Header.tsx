@@ -289,10 +289,11 @@ export default function Header({ clockStatus, activePartNumber, activeEndCustome
   return (
     <>
       <header style={{
-        background: theme.headerBg, padding: '12px 20px',
+        background: theme.headerBg, padding: '10px 12px',
         display: 'flex', alignItems: 'center', justifyContent: 'space-between',
         position: 'sticky', top: 0, zIndex: 100,
         borderBottom: `1px solid ${theme.border}`,
+        gap: '8px', minWidth: 0,
       }}>
         <div
           onClick={() => router.push('/home')}
@@ -328,7 +329,7 @@ export default function Header({ clockStatus, activePartNumber, activeEndCustome
           </div>
         </div>
 
-        <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: '4px', flexShrink: 0 }}>
           {/* Universal Search */}
           <button
             onClick={() => setShowSearch(true)}
@@ -510,12 +511,14 @@ export default function Header({ clockStatus, activePartNumber, activeEndCustome
             <button onClick={() => { setShowMenu(!showMenu); setShowNotifications(false); }} style={{
               background: showMenu ? 'rgba(255,255,255,0.12)' : 'transparent',
               border: '1px solid transparent', borderRadius: '8px',
-              padding: '6px 10px', fontSize: '12px', color: theme.textMuted,
+              padding: '6px 8px', fontSize: '11px', color: theme.textMuted,
               fontWeight: 600, display: 'flex', alignItems: 'center', gap: '4px',
-              transition: 'all 0.15s',
+              transition: 'all 0.15s', maxWidth: '100px', overflow: 'hidden',
             }}>
-              {profile?.full_name}
-              <span style={{ fontSize: '8px', opacity: 0.6 }}>▼</span>
+              <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                {profile?.full_name?.split(' ')[0] || 'Menu'}
+              </span>
+              <span style={{ fontSize: '8px', opacity: 0.6, flexShrink: 0 }}>▼</span>
             </button>
 
             {showMenu && (
