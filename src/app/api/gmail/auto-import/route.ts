@@ -95,14 +95,13 @@ export async function GET(req: NextRequest) {
       await new Promise(r => setTimeout(r, 1000));
     }
 
-    // Send notification to admins if new POs were queued
+    // Send notification to users who opted in for PO alerts
     if (imported > 0) {
-      const { data: adminProfiles } = await supabase
-        .from('profiles')
-        .select('id')
-        .eq('role', 'admin')
-        .eq('status', 'approved');
-      const adminIds = (adminProfiles || []).map((p: any) => p.id);
+      const { data: poPrefs } = await supabase
+        .from('notification_preferences')
+        .select('user_id')
+        .eq('notify_new_po', true);
+      const adminIds = (poPrefs || []).map((p: any) => p.user_id);
       if (adminIds.length > 0) {
         const poNumbers = results
           .filter((r: any) => r.status === 'review' || r.status === 'imported')

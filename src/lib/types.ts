@@ -488,6 +488,7 @@ export interface NotificationPreferences {
   notify_status_change: boolean;
   notify_ready: boolean;
   notify_shipped: boolean;
+  notify_new_po: boolean;
   notify_in_app: boolean;
   notify_email: boolean;
   notify_sms: boolean;

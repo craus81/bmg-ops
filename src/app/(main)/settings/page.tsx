@@ -40,6 +40,7 @@ export default function SettingsPage() {
         notify_status_change: true,
         notify_ready: true,
         notify_shipped: true,
+        notify_new_po: false,
         notify_in_app: true,
         notify_email: false,
         notify_sms: false,
@@ -64,6 +65,7 @@ export default function SettingsPage() {
       notify_status_change: prefs.notify_status_change,
       notify_ready: prefs.notify_ready,
       notify_shipped: prefs.notify_shipped,
+      notify_new_po: prefs.notify_new_po,
       notify_in_app: prefs.notify_in_app,
       notify_email: prefs.notify_email,
       notify_sms: prefs.notify_sms,
@@ -158,6 +160,14 @@ export default function SettingsPage() {
             <div>
               <div style={{ fontSize: '12px', fontWeight: 700, color: 'var(--text-body)' }}>Shipped</div>
               <div style={{ fontSize: '10px', color: 'var(--text-label)' }}>Get notified when a job is shipped with tracking info</div>
+            </div>
+          </label>
+
+          <label style={{ display: 'flex', alignItems: 'center', gap: '10px', cursor: 'pointer' }}>
+            <input type="checkbox" checked={prefs.notify_new_po} onChange={e => setPrefs({ ...prefs, notify_new_po: e.target.checked })} />
+            <div>
+              <div style={{ fontSize: '12px', fontWeight: 700, color: 'var(--text-body)' }}>New Purchase Orders</div>
+              <div style={{ fontSize: '10px', color: 'var(--text-label)' }}>Get notified when new POs are found in Gmail and queued for review</div>
             </div>
           </label>
         </div>
