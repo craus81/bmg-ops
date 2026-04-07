@@ -85,9 +85,10 @@ export default function BottomNav({ clockStatus }: BottomNavProps) {
       position: 'fixed', bottom: 0, left: 0, right: 0,
       background: theme.navBg,
       borderTop: `1px solid ${theme.border}`,
-      display: 'flex', zIndex: 100,
-      padding: '0 12px',
-      paddingBottom: 'env(safe-area-inset-bottom, 0px)',
+      display: 'flex', alignItems: 'center', gap: '4px',
+      zIndex: 100,
+      padding: '6px 10px',
+      paddingBottom: 'calc(6px + env(safe-area-inset-bottom, 0px))',
     }}>
       {tabs.map((tab) => {
         const active = isActive(tab);
@@ -96,20 +97,21 @@ export default function BottomNav({ clockStatus }: BottomNavProps) {
             key={tab.id}
             onClick={() => router.push(tab.path)}
             style={{
-              flex: 1, padding: '8px 4px 10px', display: 'flex',
-              flexDirection: 'column', alignItems: 'center', gap: '2px',
-              color: active ? theme.textPrimary : theme.textMuted,
-              position: 'relative',
+              flex: 1, padding: '8px 4px', display: 'flex',
+              alignItems: 'center', justifyContent: 'center',
+              borderRadius: '8px',
+              background: active ? 'rgba(59,130,246,0.15)' : 'rgba(255,255,255,0.04)',
+              border: active ? '1px solid rgba(59,130,246,0.35)' : '1px solid rgba(255,255,255,0.08)',
+              color: active ? '#60a5fa' : theme.textMuted,
+              fontSize: '9px',
+              fontWeight: active ? 800 : 600,
+              letterSpacing: '0.01em',
+              cursor: 'pointer',
+              whiteSpace: 'nowrap',
+              minWidth: 0,
             }}
           >
-            {active && (
-              <div style={{
-                position: 'absolute', top: '-1px', left: '25%', right: '25%',
-                height: '2px', background: theme.orange, borderRadius: '0 0 2px 2px',
-              }} />
-            )}
-            <div style={{ fontSize: '16px' }}>{getIcon(tab)}</div>
-            <div style={{ fontSize: '9px', fontWeight: active ? 700 : 600 }}>{tab.label}</div>
+            {tab.label}
           </button>
         );
       })}
