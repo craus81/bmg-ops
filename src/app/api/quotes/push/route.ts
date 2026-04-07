@@ -149,6 +149,9 @@ async function createNetSuiteEstimate(config: ReturnType<typeof getNetSuiteConfi
 
 // POST — push a graphics quote to NetSuite as an Estimate
 export async function POST(req: NextRequest) {
+  const auth = await requireAuth(req);
+  if (auth.error) return auth.error;
+
   try {
     const supabase = getSupabase();
     const { quoteId, customerId, customerNsId, userId } = await req.json();

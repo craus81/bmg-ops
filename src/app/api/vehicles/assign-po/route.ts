@@ -11,6 +11,9 @@ const supabase = createClient(
 
 // GET: Search open POs for the assignment picker
 export async function GET(req: NextRequest) {
+  const auth = await requireAuth(req);
+  if (auth.error) return auth.error;
+
   const q = req.nextUrl.searchParams.get('q')?.trim() || '';
 
   let query = supabase
@@ -35,6 +38,9 @@ export async function GET(req: NextRequest) {
 
 // POST: Auto-match a vehicle to a PO line item by part number
 export async function POST(req: NextRequest) {
+  const auth = await requireAuth(req);
+  if (auth.error) return auth.error;
+
   try {
     const { vehicleId, poId, partNumber } = await req.json();
 

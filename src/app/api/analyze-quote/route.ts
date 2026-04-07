@@ -162,6 +162,9 @@ function calculateCalibratedDimensions(
 }
 
 export async function POST(request: NextRequest) {
+  const auth = await requireAuth(request);
+  if (auth.error) return auth.error;
+
   if (!ANTHROPIC_API_KEY) {
     return NextResponse.json(
       { error: 'ANTHROPIC_API_KEY not configured. Add it to your environment variables.' },

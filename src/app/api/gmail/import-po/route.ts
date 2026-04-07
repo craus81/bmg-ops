@@ -175,6 +175,9 @@ RULES:
 - customer: Usually "Masterack" for Masterack POs. Use the buyer/company name from the header`;
 
 export async function POST(req: NextRequest) {
+  const auth = await requireAuth(req);
+  if (auth.error) return auth.error;
+
   try {
     const { messageId, autoCreate, forceOverwrite, extractOnly, preExtracted } = await req.json();
     if (!messageId) {

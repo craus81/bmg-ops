@@ -3,6 +3,9 @@ import { getOpenSalesOrdersByCustomer } from '@/lib/netsuite';
 import { requireAuth } from '@/lib/api-auth';
 
 export async function GET(request: NextRequest) {
+  const auth = await requireAuth(request);
+  if (auth.error) return auth.error;
+
   const { searchParams } = new URL(request.url);
   const customer = searchParams.get('customer');
 

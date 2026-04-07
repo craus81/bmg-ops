@@ -8,7 +8,10 @@ const supabase = createClient(
 );
 
 /** GET /api/prospects — list all prospects */
-export async function GET() {
+export async function GET(req: NextRequest) {
+  const auth = await requireAuth(req);
+  if (auth.error) return auth.error;
+
   const { data, error } = await supabase
     .from('prospects')
     .select('*')
@@ -20,6 +23,9 @@ export async function GET() {
 
 /** POST /api/prospects — create a new prospect */
 export async function POST(req: NextRequest) {
+  const auth = await requireAuth(req);
+  if (auth.error) return auth.error;
+
   const body = await req.json();
   const { data, error } = await supabase
     .from('prospects')
@@ -47,6 +53,9 @@ export async function POST(req: NextRequest) {
 
 /** PUT /api/prospects — update a prospect */
 export async function PUT(req: NextRequest) {
+  const auth = await requireAuth(req);
+  if (auth.error) return auth.error;
+
   const body = await req.json();
   const { id, ...fields } = body;
   if (!id) return NextResponse.json({ error: 'Missing id' }, { status: 400 });
@@ -64,6 +73,9 @@ export async function PUT(req: NextRequest) {
 
 /** DELETE /api/prospects — delete a prospect */
 export async function DELETE(req: NextRequest) {
+  const auth = await requireAuth(req);
+  if (auth.error) return auth.error;
+
   const { searchParams } = new URL(req.url);
   const id = searchParams.get('id');
   if (!id) return NextResponse.json({ error: 'Missing id' }, { status: 400 });

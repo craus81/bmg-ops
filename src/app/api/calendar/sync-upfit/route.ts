@@ -14,6 +14,9 @@ const supabase = createClient(
  * Body: { checkinId: string }
  */
 export async function POST(req: NextRequest) {
+  const auth = await requireAuth(req);
+  if (auth.error) return auth.error;
+
   try {
     const { checkinId } = await req.json();
 

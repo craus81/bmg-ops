@@ -9,6 +9,9 @@ export const dynamic = 'force-dynamic';
  * GET /api/dropbox/search?q=customer+name
  */
 export async function GET(req: NextRequest) {
+  const auth = await requireAuth(req);
+  if (auth.error) return auth.error;
+
   try {
     const q = req.nextUrl.searchParams.get('q')?.trim();
     if (!q || q.length < 2) {

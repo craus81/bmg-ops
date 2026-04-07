@@ -185,6 +185,9 @@ async function deleteNetSuiteEstimate(config: ReturnType<typeof getNetSuiteConfi
 
 // POST — push estimate to NetSuite
 export async function POST(req: NextRequest) {
+  const auth = await requireAuth(req);
+  if (auth.error) return auth.error;
+
   try {
     const supabase = getSupabase();
     const { estimateId, userId } = await req.json();
@@ -342,6 +345,9 @@ export async function POST(req: NextRequest) {
 
 // DELETE — delete estimate from NetSuite
 export async function DELETE(req: NextRequest) {
+  const auth = await requireAuth(req);
+  if (auth.error) return auth.error;
+
   try {
     const supabase = getSupabase();
     const { estimateId } = await req.json();

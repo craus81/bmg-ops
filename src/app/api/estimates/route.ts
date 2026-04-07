@@ -39,6 +39,9 @@ function computeTotals(lines: any[], taxRate: number, taxExempt: boolean, laborR
 
 // GET — list estimates
 export async function GET(req: NextRequest) {
+  const auth = await requireAuth(req);
+  if (auth.error) return auth.error;
+
   try {
     const supabase = getSupabase();
     const status = req.nextUrl.searchParams.get('status');
@@ -62,6 +65,9 @@ export async function GET(req: NextRequest) {
 
 // POST — create or update estimate
 export async function POST(req: NextRequest) {
+  const auth = await requireAuth(req);
+  if (auth.error) return auth.error;
+
   try {
     const supabase = getSupabase();
     const body = await req.json();
@@ -188,6 +194,9 @@ export async function POST(req: NextRequest) {
 
 // DELETE — delete an estimate (also deletes from NetSuite if pushed)
 export async function DELETE(req: NextRequest) {
+  const auth = await requireAuth(req);
+  if (auth.error) return auth.error;
+
   try {
     const supabase = getSupabase();
     const { id } = await req.json();

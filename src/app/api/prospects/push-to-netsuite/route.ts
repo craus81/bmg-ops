@@ -13,6 +13,9 @@ const supabase = createClient(
  * Push a prospect to NetSuite as a Customer or Lead
  */
 export async function POST(req: NextRequest) {
+  const auth = await requireAuth(req);
+  if (auth.error) return auth.error;
+
   try {
     const { prospectId, type, userId } = await req.json();
 

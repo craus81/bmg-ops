@@ -10,6 +10,9 @@ import { requireAuth } from '@/lib/api-auth';
  * billing only the installed quantities from our PO tracking.
  */
 export async function POST(req: NextRequest) {
+  const auth = await requireAuth(req);
+  if (auth.error) return auth.error;
+
   try {
     const { salesOrderIds } = await req.json();
 

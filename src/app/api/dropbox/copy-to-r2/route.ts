@@ -13,6 +13,9 @@ export const maxDuration = 60;
  * Body: { dropbox_path, vehicle_id, customer_name }
  */
 export async function POST(req: NextRequest) {
+  const auth = await requireAuth(req);
+  if (auth.error) return auth.error;
+
   try {
     const { dropbox_path, vehicle_id, customer_name } = await req.json();
 

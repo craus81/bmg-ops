@@ -6,6 +6,9 @@ export const dynamic = 'force-dynamic';
 
 // POST — upload a file to R2
 export async function POST(req: NextRequest) {
+  const auth = await requireAuth(req);
+  if (auth.error) return auth.error;
+
   try {
     const formData = await req.formData();
     const file = formData.get('file') as File | null;
@@ -36,6 +39,9 @@ export async function POST(req: NextRequest) {
 
 // DELETE — delete a file from R2
 export async function DELETE(req: NextRequest) {
+  const auth = await requireAuth(req);
+  if (auth.error) return auth.error;
+
   try {
     const { bucket, path } = await req.json();
 

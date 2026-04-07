@@ -4,6 +4,9 @@ import { requireAuth } from '@/lib/api-auth';
 
 /** @deprecated Use /api/netsuite/pdf?type=salesOrder&id=... instead */
 export async function GET(request: NextRequest) {
+  const auth = await requireAuth(request);
+  if (auth.error) return auth.error;
+
   const { searchParams } = new URL(request.url);
   const id = searchParams.get('id');
 

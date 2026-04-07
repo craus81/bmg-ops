@@ -8,6 +8,9 @@ export const maxDuration = 60;
  * Accepts a base64 business card image, uses Claude vision to extract contact info
  */
 export async function POST(req: NextRequest) {
+  const auth = await requireAuth(req);
+  if (auth.error) return auth.error;
+
   try {
     const { image, mimeType } = await req.json();
 

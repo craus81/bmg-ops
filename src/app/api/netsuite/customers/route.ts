@@ -6,6 +6,9 @@ import { requireAuth } from '@/lib/api-auth';
 export const dynamic = 'force-dynamic';
 
 export async function GET(req: NextRequest) {
+  const auth = await requireAuth(req);
+  if (auth.error) return auth.error;
+
   try {
     const supabase = createClient(
       process.env.NEXT_PUBLIC_SUPABASE_URL!,

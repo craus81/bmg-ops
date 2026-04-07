@@ -74,6 +74,9 @@ Return JSON only, no other text, in this exact format:
 }`;
 
 export async function POST(request: NextRequest) {
+  const auth = await requireAuth(request);
+  if (auth.error) return auth.error;
+
   if (!ANTHROPIC_API_KEY) {
     return NextResponse.json(
       { error: 'ANTHROPIC_API_KEY not configured.' },

@@ -3,6 +3,9 @@ import { NextRequest, NextResponse } from 'next/server';
 import { requireAuth } from '@/lib/api-auth';
 
 export async function POST(request: Request) {
+  const auth = await requireAuth(request as NextRequest);
+  if (auth.error) return auth.error;
+
   try {
     const supabase = createClient();
     const { data: { user }, error: authError } = await supabase.auth.getUser();

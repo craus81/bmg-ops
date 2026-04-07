@@ -3,6 +3,9 @@ import { createClient } from '@supabase/supabase-js';
 import { requireAuth } from '@/lib/api-auth';
 
 export async function POST(req: NextRequest) {
+  const auth = await requireAuth(req);
+  if (auth.error) return auth.error;
+
   try {
     const body = await req.json();
     const { customer_id, name, email, phone, title, address, notes } = body;
@@ -41,6 +44,9 @@ export async function POST(req: NextRequest) {
 }
 
 export async function PUT(req: NextRequest) {
+  const auth = await requireAuth(req);
+  if (auth.error) return auth.error;
+
   try {
     const body = await req.json();
     const { id, ...updates } = body;
@@ -72,6 +78,9 @@ export async function PUT(req: NextRequest) {
 }
 
 export async function DELETE(req: NextRequest) {
+  const auth = await requireAuth(req);
+  if (auth.error) return auth.error;
+
   try {
     const { id } = await req.json();
 

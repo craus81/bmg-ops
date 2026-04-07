@@ -11,6 +11,9 @@ const supabase = createClient(
 );
 
 export async function POST(req: NextRequest) {
+  const auth = await requireAuth(req);
+  if (auth.error) return auth.error;
+
   try {
     const { jobType, jobId, userIds, assignedBy, notifyUsers, notifyTeam, jobTitle } = await req.json();
 
@@ -102,6 +105,9 @@ export async function POST(req: NextRequest) {
 
 // DELETE — remove an assignment
 export async function DELETE(req: NextRequest) {
+  const auth = await requireAuth(req);
+  if (auth.error) return auth.error;
+
   try {
     const { jobType, jobId, userId } = await req.json();
 

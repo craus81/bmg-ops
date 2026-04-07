@@ -4,6 +4,9 @@ import { createClient } from '@supabase/supabase-js';
 import { requireAuth } from '@/lib/api-auth';
 
 export async function POST(req: NextRequest) {
+  const auth = await requireAuth(req);
+  if (auth.error) return auth.error;
+
   try {
     const { poId } = await req.json();
     if (!poId) {

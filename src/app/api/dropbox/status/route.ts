@@ -8,7 +8,10 @@ export const dynamic = 'force-dynamic';
  * Check if Dropbox is connected.
  * GET /api/dropbox/status
  */
-export async function GET() {
+export async function GET(req: NextRequest) {
+  const auth = await requireAuth(req);
+  if (auth.error) return auth.error;
+
   try {
     const connected = await isConnected();
     return NextResponse.json({ connected });

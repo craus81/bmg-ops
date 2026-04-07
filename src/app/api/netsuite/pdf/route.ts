@@ -9,6 +9,9 @@ export const maxDuration = 60;
  * Generic PDF endpoint for any supported NetSuite transaction type.
  */
 export async function GET(request: NextRequest) {
+  const auth = await requireAuth(request);
+  if (auth.error) return auth.error;
+
   const { searchParams } = new URL(request.url);
   const type = searchParams.get('type') as 'salesOrder' | 'invoice' | null;
   const id = searchParams.get('id');

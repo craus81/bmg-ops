@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { createClient } from '@supabase/supabase-js';
+import { requireAuth } from '@/lib/api-auth';
 
 export const dynamic = 'force-dynamic';
 
@@ -43,6 +44,9 @@ function buildCniReinviteEmailHtml(fullName: string, inviteLink: string): string
 }
 
 export async function POST(req: NextRequest) {
+  const auth = await requireAuth(req);
+  if (auth.error) return auth.error;
+
   try {
     const { userId, email, fullName } = await req.json();
 

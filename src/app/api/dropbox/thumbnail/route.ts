@@ -9,6 +9,9 @@ export const dynamic = 'force-dynamic';
  * GET /api/dropbox/thumbnail?path=/path/to/file.pdf&size=w256h256
  */
 export async function GET(req: NextRequest) {
+  const auth = await requireAuth(req);
+  if (auth.error) return auth.error;
+
   try {
     const path = req.nextUrl.searchParams.get('path');
     const size = (req.nextUrl.searchParams.get('size') || 'w256h256') as any;

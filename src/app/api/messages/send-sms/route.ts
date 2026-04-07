@@ -17,6 +17,9 @@ const supabase = createClient(
  * Body: { messageId: string, conversationId: string, senderId: string, body: string }
  */
 export async function POST(req: NextRequest) {
+  const auth = await requireAuth(req);
+  if (auth.error) return auth.error;
+
   try {
     const { messageId, conversationId, senderId, body } = await req.json();
 

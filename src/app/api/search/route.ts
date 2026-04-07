@@ -12,6 +12,9 @@ const supabase = createClient(
 const MAX_PER_GROUP = 5;
 
 export async function GET(req: NextRequest) {
+  const auth = await requireAuth(req);
+  if (auth.error) return auth.error;
+
   const q = req.nextUrl.searchParams.get('q')?.trim();
   if (!q || q.length < 2) {
     return NextResponse.json({ results: {} });

@@ -12,6 +12,9 @@ export const dynamic = 'force-dynamic';
  * GET /api/dropbox/auth?action=url
  */
 export async function GET(req: NextRequest) {
+  const auth = await requireAuth(req);
+  if (auth.error) return auth.error;
+
   const code = req.nextUrl.searchParams.get('code');
   const action = req.nextUrl.searchParams.get('action');
 
