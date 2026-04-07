@@ -163,20 +163,15 @@ export default function MorePage() {
   );
 }
 
-function MenuBtn({ icon, title, sub, onClick, badge }: { icon: string; title: string; sub: string; onClick: () => void; badge?: number }) {
+function MenuBtn({ title, sub, onClick, badge }: { icon?: string; title: string; sub: string; onClick: () => void; badge?: number }) {
   return (
     <button onClick={onClick} style={{
       display: 'flex', alignItems: 'center', gap: '14px', width: '100%',
-      padding: '16px', borderRadius: '14px', textAlign: 'left',
+      padding: '14px 16px', borderRadius: '14px', textAlign: 'left',
       border: '1px solid var(--border)', background: 'var(--card)',
       boxShadow: 'var(--shadow-sm)', transition: 'all 0.15s',
       position: 'relative',
     }}>
-      <div style={{
-        width: '44px', height: '44px', borderRadius: '12px',
-        background: 'var(--subtle-bg)', display: 'flex',
-        alignItems: 'center', justifyContent: 'center', fontSize: '20px', flexShrink: 0,
-      }}>{icon}</div>
       <div style={{ flex: 1 }}>
         <div style={{ fontWeight: 700, fontSize: '15px', color: 'var(--text-primary)', letterSpacing: '-0.2px' }}>{title}</div>
         <div style={{ fontSize: '12px', color: badge ? 'var(--warning)' : 'var(--text-muted)', marginTop: '2px', fontWeight: badge ? 600 : 400 }}>{sub}</div>
