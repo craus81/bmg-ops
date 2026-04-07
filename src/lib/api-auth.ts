@@ -1,20 +1,10 @@
 /**
  * API Route Authentication & Authorization
  *
- * Usage in API routes:
- *   import { requireAuth, requireAdmin } from '@/lib/api-auth';
- *
- *   export async function GET(req: NextRequest) {
- *     const auth = await requireAuth(req);
- *     if (auth.error) return auth.error;
- *     // auth.user is available
- *   }
- *
- *   export async function POST(req: NextRequest) {
- *     const auth = await requireAdmin(req);
- *     if (auth.error) return auth.error;
- *     // auth.user and auth.profile are available
- *   }
+ * Verifies Supabase auth sessions from cookies or Authorization headers.
+ * The Supabase JS client stores sessions in cookies named like:
+ *   sb-<project-ref>-auth-token
+ * The value is a base64-encoded JSON with access_token and refresh_token.
  */
 
 import { NextRequest, NextResponse } from 'next/server';
@@ -30,54 +20,78 @@ interface AuthResult {
   error?: NextResponse;
 }
 
-/**
- * Verify the request has a valid authenticated session.
- * Returns the user object or an error response.
- */
-export async function requireAuth(req: NextRequest): Promise<AuthResult> {
-  try {
-    // Extract the access token from cookies or Authorization header
-    const authHeader = req.headers.get('authorization');
-    let accessToken: string | null = null;
+function extractAccessToken(req: NextRequest): string | null {
+  // 1. Check Authorization header
+  const authHeader = req.headers.get('authorization');
+  if (authHeader?.startsWith('Bearer ')) {
+    return authHeader.slice(7);
+  }
 
-    if (authHeader?.startsWith('Bearer ')) {
-      accessToken = authHeader.slice(7);
-    } else {
-      // Try to get from Supabase auth cookies
-      const cookies = req.cookies;
-      // Supabase stores tokens in cookies with various naming patterns
-      for (const [name, cookie] of cookies.getAll().entries()) {
-        if (typeof cookie === 'object' && 'name' in cookie && 'value' in cookie) {
-          if (cookie.name.includes('auth-token') || cookie.name.includes('access_token') || cookie.name.includes('sb-')) {
-            try {
-              // Supabase stores a JSON array with [access_token, refresh_token]
-              const parsed = JSON.parse(decodeURIComponent(cookie.value));
-              if (Array.isArray(parsed) && parsed[0]) {
-                accessToken = parsed[0];
-                break;
-              } else if (parsed.access_token) {
-                accessToken = parsed.access_token;
-                break;
-              }
-            } catch {
-              // Not JSON, might be the raw token
-              if (cookie.value.length > 20 && cookie.name.includes('access')) {
-                accessToken = cookie.value;
-                break;
-              }
-            }
-          }
+  // 2. Check Supabase auth cookies
+  const cookies = req.cookies.getAll();
+  for (const cookie of cookies) {
+    // Match our custom cookie name and standard Supabase patterns
+    if (cookie.name === 'sb-auth-token' || (cookie.name.includes('sb-') && cookie.name.includes('auth-token'))) {
+      try {
+        const decoded = decodeURIComponent(cookie.value);
+        // Try parsing as JSON (newer Supabase versions)
+        const parsed = JSON.parse(decoded);
+        if (parsed.access_token) return parsed.access_token;
+        if (Array.isArray(parsed) && parsed[0]) return parsed[0];
+      } catch {
+        // May be base64 encoded
+        try {
+          const decoded2 = atob(cookie.value);
+          const parsed2 = JSON.parse(decoded2);
+          if (parsed2.access_token) return parsed2.access_token;
+        } catch {
+          // Raw token value
+          if (cookie.value.length > 20) return cookie.value;
         }
       }
     }
+  }
+
+  // 3. Check for chunked cookies (sb-<ref>-auth-token.0, .1, etc.)
+  const chunks: { index: number; value: string }[] = [];
+  for (const cookie of cookies) {
+    const match = cookie.name.match(/sb-.*-auth-token\.(\d+)/);
+    if (match) {
+      chunks.push({ index: parseInt(match[1]), value: cookie.value });
+    }
+  }
+  if (chunks.length > 0) {
+    chunks.sort((a, b) => a.index - b.index);
+    const combined = chunks.map(c => c.value).join('');
+    try {
+      const decoded = decodeURIComponent(combined);
+      const parsed = JSON.parse(decoded);
+      if (parsed.access_token) return parsed.access_token;
+    } catch {
+      try {
+        const decoded2 = atob(combined);
+        const parsed2 = JSON.parse(decoded2);
+        if (parsed2.access_token) return parsed2.access_token;
+      } catch {}
+    }
+  }
+
+  return null;
+}
+
+/**
+ * Verify the request has a valid authenticated session.
+ */
+export async function requireAuth(req: NextRequest): Promise<AuthResult> {
+  try {
+    const accessToken = extractAccessToken(req);
 
     if (!accessToken) {
       return { user: null, error: NextResponse.json({ error: 'Unauthorized' }, { status: 401 }) };
     }
 
-    // Verify the token by getting the user
-    const { createClient: createAnonClient } = await import('@supabase/supabase-js');
-    const supabase = createAnonClient(supabaseUrl, supabaseAnonKey, {
+    // Verify the token
+    const supabase = createClient(supabaseUrl, supabaseAnonKey, {
       global: { headers: { Authorization: `Bearer ${accessToken}` } },
     });
 
@@ -138,10 +152,7 @@ export async function requireRole(req: NextRequest, allowedRoles: string[]): Pro
   }
 
   const roles: string[] = profile.roles?.length > 0 ? profile.roles : [profile.role];
-  // Admin always passes
-  if (roles.includes('admin')) {
-    return { user: auth.user, profile };
-  }
+  if (roles.includes('admin')) return { user: auth.user, profile };
 
   const hasRole = roles.some(r => allowedRoles.includes(r));
   if (!hasRole) {
