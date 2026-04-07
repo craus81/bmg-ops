@@ -3,6 +3,7 @@
 import { useState, useEffect, useRef } from 'react';
 import { useRouter } from 'next/navigation';
 import { createClient } from '@/lib/supabase-browser';
+import { storage } from '@/lib/storage';
 import { useAuth } from '@/components/AuthProvider';
 import { theme } from '@/lib/theme';
 import AssignmentPicker from '@/components/AssignmentPicker';
@@ -107,6 +108,14 @@ export default function GraphicsPage() {
     setCustomerResults([]);
   };
 
+  // Job files
+  interface JobFile { id: string; job_id: string; file_name: string; file_type: string | null; file_size: number | null; storage_path: string; uploaded_by: string | null; uploaded_at: string; }
+  const [jobFiles, setJobFiles] = useState<Record<string, JobFile[]>>({});
+  const [createFiles, setCreateFiles] = useState<File[]>([]);
+  const [uploadingFiles, setUploadingFiles] = useState(false);
+  const fileInputRef = useRef<HTMLInputElement>(null);
+  const createFileInputRef = useRef<HTMLInputElement>(null);
+
   // Job assignments
   const [jobAssignments, setJobAssignments] = useState<Record<string, string[]>>({});
 
@@ -160,6 +169,63 @@ export default function GraphicsPage() {
         [jobId]: data.map((a: any) => a.user_id),
       }));
     }
+  };
+
+  const loadJobFiles = async (jobId: string) => {
+    const { data } = await supabase
+      .from('graphics_job_files')
+      .select('*')
+      .eq('job_id', jobId)
+      .order('uploaded_at', { ascending: false });
+    if (data) {
+      setJobFiles(prev => ({ ...prev, [jobId]: data as JobFile[] }));
+    }
+  };
+
+  const uploadFilesToJob = async (jobId: string, files: File[]) => {
+    if (files.length === 0) return;
+    setUploadingFiles(true);
+    for (const file of files) {
+      const ext = file.name.split('.').pop() || 'bin';
+      const path = `graphics-files/${jobId}/${Date.now()}-${Math.random().toString(36).slice(2, 6)}.${ext}`;
+      const { error: upErr } = await storage.from('graphics-proofs').upload(path, file, { contentType: file.type });
+      if (upErr) {
+        console.error('File upload error:', upErr);
+        continue;
+      }
+      await supabase.from('graphics_job_files').insert({
+        job_id: jobId,
+        file_name: file.name,
+        file_type: file.type || null,
+        file_size: file.size,
+        storage_path: path,
+        uploaded_by: user?.id,
+      });
+    }
+    setUploadingFiles(false);
+    await loadJobFiles(jobId);
+  };
+
+  const deleteJobFile = async (file: JobFile) => {
+    if (!window.confirm(`Delete "${file.file_name}"?`)) return;
+    await storage.from('graphics-proofs').remove([file.storage_path]);
+    await supabase.from('graphics_job_files').delete().eq('id', file.id);
+    setJobFiles(prev => ({
+      ...prev,
+      [file.job_id]: (prev[file.job_id] || []).filter(f => f.id !== file.id),
+    }));
+  };
+
+  const getFileUrl = (path: string) => {
+    const { data } = storage.from('graphics-proofs').getPublicUrl(path);
+    return data.publicUrl;
+  };
+
+  const formatFileSize = (bytes: number | null) => {
+    if (!bytes) return '';
+    if (bytes < 1024) return `${bytes} B`;
+    if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(0)} KB`;
+    return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
   };
 
   const saveJobAssignments = async (jobId: string, userIds: string[], jobTitle?: string) => {
@@ -380,6 +446,11 @@ export default function GraphicsPage() {
         }).catch(() => {});
       }
 
+      // Upload attached files
+      if (createFiles.length > 0) {
+        await uploadFilesToJob(data.id, createFiles);
+      }
+
       setJobs(prev => [data as GraphicsJob, ...prev]);
       setShowCreate(false);
       setCreateStep('category');
@@ -390,6 +461,7 @@ export default function GraphicsPage() {
         priority: 'normal', due_date: '', scheduled_install_date: '', ship_to: '', supplier: '',
       });
       setCreateAssignees([]);
+      setCreateFiles([]);
     }
     setCreating(false);
   };
@@ -603,6 +675,7 @@ export default function GraphicsPage() {
                       setExpandedJobId(job.id);
                       loadHistory(job.id);
                       loadJobAssignments(job.id);
+                      loadJobFiles(job.id);
                     }
                   }}
                   style={{ padding: '12px', cursor: 'pointer' }}
@@ -747,6 +820,63 @@ export default function GraphicsPage() {
                             </div>
                           </div>
                         )}
+
+                        {/* Files */}
+                        <div style={{ marginBottom: '10px' }}>
+                          <div style={{ ...labelStyle, marginBottom: '6px' }}>Files &amp; Attachments</div>
+                          {(jobFiles[job.id] || []).length > 0 && (
+                            <div style={{ display: 'flex', flexDirection: 'column', gap: '4px', marginBottom: '6px' }}>
+                              {(jobFiles[job.id] || []).map(f => {
+                                const isImage = f.file_type?.startsWith('image/');
+                                const isPdf = f.file_type === 'application/pdf';
+                                return (
+                                  <div key={f.id} style={{ display: 'flex', alignItems: 'center', gap: '8px', padding: '6px 8px', borderRadius: '8px', background: 'var(--subtle-bg)' }}>
+                                    <span style={{ fontSize: '14px', flexShrink: 0 }}>{isImage ? '\ud83d\uddbc\ufe0f' : isPdf ? '\ud83d\udcc4' : '\ud83d\udcce'}</span>
+                                    <a
+                                      href={getFileUrl(f.storage_path)}
+                                      target="_blank"
+                                      rel="noopener noreferrer"
+                                      style={{ flex: 1, fontSize: '11px', fontWeight: 600, color: '#60a5fa', textDecoration: 'none', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}
+                                    >
+                                      {f.file_name}
+                                    </a>
+                                    {f.file_size && <span style={{ fontSize: '9px', color: 'var(--text-muted)', flexShrink: 0 }}>{formatFileSize(f.file_size)}</span>}
+                                    <button
+                                      onClick={() => deleteJobFile(f)}
+                                      style={{ padding: '2px 6px', borderRadius: '4px', border: 'none', background: 'rgba(248,113,113,0.1)', color: '#f87171', fontSize: '10px', fontWeight: 700, cursor: 'pointer', flexShrink: 0 }}
+                                    >
+                                      ✕
+                                    </button>
+                                  </div>
+                                );
+                              })}
+                            </div>
+                          )}
+                          <input
+                            ref={fileInputRef}
+                            type="file"
+                            multiple
+                            accept="image/*,.pdf,.eps,.ai,.svg,.psd,.png,.jpg,.jpeg,.tif,.tiff,.zip"
+                            onChange={async (e) => {
+                              const files = Array.from(e.target.files || []) as File[];
+                              if (files.length > 0) await uploadFilesToJob(job.id, files);
+                              e.target.value = '';
+                            }}
+                            style={{ display: 'none' }}
+                          />
+                          <button
+                            onClick={() => fileInputRef.current?.click()}
+                            disabled={uploadingFiles}
+                            style={{
+                              width: '100%', padding: '8px', borderRadius: '8px',
+                              fontSize: '11px', fontWeight: 700, cursor: 'pointer',
+                              background: 'var(--subtle-bg)', border: '1px dashed var(--border)',
+                              color: uploadingFiles ? 'var(--text-muted)' : 'var(--text-secondary)',
+                            }}
+                          >
+                            {uploadingFiles ? 'Uploading...' : '+ Upload Files (proofs, logos, photos)'}
+                          </button>
+                        </div>
 
                         {/* Team Assignment */}
                         <div style={{ marginBottom: '10px' }}>
@@ -1144,6 +1274,49 @@ export default function GraphicsPage() {
                 <div style={{ marginBottom: '12px' }}>
                   <div style={labelStyle}>Internal Notes</div>
                   <textarea style={{ ...inputStyle, minHeight: '40px', resize: 'vertical' }} value={createForm.notes} onChange={e => setCreateForm({ ...createForm, notes: e.target.value })} />
+                </div>
+
+                {/* File Attachments */}
+                <div style={{ marginBottom: '12px' }}>
+                  <div style={labelStyle}>File Attachments</div>
+                  {createFiles.length > 0 && (
+                    <div style={{ display: 'flex', flexWrap: 'wrap', gap: '4px', marginBottom: '6px' }}>
+                      {createFiles.map((f, i) => (
+                        <span key={i} style={{
+                          display: 'flex', alignItems: 'center', gap: '4px',
+                          padding: '3px 8px', borderRadius: '6px', fontSize: '11px', fontWeight: 600,
+                          background: 'rgba(59,130,246,0.1)', border: '1px solid rgba(59,130,246,0.2)', color: '#60a5fa',
+                        }}>
+                          {f.name}
+                          <span onClick={() => setCreateFiles(prev => prev.filter((_, idx) => idx !== i))} style={{ cursor: 'pointer', fontSize: '9px', opacity: 0.7 }}>✕</span>
+                        </span>
+                      ))}
+                    </div>
+                  )}
+                  <input
+                    ref={createFileInputRef}
+                    type="file"
+                    multiple
+                    accept="image/*,.pdf,.eps,.ai,.svg,.psd,.png,.jpg,.jpeg,.tif,.tiff,.zip"
+                    onChange={(e) => {
+                      const files = Array.from(e.target.files || []) as File[];
+                      if (files.length > 0) setCreateFiles(prev => [...prev, ...files]);
+                      e.target.value = '';
+                    }}
+                    style={{ display: 'none' }}
+                  />
+                  <button
+                    type="button"
+                    onClick={() => createFileInputRef.current?.click()}
+                    style={{
+                      width: '100%', padding: '10px', borderRadius: '8px',
+                      fontSize: '11px', fontWeight: 700, cursor: 'pointer',
+                      background: 'var(--subtle-bg)', border: '1px dashed var(--border)',
+                      color: 'var(--text-secondary)',
+                    }}
+                  >
+                    + Add Files (proofs, logos, photos, PDFs)
+                  </button>
                 </div>
 
                 {/* Assign Team Members */}
