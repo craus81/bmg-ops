@@ -113,6 +113,17 @@ export default function FleetPage() {
     setVinError('');
     setVinLoading(true);
     try {
+      // Check for duplicate VIN in fleet_checkins
+      const { data: existing } = await supabase
+        .from('fleet_checkins')
+        .select('id, created_at')
+        .eq('vin', v)
+        .limit(1);
+      if (existing && existing.length > 0) {
+        setVinError(`This vehicle has already been checked in (${new Date(existing[0].created_at).toLocaleDateString([], { month: 'short', day: 'numeric' })}).`);
+        setVinLoading(false);
+        return;
+      }
       const vehicle = await decodeVIN(v);
       setVehicleData({ vin: v, vehicle });
       setStep(1);
