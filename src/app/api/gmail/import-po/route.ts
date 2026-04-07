@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { getMessage, getPdfAttachments, getAttachment, getHeader } from '@/lib/google';
 import { createClient } from '@supabase/supabase-js';
 import { notifyMany } from '@/lib/notify';
+import { requireAuth } from '@/lib/api-auth';
 
 /**
  * Check extracted PO lines for graphic parts (02* or RM*) and create flagged graphics jobs.

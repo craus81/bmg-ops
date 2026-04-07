@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { createClient } from '@supabase/supabase-js';
 import { r2Get } from '@/lib/r2';
+import { requireAdmin } from '@/lib/api-auth';
 
 export const dynamic = 'force-dynamic';
 export const maxDuration = 120;
@@ -128,6 +129,9 @@ async function streamToBuffer(stream: any): Promise<Buffer> {
 }
 
 export async function POST(req: NextRequest) {
+  const auth = await requireAdmin(req);
+  if (auth.error) return auth.error;
+
   try {
     const { docId } = await req.json();
 

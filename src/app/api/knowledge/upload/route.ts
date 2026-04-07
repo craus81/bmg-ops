@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { createClient } from '@supabase/supabase-js';
 import { r2Upload, r2Delete, r2PublicUrl } from '@/lib/r2';
+import { requireAdmin } from '@/lib/api-auth';
 
 export const dynamic = 'force-dynamic';
 export const maxDuration = 120;
@@ -160,6 +161,9 @@ Output the extracted text first, then any visual element descriptions. Be thorou
 }
 
 export async function POST(req: NextRequest) {
+  const auth = await requireAdmin(req);
+  if (auth.error) return auth.error;
+
   try {
     const contentType = req.headers.get('content-type') || '';
 

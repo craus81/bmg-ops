@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import JSZip from 'jszip';
 import { createClient } from '@supabase/supabase-js';
+import { requireAdmin } from '@/lib/api-auth';
 
 /**
  * POST /api/admin/upload-zip
@@ -17,6 +18,9 @@ import { createClient } from '@supabase/supabase-js';
  * Returns: { files: [{ path, name, ext, size, folderParts, suggested }] }
  */
 export async function POST(req: NextRequest) {
+  const auth = await requireAdmin(req);
+  if (auth.error) return auth.error;
+
   try {
     const url = new URL(req.url);
     const type = url.searchParams.get('type') || 'templates';

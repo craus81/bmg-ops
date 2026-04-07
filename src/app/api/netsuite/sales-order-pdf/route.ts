@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { getNetSuitePdf } from '@/lib/netsuite';
+import { requireAuth } from '@/lib/api-auth';
 
 /** @deprecated Use /api/netsuite/pdf?type=salesOrder&id=... instead */
 export async function GET(request: NextRequest) {

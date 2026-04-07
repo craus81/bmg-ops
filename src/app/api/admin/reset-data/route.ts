@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { createClient } from '@supabase/supabase-js';
+import { requireAdmin } from '@/lib/api-auth';
 
 /**
  * POST /api/admin/reset-data
@@ -9,6 +10,9 @@ import { createClient } from '@supabase/supabase-js';
  * Requires confirm: "DELETE ALL DATA" in the body for safety.
  */
 export async function POST(req: NextRequest) {
+  const auth = await requireAdmin(req);
+  if (auth.error) return auth.error;
+
   try {
     const { confirm } = await req.json();
 

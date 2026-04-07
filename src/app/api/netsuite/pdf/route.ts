@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { getNetSuitePdf } from '@/lib/netsuite';
+import { requireAuth } from '@/lib/api-auth';
 
 export const maxDuration = 60;
 

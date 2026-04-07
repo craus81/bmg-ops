@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { createClient } from '@supabase/supabase-js';
 import { createDirectInvoice, findCustomer, findItems, findLocation } from '@/lib/netsuite';
+import { requireAuth } from '@/lib/api-auth';
 
 /**
  * POST /api/netsuite/invoice-vehicles

@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import JSZip from 'jszip';
 import { createClient } from '@supabase/supabase-js';
 import { r2Upload, r2Delete, r2PublicUrl } from '@/lib/r2';
+import { requireAdmin } from '@/lib/api-auth';
 
 interface TemplateEntry {
   path: string;
@@ -24,6 +25,9 @@ interface TemplateEntry {
  * Uploads EPS files + thumbnails to Supabase storage and creates vehicle_templates records.
  */
 export async function POST(req: NextRequest) {
+  const auth = await requireAdmin(req);
+  if (auth.error) return auth.error;
+
   try {
     const formData = await req.formData();
     const zipFile = formData.get('file') as File;

@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { r2Upload, r2Delete, r2PublicUrl } from '@/lib/r2';
+import { requireAuth } from '@/lib/api-auth';
 
 export const dynamic = 'force-dynamic';
 

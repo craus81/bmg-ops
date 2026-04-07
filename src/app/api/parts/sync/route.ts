@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { suiteqlQueryAll } from '@/lib/netsuite';
 import { createClient } from '@supabase/supabase-js';
+import { requireAdmin } from '@/lib/api-auth';
 
 export const dynamic = 'force-dynamic';
 export const maxDuration = 120; // Allow up to 2 minutes for large syncs
@@ -27,6 +28,9 @@ function determineCatalog(itemNumber: string, nsClass: string | null): 'upfit' |
 }
 
 export async function POST(req: NextRequest) {
+  const auth = await requireAdmin(req);
+  if (auth.error) return auth.error;
+
   const body = await req.json().catch(() => ({}));
   const triggeredBy = body.userId || null;
 

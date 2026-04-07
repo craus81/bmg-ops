@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { createSalesOrder, findCustomer, findItems, findLocation } from '@/lib/netsuite';
 import { createClient } from '@supabase/supabase-js';
+import { requireAuth } from '@/lib/api-auth';
 
 export async function POST(req: NextRequest) {
   try {

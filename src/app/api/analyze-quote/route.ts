@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
+import { requireAuth } from '@/lib/api-auth';
 
 // App Router: set max duration for long AI calls (Vercel Pro allows up to 300s)
 export const maxDuration = 120;
