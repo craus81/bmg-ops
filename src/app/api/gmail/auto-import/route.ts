@@ -67,19 +67,19 @@ export async function GET(req: NextRequest) {
       }
 
       try {
-        // Call the import-po endpoint internally
+        // Call the import-po endpoint in extractOnly mode — queue for manual review
         const importRes = await fetch(new URL('/api/gmail/import-po', req.url), {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ messageId: id, autoCreate: true }),
+          body: JSON.stringify({ messageId: id, extractOnly: true }),
         });
 
         const result = await importRes.json();
 
-        if (result.status === 'imported') {
+        if (result.status === 'imported' || result.status === 'review') {
           imported++;
-          results.push({ messageId: id, status: 'imported', poNumber: result.poNumber });
-        } else if (result.status === 'skipped') {
+          results.push({ messageId: id, status: result.status, poNumber: result.poNumber || result.extracted?.po_number });
+        } else if (result.status === 'skipped' || result.status === 'exists') {
           skipped++;
           results.push({ messageId: id, status: 'skipped', reason: result.reason });
         } else {
@@ -93,6 +93,34 @@ export async function GET(req: NextRequest) {
 
       // Small delay between imports to avoid rate limits
       await new Promise(r => setTimeout(r, 1000));
+    }
+
+    // Send notification to admins if new POs were queued
+    if (imported > 0) {
+      const { data: adminProfiles } = await supabase
+        .from('profiles')
+        .select('id')
+        .eq('role', 'admin')
+        .eq('status', 'approved');
+      const adminIds = (adminProfiles || []).map((p: any) => p.id);
+      if (adminIds.length > 0) {
+        const poNumbers = results
+          .filter((r: any) => r.status === 'review' || r.status === 'imported')
+          .map((r: any) => r.poNumber)
+          .filter(Boolean)
+          .join(', ');
+        fetch(new URL('/api/notifications/send', req.url), {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            userIds: adminIds,
+            type: 'po_pending',
+            title: `${imported} new PO${imported !== 1 ? 's' : ''} pending review`,
+            body: poNumbers ? `PO #${poNumbers}` : 'New purchase orders found in Gmail',
+            url: '/admin/pos',
+          }),
+        }).catch(() => {});
+      }
     }
 
     return NextResponse.json({

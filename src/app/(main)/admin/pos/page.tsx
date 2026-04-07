@@ -72,6 +72,21 @@ export default function POsPage() {
   const [catalogAddResults, setCatalogAddResults] = useState<Record<string, 'added' | 'error'>>({});
   // Batch delete state
   const [editMode, setEditMode] = useState(false);
+
+  // Pending PO queue state
+  const [pendingPOs, setPendingPOs] = useState<any[]>([]);
+  const [pendingLoading, setPendingLoading] = useState(false);
+
+  const reviewPendingPO = (pending: any) => {
+    if (pending.raw_extraction) {
+      setReviewingExtraction({ messageId: pending.message_id, extracted: pending.raw_extraction });
+    }
+  };
+
+  const dismissPendingPO = async (id: string) => {
+    await supabase.from('gmail_po_imports').update({ status: 'skipped' }).eq('id', id);
+    setPendingPOs(prev => prev.filter(p => p.id !== id));
+  };
   const [selectedForDelete, setSelectedForDelete] = useState<Set<string>>(new Set());
   const [deletingBatch, setDeletingBatch] = useState(false);
 
@@ -95,6 +110,14 @@ export default function POsPage() {
       const { data: catData } = await supabase.from('catalog').select('*').order('part_number');
       setCatalog((catData as CatalogItem[]) || []);
       setLoading(false);
+
+      // Load pending PO queue
+      const { data: pending } = await supabase
+        .from('gmail_po_imports')
+        .select('*')
+        .eq('status', 'pending')
+        .order('created_at', { ascending: false });
+      setPendingPOs(pending || []);
     };
     load();
   }, [isAdmin]);
@@ -911,6 +934,60 @@ export default function POsPage() {
           >×</button>
         )}
       </div>
+
+      {/* Pending PO Queue */}
+      {pendingPOs.length > 0 && (
+        <div style={{ background: 'rgba(251,191,36,0.06)', border: '1px solid rgba(251,191,36,0.25)', borderRadius: '10px', padding: '14px', marginBottom: '12px' }}>
+          <div style={{ fontSize: '13px', fontWeight: 700, color: '#fbbf24', marginBottom: '8px' }}>
+            {pendingPOs.length} Pending PO{pendingPOs.length !== 1 ? 's' : ''} — Review Required
+          </div>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
+            {pendingPOs.map(p => {
+              const extracted = p.raw_extraction;
+              const poNum = extracted?.po_number || p.po_number || 'Unknown';
+              const customer = extracted?.customer || '';
+              const lineCount = extracted?.line_items?.length || 0;
+              return (
+                <div key={p.id} style={{
+                  padding: '10px 12px', borderRadius: '8px', background: 'var(--bg)', border: '1px solid var(--border)',
+                  display: 'flex', justifyContent: 'space-between', alignItems: 'center',
+                }}>
+                  <div style={{ flex: 1, minWidth: 0 }}>
+                    <div style={{ fontSize: '13px', fontWeight: 700, color: 'var(--text-body)' }}>
+                      PO #{poNum}
+                    </div>
+                    <div style={{ fontSize: '11px', color: 'var(--text-label)', marginTop: '2px' }}>
+                      {customer}{lineCount > 0 ? ` · ${lineCount} line${lineCount !== 1 ? 's' : ''}` : ''}
+                      {p.subject ? ` · ${p.subject}` : ''}
+                    </div>
+                    <div style={{ fontSize: '10px', color: 'var(--text-muted)', marginTop: '2px' }}>
+                      {new Date(p.created_at).toLocaleString()}
+                    </div>
+                  </div>
+                  <div style={{ display: 'flex', gap: '6px', flexShrink: 0 }}>
+                    <button
+                      onClick={() => reviewPendingPO(p)}
+                      style={{
+                        padding: '6px 12px', borderRadius: '6px', fontSize: '11px', fontWeight: 700,
+                        background: 'rgba(59,130,246,0.12)', border: '1px solid rgba(59,130,246,0.3)',
+                        color: '#60a5fa', cursor: 'pointer',
+                      }}
+                    >Review</button>
+                    <button
+                      onClick={() => dismissPendingPO(p.id)}
+                      style={{
+                        padding: '6px 10px', borderRadius: '6px', fontSize: '11px', fontWeight: 700,
+                        background: 'rgba(248,113,113,0.08)', border: '1px solid rgba(248,113,113,0.2)',
+                        color: '#f87171', cursor: 'pointer',
+                      }}
+                    >Dismiss</button>
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        </div>
+      )}
 
       {/* Gmail Email Import Panel */}
       {showEmailImport && (
