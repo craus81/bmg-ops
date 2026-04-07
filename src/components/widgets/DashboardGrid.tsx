@@ -66,7 +66,7 @@ const WIDGET_COMPONENTS: Record<string, React.LazyExoticComponent<any>> = {
   reports: ReportsWidget,
 };
 
-const ROW_HEIGHT = 130;
+const ROW_HEIGHT = 90;
 
 function WidgetLoader() {
   return (
@@ -292,7 +292,7 @@ export default function DashboardGrid() {
           width={width || 400}
           layouts={{ lg: lgLayout }}
           breakpoints={{ lg: 600, sm: 0 }}
-          cols={{ lg: 4, sm: 2 }}
+          cols={{ lg: 4, sm: 1 }}
           rowHeight={ROW_HEIGHT}
           dragConfig={{ enabled: isEditing, handle: '.widget-drag-handle' }}
           resizeConfig={{ enabled: isEditing }}
