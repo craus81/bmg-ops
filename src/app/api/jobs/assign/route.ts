@@ -21,33 +21,40 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ error: 'Missing required fields' }, { status: 400 });
     }
 
-    // 1. Insert assignments (skip duplicates)
-    const assignmentData = userIds.map((userId: string) => ({
-      job_type: jobType,
-      job_id: jobId,
-      user_id: userId,
-      assigned_by: assignedBy || null,
-    }));
-
-    const { error: insertError } = await supabase
+    // 1. Delete all existing assignments for this job, then re-insert
+    await supabase
       .from('job_assignments')
-      .upsert(assignmentData, { onConflict: 'job_type,job_id,user_id' });
+      .delete()
+      .eq('job_type', jobType)
+      .eq('job_id', jobId);
 
-    if (insertError) {
-      console.error('Assignment insert error:', insertError);
-      return NextResponse.json({ error: insertError.message }, { status: 500 });
-    }
-
-    // 2. Also update the legacy assigned_to field (first assigned user)
+    // 2. Insert current assignments
     if (userIds.length > 0) {
-      const table = jobType === 'scanned_vehicle' ? 'scanned_vehicles' : 'graphics_jobs';
-      await supabase
-        .from(table)
-        .update({ assigned_to: userIds[0] })
-        .eq('id', jobId);
+      const assignmentData = userIds.map((userId: string) => ({
+        job_type: jobType,
+        job_id: jobId,
+        user_id: userId,
+        assigned_by: assignedBy || null,
+      }));
+
+      const { error: insertError } = await supabase
+        .from('job_assignments')
+        .insert(assignmentData);
+
+      if (insertError) {
+        console.error('Assignment insert error:', insertError);
+        return NextResponse.json({ error: insertError.message }, { status: 500 });
+      }
     }
 
-    // 3. Notify assigned users
+    // 3. Update the legacy assigned_to field
+    const table = jobType === 'scanned_vehicle' ? 'scanned_vehicles' : 'graphics_jobs';
+    await supabase
+      .from(table)
+      .update({ assigned_to: userIds.length > 0 ? userIds[0] : null })
+      .eq('id', jobId);
+
+    // 4. Notify assigned users
     if (notifyUsers && userIds.length > 0) {
       const typeLabel = jobType === 'scanned_vehicle' ? 'Vehicle' : 'Graphics Job';
       const title = `Assigned to ${typeLabel}`;
@@ -71,7 +78,7 @@ export async function POST(req: NextRequest) {
         .in('user_id', userIds);
     }
 
-    // 4. Notify full production team (for graphics jobs)
+    // 5. Notify full production team (for graphics jobs)
     if (notifyTeam && jobType === 'graphics_job') {
       const { data: teamMembers } = await supabase
         .from('profiles')

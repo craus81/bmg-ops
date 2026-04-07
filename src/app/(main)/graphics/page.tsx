@@ -163,9 +163,10 @@ export default function GraphicsPage() {
   };
 
   const saveJobAssignments = async (jobId: string, userIds: string[], jobTitle?: string) => {
-    setJobAssignments(prev => ({ ...prev, [jobId]: userIds }));
+    const prev = jobAssignments[jobId] || [];
+    setJobAssignments(p => ({ ...p, [jobId]: userIds }));
     try {
-      await fetch('/api/jobs/assign', {
+      const res = await fetch('/api/jobs/assign', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -178,8 +179,13 @@ export default function GraphicsPage() {
           jobTitle,
         }),
       });
+      if (!res.ok) {
+        console.error('Assignment save failed:', res.status, await res.text());
+        setJobAssignments(p => ({ ...p, [jobId]: prev }));
+      }
     } catch (err) {
       console.error('Assignment save error:', err);
+      setJobAssignments(p => ({ ...p, [jobId]: prev }));
     }
   };
 
