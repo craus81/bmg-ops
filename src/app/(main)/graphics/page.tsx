@@ -60,6 +60,13 @@ export default function GraphicsPage() {
   const [editingJob, setEditingJob] = useState<GraphicsJob | null>(null);
   const [statusHistory, setStatusHistory] = useState<GraphicsStatusHistory[]>([]);
 
+  // Status change with comment
+  const [pendingStatus, setPendingStatus] = useState<{ job: GraphicsJob; status: GraphicsJobStatus } | null>(null);
+  const [statusComment, setStatusComment] = useState('');
+
+  // Internal notes (comment thread)
+  const [newNote, setNewNote] = useState('');
+
   // Create job state
   const [showCreate, setShowCreate] = useState(false);
   const [createStep, setCreateStep] = useState<'category' | 'details'>('category');
@@ -255,8 +262,22 @@ export default function GraphicsPage() {
     }
   };
 
+  // Prompt for status comment before changing
+  const promptStatusChange = (job: GraphicsJob, newStatus: GraphicsJobStatus) => {
+    if (job.status === newStatus) return;
+    setPendingStatus({ job, status: newStatus });
+    setStatusComment('');
+  };
+
+  const confirmStatusChange = async () => {
+    if (!pendingStatus) return;
+    await changeStatus(pendingStatus.job, pendingStatus.status, statusComment.trim() || undefined);
+    setPendingStatus(null);
+    setStatusComment('');
+  };
+
   // Change job status
-  const changeStatus = async (job: GraphicsJob, newStatus: GraphicsJobStatus) => {
+  const changeStatus = async (job: GraphicsJob, newStatus: GraphicsJobStatus, note?: string) => {
     const oldStatus = job.status;
     if (oldStatus === newStatus) return;
 
@@ -272,6 +293,7 @@ export default function GraphicsPage() {
         from_status: oldStatus,
         to_status: newStatus,
         changed_by: user?.id,
+        note: note || null,
       });
 
       // Notify users via all channels (in-app, SMS, email) per their preferences
@@ -319,6 +341,21 @@ export default function GraphicsPage() {
       setJobs(prev => prev.map(j => j.id === job.id ? { ...j, status: newStatus, updated_at: new Date().toISOString() } : j));
       if (expandedJobId === job.id) loadHistory(job.id);
     }
+  };
+
+  // Add internal note (timestamped comment, no status change)
+  const addNote = async (jobId: string) => {
+    if (!newNote.trim()) return;
+    const job = jobs.find(j => j.id === jobId);
+    await supabase.from('graphics_status_history').insert({
+      job_id: jobId,
+      from_status: job?.status || null,
+      to_status: job?.status || 'received',
+      changed_by: user?.id,
+      note: newNote.trim(),
+    });
+    setNewNote('');
+    await loadHistory(jobId);
   };
 
   // Save job edits
@@ -740,7 +777,7 @@ export default function GraphicsPage() {
                         {GRAPHICS_STATUS_ORDER.filter(s => s !== 'cancelled' && s !== 'flagged').map(s => (
                           <button
                             key={s}
-                            onClick={() => changeStatus(job, s)}
+                            onClick={() => promptStatusChange(job, s)}
                             disabled={job.status === s}
                             style={{
                               padding: '4px 8px', borderRadius: '5px', fontSize: '9px', fontWeight: 700,
@@ -812,22 +849,63 @@ export default function GraphicsPage() {
                           {job.job_number && <span style={{ color: 'var(--text-muted)' }}>#{job.job_number}</span>}
                         </div>
 
-                        {/* Status history */}
-                        {statusHistory.length > 0 && (
-                          <div style={{ marginBottom: '10px' }}>
-                            <div style={labelStyle}>Status History</div>
-                            <div style={{ display: 'flex', flexDirection: 'column', gap: '2px', marginTop: '4px', maxHeight: '120px', overflowY: 'auto' }}>
-                              {statusHistory.map(h => (
-                                <div key={h.id} style={{ fontSize: '10px', color: 'var(--text-label)', display: 'flex', gap: '6px' }}>
-                                  <span style={{ color: 'var(--text-body)' }}>{new Date(h.created_at).toLocaleString()}</span>
-                                  {h.from_status && <span><span style={{ color: GRAPHICS_STATUS_COLORS[h.from_status as GraphicsJobStatus] || 'var(--text-body)' }}>{GRAPHICS_STATUS_LABELS[h.from_status as GraphicsJobStatus] || h.from_status}</span> →</span>}
-                                  <span style={{ color: GRAPHICS_STATUS_COLORS[h.to_status as GraphicsJobStatus] || 'var(--text-body)', fontWeight: 700 }}>{GRAPHICS_STATUS_LABELS[h.to_status as GraphicsJobStatus] || h.to_status}</span>
-                                  {getProfileName(h.changed_by) && <span>by {getProfileName(h.changed_by)}</span>}
-                                </div>
-                              ))}
+                        {/* Activity / Status history + Notes */}
+                        <div style={{ marginBottom: '10px' }}>
+                          <div style={labelStyle}>Activity</div>
+                          {statusHistory.length > 0 && (
+                            <div style={{ display: 'flex', flexDirection: 'column', gap: '4px', marginTop: '4px', maxHeight: '200px', overflowY: 'auto' }}>
+                              {statusHistory.map(h => {
+                                const isNote = h.from_status === h.to_status && h.note;
+                                return (
+                                  <div key={h.id} style={{ fontSize: '10px', color: 'var(--text-label)', padding: '4px 6px', borderRadius: '6px', background: isNote ? 'rgba(245,158,11,0.06)' : 'transparent' }}>
+                                    <div style={{ display: 'flex', gap: '6px', alignItems: 'center' }}>
+                                      <span style={{ color: 'var(--text-muted)', flexShrink: 0 }}>{new Date(h.created_at).toLocaleString()}</span>
+                                      {!isNote && h.from_status && (
+                                        <span><span style={{ color: GRAPHICS_STATUS_COLORS[h.from_status as GraphicsJobStatus] || 'var(--text-body)' }}>{GRAPHICS_STATUS_LABELS[h.from_status as GraphicsJobStatus] || h.from_status}</span> →</span>
+                                      )}
+                                      {!isNote && (
+                                        <span style={{ color: GRAPHICS_STATUS_COLORS[h.to_status as GraphicsJobStatus] || 'var(--text-body)', fontWeight: 700 }}>{GRAPHICS_STATUS_LABELS[h.to_status as GraphicsJobStatus] || h.to_status}</span>
+                                      )}
+                                      {getProfileName(h.changed_by) && <span style={{ color: 'var(--text-muted)' }}>— {getProfileName(h.changed_by)}</span>}
+                                    </div>
+                                    {h.note && (
+                                      <div style={{ marginTop: '2px', fontSize: '11px', color: 'var(--text-body)', whiteSpace: 'pre-wrap', lineHeight: 1.4 }}>
+                                        {h.note}
+                                      </div>
+                                    )}
+                                  </div>
+                                );
+                              })}
                             </div>
+                          )}
+                          {/* Add note */}
+                          <div style={{ display: 'flex', gap: '4px', marginTop: '6px' }}>
+                            <input
+                              value={newNote}
+                              onChange={e => setNewNote(e.target.value)}
+                              onKeyDown={e => { if (e.key === 'Enter' && newNote.trim()) addNote(job.id); }}
+                              placeholder="Add a note..."
+                              style={{
+                                flex: 1, padding: '6px 10px', borderRadius: '6px', fontSize: '11px',
+                                background: 'var(--input-bg)', border: '1px solid var(--border)',
+                                color: 'var(--text-primary)', outline: 'none',
+                              }}
+                            />
+                            <button
+                              onClick={() => addNote(job.id)}
+                              disabled={!newNote.trim()}
+                              style={{
+                                padding: '6px 12px', borderRadius: '6px', fontSize: '10px', fontWeight: 700,
+                                background: newNote.trim() ? 'rgba(59,130,246,0.15)' : 'var(--subtle-bg)',
+                                border: '1px solid ' + (newNote.trim() ? 'rgba(59,130,246,0.3)' : 'var(--border)'),
+                                color: newNote.trim() ? '#60a5fa' : 'var(--text-muted)',
+                                cursor: newNote.trim() ? 'pointer' : 'default',
+                              }}
+                            >
+                              Post
+                            </button>
                           </div>
-                        )}
+                        </div>
 
                         {/* Files */}
                         <div style={{ marginBottom: '10px' }}>
@@ -917,7 +995,7 @@ export default function GraphicsPage() {
                           )}
                           {job.status !== 'cancelled' && (
                             <button
-                              onClick={() => changeStatus(job, 'cancelled')}
+                              onClick={() => promptStatusChange(job, 'cancelled')}
                               style={{ padding: '10px 14px', borderRadius: '8px', background: 'rgba(107,114,128,0.08)', border: '1px solid rgba(107,114,128,0.2)', color: '#6b7280', fontSize: '12px', fontWeight: 700, cursor: 'pointer' }}
                             >
                               Cancel
@@ -1372,6 +1450,61 @@ export default function GraphicsPage() {
                 </div>
               </>
             )}
+          </div>
+        </div>
+      )}
+
+      {/* Status change comment modal */}
+      {pendingStatus && (
+        <div style={{
+          position: 'fixed', inset: 0, background: 'var(--overlay)', zIndex: 200,
+          display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '20px',
+        }} onClick={() => setPendingStatus(null)}>
+          <div onClick={e => e.stopPropagation()} style={{
+            background: 'var(--card)', borderRadius: '14px', padding: '20px',
+            width: '100%', maxWidth: '400px', boxShadow: '0 8px 30px rgba(0,0,0,0.3)',
+          }}>
+            <div style={{ fontSize: '14px', fontWeight: 700, color: 'var(--text-primary)', marginBottom: '4px' }}>
+              Change Status
+            </div>
+            <div style={{ fontSize: '12px', color: 'var(--text-muted)', marginBottom: '14px' }}>
+              {pendingStatus.job.title} — <span style={{ color: GRAPHICS_STATUS_COLORS[pendingStatus.job.status] }}>{GRAPHICS_STATUS_LABELS[pendingStatus.job.status]}</span> → <span style={{ color: GRAPHICS_STATUS_COLORS[pendingStatus.status], fontWeight: 700 }}>{GRAPHICS_STATUS_LABELS[pendingStatus.status]}</span>
+            </div>
+            <textarea
+              autoFocus
+              value={statusComment}
+              onChange={e => setStatusComment(e.target.value)}
+              placeholder="Add a comment (optional)..."
+              style={{
+                width: '100%', padding: '10px', borderRadius: '8px', fontSize: '12px',
+                background: 'var(--input-bg)', border: '1px solid var(--border)',
+                color: 'var(--text-primary)', minHeight: '70px', resize: 'vertical',
+                outline: 'none',
+              }}
+            />
+            <div style={{ display: 'flex', gap: '8px', marginTop: '12px' }}>
+              <button
+                onClick={() => setPendingStatus(null)}
+                style={{
+                  flex: 1, padding: '10px', borderRadius: '8px', fontSize: '12px', fontWeight: 700,
+                  background: 'transparent', border: '1px solid var(--border)',
+                  color: 'var(--text-body)', cursor: 'pointer',
+                }}
+              >
+                Cancel
+              </button>
+              <button
+                onClick={confirmStatusChange}
+                style={{
+                  flex: 1, padding: '10px', borderRadius: '8px', fontSize: '12px', fontWeight: 700,
+                  background: GRAPHICS_STATUS_COLORS[pendingStatus.status] + '22',
+                  border: `1px solid ${GRAPHICS_STATUS_COLORS[pendingStatus.status]}55`,
+                  color: GRAPHICS_STATUS_COLORS[pendingStatus.status], cursor: 'pointer',
+                }}
+              >
+                Confirm
+              </button>
+            </div>
           </div>
         </div>
       )}
