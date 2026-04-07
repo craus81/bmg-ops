@@ -23,8 +23,13 @@ const supabase = createClient(
  * }
  */
 export async function POST(req: NextRequest) {
-  const auth = await requireAuth(req);
-  if (auth.error) return auth.error;
+  // Allow internal server-to-server calls (from cron jobs, background tasks)
+  const authHeader = req.headers.get('authorization');
+  const isInternalCall = authHeader === `Bearer ${process.env.SUPABASE_SERVICE_ROLE_KEY}`;
+  if (!isInternalCall) {
+    const auth = await requireAuth(req);
+    if (auth.error) return auth.error;
+  }
 
   try {
     const { userIds, type, title, body, url, excludeUserId } = await req.json();

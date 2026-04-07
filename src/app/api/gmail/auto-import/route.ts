@@ -70,7 +70,10 @@ export async function GET(req: NextRequest) {
         // Call the import-po endpoint in extractOnly mode — queue for manual review
         const importRes = await fetch(new URL('/api/gmail/import-po', req.url), {
           method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
+          headers: {
+            'Content-Type': 'application/json',
+            'Authorization': `Bearer ${process.env.SUPABASE_SERVICE_ROLE_KEY}`,
+          },
           body: JSON.stringify({ messageId: id, extractOnly: true }),
         });
 
@@ -110,7 +113,10 @@ export async function GET(req: NextRequest) {
           .join(', ');
         fetch(new URL('/api/notifications/send', req.url), {
           method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
+          headers: {
+            'Content-Type': 'application/json',
+            'Authorization': `Bearer ${process.env.SUPABASE_SERVICE_ROLE_KEY}`,
+          },
           body: JSON.stringify({
             userIds: adminIds,
             type: 'po_pending',
