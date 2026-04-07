@@ -192,7 +192,7 @@ export default function DashboardGrid() {
   }
 
   return (
-    <div ref={containerRef} style={{ maxWidth: '100%', overflowX: 'hidden' }}>
+    <div ref={containerRef} style={{ width: '100%', maxWidth: '100%', overflowX: 'hidden', boxSizing: 'border-box' }}>
       {/* Toolbar */}
       <div style={{
         display: 'flex', justifyContent: 'space-between', alignItems: 'center',
@@ -289,7 +289,7 @@ export default function DashboardGrid() {
       ) : (
         <RGL
           className="dashboard-grid"
-          width={width || 400}
+          width={Math.max((width || 400) - 2, 300)}
           layouts={{ lg: lgLayout }}
           breakpoints={{ lg: 600, sm: 0 }}
           cols={{ lg: 4, sm: 1 }}
@@ -301,7 +301,7 @@ export default function DashboardGrid() {
           onResizeStop={handleResizeStop}
           compactor={verticalCompactor}
           margin={[8, 8] as [number, number]}
-          containerPadding={[0, 0] as [number, number]}
+          containerPadding={[0, 8] as [number, number]}
         >
           {activeWidgets.map(widgetId => {
             const Component = WIDGET_COMPONENTS[widgetId];
