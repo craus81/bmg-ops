@@ -28,8 +28,8 @@ const allTabs: Tab[] = [
   { id: 'scan-install', path: '/scan-install', label: 'Scan', feature: 'scan_install', priority: 5 },
   { id: 'vehicles', path: '/vehicles', label: 'Vehicles', feature: 'vehicles', priority: 6 },
   { id: 'estimates', path: '/estimates', label: 'Estimates', feature: 'estimates', priority: 7 },
-  { id: 'installer-portal', path: '/installer', label: 'CNI Jobs', feature: 'cni_management', priority: 1 },
-  { id: 'my-jobs', path: '/my-jobs', label: 'My Jobs', feature: 'vehicles', priority: 1 },
+  { id: 'installer-portal', path: '/installer', label: 'CNI Jobs', feature: 'cni_management', priority: 8 },
+  { id: 'my-jobs', path: '/my-jobs', label: 'My Jobs', feature: 'vehicles', priority: 8 },
   // Customer-only
   { id: 'customer-dashboard', path: '/customer/dashboard', label: 'My Jobs', feature: 'home', priority: 0 },
 ];
