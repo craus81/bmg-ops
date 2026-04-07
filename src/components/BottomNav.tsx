@@ -12,9 +12,8 @@ interface BottomNavProps {
 interface Tab {
   id: string;
   path: string;
-  label: string;
-  feature?: FeatureKey; // feature required to see this tab
-  alwaysShow?: boolean; // show regardless of features (e.g. More)
+  feature?: FeatureKey;
+  alwaysShow?: boolean;
 }
 
 const allTabs: Tab[] = [
