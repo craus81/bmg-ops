@@ -7,7 +7,8 @@ import { createClient } from '@/lib/supabase-browser';
 import { decodeVIN, isValidVIN } from '@/lib/vin-decoder';
 import VinScanner from '@/components/VinScanner';
 import { theme } from '@/lib/theme';
-import type { NetsuiteSalesOrder, GraphicsProof, FleetCheckin } from '@/lib/types';
+import type { NetsuiteSalesOrder, GraphicsProof, FleetCheckin, VehicleTrackingStatus } from '@/lib/types';
+import { VEHICLE_STATUS_PIPELINE, VEHICLE_STATUS_LABELS, VEHICLE_STATUS_COLORS } from '@/lib/types';
 import NetSuitePdf from '@/components/NetSuitePdf';
 import ProofThumbnail from '@/components/ProofThumbnail';
 
@@ -78,6 +79,10 @@ export default function FleetPage() {
   const [manualCustomerName, setManualCustomerName] = useState('');
   const [scheduledUpfitDate, setScheduledUpfitDate] = useState('');
 
+  // Duplicate vehicle found
+  const [duplicateVehicle, setDuplicateVehicle] = useState<any>(null);
+  const [updatingDupStatus, setUpdatingDupStatus] = useState(false);
+
   // Recent check-ins
   const [recentCheckins, setRecentCheckins] = useState<FleetCheckin[]>([]);
   const [showRecent, setShowRecent] = useState(false);
@@ -116,14 +121,16 @@ export default function FleetPage() {
       // Check for duplicate VIN in fleet_checkins
       const { data: existing } = await supabase
         .from('fleet_checkins')
-        .select('id, created_at')
+        .select('id, vin, vehicle_year, vehicle_make, vehicle_model, customer_name, sales_order_number, status, created_at')
         .eq('vin', v)
         .limit(1);
       if (existing && existing.length > 0) {
-        setVinError(`This vehicle has already been checked in (${new Date(existing[0].created_at).toLocaleDateString([], { month: 'short', day: 'numeric' })}).`);
+        setDuplicateVehicle(existing[0]);
+        setVinError(`This vehicle was checked in on ${new Date(existing[0].created_at).toLocaleDateString([], { month: 'short', day: 'numeric' })}. You can update its status below.`);
         setVinLoading(false);
         return;
       }
+      setDuplicateVehicle(null);
       const vehicle = await decodeVIN(v);
       setVehicleData({ vin: v, vehicle });
       setStep(1);
@@ -436,6 +443,53 @@ export default function FleetPage() {
 
         {vinError && (
           <div style={{ marginTop: '8px', padding: '8px 12px', background: theme.errorBg, border: `1px solid ${theme.errorBorder}`, borderRadius: '10px', color: theme.error, fontSize: '12px' }}>{vinError}</div>
+        )}
+
+        {duplicateVehicle && (
+          <div style={{ marginTop: '8px', padding: '14px', background: theme.card, border: `1px solid ${theme.border}`, borderRadius: '14px' }}>
+            <div style={{ fontSize: '14px', fontWeight: 800, color: theme.textPrimary, marginBottom: '2px' }}>
+              {[duplicateVehicle.vehicle_year, duplicateVehicle.vehicle_make, duplicateVehicle.vehicle_model].filter(Boolean).join(' ')}
+            </div>
+            {duplicateVehicle.customer_name && (
+              <div style={{ fontSize: '12px', color: theme.textSecondary, marginBottom: '2px' }}>{duplicateVehicle.customer_name}</div>
+            )}
+            {duplicateVehicle.sales_order_number && (
+              <div style={{ fontSize: '11px', color: theme.textMuted, marginBottom: '8px' }}>SO #{duplicateVehicle.sales_order_number}</div>
+            )}
+            <div style={{ fontSize: '10px', fontWeight: 700, color: theme.textMuted, textTransform: 'uppercase', marginBottom: '6px' }}>Update Status</div>
+            <div style={{ display: 'flex', flexWrap: 'wrap', gap: '6px' }}>
+              {VEHICLE_STATUS_PIPELINE.map(s => {
+                const colors = VEHICLE_STATUS_COLORS[s];
+                const isCurrent = duplicateVehicle.status === s || (duplicateVehicle.status === 'checked_in' && s === 'received');
+                return (
+                  <button
+                    key={s}
+                    disabled={isCurrent || updatingDupStatus}
+                    onClick={async () => {
+                      setUpdatingDupStatus(true);
+                      await supabase.from('fleet_checkins').update({ status: s, updated_at: new Date().toISOString() }).eq('id', duplicateVehicle.id);
+                      setDuplicateVehicle({ ...duplicateVehicle, status: s });
+                      setUpdatingDupStatus(false);
+                    }}
+                    style={{
+                      padding: '8px 12px', borderRadius: '8px', fontSize: '12px', fontWeight: 700,
+                      background: isCurrent ? colors.bg : 'var(--subtle-bg)',
+                      border: `1.5px solid ${isCurrent ? colors.border : theme.border}`,
+                      color: isCurrent ? colors.text : theme.textSecondary,
+                      opacity: isCurrent ? 1 : (updatingDupStatus ? 0.4 : 1),
+                      cursor: isCurrent || updatingDupStatus ? 'default' : 'pointer',
+                    }}
+                  >
+                    {isCurrent ? `● ${VEHICLE_STATUS_LABELS[s]}` : VEHICLE_STATUS_LABELS[s]}
+                  </button>
+                );
+              })}
+            </div>
+            <button
+              onClick={() => { setDuplicateVehicle(null); setVinError(''); setVin(''); }}
+              style={{ marginTop: '10px', width: '100%', padding: '10px', borderRadius: '10px', border: `1px solid ${theme.border}`, background: 'transparent', color: theme.textSecondary, fontSize: '13px', fontWeight: 700 }}
+            >Scan Different VIN</button>
+          </div>
         )}
 
         {vinLoading && (
