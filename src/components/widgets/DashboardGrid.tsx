@@ -301,7 +301,7 @@ export default function DashboardGrid() {
           onResizeStop={handleResizeStop}
           compactor={verticalCompactor}
           margin={[8, 8] as [number, number]}
-          containerPadding={[0, 8] as [number, number]}
+          containerPadding={[8, 8] as [number, number]}
         >
           {activeWidgets.map(widgetId => {
             const Component = WIDGET_COMPONENTS[widgetId];

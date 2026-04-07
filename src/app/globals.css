@@ -18,7 +18,7 @@ html, body {
 }
 
 .dashboard-grid > div {
-  overflow: hidden !important;
+  overflow: visible !important;
 }
 
 /* ===== DARK THEME (default) ===== */
