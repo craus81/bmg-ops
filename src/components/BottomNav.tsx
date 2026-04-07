@@ -9,7 +9,7 @@ interface BottomNavProps {
   clockStatus: 'out' | 'in' | 'break';
 }
 
-interface Tab {
+export interface Tab {
   id: string;
   path: string;
   label: string;
@@ -19,7 +19,7 @@ interface Tab {
 }
 
 // All possible tabs with priority — only top 5 + More will show
-const allTabs: Tab[] = [
+export const allTabs: Tab[] = [
   { id: 'home', path: '/home', label: 'Home', feature: 'home', priority: 0 },
   { id: 'graphics', path: '/graphics', label: 'Graphics', feature: 'graphics', priority: 1 },
   { id: 'fleet', path: '/fleet', label: 'Check In', feature: 'fleet_checkin', priority: 2 },
@@ -34,7 +34,7 @@ const allTabs: Tab[] = [
   { id: 'customer-dashboard', path: '/customer/dashboard', label: 'My Jobs', feature: 'home', priority: 0 },
 ];
 
-const MAX_TABS = 5; // + More = 6 total
+export const MAX_TABS = 5; // + More = 6 total
 
 export default function BottomNav({ clockStatus }: BottomNavProps) {
   const pathname = usePathname();

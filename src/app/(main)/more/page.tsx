@@ -1,10 +1,11 @@
 'use client';
 
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useMemo } from 'react';
 import { useRouter } from 'next/navigation';
 import { useAuth } from '@/components/AuthProvider';
 import { useTheme } from '@/components/ThemeProvider';
 import { createClient } from '@/lib/supabase-browser';
+import { allTabs, MAX_TABS } from '@/components/BottomNav';
 
 export default function MorePage() {
   const router = useRouter();
@@ -38,12 +39,28 @@ export default function MorePage() {
 
   const F = hasFeature; // shorthand
 
+  // Tabs that didn't fit in the bottom nav
+  const overflowTabs = useMemo(() => {
+    const visible = allTabs
+      .filter(tab => {
+        if (!tab.feature) return true;
+        if (tab.id === 'customer-dashboard') return false;
+        return hasFeature(tab.feature);
+      })
+      .sort((a, b) => a.priority - b.priority);
+    return visible.slice(MAX_TABS);
+  }, [hasFeature]);
+  const overflowPaths = new Set(overflowTabs.map(t => t.path));
+
   return (
     <div>
       <div style={{ fontSize: '11px', fontWeight: 700, color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.8px', marginBottom: '12px' }}>
         More
       </div>
       <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
+        {overflowTabs.map(tab => (
+          <MenuBtn key={tab.id} title={tab.label} sub="" onClick={() => router.push(tab.path)} />
+        ))}
         {F('fleet_checkin') && (
           <MenuBtn title="Update Vehicle Status" sub="Scan VIN to update status" onClick={() => router.push('/fleet/update')} />
         )}
@@ -59,13 +76,13 @@ export default function MorePage() {
         {F('parts_catalog') && (
           <MenuBtn title="Parts Catalog" sub="Upfit & graphic parts from NetSuite" onClick={() => router.push('/parts')} />
         )}
-        {F('estimates') && (
+        {F('estimates') && !overflowPaths.has('/estimates') && (
           <MenuBtn title="Estimates" sub="Build estimates & push to NetSuite" onClick={() => router.push('/estimates')} />
         )}
         {F('quoting') && (
           <MenuBtn title="Estimating" sub="AI-powered vinyl wrap quoting" onClick={() => router.push('/admin/quotes')} />
         )}
-        {F('scan_install') && (
+        {F('scan_install') && !overflowPaths.has('/scan-install') && (
           <MenuBtn title="Scan & Install" sub="Scan VINs and assign parts" onClick={() => router.push('/scan-install')} />
         )}
         {F('proof_hygiene') && (
@@ -108,7 +125,7 @@ export default function MorePage() {
             badge={pendingUserCount > 0 ? pendingUserCount : undefined}
           />
         )}
-        {F('cni_management') && (
+        {F('cni_management') && !overflowPaths.has('/installer') && (
           <MenuBtn title="CNI Management" sub="Certified Network Installer jobs & profiles" onClick={() => router.push('/admin/cni')} />
         )}
         {F('knowledge_base') && (
