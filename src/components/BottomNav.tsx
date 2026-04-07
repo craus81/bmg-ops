@@ -88,6 +88,7 @@ export default function BottomNav({ clockStatus }: BottomNavProps) {
         return (
           <button
             key={tab.id}
+            className={active ? undefined : 'bottom-nav-tab'}
             onClick={() => router.push(tab.path)}
             style={{
               flex: 1, padding: '8px 4px', display: 'flex',
@@ -102,6 +103,7 @@ export default function BottomNav({ clockStatus }: BottomNavProps) {
               cursor: 'pointer',
               whiteSpace: 'nowrap',
               minWidth: 0,
+              transition: 'all 0.15s',
             }}
           >
             {tab.label}
