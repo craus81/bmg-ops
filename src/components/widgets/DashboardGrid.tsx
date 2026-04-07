@@ -289,7 +289,7 @@ export default function DashboardGrid() {
       ) : (
         <RGL
           className="dashboard-grid"
-          width={Math.max((width || 400) - 32, 300)}
+          width={Math.max((width || 400), 300)}
           layouts={{ lg: lgLayout }}
           breakpoints={{ lg: 600, sm: 0 }}
           cols={{ lg: 4, sm: 1 }}
