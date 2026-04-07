@@ -6,6 +6,16 @@
   box-sizing: border-box;
 }
 
+html, body {
+  overflow-x: hidden;
+  max-width: 100vw;
+}
+
+.dashboard-grid {
+  max-width: 100% !important;
+  overflow: hidden !important;
+}
+
 /* ===== DARK THEME (default) ===== */
 :root {
   --navy: #1e4a5e;

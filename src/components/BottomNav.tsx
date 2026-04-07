@@ -3,69 +3,65 @@
 import { usePathname, useRouter } from 'next/navigation';
 import { useAuth } from '@/components/AuthProvider';
 import { theme } from '@/lib/theme';
+import type { FeatureKey } from '@/lib/features';
 
 interface BottomNavProps {
   clockStatus: 'out' | 'in' | 'break';
 }
 
-import type { AppRole } from '@/lib/types';
-
 interface Tab {
   id: string;
   path: string;
   label: string;
-  icon: string;
-  roles?: AppRole[];
+  feature?: FeatureKey; // feature required to see this tab
+  alwaysShow?: boolean; // show regardless of features (e.g. More)
 }
 
-// ── Role-based tab visibility ──
-// admin:               everything
-// field_tech:          home, vehicles, time, chat, more
-// shop_tech:           home, scan & install, vehicle check in, in-shop, time, chat, more
-// sales:              home, scan & install, vehicle check in (read-only), graphics production, estimates, time, chat, more
-// graphics_production: home, vehicle check in (read-only), graphics production, estimates, time, chat, more
-// installer:           home, time, chat, more (pre-approval limited)
-// customer:            customer dashboard, settings
-
 const allTabs: Tab[] = [
-  { id: 'home', path: '/home', label: 'Home', icon: '', roles: ['admin', 'installer', 'field_tech', 'shop_tech', 'sales', 'graphics_production'] },
-  { id: 'my-jobs', path: '/my-jobs', label: 'My Jobs', icon: '', roles: ['field_tech', 'shop_tech'] },
-  { id: 'installer-portal', path: '/installer', label: 'CNI Jobs', icon: '', roles: ['installer'] },
-  { id: 'scan-install', path: '/scan-install', label: 'Scan & Install', icon: '', roles: ['sales', 'shop_tech'] },
-  { id: 'time', path: '/time', label: 'Time', icon: '', roles: ['admin', 'installer', 'field_tech', 'shop_tech', 'sales', 'graphics_production'] },
-  { id: 'graphics', path: '/graphics', label: 'Graphics', icon: '', roles: ['admin', 'graphics_production', 'sales'] },
-  { id: 'fleet', path: '/fleet', label: 'Check In', icon: '', roles: ['admin', 'shop_tech', 'sales', 'graphics_production'] },
-  { id: 'tracking', path: '/tracking', label: 'In-Shop', icon: '', roles: ['admin', 'shop_tech'] },
-  { id: 'vehicles', path: '/vehicles', label: 'Vehicles', icon: '', roles: ['admin', 'field_tech'] },
-  { id: 'estimates', path: '/estimates', label: 'Estimates', icon: '', roles: ['admin', 'sales', 'graphics_production'] },
-  { id: 'more', path: '/more', label: 'More', icon: '⋯', roles: ['admin', 'installer', 'field_tech', 'shop_tech', 'sales', 'graphics_production'] },
-  // Customer-only tabs
-  { id: 'customer-dashboard', path: '/customer/dashboard', label: 'My Jobs', icon: '', roles: ['customer'] },
-  { id: 'customer-settings', path: '/settings', label: 'Settings', icon: '', roles: ['customer'] },
+  { id: 'home', path: '/home', feature: 'home' },
+  { id: 'my-jobs', path: '/my-jobs', feature: 'vehicles' },
+  { id: 'installer-portal', path: '/installer', feature: 'cni_management' },
+  { id: 'scan-install', path: '/scan-install', feature: 'scan_install' },
+  { id: 'time', path: '/time', feature: 'time' },
+  { id: 'graphics', path: '/graphics', feature: 'graphics' },
+  { id: 'fleet', path: '/fleet', feature: 'fleet_checkin' },
+  { id: 'tracking', path: '/tracking', feature: 'in_shop' },
+  { id: 'vehicles', path: '/vehicles', feature: 'vehicles' },
+  { id: 'estimates', path: '/estimates', feature: 'estimates' },
+  { id: 'more', path: '/more', alwaysShow: true },
+  // Customer-only
+  { id: 'customer-dashboard', path: '/customer/dashboard', feature: 'home' },
+  { id: 'customer-settings', path: '/settings', alwaysShow: true },
 ];
+
+// Labels defined separately so tabs render cleanly
+const TAB_LABELS: Record<string, string> = {
+  home: 'Home', 'my-jobs': 'My Jobs', 'installer-portal': 'CNI Jobs',
+  'scan-install': 'Scan & Install', time: 'Time', graphics: 'Graphics',
+  fleet: 'Check In', tracking: 'In-Shop', vehicles: 'Vehicles',
+  estimates: 'Estimates', more: 'More',
+  'customer-dashboard': 'My Jobs', 'customer-settings': 'Settings',
+};
 
 export default function BottomNav({ clockStatus }: BottomNavProps) {
   const pathname = usePathname();
   const router = useRouter();
-  const { profile } = useAuth();
+  const { hasFeature, isCustomer } = useAuth();
 
-  // Multi-role: check roles[] array first, fall back to legacy role field
-  // Map legacy 'production' to 'graphics_production'
-  const rawRoles: string[] = (profile?.roles && profile.roles.length > 0)
-    ? profile.roles as string[]
-    : (profile?.role ? [profile.role as string] : ['installer']);
-  const userRoles: AppRole[] = rawRoles.map(r => (r === 'production' ? 'graphics_production' : r)) as AppRole[];
-
-  // Filter tabs: show if tab has no role restriction, or user has any matching role
-  const tabs = allTabs.filter(tab => !tab.roles || tab.roles.some(r => userRoles.includes(r)));
-
-  const getIcon = (tab: Tab) => {
-    if (tab.id === 'time') {
-      if (clockStatus === 'in') return '';
-      if (clockStatus === 'break') return '';
+  // Filter tabs by feature access
+  const tabs = allTabs.filter(tab => {
+    if (tab.alwaysShow) return true;
+    if (!tab.feature) return true;
+    // Customer-only tabs
+    if (tab.id === 'customer-dashboard' || tab.id === 'customer-settings') {
+      return isCustomer;
     }
-    return tab.icon;
-  };
+    // Hide customer tabs for non-customers
+    if (isCustomer && tab.id !== 'customer-dashboard' && tab.id !== 'customer-settings') {
+      return false;
+    }
+    return hasFeature(tab.feature);
+  });
 
   const isActive = (tab: Tab) => {
     if (tab.path === '/home') return pathname === '/home' || pathname === '/photos';
@@ -111,7 +107,7 @@ export default function BottomNav({ clockStatus }: BottomNavProps) {
               minWidth: 0,
             }}
           >
-            {tab.label}
+            {TAB_LABELS[tab.id] || tab.id}
           </button>
         );
       })}

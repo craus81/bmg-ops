@@ -5,6 +5,7 @@ import { useRouter } from 'next/navigation';
 import { createClient } from '@/lib/supabase-browser';
 import { useAuth } from '@/components/AuthProvider';
 import type { Profile, AppRole } from '@/lib/types';
+import { FEATURES, ROLE_DEFAULT_FEATURES, resolveFeatures, type FeatureKey } from '@/lib/features';
 
 interface Company {
   id: string;
@@ -58,6 +59,7 @@ export default function UsersPage() {
   // Edit user modal
   const [editUser, setEditUser] = useState<(Profile & { company_id?: string; company_name?: string }) | null>(null);
   const [editForm, setEditForm] = useState({ fullName: '', email: '', roles: [] as AppRole[], companyId: '' });
+  const [featureOverrides, setFeatureOverrides] = useState<Record<string, boolean>>({});
   const [saving, setSaving] = useState(false);
 
   useEffect(() => {
@@ -332,7 +334,7 @@ export default function UsersPage() {
     setTimeout(() => setCreateMessage(''), 5000);
   };
 
-  const openEditModal = (user: Profile & { company_id?: string; company_name?: string }) => {
+  const openEditModal = async (user: Profile & { company_id?: string; company_name?: string }) => {
     setEditUser(user);
     setEditForm({
       fullName: user.full_name || '',
@@ -340,6 +342,14 @@ export default function UsersPage() {
       roles: getUserRoles(user),
       companyId: user.company_id || '',
     });
+    // Load feature overrides for this user
+    const { data: overrides } = await supabase
+      .from('user_feature_overrides')
+      .select('feature, granted')
+      .eq('user_id', user.id);
+    const map: Record<string, boolean> = {};
+    (overrides || []).forEach((o: any) => { map[o.feature] = o.granted; });
+    setFeatureOverrides(map);
   };
 
   const handleSaveEdit = async () => {
@@ -360,6 +370,18 @@ export default function UsersPage() {
       .eq('id', editUser.id);
 
     if (!error) {
+      // Save feature overrides
+      // Delete existing overrides then insert new ones
+      await supabase.from('user_feature_overrides').delete().eq('user_id', editUser.id);
+      const overrideRows = Object.entries(featureOverrides).map(([feature, granted]) => ({
+        user_id: editUser.id,
+        feature,
+        granted,
+      }));
+      if (overrideRows.length > 0) {
+        await supabase.from('user_feature_overrides').insert(overrideRows);
+      }
+
       const company = companies.find(c => c.id === editForm.companyId);
       setUsers((prev) => prev.map((u) =>
         u.id === editUser.id
@@ -1096,6 +1118,59 @@ export default function UsersPage() {
                   ))}
                 </select>
               </div>
+
+              {/* Feature Access Overrides */}
+              {!editForm.roles.includes('admin') && (
+                <div>
+                  <label style={labelStyle}>Feature Access</label>
+                  <div style={{ fontSize: '10px', color: 'var(--text-muted)', marginBottom: '6px' }}>
+                    Toggle features on/off for this user. Colored = included by role. Click to override.
+                  </div>
+                  <div style={{ display: 'flex', gap: '4px', flexWrap: 'wrap' }}>
+                    {(Object.entries(FEATURES) as [FeatureKey, string][]).map(([key, label]) => {
+                      const roleDefault = editForm.roles.some(r => (ROLE_DEFAULT_FEATURES[r] || []).includes(key));
+                      const override = featureOverrides[key];
+                      const isGranted = override !== undefined ? override : roleDefault;
+                      const isOverridden = override !== undefined;
+                      return (
+                        <button
+                          key={key}
+                          type="button"
+                          onClick={() => {
+                            const newOverrides = { ...featureOverrides };
+                            if (!isOverridden) {
+                              // First click: override to opposite of role default
+                              newOverrides[key] = !roleDefault;
+                            } else if (override !== roleDefault) {
+                              // Second click: remove override (back to role default)
+                              delete newOverrides[key];
+                            } else {
+                              // Toggle override
+                              newOverrides[key] = !override;
+                            }
+                            setFeatureOverrides(newOverrides);
+                          }}
+                          style={{
+                            padding: '4px 8px', borderRadius: '6px', fontSize: '9px', fontWeight: 700,
+                            background: isGranted ? 'rgba(59,130,246,0.1)' : 'var(--bg)',
+                            border: `1px solid ${isOverridden ? '#f97316' : (isGranted ? 'rgba(59,130,246,0.3)' : 'var(--border)')}`,
+                            color: isGranted ? '#60a5fa' : 'var(--text-muted)',
+                            cursor: 'pointer',
+                          }}
+                        >
+                          {isGranted ? '✓ ' : ''}{label}
+                          {isOverridden && <span style={{ color: '#f97316', marginLeft: '2px' }}>*</span>}
+                        </button>
+                      );
+                    })}
+                  </div>
+                  {Object.keys(featureOverrides).length > 0 && (
+                    <div style={{ fontSize: '9px', color: '#f97316', marginTop: '4px' }}>
+                      * = overridden from role default
+                    </div>
+                  )}
+                </div>
+              )}
 
               <div style={{ display: 'flex', gap: '8px', marginTop: '4px' }}>
                 <button

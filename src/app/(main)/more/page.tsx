@@ -8,31 +8,35 @@ import { createClient } from '@/lib/supabase-browser';
 
 export default function MorePage() {
   const router = useRouter();
-  const { isAdmin, isSales, isGraphicsProduction, isFieldTech, isShopTech, hasRole, profile, signOut } = useAuth();
+  const { isAdmin, isSales, isGraphicsProduction, isFieldTech, isShopTech, hasRole, hasFeature, profile, signOut } = useAuth();
   const { mode, setMode, resolvedTheme } = useTheme();
   const supabase = createClient();
   const [pendingUserCount, setPendingUserCount] = useState(0);
   const [pendingReviewCount, setPendingReviewCount] = useState(0);
 
   useEffect(() => {
-    if (!isAdmin) return;
+    if (!hasFeature('user_management') && !hasFeature('photo_reviews')) return;
     const load = async () => {
-      const { count: userCount } = await supabase
-        .from('profiles')
-        .select('*', { count: 'exact', head: true })
-        .eq('status', 'pending');
-      setPendingUserCount(userCount || 0);
-
-      const { count: reviewCount } = await supabase
-        .from('scanned_vehicles')
-        .select('*', { count: 'exact', head: true })
-        .eq('review_status', 'pending')
-        .eq('submitted_for_review', true);
-      setPendingReviewCount(reviewCount || 0);
-
+      if (hasFeature('user_management')) {
+        const { count: userCount } = await supabase
+          .from('profiles')
+          .select('*', { count: 'exact', head: true })
+          .eq('status', 'pending');
+        setPendingUserCount(userCount || 0);
+      }
+      if (hasFeature('photo_reviews')) {
+        const { count: reviewCount } = await supabase
+          .from('scanned_vehicles')
+          .select('*', { count: 'exact', head: true })
+          .eq('review_status', 'pending')
+          .eq('submitted_for_review', true);
+        setPendingReviewCount(reviewCount || 0);
+      }
     };
     load();
-  }, [isAdmin]);
+  }, [profile]);
+
+  const F = hasFeature; // shorthand
 
   return (
     <div>
@@ -40,59 +44,83 @@ export default function MorePage() {
         More
       </div>
       <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
-        {(isAdmin || isShopTech) && (
-          <MenuBtn icon="" title="Update Vehicle Status" sub="Scan VIN to update status" onClick={() => router.push('/fleet/update')} />
+        {F('fleet_checkin') && (
+          <MenuBtn title="Update Vehicle Status" sub="Scan VIN to update status" onClick={() => router.push('/fleet/update')} />
         )}
-        {(isAdmin || isFieldTech || isShopTech) && (
-          <MenuBtn icon="" title="My Jobs" sub="View your company's work" onClick={() => router.push('/jobs')} />
+        {F('vehicles') && (
+          <MenuBtn title="My Jobs" sub="View your company's work" onClick={() => router.push('/jobs')} />
         )}
-        {isAdmin && (
-          <MenuBtn icon="" title="Export Reports" sub="Download vehicle spreadsheets" onClick={() => router.push('/reports')} />
+        {F('reports') && (
+          <MenuBtn title="Export Reports" sub="Download vehicle spreadsheets" onClick={() => router.push('/reports')} />
         )}
-        {/* Sales + Graphics Production + Admin tools */}
-        {(isAdmin || isSales || isGraphicsProduction) && (<>
-          <MenuBtn icon="" title="Customers" sub="Customers & contacts from NetSuite" onClick={() => router.push('/admin/customers')} />
-          <MenuBtn icon="" title="Parts Catalog" sub="Upfit & graphic parts from NetSuite" onClick={() => router.push('/parts')} />
-          <MenuBtn icon="" title="Estimates" sub="Build estimates & push to NetSuite" onClick={() => router.push('/estimates')} />
-          <MenuBtn icon="" title="Estimating" sub="AI-powered vinyl wrap quoting" onClick={() => router.push('/admin/quotes')} />
-        </>)}
-        {/* Admin-only tools */}
-        {isAdmin && (
-          <MenuBtn icon="" title="Scan & Install" sub="Scan VINs and assign parts" onClick={() => router.push('/scan-install')} />
+        {F('customers') && (
+          <MenuBtn title="Customers" sub="Customers & contacts from NetSuite" onClick={() => router.push('/admin/customers')} />
         )}
-        {isAdmin && (<>
-          <MenuBtn icon="" title="Proof Hygiene" sub="Assign unmatched proof files from NAS" onClick={() => router.push('/admin/proofs')} />
-          <MenuBtn icon="" title="All Jobs" sub="View all jobs by company" onClick={() => router.push('/admin/jobs')} />
-          <MenuBtn icon="" title="Vendor Payments" sub="Manage installer invoices & payments" onClick={() => router.push('/admin/jobs?tab=invoices')} />
-          <MenuBtn icon="" title="Bulk VIN Upload" sub="Upload VINs in bulk via spreadsheet" onClick={() => router.push('/admin/jobs?tab=bulk')} />
-          <MenuBtn icon="" title="Schedule" sub="Assign jobs to installers" onClick={() => router.push('/admin/schedule')} />
-          <MenuBtn icon="" title="Part Catalog" sub="Manage part numbers" onClick={() => router.push('/admin/catalog')} />
-          <MenuBtn icon="" title="Bulk Upload" sub="Import templates & proofs from ZIP" onClick={() => router.push('/admin/bulk-upload')} />
-          <MenuBtn icon="" title="Purchase Orders" sub="Manage POs" onClick={() => router.push('/admin/pos')} />
+        {F('parts_catalog') && (
+          <MenuBtn title="Parts Catalog" sub="Upfit & graphic parts from NetSuite" onClick={() => router.push('/parts')} />
+        )}
+        {F('estimates') && (
+          <MenuBtn title="Estimates" sub="Build estimates & push to NetSuite" onClick={() => router.push('/estimates')} />
+        )}
+        {F('quoting') && (
+          <MenuBtn title="Estimating" sub="AI-powered vinyl wrap quoting" onClick={() => router.push('/admin/quotes')} />
+        )}
+        {F('scan_install') && (
+          <MenuBtn title="Scan & Install" sub="Scan VINs and assign parts" onClick={() => router.push('/scan-install')} />
+        )}
+        {F('proof_hygiene') && (
+          <MenuBtn title="Proof Hygiene" sub="Assign unmatched proof files from NAS" onClick={() => router.push('/admin/proofs')} />
+        )}
+        {F('all_jobs') && (
+          <MenuBtn title="All Jobs" sub="View all jobs by company" onClick={() => router.push('/admin/jobs')} />
+        )}
+        {F('vendor_payments') && (
+          <MenuBtn title="Vendor Payments" sub="Manage installer invoices & payments" onClick={() => router.push('/admin/jobs?tab=invoices')} />
+        )}
+        {F('bulk_vin') && (
+          <MenuBtn title="Bulk VIN Upload" sub="Upload VINs in bulk via spreadsheet" onClick={() => router.push('/admin/jobs?tab=bulk')} />
+        )}
+        {F('schedule') && (
+          <MenuBtn title="Schedule" sub="Assign jobs to installers" onClick={() => router.push('/admin/schedule')} />
+        )}
+        {F('catalog_management') && (
+          <MenuBtn title="Part Catalog" sub="Manage part numbers" onClick={() => router.push('/admin/catalog')} />
+        )}
+        {F('bulk_upload') && (
+          <MenuBtn title="Bulk Upload" sub="Import templates & proofs from ZIP" onClick={() => router.push('/admin/bulk-upload')} />
+        )}
+        {F('purchase_orders') && (
+          <MenuBtn title="Purchase Orders" sub="Manage POs" onClick={() => router.push('/admin/pos')} />
+        )}
+        {F('photo_reviews') && (
           <MenuBtn
-            icon=""
             title="Photo Reviews"
             sub={pendingReviewCount > 0 ? `${pendingReviewCount} waiting for approval` : 'Review completion photos'}
             onClick={() => router.push('/admin/reviews')}
             badge={pendingReviewCount > 0 ? pendingReviewCount : undefined}
           />
+        )}
+        {F('user_management') && (
           <MenuBtn
-            icon=""
             title="User Management"
             sub={pendingUserCount > 0 ? `${pendingUserCount} pending approval` : 'Manage team access'}
             onClick={() => router.push('/admin/users')}
             badge={pendingUserCount > 0 ? pendingUserCount : undefined}
           />
-        </>)}
-        {isAdmin && (
-          <MenuBtn icon="" title="CNI Management" sub="Certified Network Installer jobs & profiles" onClick={() => router.push('/admin/cni')} />
         )}
-        {isAdmin && (
-          <MenuBtn icon="" title="Knowledge Base" sub="SOPs and docs for AI agent" onClick={() => router.push('/admin/knowledge')} />
+        {F('cni_management') && (
+          <MenuBtn title="CNI Management" sub="Certified Network Installer jobs & profiles" onClick={() => router.push('/admin/cni')} />
         )}
-        <MenuBtn icon="" title="Quick Job (No PO)" sub="Start scanning without a PO" onClick={() => router.push('/scan')} />
-        <MenuBtn icon="" title="Offline Scanner" sub="Scan VINs underground — syncs when back online" onClick={() => router.push('/offline-scan')} />
-        <MenuBtn icon="" title="Notification Settings" sub="Configure your alert preferences" onClick={() => router.push('/settings')} />
+        {F('knowledge_base') && (
+          <MenuBtn title="Knowledge Base" sub="SOPs and docs for AI agent" onClick={() => router.push('/admin/knowledge')} />
+        )}
+        {F('scan_install') && (
+          <MenuBtn title="Quick Job (No PO)" sub="Start scanning without a PO" onClick={() => router.push('/scan')} />
+        )}
+        {F('offline_scan') && (
+          <MenuBtn title="Offline Scanner" sub="Scan VINs underground — syncs when back online" onClick={() => router.push('/offline-scan')} />
+        )}
+        <MenuBtn title="Notification Settings" sub="Configure your alert preferences" onClick={() => router.push('/settings')} />
       </div>
 
       {/* Theme Toggle */}

@@ -26,6 +26,18 @@ const RecentMessagesWidget = lazy(() => import('./RecentMessagesWidget'));
 const TimeClockWidget = lazy(() => import('./TimeClockWidget'));
 const OpenQuotesWidget = lazy(() => import('./OpenQuotesWidget'));
 const QuickActionsWidget = lazy(() => import('./QuickActionsWidget'));
+const FleetCheckInWidget = lazy(() => import('./FleetCheckInWidget'));
+const GraphicsProductionWidget = lazy(() => import('./GraphicsProductionWidget'));
+const InShopTrackingWidget = lazy(() => import('./InShopTrackingWidget'));
+const VehiclesWidget = lazy(() => import('./VehiclesWidget'));
+const EstimatesWidget = lazy(() => import('./EstimatesWidget'));
+const CustomersWidget = lazy(() => import('./CustomersWidget'));
+const PartsCatalogWidget = lazy(() => import('./PartsCatalogWidget'));
+const PhotoReviewsWidget = lazy(() => import('./PhotoReviewsWidget'));
+const UserManagementWidget = lazy(() => import('./UserManagementWidget'));
+const VendorPaymentsWidget = lazy(() => import('./VendorPaymentsWidget'));
+const PurchaseOrdersWidget = lazy(() => import('./PurchaseOrdersWidget'));
+const ReportsWidget = lazy(() => import('./ReportsWidget'));
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 const WIDGET_COMPONENTS: Record<string, React.LazyExoticComponent<any>> = {
@@ -40,6 +52,18 @@ const WIDGET_COMPONENTS: Record<string, React.LazyExoticComponent<any>> = {
   time_clock: TimeClockWidget,
   open_quotes: OpenQuotesWidget,
   quick_actions: QuickActionsWidget,
+  fleet_checkin: FleetCheckInWidget,
+  graphics_production: GraphicsProductionWidget,
+  in_shop_tracking: InShopTrackingWidget,
+  vehicles: VehiclesWidget,
+  estimates: EstimatesWidget,
+  customers: CustomersWidget,
+  parts_catalog: PartsCatalogWidget,
+  photo_reviews: PhotoReviewsWidget,
+  user_management: UserManagementWidget,
+  vendor_payments: VendorPaymentsWidget,
+  purchase_orders: PurchaseOrdersWidget,
+  reports: ReportsWidget,
 };
 
 const ROW_HEIGHT = 130;
@@ -168,7 +192,7 @@ export default function DashboardGrid() {
   }
 
   return (
-    <div ref={containerRef}>
+    <div ref={containerRef} style={{ maxWidth: '100%', overflowX: 'hidden' }}>
       {/* Toolbar */}
       <div style={{
         display: 'flex', justifyContent: 'space-between', alignItems: 'center',

@@ -163,33 +163,6 @@ export default function LoginPage() {
               <input type="password" value={password} onChange={(e) => setPassword(e.target.value)} placeholder={mode === 'signup' ? 'Create a password (6+ chars)' : 'Enter your password'} autoComplete={mode === 'signup' ? 'new-password' : 'current-password'} style={inputStyle} />
             </>)}
 
-            {mode === 'signup' && (
-              <div style={{ marginBottom: '12px' }}>
-                <label style={labelStyle}>Role</label>
-                <div style={{ display: 'flex', gap: '6px' }}>
-                  {([
-                    { id: 'installer', label: 'Installer', desc: 'Scan VINs, track time' },
-                    { id: 'admin', label: 'Admin', desc: 'Full access' },
-                  ]).map((r) => (
-                    <button
-                      key={r.id}
-                      type="button"
-                      onClick={() => setRequestedRole(r.id)}
-                      style={{
-                        flex: 1, padding: '12px 8px', borderRadius: '10px', textAlign: 'center',
-                        background: requestedRole === r.id ? 'rgba(238,49,32,0.08)' : 'rgba(255,255,255,0.04)',
-                        border: requestedRole === r.id ? '1px solid rgba(238,49,32,0.25)' : '1px solid rgba(255,255,255,0.08)',
-                        transition: 'all 0.15s',
-                      }}
-                    >
-                      <div style={{ fontSize: '14px', fontWeight: 700, color: requestedRole === r.id ? '#fff' : 'rgba(255,255,255,0.5)' }}>{r.label}</div>
-                      <div style={{ fontSize: '10px', color: 'rgba(255,255,255,0.3)', marginTop: '2px' }}>{r.desc}</div>
-                    </button>
-                  ))}
-                </div>
-              </div>
-            )}
-
             {error && (
               <div style={{ padding: '10px 14px', background: 'var(--error-bg)', border: '1px solid var(--error-border)', borderRadius: '10px', color: 'var(--error)', fontSize: '13px', marginBottom: '12px' }}>
                 {error}
