@@ -335,7 +335,8 @@ export default function Header({ clockStatus, activePartNumber, activeEndCustome
             style={{
               background: 'transparent',
               border: '1px solid transparent', borderRadius: '8px',
-              padding: '6px 8px', fontSize: '16px',
+              padding: '6px 8px', fontSize: '12px', fontWeight: 600,
+              color: 'var(--text-secondary)',
               cursor: 'pointer', transition: 'all 0.15s',
               lineHeight: 1,
             }}
@@ -349,7 +350,8 @@ export default function Header({ clockStatus, activePartNumber, activeEndCustome
             style={{
               background: 'transparent',
               border: '1px solid transparent', borderRadius: '8px',
-              padding: '6px 8px', fontSize: '16px', position: 'relative',
+              padding: '6px 8px', fontSize: '12px', fontWeight: 600, position: 'relative',
+              color: 'var(--text-secondary)',
               cursor: 'pointer', transition: 'all 0.15s',
               lineHeight: 1,
             }}
@@ -376,7 +378,8 @@ export default function Header({ clockStatus, activePartNumber, activeEndCustome
             <button onClick={handleBellClick} style={{
               background: showNotifications ? 'rgba(255,255,255,0.12)' : 'transparent',
               border: '1px solid transparent', borderRadius: '8px',
-              padding: '6px 8px', fontSize: '16px', position: 'relative',
+              padding: '6px 8px', fontSize: '12px', fontWeight: 600, position: 'relative',
+              color: 'var(--text-secondary)',
               cursor: 'pointer', transition: 'all 0.15s',
               lineHeight: 1,
             }}>
