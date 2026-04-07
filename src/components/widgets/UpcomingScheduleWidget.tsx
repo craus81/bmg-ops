@@ -145,9 +145,15 @@ export default function UpcomingScheduleWidget() {
       ) : (
         <div style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
           {items.map(item => (
-            <div key={item.id} style={{
-              display: 'flex', gap: '10px', alignItems: 'center',
+            <button key={item.id} onClick={() => {
+              if (item.type === 'graphics') router.push('/graphics');
+              else if (item.type === 'upfit') router.push('/tracking');
+              else if (item.type === 'cni') router.push(`/admin/cni/jobs/${item.id}`);
+              else router.push('/admin/schedule');
+            }} style={{
+              display: 'flex', gap: '10px', alignItems: 'center', width: '100%',
               padding: '6px 8px', borderRadius: '8px', background: 'var(--subtle-bg)',
+              border: 'none', cursor: 'pointer', textAlign: 'left',
             }}>
               <div style={{
                 minWidth: '52px', fontSize: '10px', fontWeight: 700,
@@ -170,7 +176,7 @@ export default function UpcomingScheduleWidget() {
                   color: item.type === 'graphics' ? '#f97316' : item.type === 'upfit' ? '#3b82f6' : '#22c55e',
                 }}>{item.type === 'graphics' ? 'GFX' : item.type === 'upfit' ? 'UPFIT' : 'CNI'}</div>
               )}
-            </div>
+            </button>
           ))}
         </div>
       )}

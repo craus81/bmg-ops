@@ -383,10 +383,10 @@ export default function SchedulePage() {
               return (<div key={`gfx-${d}`} style={{ flex: 1, minWidth: '60px', borderRadius: '10px', padding: '6px', background: today ? 'rgba(30,74,94,0.08)' : 'var(--card)', border: `1px solid ${today ? 'rgba(30,74,94,0.25)' : 'var(--border)'}` }}>
                 <div style={{ fontSize: '9px', fontWeight: 700, color: today ? 'var(--navy)' : 'var(--text-muted)', textTransform: 'uppercase', textAlign: 'center', marginBottom: '4px' }}>{day.toLocaleDateString([], { weekday: 'short' })} {day.getDate()}</div>
                 {dayGfx.map(g => (
-                  <div key={g.id} style={{ width: '100%', padding: '4px 6px', borderRadius: '6px', marginBottom: '3px', background: 'rgba(249,115,22,0.1)', border: '1px solid rgba(249,115,22,0.25)', textAlign: 'left', fontSize: '9px', fontWeight: 700, color: '#f97316', lineHeight: '1.3' }}>
+                  <button key={g.id} onClick={() => router.push('/graphics')} style={{ width: '100%', padding: '4px 6px', borderRadius: '6px', marginBottom: '3px', background: 'rgba(249,115,22,0.1)', border: '1px solid rgba(249,115,22,0.25)', textAlign: 'left', fontSize: '9px', fontWeight: 700, color: '#f97316', lineHeight: '1.3', cursor: 'pointer' }}>
                     <div style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{g.title}</div>
                     <div style={{ fontSize: '8px', opacity: 0.7, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{g.customer}{g.quantity > 1 ? ` ×${g.quantity}` : ''}</div>
-                  </div>
+                  </button>
                 ))}
               </div>);
             })}
@@ -406,10 +406,10 @@ export default function SchedulePage() {
               return (<div key={`upfit-${d}`} style={{ flex: 1, minWidth: '60px', borderRadius: '10px', padding: '6px', background: today ? 'rgba(30,74,94,0.08)' : 'var(--card)', border: `1px solid ${today ? 'rgba(30,74,94,0.25)' : 'var(--border)'}` }}>
                 <div style={{ fontSize: '9px', fontWeight: 700, color: today ? 'var(--navy)' : 'var(--text-muted)', textTransform: 'uppercase', textAlign: 'center', marginBottom: '4px' }}>{day.toLocaleDateString([], { weekday: 'short' })} {day.getDate()}</div>
                 {dayUpfit.map(u => (
-                  <div key={u.id} style={{ width: '100%', padding: '4px 6px', borderRadius: '6px', marginBottom: '3px', background: 'rgba(59,130,246,0.1)', border: '1px solid rgba(59,130,246,0.25)', textAlign: 'left', fontSize: '9px', fontWeight: 700, color: '#3b82f6', lineHeight: '1.3' }}>
+                  <button key={u.id} onClick={() => router.push('/tracking')} style={{ width: '100%', padding: '4px 6px', borderRadius: '6px', marginBottom: '3px', background: 'rgba(59,130,246,0.1)', border: '1px solid rgba(59,130,246,0.25)', textAlign: 'left', fontSize: '9px', fontWeight: 700, color: '#3b82f6', lineHeight: '1.3', cursor: 'pointer' }}>
                     <div style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{[u.vehicle_year, u.vehicle_make, u.vehicle_model].filter(Boolean).join(' ') || u.vin}</div>
                     <div style={{ fontSize: '8px', opacity: 0.7, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{u.customer_name || ''}</div>
-                  </div>
+                  </button>
                 ))}
               </div>);
             })}
@@ -429,10 +429,10 @@ export default function SchedulePage() {
               return (<div key={`cni-${d}`} style={{ flex: 1, minWidth: '60px', borderRadius: '10px', padding: '6px', background: today ? 'rgba(30,74,94,0.08)' : 'var(--card)', border: `1px solid ${today ? 'rgba(30,74,94,0.25)' : 'var(--border)'}` }}>
                 <div style={{ fontSize: '9px', fontWeight: 700, color: today ? 'var(--navy)' : 'var(--text-muted)', textTransform: 'uppercase', textAlign: 'center', marginBottom: '4px' }}>{day.toLocaleDateString([], { weekday: 'short' })} {day.getDate()}</div>
                 {dayCni.map(c => (
-                  <div key={c.id} style={{ width: '100%', padding: '4px 6px', borderRadius: '6px', marginBottom: '3px', background: 'rgba(34,197,94,0.1)', border: '1px solid rgba(34,197,94,0.25)', textAlign: 'left', fontSize: '9px', fontWeight: 700, color: '#22c55e', lineHeight: '1.3' }}>
+                  <button key={c.id} onClick={() => router.push(`/admin/cni/jobs/${c.id}`)} style={{ width: '100%', padding: '4px 6px', borderRadius: '6px', marginBottom: '3px', background: 'rgba(34,197,94,0.1)', border: '1px solid rgba(34,197,94,0.25)', textAlign: 'left', fontSize: '9px', fontWeight: 700, color: '#22c55e', lineHeight: '1.3', cursor: 'pointer' }}>
                     <div style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{c.title}</div>
                     <div style={{ fontSize: '8px', opacity: 0.7, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{c.customer_name || ''}</div>
-                  </div>
+                  </button>
                 ))}
               </div>);
             })}
@@ -465,19 +465,19 @@ export default function SchedulePage() {
               </button>);
             })}
             {dayGfx.slice(0, Math.max(0, 3 - dayEntries.length)).map(g => (
-              <div key={g.id} style={{ width: '100%', padding: '2px 3px', borderRadius: '4px', marginBottom: '1px', background: 'rgba(249,115,22,0.1)', textAlign: 'left', fontSize: '7px', fontWeight: 700, color: '#f97316', lineHeight: '1.3', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+              <button key={g.id} onClick={() => router.push('/graphics')} style={{ width: '100%', padding: '2px 3px', borderRadius: '4px', marginBottom: '1px', background: 'rgba(249,115,22,0.1)', border: 'none', textAlign: 'left', fontSize: '7px', fontWeight: 700, color: '#f97316', lineHeight: '1.3', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', cursor: 'pointer' }}>
                 {g.title}
-              </div>
+              </button>
             ))}
             {dayUpfit.slice(0, Math.max(0, 3 - dayEntries.length - dayGfx.length)).map(u => (
-              <div key={u.id} style={{ width: '100%', padding: '2px 3px', borderRadius: '4px', marginBottom: '1px', background: 'rgba(59,130,246,0.1)', textAlign: 'left', fontSize: '7px', fontWeight: 700, color: '#3b82f6', lineHeight: '1.3', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+              <button key={u.id} onClick={() => router.push('/tracking')} style={{ width: '100%', padding: '2px 3px', borderRadius: '4px', marginBottom: '1px', background: 'rgba(59,130,246,0.1)', border: 'none', textAlign: 'left', fontSize: '7px', fontWeight: 700, color: '#3b82f6', lineHeight: '1.3', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', cursor: 'pointer' }}>
                 {[u.vehicle_make, u.vehicle_model].filter(Boolean).join(' ') || 'Upfit'}
-              </div>
+              </button>
             ))}
             {dayCni.slice(0, Math.max(0, 3 - dayEntries.length - dayGfx.length - dayUpfit.length)).map(c => (
-              <div key={c.id} style={{ width: '100%', padding: '2px 3px', borderRadius: '4px', marginBottom: '1px', background: 'rgba(34,197,94,0.1)', textAlign: 'left', fontSize: '7px', fontWeight: 700, color: '#22c55e', lineHeight: '1.3', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+              <button key={c.id} onClick={() => router.push(`/admin/cni/jobs/${c.id}`)} style={{ width: '100%', padding: '2px 3px', borderRadius: '4px', marginBottom: '1px', background: 'rgba(34,197,94,0.1)', border: 'none', textAlign: 'left', fontSize: '7px', fontWeight: 700, color: '#22c55e', lineHeight: '1.3', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', cursor: 'pointer' }}>
                 {c.title}
-              </div>
+              </button>
             ))}
             {totalItems > 3 && <div style={{ fontSize: '7px', color: 'var(--text-muted)', textAlign: 'center' }}>+{totalItems - 3}</div>}
           </div>);
