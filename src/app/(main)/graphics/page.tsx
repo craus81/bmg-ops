@@ -721,6 +721,14 @@ export default function GraphicsPage() {
                   </div>
                 </div>
 
+                {/* Internal notes preview (always visible) */}
+                {job.notes && (
+                  <div style={{ padding: '0 12px 8px', fontSize: '11px', color: 'var(--text-muted)', lineHeight: 1.4 }}>
+                    <span style={{ fontWeight: 700, fontSize: '9px', textTransform: 'uppercase', letterSpacing: '0.3px', color: 'var(--warning)', marginRight: '4px' }}>Note:</span>
+                    {job.notes.length > 120 ? job.notes.slice(0, 120) + '...' : job.notes}
+                  </div>
+                )}
+
                 {/* Expanded view */}
                 {isExpanded && (
                   <div style={{ padding: '0 12px 14px', borderTop: '1px solid var(--border)' }}>
