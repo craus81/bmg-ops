@@ -324,7 +324,7 @@ export default function Header({ clockStatus, activePartNumber, activeEndCustome
               </span>
             </div>
             {subtitle && (
-              <div style={{ fontSize: '10px', color: theme.textMuted, marginTop: '2px' }}>{subtitle}</div>
+              <div style={{ fontSize: '10px', color: 'rgba(255,255,255,0.5)', marginTop: '2px' }}>{subtitle}</div>
             )}
           </div>
         </div>
@@ -337,7 +337,7 @@ export default function Header({ clockStatus, activePartNumber, activeEndCustome
               background: 'transparent',
               border: '1px solid transparent', borderRadius: '8px',
               padding: '6px 8px', fontSize: '12px', fontWeight: 600,
-              color: 'var(--text-secondary)',
+              color: 'rgba(255,255,255,0.7)',
               cursor: 'pointer', transition: 'all 0.15s',
               lineHeight: 1,
             }}
@@ -352,7 +352,7 @@ export default function Header({ clockStatus, activePartNumber, activeEndCustome
               background: 'transparent',
               border: '1px solid transparent', borderRadius: '8px',
               padding: '6px 8px', fontSize: '12px', fontWeight: 600, position: 'relative',
-              color: 'var(--text-secondary)',
+              color: 'rgba(255,255,255,0.7)',
               cursor: 'pointer', transition: 'all 0.15s',
               lineHeight: 1,
             }}
@@ -380,7 +380,7 @@ export default function Header({ clockStatus, activePartNumber, activeEndCustome
               background: showNotifications ? 'rgba(255,255,255,0.12)' : 'transparent',
               border: '1px solid transparent', borderRadius: '8px',
               padding: '6px 8px', fontSize: '12px', fontWeight: 600, position: 'relative',
-              color: 'var(--text-secondary)',
+              color: 'rgba(255,255,255,0.7)',
               cursor: 'pointer', transition: 'all 0.15s',
               lineHeight: 1,
             }}>
@@ -511,7 +511,7 @@ export default function Header({ clockStatus, activePartNumber, activeEndCustome
             <button onClick={() => { setShowMenu(!showMenu); setShowNotifications(false); }} style={{
               background: showMenu ? 'rgba(255,255,255,0.12)' : 'transparent',
               border: '1px solid transparent', borderRadius: '8px',
-              padding: '6px 8px', fontSize: '11px', color: theme.textMuted,
+              padding: '6px 8px', fontSize: '11px', color: 'rgba(255,255,255,0.6)',
               fontWeight: 600, display: 'flex', alignItems: 'center', gap: '4px',
               transition: 'all 0.15s', maxWidth: '100px', overflow: 'hidden',
             }}>
