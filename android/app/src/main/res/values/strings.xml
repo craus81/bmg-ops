@@ -1,0 +1,7 @@
+<?xml version='1.0' encoding='utf-8'?>
+<resources>
+    <string name="app_name">BMG FleetSuite</string>
+    <string name="title_activity_main">BMG FleetSuite</string>
+    <string name="package_name">com.bmgfleet.fleetsuite</string>
+    <string name="custom_url_scheme">com.bmgfleet.fleetsuite</string>
+</resources>

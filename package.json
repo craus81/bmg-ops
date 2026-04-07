@@ -5,10 +5,22 @@
   "scripts": {
     "dev": "next dev",
     "build": "next build",
-    "start": "next start"
+    "start": "next start",
+    "cap:sync": "npx cap sync",
+    "cap:open:ios": "npx cap open ios",
+    "cap:open:android": "npx cap open android"
   },
   "dependencies": {
     "@aws-sdk/client-s3": "^3.1017.0",
+    "@capacitor/android": "^8.3.0",
+    "@capacitor/camera": "^8.0.2",
+    "@capacitor/cli": "^8.3.0",
+    "@capacitor/core": "^8.3.0",
+    "@capacitor/haptics": "^8.0.2",
+    "@capacitor/ios": "^8.3.0",
+    "@capacitor/push-notifications": "^8.0.3",
+    "@capacitor/splash-screen": "^8.0.1",
+    "@capacitor/status-bar": "^8.0.2",
     "@supabase/ssr": "^0.4.0",
     "@supabase/supabase-js": "^2.43.4",
     "@zxing/browser": "^0.1.5",

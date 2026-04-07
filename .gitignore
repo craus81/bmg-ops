@@ -2,3 +2,10 @@ node_modules/
 .next
 .vercel
 .env*.local
+
+# Capacitor native build artifacts
+ios/App/Pods/
+ios/App/build/
+android/.gradle/
+android/app/build/
+android/build/
