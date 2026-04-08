@@ -102,90 +102,17 @@ export default function PhotosPage() {
     if (!vehicleId || !user || photos.length === 0) return;
     setSubmitting(true);
 
-    // Check if this vehicle's PO has skip_photo_review enabled
-    let autoApprove = false;
-    if (vehicle?.po_line_item_id) {
-      const { data: lineItem } = await supabase
-        .from('po_line_items')
-        .select('po_id')
-        .eq('id', vehicle.po_line_item_id)
-        .single();
-      if (lineItem?.po_id) {
-        const { data: po } = await supabase
-          .from('purchase_orders')
-          .select('skip_photo_review')
-          .eq('id', lineItem.po_id)
-          .single();
-        if (po?.skip_photo_review) autoApprove = true;
-      }
-    }
-
-    // Update vehicle status
+    // Non-CNI photos are auto-approved — only CNI installer photos need admin review
     await supabase
       .from('scanned_vehicles')
       .update({
         submitted_for_review: true,
         submitted_at: new Date().toISOString(),
-        review_status: autoApprove ? 'approved' : 'pending',
-        ...(autoApprove ? { reviewed_at: new Date().toISOString() } : {}),
+        review_status: 'approved',
+        reviewed_at: new Date().toISOString(),
       })
       .eq('id', vehicleId);
 
-    // Skip admin notifications if auto-approved
-    if (autoApprove) {
-      setSubmitted(true);
-      setSubmitting(false);
-      return;
-    }
-
-    // Get all admin users
-    const { data: admins } = await supabase
-      .from('profiles')
-      .select('id, email')
-      .eq('role', 'admin')
-      .eq('status', 'approved');
-
-    // Create notification for each admin
-    if (admins && admins.length > 0) {
-      const title = vehicle
-        ? `Photo review: ${[vehicle.vehicle_year, vehicle.vehicle_make, vehicle.vehicle_model].filter(Boolean).join(' ')}`
-        : 'New photo review submitted';
-
-      await supabase
-        .from('notifications')
-        .insert(admins.map((admin: any) => ({
-          user_id: admin.id,
-          type: 'review_submitted',
-          title,
-          body: `${photos.length} photo${photos.length !== 1 ? 's' : ''} submitted for VIN ${vehicle?.vin || 'unknown'}`,
-          vehicle_id: vehicleId,
-        })));
-
-      // Call edge function to send email
-      try {
-        const { data: { session } } = await supabase.auth.getSession();
-        
-        await fetch(`${process.env.NEXT_PUBLIC_SUPABASE_URL}/functions/v1/send-review-email`, {
-          method: 'POST',
-          headers: {
-            'Content-Type': 'application/json',
-            'Authorization': `Bearer ${session?.access_token || process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY}`,
-            'apikey': process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY || '',
-          },
-          body: JSON.stringify({
-            type: 'submitted',
-            vehicle_id: vehicleId,
-            vehicle_info: vehicle ? `${vehicle.vehicle_year || ''} ${vehicle.vehicle_make || ''} ${vehicle.vehicle_model || ''}`.trim() : 'Unknown',
-            vin: vehicle?.vin || '',
-            photo_count: photos.length,
-            submitted_by: user.id,
-            admin_emails: admins.map((a: any) => a.email),
-          }),
-        });
-      } catch (e) {
-        console.error('Email send failed:', e);
-      }
-    }
     setSubmitted(true);
     setSubmitting(false);
   };
