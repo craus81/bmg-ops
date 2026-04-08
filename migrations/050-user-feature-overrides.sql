@@ -20,7 +20,7 @@ CREATE POLICY "admin_manage_overrides" ON user_feature_overrides
     EXISTS (
       SELECT 1 FROM profiles
       WHERE profiles.id = auth.uid()
-      AND (profiles.role = 'admin' OR profiles.roles @> '["admin"]')
+      AND (profiles.role = 'admin' OR 'admin' = ANY(profiles.roles))
     )
   );
 
