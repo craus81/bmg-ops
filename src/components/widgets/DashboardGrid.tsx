@@ -38,6 +38,7 @@ const UserManagementWidget = lazy(() => import('./UserManagementWidget'));
 const VendorPaymentsWidget = lazy(() => import('./VendorPaymentsWidget'));
 const PurchaseOrdersWidget = lazy(() => import('./PurchaseOrdersWidget'));
 const ReportsWidget = lazy(() => import('./ReportsWidget'));
+const MyJobsWidget = lazy(() => import('./MyJobsWidget'));
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 const WIDGET_COMPONENTS: Record<string, React.LazyExoticComponent<any>> = {
@@ -64,6 +65,7 @@ const WIDGET_COMPONENTS: Record<string, React.LazyExoticComponent<any>> = {
   vendor_payments: VendorPaymentsWidget,
   purchase_orders: PurchaseOrdersWidget,
   reports: ReportsWidget,
+  my_jobs: MyJobsWidget,
 };
 
 const ROW_HEIGHT = 90;

@@ -176,6 +176,13 @@ export const WIDGET_REGISTRY: WidgetDef[] = [
     description: 'Export vehicle spreadsheets and reports',
     defaultW: 2, defaultH: 2, minW: 1, minH: 1,
   },
+  {
+    id: 'my_jobs',
+    label: 'My Jobs',
+    icon: '',
+    description: 'Jobs assigned to you with status',
+    defaultW: 2, defaultH: 2, minW: 1, minH: 2,
+  },
 ];
 
 export const WIDGET_MAP = Object.fromEntries(WIDGET_REGISTRY.map(w => [w.id, w]));
