@@ -62,7 +62,8 @@ export async function POST(req: NextRequest) {
         i.department,
         i.custitem1 AS labor_hours,
         BUILTIN.DF(i.class) AS class_name,
-        BUILTIN.DF(i.department) AS department_name
+        BUILTIN.DF(i.department) AS department_name,
+        BUILTIN.DF(i.vendor) AS vendor_name
       FROM item i
       WHERE i.itemtype IN ('InvtPart', 'NonInvtPart', 'Service', 'Kit', 'Assembly')
       AND i.isinactive = 'F'
@@ -192,6 +193,7 @@ export async function POST(req: NextRequest) {
           ns_class: className || null,
           ns_category: null,
           ns_department: item.department_name || null,
+          vendor: item.vendor_name || null,
           is_active: true,
           last_synced_at: now,
           updated_at: now,

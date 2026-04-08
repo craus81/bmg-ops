@@ -20,6 +20,7 @@ interface Part {
   labor_hours: number;
   ns_class: string | null;
   ns_department: string | null;
+  vendor: string | null;
   is_active: boolean;
   last_synced_at: string;
 }
@@ -310,8 +311,15 @@ export default function PartsPage() {
                   }}
                 >
                   <div style={{ minWidth: 0 }}>
-                    <div style={{ fontSize: '13px', fontWeight: 700, color: 'var(--text-primary)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-                      {part.item_number}
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+                      <span style={{ fontSize: '13px', fontWeight: 700, color: 'var(--text-primary)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                        {part.item_number}
+                      </span>
+                      {part.vendor && (
+                        <span style={{ fontSize: '8px', fontWeight: 700, padding: '1px 5px', borderRadius: '4px', background: 'rgba(167,139,250,0.1)', border: '1px solid rgba(167,139,250,0.25)', color: '#a78bfa', whiteSpace: 'nowrap', flexShrink: 0 }}>
+                          {part.vendor}
+                        </span>
+                      )}
                     </div>
                     <div style={{ fontSize: '10px', color: 'var(--text-muted)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
                       {part.display_name || part.description || '—'}
