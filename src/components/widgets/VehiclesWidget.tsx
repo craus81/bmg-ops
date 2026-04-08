@@ -24,18 +24,14 @@ export default function VehiclesWidget() {
       .from('scanned_vehicles')
       .select('id', { count: 'exact', head: true });
 
-    const { data: vehicles } = await supabase
-      .from('scanned_vehicles')
-      .select('id, vin, vehicle_year, vehicle_make, vehicle_model, part_number, scanned_at')
-      .order('scanned_at', { ascending: false })
-      .limit(100);
+    const [todayRes, weekRes, recentRes] = await Promise.all([
+      supabase.from('scanned_vehicles').select('id', { count: 'exact', head: true }).gte('scanned_at', todayStart),
+      supabase.from('scanned_vehicles').select('id', { count: 'exact', head: true }).gte('scanned_at', weekStart),
+      supabase.from('scanned_vehicles').select('id, vin, vehicle_year, vehicle_make, vehicle_model, part_number, scanned_at').order('scanned_at', { ascending: false }).limit(5),
+    ]);
 
-    const all = vehicles || [];
-    const today = all.filter(v => v.scanned_at >= todayStart).length;
-    const week = all.filter(v => v.scanned_at >= weekStart).length;
-
-    setStats({ total: count || 0, today, week });
-    setRecentVehicles(all.slice(0, 5));
+    setStats({ total: count || 0, today: todayRes.count || 0, week: weekRes.count || 0 });
+    setRecentVehicles(recentRes.data || []);
     setLoading(false);
   };
 

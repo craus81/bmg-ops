@@ -22,6 +22,9 @@ export default function TrackingPage() {
 
   const [vehicles, setVehicles] = useState<FleetCheckin[]>([]);
   const [loading, setLoading] = useState(true);
+  const [loadingMore, setLoadingMore] = useState(false);
+  const [hasMore, setHasMore] = useState(true);
+  const PAGE_SIZE = 50;
   const [filterStatus, setFilterStatus] = useState<FilterStatus>('all');
   const [expandedId, setExpandedId] = useState<string | null>(null);
   const [statusHistory, setStatusHistory] = useState<VehicleStatusHistory[]>([]);
@@ -100,14 +103,23 @@ export default function TrackingPage() {
     }
   }, [loading]);
 
-  const loadVehicles = async () => {
-    setLoading(true);
+  const loadVehicles = async (append = false) => {
+    if (append) setLoadingMore(true); else setLoading(true);
+    const offset = append ? vehicles.length : 0;
     const { data } = await supabase
       .from('fleet_checkins')
       .select('*')
-      .order('updated_at', { ascending: false });
-    if (data) setVehicles(data);
-    setLoading(false);
+      .order('updated_at', { ascending: false })
+      .range(offset, offset + PAGE_SIZE - 1);
+    if (data) {
+      if (append) {
+        setVehicles(prev => [...prev, ...data]);
+      } else {
+        setVehicles(data);
+      }
+      setHasMore(data.length === PAGE_SIZE);
+    }
+    if (append) setLoadingMore(false); else setLoading(false);
   };
 
   const loadProfiles = async () => {
@@ -1483,6 +1495,20 @@ export default function TrackingPage() {
               </div>
             );
           })}
+          {hasMore && !searchTerm && (
+            <button
+              onClick={() => loadVehicles(true)}
+              disabled={loadingMore}
+              style={{
+                width: '100%', padding: '14px', borderRadius: '10px', marginTop: '8px',
+                fontSize: '13px', fontWeight: 700, cursor: 'pointer',
+                background: 'var(--subtle-bg)', border: '1px solid var(--border)',
+                color: loadingMore ? 'var(--text-muted)' : '#60a5fa',
+              }}
+            >
+              {loadingMore ? 'Loading...' : `Load More Vehicles (${vehicles.length} loaded)`}
+            </button>
+          )}
         </div>
       )}
     </div>

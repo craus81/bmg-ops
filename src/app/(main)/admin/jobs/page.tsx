@@ -92,17 +92,38 @@ export default function AllJobsPage() {
   const loadData = async () => {
     const { data: companyData } = await supabase.from('companies').select('*').order('name');
     setCompanies(companyData || []);
-    const { data } = await supabase.from('scanned_vehicles').select('*').order('scanned_at', { ascending: false });
+    const { data } = await supabase
+      .from('scanned_vehicles')
+      .select('*')
+      .order('scanned_at', { ascending: false })
+      .limit(200);
     if (!data) { setLoading(false); return; }
-    const enriched: Job[] = await Promise.all(
-      data.map(async (v: any) => {
-        const { data: sp } = await supabase.from('profiles').select('full_name, company_id').eq('id', v.scanned_by).maybeSingle();
-        const cid = v.company_id || sp?.company_id;
-        const company = (companyData || []).find((c: Company) => c.id === cid);
-        const { count } = await supabase.from('vehicle_photos').select('*', { count: 'exact', head: true }).eq('vehicle_id', v.id);
-        return { ...v, company_id: cid, scanner_name: sp?.full_name || 'Unknown', company_name: company?.name || 'Unassigned', photo_count: count || 0 };
-      })
-    );
+
+    // Batch load profiles and photo counts instead of N+1
+    const scannerIds = [...new Set(data.map((v: any) => v.scanned_by).filter(Boolean))];
+    const vehicleIds = data.map((v: any) => v.id);
+
+    const [profilesRes, photoCounts] = await Promise.all([
+      scannerIds.length > 0
+        ? supabase.from('profiles').select('id, full_name, company_id').in('id', scannerIds)
+        : Promise.resolve({ data: [] }),
+      vehicleIds.length > 0
+        ? supabase.from('vehicle_photos').select('vehicle_id').in('vehicle_id', vehicleIds)
+        : Promise.resolve({ data: [] }),
+    ]);
+
+    const profileMap: Record<string, { full_name: string; company_id: string | null }> = {};
+    (profilesRes.data || []).forEach((p: any) => { profileMap[p.id] = p; });
+
+    const photoCountMap: Record<string, number> = {};
+    (photoCounts.data || []).forEach((p: any) => { photoCountMap[p.vehicle_id] = (photoCountMap[p.vehicle_id] || 0) + 1; });
+
+    const enriched: Job[] = data.map((v: any) => {
+      const sp = profileMap[v.scanned_by];
+      const cid = v.company_id || sp?.company_id;
+      const company = (companyData || []).find((c: Company) => c.id === cid);
+      return { ...v, company_id: cid, scanner_name: sp?.full_name || 'Unknown', company_name: company?.name || 'Unassigned', photo_count: photoCountMap[v.id] || 0 };
+    });
     setJobs(enriched);
     setLoading(false);
   };
