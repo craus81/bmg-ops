@@ -102,15 +102,41 @@ export default function PhotosPage() {
     if (!vehicleId || !user || photos.length === 0) return;
     setSubmitting(true);
 
+    // Check if this vehicle's PO has skip_photo_review enabled
+    let autoApprove = false;
+    if (vehicle?.po_line_item_id) {
+      const { data: lineItem } = await supabase
+        .from('po_line_items')
+        .select('po_id')
+        .eq('id', vehicle.po_line_item_id)
+        .single();
+      if (lineItem?.po_id) {
+        const { data: po } = await supabase
+          .from('purchase_orders')
+          .select('skip_photo_review')
+          .eq('id', lineItem.po_id)
+          .single();
+        if (po?.skip_photo_review) autoApprove = true;
+      }
+    }
+
     // Update vehicle status
     await supabase
       .from('scanned_vehicles')
       .update({
         submitted_for_review: true,
         submitted_at: new Date().toISOString(),
-        review_status: 'pending',
+        review_status: autoApprove ? 'approved' : 'pending',
+        ...(autoApprove ? { reviewed_at: new Date().toISOString() } : {}),
       })
       .eq('id', vehicleId);
+
+    // Skip admin notifications if auto-approved
+    if (autoApprove) {
+      setSubmitted(true);
+      setSubmitting(false);
+      return;
+    }
 
     // Get all admin users
     const { data: admins } = await supabase

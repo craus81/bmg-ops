@@ -30,7 +30,7 @@ export default function POsPage() {
   const [showImport, setShowImport] = useState(false);
   const [expandedPo, setExpandedPo] = useState<string | null>(null);
   const [editPoId, setEditPoId] = useState<string | null>(null);
-  const [editPoForm, setEditPoForm] = useState({ po_number: '', customer: '', status: '' as string });
+  const [editPoForm, setEditPoForm] = useState({ po_number: '', customer: '', status: '' as string, skip_photo_review: false });
   const [editLineId, setEditLineId] = useState<string | null>(null);
   const [editLineForm, setEditLineForm] = useState({ part_number: '', quantity: '', unit_price: '' });
   const [form, setForm] = useState({ po_number: '', customer: 'Masterack' });
@@ -462,21 +462,21 @@ export default function POsPage() {
 
   const startEditPO = (po: PurchaseOrder & { line_items: POLineItem[] }) => {
     setEditPoId(po.id);
-    setEditPoForm({ po_number: po.po_number, customer: po.customer, status: po.status });
+    setEditPoForm({ po_number: po.po_number, customer: po.customer, status: po.status, skip_photo_review: (po as any).skip_photo_review || false });
   };
 
   const saveEditPO = async () => {
     if (!editPoId) return;
     const { error } = await supabase
       .from('purchase_orders')
-      .update({ po_number: editPoForm.po_number, customer: editPoForm.customer, status: editPoForm.status })
+      .update({ po_number: editPoForm.po_number, customer: editPoForm.customer, status: editPoForm.status, skip_photo_review: editPoForm.skip_photo_review })
       .eq('id', editPoId);
 
     if (!error) {
       setPos((prev) =>
         prev.map((po) =>
           po.id === editPoId
-            ? { ...po, po_number: editPoForm.po_number, customer: editPoForm.customer, status: editPoForm.status as any }
+            ? { ...po, po_number: editPoForm.po_number, customer: editPoForm.customer, status: editPoForm.status as any, skip_photo_review: editPoForm.skip_photo_review }
             : po
         )
       );
@@ -1818,6 +1818,7 @@ export default function POsPage() {
                         {po.customer} • {po.line_items.length} item{po.line_items.length !== 1 ? 's' : ''}
                         {po.status === 'complete' && <span style={{ color: '#4ade80', marginLeft: '6px' }}>&#10003; Complete</span>}
                         {(po as any).netsuite_invoice_number && <span style={{ color: '#34d399', marginLeft: '6px' }}>INV #{(po as any).netsuite_invoice_number}</span>}
+                        {(po as any).skip_photo_review && <span style={{ color: '#f59e0b', marginLeft: '6px', fontSize: '9px', fontWeight: 700 }}>NO REVIEW</span>}
                       </div>
                     </div>
                   </div>
@@ -1859,6 +1860,15 @@ export default function POsPage() {
                           <option value="open">Open</option><option value="complete">Complete</option><option value="cancelled">Cancelled</option>
                         </select>
                       </div>
+                      <label style={{ display: 'flex', alignItems: 'center', gap: '8px', marginTop: '8px', cursor: 'pointer', fontSize: '11px', fontWeight: 600, color: 'var(--text-secondary)' }}>
+                        <input
+                          type="checkbox"
+                          checked={editPoForm.skip_photo_review}
+                          onChange={(e) => setEditPoForm({ ...editPoForm, skip_photo_review: e.target.checked })}
+                          style={{ width: '16px', height: '16px', accentColor: '#f59e0b' }}
+                        />
+                        Skip photo review (auto-approve)
+                      </label>
                       <div style={{ display: 'flex', gap: '6px', marginTop: '8px' }}>
                         <button onClick={saveEditPO} style={{ flex: 1, padding: '8px', borderRadius: '8px', background: '#22c55e', color: '#fff', fontSize: '12px', fontWeight: 700, border: 'none' }}>Save</button>
                         <button onClick={() => setEditPoId(null)} style={{ flex: 1, padding: '8px', borderRadius: '8px', background: 'transparent', border: '1px solid var(--border)', color: 'var(--text-body)', fontSize: '12px', fontWeight: 700 }}>Cancel</button>
