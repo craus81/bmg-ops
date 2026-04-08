@@ -200,7 +200,7 @@ export default function GraphicsPage() {
         console.error('File upload error:', upErr);
         continue;
       }
-      await supabase.from('graphics_job_files').insert({
+      const { error: dbErr } = await supabase.from('graphics_job_files').insert({
         job_id: jobId,
         file_name: file.name,
         file_type: file.type || null,
@@ -208,6 +208,7 @@ export default function GraphicsPage() {
         storage_path: path,
         uploaded_by: user?.id,
       });
+      if (dbErr) console.error('File record insert error:', dbErr);
     }
     setUploadingFiles(false);
     await loadJobFiles(jobId);
