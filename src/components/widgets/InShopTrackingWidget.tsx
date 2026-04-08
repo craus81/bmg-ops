@@ -32,7 +32,7 @@ export default function InShopTrackingWidget() {
   const load = async () => {
     const { data: checkins } = await supabase
       .from('fleet_checkins')
-      .select('id, customer_name, vehicle_year, vehicle_make, vehicle_model, status, updated_at')
+      .select('id, vin, customer_name, vehicle_year, vehicle_make, vehicle_model, status, updated_at')
       .not('status', 'in', '("shipped","complete","archived")')
       .order('updated_at', { ascending: false })
       .limit(100);
@@ -74,9 +74,14 @@ export default function InShopTrackingWidget() {
                   padding: '6px 8px', borderRadius: '6px', border: 'none', textAlign: 'left',
                   background: 'var(--subtle-bg)', cursor: 'pointer', fontSize: '11px',
                 }}>
-                  <span style={{ fontWeight: 600, color: theme.textPrimary, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', maxWidth: '55%' }}>
-                    {[item.vehicle_year, item.vehicle_make, item.vehicle_model].filter(Boolean).join(' ') || 'Unknown Vehicle'}
-                  </span>
+                  <div style={{ flex: 1, overflow: 'hidden', minWidth: 0 }}>
+                    <span style={{ fontWeight: 600, color: theme.textPrimary, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', display: 'block' }}>
+                      {[item.vehicle_year, item.vehicle_make, item.vehicle_model].filter(Boolean).join(' ') || 'Unknown Vehicle'}
+                    </span>
+                    <span style={{ fontSize: '9px', fontFamily: 'monospace', color: theme.textMuted, display: 'block', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                      {item.vin}
+                    </span>
+                  </div>
                   <span style={{
                     fontSize: '9px', fontWeight: 700, textTransform: 'uppercase',
                     color: statusColor,
