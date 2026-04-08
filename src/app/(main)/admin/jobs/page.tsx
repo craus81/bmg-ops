@@ -65,6 +65,7 @@ export default function AllJobsPage() {
   const [loading, setLoading] = useState(true);
   const [companyFilter, setCompanyFilter] = useState<string>('all');
   const [statusFilter, setStatusFilter] = useState<'all' | 'pending' | 'approved' | 'denied' | 'not_submitted'>('all');
+  const [collapsedCompanies, setCollapsedCompanies] = useState<Set<string>>(new Set());
   const [invoices, setInvoices] = useState<Invoice[]>([]);
   const [invoicesLoading, setInvoicesLoading] = useState(true);
   const [invoiceFilter, setInvoiceFilter] = useState<'no_invoice' | 'pending' | 'approved' | 'paid' | 'denied' | 'all'>('no_invoice');
@@ -341,13 +342,21 @@ export default function AllJobsPage() {
             ))}
           </div>
           {filteredJobs.length === 0 && <div style={{ textAlign: 'center', padding: '32px 0', color: 'var(--text-muted)' }}><div style={{ fontSize: '36px', marginBottom: '6px', opacity: 0.4 }}></div><div style={{ fontWeight: 600, fontSize: '13px' }}>No jobs match filters</div></div>}
-          {Object.entries(grouped).sort(([a], [b]) => a.localeCompare(b)).map(([cn, cj]) => (
-            <div key={cn} style={{ marginBottom: '16px' }}>
-              <div style={{ fontSize: '12px', fontWeight: 800, color: 'var(--text-primary)', padding: '8px 0', borderBottom: '1px solid var(--border)', marginBottom: '8px', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                <span>{cn}</span>
-                <span style={{ fontSize: '11px', fontWeight: 600, color: 'var(--text-muted)' }}>{cj.length} job{cj.length !== 1 ? 's' : ''}</span>
+          {Object.entries(grouped).sort(([a], [b]) => a.localeCompare(b)).map(([cn, cj]) => {
+            const isCollapsed = collapsedCompanies.has(cn);
+            return (
+            <div key={cn} style={{ marginBottom: '10px' }}>
+              <div
+                onClick={() => setCollapsedCompanies(prev => { const next = new Set(prev); if (next.has(cn)) next.delete(cn); else next.add(cn); return next; })}
+                style={{ fontSize: '12px', fontWeight: 800, color: 'var(--text-primary)', padding: '10px 14px', borderRadius: '10px', cursor: 'pointer', display: 'flex', justifyContent: 'space-between', alignItems: 'center', background: 'var(--card)', border: '1px solid var(--border)', marginBottom: isCollapsed ? 0 : '6px' }}
+              >
+                <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                  <span style={{ fontSize: '10px', color: 'var(--text-muted)', transition: 'transform 0.15s', transform: isCollapsed ? 'rotate(-90deg)' : 'rotate(0deg)' }}>▼</span>
+                  <span>{cn}</span>
+                </div>
+                <span style={{ fontSize: '11px', fontWeight: 700, color: 'var(--text-muted)' }}>{cj.length} VIN{cj.length !== 1 ? 's' : ''}</span>
               </div>
-              <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
+              {!isCollapsed && <div style={{ display: 'flex', flexDirection: 'column', gap: '6px', paddingLeft: '12px' }}>
                 {cj.map((job) => (
                   <button key={job.id} onClick={() => router.push(`/photos?id=${job.id}`)} style={{ display: 'flex', alignItems: 'center', gap: '12px', width: '100%', padding: '12px', borderRadius: '12px', textAlign: 'left', border: '1px solid var(--border)', background: 'var(--card)', boxShadow: 'var(--shadow-sm)', transition: 'all 0.15s' }}>
                     <div style={{ flex: 1, minWidth: 0 }}>
@@ -360,9 +369,10 @@ export default function AllJobsPage() {
                     </div>
                   </button>
                 ))}
-              </div>
+              </div>}
             </div>
-          ))}
+          );
+          })}
         </div>
       )}
 
