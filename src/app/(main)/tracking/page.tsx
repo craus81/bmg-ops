@@ -34,6 +34,7 @@ export default function TrackingPage() {
   const [profiles, setProfiles] = useState<Record<string, string>>({});
   const [searchTerm, setSearchTerm] = useState('');
   const [updateSuccess, setUpdateSuccess] = useState<string | null>(null);
+  const [collapsedGroups, setCollapsedGroups] = useState<Set<string>>(new Set());
   const [showArchived, setShowArchived] = useState(false);
   const [deletingId, setDeletingId] = useState<string | null>(null);
   const [archivingId, setArchivingId] = useState<string | null>(null);
@@ -572,6 +573,23 @@ export default function TrackingPage() {
   activeVehicles.forEach(v => { if (statusCounts[v.status] !== undefined) statusCounts[v.status]++; });
   const stuckCount = (statusCounts['stuck_parts'] || 0) + (statusCounts['stuck_graphics'] || 0);
 
+  // Group filtered vehicles by customer/SO
+  const grouped = filtered.reduce((acc: Record<string, FleetCheckin[]>, v) => {
+    const key = v.customer_name || v.sales_order_number || 'Unassigned';
+    if (!acc[key]) acc[key] = [];
+    acc[key].push(v);
+    return acc;
+  }, {});
+  const groupKeys = Object.keys(grouped).sort((a, b) => a === 'Unassigned' ? 1 : b === 'Unassigned' ? -1 : a.localeCompare(b));
+
+  const toggleGroup = (key: string) => {
+    setCollapsedGroups(prev => {
+      const next = new Set(prev);
+      if (next.has(key)) next.delete(key); else next.add(key);
+      return next;
+    });
+  };
+
   const vehicleTitle = (v: FleetCheckin) =>
     [v.vehicle_year, v.vehicle_make, v.vehicle_model].filter(Boolean).join(' ') || 'Unknown Vehicle';
 
@@ -737,8 +755,51 @@ export default function TrackingPage() {
           </div>
         </div>
       ) : (
-        <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
-          {filtered.map(vehicle => {
+        <div style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
+          {groupKeys.map(groupKey => {
+            const groupVehicles = grouped[groupKey];
+            const isCollapsed = collapsedGroups.has(groupKey);
+            const statusSummary: Record<string, number> = {};
+            groupVehicles.forEach(v => {
+              const s = v.status === 'checked_in' ? 'received' : v.status;
+              statusSummary[s] = (statusSummary[s] || 0) + 1;
+            });
+
+            return (
+              <div key={groupKey}>
+                {/* Group header */}
+                <div
+                  onClick={() => toggleGroup(groupKey)}
+                  style={{
+                    display: 'flex', justifyContent: 'space-between', alignItems: 'center',
+                    padding: '10px 14px', borderRadius: '10px', cursor: 'pointer',
+                    background: 'var(--card)', border: '1px solid var(--border)',
+                    marginBottom: isCollapsed ? 0 : '6px',
+                  }}
+                >
+                  <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                    <span style={{ fontSize: '10px', color: 'var(--text-muted)', transition: 'transform 0.15s', transform: isCollapsed ? 'rotate(-90deg)' : 'rotate(0deg)' }}>▼</span>
+                    <span style={{ fontWeight: 800, fontSize: '13px', color: 'var(--text-primary)' }}>{groupKey}</span>
+                    {groupVehicles[0]?.sales_order_number && groupKey !== groupVehicles[0].sales_order_number && (
+                      <span style={{ fontSize: '10px', color: 'var(--text-muted)', fontWeight: 600 }}>SO #{groupVehicles[0].sales_order_number}</span>
+                    )}
+                  </div>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+                    {Object.entries(statusSummary).map(([s, count]) => (
+                      <span key={s} style={{
+                        fontSize: '9px', fontWeight: 700, padding: '2px 6px', borderRadius: '4px',
+                        background: `${VEHICLE_STATUS_COLORS[s as VehicleTrackingStatus] || 'var(--text-muted)'}18`,
+                        color: VEHICLE_STATUS_COLORS[s as VehicleTrackingStatus] || 'var(--text-muted)',
+                      }}>{count}</span>
+                    ))}
+                    <span style={{ fontSize: '11px', fontWeight: 700, color: 'var(--text-muted)' }}>{groupVehicles.length} VIN{groupVehicles.length !== 1 ? 's' : ''}</span>
+                  </div>
+                </div>
+
+                {/* Vehicle cards */}
+                {!isCollapsed && (
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: '6px', paddingLeft: '12px' }}>
+                    {groupVehicles.map(vehicle => {
             const isExpanded = expandedId === vehicle.id;
             const status = (vehicle.status === 'checked_in' ? 'received' : vehicle.status) as VehicleTrackingStatus;
 
@@ -1490,6 +1551,11 @@ export default function TrackingPage() {
                         </button>
                       </div>
                     )}
+                  </div>
+                )}
+              </div>
+            );
+                    })}
                   </div>
                 )}
               </div>
