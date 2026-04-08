@@ -35,6 +35,7 @@ export default function ReviewsPage() {
   const [denyNotes, setDenyNotes] = useState('');
   const [processing, setProcessing] = useState<string | null>(null);
   const [viewingPhoto, setViewingPhoto] = useState<string | null>(null);
+  const [clearing, setClearing] = useState(false);
 
   useEffect(() => {
     if (!isAdmin) { router.push('/home'); return; }
@@ -207,11 +208,36 @@ export default function ReviewsPage() {
     setExpandedId(null);
   };
 
+  const handleDismiss = async (vehicleId: string) => {
+    setProcessing(vehicleId);
+    await supabase
+      .from('scanned_vehicles')
+      .update({ submitted_for_review: false, review_status: 'pending' })
+      .eq('id', vehicleId);
+    setVehicles((prev) => prev.filter((v) => v.id !== vehicleId));
+    setProcessing(null);
+    setExpandedId(null);
+  };
+
+  const handleClearZeroPhoto = async () => {
+    const zeroPending = vehicles.filter((v) => v.review_status === 'pending' && v.photos.length === 0);
+    if (zeroPending.length === 0) return;
+    setClearing(true);
+    const ids = zeroPending.map((v) => v.id);
+    await supabase
+      .from('scanned_vehicles')
+      .update({ submitted_for_review: false, review_status: 'pending' })
+      .in('id', ids);
+    setVehicles((prev) => prev.filter((v) => !ids.includes(v.id)));
+    setClearing(false);
+  };
+
   const vehicleTitle = (v: ReviewVehicle) =>
     [v.vehicle_year, v.vehicle_make, v.vehicle_model].filter(Boolean).join(' ') || 'Unknown Vehicle';
 
   const filtered = filter === 'all' ? vehicles : vehicles.filter((v) => v.review_status === filter);
   const pendingCount = vehicles.filter((v) => v.review_status === 'pending').length;
+  const zeroPhotoPendingCount = vehicles.filter((v) => v.review_status === 'pending' && v.photos.length === 0).length;
 
   if (loading) return <div style={{ textAlign: 'center', padding: '40px', color: 'var(--text-muted)' }}>Loading...</div>;
 
@@ -266,6 +292,21 @@ export default function ReviewsPage() {
           </button>
         ))}
       </div>
+
+      {filter === 'pending' && zeroPhotoPendingCount > 0 && (
+        <button
+          onClick={handleClearZeroPhoto}
+          disabled={clearing}
+          style={{
+            width: '100%', padding: '10px', borderRadius: '10px', marginBottom: '12px',
+            background: 'var(--subtle-bg)', border: '1px solid var(--border)',
+            color: 'var(--text-secondary)', fontSize: '12px', fontWeight: 700,
+            opacity: clearing ? 0.5 : 1,
+          }}
+        >
+          {clearing ? 'Clearing...' : `Clear ${zeroPhotoPendingCount} Review${zeroPhotoPendingCount !== 1 ? 's' : ''} with 0 Photos`}
+        </button>
+      )}
 
       {filtered.length === 0 && (
         <div style={{ textAlign: 'center', padding: '32px 0', color: 'var(--text-muted)' }}>
@@ -379,6 +420,18 @@ export default function ReviewsPage() {
                           }}
                         >
                           {processing === v.id ? 'Processing...' : '✓ Approve'}
+                        </button>
+                        <button
+                          onClick={() => handleDismiss(v.id)}
+                          disabled={processing === v.id}
+                          style={{
+                            padding: '12px 16px', borderRadius: '10px',
+                            background: 'var(--subtle-bg)', border: '1px solid var(--border)',
+                            color: 'var(--text-muted)', fontWeight: 700, fontSize: '12px',
+                            opacity: processing === v.id ? 0.5 : 1,
+                          }}
+                        >
+                          Dismiss
                         </button>
                       </div>
 
