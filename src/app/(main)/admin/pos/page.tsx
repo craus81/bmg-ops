@@ -72,6 +72,17 @@ export default function POsPage() {
   const [catalogAddResults, setCatalogAddResults] = useState<Record<string, 'added' | 'error'>>({});
   // Batch delete state
   const [editMode, setEditMode] = useState(false);
+  // Line item sort
+  const [liSort, setLiSort] = useState<{ col: 'part_number' | 'quantity' | 'installed' | 'unit_price'; dir: 'asc' | 'desc' }>({ col: 'part_number', dir: 'asc' });
+  const toggleLiSort = (col: typeof liSort.col) => {
+    setLiSort(prev => prev.col === col ? { col, dir: prev.dir === 'asc' ? 'desc' : 'asc' } : { col, dir: 'asc' });
+  };
+  const liSortIndicator = (col: typeof liSort.col) => liSort.col === col ? (liSort.dir === 'asc' ? ' ▲' : ' ▼') : '';
+  const sortLineItems = (items: POLineItem[]) => [...items].sort((a, b) => {
+    const av = a[liSort.col]; const bv = b[liSort.col];
+    const cmp = typeof av === 'string' ? av.localeCompare(bv as string) : (av as number) - (bv as number);
+    return liSort.dir === 'asc' ? cmp : -cmp;
+  });
 
   // Pending PO queue state
   const [pendingPOs, setPendingPOs] = useState<any[]>([]);
@@ -1926,15 +1937,15 @@ export default function POsPage() {
                   )}
 
                   <div style={{ display: 'flex', gap: '4px', padding: '8px 0 4px', borderBottom: '1px solid var(--border)', fontSize: '10px', fontWeight: 700, color: 'var(--text-label)', textTransform: 'uppercase', letterSpacing: '0.3px' }}>
-                    <div style={{ flex: 1 }}>Part #</div>
-                    <div style={{ width: '36px', textAlign: 'center' }}>Qty</div>
-                    <div style={{ width: '42px', textAlign: 'center' }}>Done</div>
-                    <div style={{ width: '65px', textAlign: 'right' }}>Price</div>
+                    <div onClick={() => toggleLiSort('part_number')} style={{ flex: 1, cursor: 'pointer', color: liSort.col === 'part_number' ? '#60a5fa' : undefined }}>Part #{liSortIndicator('part_number')}</div>
+                    <div onClick={() => toggleLiSort('quantity')} style={{ width: '36px', textAlign: 'center', cursor: 'pointer', color: liSort.col === 'quantity' ? '#60a5fa' : undefined }}>Qty{liSortIndicator('quantity')}</div>
+                    <div onClick={() => toggleLiSort('installed')} style={{ width: '42px', textAlign: 'center', cursor: 'pointer', color: liSort.col === 'installed' ? '#60a5fa' : undefined }}>Done{liSortIndicator('installed')}</div>
+                    <div onClick={() => toggleLiSort('unit_price')} style={{ width: '65px', textAlign: 'right', cursor: 'pointer', color: liSort.col === 'unit_price' ? '#60a5fa' : undefined }}>Price{liSortIndicator('unit_price')}</div>
                     <div style={{ width: '55px', textAlign: 'right' }}>Total</div>
                     <div style={{ width: '24px' }}></div>
                   </div>
 
-                  {po.line_items.map((li) => {
+                  {sortLineItems(po.line_items).map((li) => {
                     const lineTotal = li.quantity * li.unit_price;
                     const linePct = li.quantity > 0 ? (li.installed / li.quantity) * 100 : 0;
                     const isEditingLine = editLineId === li.id;

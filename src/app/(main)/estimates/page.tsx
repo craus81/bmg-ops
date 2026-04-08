@@ -109,6 +109,18 @@ export default function EstimatesPage() {
   const [laborRate, setLaborRate] = useState(DEFAULT_LABOR_RATE);
   const [laborOverride, setLaborOverride] = useState<number | null>(null);
   const [lines, setLines] = useState<LineItem[]>([]);
+  const [estSortCol, setEstSortCol] = useState<'item_number' | 'quantity' | 'unit_price' | 'labor_hours' | null>(null);
+  const [estSortDir, setEstSortDir] = useState<'asc' | 'desc'>('asc');
+  const toggleEstSort = (col: typeof estSortCol) => {
+    if (estSortCol === col) { if (estSortDir === 'desc') { setEstSortCol(null); } else { setEstSortDir('desc'); } }
+    else { setEstSortCol(col); setEstSortDir('asc'); }
+  };
+  const estSortIndicator = (col: NonNullable<typeof estSortCol>) => estSortCol === col ? (estSortDir === 'asc' ? ' ▲' : ' ▼') : '';
+  const sortedLines = estSortCol ? [...lines].sort((a, b) => {
+    const av = a[estSortCol] ?? 0; const bv = b[estSortCol] ?? 0;
+    const cmp = typeof av === 'string' ? av.localeCompare(bv as string) : (av as number) - (bv as number);
+    return estSortDir === 'asc' ? cmp : -cmp;
+  }) : lines;
   const [saving, setSaving] = useState(false);
   const [pushing, setPushing] = useState(false);
   const [syncing, setSyncing] = useState(false);
@@ -697,16 +709,16 @@ export default function EstimatesPage() {
           <div style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
             {/* Header row */}
             <div style={{ display: 'grid', gridTemplateColumns: '1fr 2fr 60px 80px 80px 60px 30px', gap: '4px', padding: '4px 0', fontSize: '9px', fontWeight: 700, color: 'var(--text-label)', textTransform: 'uppercase' }}>
-              <div>Item #</div>
+              <div onClick={() => toggleEstSort('item_number')} style={{ cursor: 'pointer', color: estSortCol === 'item_number' ? '#60a5fa' : undefined }}>Item #{estSortIndicator('item_number')}</div>
               <div>Description</div>
-              <div style={{ textAlign: 'center' }}>Qty</div>
-              <div style={{ textAlign: 'right' }}>Price</div>
+              <div onClick={() => toggleEstSort('quantity')} style={{ textAlign: 'center', cursor: 'pointer', color: estSortCol === 'quantity' ? '#60a5fa' : undefined }}>Qty{estSortIndicator('quantity')}</div>
+              <div onClick={() => toggleEstSort('unit_price')} style={{ textAlign: 'right', cursor: 'pointer', color: estSortCol === 'unit_price' ? '#60a5fa' : undefined }}>Price{estSortIndicator('unit_price')}</div>
               <div style={{ textAlign: 'right' }}>Total</div>
-              <div style={{ textAlign: 'center' }}>Labor</div>
+              <div onClick={() => toggleEstSort('labor_hours')} style={{ textAlign: 'center', cursor: 'pointer', color: estSortCol === 'labor_hours' ? '#60a5fa' : undefined }}>Labor{estSortIndicator('labor_hours')}</div>
               <div></div>
             </div>
 
-            {lines.map(line => (
+            {sortedLines.map(line => (
               <div
                 key={line.key}
                 style={{

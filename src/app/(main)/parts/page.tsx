@@ -47,6 +47,8 @@ export default function PartsPage() {
   const [lastSync, setLastSync] = useState<SyncLog | null>(null);
   const [expandedId, setExpandedId] = useState<string | null>(null);
   const [editingLabor, setEditingLabor] = useState<string | null>(null);
+  const [sortCol, setSortCol] = useState<'item_number' | 'sales_price' | 'quantity_on_hand' | 'labor_hours'>('item_number');
+  const [sortDir, setSortDir] = useState<'asc' | 'desc'>('asc');
   const [laborValue, setLaborValue] = useState('');
 
   useEffect(() => {
@@ -142,6 +144,12 @@ export default function PartsPage() {
     loadParts();
   };
 
+  const toggleSort = (col: typeof sortCol) => {
+    if (sortCol === col) setSortDir(d => d === 'asc' ? 'desc' : 'asc');
+    else { setSortCol(col); setSortDir('asc'); }
+  };
+  const sortIndicator = (col: typeof sortCol) => sortCol === col ? (sortDir === 'asc' ? ' ▲' : ' ▼') : '';
+
   const filtered = parts.filter(p => {
     if (!search) return true;
     const s = search.toLowerCase();
@@ -150,6 +158,11 @@ export default function PartsPage() {
       p.display_name?.toLowerCase().includes(s) ||
       p.description?.toLowerCase().includes(s)
     );
+  }).sort((a, b) => {
+    const av = a[sortCol] ?? 0;
+    const bv = b[sortCol] ?? 0;
+    const cmp = typeof av === 'string' ? av.localeCompare(bv as string) : (av as number) - (bv as number);
+    return sortDir === 'asc' ? cmp : -cmp;
   });
 
   const formatCurrency = (val: number) => {
@@ -269,10 +282,10 @@ export default function PartsPage() {
             padding: '6px 12px', fontSize: '9px', fontWeight: 700,
             color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.3px',
           }}>
-            <div>Part</div>
-            <div style={{ textAlign: 'right' }}>Sale $</div>
-            <div style={{ textAlign: 'right' }}>Qty</div>
-            <div style={{ textAlign: 'right' }}>Labor</div>
+            <div onClick={() => toggleSort('item_number')} style={{ cursor: 'pointer', color: sortCol === 'item_number' ? '#60a5fa' : undefined }}>Part{sortIndicator('item_number')}</div>
+            <div onClick={() => toggleSort('sales_price')} style={{ textAlign: 'right', cursor: 'pointer', color: sortCol === 'sales_price' ? '#60a5fa' : undefined }}>Sale ${sortIndicator('sales_price')}</div>
+            <div onClick={() => toggleSort('quantity_on_hand')} style={{ textAlign: 'right', cursor: 'pointer', color: sortCol === 'quantity_on_hand' ? '#60a5fa' : undefined }}>Qty{sortIndicator('quantity_on_hand')}</div>
+            <div onClick={() => toggleSort('labor_hours')} style={{ textAlign: 'right', cursor: 'pointer', color: sortCol === 'labor_hours' ? '#60a5fa' : undefined }}>Labor{sortIndicator('labor_hours')}</div>
           </div>
 
           {filtered.map(part => {
