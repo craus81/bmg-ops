@@ -14,6 +14,14 @@ export default function MorePage() {
   const supabase = createClient();
   const [pendingUserCount, setPendingUserCount] = useState(0);
   const [pendingReviewCount, setPendingReviewCount] = useState(0);
+  const [companyName, setCompanyName] = useState('');
+
+  useEffect(() => {
+    if (!profile?.company_id) return;
+    supabase.from('companies').select('name').eq('id', profile.company_id).single().then(({ data }) => {
+      if (data) setCompanyName(data.name);
+    });
+  }, [profile?.company_id]);
 
   useEffect(() => {
     if (!hasFeature('user_management') && !hasFeature('photo_reviews')) return;
@@ -65,7 +73,7 @@ export default function MorePage() {
           <MenuBtn title="Update Vehicle Status" sub="Scan VIN to update status" onClick={() => router.push('/fleet/update')} />
         )}
         {F('vehicles') && (
-          <MenuBtn title="My Jobs" sub="View your company's work" onClick={() => router.push('/jobs')} />
+          <MenuBtn title={companyName ? `${companyName} Jobs` : 'My Jobs'} sub="View your company's work" onClick={() => router.push('/jobs')} />
         )}
         {F('reports') && (
           <MenuBtn title="Export Reports" sub="Download vehicle spreadsheets" onClick={() => router.push('/reports')} />
@@ -89,7 +97,7 @@ export default function MorePage() {
           <MenuBtn title="Proof Hygiene" sub="Assign unmatched proof files from NAS" onClick={() => router.push('/admin/proofs')} />
         )}
         {F('all_jobs') && (
-          <MenuBtn title="All Jobs" sub="View all jobs by company" onClick={() => router.push('/admin/jobs')} />
+          <MenuBtn title="CNI Jobs" sub="View all CNI jobs by company" onClick={() => router.push('/admin/jobs')} />
         )}
         {F('vendor_payments') && (
           <MenuBtn title="Vendor Payments" sub="Manage installer invoices & payments" onClick={() => router.push('/admin/jobs?tab=invoices')} />

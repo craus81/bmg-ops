@@ -91,7 +91,9 @@ export default function AllJobsPage() {
 
   const loadData = async () => {
     const { data: companyData } = await supabase.from('companies').select('*').order('name');
-    setCompanies(companyData || []);
+    const bmgId = (companyData || []).find((c: Company) => c.name === 'BMG Fleet')?.id;
+    const cniCompanies = (companyData || []).filter((c: Company) => c.name !== 'BMG Fleet');
+    setCompanies(cniCompanies);
     const { data } = await supabase.from('scanned_vehicles').select('*').order('scanned_at', { ascending: false });
     if (!data) { setLoading(false); return; }
     const enriched: Job[] = await Promise.all(
@@ -103,7 +105,7 @@ export default function AllJobsPage() {
         return { ...v, company_id: cid, scanner_name: sp?.full_name || 'Unknown', company_name: company?.name || 'Unassigned', photo_count: count || 0 };
       })
     );
-    setJobs(enriched);
+    setJobs(bmgId ? enriched.filter(j => j.company_id !== bmgId) : enriched);
     setLoading(false);
   };
 
@@ -304,10 +306,10 @@ export default function AllJobsPage() {
 
       {tab === 'jobs' && (
         <div>
-          <div style={{ fontSize: '11px', fontWeight: 700, color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.8px', marginBottom: '12px' }}>All Jobs ({filteredJobs.length})</div>
+          <div style={{ fontSize: '11px', fontWeight: 700, color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.8px', marginBottom: '12px' }}>CNI Jobs ({filteredJobs.length})</div>
           <div style={{ marginBottom: '8px' }}>
             <select value={companyFilter} onChange={(e) => setCompanyFilter(e.target.value)} style={{ width: '100%', padding: '10px 12px', borderRadius: '10px', border: '1px solid var(--border)', background: 'var(--card)', color: 'var(--text-primary)', fontSize: '13px', fontWeight: 600 }}>
-              <option value="all">All Companies</option>
+              <option value="all">All CNI Companies</option>
               {companies.map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}
               <option value="unassigned">Unassigned</option>
             </select>
