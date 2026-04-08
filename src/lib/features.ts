@@ -35,6 +35,7 @@ export const FEATURES = {
   all_jobs: 'All Jobs',
   catalog_management: 'Part Catalog Management',
   offline_scan: 'Offline Scanner',
+  prospects: 'Prospects / Sales CRM',
 } as const;
 
 export type FeatureKey = keyof typeof FEATURES;
@@ -45,7 +46,7 @@ export const ROLE_DEFAULT_FEATURES: Record<string, FeatureKey[]> = {
 
   sales: [
     'home', 'scan_install', 'fleet_checkin', 'graphics', 'estimates',
-    'time', 'messages', 'customers', 'parts_catalog', 'quoting', 'offline_scan',
+    'time', 'messages', 'customers', 'parts_catalog', 'quoting', 'offline_scan', 'prospects',
   ],
 
   graphics_production: [
