@@ -117,8 +117,15 @@ async function getPreferredChannels(userId: string, type: string): Promise<Notif
 
   // For all other notification types (graphics, PO, etc.)
   if (!prefs) {
-    // Default: in-app only
-    return ['in_app'];
+    // Default: in-app + email for assignments, in-app only for others
+    return type === 'assignment' ? ['in_app', 'email'] : ['in_app'];
+  }
+
+  // Assignments always get in-app + email regardless of preferences
+  if (type === 'assignment') {
+    const ch: NotifyChannel[] = ['in_app', 'email'];
+    if (prefs.notify_sms && prefs.phone_number) ch.push('sms');
+    return ch;
   }
 
   // Check if this type of notification is enabled
