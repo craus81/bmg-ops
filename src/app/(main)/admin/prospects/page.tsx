@@ -70,6 +70,26 @@ interface Tag {
   auto_generated: boolean;
 }
 
+interface Cadence {
+  id: string;
+  name: string;
+  description: string | null;
+  interval_days: number;
+  max_steps: number | null;
+}
+
+interface CadenceAssignment {
+  id: string;
+  prospect_id: string;
+  cadence_id: string;
+  status: string;
+  current_step: number;
+  next_due_at: string;
+  started_at: string;
+  cadence_name?: string;
+  interval_days?: number;
+}
+
 const OPP_TYPES: Record<string, string> = { tech_install: 'Tech Install', graphics: 'Graphics', rebrand: 'Rebrand', fleet_wrap: 'Fleet Wrap', other: 'Other' };
 const OPP_STAGES: Record<string, string> = { lead: 'Lead', quoted: 'Quoted', negotiating: 'Negotiating', won: 'Won', lost: 'Lost' };
 const STAGE_COLORS: Record<string, string> = { lead: '#60a5fa', quoted: '#a78bfa', negotiating: '#fbbf24', won: '#4ade80', lost: '#f87171' };
@@ -97,6 +117,10 @@ export default function ProspectsPage() {
   const [statusFilter, setStatusFilter] = useState<string>('active');
   const [tagFilter, setTagFilter] = useState<string>('');
   const [expandedId, setExpandedId] = useState<string | null>(null);
+
+  // Cadences
+  const [cadences, setCadences] = useState<Cadence[]>([]);
+  const [cadenceAssignments, setCadenceAssignments] = useState<Record<string, CadenceAssignment | null>>({});
 
   // Detail data (loaded on expand)
   const [contacts, setContacts] = useState<Record<string, Contact[]>>({});
@@ -129,6 +153,8 @@ export default function ProspectsPage() {
     if (!hasFeature('prospects') && !isAdmin) { router.push('/home'); return; }
     loadProspects();
     loadProfiles();
+    loadCadences();
+    loadAllCadenceAssignments();
   }, []);
 
   const loadProspects = async () => {
@@ -146,17 +172,40 @@ export default function ProspectsPage() {
     }
   };
 
+  const loadCadences = async () => {
+    const { data } = await supabase.from('sales_cadences').select('*').eq('is_active', true).order('interval_days');
+    setCadences((data || []) as Cadence[]);
+  };
+
+  const loadAllCadenceAssignments = async () => {
+    const { data } = await supabase.from('prospect_cadence_assignments').select('*, sales_cadences(name, interval_days)').eq('status', 'active');
+    if (data) {
+      const map: Record<string, CadenceAssignment> = {};
+      data.forEach((a: any) => {
+        map[a.prospect_id] = { ...a, cadence_name: a.sales_cadences?.name, interval_days: a.sales_cadences?.interval_days } as CadenceAssignment;
+      });
+      setCadenceAssignments(prev => ({ ...prev, ...map }));
+    }
+  };
+
   const loadDetail = async (prospectId: string) => {
-    const [cRes, oRes, aRes, tRes] = await Promise.all([
+    const [cRes, oRes, aRes, tRes, cadRes] = await Promise.all([
       supabase.from('prospect_contacts').select('*').eq('prospect_id', prospectId).order('is_decision_maker', { ascending: false }),
       supabase.from('prospect_opportunities').select('*').eq('prospect_id', prospectId).order('created_at', { ascending: false }),
       supabase.from('prospect_activities').select('*').eq('prospect_id', prospectId).order('created_at', { ascending: false }).limit(50),
       supabase.from('prospect_tags').select('*').eq('prospect_id', prospectId),
+      supabase.from('prospect_cadence_assignments').select('*').eq('prospect_id', prospectId).neq('status', 'completed').limit(1).maybeSingle(),
     ]);
     setContacts(prev => ({ ...prev, [prospectId]: (cRes.data || []) as Contact[] }));
     setOpportunities(prev => ({ ...prev, [prospectId]: (oRes.data || []) as Opportunity[] }));
     setActivities(prev => ({ ...prev, [prospectId]: (aRes.data || []).map((a: any) => ({ ...a, creator_name: profiles[a.created_by] || null })) as Activity[] }));
     setTags(prev => ({ ...prev, [prospectId]: (tRes.data || []) as Tag[] }));
+    if (cadRes.data) {
+      const c = cadences.find(c => c.id === cadRes.data.cadence_id);
+      setCadenceAssignments(prev => ({ ...prev, [prospectId]: { ...cadRes.data, cadence_name: c?.name, interval_days: c?.interval_days } as CadenceAssignment }));
+    } else {
+      setCadenceAssignments(prev => ({ ...prev, [prospectId]: null }));
+    }
   };
 
   const toggleExpand = (id: string) => {
@@ -313,6 +362,61 @@ export default function ProspectsPage() {
     setTags(prev => ({ ...prev, [tag.prospect_id]: (prev[tag.prospect_id] || []).filter(t => t.id !== tag.id) }));
   };
 
+  // Cadence management
+  const assignCadence = async (prospectId: string, cadenceId: string) => {
+    const cadence = cadences.find(c => c.id === cadenceId);
+    if (!cadence) return;
+    const nextDue = new Date(Date.now() + cadence.interval_days * 86400000).toISOString();
+    const { data } = await supabase.from('prospect_cadence_assignments').upsert({
+      prospect_id: prospectId,
+      cadence_id: cadenceId,
+      assigned_by: user?.id,
+      current_step: 0,
+      next_due_at: nextDue,
+      status: 'active',
+      started_at: new Date().toISOString(),
+    }, { onConflict: 'prospect_id,cadence_id' }).select().single();
+    if (data) {
+      setCadenceAssignments(prev => ({ ...prev, [prospectId]: { ...data, cadence_name: cadence.name, interval_days: cadence.interval_days } as CadenceAssignment }));
+      logActivity(prospectId, 'note', `Started "${cadence.name}" cadence (every ${cadence.interval_days} days)`);
+    }
+  };
+
+  const completeCadenceStep = async (prospectId: string) => {
+    const assignment = cadenceAssignments[prospectId];
+    if (!assignment) return;
+    const cadence = cadences.find(c => c.id === assignment.cadence_id);
+    const newStep = assignment.current_step + 1;
+    const maxSteps = cadence?.max_steps;
+    const isComplete = maxSteps != null && newStep >= maxSteps;
+    const nextDue = new Date(Date.now() + (cadence?.interval_days || 7) * 86400000).toISOString();
+
+    await supabase.from('prospect_cadence_assignments').update({
+      current_step: newStep,
+      next_due_at: isComplete ? assignment.next_due_at : nextDue,
+      status: isComplete ? 'completed' : 'active',
+      ...(isComplete ? { completed_at: new Date().toISOString() } : {}),
+    }).eq('id', assignment.id);
+
+    if (isComplete) {
+      setCadenceAssignments(prev => ({ ...prev, [prospectId]: null }));
+      logActivity(prospectId, 'note', `Completed "${assignment.cadence_name}" cadence (${newStep} steps)`);
+    } else {
+      setCadenceAssignments(prev => ({
+        ...prev,
+        [prospectId]: { ...assignment, current_step: newStep, next_due_at: nextDue },
+      }));
+    }
+  };
+
+  const stopCadence = async (prospectId: string) => {
+    const assignment = cadenceAssignments[prospectId];
+    if (!assignment) return;
+    await supabase.from('prospect_cadence_assignments').update({ status: 'completed', completed_at: new Date().toISOString() }).eq('id', assignment.id);
+    setCadenceAssignments(prev => ({ ...prev, [prospectId]: null }));
+    logActivity(prospectId, 'note', `Stopped "${assignment.cadence_name}" cadence`);
+  };
+
   // Update prospect status
   const updateStatus = async (prospect: Prospect, newStatus: string) => {
     await supabase.from('prospects').update({ status: newStatus }).eq('id', prospect.id);
@@ -451,6 +555,8 @@ export default function ProspectsPage() {
             const pActivities = activities[prospect.id] || [];
             const pTags = tags[prospect.id] || [];
             const statusColor = STATUS_COLORS[prospect.status] || '#6b7280';
+            const cadenceAssign = cadenceAssignments[prospect.id];
+            const isDueForFollowUp = cadenceAssign && new Date(cadenceAssign.next_due_at) <= new Date();
 
             return (
               <div key={prospect.id} style={{ background: 'var(--card)', border: '1px solid var(--border)', borderRadius: '14px', overflow: 'hidden' }}>
@@ -461,6 +567,8 @@ export default function ProspectsPage() {
                       <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
                         <span style={{ fontWeight: 800, fontSize: '14px', color: 'var(--text-primary)' }}>{prospect.company_name}</span>
                         <span style={{ fontSize: '9px', fontWeight: 700, padding: '2px 6px', borderRadius: '4px', background: `${statusColor}18`, color: statusColor }}>{STATUS_LABELS[prospect.status]}</span>
+                        {isDueForFollowUp && <span style={{ fontSize: '8px', fontWeight: 700, padding: '1px 5px', borderRadius: '3px', background: 'rgba(239,68,68,0.1)', color: '#ef4444' }}>FOLLOW UP</span>}
+                        {cadenceAssign && !isDueForFollowUp && <span style={{ fontSize: '8px', fontWeight: 700, padding: '1px 5px', borderRadius: '3px', background: 'rgba(59,130,246,0.1)', color: '#60a5fa' }}>{cadenceAssign.cadence_name}</span>}
                         {prospect.netsuite_id && <span style={{ fontSize: '8px', fontWeight: 700, padding: '1px 5px', borderRadius: '3px', background: 'rgba(167,139,250,0.1)', color: '#a78bfa' }}>NS</span>}
                       </div>
                       {prospect.contact_name && <div style={{ fontSize: '11px', color: 'var(--text-secondary)', marginTop: '2px' }}>{prospect.contact_name}{prospect.email ? ` · ${prospect.email}` : ''}</div>}
@@ -509,6 +617,48 @@ export default function ProspectsPage() {
                           <input value={tagInput} onChange={e => setTagInput(e.target.value)} onKeyDown={e => { if (e.key === 'Enter') addTag(prospect.id); }} placeholder="Add tag..." style={{ ...inputStyle, width: '100px', padding: '3px 8px', fontSize: '10px' }} />
                         </div>
                       </div>
+                    </div>
+
+                    {/* Sales Cadence */}
+                    <div style={{ marginBottom: '12px' }}>
+                      <div style={labelStyle}>Sales Cadence</div>
+                      {cadenceAssignments[prospect.id] ? (() => {
+                        const ca = cadenceAssignments[prospect.id]!;
+                        const isDue = new Date(ca.next_due_at) <= new Date();
+                        return (
+                          <div style={{ padding: '8px 10px', borderRadius: '8px', background: isDue ? 'rgba(239,68,68,0.06)' : 'var(--subtle-bg)', border: `1px solid ${isDue ? 'rgba(239,68,68,0.2)' : 'var(--border)'}` }}>
+                            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '4px' }}>
+                              <span style={{ fontSize: '12px', fontWeight: 700, color: 'var(--text-primary)' }}>{ca.cadence_name}</span>
+                              <span style={{ fontSize: '10px', fontWeight: 700, color: isDue ? '#ef4444' : 'var(--text-muted)' }}>
+                                {isDue ? 'Due now' : `Next: ${new Date(ca.next_due_at).toLocaleDateString()}`}
+                              </span>
+                            </div>
+                            <div style={{ fontSize: '10px', color: 'var(--text-muted)', marginBottom: '6px' }}>
+                              Step {ca.current_step + 1} · Every {ca.interval_days} days
+                            </div>
+                            <div style={{ display: 'flex', gap: '4px' }}>
+                              <button onClick={() => completeCadenceStep(prospect.id)} style={{
+                                flex: 1, padding: '5px', borderRadius: '6px', fontSize: '10px', fontWeight: 700,
+                                background: 'rgba(34,197,94,0.1)', border: '1px solid rgba(34,197,94,0.25)', color: '#22c55e', cursor: 'pointer',
+                              }}>Mark Step Done</button>
+                              <button onClick={() => stopCadence(prospect.id)} style={{
+                                padding: '5px 10px', borderRadius: '6px', fontSize: '10px', fontWeight: 700,
+                                background: 'rgba(107,114,128,0.08)', border: '1px solid rgba(107,114,128,0.2)', color: '#6b7280', cursor: 'pointer',
+                              }}>Stop</button>
+                            </div>
+                          </div>
+                        );
+                      })() : (
+                        <div style={{ display: 'flex', gap: '4px', flexWrap: 'wrap' }}>
+                          {cadences.map(c => (
+                            <button key={c.id} onClick={() => assignCadence(prospect.id, c.id)} style={{
+                              padding: '5px 10px', borderRadius: '6px', fontSize: '10px', fontWeight: 700,
+                              background: 'var(--subtle-bg)', border: '1px solid var(--border)', color: 'var(--text-secondary)', cursor: 'pointer',
+                            }}>{c.name} ({c.interval_days}d)</button>
+                          ))}
+                          {cadences.length === 0 && <span style={{ fontSize: '10px', color: 'var(--text-muted)' }}>No cadences configured</span>}
+                        </div>
+                      )}
                     </div>
 
                     {/* Contacts */}
