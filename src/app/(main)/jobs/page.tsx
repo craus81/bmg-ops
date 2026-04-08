@@ -243,7 +243,7 @@ export default function MyJobsPage() {
     : jobs;
 
   const grouped = filtered.reduce((acc: Record<string, Job[]>, j) => {
-    const key = j.end_customer || j.customer || 'Unassigned';
+    const key = j.end_customer || 'Unassigned';
     if (!acc[key]) acc[key] = [];
     acc[key].push(j);
     return acc;
