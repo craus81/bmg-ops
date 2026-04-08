@@ -351,6 +351,7 @@ export interface GraphicsProof {
 export interface NetsuiteSalesOrder {
   id: string;
   sales_order_number: string;
+  record_type?: 'Sales Order' | 'Invoice' | 'Estimate';
   date: string;
   vin: string | null;
   status: string;
