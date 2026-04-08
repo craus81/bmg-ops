@@ -582,7 +582,7 @@ export default function FleetPage() {
 
         {/* Customer search */}
         <div style={{ fontSize: '11px', fontWeight: 700, color: theme.textMuted, textTransform: 'uppercase', letterSpacing: '0.5px', marginBottom: '8px' }}>
-          Search Sales Orders
+          Search Sales Orders, Invoices &amp; Estimates
         </div>
         <div style={{ display: 'flex', gap: '8px', marginBottom: '12px' }}>
           <input
@@ -632,7 +632,16 @@ export default function FleetPage() {
                   }}
                 >
                   <div>
-                    <div style={{ fontWeight: 800, fontSize: '14px' }}>SO #{so.sales_order_number}</div>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+                      <span style={{ fontWeight: 800, fontSize: '14px' }}>{so.record_type === 'Invoice' ? 'INV' : so.record_type === 'Estimate' ? 'EST' : 'SO'} #{so.sales_order_number}</span>
+                      {so.record_type !== 'Sales Order' && (
+                        <span style={{
+                          fontSize: '8px', fontWeight: 700, padding: '1px 5px', borderRadius: '4px',
+                          background: so.record_type === 'Invoice' ? 'rgba(52,211,153,0.1)' : 'rgba(251,191,36,0.1)',
+                          color: so.record_type === 'Invoice' ? '#34d399' : '#fbbf24',
+                        }}>{so.record_type}</span>
+                      )}
+                    </div>
                     <div style={{ fontSize: '12px', color: theme.textSecondary, marginTop: '2px' }}>{so.customer_name}</div>
                     {so.memo && <div style={{ fontSize: '11px', color: theme.textMuted, marginTop: '1px' }}>{so.memo}</div>}
                   </div>
@@ -679,7 +688,7 @@ export default function FleetPage() {
             width: '100%', padding: '12px', borderRadius: '14px',
             border: `1px solid ${theme.border}`, background: 'transparent',
             color: theme.textSecondary, fontSize: '13px', fontWeight: 700,
-          }}>Skip — No Sales Order</button>
+          }}>Skip — No Order Found</button>
           <button onClick={() => { setStep(0); setVehicleData(null); setVin(''); }} style={{
             width: '100%', padding: '10px', borderRadius: '14px',
             border: `1px solid ${theme.border}`, background: 'transparent',
