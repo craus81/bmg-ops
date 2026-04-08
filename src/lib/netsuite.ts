@@ -167,6 +167,7 @@ const OPEN_STATUSES = ['A', 'B', 'D', 'E', 'F'];
 export interface SalesOrder {
   id: string;
   sales_order_number: string;
+  record_type: 'Sales Order' | 'Invoice' | 'Estimate';
   date: string;
   vin: string | null;
   status: string;
@@ -204,6 +205,7 @@ export async function getOpenSalesOrdersByCustomer(customerName: string): Promis
       t.id,
       t.tranid AS sales_order_number,
       t.trandate,
+      t.type,
       t.status,
       t.entity AS customer_id,
       c.companyname AS customer_name,
@@ -212,8 +214,12 @@ export async function getOpenSalesOrdersByCustomer(customerName: string): Promis
       t.custbody_vin_number_ AS vin
     FROM transaction t
     LEFT JOIN customer c ON t.entity = c.id
-    WHERE t.type = 'SalesOrd'
-    AND (${statusConditions})
+    WHERE t.type IN ('SalesOrd', 'CustInvc', 'Estimate')
+    AND (
+      (t.type = 'SalesOrd' AND (${statusConditions}))
+      OR (t.type = 'CustInvc' AND t.status IN ('A', 'B'))
+      OR (t.type = 'Estimate' AND t.status IN ('A', 'B', 'E', 'X'))
+    )
     AND (
       UPPER(c.companyname) LIKE UPPER('%${searchTerm}%')
       OR UPPER(c.entityid) LIKE UPPER('%${searchTerm}%')
@@ -229,7 +235,7 @@ export async function getOpenSalesOrdersByCustomer(customerName: string): Promis
       found: false,
       count: 0,
       data: null,
-      error: `No open sales orders found for "${customerName}"`,
+      error: `No sales orders, invoices, or estimates found for "${customerName}"`,
     };
   }
 
@@ -237,9 +243,11 @@ export async function getOpenSalesOrdersByCustomer(customerName: string): Promis
   const detailedOrders: SalesOrder[] = [];
 
   for (const so of items) {
+    const typeLabel = so.type === 'CustInvc' ? 'Invoice' : so.type === 'Estimate' ? 'Estimate' : 'Sales Order';
     const order: SalesOrder = {
       id: so.id,
       sales_order_number: so.sales_order_number,
+      record_type: typeLabel as SalesOrder['record_type'],
       date: so.trandate,
       vin: so.vin || null,
       status: so.status,

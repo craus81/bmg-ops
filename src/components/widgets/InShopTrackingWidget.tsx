@@ -83,10 +83,11 @@ export default function InShopTrackingWidget() {
                 }}>
                   <div style={{ flex: 1, overflow: 'hidden', minWidth: 0 }}>
                     <span style={{ fontWeight: 600, color: theme.textPrimary, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', display: 'block' }}>
-                      {[item.vehicle_year, item.vehicle_make, item.vehicle_model].filter(Boolean).join(' ') || 'Unknown Vehicle'}
+                      {item.customer_name || 'No Customer'}
                     </span>
-                    <span style={{ fontSize: '9px', fontFamily: 'monospace', color: theme.textMuted, display: 'block', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-                      {item.vin}
+                    <span style={{ fontSize: '9px', color: theme.textMuted, display: 'block', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                      {[item.vehicle_year, item.vehicle_make, item.vehicle_model].filter(Boolean).join(' ')}
+                      {item.vin ? ` · ${item.vin}` : ''}
                     </span>
                   </div>
                   <span style={{

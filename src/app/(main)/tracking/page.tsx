@@ -823,11 +823,9 @@ export default function TrackingPage() {
                 >
                   <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
                     <div style={{ flex: 1, minWidth: 0 }}>
-                      <div style={{ fontWeight: 800, fontSize: '14px', color: 'var(--text-primary)' }}>{vehicleTitle(vehicle)}</div>
+                      <div style={{ fontWeight: 800, fontSize: '14px', color: 'var(--text-primary)' }}>{vehicle.customer_name || 'No Customer'}</div>
+                      <div style={{ fontSize: '12px', color: 'var(--text-secondary)', marginTop: '2px' }}>{vehicleTitle(vehicle)}</div>
                       <div style={{ fontSize: '11px', fontFamily: 'monospace', color: 'var(--text-muted)', marginTop: '2px' }}>{vehicle.vin}</div>
-                      {vehicle.customer_name && (
-                        <div style={{ fontSize: '12px', color: 'var(--text-secondary)', marginTop: '2px' }}>{vehicle.customer_name}</div>
-                      )}
                       {vehicle.sales_order_number && (
                         <div style={{ fontSize: '11px', color: 'var(--text-muted)', marginTop: '1px' }}>SO #{vehicle.sales_order_number}</div>
                       )}
