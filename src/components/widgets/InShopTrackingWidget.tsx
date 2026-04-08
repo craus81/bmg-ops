@@ -3,6 +3,7 @@
 import { useState, useEffect } from 'react';
 import { useRouter } from 'next/navigation';
 import { createClient } from '@/lib/supabase-browser';
+import { useAuth } from '@/components/AuthProvider';
 import { theme } from '@/lib/theme';
 import WidgetShell from './WidgetShell';
 
@@ -22,18 +23,22 @@ const STATUS_LABELS: Record<string, string> = {
 
 export default function InShopTrackingWidget() {
   const router = useRouter();
+  const { user } = useAuth();
   const supabase = createClient();
   const [loading, setLoading] = useState(true);
   const [stats, setStats] = useState({ received: 0, in_progress: 0, stuck_parts: 0, stuck_graphics: 0 });
   const [recentItems, setRecentItems] = useState<any[]>([]);
 
-  useEffect(() => { load(); }, []);
+  useEffect(() => { if (user) load(); }, [user]);
 
   const load = async () => {
-    const { data: checkins } = await supabase
+    const { data: checkins, error } = await supabase
       .from('fleet_checkins')
       .select('id, customer_name, vehicle_year, vehicle_make, vehicle_model, status, updated_at')
       .order('updated_at', { ascending: false });
+
+    if (error) console.error('[InShopWidget] query error:', error.message);
+    if (!checkins?.length) console.warn('[InShopWidget] 0 rows returned, user:', user?.id);
 
     const all = (checkins || [])
       .map(c => ({
