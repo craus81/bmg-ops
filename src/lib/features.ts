@@ -45,26 +45,26 @@ export const ROLE_DEFAULT_FEATURES: Record<string, FeatureKey[]> = {
   admin: Object.keys(FEATURES) as FeatureKey[], // everything
 
   sales: [
-    'home', 'scan_install', 'fleet_checkin', 'graphics', 'estimates',
-    'time', 'messages', 'customers', 'parts_catalog', 'quoting', 'offline_scan', 'prospects',
+    'home', 'fleet_checkin', 'in_shop', 'graphics', 'estimates',
+    'time', 'messages', 'customers', 'parts_catalog', 'quoting', 'schedule', 'prospects',
   ],
 
   graphics_production: [
-    'home', 'fleet_checkin', 'graphics', 'estimates',
-    'time', 'messages', 'customers', 'parts_catalog', 'quoting', 'offline_scan',
+    'home', 'in_shop', 'graphics', 'estimates',
+    'time', 'messages', 'customers', 'parts_catalog', 'quoting', 'schedule',
   ],
 
   shop_tech: [
-    'home', 'scan_install', 'fleet_checkin', 'in_shop',
-    'time', 'messages', 'vehicles', 'offline_scan',
+    'home', 'fleet_checkin', 'in_shop',
+    'time', 'messages', 'schedule',
   ],
 
   field_tech: [
-    'home', 'vehicles', 'time', 'messages', 'offline_scan',
+    'home', 'scan_install', 'vehicles', 'time', 'messages',
   ],
 
   installer: [
-    'home', 'time', 'messages', 'cni_management', 'offline_scan',
+    'home', 'scan_install', 'time', 'messages', 'cni_management',
   ],
 
   customer: ['home'],
