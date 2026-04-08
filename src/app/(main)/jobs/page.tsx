@@ -30,6 +30,7 @@ export default function MyJobsPage() {
   const [jobs, setJobs] = useState<Job[]>([]);
   const [loading, setLoading] = useState(true);
   const [filter, setFilter] = useState<'all' | 'mine' | 'review'>('all');
+  const [collapsedGroups, setCollapsedGroups] = useState<Set<string>>(new Set());
   const [isBmg, setIsBmg] = useState(true);
   const [companyName, setCompanyName] = useState('');
 
@@ -87,27 +88,24 @@ export default function MyJobsPage() {
         .map((iv: any) => iv.vehicle_id)
     );
 
-    const enriched: Job[] = await Promise.all(
-      data.map(async (v: any) => {
-        const { data: scannerProfile } = await supabase
-          .from('profiles')
-          .select('full_name')
-          .eq('id', v.scanned_by)
-          .maybeSingle();
+    // Batch load profiles and photo counts
+    const scannerIds = [...new Set(data.map((v: any) => v.scanned_by).filter(Boolean))];
+    const vehicleIds = data.map((v: any) => v.id);
+    const [profilesRes, photoCounts] = await Promise.all([
+      scannerIds.length > 0 ? supabase.from('profiles').select('id, full_name').in('id', scannerIds) : Promise.resolve({ data: [] }),
+      vehicleIds.length > 0 ? supabase.from('vehicle_photos').select('vehicle_id').in('vehicle_id', vehicleIds) : Promise.resolve({ data: [] }),
+    ]);
+    const profileMap: Record<string, string> = {};
+    (profilesRes.data || []).forEach((p: any) => { profileMap[p.id] = p.full_name; });
+    const photoCountMap: Record<string, number> = {};
+    (photoCounts.data || []).forEach((p: any) => { photoCountMap[p.vehicle_id] = (photoCountMap[p.vehicle_id] || 0) + 1; });
 
-        const { count } = await supabase
-          .from('vehicle_photos')
-          .select('*', { count: 'exact', head: true })
-          .eq('vehicle_id', v.id);
-
-        return {
-          ...v,
-          scanner_name: scannerProfile?.full_name || 'Unknown',
-          photo_count: count || 0,
-          invoiced: invoicedSet.has(v.id),
-        };
-      })
-    );
+    const enriched: Job[] = data.map((v: any) => ({
+      ...v,
+      scanner_name: profileMap[v.scanned_by] || 'Unknown',
+      photo_count: photoCountMap[v.id] || 0,
+      invoiced: invoicedSet.has(v.id),
+    }));
 
     setJobs(enriched);
     setLoading(false);
@@ -243,6 +241,18 @@ export default function MyJobsPage() {
     : filter === 'review'
     ? jobs.filter((j) => j.submitted_for_review)
     : jobs;
+
+  const grouped = filtered.reduce((acc: Record<string, Job[]>, j) => {
+    const key = j.end_customer || j.customer || 'Unassigned';
+    if (!acc[key]) acc[key] = [];
+    acc[key].push(j);
+    return acc;
+  }, {});
+  const groupKeys = Object.keys(grouped).sort((a, b) => a === 'Unassigned' ? 1 : b === 'Unassigned' ? -1 : a.localeCompare(b));
+
+  const toggleGroup = (key: string) => {
+    setCollapsedGroups(prev => { const next = new Set(prev); if (next.has(key)) next.delete(key); else next.add(key); return next; });
+  };
 
   const statusBadge = (v: Job) => {
     if (v.invoiced) {
@@ -485,42 +495,63 @@ export default function MyJobsPage() {
         </div>
       )}
 
-      <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
-        {filtered.map((job) => (
-          <button
-            key={job.id}
-            onClick={() => router.push(`/photos?id=${job.id}`)}
-            style={{
-              display: 'flex', alignItems: 'center', gap: '14px', width: '100%',
-              padding: '14px', borderRadius: '14px', textAlign: 'left',
-              border: '1px solid var(--border)', background: 'var(--card)',
-              boxShadow: 'var(--shadow-sm)', transition: 'all 0.15s',
-            }}
-          >
-            <div style={{
-              width: '44px', height: '44px', borderRadius: '12px',
-              background: 'var(--subtle-bg)', display: 'flex',
-              alignItems: 'center', justifyContent: 'center', fontSize: '20px', flexShrink: 0,
-            }}></div>
-            <div style={{ flex: 1, minWidth: 0 }}>
-              <div style={{ display: 'flex', alignItems: 'center', gap: '8px', flexWrap: 'wrap' }}>
-                <div style={{ fontWeight: 700, fontSize: '14px', color: 'var(--text-primary)', letterSpacing: '-0.2px' }}>
-                  {vehicleTitle(job)}
+      <div style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
+        {groupKeys.map(groupKey => {
+          const groupJobs = grouped[groupKey];
+          const isCollapsed = collapsedGroups.has(groupKey);
+          return (
+            <div key={groupKey}>
+              <div
+                onClick={() => toggleGroup(groupKey)}
+                style={{
+                  display: 'flex', justifyContent: 'space-between', alignItems: 'center',
+                  padding: '10px 14px', borderRadius: '10px', cursor: 'pointer',
+                  background: 'var(--card)', border: '1px solid var(--border)',
+                  marginBottom: isCollapsed ? 0 : '6px',
+                }}
+              >
+                <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                  <span style={{ fontSize: '10px', color: 'var(--text-muted)', transition: 'transform 0.15s', transform: isCollapsed ? 'rotate(-90deg)' : 'rotate(0deg)' }}>▼</span>
+                  <span style={{ fontWeight: 800, fontSize: '13px', color: 'var(--text-primary)' }}>{groupKey}</span>
                 </div>
-                {statusBadge(job)}
+                <span style={{ fontSize: '11px', fontWeight: 700, color: 'var(--text-muted)' }}>{groupJobs.length} VIN{groupJobs.length !== 1 ? 's' : ''}</span>
               </div>
-              <div style={{ fontSize: '11px', color: 'var(--text-muted)', fontFamily: 'monospace', marginTop: '2px' }}>
-                {job.vin}
-              </div>
-              <div style={{ fontSize: '11px', color: 'var(--text-muted)', marginTop: '2px' }}>
-                {job.scanner_name}
-                {job.photo_count ? ` • ${job.photo_count} photo${job.photo_count !== 1 ? 's' : ''}` : ''}
-                {job.end_customer ? ` • ${job.end_customer}` : ''}
-                {' • '}{new Date(job.scanned_at).toLocaleDateString([], { month: 'short', day: 'numeric' })}
-              </div>
+              {!isCollapsed && (
+                <div style={{ display: 'flex', flexDirection: 'column', gap: '6px', paddingLeft: '12px' }}>
+                  {groupJobs.map((job) => (
+                    <button
+                      key={job.id}
+                      onClick={() => router.push(`/photos?id=${job.id}`)}
+                      style={{
+                        display: 'flex', alignItems: 'center', gap: '14px', width: '100%',
+                        padding: '12px 14px', borderRadius: '14px', textAlign: 'left',
+                        border: '1px solid var(--border)', background: 'var(--card)',
+                        boxShadow: 'var(--shadow-sm)',
+                      }}
+                    >
+                      <div style={{ flex: 1, minWidth: 0 }}>
+                        <div style={{ display: 'flex', alignItems: 'center', gap: '8px', flexWrap: 'wrap' }}>
+                          <div style={{ fontWeight: 700, fontSize: '14px', color: 'var(--text-primary)' }}>
+                            {vehicleTitle(job)}
+                          </div>
+                          {statusBadge(job)}
+                        </div>
+                        <div style={{ fontSize: '11px', color: 'var(--text-muted)', fontFamily: 'monospace', marginTop: '2px' }}>
+                          {job.vin}
+                        </div>
+                        <div style={{ fontSize: '11px', color: 'var(--text-muted)', marginTop: '2px' }}>
+                          {job.scanner_name}
+                          {job.photo_count ? ` • ${job.photo_count} photo${job.photo_count !== 1 ? 's' : ''}` : ''}
+                          {' • '}{new Date(job.scanned_at).toLocaleDateString([], { month: 'short', day: 'numeric' })}
+                        </div>
+                      </div>
+                    </button>
+                  ))}
+                </div>
+              )}
             </div>
-          </button>
-        ))}
+          );
+        })}
       </div>
     </div>
   );
