@@ -3,6 +3,7 @@
 import { useState, useEffect } from 'react';
 import { useRouter } from 'next/navigation';
 import { createClient } from '@/lib/supabase-browser';
+import { useAuth } from '@/components/AuthProvider';
 import { theme } from '@/lib/theme';
 import WidgetShell from './WidgetShell';
 
@@ -11,6 +12,7 @@ const STATUS_COLORS: Record<string, { text: string }> = {
   in_progress: { text: '#60a5fa' },
   stuck_parts: { text: '#fbbf24' },
   stuck_graphics: { text: '#fb923c' },
+  complete: { text: '#34d399' },
 };
 
 const STATUS_LABELS: Record<string, string> = {
@@ -18,41 +20,46 @@ const STATUS_LABELS: Record<string, string> = {
   in_progress: 'In Progress',
   stuck_parts: 'Stuck (Parts)',
   stuck_graphics: 'Stuck (Graphics)',
+  complete: 'Complete',
 };
 
 export default function InShopTrackingWidget() {
   const router = useRouter();
+  const { user } = useAuth();
   const supabase = createClient();
   const [loading, setLoading] = useState(true);
-  const [stats, setStats] = useState({ received: 0, in_progress: 0, stuck_parts: 0, stuck_graphics: 0 });
+  const [stats, setStats] = useState({ received: 0, in_progress: 0, stuck_parts: 0, stuck_graphics: 0, complete: 0 });
   const [recentItems, setRecentItems] = useState<any[]>([]);
 
-  useEffect(() => { load(); }, []);
+  useEffect(() => { load(); }, [user]);
 
   const load = async () => {
-    const { data: checkins } = await supabase
+    const { data: checkins, error } = await supabase
       .from('fleet_checkins')
       .select('id, customer_name, vehicle_year, vehicle_make, vehicle_model, status, updated_at')
-      .not('status', 'in', '("shipped","complete","archived")')
-      .order('updated_at', { ascending: false })
-      .limit(100);
+      .order('updated_at', { ascending: false });
 
-    const all = checkins || [];
+    const all = (checkins || []).map(c => ({
+      ...c,
+      status: c.status === 'checked_in' ? 'received' : c.status,
+    })).filter(c => !['shipped', 'archived'].includes(c.status || ''));
     setStats({
       received: all.filter(c => c.status === 'received').length,
       in_progress: all.filter(c => c.status === 'in_progress').length,
       stuck_parts: all.filter(c => c.status === 'stuck_parts').length,
       stuck_graphics: all.filter(c => c.status === 'stuck_graphics').length,
+      complete: all.filter(c => c.status === 'complete').length,
     });
-    setRecentItems(all.slice(0, 5));
+    const active = all.filter(c => c.status !== 'complete');
+    setRecentItems(active.length > 0 ? active.slice(0, 5) : all.slice(0, 5));
     setLoading(false);
   };
 
   return (
     <WidgetShell title="In-Shop" icon="" loading={loading} onHeaderClick={() => router.push('/tracking')}>
       <div>
-        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr 1fr', gap: '6px', marginBottom: '10px' }}>
-          {(['received', 'in_progress', 'stuck_parts', 'stuck_graphics'] as const).map(key => {
+        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(5, 1fr)', gap: '6px', marginBottom: '10px' }}>
+          {(['received', 'in_progress', 'stuck_parts', 'stuck_graphics', 'complete'] as const).map(key => {
             const color = STATUS_COLORS[key]?.text || 'var(--text-muted)';
             return (
               <div key={key} style={{ textAlign: 'center', background: 'var(--subtle-bg)', borderRadius: '8px', padding: '8px 4px' }}>

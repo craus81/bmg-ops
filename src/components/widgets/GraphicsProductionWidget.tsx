@@ -33,11 +33,9 @@ export default function GraphicsProductionWidget() {
     const { data: jobs } = await supabase
       .from('graphics_jobs')
       .select('id, title, status, customer, created_at')
-      .not('status', 'in', '("installed","cancelled")')
-      .order('created_at', { ascending: false })
-      .limit(100);
+      .order('created_at', { ascending: false });
 
-    const all = jobs || [];
+    const all = (jobs || []).filter(j => !['installed', 'cancelled'].includes(j.status || ''));
     const received = all.filter(j => j.status === 'received').length;
     const inProduction = all.filter(j => IN_PRODUCTION_STATUSES.includes(j.status)).length;
     const readyShipped = all.filter(j => j.status === 'ready' || j.status === 'shipped').length;

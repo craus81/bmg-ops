@@ -444,7 +444,7 @@ export default function MyJobsPage() {
   return (
     <div>
       <div style={{ fontSize: '11px', fontWeight: 700, color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.8px', marginBottom: '12px' }}>
-        My Jobs
+        {companyName ? `${companyName} Jobs` : 'My Jobs'}
       </div>
 
       {!isBmg && invoiceableJobs.length > 0 && (

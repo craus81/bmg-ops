@@ -55,9 +55,8 @@ export default function UpcomingScheduleWidget() {
     // Load graphics jobs with install dates
     const { data: gfx } = await supabase
       .from('graphics_jobs')
-      .select('id, title, customer, scheduled_install_date, quantity')
+      .select('id, title, customer, status, scheduled_install_date, quantity')
       .not('scheduled_install_date', 'is', null)
-      .not('status', 'in', '("installed","cancelled")')
       .gte('scheduled_install_date', startStr)
       .lte('scheduled_install_date', endStr)
       .order('scheduled_install_date', { ascending: true })
@@ -65,6 +64,7 @@ export default function UpcomingScheduleWidget() {
 
     if (gfx) {
       for (const g of gfx) {
+        if (['installed', 'cancelled'].includes(g.status || '')) continue;
         combined.push({
           id: g.id,
           date: g.scheduled_install_date,

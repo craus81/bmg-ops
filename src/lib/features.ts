@@ -32,7 +32,7 @@ export const FEATURES = {
   bulk_upload: 'Bulk Upload (Templates)',
   proof_hygiene: 'Proof Hygiene',
   quoting: 'Estimating / Quoting',
-  all_jobs: 'All Jobs',
+  all_jobs: 'CNI Jobs',
   catalog_management: 'Part Catalog Management',
   offline_scan: 'Offline Scanner',
   prospects: 'Prospects / Sales CRM',
