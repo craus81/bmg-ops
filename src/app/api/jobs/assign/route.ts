@@ -62,11 +62,12 @@ export async function POST(req: NextRequest) {
         ? `You've been assigned to: ${jobTitle}`
         : `You've been assigned to a new ${typeLabel.toLowerCase()}.`;
 
+      console.log(`[assign] Sending assignment notification to ${userIds.length} users:`, userIds);
       await notifyMany(userIds, {
         type: 'assignment',
         title,
         body,
-        url: `/jobs/${jobId}`,
+        url: jobType === 'graphics_job' ? '/graphics' : `/my-jobs`,
       }).catch(err => console.warn('Assignment notification error:', err));
 
       // Mark as notified

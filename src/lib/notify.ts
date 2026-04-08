@@ -170,8 +170,10 @@ async function sendInApp(payload: NotifyPayload): Promise<boolean> {
       body: payload.body,
       url: payload.url || null,
     });
+    if (error) console.error('sendInApp insert failed:', error.message, error.details, error.hint);
     return !error;
-  } catch {
+  } catch (err) {
+    console.error('sendInApp exception:', err);
     return false;
   }
 }
