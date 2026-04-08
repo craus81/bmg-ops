@@ -33,16 +33,14 @@ export default function InShopTrackingWidget() {
     const { data: checkins } = await supabase
       .from('fleet_checkins')
       .select('id, customer_name, vehicle_year, vehicle_make, vehicle_model, status, updated_at')
-      .neq('status', 'shipped')
-      .neq('status', 'complete')
-      .neq('status', 'archived')
-      .order('updated_at', { ascending: false })
-      .limit(100);
+      .order('updated_at', { ascending: false });
 
-    const all = (checkins || []).map(c => ({
-      ...c,
-      status: c.status === 'checked_in' ? 'received' : c.status,
-    }));
+    const all = (checkins || [])
+      .map(c => ({
+        ...c,
+        status: c.status === 'checked_in' ? 'received' : c.status,
+      }))
+      .filter(c => !['shipped', 'complete', 'archived'].includes(c.status || ''));
     setStats({
       received: all.filter(c => c.status === 'received').length,
       in_progress: all.filter(c => c.status === 'in_progress').length,
