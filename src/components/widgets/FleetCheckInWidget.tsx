@@ -24,7 +24,7 @@ export default function FleetCheckInWidget() {
 
     const { data: checkins } = await supabase
       .from('fleet_checkins')
-      .select('id, customer_name, vehicle_year, vehicle_make, vehicle_model, created_at')
+      .select('id, vin, customer_name, vehicle_year, vehicle_make, vehicle_model, created_at')
       .gte('created_at', fourteenDaysAgo)
       .order('created_at', { ascending: false })
       .limit(100);
@@ -65,14 +65,15 @@ export default function FleetCheckInWidget() {
                 padding: '6px 8px', borderRadius: '6px', border: 'none', textAlign: 'left',
                 background: 'var(--subtle-bg)', cursor: 'pointer', fontSize: '11px',
               }}>
-                <span style={{ fontWeight: 600, color: theme.textPrimary, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', maxWidth: '60%' }}>
-                  {[checkin.vehicle_year, checkin.vehicle_make, checkin.vehicle_model].filter(Boolean).join(' ') || 'Unknown Vehicle'}
-                </span>
-                <span style={{
-                  fontSize: '9px', fontWeight: 700,
-                  color: theme.textMuted,
-                  overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', maxWidth: '35%',
-                }}>{checkin.customer_name || 'No Customer'}</span>
+                <div style={{ flex: 1, overflow: 'hidden', minWidth: 0 }}>
+                  <span style={{ fontWeight: 600, color: theme.textPrimary, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', display: 'block' }}>
+                    {[checkin.vehicle_year, checkin.vehicle_make, checkin.vehicle_model].filter(Boolean).join(' ') || 'Unknown Vehicle'}
+                  </span>
+                  <span style={{ fontSize: '9px', fontFamily: 'monospace', color: theme.textMuted, display: 'block', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                    {checkin.vin}
+                    {checkin.customer_name ? ` · ${checkin.customer_name}` : ''}
+                  </span>
+                </div>
               </button>
             ))}
           </div>

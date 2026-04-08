@@ -407,8 +407,9 @@ export default function SchedulePage() {
                 <div style={{ fontSize: '9px', fontWeight: 700, color: today ? 'var(--navy)' : 'var(--text-muted)', textTransform: 'uppercase', textAlign: 'center', marginBottom: '4px' }}>{day.toLocaleDateString([], { weekday: 'short' })} {day.getDate()}</div>
                 {dayUpfit.map(u => (
                   <button key={u.id} onClick={() => router.push('/tracking')} style={{ width: '100%', padding: '4px 6px', borderRadius: '6px', marginBottom: '3px', background: 'rgba(59,130,246,0.1)', border: '1px solid rgba(59,130,246,0.25)', textAlign: 'left', fontSize: '9px', fontWeight: 700, color: '#3b82f6', lineHeight: '1.3', cursor: 'pointer' }}>
-                    <div style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{[u.vehicle_year, u.vehicle_make, u.vehicle_model].filter(Boolean).join(' ') || u.vin}</div>
-                    <div style={{ fontSize: '8px', opacity: 0.7, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{u.customer_name || ''}</div>
+                    <div style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{[u.vehicle_year, u.vehicle_make, u.vehicle_model].filter(Boolean).join(' ') || 'Unknown'}</div>
+                    <div style={{ fontSize: '8px', fontFamily: 'monospace', opacity: 0.7, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{u.vin}</div>
+                    {u.customer_name && <div style={{ fontSize: '8px', opacity: 0.6, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{u.customer_name}</div>}
                   </button>
                 ))}
               </div>);
