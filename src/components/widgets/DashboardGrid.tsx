@@ -14,6 +14,23 @@ import { useAuth } from '@/components/AuthProvider';
 import { theme } from '@/lib/theme';
 import { WIDGET_REGISTRY, WIDGET_MAP, DEFAULT_WIDGET_IDS, generateDefaultLayout } from './widgetRegistry';
 
+// Generate a mobile layout from widget IDs: 2-column grid, each widget 1 col wide, taller
+function generateMobileLayout(widgetIds: string[]): LayoutItem[] {
+  let x = 0;
+  let y = 0;
+  let rowMaxH = 0;
+  return widgetIds.map(id => {
+    const def = WIDGET_MAP[id];
+    if (!def) return null;
+    const h = Math.max((def.defaultH || 2) + 1, def.minH || 1);
+    if (x >= 2) { x = 0; y += rowMaxH; rowMaxH = 0; }
+    const item: LayoutItem = { i: id, x, y, w: 1, h, minW: 1, minH: def.minH, maxH: def.maxH };
+    rowMaxH = Math.max(rowMaxH, h);
+    x += 1;
+    return item;
+  }).filter(Boolean) as LayoutItem[];
+}
+
 // Lazy-load widgets so the grid renders fast
 const OpenPOsWidget = lazy(() => import('./OpenPOsWidget'));
 const NeedsAttentionWidget = lazy(() => import('./NeedsAttentionWidget'));
@@ -290,9 +307,9 @@ export default function DashboardGrid() {
         <RGL
           className="dashboard-grid"
           width={Math.max((width || 400), 300)}
-          layouts={{ lg: lgLayout }}
+          layouts={{ lg: lgLayout, sm: generateMobileLayout(activeWidgets) }}
           breakpoints={{ lg: 600, sm: 0 }}
-          cols={{ lg: 4, sm: 1 }}
+          cols={{ lg: 4, sm: 2 }}
           rowHeight={ROW_HEIGHT}
           dragConfig={{ enabled: isEditing, handle: '.widget-drag-handle' }}
           resizeConfig={{ enabled: isEditing }}
