@@ -26,10 +26,10 @@ export default function InShopTrackingWidget() {
   const { user } = useAuth();
   const supabase = createClient();
   const [loading, setLoading] = useState(true);
-  const [stats, setStats] = useState({ received: 0, in_progress: 0, stuck_parts: 0, stuck_graphics: 0 });
+  const [stats, setStats] = useState({ received: 0, in_progress: 0, stuck_parts: 0, stuck_graphics: 0, total: 0 });
   const [recentItems, setRecentItems] = useState<any[]>([]);
 
-  useEffect(() => { if (user) load(); }, [user]);
+  useEffect(() => { load(); }, [user]);
 
   const load = async () => {
     const { data: checkins, error } = await supabase
@@ -37,27 +37,24 @@ export default function InShopTrackingWidget() {
       .select('id, customer_name, vehicle_year, vehicle_make, vehicle_model, status, updated_at')
       .order('updated_at', { ascending: false });
 
-    if (error) console.error('[InShopWidget] query error:', error.message);
-    if (!checkins?.length) console.warn('[InShopWidget] 0 rows returned, user:', user?.id);
-
-    const all = (checkins || [])
-      .map(c => ({
-        ...c,
-        status: c.status === 'checked_in' ? 'received' : c.status,
-      }))
-      .filter(c => !['shipped', 'complete', 'archived'].includes(c.status || ''));
+    const mapped = (checkins || []).map(c => ({
+      ...c,
+      status: c.status === 'checked_in' ? 'received' : c.status,
+    }));
+    const active = mapped.filter(c => !['shipped', 'complete', 'archived'].includes(c.status || ''));
     setStats({
-      received: all.filter(c => c.status === 'received').length,
-      in_progress: all.filter(c => c.status === 'in_progress').length,
-      stuck_parts: all.filter(c => c.status === 'stuck_parts').length,
-      stuck_graphics: all.filter(c => c.status === 'stuck_graphics').length,
+      received: active.filter(c => c.status === 'received').length,
+      in_progress: active.filter(c => c.status === 'in_progress').length,
+      stuck_parts: active.filter(c => c.status === 'stuck_parts').length,
+      stuck_graphics: active.filter(c => c.status === 'stuck_graphics').length,
+      total: mapped.length,
     });
-    setRecentItems(all.slice(0, 5));
+    setRecentItems(active.slice(0, 5));
     setLoading(false);
   };
 
   return (
-    <WidgetShell title="In-Shop" icon="" loading={loading} onHeaderClick={() => router.push('/tracking')}>
+    <WidgetShell title={`In-Shop${stats.total > 0 ? ` (${stats.total})` : ''}`} icon="" loading={loading} onHeaderClick={() => router.push('/tracking')}>
       <div>
         <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr 1fr', gap: '6px', marginBottom: '10px' }}>
           {(['received', 'in_progress', 'stuck_parts', 'stuck_graphics'] as const).map(key => {
