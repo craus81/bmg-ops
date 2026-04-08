@@ -785,13 +785,16 @@ export default function TrackingPage() {
                     )}
                   </div>
                   <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
-                    {Object.entries(statusSummary).map(([s, count]) => (
-                      <span key={s} style={{
-                        fontSize: '9px', fontWeight: 700, padding: '2px 6px', borderRadius: '4px',
-                        background: `${VEHICLE_STATUS_COLORS[s as VehicleTrackingStatus] || 'var(--text-muted)'}18`,
-                        color: VEHICLE_STATUS_COLORS[s as VehicleTrackingStatus] || 'var(--text-muted)',
-                      }}>{count}</span>
-                    ))}
+                    {Object.entries(statusSummary).map(([s, count]) => {
+                      const sc = VEHICLE_STATUS_COLORS[s as VehicleTrackingStatus];
+                      return (
+                        <span key={s} style={{
+                          fontSize: '9px', fontWeight: 700, padding: '2px 6px', borderRadius: '4px',
+                          background: sc?.bg || 'var(--subtle-bg)',
+                          color: sc?.text || 'var(--text-muted)',
+                        }}>{count}</span>
+                      );
+                    })}
                     <span style={{ fontSize: '11px', fontWeight: 700, color: 'var(--text-muted)' }}>{groupVehicles.length} VIN{groupVehicles.length !== 1 ? 's' : ''}</span>
                   </div>
                 </div>
