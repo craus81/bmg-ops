@@ -1,361 +1,411 @@
 'use client';
 
-import { useState, useRef, useEffect } from 'react';
-import { useRouter } from 'next/navigation';
+import { useState, useEffect, useRef, useCallback } from 'react';
 import { createClient } from '@/lib/supabase-browser';
-import AssignmentPicker from '@/components/AssignmentPicker';
-import { useApp } from '@/components/AppProvider';
 import { useAuth } from '@/components/AuthProvider';
-import { decodeVIN, isValidVIN } from '@/lib/vin-decoder';
-import VinScanner from '@/components/VinScanner';
+import { theme } from '@/lib/theme';
+
+interface Part {
+  id: string;
+  item_number: string;
+  display_name: string | null;
+  description: string | null;
+  billable_customer: string | null;
+  catalog: string;
+}
+
+interface Location {
+  id: string;
+  name: string;
+}
+
+interface ScanEntry {
+  id: string;
+  vin: string;
+  vehicle_year: string | null;
+  vehicle_make: string | null;
+  vehicle_model: string | null;
+  scanned_at: string;
+}
 
 export default function ScanPage() {
-  const router = useRouter();
-  const { user, profile } = useAuth();
-  const { activePart } = useApp();
+  const { user } = useAuth();
   const supabase = createClient();
 
+  // Step state
+  const [step, setStep] = useState<'part' | 'location' | 'scan'>('part');
+
+  // Part selection
+  const [parts, setParts] = useState<Part[]>([]);
+  const [partSearch, setPartSearch] = useState('');
+  const [selectedPart, setSelectedPart] = useState<Part | null>(null);
+  const [customJob, setCustomJob] = useState('');
+  const [customCustomer, setCustomCustomer] = useState('');
+  const [showCustom, setShowCustom] = useState(false);
+
+  // Location selection
+  const [locations, setLocations] = useState<Location[]>([]);
+  const [selectedLocation, setSelectedLocation] = useState<Location | null>(null);
+
+  // Scanning
   const [vin, setVin] = useState('');
-  const [error, setError] = useState('');
-  const [loading, setLoading] = useState(false);
-  const [result, setResult] = useState<any>(null);
-  const [confirmed, setConfirmed] = useState(false);
-  const [savedVehicleId, setSavedVehicleId] = useState<string | null>(null);
-  const [poWarning, setPoWarning] = useState('');
-  const [poMatch, setPoMatch] = useState('');
-  const [mode, setMode] = useState<'camera' | 'text'>('text');
-  const [notes, setNotes] = useState('');
-  const [savingNotes, setSavingNotes] = useState(false);
-  const [notesSaved, setNotesSaved] = useState(false);
-  const [assignedInstallers, setAssignedInstallers] = useState<string[]>([]);
-  const [assignmentSaved, setAssignmentSaved] = useState(false);
-  const ref = useRef<HTMLInputElement>(null);
+  const [vinLoading, setVinLoading] = useState(false);
+  const [scans, setScans] = useState<ScanEntry[]>([]);
+  const [scanError, setScanError] = useState('');
+  const [scanSuccess, setScanSuccess] = useState('');
+  const vinRef = useRef<HTMLInputElement>(null);
+
+  // Offline
+  const [isOffline, setIsOffline] = useState(false);
+  const [pendingOfflineScans, setPendingOfflineScans] = useState<any[]>([]);
 
   useEffect(() => {
-    if (mode === 'text' && ref.current) ref.current.focus();
-  }, [mode]);
+    loadParts();
+    loadLocations();
 
-  const handleCameraScan = (scannedVin: string) => {
-    setVin(scannedVin);
-    handleScanVin(scannedVin);
-  };
+    const handleOffline = () => setIsOffline(true);
+    const handleOnline = () => { setIsOffline(false); syncOfflineScans(); };
+    window.addEventListener('offline', handleOffline);
+    window.addEventListener('online', handleOnline);
+    setIsOffline(!navigator.onLine);
 
-  const handleScanVin = async (v: string) => {
-    setError('');
-    setLoading(true);
     try {
-      // Check for duplicate VIN in database
-      var { data: existing } = await supabase
-        .from('scanned_vehicles')
-        .select('id, scanned_at')
-        .eq('vin', v)
-        .limit(1);
-      if (existing && existing.length > 0) {
-        setError('Duplicate VIN — this vehicle has already been scanned (' + new Date(existing[0].scanned_at).toLocaleDateString([], { month: 'short', day: 'numeric' }) + ').');
-        setLoading(false);
-        return;
-      }
-      var vehicle = await decodeVIN(v);
-      setResult({ vin: v, vehicle: vehicle });
-    } catch (e) {
-      setError('Failed to decode VIN.');
-    }
-    setLoading(false);
+      const cached = localStorage.getItem('offline_scans');
+      if (cached) setPendingOfflineScans(JSON.parse(cached));
+    } catch {}
+
+    return () => {
+      window.removeEventListener('offline', handleOffline);
+      window.removeEventListener('online', handleOnline);
+    };
+  }, []);
+
+  const loadParts = async () => {
+    const { data } = await supabase
+      .from('netsuite_parts')
+      .select('id, item_number, display_name, description, billable_customer, catalog')
+      .eq('is_active', true)
+      .order('item_number');
+    setParts((data || []) as Part[]);
+    try { localStorage.setItem('cached_parts', JSON.stringify(data || [])); } catch {}
   };
 
-  const switchToCamera = () => {
-    setMode('camera');
+  const loadLocations = async () => {
+    const { data } = await supabase
+      .from('work_locations')
+      .select('id, name')
+      .eq('is_active', true)
+      .order('name');
+    setLocations((data || []) as Location[]);
+    try { localStorage.setItem('cached_locations', JSON.stringify(data || [])); } catch {}
   };
 
-  const switchToText = () => {
-    setMode('text');
-  };
+  const loadTodayScans = useCallback(async () => {
+    if (!selectedPart && !customJob) return;
+    const todayStart = new Date();
+    todayStart.setHours(0, 0, 0, 0);
+
+    let query = supabase
+      .from('scan_logs')
+      .select('id, vin, vehicle_year, vehicle_make, vehicle_model, scanned_at')
+      .eq('scanned_by', user?.id)
+      .gte('scanned_at', todayStart.toISOString())
+      .order('scanned_at', { ascending: false });
+
+    if (selectedPart) query = query.eq('part_number', selectedPart.item_number);
+    else if (customJob) query = query.eq('part_number', customJob);
+    if (selectedLocation) query = query.eq('location_id', selectedLocation.id);
+
+    const { data } = await query;
+    setScans((data || []) as ScanEntry[]);
+  }, [selectedPart, customJob, selectedLocation, user?.id]);
+
+  useEffect(() => {
+    if (step === 'scan') loadTodayScans();
+  }, [step, loadTodayScans]);
 
   const handleScan = async () => {
-    var v = vin.trim().toUpperCase();
-    if (!isValidVIN(v)) { setError('Invalid VIN - must be 17 characters.'); return; }
-    handleScanVin(v);
-  };
+    const v = vin.trim().toUpperCase();
+    if (v.length < 5) { setScanError('VIN too short'); return; }
+    setScanError('');
+    setScanSuccess('');
+    setVinLoading(true);
 
-  const handleConfirm = async () => {
-    if (!result || !user) return;
-    var v = result.vin;
-    var vehicle = result.vehicle;
-    var matchedPoLineId: string | null = null;
-    var matchedPoNumber: string | null = null;
+    let vehicleData: any = {};
+    try {
+      const res = await fetch(`https://vpic.nhtsa.dot.gov/api/vehicles/decodevin/${v}?format=json`);
+      const json = await res.json();
+      const results = json.Results || [];
+      const get = (id: number) => results.find((r: any) => r.VariableId === id)?.Value || null;
+      vehicleData = {
+        vehicle_year: get(29),
+        vehicle_make: get(26),
+        vehicle_model: get(28),
+        vehicle_trim: get(38),
+        body_class: get(5),
+      };
+    } catch {}
 
-    setPoWarning('');
-    setPoMatch('');
-    setError('');
+    const partNumber = selectedPart?.item_number || customJob;
+    const partDesc = selectedPart?.display_name || selectedPart?.description || customJob;
+    const billable = selectedPart?.billable_customer || customCustomer || null;
 
-    if (activePart) {
-      var { data: poLines } = await supabase
-        .from('po_line_items')
-        .select('*, purchase_orders!inner(id, po_number, status)')
-        .eq('part_number', activePart.part_number)
-        .eq('purchase_orders.status', 'open');
+    const scanData = {
+      vin: v,
+      ...vehicleData,
+      part_number: partNumber,
+      part_description: partDesc,
+      billable_customer: billable,
+      location_id: selectedLocation?.id || null,
+      location_name: selectedLocation?.name || null,
+      scanned_by: user?.id,
+    };
 
-      var availableLine = (poLines || []).find(function(line: any) {
-        return line.installed < line.quantity;
-      });
-
-      if (availableLine) {
-        matchedPoLineId = availableLine.id;
-        matchedPoNumber = (availableLine as any).purchase_orders.po_number;
-        setPoMatch('PO #' + matchedPoNumber + ' (' + (availableLine.installed + 1) + '/' + availableLine.quantity + ')');
-      } else {
-        setPoWarning('No open PO found for part ' + activePart.part_number);
+    if (isOffline) {
+      const offlineScan = { ...scanData, id: crypto.randomUUID(), scanned_at: new Date().toISOString() };
+      const updated = [...pendingOfflineScans, offlineScan];
+      setPendingOfflineScans(updated);
+      try { localStorage.setItem('offline_scans', JSON.stringify(updated)); } catch {}
+      setScans(prev => [offlineScan as ScanEntry, ...prev]);
+      setScanSuccess(`Saved offline: ${[vehicleData.vehicle_year, vehicleData.vehicle_make, vehicleData.vehicle_model].filter(Boolean).join(' ') || v}`);
+    } else {
+      const { data, error } = await supabase.from('scan_logs').insert(scanData).select('id, vin, vehicle_year, vehicle_make, vehicle_model, scanned_at').single();
+      if (error) {
+        setScanError('Failed to save: ' + error.message);
+        setVinLoading(false);
+        return;
       }
+      setScans(prev => [data as ScanEntry, ...prev]);
+      setScanSuccess([vehicleData.vehicle_year, vehicleData.vehicle_make, vehicleData.vehicle_model].filter(Boolean).join(' ') || 'Scan logged');
     }
 
-    var insertResult = await supabase
-      .from('scanned_vehicles')
-      .insert({
-        vin: v,
-        vehicle_year: vehicle.year,
-        vehicle_make: vehicle.make,
-        vehicle_model: vehicle.model,
-        vehicle_trim: vehicle.trim,
-        body_class: vehicle.bodyClass,
-        drive_type: vehicle.driveType,
-        fuel_type: vehicle.fuelType,
-        gvwr: vehicle.gvwr,
-        catalog_id: activePart?.id || null,
-        part_number: activePart?.part_number || null,
-        customer: activePart?.customer || null,
-        end_customer: activePart?.end_customer || null,
-        po_line_item_id: matchedPoLineId,
-        scanned_by: user.id,
-        company_id: profile?.company_id || null,
-      })
-      .select()
-      .single();
-    if (insertResult.error) { setError('Failed to save: ' + insertResult.error.message); return; }
-
-    if (matchedPoLineId) {
-      await supabase.rpc('increment_po_installed', { p_line_id: matchedPoLineId });
-
-      var matchedLine = (poLines || []).find(function(l: any) { return l.id === matchedPoLineId; });
-      if (matchedLine) {
-        var poId = (matchedLine as any).purchase_orders.id;
-        var { data: allLines } = await supabase
-          .from('po_line_items')
-          .select('quantity, installed')
-          .eq('po_id', poId);
-        var allFulfilled = (allLines || []).every(function(l: any) {
-          return l.installed >= l.quantity;
-        });
-        if (allFulfilled) {
-          await supabase.from('purchase_orders').update({ status: 'complete' }).eq('id', poId);
-          setPoMatch(function(prev: string) { return prev + ' - PO COMPLETE!'; });
-        }
-      }
-    }
-
-    setSavedVehicleId(insertResult.data.id);
-    setConfirmed(true);
-  };
-
-  const handleSaveNotes = async () => {
-    if (!savedVehicleId || !notes.trim()) return;
-    setSavingNotes(true);
-    await supabase
-      .from('scanned_vehicles')
-      .update({ notes: notes.trim() })
-      .eq('id', savedVehicleId);
-    setSavingNotes(false);
-    setNotesSaved(true);
-  };
-
-  const resetScan = () => {
-    setResult(null);
-    setConfirmed(false);
     setVin('');
-    setSavedVehicleId(null);
-    setError('');
-    setPoWarning('');
-    setPoMatch('');
-    setNotes('');
-    setNotesSaved(false);
-    setMode('camera');
+    setVinLoading(false);
+    setTimeout(() => vinRef.current?.focus(), 100);
   };
 
-  var title = result ? [result.vehicle.year, result.vehicle.make, result.vehicle.model].filter(Boolean).join(' ') : '';
+  const syncOfflineScans = async () => {
+    try {
+      const cached = localStorage.getItem('offline_scans');
+      if (!cached) return;
+      const offlineScans = JSON.parse(cached);
+      if (offlineScans.length === 0) return;
+      for (const scan of offlineScans) {
+        const { id, scanned_at, ...rest } = scan;
+        await supabase.from('scan_logs').insert({ ...rest, scanned_at });
+      }
+      localStorage.removeItem('offline_scans');
+      setPendingOfflineScans([]);
+      loadTodayScans();
+    } catch {}
+  };
 
-  if (!result && !loading && !confirmed) {
-    return (
-      <div>
-        <div style={{ fontSize: '11px', fontWeight: 700, color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.5px', marginBottom: '12px' }}>Scan VIN</div>
-        {activePart && (
-          <div style={{ background: 'var(--card)', border: '1px solid var(--border)', borderRadius: '14px', padding: '10px 12px', marginBottom: '12px' }}>
-            <div style={{ fontWeight: 800, fontSize: '14px' }}>{activePart.part_number} - {activePart.end_customer}</div>
-            <div style={{ fontSize: '11px', color: 'var(--text-muted)', marginTop: '1px' }}>{activePart.graphic_package} | {activePart.vehicle_type}</div>
-          </div>
-        )}
-        <div style={{ display: 'flex', gap: '4px', marginBottom: '12px', background: 'var(--card)', borderRadius: '10px', padding: '3px' }}>
-          <button onClick={switchToCamera} style={{ flex: 1, padding: '8px', borderRadius: '6px', fontSize: '12px', fontWeight: 700, background: mode === 'camera' ? 'var(--tab-active-bg)' : 'transparent', border: 'none', color: mode === 'camera' ? 'var(--navy)' : 'var(--text-muted)' }}>Camera</button>
-          <button onClick={switchToText} style={{ flex: 1, padding: '8px', borderRadius: '6px', fontSize: '12px', fontWeight: 700, background: mode === 'text' ? 'var(--tab-active-bg)' : 'transparent', border: 'none', color: mode === 'text' ? 'var(--navy)' : 'var(--text-muted)' }}>Type / Scanner</button>
-        </div>
-        {mode === 'camera' ? (
-          <VinScanner onScan={handleCameraScan} theme={{}} />
-        ) : (
-          <div>
-            <input ref={ref} type="text" value={vin} onChange={(e) => setVin(e.target.value.toUpperCase().replace(/[^A-HJ-NPR-Z0-9]/gi, '').slice(0, 17))} placeholder="Enter or scan 17-char VIN" maxLength={17} style={{ width: '100%', padding: '10px 12px', borderRadius: '10px', border: '1px solid var(--border)', background: 'var(--card)', color: 'var(--text-primary)', fontSize: '18px', letterSpacing: '2px', fontWeight: 700, textAlign: 'center' }} onKeyDown={(e) => { if (e.key === 'Enter' && vin.length === 17) handleScan(); }} />
-            <div style={{ textAlign: 'center', marginTop: '4px', fontSize: '13px', fontWeight: 600, color: vin.length === 17 ? 'var(--success)' : 'var(--text-muted)' }}>{vin.length}/17 {vin.length === 17 ? 'OK' : ''}</div>
-          </div>
-        )}
-        {error && <div style={{ marginTop: '8px', padding: '8px 12px', background: 'var(--error-bg)', border: '1px solid rgba(248,113,113,0.15)', borderRadius: '10px', color: 'var(--error)', fontSize: '12px' }}>{error}</div>}
-        {mode === 'text' && (
-          <button onClick={handleScan} disabled={vin.length !== 17} style={{ width: '100%', padding: '16px', borderRadius: '14px', marginTop: '14px', background: vin.length === 17 ? 'var(--navy)' : 'var(--border)', color: '#fff', fontSize: '16px', fontWeight: 800, opacity: vin.length === 17 ? 1 : 0.4, border: 'none' }}>Decode VIN</button>
-        )}
-        <button onClick={() => router.push('/home')} style={{ width: '100%', padding: '10px', borderRadius: '14px', marginTop: '8px', border: '1px solid var(--border)', background: 'transparent', color: 'var(--text-secondary)', fontSize: '13px', fontWeight: 700 }}>Back</button>
-      </div>
-    );
-  }
+  const filteredParts = partSearch
+    ? parts.filter(p => {
+        const s = partSearch.toLowerCase();
+        return p.item_number.toLowerCase().includes(s) ||
+          p.display_name?.toLowerCase().includes(s) ||
+          p.description?.toLowerCase().includes(s) ||
+          p.billable_customer?.toLowerCase().includes(s);
+      }).slice(0, 20)
+    : [];
 
-  if (loading) {
-    return (
-      <div style={{ textAlign: 'center', padding: '60px 0' }}>
-        <div style={{ width: '36px', height: '36px', border: '3px solid var(--border)', borderTopColor: 'var(--navy)', borderRadius: '50%', margin: '0 auto', animation: 'spin 1s linear infinite' }} />
-        <div style={{ color: 'var(--navy-light)', fontWeight: 600, marginTop: '12px' }}>Decoding VIN...</div>
-      </div>
-    );
-  }
-
-  if (confirmed) {
-    return (
-      <div style={{ textAlign: 'center', padding: '28px 0' }}>
-        <div style={{ width: '64px', height: '64px', borderRadius: '50%', background: poWarning ? 'rgba(251,191,36,0.12)' : 'var(--success-bg)', display: 'flex', alignItems: 'center', justifyContent: 'center', margin: '0 auto 14px', fontSize: '30px', color: poWarning ? 'var(--warning)' : 'var(--success)' }}>{poWarning ? '!' : 'OK'}</div>
-        <div style={{ fontSize: '18px', fontWeight: 800 }}>Vehicle Recorded</div>
-        <div style={{ color: 'var(--text-secondary)', fontSize: '13px', marginTop: '4px' }}>{title}</div>
-        <div style={{ fontFamily: 'monospace', fontSize: '11px', color: 'var(--text-muted)' }}>{result.vin}</div>
-        {poMatch && (
-          <div style={{ marginTop: '8px', padding: '8px 12px', background: 'var(--success-bg)', border: '1px solid rgba(52,211,153,0.15)', borderRadius: '10px', color: 'var(--success)', fontSize: '12px', fontWeight: 700 }}>{poMatch}</div>
-        )}
-        {poWarning && (
-          <div style={{ marginTop: '8px', padding: '8px 12px', background: 'var(--warning-bg)', border: '1px solid rgba(251,191,36,0.15)', borderRadius: '10px', color: 'var(--warning)', fontSize: '12px', fontWeight: 700 }}>{poWarning}</div>
-        )}
-
-        {/* Comments section */}
-        <div style={{ marginTop: '16px', textAlign: 'left' }}>
-          <div style={{
-            background: 'var(--card)', border: '1px solid var(--border)', borderRadius: '14px',
-            padding: '14px', boxShadow: 'var(--shadow-sm)',
-          }}>
-            <label style={{ display: 'block', fontSize: '10px', fontWeight: 700, color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.5px', marginBottom: '6px' }}>
-              Comments / Notes
-            </label>
-            <textarea
-              value={notes}
-              onChange={(e) => { setNotes(e.target.value); setNotesSaved(false); }}
-              placeholder="Add any notes about this vehicle (damage, special instructions, etc.)"
-              rows={3}
-              style={{
-                width: '100%', padding: '10px', borderRadius: '10px',
-                border: '1px solid var(--border)', background: 'var(--bg)',
-                color: 'var(--text-primary)', fontSize: '13px', resize: 'vertical',
-              }}
-            />
-            {notes.trim() && !notesSaved && (
-              <button
-                onClick={handleSaveNotes}
-                disabled={savingNotes}
-                style={{
-                  marginTop: '8px', width: '100%', padding: '10px', borderRadius: '10px',
-                  background: 'var(--navy)', color: '#fff', fontSize: '12px', fontWeight: 700,
-                  border: 'none', opacity: savingNotes ? 0.5 : 1,
-                }}
-              >
-                {savingNotes ? 'Saving...' : 'Save Notes'}
-              </button>
-            )}
-            {notesSaved && (
-              <div style={{ marginTop: '8px', fontSize: '12px', color: 'var(--success)', fontWeight: 700, textAlign: 'center' }}>
-                Notes saved
-              </div>
-            )}
-          </div>
-        </div>
-
-        {/* Assign Installers */}
-        {savedVehicleId && (
-          <div style={{ marginTop: '16px', textAlign: 'left' }}>
-            <div style={{
-              background: 'var(--card)', border: '1px solid var(--border)', borderRadius: '14px',
-              padding: '14px', boxShadow: 'var(--shadow-sm)',
-            }}>
-              <AssignmentPicker
-                jobType="scanned_vehicle"
-                selectedIds={assignedInstallers}
-                onChange={setAssignedInstallers}
-                roles={['installer', 'admin', 'field_tech', 'shop_tech', 'graphics_production', 'production']}
-                label="Assign Installers (optional)"
-              />
-              {assignedInstallers.length > 0 && !assignmentSaved && (
-                <button
-                  onClick={async () => {
-                    await fetch('/api/jobs/assign', {
-                      method: 'POST',
-                      headers: { 'Content-Type': 'application/json' },
-                      body: JSON.stringify({
-                        jobType: 'scanned_vehicle',
-                        jobId: savedVehicleId,
-                        userIds: assignedInstallers,
-                        assignedBy: user?.id,
-                        notifyUsers: true,
-                        jobTitle: title,
-                      }),
-                    });
-                    setAssignmentSaved(true);
-                  }}
-                  style={{
-                    marginTop: '8px', width: '100%', padding: '10px', borderRadius: '10px',
-                    background: 'var(--accent)', color: '#fff', fontSize: '12px', fontWeight: 700,
-                    border: 'none', cursor: 'pointer',
-                  }}
-                >
-                  Assign & Notify
-                </button>
-              )}
-              {assignmentSaved && (
-                <div style={{ marginTop: '8px', fontSize: '12px', color: 'var(--success)', fontWeight: 700, textAlign: 'center' }}>
-                  Installers assigned & notified
-                </div>
-              )}
-            </div>
-          </div>
-        )}
-
-        <div style={{ marginTop: '16px', display: 'flex', flexDirection: 'column', gap: '8px' }}>
-          <button onClick={() => router.push('/photos?id=' + savedVehicleId)} style={{ width: '100%', padding: '14px', borderRadius: '14px', background: 'var(--navy)', color: '#fff', fontWeight: 800, fontSize: '14px', border: 'none' }}>Add Completion Photos</button>
-          <button onClick={() => resetScan()} style={{ width: '100%', padding: '16px', borderRadius: '14px', background: 'var(--navy)', color: '#fff', fontWeight: 800, fontSize: '16px', border: 'none' }}>Scan Next VIN</button>
-          <button onClick={() => router.push('/home')} style={{ width: '100%', padding: '10px', borderRadius: '14px', border: '1px solid var(--border)', background: 'transparent', color: 'var(--text-secondary)', fontSize: '13px', fontWeight: 700 }}>Home</button>
-        </div>
-      </div>
-    );
-  }
+  const partLabel = selectedPart
+    ? `${selectedPart.item_number}${selectedPart.billable_customer ? ` — ${selectedPart.billable_customer}` : ''}`
+    : customJob || '';
 
   return (
     <div>
-      <div style={{ fontSize: '11px', fontWeight: 700, color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.5px', marginBottom: '12px' }}>Vehicle Identified</div>
-      <div style={{ background: 'var(--card)', border: '1px solid var(--border)', borderRadius: '14px', padding: '18px', marginBottom: '12px' }}>
-        <div style={{ fontSize: '10px', color: 'var(--text-muted)', fontWeight: 600, letterSpacing: '1px', textTransform: 'uppercase' }}>VIN</div>
-        <div style={{ fontSize: '13px', fontFamily: 'monospace', color: 'var(--navy-light)', fontWeight: 700, letterSpacing: '1.5px', marginTop: '2px', marginBottom: '10px' }}>{result.vin}</div>
-        <div style={{ fontSize: '20px', fontWeight: 800 }}>{title || 'Unknown'}</div>
-        {result.vehicle.bodyClass && <div style={{ fontSize: '13px', color: 'var(--text-secondary)', marginTop: '2px' }}>{result.vehicle.bodyClass}</div>}
-      </div>
-      {activePart && (
-        <div style={{ background: 'var(--card)', border: '1px solid var(--border)', borderRadius: '14px', padding: '10px 12px', marginBottom: '12px', fontSize: '12px' }}>
-          <span style={{ color: 'var(--text-muted)' }}>Recording as </span>
-          <span style={{ fontWeight: 700, color: 'var(--navy)' }}>{activePart.part_number}</span>
-          <span style={{ color: 'var(--text-muted)' }}> - {activePart.end_customer}</span>
+      {isOffline && (
+        <div style={{
+          padding: '8px 12px', borderRadius: '8px', marginBottom: '12px',
+          background: 'rgba(251,191,36,0.1)', border: '1px solid rgba(251,191,36,0.3)',
+          color: '#f59e0b', fontSize: '12px', fontWeight: 700, textAlign: 'center',
+        }}>
+          Offline — scans will sync when back online
+          {pendingOfflineScans.length > 0 && ` (${pendingOfflineScans.length} pending)`}
         </div>
       )}
-      {error && <div style={{ marginTop: '8px', padding: '8px 12px', background: 'var(--error-bg)', border: '1px solid rgba(248,113,113,0.15)', borderRadius: '10px', color: 'var(--error)', fontSize: '12px', marginBottom: '12px' }}>{error}</div>}
-      <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
-        <button onClick={handleConfirm} style={{ width: '100%', padding: '16px', borderRadius: '14px', background: 'var(--success)', color: '#fff', fontSize: '16px', fontWeight: 800, border: 'none' }}>Confirm - Record Vehicle</button>
-        <button onClick={() => { setResult(null); setVin(''); }} style={{ width: '100%', padding: '10px', borderRadius: '14px', border: '1px solid var(--border)', background: 'transparent', color: 'var(--text-secondary)', fontSize: '13px', fontWeight: 700 }}>Scan Different VIN</button>
-      </div>
+
+      {/* ─── STEP 1: Pick Part ─── */}
+      {step === 'part' && (
+        <div>
+          <div style={{ fontSize: '11px', fontWeight: 700, color: theme.textMuted, textTransform: 'uppercase', letterSpacing: '0.8px', marginBottom: '12px' }}>
+            What are you working on?
+          </div>
+
+          <input
+            value={partSearch}
+            onChange={e => setPartSearch(e.target.value)}
+            placeholder="Search parts by number, name, or customer..."
+            autoFocus
+            style={{
+              width: '100%', padding: '14px 16px', borderRadius: '12px', fontSize: '15px',
+              border: `1px solid ${theme.border}`, background: theme.card,
+              color: theme.textPrimary, fontWeight: 600, marginBottom: '8px',
+            }}
+          />
+
+          {filteredParts.length > 0 && (
+            <div style={{ display: 'flex', flexDirection: 'column', gap: '4px', marginBottom: '12px' }}>
+              {filteredParts.map(p => (
+                <button key={p.id} onClick={() => { setSelectedPart(p); setStep('location'); }} style={{
+                  display: 'flex', justifyContent: 'space-between', alignItems: 'center', width: '100%',
+                  padding: '12px 14px', borderRadius: '10px', textAlign: 'left',
+                  border: `1px solid ${theme.border}`, background: theme.card, cursor: 'pointer',
+                }}>
+                  <div>
+                    <div style={{ fontWeight: 700, fontSize: '14px', color: theme.textPrimary }}>{p.item_number}</div>
+                    <div style={{ fontSize: '11px', color: theme.textMuted, marginTop: '1px' }}>{p.display_name || p.description || ''}</div>
+                  </div>
+                  {p.billable_customer && (
+                    <span style={{ fontSize: '10px', fontWeight: 700, padding: '3px 8px', borderRadius: '6px', background: 'rgba(167,139,250,0.1)', color: '#a78bfa', flexShrink: 0 }}>
+                      {p.billable_customer}
+                    </span>
+                  )}
+                </button>
+              ))}
+            </div>
+          )}
+
+          {!showCustom ? (
+            <button onClick={() => setShowCustom(true)} style={{
+              width: '100%', padding: '12px', borderRadius: '10px', fontSize: '13px', fontWeight: 700,
+              background: 'transparent', border: `1px dashed ${theme.border}`,
+              color: theme.textSecondary, cursor: 'pointer', marginTop: '8px',
+            }}>
+              + Custom Job (no part number)
+            </button>
+          ) : (
+            <div style={{ background: theme.card, border: `1px solid ${theme.border}`, borderRadius: '12px', padding: '14px', marginTop: '8px' }}>
+              <div style={{ fontSize: '11px', fontWeight: 700, color: theme.textMuted, marginBottom: '6px' }}>Job Name</div>
+              <input value={customJob} onChange={e => setCustomJob(e.target.value)} placeholder='e.g. "Uhaul Regular"' autoFocus style={{
+                width: '100%', padding: '10px 12px', borderRadius: '8px', fontSize: '14px',
+                border: `1px solid ${theme.border}`, background: 'var(--input-bg)',
+                color: theme.textPrimary, fontWeight: 600, marginBottom: '8px',
+              }} />
+              <div style={{ fontSize: '11px', fontWeight: 700, color: theme.textMuted, marginBottom: '6px' }}>Billable Customer</div>
+              <input value={customCustomer} onChange={e => setCustomCustomer(e.target.value)} placeholder='e.g. "Designs That Stick"' style={{
+                width: '100%', padding: '10px 12px', borderRadius: '8px', fontSize: '14px',
+                border: `1px solid ${theme.border}`, background: 'var(--input-bg)',
+                color: theme.textPrimary, fontWeight: 600, marginBottom: '10px',
+              }} />
+              <button onClick={() => { if (customJob.trim()) setStep('location'); }} disabled={!customJob.trim()} style={{
+                width: '100%', padding: '12px', borderRadius: '10px', fontSize: '14px', fontWeight: 800,
+                background: customJob.trim() ? theme.navy : theme.border, color: '#fff', border: 'none',
+                cursor: customJob.trim() ? 'pointer' : 'default', opacity: customJob.trim() ? 1 : 0.5,
+              }}>Continue</button>
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* ─── STEP 2: Pick Location ─── */}
+      {step === 'location' && (
+        <div>
+          <div style={{ fontSize: '11px', fontWeight: 700, color: theme.textMuted, textTransform: 'uppercase', letterSpacing: '0.8px', marginBottom: '4px' }}>
+            Where are you working?
+          </div>
+          <div style={{ fontSize: '13px', fontWeight: 700, color: theme.textPrimary, marginBottom: '14px' }}>{partLabel}</div>
+
+          <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
+            {locations.map(loc => (
+              <button key={loc.id} onClick={() => { setSelectedLocation(loc); setStep('scan'); }} style={{
+                width: '100%', padding: '14px 16px', borderRadius: '12px', textAlign: 'left',
+                border: `1px solid ${theme.border}`, background: theme.card,
+                cursor: 'pointer', fontSize: '15px', fontWeight: 700, color: theme.textPrimary,
+              }}>{loc.name}</button>
+            ))}
+          </div>
+
+          <button onClick={() => setStep('part')} style={{
+            width: '100%', padding: '10px', borderRadius: '10px', marginTop: '12px',
+            fontSize: '12px', fontWeight: 700, background: 'transparent',
+            border: `1px solid ${theme.border}`, color: theme.textMuted, cursor: 'pointer',
+          }}>← Back</button>
+        </div>
+      )}
+
+      {/* ─── STEP 3: Scan VINs ─── */}
+      {step === 'scan' && (
+        <div>
+          {/* Locked banner */}
+          <div style={{
+            padding: '10px 14px', borderRadius: '10px', marginBottom: '12px',
+            background: 'rgba(59,130,246,0.06)', border: '1px solid rgba(59,130,246,0.2)',
+          }}>
+            <div style={{ fontSize: '14px', fontWeight: 800, color: theme.textPrimary }}>{partLabel}</div>
+            <div style={{ fontSize: '11px', color: theme.textMuted, marginTop: '2px' }}>
+              {selectedLocation?.name || 'No location'}
+              <span style={{ margin: '0 8px' }}>•</span>
+              <span style={{ fontWeight: 700, color: '#60a5fa' }}>{scans.length} scanned today</span>
+            </div>
+            <button onClick={() => { setStep('part'); setSelectedPart(null); setCustomJob(''); setCustomCustomer(''); setSelectedLocation(null); setScans([]); setShowCustom(false); }} style={{
+              marginTop: '6px', padding: '4px 10px', borderRadius: '6px', fontSize: '10px', fontWeight: 700,
+              background: 'rgba(107,114,128,0.08)', border: '1px solid rgba(107,114,128,0.2)',
+              color: '#6b7280', cursor: 'pointer',
+            }}>Change</button>
+          </div>
+
+          {/* VIN input */}
+          <div style={{ display: 'flex', gap: '8px', marginBottom: '10px' }}>
+            <input
+              ref={vinRef}
+              value={vin}
+              onChange={e => setVin(e.target.value.toUpperCase())}
+              onKeyDown={e => { if (e.key === 'Enter' && vin.trim()) handleScan(); }}
+              placeholder="Scan or type VIN..."
+              autoFocus
+              style={{
+                flex: 1, padding: '14px 16px', borderRadius: '12px', fontSize: '16px',
+                fontFamily: 'monospace', fontWeight: 700, letterSpacing: '1px',
+                border: `1px solid ${theme.border}`, background: theme.card, color: theme.textPrimary,
+              }}
+            />
+            <button onClick={handleScan} disabled={vinLoading || !vin.trim()} style={{
+              padding: '14px 20px', borderRadius: '12px', fontSize: '15px', fontWeight: 800,
+              background: vinLoading || !vin.trim() ? theme.border : theme.navy,
+              color: '#fff', border: 'none',
+              cursor: vinLoading || !vin.trim() ? 'default' : 'pointer',
+              opacity: vinLoading || !vin.trim() ? 0.5 : 1,
+            }}>{vinLoading ? '...' : 'Log'}</button>
+          </div>
+
+          {scanError && (
+            <div style={{ padding: '8px 12px', borderRadius: '8px', marginBottom: '8px', background: theme.errorBg, border: `1px solid ${theme.errorBorder}`, color: theme.error, fontSize: '12px', fontWeight: 600 }}>{scanError}</div>
+          )}
+          {scanSuccess && (
+            <div style={{ padding: '8px 12px', borderRadius: '8px', marginBottom: '8px', background: 'rgba(34,197,94,0.06)', border: '1px solid rgba(34,197,94,0.2)', color: '#22c55e', fontSize: '12px', fontWeight: 700 }}>✓ {scanSuccess}</div>
+          )}
+
+          {scans.length > 0 && (
+            <div>
+              <div style={{ fontSize: '10px', fontWeight: 700, color: theme.textMuted, textTransform: 'uppercase', letterSpacing: '0.5px', marginBottom: '6px' }}>
+                Today&apos;s Scans ({scans.length})
+              </div>
+              <div style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
+                {scans.map(s => (
+                  <div key={s.id} style={{
+                    padding: '8px 12px', borderRadius: '8px',
+                    background: theme.card, border: `1px solid ${theme.border}`,
+                    display: 'flex', justifyContent: 'space-between', alignItems: 'center',
+                  }}>
+                    <div>
+                      <div style={{ fontSize: '12px', fontWeight: 700, color: theme.textPrimary }}>
+                        {[s.vehicle_year, s.vehicle_make, s.vehicle_model].filter(Boolean).join(' ') || 'Unknown'}
+                      </div>
+                      <div style={{ fontSize: '10px', fontFamily: 'monospace', color: theme.textMuted }}>{s.vin}</div>
+                    </div>
+                    <div style={{ fontSize: '10px', color: theme.textMuted }}>
+                      {new Date(s.scanned_at).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })}
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+        </div>
+      )}
     </div>
   );
 }
