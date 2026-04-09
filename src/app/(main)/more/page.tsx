@@ -90,8 +90,8 @@ export default function MorePage() {
         {F('quoting') && (
           <MenuBtn title="Estimating" sub="AI-powered vinyl wrap quoting" onClick={() => router.push('/admin/quotes')} />
         )}
-        {F('scan_install') && !overflowPaths.has('/scan-install') && (
-          <MenuBtn title="Scan & Install" sub="Scan VINs and assign parts" onClick={() => router.push('/scan-install')} />
+        {F('scan') && !overflowPaths.has('/scan') && (
+          <MenuBtn title="Scan & Log" sub="Scan VINs and log work" onClick={() => router.push('/scan')} />
         )}
         {F('proof_hygiene') && (
           <MenuBtn title="Proof Hygiene" sub="Assign unmatched proof files from NAS" onClick={() => router.push('/admin/proofs')} />
@@ -141,9 +141,6 @@ export default function MorePage() {
         )}
         {F('scan_install') && (
           <MenuBtn title="Quick Job (No PO)" sub="Start scanning without a PO" onClick={() => router.push('/scan')} />
-        )}
-        {F('offline_scan') && (
-          <MenuBtn title="Offline Scanner" sub="Scan VINs underground — syncs when back online" onClick={() => router.push('/offline-scan')} />
         )}
         <MenuBtn title="Notification Settings" sub="Configure your alert preferences" onClick={() => router.push('/settings')} />
       </div>

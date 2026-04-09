@@ -25,12 +25,11 @@ export const allTabs: Tab[] = [
   { id: 'fleet', path: '/fleet', label: 'Check In', feature: 'fleet_checkin', priority: 2 },
   { id: 'tracking', path: '/tracking', label: 'In-Shop', feature: 'in_shop', priority: 3 },
   { id: 'schedule', path: '/admin/schedule', label: 'Schedule', feature: 'schedule', priority: 4 },
+  { id: 'scan', path: '/scan', label: 'Scan', feature: 'scan', priority: 5 },
   { id: 'time', path: '/time', label: 'Time', feature: 'time', priority: 6 },
-  { id: 'scan-install', path: '/scan-install', label: 'Scan', feature: 'scan_install', priority: 7 },
-  { id: 'vehicles', path: '/vehicles', label: 'Vehicles', feature: 'vehicles', priority: 7 },
   { id: 'estimates', path: '/estimates', label: 'Estimates', feature: 'estimates', priority: 7 },
   { id: 'installer-portal', path: '/installer', label: 'CNI Jobs', feature: 'cni_management', priority: 8 },
-  { id: 'my-jobs', path: '/my-jobs', label: 'My Jobs', feature: 'vehicles', priority: 8 },
+  { id: 'my-jobs', path: '/my-jobs', label: 'My Jobs', feature: 'scan', priority: 8 },
   // Customer-only
   { id: 'customer-dashboard', path: '/customer/dashboard', label: 'My Jobs', feature: 'home', priority: 0 },
 ];
@@ -63,7 +62,7 @@ export default function BottomNav({ clockStatus }: BottomNavProps) {
 
   const isActive = (tab: Tab) => {
     if (tab.path === '/home') return pathname === '/home' || pathname === '/photos';
-    if (tab.path === '/scan-install') return pathname === '/scan-install' || pathname === '/scan' || pathname === '/select-part';
+    if (tab.path === '/scan') return pathname === '/scan';
     if (tab.path === '/fleet') return pathname === '/fleet';
     if (tab.path === '/tracking') return pathname === '/tracking';
     if (tab.path === '/my-jobs') return pathname === '/my-jobs' || pathname.startsWith('/jobs/');

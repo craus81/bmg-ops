@@ -8,10 +8,9 @@
 export const FEATURES = {
   // Core tabs
   home: 'Home Dashboard',
-  scan_install: 'Scan & Install',
+  scan: 'Scan & Log',
   fleet_checkin: 'Vehicle Check-In',
   in_shop: 'In-Shop Tracking',
-  vehicles: 'Vehicles',
   graphics: 'Graphics Production',
   estimates: 'Estimates',
   time: 'Time Tracking',
@@ -34,7 +33,6 @@ export const FEATURES = {
   quoting: 'Estimating / Quoting',
   all_jobs: 'CNI Jobs',
   catalog_management: 'Part Catalog Management',
-  offline_scan: 'Offline Scanner',
   prospects: 'Prospects / Sales CRM',
 } as const;
 
@@ -55,16 +53,16 @@ export const ROLE_DEFAULT_FEATURES: Record<string, FeatureKey[]> = {
   ],
 
   shop_tech: [
-    'home', 'fleet_checkin', 'in_shop',
+    'home', 'scan', 'fleet_checkin', 'in_shop',
     'time', 'messages', 'schedule',
   ],
 
   field_tech: [
-    'home', 'scan_install', 'vehicles', 'time', 'messages',
+    'home', 'scan', 'time', 'messages',
   ],
 
   installer: [
-    'home', 'scan_install', 'time', 'messages', 'cni_management',
+    'home', 'scan', 'time', 'messages', 'cni_management',
   ],
 
   customer: ['home'],
