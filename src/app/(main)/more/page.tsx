@@ -69,7 +69,7 @@ export default function MorePage() {
         {overflowTabs.map(tab => (
           <MenuBtn key={tab.id} title={tab.label} sub="" onClick={() => router.push(tab.path)} />
         ))}
-        {F('vehicles') && (
+        {F('scan') && (
           <MenuBtn title={companyName ? `${companyName} Jobs` : 'My Jobs'} sub="View your company's work" onClick={() => router.push('/jobs')} />
         )}
         {F('prospects') && (
@@ -141,9 +141,6 @@ export default function MorePage() {
         )}
         {F('knowledge_base') && (
           <MenuBtn title="Knowledge Base" sub="SOPs and docs for AI agent" onClick={() => router.push('/admin/knowledge')} />
-        )}
-        {F('scan_install') && (
-          <MenuBtn title="Quick Job (No PO)" sub="Start scanning without a PO" onClick={() => router.push('/scan')} />
         )}
         <MenuBtn title="Notification Settings" sub="Configure your alert preferences" onClick={() => router.push('/settings')} />
       </div>
