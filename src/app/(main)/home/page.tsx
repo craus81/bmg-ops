@@ -1205,16 +1205,21 @@ function ActionBtn({ icon, title, sub, onClick, primary, highlight, disabled }: 
 // ─── Main Export ────────────────────────────────────────────────
 export default function HomePage() {
   const router = useRouter();
-  const { isAdmin, profile } = useAuth();
+  const { isAdmin, isGraphicsProduction, profile } = useAuth();
 
   // Redirect customer users to their dedicated dashboard
   useEffect(() => {
     if (profile?.role === 'customer') {
       router.replace('/customer/dashboard');
     }
-  }, [profile?.role]);
+    // Graphics production role goes straight to graphics pipeline
+    if (profile?.role === 'graphics_production' || (profile?.roles?.includes('graphics_production') && !profile?.roles?.includes('admin'))) {
+      router.replace('/graphics');
+    }
+  }, [profile?.role, profile?.roles]);
 
   if (profile?.role === 'customer') return null;
+  if (profile?.role === 'graphics_production' || (profile?.roles?.includes('graphics_production') && !profile?.roles?.includes('admin'))) return null;
   if (!isAdmin) return <InstallerHome />;
 
   return <AdminDashboard />;
