@@ -18,6 +18,7 @@ interface ScanLog {
   location_name: string | null;
   po_id: string | null;
   po_number: string | null;
+  po_line_item_id: string | null;
   scanned_by: string | null;
   scanned_at: string;
   exported_at: string | null;
