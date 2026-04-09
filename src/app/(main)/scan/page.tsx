@@ -76,11 +76,45 @@ export default function ScanPage() {
       if (cached) setPendingOfflineScans(JSON.parse(cached));
     } catch {}
 
+    // Restore active session (part + location)
+    try {
+      const session = localStorage.getItem('scan_session');
+      if (session) {
+        const s = JSON.parse(session);
+        if (s.selectedPart) { setSelectedPart(s.selectedPart); }
+        if (s.customJob) { setCustomJob(s.customJob); setShowCustom(true); }
+        if (s.customCustomer) { setCustomCustomer(s.customCustomer); }
+        if (s.selectedLocation) { setSelectedLocation(s.selectedLocation); }
+        if (s.selectedPart || s.customJob) { setStep(s.selectedLocation ? 'scan' : 'location'); }
+      }
+    } catch {}
+
     return () => {
       window.removeEventListener('offline', handleOffline);
       window.removeEventListener('online', handleOnline);
     };
   }, []);
+
+  // Persist active session
+  useEffect(() => {
+    if (selectedPart || customJob) {
+      try {
+        localStorage.setItem('scan_session', JSON.stringify({ selectedPart, customJob, customCustomer, selectedLocation }));
+      } catch {}
+    }
+  }, [selectedPart, customJob, customCustomer, selectedLocation]);
+
+  const endShift = () => {
+    setStep('part');
+    setSelectedPart(null);
+    setCustomJob('');
+    setCustomCustomer('');
+    setSelectedLocation(null);
+    setScans([]);
+    setShowCustom(false);
+    setVin('');
+    try { localStorage.removeItem('scan_session'); } catch {}
+  };
 
   const loadParts = async () => {
     const { data } = await supabase
@@ -355,11 +389,18 @@ export default function ScanPage() {
               <span style={{ margin: '0 8px' }}>•</span>
               <span style={{ fontWeight: 700, color: '#60a5fa' }}>{scans.length} scanned today</span>
             </div>
-            <button onClick={() => { setStep('part'); setSelectedPart(null); setCustomJob(''); setCustomCustomer(''); setSelectedLocation(null); setScans([]); setShowCustom(false); }} style={{
-              marginTop: '6px', padding: '4px 10px', borderRadius: '6px', fontSize: '10px', fontWeight: 700,
-              background: 'rgba(107,114,128,0.08)', border: '1px solid rgba(107,114,128,0.2)',
-              color: '#6b7280', cursor: 'pointer',
-            }}>Change</button>
+            <div style={{ display: 'flex', gap: '6px', marginTop: '6px' }}>
+              <button onClick={() => { setStep('part'); setSelectedPart(null); setCustomJob(''); setCustomCustomer(''); setSelectedLocation(null); setScans([]); setShowCustom(false); try { localStorage.removeItem('scan_session'); } catch {} }} style={{
+                padding: '4px 10px', borderRadius: '6px', fontSize: '10px', fontWeight: 700,
+                background: 'rgba(107,114,128,0.08)', border: '1px solid rgba(107,114,128,0.2)',
+                color: '#6b7280', cursor: 'pointer',
+              }}>Switch Part</button>
+              <button onClick={endShift} style={{
+                padding: '4px 10px', borderRadius: '6px', fontSize: '10px', fontWeight: 700,
+                background: 'rgba(239,68,68,0.08)', border: '1px solid rgba(239,68,68,0.2)',
+                color: '#ef4444', cursor: 'pointer',
+              }}>End Shift</button>
+            </div>
           </div>
 
           {/* Camera / Text toggle */}
