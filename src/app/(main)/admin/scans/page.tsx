@@ -51,6 +51,8 @@ export default function AdminScansPage() {
   const [bulkVins, setBulkVins] = useState('');
   const [bulkProcessing, setBulkProcessing] = useState(false);
   const [bulkResult, setBulkResult] = useState<{ success: number; failed: number } | null>(null);
+  const [scanningWorksheet, setScanningWorksheet] = useState(false);
+  const [worksheetNotes, setWorksheetNotes] = useState<string | null>(null);
 
   useEffect(() => { loadAll(); }, []);
 
@@ -235,6 +237,60 @@ export default function AdminScansPage() {
     e.target.value = '';
   };
 
+  const handleWorksheetScan = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    e.target.value = '';
+    setScanningWorksheet(true);
+    setWorksheetNotes(null);
+    setBulkResult(null);
+
+    try {
+      // Convert to base64
+      const buffer = await file.arrayBuffer();
+      const base64 = btoa(String.fromCharCode(...new Uint8Array(buffer)));
+      const mediaType = file.type || (file.name.endsWith('.pdf') ? 'application/pdf' : 'image/jpeg');
+
+      const res = await fetch('/api/scan-worksheet', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ imageBase64: base64, mediaType }),
+      });
+      const result = await res.json();
+
+      if (!res.ok || !result.data) {
+        setWorksheetNotes(`Scan failed: ${result.error || 'Unknown error'}`);
+        setScanningWorksheet(false);
+        return;
+      }
+
+      const { header, rows, notes } = result.data;
+
+      // Auto-select part number if found
+      if (header?.part_number) {
+        const partNumbers = header.part_number.split('/').map((p: string) => p.trim());
+        const matchedPart = allParts.find(p => partNumbers.some((pn: string) => p.item_number.includes(pn)));
+        if (matchedPart) setBulkPart(matchedPart.id);
+      }
+
+      // Populate VINs from rows
+      if (rows && rows.length > 0) {
+        const vins = rows.map((r: any) => r.partial_vin).filter(Boolean);
+        setBulkVins(prev => prev ? prev + '\n' + vins.join('\n') : vins.join('\n'));
+      }
+
+      setWorksheetNotes(
+        `Extracted: ${rows?.length || 0} VINs` +
+        (header?.part_number ? ` · Part: ${header.part_number}` : '') +
+        (header?.customer ? ` · Customer: ${header.customer}` : '') +
+        (notes ? `\n${notes}` : '')
+      );
+    } catch (err: any) {
+      setWorksheetNotes(`Scan error: ${err.message}`);
+    }
+    setScanningWorksheet(false);
+  };
+
   if (loading) return <div style={{ textAlign: 'center', padding: '40px', color: 'var(--text-muted)' }}>Loading...</div>;
 
   return (
@@ -318,14 +374,24 @@ export default function AdminScansPage() {
               resize: 'vertical',
             }}
           />
-          <div style={{ display: 'flex', gap: '8px', marginTop: '10px', alignItems: 'center' }}>
+          <div style={{ display: 'flex', gap: '8px', marginTop: '10px', alignItems: 'center', flexWrap: 'wrap' }}>
             <label style={{
               padding: '8px 14px', borderRadius: '8px', fontSize: '12px', fontWeight: 700,
               background: 'var(--subtle-bg)', border: `1px solid ${theme.border}`,
               color: 'var(--text-secondary)', cursor: 'pointer',
             }}>
-              Upload File
+              Upload CSV
               <input type="file" accept=".csv,.txt,.tsv" onChange={handleFileUpload} style={{ display: 'none' }} />
+            </label>
+            <label style={{
+              padding: '8px 14px', borderRadius: '8px', fontSize: '12px', fontWeight: 700,
+              background: scanningWorksheet ? 'rgba(167,139,250,0.15)' : 'rgba(167,139,250,0.08)',
+              border: '1px solid rgba(167,139,250,0.25)',
+              color: '#a78bfa', cursor: scanningWorksheet ? 'default' : 'pointer',
+              opacity: scanningWorksheet ? 0.6 : 1,
+            }}>
+              {scanningWorksheet ? 'Scanning...' : 'Scan Worksheet (OCR)'}
+              <input type="file" accept="image/*,.pdf" capture="environment" onChange={handleWorksheetScan} disabled={scanningWorksheet} style={{ display: 'none' }} />
             </label>
             <span style={{ fontSize: '11px', color: 'var(--text-muted)', flex: 1 }}>
               {bulkVins.split(/[\n,]+/).filter(v => v.trim().length >= 5).length} VINs detected
@@ -343,6 +409,11 @@ export default function AdminScansPage() {
               {bulkProcessing ? 'Processing...' : 'Upload VINs'}
             </button>
           </div>
+          {worksheetNotes && (
+            <div style={{ marginTop: '10px', padding: '10px 14px', borderRadius: '8px', background: 'rgba(167,139,250,0.06)', border: '1px solid rgba(167,139,250,0.2)', color: '#a78bfa', fontSize: '12px', fontWeight: 600, whiteSpace: 'pre-wrap' }}>
+              {worksheetNotes}
+            </div>
+          )}
           {bulkResult && (
             <div style={{ marginTop: '10px', padding: '10px 14px', borderRadius: '8px', background: 'rgba(34,197,94,0.06)', border: '1px solid rgba(34,197,94,0.2)', color: '#22c55e', fontSize: '12px', fontWeight: 700 }}>
               {bulkResult.success} VIN{bulkResult.success !== 1 ? 's' : ''} uploaded{bulkResult.failed > 0 ? ` · ${bulkResult.failed} failed` : ''}
