@@ -1205,22 +1205,24 @@ function ActionBtn({ icon, title, sub, onClick, primary, highlight, disabled }: 
 // ─── Main Export ────────────────────────────────────────────────
 export default function HomePage() {
   const router = useRouter();
-  const { isAdmin, isGraphicsProduction, profile } = useAuth();
+  const { isAdmin, isSales, profile } = useAuth();
 
-  // Redirect customer users to their dedicated dashboard
+  const role = profile?.role;
+  const roles = profile?.roles || [];
+  const isOnlyRole = (r: string) => role === r || (roles.includes(r) && !roles.includes('admin'));
+
   useEffect(() => {
-    if (profile?.role === 'customer') {
-      router.replace('/customer/dashboard');
-    }
-    // Graphics production role goes straight to graphics pipeline
-    if (profile?.role === 'graphics_production' || (profile?.roles?.includes('graphics_production') && !profile?.roles?.includes('admin'))) {
-      router.replace('/graphics');
-    }
-  }, [profile?.role, profile?.roles]);
+    if (!role) return;
+    // Redirect roles to their dedicated home screens
+    if (role === 'customer') { router.replace('/customer/dashboard'); return; }
+    if (isOnlyRole('graphics_production')) { router.replace('/graphics'); return; }
+    if (isOnlyRole('field_tech') || isOnlyRole('installer')) { router.replace('/scan'); return; }
+    if (isOnlyRole('shop_tech')) { router.replace('/fleet'); return; }
+  }, [role, roles]);
 
-  if (profile?.role === 'customer') return null;
-  if (profile?.role === 'graphics_production' || (profile?.roles?.includes('graphics_production') && !profile?.roles?.includes('admin'))) return null;
-  if (!isAdmin) return <InstallerHome />;
+  if (role === 'customer') return null;
+  if (isOnlyRole('graphics_production') || isOnlyRole('field_tech') || isOnlyRole('installer') || isOnlyRole('shop_tech')) return null;
 
+  // Admin and Sales get the customizable dashboard
   return <AdminDashboard />;
 }
