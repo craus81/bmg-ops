@@ -581,7 +581,7 @@ export default function AdminScansPage() {
                                 padding: '6px 10px', borderRadius: '6px',
                                 background: 'var(--card)', border: `1px solid ${scan.po_id ? 'rgba(34,197,94,0.15)' : 'var(--border)'}`,
                               }}>
-                                {tab !== 'archived' && (
+                                {tab !== 'bulk' && (
                                   <input type="checkbox" checked={selectedScans.has(scan.id)} onChange={() => toggleSelect(scan.id)} style={{ width: '14px', height: '14px', flexShrink: 0 }} />
                                 )}
                                 <div style={{ flex: 1, minWidth: 0 }}>
