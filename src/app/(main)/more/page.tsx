@@ -76,7 +76,7 @@ export default function MorePage() {
           <MenuBtn title="Prospects" sub="Sales pipeline & CRM" onClick={() => router.push('/admin/prospects')} />
         )}
         {F('reports') && (
-          <MenuBtn title="Scan Review" sub="Review scans, match POs, export" onClick={() => router.push('/admin/scans')} />
+          <MenuBtn title="Scan Log" sub="Review scans, match POs, export to CSV" onClick={() => router.push('/admin/scans')} />
         )}
         {F('reports') && (
           <MenuBtn title="Export Reports" sub="Download vehicle spreadsheets" onClick={() => router.push('/reports')} />
@@ -100,13 +100,13 @@ export default function MorePage() {
           <MenuBtn title="Proof Hygiene" sub="Assign unmatched proof files from NAS" onClick={() => router.push('/admin/proofs')} />
         )}
         {F('all_jobs') && (
-          <MenuBtn title="CNI Jobs" sub="View all CNI jobs by company" onClick={() => router.push('/admin/jobs')} />
+          <MenuBtn title="CNI Jobs" sub="View all CNI jobs by company" onClick={() => router.push('/admin/cni')} />
         )}
         {F('vendor_payments') && (
-          <MenuBtn title="Vendor Payments" sub="Manage installer invoices & payments" onClick={() => router.push('/admin/jobs?tab=invoices')} />
+          <MenuBtn title="Vendor Payments" sub="Manage installer invoices & payments" onClick={() => router.push('/admin/cni')} />
         )}
         {F('bulk_vin') && (
-          <MenuBtn title="Bulk VIN Upload" sub="Upload VINs in bulk via spreadsheet" onClick={() => router.push('/admin/jobs?tab=bulk')} />
+          <MenuBtn title="Bulk VIN Upload" sub="Upload VINs in bulk via spreadsheet" onClick={() => router.push('/admin/scans')} />
         )}
         {F('schedule') && (
           <MenuBtn title="Schedule" sub="Assign jobs to installers" onClick={() => router.push('/admin/schedule')} />

@@ -128,6 +128,19 @@ export async function GET(req: NextRequest) {
       }
     }
 
+    // After importing POs, retroactively match unmatched scans
+    if (imported > 0) {
+      try {
+        const appUrl = process.env.NEXT_PUBLIC_APP_URL || (process.env.VERCEL_URL ? `https://${process.env.VERCEL_URL}` : 'http://localhost:3000');
+        await fetch(`${appUrl}/api/scans/match-po`, {
+          method: 'POST',
+          headers: { 'Authorization': `Bearer ${process.env.SUPABASE_SERVICE_ROLE_KEY}` },
+        });
+      } catch (err) {
+        console.warn('Retroactive scan match failed:', err);
+      }
+    }
+
     return NextResponse.json({
       message: `Processed ${messages.length} emails`,
       imported,
