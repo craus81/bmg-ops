@@ -213,6 +213,7 @@ export default function ScanPage() {
   const partLabel = selectedPart
     ? `${selectedPart.item_number}${selectedPart.billable_customer ? ` — ${selectedPart.billable_customer}` : ''}`
     : customJob || '';
+  const partDesc = selectedPart?.display_name || selectedPart?.description || null;
 
   return (
     <div>
@@ -306,7 +307,9 @@ export default function ScanPage() {
           <div style={{ fontSize: '11px', fontWeight: 700, color: theme.textMuted, textTransform: 'uppercase', letterSpacing: '0.8px', marginBottom: '4px' }}>
             Where are you working?
           </div>
-          <div style={{ fontSize: '13px', fontWeight: 700, color: theme.textPrimary, marginBottom: '14px' }}>{partLabel}</div>
+          <div style={{ fontSize: '13px', fontWeight: 700, color: theme.textPrimary }}>{partLabel}</div>
+          {partDesc && <div style={{ fontSize: '11px', color: theme.textMuted, marginBottom: '14px' }}>{partDesc}</div>}
+          {!partDesc && <div style={{ marginBottom: '14px' }} />}
 
           <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
             {locations.map(loc => (
@@ -335,6 +338,7 @@ export default function ScanPage() {
             background: 'rgba(59,130,246,0.06)', border: '1px solid rgba(59,130,246,0.2)',
           }}>
             <div style={{ fontSize: '14px', fontWeight: 800, color: theme.textPrimary }}>{partLabel}</div>
+            {partDesc && <div style={{ fontSize: '11px', color: theme.textSecondary }}>{partDesc}</div>}
             <div style={{ fontSize: '11px', color: theme.textMuted, marginTop: '2px' }}>
               {selectedLocation?.name || 'No location'}
               <span style={{ margin: '0 8px' }}>•</span>
