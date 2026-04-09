@@ -4,6 +4,7 @@ import { useState, useEffect, useRef, useCallback } from 'react';
 import { createClient } from '@/lib/supabase-browser';
 import { useAuth } from '@/components/AuthProvider';
 import { theme } from '@/lib/theme';
+import VinScanner from '@/components/VinScanner';
 
 interface Part {
   id: string;
@@ -54,6 +55,7 @@ export default function ScanPage() {
   const [scanError, setScanError] = useState('');
   const [scanSuccess, setScanSuccess] = useState('');
   const vinRef = useRef<HTMLInputElement>(null);
+  const [scanMode, setScanMode] = useState<'text' | 'camera'>('text');
 
   // Offline
   const [isOffline, setIsOffline] = useState(false);
@@ -124,8 +126,17 @@ export default function ScanPage() {
     if (step === 'scan') loadTodayScans();
   }, [step, loadTodayScans]);
 
+  const handleCameraScan = (scannedVin: string) => {
+    setVin(scannedVin);
+    processVin(scannedVin);
+  };
+
   const handleScan = async () => {
     const v = vin.trim().toUpperCase();
+    await processVin(v);
+  };
+
+  const processVin = async (v: string) => {
     if (v.length < 5) { setScanError('VIN too short'); return; }
     setScanError('');
     setScanSuccess('');
@@ -351,7 +362,25 @@ export default function ScanPage() {
             }}>Change</button>
           </div>
 
-          {/* VIN input */}
+          {/* Camera / Text toggle */}
+          <div style={{ display: 'flex', gap: '4px', marginBottom: '10px', background: theme.card, borderRadius: '10px', padding: '3px' }}>
+            <button onClick={() => setScanMode('camera')} style={{
+              flex: 1, padding: '8px', borderRadius: '6px', fontSize: '12px', fontWeight: 700,
+              background: scanMode === 'camera' ? 'var(--tab-active-bg)' : 'transparent', border: 'none',
+              color: scanMode === 'camera' ? 'var(--tab-active-color)' : theme.textMuted,
+            }}>Camera</button>
+            <button onClick={() => setScanMode('text')} style={{
+              flex: 1, padding: '8px', borderRadius: '6px', fontSize: '12px', fontWeight: 700,
+              background: scanMode === 'text' ? 'var(--tab-active-bg)' : 'transparent', border: 'none',
+              color: scanMode === 'text' ? 'var(--tab-active-color)' : theme.textMuted,
+            }}>Type / Scanner</button>
+          </div>
+
+          {scanMode === 'camera' ? (
+            <div style={{ marginBottom: '10px' }}>
+              <VinScanner onScan={handleCameraScan} theme={theme as unknown as Record<string, string>} />
+            </div>
+          ) : (
           <div style={{ display: 'flex', gap: '8px', marginBottom: '10px' }}>
             <input
               ref={vinRef}
@@ -374,6 +403,7 @@ export default function ScanPage() {
               opacity: vinLoading || !vin.trim() ? 0.5 : 1,
             }}>{vinLoading ? '...' : 'Log'}</button>
           </div>
+          )}
 
           {scanError && (
             <div style={{ padding: '8px 12px', borderRadius: '8px', marginBottom: '8px', background: theme.errorBg, border: `1px solid ${theme.errorBorder}`, color: theme.error, fontSize: '12px', fontWeight: 600 }}>{scanError}</div>
