@@ -9,9 +9,7 @@ const supabase = createClient(
   process.env.SUPABASE_SERVICE_ROLE_KEY!
 );
 
-const appUrl = process.env.NEXT_PUBLIC_APP_URL || (process.env.VERCEL_URL
-  ? `https://${process.env.VERCEL_URL}`
-  : 'https://bmg-ops.vercel.app');
+const appUrl = process.env.NEXT_PUBLIC_APP_URL || 'https://bmg-ops.vercel.app';
 
 export async function POST(req: NextRequest) {
   const auth = await requireAdmin(req);
