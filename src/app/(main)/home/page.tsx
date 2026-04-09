@@ -1209,7 +1209,7 @@ export default function HomePage() {
 
   const role = profile?.role;
   const roles = profile?.roles || [];
-  const isOnlyRole = (r: string) => role === r || (roles.includes(r) && !roles.includes('admin'));
+  const isOnlyRole = (r: string) => role === r || (roles.includes(r as any) && !roles.includes('admin' as any));
 
   useEffect(() => {
     if (!role) return;
