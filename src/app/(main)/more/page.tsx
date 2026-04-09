@@ -194,7 +194,7 @@ export default function MorePage() {
               sales: 'Sales',
               graphics_production: 'Graphics / Production',
               production: 'Graphics / Production',
-              installer: 'Installer',
+              installer: 'CNI Installer',
               customer: 'Customer',
             };
             return roles.map((r: any) => labelMap[r] || r).join(', ') || 'Installer';

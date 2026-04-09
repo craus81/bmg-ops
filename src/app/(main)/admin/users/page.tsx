@@ -14,11 +14,11 @@ interface Company {
 
 const ROLES: { value: AppRole; label: string; color: string }[] = [
   { value: 'admin', label: 'Admin', color: 'var(--orange)' },
-  { value: 'installer', label: 'Installer', color: 'var(--text-muted)' },
-  { value: 'field_tech', label: 'Field Tech', color: '#fbbf24' },
-  { value: 'shop_tech', label: 'Shop Tech', color: '#38bdf8' },
   { value: 'sales', label: 'Sales', color: '#60a5fa' },
   { value: 'graphics_production', label: 'Graphics / Production', color: '#c084fc' },
+  { value: 'shop_tech', label: 'Shop Tech (O\'Fallon)', color: '#38bdf8' },
+  { value: 'field_tech', label: 'Field Tech (Off-site)', color: '#fbbf24' },
+  { value: 'installer', label: 'CNI Installer', color: 'var(--text-muted)' },
   { value: 'customer', label: 'Customer', color: '#34d399' },
 ];
 
