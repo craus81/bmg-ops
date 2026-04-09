@@ -25,7 +25,7 @@ interface ScanLog {
   requires_po?: boolean;
 }
 
-type ViewTab = 'ready' | 'waiting' | 'exported' | 'archived';
+type ViewTab = 'ready' | 'waiting' | 'exported' | 'bulk';
 
 export default function AdminScansPage() {
   const { user } = useAuth();
@@ -43,15 +43,28 @@ export default function AdminScansPage() {
   // Part requires_po_match lookup
   const [poRequired, setPoRequired] = useState<Record<string, boolean>>({});
 
+  // Bulk upload state
+  const [allParts, setAllParts] = useState<{ id: string; item_number: string; display_name: string | null; billable_customer: string | null }[]>([]);
+  const [allLocations, setAllLocations] = useState<{ id: string; name: string }[]>([]);
+  const [bulkPart, setBulkPart] = useState<string>('');
+  const [bulkLocation, setBulkLocation] = useState<string>('');
+  const [bulkVins, setBulkVins] = useState('');
+  const [bulkProcessing, setBulkProcessing] = useState(false);
+  const [bulkResult, setBulkResult] = useState<{ success: number; failed: number } | null>(null);
+
   useEffect(() => { loadAll(); }, []);
 
   const loadAll = async () => {
     setLoading(true);
-    const [scansRes, profilesRes, partsRes] = await Promise.all([
+    const [scansRes, profilesRes, partsRes, fullPartsRes, locsRes] = await Promise.all([
       supabase.from('scan_logs').select('*').is('archived_at', null).order('scanned_at', { ascending: false }).limit(1000),
       supabase.from('profiles').select('id, full_name'),
       supabase.from('netsuite_parts').select('item_number, requires_po_match'),
+      supabase.from('netsuite_parts').select('id, item_number, display_name, billable_customer').eq('is_active', true).order('item_number'),
+      supabase.from('work_locations').select('id, name').eq('is_active', true).order('name'),
     ]);
+    setAllParts((fullPartsRes.data || []) as typeof allParts);
+    setAllLocations((locsRes.data || []) as typeof allLocations);
 
     setScans((scansRes.data || []) as ScanLog[]);
 
@@ -166,6 +179,62 @@ export default function AdminScansPage() {
     loadAll();
   };
 
+  // Bulk upload handler
+  const handleBulkUpload = async () => {
+    if (!bulkVins.trim()) return;
+    const selectedPart = allParts.find(p => p.id === bulkPart);
+    const selectedLoc = allLocations.find(l => l.id === bulkLocation);
+
+    // Parse VINs — one per line, strip whitespace, skip empty
+    const vins = bulkVins.split(/[\n,]+/).map(v => v.trim().toUpperCase().replace(/[^A-HJ-NPR-Z0-9]/gi, '')).filter(v => v.length >= 5);
+    if (vins.length === 0) { setBulkResult({ success: 0, failed: 0 }); return; }
+
+    setBulkProcessing(true);
+    setBulkResult(null);
+    let success = 0, failed = 0;
+
+    for (const vin of vins) {
+      // Decode VIN
+      let vehicleData: any = {};
+      try {
+        const res = await fetch(`https://vpic.nhtsa.dot.gov/api/vehicles/decodevin/${vin}?format=json`);
+        const json = await res.json();
+        const results = json.Results || [];
+        const get = (id: number) => results.find((r: any) => r.VariableId === id)?.Value || null;
+        vehicleData = { vehicle_year: get(29), vehicle_make: get(26), vehicle_model: get(28), vehicle_trim: get(38), body_class: get(5) };
+      } catch {}
+
+      const { error } = await supabase.from('scan_logs').insert({
+        vin,
+        ...vehicleData,
+        part_number: selectedPart?.item_number || null,
+        part_description: selectedPart?.display_name || null,
+        billable_customer: selectedPart?.billable_customer || null,
+        location_id: selectedLoc?.id || null,
+        location_name: selectedLoc?.name || null,
+        scanned_by: user?.id,
+      });
+
+      if (error) failed++; else success++;
+    }
+
+    setBulkResult({ success, failed });
+    setBulkProcessing(false);
+    if (success > 0) { setBulkVins(''); loadAll(); }
+  };
+
+  const handleFileUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    const reader = new FileReader();
+    reader.onload = (ev) => {
+      const text = ev.target?.result as string;
+      setBulkVins(prev => prev ? prev + '\n' + text : text);
+    };
+    reader.readAsText(file);
+    e.target.value = '';
+  };
+
   if (loading) return <div style={{ textAlign: 'center', padding: '40px', color: 'var(--text-muted)' }}>Loading...</div>;
 
   return (
@@ -180,6 +249,7 @@ export default function AdminScansPage() {
           { id: 'ready' as ViewTab, label: `Ready to Export (${readyToExport.length})`, color: '#22c55e' },
           { id: 'waiting' as ViewTab, label: `Waiting for PO (${waitingForPO.length})`, color: '#f59e0b' },
           { id: 'exported' as ViewTab, label: `Exported (${exported.length})`, color: '#60a5fa' },
+          { id: 'bulk' as ViewTab, label: 'Bulk Upload', color: '#a78bfa' },
         ]).map(t => (
           <button key={t.id} onClick={() => { setTab(t.id); setSelectedScans(new Set()); }} style={{
             padding: '6px 12px', borderRadius: '8px', fontSize: '11px', fontWeight: 700,
@@ -191,8 +261,8 @@ export default function AdminScansPage() {
       </div>
 
       {/* Search */}
-      <input value={search} onChange={e => setSearch(e.target.value)} placeholder="Search VIN, part, customer, location, PO..."
-        style={{ width: '100%', padding: '10px 14px', borderRadius: '10px', fontSize: '13px', border: `1px solid ${theme.border}`, background: theme.card, color: theme.textPrimary, fontWeight: 600, marginBottom: '10px' }} />
+      {tab !== 'bulk' && <input value={search} onChange={e => setSearch(e.target.value)} placeholder="Search VIN, part, customer, location, PO..."
+        style={{ width: '100%', padding: '10px 14px', borderRadius: '10px', fontSize: '13px', border: `1px solid ${theme.border}`, background: theme.card, color: theme.textPrimary, fontWeight: 600, marginBottom: '10px' }} />}
 
       {/* Actions */}
       <div style={{ display: 'flex', gap: '6px', marginBottom: '12px', flexWrap: 'wrap' }}>
@@ -216,15 +286,80 @@ export default function AdminScansPage() {
         )}
       </div>
 
+      {/* Bulk Upload tab */}
+      {tab === 'bulk' && (
+        <div style={{ background: 'var(--card)', border: `1px solid ${theme.border}`, borderRadius: '14px', padding: '16px' }}>
+          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '10px', marginBottom: '12px' }}>
+            <div>
+              <div style={{ fontSize: '10px', fontWeight: 700, color: 'var(--text-muted)', textTransform: 'uppercase', marginBottom: '4px' }}>Part Number</div>
+              <select value={bulkPart} onChange={e => setBulkPart(e.target.value)} style={{ width: '100%', padding: '10px', borderRadius: '8px', border: `1px solid ${theme.border}`, background: 'var(--input-bg)', color: 'var(--text-primary)', fontSize: '13px' }}>
+                <option value="">— Select Part —</option>
+                {allParts.map(p => <option key={p.id} value={p.id}>{p.item_number}{p.billable_customer ? ` — ${p.billable_customer}` : ''}</option>)}
+              </select>
+            </div>
+            <div>
+              <div style={{ fontSize: '10px', fontWeight: 700, color: 'var(--text-muted)', textTransform: 'uppercase', marginBottom: '4px' }}>Location</div>
+              <select value={bulkLocation} onChange={e => setBulkLocation(e.target.value)} style={{ width: '100%', padding: '10px', borderRadius: '8px', border: `1px solid ${theme.border}`, background: 'var(--input-bg)', color: 'var(--text-primary)', fontSize: '13px' }}>
+                <option value="">— Select Location —</option>
+                {allLocations.map(l => <option key={l.id} value={l.id}>{l.name}</option>)}
+              </select>
+            </div>
+          </div>
+
+          <div style={{ fontSize: '10px', fontWeight: 700, color: 'var(--text-muted)', textTransform: 'uppercase', marginBottom: '4px' }}>VINs (one per line, or paste from spreadsheet)</div>
+          <textarea
+            value={bulkVins}
+            onChange={e => setBulkVins(e.target.value)}
+            placeholder={'Paste VINs here, one per line...\n1FTBR1Y82TKA82014\n1FTBR1Y84TKA82175\n1FTBR1Y88TKA82180'}
+            style={{
+              width: '100%', minHeight: '150px', padding: '12px', borderRadius: '8px',
+              border: `1px solid ${theme.border}`, background: 'var(--input-bg)',
+              color: 'var(--text-primary)', fontSize: '13px', fontFamily: 'monospace',
+              resize: 'vertical',
+            }}
+          />
+          <div style={{ display: 'flex', gap: '8px', marginTop: '10px', alignItems: 'center' }}>
+            <label style={{
+              padding: '8px 14px', borderRadius: '8px', fontSize: '12px', fontWeight: 700,
+              background: 'var(--subtle-bg)', border: `1px solid ${theme.border}`,
+              color: 'var(--text-secondary)', cursor: 'pointer',
+            }}>
+              Upload File
+              <input type="file" accept=".csv,.txt,.tsv" onChange={handleFileUpload} style={{ display: 'none' }} />
+            </label>
+            <span style={{ fontSize: '11px', color: 'var(--text-muted)', flex: 1 }}>
+              {bulkVins.split(/[\n,]+/).filter(v => v.trim().length >= 5).length} VINs detected
+            </span>
+            <button
+              onClick={handleBulkUpload}
+              disabled={bulkProcessing || !bulkVins.trim()}
+              style={{
+                padding: '10px 20px', borderRadius: '8px', fontSize: '13px', fontWeight: 800,
+                background: bulkProcessing || !bulkVins.trim() ? theme.border : '#22c55e',
+                color: '#fff', border: 'none', cursor: bulkProcessing || !bulkVins.trim() ? 'default' : 'pointer',
+                opacity: bulkProcessing || !bulkVins.trim() ? 0.5 : 1,
+              }}
+            >
+              {bulkProcessing ? 'Processing...' : 'Upload VINs'}
+            </button>
+          </div>
+          {bulkResult && (
+            <div style={{ marginTop: '10px', padding: '10px 14px', borderRadius: '8px', background: 'rgba(34,197,94,0.06)', border: '1px solid rgba(34,197,94,0.2)', color: '#22c55e', fontSize: '12px', fontWeight: 700 }}>
+              {bulkResult.success} VIN{bulkResult.success !== 1 ? 's' : ''} uploaded{bulkResult.failed > 0 ? ` · ${bulkResult.failed} failed` : ''}
+            </div>
+          )}
+        </div>
+      )}
+
       {/* Empty state */}
-      {tabScans.length === 0 && (
+      {tab !== 'bulk' && tabScans.length === 0 && (
         <div style={{ textAlign: 'center', padding: '32px 0', color: 'var(--text-muted)', fontSize: '13px', fontWeight: 600 }}>
           {tab === 'ready' ? 'No scans ready to export' : tab === 'waiting' ? 'No scans waiting for PO — all matched!' : 'No exported scans'}
         </div>
       )}
 
       {/* Grouped list */}
-      <div style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
+      {tab !== 'bulk' && <div style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
         {customerKeys.map(customer => {
           const subGroups = grouped[customer];
           const subKeys = Object.keys(subGroups).sort();
@@ -306,7 +441,7 @@ export default function AdminScansPage() {
             </div>
           );
         })}
-      </div>
+      </div>}
     </div>
   );
 }
