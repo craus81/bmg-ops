@@ -22,6 +22,8 @@ interface Part {
   ns_class: string | null;
   ns_department: string | null;
   vendor: string | null;
+  billable_customer: string | null;
+  requires_po_match: boolean;
   is_active: boolean;
   last_synced_at: string;
 }
