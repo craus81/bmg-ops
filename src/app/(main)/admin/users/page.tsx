@@ -1178,7 +1178,7 @@ export default function UsersPage() {
                   disabled={saving || !editForm.fullName.trim() || !editForm.email.trim()}
                   style={{
                     flex: 1, padding: '12px', borderRadius: '10px',
-                    background: 'var(--accent)', color: '#fff', fontWeight: 800, fontSize: '13px',
+                    background: '#22c55e', color: '#fff', fontWeight: 800, fontSize: '13px',
                     border: 'none', cursor: 'pointer',
                     opacity: saving || !editForm.fullName.trim() || !editForm.email.trim() ? 0.5 : 1,
                   }}
