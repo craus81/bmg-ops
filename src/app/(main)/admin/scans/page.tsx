@@ -181,6 +181,59 @@ export default function AdminScansPage() {
     loadAll();
   };
 
+  // Edit scan
+  const [editingScan, setEditingScan] = useState<ScanLog | null>(null);
+  const saveEditScan = async () => {
+    if (!editingScan) return;
+    const { id, vin, vehicle_year, vehicle_make, vehicle_model, part_number, part_description, billable_customer, location_name } = editingScan;
+    await supabase.from('scan_logs').update({ vin, vehicle_year, vehicle_make, vehicle_model, part_number, part_description, billable_customer, location_name }).eq('id', id);
+    setEditingScan(null);
+    loadAll();
+  };
+
+  // Delete
+  const deleteScan = async (id: string) => {
+    if (!window.confirm('Delete this scan?')) return;
+    await supabase.from('scan_logs').delete().eq('id', id);
+    loadAll();
+  };
+
+  const bulkDelete = async () => {
+    const count = selectedScans.size;
+    if (count === 0) return;
+    if (!window.confirm(`Delete ${count} scan${count !== 1 ? 's' : ''}? This cannot be undone.`)) return;
+    await supabase.from('scan_logs').delete().in('id', [...selectedScans]);
+    setSelectedScans(new Set());
+    loadAll();
+  };
+
+  // Bulk edit — apply part/customer/location to all selected
+  const [showBulkEdit, setShowBulkEdit] = useState(false);
+  const [bulkEditPart, setBulkEditPart] = useState('');
+  const [bulkEditCustomer, setBulkEditCustomer] = useState('');
+  const [bulkEditLocation, setBulkEditLocation] = useState('');
+  const applyBulkEdit = async () => {
+    const ids = [...selectedScans];
+    if (ids.length === 0) return;
+    const updates: any = {};
+    if (bulkEditPart) {
+      const part = allParts.find(p => p.id === bulkEditPart);
+      if (part) { updates.part_number = part.item_number; updates.part_description = part.display_name; updates.billable_customer = part.billable_customer; }
+    }
+    if (bulkEditCustomer) updates.billable_customer = bulkEditCustomer;
+    if (bulkEditLocation) {
+      const loc = allLocations.find(l => l.id === bulkEditLocation);
+      if (loc) { updates.location_id = loc.id; updates.location_name = loc.name; }
+    }
+    if (Object.keys(updates).length === 0) { setShowBulkEdit(false); return; }
+    await supabase.from('scan_logs').update(updates).in('id', ids);
+    setShowBulkEdit(false);
+    setBulkEditPart('');
+    setBulkEditCustomer('');
+    setBulkEditLocation('');
+    loadAll();
+  };
+
   // Bulk upload handler
   const handleBulkUpload = async () => {
     if (!bulkVins.trim()) return;
@@ -340,7 +393,48 @@ export default function AdminScansPage() {
             Archive {selectedScans.size}
           </button>
         )}
+        {tab !== 'bulk' && selectedScans.size > 0 && (
+          <>
+            <button onClick={() => setShowBulkEdit(true)} style={{ padding: '6px 10px', borderRadius: '6px', fontSize: '10px', fontWeight: 700, background: 'rgba(59,130,246,0.1)', border: '1px solid rgba(59,130,246,0.25)', color: '#60a5fa', cursor: 'pointer' }}>
+              Edit {selectedScans.size}
+            </button>
+            <button onClick={bulkDelete} style={{ padding: '6px 10px', borderRadius: '6px', fontSize: '10px', fontWeight: 700, background: 'rgba(239,68,68,0.08)', border: '1px solid rgba(239,68,68,0.2)', color: '#ef4444', cursor: 'pointer' }}>
+              Delete {selectedScans.size}
+            </button>
+          </>
+        )}
       </div>
+
+      {/* Bulk edit modal */}
+      {showBulkEdit && (
+        <div style={{ background: 'var(--card)', border: `1px solid ${theme.border}`, borderRadius: '12px', padding: '14px', marginBottom: '12px' }}>
+          <div style={{ fontSize: '12px', fontWeight: 700, color: 'var(--text-primary)', marginBottom: '10px' }}>Edit {selectedScans.size} Scan{selectedScans.size !== 1 ? 's' : ''}</div>
+          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: '8px', marginBottom: '10px' }}>
+            <div>
+              <div style={{ fontSize: '9px', fontWeight: 700, color: 'var(--text-muted)', textTransform: 'uppercase', marginBottom: '3px' }}>Part Number</div>
+              <select value={bulkEditPart} onChange={e => setBulkEditPart(e.target.value)} style={{ width: '100%', padding: '8px', borderRadius: '6px', border: `1px solid ${theme.border}`, background: 'var(--input-bg)', color: 'var(--text-primary)', fontSize: '11px' }}>
+                <option value="">— No change —</option>
+                {allParts.map(p => <option key={p.id} value={p.id}>{p.item_number}{p.billable_customer ? ` — ${p.billable_customer}` : ''}</option>)}
+              </select>
+            </div>
+            <div>
+              <div style={{ fontSize: '9px', fontWeight: 700, color: 'var(--text-muted)', textTransform: 'uppercase', marginBottom: '3px' }}>Billable Customer</div>
+              <input value={bulkEditCustomer} onChange={e => setBulkEditCustomer(e.target.value)} placeholder="No change" style={{ width: '100%', padding: '8px', borderRadius: '6px', border: `1px solid ${theme.border}`, background: 'var(--input-bg)', color: 'var(--text-primary)', fontSize: '11px' }} />
+            </div>
+            <div>
+              <div style={{ fontSize: '9px', fontWeight: 700, color: 'var(--text-muted)', textTransform: 'uppercase', marginBottom: '3px' }}>Location</div>
+              <select value={bulkEditLocation} onChange={e => setBulkEditLocation(e.target.value)} style={{ width: '100%', padding: '8px', borderRadius: '6px', border: `1px solid ${theme.border}`, background: 'var(--input-bg)', color: 'var(--text-primary)', fontSize: '11px' }}>
+                <option value="">— No change —</option>
+                {allLocations.map(l => <option key={l.id} value={l.id}>{l.name}</option>)}
+              </select>
+            </div>
+          </div>
+          <div style={{ display: 'flex', gap: '6px' }}>
+            <button onClick={applyBulkEdit} style={{ padding: '8px 14px', borderRadius: '6px', fontSize: '11px', fontWeight: 700, background: '#22c55e', color: '#fff', border: 'none', cursor: 'pointer' }}>Apply Changes</button>
+            <button onClick={() => setShowBulkEdit(false)} style={{ padding: '8px 14px', borderRadius: '6px', fontSize: '11px', fontWeight: 700, background: 'transparent', border: `1px solid ${theme.border}`, color: 'var(--text-muted)', cursor: 'pointer' }}>Cancel</button>
+          </div>
+        </div>
+      )}
 
       {/* Bulk Upload tab */}
       {tab === 'bulk' && (
@@ -496,9 +590,13 @@ export default function AdminScansPage() {
                                   </div>
                                   <div style={{ fontSize: '9px', fontFamily: 'monospace', color: 'var(--text-muted)' }}>{scan.vin}</div>
                                 </div>
-                                <div style={{ fontSize: '9px', color: 'var(--text-muted)', textAlign: 'right', flexShrink: 0 }}>
-                                  {profiles[scan.scanned_by || ''] || ''}<br />
-                                  {new Date(scan.scanned_at).toLocaleDateString([], { month: 'short', day: 'numeric' })}
+                                <div style={{ display: 'flex', alignItems: 'center', gap: '4px', flexShrink: 0 }}>
+                                  <div style={{ fontSize: '9px', color: 'var(--text-muted)', textAlign: 'right' }}>
+                                    {profiles[scan.scanned_by || ''] || ''}<br />
+                                    {new Date(scan.scanned_at).toLocaleDateString([], { month: 'short', day: 'numeric' })}
+                                  </div>
+                                  <button onClick={() => setEditingScan({ ...scan })} style={{ padding: '2px 5px', borderRadius: '4px', border: 'none', background: 'rgba(59,130,246,0.08)', color: '#60a5fa', fontSize: '9px', fontWeight: 700, cursor: 'pointer' }}>Edit</button>
+                                  <button onClick={() => deleteScan(scan.id)} style={{ padding: '2px 5px', borderRadius: '4px', border: 'none', background: 'rgba(239,68,68,0.08)', color: '#ef4444', fontSize: '9px', fontWeight: 700, cursor: 'pointer' }}>✕</button>
                                 </div>
                               </div>
                             ))}
@@ -513,6 +611,49 @@ export default function AdminScansPage() {
           );
         })}
       </div>}
+
+      {/* Edit scan modal */}
+      {editingScan && (
+        <div style={{ position: 'fixed', inset: 0, background: 'var(--overlay)', zIndex: 200, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '20px' }} onClick={() => setEditingScan(null)}>
+          <div onClick={e => e.stopPropagation()} style={{ background: 'var(--card)', borderRadius: '14px', padding: '20px', width: '100%', maxWidth: '450px', boxShadow: '0 8px 30px rgba(0,0,0,0.3)' }}>
+            <div style={{ fontSize: '14px', fontWeight: 700, color: 'var(--text-primary)', marginBottom: '12px' }}>Edit Scan</div>
+            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '8px', marginBottom: '10px' }}>
+              <div style={{ gridColumn: '1 / -1' }}>
+                <div style={{ fontSize: '9px', fontWeight: 700, color: 'var(--text-muted)', textTransform: 'uppercase', marginBottom: '2px' }}>VIN</div>
+                <input value={editingScan.vin} onChange={e => setEditingScan({ ...editingScan, vin: e.target.value.toUpperCase() })} style={{ width: '100%', padding: '8px', borderRadius: '6px', border: `1px solid ${theme.border}`, background: 'var(--input-bg)', color: 'var(--text-primary)', fontSize: '13px', fontFamily: 'monospace' }} />
+              </div>
+              <div>
+                <div style={{ fontSize: '9px', fontWeight: 700, color: 'var(--text-muted)', textTransform: 'uppercase', marginBottom: '2px' }}>Year</div>
+                <input value={editingScan.vehicle_year || ''} onChange={e => setEditingScan({ ...editingScan, vehicle_year: e.target.value })} style={{ width: '100%', padding: '8px', borderRadius: '6px', border: `1px solid ${theme.border}`, background: 'var(--input-bg)', color: 'var(--text-primary)', fontSize: '12px' }} />
+              </div>
+              <div>
+                <div style={{ fontSize: '9px', fontWeight: 700, color: 'var(--text-muted)', textTransform: 'uppercase', marginBottom: '2px' }}>Make</div>
+                <input value={editingScan.vehicle_make || ''} onChange={e => setEditingScan({ ...editingScan, vehicle_make: e.target.value })} style={{ width: '100%', padding: '8px', borderRadius: '6px', border: `1px solid ${theme.border}`, background: 'var(--input-bg)', color: 'var(--text-primary)', fontSize: '12px' }} />
+              </div>
+              <div>
+                <div style={{ fontSize: '9px', fontWeight: 700, color: 'var(--text-muted)', textTransform: 'uppercase', marginBottom: '2px' }}>Model</div>
+                <input value={editingScan.vehicle_model || ''} onChange={e => setEditingScan({ ...editingScan, vehicle_model: e.target.value })} style={{ width: '100%', padding: '8px', borderRadius: '6px', border: `1px solid ${theme.border}`, background: 'var(--input-bg)', color: 'var(--text-primary)', fontSize: '12px' }} />
+              </div>
+              <div>
+                <div style={{ fontSize: '9px', fontWeight: 700, color: 'var(--text-muted)', textTransform: 'uppercase', marginBottom: '2px' }}>Part Number</div>
+                <input value={editingScan.part_number || ''} onChange={e => setEditingScan({ ...editingScan, part_number: e.target.value })} style={{ width: '100%', padding: '8px', borderRadius: '6px', border: `1px solid ${theme.border}`, background: 'var(--input-bg)', color: 'var(--text-primary)', fontSize: '12px' }} />
+              </div>
+              <div>
+                <div style={{ fontSize: '9px', fontWeight: 700, color: 'var(--text-muted)', textTransform: 'uppercase', marginBottom: '2px' }}>Billable Customer</div>
+                <input value={editingScan.billable_customer || ''} onChange={e => setEditingScan({ ...editingScan, billable_customer: e.target.value })} style={{ width: '100%', padding: '8px', borderRadius: '6px', border: `1px solid ${theme.border}`, background: 'var(--input-bg)', color: 'var(--text-primary)', fontSize: '12px' }} />
+              </div>
+              <div style={{ gridColumn: '1 / -1' }}>
+                <div style={{ fontSize: '9px', fontWeight: 700, color: 'var(--text-muted)', textTransform: 'uppercase', marginBottom: '2px' }}>Location</div>
+                <input value={editingScan.location_name || ''} onChange={e => setEditingScan({ ...editingScan, location_name: e.target.value })} style={{ width: '100%', padding: '8px', borderRadius: '6px', border: `1px solid ${theme.border}`, background: 'var(--input-bg)', color: 'var(--text-primary)', fontSize: '12px' }} />
+              </div>
+            </div>
+            <div style={{ display: 'flex', gap: '8px' }}>
+              <button onClick={() => setEditingScan(null)} style={{ flex: 1, padding: '10px', borderRadius: '8px', fontSize: '12px', fontWeight: 700, background: 'transparent', border: `1px solid ${theme.border}`, color: 'var(--text-body)', cursor: 'pointer' }}>Cancel</button>
+              <button onClick={saveEditScan} style={{ flex: 1, padding: '10px', borderRadius: '8px', fontSize: '12px', fontWeight: 700, background: '#22c55e', color: '#fff', border: 'none', cursor: 'pointer' }}>Save</button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
