@@ -126,7 +126,7 @@ export default function FleetPage() {
         .limit(1);
       if (existing && existing.length > 0) {
         setDuplicateVehicle(existing[0]);
-        setVinError(`This vehicle was checked in on ${new Date(existing[0].created_at).toLocaleDateString([], { month: 'short', day: 'numeric' })}. You can update its status below.`);
+        setVinError(`Duplicate VIN — this vehicle is already checked in (${new Date(existing[0].created_at).toLocaleDateString([], { month: 'short', day: 'numeric' })}). Update its status below or scan a different VIN.`);
         setVinLoading(false);
         return;
       }

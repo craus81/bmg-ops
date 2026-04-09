@@ -64,7 +64,7 @@ export default function BottomNav({ clockStatus }: BottomNavProps) {
   const isActive = (tab: Tab) => {
     if (tab.path === '/home') return pathname === '/home' || pathname === '/photos';
     if (tab.path === '/scan-install') return pathname === '/scan-install' || pathname === '/scan' || pathname === '/select-part';
-    if (tab.path === '/fleet') return pathname === '/fleet' || pathname === '/fleet/update';
+    if (tab.path === '/fleet') return pathname === '/fleet';
     if (tab.path === '/tracking') return pathname === '/tracking';
     if (tab.path === '/my-jobs') return pathname === '/my-jobs' || pathname.startsWith('/jobs/');
     if (tab.path === '/installer') return pathname.startsWith('/installer');
