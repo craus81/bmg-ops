@@ -29,7 +29,6 @@ export const allTabs: Tab[] = [
   { id: 'time', path: '/time', label: 'Time', feature: 'time', priority: 6 },
   { id: 'estimates', path: '/estimates', label: 'Estimates', feature: 'estimates', priority: 7 },
   { id: 'installer-portal', path: '/installer', label: 'CNI Jobs', feature: 'cni_management', priority: 8 },
-  { id: 'my-jobs', path: '/my-jobs', label: 'My Jobs', feature: 'scan', priority: 8 },
   // Customer-only
   { id: 'customer-dashboard', path: '/customer/dashboard', label: 'My Jobs', feature: 'home', priority: 0 },
 ];
@@ -65,7 +64,6 @@ export default function BottomNav({ clockStatus }: BottomNavProps) {
     if (tab.path === '/scan') return pathname === '/scan';
     if (tab.path === '/fleet') return pathname === '/fleet';
     if (tab.path === '/tracking') return pathname === '/tracking';
-    if (tab.path === '/my-jobs') return pathname === '/my-jobs' || pathname.startsWith('/jobs/');
     if (tab.path === '/installer') return pathname.startsWith('/installer');
     if (tab.path === '/graphics') return pathname.startsWith('/graphics');
     if (tab.path === '/estimates') return pathname.startsWith('/estimates');

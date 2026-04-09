@@ -69,9 +69,6 @@ export default function MorePage() {
         {overflowTabs.map(tab => (
           <MenuBtn key={tab.id} title={tab.label} sub="" onClick={() => router.push(tab.path)} />
         ))}
-        {F('scan') && (
-          <MenuBtn title={companyName ? `${companyName} Jobs` : 'My Jobs'} sub="View your company's work" onClick={() => router.push('/jobs')} />
-        )}
         {F('prospects') && (
           <MenuBtn title="Prospects" sub="Sales pipeline & CRM" onClick={() => router.push('/admin/prospects')} />
         )}
