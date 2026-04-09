@@ -76,6 +76,9 @@ export default function MorePage() {
           <MenuBtn title="Prospects" sub="Sales pipeline & CRM" onClick={() => router.push('/admin/prospects')} />
         )}
         {F('reports') && (
+          <MenuBtn title="Scan Review" sub="Review scans, match POs, export" onClick={() => router.push('/admin/scans')} />
+        )}
+        {F('reports') && (
           <MenuBtn title="Export Reports" sub="Download vehicle spreadsheets" onClick={() => router.push('/reports')} />
         )}
         {F('customers') && (
