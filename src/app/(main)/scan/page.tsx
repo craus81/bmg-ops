@@ -2,6 +2,7 @@
 
 import { useState, useEffect, useRef, useCallback } from 'react';
 import { createClient } from '@/lib/supabase-browser';
+import { storage } from '@/lib/storage';
 import { useAuth } from '@/components/AuthProvider';
 import { theme } from '@/lib/theme';
 import VinScanner from '@/components/VinScanner';
@@ -56,6 +57,10 @@ export default function ScanPage() {
   const [scanSuccess, setScanSuccess] = useState('');
   const vinRef = useRef<HTMLInputElement>(null);
   const [scanMode, setScanMode] = useState<'text' | 'camera'>('text');
+
+  // Part files/proofs
+  const [partProofs, setPartProofs] = useState<{ file_name: string; storage_path: string }[]>([]);
+  const [showProof, setShowProof] = useState<string | null>(null);
 
   // Offline
   const [isOffline, setIsOffline] = useState(false);
@@ -124,6 +129,11 @@ export default function ScanPage() {
       .order('item_number');
     setParts((data || []) as Part[]);
     try { localStorage.setItem('cached_parts', JSON.stringify(data || [])); } catch {}
+  };
+
+  const loadPartProofs = async (partId: string) => {
+    const { data } = await supabase.from('part_files').select('file_name, storage_path').eq('part_id', partId);
+    setPartProofs((data || []) as { file_name: string; storage_path: string }[]);
   };
 
   const loadLocations = async () => {
@@ -295,7 +305,7 @@ export default function ScanPage() {
           {filteredParts.length > 0 && (
             <div style={{ display: 'flex', flexDirection: 'column', gap: '4px', marginBottom: '12px' }}>
               {filteredParts.map(p => (
-                <button key={p.id} onClick={() => { setSelectedPart(p); setStep('location'); }} style={{
+                <button key={p.id} onClick={() => { setSelectedPart(p); setStep('location'); loadPartProofs(p.id); }} style={{
                   display: 'flex', justifyContent: 'space-between', alignItems: 'center', width: '100%',
                   padding: '12px 14px', borderRadius: '10px', textAlign: 'left',
                   border: `1px solid ${theme.border}`, background: theme.card, cursor: 'pointer',
@@ -402,6 +412,34 @@ export default function ScanPage() {
               }}>End Shift</button>
             </div>
           </div>
+
+          {/* Proof files */}
+          {partProofs.length > 0 && (
+            <div style={{ display: 'flex', gap: '4px', marginBottom: '10px', flexWrap: 'wrap' }}>
+              {partProofs.map((pf, i) => (
+                <button key={i} onClick={() => setShowProof(storage.from('graphics-proofs').getPublicUrl(pf.storage_path).data.publicUrl)} style={{
+                  padding: '6px 10px', borderRadius: '6px', fontSize: '10px', fontWeight: 700,
+                  background: 'rgba(59,130,246,0.08)', border: '1px solid rgba(59,130,246,0.2)',
+                  color: '#60a5fa', cursor: 'pointer',
+                }}>View Proof: {pf.file_name}</button>
+              ))}
+            </div>
+          )}
+
+          {/* Proof viewer modal */}
+          {showProof && (
+            <div onClick={() => setShowProof(null)} style={{
+              position: 'fixed', inset: 0, zIndex: 200, background: 'rgba(0,0,0,0.9)',
+              display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '16px',
+            }}>
+              <button onClick={() => setShowProof(null)} style={{ position: 'absolute', top: '12px', right: '16px', padding: '8px 14px', borderRadius: '10px', background: 'rgba(255,255,255,0.1)', border: '1px solid rgba(255,255,255,0.15)', color: '#fff', fontSize: '12px', fontWeight: 700, zIndex: 210 }}>✕ Close</button>
+              {showProof.toLowerCase().includes('.pdf') ? (
+                <iframe src={showProof} style={{ width: '100%', maxWidth: '600px', height: '80vh', borderRadius: '8px', border: 'none' }} />
+              ) : (
+                <img src={showProof} alt="Proof" style={{ maxWidth: '100%', maxHeight: '90vh', objectFit: 'contain', borderRadius: '8px' }} onClick={e => e.stopPropagation()} />
+              )}
+            </div>
+          )}
 
           {/* Camera / Text toggle */}
           <div style={{ display: 'flex', gap: '4px', marginBottom: '10px', background: theme.card, borderRadius: '10px', padding: '3px' }}>

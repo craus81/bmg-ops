@@ -1,8 +1,9 @@
 'use client';
 
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import { useRouter } from 'next/navigation';
 import { createClient } from '@/lib/supabase-browser';
+import { storage } from '@/lib/storage';
 import { useAuth } from '@/components/AuthProvider';
 
 interface Part {
@@ -51,6 +52,16 @@ export default function PartsPage() {
   const [sortCol, setSortCol] = useState<'item_number' | 'sales_price' | 'quantity_on_hand' | 'labor_hours'>('item_number');
   const [sortDir, setSortDir] = useState<'asc' | 'desc'>('asc');
   const [laborValue, setLaborValue] = useState('');
+
+  // Billable customer editing
+  const [editingCustomer, setEditingCustomer] = useState<string | null>(null);
+  const [customerValue, setCustomerValue] = useState('');
+
+  // Part files
+  interface PartFile { id: string; part_id: string; file_name: string; file_type: string | null; file_size: number | null; storage_path: string; }
+  const [partFiles, setPartFiles] = useState<Record<string, PartFile[]>>({});
+  const [uploadingFile, setUploadingFile] = useState(false);
+  const partFileRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
     if (!isAdmin && !isSales) { router.push('/home'); return; }
@@ -144,6 +155,39 @@ export default function PartsPage() {
     setLaborValue('');
     loadParts();
   };
+
+  const updateBillableCustomer = async (partId: string) => {
+    await supabase.from('netsuite_parts').update({ billable_customer: customerValue.trim() || null }).eq('id', partId);
+    setParts(prev => prev.map(p => p.id === partId ? { ...p, billable_customer: customerValue.trim() || null } : p));
+    setEditingCustomer(null);
+    setCustomerValue('');
+  };
+
+  const loadPartFiles = async (partId: string) => {
+    const { data } = await supabase.from('part_files').select('*').eq('part_id', partId).order('uploaded_at', { ascending: false });
+    if (data) setPartFiles(prev => ({ ...prev, [partId]: data as PartFile[] }));
+  };
+
+  const uploadPartFile = async (partId: string, file: File) => {
+    setUploadingFile(true);
+    const ext = file.name.split('.').pop() || 'bin';
+    const path = `part-files/${partId}/${Date.now()}.${ext}`;
+    const { error: upErr } = await storage.from('graphics-proofs').upload(path, file, { contentType: file.type });
+    if (!upErr) {
+      await supabase.from('part_files').insert({ part_id: partId, file_name: file.name, file_type: file.type || null, file_size: file.size, storage_path: path, uploaded_by: user?.id });
+      await loadPartFiles(partId);
+    }
+    setUploadingFile(false);
+  };
+
+  const deletePartFile = async (file: PartFile) => {
+    if (!window.confirm(`Delete "${file.file_name}"?`)) return;
+    await storage.from('graphics-proofs').remove([file.storage_path]);
+    await supabase.from('part_files').delete().eq('id', file.id);
+    setPartFiles(prev => ({ ...prev, [file.part_id]: (prev[file.part_id] || []).filter(f => f.id !== file.id) }));
+  };
+
+  const getFileUrl = (path: string) => storage.from('graphics-proofs').getPublicUrl(path).data.publicUrl;
 
   const toggleSort = (col: typeof sortCol) => {
     if (sortCol === col) setSortDir(d => d === 'asc' ? 'desc' : 'asc');
@@ -304,7 +348,7 @@ export default function PartsPage() {
               }}>
                 {/* Row summary */}
                 <div
-                  onClick={() => setExpandedId(isExpanded ? null : part.id)}
+                  onClick={() => { const newId = isExpanded ? null : part.id; setExpandedId(newId); if (newId) loadPartFiles(newId); }}
                   style={{
                     display: 'grid', gridTemplateColumns: '1fr 70px 50px 50px',
                     padding: '10px 12px', cursor: 'pointer', alignItems: 'center',
@@ -400,6 +444,54 @@ export default function PartsPage() {
                         {part.description}
                       </div>
                     )}
+
+                    {/* Billable Customer */}
+                    {isAdmin && (
+                      <div style={{ marginTop: '10px' }}>
+                        <div style={{ fontSize: '9px', fontWeight: 700, color: 'var(--text-muted)', textTransform: 'uppercase', marginBottom: '4px' }}>Billable Customer</div>
+                        {editingCustomer === part.id ? (
+                          <div style={{ display: 'flex', gap: '4px' }}>
+                            <input value={customerValue} onChange={e => setCustomerValue(e.target.value)} placeholder="e.g. Masterack" autoFocus
+                              onKeyDown={e => { if (e.key === 'Enter') updateBillableCustomer(part.id); if (e.key === 'Escape') setEditingCustomer(null); }}
+                              style={{ ...inputStyle, padding: '6px 8px', flex: 1 }} />
+                            <button onClick={() => updateBillableCustomer(part.id)} style={{ padding: '6px 10px', borderRadius: '6px', background: '#22c55e', color: '#fff', fontSize: '10px', fontWeight: 700, border: 'none', cursor: 'pointer' }}>Save</button>
+                          </div>
+                        ) : (
+                          <div onClick={() => { setEditingCustomer(part.id); setCustomerValue(part.billable_customer || ''); }}
+                            style={{ fontSize: '13px', fontWeight: 700, color: part.billable_customer ? '#a78bfa' : 'var(--text-muted)', cursor: 'pointer' }}>
+                            {part.billable_customer || '— Set Customer'}
+                            <span style={{ fontSize: '9px', color: 'var(--text-muted)', marginLeft: '4px' }}>Edit</span>
+                          </div>
+                        )}
+                      </div>
+                    )}
+
+                    {/* Part Files */}
+                    <div style={{ marginTop: '10px' }}>
+                      <div style={{ fontSize: '9px', fontWeight: 700, color: 'var(--text-muted)', textTransform: 'uppercase', marginBottom: '4px' }}>Files &amp; Proofs</div>
+                      {(partFiles[part.id] || []).map(f => (
+                        <div key={f.id} style={{ display: 'flex', alignItems: 'center', gap: '8px', padding: '4px 6px', borderRadius: '6px', background: 'var(--subtle-bg)', marginBottom: '3px' }}>
+                          <a href={getFileUrl(f.storage_path)} target="_blank" rel="noopener noreferrer"
+                            style={{ flex: 1, fontSize: '11px', fontWeight: 600, color: '#60a5fa', textDecoration: 'none', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                            {f.file_name}
+                          </a>
+                          {isAdmin && (
+                            <button onClick={() => deletePartFile(f)} style={{ padding: '2px 6px', borderRadius: '4px', border: 'none', background: 'rgba(248,113,113,0.1)', color: '#f87171', fontSize: '10px', fontWeight: 700, cursor: 'pointer' }}>✕</button>
+                          )}
+                        </div>
+                      ))}
+                      {isAdmin && (
+                        <>
+                          <input ref={partFileRef} type="file" accept="image/*,.pdf,.eps,.ai,.svg" style={{ display: 'none' }}
+                            onChange={async (e) => { const f = e.target.files?.[0]; if (f) await uploadPartFile(part.id, f); e.target.value = ''; }} />
+                          <button onClick={() => partFileRef.current?.click()} disabled={uploadingFile} style={{
+                            width: '100%', padding: '6px', borderRadius: '6px', fontSize: '10px', fontWeight: 700,
+                            background: 'var(--subtle-bg)', border: '1px dashed var(--border)',
+                            color: uploadingFile ? 'var(--text-muted)' : 'var(--text-secondary)', cursor: 'pointer',
+                          }}>{uploadingFile ? 'Uploading...' : '+ Upload Proof / File'}</button>
+                        </>
+                      )}
+                    </div>
                   </div>
                 )}
               </div>
