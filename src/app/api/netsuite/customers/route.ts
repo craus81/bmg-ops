@@ -202,6 +202,8 @@ export async function GET(req: NextRequest) {
         ORDER BY c.company, c.lastname
       `;
       const nsContacts = await suiteqlQueryAll(contactQuery);
+      contactsTotal = nsContacts.length;
+      console.log(`[customer-sync] Found ${nsContacts.length} contacts from NetSuite`);
 
       // Build a map of netsuite customer id → prospect id (paginate past 1000 limit)
       let allProspectRows: any[] = [];
@@ -215,8 +217,7 @@ export async function GET(req: NextRequest) {
       }
       const nsToProspect: Record<string, string> = {};
       allProspectRows.forEach((p: any) => { if (p.netsuite_id) nsToProspect[p.netsuite_id] = p.id; });
-
-      contactsTotal = nsContacts.length;
+      console.log(`[customer-sync] Prospect map has ${Object.keys(nsToProspect).length} entries`);
 
       for (const nc of nsContacts) {
         const prospectId = nsToProspect[nc.customer_id?.toString()];
@@ -238,7 +239,8 @@ export async function GET(req: NextRequest) {
         }
       }
     } catch (err: any) {
-      console.warn('[customer-sync] Contact sync error:', err.message);
+      console.error('[customer-sync] Contact sync error:', err.message, err.stack);
+      firstContactError = firstContactError || `Exception: ${err.message}`;
     }
 
     return NextResponse.json({
