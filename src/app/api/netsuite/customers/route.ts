@@ -188,18 +188,19 @@ export async function GET(req: NextRequest) {
     try {
       const contactQuery = `
         SELECT
-          c.id,
-          c.entityid,
-          c.firstname,
-          c.lastname,
-          c.email,
-          c.phone,
-          c.title,
-          c.company AS customer_id
-        FROM contact c
-        WHERE c.isinactive = 'F'
-        AND c.company IS NOT NULL
-        ORDER BY c.company, c.lastname
+          e.id,
+          e.entityid,
+          e.firstname,
+          e.lastname,
+          e.email,
+          e.phone,
+          e.title,
+          e.company AS customer_id
+        FROM entity e
+        WHERE e.type = 'Contact'
+        AND e.isinactive = 'F'
+        AND e.company IS NOT NULL
+        ORDER BY e.company, e.lastname
       `;
       const nsContacts = await suiteqlQueryAll(contactQuery);
       contactsTotal = nsContacts.length;
