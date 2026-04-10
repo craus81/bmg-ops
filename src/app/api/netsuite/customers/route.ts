@@ -199,23 +199,41 @@ export async function GET(req: NextRequest) {
       `;
       const nsContacts = await suiteqlQueryAll(contactQuery);
 
-      // Build a map of netsuite customer id → prospect id
-      const { data: prospectRows } = await supabase.from('prospects').select('id, netsuite_id').not('netsuite_id', 'is', null);
+      // Build a map of netsuite customer id → prospect id (paginate past 1000 limit)
+      let allProspectRows: any[] = [];
+      let pPage = 0;
+      let pHasMore = true;
+      while (pHasMore) {
+        const { data: batch } = await supabase.from('prospects').select('id, netsuite_id').not('netsuite_id', 'is', null).range(pPage * 1000, (pPage + 1) * 1000 - 1);
+        allProspectRows = [...allProspectRows, ...(batch || [])];
+        pHasMore = (batch || []).length === 1000;
+        pPage++;
+      }
       const nsToProspect: Record<string, string> = {};
-      (prospectRows || []).forEach((p: any) => { if (p.netsuite_id) nsToProspect[p.netsuite_id] = p.id; });
+      allProspectRows.forEach((p: any) => { if (p.netsuite_id) nsToProspect[p.netsuite_id] = p.id; });
+
+      let contactsSkipped = 0;
+      let contactErrors = 0;
+      let firstContactError: string | null = null;
 
       for (const nc of nsContacts) {
         const prospectId = nsToProspect[nc.customer_id?.toString()];
-        if (!prospectId) continue;
+        if (!prospectId) { contactsSkipped++; continue; }
         const name = [nc.firstname, nc.lastname].filter(Boolean).join(' ') || nc.entityid || 'Unknown';
-        const { error: cErr } = await supabase.from('prospect_contacts').upsert({
+        if (!name || name === 'Unknown') { contactsSkipped++; continue; }
+        const { data: inserted, error: cErr } = await supabase.from('prospect_contacts').upsert({
           prospect_id: prospectId,
           name,
           title: nc.title || null,
           email: nc.email || null,
           phone: nc.phone || null,
-        }, { onConflict: 'prospect_id,name' });
-        if (!cErr) contactsSynced++;
+        }, { onConflict: 'prospect_id,name' }).select('id');
+        if (cErr) {
+          contactErrors++;
+          if (!firstContactError) firstContactError = `${cErr.code}: ${cErr.message}`;
+        } else if (inserted && inserted.length > 0) {
+          contactsSynced++;
+        }
       }
     } catch (err: any) {
       console.warn('[customer-sync] Contact sync error:', err.message);
@@ -227,6 +245,10 @@ export async function GET(req: NextRequest) {
       synced,
       prospectsSynced,
       contactsSynced,
+      contactsTotal: nsContacts?.length || 0,
+      contactsSkipped,
+      contactErrors,
+      ...(firstContactError ? { firstContactError } : {}),
       ...(firstError ? { firstError, sampleErrors: errors } : {}),
       ...(firstProspectError ? { firstProspectError } : {}),
     });
