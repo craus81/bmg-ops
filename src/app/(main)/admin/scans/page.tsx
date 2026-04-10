@@ -64,13 +64,13 @@ export default function AdminScansPage() {
       supabase.from('scan_logs').select('*').is('archived_at', null).order('scanned_at', { ascending: false }).limit(1000),
       supabase.from('profiles').select('id, full_name'),
       supabase.from('netsuite_parts').select('item_number, requires_po_match'),
-      // Graphics parts — paginate to get all
+      // All active parts — paginate to get all
       (async () => {
         let all: any[] = [];
         let pg = 0;
         let more = true;
         while (more) {
-          const { data } = await supabase.from('netsuite_parts').select('id, item_number, display_name, billable_customer').eq('is_active', true).eq('catalog', 'graphics').order('item_number').range(pg * 1000, (pg + 1) * 1000 - 1);
+          const { data } = await supabase.from('netsuite_parts').select('id, item_number, display_name, billable_customer').eq('is_active', true).order('item_number').range(pg * 1000, (pg + 1) * 1000 - 1);
           all = [...all, ...(data || [])];
           more = (data || []).length === 1000;
           pg++;
@@ -455,7 +455,7 @@ export default function AdminScansPage() {
         <div style={{ background: 'var(--card)', border: `1px solid ${theme.border}`, borderRadius: '14px', padding: '16px' }}>
           <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '10px', marginBottom: '12px' }}>
             <div style={{ position: 'relative' }}>
-              <div style={{ fontSize: '10px', fontWeight: 700, color: 'var(--text-muted)', textTransform: 'uppercase', marginBottom: '4px' }}>Part Number (Graphics)</div>
+              <div style={{ fontSize: '10px', fontWeight: 700, color: 'var(--text-muted)', textTransform: 'uppercase', marginBottom: '4px' }}>Part Number</div>
               {bulkPart ? (
                 <div style={{ display: 'flex', alignItems: 'center', gap: '6px', padding: '10px', borderRadius: '8px', border: `1px solid ${theme.border}`, background: 'var(--input-bg)' }}>
                   <span style={{ flex: 1, fontSize: '13px', fontWeight: 700, color: 'var(--text-primary)' }}>{bulkPartLabel}</span>
