@@ -433,6 +433,15 @@ export default function Header({ clockStatus, activePartNumber, activeEndCustome
                       Mark all read
                     </button>
                   )}
+                  <button onClick={async () => {
+                    const res = await fetch('/api/notifications/test', { method: 'POST' });
+                    const data = await res.json();
+                    if (data.success) { loadNotifications(); loadUnreadCount(); alert('Test notification created!'); }
+                    else alert('Failed: ' + data.error + (data.hint ? '\nHint: ' + data.hint : ''));
+                  }} style={{
+                    background: 'none', border: 'none', fontSize: '10px',
+                    color: 'var(--text-muted)', cursor: 'pointer', padding: '4px 8px',
+                  }}>Test</button>
                 </div>
 
                 {/* Notification list */}
