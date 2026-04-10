@@ -105,9 +105,6 @@ export default function MorePage() {
         {F('schedule') && (
           <MenuBtn title="Schedule" sub="Assign jobs to installers" onClick={() => router.push('/admin/schedule')} />
         )}
-        {F('catalog_management') && (
-          <MenuBtn title="Part Catalog" sub="Manage part numbers" onClick={() => router.push('/admin/catalog')} />
-        )}
         {F('bulk_upload') && (
           <MenuBtn title="Bulk Upload" sub="Import templates & proofs from ZIP" onClick={() => router.push('/admin/bulk-upload')} />
         )}
