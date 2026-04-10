@@ -245,14 +245,27 @@ export default function MessagesPage() {
   };
 
   const renderMessageBody = (body: string) => {
-    // Auto-link URLs
     const urlRegex = /(https?:\/\/[^\s]+)/g;
+    const imageExts = /\.(gif|png|jpg|jpeg|webp)(\?.*)?$/i;
+    const gifDomains = /giphy\.com|tenor\.com|imgur\.com/i;
     const parts = body.split(urlRegex);
-    return parts.map((part, i) =>
-      urlRegex.test(part) ? (
-        <a key={i} href={part} target="_blank" rel="noopener noreferrer" style={{ color: 'inherit', textDecoration: 'underline', wordBreak: 'break-all' }}>{part}</a>
-      ) : part
-    );
+    return parts.map((part, i) => {
+      if (!urlRegex.test(part)) return part;
+      // Render images/gifs inline
+      if (imageExts.test(part) || gifDomains.test(part)) {
+        // Convert giphy/tenor page URLs to direct image if possible
+        let imgUrl = part;
+        if (part.includes('giphy.com') && !part.includes('/media/')) {
+          // Try to use as-is, giphy URLs often work as images
+        }
+        return (
+          <span key={i} style={{ display: 'block', marginTop: '4px' }}>
+            <img src={imgUrl} alt="" style={{ maxWidth: '100%', maxHeight: '250px', borderRadius: '8px', display: 'block' }} onError={(e) => { (e.target as HTMLImageElement).style.display = 'none'; (e.target as HTMLImageElement).insertAdjacentHTML('afterend', `<a href="${part}" target="_blank" rel="noopener noreferrer" style="color:inherit;text-decoration:underline">${part}</a>`); }} />
+          </span>
+        );
+      }
+      return <a key={i} href={part} target="_blank" rel="noopener noreferrer" style={{ color: 'inherit', textDecoration: 'underline', wordBreak: 'break-all' }}>{part}</a>;
+    });
   };
 
   const insertEmoji = (emoji: string) => {
