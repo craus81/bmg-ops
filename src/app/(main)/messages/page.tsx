@@ -20,6 +20,7 @@ export default function MessagesPage() {
   const supabase = createClient();
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLInputElement>(null);
+  const longPressTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const [conversations, setConversations] = useState<ConversationWithDetails[]>([]);
   const [profiles, setProfiles] = useState<Profile[]>([]);
@@ -408,7 +409,7 @@ export default function MessagesPage() {
         </div>
 
         {/* Messages */}
-        <div style={{ flex: 1, overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: '4px', paddingBottom: '8px' }}>
+        <div onClick={() => deleteMenuId && setDeleteMenuId(null)} style={{ flex: 1, overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: '4px', paddingBottom: '8px' }}>
           {messages.length === 0 && (
             <div style={{ textAlign: 'center', padding: '40px 0', color: 'var(--text-label)', fontSize: '13px' }}>
               Start a conversation with {convo?.otherUser?.full_name || 'this person'}
@@ -428,7 +429,10 @@ export default function MessagesPage() {
                 )}
                 <div style={{ display: 'flex', justifyContent: isMe ? 'flex-end' : 'flex-start', position: 'relative' }}>
                   <div
-                    onClick={() => setDeleteMenuId(deleteMenuId === msg.id ? null : msg.id)}
+                    onTouchStart={() => { longPressTimer.current = setTimeout(() => setDeleteMenuId(msg.id), 500); }}
+                    onTouchEnd={() => { if (longPressTimer.current) clearTimeout(longPressTimer.current); }}
+                    onTouchMove={() => { if (longPressTimer.current) clearTimeout(longPressTimer.current); }}
+                    onContextMenu={(e) => { e.preventDefault(); setDeleteMenuId(msg.id); }}
                     style={{
                       maxWidth: '80%', padding: '8px 12px', borderRadius: '14px',
                       background: isMe ? '#3b82f6' : 'var(--border)',
@@ -436,17 +440,26 @@ export default function MessagesPage() {
                       fontSize: '13px', lineHeight: 1.4,
                       borderBottomRightRadius: isMe ? '4px' : '14px',
                       borderBottomLeftRadius: isMe ? '14px' : '4px',
-                      cursor: 'pointer',
+                      userSelect: 'none', WebkitUserSelect: 'none',
                     }}>
                     <span style={{ whiteSpace: 'pre-wrap' }}>{renderMessageBody(msg.body)}</span>
                   </div>
                   {deleteMenuId === msg.id && (
-                    <button onClick={(e) => { e.stopPropagation(); deleteMessage(msg.id); }} style={{
-                      position: 'absolute', top: '-8px', [isMe ? 'left' : 'right']: '0',
-                      padding: '4px 10px', borderRadius: '6px', fontSize: '10px', fontWeight: 700,
-                      background: 'rgba(239,68,68,0.9)', color: '#fff', border: 'none',
-                      cursor: 'pointer', zIndex: 10, boxShadow: '0 2px 8px rgba(0,0,0,0.3)',
-                    }}>Delete</button>
+                    <div style={{
+                      position: 'absolute', top: '-10px', [isMe ? 'left' : 'right']: '0',
+                      display: 'flex', gap: '4px', zIndex: 10,
+                    }}>
+                      <button onClick={(e) => { e.stopPropagation(); deleteMessage(msg.id); }} style={{
+                        padding: '6px 12px', borderRadius: '8px', fontSize: '11px', fontWeight: 700,
+                        background: '#ef4444', color: '#fff', border: 'none',
+                        cursor: 'pointer', boxShadow: '0 2px 8px rgba(0,0,0,0.3)',
+                      }}>Delete</button>
+                      <button onClick={(e) => { e.stopPropagation(); setDeleteMenuId(null); }} style={{
+                        padding: '6px 12px', borderRadius: '8px', fontSize: '11px', fontWeight: 700,
+                        background: 'var(--border)', color: 'var(--text-body)', border: 'none',
+                        cursor: 'pointer', boxShadow: '0 2px 8px rgba(0,0,0,0.3)',
+                      }}>Cancel</button>
+                    </div>
                   )}
                 </div>
               </div>
