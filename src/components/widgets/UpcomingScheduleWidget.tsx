@@ -31,27 +31,6 @@ export default function UpcomingScheduleWidget() {
 
     const combined: ScheduleItem[] = [];
 
-    // Load schedule entries
-    const { data: entries } = await supabase
-      .from('schedule_entries')
-      .select('id, scheduled_date, catalog_id, installer_id, notes, quantity, profiles!schedule_entries_installer_id_fkey(full_name)')
-      .gte('scheduled_date', startStr)
-      .lte('scheduled_date', endStr)
-      .order('scheduled_date', { ascending: true })
-      .limit(20);
-
-    if (entries) {
-      for (const e of entries) {
-        combined.push({
-          id: e.id,
-          date: e.scheduled_date,
-          title: e.notes || 'Scheduled Job',
-          subtitle: (e.profiles as any)?.full_name || 'Unassigned',
-          type: 'schedule',
-        });
-      }
-    }
-
     // Load graphics jobs with install dates
     const { data: gfx } = await supabase
       .from('graphics_jobs')

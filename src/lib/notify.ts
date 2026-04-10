@@ -62,11 +62,7 @@ export async function notify(payload: NotifyPayload): Promise<NotifyResult> {
     );
   }
 
-  if (channels.includes('sms')) {
-    promises.push(
-      sendViaSMS(payload).then((ok) => { result.sms = ok; })
-    );
-  }
+  // SMS disabled — only in-app and email active
 
   if (channels.includes('email')) {
     promises.push(
@@ -106,9 +102,6 @@ async function getPreferredChannels(userId: string, type: string): Promise<Notif
     // For direct messages, use the messaging-specific preferences
     // In-app is always on for messages (they appear in the chat)
     channels.push('in_app');
-    if (prefs?.sms_messages && prefs?.phone_number) {
-      channels.push('sms');
-    }
     if (prefs?.email_messages) {
       channels.push('email');
     }
@@ -123,9 +116,7 @@ async function getPreferredChannels(userId: string, type: string): Promise<Notif
 
   // Assignments always get in-app + email regardless of preferences
   if (type === 'assignment') {
-    const ch: NotifyChannel[] = ['in_app', 'email'];
-    if (prefs.notify_sms && prefs.phone_number) ch.push('sms');
-    return ch;
+    return ['in_app', 'email'];
   }
 
   // Check if this type of notification is enabled
@@ -133,7 +124,6 @@ async function getPreferredChannels(userId: string, type: string): Promise<Notif
   if (!typeEnabled) return [];
 
   if (prefs.notify_in_app) channels.push('in_app');
-  if (prefs.notify_sms && prefs.phone_number) channels.push('sms');
   if (prefs.notify_email) channels.push('email');
 
   return channels;

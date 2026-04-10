@@ -17,7 +17,7 @@ export default function RecentMessagesWidget() {
   const load = async () => {
     const { data } = await supabase
       .from('messages')
-      .select('id, body, sender_name, created_at, conversation_id, is_sms')
+      .select('id, body, sender_name, created_at, conversation_id')
       .order('created_at', { ascending: false })
       .limit(6);
 
@@ -49,10 +49,10 @@ export default function RecentMessagesWidget() {
             }}>
               <div style={{
                 width: '28px', height: '28px', borderRadius: '50%', flexShrink: 0,
-                background: m.is_sms ? 'var(--success-bg)' : 'var(--orange-soft)',
+                background: 'var(--orange-soft)',
                 display: 'flex', alignItems: 'center', justifyContent: 'center',
                 fontSize: '12px', fontWeight: 800,
-                color: m.is_sms ? 'var(--success)' : 'var(--orange)',
+                color: 'var(--orange)',
               }}>{(m.sender_name || '?')[0]?.toUpperCase()}</div>
               <div style={{ flex: 1, minWidth: 0 }}>
                 <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline' }}>
