@@ -100,6 +100,8 @@ export async function POST(req: NextRequest) {
           i.cost AS purchase_price,
           i.totalquantityonhand,
           i.totalquantityavailable,
+          i.quantityonhand,
+          i.quantityavailable,
           i.quantityonorder
         FROM item i
         WHERE i.itemtype IN ('InvtPart', 'NonInvtPart', 'Service', 'Kit', 'Assembly')
@@ -114,11 +116,10 @@ export async function POST(req: NextRequest) {
           const id = c.id.toString();
           const bp = parseFloat(c.baseprice || '0');
           if (bp > 0) { pricingMap[id] = bp; basePriceCount++; }
-          // Use totalquantityonhand and totalquantityavailable — the aggregate fields across all locations
-          const qtyOnHand = parseFloat(c.totalquantityonhand || '0');
-          const qtyAvailable = parseFloat(c.totalquantityavailable || '0');
-          const qty = qtyOnHand || qtyAvailable;
-          if (qty > 0) qtyCount++;
+          // Try both total and non-total quantity fields
+          const qtyOnHand = parseFloat(c.totalquantityonhand || c.quantityonhand || '0');
+          const qtyAvailable = parseFloat(c.totalquantityavailable || c.quantityavailable || '0');
+          if (qtyOnHand > 0 || qtyAvailable > 0) qtyCount++;
           costMap[id] = {
             purchasePrice: parseFloat(c.purchase_price || '0'),
             quantityOnHand: qtyOnHand,
@@ -126,7 +127,7 @@ export async function POST(req: NextRequest) {
           };
         }
       }
-      console.log(`[parts-sync] baseprice found on ${basePriceCount}/${costItems.length} items, qty on ${qtyCount} items`);
+      console.log(`[parts-sync] baseprice: ${basePriceCount}/${costItems.length}, qty>0: ${qtyCount}`);
     } catch (err: any) {
       console.error('[parts-sync] Cost query failed:', err.message || err);
     }
