@@ -5,6 +5,7 @@ import { useRouter } from 'next/navigation';
 import { createClient } from '@/lib/supabase-browser';
 import { useAuth } from '@/components/AuthProvider';
 import { theme } from '@/lib/theme';
+import NetSuitePdf from '@/components/NetSuitePdf';
 
 interface Prospect {
   id: string;
@@ -118,6 +119,13 @@ export default function ProspectsPage() {
   const [saving, setSaving] = useState(false);
   const [syncing, setSyncing] = useState(false);
 
+  // Customer metrics (from customers table, keyed by netsuite_id)
+  const [customerMetrics, setCustomerMetrics] = useState<Record<string, { total_spend: number; avg_order_value: number; ytd_spend: number; ytd_orders: number; last_year_spend: number; total_orders: number; last_order_date: string | null }>>({});
+  // Invoices per prospect (keyed by prospect id)
+  interface CustInvoice { id: string; invoice_number: string; date: string; status: string; }
+  const [invoices, setInvoices] = useState<Record<string, CustInvoice[]>>({});
+  const [loadingInvoices, setLoadingInvoices] = useState<string | null>(null);
+
   // Inline forms
   const [showContactForm, setShowContactForm] = useState<string | null>(null);
   const [contactForm, setContactForm] = useState({ name: '', title: '', email: '', phone: '', is_decision_maker: false });
@@ -196,6 +204,23 @@ export default function ProspectsPage() {
     loadProfiles();
   }, []);
 
+  // Load metrics once prospects are loaded
+  useEffect(() => {
+    if (prospects.length === 0) return;
+    const converted = prospects.filter(p => p.netsuite_id);
+    if (converted.length === 0) return;
+    const loadAllMetrics = async () => {
+      const { data } = await supabase.from('customers').select('netsuite_id, total_spend, avg_order_value, ytd_spend, ytd_orders, last_year_spend, total_orders, last_order_date');
+      if (!data) return;
+      const nsMap: Record<string, any> = {};
+      data.forEach((c: any) => { if (c.netsuite_id) nsMap[c.netsuite_id] = c; });
+      const metricsMap: Record<string, any> = {};
+      converted.forEach(p => { if (nsMap[p.netsuite_id!]) metricsMap[p.id] = nsMap[p.netsuite_id!]; });
+      setCustomerMetrics(metricsMap);
+    };
+    loadAllMetrics();
+  }, [prospects]);
+
   const loadProspects = async () => {
     // Supabase defaults to 1000 rows — paginate to get all
     let all: Prospect[] = [];
@@ -223,6 +248,26 @@ export default function ProspectsPage() {
     }
   };
 
+  // Load spend metrics for converted customers
+  const loadMetrics = async (nsId: string, prospectId: string) => {
+    if (customerMetrics[prospectId]) return;
+    const { data } = await supabase.from('customers').select('total_spend, avg_order_value, ytd_spend, ytd_orders, last_year_spend, total_orders, last_order_date').eq('netsuite_id', nsId).maybeSingle();
+    if (data) setCustomerMetrics(prev => ({ ...prev, [prospectId]: data }));
+  };
+
+  const loadInvoices = async (nsId: string, prospectId: string) => {
+    if (invoices[prospectId] || loadingInvoices === prospectId) return;
+    setLoadingInvoices(prospectId);
+    try {
+      const res = await fetch(`/api/netsuite/invoices?customerId=${nsId}`);
+      const data = await res.json();
+      setInvoices(prev => ({ ...prev, [prospectId]: (data.invoices || []).map((inv: any) => ({ id: String(inv.id), invoice_number: inv.invoiceNumber, date: inv.date, status: inv.status })) }));
+    } catch {}
+    setLoadingInvoices(null);
+  };
+
+  const fmtK = (n: number) => n >= 1000 ? '$' + (n / 1000).toFixed(1) + 'k' : '$' + n.toFixed(0);
+
 
   const loadDetail = async (prospectId: string) => {
     const [cRes, oRes, aRes, tRes, rRes] = await Promise.all([
@@ -243,6 +288,12 @@ export default function ProspectsPage() {
     if (expandedId === id) { setExpandedId(null); return; }
     setExpandedId(id);
     loadDetail(id);
+    // Load metrics + invoices for converted customers
+    const p = prospects.find(pr => pr.id === id);
+    if (p?.netsuite_id) {
+      loadMetrics(p.netsuite_id, id);
+      loadInvoices(p.netsuite_id, id);
+    }
   };
 
   // Create prospect
@@ -563,8 +614,11 @@ export default function ProspectsPage() {
                       {prospect.contact_name && <div style={{ fontSize: '11px', color: 'var(--text-secondary)', marginTop: '2px' }}>{prospect.contact_name}{prospect.email ? ` · ${prospect.email}` : ''}</div>}
                       {prospect.notes && <div style={{ fontSize: '10px', color: 'var(--text-muted)', marginTop: '2px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{prospect.notes}</div>}
                     </div>
-                    <div style={{ fontSize: '10px', color: 'var(--text-muted)', flexShrink: 0, textAlign: 'right' }}>
-                      {new Date(prospect.created_at).toLocaleDateString()}
+                    <div style={{ flexShrink: 0, textAlign: 'right' }}>
+                      {customerMetrics[prospect.id]?.ytd_spend ? (
+                        <div style={{ fontSize: '13px', fontWeight: 800, color: '#4ade80' }}>{fmtK(customerMetrics[prospect.id].ytd_spend)}</div>
+                      ) : null}
+                      <div style={{ fontSize: '10px', color: 'var(--text-muted)' }}>{new Date(prospect.created_at).toLocaleDateString()}</div>
                       <div style={{ marginTop: '2px' }}>{isExpanded ? '▲' : '▼'}</div>
                     </div>
                   </div>
@@ -607,6 +661,55 @@ export default function ProspectsPage() {
                         </div>
                       </div>
                     </div>
+
+                    {/* Spend Metrics (converted customers only) */}
+                    {prospect.netsuite_id && customerMetrics[prospect.id] && (() => {
+                      const m = customerMetrics[prospect.id];
+                      return (
+                        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: '6px', marginBottom: '12px' }}>
+                          <div style={{ textAlign: 'center', padding: '8px 4px', borderRadius: '8px', background: 'rgba(34,197,94,0.08)' }}>
+                            <div style={{ fontSize: '15px', fontWeight: 800, color: '#4ade80' }}>{fmtK(m.ytd_spend)}</div>
+                            <div style={{ fontSize: '8px', fontWeight: 600, color: 'var(--text-muted)', textTransform: 'uppercase' }}>YTD{m.ytd_orders > 0 ? ` · ${m.ytd_orders}` : ''}</div>
+                          </div>
+                          <div style={{ textAlign: 'center', padding: '8px 4px', borderRadius: '8px', background: 'rgba(251,191,36,0.08)' }}>
+                            <div style={{ fontSize: '15px', fontWeight: 800, color: '#fbbf24' }}>{fmtK(m.last_year_spend)}</div>
+                            <div style={{ fontSize: '8px', fontWeight: 600, color: 'var(--text-muted)', textTransform: 'uppercase' }}>Last Year</div>
+                          </div>
+                          <div style={{ textAlign: 'center', padding: '8px 4px', borderRadius: '8px', background: 'rgba(59,130,246,0.08)' }}>
+                            <div style={{ fontSize: '15px', fontWeight: 800, color: '#60a5fa' }}>{fmtK(m.total_spend)}</div>
+                            <div style={{ fontSize: '8px', fontWeight: 600, color: 'var(--text-muted)', textTransform: 'uppercase' }}>All-Time · {m.total_orders}</div>
+                          </div>
+                          <div style={{ textAlign: 'center', padding: '8px 4px', borderRadius: '8px', background: 'rgba(168,85,247,0.08)' }}>
+                            <div style={{ fontSize: '15px', fontWeight: 800, color: '#a855f7' }}>{fmtK(m.avg_order_value)}</div>
+                            <div style={{ fontSize: '8px', fontWeight: 600, color: 'var(--text-muted)', textTransform: 'uppercase' }}>Avg Order</div>
+                          </div>
+                        </div>
+                      );
+                    })()}
+
+                    {/* Invoices (converted customers only) */}
+                    {prospect.netsuite_id && (
+                      <div style={{ marginBottom: '12px' }}>
+                        <div style={labelStyle}>Invoices &amp; Documents</div>
+                        {loadingInvoices === prospect.id ? (
+                          <div style={{ fontSize: '11px', color: 'var(--text-muted)', padding: '8px 0' }}>Loading invoices...</div>
+                        ) : (invoices[prospect.id] || []).length === 0 ? (
+                          <div style={{ fontSize: '11px', color: 'var(--text-muted)', padding: '4px 0' }}>No invoices found</div>
+                        ) : (
+                          <div style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
+                            {(invoices[prospect.id] || []).slice(0, 10).map(inv => (
+                              <div key={inv.id} style={{ padding: '6px 8px', borderRadius: '6px', background: 'var(--subtle-bg)' }}>
+                                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '4px' }}>
+                                  <span style={{ fontSize: '11px', fontWeight: 700, color: 'var(--text-primary)' }}>INV #{inv.invoice_number}</span>
+                                  <span style={{ fontSize: '9px', color: 'var(--text-muted)' }}>{inv.date} · {inv.status}</span>
+                                </div>
+                                <NetSuitePdf type="invoice" recordId={inv.id} recordNumber={inv.invoice_number} />
+                              </div>
+                            ))}
+                          </div>
+                        )}
+                      </div>
+                    )}
 
                     {/* Quick toggles & details */}
                     <div style={{ display: 'flex', gap: '6px', flexWrap: 'wrap', marginBottom: '12px' }}>
