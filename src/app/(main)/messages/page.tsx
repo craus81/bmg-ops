@@ -20,7 +20,6 @@ export default function MessagesPage() {
   const supabase = createClient();
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLInputElement>(null);
-  const longPressTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const [conversations, setConversations] = useState<ConversationWithDetails[]>([]);
   const [profiles, setProfiles] = useState<Profile[]>([]);
@@ -32,17 +31,29 @@ export default function MessagesPage() {
   const [newMessage, setNewMessage] = useState('');
   const [sending, setSending] = useState(false);
   const [showEmoji, setShowEmoji] = useState(false);
-  const [deleteMenuId, setDeleteMenuId] = useState<string | null>(null);
+  const [editMode, setEditMode] = useState(false);
+  const [selectedMsgs, setSelectedMsgs] = useState<Set<string>>(new Set());
+  const [deleting, setDeleting] = useState(false);
 
-  const deleteMessage = async (msgId: string) => {
-    const { error } = await supabase.from('messages').delete().eq('id', msgId);
-    if (error) {
-      alert('Could not delete message');
-      setDeleteMenuId(null);
-      return;
-    }
-    setMessages(prev => prev.filter(m => m.id !== msgId));
-    setDeleteMenuId(null);
+  const toggleSelect = (msgId: string) => {
+    setSelectedMsgs(prev => {
+      const next = new Set(prev);
+      if (next.has(msgId)) next.delete(msgId); else next.add(msgId);
+      return next;
+    });
+  };
+
+  const exitEditMode = () => { setEditMode(false); setSelectedMsgs(new Set()); };
+
+  const bulkDelete = async () => {
+    if (selectedMsgs.size === 0) return;
+    setDeleting(true);
+    const ids = Array.from(selectedMsgs);
+    const { error } = await supabase.from('messages').delete().in('id', ids);
+    setDeleting(false);
+    if (error) { alert('Could not delete messages'); return; }
+    setMessages(prev => prev.filter(m => !selectedMsgs.has(m.id)));
+    exitEditMode();
   };
 
   const EMOJI_LIST = ['👍', '👎', '😀', '😂', '🤣', '😊', '🙏', '🔥', '❤️', '💯', '✅', '❌', '⚡', '🎉', '👀', '💪', '🚚', '🔧', '📋', '📞', '📧', '⏰', '📍', '🏗️'];
@@ -391,7 +402,7 @@ export default function MessagesPage() {
           borderBottom: '1px solid var(--border)', marginBottom: '8px', flexShrink: 0,
         }}>
           <button
-            onClick={() => { setActiveConvoId(null); loadConversations(); }}
+            onClick={() => { exitEditMode(); setActiveConvoId(null); loadConversations(); }}
             style={{ background: 'none', border: 'none', color: '#60a5fa', fontSize: '16px', cursor: 'pointer', padding: '4px 8px' }}
           >
             ←
@@ -406,10 +417,19 @@ export default function MessagesPage() {
               </div>
             )}
           </div>
+          {editMode ? (
+            <button onClick={exitEditMode} style={{ background: 'none', border: 'none', color: '#60a5fa', fontSize: '13px', fontWeight: 700, cursor: 'pointer', padding: '4px 8px' }}>
+              Done
+            </button>
+          ) : (
+            <button onClick={() => setEditMode(true)} style={{ background: 'none', border: 'none', color: '#60a5fa', fontSize: '13px', fontWeight: 700, cursor: 'pointer', padding: '4px 8px' }}>
+              Edit
+            </button>
+          )}
         </div>
 
         {/* Messages */}
-        <div onClick={() => deleteMenuId && setDeleteMenuId(null)} style={{ flex: 1, overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: '4px', paddingBottom: '8px' }}>
+        <div style={{ flex: 1, overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: '4px', paddingBottom: '8px' }}>
           {messages.length === 0 && (
             <div style={{ textAlign: 'center', padding: '40px 0', color: 'var(--text-label)', fontSize: '13px' }}>
               Start a conversation with {convo?.otherUser?.full_name || 'this person'}
@@ -427,38 +447,39 @@ export default function MessagesPage() {
                     {formatTime(msg.created_at)}
                   </div>
                 )}
-                <div style={{ display: 'flex', justifyContent: isMe ? 'flex-end' : 'flex-start', position: 'relative' }}>
+                <div style={{ display: 'flex', alignItems: 'center', justifyContent: isMe ? 'flex-end' : 'flex-start', gap: '8px' }}>
+                  {editMode && !isMe && (
+                    <div onClick={() => toggleSelect(msg.id)} style={{
+                      width: '22px', height: '22px', borderRadius: '50%', flexShrink: 0, cursor: 'pointer',
+                      border: selectedMsgs.has(msg.id) ? 'none' : '2px solid var(--text-label)',
+                      background: selectedMsgs.has(msg.id) ? '#3b82f6' : 'transparent',
+                      display: 'flex', alignItems: 'center', justifyContent: 'center',
+                    }}>
+                      {selectedMsgs.has(msg.id) && <span style={{ color: '#fff', fontSize: '12px', fontWeight: 900 }}>✓</span>}
+                    </div>
+                  )}
                   <div
-                    onTouchStart={() => { longPressTimer.current = setTimeout(() => setDeleteMenuId(msg.id), 500); }}
-                    onTouchEnd={() => { if (longPressTimer.current) clearTimeout(longPressTimer.current); }}
-                    onTouchMove={() => { if (longPressTimer.current) clearTimeout(longPressTimer.current); }}
-                    onContextMenu={(e) => { e.preventDefault(); setDeleteMenuId(msg.id); }}
+                    onClick={() => editMode && toggleSelect(msg.id)}
                     style={{
-                      maxWidth: '80%', padding: '8px 12px', borderRadius: '14px',
+                      maxWidth: editMode ? '70%' : '80%', padding: '8px 12px', borderRadius: '14px',
                       background: isMe ? '#3b82f6' : 'var(--border)',
                       color: isMe ? '#fff' : 'var(--text-body)',
                       fontSize: '13px', lineHeight: 1.4,
                       borderBottomRightRadius: isMe ? '4px' : '14px',
                       borderBottomLeftRadius: isMe ? '14px' : '4px',
-                      userSelect: 'none', WebkitUserSelect: 'none',
+                      cursor: editMode ? 'pointer' : 'default',
+                      opacity: editMode && selectedMsgs.has(msg.id) ? 0.7 : 1,
                     }}>
                     <span style={{ whiteSpace: 'pre-wrap' }}>{renderMessageBody(msg.body)}</span>
                   </div>
-                  {deleteMenuId === msg.id && (
-                    <div style={{
-                      position: 'absolute', top: '-10px', [isMe ? 'left' : 'right']: '0',
-                      display: 'flex', gap: '4px', zIndex: 10,
+                  {editMode && isMe && (
+                    <div onClick={() => toggleSelect(msg.id)} style={{
+                      width: '22px', height: '22px', borderRadius: '50%', flexShrink: 0, cursor: 'pointer',
+                      border: selectedMsgs.has(msg.id) ? 'none' : '2px solid var(--text-label)',
+                      background: selectedMsgs.has(msg.id) ? '#3b82f6' : 'transparent',
+                      display: 'flex', alignItems: 'center', justifyContent: 'center',
                     }}>
-                      <button onClick={(e) => { e.stopPropagation(); deleteMessage(msg.id); }} style={{
-                        padding: '6px 12px', borderRadius: '8px', fontSize: '11px', fontWeight: 700,
-                        background: '#ef4444', color: '#fff', border: 'none',
-                        cursor: 'pointer', boxShadow: '0 2px 8px rgba(0,0,0,0.3)',
-                      }}>Delete</button>
-                      <button onClick={(e) => { e.stopPropagation(); setDeleteMenuId(null); }} style={{
-                        padding: '6px 12px', borderRadius: '8px', fontSize: '11px', fontWeight: 700,
-                        background: 'var(--border)', color: 'var(--text-body)', border: 'none',
-                        cursor: 'pointer', boxShadow: '0 2px 8px rgba(0,0,0,0.3)',
-                      }}>Cancel</button>
+                      {selectedMsgs.has(msg.id) && <span style={{ color: '#fff', fontSize: '12px', fontWeight: 900 }}>✓</span>}
                     </div>
                   )}
                 </div>
@@ -477,33 +498,66 @@ export default function MessagesPage() {
           </div>
         )}
 
-        {/* Input */}
-        <div style={{ display: 'flex', gap: '8px', padding: '8px 0', borderTop: '1px solid var(--border)', flexShrink: 0, alignItems: 'flex-end' }}>
-          <button onClick={() => setShowEmoji(!showEmoji)} style={{ padding: '8px', borderRadius: '8px', border: 'none', background: showEmoji ? 'rgba(59,130,246,0.15)' : 'transparent', fontSize: '18px', cursor: 'pointer', flexShrink: 0 }}>😀</button>
-          <textarea
-            ref={inputRef as any}
-            value={newMessage}
-            onChange={e => setNewMessage(e.target.value)}
-            onKeyDown={e => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); sendMessage(); } }}
-            placeholder="Type a message..."
-            rows={1}
-            style={{ ...inputStyle, resize: 'none', minHeight: '40px', maxHeight: '120px', lineHeight: '1.4' }}
-            onInput={e => { const t = e.target as HTMLTextAreaElement; t.style.height = 'auto'; t.style.height = Math.min(t.scrollHeight, 120) + 'px'; }}
-          />
-          <button
-            onClick={sendMessage}
-            disabled={!newMessage.trim() || sending}
-            style={{
-              padding: '10px 16px', borderRadius: '10px',
-              background: !newMessage.trim() ? 'var(--border)' : '#3b82f6',
-              color: '#fff', fontWeight: 800, fontSize: '14px',
-              border: 'none', cursor: 'pointer', flexShrink: 0,
-              opacity: !newMessage.trim() ? 0.5 : 1,
-            }}
-          >
-            {sending ? '...' : '→'}
-          </button>
-        </div>
+        {/* Edit mode delete bar */}
+        {editMode ? (
+          <div style={{ display: 'flex', gap: '8px', padding: '10px 0', borderTop: '1px solid var(--border)', flexShrink: 0, alignItems: 'center' }}>
+            <button onClick={() => {
+              if (selectedMsgs.size === messages.length) setSelectedMsgs(new Set());
+              else setSelectedMsgs(new Set(messages.map(m => m.id)));
+            }} style={{
+              padding: '8px 14px', borderRadius: '10px', border: 'none', fontSize: '12px', fontWeight: 700,
+              background: 'var(--border)', color: 'var(--text-body)', cursor: 'pointer',
+            }}>
+              {selectedMsgs.size === messages.length ? 'Deselect All' : 'Select All'}
+            </button>
+            <div style={{ flex: 1, textAlign: 'center', fontSize: '12px', fontWeight: 700, color: 'var(--text-label)' }}>
+              {selectedMsgs.size > 0 ? `${selectedMsgs.size} selected` : 'Tap messages to select'}
+            </div>
+            <button
+              onClick={bulkDelete}
+              disabled={selectedMsgs.size === 0 || deleting}
+              style={{
+                padding: '8px 14px', borderRadius: '10px', border: 'none', fontSize: '12px', fontWeight: 700,
+                background: selectedMsgs.size === 0 ? 'var(--border)' : '#ef4444',
+                color: selectedMsgs.size === 0 ? 'var(--text-label)' : '#fff',
+                cursor: selectedMsgs.size === 0 ? 'default' : 'pointer',
+                opacity: selectedMsgs.size === 0 ? 0.5 : 1,
+              }}
+            >
+              {deleting ? 'Deleting...' : `Delete${selectedMsgs.size > 0 ? ` (${selectedMsgs.size})` : ''}`}
+            </button>
+          </div>
+        ) : (
+          <>
+            {/* Input */}
+            <div style={{ display: 'flex', gap: '8px', padding: '8px 0', borderTop: '1px solid var(--border)', flexShrink: 0, alignItems: 'flex-end' }}>
+              <button onClick={() => setShowEmoji(!showEmoji)} style={{ padding: '8px', borderRadius: '8px', border: 'none', background: showEmoji ? 'rgba(59,130,246,0.15)' : 'transparent', fontSize: '18px', cursor: 'pointer', flexShrink: 0 }}>😀</button>
+              <textarea
+                ref={inputRef as any}
+                value={newMessage}
+                onChange={e => setNewMessage(e.target.value)}
+                onKeyDown={e => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); sendMessage(); } }}
+                placeholder="Type a message..."
+                rows={1}
+                style={{ ...inputStyle, resize: 'none', minHeight: '40px', maxHeight: '120px', lineHeight: '1.4' }}
+                onInput={e => { const t = e.target as HTMLTextAreaElement; t.style.height = 'auto'; t.style.height = Math.min(t.scrollHeight, 120) + 'px'; }}
+              />
+              <button
+                onClick={sendMessage}
+                disabled={!newMessage.trim() || sending}
+                style={{
+                  padding: '10px 16px', borderRadius: '10px',
+                  background: !newMessage.trim() ? 'var(--border)' : '#3b82f6',
+                  color: '#fff', fontWeight: 800, fontSize: '14px',
+                  border: 'none', cursor: 'pointer', flexShrink: 0,
+                  opacity: !newMessage.trim() ? 0.5 : 1,
+                }}
+              >
+                {sending ? '...' : '→'}
+              </button>
+            </div>
+          </>
+        )}
       </div>
     );
   }
