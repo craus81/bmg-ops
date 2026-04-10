@@ -122,9 +122,12 @@ export default function ProspectsPage() {
   // Customer metrics (from customers table, keyed by netsuite_id)
   const [customerMetrics, setCustomerMetrics] = useState<Record<string, { total_spend: number; avg_order_value: number; ytd_spend: number; ytd_orders: number; last_year_spend: number; total_orders: number; last_order_date: string | null }>>({});
   // Invoices per prospect (keyed by prospect id)
-  interface CustInvoice { id: string; invoice_number: string; date: string; status: string; }
-  const [invoices, setInvoices] = useState<Record<string, CustInvoice[]>>({});
-  const [loadingInvoices, setLoadingInvoices] = useState<string | null>(null);
+  interface CustDocument { id: string; number: string; date: string; status: string; type: 'invoice' | 'salesOrder' | 'estimate'; typeLabel: string; }
+  const [documents, setDocuments] = useState<Record<string, CustDocument[]>>({});
+  const [loadingDocs, setLoadingDocs] = useState<string | null>(null);
+  const [docSearch, setDocSearch] = useState<Record<string, string>>({});
+  const [docsExpanded, setDocsExpanded] = useState<Set<string>>(new Set());
+  const [docsShowAll, setDocsShowAll] = useState<Set<string>>(new Set());
 
   // Inline forms
   const [showContactForm, setShowContactForm] = useState<string | null>(null);
@@ -255,15 +258,24 @@ export default function ProspectsPage() {
     if (data) setCustomerMetrics(prev => ({ ...prev, [prospectId]: data }));
   };
 
-  const loadInvoices = async (nsId: string, prospectId: string) => {
-    if (invoices[prospectId] || loadingInvoices === prospectId) return;
-    setLoadingInvoices(prospectId);
+  const loadDocuments = async (nsId: string, prospectId: string) => {
+    if (documents[prospectId] || loadingDocs === prospectId) return;
+    setLoadingDocs(prospectId);
     try {
-      const res = await fetch(`/api/netsuite/invoices?customerId=${nsId}`);
+      const res = await fetch(`/api/netsuite/customer-invoices?customerId=${nsId}`);
       const data = await res.json();
-      setInvoices(prev => ({ ...prev, [prospectId]: (data.invoices || []).map((inv: any) => ({ id: String(inv.id), invoice_number: inv.invoiceNumber, date: inv.date, status: inv.status })) }));
+      const docs: CustDocument[] = (data.transactions || []).map((t: any) => {
+        const typeMap: Record<string, { type: CustDocument['type']; label: string }> = {
+          CustInvc: { type: 'invoice', label: 'Invoice' },
+          SalesOrd: { type: 'salesOrder', label: 'Sales Order' },
+          Estimate: { type: 'estimate', label: 'Estimate' },
+        };
+        const info = typeMap[t.type] || { type: 'invoice' as const, label: t.type };
+        return { id: String(t.id), number: t.tranid || t.id, date: t.trandate || '', status: t.status || '', type: info.type, typeLabel: info.label };
+      });
+      setDocuments(prev => ({ ...prev, [prospectId]: docs }));
     } catch {}
-    setLoadingInvoices(null);
+    setLoadingDocs(null);
   };
 
   const fmtK = (n: number) => n >= 1000 ? '$' + (n / 1000).toFixed(1) + 'k' : '$' + n.toFixed(0);
@@ -292,7 +304,7 @@ export default function ProspectsPage() {
     const p = prospects.find(pr => pr.id === id);
     if (p?.netsuite_id) {
       loadMetrics(p.netsuite_id, id);
-      loadInvoices(p.netsuite_id, id);
+      loadDocuments(p.netsuite_id, id);
     }
   };
 
@@ -687,25 +699,54 @@ export default function ProspectsPage() {
                       );
                     })()}
 
-                    {/* Invoices (converted customers only) */}
+                    {/* Documents (collapsed, with search) */}
                     {prospect.netsuite_id && (
                       <div style={{ marginBottom: '12px' }}>
-                        <div style={labelStyle}>Invoices &amp; Documents</div>
-                        {loadingInvoices === prospect.id ? (
-                          <div style={{ fontSize: '11px', color: 'var(--text-muted)', padding: '8px 0' }}>Loading invoices...</div>
-                        ) : (invoices[prospect.id] || []).length === 0 ? (
-                          <div style={{ fontSize: '11px', color: 'var(--text-muted)', padding: '4px 0' }}>No invoices found</div>
-                        ) : (
-                          <div style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
-                            {(invoices[prospect.id] || []).slice(0, 10).map(inv => (
-                              <div key={inv.id} style={{ padding: '6px 8px', borderRadius: '6px', background: 'var(--subtle-bg)' }}>
-                                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '4px' }}>
-                                  <span style={{ fontSize: '11px', fontWeight: 700, color: 'var(--text-primary)' }}>INV #{inv.invoice_number}</span>
-                                  <span style={{ fontSize: '9px', color: 'var(--text-muted)' }}>{inv.date} · {inv.status}</span>
+                        <div onClick={() => setDocsExpanded(prev => { const n = new Set(prev); if (n.has(prospect.id)) n.delete(prospect.id); else n.add(prospect.id); return n; })}
+                          style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', cursor: 'pointer', marginBottom: docsExpanded.has(prospect.id) ? '6px' : 0 }}>
+                          <div style={labelStyle}>
+                            <span style={{ marginRight: '4px', fontSize: '8px', transition: 'transform 0.15s', display: 'inline-block', transform: docsExpanded.has(prospect.id) ? 'rotate(0deg)' : 'rotate(-90deg)' }}>▼</span>
+                            Documents ({(documents[prospect.id] || []).length})
+                          </div>
+                        </div>
+                        {docsExpanded.has(prospect.id) && (
+                          <div>
+                            {loadingDocs === prospect.id ? (
+                              <div style={{ fontSize: '11px', color: 'var(--text-muted)', padding: '8px 0' }}>Loading...</div>
+                            ) : (documents[prospect.id] || []).length === 0 ? (
+                              <div style={{ fontSize: '11px', color: 'var(--text-muted)', padding: '4px 0' }}>No documents found</div>
+                            ) : (() => {
+                              const searchTerm = (docSearch[prospect.id] || '').toLowerCase();
+                              const allDocs = documents[prospect.id] || [];
+                              const filtered = searchTerm ? allDocs.filter(d => d.number.toLowerCase().includes(searchTerm) || d.typeLabel.toLowerCase().includes(searchTerm) || d.status.toLowerCase().includes(searchTerm)) : allDocs;
+                              const showAll = docsShowAll.has(prospect.id);
+                              const visible = showAll ? filtered : filtered.slice(0, 5);
+                              const TYPE_DOC_COLORS: Record<string, string> = { invoice: '#34d399', salesOrder: '#60a5fa', estimate: '#fbbf24' };
+                              return (
+                                <div>
+                                  <input value={docSearch[prospect.id] || ''} onChange={e => setDocSearch(prev => ({ ...prev, [prospect.id]: e.target.value }))} placeholder="Search documents..." style={{ ...inputStyle, padding: '5px 8px', fontSize: '10px', marginBottom: '6px' }} />
+                                  <div style={{ display: 'flex', flexDirection: 'column', gap: '3px' }}>
+                                    {visible.map(doc => (
+                                      <div key={`${doc.type}-${doc.id}`} style={{ padding: '6px 8px', borderRadius: '6px', background: 'var(--subtle-bg)' }}>
+                                        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '2px' }}>
+                                          <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+                                            <span style={{ fontSize: '8px', fontWeight: 700, padding: '1px 5px', borderRadius: '3px', background: `${TYPE_DOC_COLORS[doc.type] || '#6b7280'}18`, color: TYPE_DOC_COLORS[doc.type] || '#6b7280' }}>{doc.typeLabel}</span>
+                                            <span style={{ fontSize: '11px', fontWeight: 700, color: 'var(--text-primary)' }}>#{doc.number}</span>
+                                          </div>
+                                          <span style={{ fontSize: '9px', color: 'var(--text-muted)' }}>{doc.date}{doc.status ? ` · ${doc.status}` : ''}</span>
+                                        </div>
+                                        <NetSuitePdf type={doc.type === 'invoice' ? 'invoice' : 'salesOrder'} recordId={doc.id} recordNumber={doc.number} />
+                                      </div>
+                                    ))}
+                                  </div>
+                                  {filtered.length > 5 && !showAll && (
+                                    <button onClick={() => setDocsShowAll(prev => { const n = new Set(prev); n.add(prospect.id); return n; })} style={{ width: '100%', padding: '6px', borderRadius: '6px', fontSize: '10px', fontWeight: 700, marginTop: '4px', background: 'var(--subtle-bg)', border: '1px solid var(--border)', color: '#60a5fa', cursor: 'pointer' }}>
+                                      Show All ({filtered.length})
+                                    </button>
+                                  )}
                                 </div>
-                                <NetSuitePdf type="invoice" recordId={inv.id} recordNumber={inv.invoice_number} />
-                              </div>
-                            ))}
+                              );
+                            })()}
                           </div>
                         )}
                       </div>

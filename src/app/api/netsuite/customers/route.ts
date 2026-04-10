@@ -179,11 +179,54 @@ export async function GET(req: NextRequest) {
       }
     }
 
+    // Sync contacts from NetSuite into prospect_contacts
+    let contactsSynced = 0;
+    try {
+      const contactQuery = `
+        SELECT
+          c.id,
+          c.entityid,
+          c.firstname,
+          c.lastname,
+          c.email,
+          c.phone,
+          c.title,
+          c.company AS customer_id
+        FROM contact c
+        WHERE c.isinactive = 'F'
+        AND c.company IS NOT NULL
+        ORDER BY c.company, c.lastname
+      `;
+      const nsContacts = await suiteqlQueryAll(contactQuery);
+
+      // Build a map of netsuite customer id → prospect id
+      const { data: prospectRows } = await supabase.from('prospects').select('id, netsuite_id').not('netsuite_id', 'is', null);
+      const nsToProspect: Record<string, string> = {};
+      (prospectRows || []).forEach((p: any) => { if (p.netsuite_id) nsToProspect[p.netsuite_id] = p.id; });
+
+      for (const nc of nsContacts) {
+        const prospectId = nsToProspect[nc.customer_id?.toString()];
+        if (!prospectId) continue;
+        const name = [nc.firstname, nc.lastname].filter(Boolean).join(' ') || nc.entityid || 'Unknown';
+        const { error: cErr } = await supabase.from('prospect_contacts').upsert({
+          prospect_id: prospectId,
+          name,
+          title: nc.title || null,
+          email: nc.email || null,
+          phone: nc.phone || null,
+        }, { onConflict: 'prospect_id,name' }).single();
+        if (!cErr) contactsSynced++;
+      }
+    } catch (err: any) {
+      console.warn('[customer-sync] Contact sync error:', err.message);
+    }
+
     return NextResponse.json({
       status: 'synced',
       total: nsCustomers.length,
       synced,
       prospectsSynced,
+      contactsSynced,
       ...(firstError ? { firstError, sampleErrors: errors } : {}),
       ...(firstProspectError ? { firstProspectError } : {}),
     });

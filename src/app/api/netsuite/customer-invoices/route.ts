@@ -18,24 +18,31 @@ export async function GET(req: NextRequest) {
 
     const query = `
       SELECT
-        t.id AS id,
-        t.tranid AS invoice_number,
-        t.trandate AS invoice_date,
+        t.id,
+        t.tranid,
+        t.trandate,
+        t.type,
         t.foreigntotal AS total,
-        t.status AS status,
-        BUILTIN.DF(t.status) AS status_display,
-        t.duedate AS due_date
+        t.status,
+        BUILTIN.DF(t.status) AS status_display
       FROM transaction t
       WHERE t.entity = ${customerId}
-        AND t.type = 'CustInvc'
+        AND t.type IN ('CustInvc', 'SalesOrd', 'Estimate')
         AND t.mainline = 'T'
       ORDER BY t.trandate DESC
     `;
 
-    const result = await suiteqlQuery(query, 100);
-    const invoices = result?.items || [];
+    const result = await suiteqlQuery(query, 200);
+    const transactions = (result?.items || []).map((t: any) => ({
+      id: t.id,
+      tranid: t.tranid,
+      trandate: t.trandate,
+      type: t.type,
+      total: t.total ? parseFloat(t.total) : 0,
+      status: t.status_display || t.status,
+    }));
 
-    return NextResponse.json({ success: true, invoices });
+    return NextResponse.json({ success: true, transactions });
   } catch (e: any) {
     console.error('Customer invoices error:', e);
     return NextResponse.json(
