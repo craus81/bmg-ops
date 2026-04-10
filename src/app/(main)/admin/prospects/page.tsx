@@ -116,6 +116,7 @@ export default function ProspectsPage() {
   const [showCreate, setShowCreate] = useState(false);
   const [form, setForm] = useState({ company_name: '', contact_name: '', email: '', phone: '', address: '', city: '', state: '', zip: '', website: '', notes: '', location_count: 1 });
   const [saving, setSaving] = useState(false);
+  const [syncing, setSyncing] = useState(false);
 
   // Inline forms
   const [showContactForm, setShowContactForm] = useState<string | null>(null);
@@ -439,10 +440,24 @@ export default function ProspectsPage() {
       {/* Header */}
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: '14px' }}>
         <div>
-          <div style={{ fontSize: '22px', fontWeight: 800, color: 'var(--text-primary)' }}>Prospects &amp; Customers</div>
+          <div style={{ fontSize: '22px', fontWeight: 800, color: 'var(--text-primary)' }}>CRM</div>
           <div style={{ fontSize: '11px', color: 'var(--text-muted)', marginTop: '2px' }}>{prospects.length} total · {prospects.filter(p => p.status === 'active').length} active · {prospects.filter(p => p.status === 'converted').length} customers</div>
         </div>
-        <div style={{ display: 'flex', gap: '6px' }}>
+        <div style={{ display: 'flex', gap: '6px', flexWrap: 'wrap' }}>
+          <button onClick={async () => {
+            setSyncing(true);
+            try {
+              const res = await fetch('/api/netsuite/customers');
+              const data = await res.json();
+              alert(`Synced ${data.synced || 0} customers from NetSuite`);
+              loadProspects();
+            } catch { alert('Sync failed'); }
+            setSyncing(false);
+          }} disabled={syncing} style={{
+            padding: '8px 12px', borderRadius: '8px', fontSize: '11px', fontWeight: 700,
+            background: 'rgba(34,197,94,0.08)', border: '1px solid rgba(34,197,94,0.2)', color: '#22c55e', cursor: 'pointer',
+            opacity: syncing ? 0.5 : 1,
+          }}>{syncing ? 'Syncing...' : 'Sync NetSuite'}</button>
           <input ref={cardInputRef} type="file" accept="image/*" capture="environment" onChange={(e) => { const f = e.target.files?.[0]; if (f) handleScanCard(f); e.target.value = ''; }} style={{ display: 'none' }} />
           <button onClick={() => cardInputRef.current?.click()} disabled={scanning} style={{
             padding: '8px 12px', borderRadius: '8px', fontSize: '11px', fontWeight: 700,
@@ -451,7 +466,7 @@ export default function ProspectsPage() {
           <button onClick={() => setShowCreate(!showCreate)} style={{
             padding: '8px 14px', borderRadius: '8px', fontSize: '11px', fontWeight: 700,
             background: 'var(--tab-active-bg)', border: '1px solid var(--tab-active-border)', color: 'var(--tab-active-color)', cursor: 'pointer',
-          }}>{showCreate ? 'Cancel' : '+ New Prospect'}</button>
+          }}>{showCreate ? 'Cancel' : '+ New'}</button>
         </div>
       </div>
 
