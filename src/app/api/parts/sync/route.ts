@@ -93,41 +93,57 @@ export async function POST(req: NextRequest) {
 
     // 1. Get cost and quantity from item table
     try {
+      // First: get cost and try to discover quantity fields
       const costQuery = `
         SELECT
           i.id,
-          i.baseprice,
-          i.cost AS purchase_price,
-          i.totalquantityonhand,
-          i.totalquantityavailable
+          i.cost AS purchase_price
         FROM item i
         WHERE i.itemtype IN ('InvtPart', 'NonInvtPart', 'Service', 'Kit', 'Assembly')
         AND i.isinactive = 'F'
       `;
       const costItems = await suiteqlQueryAll(costQuery);
       console.log(`[parts-sync] Cost query returned ${costItems.length} items`);
-      let basePriceCount = 0;
-      let qtyCount = 0;
       for (const c of costItems) {
         if (c.id) {
-          const id = c.id.toString();
-          const bp = parseFloat(c.baseprice || '0');
-          if (bp > 0) { pricingMap[id] = bp; basePriceCount++; }
-          const qtyOnHand = parseFloat(c.totalquantityonhand || '0');
-          const qtyAvailable = parseFloat(c.totalquantityavailable || '0');
-          if (qtyOnHand > 0 || qtyAvailable > 0) qtyCount++;
-          costMap[id] = {
+          costMap[c.id.toString()] = {
             purchasePrice: parseFloat(c.purchase_price || '0'),
-            quantityOnHand: qtyOnHand,
-            quantityAvailable: qtyAvailable,
+            quantityOnHand: 0,
+            quantityAvailable: 0,
           };
         }
       }
-      console.log(`[parts-sync] baseprice: ${basePriceCount}, qty>0: ${qtyCount}`);
-      if (costItems.length > 0) {
-        const sample = costItems[0];
-        console.log(`[parts-sync] Sample keys: ${Object.keys(sample).join(', ')}`);
-        console.log(`[parts-sync] Sample values: totalquantityonhand=${sample.totalquantityonhand}, totalquantityavailable=${sample.totalquantityavailable}`);
+
+      // Try different quantity field names
+      const qtyQueries = [
+        `SELECT i.id, i.quantityonhand AS qty FROM item i WHERE i.itemtype = 'InvtPart' AND i.isinactive = 'F' AND i.quantityonhand > 0`,
+        `SELECT i.id, i.totalquantityonhand AS qty FROM item i WHERE i.itemtype = 'InvtPart' AND i.isinactive = 'F'`,
+        `SELECT i.id, i.onhandquantity AS qty FROM item i WHERE i.itemtype = 'InvtPart' AND i.isinactive = 'F'`,
+        `SELECT ib.item AS id, SUM(ib.quantityonhand) AS qty FROM inventorybalance ib GROUP BY ib.item`,
+      ];
+
+      let qtyCount = 0;
+      for (const q of qtyQueries) {
+        try {
+          console.log(`[parts-sync] Trying qty query: ${q.substring(0, 60)}...`);
+          const qtyItems = await suiteqlQueryAll(q);
+          if (qtyItems && qtyItems.length > 0) {
+            console.log(`[parts-sync] Qty query SUCCESS: ${qtyItems.length} items`);
+            for (const qi of qtyItems) {
+              const id = qi.id?.toString();
+              const qty = parseFloat(qi.qty || '0');
+              if (id && costMap[id]) {
+                costMap[id].quantityOnHand = qty;
+                costMap[id].quantityAvailable = qty;
+                if (qty > 0) qtyCount++;
+              }
+            }
+            console.log(`[parts-sync] ${qtyCount} items with qty > 0`);
+            break;
+          }
+        } catch (err: any) {
+          console.log(`[parts-sync] Qty query failed: ${err.message?.substring(0, 150)}`);
+        }
       }
     } catch (err: any) {
       console.error('[parts-sync] Cost query FAILED:', err.message?.substring(0, 300) || err);
