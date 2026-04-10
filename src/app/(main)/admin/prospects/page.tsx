@@ -100,7 +100,7 @@ export default function ProspectsPage() {
   const [prospects, setProspects] = useState<Prospect[]>([]);
   const [loading, setLoading] = useState(true);
   const [search, setSearch] = useState('');
-  const [statusFilter, setStatusFilter] = useState<string>('active');
+  const [statusFilter, setStatusFilter] = useState<string>('all');
   const [tagFilter, setTagFilter] = useState<string>('');
   const [expandedId, setExpandedId] = useState<string | null>(null);
 
@@ -197,8 +197,20 @@ export default function ProspectsPage() {
   }, []);
 
   const loadProspects = async () => {
-    const { data } = await supabase.from('prospects').select('*').order('created_at', { ascending: false });
-    setProspects((data || []) as Prospect[]);
+    // Supabase defaults to 1000 rows — paginate to get all
+    let all: Prospect[] = [];
+    let page = 0;
+    const pageSize = 1000;
+    let hasMore = true;
+    while (hasMore) {
+      const from = page * pageSize;
+      const { data } = await supabase.from('prospects').select('*').order('company_name').range(from, from + pageSize - 1);
+      const batch = (data || []) as Prospect[];
+      all = [...all, ...batch];
+      hasMore = batch.length === pageSize;
+      page++;
+    }
+    setProspects(all);
     setLoading(false);
   };
 
