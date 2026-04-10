@@ -34,7 +34,12 @@ export default function MessagesPage() {
   const [deleteMenuId, setDeleteMenuId] = useState<string | null>(null);
 
   const deleteMessage = async (msgId: string) => {
-    await supabase.from('messages').delete().eq('id', msgId);
+    const { error } = await supabase.from('messages').delete().eq('id', msgId);
+    if (error) {
+      alert('Could not delete message');
+      setDeleteMenuId(null);
+      return;
+    }
     setMessages(prev => prev.filter(m => m.id !== msgId));
     setDeleteMenuId(null);
   };
