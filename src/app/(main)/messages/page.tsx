@@ -31,6 +31,13 @@ export default function MessagesPage() {
   const [newMessage, setNewMessage] = useState('');
   const [sending, setSending] = useState(false);
   const [showEmoji, setShowEmoji] = useState(false);
+  const [deleteMenuId, setDeleteMenuId] = useState<string | null>(null);
+
+  const deleteMessage = async (msgId: string) => {
+    await supabase.from('messages').delete().eq('id', msgId);
+    setMessages(prev => prev.filter(m => m.id !== msgId));
+    setDeleteMenuId(null);
+  };
 
   const EMOJI_LIST = ['👍', '👎', '😀', '😂', '🤣', '😊', '🙏', '🔥', '❤️', '💯', '✅', '❌', '⚡', '🎉', '👀', '💪', '🚚', '🔧', '📋', '📞', '📧', '⏰', '📍', '🏗️'];
 
@@ -414,17 +421,28 @@ export default function MessagesPage() {
                     {formatTime(msg.created_at)}
                   </div>
                 )}
-                <div style={{ display: 'flex', justifyContent: isMe ? 'flex-end' : 'flex-start' }}>
-                  <div style={{
-                    maxWidth: '80%', padding: '8px 12px', borderRadius: '14px',
-                    background: isMe ? '#3b82f6' : 'var(--border)',
-                    color: isMe ? '#fff' : 'var(--text-body)',
-                    fontSize: '13px', lineHeight: 1.4,
-                    borderBottomRightRadius: isMe ? '4px' : '14px',
-                    borderBottomLeftRadius: isMe ? '14px' : '4px',
-                  }}>
+                <div style={{ display: 'flex', justifyContent: isMe ? 'flex-end' : 'flex-start', position: 'relative' }}>
+                  <div
+                    onClick={() => setDeleteMenuId(deleteMenuId === msg.id ? null : msg.id)}
+                    style={{
+                      maxWidth: '80%', padding: '8px 12px', borderRadius: '14px',
+                      background: isMe ? '#3b82f6' : 'var(--border)',
+                      color: isMe ? '#fff' : 'var(--text-body)',
+                      fontSize: '13px', lineHeight: 1.4,
+                      borderBottomRightRadius: isMe ? '4px' : '14px',
+                      borderBottomLeftRadius: isMe ? '14px' : '4px',
+                      cursor: 'pointer',
+                    }}>
                     <span style={{ whiteSpace: 'pre-wrap' }}>{renderMessageBody(msg.body)}</span>
                   </div>
+                  {deleteMenuId === msg.id && (
+                    <button onClick={(e) => { e.stopPropagation(); deleteMessage(msg.id); }} style={{
+                      position: 'absolute', top: '-8px', [isMe ? 'left' : 'right']: '0',
+                      padding: '4px 10px', borderRadius: '6px', fontSize: '10px', fontWeight: 700,
+                      background: 'rgba(239,68,68,0.9)', color: '#fff', border: 'none',
+                      cursor: 'pointer', zIndex: 10, boxShadow: '0 2px 8px rgba(0,0,0,0.3)',
+                    }}>Delete</button>
+                  )}
                 </div>
               </div>
             );
