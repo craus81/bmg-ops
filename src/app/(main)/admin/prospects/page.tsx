@@ -115,6 +115,7 @@ export default function ProspectsPage() {
 
   // Forms
   const [showCreate, setShowCreate] = useState(false);
+  const [editingProspectId, setEditingProspectId] = useState<string | null>(null);
   const [form, setForm] = useState({ company_name: '', contact_name: '', email: '', phone: '', address: '', city: '', state: '', zip: '', website: '', notes: '', location_count: 1 });
   const [saving, setSaving] = useState(false);
   const [syncing, setSyncing] = useState(false);
@@ -309,21 +310,34 @@ export default function ProspectsPage() {
   };
 
   // Create prospect
-  const createProspect = async () => {
+  const startEdit = (p: Prospect) => {
+    setForm({ company_name: p.company_name, contact_name: p.contact_name || '', email: p.email || '', phone: p.phone || '', address: p.address || '', city: p.city || '', state: p.state || '', zip: p.zip || '', website: p.website || '', notes: p.notes || '', location_count: p.location_count || 1 });
+    setEditingProspectId(p.id);
+    setShowCreate(true);
+  };
+
+  const saveProspect = async () => {
     if (!form.company_name.trim()) return;
     setSaving(true);
-    const { data, error } = await supabase.from('prospects').insert({
-      ...form,
-      location_count: form.location_count || 1,
-      created_by: user?.id,
-    }).select().single();
-    if (!error && data) {
-      setProspects(prev => [data as Prospect, ...prev]);
-      setShowCreate(false);
-      setForm({ company_name: '', contact_name: '', email: '', phone: '', address: '', city: '', state: '', zip: '', website: '', notes: '', location_count: 1 });
-      // Auto-tag if multilocation
-      if (form.location_count > 1) {
-        await supabase.from('prospect_tags').insert({ prospect_id: data.id, tag: 'multilocation', auto_generated: true });
+    if (editingProspectId) {
+      // Update
+      const { error } = await supabase.from('prospects').update({ ...form, location_count: form.location_count || 1 }).eq('id', editingProspectId);
+      if (!error) {
+        setProspects(prev => prev.map(p => p.id === editingProspectId ? { ...p, ...form } as Prospect : p));
+        setShowCreate(false);
+        setEditingProspectId(null);
+        setForm({ company_name: '', contact_name: '', email: '', phone: '', address: '', city: '', state: '', zip: '', website: '', notes: '', location_count: 1 });
+      }
+    } else {
+      // Create
+      const { data, error } = await supabase.from('prospects').insert({ ...form, location_count: form.location_count || 1, created_by: user?.id }).select().single();
+      if (!error && data) {
+        setProspects(prev => [data as Prospect, ...prev]);
+        setShowCreate(false);
+        setForm({ company_name: '', contact_name: '', email: '', phone: '', address: '', city: '', state: '', zip: '', website: '', notes: '', location_count: 1 });
+        if (form.location_count > 1) {
+          await supabase.from('prospect_tags').insert({ prospect_id: data.id, tag: 'multilocation', auto_generated: true });
+        }
       }
     }
     setSaving(false);
@@ -538,7 +552,7 @@ export default function ProspectsPage() {
             padding: '8px 12px', borderRadius: '8px', fontSize: '11px', fontWeight: 700,
             background: 'rgba(167,139,250,0.1)', border: '1px solid rgba(167,139,250,0.25)', color: '#a78bfa', cursor: 'pointer',
           }}>{scanning ? 'Scanning...' : 'Scan Card'}</button>
-          <button onClick={() => setShowCreate(!showCreate)} style={{
+          <button onClick={() => { if (showCreate) { setShowCreate(false); setEditingProspectId(null); setForm({ company_name: '', contact_name: '', email: '', phone: '', address: '', city: '', state: '', zip: '', website: '', notes: '', location_count: 1 }); } else { setShowCreate(true); setEditingProspectId(null); } }} style={{
             padding: '8px 14px', borderRadius: '8px', fontSize: '11px', fontWeight: 700,
             background: 'var(--tab-active-bg)', border: '1px solid var(--tab-active-border)', color: 'var(--tab-active-color)', cursor: 'pointer',
           }}>{showCreate ? 'Cancel' : '+ New'}</button>
@@ -563,11 +577,11 @@ export default function ProspectsPage() {
             <div><div style={labelStyle}># of Locations</div><input type="number" min="1" style={inputStyle} value={form.location_count} onChange={e => setForm({ ...form, location_count: parseInt(e.target.value) || 1 })} /></div>
             <div style={{ gridColumn: '1 / -1' }}><div style={labelStyle}>Notes</div><textarea style={{ ...inputStyle, minHeight: '50px', resize: 'vertical' }} value={form.notes} onChange={e => setForm({ ...form, notes: e.target.value })} /></div>
           </div>
-          <button onClick={createProspect} disabled={saving || !form.company_name.trim()} style={{
+          <button onClick={saveProspect} disabled={saving || !form.company_name.trim()} style={{
             width: '100%', padding: '12px', borderRadius: '10px', fontSize: '13px', fontWeight: 700,
             background: form.company_name.trim() ? '#22c55e' : 'var(--border)', color: '#fff', border: 'none', cursor: 'pointer',
             opacity: saving ? 0.5 : 1,
-          }}>{saving ? 'Saving...' : 'Create Prospect'}</button>
+          }}>{saving ? 'Saving...' : editingProspectId ? 'Save Changes' : 'Create Prospect'}</button>
         </div>
       )}
 
@@ -964,6 +978,10 @@ export default function ProspectsPage() {
 
                     {/* Info & Actions */}
                     <div style={{ display: 'flex', gap: '6px', marginTop: '10px' }}>
+                      <button onClick={() => startEdit(prospect)} style={{
+                        flex: 1, padding: '8px', borderRadius: '8px', fontSize: '11px', fontWeight: 700,
+                        background: 'rgba(59,130,246,0.08)', border: '1px solid rgba(59,130,246,0.2)', color: '#60a5fa', cursor: 'pointer',
+                      }}>Edit</button>
                       {prospect.netsuite_url && (
                         <a href={prospect.netsuite_url} target="_blank" rel="noopener noreferrer" style={{
                           flex: 1, padding: '8px', borderRadius: '8px', fontSize: '11px', fontWeight: 700, textAlign: 'center', textDecoration: 'none',

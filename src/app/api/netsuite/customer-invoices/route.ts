@@ -1,13 +1,13 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { suiteqlQuery } from '@/lib/netsuite';
+import { requireAuth } from '@/lib/api-auth';
 
 export const dynamic = 'force-dynamic';
 
-/**
- * GET /api/netsuite/customer-invoices?customerId=123
- * Returns recent invoices for a customer from NetSuite via SuiteQL.
- */
 export async function GET(req: NextRequest) {
+  const auth = await requireAuth(req);
+  if (auth.error) return auth.error;
+
   try {
     const { searchParams } = new URL(req.url);
     const customerId = searchParams.get('customerId');
@@ -23,12 +23,10 @@ export async function GET(req: NextRequest) {
         t.trandate,
         t.type,
         t.foreigntotal AS total,
-        t.status,
         BUILTIN.DF(t.status) AS status_display
       FROM transaction t
       WHERE t.entity = ${customerId}
         AND t.type IN ('CustInvc', 'SalesOrd', 'Estimate')
-        AND t.mainline = 'T'
       ORDER BY t.trandate DESC
     `;
 
@@ -39,15 +37,12 @@ export async function GET(req: NextRequest) {
       trandate: t.trandate,
       type: t.type,
       total: t.total ? parseFloat(t.total) : 0,
-      status: t.status_display || t.status,
+      status: t.status_display || '',
     }));
 
     return NextResponse.json({ success: true, transactions });
   } catch (e: any) {
-    console.error('Customer invoices error:', e);
-    return NextResponse.json(
-      { error: e.message || 'Failed to fetch invoices' },
-      { status: 500 }
-    );
+    console.error('Customer documents error:', e);
+    return NextResponse.json({ error: e.message || 'Failed to fetch documents' }, { status: 500 });
   }
 }

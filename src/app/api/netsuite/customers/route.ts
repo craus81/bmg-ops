@@ -214,7 +214,7 @@ export async function GET(req: NextRequest) {
           title: nc.title || null,
           email: nc.email || null,
           phone: nc.phone || null,
-        }, { onConflict: 'prospect_id,name' }).single();
+        }, { onConflict: 'prospect_id,name' });
         if (!cErr) contactsSynced++;
       }
     } catch (err: any) {
