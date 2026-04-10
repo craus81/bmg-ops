@@ -99,16 +99,13 @@ export async function POST(req: NextRequest) {
           i.baseprice,
           i.cost AS purchase_price,
           i.totalquantityonhand,
-          i.totalquantityavailable,
-          i.quantityonhand,
-          i.quantityavailable,
-          i.quantityonorder
+          i.totalquantityavailable
         FROM item i
         WHERE i.itemtype IN ('InvtPart', 'NonInvtPart', 'Service', 'Kit', 'Assembly')
         AND i.isinactive = 'F'
       `;
       const costItems = await suiteqlQueryAll(costQuery);
-      console.log(`[parts-sync] Fetched cost/qty for ${costItems.length} items`);
+      console.log(`[parts-sync] Cost query returned ${costItems.length} items`);
       let basePriceCount = 0;
       let qtyCount = 0;
       for (const c of costItems) {
@@ -116,9 +113,8 @@ export async function POST(req: NextRequest) {
           const id = c.id.toString();
           const bp = parseFloat(c.baseprice || '0');
           if (bp > 0) { pricingMap[id] = bp; basePriceCount++; }
-          // Try both total and non-total quantity fields
-          const qtyOnHand = parseFloat(c.totalquantityonhand || c.quantityonhand || '0');
-          const qtyAvailable = parseFloat(c.totalquantityavailable || c.quantityavailable || '0');
+          const qtyOnHand = parseFloat(c.totalquantityonhand || '0');
+          const qtyAvailable = parseFloat(c.totalquantityavailable || '0');
           if (qtyOnHand > 0 || qtyAvailable > 0) qtyCount++;
           costMap[id] = {
             purchasePrice: parseFloat(c.purchase_price || '0'),
@@ -127,14 +123,14 @@ export async function POST(req: NextRequest) {
           };
         }
       }
-      console.log(`[parts-sync] baseprice: ${basePriceCount}/${costItems.length}, qty>0: ${qtyCount}`);
-      // Log sample item to see which qty fields have data
+      console.log(`[parts-sync] baseprice: ${basePriceCount}, qty>0: ${qtyCount}`);
       if (costItems.length > 0) {
-        const sample = costItems.find((c: any) => parseFloat(c.totalquantityonhand || c.quantityonhand || '0') > 0) || costItems[0];
-        console.log(`[parts-sync] Sample item fields:`, JSON.stringify(sample).substring(0, 500));
+        const sample = costItems[0];
+        console.log(`[parts-sync] Sample keys: ${Object.keys(sample).join(', ')}`);
+        console.log(`[parts-sync] Sample values: totalquantityonhand=${sample.totalquantityonhand}, totalquantityavailable=${sample.totalquantityavailable}`);
       }
     } catch (err: any) {
-      console.error('[parts-sync] Cost query failed:', err.message || err);
+      console.error('[parts-sync] Cost query FAILED:', err.message?.substring(0, 300) || err);
     }
 
     // 2. Get sales prices from pricing matrix — try "pricing" table first, then "itemPrice"
