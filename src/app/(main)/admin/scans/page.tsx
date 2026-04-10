@@ -64,7 +64,19 @@ export default function AdminScansPage() {
       supabase.from('scan_logs').select('*').is('archived_at', null).order('scanned_at', { ascending: false }).limit(1000),
       supabase.from('profiles').select('id, full_name'),
       supabase.from('netsuite_parts').select('item_number, requires_po_match'),
-      supabase.from('netsuite_parts').select('id, item_number, display_name, billable_customer').eq('is_active', true).eq('catalog', 'graphics').order('item_number'),
+      // Graphics parts — paginate to get all
+      (async () => {
+        let all: any[] = [];
+        let pg = 0;
+        let more = true;
+        while (more) {
+          const { data } = await supabase.from('netsuite_parts').select('id, item_number, display_name, billable_customer').eq('is_active', true).eq('catalog', 'graphics').order('item_number').range(pg * 1000, (pg + 1) * 1000 - 1);
+          all = [...all, ...(data || [])];
+          more = (data || []).length === 1000;
+          pg++;
+        }
+        return { data: all };
+      })(),
       supabase.from('work_locations').select('id, name').eq('is_active', true).order('name'),
     ]);
     setAllParts((fullPartsRes.data || []) as typeof allParts);
