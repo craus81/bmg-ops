@@ -189,10 +189,15 @@ export async function GET(req: NextRequest) {
       // Try multiple approaches to find contacts
       let nsContacts: any[] = [];
 
-      // Approach 1: customercontact table
       const contactQueries = [
-        `SELECT cc.contact AS contact_id, cc.entity AS customer_id, cc.contactrole, c2.entityid, c2.firstname, c2.lastname, c2.email, c2.phone, c2.title FROM customercontact cc LEFT JOIN customer c2 ON cc.contact = c2.id WHERE cc.entity IS NOT NULL`,
-        `SELECT c.id, c.companyname, c.entityid, c.email, c.phone, c.firstname, c.lastname, c.title, c.parent AS customer_id FROM customer c WHERE c.parent IS NOT NULL AND c.isinactive = 'F'`,
+        // Approach 1: Contact record type (most common)
+        `SELECT c.id, c.firstname, c.lastname, c.email, c.phone, c.title, c.company AS customer_id FROM Contact c WHERE c.isinactive = 'F' AND c.company IS NOT NULL`,
+        // Approach 2: Via N_CONTACT
+        `SELECT c.id, c.firstname, c.lastname, c.email, c.phone, c.title, c.company AS customer_id FROM N_CONTACT c WHERE c.isinactive = 'F' AND c.company IS NOT NULL`,
+        // Approach 3: Via contactList on customer (subquery)
+        `SELECT cl.contact AS contact_id, cl.company AS customer_id, cl.contactname, cl.email, cl.phone, cl.contactrole FROM customerbookcontact cl`,
+        // Approach 4: REST-style entity query
+        `SELECT e.id, e.firstname, e.lastname, e.email, e.phone, e.title, e.company AS customer_id FROM entityindex e WHERE e.type = 'Contact' AND e.isinactive = 'F'`,
       ];
 
       for (const q of contactQueries) {
@@ -203,8 +208,10 @@ export async function GET(req: NextRequest) {
             console.log(`[customer-sync] Contact query succeeded with ${result.length} results`);
             break;
           }
+          console.log(`[customer-sync] Contact query returned 0 results`);
         } catch (err: any) {
-          console.log(`[customer-sync] Contact query failed: ${err.message?.substring(0, 100)}`);
+          const errMsg = err.message?.substring(0, 150) || 'unknown';
+          console.log(`[customer-sync] Contact query failed: ${errMsg}`);
         }
       }
       contactsTotal = nsContacts.length;
@@ -225,9 +232,10 @@ export async function GET(req: NextRequest) {
       console.log(`[customer-sync] Prospect map has ${Object.keys(nsToProspect).length} entries`);
 
       for (const nc of nsContacts) {
-        const prospectId = nsToProspect[nc.customer_id?.toString()];
+        const custId = (nc.customer_id || nc.company)?.toString();
+        const prospectId = nsToProspect[custId];
         if (!prospectId) { contactsSkipped++; continue; }
-        const name = [nc.firstname, nc.lastname].filter(Boolean).join(' ') || nc.entityid || 'Unknown';
+        const name = nc.contactname || [nc.firstname, nc.lastname].filter(Boolean).join(' ') || nc.entityid || 'Unknown';
         if (!name || name === 'Unknown') { contactsSkipped++; continue; }
         const { data: inserted, error: cErr } = await supabase.from('prospect_contacts').upsert({
           prospect_id: prospectId,
