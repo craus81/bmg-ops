@@ -189,6 +189,8 @@ export async function GET(req: NextRequest) {
     let contactsSkipped = 0;
     let contactErrors = 0;
     let firstContactError: string | null = null;
+    let firstRestError: string | null = null;
+    let firstRestStatus: number | null = null;
     try {
       // Fetch contacts via REST Record API (contact sublists not available in SuiteQL)
       const accountId = (process.env.NETSUITE_ACCOUNT_ID || '').toLowerCase().replace(/_/g, '-');
@@ -218,23 +220,52 @@ export async function GET(req: NextRequest) {
       const customerIds = Object.keys(nsToProspect).slice(0, 50);
       console.log(`[customer-sync] Fetching contacts for ${customerIds.length} customers via REST API`);
 
+      let firstSuccessKeys: string[] | null = null;
+
       for (const custId of customerIds) {
         try {
           const url = `${restBaseUrl}/customer/${custId}?expandSubResources=true`;
           const authData = restOAuth.authorize({ url, method: 'GET' }, restToken);
           const authHeader = restOAuth.toHeader(authData).Authorization;
 
+          // Log first request details for debugging
+          if (contactErrors === 0 && contactsSynced === 0 && contactsTotal === 0) {
+            console.log(`[customer-sync] First REST request: GET ${url}`);
+            console.log(`[customer-sync] Auth header prefix: ${authHeader.substring(0, 80)}...`);
+          }
+
           const res = await fetch(url, {
             headers: { 'Authorization': authHeader, 'Content-Type': 'application/json' },
           });
 
-          if (!res.ok) { contactErrors++; continue; }
+          if (!res.ok) {
+            contactErrors++;
+            // Log first 3 failures with full detail
+            if (contactErrors <= 3) {
+              const body = await res.text().catch(() => '(could not read body)');
+              console.error(`[customer-sync] REST error for customer ${custId}: HTTP ${res.status} ${res.statusText}`);
+              console.error(`[customer-sync] Response body: ${body.substring(0, 500)}`);
+              if (!firstRestError) { firstRestError = body.substring(0, 300); firstRestStatus = res.status; }
+            }
+            continue;
+          }
           const data = await res.json();
+
+          // Log first success to see available keys
+          if (!firstSuccessKeys) {
+            firstSuccessKeys = Object.keys(data);
+            console.log(`[customer-sync] First success keys for customer ${custId}: ${firstSuccessKeys.join(', ')}`);
+            const contactKeys = firstSuccessKeys.filter(k => k.toLowerCase().includes('contact') || k.toLowerCase().includes('role'));
+            console.log(`[customer-sync] Contact-related keys: ${contactKeys.join(', ') || 'none'}`);
+          }
 
           // Try multiple possible sublist names
           const contacts = data.contactRoles?.items || data.contactList?.items || data.contacts?.items || [];
           const prospectId = nsToProspect[custId];
-          if (!prospectId || contacts.length === 0) continue;
+          if (!prospectId || contacts.length === 0) {
+            contactsSkipped++;
+            continue;
+          }
 
           contactsTotal += contacts.length;
 
@@ -252,8 +283,11 @@ export async function GET(req: NextRequest) {
             if (!cErr) contactsSynced++;
             else contactErrors++;
           }
-        } catch {
+        } catch (fetchErr: any) {
           contactErrors++;
+          if (contactErrors <= 3) {
+            console.error(`[customer-sync] REST fetch exception for customer ${custId}: ${fetchErr.message}`);
+          }
         }
       }
 
@@ -272,6 +306,7 @@ export async function GET(req: NextRequest) {
       contactsTotal,
       contactsSkipped,
       contactErrors,
+      ...(firstRestError ? { restApiError: { status: firstRestStatus, body: firstRestError } } : {}),
       ...(firstContactError ? { firstContactError } : {}),
       ...(firstError ? { firstError, sampleErrors: errors } : {}),
       ...(firstProspectError ? { firstProspectError } : {}),
