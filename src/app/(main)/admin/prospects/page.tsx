@@ -79,7 +79,7 @@ const LEAD_SOURCES = ['Cold Call', 'Lead', 'Maryland Heights Chamber of Commerce
 const OPP_TYPES: Record<string, string> = { tech_install: 'Tech Install', graphics: 'Graphics', rebrand: 'Rebrand', fleet_wrap: 'Fleet Wrap', other: 'Other' };
 const OPP_STAGES: Record<string, string> = { lead: 'Lead', quoted: 'Quoted', negotiating: 'Negotiating', won: 'Won', lost: 'Lost' };
 const STAGE_COLORS: Record<string, string> = { lead: '#60a5fa', quoted: '#a78bfa', negotiating: '#fbbf24', won: '#4ade80', lost: '#f87171' };
-const STATUS_LABELS: Record<string, string> = { active: 'Active', nurturing: 'Nurturing', converted: 'Converted' };
+const STATUS_LABELS: Record<string, string> = { active: 'Prospects', nurturing: 'Nurturing', converted: 'Converted' };
 const STATUS_COLORS: Record<string, string> = { active: '#4ade80', nurturing: '#60a5fa', converted: '#a78bfa' };
 const ACTIVITY_ICONS: Record<string, string> = { call: '\u{1F4DE}', email: '\u{1F4E7}', note: '\u{1F4DD}', meeting: '\u{1F91D}', quote_sent: '\u{1F4CB}', status_change: '\u{1F504}' };
 
