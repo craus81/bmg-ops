@@ -30,7 +30,7 @@ const TYPE_LABELS: Record<string, string> = {
   graphics: 'Graphics',
   upfit: 'Upfit',
   cni: 'CNI',
-  reminder: 'Reminder',
+  reminder: 'Sales',
   manual: 'Event',
 };
 
