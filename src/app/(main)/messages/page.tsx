@@ -270,8 +270,7 @@ export default function MessagesPage() {
 
   const insertEmoji = (emoji: string) => {
     setNewMessage(prev => prev + emoji);
-    setShowEmoji(false);
-    inputRef.current?.focus();
+    // Keep emoji picker open — user closes it by clicking the emoji button or tapping the input
   };
 
   const sendMessage = async () => {

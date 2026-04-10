@@ -155,6 +155,38 @@ export default function AiChat() {
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLInputElement>(null);
 
+  // Draggable position
+  const [pos, setPos] = useState({ x: -1, y: -1 }); // -1 = use default
+  const dragRef = useRef<{ startX: number; startY: number; origX: number; origY: number; dragging: boolean }>({ startX: 0, startY: 0, origX: 0, origY: 0, dragging: false });
+
+  const getDefaultPos = () => ({ x: window.innerWidth - 84, y: window.innerHeight - 148 });
+  const getPos = () => pos.x < 0 ? getDefaultPos() : pos;
+
+  const handleDragStart = (clientX: number, clientY: number) => {
+    const p = getPos();
+    dragRef.current = { startX: clientX, startY: clientY, origX: p.x, origY: p.y, dragging: false };
+  };
+
+  const handleDragMove = (clientX: number, clientY: number) => {
+    const d = dragRef.current;
+    const dx = clientX - d.startX;
+    const dy = clientY - d.startY;
+    if (Math.abs(dx) > 5 || Math.abs(dy) > 5) d.dragging = true;
+    if (d.dragging) {
+      setPos({
+        x: Math.max(0, Math.min(window.innerWidth - 72, d.origX + dx)),
+        y: Math.max(0, Math.min(window.innerHeight - 72, d.origY + dy)),
+      });
+    }
+  };
+
+  const handleDragEnd = () => {
+    if (!dragRef.current.dragging) {
+      setIsOpen(true);
+      setTimeout(() => inputRef.current?.focus(), 100);
+    }
+  };
+
   if (!hasAccess) return null;
 
   const scrollToBottom = () => {
@@ -224,26 +256,28 @@ export default function AiChat() {
     <>
       {/* Floating mascot button */}
       {!isOpen && (
-        <button
-          onClick={() => {
-            setIsOpen(true);
-            setTimeout(() => inputRef.current?.focus(), 100);
-          }}
+        <div
+          onMouseDown={e => { handleDragStart(e.clientX, e.clientY); const onMove = (ev: MouseEvent) => handleDragMove(ev.clientX, ev.clientY); const onUp = () => { handleDragEnd(); window.removeEventListener('mousemove', onMove); window.removeEventListener('mouseup', onUp); }; window.addEventListener('mousemove', onMove); window.addEventListener('mouseup', onUp); }}
+          onTouchStart={e => { const t = e.touches[0]; handleDragStart(t.clientX, t.clientY); }}
+          onTouchMove={e => { const t = e.touches[0]; handleDragMove(t.clientX, t.clientY); }}
+          onTouchEnd={() => handleDragEnd()}
           style={{
             position: 'fixed',
-            bottom: '76px',
-            right: '12px',
+            left: `${getPos().x}px`,
+            top: `${getPos().y}px`,
             width: '72px',
             height: '72px',
             borderRadius: '50%',
             background: 'var(--card)',
             border: '2px solid var(--border-strong, rgba(255,255,255,0.1))',
-            cursor: 'pointer',
+            cursor: 'grab',
             boxShadow: '0 4px 20px rgba(30,58,138,0.5)',
             zIndex: 1000,
             display: 'flex',
             alignItems: 'center',
             justifyContent: 'center',
+            touchAction: 'none',
+            userSelect: 'none',
             padding: 0,
             overflow: 'hidden',
             transition: 'transform 0.2s, box-shadow 0.2s',
@@ -258,7 +292,7 @@ export default function AiChat() {
           }}
         >
           <MascotSvg thinking={sending} size={62} />
-        </button>
+        </div>
       )}
 
       {/* Chat panel */}
