@@ -79,7 +79,7 @@ export default function MorePage() {
           <MenuBtn title="Export Reports" sub="Download vehicle spreadsheets" onClick={() => router.push('/reports')} />
         )}
         {F('customers') && (
-          <MenuBtn title="Customers" sub="Customers & contacts from NetSuite" onClick={() => router.push('/admin/customers')} />
+          <MenuBtn title="Customers" sub="Customers & contacts from NetSuite" onClick={() => router.push('/admin/prospects')} />
         )}
         {F('parts_catalog') && (
           <MenuBtn title="Parts Catalog" sub="Upfit & graphic parts from NetSuite" onClick={() => router.push('/parts')} />

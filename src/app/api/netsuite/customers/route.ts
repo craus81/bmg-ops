@@ -155,6 +155,20 @@ export async function GET(req: NextRequest) {
       } else {
         synced++;
       }
+
+      // Also upsert into prospects table for unified CRM view
+      await supabase.from('prospects').upsert({
+        netsuite_id: nsId,
+        netsuite_url: nsAccountId ? `${nsBaseUrl}/app/common/entity/custjob.nl?id=${nsId}` : null,
+        netsuite_type: 'customer',
+        company_name: nsc.companyname || nsc.entityid || 'Unknown',
+        email: nsc.email || null,
+        phone: nsc.phone || null,
+        address: nsc.defaultbillingaddress || null,
+        status: 'converted',
+        source: 'netsuite',
+        pushed_at: new Date().toISOString(),
+      }, { onConflict: 'netsuite_id' }).then(() => {}).catch(() => {});
     }
 
     return NextResponse.json({

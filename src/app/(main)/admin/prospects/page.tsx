@@ -379,8 +379,8 @@ export default function ProspectsPage() {
       {/* Header */}
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: '14px' }}>
         <div>
-          <div style={{ fontSize: '22px', fontWeight: 800, color: 'var(--text-primary)' }}>Prospects</div>
-          <div style={{ fontSize: '11px', color: 'var(--text-muted)', marginTop: '2px' }}>{prospects.length} total · {prospects.filter(p => p.status === 'active').length} active</div>
+          <div style={{ fontSize: '22px', fontWeight: 800, color: 'var(--text-primary)' }}>Prospects &amp; Customers</div>
+          <div style={{ fontSize: '11px', color: 'var(--text-muted)', marginTop: '2px' }}>{prospects.length} total · {prospects.filter(p => p.status === 'active').length} active · {prospects.filter(p => p.status === 'converted').length} customers</div>
         </div>
         <div style={{ display: 'flex', gap: '6px' }}>
           <input ref={cardInputRef} type="file" accept="image/*" capture="environment" onChange={(e) => { const f = e.target.files?.[0]; if (f) handleScanCard(f); e.target.value = ''; }} style={{ display: 'none' }} />
@@ -424,11 +424,11 @@ export default function ProspectsPage() {
       {/* Search & Filters */}
       <input
         value={search} onChange={e => setSearch(e.target.value)}
-        placeholder="Search prospects..."
+        placeholder="Search prospects & customers..."
         style={{ ...inputStyle, marginBottom: '8px' }}
       />
       <div style={{ display: 'flex', gap: '4px', marginBottom: '14px', flexWrap: 'wrap' }}>
-        {['all', 'active', 'nurturing', 'converted', 'lost'].map(s => (
+        {['all', 'active', 'nurturing', 'converted'].map(s => (
           <button key={s} onClick={() => setStatusFilter(s)} style={{
             padding: '5px 10px', borderRadius: '6px', fontSize: '10px', fontWeight: 700,
             background: statusFilter === s ? 'var(--tab-active-bg)' : 'transparent',
@@ -489,7 +489,7 @@ export default function ProspectsPage() {
 
                     {/* Status Actions */}
                     <div style={{ display: 'flex', gap: '4px', marginBottom: '12px', flexWrap: 'wrap' }}>
-                      {['active', 'nurturing', 'lost', 'inactive'].filter(s => s !== prospect.status).map(s => (
+                      {['active', 'nurturing', 'converted'].filter(s => s !== prospect.status).map(s => (
                         <button key={s} onClick={() => updateStatus(prospect, s)} style={{
                           padding: '4px 10px', borderRadius: '6px', fontSize: '10px', fontWeight: 700,
                           background: `${STATUS_COLORS[s]}12`, border: `1px solid ${STATUS_COLORS[s]}33`, color: STATUS_COLORS[s], cursor: 'pointer',
