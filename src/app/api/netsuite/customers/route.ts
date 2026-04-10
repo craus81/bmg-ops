@@ -3,6 +3,10 @@ import { suiteqlQuery, suiteqlQueryAll } from '@/lib/netsuite';
 import { createClient } from '@supabase/supabase-js';
 import { requireAuth } from '@/lib/api-auth';
 
+// Import OAuth helpers for REST Record API
+import OAuth from 'oauth-1.0a';
+import crypto from 'crypto';
+
 export const dynamic = 'force-dynamic';
 
 export async function GET(req: NextRequest) {
@@ -186,43 +190,18 @@ export async function GET(req: NextRequest) {
     let contactErrors = 0;
     let firstContactError: string | null = null;
     try {
-      // Try multiple approaches to find contacts
-      let nsContacts: any[] = [];
+      // Fetch contacts via REST Record API (contact sublists not available in SuiteQL)
+      const accountId = (process.env.NETSUITE_ACCOUNT_ID || '').toLowerCase().replace(/_/g, '-');
+      const restBaseUrl = `https://${accountId}.suitetalk.api.netsuite.com/services/rest/record/v1`;
 
-      const contactQueries = [
-        // The NetSuite contact list is at /app/common/entity/contactlist.nl
-        // Try various SuiteQL table names for contacts
-        `SELECT c.id, c.entityid, c.firstname, c.lastname, c.email, c.phone, c.title, c.company AS customer_id FROM contactlist c WHERE c.isinactive = 'F'`,
-        `SELECT c.id, c.entityid, c.firstname, c.lastname, c.email, c.phone, c.title, c.company AS customer_id FROM entitycontact c WHERE c.isinactive = 'F'`,
-        // Person-type customers with a parent company = contacts
-        `SELECT c.id, c.entityid, c.firstname, c.lastname, c.email, c.phone, c.title, c.company AS customer_id FROM customer c WHERE c.isperson = 'T' AND c.company IS NOT NULL AND c.isinactive = 'F'`,
-        // Try vendor contacts too
-        `SELECT c.id, c.entityid, c.firstname, c.lastname, c.email, c.phone, c.title, c.company AS customer_id FROM vendorcontact c`,
-      ];
+      const restOAuth = new OAuth({
+        consumer: { key: process.env.NETSUITE_CONSUMER_KEY!, secret: process.env.NETSUITE_CONSUMER_SECRET! },
+        signature_method: 'HMAC-SHA256',
+        hash_function(base_string, key) { return crypto.createHmac('sha256', key).update(base_string).digest('base64'); },
+      });
+      const restToken = { key: process.env.NETSUITE_TOKEN_ID!, secret: process.env.NETSUITE_TOKEN_SECRET! };
 
-      for (const q of contactQueries) {
-        try {
-          console.log(`[customer-sync] Trying contact query: ${q.substring(0, 80)}...`);
-          const result = await suiteqlQueryAll(q);
-          if (result && result.length > 0) {
-            nsContacts = result;
-            console.log(`[customer-sync] SUCCESS: Found ${result.length} contacts`);
-            break;
-          }
-          console.log(`[customer-sync] Query returned 0 results`);
-        } catch (err: any) {
-          const errMsg = err.message?.substring(0, 200) || 'unknown';
-          console.log(`[customer-sync] Query failed: ${errMsg}`);
-        }
-      }
-
-      if (nsContacts.length === 0) {
-        console.log('[customer-sync] All contact queries failed or returned 0. Contacts may need manual entry.');
-      }
-      contactsTotal = nsContacts.length;
-      console.log(`[customer-sync] Found ${nsContacts.length} contacts from NetSuite`);
-
-      // Build a map of netsuite customer id → prospect id (paginate past 1000 limit)
+      // Build prospect map
       let allProspectRows: any[] = [];
       let pPage = 0;
       let pHasMore = true;
@@ -234,30 +213,53 @@ export async function GET(req: NextRequest) {
       }
       const nsToProspect: Record<string, string> = {};
       allProspectRows.forEach((p: any) => { if (p.netsuite_id) nsToProspect[p.netsuite_id] = p.id; });
-      console.log(`[customer-sync] Prospect map has ${Object.keys(nsToProspect).length} entries`);
 
-      for (const nc of nsContacts) {
-        const custId = (nc.customer_id || nc.company || nc.entity)?.toString();
-        const prospectId = nsToProspect[custId];
-        if (!prospectId) { contactsSkipped++; continue; }
-        const name = nc.name || nc.contactname || nc.addressee || [nc.firstname, nc.lastname].filter(Boolean).join(' ') || nc.entityid || nc.companyname || 'Unknown';
-        if (!name || name === 'Unknown') { contactsSkipped++; continue; }
-        const { data: inserted, error: cErr } = await supabase.from('prospect_contacts').upsert({
-          prospect_id: prospectId,
-          name,
-          title: nc.title || null,
-          email: nc.email || null,
-          phone: nc.phone || null,
-        }, { onConflict: 'prospect_id,name' }).select('id');
-        if (cErr) {
+      // Process first 50 customers to stay within Vercel timeout
+      const customerIds = Object.keys(nsToProspect).slice(0, 50);
+      console.log(`[customer-sync] Fetching contacts for ${customerIds.length} customers via REST API`);
+
+      for (const custId of customerIds) {
+        try {
+          const url = `${restBaseUrl}/customer/${custId}?expandSubResources=true`;
+          const authData = restOAuth.authorize({ url, method: 'GET' }, restToken);
+          const authHeader = restOAuth.toHeader(authData).Authorization;
+
+          const res = await fetch(url, {
+            headers: { 'Authorization': authHeader, 'Content-Type': 'application/json' },
+          });
+
+          if (!res.ok) { contactErrors++; continue; }
+          const data = await res.json();
+
+          // Try multiple possible sublist names
+          const contacts = data.contactRoles?.items || data.contactList?.items || data.contacts?.items || [];
+          const prospectId = nsToProspect[custId];
+          if (!prospectId || contacts.length === 0) continue;
+
+          contactsTotal += contacts.length;
+
+          for (const c of contacts) {
+            const name = c.contactName || c.contact?.refName || c.name || [c.firstName, c.lastName].filter(Boolean).join(' ') || 'Unknown';
+            if (name === 'Unknown') continue;
+
+            const { error: cErr } = await supabase.from('prospect_contacts').upsert({
+              prospect_id: prospectId,
+              name,
+              title: c.role?.refName || c.title || c.jobTitle || null,
+              email: c.email || null,
+              phone: c.phone || null,
+            }, { onConflict: 'prospect_id,name' });
+            if (!cErr) contactsSynced++;
+            else contactErrors++;
+          }
+        } catch {
           contactErrors++;
-          if (!firstContactError) firstContactError = `${cErr.code}: ${cErr.message}`;
-        } else if (inserted && inserted.length > 0) {
-          contactsSynced++;
         }
       }
+
+      console.log(`[customer-sync] Contacts: ${contactsSynced} synced, ${contactsTotal} total, ${contactErrors} errors`);
     } catch (err: any) {
-      console.error('[customer-sync] Contact sync error:', err.message, err.stack);
+      console.error('[customer-sync] Contact sync error:', err.message);
       firstContactError = firstContactError || `Exception: ${err.message}`;
     }
 
