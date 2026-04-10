@@ -30,6 +30,9 @@ export default function MessagesPage() {
   const [messages, setMessages] = useState<Message[]>([]);
   const [newMessage, setNewMessage] = useState('');
   const [sending, setSending] = useState(false);
+  const [showEmoji, setShowEmoji] = useState(false);
+
+  const EMOJI_LIST = ['👍', '👎', '😀', '😂', '🤣', '😊', '🙏', '🔥', '❤️', '💯', '✅', '❌', '⚡', '🎉', '👀', '💪', '🚚', '🔧', '📋', '📞', '📧', '⏰', '📍', '🏗️'];
 
   // New conversation
   const [showNewConvo, setShowNewConvo] = useState(false);
@@ -241,6 +244,23 @@ export default function MessagesPage() {
     }
   };
 
+  const renderMessageBody = (body: string) => {
+    // Auto-link URLs
+    const urlRegex = /(https?:\/\/[^\s]+)/g;
+    const parts = body.split(urlRegex);
+    return parts.map((part, i) =>
+      urlRegex.test(part) ? (
+        <a key={i} href={part} target="_blank" rel="noopener noreferrer" style={{ color: 'inherit', textDecoration: 'underline', wordBreak: 'break-all' }}>{part}</a>
+      ) : part
+    );
+  };
+
+  const insertEmoji = (emoji: string) => {
+    setNewMessage(prev => prev + emoji);
+    setShowEmoji(false);
+    inputRef.current?.focus();
+  };
+
   const sendMessage = async () => {
     if (!newMessage.trim() || !activeConvoId || !user || sending) return;
     setSending(true);
@@ -391,10 +411,7 @@ export default function MessagesPage() {
                     borderBottomRightRadius: isMe ? '4px' : '14px',
                     borderBottomLeftRadius: isMe ? '14px' : '4px',
                   }}>
-                    {msg.body}
-                    {msg.via_sms && (
-                      <span style={{ fontSize: '9px', opacity: 0.6, marginLeft: '6px' }} title="Sent via SMS">via SMS</span>
-                    )}
+                    <span style={{ whiteSpace: 'pre-wrap' }}>{renderMessageBody(msg.body)}</span>
                   </div>
                 </div>
               </div>
@@ -403,15 +420,27 @@ export default function MessagesPage() {
           <div ref={messagesEndRef} />
         </div>
 
+        {/* Emoji picker */}
+        {showEmoji && (
+          <div style={{ display: 'flex', flexWrap: 'wrap', gap: '2px', padding: '8px', background: 'var(--card)', border: '1px solid var(--border)', borderRadius: '10px', marginBottom: '4px' }}>
+            {EMOJI_LIST.map(e => (
+              <button key={e} onClick={() => insertEmoji(e)} style={{ padding: '4px 6px', borderRadius: '6px', border: 'none', background: 'transparent', fontSize: '18px', cursor: 'pointer' }}>{e}</button>
+            ))}
+          </div>
+        )}
+
         {/* Input */}
-        <div style={{ display: 'flex', gap: '8px', padding: '8px 0', borderTop: '1px solid var(--border)', flexShrink: 0 }}>
-          <input
-            ref={inputRef}
+        <div style={{ display: 'flex', gap: '8px', padding: '8px 0', borderTop: '1px solid var(--border)', flexShrink: 0, alignItems: 'flex-end' }}>
+          <button onClick={() => setShowEmoji(!showEmoji)} style={{ padding: '8px', borderRadius: '8px', border: 'none', background: showEmoji ? 'rgba(59,130,246,0.15)' : 'transparent', fontSize: '18px', cursor: 'pointer', flexShrink: 0 }}>😀</button>
+          <textarea
+            ref={inputRef as any}
             value={newMessage}
             onChange={e => setNewMessage(e.target.value)}
             onKeyDown={e => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); sendMessage(); } }}
             placeholder="Type a message..."
-            style={inputStyle}
+            rows={1}
+            style={{ ...inputStyle, resize: 'none', minHeight: '40px', maxHeight: '120px', lineHeight: '1.4' }}
+            onInput={e => { const t = e.target as HTMLTextAreaElement; t.style.height = 'auto'; t.style.height = Math.min(t.scrollHeight, 120) + 'px'; }}
           />
           <button
             onClick={sendMessage}
