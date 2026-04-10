@@ -108,6 +108,8 @@ export default function ProspectsPage() {
   const [contacts, setContacts] = useState<Record<string, Contact[]>>({});
   const [opportunities, setOpportunities] = useState<Record<string, Opportunity[]>>({});
   const [activities, setActivities] = useState<Record<string, Activity[]>>({});
+  interface Reminder { id: string; title: string; description: string | null; due_at: string; completed_at: string | null; }
+  const [reminders, setReminders] = useState<Record<string, Reminder[]>>({});
   const [tags, setTags] = useState<Record<string, Tag[]>>({});
 
   // Forms
@@ -123,6 +125,62 @@ export default function ProspectsPage() {
   const [activityInput, setActivityInput] = useState<Record<string, string>>({});
   const [activityType, setActivityType] = useState<Record<string, string>>({});
   const [tagInput, setTagInput] = useState('');
+
+  // Voice notes
+  const [recording, setRecording] = useState<string | null>(null); // prospect id being recorded
+  const [voiceProcessing, setVoiceProcessing] = useState(false);
+  const [voiceResult, setVoiceResult] = useState<{ summary: string; reminders: number } | null>(null);
+  const recognitionRef = useRef<any>(null);
+
+  const startVoiceNote = (prospectId: string) => {
+    const SpeechRecognition = (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition;
+    if (!SpeechRecognition) { alert('Speech recognition not supported in this browser. Try Chrome.'); return; }
+
+    const recognition = new SpeechRecognition();
+    recognition.continuous = true;
+    recognition.interimResults = true;
+    recognition.lang = 'en-US';
+
+    recognition.onresult = (event: any) => {
+      let transcript = '';
+      for (let i = 0; i < event.results.length; i++) {
+        transcript += event.results[i][0].transcript;
+      }
+      setActivityInput(prev => ({ ...prev, [prospectId]: transcript }));
+    };
+
+    recognition.onerror = () => { setRecording(null); };
+    recognition.onend = () => { if (recording === prospectId) setRecording(null); };
+
+    recognition.start();
+    recognitionRef.current = recognition;
+    setRecording(prospectId);
+    setVoiceResult(null);
+  };
+
+  const stopVoiceNote = async (prospectId: string) => {
+    if (recognitionRef.current) { recognitionRef.current.stop(); recognitionRef.current = null; }
+    setRecording(null);
+
+    const text = (activityInput[prospectId] || '').trim();
+    if (!text) return;
+
+    setVoiceProcessing(true);
+    try {
+      const res = await fetch('/api/prospects/voice-note', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ prospectId, noteText: text, userId: user?.id }),
+      });
+      const data = await res.json();
+      if (res.ok) {
+        setVoiceResult({ summary: data.summary, reminders: data.reminders || 0 });
+        setActivityInput(prev => ({ ...prev, [prospectId]: '' }));
+        loadDetail(prospectId);
+      }
+    } catch {}
+    setVoiceProcessing(false);
+  };
 
   // Profiles for activity display
   const [profiles, setProfiles] = useState<Record<string, string>>({});
@@ -154,16 +212,18 @@ export default function ProspectsPage() {
 
 
   const loadDetail = async (prospectId: string) => {
-    const [cRes, oRes, aRes, tRes] = await Promise.all([
+    const [cRes, oRes, aRes, tRes, rRes] = await Promise.all([
       supabase.from('prospect_contacts').select('*').eq('prospect_id', prospectId).order('is_decision_maker', { ascending: false }),
       supabase.from('prospect_opportunities').select('*').eq('prospect_id', prospectId).order('created_at', { ascending: false }),
       supabase.from('prospect_activities').select('*').eq('prospect_id', prospectId).order('created_at', { ascending: false }).limit(50),
       supabase.from('prospect_tags').select('*').eq('prospect_id', prospectId),
+      supabase.from('prospect_reminders').select('*').eq('prospect_id', prospectId).is('completed_at', null).order('due_at'),
     ]);
     setContacts(prev => ({ ...prev, [prospectId]: (cRes.data || []) as Contact[] }));
     setOpportunities(prev => ({ ...prev, [prospectId]: (oRes.data || []) as Opportunity[] }));
     setActivities(prev => ({ ...prev, [prospectId]: (aRes.data || []).map((a: any) => ({ ...a, creator_name: profiles[a.created_by] || null })) as Activity[] }));
     setTags(prev => ({ ...prev, [prospectId]: (tRes.data || []) as Tag[] }));
+    setReminders(prev => ({ ...prev, [prospectId]: (rRes.data || []) as Reminder[] }));
   };
 
   const toggleExpand = (id: string) => {
@@ -645,6 +705,35 @@ export default function ProspectsPage() {
                       ))}
                     </div>
 
+                    {/* Reminders */}
+                    {(reminders[prospect.id] || []).length > 0 && (
+                      <div style={{ marginBottom: '12px' }}>
+                        <div style={labelStyle}>Upcoming Reminders</div>
+                        <div style={{ display: 'flex', flexDirection: 'column', gap: '3px' }}>
+                          {(reminders[prospect.id] || []).map(r => {
+                            const isDue = new Date(r.due_at) <= new Date();
+                            return (
+                              <div key={r.id} style={{
+                                display: 'flex', justifyContent: 'space-between', alignItems: 'center',
+                                padding: '6px 8px', borderRadius: '6px',
+                                background: isDue ? 'rgba(239,68,68,0.06)' : 'var(--subtle-bg)',
+                                border: `1px solid ${isDue ? 'rgba(239,68,68,0.2)' : 'var(--border)'}`,
+                              }}>
+                                <div>
+                                  <div style={{ fontSize: '11px', fontWeight: 700, color: isDue ? '#ef4444' : 'var(--text-primary)' }}>{r.title}</div>
+                                  <div style={{ fontSize: '9px', color: 'var(--text-muted)' }}>{new Date(r.due_at).toLocaleDateString([], { weekday: 'short', month: 'short', day: 'numeric' })}</div>
+                                </div>
+                                <button onClick={async () => {
+                                  await supabase.from('prospect_reminders').update({ completed_at: new Date().toISOString() }).eq('id', r.id);
+                                  setReminders(prev => ({ ...prev, [prospect.id]: (prev[prospect.id] || []).filter(rem => rem.id !== r.id) }));
+                                }} style={{ padding: '3px 8px', borderRadius: '4px', fontSize: '9px', fontWeight: 700, background: 'rgba(34,197,94,0.1)', border: '1px solid rgba(34,197,94,0.25)', color: '#22c55e', cursor: 'pointer' }}>Done</button>
+                              </div>
+                            );
+                          })}
+                        </div>
+                      </div>
+                    )}
+
                     {/* Activity Log */}
                     <div style={{ marginBottom: '12px' }}>
                       <div style={labelStyle}>Activity</div>
@@ -667,7 +756,28 @@ export default function ProspectsPage() {
                           border: `1px solid ${(activityInput[prospect.id] || '').trim() ? 'rgba(59,130,246,0.3)' : 'var(--border)'}`,
                           color: (activityInput[prospect.id] || '').trim() ? '#60a5fa' : 'var(--text-muted)', cursor: 'pointer',
                         }}>Post</button>
+                        {recording === prospect.id ? (
+                          <button onClick={() => stopVoiceNote(prospect.id)} style={{
+                            padding: '6px 10px', borderRadius: '6px', fontSize: '12px', fontWeight: 700,
+                            background: 'rgba(239,68,68,0.15)', border: '1px solid rgba(239,68,68,0.3)',
+                            color: '#ef4444', cursor: 'pointer', animation: 'pulse 1.5s infinite',
+                          }}>&#9632; Stop</button>
+                        ) : (
+                          <button onClick={() => startVoiceNote(prospect.id)} disabled={voiceProcessing} style={{
+                            padding: '6px 10px', borderRadius: '6px', fontSize: '12px',
+                            background: 'rgba(167,139,250,0.1)', border: '1px solid rgba(167,139,250,0.25)',
+                            color: '#a78bfa', cursor: 'pointer',
+                          }} title="Voice note">&#127908;</button>
+                        )}
                       </div>
+                      {voiceProcessing && recording === null && (
+                        <div style={{ fontSize: '10px', color: '#a78bfa', fontWeight: 600, marginBottom: '4px' }}>AI is parsing your note and creating reminders...</div>
+                      )}
+                      {voiceResult && (
+                        <div style={{ padding: '6px 10px', borderRadius: '6px', marginBottom: '4px', background: 'rgba(34,197,94,0.06)', border: '1px solid rgba(34,197,94,0.2)', fontSize: '10px', color: '#22c55e', fontWeight: 600 }}>
+                          Saved: {voiceResult.summary.slice(0, 80)}{voiceResult.summary.length > 80 ? '...' : ''}{voiceResult.reminders > 0 ? ` · ${voiceResult.reminders} reminder${voiceResult.reminders !== 1 ? 's' : ''} created` : ''}
+                        </div>
+                      )}
                       <div style={{ display: 'flex', flexDirection: 'column', gap: '3px', maxHeight: '200px', overflowY: 'auto' }}>
                         {pActivities.map(a => (
                           <div key={a.id} style={{ display: 'flex', gap: '6px', padding: '4px 6px', borderRadius: '6px', fontSize: '10px', color: 'var(--text-label)' }}>
