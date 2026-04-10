@@ -114,36 +114,22 @@ export async function POST(req: NextRequest) {
         }
       }
 
-      // Try different quantity field names
-      const qtyQueries = [
-        `SELECT i.id, i.quantityonhand AS qty FROM item i WHERE i.itemtype = 'InvtPart' AND i.isinactive = 'F' AND i.quantityonhand > 0`,
-        `SELECT i.id, i.totalquantityonhand AS qty FROM item i WHERE i.itemtype = 'InvtPart' AND i.isinactive = 'F'`,
-        `SELECT i.id, i.onhandquantity AS qty FROM item i WHERE i.itemtype = 'InvtPart' AND i.isinactive = 'F'`,
-        `SELECT ib.item AS id, SUM(ib.quantityonhand) AS qty FROM inventorybalance ib GROUP BY ib.item`,
-      ];
-
+      // Get inventory quantities using totalquantityonhand
       let qtyCount = 0;
-      for (const q of qtyQueries) {
-        try {
-          console.log(`[parts-sync] Trying qty query: ${q.substring(0, 60)}...`);
-          const qtyItems = await suiteqlQueryAll(q);
-          if (qtyItems && qtyItems.length > 0) {
-            console.log(`[parts-sync] Qty query SUCCESS: ${qtyItems.length} items`);
-            for (const qi of qtyItems) {
-              const id = qi.id?.toString();
-              const qty = parseFloat(qi.qty || '0');
-              if (id && costMap[id]) {
-                costMap[id].quantityOnHand = qty;
-                costMap[id].quantityAvailable = qty;
-                if (qty > 0) qtyCount++;
-              }
-            }
-            console.log(`[parts-sync] ${qtyCount} items with qty > 0`);
-            break;
+      try {
+        const qtyItems = await suiteqlQueryAll(`SELECT i.id, i.totalquantityonhand AS qty FROM item i WHERE i.itemtype = 'InvtPart' AND i.isinactive = 'F'`);
+        for (const qi of qtyItems) {
+          const id = qi.id?.toString();
+          const qty = parseFloat(qi.qty || '0');
+          if (id && costMap[id]) {
+            costMap[id].quantityOnHand = qty;
+            costMap[id].quantityAvailable = qty;
+            if (qty > 0) qtyCount++;
           }
-        } catch (err: any) {
-          console.log(`[parts-sync] Qty query failed: ${err.message?.substring(0, 150)}`);
         }
+        console.log(`[parts-sync] ${qtyCount} items with qty > 0`);
+      } catch (err: any) {
+        console.error('[parts-sync] Qty query failed:', err.message?.substring(0, 150));
       }
     } catch (err: any) {
       console.error('[parts-sync] Cost query FAILED:', err.message?.substring(0, 300) || err);
