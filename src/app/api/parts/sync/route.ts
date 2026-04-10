@@ -128,6 +128,11 @@ export async function POST(req: NextRequest) {
         }
       }
       console.log(`[parts-sync] baseprice: ${basePriceCount}/${costItems.length}, qty>0: ${qtyCount}`);
+      // Log sample item to see which qty fields have data
+      if (costItems.length > 0) {
+        const sample = costItems.find((c: any) => parseFloat(c.totalquantityonhand || c.quantityonhand || '0') > 0) || costItems[0];
+        console.log(`[parts-sync] Sample item fields:`, JSON.stringify(sample).substring(0, 500));
+      }
     } catch (err: any) {
       console.error('[parts-sync] Cost query failed:', err.message || err);
     }
