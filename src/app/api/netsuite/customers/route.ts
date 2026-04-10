@@ -181,6 +181,10 @@ export async function GET(req: NextRequest) {
 
     // Sync contacts from NetSuite into prospect_contacts
     let contactsSynced = 0;
+    let contactsTotal = 0;
+    let contactsSkipped = 0;
+    let contactErrors = 0;
+    let firstContactError: string | null = null;
     try {
       const contactQuery = `
         SELECT
@@ -212,9 +216,7 @@ export async function GET(req: NextRequest) {
       const nsToProspect: Record<string, string> = {};
       allProspectRows.forEach((p: any) => { if (p.netsuite_id) nsToProspect[p.netsuite_id] = p.id; });
 
-      let contactsSkipped = 0;
-      let contactErrors = 0;
-      let firstContactError: string | null = null;
+      contactsTotal = nsContacts.length;
 
       for (const nc of nsContacts) {
         const prospectId = nsToProspect[nc.customer_id?.toString()];
@@ -245,7 +247,7 @@ export async function GET(req: NextRequest) {
       synced,
       prospectsSynced,
       contactsSynced,
-      contactsTotal: nsContacts?.length || 0,
+      contactsTotal,
       contactsSkipped,
       contactErrors,
       ...(firstContactError ? { firstContactError } : {}),
