@@ -190,29 +190,34 @@ export async function GET(req: NextRequest) {
       let nsContacts: any[] = [];
 
       const contactQueries = [
-        // Approach 1: Contact record type (most common)
-        `SELECT c.id, c.firstname, c.lastname, c.email, c.phone, c.title, c.company AS customer_id FROM Contact c WHERE c.isinactive = 'F' AND c.company IS NOT NULL`,
-        // Approach 2: Via N_CONTACT
-        `SELECT c.id, c.firstname, c.lastname, c.email, c.phone, c.title, c.company AS customer_id FROM N_CONTACT c WHERE c.isinactive = 'F' AND c.company IS NOT NULL`,
-        // Approach 3: Via contactList on customer (subquery)
-        `SELECT cl.contact AS contact_id, cl.company AS customer_id, cl.contactname, cl.email, cl.phone, cl.contactrole FROM customerbookcontact cl`,
-        // Approach 4: REST-style entity query
-        `SELECT e.id, e.firstname, e.lastname, e.email, e.phone, e.title, e.company AS customer_id FROM entityindex e WHERE e.type = 'Contact' AND e.isinactive = 'F'`,
+        // Approach 1: Join customer to contactRoles subrecord
+        `SELECT cr.company AS customer_id, cr.contactname AS name, cr.email, cr.phone, cr.role AS title FROM customerContactRoles cr`,
+        // Approach 2: Contact as separate record type
+        `SELECT c.id, c.firstname, c.lastname, c.email, c.phone, c.title, c.company AS customer_id FROM Contact c WHERE c.isinactive = 'F'`,
+        // Approach 3: Customer addressbook contacts
+        `SELECT cab.entity AS customer_id, cab.addressee AS name, cab.addrphone AS phone FROM customerAddressbook cab WHERE cab.addressee IS NOT NULL`,
+        // Approach 4: Messages/contacts via transaction
+        `SELECT DISTINCT tl.entity AS customer_id, c.companyname AS name, c.email, c.phone FROM transactionline tl JOIN customer c ON tl.entity = c.id WHERE c.isperson = 'T' AND c.company IS NOT NULL`,
       ];
 
       for (const q of contactQueries) {
         try {
+          console.log(`[customer-sync] Trying contact query: ${q.substring(0, 80)}...`);
           const result = await suiteqlQueryAll(q);
           if (result && result.length > 0) {
             nsContacts = result;
-            console.log(`[customer-sync] Contact query succeeded with ${result.length} results`);
+            console.log(`[customer-sync] SUCCESS: Found ${result.length} contacts`);
             break;
           }
-          console.log(`[customer-sync] Contact query returned 0 results`);
+          console.log(`[customer-sync] Query returned 0 results`);
         } catch (err: any) {
-          const errMsg = err.message?.substring(0, 150) || 'unknown';
-          console.log(`[customer-sync] Contact query failed: ${errMsg}`);
+          const errMsg = err.message?.substring(0, 200) || 'unknown';
+          console.log(`[customer-sync] Query failed: ${errMsg}`);
         }
+      }
+
+      if (nsContacts.length === 0) {
+        console.log('[customer-sync] All contact queries failed or returned 0. Contacts may need manual entry.');
       }
       contactsTotal = nsContacts.length;
       console.log(`[customer-sync] Found ${nsContacts.length} contacts from NetSuite`);
@@ -232,10 +237,10 @@ export async function GET(req: NextRequest) {
       console.log(`[customer-sync] Prospect map has ${Object.keys(nsToProspect).length} entries`);
 
       for (const nc of nsContacts) {
-        const custId = (nc.customer_id || nc.company)?.toString();
+        const custId = (nc.customer_id || nc.company || nc.entity)?.toString();
         const prospectId = nsToProspect[custId];
         if (!prospectId) { contactsSkipped++; continue; }
-        const name = nc.contactname || [nc.firstname, nc.lastname].filter(Boolean).join(' ') || nc.entityid || 'Unknown';
+        const name = nc.name || nc.contactname || nc.addressee || [nc.firstname, nc.lastname].filter(Boolean).join(' ') || nc.entityid || nc.companyname || 'Unknown';
         if (!name || name === 'Unknown') { contactsSkipped++; continue; }
         const { data: inserted, error: cErr } = await supabase.from('prospect_contacts').upsert({
           prospect_id: prospectId,
