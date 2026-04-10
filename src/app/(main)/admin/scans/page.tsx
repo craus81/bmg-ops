@@ -47,6 +47,8 @@ export default function AdminScansPage() {
   const [allParts, setAllParts] = useState<{ id: string; item_number: string; display_name: string | null; billable_customer: string | null }[]>([]);
   const [allLocations, setAllLocations] = useState<{ id: string; name: string }[]>([]);
   const [bulkPart, setBulkPart] = useState<string>('');
+  const [bulkPartSearch, setBulkPartSearch] = useState('');
+  const [bulkPartLabel, setBulkPartLabel] = useState('');
   const [bulkLocation, setBulkLocation] = useState<string>('');
   const [bulkVins, setBulkVins] = useState('');
   const [bulkProcessing, setBulkProcessing] = useState(false);
@@ -62,7 +64,7 @@ export default function AdminScansPage() {
       supabase.from('scan_logs').select('*').is('archived_at', null).order('scanned_at', { ascending: false }).limit(1000),
       supabase.from('profiles').select('id, full_name'),
       supabase.from('netsuite_parts').select('item_number, requires_po_match'),
-      supabase.from('netsuite_parts').select('id, item_number, display_name, billable_customer').eq('is_active', true).order('item_number'),
+      supabase.from('netsuite_parts').select('id, item_number, display_name, billable_customer').eq('is_active', true).eq('catalog', 'graphics').order('item_number'),
       supabase.from('work_locations').select('id, name').eq('is_active', true).order('name'),
     ]);
     setAllParts((fullPartsRes.data || []) as typeof allParts);
@@ -440,12 +442,37 @@ export default function AdminScansPage() {
       {tab === 'bulk' && (
         <div style={{ background: 'var(--card)', border: `1px solid ${theme.border}`, borderRadius: '14px', padding: '16px' }}>
           <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '10px', marginBottom: '12px' }}>
-            <div>
-              <div style={{ fontSize: '10px', fontWeight: 700, color: 'var(--text-muted)', textTransform: 'uppercase', marginBottom: '4px' }}>Part Number</div>
-              <select value={bulkPart} onChange={e => setBulkPart(e.target.value)} style={{ width: '100%', padding: '10px', borderRadius: '8px', border: `1px solid ${theme.border}`, background: 'var(--input-bg)', color: 'var(--text-primary)', fontSize: '13px' }}>
-                <option value="">— Select Part —</option>
-                {allParts.map(p => <option key={p.id} value={p.id}>{p.item_number}{p.billable_customer ? ` — ${p.billable_customer}` : ''}</option>)}
-              </select>
+            <div style={{ position: 'relative' }}>
+              <div style={{ fontSize: '10px', fontWeight: 700, color: 'var(--text-muted)', textTransform: 'uppercase', marginBottom: '4px' }}>Part Number (Graphics)</div>
+              {bulkPart ? (
+                <div style={{ display: 'flex', alignItems: 'center', gap: '6px', padding: '10px', borderRadius: '8px', border: `1px solid ${theme.border}`, background: 'var(--input-bg)' }}>
+                  <span style={{ flex: 1, fontSize: '13px', fontWeight: 700, color: 'var(--text-primary)' }}>{bulkPartLabel}</span>
+                  <button onClick={() => { setBulkPart(''); setBulkPartLabel(''); setBulkPartSearch(''); }} style={{ background: 'none', border: 'none', color: '#f87171', fontSize: '14px', cursor: 'pointer' }}>✕</button>
+                </div>
+              ) : (
+                <div>
+                  <input value={bulkPartSearch} onChange={e => setBulkPartSearch(e.target.value)} placeholder="Search graphics parts..." style={{ width: '100%', padding: '10px', borderRadius: '8px', border: `1px solid ${theme.border}`, background: 'var(--input-bg)', color: 'var(--text-primary)', fontSize: '13px' }} />
+                  {bulkPartSearch.length >= 2 && (() => {
+                    const q = bulkPartSearch.toLowerCase();
+                    const matches = allParts.filter(p => p.item_number.toLowerCase().includes(q) || p.display_name?.toLowerCase().includes(q) || p.billable_customer?.toLowerCase().includes(q)).slice(0, 8);
+                    if (matches.length === 0) return <div style={{ fontSize: '10px', color: 'var(--text-muted)', padding: '6px 0' }}>No matching graphics parts</div>;
+                    return (
+                      <div style={{ position: 'absolute', top: '100%', left: 0, right: 0, zIndex: 50, background: 'var(--card)', border: `1px solid ${theme.border}`, borderRadius: '8px', boxShadow: '0 4px 12px rgba(0,0,0,0.2)', maxHeight: '200px', overflowY: 'auto', marginTop: '2px' }}>
+                        {matches.map(p => (
+                          <button key={p.id} onClick={() => { setBulkPart(p.id); setBulkPartLabel(`${p.item_number}${p.billable_customer ? ` — ${p.billable_customer}` : ''}`); setBulkPartSearch(''); }} style={{
+                            display: 'block', width: '100%', padding: '8px 10px', textAlign: 'left', border: 'none', borderBottom: `1px solid ${theme.border}`,
+                            background: 'transparent', cursor: 'pointer', fontSize: '12px', color: 'var(--text-primary)',
+                          }}>
+                            <span style={{ fontWeight: 700 }}>{p.item_number}</span>
+                            {p.billable_customer && <span style={{ color: '#a78bfa', marginLeft: '6px' }}>{p.billable_customer}</span>}
+                            {p.display_name && <div style={{ fontSize: '10px', color: 'var(--text-muted)' }}>{p.display_name}</div>}
+                          </button>
+                        ))}
+                      </div>
+                    );
+                  })()}
+                </div>
+              )}
             </div>
             <div>
               <div style={{ fontSize: '10px', fontWeight: 700, color: 'var(--text-muted)', textTransform: 'uppercase', marginBottom: '4px' }}>Location</div>
