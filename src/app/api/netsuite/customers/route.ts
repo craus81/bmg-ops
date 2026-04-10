@@ -186,23 +186,27 @@ export async function GET(req: NextRequest) {
     let contactErrors = 0;
     let firstContactError: string | null = null;
     try {
-      const contactQuery = `
-        SELECT
-          e.id,
-          e.entityid,
-          e.firstname,
-          e.lastname,
-          e.email,
-          e.phone,
-          e.title,
-          e.company AS customer_id
-        FROM entity e
-        WHERE e.type = 'Contact'
-        AND e.isinactive = 'F'
-        AND e.company IS NOT NULL
-        ORDER BY e.company, e.lastname
-      `;
-      const nsContacts = await suiteqlQueryAll(contactQuery);
+      // Try multiple approaches to find contacts
+      let nsContacts: any[] = [];
+
+      // Approach 1: customercontact table
+      const contactQueries = [
+        `SELECT cc.contact AS contact_id, cc.entity AS customer_id, cc.contactrole, c2.entityid, c2.firstname, c2.lastname, c2.email, c2.phone, c2.title FROM customercontact cc LEFT JOIN customer c2 ON cc.contact = c2.id WHERE cc.entity IS NOT NULL`,
+        `SELECT c.id, c.companyname, c.entityid, c.email, c.phone, c.firstname, c.lastname, c.title, c.parent AS customer_id FROM customer c WHERE c.parent IS NOT NULL AND c.isinactive = 'F'`,
+      ];
+
+      for (const q of contactQueries) {
+        try {
+          const result = await suiteqlQueryAll(q);
+          if (result && result.length > 0) {
+            nsContacts = result;
+            console.log(`[customer-sync] Contact query succeeded with ${result.length} results`);
+            break;
+          }
+        } catch (err: any) {
+          console.log(`[customer-sync] Contact query failed: ${err.message?.substring(0, 100)}`);
+        }
+      }
       contactsTotal = nsContacts.length;
       console.log(`[customer-sync] Found ${nsContacts.length} contacts from NetSuite`);
 
