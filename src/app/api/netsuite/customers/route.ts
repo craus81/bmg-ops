@@ -190,14 +190,14 @@ export async function GET(req: NextRequest) {
       let nsContacts: any[] = [];
 
       const contactQueries = [
-        // Approach 1: Join customer to contactRoles subrecord
-        `SELECT cr.company AS customer_id, cr.contactname AS name, cr.email, cr.phone, cr.role AS title FROM customerContactRoles cr`,
-        // Approach 2: Contact as separate record type
-        `SELECT c.id, c.firstname, c.lastname, c.email, c.phone, c.title, c.company AS customer_id FROM Contact c WHERE c.isinactive = 'F'`,
-        // Approach 3: Customer addressbook contacts
-        `SELECT cab.entity AS customer_id, cab.addressee AS name, cab.addrphone AS phone FROM customerAddressbook cab WHERE cab.addressee IS NOT NULL`,
-        // Approach 4: Messages/contacts via transaction
-        `SELECT DISTINCT tl.entity AS customer_id, c.companyname AS name, c.email, c.phone FROM transactionline tl JOIN customer c ON tl.entity = c.id WHERE c.isperson = 'T' AND c.company IS NOT NULL`,
+        // The NetSuite contact list is at /app/common/entity/contactlist.nl
+        // Try various SuiteQL table names for contacts
+        `SELECT c.id, c.entityid, c.firstname, c.lastname, c.email, c.phone, c.title, c.company AS customer_id FROM contactlist c WHERE c.isinactive = 'F'`,
+        `SELECT c.id, c.entityid, c.firstname, c.lastname, c.email, c.phone, c.title, c.company AS customer_id FROM entitycontact c WHERE c.isinactive = 'F'`,
+        // Person-type customers with a parent company = contacts
+        `SELECT c.id, c.entityid, c.firstname, c.lastname, c.email, c.phone, c.title, c.company AS customer_id FROM customer c WHERE c.isperson = 'T' AND c.company IS NOT NULL AND c.isinactive = 'F'`,
+        // Try vendor contacts too
+        `SELECT c.id, c.entityid, c.firstname, c.lastname, c.email, c.phone, c.title, c.company AS customer_id FROM vendorcontact c`,
       ];
 
       for (const q of contactQueries) {
