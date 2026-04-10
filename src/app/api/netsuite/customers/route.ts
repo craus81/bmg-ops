@@ -168,7 +168,7 @@ export async function GET(req: NextRequest) {
         status: 'converted',
         source: 'netsuite',
         pushed_at: new Date().toISOString(),
-      }, { onConflict: 'netsuite_id' }).then(() => {}).catch(() => {});
+      }, { onConflict: 'netsuite_id' });
     }
 
     return NextResponse.json({
