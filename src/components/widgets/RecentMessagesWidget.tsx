@@ -17,7 +17,7 @@ export default function RecentMessagesWidget() {
   const load = async () => {
     const { data } = await supabase
       .from('messages')
-      .select('id, body, sender_name, created_at, conversation_id')
+      .select('id, body, sender_id, created_at, conversation_id, profiles!messages_sender_id_fkey(full_name)')
       .order('created_at', { ascending: false })
       .limit(6);
 
@@ -53,11 +53,11 @@ export default function RecentMessagesWidget() {
                 display: 'flex', alignItems: 'center', justifyContent: 'center',
                 fontSize: '12px', fontWeight: 800,
                 color: 'var(--orange)',
-              }}>{(m.sender_name || '?')[0]?.toUpperCase()}</div>
+              }}>{((m.profiles as any)?.full_name || '?')[0]?.toUpperCase()}</div>
               <div style={{ flex: 1, minWidth: 0 }}>
                 <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline' }}>
                   <span style={{ fontSize: '11px', fontWeight: 700, color: theme.textPrimary }}>
-                    {m.sender_name || 'Unknown'}
+                    {(m.profiles as any)?.full_name || 'Unknown'}
                   </span>
                   <span style={{ fontSize: '9px', color: theme.textMuted, flexShrink: 0 }}>{timeAgo(m.created_at)}</span>
                 </div>
