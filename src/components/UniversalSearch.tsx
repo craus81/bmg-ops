@@ -122,9 +122,11 @@ function renderResult(group: string, item: any, router: any, onClose: () => void
 
     case 'customers':
       return (
-        <button key={item.id} onClick={() => navigate('/estimates')} style={resultBtnStyle}>
+        <button key={item.id} onClick={() => navigate('/admin/prospects')} style={resultBtnStyle}>
           <span style={titleStyle}>{item.company_name}</span>
-          <div style={subtitleStyle}>{item.entity_id ? `ID: ${item.entity_id}` : ''}{item.netsuite_id ? ` · NS: ${item.netsuite_id}` : ''}</div>
+          <div style={subtitleStyle}>
+            {item.contact_name || ''}{item.email ? ` · ${item.email}` : ''}{item.status === 'converted' ? ' · Customer' : item.status === 'active' ? ' · Prospect' : ''}
+          </div>
         </button>
       );
 
@@ -263,7 +265,7 @@ export default function UniversalSearch({ open, onClose }: UniversalSearchProps)
             type="text"
             value={query}
             onChange={(e) => handleInput(e.target.value)}
-            placeholder="Search POs, vehicles, jobs, parts, customers..."
+            placeholder="Search POs, vehicles, jobs, parts, prospects..."
             style={{
               flex: 1, background: 'transparent', border: 'none', outline: 'none',
               color: 'var(--text-body)', fontSize: '16px', fontWeight: 600,

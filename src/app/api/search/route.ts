@@ -64,11 +64,12 @@ export async function GET(req: NextRequest) {
       .or(`part_number.ilike.${like},end_customer.ilike.${like},vehicle_type.ilike.${like},graphic_package.ilike.${like}`)
       .limit(MAX_PER_GROUP),
 
-    // Customers — search by company name or entity ID
+    // Customers & Prospects — search by company name, contact, email
     supabase
-      .from('customers')
-      .select('id, company_name, entity_id, netsuite_id')
-      .or(`company_name.ilike.${like},entity_id.ilike.${like}`)
+      .from('prospects')
+      .select('id, company_name, contact_name, email, phone, status, netsuite_id')
+      .or(`company_name.ilike.${like},contact_name.ilike.${like},email.ilike.${like}`)
+      .order('company_name')
       .limit(MAX_PER_GROUP),
 
     // Messages — search by body text
@@ -115,20 +116,27 @@ export async function GET(req: NextRequest) {
   // Merge PO results
   const allPOs = [...(pos.data || []), ...poFromLineItems].slice(0, MAX_PER_GROUP);
 
-  // Also search estimates by customer name through the customers table
+  // Also search estimates by customer name through the prospects/customers table
   let estimatesByCustomer: any[] = [];
   if (customers.data && customers.data.length > 0) {
-    const customerIds = customers.data.map((c: any) => c.id);
-    const { data: custEstimates } = await supabase
-      .from('estimates')
-      .select('id, estimate_number, customer_id, title, status, total, created_at')
-      .in('customer_id', customerIds)
-      .order('created_at', { ascending: false })
-      .limit(MAX_PER_GROUP);
+    // Prospects that came from NetSuite have netsuite_id which maps to customers.netsuite_id → estimates.customer_id
+    const nsIds = customers.data.filter((c: any) => c.netsuite_id).map((c: any) => c.netsuite_id);
+    if (nsIds.length > 0) {
+      // Look up the old customer IDs by netsuite_id
+      const { data: oldCustomers } = await supabase.from('customers').select('id').in('netsuite_id', nsIds);
+      const customerIds = (oldCustomers || []).map((c: any) => c.id);
+      if (customerIds.length > 0) {
+        const { data: custEstimates } = await supabase
+          .from('estimates')
+          .select('id, estimate_number, customer_id, title, status, total, created_at')
+          .in('customer_id', customerIds)
+          .order('created_at', { ascending: false })
+          .limit(MAX_PER_GROUP);
 
-    // Filter out already-found estimates
-    const existingEstIds = new Set((estimates.data || []).map((e: any) => e.id));
-    estimatesByCustomer = (custEstimates || []).filter((e: any) => !existingEstIds.has(e.id));
+        const existingEstIds = new Set((estimates.data || []).map((e: any) => e.id));
+        estimatesByCustomer = (custEstimates || []).filter((e: any) => !existingEstIds.has(e.id));
+      }
+    }
   }
 
   const allEstimates = [...(estimates.data || []), ...estimatesByCustomer].slice(0, MAX_PER_GROUP);
