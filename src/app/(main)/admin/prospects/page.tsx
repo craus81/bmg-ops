@@ -449,7 +449,7 @@ export default function ProspectsPage() {
             try {
               const res = await fetch('/api/netsuite/customers');
               const data = await res.json();
-              alert(`Synced ${data.synced || 0} customers from NetSuite`);
+              alert(`Synced ${data.synced || 0} customers, ${data.prospectsSynced || 0} to CRM${data.firstProspectError ? '\nCRM error: ' + data.firstProspectError : ''}`);
               loadProspects();
             } catch { alert('Sync failed'); }
             setSyncing(false);

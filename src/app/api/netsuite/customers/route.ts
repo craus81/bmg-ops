@@ -118,7 +118,9 @@ export async function GET(req: NextRequest) {
 
     // Upsert into our local customers table
     let synced = 0;
+    let prospectsSynced = 0;
     let firstError: string | null = null;
+    let firstProspectError: string | null = null;
     const errors: string[] = [];
 
     for (const nsc of nsCustomers) {
@@ -157,7 +159,7 @@ export async function GET(req: NextRequest) {
       }
 
       // Also upsert into prospects table for unified CRM view
-      await supabase.from('prospects').upsert({
+      const { error: prospectErr } = await supabase.from('prospects').upsert({
         netsuite_id: nsId,
         netsuite_url: nsAccountId ? `${nsBaseUrl}/app/common/entity/custjob.nl?id=${nsId}` : null,
         netsuite_type: 'customer',
@@ -168,14 +170,22 @@ export async function GET(req: NextRequest) {
         status: 'converted',
         source: 'netsuite',
         pushed_at: new Date().toISOString(),
-      }, { onConflict: 'netsuite_id' });
+      }, { onConflict: 'netsuite_id', ignoreDuplicates: false });
+      if (prospectErr) {
+        if (!firstProspectError) firstProspectError = `${prospectErr.code}: ${prospectErr.message} (hint: ${prospectErr.hint || 'none'})`;
+        if (prospectsSynced === 0) console.error('[customer-sync] Prospect upsert failed:', prospectErr.message, prospectErr.details, prospectErr.hint, prospectErr.code);
+      } else {
+        prospectsSynced++;
+      }
     }
 
     return NextResponse.json({
       status: 'synced',
       total: nsCustomers.length,
       synced,
+      prospectsSynced,
       ...(firstError ? { firstError, sampleErrors: errors } : {}),
+      ...(firstProspectError ? { firstProspectError } : {}),
     });
   } catch (err: any) {
     console.error('NetSuite customer sync error:', err);
