@@ -639,7 +639,7 @@ export default function ProspectsPage() {
               let lastError: string | null = null;
               try {
                 while (true) {
-                  const res = await fetch(`/api/netsuite/contacts/sync?offset=${offset}&limit=10`, { method: 'POST' });
+                  const res = await fetch(`/api/netsuite/contacts/sync?offset=${offset}&limit=3`, { method: 'POST' });
                   const data = await res.json().catch(() => ({}));
                   if (!res.ok) { lastError = `HTTP ${res.status}: ${data.error || 'Unknown'}`; break; }
                   totalSynced += data.contactsSynced || 0;
