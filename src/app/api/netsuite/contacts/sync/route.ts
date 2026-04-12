@@ -42,7 +42,7 @@ export async function POST(req: NextRequest) {
     // Get offset from query params for pagination across syncs
     const url = new URL(req.url);
     const offset = parseInt(url.searchParams.get('offset') || '0');
-    const batchSize = 100; // Process 100 customers per sync call
+    const batchSize = 20; // Keep small — each customer needs 1+ extra API calls for contact details
 
     // Build prospect map
     let allProspectRows: any[] = [];

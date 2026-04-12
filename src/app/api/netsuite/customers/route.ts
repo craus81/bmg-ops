@@ -220,8 +220,8 @@ export async function GET(req: NextRequest) {
       const nsToProspect: Record<string, string> = {};
       allProspectRows.forEach((p: any) => { if (p.netsuite_id) nsToProspect[p.netsuite_id] = p.id; });
 
-      // Process first 50 customers to stay within Vercel timeout
-      const customerIds = Object.keys(nsToProspect).slice(0, 50);
+      // Process first 20 customers — each needs extra API calls for contact phone/email
+      const customerIds = Object.keys(nsToProspect).slice(0, 20);
       console.log(`[customer-sync] Fetching contacts for ${customerIds.length} customers via REST API`);
 
       let firstSuccessKeys: string[] | null = null;
