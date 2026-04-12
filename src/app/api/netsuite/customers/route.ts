@@ -30,7 +30,7 @@ export async function GET(req: NextRequest) {
         c.entityid,
         c.email,
         c.phone,
-        c.defaultbillingaddress,
+        BUILTIN.DF(c.defaultbillingaddress) AS defaultbillingaddress,
         c.isinactive
       FROM customer c
       WHERE c.isinactive = 'F'

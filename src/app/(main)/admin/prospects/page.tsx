@@ -102,11 +102,16 @@ export default function ProspectsPage() {
   const [loading, setLoading] = useState(true);
   const [search, setSearch] = useState('');
   const [statusFilter, setStatusFilter] = useState<string>('all');
+  const [crmTab, setCrmTab] = useState<'prospects' | 'contacts'>('prospects');
   const [tagFilter, setTagFilter] = useState<string>('');
   const [expandedId, setExpandedId] = useState<string | null>(null);
 
   // Detail data (loaded on expand)
   const [contacts, setContacts] = useState<Record<string, Contact[]>>({});
+  const [allContacts, setAllContacts] = useState<(Contact & { company_name?: string; prospect_id: string })[]>([]);
+  const [contactsLoaded, setContactsLoaded] = useState(false);
+  const [contactSearch, setContactSearch] = useState('');
+  const [syncingContacts, setSyncingContacts] = useState(false);
   const [opportunities, setOpportunities] = useState<Record<string, Opportunity[]>>({});
   const [activities, setActivities] = useState<Record<string, Activity[]>>({});
   interface Reminder { id: string; title: string; description: string | null; due_at: string; completed_at: string | null; }
@@ -241,6 +246,23 @@ export default function ProspectsPage() {
     }
     setProspects(all);
     setLoading(false);
+  };
+
+  const loadAllContacts = async () => {
+    if (contactsLoaded) return;
+    let all: any[] = [];
+    let page = 0;
+    let hasMore = true;
+    while (hasMore) {
+      const from = page * 1000;
+      const { data } = await supabase.from('prospect_contacts').select('*, prospects!inner(company_name)').order('name').range(from, from + 999);
+      const batch = (data || []).map((c: any) => ({ ...c, company_name: c.prospects?.company_name }));
+      all = [...all, ...batch];
+      hasMore = (data || []).length === 1000;
+      page++;
+    }
+    setAllContacts(all);
+    setContactsLoaded(true);
   };
 
   const loadProfiles = async () => {
@@ -585,6 +607,77 @@ export default function ProspectsPage() {
         </div>
       )}
 
+      {/* Tab switcher */}
+      <div style={{ display: 'flex', gap: '0', marginBottom: '12px', borderBottom: '2px solid var(--border)' }}>
+        {(['prospects', 'contacts'] as const).map(tab => (
+          <button key={tab} onClick={() => { setCrmTab(tab); if (tab === 'contacts') loadAllContacts(); }} style={{
+            padding: '8px 16px', fontSize: '12px', fontWeight: 700, cursor: 'pointer',
+            background: 'none', border: 'none', borderBottom: crmTab === tab ? '2px solid #3b82f6' : '2px solid transparent',
+            color: crmTab === tab ? '#3b82f6' : 'var(--text-muted)', marginBottom: '-2px',
+          }}>{tab === 'prospects' ? `Prospects (${prospects.length})` : `Contacts${contactsLoaded ? ` (${allContacts.length})` : ''}`}</button>
+        ))}
+      </div>
+
+      {crmTab === 'contacts' ? (
+        <>
+          <div style={{ display: 'flex', gap: '8px', marginBottom: '10px', alignItems: 'center' }}>
+            <input
+              value={contactSearch} onChange={e => setContactSearch(e.target.value)}
+              placeholder="Search contacts..."
+              style={{ ...inputStyle, flex: 1 }}
+            />
+            <button onClick={async () => {
+              setSyncingContacts(true);
+              try {
+                const res = await fetch('/api/netsuite/contacts/sync', { method: 'POST' });
+                const data = await res.json();
+                alert(`Contacts synced: ${data.contactsSynced || 0}\nErrors: ${data.contactErrors || 0}${data.restApiError ? '\nREST error: ' + data.restApiError.body : ''}`);
+                setContactsLoaded(false);
+                loadAllContacts();
+              } catch { alert('Sync failed'); }
+              setSyncingContacts(false);
+            }} disabled={syncingContacts} style={{
+              padding: '8px 12px', borderRadius: '8px', fontSize: '11px', fontWeight: 700,
+              background: 'rgba(34,197,94,0.08)', border: '1px solid rgba(34,197,94,0.2)', color: '#22c55e', cursor: 'pointer',
+              opacity: syncingContacts ? 0.5 : 1, whiteSpace: 'nowrap',
+            }}>{syncingContacts ? 'Syncing...' : 'Sync Contacts'}</button>
+          </div>
+          {!contactsLoaded ? (
+            <div style={{ textAlign: 'center', padding: '40px', color: 'var(--text-muted)', fontSize: '13px' }}>Loading contacts...</div>
+          ) : (() => {
+            const q = contactSearch.toLowerCase();
+            const filtered = q ? allContacts.filter(c => c.name?.toLowerCase().includes(q) || c.email?.toLowerCase().includes(q) || c.company_name?.toLowerCase().includes(q) || c.title?.toLowerCase().includes(q)) : allContacts;
+            return filtered.length === 0 ? (
+              <div style={{ textAlign: 'center', padding: '40px', color: 'var(--text-muted)', fontSize: '13px' }}>No contacts found</div>
+            ) : (
+              <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
+                {filtered.map(c => (
+                  <div key={c.id} style={{ background: 'var(--card)', border: '1px solid var(--border)', borderRadius: '10px', padding: '10px 12px' }}>
+                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
+                      <div>
+                        <div style={{ fontSize: '13px', fontWeight: 700, color: 'var(--text-body)' }}>{c.name}</div>
+                        {c.title && <div style={{ fontSize: '11px', color: 'var(--text-muted)' }}>{c.title}</div>}
+                        <div style={{ fontSize: '11px', color: '#60a5fa', fontWeight: 600, marginTop: '2px' }}>{c.company_name || 'Unknown company'}</div>
+                      </div>
+                      <div style={{ display: 'flex', gap: '8px', flexShrink: 0 }}>
+                        {c.phone && <a href={`tel:${c.phone}`} style={{ fontSize: '11px', color: '#22c55e', fontWeight: 600 }}>Call</a>}
+                        {c.email && <a href={`mailto:${c.email}`} style={{ fontSize: '11px', color: '#3b82f6', fontWeight: 600 }}>Email</a>}
+                      </div>
+                    </div>
+                    {(c.phone || c.email) && (
+                      <div style={{ display: 'flex', gap: '12px', marginTop: '4px', fontSize: '11px', color: 'var(--text-muted)' }}>
+                        {c.phone && <span>{c.phone}</span>}
+                        {c.email && <span>{c.email}</span>}
+                      </div>
+                    )}
+                  </div>
+                ))}
+              </div>
+            );
+          })()}
+        </>
+      ) : (
+      <>
       {/* Search & Filters */}
       <input
         value={search} onChange={e => setSearch(e.target.value)}
@@ -999,6 +1092,8 @@ export default function ProspectsPage() {
             );
           })}
         </div>
+      )}
+      </>
       )}
     </div>
   );
