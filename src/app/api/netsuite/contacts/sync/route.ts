@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
+import { suiteqlQueryAll } from '@/lib/netsuite';
 import { createClient } from '@supabase/supabase-js';
 import { requireAuth } from '@/lib/api-auth';
 import OAuth from 'oauth-1.0a';
@@ -20,13 +21,11 @@ export async function POST(req: NextRequest) {
   let contactsTotal = 0;
   let contactsSkipped = 0;
   let contactErrors = 0;
-  let contactFetches = 0;
-  let contactFetchErrors = 0;
+  let customersProcessed = 0;
   let firstRestError: string | null = null;
   let firstRestStatus: number | null = null;
-  let customersProcessed = 0;
-  let firstContactFetchError: string | null = null;
-  let sampleContactRoleKeys: string[] | null = null;
+  let phonesFound = 0;
+  let phoneSource: string | null = null;
 
   try {
     const rawAccountId = process.env.NETSUITE_ACCOUNT_ID || '';
@@ -43,10 +42,9 @@ export async function POST(req: NextRequest) {
     });
     const restToken = { key: process.env.NETSUITE_TOKEN_ID!, secret: process.env.NETSUITE_TOKEN_SECRET! };
 
-    // Get offset from query params for pagination across syncs
     const url = new URL(req.url);
     const offset = parseInt(url.searchParams.get('offset') || '0');
-    const batchSize = parseInt(url.searchParams.get('limit') || '20');
+    const batchSize = parseInt(url.searchParams.get('limit') || '50');
 
     // Build prospect map
     let allProspectRows: any[] = [];
@@ -61,9 +59,36 @@ export async function POST(req: NextRequest) {
     const nsToProspect: Record<string, string> = {};
     allProspectRows.forEach((p: any) => { if (p.netsuite_id) nsToProspect[p.netsuite_id] = p.id; });
 
+    // Try to get contact phone numbers via SuiteQL
+    const phoneMap: Record<string, { phone: string; email?: string }> = {};
+    const phoneQueries = [
+      `SELECT c.id, c.entityid, c.phone, c.mobilephone, c.homephone, c.email FROM contact c WHERE c.phone IS NOT NULL OR c.mobilephone IS NOT NULL OR c.email IS NOT NULL`,
+      `SELECT c.id, c.entityid, c.phone, c.email FROM contact c WHERE c.isinactive = 'F'`,
+    ];
+    for (const pq of phoneQueries) {
+      try {
+        const rows = await suiteqlQueryAll(pq);
+        for (const r of rows) {
+          const id = r.id?.toString();
+          if (id) {
+            const phone = r.phone || r.mobilephone || r.homephone || null;
+            if (phone || r.email) {
+              phoneMap[id] = { phone: phone || '', email: r.email || '' };
+              if (phone) phonesFound++;
+            }
+          }
+        }
+        phoneSource = `SuiteQL (${rows.length} rows, ${phonesFound} with phone)`;
+        console.log(`[contact-sync] ${phoneSource}`);
+        break;
+      } catch (err: any) {
+        console.warn(`[contact-sync] Phone query failed: ${err.message?.substring(0, 150)}`);
+        phoneSource = `SuiteQL failed: ${err.message?.substring(0, 100)}`;
+      }
+    }
+
     const allCustomerIds = Object.keys(nsToProspect);
     const customerIds = allCustomerIds.slice(offset, offset + batchSize);
-    console.log(`[contact-sync] Processing customers ${offset}-${offset + customerIds.length} of ${allCustomerIds.length}`);
 
     for (const custId of customerIds) {
       customersProcessed++;
@@ -79,7 +104,7 @@ export async function POST(req: NextRequest) {
         if (!res.ok) {
           contactErrors++;
           if (contactErrors <= 3) {
-            const body = await res.text().catch(() => '(could not read body)');
+            const body = await res.text().catch(() => '');
             if (!firstRestError) { firstRestError = body.substring(0, 300); firstRestStatus = res.status; }
           }
           continue;
@@ -95,48 +120,20 @@ export async function POST(req: NextRequest) {
 
         contactsTotal += contacts.length;
 
-        // Log first contact role object to see available keys
-        if (!sampleContactRoleKeys && contacts.length > 0) {
-          sampleContactRoleKeys = Object.keys(contacts[0]);
-          const sampleData = JSON.stringify(contacts[0]).substring(0, 500);
-          console.log(`[contact-sync] Sample contactRole keys: ${sampleContactRoleKeys.join(', ')}`);
-          console.log(`[contact-sync] Sample contactRole data: ${sampleData}`);
-        }
-
         for (const c of contacts) {
-          const name = c.contactName || c.contact?.refName || c.name || [c.firstName, c.lastName].filter(Boolean).join(' ') || 'Unknown';
+          const name = c.contactName || c.contact?.refName || c.name || 'Unknown';
           if (name === 'Unknown') continue;
 
+          // Email comes from contactRole directly
           let email = c.email || null;
-          let phone = c.phone || null;
-          const title = c.role?.refName || c.title || c.jobTitle || null;
+          let phone: string | null = null;
+          const title = c.role?.refName || c.title || null;
 
-          // Fetch the full contact record for phone/email
-          const contactId = c.contact?.id || c.contactId || c.id;
-          if (contactId) {
-            try {
-              contactFetches++;
-              const contactUrl = `${restBaseUrl}/contact/${contactId}`;
-              const cAuthData = restOAuth.authorize({ url: contactUrl, method: 'GET' }, restToken);
-              const cAuthHeader = restOAuth.toHeader(cAuthData).Authorization;
-              const cRes = await fetch(contactUrl, {
-                headers: { 'Authorization': cAuthHeader, 'Content-Type': 'application/json' },
-              });
-              if (cRes.ok) {
-                const cData = await cRes.json();
-                email = cData.email || email;
-                phone = cData.phone || cData.mobilePhone || cData.homePhone || cData.officePhone || phone;
-              } else {
-                contactFetchErrors++;
-                if (!firstContactFetchError) {
-                  const body = await cRes.text().catch(() => '');
-                  firstContactFetchError = `GET /contact/${contactId}: HTTP ${cRes.status} - ${body.substring(0, 200)}`;
-                }
-              }
-            } catch (e: any) {
-              contactFetchErrors++;
-              if (!firstContactFetchError) firstContactFetchError = `Exception: ${e.message}`;
-            }
+          // Phone from SuiteQL contact table lookup
+          const contactId = c.contact?.id || c.contactId;
+          if (contactId && phoneMap[contactId]) {
+            phone = phoneMap[contactId].phone || null;
+            if (!email && phoneMap[contactId].email) email = phoneMap[contactId].email!;
           }
 
           const { error: cErr } = await supabase.from('prospect_contacts').upsert({
@@ -149,7 +146,7 @@ export async function POST(req: NextRequest) {
           if (!cErr) contactsSynced++;
           else contactErrors++;
         }
-      } catch (fetchErr: any) {
+      } catch {
         contactErrors++;
       }
     }
@@ -162,15 +159,13 @@ export async function POST(req: NextRequest) {
       contactsTotal,
       contactsSkipped,
       contactErrors,
-      contactFetches,
-      contactFetchErrors,
+      phonesFound,
+      phoneSource,
       customersProcessed,
       totalCustomers: allCustomerIds.length,
       offset,
       nextOffset,
       hasMore,
-      ...(sampleContactRoleKeys ? { sampleContactRoleKeys } : {}),
-      ...(firstContactFetchError ? { contactFetchError: firstContactFetchError } : {}),
       ...(firstRestError ? { restApiError: { status: firstRestStatus, body: firstRestError } } : {}),
     });
   } catch (err: any) {
