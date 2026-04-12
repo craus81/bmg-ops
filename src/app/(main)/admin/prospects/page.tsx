@@ -629,8 +629,10 @@ export default function ProspectsPage() {
             <button onClick={async () => {
               setSyncingContacts(true);
               let totalSynced = 0, totalErrors = 0, totalProcessed = 0, totalCustomers = 0;
+              let totalFetches = 0, totalFetchErrors = 0;
               let offset = 0;
               let lastError: string | null = null;
+              let debugKeys: string | null = null;
               try {
                 while (true) {
                   const res = await fetch(`/api/netsuite/contacts/sync?offset=${offset}`, { method: 'POST' });
@@ -639,12 +641,15 @@ export default function ProspectsPage() {
                   totalSynced += data.contactsSynced || 0;
                   totalErrors += data.contactErrors || 0;
                   totalProcessed += data.customersProcessed || 0;
+                  totalFetches += data.contactFetches || 0;
+                  totalFetchErrors += data.contactFetchErrors || 0;
                   totalCustomers = data.totalCustomers || totalCustomers;
+                  if (data.sampleContactKeys && !debugKeys) debugKeys = data.sampleContactKeys.join(', ');
                   if (data.restApiError) { lastError = data.restApiError.body; }
                   if (!data.hasMore) break;
                   offset = data.nextOffset;
                 }
-                alert(`Contacts synced: ${totalSynced}\nCustomers processed: ${totalProcessed} of ${totalCustomers}\nErrors: ${totalErrors}${lastError ? '\nLast error: ' + lastError : ''}`);
+                alert(`Contacts synced: ${totalSynced}\nCustomers processed: ${totalProcessed} of ${totalCustomers}\nContact fetches: ${totalFetches} (${totalFetchErrors} failed)\nErrors: ${totalErrors}${debugKeys ? '\nContact record keys: ' + debugKeys : ''}${lastError ? '\nLast error: ' + lastError : ''}`);
                 setContactsLoaded(false);
                 loadAllContacts();
               } catch (err: any) { alert('Sync failed: ' + (err.message || 'Network error')); }

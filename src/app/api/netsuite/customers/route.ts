@@ -30,7 +30,6 @@ export async function GET(req: NextRequest) {
         c.entityid,
         c.email,
         c.phone,
-        BUILTIN.DF(c.defaultbillingaddress) AS defaultbillingaddress,
         c.isinactive
       FROM customer c
       WHERE c.isinactive = 'F'
@@ -38,6 +37,48 @@ export async function GET(req: NextRequest) {
     `;
 
     const nsCustomers = await suiteqlQueryAll(customerQuery);
+
+    // Fetch billing addresses separately
+    const addressMap: Record<string, string> = {};
+    try {
+      const addrQuery = `
+        SELECT
+          ca.entity AS customer_id,
+          ea.addr1,
+          ea.addr2,
+          ea.city,
+          ea.state,
+          ea.zip,
+          ea.country
+        FROM customerAddressbook ca
+        JOIN entityAddress ea ON ea.nkey = ca.addressbookaddress
+        WHERE ca.defaultbilling = 'T'
+      `;
+      const addrRows = await suiteqlQueryAll(addrQuery);
+      for (const row of addrRows) {
+        const custId = row.customer_id?.toString();
+        if (custId) {
+          const parts = [row.addr1, row.addr2, row.city, row.state, row.zip].filter(Boolean);
+          addressMap[custId] = parts.join(', ');
+        }
+      }
+      console.log(`[customer-sync] Loaded ${Object.keys(addressMap).length} billing addresses`);
+    } catch (addrErr: any) {
+      console.warn('[customer-sync] Address query failed, trying fallback:', addrErr.message?.substring(0, 200));
+      // Fallback: try BUILTIN.DF on defaultbillingaddress
+      try {
+        const addrFallback = await suiteqlQueryAll(`SELECT c.id, BUILTIN.DF(c.defaultbillingaddress) AS addr FROM customer c WHERE c.isinactive = 'F' AND c.defaultbillingaddress IS NOT NULL`);
+        for (const row of addrFallback) {
+          const custId = row.id?.toString();
+          if (custId && row.addr && !/^\d+$/.test(row.addr)) {
+            addressMap[custId] = row.addr;
+          }
+        }
+        console.log(`[customer-sync] Fallback loaded ${Object.keys(addressMap).length} addresses`);
+      } catch (fbErr: any) {
+        console.warn('[customer-sync] Address fallback also failed:', fbErr.message?.substring(0, 200));
+      }
+    }
 
     // Fetch all-time spend data per customer
     const allTimeQuery = `
@@ -143,7 +184,7 @@ export async function GET(req: NextRequest) {
           entity_id: nsc.entityid || '',
           email: nsc.email || null,
           phone: nsc.phone || null,
-          address: nsc.defaultbillingaddress || null,
+          address: addressMap[nsId] || null,
           total_orders: allTime.order_count,
           total_spend: allTime.total_spend,
           avg_order_value: Math.round(avgOrder * 100) / 100,
@@ -170,7 +211,7 @@ export async function GET(req: NextRequest) {
         company_name: nsc.companyname || nsc.entityid || 'Unknown',
         email: nsc.email || null,
         phone: nsc.phone || null,
-        address: nsc.defaultbillingaddress || null,
+        address: addressMap[nsId] || null,
         status: 'converted',
         source: 'netsuite',
         pushed_at: new Date().toISOString(),
