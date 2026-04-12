@@ -5,7 +5,7 @@ import { requireAuth } from '@/lib/api-auth';
 
 // Import OAuth helpers for REST Record API
 import OAuth from 'oauth-1.0a';
-import crypto from 'crypto';
+import CryptoJS from 'crypto-js';
 
 export const dynamic = 'force-dynamic';
 
@@ -193,13 +193,17 @@ export async function GET(req: NextRequest) {
     let firstRestStatus: number | null = null;
     try {
       // Fetch contacts via REST Record API (contact sublists not available in SuiteQL)
-      const accountId = (process.env.NETSUITE_ACCOUNT_ID || '').toLowerCase().replace(/_/g, '-');
+      const rawAccountId = process.env.NETSUITE_ACCOUNT_ID || '';
+      const accountId = rawAccountId.toLowerCase().replace(/_/g, '-');
       const restBaseUrl = `https://${accountId}.suitetalk.api.netsuite.com/services/rest/record/v1`;
 
       const restOAuth = new OAuth({
         consumer: { key: process.env.NETSUITE_CONSUMER_KEY!, secret: process.env.NETSUITE_CONSUMER_SECRET! },
         signature_method: 'HMAC-SHA256',
-        hash_function(base_string, key) { return crypto.createHmac('sha256', key).update(base_string).digest('base64'); },
+        hash_function(baseString: string, key: string) {
+          return CryptoJS.HmacSHA256(baseString, key).toString(CryptoJS.enc.Base64);
+        },
+        realm: rawAccountId,
       });
       const restToken = { key: process.env.NETSUITE_TOKEN_ID!, secret: process.env.NETSUITE_TOKEN_SECRET! };
 
