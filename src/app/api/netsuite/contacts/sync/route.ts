@@ -25,7 +25,7 @@ export async function POST(req: NextRequest) {
   let firstRestError: string | null = null;
   let firstRestStatus: number | null = null;
   let customersProcessed = 0;
-  let sampleContactKeys: string[] | null = null;
+  let firstContactFetchError: string | null = null;
   let sampleContactRoleKeys: string[] | null = null;
 
   try {
@@ -98,8 +98,9 @@ export async function POST(req: NextRequest) {
         // Log first contact role object to see available keys
         if (!sampleContactRoleKeys && contacts.length > 0) {
           sampleContactRoleKeys = Object.keys(contacts[0]);
+          const sampleData = JSON.stringify(contacts[0]).substring(0, 500);
           console.log(`[contact-sync] Sample contactRole keys: ${sampleContactRoleKeys.join(', ')}`);
-          console.log(`[contact-sync] Sample contactRole data: ${JSON.stringify(contacts[0]).substring(0, 500)}`);
+          console.log(`[contact-sync] Sample contactRole data: ${sampleData}`);
         }
 
         for (const c of contacts) {
@@ -123,21 +124,19 @@ export async function POST(req: NextRequest) {
               });
               if (cRes.ok) {
                 const cData = await cRes.json();
-                // Log first contact record keys
-                if (!sampleContactKeys) {
-                  sampleContactKeys = Object.keys(cData);
-                  console.log(`[contact-sync] Sample contact record keys: ${sampleContactKeys.join(', ')}`);
-                  // Log phone-related fields
-                  const phoneKeys = sampleContactKeys.filter(k => k.toLowerCase().includes('phone') || k.toLowerCase().includes('mobile') || k.toLowerCase().includes('fax'));
-                  console.log(`[contact-sync] Phone-related keys: ${phoneKeys.join(', ') || 'none'}`);
-                  console.log(`[contact-sync] email=${cData.email}, phone=${cData.phone}, mobilePhone=${cData.mobilePhone}`);
-                }
                 email = cData.email || email;
                 phone = cData.phone || cData.mobilePhone || cData.homePhone || cData.officePhone || phone;
               } else {
                 contactFetchErrors++;
+                if (!firstContactFetchError) {
+                  const body = await cRes.text().catch(() => '');
+                  firstContactFetchError = `GET /contact/${contactId}: HTTP ${cRes.status} - ${body.substring(0, 200)}`;
+                }
               }
-            } catch { contactFetchErrors++; }
+            } catch (e: any) {
+              contactFetchErrors++;
+              if (!firstContactFetchError) firstContactFetchError = `Exception: ${e.message}`;
+            }
           }
 
           const { error: cErr } = await supabase.from('prospect_contacts').upsert({
@@ -171,7 +170,7 @@ export async function POST(req: NextRequest) {
       nextOffset,
       hasMore,
       ...(sampleContactRoleKeys ? { sampleContactRoleKeys } : {}),
-      ...(sampleContactKeys ? { sampleContactKeys } : {}),
+      ...(firstContactFetchError ? { contactFetchError: firstContactFetchError } : {}),
       ...(firstRestError ? { restApiError: { status: firstRestStatus, body: firstRestError } } : {}),
     });
   } catch (err: any) {

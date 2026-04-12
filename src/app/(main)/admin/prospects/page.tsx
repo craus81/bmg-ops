@@ -644,12 +644,12 @@ export default function ProspectsPage() {
                   totalFetches += data.contactFetches || 0;
                   totalFetchErrors += data.contactFetchErrors || 0;
                   totalCustomers = data.totalCustomers || totalCustomers;
-                  if (data.sampleContactKeys && !debugKeys) debugKeys = data.sampleContactKeys.join(', ');
+                  if (data.contactFetchError && !debugKeys) debugKeys = data.contactFetchError;
                   if (data.restApiError) { lastError = data.restApiError.body; }
                   if (!data.hasMore) break;
                   offset = data.nextOffset;
                 }
-                alert(`Contacts synced: ${totalSynced}\nCustomers processed: ${totalProcessed} of ${totalCustomers}\nContact fetches: ${totalFetches} (${totalFetchErrors} failed)\nErrors: ${totalErrors}${debugKeys ? '\nContact record keys: ' + debugKeys : ''}${lastError ? '\nLast error: ' + lastError : ''}`);
+                alert(`Contacts synced: ${totalSynced}\nCustomers processed: ${totalProcessed} of ${totalCustomers}\nContact fetches: ${totalFetches} (${totalFetchErrors} failed)\nErrors: ${totalErrors}${debugKeys ? '\nFetch error: ' + debugKeys : ''}${lastError ? '\nLast error: ' + lastError : ''}`);
                 setContactsLoaded(false);
                 loadAllContacts();
               } catch (err: any) { alert('Sync failed: ' + (err.message || 'Network error')); }
