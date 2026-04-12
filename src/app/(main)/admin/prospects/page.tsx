@@ -630,11 +630,15 @@ export default function ProspectsPage() {
               setSyncingContacts(true);
               try {
                 const res = await fetch('/api/netsuite/contacts/sync', { method: 'POST' });
-                const data = await res.json();
-                alert(`Contacts synced: ${data.contactsSynced || 0}\nErrors: ${data.contactErrors || 0}${data.restApiError ? '\nREST error: ' + data.restApiError.body : ''}`);
-                setContactsLoaded(false);
-                loadAllContacts();
-              } catch { alert('Sync failed'); }
+                const data = await res.json().catch(() => ({}));
+                if (!res.ok) {
+                  alert(`Sync failed (HTTP ${res.status}): ${data.error || 'Unknown error'}`);
+                } else {
+                  alert(`Contacts synced: ${data.contactsSynced || 0}\nCustomers processed: ${data.customersProcessed || 0} of ${data.totalCustomers || '?'}\nErrors: ${data.contactErrors || 0}${data.restApiError ? '\nREST error: ' + data.restApiError.body : ''}`);
+                  setContactsLoaded(false);
+                  loadAllContacts();
+                }
+              } catch (err: any) { alert('Sync failed: ' + (err.message || 'Network error')); }
               setSyncingContacts(false);
             }} disabled={syncingContacts} style={{
               padding: '8px 12px', borderRadius: '8px', fontSize: '11px', fontWeight: 700,
