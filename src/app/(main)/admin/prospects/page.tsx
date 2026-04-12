@@ -538,7 +538,7 @@ export default function ProspectsPage() {
             try {
               const res = await fetch('/api/netsuite/customers');
               const data = await res.json();
-              alert(`Customers: ${data.synced || 0}\nCRM: ${data.prospectsSynced || 0}\nContacts: ${data.contactsSynced || 0} synced, ${data.contactsSkipped || 0} skipped, ${data.contactErrors || 0} errors${data.firstContactError ? '\nContact error: ' + data.firstContactError : ''}${data.firstProspectError ? '\nCRM error: ' + data.firstProspectError : ''}`);
+              alert(`Customers: ${data.synced || 0}\nCRM: ${data.prospectsSynced || 0}\nContacts: ${data.contactsSynced || 0} synced, ${data.contactsSkipped || 0} skipped, ${data.contactErrors || 0} errors${data.restApiError ? '\nREST API error (HTTP ' + data.restApiError.status + '): ' + data.restApiError.body : ''}${data.firstContactError ? '\nContact error: ' + data.firstContactError : ''}${data.firstProspectError ? '\nCRM error: ' + data.firstProspectError : ''}`);
               loadProspects();
             } catch { alert('Sync failed'); }
             setSyncing(false);
