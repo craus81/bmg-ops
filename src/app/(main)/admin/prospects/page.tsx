@@ -639,7 +639,7 @@ export default function ProspectsPage() {
               let lastError: string | null = null;
               try {
                 while (true) {
-                  const res = await fetch(`/api/netsuite/contacts/sync?offset=${offset}`, { method: 'POST' });
+                  const res = await fetch(`/api/netsuite/contacts/sync?offset=${offset}&limit=10`, { method: 'POST' });
                   const data = await res.json().catch(() => ({}));
                   if (!res.ok) { lastError = `HTTP ${res.status}: ${data.error || 'Unknown'}`; break; }
                   totalSynced += data.contactsSynced || 0;
@@ -649,8 +649,7 @@ export default function ProspectsPage() {
                   totalPhones += data.phonesFound || 0;
                   if (data.phoneSource && !pSource) pSource = data.phoneSource;
                   if (data.restApiError) { lastError = data.restApiError.body; }
-                  if (!data.hasMore) break;
-                  offset = data.nextOffset;
+                  break; // Single batch for now
                 }
                 alert(`Contacts synced: ${totalSynced}\nCustomers: ${totalProcessed} of ${totalCustomers}\nPhones found: ${totalPhones}${pSource ? '\nPhone source: ' + pSource : ''}\nErrors: ${totalErrors}${lastError ? '\n' + lastError : ''}`);
                 setContactsLoaded(false);
