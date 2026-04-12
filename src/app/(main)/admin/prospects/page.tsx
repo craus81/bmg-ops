@@ -250,18 +250,23 @@ export default function ProspectsPage() {
 
   const loadAllContacts = async () => {
     if (contactsLoaded) return;
-    let all: any[] = [];
-    let page = 0;
-    let hasMore = true;
-    while (hasMore) {
-      const from = page * 1000;
-      const { data } = await supabase.from('prospect_contacts').select('*, prospects!inner(company_name)').order('name').range(from, from + 999);
-      const batch = (data || []).map((c: any) => ({ ...c, company_name: c.prospects?.company_name }));
-      all = [...all, ...batch];
-      hasMore = (data || []).length === 1000;
-      page++;
+    try {
+      let all: any[] = [];
+      let page = 0;
+      let hasMore = true;
+      while (hasMore) {
+        const from = page * 1000;
+        const { data, error } = await supabase.from('prospect_contacts').select('*, prospects(company_name)').order('name').range(from, from + 999);
+        if (error) { console.error('Contact load error:', error.message); break; }
+        const batch = (data || []).map((c: any) => ({ ...c, company_name: c.prospects?.company_name }));
+        all = [...all, ...batch];
+        hasMore = (data || []).length === 1000;
+        page++;
+      }
+      setAllContacts(all);
+    } catch (err: any) {
+      console.error('loadAllContacts error:', err.message);
     }
-    setAllContacts(all);
     setContactsLoaded(true);
   };
 

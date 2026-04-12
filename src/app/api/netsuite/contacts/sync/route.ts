@@ -59,32 +59,34 @@ export async function POST(req: NextRequest) {
     const nsToProspect: Record<string, string> = {};
     allProspectRows.forEach((p: any) => { if (p.netsuite_id) nsToProspect[p.netsuite_id] = p.id; });
 
-    // Try to get contact phone numbers via SuiteQL
+    // Try to get contact phone numbers via SuiteQL (non-fatal if table doesn't exist)
     const phoneMap: Record<string, { phone: string; email?: string }> = {};
-    const phoneQueries = [
-      `SELECT c.id, c.entityid, c.phone, c.mobilephone, c.homephone, c.email FROM contact c WHERE c.phone IS NOT NULL OR c.mobilephone IS NOT NULL OR c.email IS NOT NULL`,
-      `SELECT c.id, c.entityid, c.phone, c.email FROM contact c WHERE c.isinactive = 'F'`,
-    ];
-    for (const pq of phoneQueries) {
-      try {
-        const rows = await suiteqlQueryAll(pq);
-        for (const r of rows) {
-          const id = r.id?.toString();
-          if (id) {
-            const phone = r.phone || r.mobilephone || r.homephone || null;
-            if (phone || r.email) {
-              phoneMap[id] = { phone: phone || '', email: r.email || '' };
-              if (phone) phonesFound++;
+    try {
+      const phoneQueries = [
+        `SELECT c.id, c.phone, c.mobilephone, c.email FROM contact c WHERE c.isinactive = 'F'`,
+        `SELECT c.id, c.phone, c.email FROM contact c WHERE c.isinactive = 'F'`,
+      ];
+      for (const pq of phoneQueries) {
+        try {
+          const rows = await suiteqlQueryAll(pq);
+          for (const r of rows) {
+            const id = r.id?.toString();
+            if (id) {
+              const phone = r.phone || r.mobilephone || null;
+              if (phone || r.email) {
+                phoneMap[id] = { phone: phone || '', email: r.email || '' };
+                if (phone) phonesFound++;
+              }
             }
           }
+          phoneSource = `SuiteQL (${rows.length} rows, ${phonesFound} with phone)`;
+          break;
+        } catch (err: any) {
+          phoneSource = `SuiteQL failed: ${err.message?.substring(0, 100)}`;
         }
-        phoneSource = `SuiteQL (${rows.length} rows, ${phonesFound} with phone)`;
-        console.log(`[contact-sync] ${phoneSource}`);
-        break;
-      } catch (err: any) {
-        console.warn(`[contact-sync] Phone query failed: ${err.message?.substring(0, 150)}`);
-        phoneSource = `SuiteQL failed: ${err.message?.substring(0, 100)}`;
       }
+    } catch (err: any) {
+      phoneSource = `Phone lookup skipped: ${err.message?.substring(0, 80)}`;
     }
 
     const allCustomerIds = Object.keys(nsToProspect);
