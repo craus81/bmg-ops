@@ -95,12 +95,34 @@ export async function POST(req: NextRequest) {
           const name = c.contactName || c.contact?.refName || c.name || [c.firstName, c.lastName].filter(Boolean).join(' ') || 'Unknown';
           if (name === 'Unknown') continue;
 
+          let email = c.email || null;
+          let phone = c.phone || null;
+          const title = c.role?.refName || c.title || c.jobTitle || null;
+
+          // If no email/phone, fetch the full contact record
+          const contactId = c.contact?.id || c.contactId || c.id;
+          if ((!email || !phone) && contactId) {
+            try {
+              const contactUrl = `${restBaseUrl}/contact/${contactId}`;
+              const cAuthData = restOAuth.authorize({ url: contactUrl, method: 'GET' }, restToken);
+              const cAuthHeader = restOAuth.toHeader(cAuthData).Authorization;
+              const cRes = await fetch(contactUrl, {
+                headers: { 'Authorization': cAuthHeader, 'Content-Type': 'application/json' },
+              });
+              if (cRes.ok) {
+                const cData = await cRes.json();
+                if (!email) email = cData.email || null;
+                if (!phone) phone = cData.phone || cData.mobilePhone || cData.homePhone || null;
+              }
+            } catch { /* skip if contact fetch fails */ }
+          }
+
           const { error: cErr } = await supabase.from('prospect_contacts').upsert({
             prospect_id: prospectId,
             name,
-            title: c.role?.refName || c.title || c.jobTitle || null,
-            email: c.email || null,
-            phone: c.phone || null,
+            title,
+            email: email || null,
+            phone: phone || null,
           }, { onConflict: 'prospect_id,name' });
           if (!cErr) contactsSynced++;
           else contactErrors++;
