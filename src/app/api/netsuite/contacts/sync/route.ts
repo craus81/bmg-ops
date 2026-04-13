@@ -57,7 +57,20 @@ export async function POST(req: NextRequest) {
     const nsToProspect: Record<string, string> = {};
     allProspectRows.forEach((p: any) => { if (p.netsuite_id) nsToProspect[p.netsuite_id] = p.id; });
 
-    const allCustomerIds = Object.keys(nsToProspect);
+    // Find prospects that already have contacts synced (skip on re-runs)
+    const alreadySynced = new Set<string>();
+    let sPage = 0;
+    let sHasMore = true;
+    while (sHasMore) {
+      const { data: batch } = await supabase.from('prospect_contacts').select('prospect_id').range(sPage * 1000, (sPage + 1) * 1000 - 1);
+      (batch || []).forEach((r: any) => alreadySynced.add(r.prospect_id));
+      sHasMore = (batch || []).length === 1000;
+      sPage++;
+    }
+
+    const allCustomerIds = Object.keys(nsToProspect).filter(id => !alreadySynced.has(nsToProspect[id]));
+    const totalCustomers = Object.keys(nsToProspect).length;
+    const alreadyDone = totalCustomers - allCustomerIds.length;
 
     for (const custId of allCustomerIds) {
       // Check time limit
@@ -140,7 +153,9 @@ export async function POST(req: NextRequest) {
       contactErrors,
       phonesFound,
       customersProcessed,
-      totalCustomers: allCustomerIds.length,
+      totalCustomers,
+      alreadyDone,
+      remaining: allCustomerIds.length - customersProcessed,
       timedOut,
       ...(firstRestError ? { restApiError: { status: firstRestStatus, body: firstRestError } } : {}),
     });

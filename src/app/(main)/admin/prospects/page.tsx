@@ -639,7 +639,7 @@ export default function ProspectsPage() {
                 if (!res.ok) {
                   alert(`Sync failed (HTTP ${res.status}): ${data.error || 'Unknown'}`);
                 } else {
-                  alert(`Contacts synced: ${data.contactsSynced || 0}\nCustomers: ${data.customersProcessed || 0} of ${data.totalCustomers || '?'}\nPhones: ${data.phonesFound || 0}\nErrors: ${data.contactErrors || 0}${data.timedOut ? '\n(Timed out — run again to continue)' : ''}`);
+                  alert(`Contacts synced: ${data.contactsSynced || 0}\nPhones: ${data.phonesFound || 0}\nProcessed: ${data.customersProcessed || 0} this run\nPreviously done: ${data.alreadyDone || 0}\nRemaining: ${data.remaining || 0} of ${data.totalCustomers || '?'}${data.timedOut ? '\n\nTap Sync again to continue' : ''}`);
                   setContactsLoaded(false);
                   loadAllContacts();
                 }
