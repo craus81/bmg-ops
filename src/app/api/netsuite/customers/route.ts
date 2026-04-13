@@ -315,8 +315,9 @@ export async function GET(req: NextRequest) {
           contactsTotal += contacts.length;
 
           for (const c of contacts) {
-            const name = c.contactName || c.contact?.refName || c.name || 'Unknown';
+            let name = c.contactName || c.contact?.refName || c.name || 'Unknown';
             if (name === 'Unknown') continue;
+            name = name.replace(/^\d+\s+/, '');
 
             const { error: cErr } = await supabase.from('prospect_contacts').upsert({
               prospect_id: prospectId,

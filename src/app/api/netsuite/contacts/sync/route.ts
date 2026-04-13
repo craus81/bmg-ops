@@ -90,8 +90,10 @@ export async function POST(req: NextRequest) {
         contactsTotal += contacts.length;
 
         for (const c of contacts) {
-          const name = c.contactName || c.contact?.refName || c.name || 'Unknown';
+          let name = c.contactName || c.contact?.refName || c.name || 'Unknown';
           if (name === 'Unknown') continue;
+          // Strip leading entity ID prefix (e.g. "161056 Brett Byrd" -> "Brett Byrd")
+          name = name.replace(/^\d+\s+/, '');
 
           const { error: cErr } = await supabase.from('prospect_contacts').upsert({
             prospect_id: prospectId,

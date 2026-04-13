@@ -674,8 +674,8 @@ export default function ProspectsPage() {
                     <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
                       <div>
                         <div style={{ fontSize: '13px', fontWeight: 700, color: 'var(--text-body)' }}>{c.name}</div>
-                        {c.title && <div style={{ fontSize: '11px', color: 'var(--text-muted)' }}>{c.title}</div>}
-                        <div style={{ fontSize: '11px', color: '#60a5fa', fontWeight: 600, marginTop: '2px' }}>{c.company_name || 'Unknown company'}</div>
+                        <div style={{ fontSize: '12px', color: '#60a5fa', fontWeight: 600 }}>{c.company_name || 'Unknown company'}</div>
+                        {c.title && !['Customer Center', 'Customer'].includes(c.title) && <div style={{ fontSize: '11px', color: 'var(--text-muted)' }}>{c.title}</div>}
                       </div>
                       <div style={{ display: 'flex', gap: '8px', flexShrink: 0 }}>
                         {c.phone && <a href={`tel:${c.phone}`} style={{ fontSize: '11px', color: '#22c55e', fontWeight: 600 }}>Call</a>}
