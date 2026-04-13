@@ -73,6 +73,22 @@ export async function POST(req: NextRequest) {
       ORDER BY c.company, c.entityid
     `);
 
+    // Step 2b: Also fetch customer-level phone numbers as fallback
+    // Many contacts don't have individual phones, but the customer record does
+    const customerPhoneRows = await suiteqlQueryAll(`
+      SELECT
+        cu.id AS customer_id,
+        cu.phone AS company_phone
+      FROM customer cu
+      WHERE cu.phone IS NOT NULL
+    `);
+    const customerPhones: Record<string, string> = {};
+    customerPhoneRows.forEach((r: any) => {
+      if (r.customer_id && r.company_phone) {
+        customerPhones[r.customer_id.toString()] = r.company_phone;
+      }
+    });
+
     contactsTotal = contactRows.length;
 
     // Step 3: Upsert contacts into prospect_contacts, matching by customer_id
@@ -102,8 +118,9 @@ export async function POST(req: NextRequest) {
         continue;
       }
 
-      // Pick the best phone number available
-      const phone = row.phone || row.mobilephone || row.officephone || row.homephone || null;
+      // Pick the best phone number available — fall back to company phone if contact has none
+      const contactPhone = row.phone || row.mobilephone || row.officephone || row.homephone || null;
+      const phone = contactPhone || customerPhones[custId] || null;
       if (phone) phonesFound++;
 
       const { error: upsertErr } = await supabase.from('prospect_contacts').upsert({
