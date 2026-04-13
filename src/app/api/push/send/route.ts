@@ -7,12 +7,19 @@ const supabase = createClient(
   process.env.SUPABASE_SERVICE_ROLE_KEY!
 );
 
-// Configure web-push with VAPID keys
-webpush.setVapidDetails(
-  `mailto:${process.env.VAPID_EMAIL || 'admin@bluemoongraphics.com'}`,
-  process.env.NEXT_PUBLIC_VAPID_PUBLIC_KEY!,
-  process.env.VAPID_PRIVATE_KEY!
-);
+// Lazy-init VAPID config (avoid calling at module load when env vars may not exist)
+let vapidConfigured = false;
+function ensureVapid() {
+  if (vapidConfigured) return true;
+  if (!process.env.NEXT_PUBLIC_VAPID_PUBLIC_KEY || !process.env.VAPID_PRIVATE_KEY) return false;
+  webpush.setVapidDetails(
+    `mailto:${process.env.VAPID_EMAIL || 'admin@bluemoongraphics.com'}`,
+    process.env.NEXT_PUBLIC_VAPID_PUBLIC_KEY,
+    process.env.VAPID_PRIVATE_KEY
+  );
+  vapidConfigured = true;
+  return true;
+}
 
 /**
  * POST /api/push/send
@@ -33,6 +40,10 @@ export async function POST(req: NextRequest) {
   const isInternalCall = authHeader === `Bearer ${process.env.SUPABASE_SERVICE_ROLE_KEY}`;
   if (!isInternalCall) {
     return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
+  }
+
+  if (!ensureVapid()) {
+    return NextResponse.json({ error: 'Push not configured' }, { status: 503 });
   }
 
   try {
