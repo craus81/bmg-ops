@@ -662,21 +662,19 @@ export default function ProspectsPage() {
               <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
                 {filtered.map(c => (
                   <div key={c.id} style={{ background: 'var(--card)', border: '1px solid var(--border)', borderRadius: '10px', padding: '10px 12px' }}>
-                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
+                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '2px' }}>
                       <div>
-                        <div style={{ fontSize: '13px', fontWeight: 700, color: 'var(--text-body)' }}>{c.name}</div>
+                        <div style={{ fontSize: '14px', fontWeight: 700, color: 'var(--text-body)' }}>{c.name}</div>
                         <div style={{ fontSize: '12px', color: '#60a5fa', fontWeight: 600 }}>{c.company_name || 'Unknown company'}</div>
-                        {c.title && !['Customer Center', 'Customer'].includes(c.title) && <div style={{ fontSize: '11px', color: 'var(--text-muted)' }}>{c.title}</div>}
                       </div>
-                      <div style={{ display: 'flex', gap: '8px', flexShrink: 0 }}>
-                        {c.phone && <a href={`tel:${c.phone}`} style={{ fontSize: '11px', color: '#22c55e', fontWeight: 600 }}>Call</a>}
-                        {c.email && <a href={`mailto:${c.email}`} style={{ fontSize: '11px', color: '#3b82f6', fontWeight: 600 }}>Email</a>}
-                      </div>
+                      {c.title && !['Customer Center', 'Customer'].includes(c.title) && (
+                        <span style={{ fontSize: '10px', color: 'var(--text-muted)', fontWeight: 600, textAlign: 'right', flexShrink: 0, maxWidth: '40%' }}>{c.title}</span>
+                      )}
                     </div>
                     {(c.phone || c.email) && (
-                      <div style={{ display: 'flex', gap: '12px', marginTop: '4px', fontSize: '11px', color: 'var(--text-muted)' }}>
-                        {c.phone && <span>{c.phone}</span>}
-                        {c.email && <span>{c.email}</span>}
+                      <div style={{ display: 'flex', gap: '16px', marginTop: '4px', fontSize: '12px' }}>
+                        {c.phone && <a href={`tel:${c.phone}`} style={{ color: '#22c55e', textDecoration: 'none', fontWeight: 600, whiteSpace: 'nowrap' }}>{c.phone}</a>}
+                        {c.email && <a href={`mailto:${c.email}`} style={{ color: '#60a5fa', textDecoration: 'none' }}>{c.email}</a>}
                       </div>
                     )}
                   </div>
@@ -936,16 +934,22 @@ export default function ProspectsPage() {
                         </div>
                       )}
                       {pContacts.map(c => (
-                        <div key={c.id} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '6px 8px', borderRadius: '6px', background: 'var(--subtle-bg)', marginBottom: '4px' }}>
-                          <div>
-                            <span style={{ fontSize: '12px', fontWeight: 700, color: 'var(--text-primary)' }}>{c.name}</span>
-                            {c.is_decision_maker && <span style={{ fontSize: '8px', fontWeight: 700, marginLeft: '6px', padding: '1px 5px', borderRadius: '3px', background: 'rgba(251,191,36,0.1)', color: '#fbbf24' }}>DM</span>}
-                            {c.title && <span style={{ fontSize: '10px', color: 'var(--text-muted)', marginLeft: '6px' }}>{c.title}</span>}
+                        <div key={c.id} style={{ padding: '8px 10px', borderRadius: '8px', background: 'var(--subtle-bg)', marginBottom: '4px' }}>
+                          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '2px' }}>
+                            <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+                              <span style={{ fontSize: '13px', fontWeight: 700, color: 'var(--text-primary)' }}>{c.name}</span>
+                              {c.is_decision_maker && <span style={{ fontSize: '8px', fontWeight: 700, padding: '1px 5px', borderRadius: '3px', background: 'rgba(251,191,36,0.1)', color: '#fbbf24' }}>DM</span>}
+                            </div>
+                            {c.title && !['Customer Center', 'Customer'].includes(c.title) && (
+                              <span style={{ fontSize: '10px', color: 'var(--text-muted)', fontWeight: 600 }}>{c.title}</span>
+                            )}
                           </div>
-                          <div style={{ fontSize: '10px', color: 'var(--text-muted)' }}>
-                            {c.email && <span>{c.email}</span>}
-                            {c.phone && <span style={{ marginLeft: '8px' }}>{c.phone}</span>}
-                          </div>
+                          {(c.email || c.phone) && (
+                            <div style={{ display: 'flex', gap: '12px', fontSize: '11px' }}>
+                              {c.email && <a href={`mailto:${c.email}`} style={{ color: '#60a5fa', textDecoration: 'none' }}>{c.email}</a>}
+                              {c.phone && <a href={`tel:${c.phone}`} style={{ color: '#22c55e', textDecoration: 'none', whiteSpace: 'nowrap' }}>{c.phone}</a>}
+                            </div>
+                          )}
                         </div>
                       ))}
                     </div>
