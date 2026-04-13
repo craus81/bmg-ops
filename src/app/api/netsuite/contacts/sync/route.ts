@@ -1,5 +1,4 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { suiteqlQueryAll } from '@/lib/netsuite';
 import { createClient } from '@supabase/supabase-js';
 import { requireAuth } from '@/lib/api-auth';
 import OAuth from 'oauth-1.0a';
@@ -24,8 +23,6 @@ export async function POST(req: NextRequest) {
   let customersProcessed = 0;
   let firstRestError: string | null = null;
   let firstRestStatus: number | null = null;
-  let phonesFound = 0;
-  let phoneSource: string | null = null;
 
   try {
     const rawAccountId = process.env.NETSUITE_ACCOUNT_ID || '';
@@ -58,36 +55,6 @@ export async function POST(req: NextRequest) {
     }
     const nsToProspect: Record<string, string> = {};
     allProspectRows.forEach((p: any) => { if (p.netsuite_id) nsToProspect[p.netsuite_id] = p.id; });
-
-    // Try to get contact phone numbers via SuiteQL (non-fatal if table doesn't exist)
-    const phoneMap: Record<string, { phone: string; email?: string }> = {};
-    try {
-      const phoneQueries = [
-        `SELECT c.id, c.phone, c.mobilephone, c.email FROM contact c WHERE c.isinactive = 'F'`,
-        `SELECT c.id, c.phone, c.email FROM contact c WHERE c.isinactive = 'F'`,
-      ];
-      for (const pq of phoneQueries) {
-        try {
-          const rows = await suiteqlQueryAll(pq);
-          for (const r of rows) {
-            const id = r.id?.toString();
-            if (id) {
-              const phone = r.phone || r.mobilephone || null;
-              if (phone || r.email) {
-                phoneMap[id] = { phone: phone || '', email: r.email || '' };
-                if (phone) phonesFound++;
-              }
-            }
-          }
-          phoneSource = `SuiteQL (${rows.length} rows, ${phonesFound} with phone)`;
-          break;
-        } catch (err: any) {
-          phoneSource = `SuiteQL failed: ${err.message?.substring(0, 100)}`;
-        }
-      }
-    } catch (err: any) {
-      phoneSource = `Phone lookup skipped: ${err.message?.substring(0, 80)}`;
-    }
 
     const allCustomerIds = Object.keys(nsToProspect);
     const customerIds = allCustomerIds.slice(offset, offset + batchSize);
@@ -126,24 +93,11 @@ export async function POST(req: NextRequest) {
           const name = c.contactName || c.contact?.refName || c.name || 'Unknown';
           if (name === 'Unknown') continue;
 
-          // Email comes from contactRole directly
-          let email = c.email || null;
-          let phone: string | null = null;
-          const title = c.role?.refName || c.title || null;
-
-          // Phone from SuiteQL contact table lookup
-          const contactId = c.contact?.id || c.contactId;
-          if (contactId && phoneMap[contactId]) {
-            phone = phoneMap[contactId].phone || null;
-            if (!email && phoneMap[contactId].email) email = phoneMap[contactId].email!;
-          }
-
           const { error: cErr } = await supabase.from('prospect_contacts').upsert({
             prospect_id: prospectId,
             name,
-            title,
-            email: email || null,
-            phone: phone || null,
+            title: c.role?.refName || c.title || null,
+            email: c.email || null,
           }, { onConflict: 'prospect_id,name' });
           if (!cErr) contactsSynced++;
           else contactErrors++;
@@ -161,8 +115,6 @@ export async function POST(req: NextRequest) {
       contactsTotal,
       contactsSkipped,
       contactErrors,
-      phonesFound,
-      phoneSource,
       customersProcessed,
       totalCustomers: allCustomerIds.length,
       offset,
