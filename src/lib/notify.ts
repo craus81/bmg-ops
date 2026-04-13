@@ -1,13 +1,23 @@
 import { createClient } from '@supabase/supabase-js';
 import { sendSMS } from '@/lib/twilio';
 import { sendEmail, buildNotificationEmail } from '@/lib/resend';
+import webpush from 'web-push';
 
 const supabase = createClient(
   process.env.NEXT_PUBLIC_SUPABASE_URL!,
   process.env.SUPABASE_SERVICE_ROLE_KEY!
 );
 
-export type NotifyChannel = 'in_app' | 'sms' | 'email';
+// Configure web-push VAPID keys (only if configured)
+if (process.env.NEXT_PUBLIC_VAPID_PUBLIC_KEY && process.env.VAPID_PRIVATE_KEY) {
+  webpush.setVapidDetails(
+    `mailto:${process.env.VAPID_EMAIL || 'admin@bluemoongraphics.com'}`,
+    process.env.NEXT_PUBLIC_VAPID_PUBLIC_KEY,
+    process.env.VAPID_PRIVATE_KEY
+  );
+}
+
+export type NotifyChannel = 'in_app' | 'sms' | 'email' | 'push';
 
 export interface NotifyPayload {
   /** The user to notify */
@@ -36,6 +46,7 @@ export interface NotifyResult {
   inApp: boolean;
   sms: boolean;
   email: boolean;
+  push: boolean;
 }
 
 /**
@@ -44,7 +55,7 @@ export interface NotifyResult {
  * or explicit channel selection.
  */
 export async function notify(payload: NotifyPayload): Promise<NotifyResult> {
-  const result: NotifyResult = { inApp: false, sms: false, email: false };
+  const result: NotifyResult = { inApp: false, sms: false, email: false, push: false };
 
   let channels = payload.channels;
 
@@ -62,11 +73,17 @@ export async function notify(payload: NotifyPayload): Promise<NotifyResult> {
     );
   }
 
-  // SMS disabled — only in-app and email active
+  // SMS disabled — only in-app, email, and push active
 
   if (channels.includes('email')) {
     promises.push(
       sendViaEmail(payload).then((ok) => { result.email = ok; })
+    );
+  }
+
+  if (channels.includes('push')) {
+    promises.push(
+      sendViaPush(payload).then((ok) => { result.push = ok; })
     );
   }
 
@@ -110,13 +127,14 @@ async function getPreferredChannels(userId: string, type: string): Promise<Notif
 
   // For all other notification types (graphics, PO, etc.)
   if (!prefs) {
-    // Default: in-app + email for assignments, in-app only for others
-    return type === 'assignment' ? ['in_app', 'email'] : ['in_app'];
+    // Default: in-app + push + email for assignments, in-app + push for others
+    const defaults: NotifyChannel[] = type === 'assignment' ? ['in_app', 'push', 'email'] : ['in_app', 'push'];
+    return defaults;
   }
 
-  // Assignments always get in-app + email regardless of preferences
+  // Assignments always get in-app + email + push regardless of preferences
   if (type === 'assignment') {
-    return ['in_app', 'email'];
+    return ['in_app', 'email', 'push'];
   }
 
   // Check if this type of notification is enabled
@@ -125,6 +143,8 @@ async function getPreferredChannels(userId: string, type: string): Promise<Notif
 
   if (prefs.notify_in_app) channels.push('in_app');
   if (prefs.notify_email) channels.push('email');
+  // Push notifications are sent whenever in-app is enabled (separate devices get browser push)
+  if (prefs.notify_in_app) channels.push('push');
 
   return channels;
 }
@@ -205,6 +225,59 @@ async function sendViaSMS(payload: NotifyPayload): Promise<boolean> {
 
     return !!sid;
   } catch {
+    return false;
+  }
+}
+
+async function sendViaPush(payload: NotifyPayload): Promise<boolean> {
+  // Skip if VAPID keys aren't configured
+  if (!process.env.NEXT_PUBLIC_VAPID_PUBLIC_KEY || !process.env.VAPID_PRIVATE_KEY) {
+    return false;
+  }
+
+  try {
+    // Get all push subscriptions for this user
+    const { data: subscriptions } = await supabase
+      .from('push_subscriptions')
+      .select('id, endpoint, p256dh, auth')
+      .eq('user_id', payload.userId);
+
+    if (!subscriptions?.length) return false;
+
+    const pushPayload = JSON.stringify({
+      title: payload.title,
+      body: payload.body,
+      url: payload.url || '/',
+      tag: payload.type || 'bmg-notification',
+    });
+
+    const staleIds: string[] = [];
+    let sent = false;
+
+    await Promise.allSettled(
+      subscriptions.map(async (sub) => {
+        try {
+          await webpush.sendNotification(
+            { endpoint: sub.endpoint, keys: { p256dh: sub.p256dh, auth: sub.auth } },
+            pushPayload
+          );
+          sent = true;
+        } catch (err: any) {
+          if (err.statusCode === 410 || err.statusCode === 404) {
+            staleIds.push(sub.id);
+          }
+        }
+      })
+    );
+
+    // Clean up expired subscriptions
+    if (staleIds.length > 0) {
+      await supabase.from('push_subscriptions').delete().in('id', staleIds);
+    }
+
+    return sent;
+  } catch (err) {
+    console.error('sendViaPush error:', err);
     return false;
   }
 }

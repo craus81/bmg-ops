@@ -6,6 +6,7 @@ import { createClient } from '@/lib/supabase-browser';
 import { useAuth } from '@/components/AuthProvider';
 import { GRAPHICS_STATUS_LABELS, GRAPHICS_STATUS_ORDER, GRAPHICS_STATUS_COLORS } from '@/lib/types';
 import type { GraphicsJobStatus, NotificationPreferences } from '@/lib/types';
+import { isPushSupported, getPushPermission, getExistingSubscription, subscribeToPush, unsubscribeFromPush } from '@/lib/push-client';
 
 export default function SettingsPage() {
   const router = useRouter();
@@ -17,10 +18,52 @@ export default function SettingsPage() {
   const [saving, setSaving] = useState(false);
   const [saved, setSaved] = useState(false);
 
+  // Push notification state
+  const [pushSupported, setPushSupported] = useState(false);
+  const [pushEnabled, setPushEnabled] = useState(false);
+  const [pushLoading, setPushLoading] = useState(false);
+  const [pushError, setPushError] = useState('');
+  const [pushPermission, setPushPermission] = useState<string>('default');
+
   useEffect(() => {
     if (!user) return;
     loadPrefs();
+    checkPushStatus();
   }, [user]);
+
+  const checkPushStatus = async () => {
+    const supported = isPushSupported();
+    setPushSupported(supported);
+    if (supported) {
+      setPushPermission(getPushPermission() as string);
+      const sub = await getExistingSubscription();
+      setPushEnabled(!!sub);
+    }
+  };
+
+  const handlePushToggle = async () => {
+    setPushLoading(true);
+    setPushError('');
+
+    if (pushEnabled) {
+      const result = await unsubscribeFromPush();
+      if (result.ok) {
+        setPushEnabled(false);
+      } else {
+        setPushError(result.error || 'Failed to unsubscribe');
+      }
+    } else {
+      const result = await subscribeToPush();
+      if (result.ok) {
+        setPushEnabled(true);
+        setPushPermission('granted');
+      } else {
+        setPushError(result.error || 'Failed to subscribe');
+      }
+    }
+
+    setPushLoading(false);
+  };
 
   const loadPrefs = async () => {
     const { data } = await supabase
@@ -239,6 +282,61 @@ export default function SettingsPage() {
             </div>
           )}
         </div>
+      </div>
+
+      {/* Browser Push Notifications */}
+      <div style={sectionStyle}>
+        <div style={{ fontSize: '14px', fontWeight: 800, color: 'var(--text-body)', marginBottom: '4px' }}>Browser Push Notifications</div>
+        <div style={{ fontSize: '11px', color: 'var(--text-label)', marginBottom: '10px' }}>
+          Receive notifications even when the app is in the background. Works on Safari (Mac), Chrome, Firefox, and Edge.
+        </div>
+
+        {!pushSupported ? (
+          <div style={{ padding: '10px 12px', borderRadius: '8px', background: 'rgba(107,114,128,0.08)', border: '1px solid rgba(107,114,128,0.2)' }}>
+            <div style={{ fontSize: '11px', color: 'var(--text-label)' }}>
+              Push notifications are not supported in this browser. Try using Safari, Chrome, or Firefox.
+            </div>
+          </div>
+        ) : (
+          <>
+            <button
+              onClick={handlePushToggle}
+              disabled={pushLoading || pushPermission === 'denied'}
+              style={{
+                width: '100%', padding: '12px', borderRadius: '10px',
+                background: pushEnabled ? 'rgba(34,197,94,0.12)' : 'rgba(59,130,246,0.12)',
+                border: `1px solid ${pushEnabled ? 'rgba(34,197,94,0.3)' : 'rgba(59,130,246,0.3)'}`,
+                color: pushEnabled ? '#22c55e' : '#3b82f6',
+                fontSize: '13px', fontWeight: 700, cursor: pushLoading || pushPermission === 'denied' ? 'not-allowed' : 'pointer',
+                opacity: pushLoading ? 0.5 : 1,
+                display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '8px',
+              }}
+            >
+              {pushLoading ? 'Working...' : pushEnabled ? 'Push Notifications Enabled — Tap to Disable' : 'Enable Push Notifications'}
+            </button>
+
+            {pushPermission === 'denied' && (
+              <div style={{ marginTop: '8px', padding: '8px 10px', borderRadius: '8px', background: 'rgba(239,68,68,0.08)', border: '1px solid rgba(239,68,68,0.2)' }}>
+                <div style={{ fontSize: '11px', fontWeight: 700, color: '#ef4444' }}>Permission Denied</div>
+                <div style={{ fontSize: '10px', color: 'var(--text-label)', marginTop: '2px' }}>
+                  Notifications are blocked for this site. To fix this, open your browser settings and allow notifications for this site, then refresh the page.
+                </div>
+              </div>
+            )}
+
+            {pushError && pushPermission !== 'denied' && (
+              <div style={{ marginTop: '8px', padding: '8px 10px', borderRadius: '8px', background: 'rgba(239,68,68,0.08)', border: '1px solid rgba(239,68,68,0.2)' }}>
+                <div style={{ fontSize: '11px', color: '#ef4444' }}>{pushError}</div>
+              </div>
+            )}
+
+            {pushEnabled && (
+              <div style={{ marginTop: '8px', fontSize: '10px', color: 'var(--text-label)' }}>
+                This device will receive push notifications for the alert types you have enabled above.
+              </div>
+            )}
+          </>
+        )}
       </div>
 
       {/* Chat Message Delivery */}
