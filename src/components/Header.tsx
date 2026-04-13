@@ -177,6 +177,22 @@ export default function Header({ clockStatus, activePartNumber, activeEndCustome
     setUnreadCount(0);
   };
 
+  const clearNotification = async (id: string) => {
+    await supabase.from('notifications').delete().eq('id', id);
+    setNotifications((prev) => prev.filter((n) => n.id !== id));
+    setUnreadCount((c) => {
+      const wasUnread = notifications.find(n => n.id === id && !n.read_at);
+      return wasUnread ? Math.max(0, c - 1) : c;
+    });
+  };
+
+  const clearAllNotifications = async () => {
+    if (!user) return;
+    await supabase.from('notifications').delete().eq('user_id', user.id);
+    setNotifications([]);
+    setUnreadCount(0);
+  };
+
   const timeAgo = (dateStr: string) => {
     const diff = Date.now() - new Date(dateStr).getTime();
     const mins = Math.floor(diff / 60000);
@@ -424,15 +440,26 @@ export default function Header({ clockStatus, activePartNumber, activeEndCustome
                       </span>
                     )}
                   </div>
-                  {unreadCount > 0 && (
-                    <button onClick={markAllRead} style={{
-                      background: 'none', border: 'none', fontSize: '11px',
-                      fontWeight: 700, color: 'var(--navy-light)', cursor: 'pointer',
-                      padding: '4px 8px', borderRadius: '6px',
-                    }}>
-                      Mark all read
-                    </button>
-                  )}
+                  <div style={{ display: 'flex', gap: '4px' }}>
+                    {unreadCount > 0 && (
+                      <button onClick={markAllRead} style={{
+                        background: 'none', border: 'none', fontSize: '11px',
+                        fontWeight: 700, color: 'var(--navy-light)', cursor: 'pointer',
+                        padding: '4px 8px', borderRadius: '6px',
+                      }}>
+                        Mark all read
+                      </button>
+                    )}
+                    {notifications.length > 0 && (
+                      <button onClick={clearAllNotifications} style={{
+                        background: 'none', border: 'none', fontSize: '11px',
+                        fontWeight: 700, color: '#ef4444', cursor: 'pointer',
+                        padding: '4px 8px', borderRadius: '6px',
+                      }}>
+                        Clear all
+                      </button>
+                    )}
+                  </div>
                 </div>
 
                 {/* Notification list */}
@@ -491,12 +518,21 @@ export default function Header({ clockStatus, activePartNumber, activeEndCustome
                               {timeAgo(n.created_at)}
                             </div>
                           </div>
-                          {isUnread && (
-                            <div style={{
-                              width: '8px', height: '8px', borderRadius: '50%',
-                              background: 'var(--orange)', flexShrink: 0, marginTop: '4px',
-                            }} />
-                          )}
+                          <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '4px', flexShrink: 0 }}>
+                            {isUnread && (
+                              <div style={{
+                                width: '8px', height: '8px', borderRadius: '50%',
+                                background: 'var(--orange)',
+                              }} />
+                            )}
+                            <span
+                              onClick={(e) => { e.stopPropagation(); clearNotification(n.id); }}
+                              style={{
+                                fontSize: '14px', color: 'var(--text-muted)', cursor: 'pointer',
+                                opacity: 0.4, lineHeight: 1, padding: '2px',
+                              }}
+                            >&times;</span>
+                          </div>
                         </button>
                       );
                     })
