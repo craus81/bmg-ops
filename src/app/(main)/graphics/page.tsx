@@ -72,7 +72,7 @@ export default function GraphicsPage() {
   const [createStep, setCreateStep] = useState<'category' | 'details'>('category');
   const [createForm, setCreateForm] = useState({
     job_category: '' as GraphicsJobCategory | '',
-    title: '', part_number: '', customer: '', quantity: 1,
+    title: '', part_number: '', part_numbers: [] as string[], partInput: '', customer: '', quantity: 1,
     content: '', notes: '',
     vinyl_type: '', vinyl_color: '', laminate: '', print_method: '', cut_method: '', premask: '',
     priority: 'normal' as 'low' | 'normal' | 'high' | 'rush',
@@ -396,7 +396,7 @@ export default function GraphicsPage() {
         job_number: jobNumber,
         job_category: cat,
         title: createForm.title || 'Untitled Job',
-        part_number: createForm.part_number || null,
+        part_number: [...createForm.part_numbers, createForm.partInput.trim()].filter(Boolean).join(', ') || null,
         customer: createForm.customer || null,
         quantity: createForm.quantity || 1,
         content: createForm.content || null,
@@ -493,7 +493,7 @@ export default function GraphicsPage() {
       setShowCreate(false);
       setCreateStep('category');
       setCreateForm({
-        job_category: '', title: '', part_number: '', customer: '', quantity: 1,
+        job_category: '', title: '', part_number: '', part_numbers: [], partInput: '', customer: '', quantity: 1,
         content: '', notes: '',
         vinyl_type: '', vinyl_color: '', laminate: '', print_method: '', cut_method: '', premask: '',
         priority: 'normal', due_date: '', scheduled_install_date: '', ship_to: '', supplier: '',
@@ -743,7 +743,7 @@ export default function GraphicsPage() {
                           </span>
                         )}
                         {job.customer && <span>{job.customer}</span>}
-                        {job.part_number && <span>{job.part_number}</span>}
+                        {job.part_number && job.part_number.split(',').map((pn, i) => <span key={i} style={{ background: 'rgba(59,130,246,0.08)', padding: '0 4px', borderRadius: '3px' }}>{pn.trim()}</span>)}
                         <span>Qty: {job.quantity}</span>
                         {job.due_date && <span style={{ color: (parseLocalDate(job.due_date) || new Date()) < new Date() ? '#ef4444' : '#fbbf24' }}>Due: {displayDate(job.due_date)}</span>}
                         {job.scheduled_install_date && <span style={{ color: '#22d3ee' }}>Install: {displayDate(job.scheduled_install_date)}</span>}
@@ -1013,8 +1013,35 @@ export default function GraphicsPage() {
                             <input style={inputStyle} value={editJob!.title} onChange={e => setEditingJob({ ...editJob!, title: e.target.value })} />
                           </div>
                           <div>
-                            <div style={labelStyle}>Part Number</div>
-                            <input style={inputStyle} value={editJob!.part_number || ''} onChange={e => setEditingJob({ ...editJob!, part_number: e.target.value })} />
+                            <div style={labelStyle}>Part Number(s)</div>
+                            {(() => {
+                              const parts = (editJob!.part_number || '').split(',').map(s => s.trim()).filter(Boolean);
+                              return (
+                                <>
+                                  {parts.length > 0 && (
+                                    <div style={{ display: 'flex', flexWrap: 'wrap', gap: '4px', marginBottom: '4px' }}>
+                                      {parts.map((pn, i) => (
+                                        <span key={i} style={{ display: 'inline-flex', alignItems: 'center', gap: '4px', padding: '2px 8px', borderRadius: '6px', fontSize: '11px', fontWeight: 700, background: 'rgba(59,130,246,0.1)', color: '#3b82f6', border: '1px solid rgba(59,130,246,0.2)' }}>
+                                          {pn}
+                                          <span onClick={() => setEditingJob({ ...editJob!, part_number: parts.filter((_, j) => j !== i).join(', ') || null })} style={{ cursor: 'pointer', fontSize: '13px', marginLeft: '2px' }}>&times;</span>
+                                        </span>
+                                      ))}
+                                    </div>
+                                  )}
+                                  <input style={inputStyle} placeholder="Type part # and press Enter"
+                                    onKeyDown={e => {
+                                      const val = (e.target as HTMLInputElement).value.trim();
+                                      if ((e.key === 'Enter' || e.key === ',') && val) {
+                                        e.preventDefault();
+                                        const newParts = [...parts, val].join(', ');
+                                        setEditingJob({ ...editJob!, part_number: newParts });
+                                        (e.target as HTMLInputElement).value = '';
+                                      }
+                                    }}
+                                  />
+                                </>
+                              );
+                            })()}
                           </div>
                           <div>
                             <div style={labelStyle}>Customer</div>
@@ -1230,8 +1257,26 @@ export default function GraphicsPage() {
                     />
                   </div>
                   <div>
-                    <div style={labelStyle}>Part Number</div>
-                    <input style={inputStyle} value={createForm.part_number} onChange={e => setCreateForm({ ...createForm, part_number: e.target.value })} placeholder="e.g. 02T278" />
+                    <div style={labelStyle}>Part Number(s)</div>
+                    {createForm.part_numbers.length > 0 && (
+                      <div style={{ display: 'flex', flexWrap: 'wrap', gap: '4px', marginBottom: '4px' }}>
+                        {createForm.part_numbers.map((pn, i) => (
+                          <span key={i} style={{ display: 'inline-flex', alignItems: 'center', gap: '4px', padding: '2px 8px', borderRadius: '6px', fontSize: '11px', fontWeight: 700, background: 'rgba(59,130,246,0.1)', color: '#3b82f6', border: '1px solid rgba(59,130,246,0.2)' }}>
+                            {pn}
+                            <span onClick={() => setCreateForm(f => ({ ...f, part_numbers: f.part_numbers.filter((_, j) => j !== i) }))} style={{ cursor: 'pointer', fontSize: '13px', marginLeft: '2px' }}>&times;</span>
+                          </span>
+                        ))}
+                      </div>
+                    )}
+                    <input style={inputStyle} value={createForm.partInput} onChange={e => setCreateForm({ ...createForm, partInput: e.target.value })}
+                      placeholder="Type part # and press Enter"
+                      onKeyDown={e => {
+                        if ((e.key === 'Enter' || e.key === ',') && createForm.partInput.trim()) {
+                          e.preventDefault();
+                          setCreateForm(f => ({ ...f, part_numbers: [...f.part_numbers, f.partInput.trim()], partInput: '' }));
+                        }
+                      }}
+                    />
                   </div>
                   <div style={{ position: 'relative' }}>
                     <div style={labelStyle}>{createForm.job_category === 'internal' ? 'Department / Requestor' : 'Customer'}</div>
