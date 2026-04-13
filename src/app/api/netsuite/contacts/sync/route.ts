@@ -57,16 +57,28 @@ export async function POST(req: NextRequest) {
     const nsToProspect: Record<string, string> = {};
     allProspectRows.forEach((p: any) => { if (p.netsuite_id) nsToProspect[p.netsuite_id] = p.id; });
 
-    // Find prospects that already have contacts synced (skip on re-runs)
+    // Find prospects that already have contacts synced WITH phone numbers (skip on re-runs)
+    // If a prospect's contacts all have null phones, re-process to fetch phone numbers
     const alreadySynced = new Set<string>();
     let sPage = 0;
     let sHasMore = true;
+    const prospectContactPhones: Record<string, { total: number; withPhone: number }> = {};
     while (sHasMore) {
-      const { data: batch } = await supabase.from('prospect_contacts').select('prospect_id').range(sPage * 1000, (sPage + 1) * 1000 - 1);
-      (batch || []).forEach((r: any) => alreadySynced.add(r.prospect_id));
+      const { data: batch } = await supabase.from('prospect_contacts').select('prospect_id, phone').range(sPage * 1000, (sPage + 1) * 1000 - 1);
+      (batch || []).forEach((r: any) => {
+        if (!prospectContactPhones[r.prospect_id]) {
+          prospectContactPhones[r.prospect_id] = { total: 0, withPhone: 0 };
+        }
+        prospectContactPhones[r.prospect_id].total++;
+        if (r.phone) prospectContactPhones[r.prospect_id].withPhone++;
+      });
       sHasMore = (batch || []).length === 1000;
       sPage++;
     }
+    // Only skip prospects where at least one contact has a phone number
+    Object.entries(prospectContactPhones).forEach(([pid, counts]) => {
+      if (counts.withPhone > 0) alreadySynced.add(pid);
+    });
 
     const allCustomerIds = Object.keys(nsToProspect).filter(id => !alreadySynced.has(nsToProspect[id]));
     const totalCustomers = Object.keys(nsToProspect).length;
