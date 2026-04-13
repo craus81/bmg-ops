@@ -101,6 +101,17 @@ export default function MessagesPage() {
           updateConversationPreview(msg);
         }
       )
+      .on(
+        'postgres_changes',
+        { event: 'UPDATE', schema: 'public', table: 'messages' },
+        (payload) => {
+          const updated = payload.new as Message;
+          // Update read_at for read receipts in the active conversation
+          if (updated.read_at && updated.conversation_id === activeConvoId) {
+            setMessages(prev => prev.map(m => m.id === updated.id ? { ...m, read_at: updated.read_at } : m));
+          }
+        }
+      )
       .subscribe();
 
     return () => { supabase.removeChannel(channel); };
@@ -471,6 +482,15 @@ export default function MessagesPage() {
                       opacity: editMode && selectedMsgs.has(msg.id) ? 0.7 : 1,
                     }}>
                     <span style={{ whiteSpace: 'pre-wrap' }}>{renderMessageBody(msg.body)}</span>
+                    {isMe && !editMode && (
+                      <div style={{ textAlign: 'right', fontSize: '9px', marginTop: '2px', opacity: 0.7 }}>
+                        {msg.read_at ? (
+                          <span style={{ color: isMe ? 'rgba(255,255,255,0.8)' : '#22c55e' }} title={`Read ${new Date(msg.read_at).toLocaleString()}`}>✓✓ Read</span>
+                        ) : (
+                          <span style={{ color: isMe ? 'rgba(255,255,255,0.5)' : 'var(--text-muted)' }}>✓ Sent</span>
+                        )}
+                      </div>
+                    )}
                   </div>
                   {editMode && isMe && (
                     <div onClick={() => toggleSelect(msg.id)} style={{
