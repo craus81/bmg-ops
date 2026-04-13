@@ -21,6 +21,7 @@ export async function POST(req: NextRequest) {
   let contactsSkipped = 0;
   let contactErrors = 0;
   let customersProcessed = 0;
+  let phonesFound = 0;
   let firstRestError: string | null = null;
   let firstRestStatus: number | null = null;
 
@@ -41,7 +42,7 @@ export async function POST(req: NextRequest) {
 
     const url = new URL(req.url);
     const offset = parseInt(url.searchParams.get('offset') || '0');
-    const batchSize = parseInt(url.searchParams.get('limit') || '50');
+    const batchSize = parseInt(url.searchParams.get('limit') || '20');
 
     // Build prospect map
     let allProspectRows: any[] = [];
@@ -95,11 +96,30 @@ export async function POST(req: NextRequest) {
           // Strip leading entity ID prefix (e.g. "161056 Brett Byrd" -> "Brett Byrd")
           name = name.replace(/^\d+\s+/, '');
 
+          let phone: string | null = null;
+          const contactId = c.contact?.id || c.contactId;
+          if (contactId) {
+            try {
+              const contactUrl = `${restBaseUrl}/contact/${contactId}`;
+              const cAuth = restOAuth.authorize({ url: contactUrl, method: 'GET' }, restToken);
+              const cHeader = restOAuth.toHeader(cAuth).Authorization;
+              const cRes = await fetch(contactUrl, {
+                headers: { 'Authorization': cHeader, 'Content-Type': 'application/json' },
+              });
+              if (cRes.ok) {
+                const cData = await cRes.json();
+                phone = cData.phone || cData.mobilePhone || cData.homePhone || cData.officePhone || null;
+                if (phone) phonesFound++;
+              }
+            } catch { /* skip */ }
+          }
+
           const { error: cErr } = await supabase.from('prospect_contacts').upsert({
             prospect_id: prospectId,
             name,
             title: c.role?.refName || c.title || null,
             email: c.email || null,
+            phone,
           }, { onConflict: 'prospect_id,name' });
           if (!cErr) contactsSynced++;
           else contactErrors++;
@@ -117,6 +137,7 @@ export async function POST(req: NextRequest) {
       contactsTotal,
       contactsSkipped,
       contactErrors,
+      phonesFound,
       customersProcessed,
       totalCustomers: allCustomerIds.length,
       offset,
