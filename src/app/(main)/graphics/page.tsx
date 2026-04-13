@@ -825,10 +825,16 @@ export default function GraphicsPage() {
                         {(job.tracking_number || job.carrier || job.ship_to) && (
                           <div style={{ marginBottom: '10px' }}>
                             <div style={labelStyle}>Shipping</div>
-                            <div style={{ display: 'flex', gap: '8px', fontSize: '11px', flexWrap: 'wrap' }}>
-                              {job.carrier && <span style={{ color: 'var(--text-body)' }}>{job.carrier}</span>}
-                              {job.tracking_number && <span style={{ color: '#60a5fa', fontWeight: 700 }}>{job.tracking_number}</span>}
-                              {job.ship_to && <span style={{ color: 'var(--text-label)' }}>→ {job.ship_to}</span>}
+                            <div style={{ fontSize: '11px' }}>
+                              <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap' }}>
+                                {job.carrier && <span style={{ color: 'var(--text-body)' }}>{job.carrier}</span>}
+                                {job.tracking_number && <span style={{ color: '#60a5fa', fontWeight: 700 }}>{job.tracking_number}</span>}
+                              </div>
+                              {job.ship_to && (
+                                <div style={{ color: 'var(--text-label)', whiteSpace: 'pre-wrap', marginTop: '4px', padding: '4px 6px', borderRadius: '4px', background: 'var(--bg)', lineHeight: 1.4 }}>
+                                  {job.ship_to}
+                                </div>
+                              )}
                             </div>
                           </div>
                         )}
@@ -1012,8 +1018,8 @@ export default function GraphicsPage() {
                             <div style={labelStyle}>Title</div>
                             <input style={inputStyle} value={editJob!.title} onChange={e => setEditingJob({ ...editJob!, title: e.target.value })} />
                           </div>
-                          <div>
-                            <div style={labelStyle}>Part Number(s)</div>
+                          <div style={{ gridColumn: '1 / -1' }}>
+                            <div style={labelStyle}>Part Number(s) — PO Line Items</div>
                             {(() => {
                               const parts = (editJob!.part_number || '').split(',').map(s => s.trim()).filter(Boolean);
                               return (
@@ -1021,14 +1027,14 @@ export default function GraphicsPage() {
                                   {parts.length > 0 && (
                                     <div style={{ display: 'flex', flexWrap: 'wrap', gap: '4px', marginBottom: '4px' }}>
                                       {parts.map((pn, i) => (
-                                        <span key={i} style={{ display: 'inline-flex', alignItems: 'center', gap: '4px', padding: '2px 8px', borderRadius: '6px', fontSize: '11px', fontWeight: 700, background: 'rgba(59,130,246,0.1)', color: '#3b82f6', border: '1px solid rgba(59,130,246,0.2)' }}>
+                                        <span key={i} style={{ display: 'inline-flex', alignItems: 'center', gap: '4px', padding: '3px 10px', borderRadius: '6px', fontSize: '12px', fontWeight: 700, background: 'rgba(59,130,246,0.1)', color: '#3b82f6', border: '1px solid rgba(59,130,246,0.2)' }}>
                                           {pn}
-                                          <span onClick={() => setEditingJob({ ...editJob!, part_number: parts.filter((_, j) => j !== i).join(', ') || null })} style={{ cursor: 'pointer', fontSize: '13px', marginLeft: '2px' }}>&times;</span>
+                                          <span onClick={() => setEditingJob({ ...editJob!, part_number: parts.filter((_, j) => j !== i).join(', ') || null })} style={{ cursor: 'pointer', fontSize: '14px', marginLeft: '2px' }}>&times;</span>
                                         </span>
                                       ))}
                                     </div>
                                   )}
-                                  <input style={inputStyle} placeholder="Type part # and press Enter"
+                                  <input style={inputStyle} placeholder="Type each part # and press Enter to add (supports multiple PO lines)"
                                     onKeyDown={e => {
                                       const val = (e.target as HTMLInputElement).value.trim();
                                       if ((e.key === 'Enter' || e.key === ',') && val) {
@@ -1119,7 +1125,7 @@ export default function GraphicsPage() {
                         </div>
 
                         <div style={labelStyle}>Shipping</div>
-                        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: '6px', marginBottom: '10px' }}>
+                        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '6px', marginBottom: '6px' }}>
                           <div>
                             <div style={{ ...labelStyle, fontSize: '8px' }}>Carrier</div>
                             <select style={inputStyle} value={editJob!.carrier || ''} onChange={e => setEditingJob({ ...editJob!, carrier: e.target.value })}>
@@ -1135,10 +1141,12 @@ export default function GraphicsPage() {
                             <div style={{ ...labelStyle, fontSize: '8px' }}>Tracking #</div>
                             <input style={inputStyle} value={editJob!.tracking_number || ''} onChange={e => setEditingJob({ ...editJob!, tracking_number: e.target.value })} />
                           </div>
-                          <div>
-                            <div style={{ ...labelStyle, fontSize: '8px' }}>Ship To</div>
-                            <input style={inputStyle} value={editJob!.ship_to || ''} onChange={e => setEditingJob({ ...editJob!, ship_to: e.target.value })} />
-                          </div>
+                        </div>
+                        <div style={{ marginBottom: '10px' }}>
+                          <div style={{ ...labelStyle, fontSize: '8px' }}>Ship To Address</div>
+                          <textarea style={{ ...inputStyle, minHeight: '60px', resize: 'vertical' }} value={editJob!.ship_to || ''} onChange={e => setEditingJob({ ...editJob!, ship_to: e.target.value })}
+                            placeholder={'Company Name\n123 Street Address\nCity, State ZIP'}
+                          />
                         </div>
 
                         <div style={{ marginBottom: '10px' }}>
@@ -1256,20 +1264,20 @@ export default function GraphicsPage() {
                       onKeyDown={e => { if (e.key === 'Enter' && createForm.title.trim() && !creating) createJob(); }}
                     />
                   </div>
-                  <div>
-                    <div style={labelStyle}>Part Number(s)</div>
+                  <div style={{ gridColumn: '1 / -1' }}>
+                    <div style={labelStyle}>Part Number(s) — PO Line Items</div>
                     {createForm.part_numbers.length > 0 && (
                       <div style={{ display: 'flex', flexWrap: 'wrap', gap: '4px', marginBottom: '4px' }}>
                         {createForm.part_numbers.map((pn, i) => (
-                          <span key={i} style={{ display: 'inline-flex', alignItems: 'center', gap: '4px', padding: '2px 8px', borderRadius: '6px', fontSize: '11px', fontWeight: 700, background: 'rgba(59,130,246,0.1)', color: '#3b82f6', border: '1px solid rgba(59,130,246,0.2)' }}>
+                          <span key={i} style={{ display: 'inline-flex', alignItems: 'center', gap: '4px', padding: '3px 10px', borderRadius: '6px', fontSize: '12px', fontWeight: 700, background: 'rgba(59,130,246,0.1)', color: '#3b82f6', border: '1px solid rgba(59,130,246,0.2)' }}>
                             {pn}
-                            <span onClick={() => setCreateForm(f => ({ ...f, part_numbers: f.part_numbers.filter((_, j) => j !== i) }))} style={{ cursor: 'pointer', fontSize: '13px', marginLeft: '2px' }}>&times;</span>
+                            <span onClick={() => setCreateForm(f => ({ ...f, part_numbers: f.part_numbers.filter((_, j) => j !== i) }))} style={{ cursor: 'pointer', fontSize: '14px', marginLeft: '2px' }}>&times;</span>
                           </span>
                         ))}
                       </div>
                     )}
                     <input style={inputStyle} value={createForm.partInput} onChange={e => setCreateForm({ ...createForm, partInput: e.target.value })}
-                      placeholder="Type part # and press Enter"
+                      placeholder="Type each part # and press Enter to add (supports multiple PO lines)"
                       onKeyDown={e => {
                         if ((e.key === 'Enter' || e.key === ',') && createForm.partInput.trim()) {
                           e.preventDefault();
@@ -1320,9 +1328,11 @@ export default function GraphicsPage() {
                   )}
                   {/* Production & Customer Supplied get ship-to */}
                   {(createForm.job_category === 'production' || createForm.job_category === 'customer_supplied') && (
-                    <div>
-                      <div style={labelStyle}>Ship To</div>
-                      <input style={inputStyle} value={createForm.ship_to} onChange={e => setCreateForm({ ...createForm, ship_to: e.target.value })} />
+                    <div style={{ gridColumn: '1 / -1' }}>
+                      <div style={labelStyle}>Ship To Address</div>
+                      <textarea style={{ ...inputStyle, minHeight: '60px', resize: 'vertical' }} value={createForm.ship_to} onChange={e => setCreateForm({ ...createForm, ship_to: e.target.value })}
+                        placeholder={'Company Name\n123 Street Address\nCity, State ZIP'}
+                      />
                     </div>
                   )}
                 </div>
