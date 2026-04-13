@@ -633,26 +633,16 @@ export default function ProspectsPage() {
             />
             <button onClick={async () => {
               setSyncingContacts(true);
-              let totalSynced = 0, totalErrors = 0, totalProcessed = 0, totalCustomers = 0, totalPhones = 0;
-              let offset = 0;
-              let lastError: string | null = null;
               try {
-                while (true) {
-                  const res = await fetch(`/api/netsuite/contacts/sync?offset=${offset}`, { method: 'POST' });
-                  const data = await res.json().catch(() => ({}));
-                  if (!res.ok) { lastError = `HTTP ${res.status}: ${data.error || 'Unknown'}`; break; }
-                  totalSynced += data.contactsSynced || 0;
-                  totalErrors += data.contactErrors || 0;
-                  totalProcessed += data.customersProcessed || 0;
-                  totalCustomers = data.totalCustomers || totalCustomers;
-                  totalPhones += data.phonesFound || 0;
-                  if (data.restApiError) { lastError = data.restApiError.body; }
-                  if (!data.hasMore) break;
-                  offset = data.nextOffset;
+                const res = await fetch('/api/netsuite/contacts/sync', { method: 'POST' });
+                const data = await res.json().catch(() => ({}));
+                if (!res.ok) {
+                  alert(`Sync failed (HTTP ${res.status}): ${data.error || 'Unknown'}`);
+                } else {
+                  alert(`Contacts synced: ${data.contactsSynced || 0}\nCustomers: ${data.customersProcessed || 0} of ${data.totalCustomers || '?'}\nPhones: ${data.phonesFound || 0}\nErrors: ${data.contactErrors || 0}${data.timedOut ? '\n(Timed out — run again to continue)' : ''}`);
+                  setContactsLoaded(false);
+                  loadAllContacts();
                 }
-                alert(`Contacts synced: ${totalSynced}\nCustomers: ${totalProcessed} of ${totalCustomers}\nPhones found: ${totalPhones}\nErrors: ${totalErrors}${lastError ? '\n' + lastError : ''}`);
-                setContactsLoaded(false);
-                loadAllContacts();
               } catch (err: any) { alert('Sync failed: ' + (err.message || 'Network error')); }
               setSyncingContacts(false);
             }} disabled={syncingContacts} style={{

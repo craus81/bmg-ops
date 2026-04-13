@@ -24,6 +24,7 @@ export async function POST(req: NextRequest) {
   let phonesFound = 0;
   let firstRestError: string | null = null;
   let firstRestStatus: number | null = null;
+  let timedOut = false;
 
   try {
     const rawAccountId = process.env.NETSUITE_ACCOUNT_ID || '';
@@ -40,9 +41,8 @@ export async function POST(req: NextRequest) {
     });
     const restToken = { key: process.env.NETSUITE_TOKEN_ID!, secret: process.env.NETSUITE_TOKEN_SECRET! };
 
-    const url = new URL(req.url);
-    const offset = parseInt(url.searchParams.get('offset') || '0');
-    const batchSize = parseInt(url.searchParams.get('limit') || '20');
+    const startTime = Date.now();
+    const timeLimit = 100_000; // Stop after 100s to leave buffer for response
 
     // Build prospect map
     let allProspectRows: any[] = [];
@@ -58,9 +58,14 @@ export async function POST(req: NextRequest) {
     allProspectRows.forEach((p: any) => { if (p.netsuite_id) nsToProspect[p.netsuite_id] = p.id; });
 
     const allCustomerIds = Object.keys(nsToProspect);
-    const customerIds = allCustomerIds.slice(offset, offset + batchSize);
 
-    for (const custId of customerIds) {
+    for (const custId of allCustomerIds) {
+      // Check time limit
+      if (Date.now() - startTime > timeLimit) {
+        timedOut = true;
+        break;
+      }
+
       customersProcessed++;
       try {
         const reqUrl = `${restBaseUrl}/customer/${custId}?expandSubResources=true`;
@@ -93,12 +98,11 @@ export async function POST(req: NextRequest) {
         for (const c of contacts) {
           let name = c.contactName || c.contact?.refName || c.name || 'Unknown';
           if (name === 'Unknown') continue;
-          // Strip leading entity ID prefix (e.g. "161056 Brett Byrd" -> "Brett Byrd")
           name = name.replace(/^\d+\s+/, '');
 
           let phone: string | null = null;
           const contactId = c.contact?.id || c.contactId;
-          if (contactId) {
+          if (contactId && (Date.now() - startTime < timeLimit)) {
             try {
               const contactUrl = `${restBaseUrl}/contact/${contactId}`;
               const cAuth = restOAuth.authorize({ url: contactUrl, method: 'GET' }, restToken);
@@ -129,9 +133,6 @@ export async function POST(req: NextRequest) {
       }
     }
 
-    const hasMore = offset + batchSize < allCustomerIds.length;
-    const nextOffset = hasMore ? offset + batchSize : null;
-
     return NextResponse.json({
       contactsSynced,
       contactsTotal,
@@ -140,9 +141,7 @@ export async function POST(req: NextRequest) {
       phonesFound,
       customersProcessed,
       totalCustomers: allCustomerIds.length,
-      offset,
-      nextOffset,
-      hasMore,
+      timedOut,
       ...(firstRestError ? { restApiError: { status: firstRestStatus, body: firstRestError } } : {}),
     });
   } catch (err: any) {
