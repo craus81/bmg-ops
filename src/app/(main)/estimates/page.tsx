@@ -49,6 +49,8 @@ interface Estimate {
   grand_total: number;
   netsuite_estimate_id: string | null;
   netsuite_estimate_number: string | null;
+  netsuite_so_id: string | null;
+  netsuite_so_number: string | null;
   pushed_at: string | null;
   created_by: string | null;
   created_at: string;
@@ -125,6 +127,7 @@ export default function EstimatesPage() {
   const [pushing, setPushing] = useState(false);
   const [syncing, setSyncing] = useState(false);
   const [deleting, setDeleting] = useState(false);
+  const [convertingToSO, setConvertingToSO] = useState(false);
 
   // Part search
   const [partSearch, setPartSearch] = useState('');
@@ -341,6 +344,40 @@ export default function EstimatesPage() {
     setSyncing(false);
   };
 
+  // ── Convert Estimate to Sales Order in NetSuite ──
+  const convertToSalesOrder = async () => {
+    if (!editingId) return;
+    const est = estimates.find(e => e.id === editingId);
+    if (est?.netsuite_so_id) {
+      alert(`This estimate already has a Sales Order: SO #${est.netsuite_so_number || est.netsuite_so_id}`);
+      return;
+    }
+    if (!confirm('Create a Sales Order in NetSuite from this estimate?')) return;
+
+    setConvertingToSO(true);
+    try {
+      const res = await fetch('/api/estimates/convert-to-so', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ estimateId: editingId }),
+      });
+      const data = await res.json();
+      if (res.ok && data.status === 'created') {
+        alert(`Sales Order created!\nSO #: ${data.salesOrderNumber || data.salesOrderId}\nLine items: ${data.lineItemCount}${data.skippedItems ? '\nSkipped (no NS item): ' + data.skippedItems.join(', ') : ''}`);
+        await loadEstimates();
+        resetBuilder();
+        setView('list');
+      } else if (data.status === 'already_created') {
+        alert(data.message);
+      } else {
+        alert('Failed: ' + (data.error || 'Unknown error'));
+      }
+    } catch {
+      alert('Network error — please try again');
+    }
+    setConvertingToSO(false);
+  };
+
   // ── Open estimate for editing ──
   const openEstimate = async (est: Estimate) => {
     setEditingId(est.id);
@@ -502,6 +539,7 @@ export default function EstimatesPage() {
                         <span style={{ color: 'var(--text-body)', fontWeight: 700 }}>{fmt(est.grand_total)}</span>
                         <span>{new Date(est.created_at).toLocaleDateString()}</span>
                         {est.netsuite_estimate_number && <span style={{ color: '#a78bfa' }}>NS: {est.netsuite_estimate_number}</span>}
+                        {est.netsuite_so_number && <span style={{ color: '#22c55e' }}>SO: {est.netsuite_so_number}</span>}
                       </div>
                     </div>
                     <div style={{ display: 'flex', gap: '4px', alignItems: 'center', flexShrink: 0 }}>
@@ -957,6 +995,34 @@ export default function EstimatesPage() {
           >
             {pushing ? 'Pushing to NetSuite...' : syncing ? 'Syncing to NetSuite...' : isPushed ? 'Sync Changes to NetSuite' : 'Push to NetSuite as Estimate'}
           </button>
+        )}
+
+        {/* Convert to Sales Order */}
+        {editingId && customerNsId && lines.length > 0 && !estimates.find(e => e.id === editingId)?.netsuite_so_id && (
+          <button
+            onClick={convertToSalesOrder}
+            disabled={convertingToSO}
+            style={{
+              width: '100%', padding: '12px', borderRadius: '10px',
+              background: convertingToSO ? 'var(--subtle-bg)' : 'rgba(34,197,94,0.12)',
+              border: '1px solid rgba(34,197,94,0.3)',
+              color: '#22c55e', fontWeight: 800, fontSize: '13px', cursor: 'pointer',
+              opacity: convertingToSO ? 0.5 : 1,
+            }}
+          >
+            {convertingToSO ? 'Creating Sales Order...' : 'Convert to Sales Order in NetSuite'}
+          </button>
+        )}
+
+        {/* Show SO number if already converted */}
+        {editingId && estimates.find(e => e.id === editingId)?.netsuite_so_id && (
+          <div style={{
+            width: '100%', padding: '10px 12px', borderRadius: '10px',
+            background: 'rgba(34,197,94,0.08)', border: '1px solid rgba(34,197,94,0.2)',
+            fontSize: '12px', fontWeight: 700, color: '#22c55e', textAlign: 'center',
+          }}>
+            Sales Order: SO #{estimates.find(e => e.id === editingId)?.netsuite_so_number || estimates.find(e => e.id === editingId)?.netsuite_so_id}
+          </div>
         )}
 
         {/* Delete — only for saved estimates */}
