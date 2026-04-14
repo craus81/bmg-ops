@@ -80,10 +80,10 @@ export default function BottomNav({ clockStatus }: BottomNavProps) {
       borderTop: `1px solid ${theme.border}`,
       display: 'flex', alignItems: 'center', gap: '4px',
       zIndex: 100,
-      padding: '8px 10px',
+      padding: '8px 16px',
       paddingBottom: 'calc(10px + env(safe-area-inset-bottom, 0px))',
-      paddingLeft: 'calc(10px + env(safe-area-inset-left, 0px))',
-      paddingRight: 'calc(10px + env(safe-area-inset-right, 0px))',
+      paddingLeft: 'calc(16px + env(safe-area-inset-left, 0px))',
+      paddingRight: 'calc(16px + env(safe-area-inset-right, 0px))',
     }}>
       {tabs.map((tab) => {
         const active = isActive(tab);
