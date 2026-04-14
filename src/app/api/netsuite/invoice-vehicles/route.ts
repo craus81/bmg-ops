@@ -132,7 +132,7 @@ export async function POST(req: NextRequest) {
         // Find a location — use scan's location, fall back to BMG Shop
         let locationId: string | undefined;
         const firstLocation = custScans.find(s => s.location_name)?.location_name;
-        const loc = await findLocation(firstLocation || 'BMG');
+        const loc = await findLocation(firstLocation || "O'Fallon");
         if (loc) locationId = loc.id;
 
         // Create the invoice
