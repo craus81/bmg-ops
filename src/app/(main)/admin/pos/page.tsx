@@ -554,6 +554,18 @@ export default function POsPage() {
     setEmailLoading(false);
   };
 
+  const dismissEmail = async (messageId: string, email: any) => {
+    await supabase.from('gmail_po_imports').upsert({
+      message_id: messageId,
+      thread_id: email.threadId,
+      subject: email.subject || '',
+      from_email: email.fromEmail || '',
+      po_number: email.poNumber || '',
+      status: 'dismissed',
+    }, { onConflict: 'message_id' });
+    setEmailEmails(prev => prev.filter(e => e.messageId !== messageId));
+  };
+
   const importEmailPO = async (messageId: string, skipReview = false) => {
     setImportingEmailId(messageId);
     try {
@@ -1122,6 +1134,15 @@ export default function POsPage() {
                           )}
                           {!hasPdfs && (
                             <span style={{ fontSize: '10px', color: 'var(--text-label)' }}>No PDF</span>
+                          )}
+                          {!existsInSystem && !justImported && (
+                            <button
+                              onClick={() => dismissEmail(email.messageId, email)}
+                              style={{
+                                padding: '4px 8px', borderRadius: '5px', fontSize: '10px', fontWeight: 700, cursor: 'pointer',
+                                background: 'rgba(239,68,68,0.08)', border: '1px solid rgba(239,68,68,0.2)', color: '#ef4444',
+                              }}
+                            >Dismiss</button>
                           )}
                         </div>
                       </div>
