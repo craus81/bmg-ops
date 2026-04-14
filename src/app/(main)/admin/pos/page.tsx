@@ -1197,7 +1197,7 @@ export default function POsPage() {
             </div>
 
             {/* PO header fields */}
-            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: '8px', marginBottom: '14px' }}>
+            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: '8px', marginBottom: '10px' }}>
               <div>
                 <div style={{ fontSize: '9px', fontWeight: 700, color: 'var(--text-label)', textTransform: 'uppercase', marginBottom: '3px' }}>PO Number</div>
                 <input
@@ -1221,6 +1221,49 @@ export default function POsPage() {
                   onChange={e => setReviewingExtraction(prev => prev ? { ...prev, extracted: { ...prev.extracted, ordered_date: e.target.value } } : prev)}
                   style={{ width: '100%', padding: '6px 8px', borderRadius: '6px', border: '1px solid var(--border)', background: 'var(--input-bg)', color: 'var(--text-body)', fontSize: '12px' }}
                 />
+              </div>
+            </div>
+
+            {/* Ship To fields */}
+            <div style={{ marginBottom: '14px' }}>
+              <div style={{ fontSize: '9px', fontWeight: 700, color: 'var(--text-label)', textTransform: 'uppercase', marginBottom: '4px' }}>Ship To</div>
+              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '6px' }}>
+                <div style={{ gridColumn: '1 / -1' }}>
+                  <input
+                    value={reviewingExtraction.extracted.ship_to?.name || ''}
+                    onChange={e => setReviewingExtraction(prev => prev ? { ...prev, extracted: { ...prev.extracted, ship_to: { ...prev.extracted.ship_to, name: e.target.value } } } : prev)}
+                    placeholder="Name"
+                    style={{ width: '100%', padding: '6px 8px', borderRadius: '6px', border: '1px solid var(--border)', background: 'var(--input-bg)', color: 'var(--text-body)', fontSize: '11px' }}
+                  />
+                </div>
+                <div style={{ gridColumn: '1 / -1' }}>
+                  <input
+                    value={reviewingExtraction.extracted.ship_to?.address || ''}
+                    onChange={e => setReviewingExtraction(prev => prev ? { ...prev, extracted: { ...prev.extracted, ship_to: { ...prev.extracted.ship_to, address: e.target.value } } } : prev)}
+                    placeholder="Address"
+                    style={{ width: '100%', padding: '6px 8px', borderRadius: '6px', border: '1px solid var(--border)', background: 'var(--input-bg)', color: 'var(--text-body)', fontSize: '11px' }}
+                  />
+                </div>
+                <input
+                  value={reviewingExtraction.extracted.ship_to?.city || ''}
+                  onChange={e => setReviewingExtraction(prev => prev ? { ...prev, extracted: { ...prev.extracted, ship_to: { ...prev.extracted.ship_to, city: e.target.value } } } : prev)}
+                  placeholder="City"
+                  style={{ width: '100%', padding: '6px 8px', borderRadius: '6px', border: '1px solid var(--border)', background: 'var(--input-bg)', color: 'var(--text-body)', fontSize: '11px' }}
+                />
+                <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '6px' }}>
+                  <input
+                    value={reviewingExtraction.extracted.ship_to?.state || ''}
+                    onChange={e => setReviewingExtraction(prev => prev ? { ...prev, extracted: { ...prev.extracted, ship_to: { ...prev.extracted.ship_to, state: e.target.value } } } : prev)}
+                    placeholder="State"
+                    style={{ width: '100%', padding: '6px 8px', borderRadius: '6px', border: '1px solid var(--border)', background: 'var(--input-bg)', color: 'var(--text-body)', fontSize: '11px' }}
+                  />
+                  <input
+                    value={reviewingExtraction.extracted.ship_to?.zip || ''}
+                    onChange={e => setReviewingExtraction(prev => prev ? { ...prev, extracted: { ...prev.extracted, ship_to: { ...prev.extracted.ship_to, zip: e.target.value } } } : prev)}
+                    placeholder="Zip"
+                    style={{ width: '100%', padding: '6px 8px', borderRadius: '6px', border: '1px solid var(--border)', background: 'var(--input-bg)', color: 'var(--text-body)', fontSize: '11px' }}
+                  />
+                </div>
               </div>
             </div>
 
