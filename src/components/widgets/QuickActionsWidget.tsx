@@ -10,7 +10,7 @@ const ACTIONS = [
   { label: 'Photo Reviews', path: '/admin/reviews', desc: 'Approve photos' },
   { label: 'CNI Dashboard', path: '/admin/cni', desc: 'Installer program' },
   { label: 'Customers', path: '/admin/customers', desc: 'Customer directory' },
-  { label: 'Reports', path: '/reports', desc: 'Analytics' },
+  { label: 'Scan Log', path: '/admin/scans', desc: 'Export & invoice' },
 ];
 
 export default function QuickActionsWidget() {

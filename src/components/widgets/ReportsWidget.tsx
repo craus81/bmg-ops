@@ -8,13 +8,13 @@ export default function ReportsWidget() {
   const router = useRouter();
 
   return (
-    <WidgetShell title="Reports" icon="" loading={false} onHeaderClick={() => router.push('/reports')}>
+    <WidgetShell title="Scan Log" icon="" loading={false} onHeaderClick={() => router.push('/admin/scans')}>
       <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', height: '100%', gap: '12px' }}>
         <p style={{ fontSize: '12px', color: theme.textMuted, textAlign: 'center', margin: 0 }}>
-          Export vehicle spreadsheets and reports
+          Review scans, export &amp; invoice
         </p>
         <button
-          onClick={() => router.push('/reports')}
+          onClick={() => router.push('/admin/scans')}
           style={{
             padding: '8px 20px',
             borderRadius: '8px',
@@ -26,7 +26,7 @@ export default function ReportsWidget() {
             cursor: 'pointer',
           }}
         >
-          Go to Reports
+          Go to Scan Log
         </button>
       </div>
     </WidgetShell>
