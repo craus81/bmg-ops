@@ -50,6 +50,7 @@ export default function AdminScansPage() {
   const [bulkPartSearch, setBulkPartSearch] = useState('');
   const [bulkPartLabel, setBulkPartLabel] = useState('');
   const [bulkLocation, setBulkLocation] = useState<string>('');
+  const [bulkCustomer, setBulkCustomer] = useState('');
   const [bulkVins, setBulkVins] = useState('');
   const [bulkProcessing, setBulkProcessing] = useState(false);
   const [bulkResult, setBulkResult] = useState<{ success: number; failed: number; skipped?: number } | null>(null);
@@ -336,7 +337,7 @@ export default function AdminScansPage() {
         ...vehicleData,
         part_number: selectedPart?.item_number || null,
         part_description: selectedPart?.display_name || null,
-        billable_customer: selectedPart?.billable_customer || null,
+        billable_customer: bulkCustomer.trim() || selectedPart?.billable_customer || null,
         location_id: selectedLoc?.id || null,
         location_name: selectedLoc?.name || null,
         scanned_by: user?.id,
@@ -347,7 +348,7 @@ export default function AdminScansPage() {
 
     setBulkResult({ success, failed, skipped });
     setBulkProcessing(false);
-    if (success > 0) { setBulkVins(''); loadAll(); }
+    if (success > 0) { setBulkVins(''); setBulkCustomer(''); loadAll(); }
   };
 
   const handleFileUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -539,7 +540,7 @@ export default function AdminScansPage() {
       {/* Bulk Upload tab */}
       {tab === 'bulk' && (
         <div style={{ background: 'var(--card)', border: `1px solid ${theme.border}`, borderRadius: '14px', padding: '16px' }}>
-          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '10px', marginBottom: '12px' }}>
+          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: '10px', marginBottom: '12px' }}>
             <div style={{ position: 'relative' }}>
               <div style={{ fontSize: '10px', fontWeight: 700, color: 'var(--text-muted)', textTransform: 'uppercase', marginBottom: '4px' }}>Part Number</div>
               {bulkPart ? (
@@ -578,6 +579,10 @@ export default function AdminScansPage() {
                 <option value="">— Select Location —</option>
                 {allLocations.map(l => <option key={l.id} value={l.id}>{l.name}</option>)}
               </select>
+            </div>
+            <div>
+              <div style={{ fontSize: '10px', fontWeight: 700, color: 'var(--text-muted)', textTransform: 'uppercase', marginBottom: '4px' }}>Customer</div>
+              <input value={bulkCustomer} onChange={e => setBulkCustomer(e.target.value)} placeholder="Override part default" style={{ width: '100%', padding: '10px', borderRadius: '8px', border: `1px solid ${theme.border}`, background: 'var(--input-bg)', color: 'var(--text-primary)', fontSize: '13px' }} />
             </div>
           </div>
 
