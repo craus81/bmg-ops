@@ -85,7 +85,7 @@ function AppShell({ children }: { children: React.ReactNode }) {
   if (profile?.status === 'denied') return <DeniedScreen />;
 
   return (
-    <div style={{ minHeight: '100vh', paddingBottom: '70px', background: 'var(--bg)' }}>
+    <div style={{ minHeight: '100vh', paddingBottom: '85px', background: 'var(--bg)' }}>
       <Header clockStatus={clockStatus} activePartNumber={activePart?.part_number} activeEndCustomer={activePart?.end_customer} />
       <div style={{ maxWidth: '1200px', margin: '0 auto', padding: '14px 20px', boxSizing: 'border-box' }}>
         {children}

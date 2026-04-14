@@ -80,8 +80,8 @@ export default function BottomNav({ clockStatus }: BottomNavProps) {
       borderTop: `1px solid ${theme.border}`,
       display: 'flex', alignItems: 'center', gap: '4px',
       zIndex: 100,
-      padding: '6px 10px',
-      paddingBottom: 'calc(6px + env(safe-area-inset-bottom, 0px))',
+      padding: '8px 10px',
+      paddingBottom: 'calc(10px + env(safe-area-inset-bottom, 0px))',
     }}>
       {tabs.map((tab) => {
         const active = isActive(tab);
@@ -91,7 +91,7 @@ export default function BottomNav({ clockStatus }: BottomNavProps) {
             className={active ? undefined : 'bottom-nav-tab'}
             onClick={() => router.push(tab.path)}
             style={{
-              flex: 1, padding: '8px 4px', display: 'flex',
+              flex: 1, padding: '12px 4px', display: 'flex',
               alignItems: 'center', justifyContent: 'center',
               borderRadius: '8px',
               background: active ? 'rgba(59,130,246,0.15)' : 'rgba(255,255,255,0.04)',
