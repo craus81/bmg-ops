@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { createClient } from '@supabase/supabase-js';
-import { createDirectInvoice, findCustomer, findItems, findLocation } from '@/lib/netsuite';
+import { createDirectInvoice, findCustomer, findItems, findLocation, suiteqlQuery } from '@/lib/netsuite';
 import { requireAuth } from '@/lib/api-auth';
 
 /**
@@ -129,11 +129,29 @@ export async function POST(req: NextRequest) {
         const vinList = custScans.map(s => s.vin).join(', ');
         const memo = `BMG FleetSuite Invoice — ${custScans.length} vehicle${custScans.length !== 1 ? 's' : ''}: ${vinList.length > 200 ? vinList.slice(0, 200) + '...' : vinList}`;
 
-        // Find a location — use scan's location, fall back to BMG Shop
+        // Find a NetSuite location — use scan's location, fall back to O'Fallon
         let locationId: string | undefined;
         const firstLocation = custScans.find(s => s.location_name)?.location_name;
-        const loc = await findLocation(firstLocation || "O'Fallon");
+        const loc = await findLocation(firstLocation || "Fallon");
         if (loc) locationId = loc.id;
+
+        // If location lookup failed, try a broader search
+        if (!locationId) {
+          try {
+            const locResult = await suiteqlQuery("SELECT id FROM location WHERE UPPER(name) LIKE '%FALLON%' FETCH FIRST 1 ROWS ONLY");
+            if (locResult?.items?.[0]?.id) locationId = locResult.items[0].id.toString();
+          } catch {}
+        }
+
+        if (!locationId) {
+          results.push({
+            customer: customerName,
+            vehicleCount: custScans.length,
+            status: 'error',
+            error: 'Could not find O\'Fallon location in NetSuite',
+          });
+          continue;
+        }
 
         // Create the invoice
         const invoiceResult = await createDirectInvoice({
