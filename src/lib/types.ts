@@ -223,6 +223,7 @@ export interface GraphicElement {
   width_in: number;
   height_in: number;
   description: string;
+  panel?: string;
   // Crop region in the proof image (percentages of image dimensions)
   crop_x_pct?: number;
   crop_y_pct?: number;

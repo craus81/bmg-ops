@@ -814,6 +814,72 @@ function NewQuote({ onCreated, editQuote }: { onCreated: () => void; editQuote?:
     setDrawingNewElement(false);
   }
 
+  // Place a default-position box on the image for an AI-detected element
+  function placeElement(idx: number) {
+    if (!analysis?.graphic_elements) return;
+    const el = analysis.graphic_elements[idx];
+
+    // Try to find the calibration region for this element's panel
+    const panelName = (el.panel || '').toLowerCase();
+    const region = calibrationRegions.find(r =>
+      r.panel_name.toLowerCase() === panelName ||
+      panelName.includes(r.panel_name.toLowerCase()) ||
+      r.panel_name.toLowerCase().includes(panelName)
+    );
+
+    let wPct: number, hPct: number, xPct: number, yPct: number;
+
+    if (region && el.width_in && el.height_in) {
+      // Use calibration to convert estimated inches to image percentage
+      wPct = Math.min(el.width_in / region.in_per_pct_x, region.img_w_pct * 0.9);
+      hPct = Math.min(el.height_in / region.in_per_pct_y, region.img_h_pct * 0.9);
+      // Center within the calibration region
+      xPct = region.img_x_pct + (region.img_w_pct - wPct) / 2;
+      yPct = region.img_y_pct + (region.img_h_pct - hPct) / 2;
+    } else {
+      // Default: reasonable box centered in image
+      wPct = 20;
+      hPct = 15;
+      xPct = 40;
+      yPct = 42;
+    }
+
+    // Stagger slightly so multiple placed boxes don't stack exactly
+    const placedCount = analysis.graphic_elements.filter(
+      (e, i) => i < idx && e.crop_x_pct !== undefined
+    ).length;
+    xPct = Math.max(0, Math.min(100 - wPct, xPct + (placedCount % 3) * 3));
+    yPct = Math.max(0, Math.min(100 - hPct, yPct + Math.floor(placedCount / 3) * 3));
+
+    el.crop_x_pct = xPct;
+    el.crop_y_pct = yPct;
+    el.crop_w_pct = wPct;
+    el.crop_h_pct = hPct;
+
+    setAnalysis({ ...analysis });
+    setIncludedElements(prev => new Set(prev).add(el.element_name));
+    setSelectedBboxIdx(idx);
+  }
+
+  // Remove a placed box from an element (undo placement)
+  function removeElementBox(idx: number) {
+    if (!analysis?.graphic_elements) return;
+    const el = analysis.graphic_elements[idx];
+
+    el.crop_x_pct = undefined;
+    el.crop_y_pct = undefined;
+    el.crop_w_pct = undefined;
+    el.crop_h_pct = undefined;
+
+    setAnalysis({ ...analysis });
+    setIncludedElements(prev => {
+      const next = new Set(prev);
+      next.delete(el.element_name);
+      return next;
+    });
+    if (selectedBboxIdx === idx) setSelectedBboxIdx(null);
+  }
+
   // Calculate real-world inches from a bounding box's position/size on the proof image.
   // Uses calibration regions (panel edges mapped to known dimensions) for accuracy.
   // Falls back to overall vehicle dimensions if no calibration is available.
@@ -2157,13 +2223,11 @@ function NewQuote({ onCreated, editQuote }: { onCreated: () => void; editQuote?:
             background: theme.card, borderBottom: `1px solid ${theme.border}`, flexShrink: 0,
           }}>
             <div>
-              <div style={{ fontSize: '14px', fontWeight: 800, color: theme.textPrimary }}>{templateOnly ? 'Tag Panels' : 'Tag Elements'}</div>
+              <div style={{ fontSize: '14px', fontWeight: 800, color: theme.textPrimary }}>{templateOnly ? 'Select Panels' : 'Select Elements'}</div>
               <div style={{ fontSize: '11px', color: theme.textMuted }}>
                 {drawingNewElement
-                  ? 'Draw a box around the element'
-                  : croppingElement
-                  ? `Drawing: ${croppingElement}`
-                  : `${includedElements.size} of ${analysis.graphic_elements!.length} included`}
+                  ? 'Draw a box on the image'
+                  : `${includedElements.size} of ${analysis.graphic_elements!.length} placed`}
               </div>
             </div>
             <div style={{ display: 'flex', gap: '8px' }}>
@@ -2197,60 +2261,6 @@ function NewQuote({ onCreated, editQuote }: { onCreated: () => void; editQuote?:
                   : 'Select elements to continue'}
               </button>
             </div>
-          </div>
-
-          {/* Element buttons — scrollable strip */}
-          <div style={{
-            padding: '8px 16px', display: 'flex', gap: '6px', overflowX: 'auto', flexShrink: 0,
-            borderBottom: `1px solid ${theme.border}`, background: theme.card,
-          }}>
-            {analysis.graphic_elements!.map((el, i) => {
-              const isIncluded = includedElements.has(el.element_name);
-              const isSelected = selectedBboxIdx === i;
-              const boxColors = [
-                '#FF6B35', '#4ECDC4', '#FFE66D', '#95E1D3', '#F38181',
-                '#AA96DA', '#A8D8EA', '#FCBAD3', '#C9CBA3', '#E8A87C',
-              ];
-              const color = boxColors[i % boxColors.length];
-              return (
-                <button
-                  key={i}
-                  onClick={() => setSelectedBboxIdx(isSelected ? null : i)}
-                  style={{
-                    width: '32px', height: '32px', borderRadius: '50%', fontSize: '12px', fontWeight: 800,
-                    cursor: 'pointer', flexShrink: 0,
-                    border: isSelected ? `3px solid #fff` : `2px solid ${isIncluded ? color : theme.border}`,
-                    background: isIncluded ? color : theme.inputBg,
-                    color: isIncluded ? '#fff' : theme.textMuted,
-                    boxShadow: isSelected ? `0 0 0 2px ${color}` : 'none',
-                    display: 'flex', alignItems: 'center', justifyContent: 'center',
-                    transition: 'box-shadow 0.15s',
-                  }}
-                  title={el.element_name}
-                >
-                  {isIncluded ? '✓' : i + 1}
-                </button>
-              );
-            })}
-            {/* Draw new element button */}
-            <button
-              onClick={() => {
-                setDrawingNewElement(!drawingNewElement);
-                setCroppingElement(null);
-                setSelectedBboxIdx(null);
-              }}
-              style={{
-                height: '32px', borderRadius: '16px', fontSize: '11px', fontWeight: 800,
-                cursor: 'pointer', flexShrink: 0, padding: '0 12px',
-                border: drawingNewElement ? '2px solid #10b981' : `2px dashed ${theme.border}`,
-                background: drawingNewElement ? 'rgba(16,185,129,0.15)' : theme.inputBg,
-                color: drawingNewElement ? '#10b981' : theme.textMuted,
-                display: 'flex', alignItems: 'center', gap: '4px',
-              }}
-              title="Draw a new element on the proof"
-            >
-              {drawingNewElement ? 'Drawing...' : '+ New'}
-            </button>
           </div>
 
           {/* Proof image — fills remaining space */}
@@ -2677,6 +2687,103 @@ function NewQuote({ onCreated, editQuote }: { onCreated: () => void; editQuote?:
               </div>
             );
           })()}
+
+          {/* Bottom element list panel — shown when no box is selected */}
+          {selectedBboxIdx === null && (
+            <div style={{
+              flexShrink: 0, maxHeight: '45vh', overflow: 'auto',
+              background: theme.card, borderTop: `1px solid ${theme.border}`,
+              padding: '10px 16px',
+            }}>
+              {/* Draw custom element button */}
+              <button
+                onClick={() => {
+                  setDrawingNewElement(!drawingNewElement);
+                  setCroppingElement(null);
+                  setSelectedBboxIdx(null);
+                }}
+                style={{
+                  width: '100%', padding: '10px', borderRadius: '10px', fontSize: '13px', fontWeight: 700,
+                  cursor: 'pointer', marginBottom: '12px',
+                  border: drawingNewElement ? '2px solid #10b981' : `2px dashed ${theme.border}`,
+                  background: drawingNewElement ? 'rgba(16,185,129,0.15)' : theme.inputBg,
+                  color: drawingNewElement ? '#10b981' : theme.textMuted,
+                  display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '6px',
+                }}
+              >
+                {drawingNewElement ? 'Cancel Drawing' : '+ Draw Custom Element'}
+              </button>
+
+              {/* AI-detected elements list */}
+              {analysis.graphic_elements!.length > 0 && (
+                <div style={{ fontSize: '11px', fontWeight: 700, color: theme.textMuted, marginBottom: '8px', textTransform: 'uppercase', letterSpacing: '0.5px' }}>
+                  Detected Elements ({analysis.graphic_elements!.length})
+                </div>
+              )}
+              {analysis.graphic_elements!.map((el, i) => {
+                const isPlaced = el.crop_x_pct !== undefined;
+                const boxColors = [
+                  '#FF6B35', '#4ECDC4', '#FFE66D', '#95E1D3', '#F38181',
+                  '#AA96DA', '#A8D8EA', '#FCBAD3', '#C9CBA3', '#E8A87C',
+                ];
+                const color = boxColors[i % boxColors.length];
+                return (
+                  <div key={i} style={{
+                    display: 'flex', alignItems: 'center', gap: '10px',
+                    padding: '10px 12px', borderRadius: '10px',
+                    background: isPlaced ? `${color}15` : theme.inputBg,
+                    border: `1px solid ${isPlaced ? color : theme.border}`,
+                    marginBottom: '6px',
+                  }}>
+                    {/* Color indicator */}
+                    <div style={{
+                      width: '10px', height: '10px', borderRadius: '50%',
+                      background: isPlaced ? color : theme.border, flexShrink: 0,
+                    }} />
+                    {/* Info */}
+                    <div style={{ flex: 1, minWidth: 0 }}>
+                      <div style={{ fontSize: '13px', fontWeight: 700, color: theme.textPrimary, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                        {el.element_name}
+                      </div>
+                      <div style={{ fontSize: '11px', color: theme.textMuted, marginTop: '1px' }}>
+                        {el.element_type}{el.description ? ` — ${el.description}` : ''}{el.width_in ? ` — est. ${el.width_in}"×${el.height_in}"` : ''}
+                      </div>
+                    </div>
+                    {/* Place / Remove button */}
+                    {el.element_type === 'custom' ? (
+                      <button
+                        onClick={() => {
+                          const elements = analysis.graphic_elements!.filter((_, j) => j !== i);
+                          setIncludedElements(prev => { const next = new Set(prev); next.delete(el.element_name); return next; });
+                          setAnalysis({ ...analysis, graphic_elements: elements });
+                        }}
+                        style={{
+                          padding: '6px 12px', borderRadius: '8px', fontSize: '11px', fontWeight: 700,
+                          border: `1px solid rgba(239,68,68,0.3)`, background: 'rgba(239,68,68,0.1)',
+                          color: '#ef4444', cursor: 'pointer', flexShrink: 0,
+                        }}
+                      >
+                        Delete
+                      </button>
+                    ) : (
+                      <button
+                        onClick={() => isPlaced ? removeElementBox(i) : placeElement(i)}
+                        style={{
+                          padding: '6px 12px', borderRadius: '8px', fontSize: '11px', fontWeight: 700,
+                          border: isPlaced ? `1px solid ${color}` : `1px solid ${theme.border}`,
+                          background: isPlaced ? `${color}20` : 'transparent',
+                          color: isPlaced ? color : theme.textMuted,
+                          cursor: 'pointer', flexShrink: 0, whiteSpace: 'nowrap',
+                        }}
+                      >
+                        {isPlaced ? '✓ Placed' : 'Place Box'}
+                      </button>
+                    )}
+                  </div>
+                );
+              })}
+            </div>
+          )}
         </div>
       )}
 

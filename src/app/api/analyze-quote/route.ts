@@ -47,19 +47,21 @@ YOUR TASK HAS TWO PARTS:
 Find where each known vehicle panel appears on this proof image. For each panel visible in the image, provide a tight bounding box around the FULL paintable surface of that panel (excluding windows, bumpers, wheels).
 
 ═══ PART 2: GRAPHIC ELEMENTS ═══
-Identify each individual graphic element (logo, stripe, text, decal, large graphic panel, etc.) and provide its bounding box on the proof image. Do NOT calculate inch dimensions — just provide the image position.
+List each individual graphic element you can see (logo, stripe, text, decal, large graphic, etc.).
+Do NOT provide bounding box positions — just describe each element and estimate its size.
 
 For each graphic element:
 1. Descriptive name (e.g. "Driver Side Logo", "Rear Door Text")
 2. Type: "logo", "stripe", "text_block", "graphic", "full_panel", "decal"
 3. Which vehicle panel it sits on (must match a panel name from the calibration)
-4. Its bounding box on the proof image as percentages (0-100)
+4. Brief description of what the element looks like
+5. Estimated real-world dimensions in inches (width × height), using the known panel dimensions and the element's relative size on that panel
 
 IMPORTANT RULES:
 - Identify EACH separate printed piece, not whole panels
 - If the same graphic appears on both sides, list as SEPARATE elements
-- Measure the BOUNDING BOX of the graphic only, not bare paint
 - Be conservative — only include actual vinyl/printed areas
+- Use the known panel dimensions to estimate element sizes accurately in inches
 - Panel calibration boxes should cover the entire paintable body panel surface
 
 Return JSON only, no other text:
@@ -78,10 +80,9 @@ Return JSON only, no other text:
       "element_name": "Driver Side Company Logo",
       "element_type": "logo",
       "panel": "Driver Side",
-      "crop_x_pct": 10.0,
-      "crop_y_pct": 5.0,
-      "crop_w_pct": 15.0,
-      "crop_h_pct": 8.0
+      "description": "Large company logo centered on the driver side door",
+      "width_in": 24.0,
+      "height_in": 12.0
     }
   ]
 }`;
@@ -90,14 +91,14 @@ Return JSON only, no other text:
 function buildLegacyPrompt(): string {
   return `You are a vehicle wrap estimation expert. Analyze this proof/design image.
 
-Identify each individual graphic element and provide its bounding box position on the image.
+List each individual graphic element you can identify. Do NOT provide bounding box positions — just describe each element and estimate its size.
 
 For each element:
 1. Descriptive name
 2. Type: "logo", "stripe", "text_block", "graphic", "full_panel", "decal"
 3. Which side/panel it's on
-4. Bounding box as percentages of image (0-100)
-5. Estimate width and height in inches based on typical vehicle proportions
+4. Brief description of what the element looks like
+5. Estimated width and height in inches based on typical vehicle proportions
 
 Return JSON only:
 {
@@ -106,12 +107,9 @@ Return JSON only:
       "element_name": "Driver Side Logo",
       "element_type": "logo",
       "panel": "Driver Side",
+      "description": "Large company logo on driver side door area",
       "width_in": 44.0,
-      "height_in": 14.0,
-      "crop_x_pct": 10.0,
-      "crop_y_pct": 5.0,
-      "crop_w_pct": 25.0,
-      "crop_h_pct": 12.0
+      "height_in": 14.0
     }
   ],
   "total_vinyl_sqft": 45.0,
@@ -124,41 +122,14 @@ function calculateCalibratedDimensions(
   calibrationRegions: CalibrationRegion[],
   elements: any[]
 ): any[] {
-  // For each element, find which calibration region it belongs to and calculate inches
-  return elements.map(el => {
-    const panelName = (el.panel || '').toLowerCase();
-
-    // Find matching calibration region
-    const region = calibrationRegions.find(r =>
-      r.panel_name.toLowerCase() === panelName ||
-      panelName.includes(r.panel_name.toLowerCase()) ||
-      r.panel_name.toLowerCase().includes(panelName)
-    );
-
-    if (region && el.crop_w_pct && el.crop_h_pct) {
-      // Calculate inches using calibration scale
-      const width_in = Math.round(el.crop_w_pct * region.in_per_pct_x * 10) / 10;
-      const height_in = Math.round(el.crop_h_pct * region.in_per_pct_y * 10) / 10;
-
-      return {
-        ...el,
-        width_in,
-        height_in,
-        width_pct_of_panel: Math.round((el.crop_w_pct / region.img_w_pct) * 100 * 10) / 10,
-        height_pct_of_panel: Math.round((el.crop_h_pct / region.img_h_pct) * 100 * 10) / 10,
-        calibrated: true,
-        calibration_panel: region.panel_name,
-      };
-    }
-
-    // No calibration match — return as-is (inches will be 0 if not provided)
-    return {
-      ...el,
-      width_in: el.width_in || 0,
-      height_in: el.height_in || 0,
-      calibrated: false,
-    };
-  });
+  // Elements now come with AI-estimated dimensions (no crop positions).
+  // Just validate and pass through.
+  return elements.map(el => ({
+    ...el,
+    width_in: el.width_in || 0,
+    height_in: el.height_in || 0,
+    description: el.description || '',
+  }));
 }
 
 export async function POST(request: NextRequest) {
