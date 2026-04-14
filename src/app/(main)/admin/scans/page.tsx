@@ -56,6 +56,10 @@ export default function AdminScansPage() {
   const [scanningWorksheet, setScanningWorksheet] = useState(false);
   const [worksheetNotes, setWorksheetNotes] = useState<string | null>(null);
 
+  // Direct invoice state
+  const [invoicing, setInvoicing] = useState(false);
+  const [invoiceResult, setInvoiceResult] = useState<{ results: { customer: string; vehicleCount: number; status: string; invoiceNumber?: string; error?: string }[]; summary: { success: number; errors: number } } | null>(null);
+
   useEffect(() => { loadAll(); }, []);
 
   const loadAll = async () => {
@@ -193,6 +197,32 @@ export default function AdminScansPage() {
     if (ids.length === 0) return;
     await supabase.from('scan_logs').update({ archived_at: new Date().toISOString() }).in('id', ids);
     loadAll();
+  };
+
+  // Create direct invoice in NetSuite (no PO/SO needed)
+  const createInvoice = async () => {
+    const ids = [...selectedScans];
+    if (ids.length === 0) return;
+    if (!window.confirm(`Create NetSuite invoice for ${ids.length} scan${ids.length !== 1 ? 's' : ''}? This will bill the customer directly.`)) return;
+    setInvoicing(true);
+    setInvoiceResult(null);
+    try {
+      const res = await fetch('/api/netsuite/invoice-vehicles', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ scanIds: ids }),
+      });
+      const data = await res.json();
+      if (!res.ok) {
+        alert(`Invoice failed: ${data.error || 'Unknown error'}`);
+      } else {
+        setInvoiceResult(data);
+        loadAll();
+      }
+    } catch (e: any) {
+      alert(`Invoice failed: ${e.message}`);
+    }
+    setInvoicing(false);
   };
 
   // Edit scan
@@ -398,9 +428,14 @@ export default function AdminScansPage() {
           </button>
         )}
         {(tab === 'ready' || tab === 'waiting') && selectedScans.size > 0 && (
-          <button onClick={exportCSV} disabled={exporting} style={{ padding: '6px 10px', borderRadius: '6px', fontSize: '10px', fontWeight: 700, background: 'rgba(34,197,94,0.1)', border: '1px solid rgba(34,197,94,0.25)', color: '#22c55e', cursor: 'pointer' }}>
-            {exporting ? 'Exporting...' : `Export ${selectedScans.size} to CSV`}
-          </button>
+          <>
+            <button onClick={exportCSV} disabled={exporting} style={{ padding: '6px 10px', borderRadius: '6px', fontSize: '10px', fontWeight: 700, background: 'rgba(34,197,94,0.1)', border: '1px solid rgba(34,197,94,0.25)', color: '#22c55e', cursor: 'pointer' }}>
+              {exporting ? 'Exporting...' : `Export ${selectedScans.size} to CSV`}
+            </button>
+            <button onClick={createInvoice} disabled={invoicing} style={{ padding: '6px 10px', borderRadius: '6px', fontSize: '10px', fontWeight: 700, background: 'rgba(251,191,36,0.1)', border: '1px solid rgba(251,191,36,0.25)', color: '#fbbf24', cursor: 'pointer' }}>
+              {invoicing ? 'Creating...' : `Create Invoice (${selectedScans.size})`}
+            </button>
+          </>
         )}
         {tab === 'exported' && selectedScans.size > 0 && (
           <button onClick={archiveExported} style={{ padding: '6px 10px', borderRadius: '6px', fontSize: '10px', fontWeight: 700, background: 'rgba(167,139,250,0.1)', border: '1px solid rgba(167,139,250,0.25)', color: '#a78bfa', cursor: 'pointer' }}>
@@ -418,6 +453,24 @@ export default function AdminScansPage() {
           </>
         )}
       </div>
+
+      {/* Invoice result banner */}
+      {invoiceResult && (
+        <div style={{ padding: '12px 14px', borderRadius: '10px', marginBottom: '12px', background: 'var(--card)', border: `1px solid ${invoiceResult.summary.errors > 0 ? 'rgba(239,68,68,0.3)' : 'rgba(34,197,94,0.3)'}` }}>
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: invoiceResult.results.length > 0 ? '8px' : 0 }}>
+            <div style={{ fontSize: '12px', fontWeight: 700, color: 'var(--text-primary)' }}>
+              Invoice Result: {invoiceResult.summary.success} created{invoiceResult.summary.errors > 0 ? `, ${invoiceResult.summary.errors} failed` : ''}
+            </div>
+            <button onClick={() => setInvoiceResult(null)} style={{ background: 'none', border: 'none', color: 'var(--text-muted)', fontSize: '14px', cursor: 'pointer' }}>✕</button>
+          </div>
+          {invoiceResult.results.map((r, i) => (
+            <div key={i} style={{ fontSize: '11px', fontWeight: 600, color: r.status === 'success' ? '#22c55e' : '#ef4444', marginBottom: '2px' }}>
+              {r.customer} ({r.vehicleCount} VIN{r.vehicleCount !== 1 ? 's' : ''})
+              {r.status === 'success' ? ` → Invoice #${r.invoiceNumber}` : ` — ${r.error}`}
+            </div>
+          ))}
+        </div>
+      )}
 
       {/* Bulk edit modal */}
       {showBulkEdit && (
