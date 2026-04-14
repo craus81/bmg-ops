@@ -904,9 +904,12 @@ function NewQuote({ onCreated, editQuote }: { onCreated: () => void; editQuote?:
     }
 
     // Load template image for calibration reference
-    if (selectedTemplate.template_image_path && !templatePreviewUrl) {
-      const { data } = storage.from('vehicle-templates').getPublicUrl(selectedTemplate.template_image_path);
-      setTemplatePreviewUrl(data.publicUrl);
+    if (!templatePreviewUrl) {
+      const imgPath = selectedTemplate.template_image_path || selectedTemplate.original_file_path;
+      if (imgPath) {
+        const { data } = storage.from('vehicle-templates').getPublicUrl(imgPath);
+        setTemplatePreviewUrl(data.publicUrl);
+      }
     }
 
     // Initialize empty analysis if none exists
@@ -2710,21 +2713,41 @@ function NewQuote({ onCreated, editQuote }: { onCreated: () => void; editQuote?:
                     Draw a box around one of these known panels on the proof. Match edge-to-edge including bleed area.
                   </div>
 
-                  {/* Template reference image */}
-                  {templatePreviewUrl && (
-                    <div style={{ marginBottom: '10px' }}>
-                      <div style={{ fontSize: '11px', fontWeight: 700, color: theme.textMuted, marginBottom: '4px', textTransform: 'uppercase', letterSpacing: '0.5px' }}>
-                        Template Reference
-                      </div>
-                      <img
-                        src={templatePreviewUrl}
-                        alt="Vehicle template"
-                        style={{
-                          width: '100%', maxHeight: '100px', objectFit: 'contain',
-                          borderRadius: '8px', border: `1px solid ${theme.border}`,
-                          background: '#fff',
-                        }}
-                      />
+                  {/* Reference images: template + proof side by side */}
+                  {(templatePreviewUrl || proofPreviewForReview || proofPreview) && (
+                    <div style={{ display: 'grid', gridTemplateColumns: templatePreviewUrl ? '1fr 1fr' : '1fr', gap: '8px', marginBottom: '10px' }}>
+                      {templatePreviewUrl && (
+                        <div>
+                          <div style={{ fontSize: '10px', fontWeight: 700, color: theme.textMuted, marginBottom: '3px', textTransform: 'uppercase', letterSpacing: '0.5px' }}>
+                            Template
+                          </div>
+                          <img
+                            src={templatePreviewUrl}
+                            alt="Vehicle template"
+                            style={{
+                              width: '100%', height: '80px', objectFit: 'contain',
+                              borderRadius: '6px', border: `1px solid ${theme.border}`,
+                              background: '#fff',
+                            }}
+                          />
+                        </div>
+                      )}
+                      {(proofPreviewForReview || proofPreview) && (
+                        <div>
+                          <div style={{ fontSize: '10px', fontWeight: 700, color: theme.textMuted, marginBottom: '3px', textTransform: 'uppercase', letterSpacing: '0.5px' }}>
+                            Proof (draw on this)
+                          </div>
+                          <img
+                            src={proofPreviewForReview || proofPreview || ''}
+                            alt="Proof design"
+                            style={{
+                              width: '100%', height: '80px', objectFit: 'contain',
+                              borderRadius: '6px', border: `1px solid #fbbf24`,
+                              background: '#000',
+                            }}
+                          />
+                        </div>
+                      )}
                     </div>
                   )}
 
