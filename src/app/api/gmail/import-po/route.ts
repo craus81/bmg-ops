@@ -127,7 +127,7 @@ CRITICAL: You MUST extract every single line item from the table. Each line item
 LOOK FOR THESE SPECIFIC ELEMENTS:
 - PURCHASE ORDER NUMBER: Usually at top right, labeled "PURCHASE ORDER NUMBER" followed by a number like 35045953
 - ORDERED DATE: Format like MM/DD/YY or MM/DD/YYYY
-- SHIP TO / DELIVER TO: The address block showing where to ship
+- SHIP TO / DELIVER TO: The address block showing the DESTINATION where items should be delivered. IMPORTANT: POs have multiple address blocks — there is usually a "Supplier" or "Vendor" address (this is BMG Fleet Installation's address — IGNORE IT) and a "Ship To" or "Deliver To" address (this is the actual destination — USE THIS ONE). Never use BMG Fleet Installation's own address as the ship_to. The ship_to should be the customer's facility or job site, like a Masterack plant, dealership, or fleet location.
 - LINE ITEMS TABLE: Each row starts with a line number (1.000, 2.000, etc.) followed by columns of data
 
 COLUMN IDENTIFICATION — THIS IS CRITICAL:
@@ -143,11 +143,11 @@ Return ONLY valid JSON, no markdown, no backticks, no other text:
   "customer": "Masterack",
   "ordered_date": "03/18/2026",
   "ship_to": {
-    "name": "BMG Fleet Installation LLC",
-    "address": "123 Main St",
-    "city": "Indianapolis",
-    "state": "IN",
-    "zip": "46201"
+    "name": "Masterack - Kansas City",
+    "address": "1234 Industrial Blvd",
+    "city": "Kansas City",
+    "state": "MO",
+    "zip": "64101"
   },
   "lines": [
     {
