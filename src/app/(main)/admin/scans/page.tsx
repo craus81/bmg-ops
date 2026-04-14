@@ -141,6 +141,15 @@ export default function AdminScansPage() {
     setCollapsedGroups(prev => { const n = new Set(prev); if (n.has(key)) n.delete(key); else n.add(key); return n; });
   };
 
+  const toggleSelectGroup = (ids: string[]) => {
+    setSelectedScans(prev => {
+      const n = new Set(prev);
+      const allSelected = ids.every(id => n.has(id));
+      if (allSelected) { ids.forEach(id => n.delete(id)); } else { ids.forEach(id => n.add(id)); }
+      return n;
+    });
+  };
+
   const toggleSelect = (id: string) => {
     setSelectedScans(prev => { const n = new Set(prev); if (n.has(id)) n.delete(id); else n.add(id); return n; });
   };
@@ -647,19 +656,27 @@ export default function AdminScansPage() {
           const totalVins = subKeys.reduce((sum, k) => sum + subGroups[k].length, 0);
           const isCustomerCollapsed = collapsedGroups.has(customer);
 
+          const customerScanIds = subKeys.flatMap(k => subGroups[k].map(s => s.id));
+          const allCustomerSelected = customerScanIds.length > 0 && customerScanIds.every(id => selectedScans.has(id));
+
           return (
             <div key={customer}>
               {/* Customer header */}
-              <div onClick={() => toggleGroup(customer)} style={{
+              <div style={{
                 display: 'flex', justifyContent: 'space-between', alignItems: 'center',
-                padding: '10px 14px', borderRadius: '10px', cursor: 'pointer',
+                padding: '10px 14px', borderRadius: '10px',
                 background: 'var(--card)', border: '1px solid var(--border)', marginBottom: isCustomerCollapsed ? 0 : '6px',
               }}>
-                <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                <div onClick={() => toggleGroup(customer)} style={{ display: 'flex', alignItems: 'center', gap: '8px', cursor: 'pointer', flex: 1 }}>
                   <span style={{ fontSize: '10px', color: 'var(--text-muted)', transition: 'transform 0.15s', transform: isCustomerCollapsed ? 'rotate(-90deg)' : 'rotate(0deg)' }}>▼</span>
                   <span style={{ fontWeight: 800, fontSize: '14px', color: 'var(--text-primary)' }}>{customer}</span>
                 </div>
-                <span style={{ fontSize: '11px', fontWeight: 700, color: 'var(--text-muted)' }}>{totalVins} VIN{totalVins !== 1 ? 's' : ''}</span>
+                <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                  <button onClick={(e) => { e.stopPropagation(); toggleSelectGroup(customerScanIds); }} style={{ padding: '2px 8px', borderRadius: '4px', fontSize: '9px', fontWeight: 700, background: allCustomerSelected ? 'rgba(59,130,246,0.15)' : 'rgba(59,130,246,0.06)', border: '1px solid rgba(59,130,246,0.2)', color: '#60a5fa', cursor: 'pointer' }}>
+                    {allCustomerSelected ? 'Deselect' : 'Select'} All
+                  </button>
+                  <span style={{ fontSize: '11px', fontWeight: 700, color: 'var(--text-muted)' }}>{totalVins} VIN{totalVins !== 1 ? 's' : ''}</span>
+                </div>
               </div>
 
               {!isCustomerCollapsed && (
@@ -668,21 +685,26 @@ export default function AdminScansPage() {
                     const groupScans = subGroups[subKey];
                     const subCollapsed = collapsedGroups.has(`${customer}|${subKey}`);
                     const [partLabel, locLabel] = subKey.split(' · ');
+                    const groupIds = groupScans.map(s => s.id);
+                    const allGroupSelected = groupIds.length > 0 && groupIds.every(id => selectedScans.has(id));
 
                     return (
                       <div key={subKey}>
                         {/* Part + location sub-header */}
-                        <div onClick={() => toggleGroup(`${customer}|${subKey}`)} style={{
+                        <div style={{
                           display: 'flex', justifyContent: 'space-between', alignItems: 'center',
-                          padding: '6px 10px', borderRadius: '8px', cursor: 'pointer',
+                          padding: '6px 10px', borderRadius: '8px',
                           background: 'var(--subtle-bg)', border: '1px solid var(--border)', marginBottom: subCollapsed ? 0 : '3px',
                         }}>
-                          <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+                          <div onClick={() => toggleGroup(`${customer}|${subKey}`)} style={{ display: 'flex', alignItems: 'center', gap: '6px', cursor: 'pointer', flex: 1 }}>
                             <span style={{ fontSize: '9px', color: 'var(--text-muted)', transform: subCollapsed ? 'rotate(-90deg)' : 'rotate(0deg)' }}>▼</span>
                             <span style={{ fontSize: '12px', fontWeight: 700, color: 'var(--text-primary)' }}>{partLabel}</span>
                             <span style={{ fontSize: '10px', color: 'var(--text-muted)' }}>{locLabel}</span>
                           </div>
                           <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+                            <button onClick={(e) => { e.stopPropagation(); toggleSelectGroup(groupIds); }} style={{ padding: '2px 6px', borderRadius: '4px', fontSize: '8px', fontWeight: 700, background: allGroupSelected ? 'rgba(59,130,246,0.15)' : 'rgba(59,130,246,0.06)', border: '1px solid rgba(59,130,246,0.2)', color: '#60a5fa', cursor: 'pointer' }}>
+                              {allGroupSelected ? 'Deselect' : 'Select'}
+                            </button>
                             {groupScans[0]?.po_number && <span style={{ fontSize: '9px', fontWeight: 700, padding: '2px 6px', borderRadius: '4px', background: 'rgba(34,197,94,0.1)', color: '#22c55e' }}>PO #{groupScans[0].po_number}</span>}
                             <span style={{ fontSize: '10px', fontWeight: 700, color: 'var(--text-muted)' }}>{groupScans.length}</span>
                           </div>
