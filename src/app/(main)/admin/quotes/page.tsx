@@ -2714,12 +2714,12 @@ function NewQuote({ onCreated, editQuote }: { onCreated: () => void; editQuote?:
                   </div>
 
                   {/* Reference images */}
-                  <div style={{ display: 'grid', gridTemplateColumns: templatePreviewUrl ? '1fr 1fr' : '1fr', gap: '8px', marginBottom: '10px' }}>
-                    {templatePreviewUrl && (
-                      <div>
-                        <div style={{ fontSize: '10px', fontWeight: 700, color: theme.textMuted, marginBottom: '3px', textTransform: 'uppercase', letterSpacing: '0.5px' }}>
-                          Template
-                        </div>
+                  <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '8px', marginBottom: '10px' }}>
+                    <div>
+                      <div style={{ fontSize: '10px', fontWeight: 700, color: theme.textMuted, marginBottom: '3px', textTransform: 'uppercase', letterSpacing: '0.5px' }}>
+                        Template
+                      </div>
+                      {templatePreviewUrl ? (
                         <img
                           src={templatePreviewUrl}
                           alt="Vehicle template"
@@ -2729,8 +2729,38 @@ function NewQuote({ onCreated, editQuote }: { onCreated: () => void; editQuote?:
                             background: '#fff',
                           }}
                         />
-                      </div>
-                    )}
+                      ) : (
+                        <label style={{
+                          display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center',
+                          width: '100%', height: '80px', borderRadius: '6px',
+                          border: `2px dashed ${theme.border}`, background: theme.inputBg,
+                          cursor: 'pointer', fontSize: '11px', color: theme.textMuted, textAlign: 'center',
+                        }}>
+                          <input
+                            type="file"
+                            accept=".png,.jpg,.jpeg"
+                            style={{ display: 'none' }}
+                            onChange={async (e) => {
+                              const file = e.target.files?.[0];
+                              if (!file || !selectedTemplate) return;
+                              try {
+                                const slug = `${selectedTemplate.make}-${selectedTemplate.model}-${selectedTemplate.year || 'any'}`.toLowerCase().replace(/[^a-z0-9-]/g, '-');
+                                const ext = file.name.split('.').pop() || 'png';
+                                const path = `previews/${slug}.${ext}`;
+                                await storage.from('vehicle-templates').upload(path, file, { upsert: true });
+                                await supabase.from('vehicle_templates').update({ template_image_path: path }).eq('id', selectedTemplate.id);
+                                const { data } = storage.from('vehicle-templates').getPublicUrl(path);
+                                setTemplatePreviewUrl(data.publicUrl);
+                              } catch (err) {
+                                console.error('Failed to upload template image:', err);
+                              }
+                            }}
+                          />
+                          <span style={{ fontWeight: 700 }}>+ Upload</span>
+                          <span>template image</span>
+                        </label>
+                      )}
+                    </div>
                     {(proofPreviewForReview || proofPreview) && (
                       <div>
                         <div style={{ fontSize: '10px', fontWeight: 700, color: theme.textMuted, marginBottom: '3px', textTransform: 'uppercase', letterSpacing: '0.5px' }}>
