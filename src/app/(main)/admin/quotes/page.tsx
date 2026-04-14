@@ -1899,7 +1899,14 @@ function NewQuote({ onCreated, editQuote }: { onCreated: () => void; editQuote?:
   }
 
   // Calculated totals for step 5
-  const baseVinylSqft = nestingResult?.roll_area_sqft || analysis?.total_vinyl_sqft || 0;
+  // Identify elements that were too large for the 60" roll (both dimensions > 60")
+  const nestedNames = new Set(nestingResult?.nested_elements.map(el => el.element.element_name) || []);
+  const oversizedElements = (analysis?.graphic_elements || [])
+    .filter(el => includedElements.has(el.element_name) && !nestedNames.has(el.element_name));
+  const oversizedSqft = oversizedElements.reduce((sum, el) => sum + (el.width_in * el.height_in) / 144, 0);
+
+  // Include oversized element area in material calculation (they still need material, just wider stock)
+  const baseVinylSqft = (nestingResult?.roll_area_sqft || analysis?.total_vinyl_sqft || 0) + oversizedSqft;
   const vinylSqft = baseVinylSqft * (1 + wastePct / 100);
   const materialTotal = vinylSqft * materialRate;
   const laborTotal = baseVinylSqft * laborRate; // labor based on actual area, not waste
@@ -3211,6 +3218,29 @@ function NewQuote({ onCreated, editQuote }: { onCreated: () => void; editQuote?:
             );
           })()}
 
+          {/* Oversized elements warning */}
+          {oversizedElements.length > 0 && (
+            <div style={{
+              background: theme.warningBg, border: `1px solid ${theme.warningBorder}`,
+              borderRadius: '10px', padding: '12px 14px', marginBottom: '12px',
+            }}>
+              <div style={{ fontSize: '13px', fontWeight: 700, color: theme.warning, marginBottom: '6px' }}>
+                {oversizedElements.length} element{oversizedElements.length > 1 ? 's' : ''} too large for 60" roll
+              </div>
+              <div style={{ fontSize: '12px', color: theme.textSecondary, marginBottom: '6px' }}>
+                These elements exceed 60" in both dimensions and cannot be nested on a standard roll. They may need wider material or paneling.
+              </div>
+              {oversizedElements.map((el, i) => (
+                <div key={i} style={{ fontSize: '12px', color: theme.textPrimary, padding: '2px 0' }}>
+                  • {el.element_name}: {el.width_in}" × {el.height_in}" ({((el.width_in * el.height_in) / 144).toFixed(1)} sq ft)
+                </div>
+              ))}
+              <div style={{ fontSize: '11px', color: theme.textMuted, marginTop: '6px', fontStyle: 'italic' }}>
+                Their area ({oversizedSqft.toFixed(1)} sq ft) is still included in the material total.
+              </div>
+            </div>
+          )}
+
           {/* Elements List (for element-based) — with include/exclude toggles */}
           {analysis.graphic_elements && analysis.graphic_elements.length > 0 ? (
             <div style={{ background: theme.card, border: `1px solid ${theme.border}`, borderRadius: '12px', padding: '14px', marginBottom: '12px' }}>
@@ -3218,6 +3248,11 @@ function NewQuote({ onCreated, editQuote }: { onCreated: () => void; editQuote?:
                 <div style={{ fontSize: '14px', fontWeight: 700, color: theme.textPrimary }}>Graphic Elements</div>
                 <div style={{ fontSize: '11px', color: theme.textMuted, fontWeight: 600 }}>
                   {includedElements.size} of {analysis.graphic_elements.length} in kit
+                  {oversizedElements.length > 0 && (
+                    <span style={{ color: theme.warning, marginLeft: '6px' }}>
+                      ({oversizedElements.length} oversized)
+                    </span>
+                  )}
                 </div>
               </div>
               {analysis.graphic_elements.map((el, i) => {
