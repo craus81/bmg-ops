@@ -2714,42 +2714,68 @@ function NewQuote({ onCreated, editQuote }: { onCreated: () => void; editQuote?:
                   </div>
 
                   {/* Reference images: template + proof side by side */}
-                  {(templatePreviewUrl || proofPreviewForReview || proofPreview) && (
-                    <div style={{ display: 'grid', gridTemplateColumns: templatePreviewUrl ? '1fr 1fr' : '1fr', gap: '8px', marginBottom: '10px' }}>
-                      {templatePreviewUrl && (
-                        <div>
-                          <div style={{ fontSize: '10px', fontWeight: 700, color: theme.textMuted, marginBottom: '3px', textTransform: 'uppercase', letterSpacing: '0.5px' }}>
-                            Template
-                          </div>
-                          <img
-                            src={templatePreviewUrl}
-                            alt="Vehicle template"
-                            style={{
-                              width: '100%', height: '80px', objectFit: 'contain',
-                              borderRadius: '6px', border: `1px solid ${theme.border}`,
-                              background: '#fff',
-                            }}
-                          />
-                        </div>
-                      )}
-                      {(proofPreviewForReview || proofPreview) && (
-                        <div>
-                          <div style={{ fontSize: '10px', fontWeight: 700, color: theme.textMuted, marginBottom: '3px', textTransform: 'uppercase', letterSpacing: '0.5px' }}>
-                            Proof (draw on this)
-                          </div>
-                          <img
-                            src={proofPreviewForReview || proofPreview || ''}
-                            alt="Proof design"
-                            style={{
-                              width: '100%', height: '80px', objectFit: 'contain',
-                              borderRadius: '6px', border: `1px solid #fbbf24`,
-                              background: '#000',
-                            }}
-                          />
+                  <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '8px', marginBottom: '10px' }}>
+                    <div>
+                      <div style={{ fontSize: '10px', fontWeight: 700, color: theme.textMuted, marginBottom: '3px', textTransform: 'uppercase', letterSpacing: '0.5px' }}>
+                        Template
+                      </div>
+                      {templatePreviewUrl ? (
+                        <img
+                          src={templatePreviewUrl}
+                          alt="Vehicle template"
+                          style={{
+                            width: '100%', height: '80px', objectFit: 'contain',
+                            borderRadius: '6px', border: `1px solid ${theme.border}`,
+                            background: '#fff',
+                          }}
+                        />
+                      ) : (
+                        /* No template image — show panel diagram as fallback */
+                        <div style={{
+                          width: '100%', height: '80px', borderRadius: '6px',
+                          border: `1px solid ${theme.border}`, background: theme.inputBg,
+                          display: 'flex', flexDirection: 'column', justifyContent: 'center',
+                          padding: '4px 8px', overflow: 'hidden',
+                        }}>
+                          {selectedTemplate?.panel_data?.slice(0, 4).map((panel, i) => {
+                            const maxW = Math.max(...(selectedTemplate.panel_data || []).map(p => p.width_in));
+                            const barPct = maxW > 0 ? (panel.width_in / maxW) * 100 : 50;
+                            return (
+                              <div key={i} style={{ display: 'flex', alignItems: 'center', gap: '4px', marginBottom: '2px' }}>
+                                <div style={{
+                                  height: '8px', width: `${barPct}%`, minWidth: '10px',
+                                  background: 'rgba(251,191,36,0.3)', border: '1px solid rgba(251,191,36,0.5)',
+                                  borderRadius: '2px',
+                                }} />
+                                <span style={{ fontSize: '7px', color: theme.textMuted, whiteSpace: 'nowrap' }}>
+                                  {panel.name.length > 12 ? panel.name.slice(0, 12) + '…' : panel.name}
+                                </span>
+                              </div>
+                            );
+                          })}
+                          {(selectedTemplate?.panel_data?.length || 0) > 4 && (
+                            <span style={{ fontSize: '7px', color: theme.textMuted }}>+{(selectedTemplate?.panel_data?.length || 0) - 4} more</span>
+                          )}
                         </div>
                       )}
                     </div>
-                  )}
+                    {(proofPreviewForReview || proofPreview) && (
+                      <div>
+                        <div style={{ fontSize: '10px', fontWeight: 700, color: theme.textMuted, marginBottom: '3px', textTransform: 'uppercase', letterSpacing: '0.5px' }}>
+                          Proof (draw on this)
+                        </div>
+                        <img
+                          src={proofPreviewForReview || proofPreview || ''}
+                          alt="Proof design"
+                          style={{
+                            width: '100%', height: '80px', objectFit: 'contain',
+                            borderRadius: '6px', border: `1px solid #fbbf24`,
+                            background: '#000',
+                          }}
+                        />
+                      </div>
+                    )}
+                  </div>
 
                   <div style={{ fontSize: '11px', fontWeight: 700, color: theme.textMuted, marginBottom: '6px', textTransform: 'uppercase', letterSpacing: '0.5px' }}>
                     Available Panels
