@@ -19,7 +19,7 @@
  */
 
 import 'dotenv/config';
-import { S3Client, ListObjectsV2Command, GetObjectCommand } from '@aws-sdk/client-s3';
+import { S3Client, ListObjectsV2Command, GetObjectCommand, PutObjectCommand } from '@aws-sdk/client-s3';
 import { createClient } from '@supabase/supabase-js';
 import { PDFDocument } from 'pdf-lib';
 
@@ -219,8 +219,25 @@ async function extractFromPage(base64Data, fileName, pageNum) {
   return parsed;
 }
 
+// ── Upload a single-page PDF to R2 as the template preview image ──
+async function uploadPagePreview(pageBuffer, make, model, variant, year) {
+  const slug = [make, model, variant, year].filter(Boolean).join('-')
+    .toLowerCase().replace(/[^a-z0-9-]/g, '-').replace(/-+/g, '-');
+  const key = `vehicle-templates/previews/${slug}.pdf`;
+
+  await s3.send(new PutObjectCommand({
+    Bucket: R2_BUCKET,
+    Key: key,
+    Body: pageBuffer,
+    ContentType: 'application/pdf',
+  }));
+
+  // Return the path relative to the bucket (what Supabase storage.getPublicUrl expects)
+  return `previews/${slug}.pdf`;
+}
+
 // ── Upsert one vehicle into vehicle_templates ──
-async function upsertTemplate(vehicle, sourceFile) {
+async function upsertTemplate(vehicle, sourceFile, pageBuffer) {
   const { make, model, year_range, variant, overall_length_in, overall_height_in, wheelbase_in, panels } = vehicle;
 
   if (!make || !model) {
@@ -274,6 +291,17 @@ async function upsertTemplate(vehicle, sourceFile) {
     }
   }
 
+  // Upload the PDF page as the template preview image
+  let templateImagePath = null;
+  if (pageBuffer) {
+    try {
+      templateImagePath = await uploadPagePreview(pageBuffer, make, model, variant, year);
+      console.log(`      📸 Uploaded preview: ${templateImagePath}`);
+    } catch (err) {
+      console.warn(`      ⚠ Failed to upload preview: ${err.message}`);
+    }
+  }
+
   const record = {
     name: templateName,
     make,
@@ -285,7 +313,7 @@ async function upsertTemplate(vehicle, sourceFile) {
     overall_height_in: parseFloat(overall_height_in) || null,
     wheelbase_in: parseFloat(wheelbase_in) || null,
     panel_data: panelData,
-    template_image_path: null,
+    template_image_path: templateImagePath,
     original_file_path: null,
     updated_at: new Date().toISOString(),
   };
@@ -376,7 +404,7 @@ async function main() {
               totalVehicles++;
             } else {
               try {
-                const result = await upsertTemplate(vehicle, file.fileName);
+                const result = await upsertTemplate(vehicle, file.fileName, page.buffer);
                 if (result) {
                   if (result.action === 'skipped') {
                     console.log(`      ⏭ skipped: ${result.name} (already has ${result.panels} panels)`);

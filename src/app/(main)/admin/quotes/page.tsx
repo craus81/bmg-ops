@@ -908,7 +908,23 @@ function NewQuote({ onCreated, editQuote }: { onCreated: () => void; editQuote?:
       const imgPath = selectedTemplate.template_image_path || selectedTemplate.original_file_path;
       if (imgPath) {
         const { data } = storage.from('vehicle-templates').getPublicUrl(imgPath);
-        setTemplatePreviewUrl(data.publicUrl);
+        const publicUrl = data.publicUrl;
+
+        // If the template file is a PDF, render its first page to an image
+        if (imgPath.toLowerCase().endsWith('.pdf')) {
+          try {
+            const resp = await fetch(publicUrl);
+            const blob = await resp.blob();
+            const file = new File([blob], 'template.pdf', { type: 'application/pdf' });
+            const { base64, mediaType } = await pdfToImage(file, 1200, 0.9);
+            setTemplatePreviewUrl(`data:${mediaType};base64,${base64}`);
+          } catch (err) {
+            console.error('Failed to render template PDF:', err);
+            // Fallback: won't show, but that's OK
+          }
+        } else {
+          setTemplatePreviewUrl(publicUrl);
+        }
       }
     }
 
