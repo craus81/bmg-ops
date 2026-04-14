@@ -183,6 +183,20 @@ export const WIDGET_REGISTRY: WidgetDef[] = [
     description: 'Jobs assigned to you with status',
     defaultW: 2, defaultH: 2, minW: 1, minH: 2,
   },
+  {
+    id: 'sales_pipeline',
+    label: 'Sales Pipeline',
+    icon: '',
+    description: 'Opportunity stages, deal count, and pipeline value',
+    defaultW: 2, defaultH: 3, minW: 2, minH: 2,
+  },
+  {
+    id: 'my_accounts',
+    label: 'My Accounts — Active Jobs',
+    icon: '',
+    description: 'Active graphics and fleet jobs grouped by customer',
+    defaultW: 2, defaultH: 3, minW: 2, minH: 2,
+  },
 ];
 
 export const WIDGET_MAP = Object.fromEntries(WIDGET_REGISTRY.map(w => [w.id, w]));

@@ -24,7 +24,7 @@ interface Notification {
 }
 
 export default function Header({ clockStatus, activePartNumber, activeEndCustomer }: HeaderProps) {
-  const { user, profile, isAdmin, signOut } = useAuth();
+  const { user, profile, isAdmin, isActualAdmin, viewAsRole, setViewAsRole, signOut } = useAuth();
   const router = useRouter();
   const [showMenu, setShowMenu] = useState(false);
   const [showSwitchModal, setShowSwitchModal] = useState(false);
@@ -304,10 +304,27 @@ export default function Header({ clockStatus, activePartNumber, activeEndCustome
 
   return (
     <>
+      {/* "View As" banner when admin is viewing as another role */}
+      {isActualAdmin && viewAsRole && (
+        <div style={{
+          background: 'rgba(251,191,36,0.15)', borderBottom: '1px solid rgba(251,191,36,0.3)',
+          padding: '4px 12px', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '8px',
+          position: 'sticky', top: 0, zIndex: 101,
+        }}>
+          <span style={{ fontSize: '11px', fontWeight: 700, color: '#fbbf24' }}>
+            Viewing as: {viewAsRole.replace('_', ' ')}
+          </span>
+          <button onClick={() => setViewAsRole(null)} style={{
+            padding: '2px 8px', borderRadius: '4px', fontSize: '10px', fontWeight: 700,
+            background: 'rgba(251,191,36,0.2)', border: '1px solid rgba(251,191,36,0.4)',
+            color: '#fbbf24', cursor: 'pointer',
+          }}>Exit</button>
+        </div>
+      )}
       <header style={{
         background: theme.headerBg, padding: '10px 12px',
         display: 'flex', alignItems: 'center', justifyContent: 'space-between',
-        position: 'sticky', top: 0, zIndex: 100,
+        position: 'sticky', top: isActualAdmin && viewAsRole ? undefined : 0, zIndex: 100,
         borderBottom: `1px solid ${theme.border}`,
         gap: '8px', minWidth: 0,
       }}>
@@ -568,9 +585,41 @@ export default function Header({ clockStatus, activePartNumber, activeEndCustome
                   <div style={{ fontSize: '13px', fontWeight: 700, color: 'var(--text-primary)' }}>{profile?.full_name}</div>
                   <div style={{ fontSize: '10px', color: 'var(--text-muted)', marginTop: '2px' }}>{profile?.email}</div>
                   <div style={{ fontSize: '10px', color: isAdmin ? 'var(--orange)' : 'var(--navy-light)', marginTop: '2px', fontWeight: 600 }}>
-                    {isAdmin ? 'Administrator' : 'Installer'}
+                    {viewAsRole ? `Viewing as: ${viewAsRole}` : (isActualAdmin ? 'Administrator' : (profile?.role || 'User'))}
                   </div>
                 </div>
+
+                {/* Admin: View As Role Switcher */}
+                {isActualAdmin && (
+                  <div style={{ padding: '8px 14px', borderBottom: '1px solid var(--border)' }}>
+                    <div style={{ fontSize: '9px', fontWeight: 700, color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.5px', marginBottom: '6px' }}>View As</div>
+                    <div style={{ display: 'flex', flexWrap: 'wrap', gap: '4px' }}>
+                      {[
+                        { key: null, label: 'Admin' },
+                        { key: 'sales', label: 'Sales' },
+                        { key: 'graphics_production', label: 'Graphics' },
+                        { key: 'shop_tech', label: 'Shop Tech' },
+                        { key: 'field_tech', label: 'Field Tech' },
+                        { key: 'installer', label: 'Installer' },
+                      ].map(r => {
+                        const active = viewAsRole === r.key;
+                        return (
+                          <button
+                            key={r.key || 'admin'}
+                            onClick={() => { setViewAsRole(r.key); setShowMenu(false); }}
+                            style={{
+                              padding: '4px 8px', borderRadius: '6px', fontSize: '10px', fontWeight: 700,
+                              background: active ? 'rgba(59,130,246,0.15)' : 'var(--bg)',
+                              border: `1px solid ${active ? '#3b82f6' : 'var(--border)'}`,
+                              color: active ? '#60a5fa' : 'var(--text-muted)',
+                              cursor: 'pointer',
+                            }}
+                          >{r.label}</button>
+                        );
+                      })}
+                    </div>
+                  </div>
+                )}
 
                 <button onClick={() => { setShowMenu(false); setShowSwitchModal(true); setSwitchEmail(''); setSwitchPassword(''); setSwitchError(''); }} style={{
                   width: '100%', padding: '12px 14px', textAlign: 'left', background: 'transparent',

@@ -21,10 +21,16 @@ interface AuthContextType {
   hasFeature: (feature: FeatureKey) => boolean;
   loading: boolean;
   signOut: () => Promise<void>;
+  /** Admin-only: temporarily view the app as a different role */
+  viewAsRole: string | null;
+  setViewAsRole: (role: string | null) => void;
+  /** True if the actual user is admin (even when viewing as another role) */
+  isActualAdmin: boolean;
 }
 
 const AuthContext = createContext<AuthContextType>({
   user: null, profile: null, isAdmin: false, isProduction: false, isGraphicsProduction: false, isSales: false, isCustomer: false, isInstaller: false, isFieldTech: false, isShopTech: false, hasRole: () => false, hasFeature: () => false, loading: true, signOut: async () => {},
+  viewAsRole: null, setViewAsRole: () => {}, isActualAdmin: false,
 });
 
 export function AuthProvider({ children }: { children: ReactNode }) {
@@ -92,9 +98,17 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     setFeatureOverrides([]);
   };
 
-  // Multi-role check
+  // Admin "View As" role override
+  const [viewAsRole, setViewAsRole] = useState<string | null>(null);
+
+  // Multi-role check — actual roles (for permission checks)
   const rawRoles = profile?.roles?.length ? profile.roles : (profile?.role ? [profile.role] : []);
-  const userRoles = rawRoles.map((r: string) => r === 'production' ? 'graphics_production' : r);
+  const actualRoles = rawRoles.map((r: string) => r === 'production' ? 'graphics_production' : r);
+  const isActualAdmin = actualRoles.includes('admin');
+
+  // Effective roles — when admin uses "View As", override to the selected role
+  const userRoles = (isActualAdmin && viewAsRole) ? [viewAsRole] : actualRoles;
+
   const hasRole = (r: string) => userRoles.includes(r as any) || (r === 'production' && userRoles.includes('graphics_production'));
   const isAdmin = hasRole('admin');
   const isGraphicsProduction = hasRole('graphics_production') || isAdmin;
@@ -105,12 +119,12 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const isFieldTech = hasRole('field_tech') || isAdmin;
   const isShopTech = hasRole('shop_tech') || isAdmin;
 
-  // Feature access — resolved from roles + per-user overrides
-  const features = resolveFeatures(userRoles, featureOverrides);
+  // Feature access — resolved from effective roles + per-user overrides
+  const features = resolveFeatures(userRoles, viewAsRole ? [] : featureOverrides);
   const hasFeature = (feature: FeatureKey) => features.has(feature);
 
   return (
-    <AuthContext.Provider value={{ user, profile, isAdmin, isProduction, isGraphicsProduction, isSales, isCustomer, isInstaller, isFieldTech, isShopTech, hasRole, hasFeature, loading, signOut }}>
+    <AuthContext.Provider value={{ user, profile, isAdmin, isProduction, isGraphicsProduction, isSales, isCustomer, isInstaller, isFieldTech, isShopTech, hasRole, hasFeature, loading, signOut, viewAsRole, setViewAsRole, isActualAdmin }}>
       {children}
     </AuthContext.Provider>
   );

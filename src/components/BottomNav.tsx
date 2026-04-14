@@ -24,6 +24,7 @@ export const allTabs: Tab[] = [
   { id: 'graphics', path: '/graphics', label: 'Graphics', feature: 'graphics', priority: 1 },
   { id: 'fleet', path: '/fleet', label: 'Check In', feature: 'fleet_checkin', priority: 2 },
   { id: 'tracking', path: '/tracking', label: 'In-Shop', feature: 'in_shop', priority: 3 },
+  { id: 'prospects', path: '/admin/prospects', label: 'CRM', feature: 'prospects', priority: 3.5 },
   { id: 'schedule', path: '/admin/schedule', label: 'Schedule', feature: 'schedule', priority: 4 },
   { id: 'scan', path: '/scan', label: 'Scan', feature: 'scan', priority: 5 },
   { id: 'time', path: '/time', label: 'Time', feature: 'time', priority: 6 },
@@ -64,6 +65,7 @@ export default function BottomNav({ clockStatus }: BottomNavProps) {
     if (tab.path === '/scan') return pathname === '/scan';
     if (tab.path === '/fleet') return pathname === '/fleet';
     if (tab.path === '/tracking') return pathname === '/tracking';
+    if (tab.path === '/admin/prospects') return pathname.startsWith('/admin/prospects');
     if (tab.path === '/installer') return pathname.startsWith('/installer');
     if (tab.path === '/graphics') return pathname.startsWith('/graphics');
     if (tab.path === '/estimates') return pathname.startsWith('/estimates');
