@@ -638,11 +638,17 @@ export default function POsPage() {
       } else {
         setEmailImportResults(prev => ({ ...prev, [messageId]: data }));
         if (data.status === 'imported' || data.status === 'updated') {
+          // Remove from pending POs list and email list
+          setPendingPOs(prev => prev.filter(p => p.message_id !== messageId));
+          setEmailEmails(prev => prev.filter(e => e.messageId !== messageId));
           const { data: poData } = await supabase
             .from('purchase_orders')
             .select('*, po_line_items(*), po_invoices(*)')
             .order('created_at', { ascending: false });
-          const mapped = (poData || []).map((po: any) => ({ ...po, line_items: po.po_line_items || [], po_invoices: (po.po_invoices || []).sort((a: any, b: any) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime()) }));
+          const FILTERED_CUSTOMERS = ['ranger design', 'enterprise fleet management', 'bmg fleet installations'];
+          const mapped = (poData || [])
+            .filter((po: any) => !FILTERED_CUSTOMERS.some(fc => po.customer?.toLowerCase().includes(fc)))
+            .map((po: any) => ({ ...po, line_items: po.po_line_items || [], po_invoices: (po.po_invoices || []).sort((a: any, b: any) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime()) }));
           setPos(mapped);
         }
       }
@@ -690,13 +696,18 @@ export default function POsPage() {
       } else {
         setEmailImportResults(prev => ({ ...prev, [overwriteMessageId!]: data }));
 
-        // Refresh PO list
+        // Refresh PO list and remove from pending/email lists
         if (data.status === 'updated') {
+          setPendingPOs(prev => prev.filter(p => p.message_id !== overwriteMessageId));
+          setEmailEmails(prev => prev.filter(e => e.messageId !== overwriteMessageId));
           const { data: poData } = await supabase
             .from('purchase_orders')
-            .select('*, po_line_items(*)')
+            .select('*, po_line_items(*), po_invoices(*)')
             .order('created_at', { ascending: false });
-          const mapped = (poData || []).map((po: any) => ({ ...po, line_items: po.po_line_items || [] }));
+          const FILTERED_CUSTOMERS = ['ranger design', 'enterprise fleet management', 'bmg fleet installations'];
+          const mapped = (poData || [])
+            .filter((po: any) => !FILTERED_CUSTOMERS.some(fc => po.customer?.toLowerCase().includes(fc)))
+            .map((po: any) => ({ ...po, line_items: po.po_line_items || [], po_invoices: (po.po_invoices || []).sort((a: any, b: any) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime()) }));
           setPos(mapped);
         }
       }
