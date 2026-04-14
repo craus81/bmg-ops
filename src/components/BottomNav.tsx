@@ -4,6 +4,11 @@ import { usePathname, useRouter } from 'next/navigation';
 import { useAuth } from '@/components/AuthProvider';
 import { theme } from '@/lib/theme';
 import type { FeatureKey } from '@/lib/features';
+import {
+  Home, Palette, ClipboardCheck, Warehouse, Users,
+  CalendarDays, ScanLine, Clock, FileText, Briefcase,
+  LayoutGrid, Settings, MoreHorizontal,
+} from 'lucide-react';
 
 interface BottomNavProps {
   clockStatus: 'out' | 'in' | 'break';
@@ -33,6 +38,22 @@ export const allTabs: Tab[] = [
   // Customer-only
   { id: 'customer-dashboard', path: '/customer/dashboard', label: 'My Jobs', feature: 'home', priority: 0 },
 ];
+
+const TAB_ICONS: Record<string, React.ElementType> = {
+  home: Home,
+  graphics: Palette,
+  fleet: ClipboardCheck,
+  tracking: Warehouse,
+  prospects: Users,
+  schedule: CalendarDays,
+  scan: ScanLine,
+  time: Clock,
+  estimates: FileText,
+  'installer-portal': Briefcase,
+  'customer-dashboard': LayoutGrid,
+  more: MoreHorizontal,
+  'customer-settings': Settings,
+};
 
 export const MAX_TABS = 5; // + More = 6 total
 
@@ -80,24 +101,27 @@ export default function BottomNav({ clockStatus }: BottomNavProps) {
       borderTop: `1px solid ${theme.border}`,
       display: 'flex', alignItems: 'center', gap: '4px',
       zIndex: 100,
-      padding: '8px 12px',
-      paddingBottom: 'calc(10px + env(safe-area-inset-bottom, 0px))',
+      padding: '6px 12px',
+      paddingBottom: 'calc(8px + env(safe-area-inset-bottom, 0px))',
       paddingLeft: 'calc(12px + env(safe-area-inset-left, 0px))',
       paddingRight: 'calc(12px + env(safe-area-inset-right, 0px))',
     }}>
       {tabs.map((tab) => {
         const active = isActive(tab);
+        const Icon = TAB_ICONS[tab.id];
         return (
           <button
             key={tab.id}
             className={active ? undefined : 'bottom-nav-tab'}
             onClick={() => router.push(tab.path)}
             style={{
-              flex: 1, padding: '12px 4px', display: 'flex',
+              flex: 1, padding: '6px 4px', display: 'flex',
+              flexDirection: 'column',
               alignItems: 'center', justifyContent: 'center',
+              gap: '2px',
               borderRadius: '8px',
-              background: active ? 'rgba(59,130,246,0.15)' : 'rgba(255,255,255,0.04)',
-              border: active ? '1px solid rgba(59,130,246,0.35)' : '1px solid rgba(255,255,255,0.08)',
+              background: active ? 'rgba(59,130,246,0.15)' : 'transparent',
+              border: active ? '1px solid rgba(59,130,246,0.35)' : '1px solid transparent',
               color: active ? '#60a5fa' : theme.textMuted,
               fontSize: '9px',
               fontWeight: active ? 800 : 600,
@@ -108,6 +132,7 @@ export default function BottomNav({ clockStatus }: BottomNavProps) {
               transition: 'all 0.15s',
             }}
           >
+            {Icon && <Icon size={18} strokeWidth={active ? 2.5 : 2} />}
             {tab.label}
           </button>
         );
