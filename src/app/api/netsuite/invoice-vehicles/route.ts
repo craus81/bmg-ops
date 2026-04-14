@@ -129,13 +129,11 @@ export async function POST(req: NextRequest) {
         const vinList = custScans.map(s => s.vin).join(', ');
         const memo = `BMG FleetSuite Invoice — ${custScans.length} vehicle${custScans.length !== 1 ? 's' : ''}: ${vinList.length > 200 ? vinList.slice(0, 200) + '...' : vinList}`;
 
-        // Try to find a location from the first scan
+        // Find a location — use scan's location, fall back to BMG Shop
         let locationId: string | undefined;
         const firstLocation = custScans.find(s => s.location_name)?.location_name;
-        if (firstLocation) {
-          const loc = await findLocation(firstLocation);
-          if (loc) locationId = loc.id;
-        }
+        const loc = await findLocation(firstLocation || 'BMG');
+        if (loc) locationId = loc.id;
 
         // Create the invoice
         const invoiceResult = await createDirectInvoice({
