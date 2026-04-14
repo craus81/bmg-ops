@@ -517,6 +517,8 @@ export default function GraphicsPage() {
 
   // Filter jobs
   const filteredJobs = jobs.filter(j => {
+    // Flagged jobs only visible to admins
+    if (j.status === 'flagged' && !isAdmin) return false;
     // Category filter
     if (filterCategory !== 'all' && (j.job_category || 'production') !== filterCategory) return false;
     // Status filter
@@ -544,10 +546,11 @@ export default function GraphicsPage() {
     return 0;
   });
 
-  // Pipeline counts
+  // Pipeline counts (hide flagged from non-admins)
+  const visibleJobs = isAdmin ? jobs : jobs.filter(j => j.status !== 'flagged');
   const statusCounts: Record<string, number> = {};
   GRAPHICS_STATUS_ORDER.forEach(s => {
-    statusCounts[s] = jobs.filter(j => j.status === s).length;
+    statusCounts[s] = visibleJobs.filter(j => j.status === s).length;
   });
 
   const getProfileName = (userId: string | null) => {
@@ -642,9 +645,9 @@ export default function GraphicsPage() {
             whiteSpace: 'nowrap', cursor: 'pointer', flexShrink: 0,
           }}
         >
-          Active ({jobs.filter(j => ACTIVE_STATUSES.includes(j.status)).length})
+          Active ({visibleJobs.filter(j => ACTIVE_STATUSES.includes(j.status)).length})
         </button>
-        {GRAPHICS_STATUS_ORDER.filter(s => statusCounts[s] > 0 || s === 'received').map(s => (
+        {GRAPHICS_STATUS_ORDER.filter(s => (statusCounts[s] > 0 || s === 'received') && (s !== 'flagged' || isAdmin)).map(s => (
           <button
             key={s}
             onClick={() => setFilterStatus(filterStatus === s ? 'active' : s)}
