@@ -659,6 +659,10 @@ function NewQuote({ onCreated, editQuote }: { onCreated: () => void; editQuote?:
   const [newElementStart, setNewElementStart] = useState<{ x: number; y: number } | null>(null);
   const [newElementEnd, setNewElementEnd] = useState<{ x: number; y: number } | null>(null);
 
+  // Calibration mode — user draws a box on a known panel to set the scale
+  const [calibrationMode, setCalibrationMode] = useState(false);
+  const [pendingCalibrationBox, setPendingCalibrationBox] = useState<{ xPct: number; yPct: number; wPct: number; hPct: number } | null>(null);
+
   // Drag-and-drop state for nesting diagram
   const [draggingIdx, setDraggingIdx] = useState<number | null>(null);
   const [dragOffset, setDragOffset] = useState<{ x: number; y: number }>({ x: 0, y: 0 });
@@ -786,32 +790,37 @@ function NewQuote({ onCreated, editQuote }: { onCreated: () => void; editQuote?:
 
   // Finalize a manually drawn new element box
   function finalizeNewElement(imgEl: HTMLImageElement, sx: number, sy: number, sw: number, sh: number) {
-    if (!analysis?.graphic_elements || sw < 5 || sh < 5) return;
+    if (sw < 5 || sh < 5) return;
     const rect = imgEl.getBoundingClientRect();
     const xPct = (sx / rect.width) * 100;
     const yPct = (sy / rect.height) * 100;
     const wPct = (sw / rect.width) * 100;
     const hPct = (sh / rect.height) * 100;
 
+    // In calibration mode, store as pending calibration box for panel selection
+    if (calibrationMode) {
+      setPendingCalibrationBox({ xPct, yPct, wPct, hPct });
+      return;
+    }
+
+    if (!analysis) return;
     const dims = boxPctToInches(wPct, hPct, xPct, yPct);
-    const nextNum = analysis.graphic_elements.length + 1;
+    const nextNum = (analysis.graphic_elements?.length || 0) + 1;
     const newEl: GraphicElement = {
-      element_name: `Custom Element ${nextNum}`,
+      element_name: `Element ${nextNum}`,
       element_type: 'custom',
       width_in: dims?.width_in || 0,
       height_in: dims?.height_in || 0,
-      description: 'Manually drawn element',
+      description: '',
       crop_x_pct: xPct,
       crop_y_pct: yPct,
       crop_w_pct: wPct,
       crop_h_pct: hPct,
     };
-    const updatedElements = [...analysis.graphic_elements, newEl];
+    const updatedElements = [...(analysis.graphic_elements || []), newEl];
     setAnalysis({ ...analysis, graphic_elements: updatedElements });
-    // Auto-include it
     setIncludedElements(prev => new Set(prev).add(newEl.element_name));
     setSelectedBboxIdx(updatedElements.length - 1);
-    setDrawingNewElement(false);
   }
 
   // Place a default-position box on the image for an AI-detected element
@@ -878,6 +887,62 @@ function NewQuote({ onCreated, editQuote }: { onCreated: () => void; editQuote?:
       return next;
     });
     if (selectedBboxIdx === idx) setSelectedBboxIdx(null);
+  }
+
+  // Enter the draw step — prepare proof image and initialize empty analysis
+  async function enterDrawStep() {
+    if (!selectedTemplate) return;
+
+    // Prepare proof image for display (handles PDF rendering + compression)
+    if (proofFile && !proofPreviewForReview) {
+      try {
+        const compressed = await compressImage(proofFile, 2048, 0.8);
+        setProofPreviewForReview(`data:${compressed.mediaType};base64,${compressed.base64}`);
+      } catch {
+        // proofPreview fallback will be used
+      }
+    }
+
+    // Initialize empty analysis if none exists
+    if (!analysis || !analysis.graphic_elements) {
+      setAnalysis({
+        graphic_elements: [],
+        total_vinyl_sqft: 0,
+        total_vehicle_sqft: selectedTemplate.panel_data?.reduce((sum, p) => sum + (p.area_sqft || 0), 0) || 0,
+        overall_coverage_pct: 0,
+        confidence: 'manual',
+        notes: 'Manual element measurement',
+      });
+    }
+
+    setCalibrationMode(calibrationRegions.length === 0);
+    setPendingCalibrationBox(null);
+    setDrawingNewElement(true);
+    setTemplateOnly(false);
+    setStep(4);
+  }
+
+  // Finalize calibration — user selected which panel their drawn box represents
+  function finalizeCalibration(panelIdx: number) {
+    if (!pendingCalibrationBox || !selectedTemplate?.panel_data?.[panelIdx]) return;
+    const panel = selectedTemplate.panel_data[panelIdx];
+    const box = pendingCalibrationBox;
+
+    const region = {
+      panel_name: panel.name,
+      width_in: panel.width_in,
+      height_in: panel.height_in,
+      img_x_pct: box.xPct,
+      img_y_pct: box.yPct,
+      img_w_pct: box.wPct,
+      img_h_pct: box.hPct,
+      in_per_pct_x: panel.width_in / box.wPct,
+      in_per_pct_y: panel.height_in / box.hPct,
+    };
+
+    setCalibrationRegions([region]);
+    setPendingCalibrationBox(null);
+    setCalibrationMode(false);
   }
 
   // Calculate real-world inches from a bounding box's position/size on the proof image.
@@ -1163,26 +1228,19 @@ function NewQuote({ onCreated, editQuote }: { onCreated: () => void; editQuote?:
     touchStartPos.current = null;
   }
 
-  // Touch handlers for crop tool on proof image
+  // Touch handlers for drawing on proof image
   function handleProofTouchStart(e: React.TouchEvent) {
     if (bboxDragging || touchDragging) return;
     // Deselect bbox when touching background
     setSelectedBboxIdx(null);
     if (!proofImgRef.current || e.touches.length !== 1) return;
-    // Allow touch drawing for new element mode OR crop mode
-    if (!drawingNewElement && !croppingElement) return;
     e.preventDefault();
     const t = e.touches[0];
     const rect = proofImgRef.current.getBoundingClientRect();
     const x = t.clientX - rect.left;
     const y = t.clientY - rect.top;
-    if (drawingNewElement) {
-      setNewElementStart({ x, y });
-      setNewElementEnd({ x, y });
-    } else {
-      setCropStart({ x, y });
-      setCropEnd({ x, y });
-    }
+    setNewElementStart({ x, y });
+    setNewElementEnd({ x, y });
     setIsDragging(true);
   }
 
@@ -1193,11 +1251,7 @@ function NewQuote({ onCreated, editQuote }: { onCreated: () => void; editQuote?:
     const rect = proofImgRef.current.getBoundingClientRect();
     const x = Math.max(0, Math.min(t.clientX - rect.left, rect.width));
     const y = Math.max(0, Math.min(t.clientY - rect.top, rect.height));
-    if (drawingNewElement) {
-      setNewElementEnd({ x, y });
-    } else {
-      setCropEnd({ x, y });
-    }
+    setNewElementEnd({ x, y });
   }
 
   function handleProofTouchEnd() {
@@ -1207,8 +1261,8 @@ function NewQuote({ onCreated, editQuote }: { onCreated: () => void; editQuote?:
     }
     setIsDragging(false);
 
-    // Finalize new element drawing
-    if (drawingNewElement && newElementStart && newElementEnd) {
+    // Finalize drawing — creates element or calibration box
+    if (newElementStart && newElementEnd) {
       const sx = Math.min(newElementStart.x, newElementEnd.x);
       const sy = Math.min(newElementStart.y, newElementEnd.y);
       const sw = Math.abs(newElementEnd.x - newElementStart.x);
@@ -1216,23 +1270,7 @@ function NewQuote({ onCreated, editQuote }: { onCreated: () => void; editQuote?:
       finalizeNewElement(proofImgRef.current, sx, sy, sw, sh);
       setNewElementStart(null);
       setNewElementEnd(null);
-      return;
     }
-
-    if (!cropStart || !cropEnd || !croppingElement) return;
-    const sx = Math.min(cropStart.x, cropEnd.x);
-    const sy = Math.min(cropStart.y, cropEnd.y);
-    const sw = Math.abs(cropEnd.x - cropStart.x);
-    const sh = Math.abs(cropEnd.y - cropStart.y);
-    if (sw > 5 && sh > 5) {
-      cropFromProof(croppingElement, proofImgRef.current, sx, sy, sw, sh);
-    }
-    setCropStart(null);
-    setCropEnd(null);
-    const nextUntagged = analysis!.graphic_elements!.find(
-      el => el.element_name !== croppingElement && !elementCrops[el.element_name]
-    );
-    setCroppingElement(nextUntagged?.element_name || null);
   }
 
   function recalculateNesting(elements: GraphicElement[], qty: number = 1) {
@@ -2077,7 +2115,7 @@ function NewQuote({ onCreated, editQuote }: { onCreated: () => void; editQuote?:
 
           {/* Full Wrap — No Proof */}
           <button
-            onClick={() => { setTemplateOnly(true); setStep(3); }}
+            onClick={() => { setTemplateOnly(true); runTemplateOnlyAnalysis(); }}
             style={{
               width: '100%', padding: '16px', borderRadius: '12px',
               border: `2px solid ${theme.orange}`, background: theme.orange + '10',
@@ -2088,7 +2126,7 @@ function NewQuote({ onCreated, editQuote }: { onCreated: () => void; editQuote?:
             Full Wrap — Skip Proof
           </button>
           <div style={{ fontSize: '11px', color: theme.textMuted, textAlign: 'center', marginBottom: '16px' }}>
-            AI will detect panels from the template. You can draw and adjust wrap areas.
+            Uses template panel dimensions for a full wrap estimate.
           </div>
 
           <div style={{ display: 'flex', gap: '8px' }}>
@@ -2102,7 +2140,7 @@ function NewQuote({ onCreated, editQuote }: { onCreated: () => void; editQuote?:
               ← Back
             </button>
             <button
-              onClick={() => { setTemplateOnly(false); setStep(3); }}
+              onClick={() => enterDrawStep()}
               disabled={!proofFile && !proofPreview}
               style={{
                 flex: 2, padding: '14px', borderRadius: '12px', border: 'none',
@@ -2111,7 +2149,7 @@ function NewQuote({ onCreated, editQuote }: { onCreated: () => void; editQuote?:
                 fontSize: '15px', fontWeight: 700, cursor: 'pointer',
               }}
             >
-              Next: Analyze Proof →
+              Next: Draw Elements →
             </button>
           </div>
         </div>
@@ -2210,8 +2248,8 @@ function NewQuote({ onCreated, editQuote }: { onCreated: () => void; editQuote?:
         </div>
       )}
 
-      {/* Step 4: Tag Elements — fullscreen crop tool */}
-      {step === 4 && analysis && analysis.graphic_elements?.length && (
+      {/* Step 4: Calibrate & Draw Elements — fullscreen measurement tool */}
+      {step === 4 && analysis && (
         <div style={{
           position: 'fixed', inset: 0, zIndex: 200,
           background: theme.bg || '#0e1621',
@@ -2223,16 +2261,19 @@ function NewQuote({ onCreated, editQuote }: { onCreated: () => void; editQuote?:
             background: theme.card, borderBottom: `1px solid ${theme.border}`, flexShrink: 0,
           }}>
             <div>
-              <div style={{ fontSize: '14px', fontWeight: 800, color: theme.textPrimary }}>{templateOnly ? 'Select Panels' : 'Select Elements'}</div>
+              <div style={{ fontSize: '14px', fontWeight: 800, color: theme.textPrimary }}>
+                {calibrationMode ? 'Calibrate' : templateOnly ? 'Adjust Panels' : 'Draw Elements'}
+              </div>
               <div style={{ fontSize: '11px', color: theme.textMuted }}>
-                {drawingNewElement
-                  ? 'Draw a box on the image'
-                  : `${includedElements.size} of ${analysis.graphic_elements!.length} placed`}
+                {calibrationMode
+                  ? 'Draw a box around a known panel to set the scale'
+                  : `${includedElements.size} element${includedElements.size !== 1 ? 's' : ''} drawn`
+                    + (calibrationRegions.length > 0 ? ` · Calibrated` : '')}
               </div>
             </div>
             <div style={{ display: 'flex', gap: '8px' }}>
               <button
-                onClick={() => setStep(3)}
+                onClick={() => { setCalibrationMode(false); setPendingCalibrationBox(null); setDrawingNewElement(false); setStep(2); }}
                 style={{
                   padding: '8px 14px', borderRadius: '8px', border: `1px solid ${theme.border}`,
                   background: 'transparent', color: theme.textSecondary, fontSize: '12px', fontWeight: 700, cursor: 'pointer',
@@ -2267,28 +2308,21 @@ function NewQuote({ onCreated, editQuote }: { onCreated: () => void; editQuote?:
           <div
             style={{
               flex: 1, overflow: 'auto', position: 'relative', userSelect: 'none',
-              cursor: bboxDragging ? (bboxDragging.mode === 'move' ? 'grabbing' : 'nwse-resize') : (croppingElement || drawingNewElement) ? 'crosshair' : 'default',
+              cursor: bboxDragging ? (bboxDragging.mode === 'move' ? 'grabbing' : 'nwse-resize') : 'crosshair',
               touchAction: (bboxDragging || touchDragging) ? 'none' : 'auto',
             }}
             onMouseDown={(e) => {
               if (bboxDragging) return;
               // Deselect bbox when clicking background
               setSelectedBboxIdx(null);
-              // Draw new element mode
-              if (drawingNewElement && proofImgRef.current) {
+              // Always in drawing mode — start a new box (element or calibration)
+              if (proofImgRef.current) {
                 const rect = proofImgRef.current.getBoundingClientRect();
                 setNewElementStart({ x: e.clientX - rect.left, y: e.clientY - rect.top });
                 setNewElementEnd({ x: e.clientX - rect.left, y: e.clientY - rect.top });
                 setIsDragging(true);
                 return;
               }
-              if (!croppingElement || !proofImgRef.current) return;
-              const rect = proofImgRef.current.getBoundingClientRect();
-              const x = e.clientX - rect.left;
-              const y = e.clientY - rect.top;
-              setCropStart({ x, y });
-              setCropEnd({ x, y });
-              setIsDragging(true);
             }}
             onMouseMove={(e) => {
               // Bbox drag/resize takes priority
@@ -2300,11 +2334,7 @@ function NewQuote({ onCreated, editQuote }: { onCreated: () => void; editQuote?:
               const rect = proofImgRef.current.getBoundingClientRect();
               const x = Math.max(0, Math.min(e.clientX - rect.left, rect.width));
               const y = Math.max(0, Math.min(e.clientY - rect.top, rect.height));
-              if (drawingNewElement) {
-                setNewElementEnd({ x, y });
-              } else {
-                setCropEnd({ x, y });
-              }
+              setNewElementEnd({ x, y });
             }}
             onMouseUp={() => {
               // Bbox drag/resize
@@ -2312,8 +2342,8 @@ function NewQuote({ onCreated, editQuote }: { onCreated: () => void; editQuote?:
                 handleBboxMouseUp();
                 return;
               }
-              // Finalize drawing new element
-              if (drawingNewElement && newElementStart && newElementEnd && proofImgRef.current) {
+              // Finalize drawing — creates element or calibration box
+              if (newElementStart && newElementEnd && proofImgRef.current) {
                 setIsDragging(false);
                 const sx = Math.min(newElementStart.x, newElementEnd.x);
                 const sy = Math.min(newElementStart.y, newElementEnd.y);
@@ -2324,25 +2354,7 @@ function NewQuote({ onCreated, editQuote }: { onCreated: () => void; editQuote?:
                 setNewElementEnd(null);
                 return;
               }
-              if (!isDragging || !cropStart || !cropEnd || !croppingElement || !proofImgRef.current) {
-                setIsDragging(false);
-                return;
-              }
               setIsDragging(false);
-              const sx = Math.min(cropStart.x, cropEnd.x);
-              const sy = Math.min(cropStart.y, cropEnd.y);
-              const sw = Math.abs(cropEnd.x - cropStart.x);
-              const sh = Math.abs(cropEnd.y - cropStart.y);
-              if (sw > 5 && sh > 5) {
-                cropFromProof(croppingElement, proofImgRef.current, sx, sy, sw, sh);
-              }
-              setCropStart(null);
-              setCropEnd(null);
-              // Auto-advance to next untagged element
-              const nextUntagged = analysis.graphic_elements!.find(
-                el => el.element_name !== croppingElement && !elementCrops[el.element_name]
-              );
-              setCroppingElement(nextUntagged?.element_name || null);
             }}
             onMouseLeave={() => {
               if (bboxDragging) {
@@ -2527,44 +2539,63 @@ function NewQuote({ onCreated, editQuote }: { onCreated: () => void; editQuote?:
                   </div>
                 );
               })}
-              {/* Crop selection rectangle */}
-              {isDragging && cropStart && cropEnd && !drawingNewElement && (
+              {/* Pending calibration box — shown after drawing, waiting for panel selection */}
+              {pendingCalibrationBox && (
                 <div style={{
                   position: 'absolute',
-                  left: Math.min(cropStart.x, cropEnd.x),
-                  top: Math.min(cropStart.y, cropEnd.y),
-                  width: Math.abs(cropEnd.x - cropStart.x),
-                  height: Math.abs(cropEnd.y - cropStart.y),
-                  border: `2px solid ${theme.orange}`,
-                  background: 'rgba(255, 140, 0, 0.15)',
+                  left: `${pendingCalibrationBox.xPct}%`,
+                  top: `${pendingCalibrationBox.yPct}%`,
+                  width: `${pendingCalibrationBox.wPct}%`,
+                  height: `${pendingCalibrationBox.hPct}%`,
+                  border: '2px dashed #fbbf24',
+                  background: 'rgba(251,191,36,0.1)',
                   pointerEvents: 'none',
-                  borderRadius: '2px',
-                  zIndex: 20,
-                }} />
+                  zIndex: 20, borderRadius: '3px',
+                }}>
+                  <div style={{
+                    position: 'absolute', top: '50%', left: '50%', transform: 'translate(-50%,-50%)',
+                    fontSize: '11px', fontWeight: 800, color: '#fbbf24',
+                    background: 'rgba(0,0,0,0.75)', padding: '3px 8px', borderRadius: '4px',
+                    pointerEvents: 'none', whiteSpace: 'nowrap',
+                  }}>
+                    Select panel below
+                  </div>
+                </div>
               )}
 
-              {/* New element drawing rectangle */}
-              {isDragging && drawingNewElement && newElementStart && newElementEnd && (() => {
+              {/* Drawing rectangle — yellow for calibration, green for element */}
+              {isDragging && newElementStart && newElementEnd && (() => {
                 const sx = Math.min(newElementStart.x, newElementEnd.x);
                 const sy = Math.min(newElementStart.y, newElementEnd.y);
                 const sw = Math.abs(newElementEnd.x - newElementStart.x);
                 const sh = Math.abs(newElementEnd.y - newElementStart.y);
-                // Show live dimensions as you draw
+                const isCal = calibrationMode;
+                // Show live dimensions as you draw (only in element mode with calibration)
                 const imgEl = proofImgRef.current;
                 const imgRect = imgEl?.getBoundingClientRect();
                 const wPct = imgRect ? (sw / imgRect.width) * 100 : 0;
                 const hPct = imgRect ? (sh / imgRect.height) * 100 : 0;
                 const xPct = imgRect ? (sx / imgRect.width) * 100 : 0;
                 const yPct = imgRect ? (sy / imgRect.height) * 100 : 0;
-                const dims = boxPctToInches(wPct, hPct, xPct, yPct);
+                const dims = !isCal ? boxPctToInches(wPct, hPct, xPct, yPct) : null;
                 return (
                   <>
                     <div style={{
                       position: 'absolute', left: sx, top: sy, width: sw, height: sh,
-                      border: '2px dashed #10b981',
-                      background: 'rgba(16, 185, 129, 0.15)',
+                      border: `2px dashed ${isCal ? '#fbbf24' : '#10b981'}`,
+                      background: isCal ? 'rgba(251,191,36,0.1)' : 'rgba(16, 185, 129, 0.15)',
                       pointerEvents: 'none', borderRadius: '2px', zIndex: 20,
                     }} />
+                    {isCal && sw > 30 && sh > 20 && (
+                      <div style={{
+                        position: 'absolute', left: sx + 4, top: sy + 4,
+                        fontSize: '11px', fontWeight: 800, color: '#fbbf24',
+                        background: 'rgba(0,0,0,0.7)', padding: '2px 6px', borderRadius: '4px',
+                        pointerEvents: 'none', zIndex: 21, whiteSpace: 'nowrap',
+                      }}>
+                        Calibration panel
+                      </div>
+                    )}
                     {dims && sw > 30 && sh > 20 && (
                       <div style={{
                         position: 'absolute', left: sx + 4, top: sy + 4,
@@ -2581,10 +2612,80 @@ function NewQuote({ onCreated, editQuote }: { onCreated: () => void; editQuote?:
             </div>
           </div>
 
-          {/* Bottom detail panel — shows when a box is selected */}
-          {selectedBboxIdx !== null && analysis.graphic_elements![selectedBboxIdx] && (() => {
+          {/* Bottom panel — three states: calibration, element detail, or element list */}
+          {calibrationMode ? (
+            /* ── CALIBRATION PANEL ── */
+            <div style={{
+              flexShrink: 0, maxHeight: '45vh', overflow: 'auto',
+              background: theme.card, borderTop: '3px solid #fbbf24',
+              padding: '12px 16px',
+            }}>
+              {pendingCalibrationBox ? (
+                /* Panel picker — user drew a box, now select which panel */
+                <>
+                  <div style={{ fontSize: '13px', fontWeight: 800, color: '#fbbf24', marginBottom: '10px' }}>
+                    Which panel did you draw?
+                  </div>
+                  {selectedTemplate?.panel_data?.map((panel, i) => (
+                    <button
+                      key={i}
+                      onClick={() => finalizeCalibration(i)}
+                      style={{
+                        width: '100%', padding: '12px 14px', borderRadius: '10px', marginBottom: '6px',
+                        border: `1px solid ${theme.border}`, background: theme.inputBg,
+                        cursor: 'pointer', textAlign: 'left', display: 'flex', justifyContent: 'space-between', alignItems: 'center',
+                      }}
+                    >
+                      <span style={{ fontSize: '14px', fontWeight: 700, color: theme.textPrimary }}>{panel.name}</span>
+                      <span style={{ fontSize: '12px', color: theme.textMuted }}>{panel.width_in}" × {panel.height_in}"</span>
+                    </button>
+                  ))}
+                  <button
+                    onClick={() => setPendingCalibrationBox(null)}
+                    style={{
+                      width: '100%', padding: '10px', borderRadius: '10px', marginTop: '4px',
+                      border: `1px solid ${theme.border}`, background: 'transparent',
+                      color: theme.textMuted, fontSize: '12px', fontWeight: 700, cursor: 'pointer',
+                    }}
+                  >
+                    Cancel — draw again
+                  </button>
+                </>
+              ) : (
+                /* Instructions — draw a calibration box */
+                <>
+                  <div style={{ fontSize: '14px', fontWeight: 800, color: theme.textPrimary, marginBottom: '6px' }}>
+                    Set the Scale
+                  </div>
+                  <div style={{ fontSize: '13px', color: theme.textSecondary, marginBottom: '12px' }}>
+                    Draw a box around one of these known panels on the proof image. This sets the measurement scale.
+                  </div>
+                  {selectedTemplate?.panel_data?.map((panel, i) => (
+                    <div key={i} style={{
+                      padding: '8px 12px', borderRadius: '8px', marginBottom: '4px',
+                      background: theme.inputBg, border: `1px solid ${theme.border}`,
+                      display: 'flex', justifyContent: 'space-between', alignItems: 'center',
+                    }}>
+                      <span style={{ fontSize: '13px', fontWeight: 700, color: theme.textPrimary }}>{panel.name}</span>
+                      <span style={{ fontSize: '12px', color: theme.textMuted }}>{panel.width_in}" × {panel.height_in}"</span>
+                    </div>
+                  ))}
+                  <button
+                    onClick={() => setCalibrationMode(false)}
+                    style={{
+                      width: '100%', padding: '10px', borderRadius: '10px', marginTop: '10px',
+                      border: `1px solid ${theme.border}`, background: 'transparent',
+                      color: theme.textMuted, fontSize: '12px', fontWeight: 700, cursor: 'pointer',
+                    }}
+                  >
+                    Skip calibration (dimensions will use vehicle overall size)
+                  </button>
+                </>
+              )}
+            </div>
+          ) : selectedBboxIdx !== null && analysis.graphic_elements?.[selectedBboxIdx] ? (() => {
+            /* ── ELEMENT DETAIL PANEL ── */
             const sel = analysis.graphic_elements![selectedBboxIdx];
-            const isIncluded = includedElements.has(sel.element_name);
             const boxColors = [
               '#FF6B35', '#4ECDC4', '#FFE66D', '#95E1D3', '#F38181',
               '#AA96DA', '#A8D8EA', '#FCBAD3', '#C9CBA3', '#E8A87C',
@@ -2595,85 +2696,54 @@ function NewQuote({ onCreated, editQuote }: { onCreated: () => void; editQuote?:
                 flexShrink: 0, background: theme.card, borderTop: `3px solid ${color}`,
                 padding: '10px 16px', display: 'flex', gap: '10px', alignItems: 'center',
               }}>
-                {/* Crop thumbnail or placeholder */}
-                {elementCrops[sel.element_name] ? (
-                  <img
-                    src={elementCrops[sel.element_name]}
-                    alt={sel.element_name}
-                    style={{ width: '48px', height: '48px', objectFit: 'contain', borderRadius: '6px', border: `2px solid ${color}`, flexShrink: 0 }}
-                    onClick={() => { setCroppingElement(sel.element_name); setCropStart(null); setCropEnd(null); }}
-                  />
-                ) : (
-                  <div style={{
-                    width: '48px', height: '48px', borderRadius: '6px', flexShrink: 0,
-                    background: theme.inputBg, border: `2px solid ${color}`,
-                    display: 'flex', alignItems: 'center', justifyContent: 'center',
-                    fontSize: '16px', fontWeight: 800, color,
-                  }}>{selectedBboxIdx + 1}</div>
-                )}
-                {/* Element info */}
+                {/* Number badge */}
+                <div style={{
+                  width: '40px', height: '40px', borderRadius: '8px', flexShrink: 0,
+                  background: theme.inputBg, border: `2px solid ${color}`,
+                  display: 'flex', alignItems: 'center', justifyContent: 'center',
+                  fontSize: '15px', fontWeight: 800, color,
+                }}>{selectedBboxIdx + 1}</div>
+                {/* Editable name + dimensions */}
                 <div style={{ flex: 1, minWidth: 0 }}>
-                  {sel.element_type === 'custom' ? (
-                    <input
-                      value={sel.element_name}
-                      onChange={(e) => {
-                        const oldName = sel.element_name;
-                        const newName = e.target.value;
-                        sel.element_name = newName;
-                        setAnalysis({ ...analysis });
-                        // Update includedElements set
-                        setIncludedElements(prev => {
-                          const next = new Set(prev);
-                          if (next.has(oldName)) { next.delete(oldName); next.add(newName); }
-                          return next;
-                        });
-                      }}
-                      style={{
-                        fontSize: '13px', fontWeight: 700, color: theme.textPrimary, width: '100%',
-                        background: theme.inputBg, border: `1px solid ${theme.border}`, borderRadius: '6px',
-                        padding: '3px 6px',
-                      }}
-                      placeholder="Element name"
-                    />
-                  ) : (
-                    <div style={{ fontSize: '13px', fontWeight: 700, color: theme.textPrimary, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-                      {sel.element_name}
-                    </div>
-                  )}
-                  <div style={{ fontSize: '11px', color: theme.textMuted, marginTop: '1px' }}>
-                    {sel.element_type} — {sel.width_in}"×{sel.height_in}"
-                  </div>
-                </div>
-                {/* Delete custom element */}
-                {sel.element_type === 'custom' && (
-                  <button
-                    onClick={() => {
-                      const elements = analysis.graphic_elements!.filter((_, i) => i !== selectedBboxIdx);
-                      setIncludedElements(prev => { const next = new Set(prev); next.delete(sel.element_name); return next; });
-                      setAnalysis({ ...analysis, graphic_elements: elements });
-                      setSelectedBboxIdx(null);
+                  <input
+                    value={sel.element_name}
+                    onChange={(e) => {
+                      const oldName = sel.element_name;
+                      const newName = e.target.value;
+                      sel.element_name = newName;
+                      setAnalysis({ ...analysis });
+                      setIncludedElements(prev => {
+                        const next = new Set(prev);
+                        if (next.has(oldName)) { next.delete(oldName); next.add(newName); }
+                        return next;
+                      });
                     }}
                     style={{
-                      padding: '6px 10px', borderRadius: '6px', fontSize: '11px', fontWeight: 700,
-                      border: `1px solid rgba(239,68,68,0.3)`, background: 'rgba(239,68,68,0.1)',
-                      color: '#ef4444', cursor: 'pointer', flexShrink: 0,
+                      fontSize: '13px', fontWeight: 700, color: theme.textPrimary, width: '100%',
+                      background: theme.inputBg, border: `1px solid ${theme.border}`, borderRadius: '6px',
+                      padding: '3px 6px',
                     }}
-                  >
-                    Delete
-                  </button>
-                )}
-                {/* Include/exclude button */}
+                    placeholder="Element name"
+                  />
+                  <div style={{ fontSize: '11px', color: theme.textMuted, marginTop: '2px' }}>
+                    {sel.width_in}" × {sel.height_in}" — {((sel.width_in * sel.height_in) / 144).toFixed(2)} sq ft
+                  </div>
+                </div>
+                {/* Delete */}
                 <button
-                  onClick={() => toggleElement(sel.element_name)}
+                  onClick={() => {
+                    const elements = analysis.graphic_elements!.filter((_, i) => i !== selectedBboxIdx);
+                    setIncludedElements(prev => { const next = new Set(prev); next.delete(sel.element_name); return next; });
+                    setAnalysis({ ...analysis, graphic_elements: elements });
+                    setSelectedBboxIdx(null);
+                  }}
                   style={{
-                    padding: '8px 14px', borderRadius: '8px', fontSize: '12px', fontWeight: 700,
-                    border: isIncluded ? `2px solid ${theme.success}` : `2px solid ${theme.border}`,
-                    background: isIncluded ? theme.successBg : 'transparent',
-                    color: isIncluded ? theme.success : theme.textMuted,
-                    cursor: 'pointer', flexShrink: 0, minWidth: '70px',
+                    padding: '6px 10px', borderRadius: '6px', fontSize: '11px', fontWeight: 700,
+                    border: `1px solid rgba(239,68,68,0.3)`, background: 'rgba(239,68,68,0.1)',
+                    color: '#ef4444', cursor: 'pointer', flexShrink: 0,
                   }}
                 >
-                  {isIncluded ? '✓ In Kit' : 'Add'}
+                  Delete
                 </button>
                 {/* Close */}
                 <button
@@ -2686,102 +2756,89 @@ function NewQuote({ onCreated, editQuote }: { onCreated: () => void; editQuote?:
                 >✕</button>
               </div>
             );
-          })()}
-
-          {/* Bottom element list panel — shown when no box is selected */}
-          {selectedBboxIdx === null && (
+          })() : (
+            /* ── ELEMENT LIST PANEL ── */
             <div style={{
-              flexShrink: 0, maxHeight: '45vh', overflow: 'auto',
+              flexShrink: 0, maxHeight: '40vh', overflow: 'auto',
               background: theme.card, borderTop: `1px solid ${theme.border}`,
               padding: '10px 16px',
             }}>
-              {/* Draw custom element button */}
-              <button
-                onClick={() => {
-                  setDrawingNewElement(!drawingNewElement);
-                  setCroppingElement(null);
-                  setSelectedBboxIdx(null);
-                }}
-                style={{
-                  width: '100%', padding: '10px', borderRadius: '10px', fontSize: '13px', fontWeight: 700,
-                  cursor: 'pointer', marginBottom: '12px',
-                  border: drawingNewElement ? '2px solid #10b981' : `2px dashed ${theme.border}`,
-                  background: drawingNewElement ? 'rgba(16,185,129,0.15)' : theme.inputBg,
-                  color: drawingNewElement ? '#10b981' : theme.textMuted,
-                  display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '6px',
-                }}
-              >
-                {drawingNewElement ? 'Cancel Drawing' : '+ Draw Custom Element'}
-              </button>
-
-              {/* AI-detected elements list */}
-              {analysis.graphic_elements!.length > 0 && (
-                <div style={{ fontSize: '11px', fontWeight: 700, color: theme.textMuted, marginBottom: '8px', textTransform: 'uppercase', letterSpacing: '0.5px' }}>
-                  Detected Elements ({analysis.graphic_elements!.length})
+              {/* Calibration status */}
+              {calibrationRegions.length > 0 && (
+                <div style={{
+                  display: 'flex', justifyContent: 'space-between', alignItems: 'center',
+                  padding: '6px 10px', borderRadius: '8px', marginBottom: '10px',
+                  background: 'rgba(16,185,129,0.08)', border: '1px solid rgba(16,185,129,0.25)',
+                }}>
+                  <span style={{ fontSize: '12px', fontWeight: 700, color: '#10b981' }}>
+                    Scale: {calibrationRegions[0].panel_name} ({calibrationRegions[0].width_in}" × {calibrationRegions[0].height_in}")
+                  </span>
+                  <button
+                    onClick={() => { setCalibrationMode(true); setPendingCalibrationBox(null); }}
+                    style={{
+                      fontSize: '11px', fontWeight: 700, color: theme.textMuted, background: 'transparent',
+                      border: 'none', cursor: 'pointer', textDecoration: 'underline',
+                    }}
+                  >
+                    Recalibrate
+                  </button>
                 </div>
               )}
-              {analysis.graphic_elements!.map((el, i) => {
-                const isPlaced = el.crop_x_pct !== undefined;
-                const boxColors = [
-                  '#FF6B35', '#4ECDC4', '#FFE66D', '#95E1D3', '#F38181',
-                  '#AA96DA', '#A8D8EA', '#FCBAD3', '#C9CBA3', '#E8A87C',
-                ];
-                const color = boxColors[i % boxColors.length];
-                return (
-                  <div key={i} style={{
-                    display: 'flex', alignItems: 'center', gap: '10px',
-                    padding: '10px 12px', borderRadius: '10px',
-                    background: isPlaced ? `${color}15` : theme.inputBg,
-                    border: `1px solid ${isPlaced ? color : theme.border}`,
-                    marginBottom: '6px',
-                  }}>
-                    {/* Color indicator */}
-                    <div style={{
-                      width: '10px', height: '10px', borderRadius: '50%',
-                      background: isPlaced ? color : theme.border, flexShrink: 0,
-                    }} />
-                    {/* Info */}
-                    <div style={{ flex: 1, minWidth: 0 }}>
-                      <div style={{ fontSize: '13px', fontWeight: 700, color: theme.textPrimary, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-                        {el.element_name}
-                      </div>
-                      <div style={{ fontSize: '11px', color: theme.textMuted, marginTop: '1px' }}>
-                        {el.element_type}{el.description ? ` — ${el.description}` : ''}{el.width_in ? ` — est. ${el.width_in}"×${el.height_in}"` : ''}
-                      </div>
-                    </div>
-                    {/* Place / Remove button */}
-                    {el.element_type === 'custom' ? (
-                      <button
-                        onClick={() => {
-                          const elements = analysis.graphic_elements!.filter((_, j) => j !== i);
-                          setIncludedElements(prev => { const next = new Set(prev); next.delete(el.element_name); return next; });
-                          setAnalysis({ ...analysis, graphic_elements: elements });
-                        }}
-                        style={{
-                          padding: '6px 12px', borderRadius: '8px', fontSize: '11px', fontWeight: 700,
-                          border: `1px solid rgba(239,68,68,0.3)`, background: 'rgba(239,68,68,0.1)',
-                          color: '#ef4444', cursor: 'pointer', flexShrink: 0,
-                        }}
-                      >
-                        Delete
-                      </button>
-                    ) : (
-                      <button
-                        onClick={() => isPlaced ? removeElementBox(i) : placeElement(i)}
-                        style={{
-                          padding: '6px 12px', borderRadius: '8px', fontSize: '11px', fontWeight: 700,
-                          border: isPlaced ? `1px solid ${color}` : `1px solid ${theme.border}`,
-                          background: isPlaced ? `${color}20` : 'transparent',
-                          color: isPlaced ? color : theme.textMuted,
-                          cursor: 'pointer', flexShrink: 0, whiteSpace: 'nowrap',
-                        }}
-                      >
-                        {isPlaced ? '✓ Placed' : 'Place Box'}
-                      </button>
-                    )}
+
+              {/* Instructions or element list */}
+              {(analysis.graphic_elements?.length || 0) === 0 ? (
+                <div style={{ textAlign: 'center', padding: '16px', color: theme.textSecondary, fontSize: '13px' }}>
+                  {calibrationRegions.length === 0
+                    ? 'Calibrate first, then draw boxes around each graphic element'
+                    : 'Draw boxes around each graphic element on the proof image'}
+                </div>
+              ) : (
+                <>
+                  <div style={{ fontSize: '11px', fontWeight: 700, color: theme.textMuted, marginBottom: '8px', textTransform: 'uppercase', letterSpacing: '0.5px' }}>
+                    Elements ({analysis.graphic_elements!.length})
+                    {' · '}
+                    {(analysis.graphic_elements!.reduce((sum, el) => sum + (el.width_in * el.height_in) / 144, 0)).toFixed(1)} sq ft total
                   </div>
-                );
-              })}
+                  {analysis.graphic_elements!.map((el, i) => {
+                    const boxColors = [
+                      '#FF6B35', '#4ECDC4', '#FFE66D', '#95E1D3', '#F38181',
+                      '#AA96DA', '#A8D8EA', '#FCBAD3', '#C9CBA3', '#E8A87C',
+                    ];
+                    const color = boxColors[i % boxColors.length];
+                    const sqft = ((el.width_in * el.height_in) / 144).toFixed(2);
+                    return (
+                      <div
+                        key={i}
+                        onClick={() => setSelectedBboxIdx(i)}
+                        style={{
+                          display: 'flex', alignItems: 'center', gap: '10px',
+                          padding: '8px 12px', borderRadius: '10px',
+                          background: `${color}10`, border: `1px solid ${color}40`,
+                          marginBottom: '6px', cursor: 'pointer',
+                        }}
+                      >
+                        <div style={{
+                          width: '24px', height: '24px', borderRadius: '6px', flexShrink: 0,
+                          background: color, color: '#fff',
+                          display: 'flex', alignItems: 'center', justifyContent: 'center',
+                          fontSize: '11px', fontWeight: 800,
+                        }}>{i + 1}</div>
+                        <div style={{ flex: 1, minWidth: 0 }}>
+                          <div style={{ fontSize: '13px', fontWeight: 700, color: theme.textPrimary, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                            {el.element_name}
+                          </div>
+                        </div>
+                        <div style={{ fontSize: '12px', fontWeight: 700, color: theme.textSecondary, flexShrink: 0 }}>
+                          {el.width_in}" × {el.height_in}"
+                        </div>
+                        <div style={{ fontSize: '11px', color: theme.textMuted, flexShrink: 0 }}>
+                          {sqft} ft²
+                        </div>
+                      </div>
+                    );
+                  })}
+                </>
+              )}
             </div>
           )}
         </div>
