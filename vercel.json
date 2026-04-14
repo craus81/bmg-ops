@@ -3,6 +3,10 @@
     {
       "path": "/api/gmail/auto-import",
       "schedule": "0 * * * *"
+    },
+    {
+      "path": "/api/cron/netsuite-sync",
+      "schedule": "0 */2 * * *"
     }
   ]
 }
