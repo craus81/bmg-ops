@@ -1899,14 +1899,15 @@ function NewQuote({ onCreated, editQuote }: { onCreated: () => void; editQuote?:
   }
 
   // Calculated totals for step 5
-  // Identify elements that were too large for the 60" roll (both dimensions > 60")
+  // Identify elements that were panelized (split into pieces for the 60" roll)
   const nestedNames = new Set(nestingResult?.nested_elements.map(el => el.element.element_name) || []);
-  const oversizedElements = (analysis?.graphic_elements || [])
-    .filter(el => includedElements.has(el.element_name) && !nestedNames.has(el.element_name));
-  const oversizedSqft = oversizedElements.reduce((sum, el) => sum + (el.width_in * el.height_in) / 144, 0);
+  const panelizedElements = (analysis?.graphic_elements || [])
+    .filter(el => includedElements.has(el.element_name) &&
+      !nestedNames.has(el.element_name) &&
+      nestingResult?.nested_elements.some(ne => ne.element.element_name.startsWith(el.element_name + '-'))
+    );
 
-  // Include oversized element area in material calculation (they still need material, just wider stock)
-  const baseVinylSqft = (nestingResult?.roll_area_sqft || analysis?.total_vinyl_sqft || 0) + oversizedSqft;
+  const baseVinylSqft = nestingResult?.roll_area_sqft || analysis?.total_vinyl_sqft || 0;
   const vinylSqft = baseVinylSqft * (1 + wastePct / 100);
   const materialTotal = vinylSqft * materialRate;
   const laborTotal = baseVinylSqft * laborRate; // labor based on actual area, not waste
@@ -3218,26 +3219,26 @@ function NewQuote({ onCreated, editQuote }: { onCreated: () => void; editQuote?:
             );
           })()}
 
-          {/* Oversized elements warning */}
-          {oversizedElements.length > 0 && (
+          {/* Panelized elements info */}
+          {panelizedElements.length > 0 && (
             <div style={{
-              background: theme.warningBg, border: `1px solid ${theme.warningBorder}`,
+              background: 'rgba(59,130,246,0.06)', border: '1px solid rgba(59,130,246,0.2)',
               borderRadius: '10px', padding: '12px 14px', marginBottom: '12px',
             }}>
-              <div style={{ fontSize: '13px', fontWeight: 700, color: theme.warning, marginBottom: '6px' }}>
-                {oversizedElements.length} element{oversizedElements.length > 1 ? 's' : ''} too large for 60" roll
+              <div style={{ fontSize: '13px', fontWeight: 700, color: '#60a5fa', marginBottom: '6px' }}>
+                {panelizedElements.length} element{panelizedElements.length > 1 ? 's' : ''} split into panels
               </div>
               <div style={{ fontSize: '12px', color: theme.textSecondary, marginBottom: '6px' }}>
-                These elements exceed 60" in both dimensions and cannot be nested on a standard roll. They may need wider material or paneling.
+                These elements exceeded 60" in both dimensions and were split into panels for the roll.
               </div>
-              {oversizedElements.map((el, i) => (
-                <div key={i} style={{ fontSize: '12px', color: theme.textPrimary, padding: '2px 0' }}>
-                  • {el.element_name}: {el.width_in}" × {el.height_in}" ({((el.width_in * el.height_in) / 144).toFixed(1)} sq ft)
-                </div>
-              ))}
-              <div style={{ fontSize: '11px', color: theme.textMuted, marginTop: '6px', fontStyle: 'italic' }}>
-                Their area ({oversizedSqft.toFixed(1)} sq ft) is still included in the material total.
-              </div>
+              {panelizedElements.map((el, i) => {
+                const numPanels = nestingResult?.nested_elements.filter(ne => ne.element.element_name.startsWith(el.element_name + '-')).length || 0;
+                return (
+                  <div key={i} style={{ fontSize: '12px', color: theme.textPrimary, padding: '2px 0' }}>
+                    • {el.element_name} ({el.width_in}" × {el.height_in}") → {numPanels} panels
+                  </div>
+                );
+              })}
             </div>
           )}
 
@@ -3248,9 +3249,9 @@ function NewQuote({ onCreated, editQuote }: { onCreated: () => void; editQuote?:
                 <div style={{ fontSize: '14px', fontWeight: 700, color: theme.textPrimary }}>Graphic Elements</div>
                 <div style={{ fontSize: '11px', color: theme.textMuted, fontWeight: 600 }}>
                   {includedElements.size} of {analysis.graphic_elements.length} in kit
-                  {oversizedElements.length > 0 && (
-                    <span style={{ color: theme.warning, marginLeft: '6px' }}>
-                      ({oversizedElements.length} oversized)
+                  {panelizedElements.length > 0 && (
+                    <span style={{ color: '#60a5fa', marginLeft: '6px' }}>
+                      ({panelizedElements.length} panelized)
                     </span>
                   )}
                 </div>

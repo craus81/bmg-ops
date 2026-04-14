@@ -33,6 +33,58 @@ interface FreeRect {
   h: number;
 }
 
+/**
+ * Split oversized elements (both dimensions > rollWidth) into panels.
+ * Each panel's shorter dimension ≤ rollWidth so it can be rotated onto the roll.
+ * Panels are named "{element_name}-1", "{element_name}-2", etc.
+ */
+function panelizeOversized(
+  elements: ElementWithBleed[],
+  rollWidthIn: number
+): ElementWithBleed[] {
+  const result: ElementWithBleed[] = [];
+
+  for (const ewb of elements) {
+    const tw = ewb.total_width_in;
+    const th = ewb.total_height_in;
+
+    // If at least one dimension fits the roll, no split needed
+    if (tw <= rollWidthIn || th <= rollWidthIn) {
+      result.push(ewb);
+      continue;
+    }
+
+    // Both dimensions exceed roll width.
+    // Split the shorter dimension into panels ≤ rollWidth.
+    // Each panel can then be rotated (short side as width) to fit the roll.
+    const shorter = Math.min(tw, th);
+    const longer = Math.max(tw, th);
+    const splitWidth = tw === shorter; // true → split along width
+
+    const numPanels = Math.ceil(shorter / rollWidthIn);
+    const panelShorter = Math.round((shorter / numPanels) * 10) / 10;
+
+    for (let i = 0; i < numPanels; i++) {
+      const panelTW = splitWidth ? panelShorter : longer;
+      const panelTH = splitWidth ? longer : panelShorter;
+
+      result.push({
+        element: {
+          ...ewb.element,
+          element_name: `${ewb.element.element_name}-${i + 1}`,
+          width_in: panelTW - ewb.bleed_in * 2,
+          height_in: panelTH - ewb.bleed_in * 2,
+        },
+        bleed_in: ewb.bleed_in,
+        total_width_in: panelTW,
+        total_height_in: panelTH,
+      });
+    }
+  }
+
+  return result;
+}
+
 export function nestElementsOnRoll(
   elementsWithBleed: ElementWithBleed[],
   rollWidthIn: number = 60,
@@ -48,9 +100,12 @@ export function nestElementsOnRoll(
     };
   }
 
+  // Split oversized elements (both dims > roll width) into panels
+  const panelized = panelizeOversized(elementsWithBleed, rollWidthIn);
+
   // Sort by height descending — place tallest pieces first so shorter ones
   // can fill gaps beside them. Break ties by area descending.
-  const sorted = [...elementsWithBleed].sort((a, b) => {
+  const sorted = [...panelized].sort((a, b) => {
     const maxA = Math.max(a.total_width_in, a.total_height_in);
     const maxB = Math.max(b.total_width_in, b.total_height_in);
     if (Math.abs(maxB - maxA) > 0.1) return maxB - maxA;
