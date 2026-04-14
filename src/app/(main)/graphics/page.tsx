@@ -746,7 +746,7 @@ export default function GraphicsPage() {
                         {job.part_number && job.part_number.split(',').map((pn, i) => <span key={i} style={{ background: 'rgba(59,130,246,0.08)', padding: '0 4px', borderRadius: '3px' }}>{pn.trim()}</span>)}
                         <span>Qty: {job.quantity}</span>
                         {job.due_date && <span style={{ color: (parseLocalDate(job.due_date) || new Date()) < new Date() ? '#ef4444' : '#fbbf24' }}>Due: {displayDate(job.due_date)}</span>}
-                        {job.scheduled_install_date && <span style={{ color: '#22d3ee' }}>Install: {displayDate(job.scheduled_install_date)}</span>}
+                        {job.scheduled_install_date && <span style={{ color: job.scheduled_install_date === 'N/A' ? 'var(--text-muted)' : '#22d3ee' }}>Install: {job.scheduled_install_date === 'N/A' ? 'N/A' : displayDate(job.scheduled_install_date)}</span>}
                       </div>
                     </div>
                     <div style={{
@@ -850,7 +850,7 @@ export default function GraphicsPage() {
                         <div style={{ fontSize: '10px', color: 'var(--text-label)', display: 'flex', gap: '12px', flexWrap: 'wrap', marginBottom: '10px' }}>
                           <span>Created: {new Date(job.created_at).toLocaleDateString()}</span>
                           {job.due_date && <span style={{ color: (parseLocalDate(job.due_date) || new Date()) < new Date() ? '#ef4444' : '#fbbf24' }}>Due: {displayDate(job.due_date)}</span>}
-                          {job.scheduled_install_date && <span style={{ color: '#22d3ee' }}>Install: {displayDate(job.scheduled_install_date)}{job.calendar_event_id ? '' : ''}</span>}
+                          {job.scheduled_install_date && <span style={{ color: job.scheduled_install_date === 'N/A' ? 'var(--text-muted)' : '#22d3ee' }}>Install: {job.scheduled_install_date === 'N/A' ? 'N/A' : displayDate(job.scheduled_install_date)}{job.calendar_event_id ? '' : ''}</span>}
                           {getProfileName(job.assigned_to) && <span>Assigned: {getProfileName(job.assigned_to)}</span>}
                           {getProfileName(job.created_by) && <span>By: {getProfileName(job.created_by)}</span>}
                           {job.job_number && <span style={{ color: 'var(--text-muted)' }}>#{job.job_number}</span>}
@@ -1072,7 +1072,17 @@ export default function GraphicsPage() {
                           </div>
                           <div>
                             <div style={labelStyle}>Scheduled Install Date</div>
-                            <input type="date" style={inputStyle} value={toDateInputValue(editJob!.scheduled_install_date)} onChange={e => setEditingJob({ ...editJob!, scheduled_install_date: e.target.value })} />
+                            {editJob!.scheduled_install_date === 'N/A' ? (
+                              <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                                <div style={{ ...inputStyle, display: 'flex', alignItems: 'center', color: 'var(--text-muted)', fontStyle: 'italic' }}>N/A</div>
+                                <button type="button" onClick={() => setEditingJob({ ...editJob!, scheduled_install_date: '' })} style={{ fontSize: '10px', fontWeight: 700, color: '#60a5fa', background: 'none', border: 'none', cursor: 'pointer', whiteSpace: 'nowrap' }}>Set Date</button>
+                              </div>
+                            ) : (
+                              <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                                <input type="date" style={{ ...inputStyle, flex: 1 }} value={toDateInputValue(editJob!.scheduled_install_date)} onChange={e => setEditingJob({ ...editJob!, scheduled_install_date: e.target.value })} />
+                                <button type="button" onClick={() => setEditingJob({ ...editJob!, scheduled_install_date: 'N/A' })} style={{ fontSize: '10px', fontWeight: 700, color: 'var(--text-muted)', background: 'none', border: 'none', cursor: 'pointer', whiteSpace: 'nowrap' }}>N/A</button>
+                              </div>
+                            )}
                             {editJob!.calendar_event_id && <div style={{ fontSize: '9px', color: '#22d3ee', marginTop: '2px' }}>Synced to Google Calendar</div>}
                           </div>
                           <div>
@@ -1108,7 +1118,14 @@ export default function GraphicsPage() {
                           </div>
                           <div>
                             <div style={{ ...labelStyle, fontSize: '8px' }}>Laminate</div>
-                            <input style={inputStyle} value={editJob!.laminate || ''} onChange={e => setEditingJob({ ...editJob!, laminate: e.target.value })} placeholder="e.g. 3M 8518" />
+                            <select style={inputStyle} value={editJob!.laminate || ''} onChange={e => setEditingJob({ ...editJob!, laminate: e.target.value })}>
+                              <option value="">Select...</option>
+                              <option value="N/A">N/A</option>
+                              <option value="8428G">8428G</option>
+                              <option value="8418">8418</option>
+                              <option value="8508">8508</option>
+                              <option value="Other">Other</option>
+                            </select>
                           </div>
                           <div>
                             <div style={{ ...labelStyle, fontSize: '8px' }}>Print</div>
@@ -1323,7 +1340,17 @@ export default function GraphicsPage() {
                   {createForm.job_category !== 'internal' && (
                     <div>
                       <div style={labelStyle}>Scheduled Install Date</div>
-                      <input type="date" style={inputStyle} value={createForm.scheduled_install_date} onChange={e => setCreateForm({ ...createForm, scheduled_install_date: e.target.value })} />
+                      {createForm.scheduled_install_date === 'N/A' ? (
+                        <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                          <div style={{ ...inputStyle, display: 'flex', alignItems: 'center', color: 'var(--text-muted)', fontStyle: 'italic' }}>N/A</div>
+                          <button type="button" onClick={() => setCreateForm({ ...createForm, scheduled_install_date: '' })} style={{ fontSize: '10px', fontWeight: 700, color: '#60a5fa', background: 'none', border: 'none', cursor: 'pointer', whiteSpace: 'nowrap' }}>Set Date</button>
+                        </div>
+                      ) : (
+                        <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                          <input type="date" style={{ ...inputStyle, flex: 1 }} value={createForm.scheduled_install_date} onChange={e => setCreateForm({ ...createForm, scheduled_install_date: e.target.value })} />
+                          <button type="button" onClick={() => setCreateForm({ ...createForm, scheduled_install_date: 'N/A' })} style={{ fontSize: '10px', fontWeight: 700, color: 'var(--text-muted)', background: 'none', border: 'none', cursor: 'pointer', whiteSpace: 'nowrap' }}>N/A</button>
+                        </div>
+                      )}
                     </div>
                   )}
                   {/* Production & Customer Supplied get ship-to */}
@@ -1373,6 +1400,7 @@ export default function GraphicsPage() {
                         <div style={{ ...labelStyle, fontSize: '8px' }}>Laminate</div>
                         <select style={inputStyle} value={createForm.laminate} onChange={e => setCreateForm({ ...createForm, laminate: e.target.value })}>
                           <option value="">Select...</option>
+                          <option value="N/A">N/A</option>
                           <option value="8428G">8428G</option>
                           <option value="8418">8418</option>
                           <option value="8508">8508</option>
@@ -1408,7 +1436,17 @@ export default function GraphicsPage() {
                     </div>
                     <div>
                       <div style={labelStyle}>Scheduled Install Date</div>
-                      <input type="date" style={inputStyle} value={createForm.scheduled_install_date} onChange={e => setCreateForm({ ...createForm, scheduled_install_date: e.target.value })} />
+                      {createForm.scheduled_install_date === 'N/A' ? (
+                        <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                          <div style={{ ...inputStyle, display: 'flex', alignItems: 'center', color: 'var(--text-muted)', fontStyle: 'italic' }}>N/A</div>
+                          <button type="button" onClick={() => setCreateForm({ ...createForm, scheduled_install_date: '' })} style={{ fontSize: '10px', fontWeight: 700, color: '#60a5fa', background: 'none', border: 'none', cursor: 'pointer', whiteSpace: 'nowrap' }}>Set Date</button>
+                        </div>
+                      ) : (
+                        <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                          <input type="date" style={{ ...inputStyle, flex: 1 }} value={createForm.scheduled_install_date} onChange={e => setCreateForm({ ...createForm, scheduled_install_date: e.target.value })} />
+                          <button type="button" onClick={() => setCreateForm({ ...createForm, scheduled_install_date: 'N/A' })} style={{ fontSize: '10px', fontWeight: 700, color: 'var(--text-muted)', background: 'none', border: 'none', cursor: 'pointer', whiteSpace: 'nowrap' }}>N/A</button>
+                        </div>
+                      )}
                     </div>
                   </div>
                 )}
