@@ -95,7 +95,14 @@ export default function POsPage() {
   };
 
   const dismissPendingPO = async (id: string) => {
-    await supabase.from('gmail_po_imports').update({ status: 'skipped' }).eq('id', id);
+    const pending = pendingPOs.find(p => p.id === id);
+    if (pending?.message_id) {
+      await fetch('/api/gmail/dismiss-po', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ messageId: pending.message_id }),
+      });
+    }
     setPendingPOs(prev => prev.filter(p => p.id !== id));
   };
   const [selectedForDelete, setSelectedForDelete] = useState<Set<string>>(new Set());
@@ -555,14 +562,17 @@ export default function POsPage() {
   };
 
   const dismissEmail = async (messageId: string, email: any) => {
-    await supabase.from('gmail_po_imports').upsert({
-      message_id: messageId,
-      thread_id: email.threadId,
-      subject: email.subject || '',
-      from_email: email.fromEmail || '',
-      po_number: email.poNumber || '',
-      status: 'dismissed',
-    }, { onConflict: 'message_id' });
+    await fetch('/api/gmail/dismiss-po', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        messageId,
+        threadId: email.threadId,
+        subject: email.subject,
+        fromEmail: email.fromEmail,
+        poNumber: email.poNumber,
+      }),
+    });
     setEmailEmails(prev => prev.filter(e => e.messageId !== messageId));
   };
 
