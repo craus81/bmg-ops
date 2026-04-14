@@ -397,7 +397,7 @@ export default function AdminScansPage() {
             {matching ? 'Matching...' : 'Try Auto-Match POs'}
           </button>
         )}
-        {tab === 'ready' && selectedScans.size > 0 && (
+        {(tab === 'ready' || tab === 'waiting') && selectedScans.size > 0 && (
           <button onClick={exportCSV} disabled={exporting} style={{ padding: '6px 10px', borderRadius: '6px', fontSize: '10px', fontWeight: 700, background: 'rgba(34,197,94,0.1)', border: '1px solid rgba(34,197,94,0.25)', color: '#22c55e', cursor: 'pointer' }}>
             {exporting ? 'Exporting...' : `Export ${selectedScans.size} to CSV`}
           </button>
