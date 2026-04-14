@@ -82,6 +82,8 @@ export default function BottomNav({ clockStatus }: BottomNavProps) {
       zIndex: 100,
       padding: '8px 10px',
       paddingBottom: 'calc(10px + env(safe-area-inset-bottom, 0px))',
+      paddingLeft: 'calc(10px + env(safe-area-inset-left, 0px))',
+      paddingRight: 'calc(10px + env(safe-area-inset-right, 0px))',
     }}>
       {tabs.map((tab) => {
         const active = isActive(tab);

@@ -322,7 +322,11 @@ export default function Header({ clockStatus, activePartNumber, activeEndCustome
         </div>
       )}
       <header style={{
-        background: theme.headerBg, padding: '10px 12px',
+        background: theme.headerBg,
+        padding: '12px 16px',
+        paddingTop: 'calc(12px + env(safe-area-inset-top, 0px))',
+        paddingLeft: 'calc(16px + env(safe-area-inset-left, 0px))',
+        paddingRight: 'calc(16px + env(safe-area-inset-right, 0px))',
         display: 'flex', alignItems: 'center', justifyContent: 'space-between',
         position: 'sticky', top: isActualAdmin && viewAsRole ? undefined : 0, zIndex: 100,
         borderBottom: `1px solid ${theme.border}`,
