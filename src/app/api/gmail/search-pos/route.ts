@@ -47,7 +47,9 @@ export async function GET(req: NextRequest) {
     const emails = [];
     for (const msg of messages) {
       const id = msg.id!;
-      const alreadyImported = importedSet.has(id);
+
+      // Skip already-imported or dismissed emails entirely
+      if (importedSet.has(id)) continue;
 
       const full = await getMessage(id);
       const subject = getHeader(full, 'Subject');
@@ -60,6 +62,9 @@ export async function GET(req: NextRequest) {
                        subject.match(/Purchase\s*Order\s*#?\s*(\w+)/i) ||
                        subject.match(/PO\s*(\d{5,})/i);
       const poNumber = poMatch ? poMatch[1] : null;
+
+      // Skip POs already in the system
+      if (poNumber && existingPoNumbers.has(poNumber)) continue;
 
       // Parse sender name
       const fromMatch = from.match(/"?([^"<]+)"?\s*</);
@@ -84,8 +89,6 @@ export async function GET(req: NextRequest) {
         continue;
       }
 
-      const alreadyInSystem = poNumber ? existingPoNumbers.has(poNumber) : false;
-
       emails.push({
         messageId: id,
         threadId: msg.threadId,
@@ -96,14 +99,10 @@ export async function GET(req: NextRequest) {
         customer,
         poNumber,
         pdfs: pdfs.map(p => ({ filename: p.filename, size: p.size })),
-        alreadyImported,
-        alreadyInSystem,
       });
     }
 
-    const newCount = emails.filter(e => !e.alreadyImported && !e.alreadyInSystem && e.pdfs.length > 0).length;
-
-    return NextResponse.json({ emails, newCount });
+    return NextResponse.json({ emails, newCount: emails.filter(e => e.pdfs.length > 0).length });
   } catch (err: any) {
     if (err.message === 'NO_GOOGLE_TOKEN') {
       return NextResponse.json({ error: 'Gmail not connected. Please authorize first.', needsAuth: true }, { status: 401 });
