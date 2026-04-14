@@ -78,6 +78,12 @@ export async function GET(req: NextRequest) {
         customer = 'Grimco';
       }
 
+      // Skip POs from filtered customers
+      const lowerFrom = (fromName + ' ' + fromEmail + ' ' + subject).toLowerCase();
+      if (lowerFrom.includes('ranger design') || lowerFrom.includes('enterprise fleet') || lowerFrom.includes('bmg fleet installation')) {
+        continue;
+      }
+
       const alreadyInSystem = poNumber ? existingPoNumbers.has(poNumber) : false;
 
       emails.push({

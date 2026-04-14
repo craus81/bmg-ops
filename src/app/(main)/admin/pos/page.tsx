@@ -109,13 +109,16 @@ export default function POsPage() {
         .select('*, po_line_items(*), po_invoices(*)')
         .order('created_at', { ascending: false });
 
-      const mapped = (poData || []).map((po: any) => ({
-        ...po,
-        line_items: po.po_line_items || [],
-        po_invoices: (po.po_invoices || []).sort((a: any, b: any) =>
-          new Date(b.created_at).getTime() - new Date(a.created_at).getTime()
-        ),
-      }));
+      const FILTERED_CUSTOMERS = ['ranger design', 'enterprise fleet management', 'bmg fleet installations'];
+      const mapped = (poData || [])
+        .filter((po: any) => !FILTERED_CUSTOMERS.some(fc => po.customer?.toLowerCase().includes(fc)))
+        .map((po: any) => ({
+          ...po,
+          line_items: po.po_line_items || [],
+          po_invoices: (po.po_invoices || []).sort((a: any, b: any) =>
+            new Date(b.created_at).getTime() - new Date(a.created_at).getTime()
+          ),
+        }));
       setPos(mapped);
 
       const { data: catData } = await supabase.from('catalog').select('*').order('part_number');
