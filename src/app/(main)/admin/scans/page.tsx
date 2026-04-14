@@ -52,7 +52,7 @@ export default function AdminScansPage() {
   const [bulkLocation, setBulkLocation] = useState<string>('');
   const [bulkVins, setBulkVins] = useState('');
   const [bulkProcessing, setBulkProcessing] = useState(false);
-  const [bulkResult, setBulkResult] = useState<{ success: number; failed: number } | null>(null);
+  const [bulkResult, setBulkResult] = useState<{ success: number; failed: number; skipped?: number } | null>(null);
   const [scanningWorksheet, setScanningWorksheet] = useState(false);
   const [worksheetNotes, setWorksheetNotes] = useState<string | null>(null);
 
@@ -290,9 +290,28 @@ export default function AdminScansPage() {
 
     setBulkProcessing(true);
     setBulkResult(null);
-    let success = 0, failed = 0;
 
-    for (const vin of vins) {
+    // Check for duplicate VINs already in the system
+    const { data: existingScans } = await supabase.from('scan_logs').select('vin').in('vin', vins);
+    const existingVins = new Set((existingScans || []).map(s => s.vin));
+    const dupeVins = vins.filter(v => existingVins.has(v));
+    const newVins = vins.filter(v => !existingVins.has(v));
+
+    if (dupeVins.length > 0 && newVins.length === 0) {
+      alert(`All ${dupeVins.length} VIN${dupeVins.length !== 1 ? 's' : ''} already exist in the system.`);
+      setBulkProcessing(false);
+      return;
+    }
+    if (dupeVins.length > 0) {
+      if (!window.confirm(`${dupeVins.length} VIN${dupeVins.length !== 1 ? 's' : ''} already exist and will be skipped:\n${dupeVins.slice(0, 5).join('\n')}${dupeVins.length > 5 ? `\n...and ${dupeVins.length - 5} more` : ''}\n\nContinue uploading ${newVins.length} new VIN${newVins.length !== 1 ? 's' : ''}?`)) {
+        setBulkProcessing(false);
+        return;
+      }
+    }
+
+    let success = 0, failed = 0, skipped = dupeVins.length;
+
+    for (const vin of newVins) {
       // Decode VIN
       let vehicleData: any = {};
       try {
@@ -317,7 +336,7 @@ export default function AdminScansPage() {
       if (error) failed++; else success++;
     }
 
-    setBulkResult({ success, failed });
+    setBulkResult({ success, failed, skipped });
     setBulkProcessing(false);
     if (success > 0) { setBulkVins(''); loadAll(); }
   };
@@ -438,9 +457,14 @@ export default function AdminScansPage() {
           </>
         )}
         {tab === 'exported' && selectedScans.size > 0 && (
-          <button onClick={archiveExported} style={{ padding: '6px 10px', borderRadius: '6px', fontSize: '10px', fontWeight: 700, background: 'rgba(167,139,250,0.1)', border: '1px solid rgba(167,139,250,0.25)', color: '#a78bfa', cursor: 'pointer' }}>
-            Archive {selectedScans.size}
-          </button>
+          <>
+            <button onClick={exportCSV} disabled={exporting} style={{ padding: '6px 10px', borderRadius: '6px', fontSize: '10px', fontWeight: 700, background: 'rgba(34,197,94,0.1)', border: '1px solid rgba(34,197,94,0.25)', color: '#22c55e', cursor: 'pointer' }}>
+              {exporting ? 'Exporting...' : `Download CSV (${selectedScans.size})`}
+            </button>
+            <button onClick={archiveExported} style={{ padding: '6px 10px', borderRadius: '6px', fontSize: '10px', fontWeight: 700, background: 'rgba(167,139,250,0.1)', border: '1px solid rgba(167,139,250,0.25)', color: '#a78bfa', cursor: 'pointer' }}>
+              Archive {selectedScans.size}
+            </button>
+          </>
         )}
         {tab !== 'bulk' && selectedScans.size > 0 && (
           <>
@@ -602,7 +626,7 @@ export default function AdminScansPage() {
           )}
           {bulkResult && (
             <div style={{ marginTop: '10px', padding: '10px 14px', borderRadius: '8px', background: 'rgba(34,197,94,0.06)', border: '1px solid rgba(34,197,94,0.2)', color: '#22c55e', fontSize: '12px', fontWeight: 700 }}>
-              {bulkResult.success} VIN{bulkResult.success !== 1 ? 's' : ''} uploaded{bulkResult.failed > 0 ? ` · ${bulkResult.failed} failed` : ''}
+              {bulkResult.success} VIN{bulkResult.success !== 1 ? 's' : ''} uploaded{bulkResult.failed > 0 ? ` · ${bulkResult.failed} failed` : ''}{bulkResult.skipped ? ` · ${bulkResult.skipped} duplicate${bulkResult.skipped !== 1 ? 's' : ''} skipped` : ''}
             </div>
           )}
         </div>

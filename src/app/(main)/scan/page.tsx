@@ -186,6 +186,14 @@ export default function ScanPage() {
     setScanSuccess('');
     setVinLoading(true);
 
+    // Check for duplicate VIN
+    const { data: existing } = await supabase.from('scan_logs').select('id, scanned_at').eq('vin', v).limit(1);
+    if (existing && existing.length > 0) {
+      setScanError(`Duplicate VIN — already scanned on ${new Date(existing[0].scanned_at).toLocaleDateString()}`);
+      setVinLoading(false);
+      return;
+    }
+
     let vehicleData: any = {};
     try {
       const res = await fetch(`https://vpic.nhtsa.dot.gov/api/vehicles/decodevin/${v}?format=json`);
