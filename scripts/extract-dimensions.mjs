@@ -52,6 +52,7 @@ const DRY_RUN = args.includes('--dry-run');
 const FIX_EMPTY = args.includes('--fix-empty');
 const PREFIX_FILTER = args.includes('--prefix') ? args[args.indexOf('--prefix') + 1] : null;
 const SINGLE_FILE = args.includes('--file') ? args[args.indexOf('--file') + 1] : null;
+const CLEANUP = args.includes('--cleanup');
 
 const s3 = new S3Client({
   region: 'auto',
@@ -342,6 +343,48 @@ async function upsertTemplate(vehicle, sourceFile, pageBuffer) {
 
 // ── Main ──
 async function main() {
+  // --cleanup: remove templates without panel data, no AI calls needed
+  if (CLEANUP) {
+    console.log('🧹 Cleaning up templates without panel data...\n');
+
+    const { data: all } = await supabase
+      .from('vehicle_templates')
+      .select('id, name, panel_data');
+
+    const toDelete = (all || []).filter(t =>
+      !t.panel_data || !Array.isArray(t.panel_data) || t.panel_data.length === 0 ||
+      !t.panel_data.some(p => p.width_in > 0 && p.height_in > 0)
+    );
+
+    const toKeep = (all || []).length - toDelete.length;
+    console.log(`   📊 ${(all || []).length} total templates`);
+    console.log(`   ✅ ${toKeep} have valid panel data (keeping)`);
+    console.log(`   ❌ ${toDelete.length} have no panel data (removing)\n`);
+
+    if (toDelete.length === 0) {
+      console.log('Nothing to clean up.');
+      return;
+    }
+
+    if (DRY_RUN) {
+      toDelete.forEach(t => console.log(`   Would delete: ${t.name}`));
+      console.log('\n   ⚡ DRY RUN — no changes made. Remove --dry-run to delete.');
+      return;
+    }
+
+    for (const t of toDelete) {
+      const { error } = await supabase.from('vehicle_templates').delete().eq('id', t.id);
+      if (error) {
+        console.error(`   ❌ Failed to delete "${t.name}": ${error.message}`);
+      } else {
+        console.log(`   🗑  Deleted: ${t.name}`);
+      }
+    }
+
+    console.log(`\n✅ Done. ${toDelete.length} templates removed, ${toKeep} remaining.`);
+    return;
+  }
+
   console.log('🔍 Scanning R2 for wrap dimension PDFs...\n');
   if (DRY_RUN) console.log('   ⚡ DRY RUN — no database writes\n');
   if (FIX_EMPTY) console.log('   🔧 FIX-EMPTY mode — only updating vehicles with missing panel_data\n');
