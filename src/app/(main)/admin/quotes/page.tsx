@@ -903,6 +903,12 @@ function NewQuote({ onCreated, editQuote }: { onCreated: () => void; editQuote?:
       }
     }
 
+    // Load template image for calibration reference
+    if (selectedTemplate.template_image_path && !templatePreviewUrl) {
+      const { data } = storage.from('vehicle-templates').getPublicUrl(selectedTemplate.template_image_path);
+      setTemplatePreviewUrl(data.publicUrl);
+    }
+
     // Initialize empty analysis if none exists
     if (!analysis || !analysis.graphic_elements) {
       setAnalysis({
@@ -2616,15 +2622,50 @@ function NewQuote({ onCreated, editQuote }: { onCreated: () => void; editQuote?:
           {calibrationMode ? (
             /* ── CALIBRATION PANEL ── */
             <div style={{
-              flexShrink: 0, maxHeight: '45vh', overflow: 'auto',
+              flexShrink: 0, maxHeight: '50vh', overflow: 'auto',
               background: theme.card, borderTop: '3px solid #fbbf24',
               padding: '12px 16px',
             }}>
               {pendingCalibrationBox ? (
                 /* Panel picker — user drew a box, now select which panel */
                 <>
-                  <div style={{ fontSize: '13px', fontWeight: 800, color: '#fbbf24', marginBottom: '10px' }}>
+                  <div style={{ fontSize: '13px', fontWeight: 800, color: '#fbbf24', marginBottom: '8px' }}>
                     Which panel did you draw?
+                  </div>
+
+                  {/* Show cropped preview of what the user drew */}
+                  {proofImgRef.current && (() => {
+                    const img = proofImgRef.current!;
+                    const scaleX = img.naturalWidth / img.clientWidth;
+                    const scaleY = img.naturalHeight / img.clientHeight;
+                    const sx = (pendingCalibrationBox.xPct / 100) * img.clientWidth * scaleX;
+                    const sy = (pendingCalibrationBox.yPct / 100) * img.clientHeight * scaleY;
+                    const sw = (pendingCalibrationBox.wPct / 100) * img.clientWidth * scaleX;
+                    const sh = (pendingCalibrationBox.hPct / 100) * img.clientHeight * scaleY;
+                    // Render crop to a canvas data URL
+                    const canvas = document.createElement('canvas');
+                    const maxDim = 300;
+                    const scale = Math.min(1, maxDim / Math.max(sw, sh));
+                    canvas.width = Math.round(sw * scale);
+                    canvas.height = Math.round(sh * scale);
+                    const ctx = canvas.getContext('2d');
+                    if (ctx) {
+                      ctx.drawImage(img, sx, sy, sw, sh, 0, 0, canvas.width, canvas.height);
+                      const cropUrl = canvas.toDataURL('image/jpeg', 0.85);
+                      return (
+                        <div style={{ marginBottom: '10px', borderRadius: '8px', overflow: 'hidden', border: '2px solid #fbbf24' }}>
+                          <img src={cropUrl} alt="Your drawn area" style={{ width: '100%', display: 'block', maxHeight: '100px', objectFit: 'contain', background: '#000' }} />
+                          <div style={{ fontSize: '10px', color: theme.textMuted, padding: '4px 8px', background: theme.inputBg, textAlign: 'center' }}>
+                            Your drawn area — select the matching panel below
+                          </div>
+                        </div>
+                      );
+                    }
+                    return null;
+                  })()}
+
+                  <div style={{ fontSize: '11px', color: theme.warning, marginBottom: '8px', fontStyle: 'italic' }}>
+                    Note: Panel dimensions include bleed. Match the full panel edge-to-edge.
                   </div>
                   {selectedTemplate?.panel_data?.map((panel, i) => (
                     <button
@@ -2657,8 +2698,30 @@ function NewQuote({ onCreated, editQuote }: { onCreated: () => void; editQuote?:
                   <div style={{ fontSize: '14px', fontWeight: 800, color: theme.textPrimary, marginBottom: '6px' }}>
                     Set the Scale
                   </div>
-                  <div style={{ fontSize: '13px', color: theme.textSecondary, marginBottom: '12px' }}>
-                    Draw a box around one of these known panels on the proof image. This sets the measurement scale.
+                  <div style={{ fontSize: '13px', color: theme.textSecondary, marginBottom: '10px' }}>
+                    Draw a box around one of these known panels on the proof. Match edge-to-edge including bleed area.
+                  </div>
+
+                  {/* Template reference image */}
+                  {templatePreviewUrl && (
+                    <div style={{ marginBottom: '10px' }}>
+                      <div style={{ fontSize: '11px', fontWeight: 700, color: theme.textMuted, marginBottom: '4px', textTransform: 'uppercase', letterSpacing: '0.5px' }}>
+                        Template Reference
+                      </div>
+                      <img
+                        src={templatePreviewUrl}
+                        alt="Vehicle template"
+                        style={{
+                          width: '100%', maxHeight: '100px', objectFit: 'contain',
+                          borderRadius: '8px', border: `1px solid ${theme.border}`,
+                          background: '#fff',
+                        }}
+                      />
+                    </div>
+                  )}
+
+                  <div style={{ fontSize: '11px', fontWeight: 700, color: theme.textMuted, marginBottom: '6px', textTransform: 'uppercase', letterSpacing: '0.5px' }}>
+                    Available Panels
                   </div>
                   {selectedTemplate?.panel_data?.map((panel, i) => (
                     <div key={i} style={{
@@ -2667,7 +2730,7 @@ function NewQuote({ onCreated, editQuote }: { onCreated: () => void; editQuote?:
                       display: 'flex', justifyContent: 'space-between', alignItems: 'center',
                     }}>
                       <span style={{ fontSize: '13px', fontWeight: 700, color: theme.textPrimary }}>{panel.name}</span>
-                      <span style={{ fontSize: '12px', color: theme.textMuted }}>{panel.width_in}" × {panel.height_in}"</span>
+                      <span style={{ fontSize: '12px', color: theme.textMuted }}>{panel.width_in}" × {panel.height_in}" ({panel.area_sqft.toFixed(1)} ft²)</span>
                     </div>
                   ))}
                   <button
