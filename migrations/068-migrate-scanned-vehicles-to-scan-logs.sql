@@ -15,8 +15,7 @@ INSERT INTO scan_logs (
   po_line_item_id,
   scanned_by,
   scanned_at,
-  exported_at,
-  archived_at
+  exported_at
 )
 SELECT
   sv.vin,
@@ -31,11 +30,7 @@ SELECT
   sv.po_line_item_id,
   sv.scanned_by,
   sv.scanned_at,
-  sv.exported_at,
-  CASE WHEN sv.exported_at IS NOT NULL
-    THEN sv.exported_at                 -- mark exported records as archived too
-    ELSE NULL
-  END AS archived_at
+  sv.exported_at
 FROM scanned_vehicles sv
 WHERE NOT EXISTS (
   SELECT 1 FROM scan_logs sl
