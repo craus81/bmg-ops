@@ -323,10 +323,10 @@ export default function Header({ clockStatus, activePartNumber, activeEndCustome
       )}
       <header style={{
         background: theme.headerBg,
-        padding: '12px 20px',
+        padding: '12px 12px',
         paddingTop: 'calc(12px + env(safe-area-inset-top, 0px))',
-        paddingLeft: 'calc(20px + env(safe-area-inset-left, 0px))',
-        paddingRight: 'calc(20px + env(safe-area-inset-right, 0px))',
+        paddingLeft: 'calc(12px + env(safe-area-inset-left, 0px))',
+        paddingRight: 'calc(12px + env(safe-area-inset-right, 0px))',
         display: 'flex', alignItems: 'center', justifyContent: 'space-between',
         position: 'sticky', top: isActualAdmin && viewAsRole ? undefined : 0, zIndex: 100,
         borderBottom: `1px solid ${theme.border}`,
@@ -334,7 +334,7 @@ export default function Header({ clockStatus, activePartNumber, activeEndCustome
       }}>
         <div
           onClick={() => router.push('/home')}
-          style={{ display: 'flex', alignItems: 'center', gap: '10px', cursor: 'pointer' }}
+          style={{ display: 'flex', alignItems: 'center', gap: '10px', cursor: 'pointer', minWidth: 0, flex: '0 1 auto', overflow: 'hidden' }}
         >
           <div style={{
             height: '36px', padding: '4px 10px', borderRadius: '10px',
@@ -366,14 +366,14 @@ export default function Header({ clockStatus, activePartNumber, activeEndCustome
           </div>
         </div>
 
-        <div style={{ display: 'flex', alignItems: 'center', gap: '4px', flexShrink: 0 }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: '2px', flexShrink: 0 }}>
           {/* Universal Search */}
           <button
             onClick={() => setShowSearch(true)}
             style={{
               background: 'transparent',
               border: '1px solid transparent', borderRadius: '8px',
-              padding: '6px 8px', fontSize: '12px', fontWeight: 600,
+              padding: '6px 6px', fontSize: '11px', fontWeight: 600,
               color: 'rgba(255,255,255,0.7)',
               cursor: 'pointer', transition: 'all 0.15s',
               lineHeight: 1,
@@ -388,7 +388,7 @@ export default function Header({ clockStatus, activePartNumber, activeEndCustome
             style={{
               background: 'transparent',
               border: '1px solid transparent', borderRadius: '8px',
-              padding: '6px 8px', fontSize: '12px', fontWeight: 600, position: 'relative',
+              padding: '6px 6px', fontSize: '11px', fontWeight: 600, position: 'relative',
               color: 'rgba(255,255,255,0.7)',
               cursor: 'pointer', transition: 'all 0.15s',
               lineHeight: 1,
@@ -416,7 +416,7 @@ export default function Header({ clockStatus, activePartNumber, activeEndCustome
             <button onClick={handleBellClick} style={{
               background: showNotifications ? 'rgba(255,255,255,0.12)' : 'transparent',
               border: '1px solid transparent', borderRadius: '8px',
-              padding: '6px 8px', fontSize: '12px', fontWeight: 600, position: 'relative',
+              padding: '6px 6px', fontSize: '11px', fontWeight: 600, position: 'relative',
               color: 'rgba(255,255,255,0.7)',
               cursor: 'pointer', transition: 'all 0.15s',
               lineHeight: 1,
