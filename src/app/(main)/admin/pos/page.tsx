@@ -611,13 +611,18 @@ export default function POsPage() {
 
       setEmailImportResults(prev => ({ ...prev, [messageId]: data }));
 
-      // Refresh PO list if imported or updated
+      // Refresh PO list if imported or updated, remove from pending/email lists
       if (data.status === 'imported' || data.status === 'updated') {
+        setPendingPOs(prev => prev.filter(p => p.message_id !== messageId));
+        setEmailEmails(prev => prev.filter(e => e.messageId !== messageId));
         const { data: poData } = await supabase
           .from('purchase_orders')
           .select('*, po_line_items(*), po_invoices(*)')
           .order('created_at', { ascending: false });
-        const mapped = (poData || []).map((po: any) => ({ ...po, line_items: po.po_line_items || [], po_invoices: (po.po_invoices || []).sort((a: any, b: any) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime()) }));
+        const FILTERED_CUSTOMERS = ['ranger design', 'enterprise fleet management', 'bmg fleet installations'];
+        const mapped = (poData || [])
+          .filter((po: any) => !FILTERED_CUSTOMERS.some(fc => po.customer?.toLowerCase().includes(fc)))
+          .map((po: any) => ({ ...po, line_items: po.po_line_items || [], po_invoices: (po.po_invoices || []).sort((a: any, b: any) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime()) }));
         setPos(mapped);
       }
     } catch (err: any) {
