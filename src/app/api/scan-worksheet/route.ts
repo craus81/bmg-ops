@@ -5,38 +5,36 @@ export const maxDuration = 60;
 
 const ANTHROPIC_API_KEY = process.env.ANTHROPIC_API_KEY;
 
-const WORKSHEET_PROMPT = `You are reading a handwritten fleet vehicle worksheet/log sheet. Extract the data as fast and accurately as possible.
+const WORKSHEET_PROMPT = `You are reading a Subcontractor Installation Worksheet. Extract the data as accurately as possible.
 
-Focus on:
-1. The Part# (Part Number) field in the header — this is the most important header field
-2. The Customer field in the header
-3. The TABLE rows: each row has a partial VIN and a unit number
+The sheet has:
+- A header with: Vendor Name, Part# (one or more part numbers), Date, PO#, Customer
+- A table with numbered rows containing: Order #, VIN Last 8, Unit #
 
 IMPORTANT RULES:
-- Read the handwriting as carefully as possible
-- Extract ALL rows from ALL pages of the document
 - VIN digits are alphanumeric (0-9 and A-Z, excluding I, O, Q)
 - Common handwriting confusions: 5/S, 0/O, 1/I, 8/B, 6/G, 2/Z
 - If a field is empty or illegible, use null
 - Only include rows that have data (skip empty numbered rows)
-- The Part# field may contain MULTIPLE part numbers separated by "/" or written side by side (e.g., "06T887 / 065646"). Include ALL part numbers exactly as written, separated by "/"
+- The Part# field may contain MULTIPLE part numbers separated by "/" — include ALL of them exactly as written
 - Part numbers typically start with "06" and are 6+ characters long
-- IGNORE the Vendor Name and PO# fields — do not extract them
+- The Unit # column often contains location names (city, state)
+- IGNORE the Vendor Name and PO# fields
 
-Return JSON only, no other text, in this exact format:
+Return ONLY valid JSON, no markdown, no backticks, no explanation:
 {
   "header": {
-    "part_number": "065058",
-    "customer": "DISH"
+    "part_number": "06N5TR/06N179",
+    "customer": "CROWN"
   },
   "rows": [
     {
       "row_number": 1,
-      "partial_vin": "SE539318",
-      "unit_number": "41A575"
+      "partial_vin": "TKA34769",
+      "unit_number": "Joliet, IL"
     }
   ],
-  "notes": "Any observations about legibility or ambiguous characters"
+  "notes": "Any observations about legibility"
 }`;
 
 export async function POST(request: NextRequest) {
@@ -125,11 +123,27 @@ export async function POST(request: NextRequest) {
 
     let parsed;
     try {
-      const jsonMatch = aiText.match(/\{[\s\S]*\}/);
+      // Strip markdown backticks if present
+      let cleanText = aiText.replace(/^```(?:json)?\s*\n?/i, '').replace(/\n?```\s*$/i, '');
+      const jsonMatch = cleanText.match(/\{[\s\S]*\}/);
       if (jsonMatch) {
         parsed = JSON.parse(jsonMatch[0]);
       } else {
         throw new Error('No JSON found in AI response');
+      }
+
+      // Handle multi-page PDF response — Claude wraps in { pages: [...] }
+      if (parsed.pages && Array.isArray(parsed.pages)) {
+        const allRows: any[] = [];
+        let header = null;
+        let allNotes: string[] = [];
+        for (const page of parsed.pages) {
+          if (page.header && !header) header = page.header;
+          if (page.header && header && page.header.part_number && !header.part_number) header = page.header;
+          if (page.rows) allRows.push(...page.rows);
+          if (page.notes) allNotes.push(page.notes);
+        }
+        parsed = { header, rows: allRows, notes: allNotes.join('; ') };
       }
     } catch (parseError) {
       console.error('Failed to parse AI response:', aiText);
