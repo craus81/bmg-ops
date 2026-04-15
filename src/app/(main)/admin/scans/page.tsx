@@ -375,7 +375,6 @@ export default function AdminScansPage() {
     setBulkResult(null);
 
     // Check for duplicate VINs with the same part number already in the system
-    const selectedPart = allParts.find(p => p.id === bulkPart);
     const partNum = selectedPart?.item_number || '';
     let existingQuery = supabase.from('scan_logs').select('vin, part_number').in('vin', vins);
     if (partNum) {
