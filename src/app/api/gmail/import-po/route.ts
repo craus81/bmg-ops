@@ -288,10 +288,7 @@ export async function POST(req: NextRequest) {
           })
           .map((l: any) => ({ part_number: l.supplier_part || l.part_number, description: l.description || '', unit_price: parseFloat(l.unit_price) || 0 }));
 
-        // Flag graphic parts (02/RM) for production review
-        const flagResult = await flagGraphicParts(supabase, existingPO.id, String(poNumber), customer, extractedLines);
-
-        return NextResponse.json({ status: 'updated', poNumber, poId: existingPO.id, customer, lineCount: lineInserts.length, unmatchedParts, extracted, flaggedGraphics: flagResult.flaggedCount });
+        return NextResponse.json({ status: 'updated', poNumber, poId: existingPO.id, customer, lineCount: lineInserts.length, unmatchedParts, extracted });
       }
 
       // Create new PO from reviewed data
@@ -350,10 +347,7 @@ export async function POST(req: NextRequest) {
         })
         .map((l: any) => ({ part_number: l.supplier_part || l.part_number, description: l.description || '', unit_price: parseFloat(l.unit_price) || 0 }));
 
-      // Flag graphic parts (02/RM) for production review
-      const flagResult = await flagGraphicParts(supabase, newPO.id, String(poNumber), customer, extractedLines);
-
-      return NextResponse.json({ status: 'imported', poNumber, poId: newPO.id, customer, lineCount: lineInserts.length, unmatchedParts, extracted, flaggedGraphics: flagResult.flaggedCount });
+      return NextResponse.json({ status: 'imported', poNumber, poId: newPO.id, customer, lineCount: lineInserts.length, unmatchedParts, extracted });
     }
 
     if (pdfs.length === 0) {
@@ -709,9 +703,6 @@ export async function POST(req: NextRequest) {
           unit_price: parseFloat(l.unit_price) || 0,
         }));
 
-      // Flag graphic parts (02/RM) for production review
-      const flagResult2 = await flagGraphicParts(supabase, existingPO.id, String(poNumber), extracted.customer || existingPO.customer, extractedLines);
-
       return NextResponse.json({
         status: 'updated',
         poNumber,
@@ -720,7 +711,6 @@ export async function POST(req: NextRequest) {
         lineCount: lineInserts.length,
         unmatchedParts,
         extracted,
-        flaggedGraphics: flagResult2.flaggedCount,
       });
     }
 
@@ -819,9 +809,6 @@ export async function POST(req: NextRequest) {
           unit_price: parseFloat(l.unit_price) || 0,
         }));
 
-      // Flag graphic parts (02/RM) for production review
-      const flagResult3 = await flagGraphicParts(supabase, newPO.id, String(poNumber), customer, extractedLines, adminUser?.id);
-
       return NextResponse.json({
         status: 'imported',
         poNumber,
@@ -830,7 +817,6 @@ export async function POST(req: NextRequest) {
         lineCount: lineInserts.length,
         unmatchedParts,
         extracted,
-        flaggedGraphics: flagResult3.flaggedCount,
       });
     }
 

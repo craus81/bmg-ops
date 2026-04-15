@@ -70,6 +70,9 @@ export default function POsPage() {
   // Catalog add state for unmatched parts
   const [addingToCatalog, setAddingToCatalog] = useState<string | null>(null); // part_number being added
   const [catalogAddResults, setCatalogAddResults] = useState<Record<string, 'added' | 'error'>>({});
+  // Create graphics job from PO line item
+  const [creatingGfxJob, setCreatingGfxJob] = useState<string | null>(null); // line item id
+  const [gfxJobResults, setGfxJobResults] = useState<Record<string, 'created' | 'error'>>({});
   // Batch delete state
   const [editMode, setEditMode] = useState(false);
   // Line item sort
@@ -852,6 +855,76 @@ export default function POsPage() {
         await new Promise(r => setTimeout(r, 5000));
       }
     }
+  };
+
+  // Add a PO line item's part to the catalog
+  const addLineItemToCatalog = async (li: { id: string; part_number: string; description: string | null; unit_price: number }, customer: string) => {
+    setAddingToCatalog(li.part_number);
+    try {
+      const { error } = await supabase
+        .from('catalog')
+        .insert({
+          part_number: li.part_number,
+          customer: customer || '',
+          end_customer: '',
+          vehicle_type: '',
+          graphic_package: li.description || '',
+          price: li.unit_price,
+          proof_pages: 0,
+          active: true,
+        });
+      if (error) {
+        setCatalogAddResults(prev => ({ ...prev, [li.part_number]: 'error' }));
+      } else {
+        setCatalogAddResults(prev => ({ ...prev, [li.part_number]: 'added' }));
+        const { data: catData } = await supabase.from('catalog').select('*').order('part_number');
+        setCatalog((catData as CatalogItem[]) || []);
+      }
+    } catch {
+      setCatalogAddResults(prev => ({ ...prev, [li.part_number]: 'error' }));
+    }
+    setAddingToCatalog(null);
+  };
+
+  // Create a graphics job from a PO line item
+  const createGfxJobFromLine = async (po: PurchaseOrder, li: { id: string; part_number: string; description: string | null; quantity: number }) => {
+    setCreatingGfxJob(li.id);
+    try {
+      const jobNumber = `GFX-${Date.now().toString(36).toUpperCase()}-${Math.random().toString(36).slice(2, 5).toUpperCase()}`;
+      const { data: job, error } = await supabase
+        .from('graphics_jobs')
+        .insert({
+          po_id: po.id,
+          po_line_item_id: li.id,
+          job_number: jobNumber,
+          title: li.description || `Graphic - ${li.part_number}`,
+          part_number: li.part_number,
+          customer: po.customer || null,
+          quantity: li.quantity,
+          status: 'received',
+          job_category: 'production',
+          priority: 'normal',
+          created_by: user?.id || null,
+        })
+        .select('id')
+        .single();
+
+      if (error) throw error;
+
+      // Log status history
+      await supabase.from('graphics_status_history').insert({
+        job_id: job.id,
+        from_status: null,
+        to_status: 'received',
+        changed_by: user?.id || null,
+        note: `Created from PO #${po.po_number}`,
+      });
+
+      setGfxJobResults(prev => ({ ...prev, [li.id]: 'created' }));
+    } catch {
+      setGfxJobResults(prev => ({ ...prev, [li.id]: 'error' }));
+    }
+    setCreatingGfxJob(null);
   };
 
   const addPartToCatalog = async (part: { part_number: string; description: string; unit_price: number }, customer: string) => {
@@ -2066,27 +2139,66 @@ export default function POsPage() {
                       );
                     }
 
+                    const catalogMatch = catalog.find(c => c.part_number.toUpperCase() === li.part_number.toUpperCase());
+                    const catalogAdded = catalogAddResults[li.part_number] === 'added';
+                    const gfxCreated = gfxJobResults[li.id] === 'created';
+
                     return (
-                      <div key={li.id} style={{ display: 'flex', gap: '4px', padding: '8px 0', borderBottom: '1px solid rgba(30,45,61,0.5)', alignItems: 'center', fontSize: '12px' }}>
-                        <div style={{ flex: 1 }} onClick={() => startEditLine(li)}>
-                          <div style={{ fontWeight: 700, color: 'var(--text-body)' }}>{li.part_number}</div>
-                          {li.description && (
-                            <div style={{ fontSize: '10px', color: 'var(--text-label)', marginTop: '1px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{li.description}</div>
-                          )}
-                          <div style={{ height: '3px', background: 'var(--subtle-bg)', borderRadius: '2px', marginTop: '3px', width: '80%' }}>
-                            <div style={{ height: '100%', width: `${Math.min(linePct, 100)}%`, background: linePct >= 100 ? '#22c55e' : '#3b82f6', borderRadius: '2px' }} />
+                      <div key={li.id} style={{ padding: '8px 0', borderBottom: '1px solid rgba(30,45,61,0.5)' }}>
+                        <div style={{ display: 'flex', gap: '4px', alignItems: 'center', fontSize: '12px' }}>
+                          <div style={{ flex: 1 }} onClick={() => startEditLine(li)}>
+                            <div style={{ fontWeight: 700, color: 'var(--text-body)' }}>{li.part_number}</div>
+                            {li.description && (
+                              <div style={{ fontSize: '10px', color: 'var(--text-label)', marginTop: '1px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{li.description}</div>
+                            )}
+                            <div style={{ height: '3px', background: 'var(--subtle-bg)', borderRadius: '2px', marginTop: '3px', width: '80%' }}>
+                              <div style={{ height: '100%', width: `${Math.min(linePct, 100)}%`, background: linePct >= 100 ? '#22c55e' : '#3b82f6', borderRadius: '2px' }} />
+                            </div>
                           </div>
+                          <div style={{ width: '36px', textAlign: 'center', color: 'var(--text-body)', fontWeight: 600 }} onClick={() => startEditLine(li)}>{li.quantity}</div>
+                          <div style={{ width: '42px', textAlign: 'center', fontWeight: 700, color: li.installed >= li.quantity ? '#4ade80' : '#fbbf24' }}>{li.installed}</div>
+                          <div style={{ width: '65px', textAlign: 'right', color: 'var(--text-body)', fontSize: '11px' }} onClick={() => startEditLine(li)}>{fmt(li.unit_price)}</div>
+                          <div style={{ width: '55px', textAlign: 'right', fontWeight: 700, color: 'var(--text-body)' }}>{fmt(lineTotal)}</div>
+                          <button
+                            onClick={() => { if (window.confirm(`Remove ${li.part_number} from this PO?`)) handleDeleteLineItem(li.id, po.id); }}
+                            style={{ width: '24px', background: 'none', border: 'none', color: '#f87171', fontSize: '14px', padding: 0, cursor: 'pointer' }}
+                          >
+                            ×
+                          </button>
                         </div>
-                        <div style={{ width: '36px', textAlign: 'center', color: 'var(--text-body)', fontWeight: 600 }} onClick={() => startEditLine(li)}>{li.quantity}</div>
-                        <div style={{ width: '42px', textAlign: 'center', fontWeight: 700, color: li.installed >= li.quantity ? '#4ade80' : '#fbbf24' }}>{li.installed}</div>
-                        <div style={{ width: '65px', textAlign: 'right', color: 'var(--text-body)', fontSize: '11px' }} onClick={() => startEditLine(li)}>{fmt(li.unit_price)}</div>
-                        <div style={{ width: '55px', textAlign: 'right', fontWeight: 700, color: 'var(--text-body)' }}>{fmt(lineTotal)}</div>
-                        <button
-                          onClick={() => { if (window.confirm(`Remove ${li.part_number} from this PO?`)) handleDeleteLineItem(li.id, po.id); }}
-                          style={{ width: '24px', background: 'none', border: 'none', color: '#f87171', fontSize: '14px', padding: 0, cursor: 'pointer' }}
-                        >
-                          ×
-                        </button>
+                        {/* Action buttons: Add to Catalog / Create Graphics Job */}
+                        <div style={{ display: 'flex', gap: '6px', marginTop: '6px', paddingLeft: '2px' }}>
+                          {catalogMatch || catalogAdded ? (
+                            <span style={{ fontSize: '9px', color: '#4ade80', fontWeight: 600 }}>✓ In catalog</span>
+                          ) : (
+                            <button
+                              onClick={() => addLineItemToCatalog(li, po.customer)}
+                              disabled={addingToCatalog === li.part_number}
+                              style={{
+                                padding: '3px 8px', borderRadius: '4px', fontSize: '9px', fontWeight: 700,
+                                background: 'rgba(251,191,36,0.1)', border: '1px solid rgba(251,191,36,0.3)',
+                                color: '#fbbf24', cursor: 'pointer',
+                              }}
+                            >
+                              {addingToCatalog === li.part_number ? 'Adding...' : '+ Add to Catalog'}
+                            </button>
+                          )}
+                          {gfxCreated ? (
+                            <span style={{ fontSize: '9px', color: '#4ade80', fontWeight: 600 }}>✓ Graphics job created</span>
+                          ) : (
+                            <button
+                              onClick={() => createGfxJobFromLine(po, li)}
+                              disabled={creatingGfxJob === li.id}
+                              style={{
+                                padding: '3px 8px', borderRadius: '4px', fontSize: '9px', fontWeight: 700,
+                                background: 'rgba(167,139,250,0.1)', border: '1px solid rgba(167,139,250,0.3)',
+                                color: '#a78bfa', cursor: 'pointer',
+                              }}
+                            >
+                              {creatingGfxJob === li.id ? 'Creating...' : '+ Graphics Job'}
+                            </button>
+                          )}
+                        </div>
                       </div>
                     );
                   })}
