@@ -735,6 +735,51 @@ export default function AdminScansPage() {
                           </div>
                         </div>
 
+                        {/* Invoice tracking for archived groups */}
+                        {tab === 'archived' && (() => {
+                          const first = groupScans[0];
+                          const invNum = (first as any).invoice_number || '';
+                          const invDate = (first as any).date_invoiced || '';
+                          const isPaid = (first as any).is_paid || false;
+                          const updateGroupInvoice = async (field: string, value: any) => {
+                            await supabase.from('scan_logs').update({ [field]: value }).in('id', groupIds);
+                            setArchivedScans(prev => prev.map(s => groupIds.includes(s.id) ? { ...s, [field]: value } as any : s));
+                          };
+                          return (
+                            <div style={{ display: 'flex', gap: '6px', alignItems: 'center', padding: '5px 10px', flexWrap: 'wrap' }}>
+                              <input
+                                value={invNum}
+                                placeholder="Invoice #"
+                                onClick={(e) => e.stopPropagation()}
+                                onBlur={async (e) => { await updateGroupInvoice('invoice_number', e.target.value || null); }}
+                                onChange={(e) => {
+                                  const val = e.target.value;
+                                  setArchivedScans(prev => prev.map(s => groupIds.includes(s.id) ? { ...s, invoice_number: val } as any : s));
+                                }}
+                                style={{ width: '100px', padding: '4px 6px', borderRadius: '4px', fontSize: '10px', border: '1px solid var(--border)', background: 'var(--input-bg)', color: 'var(--text-primary)' }}
+                              />
+                              <input
+                                type="date"
+                                value={invDate}
+                                onClick={(e) => e.stopPropagation()}
+                                onChange={async (e) => { await updateGroupInvoice('date_invoiced', e.target.value || null); }}
+                                style={{ width: '120px', padding: '4px 6px', borderRadius: '4px', fontSize: '10px', border: '1px solid var(--border)', background: 'var(--input-bg)', color: 'var(--text-primary)' }}
+                              />
+                              <label style={{ display: 'flex', alignItems: 'center', gap: '4px', cursor: 'pointer' }} onClick={(e) => e.stopPropagation()}>
+                                <input
+                                  type="checkbox"
+                                  checked={isPaid}
+                                  onChange={async (e) => { await updateGroupInvoice('is_paid', e.target.checked); }}
+                                  style={{ width: '12px', height: '12px', accentColor: '#22c55e' }}
+                                />
+                                <span style={{ fontSize: '10px', fontWeight: 700, color: isPaid ? '#4ade80' : '#fbbf24' }}>
+                                  {isPaid ? 'Paid' : 'Unpaid'}
+                                </span>
+                              </label>
+                            </div>
+                          );
+                        })()}
+
                         {/* VIN list */}
                         {!subCollapsed && (
                           <div style={{ display: 'flex', flexDirection: 'column', gap: '2px', paddingLeft: '10px' }}>
@@ -759,16 +804,6 @@ export default function AdminScansPage() {
                                   )}
                                 </div>
                                 <div style={{ display: 'flex', alignItems: 'center', gap: '4px', flexShrink: 0 }}>
-                                  {/* Paid badge for archived scans */}
-                                  {tab === 'archived' && (
-                                    <span style={{
-                                      fontSize: '8px', fontWeight: 700, padding: '2px 5px', borderRadius: '4px',
-                                      background: (scan as any).is_paid ? 'rgba(34,197,94,0.1)' : 'rgba(251,191,36,0.1)',
-                                      color: (scan as any).is_paid ? '#4ade80' : '#fbbf24',
-                                    }}>
-                                      {(scan as any).is_paid ? 'Paid' : 'Unpaid'}
-                                    </span>
-                                  )}
                                   <div style={{ fontSize: '9px', color: 'var(--text-muted)', textAlign: 'right' }}>
                                     {profiles[scan.scanned_by || ''] || ''}<br />
                                     {new Date(scan.scanned_at).toLocaleDateString([], { month: 'short', day: 'numeric' })}
@@ -777,48 +812,6 @@ export default function AdminScansPage() {
                                   <button onClick={() => deleteScan(scan.id)} style={{ padding: '2px 5px', borderRadius: '4px', border: 'none', background: 'rgba(239,68,68,0.08)', color: '#ef4444', fontSize: '9px', fontWeight: 700, cursor: 'pointer' }}>✕</button>
                                 </div>
                               </div>
-                              {/* Invoice fields for archived scans */}
-                              {tab === 'archived' && selectedScans.has(scan.id) && (
-                                <div style={{ display: 'flex', gap: '6px', alignItems: 'center', padding: '6px 10px 6px 34px', background: 'rgba(167,139,250,0.04)', borderTop: '1px solid var(--border)' }}>
-                                  <input
-                                    value={(scan as any).invoice_number || ''}
-                                    placeholder="Invoice #"
-                                    onClick={(e) => e.stopPropagation()}
-                                    onChange={async (e) => {
-                                      const val = e.target.value || null;
-                                      await supabase.from('scan_logs').update({ invoice_number: val }).eq('id', scan.id);
-                                      setArchivedScans(prev => prev.map(s => s.id === scan.id ? { ...s, invoice_number: val } as any : s));
-                                    }}
-                                    style={{ width: '100px', padding: '4px 6px', borderRadius: '4px', fontSize: '10px', border: '1px solid var(--border)', background: 'var(--input-bg)', color: 'var(--text-primary)' }}
-                                  />
-                                  <input
-                                    type="date"
-                                    value={(scan as any).date_invoiced || ''}
-                                    onClick={(e) => e.stopPropagation()}
-                                    onChange={async (e) => {
-                                      const val = e.target.value || null;
-                                      await supabase.from('scan_logs').update({ date_invoiced: val }).eq('id', scan.id);
-                                      setArchivedScans(prev => prev.map(s => s.id === scan.id ? { ...s, date_invoiced: val } as any : s));
-                                    }}
-                                    style={{ width: '120px', padding: '4px 6px', borderRadius: '4px', fontSize: '10px', border: '1px solid var(--border)', background: 'var(--input-bg)', color: 'var(--text-primary)' }}
-                                  />
-                                  <label style={{ display: 'flex', alignItems: 'center', gap: '4px', cursor: 'pointer' }} onClick={(e) => e.stopPropagation()}>
-                                    <input
-                                      type="checkbox"
-                                      checked={(scan as any).is_paid || false}
-                                      onChange={async (e) => {
-                                        const val = e.target.checked;
-                                        await supabase.from('scan_logs').update({ is_paid: val }).eq('id', scan.id);
-                                        setArchivedScans(prev => prev.map(s => s.id === scan.id ? { ...s, is_paid: val } as any : s));
-                                      }}
-                                      style={{ width: '12px', height: '12px', accentColor: '#22c55e' }}
-                                    />
-                                    <span style={{ fontSize: '10px', fontWeight: 700, color: (scan as any).is_paid ? '#4ade80' : '#fbbf24' }}>
-                                      {(scan as any).is_paid ? 'Paid' : 'Unpaid'}
-                                    </span>
-                                  </label>
-                                </div>
-                              )}
                               </div>
                             ))}
                           </div>
