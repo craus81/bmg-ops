@@ -40,7 +40,7 @@ export default function ScanPage() {
   // Part selection
   const [parts, setParts] = useState<Part[]>([]);
   const [partSearch, setPartSearch] = useState('');
-  const [selectedPart, setSelectedPart] = useState<Part | null>(null);
+  const [selectedParts, setSelectedParts] = useState<Part[]>([]);
   const [customJob, setCustomJob] = useState('');
   const [customCustomer, setCustomCustomer] = useState('');
   const [showCustom, setShowCustom] = useState(false);
@@ -86,11 +86,12 @@ export default function ScanPage() {
       const session = localStorage.getItem('scan_session');
       if (session) {
         const s = JSON.parse(session);
-        if (s.selectedPart) { setSelectedPart(s.selectedPart); }
+        if (s.selectedParts) { setSelectedParts(s.selectedParts); }
+        else if (s.selectedPart) { setSelectedParts([s.selectedPart]); } // migrate old sessions
         if (s.customJob) { setCustomJob(s.customJob); setShowCustom(true); }
         if (s.customCustomer) { setCustomCustomer(s.customCustomer); }
         if (s.selectedLocation) { setSelectedLocation(s.selectedLocation); }
-        if (s.selectedPart || s.customJob) { setStep(s.selectedLocation ? 'scan' : 'location'); }
+        if (s.selectedParts?.length || s.selectedPart || s.customJob) { setStep(s.selectedLocation ? 'scan' : 'location'); }
       }
     } catch {}
 
@@ -102,16 +103,16 @@ export default function ScanPage() {
 
   // Persist active session
   useEffect(() => {
-    if (selectedPart || customJob) {
+    if (selectedParts.length > 0 || customJob) {
       try {
-        localStorage.setItem('scan_session', JSON.stringify({ selectedPart, customJob, customCustomer, selectedLocation }));
+        localStorage.setItem('scan_session', JSON.stringify({ selectedParts, customJob, customCustomer, selectedLocation }));
       } catch {}
     }
-  }, [selectedPart, customJob, customCustomer, selectedLocation]);
+  }, [selectedParts, customJob, customCustomer, selectedLocation]);
 
   const endShift = () => {
     setStep('part');
-    setSelectedPart(null);
+    setSelectedParts([]);
     setCustomJob('');
     setCustomCustomer('');
     setSelectedLocation(null);
@@ -147,7 +148,7 @@ export default function ScanPage() {
   };
 
   const loadTodayScans = useCallback(async () => {
-    if (!selectedPart && !customJob) return;
+    if (selectedParts.length === 0 && !customJob) return;
     const todayStart = new Date();
     todayStart.setHours(0, 0, 0, 0);
 
@@ -158,13 +159,13 @@ export default function ScanPage() {
       .gte('scanned_at', todayStart.toISOString())
       .order('scanned_at', { ascending: false });
 
-    if (selectedPart) query = query.eq('part_number', selectedPart.item_number);
+    if (selectedParts.length > 0) query = query.in('part_number', selectedParts.map(p => p.item_number));
     else if (customJob) query = query.eq('part_number', customJob);
     if (selectedLocation) query = query.eq('location_id', selectedLocation.id);
 
     const { data } = await query;
     setScans((data || []) as ScanEntry[]);
-  }, [selectedPart, customJob, selectedLocation, user?.id]);
+  }, [selectedParts, customJob, selectedLocation, user?.id]);
 
   useEffect(() => {
     if (step === 'scan') loadTodayScans();
@@ -186,12 +187,19 @@ export default function ScanPage() {
     setScanSuccess('');
     setVinLoading(true);
 
-    // Check for duplicate VIN
-    const { data: existing } = await supabase.from('scan_logs').select('id, scanned_at').eq('vin', v).limit(1);
-    if (existing && existing.length > 0) {
-      setScanError(`Duplicate VIN — already scanned on ${new Date(existing[0].scanned_at).toLocaleDateString()}`);
-      setVinLoading(false);
-      return;
+    // Build list of parts to scan (multiple parts = multiple records)
+    const partsToScan = selectedParts.length > 0
+      ? selectedParts.map(p => ({ partNumber: p.item_number, partDesc: p.display_name || p.description || p.item_number, billable: p.billable_customer || customCustomer || null }))
+      : [{ partNumber: customJob, partDesc: customJob, billable: customCustomer || null }];
+
+    // Check for duplicate VIN+part combos
+    for (const pt of partsToScan) {
+      const { data: existing } = await supabase.from('scan_logs').select('id, scanned_at').eq('vin', v).eq('part_number', pt.partNumber).limit(1);
+      if (existing && existing.length > 0) {
+        setScanError(`Duplicate — ${v} already scanned for ${pt.partNumber} on ${new Date(existing[0].scanned_at).toLocaleDateString()}`);
+        setVinLoading(false);
+        return;
+      }
     }
 
     let vehicleData: any = {};
@@ -209,37 +217,45 @@ export default function ScanPage() {
       };
     } catch {}
 
-    const partNumber = selectedPart?.item_number || customJob;
-    const partDesc = selectedPart?.display_name || selectedPart?.description || customJob;
-    const billable = selectedPart?.billable_customer || customCustomer || null;
+    let lastData: any = null;
+    let lastError: any = null;
 
-    const scanData = {
-      vin: v,
-      ...vehicleData,
-      part_number: partNumber,
-      part_description: partDesc,
-      billable_customer: billable,
-      location_id: selectedLocation?.id || null,
-      location_name: selectedLocation?.name || null,
-      scanned_by: user?.id,
-    };
+    for (const pt of partsToScan) {
+      const scanData = {
+        vin: v,
+        ...vehicleData,
+        part_number: pt.partNumber,
+        part_description: pt.partDesc,
+        billable_customer: pt.billable,
+        location_id: selectedLocation?.id || null,
+        location_name: selectedLocation?.name || null,
+        scanned_by: user?.id,
+      };
 
-    if (isOffline) {
-      const offlineScan = { ...scanData, id: crypto.randomUUID(), scanned_at: new Date().toISOString() };
-      const updated = [...pendingOfflineScans, offlineScan];
-      setPendingOfflineScans(updated);
-      try { localStorage.setItem('offline_scans', JSON.stringify(updated)); } catch {}
-      setScans(prev => [offlineScan as ScanEntry, ...prev]);
-      setScanSuccess(`Saved offline: ${[vehicleData.vehicle_year, vehicleData.vehicle_make, vehicleData.vehicle_model].filter(Boolean).join(' ') || v}`);
-    } else {
-      const { data, error } = await supabase.from('scan_logs').insert(scanData).select('id, vin, vehicle_year, vehicle_make, vehicle_model, scanned_at').single();
-      if (error) {
-        setScanError('Failed to save: ' + error.message);
-        setVinLoading(false);
-        return;
+      if (isOffline) {
+        const offlineScan = { ...scanData, id: crypto.randomUUID(), scanned_at: new Date().toISOString() };
+        const updated = [...pendingOfflineScans, offlineScan];
+        setPendingOfflineScans(updated);
+        try { localStorage.setItem('offline_scans', JSON.stringify(updated)); } catch {}
+        lastData = offlineScan;
+      } else {
+        const { data, error } = await supabase.from('scan_logs').insert(scanData).select('id, vin, vehicle_year, vehicle_make, vehicle_model, scanned_at').single();
+        if (error) lastError = error;
+        else lastData = data;
       }
-      setScans(prev => [data as ScanEntry, ...prev]);
-      setScanSuccess([vehicleData.vehicle_year, vehicleData.vehicle_make, vehicleData.vehicle_model].filter(Boolean).join(' ') || 'Scan logged');
+    }
+
+    if (isOffline && lastData) {
+      setScans(prev => [lastData as ScanEntry, ...prev]);
+      setScanSuccess(`Saved offline: ${[vehicleData.vehicle_year, vehicleData.vehicle_make, vehicleData.vehicle_model].filter(Boolean).join(' ') || v} (${partsToScan.length} part${partsToScan.length > 1 ? 's' : ''})`);
+    } else if (lastError) {
+      setScanError('Failed to save: ' + lastError.message);
+      setVinLoading(false);
+      return;
+    } else if (lastData) {
+      setScans(prev => [lastData as ScanEntry, ...prev]);
+      const label = [vehicleData.vehicle_year, vehicleData.vehicle_make, vehicleData.vehicle_model].filter(Boolean).join(' ') || 'Scan logged';
+      setScanSuccess(partsToScan.length > 1 ? `${label} (${partsToScan.length} parts)` : label);
     }
 
     setVin('');
@@ -273,10 +289,12 @@ export default function ScanPage() {
       }).slice(0, 20)
     : [];
 
-  const partLabel = selectedPart
-    ? `${selectedPart.item_number}${selectedPart.billable_customer ? ` — ${selectedPart.billable_customer}` : ''}`
+  const partLabel = selectedParts.length > 0
+    ? selectedParts.map(p => p.item_number).join(' / ')
     : customJob || '';
-  const partDesc = selectedPart?.display_name || selectedPart?.description || null;
+  const partDesc = selectedParts.length > 0
+    ? selectedParts.map(p => p.display_name || p.description || '').filter(Boolean).join(', ')
+    : null;
 
   return (
     <div>
@@ -312,24 +330,55 @@ export default function ScanPage() {
 
           {filteredParts.length > 0 && (
             <div style={{ display: 'flex', flexDirection: 'column', gap: '4px', marginBottom: '12px' }}>
-              {filteredParts.map(p => (
-                <button key={p.id} onClick={() => { setSelectedPart(p); setStep('location'); loadPartProofs(p.id); }} style={{
-                  display: 'flex', justifyContent: 'space-between', alignItems: 'center', width: '100%',
-                  padding: '12px 14px', borderRadius: '10px', textAlign: 'left',
-                  border: `1px solid ${theme.border}`, background: theme.card, cursor: 'pointer',
-                }}>
-                  <div>
-                    <div style={{ fontWeight: 700, fontSize: '14px', color: theme.textPrimary }}>{p.item_number}</div>
-                    <div style={{ fontSize: '11px', color: theme.textMuted, marginTop: '1px' }}>{p.display_name || p.description || ''}</div>
-                  </div>
-                  {p.billable_customer && (
-                    <span style={{ fontSize: '10px', fontWeight: 700, padding: '3px 8px', borderRadius: '6px', background: 'rgba(167,139,250,0.1)', color: '#a78bfa', flexShrink: 0 }}>
-                      {p.billable_customer}
-                    </span>
-                  )}
-                </button>
-              ))}
+              {filteredParts.map(p => {
+                const isSelected = selectedParts.some(sp => sp.id === p.id);
+                return (
+                  <button key={p.id} onClick={() => {
+                    if (isSelected) {
+                      setSelectedParts(prev => prev.filter(sp => sp.id !== p.id));
+                    } else {
+                      setSelectedParts(prev => [...prev, p]);
+                      loadPartProofs(p.id);
+                    }
+                  }} style={{
+                    display: 'flex', justifyContent: 'space-between', alignItems: 'center', width: '100%',
+                    padding: '12px 14px', borderRadius: '10px', textAlign: 'left',
+                    border: `1px solid ${isSelected ? 'rgba(34,197,94,0.4)' : theme.border}`,
+                    background: isSelected ? 'rgba(34,197,94,0.06)' : theme.card, cursor: 'pointer',
+                  }}>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+                      <div style={{
+                        width: '20px', height: '20px', borderRadius: '4px', flexShrink: 0,
+                        border: isSelected ? '2px solid #22c55e' : `2px solid ${theme.border}`,
+                        background: isSelected ? '#22c55e' : 'transparent',
+                        display: 'flex', alignItems: 'center', justifyContent: 'center',
+                        color: '#fff', fontSize: '12px', fontWeight: 800,
+                      }}>{isSelected ? '✓' : ''}</div>
+                      <div>
+                        <div style={{ fontWeight: 700, fontSize: '14px', color: theme.textPrimary }}>{p.item_number}</div>
+                        <div style={{ fontSize: '11px', color: theme.textMuted, marginTop: '1px' }}>{p.display_name || p.description || ''}</div>
+                      </div>
+                    </div>
+                    {p.billable_customer && (
+                      <span style={{ fontSize: '10px', fontWeight: 700, padding: '3px 8px', borderRadius: '6px', background: 'rgba(167,139,250,0.1)', color: '#a78bfa', flexShrink: 0 }}>
+                        {p.billable_customer}
+                      </span>
+                    )}
+                  </button>
+                );
+              })}
             </div>
+          )}
+
+          {/* Continue button when parts are selected */}
+          {selectedParts.length > 0 && (
+            <button onClick={() => setStep('location')} style={{
+              width: '100%', padding: '14px', borderRadius: '12px', fontSize: '15px', fontWeight: 800,
+              background: theme.navy, color: '#fff', border: 'none', cursor: 'pointer',
+              marginTop: '12px', marginBottom: '8px',
+            }}>
+              Continue with {selectedParts.length} part{selectedParts.length > 1 ? 's' : ''} →
+            </button>
           )}
 
           {!showCustom ? (
@@ -408,7 +457,7 @@ export default function ScanPage() {
               <span style={{ fontWeight: 700, color: '#60a5fa' }}>{scans.length} scanned today</span>
             </div>
             <div style={{ display: 'flex', gap: '6px', marginTop: '6px' }}>
-              <button onClick={() => { setStep('part'); setSelectedPart(null); setCustomJob(''); setCustomCustomer(''); setSelectedLocation(null); setScans([]); setShowCustom(false); try { localStorage.removeItem('scan_session'); } catch {} }} style={{
+              <button onClick={() => { setStep('part'); setSelectedParts([]); setCustomJob(''); setCustomCustomer(''); setSelectedLocation(null); setScans([]); setShowCustom(false); try { localStorage.removeItem('scan_session'); } catch {} }} style={{
                 padding: '4px 10px', borderRadius: '6px', fontSize: '10px', fontWeight: 700,
                 background: 'rgba(107,114,128,0.08)', border: '1px solid rgba(107,114,128,0.2)',
                 color: '#6b7280', cursor: 'pointer',
