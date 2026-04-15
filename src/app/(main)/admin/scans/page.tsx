@@ -244,6 +244,26 @@ export default function AdminScansPage() {
         alert(`Invoice failed: ${data.error || 'Unknown error'}`);
       } else {
         setInvoiceResult(data);
+
+        // Auto-archive invoiced scans and set invoice details
+        const successResults = (data.results || []).filter((r: any) => r.status === 'success' && r.invoiceNumber);
+        if (successResults.length > 0) {
+          const invoiceNumber = successResults.map((r: any) => r.invoiceNumber).join(', ');
+          const today = new Date().toISOString().slice(0, 10);
+          await fetch('/api/scans/bulk-update', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              scanIds: ids,
+              updates: {
+                archived_at: new Date().toISOString(),
+                invoice_number: invoiceNumber,
+                date_invoiced: today,
+              },
+            }),
+          });
+        }
+
         loadAll();
       }
     } catch (e: any) {
