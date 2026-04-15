@@ -136,10 +136,11 @@ export default function AdminScansPage() {
       [s.vehicle_year, s.vehicle_make, s.vehicle_model].filter(Boolean).join(' ').toLowerCase().includes(q);
   });
 
-  // Group by billable customer → part + location
+  // Group by billable customer → part + location (+ PO for archived tab)
   const grouped = tabScans.reduce((acc: Record<string, Record<string, ScanLog[]>>, s) => {
     const customer = s.billable_customer || 'No Customer';
-    const subKey = `${s.part_number || 'No Part'} · ${s.location_name || 'No Location'}`;
+    const poSuffix = tab === 'archived' && s.po_number ? ` · PO #${s.po_number}` : '';
+    const subKey = `${s.part_number || 'No Part'} · ${s.location_name || 'No Location'}${poSuffix}`;
     if (!acc[customer]) acc[customer] = {};
     if (!acc[customer][subKey]) acc[customer][subKey] = [];
     acc[customer][subKey].push(s);
