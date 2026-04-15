@@ -26,13 +26,14 @@ export default function POsPage() {
   const [pos, setPos] = useState<(PurchaseOrder & { line_items: POLineItem[]; po_invoices?: any[] })[]>([]);
   const [catalog, setCatalog] = useState<CatalogItem[]>([]);
   const [loading, setLoading] = useState(true);
+  const [poTab, setPoTab] = useState<'open' | 'closed'>('open');
   const [showCreate, setShowCreate] = useState(false);
   const [showImport, setShowImport] = useState(false);
   const [expandedPo, setExpandedPo] = useState<string | null>(null);
   const [editPoId, setEditPoId] = useState<string | null>(null);
   const [editPoForm, setEditPoForm] = useState({ po_number: '', customer: '', status: '' as string });
   const [editLineId, setEditLineId] = useState<string | null>(null);
-  const [editLineForm, setEditLineForm] = useState({ part_number: '', quantity: '', unit_price: '' });
+  const [editLineForm, setEditLineForm] = useState({ part_number: '', quantity: '', unit_price: '', installed: '' });
   const [form, setForm] = useState({ po_number: '', customer: 'Masterack' });
   const [lineItems, setLineItems] = useState<{ catalog_id: string; part_number: string; quantity: number; unit_price: number }[]>([]);
   const fileRef = useRef<HTMLInputElement>(null);
@@ -510,7 +511,7 @@ export default function POsPage() {
 
   const startEditLine = (li: POLineItem) => {
     setEditLineId(li.id);
-    setEditLineForm({ part_number: li.part_number || '', quantity: li.quantity.toString(), unit_price: li.unit_price.toString() });
+    setEditLineForm({ part_number: li.part_number || '', quantity: li.quantity.toString(), unit_price: li.unit_price.toString(), installed: li.installed.toString() });
   };
 
   const saveEditLine = async (poId: string) => {
@@ -518,16 +519,17 @@ export default function POsPage() {
     const partNum = editLineForm.part_number.trim();
     const qty = parseInt(editLineForm.quantity) || 1;
     const price = parseFloat(editLineForm.unit_price) || 0;
+    const installed = parseInt(editLineForm.installed) || 0;
     const { error } = await supabase
       .from('po_line_items')
-      .update({ part_number: partNum, quantity: qty, unit_price: price })
+      .update({ part_number: partNum, quantity: qty, unit_price: price, installed })
       .eq('id', editLineId);
 
     if (!error) {
       setPos((prev) =>
         prev.map((po) =>
           po.id === poId
-            ? { ...po, line_items: po.line_items.map((li) => li.id === editLineId ? { ...li, part_number: partNum, quantity: qty, unit_price: price } : li) }
+            ? { ...po, line_items: po.line_items.map((li) => li.id === editLineId ? { ...li, part_number: partNum, quantity: qty, unit_price: price, installed } : li) }
             : po
         )
       );
@@ -963,7 +965,9 @@ export default function POsPage() {
   const fmt = (n: number) => '$' + n.toFixed(2).replace(/\B(?=(\d{3})+(?!\d))/g, ',');
 
   // Sort by PO number and filter by search
-  const filteredPos = pos
+  const openPos = pos.filter(po => po.status !== 'closed');
+  const closedPos = pos.filter(po => po.status === 'closed');
+  const filteredPos = (poTab === 'closed' ? closedPos : openPos)
     .filter((po) => {
       if (!poSearch.trim()) return true;
       const q = poSearch.toLowerCase();
@@ -974,13 +978,40 @@ export default function POsPage() {
     })
     .sort((a, b) => a.po_number.localeCompare(b.po_number, undefined, { numeric: true }));
 
+  const closePO = async (poId: string) => {
+    await supabase.from('purchase_orders').update({ status: 'closed' }).eq('id', poId);
+    setPos(prev => prev.map(p => p.id === poId ? { ...p, status: 'closed' as any } : p));
+    setExpandedPo(null);
+  };
+
+  const reopenPO = async (poId: string) => {
+    await supabase.from('purchase_orders').update({ status: 'open' }).eq('id', poId);
+    setPos(prev => prev.map(p => p.id === poId ? { ...p, status: 'open' } : p));
+  };
+
   if (loading) return <div style={{ textAlign: 'center', padding: '40px', color: 'var(--text-label)' }}>Loading...</div>;
 
   return (
     <div>
+      {/* Open / Closed tabs */}
+      <div style={{ display: 'flex', gap: '4px', marginBottom: '10px' }}>
+        <button onClick={() => setPoTab('open')} style={{
+          padding: '6px 14px', borderRadius: '8px', fontSize: '11px', fontWeight: 700, cursor: 'pointer',
+          background: poTab === 'open' ? 'var(--tab-active-bg)' : 'transparent',
+          border: poTab === 'open' ? '1px solid var(--tab-active-border)' : '1px solid var(--border)',
+          color: poTab === 'open' ? '#60a5fa' : 'var(--text-muted)',
+        }}>Open ({openPos.length})</button>
+        <button onClick={() => setPoTab('closed')} style={{
+          padding: '6px 14px', borderRadius: '8px', fontSize: '11px', fontWeight: 700, cursor: 'pointer',
+          background: poTab === 'closed' ? 'var(--tab-active-bg)' : 'transparent',
+          border: poTab === 'closed' ? '1px solid var(--tab-active-border)' : '1px solid var(--border)',
+          color: poTab === 'closed' ? '#94a3b8' : 'var(--text-muted)',
+        }}>Closed ({closedPos.length})</button>
+      </div>
+
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '8px' }}>
         <div style={{ fontSize: '11px', fontWeight: 700, color: 'var(--text-label)', textTransform: 'uppercase', letterSpacing: '0.5px' }}>
-          Purchase Orders ({filteredPos.length}{poSearch ? ` of ${pos.length}` : ''})
+          {poTab === 'closed' ? 'Closed' : ''} Purchase Orders ({filteredPos.length}{poSearch ? ` of ${pos.length}` : ''})
         </div>
         <div style={{ display: 'flex', gap: '6px' }}>
           {!editMode ? (
@@ -2129,6 +2160,10 @@ export default function POsPage() {
                               <input type="number" value={editLineForm.quantity} onChange={(e) => setEditLineForm({ ...editLineForm, quantity: e.target.value })} style={{ ...inputStyle, padding: '6px 8px', fontSize: '12px' }} />
                             </div>
                             <div style={{ flex: 1 }}>
+                              <label style={{ ...labelStyle, fontSize: '9px' }}>Done</label>
+                              <input type="number" value={editLineForm.installed} onChange={(e) => setEditLineForm({ ...editLineForm, installed: e.target.value })} style={{ ...inputStyle, padding: '6px 8px', fontSize: '12px' }} />
+                            </div>
+                            <div style={{ flex: 1 }}>
                               <label style={{ ...labelStyle, fontSize: '9px' }}>Unit Price</label>
                               <input type="number" value={editLineForm.unit_price} onChange={(e) => setEditLineForm({ ...editLineForm, unit_price: e.target.value })} style={{ ...inputStyle, padding: '6px 8px', fontSize: '12px' }} step="0.01" />
                             </div>
@@ -2270,18 +2305,35 @@ export default function POsPage() {
                     );
                   })()}
 
-                  {/* Delete PO button in expanded view */}
-                  <button
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      if (window.confirm(`Delete PO #${po.po_number} and all its line items? This cannot be undone.`)) {
-                        handleDeletePO(po.id);
-                      }
-                    }}
-                    style={{ width: '100%', marginTop: '10px', padding: '8px', borderRadius: '8px', background: 'rgba(248,113,113,0.08)', border: '1px solid rgba(248,113,113,0.2)', color: '#f87171', fontSize: '12px', fontWeight: 700, cursor: 'pointer' }}
-                  >
-                    Delete PO
-                  </button>
+                  {/* Close / Reopen / Delete PO buttons */}
+                  <div style={{ display: 'flex', gap: '6px', marginTop: '10px' }}>
+                    {po.status === 'closed' ? (
+                      <button
+                        onClick={(e) => { e.stopPropagation(); reopenPO(po.id); }}
+                        style={{ flex: 1, padding: '8px', borderRadius: '8px', background: 'rgba(59,130,246,0.08)', border: '1px solid rgba(59,130,246,0.2)', color: '#60a5fa', fontSize: '12px', fontWeight: 700, cursor: 'pointer' }}
+                      >
+                        Reopen PO
+                      </button>
+                    ) : (
+                      <button
+                        onClick={(e) => { e.stopPropagation(); closePO(po.id); }}
+                        style={{ flex: 1, padding: '8px', borderRadius: '8px', background: 'rgba(34,197,94,0.08)', border: '1px solid rgba(34,197,94,0.2)', color: '#22c55e', fontSize: '12px', fontWeight: 700, cursor: 'pointer' }}
+                      >
+                        Close PO
+                      </button>
+                    )}
+                    <button
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        if (window.confirm(`Delete PO #${po.po_number} and all its line items? This cannot be undone.`)) {
+                          handleDeletePO(po.id);
+                        }
+                      }}
+                      style={{ padding: '8px 14px', borderRadius: '8px', background: 'rgba(248,113,113,0.08)', border: '1px solid rgba(248,113,113,0.2)', color: '#f87171', fontSize: '12px', fontWeight: 700, cursor: 'pointer' }}
+                    >
+                      Delete
+                    </button>
+                  </div>
                 </div>
               )}
             </div>

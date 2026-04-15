@@ -58,7 +58,7 @@ export interface PurchaseOrder {
   id: string;
   po_number: string;
   customer: string;
-  status: 'open' | 'complete' | 'cancelled';
+  status: 'open' | 'complete' | 'cancelled' | 'closed';
   ordered_date: string | null;
   notes: string | null;
   ship_to: { name?: string; address?: string; city?: string; state?: string; zip?: string } | null;
