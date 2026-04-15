@@ -522,6 +522,9 @@ export default function AdminScansPage() {
         )}
         {tab === 'exported' && selectedScans.size > 0 && (
           <>
+            <button onClick={createInvoice} disabled={invoicing} style={{ padding: '6px 10px', borderRadius: '6px', fontSize: '10px', fontWeight: 700, background: 'rgba(251,191,36,0.1)', border: '1px solid rgba(251,191,36,0.25)', color: '#fbbf24', cursor: 'pointer' }}>
+              {invoicing ? 'Creating...' : `Create Invoice (${selectedScans.size})`}
+            </button>
             <button onClick={exportCSV} disabled={exporting} style={{ padding: '6px 10px', borderRadius: '6px', fontSize: '10px', fontWeight: 700, background: 'rgba(34,197,94,0.1)', border: '1px solid rgba(34,197,94,0.25)', color: '#22c55e', cursor: 'pointer' }}>
               {exporting ? 'Exporting...' : `Download CSV (${selectedScans.size})`}
             </button>
