@@ -60,12 +60,34 @@ export async function POST(request: NextRequest) {
       );
     }
 
+    const isPDF = mediaType === 'application/pdf';
+
+    // PDFs use document type; images use image type
+    const fileContent = isPDF
+      ? {
+          type: 'document' as const,
+          source: {
+            type: 'base64' as const,
+            media_type: 'application/pdf' as const,
+            data: imageBase64,
+          },
+        }
+      : {
+          type: 'image' as const,
+          source: {
+            type: 'base64' as const,
+            media_type: (mediaType || 'image/jpeg') as 'image/jpeg',
+            data: imageBase64,
+          },
+        };
+
     const response = await fetch('https://api.anthropic.com/v1/messages', {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
         'x-api-key': ANTHROPIC_API_KEY,
         'anthropic-version': '2023-06-01',
+        ...(isPDF ? { 'anthropic-beta': 'pdfs-2024-09-25' } : {}),
       },
       body: JSON.stringify({
         model: 'claude-sonnet-4-6',
@@ -78,14 +100,7 @@ export async function POST(request: NextRequest) {
                 type: 'text',
                 text: 'Read this handwritten vehicle worksheet and extract all the data:',
               },
-              {
-                type: 'image',
-                source: {
-                  type: 'base64',
-                  media_type: mediaType || 'image/jpeg',
-                  data: imageBase64,
-                },
-              },
+              fileContent,
               {
                 type: 'text',
                 text: WORKSHEET_PROMPT,
