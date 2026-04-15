@@ -795,7 +795,6 @@ export default function AdminScansPage() {
                     if (matchedPart) {
                       setBulkPart(matchedPart.id);
                       setBulkPartLabel(`${matchedPart.item_number}${matchedPart.billable_customer ? ` — ${matchedPart.billable_customer}` : ''}`);
-                      if (matchedPart.billable_customer) setBulkCustomer(matchedPart.billable_customer);
                     }
                   }
                   // Populate VINs (only included ones)
