@@ -317,9 +317,19 @@ export default function AdminScansPage() {
       }
     }
     if (Object.keys(updates).length === 0) { setShowBulkEdit(false); return; }
-    const { error } = await supabase.from('scan_logs').update(updates).in('id', ids);
-    if (error) {
-      alert(`Failed to update: ${error.message}`);
+    try {
+      const res = await fetch('/api/scans/bulk-update', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ scanIds: ids, updates }),
+      });
+      const data = await res.json();
+      if (!res.ok || !data.success) {
+        alert(`Failed to update: ${data.error || 'Unknown error'}`);
+        return;
+      }
+    } catch (err: any) {
+      alert(`Update failed: ${err.message}`);
       return;
     }
     setShowBulkEdit(false);
