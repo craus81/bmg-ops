@@ -739,7 +739,8 @@ export default function AdminScansPage() {
                         {!subCollapsed && (
                           <div style={{ display: 'flex', flexDirection: 'column', gap: '2px', paddingLeft: '10px' }}>
                             {groupScans.map(scan => (
-                              <div key={scan.id} style={{
+                              <div key={scan.id}>
+                              <div style={{
                                 display: 'flex', alignItems: 'center', gap: '8px',
                                 padding: '6px 10px', borderRadius: '6px',
                                 background: 'var(--card)', border: `1px solid ${scan.po_id ? 'rgba(34,197,94,0.15)' : 'var(--border)'}`,
@@ -818,6 +819,7 @@ export default function AdminScansPage() {
                                   </label>
                                 </div>
                               )}
+                              </div>
                             ))}
                           </div>
                         )}
