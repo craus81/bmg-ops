@@ -43,7 +43,7 @@ export default function AdminScansPage() {
   const [selectedScans, setSelectedScans] = useState<Set<string>>(new Set());
   const [exporting, setExporting] = useState(false);
   const [matching, setMatching] = useState(false);
-  const [expandedGroups, setCollapsedGroups] = useState<Set<string>>(new Set());
+  const [expandedGroups, setExpandedGroups] = useState<Set<string>>(new Set());
   // Part requires_po_match lookup
   const [poRequired, setPoRequired] = useState<Record<string, boolean>>({});
 
@@ -149,7 +149,7 @@ export default function AdminScansPage() {
   const customerKeys = Object.keys(grouped).sort((a, b) => a === 'No Customer' ? 1 : b === 'No Customer' ? -1 : a.localeCompare(b));
 
   const toggleGroup = (key: string) => {
-    setCollapsedGroups(prev => { const n = new Set(prev); if (n.has(key)) n.delete(key); else n.add(key); return n; });
+    setExpandedGroups(prev => { const n = new Set(prev); if (n.has(key)) n.delete(key); else n.add(key); return n; });
   };
 
   const toggleSelectGroup = (ids: string[]) => {
