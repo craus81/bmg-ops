@@ -57,7 +57,7 @@ export async function POST(req: NextRequest) {
       type: 'message',
       title: `Message from ${senderName}`,
       body,
-      url: `/messages`,
+      url: `/messages?conversation=${conversationId}`,
       messageContext: {
         senderName,
         messageBody: body,

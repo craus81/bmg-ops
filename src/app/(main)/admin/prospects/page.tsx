@@ -1,7 +1,7 @@
 'use client';
 
 import { useState, useEffect, useRef } from 'react';
-import { useRouter } from 'next/navigation';
+import { useRouter, useSearchParams } from 'next/navigation';
 import { createClient } from '@/lib/supabase-browser';
 import { useAuth } from '@/components/AuthProvider';
 import { theme } from '@/lib/theme';
@@ -95,6 +95,7 @@ const labelStyle: React.CSSProperties = {
 
 export default function ProspectsPage() {
   const router = useRouter();
+  const searchParams = useSearchParams();
   const { user, isAdmin, isSales, hasFeature } = useAuth();
   const supabase = createClient();
 
@@ -212,6 +213,15 @@ export default function ProspectsPage() {
     loadProspects();
     loadProfiles();
   }, []);
+
+  // Auto-expand prospect from URL param (deep link from notifications/search)
+  useEffect(() => {
+    if (loading) return;
+    const prospectId = searchParams.get('id');
+    if (prospectId && prospects.some(p => p.id === prospectId)) {
+      toggleExpand(prospectId);
+    }
+  }, [loading]);
 
   // Load metrics once prospects are loaded
   useEffect(() => {

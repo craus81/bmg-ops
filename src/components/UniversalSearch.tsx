@@ -49,7 +49,7 @@ function renderResult(group: string, item: any, router: any, onClose: () => void
       const totalValue = (item.po_line_items || []).reduce((s: number, l: any) => s + (l.quantity * l.unit_price), 0);
       const lineCount = (item.po_line_items || []).length;
       return (
-        <button key={item.id} onClick={() => navigate('/admin/pos')} style={resultBtnStyle}>
+        <button key={item.id} onClick={() => navigate(`/admin/pos?id=${item.id}`)} style={resultBtnStyle}>
           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'start' }}>
             <div>
               <span style={titleStyle}>PO #{item.po_number}</span>
@@ -69,7 +69,7 @@ function renderResult(group: string, item: any, router: any, onClose: () => void
 
     case 'vehicles':
       return (
-        <button key={item.id} onClick={() => navigate('/fleet')} style={resultBtnStyle}>
+        <button key={item.id} onClick={() => navigate(`/tracking?vehicle=${item.id}`)} style={resultBtnStyle}>
           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'start' }}>
             <span style={titleStyle}>{item.vehicle_year} {item.vehicle_make} {item.vehicle_model}</span>
             <span style={{ ...statusBadge, color: statusColor(item.status) }}>{item.status}</span>
@@ -82,7 +82,7 @@ function renderResult(group: string, item: any, router: any, onClose: () => void
 
     case 'graphics_jobs':
       return (
-        <button key={item.id} onClick={() => navigate('/graphics')} style={resultBtnStyle}>
+        <button key={item.id} onClick={() => navigate(`/graphics?id=${item.id}`)} style={resultBtnStyle}>
           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'start' }}>
             <span style={titleStyle}>{item.job_number ? `#${item.job_number} ` : ''}{item.title || item.part_number}</span>
             <span style={{ ...statusBadge, color: statusColor(item.status) }}>{item.status}</span>
@@ -95,7 +95,7 @@ function renderResult(group: string, item: any, router: any, onClose: () => void
 
     case 'estimates':
       return (
-        <button key={item.id} onClick={() => navigate('/estimates')} style={resultBtnStyle}>
+        <button key={item.id} onClick={() => navigate(`/estimates?id=${item.id}`)} style={resultBtnStyle}>
           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'start' }}>
             <span style={titleStyle}>{item.estimate_number || 'Estimate'}</span>
             <div>
@@ -109,7 +109,7 @@ function renderResult(group: string, item: any, router: any, onClose: () => void
 
     case 'parts':
       return (
-        <button key={item.id} onClick={() => navigate('/admin/pos')} style={resultBtnStyle}>
+        <button key={item.id} onClick={() => navigate(`/admin/catalog?id=${item.id}`)} style={resultBtnStyle}>
           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'start' }}>
             <span style={titleStyle}>{item.part_number}</span>
             {item.price > 0 && <span style={valueStyle}>{formatCurrency(item.price)}</span>}
@@ -122,7 +122,7 @@ function renderResult(group: string, item: any, router: any, onClose: () => void
 
     case 'customers':
       return (
-        <button key={item.id} onClick={() => navigate('/admin/prospects')} style={resultBtnStyle}>
+        <button key={item.id} onClick={() => navigate(`/admin/prospects?id=${item.id}`)} style={resultBtnStyle}>
           <span style={titleStyle}>{item.company_name}</span>
           <div style={subtitleStyle}>
             {item.contact_name || ''}{item.email ? ` · ${item.email}` : ''}{item.status === 'converted' ? ' · Customer' : item.status === 'active' ? ' · Prospect' : ''}
@@ -132,7 +132,7 @@ function renderResult(group: string, item: any, router: any, onClose: () => void
 
     case 'messages':
       return (
-        <button key={item.id} onClick={() => navigate('/messages')} style={resultBtnStyle}>
+        <button key={item.id} onClick={() => navigate(`/messages?conversation=${item.conversation_id}`)} style={resultBtnStyle}>
           <div style={{ ...subtitleStyle, fontSize: '12px', color: 'var(--text-secondary)' }}>
             {(item.body || '').length > 120 ? item.body.substring(0, 120) + '...' : item.body}
           </div>
@@ -142,7 +142,7 @@ function renderResult(group: string, item: any, router: any, onClose: () => void
 
     case 'quotes':
       return (
-        <button key={item.id} onClick={() => navigate('/admin/quotes')} style={resultBtnStyle}>
+        <button key={item.id} onClick={() => navigate(`/admin/quotes?id=${item.id}`)} style={resultBtnStyle}>
           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'start' }}>
             <span style={titleStyle}>{item.quote_number}</span>
             <div>

@@ -1,6 +1,7 @@
 'use client';
 
 import { useState, useEffect, useRef, useCallback } from 'react';
+import { useSearchParams } from 'next/navigation';
 import { useAuth } from '@/components/AuthProvider';
 import { createClient } from '@/lib/supabase-browser';
 import { storage } from '@/lib/storage';
@@ -96,9 +97,28 @@ function fmtCurrency(n: number) {
 
 // ============ Main Page ============
 export default function QuotesPage() {
+  const searchParams = useSearchParams();
   const { user, isAdmin, isSales } = useAuth();
   const [tab, setTab] = useState<'quotes' | 'templates' | 'new'>('quotes');
   const [editQuote, setEditQuote] = useState<Quote | null>(null);
+
+  // Auto-open quote from URL param (deep link from notifications/search)
+  useEffect(() => {
+    const quoteId = searchParams.get('id');
+    if (quoteId) {
+      (async () => {
+        const { data } = await supabase
+          .from('quotes')
+          .select('*, template:vehicle_templates(*)')
+          .eq('id', quoteId)
+          .maybeSingle();
+        if (data) {
+          setEditQuote(data as Quote);
+          setTab('new');
+        }
+      })();
+    }
+  }, []);
 
   if (!isAdmin && !isSales) {
     return (
