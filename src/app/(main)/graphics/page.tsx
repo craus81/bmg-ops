@@ -1,7 +1,7 @@
 'use client';
 
 import { useState, useEffect, useRef } from 'react';
-import { useRouter } from 'next/navigation';
+import { useRouter, useSearchParams } from 'next/navigation';
 import { createClient } from '@/lib/supabase-browser';
 import { storage } from '@/lib/storage';
 import { useAuth } from '@/components/AuthProvider';
@@ -46,6 +46,7 @@ const ACTIVE_STATUSES: GraphicsJobStatus[] = ['flagged', 'received', 'designing'
 
 export default function GraphicsPage() {
   const router = useRouter();
+  const searchParams = useSearchParams();
   const { user, isAdmin, isProduction, isSales, profile } = useAuth();
   const supabase = createClient();
 
@@ -135,6 +136,23 @@ export default function GraphicsPage() {
     loadJobs();
     loadProfiles();
   }, [user, isAdmin, isProduction]);
+
+  // Auto-open a job for editing when navigated from PO page via ?editJob=<id>
+  useEffect(() => {
+    if (loading) return;
+    const editJobId = searchParams.get('editJob');
+    if (!editJobId) return;
+    const job = jobs.find(j => j.id === editJobId);
+    if (job) {
+      setExpandedJobId(job.id);
+      setEditingJob({ ...job });
+      setFilterStatus('all');
+      loadHistory(job.id);
+      loadJobAssignments(job.id);
+    }
+    // Clear the query param so refreshing doesn't re-trigger
+    router.replace('/graphics', { scroll: false });
+  }, [loading, searchParams]);
 
   const loadJobs = async () => {
     // Exclude installed/cancelled by default — they're archived
