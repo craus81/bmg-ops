@@ -134,7 +134,7 @@ export async function POST(request: NextRequest) {
     } catch (parseError) {
       console.error('Failed to parse AI response:', aiText);
       return NextResponse.json(
-        { error: 'Failed to parse worksheet. Raw response saved.', raw: aiText },
+        { error: `Failed to parse worksheet response. Claude said: ${aiText.substring(0, 300)}`, raw: aiText },
         { status: 500 }
       );
     }
