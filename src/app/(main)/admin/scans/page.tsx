@@ -317,7 +317,11 @@ export default function AdminScansPage() {
       }
     }
     if (Object.keys(updates).length === 0) { setShowBulkEdit(false); return; }
-    await supabase.from('scan_logs').update(updates).in('id', ids);
+    const { error } = await supabase.from('scan_logs').update(updates).in('id', ids);
+    if (error) {
+      alert(`Failed to update: ${error.message}`);
+      return;
+    }
     setShowBulkEdit(false);
     setBulkEditPart('');
     setBulkEditCustomer('');
