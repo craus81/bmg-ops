@@ -38,7 +38,27 @@ export async function POST(req: NextRequest) {
             .in('po_line_item_id', lineIds);
         }
 
-        // 3. Delete line items
+        // 3. Clear FK references from gmail_po_imports
+        await supabase
+          .from('gmail_po_imports')
+          .update({ po_id: null })
+          .eq('po_id', poId);
+
+        // 3b. Clear FK references from graphics_jobs
+        await supabase
+          .from('graphics_jobs')
+          .update({ po_id: null, po_line_item_id: null })
+          .eq('po_id', poId);
+
+        // 3c. Clear FK references from scan_logs
+        if (lineIds.length > 0) {
+          await supabase
+            .from('scan_logs')
+            .update({ po_id: null, po_line_item_id: null })
+            .in('po_line_item_id', lineIds);
+        }
+
+        // 4. Delete line items
         const { error: lineErr } = await supabase
           .from('po_line_items')
           .delete()
