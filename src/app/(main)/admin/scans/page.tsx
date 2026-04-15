@@ -743,9 +743,9 @@ export default function AdminScansPage() {
                     const matchedPart = allParts.find(p => partNumbers.some((pn: string) => p.item_number.includes(pn)));
                     if (matchedPart) setBulkPart(matchedPart.id);
                   }
-                  // Auto-set customer
-                  if (review.header?.customer) {
-                    setBulkCustomer(review.header.customer);
+                  // Auto-set customer from matched part (not from worksheet)
+                  if (matchedPart?.billable_customer) {
+                    setBulkCustomer(matchedPart.billable_customer);
                   }
                   // Populate VINs (only included ones)
                   const vins = review.rows.filter(r => r.include && r.partial_vin).map(r => r.partial_vin);
