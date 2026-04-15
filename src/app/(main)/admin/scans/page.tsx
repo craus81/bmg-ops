@@ -43,7 +43,7 @@ export default function AdminScansPage() {
   const [selectedScans, setSelectedScans] = useState<Set<string>>(new Set());
   const [exporting, setExporting] = useState(false);
   const [matching, setMatching] = useState(false);
-  const [collapsedGroups, setCollapsedGroups] = useState<Set<string>>(new Set());
+  const [expandedGroups, setCollapsedGroups] = useState<Set<string>>(new Set());
   // Part requires_po_match lookup
   const [poRequired, setPoRequired] = useState<Record<string, boolean>>({});
 
@@ -507,7 +507,7 @@ export default function AdminScansPage() {
           { id: 'archived' as ViewTab, label: `Archived (${archivedScans.length})`, color: '#94a3b8' },
           { id: 'bulk' as ViewTab, label: 'Bulk Upload', color: '#a78bfa' },
         ]).map(t => (
-          <button key={t.id} onClick={() => { setTab(t.id); setSelectedScans(new Set()); }} style={{
+          <button key={t.id} onClick={() => { setTab(t.id); setSelectedScans(new Set()); setExpandedGroups(new Set()); }} style={{
             padding: '6px 12px', borderRadius: '8px', fontSize: '11px', fontWeight: 700,
             background: tab === t.id ? 'var(--tab-active-bg)' : 'transparent',
             border: tab === t.id ? '1px solid var(--tab-active-border)' : '1px solid var(--border)',
@@ -770,7 +770,7 @@ export default function AdminScansPage() {
           const subGroups = grouped[customer];
           const subKeys = Object.keys(subGroups).sort();
           const totalVins = subKeys.reduce((sum, k) => sum + subGroups[k].length, 0);
-          const isCustomerCollapsed = collapsedGroups.has(customer);
+          const isCustomerCollapsed = !expandedGroups.has(customer);
 
           const customerScanIds = subKeys.flatMap(k => subGroups[k].map(s => s.id));
           const allCustomerSelected = customerScanIds.length > 0 && customerScanIds.every(id => selectedScans.has(id));
@@ -799,7 +799,7 @@ export default function AdminScansPage() {
                 <div style={{ paddingLeft: '12px', display: 'flex', flexDirection: 'column', gap: '8px' }}>
                   {subKeys.map(subKey => {
                     const groupScans = subGroups[subKey];
-                    const subCollapsed = collapsedGroups.has(`${customer}|${subKey}`);
+                    const subCollapsed = !expandedGroups.has(`${customer}|${subKey}`);
                     const [partLabel, locLabel] = subKey.split(' · ');
                     const groupIds = groupScans.map(s => s.id);
                     const allGroupSelected = groupIds.length > 0 && groupIds.every(id => selectedScans.has(id));
