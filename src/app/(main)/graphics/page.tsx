@@ -382,9 +382,16 @@ export default function GraphicsPage() {
     if (!editingJob) return;
     setSaving(true);
     const { id, created_at, created_by, ...updateFields } = editingJob;
+    // Convert non-date values like "N/A" or empty strings to null for date columns
+    const sanitized = {
+      ...updateFields,
+      due_date: updateFields.due_date && updateFields.due_date !== 'N/A' ? updateFields.due_date : null,
+      scheduled_install_date: updateFields.scheduled_install_date && updateFields.scheduled_install_date !== 'N/A' ? updateFields.scheduled_install_date : null,
+      updated_at: new Date().toISOString(),
+    };
     const { error } = await supabase
       .from('graphics_jobs')
-      .update({ ...updateFields, updated_at: new Date().toISOString() })
+      .update(sanitized)
       .eq('id', id);
 
     if (!error) {
@@ -426,8 +433,8 @@ export default function GraphicsPage() {
         cut_method: cat === 'production' ? (createForm.cut_method || null) : null,
         premask: cat === 'production' ? (createForm.premask || null) : null,
         priority: createForm.priority,
-        due_date: createForm.due_date || null,
-        scheduled_install_date: cat !== 'internal' ? (createForm.scheduled_install_date || null) : null,
+        due_date: createForm.due_date && createForm.due_date !== 'N/A' ? createForm.due_date : null,
+        scheduled_install_date: cat !== 'internal' && createForm.scheduled_install_date && createForm.scheduled_install_date !== 'N/A' ? createForm.scheduled_install_date : null,
         ship_to: (cat === 'production' || cat === 'customer_supplied') ? (createForm.ship_to || null) : null,
         supplier: cat === 'customer_supplied' ? (createForm.supplier || null) : null,
         status: initialStatus,
