@@ -374,8 +374,14 @@ export default function AdminScansPage() {
     setBulkProcessing(true);
     setBulkResult(null);
 
-    // Check for duplicate VINs already in the system
-    const { data: existingScans } = await supabase.from('scan_logs').select('vin').in('vin', vins);
+    // Check for duplicate VINs with the same part number already in the system
+    const selectedPart = allParts.find(p => p.id === bulkPart);
+    const partNum = selectedPart?.item_number || '';
+    let existingQuery = supabase.from('scan_logs').select('vin, part_number').in('vin', vins);
+    if (partNum) {
+      existingQuery = existingQuery.eq('part_number', partNum);
+    }
+    const { data: existingScans } = await existingQuery;
     const existingVins = new Set((existingScans || []).map(s => s.vin));
     const dupeVins = vins.filter(v => existingVins.has(v));
     const newVins = vins.filter(v => !existingVins.has(v));
