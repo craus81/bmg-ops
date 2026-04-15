@@ -793,6 +793,7 @@ export default function AdminScansPage() {
                     const matchedPart = allParts.find(p => partNumbers.some((pn: string) => p.item_number.includes(pn)));
                     if (matchedPart) {
                       setBulkPart(matchedPart.id);
+                      setBulkPartLabel(`${matchedPart.item_number}${matchedPart.billable_customer ? ` — ${matchedPart.billable_customer}` : ''}`);
                       if (matchedPart.billable_customer) setBulkCustomer(matchedPart.billable_customer);
                     }
                   }
