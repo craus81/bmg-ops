@@ -663,25 +663,75 @@ export default function AdminScansPage() {
               <button onClick={() => setWorksheetReview(null)} style={{ background: 'none', border: 'none', color: 'var(--text-muted)', fontSize: '18px', cursor: 'pointer' }}>✕</button>
             </div>
 
-            {/* Header fields */}
-            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '8px', marginBottom: '14px' }}>
-              <div>
-                <div style={{ fontSize: '9px', fontWeight: 700, color: 'var(--text-muted)', textTransform: 'uppercase', marginBottom: '3px' }}>Part Number(s)</div>
-                <input
-                  value={worksheetReview.header.part_number || ''}
-                  onChange={e => setWorksheetReview(prev => prev ? { ...prev, header: { ...prev.header, part_number: e.target.value } } : prev)}
-                  style={{ width: '100%', padding: '7px 9px', borderRadius: '6px', border: '1px solid var(--border)', background: 'var(--input-bg)', color: 'var(--text-primary)', fontSize: '13px', fontWeight: 700 }}
-                />
-              </div>
-              <div>
-                <div style={{ fontSize: '9px', fontWeight: 700, color: 'var(--text-muted)', textTransform: 'uppercase', marginBottom: '3px' }}>Customer</div>
-                <input
-                  value={worksheetReview.header.customer || ''}
-                  onChange={e => setWorksheetReview(prev => prev ? { ...prev, header: { ...prev.header, customer: e.target.value } } : prev)}
-                  style={{ width: '100%', padding: '7px 9px', borderRadius: '6px', border: '1px solid var(--border)', background: 'var(--input-bg)', color: 'var(--text-primary)', fontSize: '13px' }}
-                />
-              </div>
-            </div>
+            {/* Part number match status */}
+            {(() => {
+              const partNumbers = (worksheetReview.header.part_number || '').split('/').map((p: string) => p.trim()).filter(Boolean);
+              const matchResults = partNumbers.map(pn => ({
+                partNumber: pn,
+                match: allParts.find(p => p.item_number.toUpperCase().includes(pn.toUpperCase())),
+              }));
+
+              return (
+                <div style={{ marginBottom: '14px' }}>
+                  <div style={{ marginBottom: '8px' }}>
+                    <div style={{ fontSize: '9px', fontWeight: 700, color: 'var(--text-muted)', textTransform: 'uppercase', marginBottom: '3px' }}>Part Number(s)</div>
+                    <input
+                      value={worksheetReview.header.part_number || ''}
+                      onChange={e => setWorksheetReview(prev => prev ? { ...prev, header: { ...prev.header, part_number: e.target.value } } : prev)}
+                      style={{ width: '100%', padding: '7px 9px', borderRadius: '6px', border: '1px solid var(--border)', background: 'var(--input-bg)', color: 'var(--text-primary)', fontSize: '13px', fontWeight: 700 }}
+                    />
+                  </div>
+                  {matchResults.map((r, i) => (
+                    <div key={i} style={{
+                      display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '8px',
+                      padding: '6px 10px', borderRadius: '6px', marginBottom: '4px',
+                      background: r.match ? 'rgba(34,197,94,0.06)' : 'rgba(251,191,36,0.06)',
+                      border: `1px solid ${r.match ? 'rgba(34,197,94,0.2)' : 'rgba(251,191,36,0.2)'}`,
+                    }}>
+                      <div>
+                        <span style={{ fontSize: '12px', fontWeight: 700, color: 'var(--text-primary)' }}>{r.partNumber}</span>
+                        {r.match && <span style={{ fontSize: '10px', color: '#4ade80', marginLeft: '6px' }}>✓ {r.match.display_name || r.match.item_number}{r.match.billable_customer ? ` — ${r.match.billable_customer}` : ''}</span>}
+                        {!r.match && <span style={{ fontSize: '10px', color: '#fbbf24', marginLeft: '6px' }}>Not in catalog</span>}
+                      </div>
+                      {!r.match && (
+                        <button
+                          onClick={async () => {
+                            const { error } = await supabase.from('netsuite_parts').insert({
+                              item_number: r.partNumber,
+                              display_name: r.partNumber,
+                              billable_customer: worksheetReview.header.customer || null,
+                              is_active: true,
+                            });
+                            if (error) {
+                              alert(`Failed to add: ${error.message}`);
+                            } else {
+                              let all: any[] = [];
+                              let pg = 0;
+                              let more = true;
+                              while (more) {
+                                const { data } = await supabase.from('netsuite_parts').select('id, item_number, display_name, billable_customer').eq('is_active', true).order('item_number').range(pg * 1000, (pg + 1) * 1000 - 1);
+                                all = [...all, ...(data || [])];
+                                more = (data || []).length === 1000;
+                                pg++;
+                              }
+                              setAllParts(all as typeof allParts);
+                              setWorksheetReview(prev => prev ? { ...prev } : prev);
+                            }
+                          }}
+                          style={{
+                            padding: '4px 10px', borderRadius: '6px', fontSize: '10px', fontWeight: 700,
+                            background: 'rgba(59,130,246,0.1)', border: '1px solid rgba(59,130,246,0.25)',
+                            color: '#60a5fa', cursor: 'pointer', whiteSpace: 'nowrap', flexShrink: 0,
+                          }}
+                        >
+                          + Add to Catalog
+                        </button>
+                      )}
+                    </div>
+                  ))}
+                </div>
+              );
+            })()}
 
             {/* VIN rows */}
             <div style={{ fontSize: '9px', fontWeight: 700, color: 'var(--text-muted)', textTransform: 'uppercase', marginBottom: '6px' }}>
