@@ -125,14 +125,20 @@ export async function POST(request: NextRequest) {
     try {
       // Strip markdown backticks if present
       let cleanText = aiText.replace(/^```(?:json)?\s*\n?/i, '').replace(/\n?```\s*$/i, '');
-      const jsonMatch = cleanText.match(/\{[\s\S]*\}/);
+      // Match either {...} or [...]
+      const jsonMatch = cleanText.match(/[\[{][\s\S]*[\]}]/);
       if (jsonMatch) {
         parsed = JSON.parse(jsonMatch[0]);
       } else {
         throw new Error('No JSON found in AI response');
       }
 
-      // Handle multi-page PDF response — Claude wraps in { pages: [...] }
+      // Handle array response (multi-page PDF) — Claude returns [{page:1,...}, {page:2,...}]
+      if (Array.isArray(parsed)) {
+        parsed = { pages: parsed };
+      }
+
+      // Handle multi-page PDF response — merge into single result
       if (parsed.pages && Array.isArray(parsed.pages)) {
         const allRows: any[] = [];
         let header = null;
