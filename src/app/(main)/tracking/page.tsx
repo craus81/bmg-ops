@@ -936,6 +936,71 @@ export default function TrackingPage() {
                       )}
                     </div>
 
+                    {/* Invoice tracking — shown for archived vehicles */}
+                    {showArchived && (
+                      <div style={{
+                        display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '8px', marginBottom: '12px',
+                        padding: '10px', borderRadius: '8px',
+                        background: 'rgba(167,139,250,0.04)', border: '1px solid rgba(167,139,250,0.15)',
+                      }}>
+                        <div>
+                          <div style={{ fontSize: '9px', fontWeight: 700, color: 'var(--text-muted)', textTransform: 'uppercase', marginBottom: '3px' }}>Invoice #</div>
+                          <input
+                            value={(vehicle as any).invoice_number || ''}
+                            placeholder="Invoice number"
+                            onClick={(e) => e.stopPropagation()}
+                            onChange={async (e) => {
+                              const val = e.target.value || null;
+                              await supabase.from('fleet_checkins').update({ invoice_number: val, updated_at: new Date().toISOString() }).eq('id', vehicle.id);
+                              setVehicles(prev => prev.map(v => v.id === vehicle.id ? { ...v, invoice_number: val } as any : v));
+                            }}
+                            style={{
+                              width: '100%', padding: '6px 8px', borderRadius: '6px', fontSize: '12px', fontWeight: 700,
+                              border: '1px solid var(--border)', background: 'var(--input-bg)', color: 'var(--text-primary)',
+                              boxSizing: 'border-box',
+                            }}
+                          />
+                        </div>
+                        <div>
+                          <div style={{ fontSize: '9px', fontWeight: 700, color: 'var(--text-muted)', textTransform: 'uppercase', marginBottom: '3px' }}>Date Invoiced</div>
+                          <input
+                            type="date"
+                            value={(vehicle as any).date_invoiced || ''}
+                            onClick={(e) => e.stopPropagation()}
+                            onChange={async (e) => {
+                              const val = e.target.value || null;
+                              await supabase.from('fleet_checkins').update({ date_invoiced: val, updated_at: new Date().toISOString() }).eq('id', vehicle.id);
+                              setVehicles(prev => prev.map(v => v.id === vehicle.id ? { ...v, date_invoiced: val } as any : v));
+                            }}
+                            style={{
+                              width: '100%', padding: '6px 8px', borderRadius: '6px', fontSize: '12px',
+                              border: '1px solid var(--border)', background: 'var(--input-bg)', color: 'var(--text-primary)',
+                              boxSizing: 'border-box',
+                            }}
+                          />
+                        </div>
+                        <div style={{ gridColumn: '1 / -1', display: 'flex', alignItems: 'center', gap: '8px' }}>
+                          <input
+                            type="checkbox"
+                            checked={(vehicle as any).is_paid || false}
+                            onClick={(e) => e.stopPropagation()}
+                            onChange={async (e) => {
+                              const val = e.target.checked;
+                              await supabase.from('fleet_checkins').update({ is_paid: val, updated_at: new Date().toISOString() }).eq('id', vehicle.id);
+                              setVehicles(prev => prev.map(v => v.id === vehicle.id ? { ...v, is_paid: val } as any : v));
+                            }}
+                            style={{ width: '16px', height: '16px', accentColor: '#22c55e', cursor: 'pointer' }}
+                          />
+                          <span style={{
+                            fontSize: '12px', fontWeight: 700,
+                            color: (vehicle as any).is_paid ? '#4ade80' : '#fbbf24',
+                          }}>
+                            {(vehicle as any).is_paid ? 'Paid' : 'Unpaid'}
+                          </span>
+                        </div>
+                      </div>
+                    )}
+
                     {/* Scheduled Upfit Date */}
                     <div style={{ marginBottom: '12px' }}>
                       <div style={{ fontSize: '9px', fontWeight: 700, color: 'var(--text-muted)', textTransform: 'uppercase', marginBottom: '4px' }}>Scheduled Upfit Date</div>

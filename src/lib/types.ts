@@ -321,6 +321,9 @@ export interface FleetCheckin {
   scheduled_upfit_date?: string | null;
   matched_graphics_job_id?: string | null;
   calendar_event_id?: string | null;
+  invoice_number?: string | null;
+  date_invoiced?: string | null;
+  is_paid?: boolean;
   created_at: string;
   updated_at: string;
 }
