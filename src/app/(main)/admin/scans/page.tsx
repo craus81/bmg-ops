@@ -69,7 +69,7 @@ export default function AdminScansPage() {
 
   const loadAll = async () => {
     setLoading(true);
-    const [scansRes, archivedRes, profilesRes, partsRes, fullPartsRes, locsRes] = await Promise.all([
+    const [scansRes, archivedRes, profilesRes, partsRes, fullPartsRes, locsRes, posRes] = await Promise.all([
       supabase.from('scan_logs').select('*').is('archived_at', null).order('scanned_at', { ascending: false }).limit(1000),
       supabase.from('scan_logs').select('*').not('archived_at', 'is', null).order('archived_at', { ascending: false }).limit(500),
       supabase.from('profiles').select('id, full_name'),
@@ -88,9 +88,11 @@ export default function AdminScansPage() {
         return { data: all };
       })(),
       supabase.from('work_locations').select('id, name').eq('is_active', true).order('name'),
+      supabase.from('purchase_orders').select('id, po_number, customer, line_items:po_line_items(id, part_number)').in('status', ['open', 'complete']).order('po_number'),
     ]);
     setAllParts((fullPartsRes.data || []) as typeof allParts);
     setAllLocations((locsRes.data || []) as typeof allLocations);
+    setAllPOs((posRes.data || []) as typeof allPOs);
 
     setScans((scansRes.data || []) as ScanLog[]);
     setArchivedScans((archivedRes.data || []) as ScanLog[]);
@@ -280,6 +282,8 @@ export default function AdminScansPage() {
   const [bulkEditPart, setBulkEditPart] = useState('');
   const [bulkEditCustomer, setBulkEditCustomer] = useState('');
   const [bulkEditLocation, setBulkEditLocation] = useState('');
+  const [bulkEditPO, setBulkEditPO] = useState('');
+  const [allPOs, setAllPOs] = useState<{ id: string; po_number: string; customer: string; line_items: { id: string; part_number: string }[] }[]>([]);
   const applyBulkEdit = async () => {
     const ids = [...selectedScans];
     if (ids.length === 0) return;
@@ -293,12 +297,32 @@ export default function AdminScansPage() {
       const loc = allLocations.find(l => l.id === bulkEditLocation);
       if (loc) { updates.location_id = loc.id; updates.location_name = loc.name; }
     }
+    if (bulkEditPO) {
+      if (bulkEditPO === '__clear__') {
+        updates.po_id = null;
+        updates.po_number = null;
+        updates.po_line_item_id = null;
+      } else {
+        const po = allPOs.find(p => p.id === bulkEditPO);
+        if (po) {
+          updates.po_id = po.id;
+          updates.po_number = po.po_number;
+          // Try to match line item by part number from first selected scan
+          const firstScan = scans.find(s => ids.includes(s.id)) || archivedScans.find(s => ids.includes(s.id));
+          const matchedLine = firstScan?.part_number
+            ? po.line_items.find(li => li.part_number.toUpperCase() === firstScan.part_number!.toUpperCase())
+            : null;
+          updates.po_line_item_id = matchedLine?.id || null;
+        }
+      }
+    }
     if (Object.keys(updates).length === 0) { setShowBulkEdit(false); return; }
     await supabase.from('scan_logs').update(updates).in('id', ids);
     setShowBulkEdit(false);
     setBulkEditPart('');
     setBulkEditCustomer('');
     setBulkEditLocation('');
+    setBulkEditPO('');
     loadAll();
   };
 
@@ -530,7 +554,7 @@ export default function AdminScansPage() {
       {showBulkEdit && (
         <div style={{ background: 'var(--card)', border: `1px solid ${theme.border}`, borderRadius: '12px', padding: '14px', marginBottom: '12px' }}>
           <div style={{ fontSize: '12px', fontWeight: 700, color: 'var(--text-primary)', marginBottom: '10px' }}>Edit {selectedScans.size} Scan{selectedScans.size !== 1 ? 's' : ''}</div>
-          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: '8px', marginBottom: '10px' }}>
+          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '8px', marginBottom: '8px' }}>
             <div>
               <div style={{ fontSize: '9px', fontWeight: 700, color: 'var(--text-muted)', textTransform: 'uppercase', marginBottom: '3px' }}>Part Number</div>
               <select value={bulkEditPart} onChange={e => setBulkEditPart(e.target.value)} style={{ width: '100%', padding: '8px', borderRadius: '6px', border: `1px solid ${theme.border}`, background: 'var(--input-bg)', color: 'var(--text-primary)', fontSize: '11px' }}>
@@ -547,6 +571,14 @@ export default function AdminScansPage() {
               <select value={bulkEditLocation} onChange={e => setBulkEditLocation(e.target.value)} style={{ width: '100%', padding: '8px', borderRadius: '6px', border: `1px solid ${theme.border}`, background: 'var(--input-bg)', color: 'var(--text-primary)', fontSize: '11px' }}>
                 <option value="">— No change —</option>
                 {allLocations.map(l => <option key={l.id} value={l.id}>{l.name}</option>)}
+              </select>
+            </div>
+            <div>
+              <div style={{ fontSize: '9px', fontWeight: 700, color: 'var(--text-muted)', textTransform: 'uppercase', marginBottom: '3px' }}>Assign to PO</div>
+              <select value={bulkEditPO} onChange={e => setBulkEditPO(e.target.value)} style={{ width: '100%', padding: '8px', borderRadius: '6px', border: `1px solid ${theme.border}`, background: 'var(--input-bg)', color: 'var(--text-primary)', fontSize: '11px' }}>
+                <option value="">— No change —</option>
+                <option value="__clear__">Clear PO assignment</option>
+                {allPOs.map(p => <option key={p.id} value={p.id}>PO #{p.po_number} — {p.customer}</option>)}
               </select>
             </div>
           </div>
