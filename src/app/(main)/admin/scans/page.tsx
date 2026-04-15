@@ -697,6 +697,7 @@ export default function AdminScansPage() {
                         <button
                           onClick={async () => {
                             const { error } = await supabase.from('netsuite_parts').insert({
+                              netsuite_id: `LOCAL-${r.partNumber}-${Date.now()}`,
                               item_number: r.partNumber,
                               display_name: r.partNumber,
                               billable_customer: worksheetReview.header.customer || null,
