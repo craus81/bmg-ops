@@ -22,16 +22,20 @@ interface ScanLog {
   scanned_at: string;
   exported_at: string | null;
   archived_at: string | null;
+  invoice_number?: string | null;
+  date_invoiced?: string | null;
+  is_paid?: boolean;
   requires_po?: boolean;
 }
 
-type ViewTab = 'ready' | 'waiting' | 'exported' | 'bulk';
+type ViewTab = 'ready' | 'waiting' | 'exported' | 'archived' | 'bulk';
 
 export default function AdminScansPage() {
   const { user } = useAuth();
   const supabase = createClient();
 
   const [scans, setScans] = useState<ScanLog[]>([]);
+  const [archivedScans, setArchivedScans] = useState<ScanLog[]>([]);
   const [loading, setLoading] = useState(true);
   const [tab, setTab] = useState<ViewTab>('ready');
   const [search, setSearch] = useState('');
@@ -65,8 +69,9 @@ export default function AdminScansPage() {
 
   const loadAll = async () => {
     setLoading(true);
-    const [scansRes, profilesRes, partsRes, fullPartsRes, locsRes] = await Promise.all([
+    const [scansRes, archivedRes, profilesRes, partsRes, fullPartsRes, locsRes] = await Promise.all([
       supabase.from('scan_logs').select('*').is('archived_at', null).order('scanned_at', { ascending: false }).limit(1000),
+      supabase.from('scan_logs').select('*').not('archived_at', 'is', null).order('archived_at', { ascending: false }).limit(500),
       supabase.from('profiles').select('id, full_name'),
       supabase.from('netsuite_parts').select('item_number, requires_po_match'),
       // All active parts — paginate to get all
@@ -88,6 +93,7 @@ export default function AdminScansPage() {
     setAllLocations((locsRes.data || []) as typeof allLocations);
 
     setScans((scansRes.data || []) as ScanLog[]);
+    setArchivedScans((archivedRes.data || []) as ScanLog[]);
 
     const pMap: Record<string, string> = {};
     (profilesRes.data || []).forEach((p: any) => { pMap[p.id] = p.full_name; });
@@ -113,6 +119,7 @@ export default function AdminScansPage() {
     if (tab === 'ready') return readyToExport;
     if (tab === 'waiting') return waitingForPO;
     if (tab === 'exported') return exported;
+    if (tab === 'archived') return archivedScans;
     return [];
   };
 
@@ -206,6 +213,13 @@ export default function AdminScansPage() {
     const ids = [...selectedScans];
     if (ids.length === 0) return;
     await supabase.from('scan_logs').update({ archived_at: new Date().toISOString() }).in('id', ids);
+    loadAll();
+  };
+
+  const unarchiveScans = async () => {
+    const ids = [...selectedScans];
+    if (ids.length === 0) return;
+    await supabase.from('scan_logs').update({ archived_at: null }).in('id', ids);
     loadAll();
   };
 
@@ -431,6 +445,7 @@ export default function AdminScansPage() {
           { id: 'ready' as ViewTab, label: `Ready to Export (${readyToExport.length})`, color: '#22c55e' },
           { id: 'waiting' as ViewTab, label: `Waiting for PO (${waitingForPO.length})`, color: '#f59e0b' },
           { id: 'exported' as ViewTab, label: `Exported (${exported.length})`, color: '#60a5fa' },
+          { id: 'archived' as ViewTab, label: `Archived (${archivedScans.length})`, color: '#94a3b8' },
           { id: 'bulk' as ViewTab, label: 'Bulk Upload', color: '#a78bfa' },
         ]).map(t => (
           <button key={t.id} onClick={() => { setTab(t.id); setSelectedScans(new Set()); }} style={{
@@ -475,6 +490,11 @@ export default function AdminScansPage() {
               Archive {selectedScans.size}
             </button>
           </>
+        )}
+        {tab === 'archived' && selectedScans.size > 0 && (
+          <button onClick={unarchiveScans} style={{ padding: '6px 10px', borderRadius: '6px', fontSize: '10px', fontWeight: 700, background: 'rgba(251,191,36,0.1)', border: '1px solid rgba(251,191,36,0.25)', color: '#fbbf24', cursor: 'pointer' }}>
+            Unarchive {selectedScans.size}
+          </button>
         )}
         {tab !== 'bulk' && selectedScans.size > 0 && (
           <>
@@ -730,8 +750,24 @@ export default function AdminScansPage() {
                                     {[scan.vehicle_year, scan.vehicle_make, scan.vehicle_model].filter(Boolean).join(' ') || 'Unknown'}
                                   </div>
                                   <div style={{ fontSize: '9px', fontFamily: 'monospace', color: 'var(--text-muted)' }}>{scan.vin}</div>
+                                  {scan.part_number && (
+                                    <div style={{ fontSize: '9px', color: 'var(--text-secondary)', marginTop: '1px' }}>
+                                      <span style={{ fontWeight: 700 }}>{scan.part_number}</span>
+                                      {scan.part_description && <span style={{ color: 'var(--text-muted)', marginLeft: '4px' }}>{scan.part_description}</span>}
+                                    </div>
+                                  )}
                                 </div>
                                 <div style={{ display: 'flex', alignItems: 'center', gap: '4px', flexShrink: 0 }}>
+                                  {/* Paid badge for archived scans */}
+                                  {tab === 'archived' && (
+                                    <span style={{
+                                      fontSize: '8px', fontWeight: 700, padding: '2px 5px', borderRadius: '4px',
+                                      background: (scan as any).is_paid ? 'rgba(34,197,94,0.1)' : 'rgba(251,191,36,0.1)',
+                                      color: (scan as any).is_paid ? '#4ade80' : '#fbbf24',
+                                    }}>
+                                      {(scan as any).is_paid ? 'Paid' : 'Unpaid'}
+                                    </span>
+                                  )}
                                   <div style={{ fontSize: '9px', color: 'var(--text-muted)', textAlign: 'right' }}>
                                     {profiles[scan.scanned_by || ''] || ''}<br />
                                     {new Date(scan.scanned_at).toLocaleDateString([], { month: 'short', day: 'numeric' })}
@@ -740,6 +776,48 @@ export default function AdminScansPage() {
                                   <button onClick={() => deleteScan(scan.id)} style={{ padding: '2px 5px', borderRadius: '4px', border: 'none', background: 'rgba(239,68,68,0.08)', color: '#ef4444', fontSize: '9px', fontWeight: 700, cursor: 'pointer' }}>✕</button>
                                 </div>
                               </div>
+                              {/* Invoice fields for archived scans */}
+                              {tab === 'archived' && selectedScans.has(scan.id) && (
+                                <div style={{ display: 'flex', gap: '6px', alignItems: 'center', padding: '6px 10px 6px 34px', background: 'rgba(167,139,250,0.04)', borderTop: '1px solid var(--border)' }}>
+                                  <input
+                                    value={(scan as any).invoice_number || ''}
+                                    placeholder="Invoice #"
+                                    onClick={(e) => e.stopPropagation()}
+                                    onChange={async (e) => {
+                                      const val = e.target.value || null;
+                                      await supabase.from('scan_logs').update({ invoice_number: val }).eq('id', scan.id);
+                                      setArchivedScans(prev => prev.map(s => s.id === scan.id ? { ...s, invoice_number: val } as any : s));
+                                    }}
+                                    style={{ width: '100px', padding: '4px 6px', borderRadius: '4px', fontSize: '10px', border: '1px solid var(--border)', background: 'var(--input-bg)', color: 'var(--text-primary)' }}
+                                  />
+                                  <input
+                                    type="date"
+                                    value={(scan as any).date_invoiced || ''}
+                                    onClick={(e) => e.stopPropagation()}
+                                    onChange={async (e) => {
+                                      const val = e.target.value || null;
+                                      await supabase.from('scan_logs').update({ date_invoiced: val }).eq('id', scan.id);
+                                      setArchivedScans(prev => prev.map(s => s.id === scan.id ? { ...s, date_invoiced: val } as any : s));
+                                    }}
+                                    style={{ width: '120px', padding: '4px 6px', borderRadius: '4px', fontSize: '10px', border: '1px solid var(--border)', background: 'var(--input-bg)', color: 'var(--text-primary)' }}
+                                  />
+                                  <label style={{ display: 'flex', alignItems: 'center', gap: '4px', cursor: 'pointer' }} onClick={(e) => e.stopPropagation()}>
+                                    <input
+                                      type="checkbox"
+                                      checked={(scan as any).is_paid || false}
+                                      onChange={async (e) => {
+                                        const val = e.target.checked;
+                                        await supabase.from('scan_logs').update({ is_paid: val }).eq('id', scan.id);
+                                        setArchivedScans(prev => prev.map(s => s.id === scan.id ? { ...s, is_paid: val } as any : s));
+                                      }}
+                                      style={{ width: '12px', height: '12px', accentColor: '#22c55e' }}
+                                    />
+                                    <span style={{ fontSize: '10px', fontWeight: 700, color: (scan as any).is_paid ? '#4ade80' : '#fbbf24' }}>
+                                      {(scan as any).is_paid ? 'Paid' : 'Unpaid'}
+                                    </span>
+                                  </label>
+                                </div>
+                              )}
                             ))}
                           </div>
                         )}
