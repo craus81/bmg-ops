@@ -853,6 +853,11 @@ export default function AdminScansPage() {
                                   )}
                                 </div>
                                 <div style={{ display: 'flex', alignItems: 'center', gap: '4px', flexShrink: 0 }}>
+                                  {scan.po_number && (
+                                    <span style={{ fontSize: '8px', fontWeight: 700, padding: '2px 5px', borderRadius: '4px', background: 'rgba(34,197,94,0.1)', color: '#22c55e' }}>
+                                      PO #{scan.po_number}
+                                    </span>
+                                  )}
                                   <div style={{ fontSize: '9px', color: 'var(--text-muted)', textAlign: 'right' }}>
                                     {profiles[scan.scanned_by || ''] || ''}<br />
                                     {new Date(scan.scanned_at).toLocaleDateString([], { month: 'short', day: 'numeric' })}
