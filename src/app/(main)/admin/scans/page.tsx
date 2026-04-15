@@ -71,7 +71,7 @@ export default function AdminScansPage() {
     setLoading(true);
     const [scansRes, archivedRes, profilesRes, partsRes, fullPartsRes, locsRes, posRes] = await Promise.all([
       supabase.from('scan_logs').select('*').is('archived_at', null).order('scanned_at', { ascending: false }).limit(1000),
-      supabase.from('scan_logs').select('*').not('archived_at', 'is', null).order('archived_at', { ascending: false }).limit(500),
+      supabase.from('scan_logs').select('*').not('archived_at', 'is', null).order('archived_at', { ascending: false }).limit(5000),
       supabase.from('profiles').select('id, full_name'),
       supabase.from('netsuite_parts').select('item_number, requires_po_match'),
       // All active parts — paginate to get all
