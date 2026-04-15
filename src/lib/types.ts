@@ -474,6 +474,15 @@ export interface GraphicsJob {
   assigned_to: string | null;
   created_at: string;
   updated_at: string;
+  // Estimate & Invoice linkage
+  estimate_id: string | null;
+  po_number: string | null;
+  customer_netsuite_id: string | null;
+  netsuite_invoice_id: string | null;
+  netsuite_invoice_number: string | null;
+  invoiced_at: string | null;
+  invoiced_by: string | null;
+  invoice_amount: number | null;
 }
 
 export interface GraphicsStatusHistory {

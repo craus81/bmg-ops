@@ -80,6 +80,7 @@ export default function GraphicsPage() {
     scheduled_install_date: '',
     ship_to: '',
     supplier: '',
+    po_number: '',
   });
   const [createAssignees, setCreateAssignees] = useState<string[]>([]);
   const [creating, setCreating] = useState(false);
@@ -128,6 +129,10 @@ export default function GraphicsPage() {
 
   // Saving state
   const [saving, setSaving] = useState(false);
+
+  // Estimate & Invoice state
+  const [creatingEstimate, setCreatingEstimate] = useState(false);
+  const [creatingInvoice, setCreatingInvoice] = useState(false);
 
   useEffect(() => {
     if (!user) return;
@@ -412,6 +417,7 @@ export default function GraphicsPage() {
         scheduled_install_date: cat !== 'internal' ? (createForm.scheduled_install_date || null) : null,
         ship_to: (cat === 'production' || cat === 'customer_supplied') ? (createForm.ship_to || null) : null,
         supplier: cat === 'customer_supplied' ? (createForm.supplier || null) : null,
+        po_number: createForm.po_number || null,
         status: initialStatus,
         created_by: user?.id,
       })
@@ -496,7 +502,7 @@ export default function GraphicsPage() {
         job_category: '', title: '', part_number: '', part_numbers: [], partInput: '', customer: '', quantity: 1,
         content: '', notes: '',
         vinyl_type: '', vinyl_color: '', laminate: '', print_method: '', cut_method: '', premask: '',
-        priority: 'normal', due_date: '', scheduled_install_date: '', ship_to: '', supplier: '',
+        priority: 'normal', due_date: '', scheduled_install_date: '', ship_to: '', supplier: '', po_number: '',
       });
       setCreateAssignees([]);
       setCreateFiles([]);
@@ -513,6 +519,88 @@ export default function GraphicsPage() {
       setExpandedJobId(null);
       setEditingJob(null);
     }
+  };
+
+  // Create estimate from graphics job
+  const createEstimateFromJob = async (job: GraphicsJob) => {
+    if (job.estimate_id) {
+      alert('This job already has an estimate linked.');
+      return;
+    }
+    if (!job.part_number && !job.customer) {
+      alert('Please add at least a part number or customer to this job before creating an estimate.');
+      return;
+    }
+    if (!window.confirm('Create an estimate from this graphics job? The estimate will be pre-populated with the job\'s part numbers and customer.')) return;
+
+    setCreatingEstimate(true);
+    try {
+      const res = await fetch('/api/graphics/create-estimate', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ jobId: job.id, userId: user?.id }),
+      });
+      const data = await res.json();
+      if (data.success) {
+        alert(`Estimate created: ${data.estimate_number}\n${data.line_item_count} line item${data.line_item_count !== 1 ? 's' : ''}\nTotal: $${data.grand_total?.toFixed(2) || '0.00'}\n\nYou can edit this estimate on the Estimates page.`);
+        // Update local job state
+        setJobs(prev => prev.map(j => j.id === job.id ? { ...j, estimate_id: data.estimate_id, updated_at: new Date().toISOString() } : j));
+        loadHistory(job.id);
+      } else {
+        alert('Failed to create estimate: ' + (data.error || 'Unknown error'));
+      }
+    } catch {
+      alert('Network error — please try again');
+    }
+    setCreatingEstimate(false);
+  };
+
+  // Create direct invoice from graphics job (skip SO)
+  const createInvoiceFromJob = async (job: GraphicsJob) => {
+    if (job.netsuite_invoice_id) {
+      alert(`This job already has an invoice: ${job.netsuite_invoice_number || job.netsuite_invoice_id}`);
+      return;
+    }
+    if (!job.part_number) {
+      alert('Please add part numbers to this job before creating an invoice.');
+      return;
+    }
+    if (!job.customer) {
+      alert('Please set the customer on this job before creating an invoice.');
+      return;
+    }
+    const msg = job.po_number
+      ? `Create a direct invoice in NetSuite for PO #${job.po_number}?\nThis will skip the Sales Order and go straight to Invoice.`
+      : 'Create a direct invoice in NetSuite for this job?\nThis will skip the Sales Order and go straight to Invoice.';
+    if (!window.confirm(msg)) return;
+
+    setCreatingInvoice(true);
+    try {
+      const res = await fetch('/api/graphics/create-invoice', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ jobId: job.id, userId: user?.id }),
+      });
+      const data = await res.json();
+      if (data.success) {
+        alert(`Invoice created!\nInvoice #: ${data.invoiceNumber || data.invoiceId}\nLine items: ${data.lineItemCount}${data.skippedParts ? '\nSkipped (not in NS): ' + data.skippedParts.join(', ') : ''}`);
+        // Update local job state
+        setJobs(prev => prev.map(j => j.id === job.id ? {
+          ...j,
+          netsuite_invoice_id: data.invoiceId,
+          netsuite_invoice_number: data.invoiceNumber,
+          invoice_amount: data.invoiceAmount,
+          invoiced_at: new Date().toISOString(),
+          updated_at: new Date().toISOString(),
+        } : j));
+        loadHistory(job.id);
+      } else {
+        alert('Failed to create invoice: ' + (data.error || 'Unknown error'));
+      }
+    } catch {
+      alert('Network error — please try again');
+    }
+    setCreatingInvoice(false);
   };
 
   // Filter jobs
@@ -750,6 +838,9 @@ export default function GraphicsPage() {
                         <span>Qty: {job.quantity}</span>
                         {job.due_date && <span style={{ color: (parseLocalDate(job.due_date) || new Date()) < new Date() ? '#ef4444' : '#fbbf24' }}>Due: {displayDate(job.due_date)}</span>}
                         {job.scheduled_install_date && <span style={{ color: job.scheduled_install_date === 'N/A' ? 'var(--text-muted)' : '#22d3ee' }}>Install: {job.scheduled_install_date === 'N/A' ? 'N/A' : displayDate(job.scheduled_install_date)}</span>}
+                        {job.po_number && <span style={{ color: '#a78bfa', fontWeight: 700 }}>PO #{job.po_number}</span>}
+                        {job.estimate_id && <span style={{ padding: '0 4px', borderRadius: '3px', background: 'rgba(96,165,250,0.1)', color: '#60a5fa', fontWeight: 700 }}>Estimate</span>}
+                        {job.netsuite_invoice_number && <span style={{ padding: '0 4px', borderRadius: '3px', background: 'rgba(34,197,94,0.1)', color: '#22c55e', fontWeight: 700 }}>INV {job.netsuite_invoice_number}</span>}
                       </div>
                     </div>
                     <div style={{
@@ -987,6 +1078,83 @@ export default function GraphicsPage() {
                           />
                         </div>
 
+                        {/* Estimate & Invoice */}
+                        <div style={{ marginBottom: '10px' }}>
+                          <div style={labelStyle}>Estimate & Invoice</div>
+
+                          {/* Show linked estimate */}
+                          {job.estimate_id && (
+                            <div style={{ padding: '8px 10px', borderRadius: '8px', background: 'rgba(96,165,250,0.06)', border: '1px solid rgba(96,165,250,0.15)', marginBottom: '6px' }}>
+                              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                                <div style={{ fontSize: '11px', color: '#60a5fa', fontWeight: 700 }}>Estimate Linked</div>
+                                <button
+                                  onClick={() => router.push('/estimates')}
+                                  style={{ fontSize: '10px', fontWeight: 700, color: '#60a5fa', background: 'rgba(96,165,250,0.1)', border: '1px solid rgba(96,165,250,0.2)', borderRadius: '5px', padding: '3px 8px', cursor: 'pointer' }}
+                                >
+                                  Open Estimates
+                                </button>
+                              </div>
+                            </div>
+                          )}
+
+                          {/* Show invoice info if invoiced */}
+                          {job.netsuite_invoice_id && (
+                            <div style={{ padding: '8px 10px', borderRadius: '8px', background: 'rgba(34,197,94,0.06)', border: '1px solid rgba(34,197,94,0.15)', marginBottom: '6px' }}>
+                              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                                <div>
+                                  <div style={{ fontSize: '11px', color: '#22c55e', fontWeight: 700 }}>
+                                    Invoice #{job.netsuite_invoice_number || job.netsuite_invoice_id}
+                                  </div>
+                                  <div style={{ fontSize: '10px', color: 'var(--text-label)', marginTop: '2px' }}>
+                                    {job.invoice_amount ? `$${job.invoice_amount.toLocaleString('en-US', { minimumFractionDigits: 2 })}` : ''}
+                                    {job.invoiced_at ? ` — ${new Date(job.invoiced_at).toLocaleDateString()}` : ''}
+                                    {job.po_number ? ` — PO #${job.po_number}` : ''}
+                                  </div>
+                                </div>
+                              </div>
+                            </div>
+                          )}
+
+                          {/* PO number display */}
+                          {job.po_number && !job.netsuite_invoice_id && (
+                            <div style={{ fontSize: '11px', color: '#a78bfa', marginBottom: '6px', padding: '4px 8px', borderRadius: '6px', background: 'rgba(167,139,250,0.06)' }}>
+                              PO #{job.po_number} — ready to invoice when job completes
+                            </div>
+                          )}
+
+                          {/* Action buttons for estimate/invoice */}
+                          {job.status !== 'cancelled' && (
+                            <div style={{ display: 'flex', gap: '6px', marginTop: '6px' }}>
+                              {!job.estimate_id && (
+                                <button
+                                  onClick={() => createEstimateFromJob(job)}
+                                  disabled={creatingEstimate}
+                                  style={{
+                                    flex: 1, padding: '8px', borderRadius: '7px', fontSize: '11px', fontWeight: 700, cursor: 'pointer',
+                                    background: 'rgba(96,165,250,0.08)', border: '1px solid rgba(96,165,250,0.2)', color: '#60a5fa',
+                                    opacity: creatingEstimate ? 0.5 : 1,
+                                  }}
+                                >
+                                  {creatingEstimate ? 'Creating...' : 'Create Estimate'}
+                                </button>
+                              )}
+                              {!job.netsuite_invoice_id && (
+                                <button
+                                  onClick={() => createInvoiceFromJob(job)}
+                                  disabled={creatingInvoice}
+                                  style={{
+                                    flex: 1, padding: '8px', borderRadius: '7px', fontSize: '11px', fontWeight: 700, cursor: 'pointer',
+                                    background: 'rgba(34,197,94,0.08)', border: '1px solid rgba(34,197,94,0.2)', color: '#22c55e',
+                                    opacity: creatingInvoice ? 0.5 : 1,
+                                  }}
+                                >
+                                  {creatingInvoice ? 'Creating...' : 'Create Invoice'}
+                                </button>
+                              )}
+                            </div>
+                          )}
+                        </div>
+
                         {/* Action buttons */}
                         <div style={{ display: 'flex', gap: '6px' }}>
                           <button
@@ -1059,6 +1227,10 @@ export default function GraphicsPage() {
                           <div>
                             <div style={labelStyle}>Quantity</div>
                             <input type="number" style={inputStyle} value={editJob!.quantity} onChange={e => setEditingJob({ ...editJob!, quantity: parseInt(e.target.value) || 1 })} />
+                          </div>
+                          <div>
+                            <div style={labelStyle}>PO Number</div>
+                            <input style={inputStyle} value={editJob!.po_number || ''} onChange={e => setEditingJob({ ...editJob!, po_number: e.target.value || null })} placeholder="e.g. PO-12345" />
                           </div>
                           <div>
                             <div style={labelStyle}>Priority</div>
@@ -1325,6 +1497,10 @@ export default function GraphicsPage() {
                   <div>
                     <div style={labelStyle}>Quantity</div>
                     <input type="number" style={inputStyle} value={createForm.quantity} onChange={e => setCreateForm({ ...createForm, quantity: parseInt(e.target.value) || 1 })} />
+                  </div>
+                  <div>
+                    <div style={labelStyle}>PO Number</div>
+                    <input style={inputStyle} value={createForm.po_number} onChange={e => setCreateForm({ ...createForm, po_number: e.target.value })} placeholder="e.g. PO-12345" />
                   </div>
                   <div>
                     <div style={labelStyle}>Priority</div>
