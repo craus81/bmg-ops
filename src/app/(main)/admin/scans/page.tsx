@@ -50,9 +50,8 @@ export default function AdminScansPage() {
   // Bulk upload state
   const [allParts, setAllParts] = useState<{ id: string; item_number: string; display_name: string | null; billable_customer: string | null }[]>([]);
   const [allLocations, setAllLocations] = useState<{ id: string; name: string }[]>([]);
-  const [bulkPart, setBulkPart] = useState<string>('');
+  const [bulkParts, setBulkParts] = useState<{ id: string; label: string }[]>([]);
   const [bulkPartSearch, setBulkPartSearch] = useState('');
-  const [bulkPartLabel, setBulkPartLabel] = useState('');
   const [bulkLocation, setBulkLocation] = useState<string>('');
   const [bulkCustomer, setBulkCustomer] = useState('');
   const [bulkVins, setBulkVins] = useState('');
@@ -365,42 +364,49 @@ export default function AdminScansPage() {
   // Bulk upload handler
   const handleBulkUpload = async () => {
     if (!bulkVins.trim()) return;
-    const selectedPart = allParts.find(p => p.id === bulkPart);
+    const selectedPartsList = bulkParts.map(bp => allParts.find(p => p.id === bp.id)).filter(Boolean) as typeof allParts;
     const selectedLoc = allLocations.find(l => l.id === bulkLocation);
 
     // Parse VINs — one per line, strip whitespace, skip empty
     const vins = bulkVins.split(/[\n,]+/).map(v => v.trim().toUpperCase().replace(/[^A-HJ-NPR-Z0-9]/gi, '')).filter(v => v.length >= 5);
     if (vins.length === 0) { setBulkResult({ success: 0, failed: 0 }); return; }
 
+    // If no parts selected, use a single null entry so VINs still upload
+    const partsToProcess = selectedPartsList.length > 0 ? selectedPartsList : [null];
+
     setBulkProcessing(true);
     setBulkResult(null);
 
-    // Check for duplicate VINs with the same part number already in the system
-    const partNum = selectedPart?.item_number || '';
-    let existingQuery = supabase.from('scan_logs').select('vin, part_number').in('vin', vins);
-    if (partNum) {
-      existingQuery = existingQuery.eq('part_number', partNum);
+    // Check for duplicates across all selected part numbers
+    let totalDupes = 0;
+    const vinPartPairs: { vin: string; part: typeof partsToProcess[0] }[] = [];
+    for (const part of partsToProcess) {
+      const partNum = part?.item_number || '';
+      let existingQuery = supabase.from('scan_logs').select('vin, part_number').in('vin', vins);
+      if (partNum) existingQuery = existingQuery.eq('part_number', partNum);
+      const { data: existingScans } = await existingQuery;
+      const existingVins = new Set((existingScans || []).map(s => s.vin));
+      for (const vin of vins) {
+        if (existingVins.has(vin)) { totalDupes++; }
+        else { vinPartPairs.push({ vin, part }); }
+      }
     }
-    const { data: existingScans } = await existingQuery;
-    const existingVins = new Set((existingScans || []).map(s => s.vin));
-    const dupeVins = vins.filter(v => existingVins.has(v));
-    const newVins = vins.filter(v => !existingVins.has(v));
 
-    if (dupeVins.length > 0 && newVins.length === 0) {
-      alert(`All ${dupeVins.length} VIN${dupeVins.length !== 1 ? 's' : ''} already exist in the system.`);
+    if (vinPartPairs.length === 0) {
+      alert(`All VINs already exist for the selected part number${partsToProcess.length > 1 ? 's' : ''}.`);
       setBulkProcessing(false);
       return;
     }
-    if (dupeVins.length > 0) {
-      if (!window.confirm(`${dupeVins.length} VIN${dupeVins.length !== 1 ? 's' : ''} already exist and will be skipped:\n${dupeVins.slice(0, 5).join('\n')}${dupeVins.length > 5 ? `\n...and ${dupeVins.length - 5} more` : ''}\n\nContinue uploading ${newVins.length} new VIN${newVins.length !== 1 ? 's' : ''}?`)) {
+    if (totalDupes > 0) {
+      if (!window.confirm(`${totalDupes} duplicate${totalDupes !== 1 ? 's' : ''} will be skipped.\n\nContinue uploading ${vinPartPairs.length} scan${vinPartPairs.length !== 1 ? 's' : ''}?`)) {
         setBulkProcessing(false);
         return;
       }
     }
 
-    let success = 0, failed = 0, skipped = dupeVins.length;
+    let success = 0, failed = 0, skipped = totalDupes;
 
-    for (const vin of newVins) {
+    for (const { vin, part } of vinPartPairs) {
       // Decode VIN
       let vehicleData: any = {};
       try {
@@ -414,9 +420,9 @@ export default function AdminScansPage() {
       const { error } = await supabase.from('scan_logs').insert({
         vin,
         ...vehicleData,
-        part_number: selectedPart?.item_number || null,
-        part_description: selectedPart?.display_name || null,
-        billable_customer: bulkCustomer.trim() || selectedPart?.billable_customer || null,
+        part_number: part?.item_number || null,
+        part_description: part?.display_name || null,
+        billable_customer: bulkCustomer.trim() || part?.billable_customer || null,
         location_id: selectedLoc?.id || null,
         location_name: selectedLoc?.name || null,
         scanned_by: user?.id,
@@ -788,14 +794,17 @@ export default function AdminScansPage() {
                 onClick={() => {
                   const review = worksheetReview;
                   if (!review) return;
-                  // Auto-select part number and customer
+                  // Auto-select all matched part numbers
                   if (review.header?.part_number) {
-                    const partNumbers = review.header.part_number.split('/').map((p: string) => p.trim());
-                    const matchedPart = allParts.find(p => partNumbers.some((pn: string) => p.item_number.includes(pn)));
-                    if (matchedPart) {
-                      setBulkPart(matchedPart.id);
-                      setBulkPartLabel(`${matchedPart.item_number}${matchedPart.billable_customer ? ` — ${matchedPart.billable_customer}` : ''}`);
+                    const partNumbers = review.header.part_number.split('/').map((p: string) => p.trim()).filter(Boolean);
+                    const matched: { id: string; label: string }[] = [];
+                    for (const pn of partNumbers) {
+                      const match = allParts.find(p => p.item_number.toUpperCase().includes(pn.toUpperCase()));
+                      if (match && !matched.some(m => m.id === match.id)) {
+                        matched.push({ id: match.id, label: `${match.item_number}${match.billable_customer ? ` — ${match.billable_customer}` : ''}` });
+                      }
                     }
+                    if (matched.length > 0) setBulkParts(matched);
                   }
                   // Populate VINs (only included ones)
                   const vins = review.rows.filter(r => r.include && r.partial_vin).map(r => r.partial_vin);
@@ -828,36 +837,42 @@ export default function AdminScansPage() {
         <div style={{ background: 'var(--card)', border: `1px solid ${theme.border}`, borderRadius: '14px', padding: '16px' }}>
           <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: '10px', marginBottom: '12px' }}>
             <div style={{ position: 'relative' }}>
-              <div style={{ fontSize: '10px', fontWeight: 700, color: 'var(--text-muted)', textTransform: 'uppercase', marginBottom: '4px' }}>Part Number</div>
-              {bulkPart ? (
-                <div style={{ display: 'flex', alignItems: 'center', gap: '6px', padding: '10px', borderRadius: '8px', border: `1px solid ${theme.border}`, background: 'var(--input-bg)' }}>
-                  <span style={{ flex: 1, fontSize: '13px', fontWeight: 700, color: 'var(--text-primary)' }}>{bulkPartLabel}</span>
-                  <button onClick={() => { setBulkPart(''); setBulkPartLabel(''); setBulkPartSearch(''); }} style={{ background: 'none', border: 'none', color: '#f87171', fontSize: '14px', cursor: 'pointer' }}>✕</button>
-                </div>
-              ) : (
-                <div>
-                  <input value={bulkPartSearch} onChange={e => setBulkPartSearch(e.target.value)} placeholder="Search graphics parts..." style={{ width: '100%', padding: '10px', borderRadius: '8px', border: `1px solid ${theme.border}`, background: 'var(--input-bg)', color: 'var(--text-primary)', fontSize: '13px' }} />
-                  {bulkPartSearch.length >= 2 && (() => {
-                    const q = bulkPartSearch.toLowerCase();
-                    const matches = allParts.filter(p => p.item_number.toLowerCase().includes(q) || p.display_name?.toLowerCase().includes(q) || p.billable_customer?.toLowerCase().includes(q)).slice(0, 8);
-                    if (matches.length === 0) return <div style={{ fontSize: '10px', color: 'var(--text-muted)', padding: '6px 0' }}>No matching graphics parts</div>;
-                    return (
-                      <div style={{ position: 'absolute', top: '100%', left: 0, right: 0, zIndex: 50, background: 'var(--card)', border: `1px solid ${theme.border}`, borderRadius: '8px', boxShadow: '0 4px 12px rgba(0,0,0,0.2)', maxHeight: '200px', overflowY: 'auto', marginTop: '2px' }}>
-                        {matches.map(p => (
-                          <button key={p.id} onClick={() => { setBulkPart(p.id); setBulkPartLabel(`${p.item_number}${p.billable_customer ? ` — ${p.billable_customer}` : ''}`); setBulkPartSearch(''); }} style={{
-                            display: 'block', width: '100%', padding: '8px 10px', textAlign: 'left', border: 'none', borderBottom: `1px solid ${theme.border}`,
-                            background: 'transparent', cursor: 'pointer', fontSize: '12px', color: 'var(--text-primary)',
-                          }}>
-                            <span style={{ fontWeight: 700 }}>{p.item_number}</span>
-                            {p.billable_customer && <span style={{ color: '#a78bfa', marginLeft: '6px' }}>{p.billable_customer}</span>}
-                            {p.display_name && <div style={{ fontSize: '10px', color: 'var(--text-muted)' }}>{p.display_name}</div>}
-                          </button>
-                        ))}
-                      </div>
-                    );
-                  })()}
+              <div style={{ fontSize: '10px', fontWeight: 700, color: 'var(--text-muted)', textTransform: 'uppercase', marginBottom: '4px' }}>Part Number(s)</div>
+              {/* Selected parts chips */}
+              {bulkParts.length > 0 && (
+                <div style={{ display: 'flex', flexWrap: 'wrap', gap: '4px', marginBottom: '6px' }}>
+                  {bulkParts.map(bp => (
+                    <div key={bp.id} style={{ display: 'flex', alignItems: 'center', gap: '4px', padding: '4px 8px', borderRadius: '6px', background: 'rgba(34,197,94,0.08)', border: '1px solid rgba(34,197,94,0.2)', fontSize: '11px', fontWeight: 700, color: 'var(--text-primary)' }}>
+                      {bp.label}
+                      <button onClick={() => setBulkParts(prev => prev.filter(p => p.id !== bp.id))} style={{ background: 'none', border: 'none', color: '#f87171', fontSize: '12px', cursor: 'pointer', padding: '0 2px' }}>✕</button>
+                    </div>
+                  ))}
                 </div>
               )}
+              {/* Search to add parts */}
+              <div>
+                <input value={bulkPartSearch} onChange={e => setBulkPartSearch(e.target.value)} placeholder="Search to add part..." style={{ width: '100%', padding: bulkParts.length > 0 ? '6px 8px' : '10px', borderRadius: '8px', border: `1px solid ${theme.border}`, background: 'var(--input-bg)', color: 'var(--text-primary)', fontSize: bulkParts.length > 0 ? '11px' : '13px' }} />
+                {bulkPartSearch.length >= 2 && (() => {
+                  const q = bulkPartSearch.toLowerCase();
+                  const selectedIds = new Set(bulkParts.map(bp => bp.id));
+                  const matches = allParts.filter(p => !selectedIds.has(p.id) && (p.item_number.toLowerCase().includes(q) || p.display_name?.toLowerCase().includes(q) || p.billable_customer?.toLowerCase().includes(q))).slice(0, 8);
+                  if (matches.length === 0) return <div style={{ fontSize: '10px', color: 'var(--text-muted)', padding: '6px 0' }}>No matching parts</div>;
+                  return (
+                    <div style={{ position: 'absolute', top: '100%', left: 0, right: 0, zIndex: 50, background: 'var(--card)', border: `1px solid ${theme.border}`, borderRadius: '8px', boxShadow: '0 4px 12px rgba(0,0,0,0.2)', maxHeight: '200px', overflowY: 'auto', marginTop: '2px' }}>
+                      {matches.map(p => (
+                        <button key={p.id} onClick={() => { setBulkParts(prev => [...prev, { id: p.id, label: `${p.item_number}${p.billable_customer ? ` — ${p.billable_customer}` : ''}` }]); setBulkPartSearch(''); }} style={{
+                          display: 'block', width: '100%', padding: '8px 10px', textAlign: 'left', border: 'none', borderBottom: `1px solid ${theme.border}`,
+                          background: 'transparent', cursor: 'pointer', fontSize: '12px', color: 'var(--text-primary)',
+                        }}>
+                          <span style={{ fontWeight: 700 }}>{p.item_number}</span>
+                          {p.billable_customer && <span style={{ color: '#a78bfa', marginLeft: '6px' }}>{p.billable_customer}</span>}
+                          {p.display_name && <div style={{ fontSize: '10px', color: 'var(--text-muted)' }}>{p.display_name}</div>}
+                        </button>
+                      ))}
+                    </div>
+                  );
+                })()}
+              </div>
             </div>
             <div>
               <div style={{ fontSize: '10px', fontWeight: 700, color: 'var(--text-muted)', textTransform: 'uppercase', marginBottom: '4px' }}>Location</div>
