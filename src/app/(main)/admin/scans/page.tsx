@@ -88,7 +88,7 @@ export default function AdminScansPage() {
         return { data: all };
       })(),
       supabase.from('work_locations').select('id, name').eq('is_active', true).order('name'),
-      supabase.from('purchase_orders').select('id, po_number, customer, line_items:po_line_items(id, part_number)').in('status', ['open', 'complete']).order('po_number'),
+      supabase.from('purchase_orders').select('id, po_number, customer, line_items:po_line_items(id, part_number, quantity, installed)').in('status', ['open', 'complete']).order('po_number'),
     ]);
     setAllParts((fullPartsRes.data || []) as typeof allParts);
     setAllLocations((locsRes.data || []) as typeof allLocations);
@@ -284,7 +284,7 @@ export default function AdminScansPage() {
   const [bulkEditCustomer, setBulkEditCustomer] = useState('');
   const [bulkEditLocation, setBulkEditLocation] = useState('');
   const [bulkEditPO, setBulkEditPO] = useState('');
-  const [allPOs, setAllPOs] = useState<{ id: string; po_number: string; customer: string; line_items: { id: string; part_number: string }[] }[]>([]);
+  const [allPOs, setAllPOs] = useState<{ id: string; po_number: string; customer: string; line_items: { id: string; part_number: string; quantity: number; installed: number }[] }[]>([]);
   const applyBulkEdit = async () => {
     const ids = [...selectedScans];
     if (ids.length === 0) return;
@@ -568,7 +568,20 @@ export default function AdminScansPage() {
       {/* Bulk edit modal */}
       {showBulkEdit && (
         <div style={{ background: 'var(--card)', border: `1px solid ${theme.border}`, borderRadius: '12px', padding: '14px', marginBottom: '12px' }}>
-          <div style={{ fontSize: '12px', fontWeight: 700, color: 'var(--text-primary)', marginBottom: '10px' }}>Edit {selectedScans.size} Scan{selectedScans.size !== 1 ? 's' : ''}</div>
+          {(() => {
+            // Find the common part number across selected scans for PO filtering
+            const selectedScanList = [...selectedScans].map(id => scans.find(s => s.id === id) || archivedScans.find(s => s.id === id)).filter(Boolean) as ScanLog[];
+            const selectedPartNumbers = [...new Set(selectedScanList.map(s => s.part_number?.toUpperCase()).filter(Boolean))];
+            const hasOnePart = selectedPartNumbers.length === 1;
+            const selectedPart = hasOnePart ? selectedPartNumbers[0] : null;
+
+            // Filter POs to only those containing the selected part number
+            const matchingPOs = selectedPart
+              ? allPOs.filter(po => po.line_items.some(li => li.part_number.toUpperCase() === selectedPart))
+              : allPOs;
+
+            return (<>
+          <div style={{ fontSize: '12px', fontWeight: 700, color: 'var(--text-primary)', marginBottom: '10px' }}>Edit {selectedScans.size} Scan{selectedScans.size !== 1 ? 's' : ''}{selectedPart ? <span style={{ fontSize: '10px', color: 'var(--text-muted)', marginLeft: '6px' }}>({selectedPart})</span> : ''}</div>
           <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '8px', marginBottom: '8px' }}>
             <div>
               <div style={{ fontSize: '9px', fontWeight: 700, color: 'var(--text-muted)', textTransform: 'uppercase', marginBottom: '3px' }}>Part Number</div>
@@ -593,14 +606,22 @@ export default function AdminScansPage() {
               <select value={bulkEditPO} onChange={e => setBulkEditPO(e.target.value)} style={{ width: '100%', padding: '8px', borderRadius: '6px', border: `1px solid ${theme.border}`, background: 'var(--input-bg)', color: 'var(--text-primary)', fontSize: '11px' }}>
                 <option value="">— No change —</option>
                 <option value="__clear__">Clear PO assignment</option>
-                {allPOs.map(p => <option key={p.id} value={p.id}>PO #{p.po_number} — {p.customer}</option>)}
+                {matchingPOs.map(p => {
+                  const matchedLine = selectedPart ? p.line_items.find(li => li.part_number.toUpperCase() === selectedPart) : null;
+                  const remaining = matchedLine ? matchedLine.quantity - matchedLine.installed : null;
+                  return <option key={p.id} value={p.id}>PO #{p.po_number} — {p.customer}{remaining !== null ? ` (${remaining} remaining)` : ''}</option>;
+                })}
               </select>
+              {hasOnePart && matchingPOs.length === 0 && (
+                <div style={{ fontSize: '9px', color: '#fbbf24', marginTop: '3px' }}>No POs found with part {selectedPart}</div>
+              )}
             </div>
           </div>
           <div style={{ display: 'flex', gap: '6px' }}>
             <button onClick={applyBulkEdit} style={{ padding: '8px 14px', borderRadius: '6px', fontSize: '11px', fontWeight: 700, background: '#22c55e', color: '#fff', border: 'none', cursor: 'pointer' }}>Apply Changes</button>
             <button onClick={() => setShowBulkEdit(false)} style={{ padding: '8px 14px', borderRadius: '6px', fontSize: '11px', fontWeight: 700, background: 'transparent', border: `1px solid ${theme.border}`, color: 'var(--text-muted)', cursor: 'pointer' }}>Cancel</button>
           </div>
+          </>); })()}
         </div>
       )}
 
