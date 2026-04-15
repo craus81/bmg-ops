@@ -787,15 +787,14 @@ export default function AdminScansPage() {
                 onClick={() => {
                   const review = worksheetReview;
                   if (!review) return;
-                  // Auto-select part number
+                  // Auto-select part number and customer
                   if (review.header?.part_number) {
                     const partNumbers = review.header.part_number.split('/').map((p: string) => p.trim());
                     const matchedPart = allParts.find(p => partNumbers.some((pn: string) => p.item_number.includes(pn)));
-                    if (matchedPart) setBulkPart(matchedPart.id);
-                  }
-                  // Auto-set customer from matched part (not from worksheet)
-                  if (matchedPart?.billable_customer) {
-                    setBulkCustomer(matchedPart.billable_customer);
+                    if (matchedPart) {
+                      setBulkPart(matchedPart.id);
+                      if (matchedPart.billable_customer) setBulkCustomer(matchedPart.billable_customer);
+                    }
                   }
                   // Populate VINs (only included ones)
                   const vins = review.rows.filter(r => r.include && r.partial_vin).map(r => r.partial_vin);
