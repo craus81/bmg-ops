@@ -59,6 +59,7 @@ export default function AdminScansPage() {
   const [bulkProcessing, setBulkProcessing] = useState(false);
   const [bulkResult, setBulkResult] = useState<{ success: number; failed: number; skipped?: number } | null>(null);
   const [scanningWorksheet, setScanningWorksheet] = useState(false);
+  const [worksheetReview, setWorksheetReview] = useState<{ header: any; rows: { row_number: number; partial_vin: string; unit_number: string | null; include: boolean }[]; notes: string | null } | null>(null);
   const [worksheetNotes, setWorksheetNotes] = useState<string | null>(null);
 
   // Direct invoice state
@@ -477,25 +478,12 @@ export default function AdminScansPage() {
 
       const { header, rows, notes } = result.data;
 
-      // Auto-select part number if found
-      if (header?.part_number) {
-        const partNumbers = header.part_number.split('/').map((p: string) => p.trim());
-        const matchedPart = allParts.find(p => partNumbers.some((pn: string) => p.item_number.includes(pn)));
-        if (matchedPart) setBulkPart(matchedPart.id);
-      }
-
-      // Populate VINs from rows
-      if (rows && rows.length > 0) {
-        const vins = rows.map((r: any) => r.partial_vin).filter(Boolean);
-        setBulkVins(prev => prev ? prev + '\n' + vins.join('\n') : vins.join('\n'));
-      }
-
-      setWorksheetNotes(
-        `Extracted: ${rows?.length || 0} VINs` +
-        (header?.part_number ? ` · Part: ${header.part_number}` : '') +
-        (header?.customer ? ` · Customer: ${header.customer}` : '') +
-        (notes ? `\n${notes}` : '')
-      );
+      // Open review modal instead of auto-populating
+      setWorksheetReview({
+        header: header || {},
+        rows: (rows || []).map((r: any) => ({ ...r, include: true })),
+        notes: notes || null,
+      });
     } catch (err: any) {
       setWorksheetNotes(`Scan error: ${err.message}`);
     }
@@ -657,6 +645,131 @@ export default function AdminScansPage() {
             <button onClick={() => setShowBulkEdit(false)} style={{ padding: '8px 14px', borderRadius: '6px', fontSize: '11px', fontWeight: 700, background: 'transparent', border: `1px solid ${theme.border}`, color: 'var(--text-muted)', cursor: 'pointer' }}>Cancel</button>
           </div>
           </>); })()}
+        </div>
+      )}
+
+      {/* Worksheet Review Modal */}
+      {worksheetReview && (
+        <div style={{ position: 'fixed', inset: 0, background: 'var(--overlay)', zIndex: 200, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '16px' }} onClick={() => setWorksheetReview(null)}>
+          <div onClick={e => e.stopPropagation()} style={{ background: 'var(--card)', borderRadius: '14px', padding: '18px', width: '100%', maxWidth: '550px', maxHeight: '85vh', overflowY: 'auto', boxShadow: '0 8px 30px rgba(0,0,0,0.3)' }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '12px' }}>
+              <div>
+                <div style={{ fontSize: '15px', fontWeight: 800, color: 'var(--text-primary)' }}>Review Worksheet Scan</div>
+                <div style={{ fontSize: '11px', color: 'var(--text-muted)', marginTop: '2px' }}>
+                  {worksheetReview.rows.filter(r => r.include).length} of {worksheetReview.rows.length} VINs selected
+                  {worksheetReview.notes && <span> · {worksheetReview.notes}</span>}
+                </div>
+              </div>
+              <button onClick={() => setWorksheetReview(null)} style={{ background: 'none', border: 'none', color: 'var(--text-muted)', fontSize: '18px', cursor: 'pointer' }}>✕</button>
+            </div>
+
+            {/* Header fields */}
+            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '8px', marginBottom: '14px' }}>
+              <div>
+                <div style={{ fontSize: '9px', fontWeight: 700, color: 'var(--text-muted)', textTransform: 'uppercase', marginBottom: '3px' }}>Part Number(s)</div>
+                <input
+                  value={worksheetReview.header.part_number || ''}
+                  onChange={e => setWorksheetReview(prev => prev ? { ...prev, header: { ...prev.header, part_number: e.target.value } } : prev)}
+                  style={{ width: '100%', padding: '7px 9px', borderRadius: '6px', border: '1px solid var(--border)', background: 'var(--input-bg)', color: 'var(--text-primary)', fontSize: '13px', fontWeight: 700 }}
+                />
+              </div>
+              <div>
+                <div style={{ fontSize: '9px', fontWeight: 700, color: 'var(--text-muted)', textTransform: 'uppercase', marginBottom: '3px' }}>Customer</div>
+                <input
+                  value={worksheetReview.header.customer || ''}
+                  onChange={e => setWorksheetReview(prev => prev ? { ...prev, header: { ...prev.header, customer: e.target.value } } : prev)}
+                  style={{ width: '100%', padding: '7px 9px', borderRadius: '6px', border: '1px solid var(--border)', background: 'var(--input-bg)', color: 'var(--text-primary)', fontSize: '13px' }}
+                />
+              </div>
+            </div>
+
+            {/* VIN rows */}
+            <div style={{ fontSize: '9px', fontWeight: 700, color: 'var(--text-muted)', textTransform: 'uppercase', marginBottom: '6px' }}>
+              VINs ({worksheetReview.rows.filter(r => r.include).length} selected)
+            </div>
+            {worksheetReview.rows.map((row, idx) => (
+              <div key={idx} style={{
+                display: 'flex', alignItems: 'center', gap: '8px',
+                padding: '6px 8px', marginBottom: '3px', borderRadius: '6px',
+                background: row.include ? 'rgba(34,197,94,0.04)' : 'rgba(239,68,68,0.04)',
+                border: `1px solid ${row.include ? 'rgba(34,197,94,0.15)' : 'rgba(239,68,68,0.15)'}`,
+                opacity: row.include ? 1 : 0.5,
+              }}>
+                <input
+                  type="checkbox"
+                  checked={row.include}
+                  onChange={() => setWorksheetReview(prev => {
+                    if (!prev) return prev;
+                    const rows = [...prev.rows];
+                    rows[idx] = { ...rows[idx], include: !rows[idx].include };
+                    return { ...prev, rows };
+                  })}
+                  style={{ width: '14px', height: '14px', flexShrink: 0, accentColor: '#22c55e' }}
+                />
+                <span style={{ fontSize: '10px', color: 'var(--text-muted)', width: '20px', flexShrink: 0 }}>{row.row_number}</span>
+                <input
+                  value={row.partial_vin || ''}
+                  onChange={e => setWorksheetReview(prev => {
+                    if (!prev) return prev;
+                    const rows = [...prev.rows];
+                    rows[idx] = { ...rows[idx], partial_vin: e.target.value.toUpperCase() };
+                    return { ...prev, rows };
+                  })}
+                  style={{ flex: 1, padding: '5px 7px', borderRadius: '5px', border: '1px solid var(--border)', background: 'var(--input-bg)', color: 'var(--text-primary)', fontSize: '12px', fontWeight: 700, fontFamily: 'monospace' }}
+                />
+                <input
+                  value={row.unit_number || ''}
+                  onChange={e => setWorksheetReview(prev => {
+                    if (!prev) return prev;
+                    const rows = [...prev.rows];
+                    rows[idx] = { ...rows[idx], unit_number: e.target.value };
+                    return { ...prev, rows };
+                  })}
+                  placeholder="Location"
+                  style={{ width: '110px', padding: '5px 7px', borderRadius: '5px', border: '1px solid var(--border)', background: 'var(--input-bg)', color: 'var(--text-secondary)', fontSize: '11px', flexShrink: 0 }}
+                />
+              </div>
+            ))}
+
+            {/* Actions */}
+            <div style={{ display: 'flex', gap: '8px', marginTop: '14px' }}>
+              <button
+                onClick={() => {
+                  const review = worksheetReview;
+                  if (!review) return;
+                  // Auto-select part number
+                  if (review.header?.part_number) {
+                    const partNumbers = review.header.part_number.split('/').map((p: string) => p.trim());
+                    const matchedPart = allParts.find(p => partNumbers.some((pn: string) => p.item_number.includes(pn)));
+                    if (matchedPart) setBulkPart(matchedPart.id);
+                  }
+                  // Auto-set customer
+                  if (review.header?.customer) {
+                    setBulkCustomer(review.header.customer);
+                  }
+                  // Populate VINs (only included ones)
+                  const vins = review.rows.filter(r => r.include && r.partial_vin).map(r => r.partial_vin);
+                  setBulkVins(prev => prev ? prev + '\n' + vins.join('\n') : vins.join('\n'));
+                  setWorksheetNotes(
+                    `Extracted: ${vins.length} VINs` +
+                    (review.header?.part_number ? ` · Part: ${review.header.part_number}` : '') +
+                    (review.header?.customer ? ` · Customer: ${review.header.customer}` : '')
+                  );
+                  setWorksheetReview(null);
+                }}
+                disabled={worksheetReview.rows.filter(r => r.include).length === 0}
+                style={{ flex: 1, padding: '12px', borderRadius: '10px', background: '#22c55e', color: '#fff', fontWeight: 800, fontSize: '13px', border: 'none', cursor: 'pointer' }}
+              >
+                Add {worksheetReview.rows.filter(r => r.include).length} VINs to Upload
+              </button>
+              <button
+                onClick={() => setWorksheetReview(null)}
+                style={{ flex: 1, padding: '12px', borderRadius: '10px', background: 'transparent', border: '1px solid var(--border)', color: 'var(--text-body)', fontWeight: 700, fontSize: '13px', cursor: 'pointer' }}
+              >
+                Cancel
+              </button>
+            </div>
+          </div>
         </div>
       )}
 
