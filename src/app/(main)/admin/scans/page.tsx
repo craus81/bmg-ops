@@ -63,7 +63,9 @@ export default function AdminScansPage() {
 
   // Direct invoice state
   const [invoicing, setInvoicing] = useState(false);
-  const [invoiceResult, setInvoiceResult] = useState<{ results: { customer: string; vehicleCount: number; status: string; invoiceNumber?: string; error?: string }[]; summary: { success: number; errors: number } } | null>(null);
+  const [invoiceResult, setInvoiceResult] = useState<{ results: { customer: string; po?: string | null; invoiceId?: string; invoiceNumber?: string; vehicleCount: number; status: string; error?: string }[]; summary: { success: number; errors: number } } | null>(null);
+  const [emailingInvoices, setEmailingInvoices] = useState(false);
+  const [emailTarget, setEmailTarget] = useState<{ customer: string; email: string; invoices: { invoiceId: string; invoiceNumber: string; po?: string }[] } | null>(null);
 
   useEffect(() => { loadAll(); }, []);
 
@@ -276,6 +278,32 @@ export default function AdminScansPage() {
       alert(`Invoice failed: ${e.message}`);
     }
     setInvoicing(false);
+  };
+
+  const emailInvoices = async () => {
+    if (!emailTarget) return;
+    setEmailingInvoices(true);
+    try {
+      const res = await fetch('/api/netsuite/email-invoices', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          invoices: emailTarget.invoices,
+          customerName: emailTarget.customer,
+          customerEmail: emailTarget.email,
+        }),
+      });
+      const data = await res.json();
+      if (!res.ok) {
+        alert(`Email failed: ${data.error || 'Unknown error'}`);
+      } else {
+        alert(`Sent ${data.sent} invoice${data.sent !== 1 ? 's' : ''} to ${emailTarget.email}${data.failed > 0 ? ` (${data.failed} failed to fetch)` : ''}`);
+        setEmailTarget(null);
+      }
+    } catch (e: any) {
+      alert(`Email failed: ${e.message}`);
+    }
+    setEmailingInvoices(false);
   };
 
   // Edit scan
@@ -593,10 +621,60 @@ export default function AdminScansPage() {
           </div>
           {invoiceResult.results.map((r, i) => (
             <div key={i} style={{ fontSize: '11px', fontWeight: 600, color: r.status === 'success' ? '#22c55e' : '#ef4444', marginBottom: '2px' }}>
-              {r.customer} ({r.vehicleCount} VIN{r.vehicleCount !== 1 ? 's' : ''})
+              {r.customer}{r.po ? ` · PO #${r.po}` : ''} ({r.vehicleCount} VIN{r.vehicleCount !== 1 ? 's' : ''})
               {r.status === 'success' ? ` → Invoice #${r.invoiceNumber}` : ` — ${r.error}`}
             </div>
           ))}
+          {invoiceResult.summary.success > 0 && (() => {
+            const successByCustomer: Record<string, { invoiceId: string; invoiceNumber: string; po?: string }[]> = {};
+            for (const r of invoiceResult.results) {
+              if (r.status === 'success' && r.invoiceId && r.invoiceNumber) {
+                if (!successByCustomer[r.customer]) successByCustomer[r.customer] = [];
+                successByCustomer[r.customer].push({ invoiceId: r.invoiceId, invoiceNumber: r.invoiceNumber, po: r.po || undefined });
+              }
+            }
+            return (
+              <div style={{ marginTop: '8px', display: 'flex', gap: '6px', flexWrap: 'wrap' }}>
+                {Object.entries(successByCustomer).map(([customer, invs]) => (
+                  <button key={customer} onClick={() => setEmailTarget({ customer, email: '', invoices: invs })} style={{ padding: '5px 10px', borderRadius: '6px', fontSize: '10px', fontWeight: 700, background: 'rgba(59,130,246,0.1)', border: '1px solid rgba(59,130,246,0.25)', color: '#60a5fa', cursor: 'pointer' }}>
+                    Email {invs.length} Invoice{invs.length !== 1 ? 's' : ''} to {customer}
+                  </button>
+                ))}
+              </div>
+            );
+          })()}
+        </div>
+      )}
+
+      {/* Email invoices modal */}
+      {emailTarget && (
+        <div style={{ padding: '14px', borderRadius: '10px', marginBottom: '12px', background: 'var(--card)', border: '1px solid rgba(59,130,246,0.3)' }}>
+          <div style={{ fontSize: '12px', fontWeight: 700, color: 'var(--text-primary)', marginBottom: '8px' }}>
+            Email {emailTarget.invoices.length} Invoice{emailTarget.invoices.length !== 1 ? 's' : ''} to {emailTarget.customer}
+          </div>
+          <div style={{ fontSize: '10px', color: 'var(--text-muted)', marginBottom: '8px' }}>
+            {emailTarget.invoices.map(inv => `#${inv.invoiceNumber}`).join(', ')}
+          </div>
+          <div style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>
+            <input
+              type="email"
+              placeholder="Customer email address"
+              value={emailTarget.email}
+              onChange={(e) => setEmailTarget({ ...emailTarget, email: e.target.value })}
+              style={{ flex: 1, padding: '8px 10px', borderRadius: '6px', fontSize: '12px', border: '1px solid var(--border)', background: 'var(--input-bg)', color: 'var(--text-primary)' }}
+            />
+            <button
+              onClick={emailInvoices}
+              disabled={emailingInvoices || !emailTarget.email}
+              style={{ padding: '8px 14px', borderRadius: '6px', fontSize: '11px', fontWeight: 700, background: emailingInvoices ? 'rgba(59,130,246,0.05)' : 'rgba(59,130,246,0.1)', border: '1px solid rgba(59,130,246,0.25)', color: '#60a5fa', cursor: emailingInvoices || !emailTarget.email ? 'not-allowed' : 'pointer', opacity: !emailTarget.email ? 0.5 : 1, whiteSpace: 'nowrap' }}
+            >
+              {emailingInvoices ? 'Sending...' : 'Send'}
+            </button>
+            <button
+              onClick={() => setEmailTarget(null)}
+              style={{ background: 'none', border: 'none', color: 'var(--text-muted)', fontSize: '14px', cursor: 'pointer' }}
+            >✕</button>
+          </div>
         </div>
       )}
 
