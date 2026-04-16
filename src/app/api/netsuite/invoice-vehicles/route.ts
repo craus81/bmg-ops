@@ -6,9 +6,10 @@ import { requireAuth } from '@/lib/api-auth';
 /**
  * POST /api/netsuite/invoice-vehicles
  * Body: { scanIds: string[] }
- * Creates a NetSuite invoice directly from scan_logs entries (no PO/SO needed).
- * Groups scans by billable customer, looks up catalog pricing from netsuite_parts,
- * and creates one invoice per customer.
+ * Creates NetSuite invoices directly from scan_logs entries (no PO/SO needed).
+ * Groups scans by billable customer + PO number so each unique PO gets its own
+ * invoice with each part number on a separate line. Scans without a PO are
+ * grouped together by customer.
  */
 export async function POST(req: NextRequest) {
   const auth = await requireAuth(req);
@@ -48,16 +49,21 @@ export async function POST(req: NextRequest) {
       priceMap[p.item_number] = parseFloat(p.sales_price) || 0;
     }
 
-    // Group scans by billable customer
-    const byCustomer: Record<string, typeof scans> = {};
+    // Group scans by billable customer + PO number.
+    // Each unique PO gets its own invoice; scans without a PO are grouped together per customer.
+    const byGroup: Record<string, typeof scans> = {};
     for (const s of scans) {
       const customer = s.billable_customer || 'Unknown';
-      if (!byCustomer[customer]) byCustomer[customer] = [];
-      byCustomer[customer].push(s);
+      const groupKey = s.po_number
+        ? `${customer}|||${s.po_number}`
+        : `${customer}|||__NO_PO__`;
+      if (!byGroup[groupKey]) byGroup[groupKey] = [];
+      byGroup[groupKey].push(s);
     }
 
     const results: {
       customer: string;
+      poNumber?: string;
       vehicleCount: number;
       status: 'success' | 'error';
       invoiceId?: string;
@@ -65,14 +71,18 @@ export async function POST(req: NextRequest) {
       error?: string;
     }[] = [];
 
-    for (const [customerName, custScans] of Object.entries(byCustomer)) {
+    for (const [groupKey, groupScans] of Object.entries(byGroup)) {
+      const [customerName, poKey] = groupKey.split('|||');
+      const poNumber = poKey !== '__NO_PO__' ? poKey : undefined;
+
       try {
         // Find the NetSuite customer
         const customerResult = await findCustomer(customerName);
         if (!customerResult.found || customerResult.customers.length === 0) {
           results.push({
             customer: customerName,
-            vehicleCount: custScans.length,
+            poNumber,
+            vehicleCount: groupScans.length,
             status: 'error',
             error: `Customer "${customerName}" not found in NetSuite`,
           });
@@ -80,15 +90,14 @@ export async function POST(req: NextRequest) {
         }
         const nsCustomer = customerResult.customers[0];
 
-        // Group scans by part number and aggregate quantities
-        const partGroups: Record<string, { count: number; price: number; description: string }> = {};
-        for (const s of custScans) {
+        // Group scans by part number and aggregate quantities — each part is a separate line
+        const partGroups: Record<string, { count: number; price: number }> = {};
+        for (const s of groupScans) {
           const partNum = s.part_number || 'UNKNOWN';
           if (!partGroups[partNum]) {
             partGroups[partNum] = {
               count: 0,
               price: priceMap[partNum] || 0,
-              description: s.part_description || partNum,
             };
           }
           partGroups[partNum].count++;
@@ -117,24 +126,22 @@ export async function POST(req: NextRequest) {
         if (lineItems.length === 0) {
           results.push({
             customer: customerName,
-            vehicleCount: custScans.length,
+            poNumber,
+            vehicleCount: groupScans.length,
             status: 'error',
             error: `No parts matched in NetSuite: ${unmatchedParts.join(', ')}`,
           });
           continue;
         }
 
-        // Collect PO numbers from scans (if linked to POs)
-        const poNumbers = [...new Set(custScans.map(s => s.po_number).filter(Boolean))];
-        const poNumber = poNumbers.length > 0 ? poNumbers.join(', ') : undefined;
-
         // Build VIN list for the memo
-        const vinList = custScans.map(s => s.vin).join(', ');
-        const memo = `BMG FleetSuite Invoice — ${custScans.length} vehicle${custScans.length !== 1 ? 's' : ''}: ${vinList.length > 200 ? vinList.slice(0, 200) + '...' : vinList}`;
+        const vinList = groupScans.map(s => s.vin).join(', ');
+        const poLabel = poNumber ? ` — PO #${poNumber}` : '';
+        const memo = `BMG FleetSuite Invoice${poLabel} — ${groupScans.length} vehicle${groupScans.length !== 1 ? 's' : ''}: ${vinList.length > 200 ? vinList.slice(0, 200) + '...' : vinList}`;
 
         // Find a NetSuite location — use scan's location, fall back to O'Fallon
         let locationId: string | undefined;
-        const firstLocation = custScans.find(s => s.location_name)?.location_name;
+        const firstLocation = groupScans.find(s => s.location_name)?.location_name;
         const loc = await findLocation(firstLocation || "Fallon");
         if (loc) locationId = loc.id;
 
@@ -149,14 +156,15 @@ export async function POST(req: NextRequest) {
         if (!locationId) {
           results.push({
             customer: customerName,
-            vehicleCount: custScans.length,
+            poNumber,
+            vehicleCount: groupScans.length,
             status: 'error',
             error: 'Could not find O\'Fallon location in NetSuite',
           });
           continue;
         }
 
-        // Create the invoice
+        // Create the invoice — one per unique PO (or one for all no-PO scans per customer)
         const invoiceResult = await createDirectInvoice({
           customerId: nsCustomer.id,
           locationId,
@@ -167,7 +175,7 @@ export async function POST(req: NextRequest) {
 
         if (invoiceResult.success) {
           // Mark scans as exported if not already
-          const unexportedIds = custScans.filter(s => !s.exported_at).map(s => s.id);
+          const unexportedIds = groupScans.filter(s => !s.exported_at).map(s => s.id);
           if (unexportedIds.length > 0) {
             await supabase
               .from('scan_logs')
@@ -177,7 +185,8 @@ export async function POST(req: NextRequest) {
 
           results.push({
             customer: customerName,
-            vehicleCount: custScans.length,
+            poNumber,
+            vehicleCount: groupScans.length,
             status: 'success',
             invoiceId: invoiceResult.invoiceId,
             invoiceNumber: invoiceResult.invoiceNumber,
@@ -185,7 +194,8 @@ export async function POST(req: NextRequest) {
         } else {
           results.push({
             customer: customerName,
-            vehicleCount: custScans.length,
+            poNumber,
+            vehicleCount: groupScans.length,
             status: 'error',
             error: invoiceResult.error,
           });
@@ -193,7 +203,8 @@ export async function POST(req: NextRequest) {
       } catch (e: any) {
         results.push({
           customer: customerName,
-          vehicleCount: custScans.length,
+          poNumber,
+          vehicleCount: groupScans.length,
           status: 'error',
           error: e.message || 'Unknown error',
         });
@@ -206,7 +217,8 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({
       results,
       summary: {
-        totalCustomers: Object.keys(byCustomer).length,
+        totalCustomers: new Set(Object.keys(byGroup).map(k => k.split('|||')[0])).size,
+        totalInvoices: Object.keys(byGroup).length,
         totalVehicles: scanIds.length,
         success: successCount,
         errors: errorCount,

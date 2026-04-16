@@ -63,7 +63,7 @@ export default function AdminScansPage() {
 
   // Direct invoice state
   const [invoicing, setInvoicing] = useState(false);
-  const [invoiceResult, setInvoiceResult] = useState<{ results: { customer: string; vehicleCount: number; status: string; invoiceNumber?: string; error?: string }[]; summary: { success: number; errors: number } } | null>(null);
+  const [invoiceResult, setInvoiceResult] = useState<{ results: { customer: string; poNumber?: string; vehicleCount: number; status: string; invoiceNumber?: string; error?: string }[]; summary: { success: number; errors: number } } | null>(null);
 
   useEffect(() => { loadAll(); }, []);
 
@@ -587,7 +587,7 @@ export default function AdminScansPage() {
           </div>
           {invoiceResult.results.map((r, i) => (
             <div key={i} style={{ fontSize: '11px', fontWeight: 600, color: r.status === 'success' ? '#22c55e' : '#ef4444', marginBottom: '2px' }}>
-              {r.customer} ({r.vehicleCount} VIN{r.vehicleCount !== 1 ? 's' : ''})
+              {r.customer}{r.poNumber ? ` (PO #${r.poNumber})` : ''} ({r.vehicleCount} VIN{r.vehicleCount !== 1 ? 's' : ''})
               {r.status === 'success' ? ` → Invoice #${r.invoiceNumber}` : ` — ${r.error}`}
             </div>
           ))}
