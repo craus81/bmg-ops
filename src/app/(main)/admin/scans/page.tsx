@@ -136,11 +136,17 @@ export default function AdminScansPage() {
       [s.vehicle_year, s.vehicle_make, s.vehicle_model].filter(Boolean).join(' ').toLowerCase().includes(q);
   });
 
-  // Group by billable customer → part + location (+ PO for archived tab)
+  // Group by billable customer → PO (ready tab) or part + location (other tabs)
   const grouped = tabScans.reduce((acc: Record<string, Record<string, ScanLog[]>>, s) => {
     const customer = s.billable_customer || 'No Customer';
-    const poSuffix = tab === 'archived' && s.po_number ? ` · PO #${s.po_number}` : '';
-    const subKey = `${s.part_number || 'No Part'} · ${s.location_name || 'No Location'}${poSuffix}`;
+    let subKey: string;
+    if (tab === 'ready' && s.po_number) {
+      // Ready tab: group by PO so one invoice = one PO with multiple part lines
+      subKey = `PO #${s.po_number}`;
+    } else {
+      const poSuffix = tab === 'archived' && s.po_number ? ` · PO #${s.po_number}` : '';
+      subKey = `${s.part_number || 'No Part'} · ${s.location_name || 'No Location'}${poSuffix}`;
+    }
     if (!acc[customer]) acc[customer] = {};
     if (!acc[customer][subKey]) acc[customer][subKey] = [];
     acc[customer][subKey].push(s);
@@ -245,19 +251,19 @@ export default function AdminScansPage() {
       } else {
         setInvoiceResult(data);
 
-        // Auto-archive invoiced scans and set invoice details
+        // Auto-archive invoiced scans per PO group with correct invoice number
         const successResults = (data.results || []).filter((r: any) => r.status === 'success' && r.invoiceNumber);
-        if (successResults.length > 0) {
-          const invoiceNumber = successResults.map((r: any) => r.invoiceNumber).join(', ');
-          const today = new Date().toISOString().slice(0, 10);
+        const today = new Date().toISOString().slice(0, 10);
+        for (const result of successResults) {
+          const groupIds = result.scanIds || ids;
           await fetch('/api/scans/bulk-update', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({
-              scanIds: ids,
+              scanIds: groupIds,
               updates: {
                 archived_at: new Date().toISOString(),
-                invoice_number: invoiceNumber,
+                invoice_number: result.invoiceNumber,
                 date_invoiced: today,
               },
             }),
@@ -990,7 +996,11 @@ export default function AdminScansPage() {
                   {subKeys.map(subKey => {
                     const groupScans = subGroups[subKey];
                     const subCollapsed = !expandedGroups.has(`${customer}|${subKey}`);
-                    const [partLabel, locLabel] = subKey.split(' · ');
+                    const isPOGroup = subKey.startsWith('PO #');
+                    const uniqueParts = isPOGroup ? [...new Set(groupScans.map(s => s.part_number).filter(Boolean))] : [];
+                    const [partLabel, locLabel] = isPOGroup
+                      ? [subKey, groupScans[0]?.location_name || '']
+                      : subKey.split(' · ');
                     const groupIds = groupScans.map(s => s.id);
                     const allGroupSelected = groupIds.length > 0 && groupIds.every(id => selectedScans.has(id));
 
@@ -1004,17 +1014,19 @@ export default function AdminScansPage() {
                         }}>
                           <div onClick={() => toggleGroup(`${customer}|${subKey}`)} style={{ display: 'flex', alignItems: 'center', gap: '6px', cursor: 'pointer', flex: 1, minWidth: 0 }}>
                             <span style={{ fontSize: '9px', color: 'var(--text-muted)', transform: subCollapsed ? 'rotate(-90deg)' : 'rotate(0deg)', flexShrink: 0 }}>▼</span>
-                            <span style={{ fontSize: '12px', fontWeight: 700, color: 'var(--text-primary)', flexShrink: 0 }}>{partLabel}</span>
-                            {groupScans[0]?.part_description && (
+                            <span style={{ fontSize: '12px', fontWeight: 700, color: isPOGroup ? '#22c55e' : 'var(--text-primary)', flexShrink: 0 }}>{partLabel}</span>
+                            {isPOGroup ? (
+                              uniqueParts.length > 0 && <span style={{ fontSize: '10px', color: 'var(--text-secondary)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{uniqueParts.join(', ')}</span>
+                            ) : groupScans[0]?.part_description ? (
                               <span style={{ fontSize: '10px', color: 'var(--text-secondary)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{groupScans[0].part_description}</span>
-                            )}
-                            <span style={{ fontSize: '10px', color: 'var(--text-muted)', flexShrink: 0 }}>{locLabel}</span>
+                            ) : null}
+                            {locLabel && <span style={{ fontSize: '10px', color: 'var(--text-muted)', flexShrink: 0 }}>{locLabel}</span>}
                           </div>
                           <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
                             <button onClick={(e) => { e.stopPropagation(); toggleSelectGroup(groupIds); }} style={{ padding: '2px 6px', borderRadius: '4px', fontSize: '8px', fontWeight: 700, background: allGroupSelected ? 'rgba(59,130,246,0.15)' : 'rgba(59,130,246,0.06)', border: '1px solid rgba(59,130,246,0.2)', color: '#60a5fa', cursor: 'pointer' }}>
                               {allGroupSelected ? 'Deselect' : 'Select'}
                             </button>
-                            {groupScans[0]?.po_number && <span style={{ fontSize: '9px', fontWeight: 700, padding: '2px 6px', borderRadius: '4px', background: 'rgba(34,197,94,0.1)', color: '#22c55e' }}>PO #{groupScans[0].po_number}</span>}
+                            {!isPOGroup && groupScans[0]?.po_number && <span style={{ fontSize: '9px', fontWeight: 700, padding: '2px 6px', borderRadius: '4px', background: 'rgba(34,197,94,0.1)', color: '#22c55e' }}>PO #{groupScans[0].po_number}</span>}
                             <span style={{ fontSize: '10px', fontWeight: 700, color: 'var(--text-muted)' }}>{groupScans.length}</span>
                           </div>
                         </div>

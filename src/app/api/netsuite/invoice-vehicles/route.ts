@@ -6,9 +6,9 @@ import { requireAuth } from '@/lib/api-auth';
 /**
  * POST /api/netsuite/invoice-vehicles
  * Body: { scanIds: string[] }
- * Creates a NetSuite invoice directly from scan_logs entries (no PO/SO needed).
- * Groups scans by billable customer, looks up catalog pricing from netsuite_parts,
- * and creates one invoice per customer.
+ * Creates a NetSuite invoice directly from scan_logs entries.
+ * Groups scans by billable customer + PO number, creating one invoice per PO
+ * with multiple part number line items.
  */
 export async function POST(req: NextRequest) {
   const auth = await requireAuth(req);
@@ -48,16 +48,20 @@ export async function POST(req: NextRequest) {
       priceMap[p.item_number] = parseFloat(p.sales_price) || 0;
     }
 
-    // Group scans by billable customer
-    const byCustomer: Record<string, typeof scans> = {};
+    // Group scans by billable customer + PO (one invoice per PO)
+    const byCustomerPO: Record<string, { customer: string; po: string | null; scans: typeof scans }> = {};
     for (const s of scans) {
       const customer = s.billable_customer || 'Unknown';
-      if (!byCustomer[customer]) byCustomer[customer] = [];
-      byCustomer[customer].push(s);
+      const po = s.po_number || null;
+      const key = `${customer}|||${po || 'NO_PO'}`;
+      if (!byCustomerPO[key]) byCustomerPO[key] = { customer, po, scans: [] };
+      byCustomerPO[key].scans.push(s);
     }
 
     const results: {
       customer: string;
+      po: string | null;
+      scanIds: string[];
       vehicleCount: number;
       status: 'success' | 'error';
       invoiceId?: string;
@@ -65,13 +69,15 @@ export async function POST(req: NextRequest) {
       error?: string;
     }[] = [];
 
-    for (const [customerName, custScans] of Object.entries(byCustomer)) {
+    for (const { customer: customerName, po: poNumber, scans: custScans } of Object.values(byCustomerPO)) {
       try {
         // Find the NetSuite customer
         const customerResult = await findCustomer(customerName);
         if (!customerResult.found || customerResult.customers.length === 0) {
           results.push({
             customer: customerName,
+            po: poNumber,
+            scanIds: custScans.map(s => s.id),
             vehicleCount: custScans.length,
             status: 'error',
             error: `Customer "${customerName}" not found in NetSuite`,
@@ -118,6 +124,8 @@ export async function POST(req: NextRequest) {
         if (lineItems.length === 0) {
           results.push({
             customer: customerName,
+            po: poNumber,
+            scanIds: custScans.map(s => s.id),
             vehicleCount: custScans.length,
             status: 'error',
             error: `No parts matched in NetSuite: ${unmatchedParts.join(', ')}`,
@@ -127,7 +135,8 @@ export async function POST(req: NextRequest) {
 
         // Build VIN list for the memo
         const vinList = custScans.map(s => s.vin).join(', ');
-        const memo = `BMG FleetSuite Invoice — ${custScans.length} vehicle${custScans.length !== 1 ? 's' : ''}: ${vinList.length > 200 ? vinList.slice(0, 200) + '...' : vinList}`;
+        const poMemo = poNumber ? ` · PO #${poNumber}` : '';
+        const memo = `BMG FleetSuite Invoice${poMemo} — ${custScans.length} vehicle${custScans.length !== 1 ? 's' : ''}: ${vinList.length > 200 ? vinList.slice(0, 200) + '...' : vinList}`;
 
         // Find a NetSuite location — use scan's location, fall back to O'Fallon
         let locationId: string | undefined;
@@ -146,6 +155,8 @@ export async function POST(req: NextRequest) {
         if (!locationId) {
           results.push({
             customer: customerName,
+            po: poNumber,
+            scanIds: custScans.map(s => s.id),
             vehicleCount: custScans.length,
             status: 'error',
             error: 'Could not find O\'Fallon location in NetSuite',
@@ -173,6 +184,8 @@ export async function POST(req: NextRequest) {
 
           results.push({
             customer: customerName,
+            po: poNumber,
+            scanIds: custScans.map(s => s.id),
             vehicleCount: custScans.length,
             status: 'success',
             invoiceId: invoiceResult.invoiceId,
@@ -181,6 +194,8 @@ export async function POST(req: NextRequest) {
         } else {
           results.push({
             customer: customerName,
+            po: poNumber,
+            scanIds: custScans.map(s => s.id),
             vehicleCount: custScans.length,
             status: 'error',
             error: invoiceResult.error,
@@ -189,6 +204,8 @@ export async function POST(req: NextRequest) {
       } catch (e: any) {
         results.push({
           customer: customerName,
+          po: poNumber,
+          scanIds: custScans.map(s => s.id),
           vehicleCount: custScans.length,
           status: 'error',
           error: e.message || 'Unknown error',
@@ -202,7 +219,7 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({
       results,
       summary: {
-        totalCustomers: Object.keys(byCustomer).length,
+        totalGroups: Object.keys(byCustomerPO).length,
         totalVehicles: scanIds.length,
         success: successCount,
         errors: errorCount,
