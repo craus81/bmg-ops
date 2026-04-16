@@ -97,8 +97,8 @@ export async function POST(req: NextRequest) {
         // Look up NetSuite items by part number
         const nsItems = await findItems(Object.keys(partGroups));
 
-        // Build invoice line items
-        const lineItems: { itemId: string | number; quantity: number; rate: number; description: string }[] = [];
+        // Build invoice line items (no description — NetSuite populates from part number)
+        const lineItems: { itemId: string | number; quantity: number; rate: number }[] = [];
         const unmatchedParts: string[] = [];
 
         for (const [partNum, group] of Object.entries(partGroups)) {
@@ -111,7 +111,6 @@ export async function POST(req: NextRequest) {
             itemId: nsItem.id,
             quantity: group.count,
             rate: group.price,
-            description: `${group.description} — ${group.count} vehicle${group.count !== 1 ? 's' : ''}`,
           });
         }
 
@@ -124,6 +123,10 @@ export async function POST(req: NextRequest) {
           });
           continue;
         }
+
+        // Collect PO numbers from scans (if linked to POs)
+        const poNumbers = [...new Set(custScans.map(s => s.po_number).filter(Boolean))];
+        const poNumber = poNumbers.length > 0 ? poNumbers.join(', ') : undefined;
 
         // Build VIN list for the memo
         const vinList = custScans.map(s => s.vin).join(', ');
@@ -157,6 +160,7 @@ export async function POST(req: NextRequest) {
         const invoiceResult = await createDirectInvoice({
           customerId: nsCustomer.id,
           locationId,
+          poNumber,
           memo,
           lineItems,
         });
