@@ -72,6 +72,9 @@ export default function MorePage() {
         {F('prospects') && (
           <MenuBtn title="CRM" sub="Prospects, customers & sales pipeline" onClick={() => router.push('/admin/prospects')} />
         )}
+        {F('upfit_projects') && (
+          <MenuBtn title="Upfit Projects" sub="Track upfit jobs from estimate to completion" onClick={() => router.push('/upfit')} />
+        )}
         {F('reports') && (
           <MenuBtn title="Scan Log" sub="Review scans, match POs, export & invoice" onClick={() => router.push('/admin/scans')} />
         )}
