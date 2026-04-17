@@ -66,7 +66,8 @@ export default function AdminScansPage() {
   const [invoiceResult, setInvoiceResult] = useState<{ results: { customer: string; po?: string | null; invoiceId?: string; invoiceNumber?: string; vehicleCount: number; status: string; error?: string }[]; summary: { success: number; errors: number } } | null>(null);
   const [emailingInvoices, setEmailingInvoices] = useState(false);
   const [sendingTest, setSendingTest] = useState(false);
-  const [emailTarget, setEmailTarget] = useState<{ customer: string; email: string; body: string; invoices: { invoiceId?: string; invoiceNumber: string; po?: string; include: boolean }[] } | null>(null);
+  const [emailTarget, setEmailTarget] = useState<{ customer: string; email: string; body: string; invoices: { invoiceId?: string; invoiceNumber: string; po?: string; include: boolean; verifyStatus?: 'ok' | 'error'; verifyError?: string }[] } | null>(null);
+  const [verifyingInvoices, setVerifyingInvoices] = useState(false);
 
   useEffect(() => { loadAll(); }, []);
 
@@ -360,6 +361,41 @@ export default function AdminScansPage() {
     await supabase.from('prospects').update({ billing_emails: merged }).eq('id', (prospect as any).id);
   };
 
+  const verifyInvoices = async () => {
+    if (!emailTarget) return;
+    const invoicesToCheck = emailTarget.invoices.filter(i => i.include);
+    if (invoicesToCheck.length === 0) return;
+    setVerifyingInvoices(true);
+    try {
+      const res = await fetch('/api/netsuite/email-invoices', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          invoices: invoicesToCheck.map(({ include, verifyStatus, verifyError, ...rest }) => rest),
+          customerName: emailTarget.customer,
+          customerEmail: [],
+          dryRun: true,
+        }),
+      });
+      const data = await res.json();
+      const statusByNumber: Record<string, { status: 'ok' | 'error'; error?: string }> = {};
+      for (const r of data.results || []) {
+        statusByNumber[r.invoiceNumber] = { status: r.status, error: r.error };
+      }
+      setEmailTarget(t => t ? {
+        ...t,
+        invoices: t.invoices.map(i => {
+          if (!i.include) return { ...i, verifyStatus: undefined, verifyError: undefined };
+          const s = statusByNumber[i.invoiceNumber];
+          return s ? { ...i, verifyStatus: s.status, verifyError: s.error } : i;
+        }),
+      } : t);
+    } catch (e: any) {
+      alert(`Verification failed: ${e.message}`);
+    }
+    setVerifyingInvoices(false);
+  };
+
   const emailInvoices = async (overrideEmail?: string) => {
     if (!emailTarget) return;
     const isTest = !!overrideEmail;
@@ -379,7 +415,7 @@ export default function AdminScansPage() {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          invoices: invoicesToSend.map(({ include, ...rest }) => rest),
+          invoices: invoicesToSend.map(({ include, verifyStatus, verifyError, ...rest }) => rest),
           customerName: emailTarget.customer,
           customerEmail: recipients,
           customBody: emailTarget.body,
@@ -387,12 +423,27 @@ export default function AdminScansPage() {
       });
       const data = await res.json();
       if (!res.ok) {
-        alert(`Email failed: ${data.error || 'Unknown error'}`);
+        // Annotate per-invoice failures in the modal so the user can see which failed
+        if (Array.isArray(data.results)) {
+          const statusByNumber: Record<string, { status: 'ok' | 'error'; error?: string }> = {};
+          for (const r of data.results) {
+            statusByNumber[r.invoiceNumber] = { status: r.status, error: r.error };
+          }
+          setEmailTarget(t => t ? {
+            ...t,
+            invoices: t.invoices.map(i => {
+              if (!i.include) return i;
+              const s = statusByNumber[i.invoiceNumber];
+              return s ? { ...i, verifyStatus: s.status, verifyError: s.error } : i;
+            }),
+          } : t);
+        }
+        alert(`${data.error || 'Email failed'}`);
       } else if (isTest) {
         alert(`Test email sent to ${recipients[0]} — check your inbox to preview`);
       } else {
         await saveBillingEmails(emailTarget.customer, recipients);
-        alert(`Sent ${data.sent} invoice${data.sent !== 1 ? 's' : ''} to ${recipients.join(', ')}${data.failed > 0 ? ` (${data.failed} failed to fetch)` : ''}`);
+        alert(`Sent ${data.sent} invoice${data.sent !== 1 ? 's' : ''} to ${recipients.join(', ')}`);
         setEmailTarget(null);
       }
     } catch (e: any) {
@@ -783,27 +834,50 @@ export default function AdminScansPage() {
               style={{ width: '100%', padding: '8px 10px', borderRadius: '6px', border: '1px solid var(--border)', background: 'var(--input-bg)', color: 'var(--text-primary)', fontSize: '12px', fontFamily: 'inherit', resize: 'vertical', marginBottom: '8px', lineHeight: 1.5 }}
               placeholder="Write a note for the customer..."
             />
-            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '4px' }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '4px', gap: '8px', flexWrap: 'wrap' }}>
               <div style={{ color: 'var(--text-muted)' }}>Invoices ({includedCount} selected):</div>
-              <button
-                onClick={toggleAll}
-                style={{ padding: '2px 8px', borderRadius: '4px', fontSize: '9px', fontWeight: 700, background: 'rgba(59,130,246,0.08)', border: '1px solid rgba(59,130,246,0.2)', color: '#60a5fa', cursor: 'pointer' }}
-              >
-                {allChecked ? 'Uncheck All' : 'Check All'}
-              </button>
+              <div style={{ display: 'flex', gap: '6px' }}>
+                <button
+                  onClick={verifyInvoices}
+                  disabled={verifyingInvoices || includedCount === 0}
+                  style={{ padding: '2px 8px', borderRadius: '4px', fontSize: '9px', fontWeight: 700, background: 'rgba(251,191,36,0.08)', border: '1px solid rgba(251,191,36,0.25)', color: '#fbbf24', cursor: verifyingInvoices || includedCount === 0 ? 'not-allowed' : 'pointer', opacity: verifyingInvoices || includedCount === 0 ? 0.5 : 1 }}
+                >
+                  {verifyingInvoices ? 'Verifying...' : 'Verify PDFs'}
+                </button>
+                <button
+                  onClick={toggleAll}
+                  style={{ padding: '2px 8px', borderRadius: '4px', fontSize: '9px', fontWeight: 700, background: 'rgba(59,130,246,0.08)', border: '1px solid rgba(59,130,246,0.2)', color: '#60a5fa', cursor: 'pointer' }}
+                >
+                  {allChecked ? 'Uncheck All' : 'Check All'}
+                </button>
+              </div>
             </div>
             <div style={{ maxHeight: '260px', overflowY: 'auto', padding: '4px 0' }}>
-              {emailTarget.invoices.map((inv, i) => (
-                <label key={i} style={{ display: 'flex', alignItems: 'center', gap: '8px', padding: '3px 6px', borderRadius: '4px', cursor: 'pointer', color: inv.include ? 'var(--text-secondary)' : 'var(--text-muted)', opacity: inv.include ? 1 : 0.55 }}>
-                  <input
-                    type="checkbox"
-                    checked={inv.include}
-                    onChange={() => toggleOne(i)}
-                    style={{ cursor: 'pointer', accentColor: '#22c55e' }}
-                  />
-                  <span>#{inv.invoiceNumber}{inv.po ? ` (PO #${inv.po})` : ''}</span>
-                </label>
-              ))}
+              {emailTarget.invoices.map((inv, i) => {
+                const statusColor = inv.verifyStatus === 'ok' ? '#22c55e' : inv.verifyStatus === 'error' ? '#ef4444' : 'var(--text-muted)';
+                const statusIcon = inv.verifyStatus === 'ok' ? '✓' : inv.verifyStatus === 'error' ? '✕' : '';
+                return (
+                  <label key={i} title={inv.verifyError || ''} style={{ display: 'flex', alignItems: 'center', gap: '8px', padding: '3px 6px', borderRadius: '4px', cursor: 'pointer', color: inv.include ? 'var(--text-secondary)' : 'var(--text-muted)', opacity: inv.include ? 1 : 0.55 }}>
+                    <input
+                      type="checkbox"
+                      checked={inv.include}
+                      onChange={() => toggleOne(i)}
+                      style={{ cursor: 'pointer', accentColor: '#22c55e' }}
+                    />
+                    <span style={{ flex: 1 }}>#{inv.invoiceNumber}{inv.po ? ` (PO #${inv.po})` : ''}</span>
+                    {statusIcon && (
+                      <span style={{ fontSize: '11px', fontWeight: 700, color: statusColor, minWidth: '14px', textAlign: 'right' }}>
+                        {statusIcon}
+                      </span>
+                    )}
+                    {inv.verifyStatus === 'error' && inv.verifyError && (
+                      <span style={{ fontSize: '10px', color: '#ef4444', fontStyle: 'italic', flexShrink: 0 }}>
+                        {inv.verifyError.length > 40 ? inv.verifyError.substring(0, 40) + '...' : inv.verifyError}
+                      </span>
+                    )}
+                  </label>
+                );
+              })}
             </div>
           </div>
 
