@@ -26,6 +26,7 @@ export interface Tab {
 // All possible tabs with priority — only top 5 + More will show
 export const allTabs: Tab[] = [
   { id: 'home', path: '/home', label: 'Home', feature: 'home', priority: 0 },
+  { id: 'upfit', path: '/upfit', label: 'Upfit', feature: 'upfit_projects', priority: 0.5 },
   { id: 'graphics', path: '/graphics', label: 'Graphics', feature: 'graphics', priority: 1 },
   { id: 'fleet', path: '/fleet', label: 'Check In', feature: 'fleet_checkin', priority: 2 },
   { id: 'tracking', path: '/tracking', label: 'In-Shop', feature: 'in_shop', priority: 3 },
@@ -34,7 +35,6 @@ export const allTabs: Tab[] = [
   { id: 'scan', path: '/scan', label: 'Scan', feature: 'scan', priority: 5 },
   { id: 'time', path: '/time', label: 'Time', feature: 'time', priority: 6 },
   { id: 'estimates', path: '/estimates', label: 'Estimates', feature: 'estimates', priority: 7 },
-  { id: 'upfit', path: '/upfit', label: 'Upfit', feature: 'upfit_projects', priority: 7.5 },
   { id: 'installer-portal', path: '/installer', label: 'CNI Jobs', feature: 'cni_management', priority: 8 },
   // Customer-only
   { id: 'customer-dashboard', path: '/customer/dashboard', label: 'My Jobs', feature: 'home', priority: 0 },
