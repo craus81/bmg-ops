@@ -66,7 +66,7 @@ export default function AdminScansPage() {
   const [invoiceResult, setInvoiceResult] = useState<{ results: { customer: string; po?: string | null; invoiceId?: string; invoiceNumber?: string; vehicleCount: number; status: string; error?: string }[]; summary: { success: number; errors: number } } | null>(null);
   const [emailingInvoices, setEmailingInvoices] = useState(false);
   const [sendingTest, setSendingTest] = useState(false);
-  const [emailTarget, setEmailTarget] = useState<{ customer: string; email: string; invoices: { invoiceId: string; invoiceNumber: string; po?: string }[] } | null>(null);
+  const [emailTarget, setEmailTarget] = useState<{ customer: string; email: string; invoices: { invoiceId?: string; invoiceNumber: string; po?: string }[] } | null>(null);
 
   useEffect(() => { loadAll(); }, []);
 
@@ -1098,6 +1098,35 @@ export default function AdminScansPage() {
                   <span style={{ fontWeight: 800, fontSize: '14px', color: 'var(--text-primary)' }}>{customer}</span>
                 </div>
                 <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                  {tab === 'archived' && (() => {
+                    const selectedCustomerScans = customerScanIds.filter(id => selectedScans.has(id));
+                    const sourceScans = selectedCustomerScans.length > 0
+                      ? subKeys.flatMap(k => subGroups[k]).filter(s => selectedScans.has(s.id))
+                      : subKeys.flatMap(k => subGroups[k]);
+                    const invoiceMap = new Map<string, { invoiceNumber: string; po?: string }>();
+                    for (const s of sourceScans) {
+                      if (s.invoice_number && !invoiceMap.has(s.invoice_number)) {
+                        invoiceMap.set(s.invoice_number, {
+                          invoiceNumber: s.invoice_number,
+                          po: s.po_number || undefined,
+                        });
+                      }
+                    }
+                    const invoicesForCustomer = [...invoiceMap.values()];
+                    if (invoicesForCustomer.length === 0) return null;
+                    return (
+                      <button
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          setEmailTarget({ customer, email: '', invoices: invoicesForCustomer });
+                        }}
+                        style={{ padding: '2px 8px', borderRadius: '4px', fontSize: '9px', fontWeight: 700, background: 'rgba(34,197,94,0.1)', border: '1px solid rgba(34,197,94,0.25)', color: '#22c55e', cursor: 'pointer', whiteSpace: 'nowrap' }}
+                        title={selectedCustomerScans.length > 0 ? 'Email invoices for selected scans' : 'Email all invoices for this customer'}
+                      >
+                        Email {invoicesForCustomer.length} Invoice{invoicesForCustomer.length !== 1 ? 's' : ''}
+                      </button>
+                    );
+                  })()}
                   <button onClick={(e) => { e.stopPropagation(); toggleSelectGroup(customerScanIds); }} style={{ padding: '2px 8px', borderRadius: '4px', fontSize: '9px', fontWeight: 700, background: allCustomerSelected ? 'rgba(59,130,246,0.15)' : 'rgba(59,130,246,0.06)', border: '1px solid rgba(59,130,246,0.2)', color: '#60a5fa', cursor: 'pointer' }}>
                     {allCustomerSelected ? 'Deselect' : 'Select'} All
                   </button>

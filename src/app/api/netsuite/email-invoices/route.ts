@@ -1,12 +1,13 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { getNetSuitePdf } from '@/lib/netsuite';
+import { getNetSuitePdf, suiteqlQuery } from '@/lib/netsuite';
 import { sendEmail, buildInvoiceEmail } from '@/lib/resend';
 import { requireAuth } from '@/lib/api-auth';
 
 /**
  * POST /api/netsuite/email-invoices
- * Body: { invoices: { invoiceId: string; invoiceNumber: string; po?: string }[]; customerName: string; customerEmail: string }
+ * Body: { invoices: { invoiceId?: string; invoiceNumber: string; po?: string }[]; customerName: string; customerEmail: string }
  * Fetches PDFs for each invoice from NetSuite, attaches them all to one email.
+ * If invoiceId is missing, looks it up by invoiceNumber (tranid) via SuiteQL.
  */
 export async function POST(req: NextRequest) {
   const auth = await requireAuth(req);
@@ -26,7 +27,26 @@ export async function POST(req: NextRequest) {
     const failed: string[] = [];
 
     for (const inv of invoices) {
-      const result = await getNetSuitePdf('invoice', inv.invoiceId);
+      let invoiceId = inv.invoiceId;
+
+      // Look up internal ID from tranid if not provided
+      if (!invoiceId && inv.invoiceNumber) {
+        try {
+          const lookup = await suiteqlQuery(
+            `SELECT id FROM transaction WHERE type = 'CustInvc' AND tranid = '${String(inv.invoiceNumber).replace(/'/g, "''")}'`
+          );
+          invoiceId = lookup?.items?.[0]?.id;
+        } catch (err) {
+          // fall through — will record as failed below
+        }
+      }
+
+      if (!invoiceId) {
+        failed.push(inv.invoiceNumber || 'unknown');
+        continue;
+      }
+
+      const result = await getNetSuitePdf('invoice', invoiceId);
       if (result.success && result.pdfBase64) {
         attachments.push({
           filename: result.filename || `Invoice_${inv.invoiceNumber}.pdf`,
@@ -34,7 +54,7 @@ export async function POST(req: NextRequest) {
           contentType: 'application/pdf',
         });
       } else {
-        failed.push(inv.invoiceNumber || inv.invoiceId);
+        failed.push(inv.invoiceNumber || invoiceId);
       }
     }
 
