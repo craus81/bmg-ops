@@ -1,4 +1,5 @@
 import { S3Client, PutObjectCommand, DeleteObjectCommand, GetObjectCommand } from '@aws-sdk/client-s3';
+import { getSignedUrl } from '@aws-sdk/s3-request-presigner';
 
 // ── R2 Configuration ──
 function getR2Config() {
@@ -96,6 +97,35 @@ export function r2PublicUrl(prefix: string, path: string): string {
   const accountId = process.env.R2_ACCOUNT_ID || '';
   const bucket = process.env.R2_BUCKET_NAME || 'fleetsuite';
   return `https://${accountId}.r2.cloudflarestorage.com/${bucket}/${key}`;
+}
+
+// ── Generate a presigned PUT URL so the browser can upload directly to R2 ──
+// Bypasses the Next.js API route body-size limit (~4.5MB on Vercel).
+export async function r2PresignPut(
+  prefix: string,
+  path: string,
+  contentType: string,
+  expiresIn = 600,
+): Promise<{ url: string; key: string; publicUrl: string }> {
+  const config = getR2Config();
+  const client = getR2Client();
+  const key = `${prefix}/${path}`;
+
+  const url = await getSignedUrl(
+    client,
+    new PutObjectCommand({
+      Bucket: config.bucket,
+      Key: key,
+      ContentType: contentType,
+    }),
+    { expiresIn },
+  );
+
+  const publicUrl = config.publicUrl
+    ? `${config.publicUrl}/${key}`
+    : `https://${config.accountId}.r2.cloudflarestorage.com/${config.bucket}/${key}`;
+
+  return { url, key, publicUrl };
 }
 
 // ── Get a file from R2 (for server-side reads) ──
