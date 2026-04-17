@@ -34,6 +34,7 @@ export const FEATURES = {
   all_jobs: 'CNI Jobs',
   catalog_management: 'Part Catalog Management',
   prospects: 'Prospects / Sales CRM',
+  upfit_projects: 'Upfit Projects',
 } as const;
 
 export type FeatureKey = keyof typeof FEATURES;
@@ -44,7 +45,7 @@ export const ROLE_DEFAULT_FEATURES: Record<string, FeatureKey[]> = {
 
   sales: [
     'home', 'fleet_checkin', 'in_shop', 'graphics', 'estimates',
-    'time', 'messages', 'customers', 'parts_catalog', 'quoting', 'schedule', 'prospects',
+    'time', 'messages', 'customers', 'parts_catalog', 'quoting', 'schedule', 'prospects', 'upfit_projects',
   ],
 
   graphics_production: [

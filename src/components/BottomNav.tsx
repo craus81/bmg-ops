@@ -7,7 +7,7 @@ import type { FeatureKey } from '@/lib/features';
 import {
   Home, Palette, ClipboardCheck, Warehouse, Users,
   CalendarDays, ScanLine, Clock, FileText, Briefcase,
-  LayoutGrid, Settings, MoreHorizontal,
+  LayoutGrid, Settings, MoreHorizontal, Wrench,
 } from 'lucide-react';
 
 interface BottomNavProps {
@@ -34,6 +34,7 @@ export const allTabs: Tab[] = [
   { id: 'scan', path: '/scan', label: 'Scan', feature: 'scan', priority: 5 },
   { id: 'time', path: '/time', label: 'Time', feature: 'time', priority: 6 },
   { id: 'estimates', path: '/estimates', label: 'Estimates', feature: 'estimates', priority: 7 },
+  { id: 'upfit', path: '/upfit', label: 'Upfit', feature: 'upfit_projects', priority: 7.5 },
   { id: 'installer-portal', path: '/installer', label: 'CNI Jobs', feature: 'cni_management', priority: 8 },
   // Customer-only
   { id: 'customer-dashboard', path: '/customer/dashboard', label: 'My Jobs', feature: 'home', priority: 0 },
@@ -50,6 +51,7 @@ const TAB_ICONS: Record<string, React.ElementType> = {
   time: Clock,
   estimates: FileText,
   'installer-portal': Briefcase,
+  upfit: Wrench,
   'customer-dashboard': LayoutGrid,
   more: MoreHorizontal,
   'customer-settings': Settings,
@@ -90,6 +92,7 @@ export default function BottomNav({ clockStatus }: BottomNavProps) {
     if (tab.path === '/installer') return pathname.startsWith('/installer');
     if (tab.path === '/graphics') return pathname.startsWith('/graphics');
     if (tab.path === '/estimates') return pathname.startsWith('/estimates');
+    if (tab.path === '/upfit') return pathname.startsWith('/upfit');
     if (tab.path === '/customer/dashboard') return pathname.startsWith('/customer');
     return pathname.startsWith(tab.path);
   };

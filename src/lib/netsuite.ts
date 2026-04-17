@@ -625,6 +625,7 @@ export async function findItems(partNumbers: string[]): Promise<Record<string, {
 export async function createDirectInvoice(payload: {
   customerId: string | number;
   locationId?: string | number;
+  poNumber?: string;
   memo?: string;
   otherrefnum?: string;
   lineItems: {
@@ -656,6 +657,7 @@ export async function createDirectInvoice(payload: {
     entity: { id: payload.customerId },
     item: { items },
     ...(payload.locationId ? { location: { id: payload.locationId } } : {}),
+    ...(payload.poNumber ? { otherRefNum: payload.poNumber } : {}),
     ...(payload.memo ? { memo: payload.memo } : {}),
     ...(payload.otherrefnum ? { otherrefnum: payload.otherrefnum } : {}),
   };
