@@ -17,7 +17,7 @@ interface Attachment {
  * Returns true if successful, false if Resend is not configured or failed
  */
 export async function sendEmail(
-  to: string,
+  to: string | string[],
   subject: string,
   htmlBody: string,
   textBody?: string,

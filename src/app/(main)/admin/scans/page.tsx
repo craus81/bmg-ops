@@ -310,11 +310,44 @@ export default function AdminScansPage() {
     setInvoicing(false);
   };
 
+  const parseEmails = (input: string): string[] => {
+    return input.split(/[,;\s]+/).map(e => e.trim()).filter(e => /^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(e));
+  };
+
+  // Look up saved billing emails for a customer by company_name (case-insensitive)
+  const fetchSavedBillingEmails = async (customer: string): Promise<string[]> => {
+    const { data } = await supabase
+      .from('prospects')
+      .select('billing_emails')
+      .ilike('company_name', customer)
+      .limit(1)
+      .maybeSingle();
+    return (data as any)?.billing_emails || [];
+  };
+
+  // Merge and save billing emails back to the matching prospect
+  const saveBillingEmails = async (customer: string, newEmails: string[]) => {
+    if (newEmails.length === 0) return;
+    const { data: prospect } = await supabase
+      .from('prospects')
+      .select('id, billing_emails')
+      .ilike('company_name', customer)
+      .limit(1)
+      .maybeSingle();
+    if (!prospect) return;
+    const existing: string[] = (prospect as any).billing_emails || [];
+    const merged = Array.from(new Set([...existing, ...newEmails].map(e => e.toLowerCase())));
+    await supabase.from('prospects').update({ billing_emails: merged }).eq('id', (prospect as any).id);
+  };
+
   const emailInvoices = async (overrideEmail?: string) => {
     if (!emailTarget) return;
     const isTest = !!overrideEmail;
-    const targetEmail = overrideEmail || emailTarget.email;
-    if (!targetEmail) return;
+    const recipients = isTest ? [overrideEmail!] : parseEmails(emailTarget.email);
+    if (recipients.length === 0) {
+      alert('Please enter at least one valid email address');
+      return;
+    }
     if (isTest) setSendingTest(true); else setEmailingInvoices(true);
     try {
       const res = await fetch('/api/netsuite/email-invoices', {
@@ -323,7 +356,7 @@ export default function AdminScansPage() {
         body: JSON.stringify({
           invoices: emailTarget.invoices,
           customerName: emailTarget.customer,
-          customerEmail: targetEmail,
+          customerEmail: recipients,
           customBody: emailTarget.body,
         }),
       });
@@ -331,9 +364,10 @@ export default function AdminScansPage() {
       if (!res.ok) {
         alert(`Email failed: ${data.error || 'Unknown error'}`);
       } else if (isTest) {
-        alert(`Test email sent to ${targetEmail} — check your inbox to preview`);
+        alert(`Test email sent to ${recipients[0]} — check your inbox to preview`);
       } else {
-        alert(`Sent ${data.sent} invoice${data.sent !== 1 ? 's' : ''} to ${targetEmail}${data.failed > 0 ? ` (${data.failed} failed to fetch)` : ''}`);
+        await saveBillingEmails(emailTarget.customer, recipients);
+        alert(`Sent ${data.sent} invoice${data.sent !== 1 ? 's' : ''} to ${recipients.join(', ')}${data.failed > 0 ? ` (${data.failed} failed to fetch)` : ''}`);
         setEmailTarget(null);
       }
     } catch (e: any) {
@@ -341,6 +375,17 @@ export default function AdminScansPage() {
     }
     if (isTest) setSendingTest(false); else setEmailingInvoices(false);
   };
+
+  // When a customer is targeted for emailing, prefill the input with saved billing emails
+  useEffect(() => {
+    if (!emailTarget || emailTarget.email) return;
+    (async () => {
+      const saved = await fetchSavedBillingEmails(emailTarget.customer);
+      if (saved.length > 0) {
+        setEmailTarget(t => t ? { ...t, email: saved.join(', ') } : t);
+      }
+    })();
+  }, [emailTarget?.customer]);
 
   // Edit scan
   const [editingScan, setEditingScan] = useState<ScanLog | null>(null);
@@ -719,8 +764,8 @@ export default function AdminScansPage() {
           {/* Customer email + send buttons */}
           <div style={{ display: 'flex', gap: '8px', alignItems: 'center', flexWrap: 'wrap' }}>
             <input
-              type="email"
-              placeholder="Customer email address"
+              type="text"
+              placeholder="Customer email(s) — separate multiple with commas"
               value={emailTarget.email}
               onChange={(e) => setEmailTarget({ ...emailTarget, email: e.target.value })}
               style={{ flex: 1, minWidth: '180px', padding: '8px 10px', borderRadius: '6px', fontSize: '12px', border: '1px solid var(--border)', background: 'var(--input-bg)', color: 'var(--text-primary)' }}

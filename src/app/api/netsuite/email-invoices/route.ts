@@ -19,7 +19,12 @@ export async function POST(req: NextRequest) {
     if (!invoices || !Array.isArray(invoices) || invoices.length === 0) {
       return NextResponse.json({ error: 'invoices array required' }, { status: 400 });
     }
-    if (!customerEmail) {
+
+    const recipients: string[] = Array.isArray(customerEmail)
+      ? customerEmail.map((e: string) => String(e).trim()).filter(Boolean)
+      : String(customerEmail || '').split(/[,;\s]+/).map(e => e.trim()).filter(Boolean);
+
+    if (recipients.length === 0) {
       return NextResponse.json({ error: 'customerEmail required' }, { status: 400 });
     }
 
@@ -73,7 +78,7 @@ export async function POST(req: NextRequest) {
 
     const html = buildInvoiceEmail(customerName, invoiceNumbers, poNumbers, customBody);
 
-    const sent = await sendEmail(customerEmail, subject, html, undefined, attachments);
+    const sent = await sendEmail(recipients, subject, html, undefined, attachments);
 
     if (!sent) {
       return NextResponse.json({ error: 'Failed to send email' }, { status: 500 });
@@ -84,7 +89,7 @@ export async function POST(req: NextRequest) {
       sent: attachments.length,
       failed: failed.length,
       failedInvoices: failed,
-      to: customerEmail,
+      to: recipients,
     });
   } catch (err: any) {
     console.error('Email invoices error:', err);
