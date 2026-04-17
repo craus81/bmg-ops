@@ -155,9 +155,20 @@ export default function GraphicsPage() {
       loadHistory(job.id);
       loadJobAssignments(job.id);
     }
-    // Clear the query param so refreshing doesn't re-trigger
     router.replace('/graphics', { scroll: false });
   }, [loading, searchParams]);
+
+  // Auto-expand job from URL param (deep link from notifications/search)
+  useEffect(() => {
+    if (loading) return;
+    const jobId = searchParams.get('id');
+    if (jobId && jobs.some(j => j.id === jobId)) {
+      setExpandedJobId(jobId);
+      loadHistory(jobId);
+      loadJobAssignments(jobId);
+      loadJobFiles(jobId);
+    }
+  }, [loading]);
 
   const loadJobs = async () => {
     // Exclude installed/cancelled by default — they're archived
@@ -346,7 +357,7 @@ export default function GraphicsPage() {
               type: 'graphics_status',
               title: `${job.title} → ${GRAPHICS_STATUS_LABELS[newStatus]}`,
               body: `Job #${job.job_number || job.id.slice(0, 8)} status changed to ${GRAPHICS_STATUS_LABELS[newStatus]}`,
-              url: '/graphics',
+              url: `/graphics?id=${job.id}`,
               excludeUserId: user?.id,
             }),
           }).catch(() => {});
@@ -491,7 +502,7 @@ export default function GraphicsPage() {
               type: 'graphics_new',
               title: `New Graphics Job: ${createForm.title || 'Untitled'}`,
               body: `${createForm.customer || 'Unknown'} · ${createForm.quantity} unit${createForm.quantity !== 1 ? 's' : ''}${createForm.part_number ? ` · ${createForm.part_number}` : ''}`,
-              url: '/graphics',
+              url: `/graphics?id=${data.id}`,
               excludeUserId: user?.id,
             }),
           }).catch(() => {});
