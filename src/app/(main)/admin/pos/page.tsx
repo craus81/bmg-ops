@@ -74,6 +74,8 @@ export default function POsPage() {
   // Create graphics job from PO line item
   const [creatingGfxJob, setCreatingGfxJob] = useState<string | null>(null); // line item id
   const [gfxJobResults, setGfxJobResults] = useState<Record<string, 'created' | 'error'>>({});
+  // Create multi-part graphics job from entire PO
+  const [creatingGfxJobForPo, setCreatingGfxJobForPo] = useState<string | null>(null); // po id
   // Batch delete state
   const [editMode, setEditMode] = useState(false);
   // Line item sort
@@ -927,6 +929,50 @@ export default function POsPage() {
       setGfxJobResults(prev => ({ ...prev, [li.id]: 'error' }));
     }
     setCreatingGfxJob(null);
+  };
+
+  // Create a single graphics job from ALL line items in a PO
+  const createGfxJobFromPO = async (po: PurchaseOrder & { line_items: POLineItem[] }) => {
+    if (!po.line_items.length) return;
+    setCreatingGfxJobForPo(po.id);
+    try {
+      const jobNumber = `GFX-${Date.now().toString(36).toUpperCase()}-${Math.random().toString(36).slice(2, 5).toUpperCase()}`;
+      const partNumbers = [...new Set(po.line_items.map(li => li.part_number))].join(', ');
+      const totalQty = po.line_items.reduce((sum, li) => sum + li.quantity, 0);
+      const { data: job, error } = await supabase
+        .from('graphics_jobs')
+        .insert({
+          po_id: po.id,
+          po_line_item_id: null,
+          job_number: jobNumber,
+          title: `PO #${po.po_number} – ${po.customer}`,
+          part_number: partNumbers,
+          customer: po.customer || null,
+          quantity: totalQty,
+          status: 'received',
+          job_category: 'production',
+          priority: 'normal',
+          created_by: user?.id || null,
+        })
+        .select('id')
+        .single();
+
+      if (error) throw error;
+
+      await supabase.from('graphics_status_history').insert({
+        job_id: job.id,
+        from_status: null,
+        to_status: 'received',
+        changed_by: user?.id || null,
+        note: `Created from PO #${po.po_number} with ${po.line_items.length} part(s)`,
+      });
+
+      // Navigate to graphics page with the new job open for editing
+      router.push(`/graphics?editJob=${job.id}`);
+    } catch {
+      alert('Failed to create graphics job');
+    }
+    setCreatingGfxJobForPo(null);
   };
 
   const addPartToCatalog = async (part: { part_number: string; description: string; unit_price: number }, customer: string) => {
@@ -2304,6 +2350,20 @@ export default function POsPage() {
                       </div>
                     );
                   })()}
+
+                  {/* Create Graphics Job for entire PO */}
+                  <button
+                    onClick={(e) => { e.stopPropagation(); createGfxJobFromPO(po); }}
+                    disabled={creatingGfxJobForPo === po.id}
+                    style={{
+                      width: '100%', padding: '10px', borderRadius: '8px', marginTop: '10px',
+                      background: 'rgba(167,139,250,0.08)', border: '1px solid rgba(167,139,250,0.25)',
+                      color: '#a78bfa', fontSize: '12px', fontWeight: 700, cursor: 'pointer',
+                      display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '6px',
+                    }}
+                  >
+                    {creatingGfxJobForPo === po.id ? 'Creating...' : `+ Create Graphics Job (${po.line_items.length} part${po.line_items.length !== 1 ? 's' : ''})`}
+                  </button>
 
                   {/* Close / Reopen / Delete PO buttons */}
                   <div style={{ display: 'flex', gap: '6px', marginTop: '10px' }}>

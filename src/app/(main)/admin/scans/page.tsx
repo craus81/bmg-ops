@@ -63,7 +63,10 @@ export default function AdminScansPage() {
 
   // Direct invoice state
   const [invoicing, setInvoicing] = useState(false);
-  const [invoiceResult, setInvoiceResult] = useState<{ results: { customer: string; vehicleCount: number; status: string; invoiceNumber?: string; error?: string }[]; summary: { success: number; errors: number } } | null>(null);
+  const [invoiceResult, setInvoiceResult] = useState<{ results: { customer: string; po?: string | null; invoiceId?: string; invoiceNumber?: string; vehicleCount: number; status: string; error?: string }[]; summary: { success: number; errors: number } } | null>(null);
+  const [emailingInvoices, setEmailingInvoices] = useState(false);
+  const [sendingTest, setSendingTest] = useState(false);
+  const [emailTarget, setEmailTarget] = useState<{ customer: string; email: string; invoices: { invoiceId: string; invoiceNumber: string; po?: string }[] } | null>(null);
 
   useEffect(() => { loadAll(); }, []);
 
@@ -136,11 +139,17 @@ export default function AdminScansPage() {
       [s.vehicle_year, s.vehicle_make, s.vehicle_model].filter(Boolean).join(' ').toLowerCase().includes(q);
   });
 
-  // Group by billable customer → part + location (+ PO for archived tab)
+  // Group by billable customer → PO (ready tab) or part + location (other tabs)
   const grouped = tabScans.reduce((acc: Record<string, Record<string, ScanLog[]>>, s) => {
     const customer = s.billable_customer || 'No Customer';
-    const poSuffix = tab === 'archived' && s.po_number ? ` · PO #${s.po_number}` : '';
-    const subKey = `${s.part_number || 'No Part'} · ${s.location_name || 'No Location'}${poSuffix}`;
+    let subKey: string;
+    if (tab === 'ready' && s.po_number) {
+      // Ready tab: group by PO so one invoice = one PO with multiple part lines
+      subKey = `PO #${s.po_number}`;
+    } else {
+      const poSuffix = tab === 'archived' && s.po_number ? ` · PO #${s.po_number}` : '';
+      subKey = `${s.part_number || 'No Part'} · ${s.location_name || 'No Location'}${poSuffix}`;
+    }
     if (!acc[customer]) acc[customer] = {};
     if (!acc[customer][subKey]) acc[customer][subKey] = [];
     acc[customer][subKey].push(s);
@@ -245,19 +254,19 @@ export default function AdminScansPage() {
       } else {
         setInvoiceResult(data);
 
-        // Auto-archive invoiced scans and set invoice details
+        // Auto-archive invoiced scans per PO group with correct invoice number
         const successResults = (data.results || []).filter((r: any) => r.status === 'success' && r.invoiceNumber);
-        if (successResults.length > 0) {
-          const invoiceNumber = successResults.map((r: any) => r.invoiceNumber).join(', ');
-          const today = new Date().toISOString().slice(0, 10);
+        const today = new Date().toISOString().slice(0, 10);
+        for (const result of successResults) {
+          const groupIds = result.scanIds || ids;
           await fetch('/api/scans/bulk-update', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({
-              scanIds: ids,
+              scanIds: groupIds,
               updates: {
                 archived_at: new Date().toISOString(),
-                invoice_number: invoiceNumber,
+                invoice_number: result.invoiceNumber,
                 date_invoiced: today,
               },
             }),
@@ -270,6 +279,37 @@ export default function AdminScansPage() {
       alert(`Invoice failed: ${e.message}`);
     }
     setInvoicing(false);
+  };
+
+  const emailInvoices = async (overrideEmail?: string) => {
+    if (!emailTarget) return;
+    const isTest = !!overrideEmail;
+    const targetEmail = overrideEmail || emailTarget.email;
+    if (!targetEmail) return;
+    if (isTest) setSendingTest(true); else setEmailingInvoices(true);
+    try {
+      const res = await fetch('/api/netsuite/email-invoices', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          invoices: emailTarget.invoices,
+          customerName: emailTarget.customer,
+          customerEmail: targetEmail,
+        }),
+      });
+      const data = await res.json();
+      if (!res.ok) {
+        alert(`Email failed: ${data.error || 'Unknown error'}`);
+      } else if (isTest) {
+        alert(`Test email sent to ${targetEmail} — check your inbox to preview`);
+      } else {
+        alert(`Sent ${data.sent} invoice${data.sent !== 1 ? 's' : ''} to ${targetEmail}${data.failed > 0 ? ` (${data.failed} failed to fetch)` : ''}`);
+        setEmailTarget(null);
+      }
+    } catch (e: any) {
+      alert(`Email failed: ${e.message}`);
+    }
+    if (isTest) setSendingTest(false); else setEmailingInvoices(false);
   };
 
   // Edit scan
@@ -587,10 +627,90 @@ export default function AdminScansPage() {
           </div>
           {invoiceResult.results.map((r, i) => (
             <div key={i} style={{ fontSize: '11px', fontWeight: 600, color: r.status === 'success' ? '#22c55e' : '#ef4444', marginBottom: '2px' }}>
-              {r.customer} ({r.vehicleCount} VIN{r.vehicleCount !== 1 ? 's' : ''})
+              {r.customer}{r.po ? ` · PO #${r.po}` : ''} ({r.vehicleCount} VIN{r.vehicleCount !== 1 ? 's' : ''})
               {r.status === 'success' ? ` → Invoice #${r.invoiceNumber}` : ` — ${r.error}`}
             </div>
           ))}
+          {invoiceResult.summary.success > 0 && (() => {
+            const successByCustomer: Record<string, { invoiceId: string; invoiceNumber: string; po?: string }[]> = {};
+            for (const r of invoiceResult.results) {
+              if (r.status === 'success' && r.invoiceId && r.invoiceNumber) {
+                if (!successByCustomer[r.customer]) successByCustomer[r.customer] = [];
+                successByCustomer[r.customer].push({ invoiceId: r.invoiceId, invoiceNumber: r.invoiceNumber, po: r.po || undefined });
+              }
+            }
+            return (
+              <div style={{ marginTop: '8px', display: 'flex', gap: '6px', flexWrap: 'wrap' }}>
+                {Object.entries(successByCustomer).map(([customer, invs]) => (
+                  <button key={customer} onClick={() => setEmailTarget({ customer, email: '', invoices: invs })} style={{ padding: '5px 10px', borderRadius: '6px', fontSize: '10px', fontWeight: 700, background: 'rgba(59,130,246,0.1)', border: '1px solid rgba(59,130,246,0.25)', color: '#60a5fa', cursor: 'pointer' }}>
+                    Email {invs.length} Invoice{invs.length !== 1 ? 's' : ''} to {customer}
+                  </button>
+                ))}
+              </div>
+            );
+          })()}
+        </div>
+      )}
+
+      {/* Email invoices modal */}
+      {emailTarget && (
+        <div style={{ padding: '14px', borderRadius: '10px', marginBottom: '12px', background: 'var(--card)', border: '1px solid rgba(59,130,246,0.3)' }}>
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '10px' }}>
+            <div style={{ fontSize: '12px', fontWeight: 700, color: 'var(--text-primary)' }}>
+              Email {emailTarget.invoices.length} Invoice{emailTarget.invoices.length !== 1 ? 's' : ''} to {emailTarget.customer}
+            </div>
+            <button
+              onClick={() => setEmailTarget(null)}
+              style={{ background: 'none', border: 'none', color: 'var(--text-muted)', fontSize: '14px', cursor: 'pointer' }}
+            >✕</button>
+          </div>
+
+          {/* Email preview */}
+          <div style={{ padding: '10px 12px', borderRadius: '8px', background: 'rgba(255,255,255,0.03)', border: '1px solid var(--border)', marginBottom: '10px', fontSize: '11px' }}>
+            <div style={{ fontWeight: 700, color: 'var(--text-primary)', marginBottom: '4px' }}>
+              Subject: {emailTarget.invoices.length === 1 ? `Invoice #${emailTarget.invoices[0].invoiceNumber} from BMG Fleet` : `${emailTarget.invoices.length} Invoices from BMG Fleet`}
+            </div>
+            <div style={{ color: 'var(--text-secondary)', marginBottom: '6px' }}>
+              &quot;Please find the attached invoice{emailTarget.invoices.length !== 1 ? 's' : ''} for your recent services.&quot;
+            </div>
+            <div style={{ color: 'var(--text-muted)', marginBottom: '4px' }}>Invoices:</div>
+            {emailTarget.invoices.map((inv, i) => (
+              <div key={i} style={{ color: 'var(--text-secondary)', paddingLeft: '8px', marginBottom: '2px' }}>
+                #{inv.invoiceNumber}{inv.po ? ` (PO #${inv.po})` : ''} — PDF attached
+              </div>
+            ))}
+          </div>
+
+          {/* Customer email + send buttons */}
+          <div style={{ display: 'flex', gap: '8px', alignItems: 'center', flexWrap: 'wrap' }}>
+            <input
+              type="email"
+              placeholder="Customer email address"
+              value={emailTarget.email}
+              onChange={(e) => setEmailTarget({ ...emailTarget, email: e.target.value })}
+              style={{ flex: 1, minWidth: '180px', padding: '8px 10px', borderRadius: '6px', fontSize: '12px', border: '1px solid var(--border)', background: 'var(--input-bg)', color: 'var(--text-primary)' }}
+            />
+            <button
+              onClick={() => emailInvoices()}
+              disabled={emailingInvoices || sendingTest || !emailTarget.email}
+              style={{ padding: '8px 14px', borderRadius: '6px', fontSize: '11px', fontWeight: 700, background: 'rgba(34,197,94,0.1)', border: '1px solid rgba(34,197,94,0.25)', color: '#22c55e', cursor: emailingInvoices || sendingTest || !emailTarget.email ? 'not-allowed' : 'pointer', opacity: !emailTarget.email ? 0.5 : 1, whiteSpace: 'nowrap' }}
+            >
+              {emailingInvoices ? 'Sending...' : 'Send to Customer'}
+            </button>
+          </div>
+
+          {/* Test send */}
+          {user?.email && (
+            <div style={{ marginTop: '8px' }}>
+              <button
+                onClick={() => emailInvoices(user.email!)}
+                disabled={sendingTest || emailingInvoices}
+                style={{ padding: '6px 10px', borderRadius: '6px', fontSize: '10px', fontWeight: 700, background: 'rgba(251,191,36,0.08)', border: '1px solid rgba(251,191,36,0.2)', color: '#fbbf24', cursor: sendingTest || emailingInvoices ? 'not-allowed' : 'pointer', whiteSpace: 'nowrap' }}
+              >
+                {sendingTest ? 'Sending test...' : `Send Test to ${user.email}`}
+              </button>
+            </div>
+          )}
         </div>
       )}
 
@@ -990,7 +1110,11 @@ export default function AdminScansPage() {
                   {subKeys.map(subKey => {
                     const groupScans = subGroups[subKey];
                     const subCollapsed = !expandedGroups.has(`${customer}|${subKey}`);
-                    const [partLabel, locLabel] = subKey.split(' · ');
+                    const isPOGroup = subKey.startsWith('PO #');
+                    const uniqueParts = isPOGroup ? [...new Set(groupScans.map(s => s.part_number).filter(Boolean))] : [];
+                    const [partLabel, locLabel] = isPOGroup
+                      ? [subKey, groupScans[0]?.location_name || '']
+                      : subKey.split(' · ');
                     const groupIds = groupScans.map(s => s.id);
                     const allGroupSelected = groupIds.length > 0 && groupIds.every(id => selectedScans.has(id));
 
@@ -1004,17 +1128,19 @@ export default function AdminScansPage() {
                         }}>
                           <div onClick={() => toggleGroup(`${customer}|${subKey}`)} style={{ display: 'flex', alignItems: 'center', gap: '6px', cursor: 'pointer', flex: 1, minWidth: 0 }}>
                             <span style={{ fontSize: '9px', color: 'var(--text-muted)', transform: subCollapsed ? 'rotate(-90deg)' : 'rotate(0deg)', flexShrink: 0 }}>▼</span>
-                            <span style={{ fontSize: '12px', fontWeight: 700, color: 'var(--text-primary)', flexShrink: 0 }}>{partLabel}</span>
-                            {groupScans[0]?.part_description && (
+                            <span style={{ fontSize: '12px', fontWeight: 700, color: isPOGroup ? '#22c55e' : 'var(--text-primary)', flexShrink: 0 }}>{partLabel}</span>
+                            {isPOGroup ? (
+                              uniqueParts.length > 0 && <span style={{ fontSize: '10px', color: 'var(--text-secondary)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{uniqueParts.join(', ')}</span>
+                            ) : groupScans[0]?.part_description ? (
                               <span style={{ fontSize: '10px', color: 'var(--text-secondary)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{groupScans[0].part_description}</span>
-                            )}
-                            <span style={{ fontSize: '10px', color: 'var(--text-muted)', flexShrink: 0 }}>{locLabel}</span>
+                            ) : null}
+                            {locLabel && <span style={{ fontSize: '10px', color: 'var(--text-muted)', flexShrink: 0 }}>{locLabel}</span>}
                           </div>
                           <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
                             <button onClick={(e) => { e.stopPropagation(); toggleSelectGroup(groupIds); }} style={{ padding: '2px 6px', borderRadius: '4px', fontSize: '8px', fontWeight: 700, background: allGroupSelected ? 'rgba(59,130,246,0.15)' : 'rgba(59,130,246,0.06)', border: '1px solid rgba(59,130,246,0.2)', color: '#60a5fa', cursor: 'pointer' }}>
                               {allGroupSelected ? 'Deselect' : 'Select'}
                             </button>
-                            {groupScans[0]?.po_number && <span style={{ fontSize: '9px', fontWeight: 700, padding: '2px 6px', borderRadius: '4px', background: 'rgba(34,197,94,0.1)', color: '#22c55e' }}>PO #{groupScans[0].po_number}</span>}
+                            {!isPOGroup && groupScans[0]?.po_number && <span style={{ fontSize: '9px', fontWeight: 700, padding: '2px 6px', borderRadius: '4px', background: 'rgba(34,197,94,0.1)', color: '#22c55e' }}>PO #{groupScans[0].po_number}</span>}
                             <span style={{ fontSize: '10px', fontWeight: 700, color: 'var(--text-muted)' }}>{groupScans.length}</span>
                           </div>
                         </div>

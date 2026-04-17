@@ -1,7 +1,7 @@
 'use client';
 
 import { useState, useEffect, useRef } from 'react';
-import { useRouter } from 'next/navigation';
+import { useRouter, useSearchParams } from 'next/navigation';
 import { createClient } from '@/lib/supabase-browser';
 import { storage } from '@/lib/storage';
 import { useAuth } from '@/components/AuthProvider';
@@ -46,6 +46,7 @@ const ACTIVE_STATUSES: GraphicsJobStatus[] = ['flagged', 'received', 'designing'
 
 export default function GraphicsPage() {
   const router = useRouter();
+  const searchParams = useSearchParams();
   const { user, isAdmin, isProduction, isSales, profile } = useAuth();
   const supabase = createClient();
 
@@ -140,6 +141,23 @@ export default function GraphicsPage() {
     loadJobs();
     loadProfiles();
   }, [user, isAdmin, isProduction]);
+
+  // Auto-open a job for editing when navigated from PO page via ?editJob=<id>
+  useEffect(() => {
+    if (loading) return;
+    const editJobId = searchParams.get('editJob');
+    if (!editJobId) return;
+    const job = jobs.find(j => j.id === editJobId);
+    if (job) {
+      setExpandedJobId(job.id);
+      setEditingJob({ ...job });
+      setFilterStatus('all');
+      loadHistory(job.id);
+      loadJobAssignments(job.id);
+    }
+    // Clear the query param so refreshing doesn't re-trigger
+    router.replace('/graphics', { scroll: false });
+  }, [loading, searchParams]);
 
   const loadJobs = async () => {
     // Exclude installed/cancelled by default — they're archived
@@ -369,9 +387,16 @@ export default function GraphicsPage() {
     if (!editingJob) return;
     setSaving(true);
     const { id, created_at, created_by, ...updateFields } = editingJob;
+    // Convert non-date values like "N/A" or empty strings to null for date columns
+    const sanitized = {
+      ...updateFields,
+      due_date: updateFields.due_date && updateFields.due_date !== 'N/A' ? updateFields.due_date : null,
+      scheduled_install_date: updateFields.scheduled_install_date && updateFields.scheduled_install_date !== 'N/A' ? updateFields.scheduled_install_date : null,
+      updated_at: new Date().toISOString(),
+    };
     const { error } = await supabase
       .from('graphics_jobs')
-      .update({ ...updateFields, updated_at: new Date().toISOString() })
+      .update(sanitized)
       .eq('id', id);
 
     if (!error) {
@@ -413,8 +438,8 @@ export default function GraphicsPage() {
         cut_method: cat === 'production' ? (createForm.cut_method || null) : null,
         premask: cat === 'production' ? (createForm.premask || null) : null,
         priority: createForm.priority,
-        due_date: createForm.due_date || null,
-        scheduled_install_date: cat !== 'internal' ? (createForm.scheduled_install_date || null) : null,
+        due_date: createForm.due_date && createForm.due_date !== 'N/A' ? createForm.due_date : null,
+        scheduled_install_date: cat !== 'internal' && createForm.scheduled_install_date && createForm.scheduled_install_date !== 'N/A' ? createForm.scheduled_install_date : null,
         ship_to: (cat === 'production' || cat === 'customer_supplied') ? (createForm.ship_to || null) : null,
         supplier: cat === 'customer_supplied' ? (createForm.supplier || null) : null,
         po_number: createForm.po_number || null,
