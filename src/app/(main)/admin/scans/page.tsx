@@ -155,7 +155,36 @@ export default function AdminScansPage() {
     acc[customer][subKey].push(s);
     return acc;
   }, {});
-  const customerKeys = Object.keys(grouped).sort((a, b) => a === 'No Customer' ? 1 : b === 'No Customer' ? -1 : a.localeCompare(b));
+  // Compare two invoice numbers numerically when possible, else lexicographically.
+  // Returns positive if b > a (so a sorts after b, i.e. highest first).
+  const compareInvoice = (a: string, b: string) => {
+    const an = parseFloat(a.replace(/[^0-9.]/g, ''));
+    const bn = parseFloat(b.replace(/[^0-9.]/g, ''));
+    if (!isNaN(an) && !isNaN(bn) && an !== bn) return bn - an;
+    return b.localeCompare(a);
+  };
+
+  const maxInvoiceIn = (list: ScanLog[]): string => {
+    let max = '';
+    for (const s of list) {
+      const inv = s.invoice_number || '';
+      if (inv && (!max || compareInvoice(inv, max) < 0)) max = inv;
+    }
+    return max;
+  };
+
+  const customerKeys = Object.keys(grouped).sort((a, b) => {
+    if (a === 'No Customer') return 1;
+    if (b === 'No Customer') return -1;
+    if (tab === 'archived') {
+      const aMax = maxInvoiceIn(Object.values(grouped[a]).flat());
+      const bMax = maxInvoiceIn(Object.values(grouped[b]).flat());
+      if (aMax && bMax) return compareInvoice(aMax, bMax);
+      if (aMax) return -1;
+      if (bMax) return 1;
+    }
+    return a.localeCompare(b);
+  });
 
   const toggleGroup = (key: string) => {
     setExpandedGroups(prev => { const n = new Set(prev); if (n.has(key)) n.delete(key); else n.add(key); return n; });
@@ -1078,7 +1107,16 @@ export default function AdminScansPage() {
       {tab !== 'bulk' && <div style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
         {customerKeys.map(customer => {
           const subGroups = grouped[customer];
-          const subKeys = Object.keys(subGroups).sort();
+          const subKeys = Object.keys(subGroups).sort((a, b) => {
+            if (tab === 'archived') {
+              const aMax = maxInvoiceIn(subGroups[a]);
+              const bMax = maxInvoiceIn(subGroups[b]);
+              if (aMax && bMax) return compareInvoice(aMax, bMax);
+              if (aMax) return -1;
+              if (bMax) return 1;
+            }
+            return a.localeCompare(b);
+          });
           const totalVins = subKeys.reduce((sum, k) => sum + subGroups[k].length, 0);
           const isCustomerCollapsed = !expandedGroups.has(customer);
 
