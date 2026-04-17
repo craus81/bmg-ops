@@ -156,7 +156,7 @@ export default function EstimatesPage() {
       const est = estimates.find(e => e.id === estId);
       if (est) openEstimate(est);
     }
-  }, [loading]);
+  }, [loading, searchParams]);
 
   const loadEstimates = async () => {
     setLoading(true);

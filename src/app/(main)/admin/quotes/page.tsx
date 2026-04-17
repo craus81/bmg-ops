@@ -118,7 +118,7 @@ export default function QuotesPage() {
         }
       })();
     }
-  }, []);
+  }, [searchParams]);
 
   if (!isAdmin && !isSales) {
     return (

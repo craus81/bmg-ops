@@ -81,7 +81,7 @@ export default function MessagesPage() {
     if (convoId && conversations.some(c => c.id === convoId)) {
       openConversation(convoId);
     }
-  }, [loading]);
+  }, [loading, searchParams]);
 
   // Realtime subscription for new messages
   useEffect(() => {

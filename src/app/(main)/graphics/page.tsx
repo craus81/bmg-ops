@@ -168,7 +168,7 @@ export default function GraphicsPage() {
       loadJobAssignments(jobId);
       loadJobFiles(jobId);
     }
-  }, [loading]);
+  }, [loading, searchParams]);
 
   const loadJobs = async () => {
     // Exclude installed/cancelled by default — they're archived

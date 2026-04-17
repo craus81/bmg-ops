@@ -157,7 +157,7 @@ export default function POsPage() {
     if (poId && pos.some(p => p.id === poId)) {
       setExpandedPo(poId);
     }
-  }, [loading]);
+  }, [loading, searchParams]);
 
   // PDF Upload handler
   const handlePDFUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {

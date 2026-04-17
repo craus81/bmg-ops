@@ -102,7 +102,7 @@ export default function TrackingPage() {
       loadPhotos(vehicleId);
       loadNotes(vehicleId);
     }
-  }, [loading]);
+  }, [loading, searchParams]);
 
   const loadVehicles = async (append = false) => {
     if (append) setLoadingMore(true); else setLoading(true);

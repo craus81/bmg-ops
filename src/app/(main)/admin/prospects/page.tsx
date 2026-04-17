@@ -221,7 +221,7 @@ export default function ProspectsPage() {
     if (prospectId && prospects.some(p => p.id === prospectId)) {
       toggleExpand(prospectId);
     }
-  }, [loading]);
+  }, [loading, searchParams]);
 
   // Load metrics once prospects are loaded
   useEffect(() => {

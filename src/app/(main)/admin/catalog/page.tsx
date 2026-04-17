@@ -53,7 +53,7 @@ export default function CatalogPage() {
     if (itemId && catalog.some(c => c.id === itemId)) {
       setProofPanel(itemId);
     }
-  }, [loading]);
+  }, [loading, searchParams]);
 
   const handleUploadProofs = async (catalogId: string, partNumber: string, files: FileList) => {
     setUploading(true);
