@@ -148,7 +148,11 @@ export default function AdminScansPage() {
       subKey = `PO #${s.po_number}`;
     } else {
       const poSuffix = tab === 'archived' && s.po_number ? ` · PO #${s.po_number}` : '';
-      subKey = `${s.part_number || 'No Part'} · ${s.location_name || 'No Location'}${poSuffix}`;
+      // On the archived tab, include invoice_number in the key so scans invoiced on
+      // different invoices don't lump into the same visual sub-group (even if they
+      // share the same part · location · PO).
+      const invSuffix = tab === 'archived' && s.invoice_number ? ` · ${s.invoice_number}` : '';
+      subKey = `${s.part_number || 'No Part'} · ${s.location_name || 'No Location'}${poSuffix}${invSuffix}`;
     }
     if (!acc[customer]) acc[customer] = {};
     if (!acc[customer][subKey]) acc[customer][subKey] = [];
