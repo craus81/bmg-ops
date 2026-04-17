@@ -66,7 +66,7 @@ export default function AdminScansPage() {
   const [invoiceResult, setInvoiceResult] = useState<{ results: { customer: string; po?: string | null; invoiceId?: string; invoiceNumber?: string; vehicleCount: number; status: string; error?: string }[]; summary: { success: number; errors: number } } | null>(null);
   const [emailingInvoices, setEmailingInvoices] = useState(false);
   const [sendingTest, setSendingTest] = useState(false);
-  const [emailTarget, setEmailTarget] = useState<{ customer: string; email: string; body: string; invoices: { invoiceId?: string; invoiceNumber: string; po?: string }[] } | null>(null);
+  const [emailTarget, setEmailTarget] = useState<{ customer: string; email: string; body: string; invoices: { invoiceId?: string; invoiceNumber: string; po?: string; include: boolean }[] } | null>(null);
 
   useEffect(() => { loadAll(); }, []);
 
@@ -348,13 +348,18 @@ export default function AdminScansPage() {
       alert('Please enter at least one valid email address');
       return;
     }
+    const invoicesToSend = emailTarget.invoices.filter(i => i.include);
+    if (invoicesToSend.length === 0) {
+      alert('Please select at least one invoice to send');
+      return;
+    }
     if (isTest) setSendingTest(true); else setEmailingInvoices(true);
     try {
       const res = await fetch('/api/netsuite/email-invoices', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          invoices: emailTarget.invoices,
+          invoices: invoicesToSend.map(({ include, ...rest }) => rest),
           customerName: emailTarget.customer,
           customerEmail: recipients,
           customBody: emailTarget.body,
@@ -717,7 +722,7 @@ export default function AdminScansPage() {
             return (
               <div style={{ marginTop: '8px', display: 'flex', gap: '6px', flexWrap: 'wrap' }}>
                 {Object.entries(successByCustomer).map(([customer, invs]) => (
-                  <button key={customer} onClick={() => setEmailTarget({ customer, email: '', body: `Please find the attached invoice${invs.length !== 1 ? 's' : ''} for your recent services.`, invoices: invs })} style={{ padding: '5px 10px', borderRadius: '6px', fontSize: '10px', fontWeight: 700, background: 'rgba(59,130,246,0.1)', border: '1px solid rgba(59,130,246,0.25)', color: '#60a5fa', cursor: 'pointer' }}>
+                  <button key={customer} onClick={() => setEmailTarget({ customer, email: '', body: `Please find the attached invoice${invs.length !== 1 ? 's' : ''} for your recent services.`, invoices: invs.map(i => ({ ...i, include: true })) })} style={{ padding: '5px 10px', borderRadius: '6px', fontSize: '10px', fontWeight: 700, background: 'rgba(59,130,246,0.1)', border: '1px solid rgba(59,130,246,0.25)', color: '#60a5fa', cursor: 'pointer' }}>
                     Email {invs.length} Invoice{invs.length !== 1 ? 's' : ''} to {customer}
                   </button>
                 ))}
@@ -728,11 +733,16 @@ export default function AdminScansPage() {
       )}
 
       {/* Email invoices modal */}
-      {emailTarget && (
+      {emailTarget && (() => {
+        const includedCount = emailTarget.invoices.filter(i => i.include).length;
+        const allChecked = includedCount === emailTarget.invoices.length;
+        const toggleAll = () => setEmailTarget(t => t ? { ...t, invoices: t.invoices.map(i => ({ ...i, include: !allChecked })) } : t);
+        const toggleOne = (idx: number) => setEmailTarget(t => t ? { ...t, invoices: t.invoices.map((i, j) => j === idx ? { ...i, include: !i.include } : i) } : t);
+        return (
         <div style={{ padding: '14px', borderRadius: '10px', marginBottom: '12px', background: 'var(--card)', border: '1px solid rgba(59,130,246,0.3)' }}>
           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '10px' }}>
             <div style={{ fontSize: '12px', fontWeight: 700, color: 'var(--text-primary)' }}>
-              Email {emailTarget.invoices.length} Invoice{emailTarget.invoices.length !== 1 ? 's' : ''} to {emailTarget.customer}
+              Email {includedCount} of {emailTarget.invoices.length} Invoice{emailTarget.invoices.length !== 1 ? 's' : ''} to {emailTarget.customer}
             </div>
             <button
               onClick={() => setEmailTarget(null)}
@@ -743,7 +753,7 @@ export default function AdminScansPage() {
           {/* Email preview */}
           <div style={{ padding: '10px 12px', borderRadius: '8px', background: 'rgba(255,255,255,0.03)', border: '1px solid var(--border)', marginBottom: '10px', fontSize: '11px' }}>
             <div style={{ fontWeight: 700, color: 'var(--text-primary)', marginBottom: '4px' }}>
-              Subject: {emailTarget.invoices.length === 1 ? `Invoice #${emailTarget.invoices[0].invoiceNumber} from BMG Fleet` : `${emailTarget.invoices.length} Invoices from BMG Fleet`}
+              Subject: {includedCount === 1 ? `Invoice #${emailTarget.invoices.find(i => i.include)?.invoiceNumber} from BMG Fleet` : `${includedCount} Invoices from BMG Fleet`}
             </div>
             <div style={{ color: 'var(--text-muted)', marginBottom: '3px', fontSize: '10px', textTransform: 'uppercase', fontWeight: 700, letterSpacing: '0.5px' }}>Message Body</div>
             <textarea
@@ -753,12 +763,28 @@ export default function AdminScansPage() {
               style={{ width: '100%', padding: '8px 10px', borderRadius: '6px', border: '1px solid var(--border)', background: 'var(--input-bg)', color: 'var(--text-primary)', fontSize: '12px', fontFamily: 'inherit', resize: 'vertical', marginBottom: '8px', lineHeight: 1.5 }}
               placeholder="Write a note for the customer..."
             />
-            <div style={{ color: 'var(--text-muted)', marginBottom: '4px' }}>Invoices:</div>
-            {emailTarget.invoices.map((inv, i) => (
-              <div key={i} style={{ color: 'var(--text-secondary)', paddingLeft: '8px', marginBottom: '2px' }}>
-                #{inv.invoiceNumber}{inv.po ? ` (PO #${inv.po})` : ''} — PDF attached
-              </div>
-            ))}
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '4px' }}>
+              <div style={{ color: 'var(--text-muted)' }}>Invoices ({includedCount} selected):</div>
+              <button
+                onClick={toggleAll}
+                style={{ padding: '2px 8px', borderRadius: '4px', fontSize: '9px', fontWeight: 700, background: 'rgba(59,130,246,0.08)', border: '1px solid rgba(59,130,246,0.2)', color: '#60a5fa', cursor: 'pointer' }}
+              >
+                {allChecked ? 'Uncheck All' : 'Check All'}
+              </button>
+            </div>
+            <div style={{ maxHeight: '260px', overflowY: 'auto', padding: '4px 0' }}>
+              {emailTarget.invoices.map((inv, i) => (
+                <label key={i} style={{ display: 'flex', alignItems: 'center', gap: '8px', padding: '3px 6px', borderRadius: '4px', cursor: 'pointer', color: inv.include ? 'var(--text-secondary)' : 'var(--text-muted)', opacity: inv.include ? 1 : 0.55 }}>
+                  <input
+                    type="checkbox"
+                    checked={inv.include}
+                    onChange={() => toggleOne(i)}
+                    style={{ cursor: 'pointer', accentColor: '#22c55e' }}
+                  />
+                  <span>#{inv.invoiceNumber}{inv.po ? ` (PO #${inv.po})` : ''}</span>
+                </label>
+              ))}
+            </div>
           </div>
 
           {/* Customer email + send buttons */}
@@ -772,10 +798,10 @@ export default function AdminScansPage() {
             />
             <button
               onClick={() => emailInvoices()}
-              disabled={emailingInvoices || sendingTest || !emailTarget.email}
-              style={{ padding: '8px 14px', borderRadius: '6px', fontSize: '11px', fontWeight: 700, background: 'rgba(34,197,94,0.1)', border: '1px solid rgba(34,197,94,0.25)', color: '#22c55e', cursor: emailingInvoices || sendingTest || !emailTarget.email ? 'not-allowed' : 'pointer', opacity: !emailTarget.email ? 0.5 : 1, whiteSpace: 'nowrap' }}
+              disabled={emailingInvoices || sendingTest || !emailTarget.email || includedCount === 0}
+              style={{ padding: '8px 14px', borderRadius: '6px', fontSize: '11px', fontWeight: 700, background: 'rgba(34,197,94,0.1)', border: '1px solid rgba(34,197,94,0.25)', color: '#22c55e', cursor: emailingInvoices || sendingTest || !emailTarget.email || includedCount === 0 ? 'not-allowed' : 'pointer', opacity: (!emailTarget.email || includedCount === 0) ? 0.5 : 1, whiteSpace: 'nowrap' }}
             >
-              {emailingInvoices ? 'Sending...' : 'Send to Customer'}
+              {emailingInvoices ? 'Sending...' : `Send ${includedCount} to Customer`}
             </button>
           </div>
 
@@ -792,7 +818,8 @@ export default function AdminScansPage() {
             </div>
           )}
         </div>
-      )}
+        );
+      })()}
 
       {/* Bulk edit modal */}
       {showBulkEdit && (
@@ -1201,7 +1228,9 @@ export default function AdminScansPage() {
                         });
                       }
                     }
-                    const invoicesForCustomer = [...invoiceMap.values()];
+                    const invoicesForCustomer = [...invoiceMap.values()]
+                      .sort((a, b) => compareInvoice(a.invoiceNumber, b.invoiceNumber))
+                      .map(i => ({ ...i, include: true }));
                     if (invoicesForCustomer.length === 0) return null;
                     return (
                       <button
