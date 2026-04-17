@@ -66,7 +66,7 @@ export default function AdminScansPage() {
   const [invoiceResult, setInvoiceResult] = useState<{ results: { customer: string; po?: string | null; invoiceId?: string; invoiceNumber?: string; vehicleCount: number; status: string; error?: string }[]; summary: { success: number; errors: number } } | null>(null);
   const [emailingInvoices, setEmailingInvoices] = useState(false);
   const [sendingTest, setSendingTest] = useState(false);
-  const [emailTarget, setEmailTarget] = useState<{ customer: string; email: string; invoices: { invoiceId?: string; invoiceNumber: string; po?: string }[] } | null>(null);
+  const [emailTarget, setEmailTarget] = useState<{ customer: string; email: string; body: string; invoices: { invoiceId?: string; invoiceNumber: string; po?: string }[] } | null>(null);
 
   useEffect(() => { loadAll(); }, []);
 
@@ -324,6 +324,7 @@ export default function AdminScansPage() {
           invoices: emailTarget.invoices,
           customerName: emailTarget.customer,
           customerEmail: targetEmail,
+          customBody: emailTarget.body,
         }),
       });
       const data = await res.json();
@@ -671,7 +672,7 @@ export default function AdminScansPage() {
             return (
               <div style={{ marginTop: '8px', display: 'flex', gap: '6px', flexWrap: 'wrap' }}>
                 {Object.entries(successByCustomer).map(([customer, invs]) => (
-                  <button key={customer} onClick={() => setEmailTarget({ customer, email: '', invoices: invs })} style={{ padding: '5px 10px', borderRadius: '6px', fontSize: '10px', fontWeight: 700, background: 'rgba(59,130,246,0.1)', border: '1px solid rgba(59,130,246,0.25)', color: '#60a5fa', cursor: 'pointer' }}>
+                  <button key={customer} onClick={() => setEmailTarget({ customer, email: '', body: `Please find the attached invoice${invs.length !== 1 ? 's' : ''} for your recent services.`, invoices: invs })} style={{ padding: '5px 10px', borderRadius: '6px', fontSize: '10px', fontWeight: 700, background: 'rgba(59,130,246,0.1)', border: '1px solid rgba(59,130,246,0.25)', color: '#60a5fa', cursor: 'pointer' }}>
                     Email {invs.length} Invoice{invs.length !== 1 ? 's' : ''} to {customer}
                   </button>
                 ))}
@@ -699,9 +700,14 @@ export default function AdminScansPage() {
             <div style={{ fontWeight: 700, color: 'var(--text-primary)', marginBottom: '4px' }}>
               Subject: {emailTarget.invoices.length === 1 ? `Invoice #${emailTarget.invoices[0].invoiceNumber} from BMG Fleet` : `${emailTarget.invoices.length} Invoices from BMG Fleet`}
             </div>
-            <div style={{ color: 'var(--text-secondary)', marginBottom: '6px' }}>
-              &quot;Please find the attached invoice{emailTarget.invoices.length !== 1 ? 's' : ''} for your recent services.&quot;
-            </div>
+            <div style={{ color: 'var(--text-muted)', marginBottom: '3px', fontSize: '10px', textTransform: 'uppercase', fontWeight: 700, letterSpacing: '0.5px' }}>Message Body</div>
+            <textarea
+              value={emailTarget.body}
+              onChange={(e) => setEmailTarget({ ...emailTarget, body: e.target.value })}
+              rows={4}
+              style={{ width: '100%', padding: '8px 10px', borderRadius: '6px', border: '1px solid var(--border)', background: 'var(--input-bg)', color: 'var(--text-primary)', fontSize: '12px', fontFamily: 'inherit', resize: 'vertical', marginBottom: '8px', lineHeight: 1.5 }}
+              placeholder="Write a note for the customer..."
+            />
             <div style={{ color: 'var(--text-muted)', marginBottom: '4px' }}>Invoices:</div>
             {emailTarget.invoices.map((inv, i) => (
               <div key={i} style={{ color: 'var(--text-secondary)', paddingLeft: '8px', marginBottom: '2px' }}>
@@ -1156,7 +1162,7 @@ export default function AdminScansPage() {
                       <button
                         onClick={(e) => {
                           e.stopPropagation();
-                          setEmailTarget({ customer, email: '', invoices: invoicesForCustomer });
+                          setEmailTarget({ customer, email: '', body: `Please find the attached invoice${invoicesForCustomer.length !== 1 ? 's' : ''} for your recent services.`, invoices: invoicesForCustomer });
                         }}
                         style={{ padding: '2px 8px', borderRadius: '4px', fontSize: '9px', fontWeight: 700, background: 'rgba(34,197,94,0.1)', border: '1px solid rgba(34,197,94,0.25)', color: '#22c55e', cursor: 'pointer', whiteSpace: 'nowrap' }}
                         title={selectedCustomerScans.length > 0 ? 'Email invoices for selected scans' : 'Email all invoices for this customer'}

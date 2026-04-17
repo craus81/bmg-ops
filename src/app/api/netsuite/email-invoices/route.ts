@@ -14,7 +14,7 @@ export async function POST(req: NextRequest) {
   if (auth.error) return auth.error;
 
   try {
-    const { invoices, customerName, customerEmail } = await req.json();
+    const { invoices, customerName, customerEmail, customBody } = await req.json();
 
     if (!invoices || !Array.isArray(invoices) || invoices.length === 0) {
       return NextResponse.json({ error: 'invoices array required' }, { status: 400 });
@@ -71,7 +71,7 @@ export async function POST(req: NextRequest) {
       ? `Invoice #${invoiceNumbers[0]} from BMG Fleet`
       : `${invoiceNumbers.length} Invoices from BMG Fleet`;
 
-    const html = buildInvoiceEmail(customerName, invoiceNumbers, poNumbers);
+    const html = buildInvoiceEmail(customerName, invoiceNumbers, poNumbers, customBody);
 
     const sent = await sendEmail(customerEmail, subject, html, undefined, attachments);
 

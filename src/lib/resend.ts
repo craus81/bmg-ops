@@ -87,11 +87,16 @@ export function buildNotificationEmail(title: string, body: string, ctaUrl?: str
 /**
  * Build a styled HTML email for sending invoices to customers
  */
-export function buildInvoiceEmail(customerName: string, invoiceNumbers: string[], poNumbers: string[]): string {
+export function buildInvoiceEmail(customerName: string, invoiceNumbers: string[], poNumbers: string[], customBody?: string): string {
   const invoiceList = invoiceNumbers.map(n => `<li style="margin-bottom:4px;color:#f5f8fc;font-size:14px;">Invoice #${escapeHtml(n)}</li>`).join('');
   const poLine = poNumbers.length > 0
     ? `<div style="font-size:13px;color:#8899aa;margin-top:12px;">PO${poNumbers.length > 1 ? 's' : ''}: ${poNumbers.map(p => escapeHtml(p)).join(', ')}</div>`
     : '';
+
+  const defaultBody = `Please find the attached invoice${invoiceNumbers.length !== 1 ? 's' : ''} for your recent services.`;
+  const bodyHtml = (customBody && customBody.trim()
+    ? escapeHtml(customBody).replace(/\n/g, '<br>')
+    : defaultBody);
 
   return `
 <!DOCTYPE html>
@@ -108,7 +113,7 @@ export function buildInvoiceEmail(customerName: string, invoiceNumbers: string[]
           ${invoiceNumbers.length === 1 ? 'Invoice' : 'Invoices'} for ${escapeHtml(customerName)}
         </div>
         <div style="font-size:14px;color:#8899aa;line-height:1.6;margin-bottom:16px;">
-          Please find the attached invoice${invoiceNumbers.length !== 1 ? 's' : ''} for your recent services.
+          ${bodyHtml}
         </div>
         <ul style="list-style:none;padding:0;margin:0 0 8px 0;">
           ${invoiceList}
