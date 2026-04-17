@@ -109,7 +109,7 @@ export default function SchedulePage() {
       (gfx || []).forEach((g: any) => allEvents.push({
         id: `gfx-${g.id}`, title: g.title || g.job_number, subtitle: g.customer,
         date: g.scheduled_install_date.split('T')[0], type: 'graphics', color: TYPE_COLORS.graphics,
-        status: g.status, linkTo: '/graphics',
+        status: g.status, linkTo: `/graphics?id=${g.id}`,
       }));
     }
 
@@ -125,7 +125,7 @@ export default function SchedulePage() {
         id: `upfit-${u.id}`,
         title: [u.vehicle_year, u.vehicle_make, u.vehicle_model].filter(Boolean).join(' ') || u.vin,
         subtitle: u.customer_name, date: u.scheduled_upfit_date.split('T')[0],
-        type: 'upfit', color: TYPE_COLORS.upfit, status: u.status, linkTo: '/tracking',
+        type: 'upfit', color: TYPE_COLORS.upfit, status: u.status, linkTo: `/tracking?vehicle=${u.id}`,
       }));
     }
 
@@ -142,7 +142,7 @@ export default function SchedulePage() {
       (cni || []).forEach((c: any) => allEvents.push({
         id: `cni-${c.id}`, title: c.title || c.job_number, subtitle: c.customer_name,
         date: c.deadline.split('T')[0], type: 'cni', color: TYPE_COLORS.cni,
-        status: c.status, linkTo: '/admin/cni',
+        status: c.status, linkTo: `/admin/cni/jobs/${c.id}`,
       }));
     }
 
@@ -159,7 +159,7 @@ export default function SchedulePage() {
       (rems || []).forEach((r: any) => allEvents.push({
         id: `rem-${r.id}`, title: r.title, subtitle: r.description,
         date: r.due_at.split('T')[0], type: 'reminder', color: TYPE_COLORS.reminder,
-        linkTo: '/admin/prospects',
+        linkTo: r.prospect_id ? `/admin/prospects?id=${r.prospect_id}` : '/admin/prospects',
       }));
     }
 
