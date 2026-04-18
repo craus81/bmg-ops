@@ -60,8 +60,12 @@ const STATUSES = [
   { key: 'estimate', label: 'Estimate', color: '#fbbf24' },
   { key: 'sold', label: 'Sold', color: '#34d399' },
   { key: 'parts_ordered', label: 'Parts Ordered', color: '#60a5fa' },
-  { key: 'scheduled', label: 'Scheduled', color: '#38bdf8' },
+  { key: 'parts_arrived', label: 'Parts Arrived', color: '#3b82f6' },
+  { key: 'parts_in_stock', label: 'Parts In Stock', color: '#2563eb' },
+  { key: 'scheduled_dropoff', label: 'Scheduled Drop-off', color: '#38bdf8' },
+  { key: 'scheduled_build', label: 'Scheduled Build', color: '#0ea5e9' },
   { key: 'in_progress', label: 'In Progress', color: '#f97316' },
+  { key: 'scheduled_pickup', label: 'Scheduled Pickup', color: '#eab308' },
   { key: 'completed', label: 'Completed', color: '#22c55e' },
   { key: 'cancelled', label: 'Cancelled', color: '#6b7280' },
 ];
@@ -249,7 +253,7 @@ export default function UpfitProjectsPage() {
   };
 
   // Filter logic
-  const activeStatuses = ['opportunity', 'estimate', 'sold', 'parts_ordered', 'scheduled', 'in_progress'];
+  const activeStatuses = ['opportunity', 'estimate', 'sold', 'parts_ordered', 'parts_arrived', 'parts_in_stock', 'scheduled_dropoff', 'scheduled_build', 'in_progress', 'scheduled_pickup'];
   const filtered = projects.filter(p => {
     if (filter === 'active' && !activeStatuses.includes(p.status)) return false;
     if (filter === 'completed' && p.status !== 'completed') return false;
