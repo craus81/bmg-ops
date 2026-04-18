@@ -16,7 +16,7 @@ export async function GET(req: NextRequest) {
 
   let query = supabase
     .from('upfit_projects')
-    .select('*, upfit_project_notes(id, note_type, content, created_by, created_at)')
+    .select('*, upfit_project_notes(id, note_type, content, created_by, created_at), upfit_project_tasks(id, completed_at)')
     .order('updated_at', { ascending: false });
 
   if (status && status !== 'all') {

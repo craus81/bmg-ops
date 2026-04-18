@@ -14,6 +14,21 @@ interface UpfitNote {
   profiles?: { full_name: string } | null;
 }
 
+interface UpfitTask {
+  id: string;
+  project_id: string;
+  title: string;
+  description: string | null;
+  assigned_to: string | null;
+  due_date: string | null;
+  completed_at: string | null;
+  completed_by: string | null;
+  created_by: string | null;
+  created_at: string;
+  assignee?: { id: string; full_name: string } | null;
+  creator?: { full_name: string } | null;
+}
+
 interface UpfitProject {
   id: string;
   project_name: string;
@@ -37,6 +52,7 @@ interface UpfitProject {
   created_at: string;
   updated_at: string;
   upfit_project_notes?: UpfitNote[];
+  upfit_project_tasks?: { id: string; completed_at: string | null }[];
 }
 
 const STATUSES = [
@@ -71,12 +87,22 @@ export default function UpfitProjectsPage() {
   const [search, setSearch] = useState('');
   const [profiles, setProfiles] = useState<Record<string, string>>({});
 
+  const [profileList, setProfileList] = useState<{ id: string; full_name: string }[]>([]);
+
   // Detail view
   const [selected, setSelected] = useState<UpfitProject | null>(null);
   const [notes, setNotes] = useState<UpfitNote[]>([]);
   const [loadingNotes, setLoadingNotes] = useState(false);
   const [newNote, setNewNote] = useState('');
   const [addingNote, setAddingNote] = useState(false);
+
+  // Tasks
+  const [tasks, setTasks] = useState<UpfitTask[]>([]);
+  const [loadingTasks, setLoadingTasks] = useState(false);
+  const [newTaskTitle, setNewTaskTitle] = useState('');
+  const [newTaskAssignee, setNewTaskAssignee] = useState('');
+  const [newTaskDue, setNewTaskDue] = useState('');
+  const [addingTask, setAddingTask] = useState(false);
 
   // New project form
   const [showCreate, setShowCreate] = useState(false);
@@ -93,11 +119,12 @@ export default function UpfitProjectsPage() {
     }
 
     // Load profiles for display names
-    const { data: profs } = await supabase.from('profiles').select('id, full_name');
+    const { data: profs } = await supabase.from('profiles').select('id, full_name').eq('status', 'approved').order('full_name');
     if (profs) {
       const map: Record<string, string> = {};
       for (const p of profs) map[p.id] = p.full_name || 'Unknown';
       setProfiles(map);
+      setProfileList(profs as { id: string; full_name: string }[]);
     }
 
     setLoading(false);
@@ -115,9 +142,60 @@ export default function UpfitProjectsPage() {
     setLoadingNotes(false);
   };
 
+  const loadTasks = async (projectId: string) => {
+    setLoadingTasks(true);
+    const res = await fetch(`/api/upfit-projects/tasks?projectId=${projectId}`);
+    if (res.ok) {
+      const data = await res.json();
+      setTasks(data.tasks || []);
+    }
+    setLoadingTasks(false);
+  };
+
+  const addTask = async () => {
+    if (!selected || !newTaskTitle.trim()) return;
+    setAddingTask(true);
+    const res = await fetch('/api/upfit-projects/tasks', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        project_id: selected.id,
+        title: newTaskTitle.trim(),
+        assigned_to: newTaskAssignee || null,
+        due_date: newTaskDue || null,
+      }),
+    });
+    if (res.ok) {
+      setNewTaskTitle('');
+      setNewTaskAssignee('');
+      setNewTaskDue('');
+      loadTasks(selected.id);
+    }
+    setAddingTask(false);
+  };
+
+  const updateTask = async (taskId: string, fields: Record<string, any>) => {
+    const res = await fetch('/api/upfit-projects/tasks', {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ id: taskId, ...fields }),
+    });
+    if (res.ok && selected) loadTasks(selected.id);
+  };
+
+  const deleteTask = async (taskId: string) => {
+    const res = await fetch('/api/upfit-projects/tasks', {
+      method: 'DELETE',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ id: taskId }),
+    });
+    if (res.ok && selected) loadTasks(selected.id);
+  };
+
   const openProject = (p: UpfitProject) => {
     setSelected(p);
     loadNotes(p.id);
+    loadTasks(p.id);
   };
 
   const addNote = async () => {
@@ -270,6 +348,91 @@ export default function UpfitProjectsPage() {
           </div>
         </div>
 
+        {/* Tasks */}
+        <div style={{ fontSize: '11px', fontWeight: 700, color: theme.textSecondary, marginBottom: '8px', textTransform: 'uppercase', letterSpacing: '0.5px', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+          <span>Tasks ({tasks.filter(t => !t.completed_at).length} open · {tasks.filter(t => t.completed_at).length} done)</span>
+        </div>
+
+        {/* Add task form */}
+        <div style={{ background: theme.card, border: `1px solid ${theme.border}`, borderRadius: '10px', padding: '10px', marginBottom: '10px', display: 'grid', gridTemplateColumns: '2fr 1fr 1fr auto', gap: '6px' }}>
+          <input
+            value={newTaskTitle}
+            onChange={e => setNewTaskTitle(e.target.value)}
+            onKeyDown={e => e.key === 'Enter' && !e.shiftKey && addTask()}
+            placeholder="Task title (e.g. Order parts)"
+            style={{ padding: '7px 10px', borderRadius: '6px', border: `1px solid ${theme.border}`, background: theme.inputBg, color: theme.textPrimary, fontSize: '12px', outline: 'none' }}
+          />
+          <select
+            value={newTaskAssignee}
+            onChange={e => setNewTaskAssignee(e.target.value)}
+            style={{ padding: '7px 10px', borderRadius: '6px', border: `1px solid ${theme.border}`, background: theme.inputBg, color: theme.textPrimary, fontSize: '12px', outline: 'none' }}
+          >
+            <option value="">Unassigned</option>
+            {profileList.map(p => <option key={p.id} value={p.id}>{p.full_name}</option>)}
+          </select>
+          <input
+            type="date"
+            value={newTaskDue}
+            onChange={e => setNewTaskDue(e.target.value)}
+            style={{ padding: '7px 10px', borderRadius: '6px', border: `1px solid ${theme.border}`, background: theme.inputBg, color: theme.textPrimary, fontSize: '12px', outline: 'none' }}
+          />
+          <button
+            onClick={addTask}
+            disabled={addingTask || !newTaskTitle.trim()}
+            style={{ padding: '7px 14px', borderRadius: '6px', background: theme.orange, color: '#fff', border: 'none', fontSize: '12px', fontWeight: 700, cursor: 'pointer', opacity: addingTask || !newTaskTitle.trim() ? 0.5 : 1, whiteSpace: 'nowrap' }}
+          >
+            + Task
+          </button>
+        </div>
+
+        {/* Task list */}
+        {loadingTasks ? (
+          <div style={{ color: theme.textMuted, fontSize: '12px', textAlign: 'center', padding: '14px', marginBottom: '16px' }}>Loading tasks...</div>
+        ) : tasks.length > 0 && (
+          <div style={{ display: 'flex', flexDirection: 'column', gap: '4px', marginBottom: '16px' }}>
+            {tasks.map(t => {
+              const isDone = !!t.completed_at;
+              const overdue = t.due_date && !isDone && new Date(t.due_date) < new Date(new Date().toDateString());
+              return (
+                <div key={t.id} style={{ background: theme.card, border: `1px solid ${overdue ? '#ef4444' : theme.border}`, borderRadius: '8px', padding: '8px 10px', display: 'flex', alignItems: 'center', gap: '8px', opacity: isDone ? 0.5 : 1 }}>
+                  <input
+                    type="checkbox"
+                    checked={isDone}
+                    onChange={() => updateTask(t.id, { completed: !isDone })}
+                    style={{ cursor: 'pointer', accentColor: '#22c55e' }}
+                  />
+                  <div style={{ flex: 1, minWidth: 0 }}>
+                    <div style={{ fontSize: '12px', fontWeight: 600, color: theme.textPrimary, textDecoration: isDone ? 'line-through' : 'none', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+                      {t.title}
+                    </div>
+                    <div style={{ fontSize: '10px', color: theme.textMuted, marginTop: '2px', display: 'flex', gap: '8px' }}>
+                      {t.due_date && <span style={{ color: overdue ? '#ef4444' : theme.textMuted }}>Due {fmt(t.due_date)}</span>}
+                      {t.assignee?.full_name && <span>→ {t.assignee.full_name}</span>}
+                      {!t.assignee && <span style={{ fontStyle: 'italic' }}>Unassigned</span>}
+                    </div>
+                  </div>
+                  <select
+                    value={t.assigned_to || ''}
+                    onChange={e => updateTask(t.id, { assigned_to: e.target.value || null })}
+                    style={{ padding: '4px 6px', borderRadius: '5px', border: `1px solid ${theme.border}`, background: theme.inputBg, color: theme.textPrimary, fontSize: '11px', outline: 'none', maxWidth: '130px' }}
+                    title="Reassign task"
+                  >
+                    <option value="">Unassigned</option>
+                    {profileList.map(p => <option key={p.id} value={p.id}>{p.full_name}</option>)}
+                  </select>
+                  <button
+                    onClick={() => { if (confirm(`Delete task "${t.title}"?`)) deleteTask(t.id); }}
+                    style={{ padding: '4px 6px', borderRadius: '5px', background: 'none', border: 'none', color: theme.textMuted, fontSize: '12px', cursor: 'pointer' }}
+                    title="Delete task"
+                  >
+                    ✕
+                  </button>
+                </div>
+              );
+            })}
+          </div>
+        )}
+
         {/* Add note */}
         <div style={{ display: 'flex', gap: '8px', marginBottom: '12px' }}>
           <input
@@ -398,6 +561,8 @@ export default function UpfitProjectsPage() {
           {filtered.map(p => {
             const st = getStatus(p.status);
             const noteCount = p.upfit_project_notes?.length || 0;
+            const openTasks = (p.upfit_project_tasks || []).filter(t => !t.completed_at).length;
+            const totalTasks = (p.upfit_project_tasks || []).length;
             return (
               <div
                 key={p.id}
@@ -420,10 +585,15 @@ export default function UpfitProjectsPage() {
                   </div>
                   <span style={{ fontSize: '10px', fontWeight: 700, padding: '2px 8px', borderRadius: '6px', background: `${st.color}20`, color: st.color, border: `1px solid ${st.color}40`, whiteSpace: 'nowrap', flexShrink: 0 }}>{st.label}</span>
                 </div>
-                <div style={{ display: 'flex', gap: '12px', fontSize: '10px', color: theme.textMuted }}>
+                <div style={{ display: 'flex', gap: '12px', fontSize: '10px', color: theme.textMuted, flexWrap: 'wrap' }}>
                   {p.estimate_number && <span>Est: {p.estimate_number}</span>}
                   {p.netsuite_so_number && <span>SO: {p.netsuite_so_number}</span>}
                   {p.scheduled_date && <span>Sched: {fmt(p.scheduled_date)}</span>}
+                  {totalTasks > 0 && (
+                    <span style={{ color: openTasks > 0 ? '#fbbf24' : '#22c55e' }}>
+                      {openTasks > 0 ? `${openTasks}/${totalTasks} tasks open` : `${totalTasks} task${totalTasks !== 1 ? 's' : ''} done`}
+                    </span>
+                  )}
                   {noteCount > 0 && <span>{noteCount} note{noteCount !== 1 ? 's' : ''}</span>}
                   <span style={{ marginLeft: 'auto' }}>{fmt(p.updated_at)}</span>
                 </div>
