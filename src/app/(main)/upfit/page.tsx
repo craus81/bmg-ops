@@ -120,6 +120,9 @@ export default function UpfitProjectsPage() {
   const [nsLookingUp, setNsLookingUp] = useState(false);
   const [nsLookupError, setNsLookupError] = useState('');
 
+  // Linked fleet check-in (for handoff display)
+  const [linkedCheckin, setLinkedCheckin] = useState<{ id: string; vin: string; status: string; vehicle_year: string | null; vehicle_make: string | null; vehicle_model: string | null } | null>(null);
+
   // New project form
   const [showCreate, setShowCreate] = useState(false);
   const [newName, setNewName] = useState('');
@@ -302,11 +305,22 @@ export default function UpfitProjectsPage() {
     setNsLookingUp(false);
   };
 
+  const loadLinkedCheckin = async (checkinId: string | null) => {
+    if (!checkinId) { setLinkedCheckin(null); return; }
+    const { data } = await supabase
+      .from('fleet_checkins')
+      .select('id, vin, status, vehicle_year, vehicle_make, vehicle_model')
+      .eq('id', checkinId)
+      .maybeSingle();
+    setLinkedCheckin((data as any) || null);
+  };
+
   const openProject = (p: UpfitProject) => {
     setSelected(p);
     loadNotes(p.id);
     loadTasks(p.id);
     loadFiles(p.id);
+    loadLinkedCheckin(p.fleet_checkin_id);
   };
 
   const addNote = async () => {
@@ -457,6 +471,24 @@ export default function UpfitProjectsPage() {
               </div>
             )}
           </div>
+
+          {/* Linked vehicle (handoff from fleet check-in) */}
+          {linkedCheckin && (
+            <div style={{ marginTop: '10px', paddingTop: '10px', borderTop: `1px solid ${theme.border}` }}>
+              <div style={{ fontSize: '10px', fontWeight: 700, color: theme.textMuted, marginBottom: '4px', textTransform: 'uppercase', letterSpacing: '0.5px' }}>Linked Vehicle</div>
+              <button
+                onClick={() => window.location.assign(`/tracking?vehicle=${linkedCheckin.id}`)}
+                style={{ width: '100%', textAlign: 'left', padding: '8px 10px', borderRadius: '6px', background: theme.inputBg, border: `1px solid ${theme.border}`, color: theme.textPrimary, fontSize: '12px', cursor: 'pointer', display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '8px' }}
+              >
+                <span style={{ fontWeight: 600 }}>
+                  {[linkedCheckin.vehicle_year, linkedCheckin.vehicle_make, linkedCheckin.vehicle_model].filter(Boolean).join(' ') || 'Vehicle'} · VIN {linkedCheckin.vin}
+                </span>
+                <span style={{ fontSize: '10px', fontWeight: 700, padding: '2px 8px', borderRadius: '5px', background: `${theme.orange}20`, color: theme.orange }}>
+                  {linkedCheckin.status.replace(/_/g, ' ')}
+                </span>
+              </button>
+            </div>
+          )}
 
           {/* Pull from NetSuite */}
           <div style={{ marginTop: '10px', paddingTop: '10px', borderTop: `1px solid ${theme.border}` }}>
