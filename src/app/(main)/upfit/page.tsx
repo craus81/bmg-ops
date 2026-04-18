@@ -1,7 +1,8 @@
 'use client';
 
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import { createClient } from '@/lib/supabase-browser';
+import { storage } from '@/lib/storage';
 import { useAuth } from '@/components/AuthProvider';
 import { theme } from '@/lib/theme';
 
@@ -108,6 +109,17 @@ export default function UpfitProjectsPage() {
   const [newTaskDue, setNewTaskDue] = useState('');
   const [addingTask, setAddingTask] = useState(false);
 
+  // Files
+  interface UpfitFile { id: string; project_id: string; file_name: string; file_type: string | null; file_size: number | null; storage_path: string; uploaded_by: string | null; uploaded_at: string; }
+  const [files, setFiles] = useState<UpfitFile[]>([]);
+  const [uploadingFiles, setUploadingFiles] = useState(false);
+  const fileInputRef = useRef<HTMLInputElement>(null);
+
+  // NetSuite lookup
+  const [nsLookupNumber, setNsLookupNumber] = useState('');
+  const [nsLookingUp, setNsLookingUp] = useState(false);
+  const [nsLookupError, setNsLookupError] = useState('');
+
   // New project form
   const [showCreate, setShowCreate] = useState(false);
   const [newName, setNewName] = useState('');
@@ -196,10 +208,105 @@ export default function UpfitProjectsPage() {
     if (res.ok && selected) loadTasks(selected.id);
   };
 
+  const loadFiles = async (projectId: string) => {
+    const { data } = await supabase
+      .from('upfit_project_files')
+      .select('*')
+      .eq('project_id', projectId)
+      .order('uploaded_at', { ascending: false });
+    setFiles((data as UpfitFile[]) || []);
+  };
+
+  const uploadFiles = async (projectId: string, filesToUpload: File[]) => {
+    if (filesToUpload.length === 0) return;
+    setUploadingFiles(true);
+    for (const file of filesToUpload) {
+      const ext = file.name.split('.').pop() || 'bin';
+      const path = `upfit-files/${projectId}/${Date.now()}-${Math.random().toString(36).slice(2, 6)}.${ext}`;
+      const { error: upErr } = await storage.from('upfit-files').upload(path, file, { contentType: file.type });
+      if (upErr) {
+        console.error('File upload error:', upErr);
+        continue;
+      }
+      const { error: dbErr } = await supabase.from('upfit_project_files').insert({
+        project_id: projectId,
+        file_name: file.name,
+        file_type: file.type || null,
+        file_size: file.size,
+        storage_path: path,
+        uploaded_by: user?.id,
+      });
+      if (dbErr) console.error('File record insert error:', dbErr);
+    }
+    setUploadingFiles(false);
+    await loadFiles(projectId);
+  };
+
+  const deleteFile = async (file: UpfitFile) => {
+    if (!window.confirm(`Delete "${file.file_name}"?`)) return;
+    await storage.from('upfit-files').remove([file.storage_path]);
+    await supabase.from('upfit_project_files').delete().eq('id', file.id);
+    setFiles(prev => prev.filter(f => f.id !== file.id));
+  };
+
+  const getFileUrl = (path: string) => storage.from('upfit-files').getPublicUrl(path).data.publicUrl;
+
+  const formatFileSize = (bytes: number | null) => {
+    if (!bytes) return '';
+    if (bytes < 1024) return `${bytes} B`;
+    if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(0)} KB`;
+    return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+  };
+
+  const pullFromNetSuite = async () => {
+    if (!selected || !nsLookupNumber.trim()) return;
+    setNsLookingUp(true);
+    setNsLookupError('');
+    try {
+      const res = await fetch(`/api/netsuite/lookup-transaction?tranid=${encodeURIComponent(nsLookupNumber.trim())}`);
+      const data = await res.json();
+      if (!res.ok || !data.found) {
+        setNsLookupError(data.error || 'Not found');
+        setNsLookingUp(false);
+        return;
+      }
+      const m = data.match;
+      const updates: any = {
+        customer_name: m.customer_name || selected.customer_name,
+        customer_netsuite_id: m.customer_id || selected.customer_netsuite_id,
+      };
+      if (m.type === 'estimate') {
+        updates.estimate_number = m.tranid;
+        updates.estimated_total = m.total;
+      } else {
+        updates.netsuite_so_id = String(m.id);
+        updates.netsuite_so_number = m.tranid;
+        updates.so_total = m.total;
+      }
+      const updateRes = await fetch('/api/upfit-projects', {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ id: selected.id, ...updates }),
+      });
+      if (updateRes.ok) {
+        const { project } = await updateRes.json();
+        setSelected(project);
+        setNsLookupNumber('');
+        load();
+      } else {
+        setNsLookupError('Failed to save link');
+      }
+    } catch (e: any) {
+      setNsLookupError(e.message || 'Lookup failed');
+    }
+    setNsLookingUp(false);
+  };
+
   const openProject = (p: UpfitProject) => {
     setSelected(p);
     loadNotes(p.id);
     loadTasks(p.id);
+    loadFiles(p.id);
   };
 
   const addNote = async () => {
@@ -350,6 +457,30 @@ export default function UpfitProjectsPage() {
               </div>
             )}
           </div>
+
+          {/* Pull from NetSuite */}
+          <div style={{ marginTop: '10px', paddingTop: '10px', borderTop: `1px solid ${theme.border}` }}>
+            <div style={{ fontSize: '10px', fontWeight: 700, color: theme.textMuted, marginBottom: '6px', textTransform: 'uppercase', letterSpacing: '0.5px' }}>Pull from NetSuite</div>
+            <div style={{ display: 'flex', gap: '6px' }}>
+              <input
+                value={nsLookupNumber}
+                onChange={e => { setNsLookupNumber(e.target.value); setNsLookupError(''); }}
+                onKeyDown={e => e.key === 'Enter' && pullFromNetSuite()}
+                placeholder="SO or estimate number (e.g. SO12345)"
+                style={{ flex: 1, padding: '7px 10px', borderRadius: '6px', border: `1px solid ${theme.border}`, background: theme.inputBg, color: theme.textPrimary, fontSize: '12px', outline: 'none' }}
+              />
+              <button
+                onClick={pullFromNetSuite}
+                disabled={nsLookingUp || !nsLookupNumber.trim()}
+                style={{ padding: '7px 14px', borderRadius: '6px', background: theme.orange, color: '#fff', border: 'none', fontSize: '12px', fontWeight: 700, cursor: 'pointer', opacity: nsLookingUp || !nsLookupNumber.trim() ? 0.5 : 1, whiteSpace: 'nowrap' }}
+              >
+                {nsLookingUp ? 'Looking up...' : 'Link'}
+              </button>
+            </div>
+            {nsLookupError && (
+              <div style={{ fontSize: '11px', color: '#ef4444', marginTop: '6px' }}>{nsLookupError}</div>
+            )}
+          </div>
         </div>
 
         {/* Tasks */}
@@ -434,6 +565,56 @@ export default function UpfitProjectsPage() {
                 </div>
               );
             })}
+          </div>
+        )}
+
+        {/* Files */}
+        <div style={{ fontSize: '11px', fontWeight: 700, color: theme.textSecondary, marginBottom: '8px', textTransform: 'uppercase', letterSpacing: '0.5px', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+          <span>Files ({files.length})</span>
+          <div>
+            <input
+              ref={fileInputRef}
+              type="file"
+              multiple
+              onChange={e => {
+                const fs = e.target.files;
+                if (fs && fs.length > 0 && selected) uploadFiles(selected.id, Array.from(fs));
+                if (fileInputRef.current) fileInputRef.current.value = '';
+              }}
+              style={{ display: 'none' }}
+            />
+            <button
+              onClick={() => fileInputRef.current?.click()}
+              disabled={uploadingFiles}
+              style={{ padding: '4px 10px', borderRadius: '6px', background: theme.orange, color: '#fff', border: 'none', fontSize: '11px', fontWeight: 700, cursor: 'pointer', opacity: uploadingFiles ? 0.5 : 1 }}
+            >
+              {uploadingFiles ? 'Uploading...' : '+ Upload'}
+            </button>
+          </div>
+        </div>
+        {files.length > 0 && (
+          <div style={{ display: 'flex', flexDirection: 'column', gap: '4px', marginBottom: '16px' }}>
+            {files.map(f => (
+              <div key={f.id} style={{ background: theme.card, border: `1px solid ${theme.border}`, borderRadius: '8px', padding: '8px 10px', display: 'flex', alignItems: 'center', gap: '8px' }}>
+                <a
+                  href={getFileUrl(f.storage_path)}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  style={{ flex: 1, minWidth: 0, color: theme.textPrimary, fontSize: '12px', fontWeight: 600, textDecoration: 'none', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}
+                >
+                  {f.file_name}
+                </a>
+                <span style={{ fontSize: '10px', color: theme.textMuted, flexShrink: 0 }}>{formatFileSize(f.file_size)}</span>
+                <span style={{ fontSize: '10px', color: theme.textMuted, flexShrink: 0 }}>{fmtTime(f.uploaded_at)}</span>
+                <button
+                  onClick={() => deleteFile(f)}
+                  style={{ padding: '4px 6px', borderRadius: '5px', background: 'none', border: 'none', color: theme.textMuted, fontSize: '12px', cursor: 'pointer' }}
+                  title="Delete file"
+                >
+                  ✕
+                </button>
+              </div>
+            ))}
           </div>
         )}
 
