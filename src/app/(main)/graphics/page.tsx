@@ -391,6 +391,35 @@ export default function GraphicsPage() {
     await loadHistory(jobId);
   };
 
+  // Send proof to customer for approval (magic link)
+  const [sendingApprovalId, setSendingApprovalId] = useState<string | null>(null);
+  const sendForApproval = async (jobId: string) => {
+    if (sendingApprovalId) return;
+    setSendingApprovalId(jobId);
+    const res = await fetch(`/api/graphics-jobs/${jobId}/send-for-approval`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({}),
+    });
+    const data = await res.json();
+    setSendingApprovalId(null);
+    if (!res.ok) {
+      alert('Send failed: ' + (data.error || 'Unknown error'));
+      return;
+    }
+    const emailInfo = data.dispatch?.email
+      ? (data.dispatch.email.ok ? `Email sent to ${data.dispatch.email.target}` : `Email failed: ${data.dispatch.email.error || 'unknown'}`)
+      : null;
+    const smsInfo = data.dispatch?.sms
+      ? (data.dispatch.sms.skipped
+          ? 'SMS skipped (provider disabled)'
+          : data.dispatch.sms.ok
+            ? `SMS sent to ${data.dispatch.sms.target}`
+            : `SMS failed: ${data.dispatch.sms.error || 'unknown'}`)
+      : null;
+    alert(`Proof sent for approval. Link: ${data.approvalUrl}\n\n${[emailInfo, smsInfo].filter(Boolean).join('\n')}`);
+  };
+
   // Save job edits
   const saveJob = async () => {
     if (!editingJob) return;
@@ -954,6 +983,49 @@ export default function GraphicsPage() {
                               Post
                             </button>
                           </div>
+                        </div>
+
+                        {/* Customer approval */}
+                        <div style={{ marginBottom: '10px', padding: '8px 10px', borderRadius: '8px', background: (job as any).customer_approved ? 'rgba(34,197,94,0.1)' : 'var(--subtle-bg)', border: '1px solid ' + ((job as any).customer_approved ? 'rgba(34,197,94,0.3)' : 'var(--border)') }}>
+                          <div style={{ ...labelStyle, marginBottom: '6px' }}>Customer Approval</div>
+                          {(job as any).customer_approved ? (
+                            <div style={{ fontSize: '11px', color: '#22c55e', fontWeight: 700 }}>
+                              ✓ Approved {(job as any).customer_approved_at ? ` · ${new Date((job as any).customer_approved_at).toLocaleString()}` : ''}
+                            </div>
+                          ) : (job as any).customer_rejected_at ? (
+                            <div>
+                              <div style={{ fontSize: '11px', color: '#ef4444', fontWeight: 700, marginBottom: '4px' }}>Changes requested</div>
+                              {(job as any).customer_rejection_reason && (
+                                <div style={{ fontSize: '11px', color: 'var(--text-body)', fontStyle: 'italic' }}>{(job as any).customer_rejection_reason}</div>
+                              )}
+                              <button
+                                onClick={() => sendForApproval(job.id)}
+                                disabled={sendingApprovalId === job.id}
+                                style={{
+                                  marginTop: '6px', padding: '6px 12px', borderRadius: '6px', fontSize: '11px', fontWeight: 700,
+                                  background: 'rgba(59,130,246,0.15)', border: '1px solid rgba(59,130,246,0.3)',
+                                  color: '#60a5fa', cursor: 'pointer',
+                                }}
+                              >{sendingApprovalId === job.id ? 'Sending...' : 'Resend for approval'}</button>
+                            </div>
+                          ) : (
+                            <div>
+                              {(job as any).sent_for_approval_at && (
+                                <div style={{ fontSize: '11px', color: 'var(--text-muted)', marginBottom: '4px' }}>
+                                  Sent for approval {new Date((job as any).sent_for_approval_at).toLocaleString()}
+                                </div>
+                              )}
+                              <button
+                                onClick={() => sendForApproval(job.id)}
+                                disabled={sendingApprovalId === job.id}
+                                style={{
+                                  padding: '6px 12px', borderRadius: '6px', fontSize: '11px', fontWeight: 700,
+                                  background: 'rgba(59,130,246,0.15)', border: '1px solid rgba(59,130,246,0.3)',
+                                  color: '#60a5fa', cursor: 'pointer',
+                                }}
+                              >{sendingApprovalId === job.id ? 'Sending...' : ((job as any).sent_for_approval_at ? 'Resend approval link' : 'Send proof for customer approval')}</button>
+                            </div>
+                          )}
                         </div>
 
                         {/* Files */}
