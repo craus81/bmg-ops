@@ -163,6 +163,10 @@ function isTypeEnabled(prefs: any, type: string): boolean {
     }
     return true;
   }
+  // graphics_ready_for_install is dispatched only to a pre-targeted user set
+  // (assigned installers, admins, explicit opt-ins). Skip the per-user type
+  // gate here — channel preferences (in_app/email/push) still apply below.
+  if (type === 'graphics_ready_for_install') return true;
   if (type.includes('ready')) return prefs.notify_ready !== false;
   if (type.includes('shipped')) return prefs.notify_shipped !== false;
   // Default: allow

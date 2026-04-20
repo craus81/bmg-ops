@@ -315,16 +315,30 @@ export default function GraphicsPage() {
         note: note || null,
       });
 
-      // Notify users via all channels (in-app, SMS, email) per their preferences
+      // Notifications split by target audience:
+      //   - newStatus === 'ready': install-readiness event. Fire to a narrow
+      //     install-target set (assigned installers + admins + opt-ins) via
+      //     /api/graphics/notify-ready. Graphics-team users who want generic
+      //     status-change pings still get them via the second path below.
+      //   - All transitions also fire a generic status-change notification to
+      //     anyone whose preferences include that type — preserves the
+      //     existing awareness for the production team.
+      if (newStatus === 'ready') {
+        fetch('/api/graphics/notify-ready', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ jobId: job.id, excludeUserId: user?.id }),
+        }).catch(() => {});
+      }
+
       const { data: prefs } = await supabase
         .from('notification_preferences')
-        .select('user_id, notify_status_change, notify_ready, notify_shipped, custom_statuses');
+        .select('user_id, notify_status_change, notify_shipped, custom_statuses');
 
       if (prefs) {
-        const notifyUserIds = prefs
+        const statusPingUserIds = prefs
           .filter((p: any) => {
             if (p.user_id === user?.id) return false;
-            if (newStatus === 'ready' && p.notify_ready) return true;
             if (newStatus === 'shipped' && p.notify_shipped) return true;
             if (p.notify_status_change) return true;
             if (p.custom_statuses?.includes(newStatus)) return true;
@@ -332,12 +346,12 @@ export default function GraphicsPage() {
           })
           .map((p: any) => p.user_id);
 
-        if (notifyUserIds.length > 0) {
+        if (statusPingUserIds.length > 0) {
           fetch('/api/notifications/send', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({
-              userIds: notifyUserIds,
+              userIds: statusPingUserIds,
               type: 'graphics_status',
               title: `${job.title} → ${GRAPHICS_STATUS_LABELS[newStatus]}`,
               body: `Job #${job.job_number || job.id.slice(0, 8)} status changed to ${GRAPHICS_STATUS_LABELS[newStatus]}`,
