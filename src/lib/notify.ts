@@ -73,7 +73,15 @@ export async function notify(payload: NotifyPayload): Promise<NotifyResult> {
     );
   }
 
-  // SMS disabled — only in-app, email, and push active
+  // SMS is gated behind SMS_PROVIDER_ENABLED until T1.5's RingCentral
+  // integration + A2P 10DLC registration are live. When the flag is off
+  // the channel is simply skipped; when on, dispatches go through the
+  // existing Twilio adapter (src/lib/twilio.ts) as a fallback provider.
+  if (channels.includes('sms') && process.env.SMS_PROVIDER_ENABLED === 'true') {
+    promises.push(
+      sendViaSMS(payload).then((ok) => { result.sms = ok; })
+    );
+  }
 
   if (channels.includes('email')) {
     promises.push(

@@ -440,48 +440,41 @@ export default function TrackingPage() {
     }
   };
 
-  const updateStatus = useCallback(async (vehicleId: string, newStatus: VehicleTrackingStatus) => {
+  const updateStatus = useCallback(async (vehicleId: string, newStatus: VehicleTrackingStatus, opts: { force?: boolean } = {}) => {
     setUpdatingId(vehicleId);
     setUpdateSuccess(null);
     try {
-      // Get current status first
-      const { data: vehicle, error: fetchErr } = await supabase
-        .from('fleet_checkins')
-        .select('status')
-        .eq('id', vehicleId)
-        .single();
-
-      if (fetchErr || !vehicle) {
-        alert('Vehicle not found');
-        setUpdatingId(null);
-        return;
-      }
-
-      const fromStatus = vehicle.status;
-
-      // Update the status
-      const { error: updateErr } = await supabase
-        .from('fleet_checkins')
-        .update({ status: newStatus })
-        .eq('id', vehicleId);
-
-      if (updateErr) {
-        alert('Update failed: ' + updateErr.message);
-        setUpdatingId(null);
-        return;
-      }
-
-      // Log to status history
-      const { data: { user: authUser } } = await supabase.auth.getUser();
-      if (authUser) {
-        await supabase.from('vehicle_status_history').insert({
-          vehicle_id: vehicleId,
-          from_status: fromStatus,
-          to_status: newStatus,
+      const res = await fetch('/api/vehicle-tracking/update-status', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          vehicleId,
+          newStatus,
           note: statusNote.trim() || null,
-          changed_by: authUser.id,
-          changed_by_name: profile?.full_name || authUser.email || 'Unknown',
-        });
+          force: opts.force,
+        }),
+      });
+      const data = await res.json().catch(() => ({}));
+
+      if (res.status === 422 && Array.isArray(data.missing)) {
+        // Completion requirements missing — surface the list and offer
+        // admin override.
+        const lines = data.missing.join('\n• ');
+        const isAdmin = profile?.role === 'admin';
+        const proceed = isAdmin
+          ? confirm(`Cannot mark complete yet:\n\n• ${lines}\n\nOverride and mark complete anyway?`)
+          : (alert(`Cannot mark complete yet:\n\n• ${lines}\n\nFinish the checklist and upload a completion photo, then try again.`), false);
+        if (proceed) {
+          await updateStatus(vehicleId, newStatus, { force: true });
+        }
+        setUpdatingId(null);
+        return;
+      }
+
+      if (!res.ok) {
+        alert('Update failed: ' + (data.error || 'Unknown error'));
+        setUpdatingId(null);
+        return;
       }
 
       setStatusNote('');

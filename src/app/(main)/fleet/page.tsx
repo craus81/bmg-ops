@@ -525,6 +525,15 @@ export default function FleetPage() {
         />
 
         <div style={{ display: 'flex', flexDirection: 'column', gap: '8px', marginTop: '16px' }}>
+          <button
+            onClick={() => router.push(`/vehicles/${savedCheckin.vin}/pick-list`)}
+            style={{
+              width: '100%', padding: '12px', borderRadius: '12px',
+              background: 'transparent', color: theme.textPrimary,
+              border: `1px solid ${theme.border}`,
+              fontSize: '13px', fontWeight: 700,
+            }}
+          >Take check-in photos (optional)</button>
           {(savedCheckin.customer_name || savedCheckin.sales_order_number) && (
             <button onClick={checkInAnotherSameCustomer} style={{
               width: '100%', padding: '16px', borderRadius: '14px',
@@ -663,8 +672,21 @@ export default function FleetPage() {
                     disabled={isCurrent || updatingDupStatus}
                     onClick={async () => {
                       setUpdatingDupStatus(true);
-                      await supabase.from('fleet_checkins').update({ status: s, updated_at: new Date().toISOString() }).eq('id', duplicateVehicle.id);
-                      setDuplicateVehicle({ ...duplicateVehicle, status: s });
+                      const res = await fetch('/api/vehicle-tracking/update-status', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ vehicleId: duplicateVehicle.id, newStatus: s }),
+                      });
+                      if (res.ok) {
+                        setDuplicateVehicle({ ...duplicateVehicle, status: s });
+                      } else {
+                        const data = await res.json().catch(() => ({}));
+                        if (res.status === 422 && Array.isArray(data.missing)) {
+                          alert(`Cannot mark complete yet:\n\n• ${data.missing.join('\n• ')}`);
+                        } else {
+                          alert('Update failed: ' + (data.error || 'Unknown error'));
+                        }
+                      }
                       setUpdatingDupStatus(false);
                     }}
                     style={{
