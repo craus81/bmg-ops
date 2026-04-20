@@ -87,6 +87,19 @@ export default function FleetPage() {
   const [recentCheckins, setRecentCheckins] = useState<FleetCheckin[]>([]);
   const [showRecent, setShowRecent] = useState(false);
 
+  // Partial VIN lookup (last-8 handling)
+  const [partialVinMatches, setPartialVinMatches] = useState<Array<{
+    vin: string;
+    customerName: string | null;
+    source: 'fleet_checkin' | 'scan_log';
+    vehicleDescription: string | null;
+    lastSeenAt: string | null;
+  }>>([]);
+
+  // Prefilled on "Check in another for same customer" or "Clone" — keeps the
+  // shared job config while resetting only the VIN.
+  const [keepingContext, setKeepingContext] = useState(false);
+
   useEffect(() => {
     if (mode === 'text' && inputRef.current) inputRef.current.focus();
   }, [mode]);
@@ -141,10 +154,54 @@ export default function FleetPage() {
     setVinLoading(false);
   };
 
-  const handleVinSubmit = () => {
+  const handleVinSubmit = async () => {
     const v = vin.trim().toUpperCase();
-    if (!isValidVIN(v)) { setVinError('Invalid VIN - must be 17 characters.'); return; }
-    handleDecodeVin(v);
+    if (v.length === 17) {
+      if (!isValidVIN(v)) { setVinError('Invalid VIN format.'); return; }
+      setPartialVinMatches([]);
+      handleDecodeVin(v);
+      return;
+    }
+    if (v.length < 8) {
+      setVinError('Enter at least the last 8 characters of the VIN.');
+      return;
+    }
+    // Partial (8-16 chars) — look up prior full VINs
+    setVinError('');
+    setVinLoading(true);
+    setPartialVinMatches([]);
+    try {
+      const customer = selectedOrder?.customer_name || manualCustomerName.trim();
+      const qs = new URLSearchParams({ partial: v });
+      if (customer) qs.set('customer', customer);
+      const res = await fetch(`/api/fleet/lookup-vin?${qs.toString()}`);
+      const data = await res.json();
+      const matches = (data.matches || []) as typeof partialVinMatches;
+      if (matches.length === 1) {
+        // Unique hit — auto-complete
+        const full = matches[0].vin;
+        setVin(full);
+        setVinLoading(false);
+        handleDecodeVin(full);
+        return;
+      }
+      if (matches.length === 0) {
+        setVinError(
+          `No prior VIN ending in "${v}" found${customer ? ` for ${customer}` : ''}. Please enter the full 17-character VIN.`
+        );
+      } else {
+        setPartialVinMatches(matches);
+      }
+    } catch {
+      setVinError('Failed to look up partial VIN. Please enter the full 17-character VIN.');
+    }
+    setVinLoading(false);
+  };
+
+  const selectPartialMatch = (fullVin: string) => {
+    setVin(fullVin);
+    setPartialVinMatches([]);
+    handleDecodeVin(fullVin);
   };
 
   // ─── Step 2: Sales Order Search ────────────────────────────
@@ -324,6 +381,92 @@ export default function FleetPage() {
     setSavedCheckin(null);
     setNotes('');
     setScheduledUpfitDate('');
+    setManualCustomerName('');
+    setKeepingContext(false);
+    setPartialVinMatches([]);
+    setMode('text');
+  };
+
+  // ─── Check in another for same customer ──────────────────
+  // Resets VIN-only state while keeping customer / sales order / proof /
+  // scheduled date / notes. Jumps back to step 0 so the user can scan or
+  // enter the next VIN without re-picking shared context.
+  const checkInAnotherSameCustomer = () => {
+    setStep(0);
+    setVin('');
+    setVinError('');
+    setVehicleData(null);
+    setDuplicateVehicle(null);
+    setPartialVinMatches([]);
+    setSaved(false);
+    setSavedCheckin(null);
+    // Intentionally preserved: selectedOrder, manualCustomerName, customerSearch,
+    // selectedProof, dbxSelected, scheduledUpfitDate, notes.
+    setKeepingContext(true);
+    setMode('text');
+  };
+
+  // ─── Clone a prior check-in's context ─────────────────────
+  // Pre-populates customer search + sales order + proof + scheduled date from
+  // a prior check-in, then lands the user on step 0 to enter a fresh VIN.
+  const cloneFromCheckin = async (ci: FleetCheckin) => {
+    setStep(0);
+    setVin('');
+    setVinError('');
+    setVehicleData(null);
+    setDuplicateVehicle(null);
+    setPartialVinMatches([]);
+    setSaved(false);
+    setSavedCheckin(null);
+
+    setCustomerSearch(ci.customer_name || '');
+    setManualCustomerName(ci.customer_name || '');
+    setScheduledUpfitDate(ci.scheduled_upfit_date || '');
+    setNotes('');
+
+    // Reconstruct a minimal selectedOrder shape so downstream save writes
+    // the same SO linkage.
+    if (ci.netsuite_sales_order_id && ci.sales_order_number) {
+      setSelectedOrder({
+        id: ci.netsuite_sales_order_id,
+        sales_order_number: ci.sales_order_number,
+        customer_name: ci.customer_name || '',
+        memo: ci.sales_order_memo || '',
+        total: ci.sales_order_total || 0,
+        status: null,
+        date: null,
+        line_items: [],
+      } as any);
+    } else {
+      setSelectedOrder(null);
+    }
+
+    // Restore proof selection (Supabase or Dropbox).
+    if (ci.proof_file_path) {
+      setSelectedProof({
+        id: '',
+        customer_name: ci.customer_name || '',
+        vehicle_type: null,
+        file_name: ci.proof_file_name || '',
+        storage_path: ci.proof_file_path,
+        thumbnail_path: ci.proof_thumbnail_path || null,
+        file_size: null,
+        file_type: null,
+      } as any);
+    } else {
+      setSelectedProof(null);
+    }
+    if ((ci as any).proof_dropbox_path) {
+      setDbxSelected({
+        name: (ci as any).proof_filename || '',
+        path: (ci as any).proof_dropbox_path,
+      });
+    } else {
+      setDbxSelected(null);
+    }
+
+    setKeepingContext(true);
+    setShowRecent(false);
     setMode('text');
   };
 
@@ -382,10 +525,19 @@ export default function FleetPage() {
         />
 
         <div style={{ display: 'flex', flexDirection: 'column', gap: '8px', marginTop: '16px' }}>
+          {(savedCheckin.customer_name || savedCheckin.sales_order_number) && (
+            <button onClick={checkInAnotherSameCustomer} style={{
+              width: '100%', padding: '16px', borderRadius: '14px',
+              background: theme.navy, color: '#fff', fontSize: '16px', fontWeight: 800, border: 'none',
+            }}>Check in another for {savedCheckin.customer_name || 'same customer'}</button>
+          )}
           <button onClick={resetAll} style={{
-            width: '100%', padding: '16px', borderRadius: '14px',
-            background: theme.navy, color: '#fff', fontSize: '16px', fontWeight: 800, border: 'none',
-          }}>Check In Next Vehicle</button>
+            width: '100%', padding: '14px', borderRadius: '14px',
+            background: (savedCheckin.customer_name || savedCheckin.sales_order_number) ? 'transparent' : theme.navy,
+            color: (savedCheckin.customer_name || savedCheckin.sales_order_number) ? theme.textPrimary : '#fff',
+            border: (savedCheckin.customer_name || savedCheckin.sales_order_number) ? `1px solid ${theme.border}` : 'none',
+            fontSize: '15px', fontWeight: 700,
+          }}>Check in a different customer</button>
         </div>
       </div>
     );
@@ -395,12 +547,53 @@ export default function FleetPage() {
   // STEP 0: VIN ENTRY
   // ═══════════════════════════════════════════════════════════
   if (step === 0) {
+    const heldCustomer = selectedOrder?.customer_name || manualCustomerName.trim();
+    const heldSO = selectedOrder?.sales_order_number;
+    const heldProof = selectedProof?.file_name || dbxSelected?.name;
     return (
       <div>
         <StepIndicator current={0} />
         <div style={{ fontSize: '11px', fontWeight: 700, color: theme.textMuted, textTransform: 'uppercase', letterSpacing: '0.5px', marginBottom: '12px' }}>
           Fleet Check-In
         </div>
+
+        {keepingContext && (heldCustomer || heldSO || heldProof) && (
+          <div style={{
+            marginBottom: '12px', padding: '10px 12px', borderRadius: '12px',
+            background: theme.successBg, border: `1px solid ${theme.successBorder}`,
+            display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '12px',
+          }}>
+            <div style={{ flex: 1, minWidth: 0 }}>
+              <div style={{ fontSize: '11px', fontWeight: 700, color: theme.success, textTransform: 'uppercase', letterSpacing: '0.5px' }}>
+                Context kept — just enter VIN
+              </div>
+              <div style={{ fontSize: '12px', color: theme.textSecondary, marginTop: '2px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                {heldCustomer || '—'}
+                {heldSO ? ` · SO #${heldSO}` : ''}
+                {scheduledUpfitDate ? ` · ${new Date(scheduledUpfitDate + 'T00:00:00').toLocaleDateString([], { month: 'short', day: 'numeric' })}` : ''}
+                {heldProof ? ` · ${heldProof}` : ''}
+              </div>
+            </div>
+            <button
+              onClick={() => {
+                setSelectedOrder(null);
+                setManualCustomerName('');
+                setCustomerSearch('');
+                setSelectedProof(null);
+                setDbxSelected(null);
+                setScheduledUpfitDate('');
+                setNotes('');
+                setKeepingContext(false);
+              }}
+              style={{
+                padding: '6px 10px', borderRadius: '8px',
+                background: 'transparent', border: `1px solid ${theme.border}`,
+                fontSize: '11px', fontWeight: 700, color: theme.textSecondary,
+                cursor: 'pointer', flexShrink: 0,
+              }}
+            >Clear</button>
+          </div>
+        )}
 
         {/* Camera / Text toggle */}
         <div style={{ display: 'flex', gap: '4px', marginBottom: '12px', background: theme.card, borderRadius: '10px', padding: '3px' }}>
@@ -425,7 +618,7 @@ export default function FleetPage() {
               type="text"
               value={vin}
               onChange={(e) => setVin(e.target.value.toUpperCase().replace(/[^A-HJ-NPR-Z0-9]/gi, '').slice(0, 17))}
-              placeholder="Enter or scan 17-char VIN"
+              placeholder="Enter full 17-char VIN or last 8+ chars"
               maxLength={17}
               style={{
                 width: '100%', padding: '10px 12px', borderRadius: '10px',
@@ -433,10 +626,13 @@ export default function FleetPage() {
                 color: theme.textPrimary, fontSize: '18px', letterSpacing: '2px',
                 fontWeight: 700, textAlign: 'center',
               }}
-              onKeyDown={(e) => { if (e.key === 'Enter' && vin.length === 17) handleVinSubmit(); }}
+              onKeyDown={(e) => { if (e.key === 'Enter' && vin.length >= 8) handleVinSubmit(); }}
             />
-            <div style={{ textAlign: 'center', marginTop: '4px', fontSize: '13px', fontWeight: 600, color: vin.length === 17 ? theme.success : theme.textMuted }}>
-              {vin.length}/17 {vin.length === 17 ? 'OK' : ''}
+            <div style={{
+              textAlign: 'center', marginTop: '4px', fontSize: '13px', fontWeight: 600,
+              color: vin.length === 17 ? theme.success : (vin.length >= 8 ? theme.textSecondary : theme.textMuted),
+            }}>
+              {vin.length}/17 {vin.length === 17 ? 'OK' : (vin.length >= 8 ? '· partial lookup OK' : '')}
             </div>
           </div>
         )}
@@ -500,12 +696,51 @@ export default function FleetPage() {
         )}
 
         {mode === 'text' && !vinLoading && (
-          <button onClick={handleVinSubmit} disabled={vin.length !== 17} style={{
+          <button onClick={handleVinSubmit} disabled={vin.length < 8} style={{
             width: '100%', padding: '16px', borderRadius: '14px', marginTop: '14px',
-            background: vin.length === 17 ? theme.navy : theme.border,
+            background: vin.length >= 8 ? theme.navy : theme.border,
             color: '#fff', fontSize: '16px', fontWeight: 800,
-            opacity: vin.length === 17 ? 1 : 0.4, border: 'none',
-          }}>Decode VIN</button>
+            opacity: vin.length >= 8 ? 1 : 0.4, border: 'none',
+          }}>{vin.length === 17 ? 'Decode VIN' : (vin.length >= 8 ? 'Look up partial' : 'Decode VIN')}</button>
+        )}
+
+        {partialVinMatches.length > 0 && (
+          <div style={{ marginTop: '12px', padding: '12px', background: theme.card, border: `1px solid ${theme.border}`, borderRadius: '14px' }}>
+            <div style={{ fontSize: '11px', fontWeight: 700, color: theme.textMuted, textTransform: 'uppercase', letterSpacing: '0.5px', marginBottom: '8px' }}>
+              {partialVinMatches.length} Prior VIN{partialVinMatches.length === 1 ? '' : 's'} Match — Pick One
+            </div>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
+              {partialVinMatches.map((m) => (
+                <button
+                  key={m.vin}
+                  onClick={() => selectPartialMatch(m.vin)}
+                  style={{
+                    padding: '10px 12px', borderRadius: '10px', textAlign: 'left',
+                    background: 'var(--subtle-bg)', border: `1px solid ${theme.border}`,
+                    cursor: 'pointer',
+                  }}
+                >
+                  <div style={{ fontFamily: 'monospace', fontSize: '12px', fontWeight: 700, color: theme.textPrimary }}>
+                    {m.vin}
+                  </div>
+                  <div style={{ fontSize: '11px', color: theme.textMuted, marginTop: '2px' }}>
+                    {m.vehicleDescription || '—'}
+                    {m.customerName ? ` · ${m.customerName}` : ''}
+                    {m.lastSeenAt ? ` · ${new Date(m.lastSeenAt).toLocaleDateString([], { month: 'short', day: 'numeric', year: 'numeric' })}` : ''}
+                    {m.source === 'scan_log' ? ' · from scan log' : ''}
+                  </div>
+                </button>
+              ))}
+            </div>
+            <button
+              onClick={() => setPartialVinMatches([])}
+              style={{
+                marginTop: '8px', width: '100%', padding: '8px', borderRadius: '10px',
+                border: `1px solid ${theme.border}`, background: 'transparent',
+                color: theme.textSecondary, fontSize: '12px', fontWeight: 700,
+              }}
+            >Cancel — enter full VIN</button>
+          </div>
         )}
 
         {/* Recent Check-Ins */}
@@ -527,28 +762,43 @@ export default function FleetPage() {
               {recentCheckins.map(ci => (
                 <div
                   key={ci.id}
-                  onClick={() => router.push(`/tracking?vehicle=${ci.id}`)}
                   style={{
                     background: theme.card, border: `1px solid ${theme.border}`, borderRadius: '10px',
-                    padding: '10px 12px', cursor: 'pointer',
+                    padding: '10px 12px',
                   }}
                 >
-                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                    <div style={{ flex: 1 }}>
+                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '8px' }}>
+                    <div
+                      style={{ flex: 1, cursor: 'pointer', minWidth: 0 }}
+                      onClick={() => router.push(`/tracking?vehicle=${ci.id}`)}
+                    >
                       <div style={{ fontWeight: 700, fontSize: '13px' }}>
                         {[ci.vehicle_year, ci.vehicle_make, ci.vehicle_model].filter(Boolean).join(' ') || 'Unknown'}
                       </div>
                       <div style={{ fontSize: '11px', fontFamily: 'monospace', color: theme.textMuted }}>{ci.vin}</div>
+                      {ci.customer_name && (
+                        <div style={{ fontSize: '11px', color: theme.textSecondary, marginTop: '2px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                          {ci.customer_name}
+                        </div>
+                      )}
                     </div>
-                    <div style={{ textAlign: 'right', marginRight: '8px' }}>
+                    <div style={{ textAlign: 'right', display: 'flex', flexDirection: 'column', gap: '4px', flexShrink: 0 }}>
                       {ci.sales_order_number && (
                         <div style={{ fontSize: '11px', fontWeight: 700, color: theme.success }}>SO #{ci.sales_order_number}</div>
                       )}
                       <div style={{ fontSize: '10px', color: theme.textMuted }}>
                         {new Date(ci.created_at).toLocaleDateString([], { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' })}
                       </div>
+                      <button
+                        onClick={(e) => { e.stopPropagation(); cloneFromCheckin(ci); }}
+                        style={{
+                          padding: '4px 10px', borderRadius: '8px',
+                          background: 'transparent', border: `1px solid ${theme.border}`,
+                          fontSize: '11px', fontWeight: 700, color: theme.textSecondary,
+                          cursor: 'pointer',
+                        }}
+                      >Clone</button>
                     </div>
-                    <span style={{ color: theme.textMuted, fontSize: '14px' }}>›</span>
                   </div>
                 </div>
               ))}
