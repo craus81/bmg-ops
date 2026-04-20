@@ -25,6 +25,10 @@ interface VehicleData {
   proof_file_name: string | null;
   qc_completed_at: string | null;
   completion_notes: string | null;
+  install_instructions: string | null;
+  on_site_contact_name: string | null;
+  on_site_contact_phone: string | null;
+  delivery_preferences: string | null;
 }
 
 interface GraphicsJobData {
@@ -410,6 +414,45 @@ export default function VehiclePickListPage() {
           )}
         </div>
       </div>
+
+      {/* Install context (T1.6) — snapshot from estimate/customer defaults */}
+      {(vehicle.install_instructions || vehicle.on_site_contact_name || vehicle.on_site_contact_phone || vehicle.delivery_preferences) && (
+        <div style={{
+          background: 'color-mix(in srgb, var(--accent, #2563eb) 6%, var(--card))',
+          border: '1px solid var(--accent, #2563eb)',
+          borderRadius: '14px',
+          padding: '14px',
+          marginBottom: '16px',
+        }}>
+          <div style={{ fontSize: '12px', fontWeight: 700, color: 'var(--accent, #2563eb)', textTransform: 'uppercase', letterSpacing: '0.8px', marginBottom: '8px' }}>
+            Install Context
+          </div>
+          {vehicle.install_instructions && (
+            <div style={{ fontSize: '13px', color: 'var(--text-primary)', whiteSpace: 'pre-wrap', marginBottom: '8px' }}>
+              {vehicle.install_instructions}
+            </div>
+          )}
+          {(vehicle.on_site_contact_name || vehicle.on_site_contact_phone) && (
+            <div style={{ fontSize: '12px', color: 'var(--text-secondary, #475569)', marginBottom: '4px' }}>
+              <strong style={{ color: 'var(--text-muted)' }}>On-site:</strong>{' '}
+              {vehicle.on_site_contact_name}
+              {vehicle.on_site_contact_phone && (
+                <>
+                  {' · '}
+                  <a href={`tel:${vehicle.on_site_contact_phone}`} style={{ color: 'var(--accent, #2563eb)', textDecoration: 'none', fontWeight: 700 }}>
+                    {vehicle.on_site_contact_phone}
+                  </a>
+                </>
+              )}
+            </div>
+          )}
+          {vehicle.delivery_preferences && (
+            <div style={{ fontSize: '12px', color: 'var(--text-secondary, #475569)' }}>
+              <strong style={{ color: 'var(--text-muted)' }}>Delivery:</strong> {vehicle.delivery_preferences}
+            </div>
+          )}
+        </div>
+      )}
 
       {/* Primary action */}
       {canStart && (

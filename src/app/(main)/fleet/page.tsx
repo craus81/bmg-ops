@@ -285,6 +285,55 @@ export default function FleetPage() {
   const handleSave = async () => {
     if (!vehicleData || !user) return;
     setSaving(true);
+
+    // Snapshot install context (T1.6) from the originating estimate if
+    // one is linked to this sales order. Falls back to customers.delivery_instructions
+    // when an estimate isn't available.
+    let contextSnapshot: {
+      install_instructions: string | null;
+      on_site_contact_name: string | null;
+      on_site_contact_phone: string | null;
+      delivery_preferences: string | null;
+      source_estimate_id: string | null;
+    } = {
+      install_instructions: null,
+      on_site_contact_name: null,
+      on_site_contact_phone: null,
+      delivery_preferences: null,
+      source_estimate_id: null,
+    };
+
+    if (selectedOrder?.id) {
+      const { data: est } = await supabase
+        .from('estimates')
+        .select('id, install_instructions, on_site_contact_name, on_site_contact_phone, delivery_preferences')
+        .eq('netsuite_so_id', selectedOrder.id)
+        .order('updated_at', { ascending: false })
+        .limit(1)
+        .maybeSingle();
+      if (est) {
+        contextSnapshot = {
+          install_instructions: est.install_instructions || null,
+          on_site_contact_name: est.on_site_contact_name || null,
+          on_site_contact_phone: est.on_site_contact_phone || null,
+          delivery_preferences: est.delivery_preferences || null,
+          source_estimate_id: est.id,
+        };
+      }
+    }
+
+    if (!contextSnapshot.install_instructions && (selectedOrder?.customer_name || manualCustomerName.trim())) {
+      const custName = selectedOrder?.customer_name || manualCustomerName.trim();
+      const { data: customer } = await supabase
+        .from('customers')
+        .select('delivery_instructions')
+        .ilike('company_name', custName)
+        .maybeSingle();
+      if (customer?.delivery_instructions) {
+        contextSnapshot.install_instructions = customer.delivery_instructions;
+      }
+    }
+
     const { data, error } = await supabase
       .from('fleet_checkins')
       .insert({
@@ -308,6 +357,11 @@ export default function FleetPage() {
         checked_in_by: user.id,
         company_id: profile?.company_id || null,
         scheduled_upfit_date: scheduledUpfitDate || null,
+        install_instructions: contextSnapshot.install_instructions,
+        on_site_contact_name: contextSnapshot.on_site_contact_name,
+        on_site_contact_phone: contextSnapshot.on_site_contact_phone,
+        delivery_preferences: contextSnapshot.delivery_preferences,
+        source_estimate_id: contextSnapshot.source_estimate_id,
       })
       .select()
       .single();
