@@ -145,6 +145,7 @@ export default function EstimatesPage() {
   const [syncing, setSyncing] = useState(false);
   const [deleting, setDeleting] = useState(false);
   const [convertingToSO, setConvertingToSO] = useState(false);
+  const [sendingForApproval, setSendingForApproval] = useState(false);
 
   // Part search
   const [partSearch, setPartSearch] = useState('');
@@ -368,6 +369,37 @@ export default function EstimatesPage() {
   };
 
   // ── Convert Estimate to Sales Order in NetSuite ──
+  const sendForApproval = async () => {
+    if (!editingId || sendingForApproval) return;
+    if (!customerId) { alert('Pick a customer first.'); return; }
+    setSendingForApproval(true);
+    // Save current state first so the sent estimate reflects the latest edits
+    await saveEstimate('sent');
+    const res = await fetch(`/api/estimates/${editingId}/send-for-approval`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({}),
+    });
+    const data = await res.json();
+    setSendingForApproval(false);
+    if (!res.ok) {
+      alert('Send failed: ' + (data.error || 'Unknown error'));
+      return;
+    }
+    const emailInfo = data.dispatch?.email
+      ? (data.dispatch.email.ok ? `Email sent to ${data.dispatch.email.target}` : `Email failed: ${data.dispatch.email.error || 'unknown'}`)
+      : null;
+    const smsInfo = data.dispatch?.sms
+      ? (data.dispatch.sms.skipped
+          ? `SMS skipped (provider disabled) — link still works via email`
+          : data.dispatch.sms.ok
+            ? `SMS sent to ${data.dispatch.sms.target}`
+            : `SMS failed: ${data.dispatch.sms.error || 'unknown'}`)
+      : null;
+    alert(`Approval link sent. Link: ${data.approvalUrl}\n\n${[emailInfo, smsInfo].filter(Boolean).join('\n')}`);
+    loadEstimates();
+  };
+
   const convertToSalesOrder = async () => {
     if (!editingId) return;
     const est = estimates.find(e => e.id === editingId);
@@ -1174,6 +1206,23 @@ export default function EstimatesPage() {
             }}
           >
             {pushing ? 'Pushing to NetSuite...' : syncing ? 'Syncing to NetSuite...' : isPushed ? 'Sync Changes to NetSuite' : 'Push to NetSuite as Estimate'}
+          </button>
+        )}
+
+        {/* Send for Customer Approval (magic link) */}
+        {editingId && customerId && lines.length > 0 && !(estimates.find(e => e.id === editingId) as any)?.customer_approved && (
+          <button
+            onClick={sendForApproval}
+            disabled={sendingForApproval}
+            style={{
+              width: '100%', padding: '12px', borderRadius: '10px',
+              background: sendingForApproval ? 'var(--subtle-bg)' : 'rgba(59,130,246,0.15)',
+              border: '1px solid rgba(59,130,246,0.3)',
+              color: '#3b82f6', fontWeight: 800, fontSize: '13px', cursor: 'pointer',
+              opacity: sendingForApproval ? 0.5 : 1,
+            }}
+          >
+            {sendingForApproval ? 'Sending...' : 'Send to Customer for Approval'}
           </button>
         )}
 
