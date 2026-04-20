@@ -89,6 +89,7 @@ export default function VehiclePickListPage() {
   const [beforeCaption, setBeforeCaption] = useState('');
   const [completionCaption, setCompletionCaption] = useState('');
   const [photoRefreshKey, setPhotoRefreshKey] = useState(0);
+  const [messagingCustomer, setMessagingCustomer] = useState(false);
 
   const beforeFileRef = useRef<HTMLInputElement>(null);
   const completionFileRef = useRef<HTMLInputElement>(null);
@@ -194,6 +195,84 @@ export default function VehiclePickListPage() {
   const startInstall = () => postStatusChange('in_progress');
   const markComplete = () => postStatusChange('complete', { note: completionNote.trim() || undefined });
   const forceComplete = () => postStatusChange('complete', { note: completionNote.trim() || undefined, force: true });
+
+  // Open (or create) a customer thread scoped to this vehicle and deep-link
+  // into /admin/inbox. Customer resolution is best-effort: match external_contacts
+  // by the checkin's customer_name via the matching customers row, creating a
+  // placeholder contact if none exists so the inbox always has somewhere to land.
+  const openMessageCustomer = async () => {
+    if (!vehicle || messagingCustomer) return;
+    setMessagingCustomer(true);
+    try {
+      // Find customer row by company_name
+      let customerId: string | null = null;
+      let contactId: string | null = null;
+      if (vehicle.customer_name) {
+        const { data: cust } = await supabase
+          .from('customers')
+          .select('id, email, phone')
+          .ilike('company_name', vehicle.customer_name)
+          .maybeSingle();
+        if (cust) {
+          customerId = cust.id;
+          // Primary contact for this customer
+          const { data: primary } = await supabase
+            .from('external_contacts')
+            .select('id')
+            .eq('customer_id', cust.id)
+            .eq('is_primary', true)
+            .maybeSingle();
+          if (primary) {
+            contactId = primary.id;
+          } else {
+            // Create a primary contact from whatever the customer row has
+            const { data: created } = await supabase
+              .from('external_contacts')
+              .insert({
+                customer_id: cust.id,
+                name: vehicle.customer_name,
+                email: cust.email || null,
+                phone: cust.phone || null,
+                is_primary: true,
+                created_by: user?.id,
+              })
+              .select('id')
+              .single();
+            contactId = created?.id || null;
+          }
+        }
+      }
+
+      if (!contactId) {
+        alert('No contact available for this customer. Add a contact in the inbox first.');
+        setMessagingCustomer(false);
+        return;
+      }
+
+      const res = await fetch('/api/customer-threads', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          contactId,
+          customerId,
+          contextEntityType: 'fleet_checkin',
+          contextEntityId: vehicle.id,
+          subject: `${vehicle.vin} install`,
+        }),
+      });
+      const data = await res.json();
+      if (!res.ok || !data.thread?.id) {
+        alert('Failed to open thread: ' + (data.error || 'Unknown error'));
+        setMessagingCustomer(false);
+        return;
+      }
+      router.push(`/admin/inbox?thread=${data.thread.id}`);
+    } catch (err: any) {
+      alert('Failed to open thread: ' + (err.message || 'Network error'));
+    } finally {
+      setMessagingCustomer(false);
+    }
+  };
 
   const toggleTask = async (task: Task) => {
     if (!vehicle) return;
@@ -343,6 +422,18 @@ export default function VehiclePickListPage() {
             fontSize: '15px', fontWeight: 700, cursor: 'pointer', marginBottom: '16px',
           }}
         >{actionLoading ? 'Starting...' : 'Start Install'}</button>
+      )}
+
+      {(isAdmin || isInstaller) && (
+        <button
+          onClick={openMessageCustomer}
+          disabled={messagingCustomer}
+          style={{
+            width: '100%', padding: '10px', borderRadius: '10px',
+            border: '1px solid var(--border)', background: 'var(--card)',
+            fontSize: '13px', fontWeight: 700, cursor: 'pointer', marginBottom: '12px',
+          }}
+        >{messagingCustomer ? 'Opening thread...' : '💬 Message Customer'}</button>
       )}
 
       {isComplete && (
