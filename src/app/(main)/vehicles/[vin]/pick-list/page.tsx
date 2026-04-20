@@ -4,6 +4,7 @@ import { useState, useEffect, useCallback, useRef } from 'react';
 import { useRouter, useParams } from 'next/navigation';
 import { createClient } from '@/lib/supabase-browser';
 import { useAuth } from '@/components/AuthProvider';
+import VehiclePhotoTimeline from '@/components/VehiclePhotoTimeline';
 
 interface VehicleData {
   id: string;
@@ -85,6 +86,9 @@ export default function VehiclePickListPage() {
   const [completionNote, setCompletionNote] = useState('');
   const [uploadingPhotoType, setUploadingPhotoType] = useState<'before' | 'completion' | null>(null);
   const [missingRequirements, setMissingRequirements] = useState<string[] | null>(null);
+  const [beforeCaption, setBeforeCaption] = useState('');
+  const [completionCaption, setCompletionCaption] = useState('');
+  const [photoRefreshKey, setPhotoRefreshKey] = useState(0);
 
   const beforeFileRef = useRef<HTMLInputElement>(null);
   const completionFileRef = useRef<HTMLInputElement>(null);
@@ -206,7 +210,7 @@ export default function VehiclePickListPage() {
     }
   };
 
-  const uploadPhoto = async (type: 'before' | 'completion', file: File) => {
+  const uploadPhoto = async (type: 'before' | 'completion', file: File, caption?: string) => {
     if (!vehicle || !user) return;
     setUploadingPhotoType(type);
     try {
@@ -221,11 +225,13 @@ export default function VehiclePickListPage() {
           storage_path: path,
           photo_type: type,
           taken_by: user.id,
+          caption: caption?.trim() || null,
         });
         if (dbErr) {
           alert('Failed to save photo: ' + dbErr.message);
         } else {
           await load();
+          setPhotoRefreshKey(k => k + 1);
         }
       }
     } finally {
@@ -237,14 +243,13 @@ export default function VehiclePickListPage() {
 
   const onPhotoPick = (type: 'before' | 'completion') => async (e: React.ChangeEvent<HTMLInputElement>) => {
     const files = Array.from(e.target.files || []);
+    const caption = type === 'before' ? beforeCaption : completionCaption;
     for (const f of files) {
-      await uploadPhoto(type, f);
+      // Only attach the caption to the first file in a multi-select.
+      await uploadPhoto(type, f, files.indexOf(f) === 0 ? caption : undefined);
     }
-  };
-
-  const photoUrl = (storagePath: string) => {
-    const { data } = supabase.storage.from('photos').getPublicUrl(storagePath);
-    return data.publicUrl;
+    if (type === 'before') setBeforeCaption('');
+    else setCompletionCaption('');
   };
 
   const fileUrl = (storagePath: string) => {
@@ -279,7 +284,6 @@ export default function VehiclePickListPage() {
     );
   }
 
-  const beforePhotos = photos.filter(p => p.photo_type === 'before');
   const completionPhotos = photos.filter(p => p.photo_type === 'completion');
   const canStart = vehicle.status === 'received';
   const canComplete = vehicle.status === 'in_progress';
@@ -407,106 +411,99 @@ export default function VehiclePickListPage() {
         </div>
       )}
 
-      {/* Check-in photos — always available, optional */}
+      {/* Photo upload controls (check-in optional, completion required while in_progress) */}
       <div style={{
         background: 'var(--card)', border: '1px solid var(--border)',
         borderRadius: '14px', padding: '14px', marginBottom: '16px',
       }}>
-        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '10px' }}>
-          <div style={{ fontSize: '12px', fontWeight: 700, color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.8px' }}>
-            Check-in Photos (optional)
-          </div>
-          <button
-            onClick={() => beforeFileRef.current?.click()}
-            disabled={uploadingPhotoType === 'before'}
-            style={{
-              padding: '6px 12px', borderRadius: '8px',
-              border: '1px solid var(--border)', background: 'var(--card)',
-              fontSize: '12px', fontWeight: 700, cursor: 'pointer',
-            }}
-          >{uploadingPhotoType === 'before' ? 'Uploading...' : '+ Add'}</button>
-          <input
-            ref={beforeFileRef}
-            type="file"
-            accept="image/*"
-            capture="environment"
-            multiple
-            onChange={onPhotoPick('before')}
-            style={{ display: 'none' }}
-          />
+        <div style={{ fontSize: '12px', fontWeight: 700, color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.8px', marginBottom: '10px' }}>
+          Add Photos
         </div>
-        {beforePhotos.length === 0 ? (
-          <div style={{ fontSize: '12px', color: 'var(--text-muted)' }}>
-            Document prior damage or arrival condition before work begins.
+        <div style={{ display: 'grid', gridTemplateColumns: (canComplete || isComplete) ? '1fr 1fr' : '1fr', gap: '10px' }}>
+          {/* Check-in (before) */}
+          <div style={{ padding: '10px', borderRadius: '10px', background: 'var(--background, #fff)', border: '1px solid var(--border)' }}>
+            <div style={{ fontSize: '11px', fontWeight: 700, color: 'var(--text-secondary, #475569)', marginBottom: '6px' }}>Check-in (optional)</div>
+            <input
+              type="text"
+              value={beforeCaption}
+              onChange={e => setBeforeCaption(e.target.value)}
+              placeholder="Caption (e.g. dent on left bumper)"
+              style={{
+                width: '100%', padding: '6px 8px', borderRadius: '8px',
+                border: '1px solid var(--border)', background: 'var(--background, #fff)',
+                fontSize: '12px', marginBottom: '6px',
+              }}
+            />
+            <button
+              onClick={() => beforeFileRef.current?.click()}
+              disabled={uploadingPhotoType === 'before'}
+              style={{
+                width: '100%', padding: '8px 12px', borderRadius: '8px',
+                border: '1px dashed var(--border)', background: 'transparent',
+                fontSize: '12px', fontWeight: 700, cursor: 'pointer',
+              }}
+            >{uploadingPhotoType === 'before' ? 'Uploading...' : '+ Take / upload'}</button>
+            <input
+              ref={beforeFileRef}
+              type="file"
+              accept="image/*"
+              capture="environment"
+              multiple
+              onChange={onPhotoPick('before')}
+              style={{ display: 'none' }}
+            />
           </div>
-        ) : (
-          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(120px, 1fr))', gap: '8px' }}>
-            {beforePhotos.map(p => (
-              <a key={p.id} href={photoUrl(p.storage_path)} target="_blank" rel="noopener noreferrer">
-                <img
-                  src={photoUrl(p.storage_path)}
-                  alt="before"
-                  style={{ width: '100%', aspectRatio: '1', objectFit: 'cover', borderRadius: '8px', border: '1px solid var(--border)' }}
-                />
-              </a>
-            ))}
-          </div>
-        )}
-      </div>
 
-      {/* Completion photos (only during in_progress/complete) */}
-      {(canComplete || isComplete) && (
-        <div style={{
-          background: 'var(--card)',
-          border: `1px solid ${canComplete && !hasCompletionPhoto ? 'var(--warning, #f59e0b)' : 'var(--border)'}`,
-          borderRadius: '14px', padding: '14px', marginBottom: '16px',
-        }}>
-          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '10px' }}>
-            <div style={{ fontSize: '12px', fontWeight: 700, color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.8px' }}>
-              Completion Photos {canComplete && !hasCompletionPhoto && <span style={{ color: 'var(--warning, #f59e0b)' }}>· required</span>}
-            </div>
-            {canComplete && (
-              <>
-                <button
-                  onClick={() => completionFileRef.current?.click()}
-                  disabled={uploadingPhotoType === 'completion'}
-                  style={{
-                    padding: '6px 12px', borderRadius: '8px',
-                    border: '1px solid var(--border)', background: 'var(--card)',
-                    fontSize: '12px', fontWeight: 700, cursor: 'pointer',
-                  }}
-                >{uploadingPhotoType === 'completion' ? 'Uploading...' : '+ Add'}</button>
-                <input
-                  ref={completionFileRef}
-                  type="file"
-                  accept="image/*"
-                  capture="environment"
-                  multiple
-                  onChange={onPhotoPick('completion')}
-                  style={{ display: 'none' }}
-                />
-              </>
-            )}
-          </div>
-          {completionPhotos.length === 0 ? (
-            <div style={{ fontSize: '12px', color: 'var(--text-muted)' }}>
-              Upload at least one finished-install photo before marking complete.
-            </div>
-          ) : (
-            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(120px, 1fr))', gap: '8px' }}>
-              {completionPhotos.map(p => (
-                <a key={p.id} href={photoUrl(p.storage_path)} target="_blank" rel="noopener noreferrer">
-                  <img
-                    src={photoUrl(p.storage_path)}
-                    alt="completion"
-                    style={{ width: '100%', aspectRatio: '1', objectFit: 'cover', borderRadius: '8px', border: '1px solid var(--border)' }}
-                  />
-                </a>
-              ))}
+          {/* Completion (only while in_progress/complete) */}
+          {(canComplete || isComplete) && (
+            <div style={{
+              padding: '10px', borderRadius: '10px',
+              background: canComplete && !hasCompletionPhoto ? 'color-mix(in srgb, var(--warning, #f59e0b) 5%, var(--background, #fff))' : 'var(--background, #fff)',
+              border: `1px solid ${canComplete && !hasCompletionPhoto ? 'var(--warning, #f59e0b)' : 'var(--border)'}`,
+            }}>
+              <div style={{ fontSize: '11px', fontWeight: 700, color: canComplete && !hasCompletionPhoto ? 'var(--warning, #f59e0b)' : 'var(--text-secondary, #475569)', marginBottom: '6px' }}>
+                Completion {canComplete && !hasCompletionPhoto && '· required'}
+              </div>
+              <input
+                type="text"
+                value={completionCaption}
+                onChange={e => setCompletionCaption(e.target.value)}
+                placeholder="Caption (optional)"
+                disabled={!canComplete}
+                style={{
+                  width: '100%', padding: '6px 8px', borderRadius: '8px',
+                  border: '1px solid var(--border)', background: 'var(--background, #fff)',
+                  fontSize: '12px', marginBottom: '6px',
+                }}
+              />
+              <button
+                onClick={() => completionFileRef.current?.click()}
+                disabled={uploadingPhotoType === 'completion' || !canComplete}
+                style={{
+                  width: '100%', padding: '8px 12px', borderRadius: '8px',
+                  border: '1px dashed var(--border)', background: 'transparent',
+                  fontSize: '12px', fontWeight: 700, cursor: canComplete ? 'pointer' : 'not-allowed',
+                  opacity: canComplete ? 1 : 0.5,
+                }}
+              >{uploadingPhotoType === 'completion' ? 'Uploading...' : '+ Take / upload'}</button>
+              <input
+                ref={completionFileRef}
+                type="file"
+                accept="image/*"
+                capture="environment"
+                multiple
+                onChange={onPhotoPick('completion')}
+                style={{ display: 'none' }}
+              />
             </div>
           )}
         </div>
-      )}
+      </div>
+
+      {/* Unified photo timeline (check-in + in-progress + completion + design files + proofs) */}
+      <div style={{ marginBottom: '16px' }}>
+        <VehiclePhotoTimeline vin={vin} refreshKey={photoRefreshKey} variant="internal" />
+      </div>
 
       {/* Mark Complete block (in_progress only) */}
       {canComplete && (
