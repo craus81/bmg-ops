@@ -134,14 +134,18 @@ async function getPreferredChannels(userId: string, type: string): Promise<Notif
   }
 
   // For all other notification types (graphics, PO, etc.)
+  // Actionable operational events (assignments, install readiness) always
+  // fan out to in-app + email + push regardless of per-user preferences —
+  // silencing these by accident creates operational blindspots.
+  const ALWAYS_ALL_CHANNELS = new Set(['assignment', 'graphics_ready_for_install']);
+
   if (!prefs) {
-    // Default: in-app + push + email for assignments, in-app + push for others
-    const defaults: NotifyChannel[] = type === 'assignment' ? ['in_app', 'push', 'email'] : ['in_app', 'push'];
+    // Default: in-app + push + email for high-signal events, in-app + push for others
+    const defaults: NotifyChannel[] = ALWAYS_ALL_CHANNELS.has(type) ? ['in_app', 'push', 'email'] : ['in_app', 'push'];
     return defaults;
   }
 
-  // Assignments always get in-app + email + push regardless of preferences
-  if (type === 'assignment') {
+  if (ALWAYS_ALL_CHANNELS.has(type)) {
     return ['in_app', 'email', 'push'];
   }
 

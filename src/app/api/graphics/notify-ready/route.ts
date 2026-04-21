@@ -36,7 +36,7 @@ export async function POST(req: NextRequest) {
     // Load the graphics job for notification context
     const { data: job } = await supabase
       .from('graphics_jobs')
-      .select('id, title, job_number, part_number, customer')
+      .select('id, title, job_number, part_number, customer, created_by, assigned_to')
       .eq('id', jobId)
       .single();
 
@@ -68,13 +68,22 @@ export async function POST(req: NextRequest) {
       for (const a of assignments || []) targetUserIds.add(a.user_id);
     }
 
-    // Admins (always notified for install-readiness oversight)
+    // Admins — match either the primary `role` column or the multi-role
+    // `roles` array. Deliberately does NOT filter by profiles.status since
+    // admin accounts aren't always stamped 'approved' (particularly the
+    // bootstrap admin), and losing visibility on install readiness is
+    // worse than occasionally notifying an admin whose onboarding isn't
+    // fully finalized.
     const { data: admins } = await supabase
       .from('profiles')
-      .select('id')
-      .eq('role', 'admin')
-      .eq('status', 'approved');
+      .select('id, role, roles, status')
+      .or('role.eq.admin,roles.cs.{admin}');
     for (const a of admins || []) targetUserIds.add(a.id);
+
+    // Also include the graphics job's creator and assigned user — they
+    // are natural recipients even if they aren't flagged elsewhere.
+    if (job.created_by) targetUserIds.add(job.created_by);
+    if (job.assigned_to) targetUserIds.add(job.assigned_to);
 
     // Opt-in: users with notify_ready_for_install = true
     const { data: optins } = await supabase
@@ -87,6 +96,17 @@ export async function POST(req: NextRequest) {
     if (excludeUserId) targetUserIds.delete(excludeUserId);
 
     const userIds = Array.from(targetUserIds);
+
+    // Diagnostic logging — Vercel logs pick these up. Helps future debugging
+    // of the "why didn't the admin get pinged?" question.
+    console.log('[notify-ready] dispatch', {
+      jobId,
+      matchedCheckins: matchedCheckins?.length || 0,
+      adminCount: admins?.length || 0,
+      optinCount: optins?.length || 0,
+      finalTargetCount: userIds.length,
+    });
+
     if (userIds.length === 0) {
       return NextResponse.json({ sent: 0, reason: 'no_targets' });
     }
