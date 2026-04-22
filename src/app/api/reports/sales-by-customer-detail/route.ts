@@ -68,6 +68,11 @@ export async function GET(req: NextRequest) {
   // and we filter to non-zero quantity to skip discount/group rows that mostly
   // pollute the report. itemtype IN ('InvtPart','NonInvtPart','Service','OthCharge')
   // keeps real billable lines and drops subtotal/markup/etc rows.
+  // NetSuite stores invoice line netamount + quantity as NEGATIVE because
+  // item lines on sales transactions are credits to revenue in NS's internal
+  // double-entry model. Flip the sign so the report reads as positive
+  // customer-facing numbers. Unit rate (tl.rate) is stored positive — leave
+  // it alone.
   const baseQuery = `
     SELECT
       t.id            AS invoice_id,
@@ -78,9 +83,9 @@ export async function GET(req: NextRequest) {
       l.name          AS location,
       i.itemid        AS part_number,
       tl.memo         AS line_description,
-      tl.quantity     AS quantity,
+      -tl.quantity    AS quantity,
       tl.rate         AS unit_rate,
-      tl.netamount    AS net_amount
+      -tl.netamount   AS net_amount
     FROM transaction t
     INNER JOIN transactionline tl
       ON tl.transaction = t.id
