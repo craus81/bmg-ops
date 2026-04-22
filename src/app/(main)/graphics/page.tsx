@@ -329,6 +329,12 @@ export default function GraphicsPage() {
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ jobId: job.id }),
         }).catch(() => {});
+      } else if (newStatus === 'ready_to_pickup') {
+        fetch('/api/graphics/notify-pickup', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ jobId: job.id }),
+        }).catch(() => {});
       }
 
       const { data: prefs } = await supabase
