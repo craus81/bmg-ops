@@ -327,7 +327,7 @@ export default function GraphicsPage() {
         fetch('/api/graphics/notify-ready', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ jobId: job.id, excludeUserId: user?.id }),
+          body: JSON.stringify({ jobId: job.id }),
         }).catch(() => {});
       }
 

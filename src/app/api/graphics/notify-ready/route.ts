@@ -19,16 +19,22 @@ const supabase = createClient(
  *
  * Target set = installers assigned to matched fleet_checkins via job_assignments,
  *              plus fleet_checkins.assigned_to users, plus admins,
+ *              plus the graphics job's creator and assigned user,
  *              plus anyone with notification_preferences.notify_ready_for_install=true.
  *
- * Body: { jobId: string, excludeUserId?: string }
+ * The actor (user who flipped status) is intentionally NOT excluded — in a
+ * small shop the admin is often both the one flipping the status and a
+ * natural recipient. Receiving confirmation of your own action is less
+ * harmful than silently dropping notifications.
+ *
+ * Body: { jobId: string }
  */
 export async function POST(req: NextRequest) {
   const auth = await requireAuth(req);
   if (auth.error) return auth.error;
 
   try {
-    const { jobId, excludeUserId } = await req.json();
+    const { jobId } = await req.json();
     if (!jobId) {
       return NextResponse.json({ error: 'Missing jobId' }, { status: 400 });
     }
@@ -91,9 +97,6 @@ export async function POST(req: NextRequest) {
       .select('user_id')
       .eq('notify_ready_for_install', true);
     for (const p of optins || []) targetUserIds.add(p.user_id);
-
-    // Exclude the user who triggered the change
-    if (excludeUserId) targetUserIds.delete(excludeUserId);
 
     const userIds = Array.from(targetUserIds);
 
