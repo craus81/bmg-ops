@@ -42,7 +42,7 @@ function toDateInputValue(dateStr: string | null | undefined): string {
 }
 
 // Active statuses (not terminal)
-const ACTIVE_STATUSES: GraphicsJobStatus[] = ['flagged', 'received', 'designing', 'revision', 'printing', 'outgassing', 'cutting', 'packing', 'ready'];
+const ACTIVE_STATUSES: GraphicsJobStatus[] = ['flagged', 'received', 'designing', 'revision', 'printing', 'outgassing', 'cutting', 'packing', 'ready', 'ready_to_pickup'];
 
 export default function GraphicsPage() {
   const router = useRouter();

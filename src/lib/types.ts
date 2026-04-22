@@ -387,6 +387,7 @@ export type GraphicsJobStatus =
   | 'cutting'
   | 'packing'
   | 'ready'
+  | 'ready_to_pickup'
   | 'shipped'
   | 'installed'
   | 'cancelled';
@@ -401,6 +402,7 @@ export const GRAPHICS_STATUS_LABELS: Record<GraphicsJobStatus, string> = {
   cutting: 'Cutting',
   packing: 'Packing',
   ready: 'Ready to Install',
+  ready_to_pickup: 'Ready for Pickup',
   shipped: 'Shipped',
   installed: 'Installed',
   cancelled: 'Cancelled',
@@ -416,6 +418,7 @@ export const GRAPHICS_STATUS_COLORS: Record<GraphicsJobStatus, string> = {
   cutting: '#fbbf24',
   packing: '#c084fc',
   ready: '#4ade80',
+  ready_to_pickup: '#0ea5e9',
   shipped: '#3b82f6',
   installed: '#22c55e',
   cancelled: '#6b7280',
@@ -423,7 +426,8 @@ export const GRAPHICS_STATUS_COLORS: Record<GraphicsJobStatus, string> = {
 
 export const GRAPHICS_STATUS_ORDER: GraphicsJobStatus[] = [
   'flagged', 'received', 'designing', 'revision', 'printing',
-  'outgassing', 'cutting', 'packing', 'ready', 'shipped', 'installed', 'cancelled',
+  'outgassing', 'cutting', 'packing', 'ready', 'ready_to_pickup',
+  'shipped', 'installed', 'cancelled',
 ];
 
 export type GraphicsJobCategory = 'production' | 'proofing' | 'internal' | 'customer_supplied';
