@@ -186,7 +186,7 @@ async function instantiateChecklist(vehicleId: string, hasGraphics: boolean) {
 
     if (!template?.items || !Array.isArray(template.items)) return;
 
-    const rows = (template.items as Array<{ label: string; required?: boolean }>)
+    const rows = (template.items as Array<{ label: string; required?: boolean; key?: string }>)
       .filter((i) => i?.label)
       .map((item, i) => ({
         job_type: 'fleet_checkin',
@@ -195,6 +195,7 @@ async function instantiateChecklist(vehicleId: string, hasGraphics: boolean) {
         required: item.required === true,
         sort_order: i,
         template_id: template.id,
+        task_key: item.key || null,
       }));
 
     if (rows.length > 0) {

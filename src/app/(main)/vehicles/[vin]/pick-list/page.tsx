@@ -5,6 +5,7 @@ import { useRouter, useParams } from 'next/navigation';
 import { createClient } from '@/lib/supabase-browser';
 import { useAuth } from '@/components/AuthProvider';
 import VehiclePhotoTimeline from '@/components/VehiclePhotoTimeline';
+import CompletionModal from '@/components/CompletionModal';
 
 interface VehicleData {
   id: string;
@@ -14,6 +15,7 @@ interface VehicleData {
   vehicle_model: string | null;
   vehicle_trim: string | null;
   customer_name: string | null;
+  netsuite_sales_order_id: string | null;
   sales_order_number: string | null;
   sales_order_memo: string | null;
   status: string;
@@ -94,6 +96,7 @@ export default function VehiclePickListPage() {
   const [completionCaption, setCompletionCaption] = useState('');
   const [photoRefreshKey, setPhotoRefreshKey] = useState(0);
   const [messagingCustomer, setMessagingCustomer] = useState(false);
+  const [completionModalOpen, setCompletionModalOpen] = useState(false);
 
   const beforeFileRef = useRef<HTMLInputElement>(null);
   const completionFileRef = useRef<HTMLInputElement>(null);
@@ -492,56 +495,36 @@ export default function VehiclePickListPage() {
         </div>
       )}
 
-      {/* Checklist (only while in_progress or complete, if any tasks exist) */}
-      {(canComplete || isComplete) && tasks.length > 0 && (
+      {/* Compact checklist summary while in_progress — full UX lives in CompletionModal */}
+      {canComplete && (
         <div style={{
           background: 'var(--card)', border: '1px solid var(--border)',
           borderRadius: '14px', padding: '14px', marginBottom: '16px',
+          display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '10px',
         }}>
-          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '10px' }}>
+          <div>
             <div style={{ fontSize: '12px', fontWeight: 700, color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.8px' }}>
               QC Checklist
             </div>
-            <div style={{ fontSize: '11px', color: 'var(--text-muted)' }}>
-              {tasks.filter(t => t.completed).length}/{tasks.length} done
-              {requiredTasksRemaining > 0 && ` · ${requiredTasksRemaining} required left`}
+            <div style={{ fontSize: '13px', color: 'var(--text-primary)', marginTop: '4px' }}>
+              {tasks.length === 0 ? 'No checklist yet' : (
+                <>
+                  {tasks.filter(t => t.completed).length}/{tasks.length} done
+                  {requiredTasksRemaining > 0 && (
+                    <span style={{ color: 'var(--warning, #f59e0b)', fontWeight: 700 }}> · {requiredTasksRemaining} required left</span>
+                  )}
+                </>
+              )}
             </div>
           </div>
-          <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
-            {tasks.map(t => (
-              <label
-                key={t.id}
-                style={{
-                  display: 'flex', alignItems: 'flex-start', gap: '10px',
-                  padding: '10px 12px', borderRadius: '10px',
-                  background: 'var(--background, #fff)',
-                  border: `1px solid ${t.completed ? '#4ade80' : 'var(--border)'}`,
-                  cursor: canComplete ? 'pointer' : 'default',
-                  opacity: canComplete ? 1 : 0.7,
-                }}
-              >
-                <input
-                  type="checkbox"
-                  checked={t.completed}
-                  disabled={!canComplete}
-                  onChange={() => toggleTask(t)}
-                  style={{ marginTop: '2px', flexShrink: 0 }}
-                />
-                <div style={{ flex: 1, minWidth: 0 }}>
-                  <div style={{ fontSize: '13px', color: 'var(--text-primary)' }}>
-                    {t.required && <span style={{ color: 'var(--danger, #ef4444)', marginRight: '4px' }}>*</span>}
-                    {t.label}
-                  </div>
-                  {t.completed && t.completed_by_name && (
-                    <div style={{ fontSize: '11px', color: 'var(--text-muted)', marginTop: '2px' }}>
-                      {t.completed_by_name}
-                      {t.completed_at && ` · ${new Date(t.completed_at).toLocaleString([], { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' })}`}
-                    </div>
-                  )}
-                </div>
-              </label>
-            ))}
-          </div>
+          <button
+            onClick={() => setCompletionModalOpen(true)}
+            style={{
+              padding: '10px 14px', borderRadius: '10px', border: 'none',
+              background: '#22c55e', color: '#fff', fontSize: '13px', fontWeight: 800,
+              cursor: 'pointer', whiteSpace: 'nowrap',
+            }}
+          >Run Completion Checklist</button>
         </div>
       )}
 
@@ -639,69 +622,9 @@ export default function VehiclePickListPage() {
         <VehiclePhotoTimeline vin={vin} refreshKey={photoRefreshKey} variant="internal" />
       </div>
 
-      {/* Mark Complete block (in_progress only) */}
-      {canComplete && (
-        <div style={{
-          background: 'var(--card)', border: '1px solid var(--border)',
-          borderRadius: '14px', padding: '14px', marginBottom: '16px',
-        }}>
-          <label style={{ display: 'block', marginBottom: '10px' }}>
-            <div style={{ fontSize: '11px', color: 'var(--text-muted)', marginBottom: '4px' }}>Completion notes (optional)</div>
-            <textarea
-              value={completionNote}
-              onChange={(e) => setCompletionNote(e.target.value)}
-              rows={2}
-              placeholder="Anything worth noting for the record?"
-              style={{
-                width: '100%', padding: '8px 10px', borderRadius: '8px',
-                border: '1px solid var(--border)', background: 'var(--background, #fff)',
-                fontSize: '13px', fontFamily: 'inherit', resize: 'vertical',
-              }}
-            />
-          </label>
-
-          {missingRequirements && missingRequirements.length > 0 && (
-            <div style={{
-              padding: '10px 12px', borderRadius: '10px', marginBottom: '10px',
-              background: 'color-mix(in srgb, var(--danger, #ef4444) 10%, var(--card))',
-              border: '1px solid var(--danger, #ef4444)',
-              fontSize: '12px', color: 'var(--danger, #ef4444)',
-            }}>
-              <div style={{ fontWeight: 700, marginBottom: '4px' }}>Cannot mark complete yet:</div>
-              <ul style={{ margin: 0, paddingLeft: '18px' }}>
-                {missingRequirements.map((m, i) => <li key={i}>{m}</li>)}
-              </ul>
-              {isAdmin && (
-                <button
-                  onClick={forceComplete}
-                  disabled={actionLoading}
-                  style={{
-                    marginTop: '8px', padding: '6px 12px', borderRadius: '8px',
-                    border: '1px solid var(--danger, #ef4444)', background: 'transparent',
-                    color: 'var(--danger, #ef4444)', fontSize: '11px', fontWeight: 700,
-                    cursor: 'pointer',
-                  }}
-                >Admin override · mark complete anyway</button>
-              )}
-            </div>
-          )}
-
-          <button
-            onClick={markComplete}
-            disabled={actionLoading || !readyToComplete}
-            style={{
-              width: '100%', padding: '14px', borderRadius: '12px',
-              border: 'none',
-              background: readyToComplete ? '#22c55e' : 'var(--border)',
-              color: '#fff', fontSize: '15px', fontWeight: 700,
-              cursor: readyToComplete ? 'pointer' : 'not-allowed',
-              opacity: readyToComplete ? 1 : 0.5,
-            }}
-          >
-            {actionLoading ? 'Marking complete...' : (readyToComplete ? 'Mark Complete' : `Finish checklist + photo to enable`)}
-          </button>
-        </div>
-      )}
+      {/* Mark Complete UX lives in CompletionModal. The compact summary above
+          is the entry point; the modal renders the full checklist + photo
+          capture + proof preview + SO line items in one focused screen. */}
 
       {/* Graphics section */}
       {graphicsJob && (
@@ -836,6 +759,22 @@ export default function VehiclePickListPage() {
       >
         ← Back to ready queue
       </button>
+
+      {completionModalOpen && (
+        <CompletionModal
+          vehicleId={vehicle.id}
+          vehicleVin={vehicle.vin}
+          vehicleLabel={[vehicle.vehicle_year, vehicle.vehicle_make, vehicle.vehicle_model].filter(Boolean).join(' ') || '—'}
+          customerName={vehicle.customer_name}
+          netsuiteSalesOrderId={vehicle.netsuite_sales_order_id}
+          proofUrl={proofUrl}
+          proofIsPdf={(vehicle.proof_file_name || '').toLowerCase().endsWith('.pdf') || (vehicle.proof_file_path || '').toLowerCase().endsWith('.pdf')}
+          graphicsFiles={graphicsFiles}
+          isAdmin={!!isAdmin}
+          onClose={() => setCompletionModalOpen(false)}
+          onComplete={() => { setCompletionModalOpen(false); load(); }}
+        />
+      )}
     </div>
   );
 }
