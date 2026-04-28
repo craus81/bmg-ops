@@ -11,6 +11,7 @@ import type { FleetCheckin, VehicleTrackingStatus, VehicleStatusHistory, Vehicle
 import { VEHICLE_STATUS_PIPELINE, VEHICLE_STATUS_LABELS, VEHICLE_STATUS_COLORS } from '@/lib/types';
 import NetSuitePdf from '@/components/NetSuitePdf';
 import ProofThumbnail from '@/components/ProofThumbnail';
+import CompletionModal from '@/components/CompletionModal';
 
 type FilterStatus = VehicleTrackingStatus | 'all' | 'stuck';
 
@@ -46,6 +47,7 @@ export default function TrackingPage() {
   const [photosLoading, setPhotosLoading] = useState<Record<string, boolean>>({});
   const [photoUploading, setPhotoUploading] = useState(false);
   const [showCompletionPrompt, setShowCompletionPrompt] = useState<string | null>(null); // vehicleId
+  const [completionModalVehicleId, setCompletionModalVehicleId] = useState<string | null>(null);
   const photoInputRef = useRef<HTMLInputElement>(null);
   const cameraInputRef = useRef<HTMLInputElement>(null);
 
@@ -897,6 +899,25 @@ export default function TrackingPage() {
                             color: 'var(--text-primary)', fontSize: '12px', boxSizing: 'border-box',
                           }}
                         />
+
+                        {/* Run Completion Process — opens the full checklist + photo modal */}
+                        {status !== 'complete' && status !== 'shipped' && (
+                          <button
+                            type="button"
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              setCompletionModalVehicleId(vehicle.id);
+                            }}
+                            style={{
+                              width: '100%', padding: '12px', borderRadius: '10px', marginTop: '8px',
+                              fontSize: '13px', fontWeight: 800, cursor: 'pointer',
+                              background: '#22c55e', border: '1px solid #22c55e', color: '#fff',
+                              transition: 'all 0.15s',
+                            }}
+                          >
+                            Run Completion Process
+                          </button>
+                        )}
                       </div>
 
                     {/* Vehicle Info */}
@@ -1636,6 +1657,31 @@ export default function TrackingPage() {
           )}
         </div>
       )}
+
+      {completionModalVehicleId && (() => {
+        const v = vehicles.find(x => x.id === completionModalVehicleId);
+        if (!v) return null;
+        const proofName = (v.proof_file_name || v.proof_file_path || '').toLowerCase();
+        return (
+          <CompletionModal
+            vehicleId={v.id}
+            vehicleVin={v.vin}
+            vehicleLabel={[v.vehicle_year, v.vehicle_make, v.vehicle_model].filter(Boolean).join(' ') || 'Unknown Vehicle'}
+            customerName={v.customer_name}
+            netsuiteSalesOrderId={v.netsuite_sales_order_id}
+            proofUrl={(v as any).proof_url || null}
+            proofIsPdf={proofName.endsWith('.pdf')}
+            graphicsFiles={[]}
+            isAdmin={!!isAdmin}
+            onClose={() => setCompletionModalVehicleId(null)}
+            onComplete={() => {
+              setCompletionModalVehicleId(null);
+              loadVehicles();
+              if (expandedId) loadHistory(expandedId);
+            }}
+          />
+        );
+      })()}
     </div>
   );
 }
