@@ -259,6 +259,7 @@ export default function CompletionModal({
               style={{
                 width: '100%', padding: '8px 12px', borderRadius: '8px',
                 border: '1px dashed var(--border)', background: 'var(--card)',
+                color: 'var(--text-primary)',
                 fontSize: '12px', fontWeight: 700, cursor: 'pointer',
               }}
             >{uploading ? 'Uploading…' : '+ Take / upload completion photo'}</button>
