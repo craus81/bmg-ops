@@ -2,6 +2,7 @@
 
 import { useState, useEffect, useRef, useCallback } from 'react';
 import { createClient } from '@/lib/supabase-browser';
+import { storage } from '@/lib/storage';
 import { useAuth } from '@/components/AuthProvider';
 import ProofThumbnail from '@/components/ProofThumbnail';
 
@@ -131,7 +132,7 @@ export default function CompletionModal({
     if (key === 'task_upfit_per_spec') ensureSoLines();
   };
 
-  const photoUrl = (path: string) => supabase.storage.from(PHOTO_BUCKET).getPublicUrl(path).data.publicUrl;
+  const photoUrl = (path: string) => storage.from(PHOTO_BUCKET).getPublicUrl(path).data.publicUrl;
 
   const onPhotoPick = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const files = Array.from(e.target.files || []);
@@ -142,7 +143,7 @@ export default function CompletionModal({
         const file = files[idx];
         const ext = file.name.split('.').pop()?.toLowerCase() || 'jpg';
         const path = `vehicles/${vehicleId}/completion-${Date.now()}-${idx}.${ext}`;
-        const { error: upErr } = await supabase.storage.from(PHOTO_BUCKET).upload(path, file, { contentType: file.type });
+        const { error: upErr } = await storage.from(PHOTO_BUCKET).upload(path, file, { contentType: file.type });
         if (upErr) { alert('Upload failed: ' + upErr.message); continue; }
         await supabase.from('vehicle_photos').insert({
           vehicle_id: vehicleId,
@@ -340,7 +341,7 @@ export default function CompletionModal({
                             <div style={{ fontSize: '11px', fontWeight: 700, color: 'var(--text-muted)', marginBottom: '6px' }}>Design files</div>
                             <div style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
                               {graphicsFiles.map(f => {
-                                const url = supabase.storage.from('graphics-proofs').getPublicUrl(f.storage_path).data.publicUrl;
+                                const url = storage.from('graphics-proofs').getPublicUrl(f.storage_path).data.publicUrl;
                                 return (
                                   <a key={f.id} href={url} target="_blank" rel="noopener noreferrer" style={{ fontSize: '12px', color: 'var(--accent, #2563eb)', textDecoration: 'none' }}>
                                     {f.file_name} ↗
