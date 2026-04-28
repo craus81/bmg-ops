@@ -251,7 +251,7 @@ export default function CompletionModal({
               placeholder="Optional caption for next photo"
               value={caption}
               onChange={e => setCaption(e.target.value)}
-              style={{ width: '100%', padding: '6px 10px', borderRadius: '6px', border: '1px solid var(--border)', background: 'var(--background, #fff)', fontSize: '12px', marginBottom: '6px' }}
+              style={{ width: '100%', padding: '6px 10px', borderRadius: '6px', border: '1px solid var(--border)', background: 'var(--input-bg)', color: 'var(--text-primary)', fontSize: '12px', marginBottom: '6px' }}
             />
             <button
               onClick={() => fileRef.current?.click()}
@@ -284,7 +284,7 @@ export default function CompletionModal({
                   <div key={t.id} style={{
                     borderRadius: '10px',
                     border: `1px solid ${t.completed ? '#4ade80' : 'var(--border)'}`,
-                    background: 'var(--background, #fff)',
+                    background: 'var(--card)',
                     overflow: 'hidden',
                   }}>
                     <div style={{ display: 'flex', alignItems: 'flex-start', gap: '10px', padding: '10px 12px' }}>
@@ -401,7 +401,7 @@ export default function CompletionModal({
               onChange={e => setCompletionNote(e.target.value)}
               rows={2}
               placeholder="Anything worth noting for the record"
-              style={{ width: '100%', padding: '8px 10px', borderRadius: '8px', border: '1px solid var(--border)', background: 'var(--background, #fff)', fontSize: '13px', fontFamily: 'inherit', resize: 'vertical' }}
+              style={{ width: '100%', padding: '8px 10px', borderRadius: '8px', border: '1px solid var(--border)', background: 'var(--input-bg)', color: 'var(--text-primary)', fontSize: '13px', fontFamily: 'inherit', resize: 'vertical' }}
             />
           </label>
 
@@ -436,7 +436,7 @@ export default function CompletionModal({
             )}
           </div>
           <div style={{ display: 'flex', gap: '8px' }}>
-            <button onClick={onClose} style={{ padding: '10px 14px', borderRadius: '10px', border: '1px solid var(--border)', background: 'transparent', fontSize: '13px', fontWeight: 700, cursor: 'pointer' }}>Cancel</button>
+            <button onClick={onClose} style={{ padding: '10px 14px', borderRadius: '10px', border: '1px solid var(--border)', background: 'transparent', color: 'var(--text-primary)', fontSize: '13px', fontWeight: 700, cursor: 'pointer' }}>Cancel</button>
             <button
               onClick={() => submit(false)}
               disabled={!ready || submitting}
