@@ -114,12 +114,15 @@ export default function CompletionModal({
     const update = {
       completed: newCompleted,
       completed_at: newCompleted ? new Date().toISOString() : null,
-      completed_by: newCompleted ? user?.id : null,
+      completed_by: newCompleted ? (user?.id ?? null) : null,
       completed_by_name: newCompleted ? (profile?.full_name || user?.email || null) : null,
     };
-    const { error: e } = await supabase.from('job_tasks').update(update).eq('id', task.id);
-    if (!e) {
-      setTasks(prev => prev.map(t => t.id === task.id ? { ...t, ...update } as Task : t));
+    setTasks(prev => prev.map(t => t.id === task.id ? { ...t, ...update } as Task : t));
+    const { error: updateErr } = await supabase.from('job_tasks').update(update).eq('id', task.id);
+    if (updateErr) {
+      console.error('Failed to update task', updateErr);
+      setError(`Couldn't save: ${updateErr.message}`);
+      setTasks(prev => prev.map(t => t.id === task.id ? task : t));
     }
   };
 
