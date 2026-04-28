@@ -372,7 +372,12 @@ export default function FleetPage() {
       return;
     }
 
-    // Auto-match graphics job by customer name
+    // Auto-match graphics job by customer name. The linkage lives on
+    // fleet_checkins.matched_graphics_job_id; graphics_jobs has no
+    // matched_vehicle_id column (an earlier filter referencing it caused
+    // a 400 from PostgREST). Allow same graphics_job to match multiple
+    // checkins — appropriate for fleet customers where one design covers
+    // many vehicles.
     if (data?.id && (selectedOrder?.customer_name || manualCustomerName.trim())) {
       const custName = selectedOrder?.customer_name || manualCustomerName.trim();
       const { data: matchedJob } = await supabase
@@ -380,7 +385,7 @@ export default function FleetPage() {
         .select('id')
         .ilike('customer', `%${custName}%`)
         .not('status', 'in', '("installed","cancelled")')
-        .is('matched_vehicle_id', null)
+        .order('created_at', { ascending: false })
         .limit(1)
         .maybeSingle();
       if (matchedJob) {

@@ -1,4 +1,3 @@
-import { createClient } from '@/lib/supabase-server';
 import { NextRequest, NextResponse } from 'next/server';
 import { requireAuth } from '@/lib/api-auth';
 import { notify, notifyMany } from '@/lib/notify';
@@ -29,15 +28,9 @@ const VALID_STATUSES = ['received', 'in_progress', 'stuck_parts', 'stuck_graphic
 export async function POST(request: Request) {
   const auth = await requireAuth(request as NextRequest);
   if (auth.error) return auth.error;
+  const user = auth.user;
 
   try {
-    const supabase = createClient();
-    const { data: { user }, error: authError } = await supabase.auth.getUser();
-
-    if (authError || !user) {
-      return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
-    }
-
     const body = await request.json();
     const { vehicleId, newStatus, note, force } = body;
 
@@ -51,12 +44,12 @@ export async function POST(request: Request) {
 
     // Get current vehicle + user profile
     const [vehicleResult, profileResult] = await Promise.all([
-      supabase
+      serviceSupabase
         .from('fleet_checkins')
         .select('id, status, vin, customer_name, vehicle_year, vehicle_make, vehicle_model, assigned_to, matched_graphics_job_id')
         .eq('id', vehicleId)
         .single(),
-      supabase.from('profiles').select('id, full_name, role').eq('id', user.id).single(),
+      serviceSupabase.from('profiles').select('id, full_name, role').eq('id', user.id).single(),
     ]);
 
     if (vehicleResult.error || !vehicleResult.data) {
@@ -87,12 +80,12 @@ export async function POST(request: Request) {
     // Enforce artifact requirements on in_progress → complete
     if (currentStatus === 'in_progress' && newStatus === 'complete') {
       const [photoResult, taskResult] = await Promise.all([
-        supabase
+        serviceSupabase
           .from('vehicle_photos')
           .select('id', { count: 'exact', head: true })
           .eq('vehicle_id', vehicleId)
           .eq('photo_type', 'completion'),
-        supabase
+        serviceSupabase
           .from('job_tasks')
           .select('id, label, completed, required')
           .eq('job_type', 'fleet_checkin')
@@ -123,7 +116,7 @@ export async function POST(request: Request) {
       if (note?.trim()) updatePayload.completion_notes = note.trim();
     }
 
-    const { error: updateError } = await supabase
+    const { error: updateError } = await serviceSupabase
       .from('fleet_checkins')
       .update(updatePayload)
       .eq('id', vehicleId);
@@ -133,7 +126,7 @@ export async function POST(request: Request) {
     }
 
     // Log status change
-    await supabase.from('vehicle_status_history').insert({
+    await serviceSupabase.from('vehicle_status_history').insert({
       vehicle_id: vehicleId,
       from_status: currentStatus,
       to_status: newStatus,
