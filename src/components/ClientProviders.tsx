@@ -60,7 +60,13 @@ function AppShell({ children }: { children: React.ReactNode }) {
   const { clockStatus, activePart, appLoading } = useApp();
 
   useEffect(() => {
-    if (!loading && !user) router.push('/login');
+    if (!loading && !user) {
+      // Preserve the destination across login so deep links from emails
+      // (e.g. /graphics?id=...) land where the user expected.
+      const here = window.location.pathname + window.location.search + window.location.hash;
+      const next = here && here !== '/' && here !== '/login' ? `?next=${encodeURIComponent(here)}` : '';
+      router.push(`/login${next}`);
+    }
   }, [loading, user]);
 
   if (loading || appLoading) {

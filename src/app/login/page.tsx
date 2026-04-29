@@ -3,6 +3,14 @@
 import { useState, useEffect } from 'react';
 import { createClient } from '@/lib/supabase-browser';
 
+// Same-origin path validator — defends the post-login redirect against
+// open-redirect abuse (e.g. /login?next=//evil.com).
+function safeNextPath(raw: string | null): string {
+  if (!raw) return '/home';
+  if (!raw.startsWith('/') || raw.startsWith('//') || raw.startsWith('/\\')) return '/home';
+  return raw;
+}
+
 export default function LoginPage() {
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
@@ -13,7 +21,15 @@ export default function LoginPage() {
   const [signupDone, setSignupDone] = useState(false);
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(false);
+  const [nextPath, setNextPath] = useState<string>('/home');
   const supabase = createClient();
+
+  useEffect(() => {
+    try {
+      const raw = new URL(window.location.href).searchParams.get('next');
+      setNextPath(safeNextPath(raw));
+    } catch {}
+  }, []);
 
   useEffect(() => {
     try {
@@ -26,7 +42,8 @@ export default function LoginPage() {
     e.preventDefault();
     if (!email) return;
     setLoading(true); setError('');
-    const { error } = await supabase.auth.signInWithOtp({ email, options: { emailRedirectTo: `${window.location.origin}/auth/callback` } });
+    const callback = `${window.location.origin}/auth/callback${nextPath !== '/home' ? `?next=${encodeURIComponent(nextPath)}` : ''}`;
+    const { error } = await supabase.auth.signInWithOtp({ email, options: { emailRedirectTo: callback } });
     setLoading(false);
     if (error) setError(error.message); else setSent(true);
   };
@@ -37,7 +54,7 @@ export default function LoginPage() {
     setLoading(true); setError('');
     const { error } = await supabase.auth.signInWithPassword({ email, password });
     setLoading(false);
-    if (error) setError(error.message); else window.location.href = '/home';
+    if (error) setError(error.message); else window.location.href = nextPath;
   };
 
   const handleSignup = async (e: React.FormEvent) => {

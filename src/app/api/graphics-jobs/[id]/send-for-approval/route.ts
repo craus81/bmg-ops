@@ -89,6 +89,9 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
       approval_proof_file_id: proofFileId,
       sent_for_approval_at: new Date().toISOString(),
       sent_for_approval_by: auth.user.id,
+      // Clear any prior rejection so the resent link is actionable.
+      customer_rejected_at: null,
+      customer_rejection_reason: null,
       updated_at: new Date().toISOString(),
     })
     .eq('id', job.id);
