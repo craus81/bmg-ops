@@ -14,15 +14,21 @@ const supabase = createClient(
  * POST /api/graphics/notify-shipped-invoice
  *
  * Fires when a graphics_job transitions to 'shipped'. Pings the
- * billing-trusted admins (Craig George + Jessie Whittington) with a
- * notification that links back to /graphics with ?invoiceJob=<id>, where
- * the page surfaces a confirm prompt and (on yes) opens the invoice
- * modal. Skips if the job is already invoiced.
+ * billing-trusted admins with a notification that links back to
+ * /graphics with ?invoiceJob=<id>, where the page surfaces a confirm
+ * prompt and (on yes) opens the invoice modal. Skips if the job is
+ * already invoiced.
  *
  * Body: { jobId: string }
  */
 
-const INVOICE_PROMPT_RECIPIENTS = ['Craig George', 'Jessie Whittington'];
+// Hardcoded user UUIDs for now. Survives name/email changes. Swap to a
+// `notify_invoice_prompts` boolean on profiles once the recipient list
+// needs self-serve management.
+const INVOICE_PROMPT_USER_IDS = [
+  'f9f8a88c-1049-4bd5-95db-888787677ac9', // Craig George
+  '13c993b2-bb84-4539-8bbc-6c85395f558c', // Jessie Whittington
+];
 
 export async function POST(req: NextRequest) {
   const auth = await requireAuth(req);
@@ -42,24 +48,14 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ skipped: 'already_invoiced' });
   }
 
-  const { data: targetProfiles } = await supabase
-    .from('profiles')
-    .select('id, full_name')
-    .in('full_name', INVOICE_PROMPT_RECIPIENTS);
-
-  const userIds = (targetProfiles || []).map((p) => p.id);
-  if (userIds.length === 0) {
-    return NextResponse.json({ warning: 'No matching recipients found', recipients: INVOICE_PROMPT_RECIPIENTS });
-  }
-
   const jobLabel = job.title || `Job #${job.job_number}` || `Job ${job.id.slice(0, 8)}`;
 
-  await notifyMany(userIds, {
+  await notifyMany(INVOICE_PROMPT_USER_IDS, {
     type: 'graphics_invoice_prompt',
     title: 'Graphics shipped — create invoice?',
     body: `${jobLabel}${job.customer ? ` for ${job.customer}` : ''} has shipped. Create invoice in FleetSuite?`,
     url: `/graphics?invoiceJob=${job.id}`,
   });
 
-  return NextResponse.json({ notified: userIds.length });
+  return NextResponse.json({ notified: INVOICE_PROMPT_USER_IDS.length });
 }
