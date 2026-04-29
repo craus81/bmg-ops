@@ -7,8 +7,8 @@ import { useAuth } from '@/components/AuthProvider';
 import { storage } from '@/lib/storage';
 import StatusBadge from '@/components/StatusBadge';
 import AssignmentPicker from '@/components/AssignmentPicker';
-import type { FleetCheckin, VehicleTrackingStatus, VehicleStatusHistory, VehiclePhoto } from '@/lib/types';
-import { VEHICLE_STATUS_PIPELINE, VEHICLE_STATUS_LABELS, VEHICLE_STATUS_COLORS } from '@/lib/types';
+import type { FleetCheckin, VehicleTrackingStatus, VehicleStatusHistory, VehiclePhoto, GraphicsJob } from '@/lib/types';
+import { VEHICLE_STATUS_PIPELINE, VEHICLE_STATUS_LABELS, VEHICLE_STATUS_COLORS, GRAPHICS_STATUS_LABELS } from '@/lib/types';
 import NetSuitePdf from '@/components/NetSuitePdf';
 import ProofThumbnail from '@/components/ProofThumbnail';
 import CompletionModal from '@/components/CompletionModal';
@@ -55,6 +55,9 @@ export default function TrackingPage() {
   }
   const [vehicleTasks, setVehicleTasks] = useState<Record<string, ChecklistTask[]>>({});
   const [tasksLoading, setTasksLoading] = useState<Record<string, boolean>>({});
+
+  // Matched graphics job (looked up via fleet_checkins.matched_graphics_job_id)
+  const [graphicsJobs, setGraphicsJobs] = useState<Record<string, GraphicsJob | null>>({});
 
   // Photos state
   const [vehiclePhotos, setVehiclePhotos] = useState<Record<string, (VehiclePhoto & { url?: string })[]>>({});
@@ -183,6 +186,20 @@ export default function TrackingPage() {
       .order('sort_order');
     setVehicleTasks(prev => ({ ...prev, [vehicleId]: (data || []) as ChecklistTask[] }));
     setTasksLoading(prev => ({ ...prev, [vehicleId]: false }));
+  };
+
+  const loadGraphicsJob = async (vehicle: FleetCheckin) => {
+    const gjId = (vehicle as any).matched_graphics_job_id;
+    if (!gjId) {
+      setGraphicsJobs(prev => ({ ...prev, [vehicle.id]: null }));
+      return;
+    }
+    const { data } = await supabase
+      .from('graphics_jobs')
+      .select('*')
+      .eq('id', gjId)
+      .maybeSingle();
+    setGraphicsJobs(prev => ({ ...prev, [vehicle.id]: (data as GraphicsJob | null) || null }));
   };
 
   const loadPhotos = async (vehicleId: string) => {
@@ -466,6 +483,8 @@ export default function TrackingPage() {
       loadPhotos(id);
       loadNotes(id);
       loadTasks(id);
+      const v = vehicles.find(x => x.id === id);
+      if (v) loadGraphicsJob(v);
     }
   };
 
@@ -979,6 +998,107 @@ export default function TrackingPage() {
                         </div>
                       )}
                     </div>
+
+                    {/* Install Context — sales-order memo, install instructions, on-site contact, delivery prefs.
+                        Snapshotted from the originating estimate at check-in time (migration 076). */}
+                    {(() => {
+                      const memo = vehicle.sales_order_memo;
+                      const inst = (vehicle as any).install_instructions as string | null | undefined;
+                      const contactName = (vehicle as any).on_site_contact_name as string | null | undefined;
+                      const contactPhone = (vehicle as any).on_site_contact_phone as string | null | undefined;
+                      const delivery = (vehicle as any).delivery_preferences as string | null | undefined;
+                      if (!memo && !inst && !contactName && !contactPhone && !delivery) return null;
+                      return (
+                        <div style={{
+                          marginBottom: '12px', padding: '10px', borderRadius: '8px',
+                          background: 'rgba(96,165,250,0.05)', border: '1px solid rgba(96,165,250,0.18)',
+                        }}>
+                          <div style={{ fontSize: '10px', fontWeight: 700, color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.5px', marginBottom: '6px' }}>
+                            Install Context
+                          </div>
+                          <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
+                            {memo && (
+                              <div>
+                                <div style={{ fontSize: '9px', fontWeight: 700, color: 'var(--text-muted)', textTransform: 'uppercase' }}>SO Memo</div>
+                                <div style={{ fontSize: '12px', color: 'var(--text-primary)', whiteSpace: 'pre-wrap' }}>{memo}</div>
+                              </div>
+                            )}
+                            {inst && (
+                              <div>
+                                <div style={{ fontSize: '9px', fontWeight: 700, color: 'var(--text-muted)', textTransform: 'uppercase' }}>Install Instructions</div>
+                                <div style={{ fontSize: '12px', color: 'var(--text-primary)', whiteSpace: 'pre-wrap' }}>{inst}</div>
+                              </div>
+                            )}
+                            {(contactName || contactPhone) && (
+                              <div>
+                                <div style={{ fontSize: '9px', fontWeight: 700, color: 'var(--text-muted)', textTransform: 'uppercase' }}>On-site Contact</div>
+                                <div style={{ fontSize: '12px', color: 'var(--text-primary)' }}>
+                                  {contactName || ''}
+                                  {contactName && contactPhone && ' · '}
+                                  {contactPhone && (
+                                    <a href={`tel:${contactPhone}`} style={{ color: 'var(--accent, #2563eb)' }}>{contactPhone}</a>
+                                  )}
+                                </div>
+                              </div>
+                            )}
+                            {delivery && (
+                              <div>
+                                <div style={{ fontSize: '9px', fontWeight: 700, color: 'var(--text-muted)', textTransform: 'uppercase' }}>Delivery Preferences</div>
+                                <div style={{ fontSize: '12px', color: 'var(--text-primary)', whiteSpace: 'pre-wrap' }}>{delivery}</div>
+                              </div>
+                            )}
+                          </div>
+                        </div>
+                      );
+                    })()}
+
+                    {/* Completion Notes — what the installer wrote when finishing the job. */}
+                    {(vehicle as any).completion_notes && (
+                      <div style={{
+                        marginBottom: '12px', padding: '10px', borderRadius: '8px',
+                        background: 'rgba(34,197,94,0.06)', border: '1px solid rgba(34,197,94,0.2)',
+                      }}>
+                        <div style={{ fontSize: '10px', fontWeight: 700, color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.5px', marginBottom: '4px' }}>
+                          Completion Notes
+                        </div>
+                        <div style={{ fontSize: '12px', color: 'var(--text-primary)', whiteSpace: 'pre-wrap' }}>
+                          {(vehicle as any).completion_notes}
+                        </div>
+                      </div>
+                    )}
+
+                    {/* Matched Graphics Job — the linked graphics job's spec + status. */}
+                    {(() => {
+                      const gj = graphicsJobs[vehicle.id];
+                      if (!gj) return null;
+                      const spec = [gj.vinyl_color, gj.vinyl_type].filter(Boolean).join(' · ');
+                      return (
+                        <div style={{
+                          marginBottom: '12px', padding: '10px', borderRadius: '8px',
+                          background: 'rgba(167,139,250,0.05)', border: '1px solid rgba(167,139,250,0.2)',
+                        }}>
+                          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '6px' }}>
+                            <div style={{ fontSize: '10px', fontWeight: 700, color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.5px' }}>
+                              Matched Graphics Job
+                            </div>
+                            <a
+                              href={`/graphics?editJob=${gj.id}`}
+                              onClick={(e) => e.stopPropagation()}
+                              style={{ fontSize: '11px', fontWeight: 700, color: 'var(--accent, #2563eb)', textDecoration: 'none' }}
+                            >Open ↗</a>
+                          </div>
+                          <div style={{ fontSize: '12px', fontWeight: 700, color: 'var(--text-primary)' }}>
+                            {gj.title}
+                            {gj.job_number && <span style={{ color: 'var(--text-muted)', fontWeight: 400, marginLeft: '6px' }}>#{gj.job_number}</span>}
+                          </div>
+                          <div style={{ display: 'flex', gap: '12px', flexWrap: 'wrap', fontSize: '11px', color: 'var(--text-secondary)', marginTop: '4px' }}>
+                            <span><strong style={{ color: 'var(--text-muted)' }}>Status:</strong> {GRAPHICS_STATUS_LABELS[gj.status] || gj.status}</span>
+                            <span><strong style={{ color: 'var(--text-muted)' }}>Qty:</strong> {gj.quantity}</span>
+                            {spec && <span><strong style={{ color: 'var(--text-muted)' }}>Vinyl:</strong> {spec}</span>}
+                          </div>
+                        </div>
+                      );
+                    })()}
 
                     {/* Invoice tracking — shown for archived vehicles */}
                     {showArchived && (
