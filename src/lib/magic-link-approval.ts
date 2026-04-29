@@ -8,6 +8,7 @@
 import crypto from 'crypto';
 import { NextRequest } from 'next/server';
 import { createClient } from '@supabase/supabase-js';
+import { r2Upload } from '@/lib/r2';
 
 const DEFAULT_EXPIRY_DAYS = 30;
 const RATE_LIMIT_WINDOW_MS = 60 * 60 * 1000; // 1 hour
@@ -109,14 +110,12 @@ export async function uploadSignedDocument(
   contents: string,
   contentType: string = 'text/html'
 ): Promise<{ path: string; hash: string }> {
-  const supabase = getServiceClient();
   const hash = sha256Hex(contents);
   const path = `${subpath}-${Date.now()}.${contentType.includes('html') ? 'html' : 'pdf'}`;
-  const { error } = await supabase.storage
-    .from('signed-documents')
-    .upload(path, new Blob([contents], { type: contentType }), { contentType, upsert: false });
-  if (error) throw new Error(`Failed to upload signed document: ${error.message}`);
-  return { path, hash };
+  const buffer = Buffer.from(contents, 'utf8');
+  const result = await r2Upload('signed-documents', path, buffer, contentType);
+  if (!result.success) throw new Error(`Failed to upload signed document: ${result.error}`);
+  return { path: result.key, hash };
 }
 
 /**

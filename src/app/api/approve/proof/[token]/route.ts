@@ -5,6 +5,7 @@ import {
   getRequestIp, AGREEMENT_TEXT,
 } from '@/lib/magic-link-approval';
 import { notifyMany } from '@/lib/notify';
+import { r2Get, r2PublicUrl, r2Upload } from '@/lib/r2';
 
 export const dynamic = 'force-dynamic';
 
@@ -80,18 +81,13 @@ export async function GET(req: NextRequest, { params }: { params: { token: strin
     return NextResponse.json({ status: 'already_rejected', job: publicJob(job) });
   }
 
-  // Build public-accessible file URLs. graphics-proofs bucket is private,
-  // so mint short-lived signed URLs that work on the public approval page.
-  const fileEntries = await Promise.all((files || []).map(async (f: any) => {
-    const { data } = await supabase.storage
-      .from('graphics-proofs')
-      .createSignedUrl(f.storage_path, 60 * 60); // 1h
-    return {
-      id: f.id,
-      file_name: f.file_name,
-      url: data?.signedUrl || '',
-      is_pdf: isPdf(f),
-    };
+  // Files live in R2 under the graphics-proofs prefix (see src/lib/storage.ts).
+  // R2 public URLs are directly fetchable, no signing needed.
+  const fileEntries = (files || []).map((f: any) => ({
+    id: f.id,
+    file_name: f.file_name,
+    url: r2PublicUrl('graphics-proofs', f.storage_path),
+    is_pdf: isPdf(f),
   }));
 
   return NextResponse.json({ status: 'ready', job: publicJob(job), files: fileEntries });
@@ -158,15 +154,25 @@ export async function POST(req: NextRequest, { params }: { params: { token: stri
   const signedProofPaths: string[] = [];
   for (const f of files || []) {
     try {
-      const { data: blob } = await supabase.storage
-        .from('graphics-proofs')
-        .download(f.storage_path);
-      if (!blob) continue;
+      const fetched = await r2Get('graphics-proofs', f.storage_path);
+      if (!fetched.success || !fetched.body) {
+        console.error('proof file fetch failed:', f.storage_path, fetched.error);
+        continue;
+      }
+      const chunks: Buffer[] = [];
+      for await (const chunk of fetched.body as any) {
+        chunks.push(chunk instanceof Buffer ? chunk : Buffer.from(chunk));
+      }
+      const buffer = Buffer.concat(chunks);
       const destPath = `proofs/${job.id}/${Date.now()}-${f.file_name}`;
-      const { error: upErr } = await supabase.storage
-        .from('signed-documents')
-        .upload(destPath, blob, { contentType: f.file_type || 'application/octet-stream', upsert: false });
-      if (!upErr) signedProofPaths.push(destPath);
+      const uploaded = await r2Upload(
+        'signed-documents',
+        destPath,
+        buffer,
+        f.file_type || 'application/octet-stream',
+      );
+      if (uploaded.success) signedProofPaths.push(uploaded.key);
+      else console.error('proof file archive upload failed:', destPath, uploaded.error);
     } catch (err) {
       console.error('proof file clone failed:', err);
     }

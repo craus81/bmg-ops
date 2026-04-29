@@ -72,7 +72,7 @@ export default function ProofApprovalPage() {
   };
 
   if (state.status === 'loading') return <Frame>Loading proof...</Frame>;
-  if (state.status === 'invalid') return <Frame>Invalid approval link. Please contact BMG Fleet Installations.</Frame>;
+  if (state.status === 'invalid') return <Frame>This approval link is no longer valid. If a newer email was sent, please use that one — otherwise contact BMG Fleet Installations.</Frame>;
   if (state.status === 'expired') return <Frame>This approval link has expired. Please ask BMG Fleet Installations to re-send.</Frame>;
   if (state.status === 'already_approved') return <Frame><Accepted job={state.job} /></Frame>;
   if (state.status === 'already_rejected') return <Frame><Rejected job={state.job} /></Frame>;
