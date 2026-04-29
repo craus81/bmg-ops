@@ -77,57 +77,67 @@ export default function InstallerPhotoUploadPage() {
     setLoading(false);
   };
 
-  const uploadPhoto = async (file: File) => {
-    if (!user || !job) return;
+  const [uploadProgress, setUploadProgress] = useState<{ done: number; total: number } | null>(null);
+
+  const uploadPhotos = async (files: File[]) => {
+    if (!user || !job || files.length === 0) return;
     setUploading(true);
+    setUploadProgress({ done: 0, total: files.length });
 
     try {
-      const ext = file.name.split('.').pop() || 'jpg';
-      const path = `cni-photos/${job.id}/${selectedVin || 'general'}/${Date.now()}.${ext}`;
+      for (let i = 0; i < files.length; i++) {
+        const file = files[i];
+        const ext = file.name.split('.').pop() || 'jpg';
+        const path = `cni-photos/${job.id}/${selectedVin || 'general'}/${Date.now()}-${i}-${Math.random().toString(36).slice(2, 8)}.${ext}`;
 
-      const formData = new FormData();
-      formData.append('file', file);
-      formData.append('bucket', 'photos');
-      formData.append('path', path);
+        const formData = new FormData();
+        formData.append('file', file);
+        formData.append('bucket', 'photos');
+        formData.append('path', path);
 
-      const res = await fetch('/api/storage', { method: 'POST', body: formData });
-      const result = await res.json();
+        const res = await fetch('/api/storage', { method: 'POST', body: formData });
+        const result = await res.json();
 
-      if (result.success) {
-        // Create photo record
-        await supabase.from('cni_job_photos').insert({
-          job_id: job.id,
-          vin_id: selectedVin,
-          storage_path: result.key || path,
-          photo_type: selectedType,
-          uploaded_by: user.id,
-        });
-
-        // Update VIN photos_submitted flag
-        if (selectedVin) {
-          const vinPhotos = photos.filter(p => p.vin_id === selectedVin);
-          const typesCovered = new Set([...vinPhotos.map(p => p.photo_type), selectedType]);
-          const allRequired = REQUIRED_TYPES.every(t => typesCovered.has(t));
-          if (allRequired) {
-            await supabase.from('cni_job_vins').update({ photos_submitted: true }).eq('id', selectedVin);
-          }
+        if (result.success) {
+          await supabase.from('cni_job_photos').insert({
+            job_id: job.id,
+            vin_id: selectedVin,
+            storage_path: result.key || path,
+            photo_type: selectedType,
+            uploaded_by: user.id,
+          });
         }
 
-        await loadData();
+        setUploadProgress({ done: i + 1, total: files.length });
       }
+
+      // Update photos_submitted flag once after the batch
+      if (selectedVin) {
+        const { data: allVinPhotos } = await supabase
+          .from('cni_job_photos')
+          .select('photo_type')
+          .eq('job_id', job.id)
+          .eq('vin_id', selectedVin);
+        const typesCovered = new Set((allVinPhotos || []).map(p => p.photo_type));
+        if (REQUIRED_TYPES.every(t => typesCovered.has(t))) {
+          await supabase.from('cni_job_vins').update({ photos_submitted: true }).eq('id', selectedVin);
+        }
+      }
+
+      await loadData();
     } catch (err) {
       console.error('Upload error:', err);
     }
 
     setUploading(false);
+    setUploadProgress(null);
   };
 
   const handleFileSelect = (e: React.ChangeEvent<HTMLInputElement>) => {
     const files = e.target.files;
     if (files && files.length > 0) {
-      uploadPhoto(files[0]);
+      uploadPhotos(Array.from(files));
     }
-    // Reset input
     if (fileInputRef.current) fileInputRef.current.value = '';
   };
 
@@ -236,7 +246,7 @@ export default function InstallerPhotoUploadPage() {
             ref={fileInputRef}
             type="file"
             accept="image/*"
-            capture="environment"
+            multiple
             onChange={handleFileSelect}
             style={{ display: 'none' }}
           />
@@ -250,7 +260,11 @@ export default function InstallerPhotoUploadPage() {
                 background: uploading ? 'var(--text-muted)' : 'var(--orange)', color: '#fff', border: 'none',
               }}
             >
-              {uploading ? 'Uploading...' : 'Take / Choose Photo'}
+              {uploading
+                ? uploadProgress
+                  ? `Uploading ${uploadProgress.done}/${uploadProgress.total}...`
+                  : 'Uploading...'
+                : 'Take / Choose Photos'}
             </button>
           </div>
         </div>

@@ -67,7 +67,7 @@ export async function POST(req: NextRequest) {
         type: 'assignment',
         title,
         body,
-        url: jobType === 'graphics_job' ? '/graphics' : `/my-jobs`,
+        url: jobType === 'graphics_job' ? `/graphics?id=${jobId}` : `/tracking?vehicle=${jobId}`,
       }).catch(err => console.warn('Assignment notification error:', err));
 
       // Mark as notified
@@ -98,7 +98,7 @@ export async function POST(req: NextRequest) {
             type: 'graphics',
             title: 'New Graphics Job',
             body: jobTitle ? `New job: ${jobTitle}` : 'A new graphics job has been created.',
-            url: `/jobs/${jobId}`,
+            url: `/graphics?id=${jobId}`,
           }).catch(err => console.warn('Team notification error:', err));
         }
       }

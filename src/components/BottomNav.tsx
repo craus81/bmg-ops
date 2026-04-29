@@ -7,7 +7,7 @@ import type { FeatureKey } from '@/lib/features';
 import {
   Home, Palette, ClipboardCheck, Warehouse, Users,
   CalendarDays, ScanLine, Clock, FileText, Briefcase,
-  LayoutGrid, Settings, MoreHorizontal,
+  LayoutGrid, Settings, MoreHorizontal, Wrench,
 } from 'lucide-react';
 
 interface BottomNavProps {
@@ -26,6 +26,7 @@ export interface Tab {
 // All possible tabs with priority — only top 5 + More will show
 export const allTabs: Tab[] = [
   { id: 'home', path: '/home', label: 'Home', feature: 'home', priority: 0 },
+  { id: 'upfit', path: '/upfit', label: 'Upfit', feature: 'upfit_projects', priority: 0.5 },
   { id: 'graphics', path: '/graphics', label: 'Graphics', feature: 'graphics', priority: 1 },
   { id: 'fleet', path: '/fleet', label: 'Check In', feature: 'fleet_checkin', priority: 2 },
   { id: 'tracking', path: '/tracking', label: 'In-Shop', feature: 'in_shop', priority: 3 },
@@ -50,6 +51,7 @@ const TAB_ICONS: Record<string, React.ElementType> = {
   time: Clock,
   estimates: FileText,
   'installer-portal': Briefcase,
+  upfit: Wrench,
   'customer-dashboard': LayoutGrid,
   more: MoreHorizontal,
   'customer-settings': Settings,
@@ -90,6 +92,7 @@ export default function BottomNav({ clockStatus }: BottomNavProps) {
     if (tab.path === '/installer') return pathname.startsWith('/installer');
     if (tab.path === '/graphics') return pathname.startsWith('/graphics');
     if (tab.path === '/estimates') return pathname.startsWith('/estimates');
+    if (tab.path === '/upfit') return pathname.startsWith('/upfit');
     if (tab.path === '/customer/dashboard') return pathname.startsWith('/customer');
     return pathname.startsWith(tab.path);
   };

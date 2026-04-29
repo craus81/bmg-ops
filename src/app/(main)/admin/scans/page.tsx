@@ -63,7 +63,11 @@ export default function AdminScansPage() {
 
   // Direct invoice state
   const [invoicing, setInvoicing] = useState(false);
-  const [invoiceResult, setInvoiceResult] = useState<{ results: { customer: string; vehicleCount: number; status: string; invoiceNumber?: string; error?: string }[]; summary: { success: number; errors: number } } | null>(null);
+  const [invoiceResult, setInvoiceResult] = useState<{ results: { customer: string; po?: string | null; invoiceId?: string; invoiceNumber?: string; vehicleCount: number; status: string; error?: string }[]; summary: { success: number; errors: number } } | null>(null);
+  const [emailingInvoices, setEmailingInvoices] = useState(false);
+  const [sendingTest, setSendingTest] = useState(false);
+  const [emailTarget, setEmailTarget] = useState<{ customer: string; email: string; body: string; invoices: { invoiceId?: string; invoiceNumber: string; po?: string; include: boolean; verifyStatus?: 'ok' | 'error'; verifyError?: string }[] } | null>(null);
+  const [verifyingInvoices, setVerifyingInvoices] = useState(false);
 
   useEffect(() => { loadAll(); }, []);
 
@@ -71,7 +75,23 @@ export default function AdminScansPage() {
     setLoading(true);
     const [scansRes, archivedRes, profilesRes, partsRes, fullPartsRes, locsRes, posRes] = await Promise.all([
       supabase.from('scan_logs').select('*').is('archived_at', null).order('scanned_at', { ascending: false }).limit(1000),
-      supabase.from('scan_logs').select('*').not('archived_at', 'is', null).order('archived_at', { ascending: false }).limit(5000),
+      // Paginate archived scans — Supabase caps responses at 1000 rows by default
+      (async () => {
+        let all: any[] = [];
+        let pg = 0;
+        let more = true;
+        while (more) {
+          const { data } = await supabase
+            .from('scan_logs').select('*')
+            .not('archived_at', 'is', null)
+            .order('archived_at', { ascending: false })
+            .range(pg * 1000, (pg + 1) * 1000 - 1);
+          all = [...all, ...(data || [])];
+          more = (data || []).length === 1000;
+          pg++;
+        }
+        return { data: all };
+      })(),
       supabase.from('profiles').select('id, full_name'),
       supabase.from('netsuite_parts').select('item_number, requires_po_match'),
       // All active parts — paginate to get all
@@ -145,14 +165,47 @@ export default function AdminScansPage() {
       subKey = `PO #${s.po_number}`;
     } else {
       const poSuffix = tab === 'archived' && s.po_number ? ` · PO #${s.po_number}` : '';
-      subKey = `${s.part_number || 'No Part'} · ${s.location_name || 'No Location'}${poSuffix}`;
+      // On the archived tab, include invoice_number in the key so scans invoiced on
+      // different invoices don't lump into the same visual sub-group (even if they
+      // share the same part · location · PO).
+      const invSuffix = tab === 'archived' && s.invoice_number ? ` · ${s.invoice_number}` : '';
+      subKey = `${s.part_number || 'No Part'} · ${s.location_name || 'No Location'}${poSuffix}${invSuffix}`;
     }
     if (!acc[customer]) acc[customer] = {};
     if (!acc[customer][subKey]) acc[customer][subKey] = [];
     acc[customer][subKey].push(s);
     return acc;
   }, {});
-  const customerKeys = Object.keys(grouped).sort((a, b) => a === 'No Customer' ? 1 : b === 'No Customer' ? -1 : a.localeCompare(b));
+  // Compare two invoice numbers numerically when possible, else lexicographically.
+  // Returns positive if b > a (so a sorts after b, i.e. highest first).
+  const compareInvoice = (a: string, b: string) => {
+    const an = parseFloat(a.replace(/[^0-9.]/g, ''));
+    const bn = parseFloat(b.replace(/[^0-9.]/g, ''));
+    if (!isNaN(an) && !isNaN(bn) && an !== bn) return bn - an;
+    return b.localeCompare(a);
+  };
+
+  const maxInvoiceIn = (list: ScanLog[]): string => {
+    let max = '';
+    for (const s of list) {
+      const inv = s.invoice_number || '';
+      if (inv && (!max || compareInvoice(inv, max) < 0)) max = inv;
+    }
+    return max;
+  };
+
+  const customerKeys = Object.keys(grouped).sort((a, b) => {
+    if (a === 'No Customer') return 1;
+    if (b === 'No Customer') return -1;
+    if (tab === 'archived') {
+      const aMax = maxInvoiceIn(Object.values(grouped[a]).flat());
+      const bMax = maxInvoiceIn(Object.values(grouped[b]).flat());
+      if (aMax && bMax) return compareInvoice(aMax, bMax);
+      if (aMax) return -1;
+      if (bMax) return 1;
+    }
+    return a.localeCompare(b);
+  });
 
   const toggleGroup = (key: string) => {
     setExpandedGroups(prev => { const n = new Set(prev); if (n.has(key)) n.delete(key); else n.add(key); return n; });
@@ -277,6 +330,138 @@ export default function AdminScansPage() {
     }
     setInvoicing(false);
   };
+
+  const parseEmails = (input: string): string[] => {
+    return input.split(/[,;\s]+/).map(e => e.trim()).filter(e => /^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(e));
+  };
+
+  // Look up saved billing emails for a customer by company_name (case-insensitive)
+  const fetchSavedBillingEmails = async (customer: string): Promise<string[]> => {
+    const { data } = await supabase
+      .from('prospects')
+      .select('billing_emails')
+      .ilike('company_name', customer)
+      .limit(1)
+      .maybeSingle();
+    return (data as any)?.billing_emails || [];
+  };
+
+  // Merge and save billing emails back to the matching prospect
+  const saveBillingEmails = async (customer: string, newEmails: string[]) => {
+    if (newEmails.length === 0) return;
+    const { data: prospect } = await supabase
+      .from('prospects')
+      .select('id, billing_emails')
+      .ilike('company_name', customer)
+      .limit(1)
+      .maybeSingle();
+    if (!prospect) return;
+    const existing: string[] = (prospect as any).billing_emails || [];
+    const merged = Array.from(new Set([...existing, ...newEmails].map(e => e.toLowerCase())));
+    await supabase.from('prospects').update({ billing_emails: merged }).eq('id', (prospect as any).id);
+  };
+
+  const verifyInvoices = async () => {
+    if (!emailTarget) return;
+    const invoicesToCheck = emailTarget.invoices.filter(i => i.include);
+    if (invoicesToCheck.length === 0) return;
+    setVerifyingInvoices(true);
+    try {
+      const res = await fetch('/api/netsuite/email-invoices', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          invoices: invoicesToCheck.map(({ include, verifyStatus, verifyError, ...rest }) => rest),
+          customerName: emailTarget.customer,
+          customerEmail: [],
+          dryRun: true,
+        }),
+      });
+      const data = await res.json();
+      const statusByNumber: Record<string, { status: 'ok' | 'error'; error?: string }> = {};
+      for (const r of data.results || []) {
+        statusByNumber[r.invoiceNumber] = { status: r.status, error: r.error };
+      }
+      setEmailTarget(t => t ? {
+        ...t,
+        invoices: t.invoices.map(i => {
+          if (!i.include) return { ...i, verifyStatus: undefined, verifyError: undefined };
+          const s = statusByNumber[i.invoiceNumber];
+          return s ? { ...i, verifyStatus: s.status, verifyError: s.error } : i;
+        }),
+      } : t);
+    } catch (e: any) {
+      alert(`Verification failed: ${e.message}`);
+    }
+    setVerifyingInvoices(false);
+  };
+
+  const emailInvoices = async (overrideEmail?: string) => {
+    if (!emailTarget) return;
+    const isTest = !!overrideEmail;
+    const recipients = isTest ? [overrideEmail!] : parseEmails(emailTarget.email);
+    if (recipients.length === 0) {
+      alert('Please enter at least one valid email address');
+      return;
+    }
+    const invoicesToSend = emailTarget.invoices.filter(i => i.include);
+    if (invoicesToSend.length === 0) {
+      alert('Please select at least one invoice to send');
+      return;
+    }
+    if (isTest) setSendingTest(true); else setEmailingInvoices(true);
+    try {
+      const res = await fetch('/api/netsuite/email-invoices', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          invoices: invoicesToSend.map(({ include, verifyStatus, verifyError, ...rest }) => rest),
+          customerName: emailTarget.customer,
+          customerEmail: recipients,
+          customBody: emailTarget.body,
+        }),
+      });
+      const data = await res.json();
+      if (!res.ok) {
+        // Annotate per-invoice failures in the modal so the user can see which failed
+        if (Array.isArray(data.results)) {
+          const statusByNumber: Record<string, { status: 'ok' | 'error'; error?: string }> = {};
+          for (const r of data.results) {
+            statusByNumber[r.invoiceNumber] = { status: r.status, error: r.error };
+          }
+          setEmailTarget(t => t ? {
+            ...t,
+            invoices: t.invoices.map(i => {
+              if (!i.include) return i;
+              const s = statusByNumber[i.invoiceNumber];
+              return s ? { ...i, verifyStatus: s.status, verifyError: s.error } : i;
+            }),
+          } : t);
+        }
+        alert(`${data.error || 'Email failed'}`);
+      } else if (isTest) {
+        alert(`Test email sent to ${recipients[0]} — check your inbox to preview`);
+      } else {
+        await saveBillingEmails(emailTarget.customer, recipients);
+        alert(`Sent ${data.sent} invoice${data.sent !== 1 ? 's' : ''} to ${recipients.join(', ')}`);
+        setEmailTarget(null);
+      }
+    } catch (e: any) {
+      alert(`Email failed: ${e.message}`);
+    }
+    if (isTest) setSendingTest(false); else setEmailingInvoices(false);
+  };
+
+  // When a customer is targeted for emailing, prefill the input with saved billing emails
+  useEffect(() => {
+    if (!emailTarget || emailTarget.email) return;
+    (async () => {
+      const saved = await fetchSavedBillingEmails(emailTarget.customer);
+      if (saved.length > 0) {
+        setEmailTarget(t => t ? { ...t, email: saved.join(', ') } : t);
+      }
+    })();
+  }, [emailTarget?.customer]);
 
   // Edit scan
   const [editingScan, setEditingScan] = useState<ScanLog | null>(null);
@@ -593,12 +778,142 @@ export default function AdminScansPage() {
           </div>
           {invoiceResult.results.map((r, i) => (
             <div key={i} style={{ fontSize: '11px', fontWeight: 600, color: r.status === 'success' ? '#22c55e' : '#ef4444', marginBottom: '2px' }}>
-              {r.customer} ({r.vehicleCount} VIN{r.vehicleCount !== 1 ? 's' : ''})
+              {r.customer}{r.po ? ` · PO #${r.po}` : ''} ({r.vehicleCount} VIN{r.vehicleCount !== 1 ? 's' : ''})
               {r.status === 'success' ? ` → Invoice #${r.invoiceNumber}` : ` — ${r.error}`}
             </div>
           ))}
+          {invoiceResult.summary.success > 0 && (() => {
+            const successByCustomer: Record<string, { invoiceId: string; invoiceNumber: string; po?: string }[]> = {};
+            for (const r of invoiceResult.results) {
+              if (r.status === 'success' && r.invoiceId && r.invoiceNumber) {
+                if (!successByCustomer[r.customer]) successByCustomer[r.customer] = [];
+                successByCustomer[r.customer].push({ invoiceId: r.invoiceId, invoiceNumber: r.invoiceNumber, po: r.po || undefined });
+              }
+            }
+            return (
+              <div style={{ marginTop: '8px', display: 'flex', gap: '6px', flexWrap: 'wrap' }}>
+                {Object.entries(successByCustomer).map(([customer, invs]) => (
+                  <button key={customer} onClick={() => setEmailTarget({ customer, email: '', body: `Please find the attached invoice${invs.length !== 1 ? 's' : ''} for your recent services.`, invoices: invs.map(i => ({ ...i, include: true })) })} style={{ padding: '5px 10px', borderRadius: '6px', fontSize: '10px', fontWeight: 700, background: 'rgba(59,130,246,0.1)', border: '1px solid rgba(59,130,246,0.25)', color: '#60a5fa', cursor: 'pointer' }}>
+                    Email {invs.length} Invoice{invs.length !== 1 ? 's' : ''} to {customer}
+                  </button>
+                ))}
+              </div>
+            );
+          })()}
         </div>
       )}
+
+      {/* Email invoices modal */}
+      {emailTarget && (() => {
+        const includedCount = emailTarget.invoices.filter(i => i.include).length;
+        const allChecked = includedCount === emailTarget.invoices.length;
+        const toggleAll = () => setEmailTarget(t => t ? { ...t, invoices: t.invoices.map(i => ({ ...i, include: !allChecked })) } : t);
+        const toggleOne = (idx: number) => setEmailTarget(t => t ? { ...t, invoices: t.invoices.map((i, j) => j === idx ? { ...i, include: !i.include } : i) } : t);
+        return (
+        <div style={{ padding: '14px', borderRadius: '10px', marginBottom: '12px', background: 'var(--card)', border: '1px solid rgba(59,130,246,0.3)' }}>
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '10px' }}>
+            <div style={{ fontSize: '12px', fontWeight: 700, color: 'var(--text-primary)' }}>
+              Email {includedCount} of {emailTarget.invoices.length} Invoice{emailTarget.invoices.length !== 1 ? 's' : ''} to {emailTarget.customer}
+            </div>
+            <button
+              onClick={() => setEmailTarget(null)}
+              style={{ background: 'none', border: 'none', color: 'var(--text-muted)', fontSize: '14px', cursor: 'pointer' }}
+            >✕</button>
+          </div>
+
+          {/* Email preview */}
+          <div style={{ padding: '10px 12px', borderRadius: '8px', background: 'rgba(255,255,255,0.03)', border: '1px solid var(--border)', marginBottom: '10px', fontSize: '11px' }}>
+            <div style={{ fontWeight: 700, color: 'var(--text-primary)', marginBottom: '4px' }}>
+              Subject: {includedCount === 1 ? `Invoice #${emailTarget.invoices.find(i => i.include)?.invoiceNumber} from BMG Fleet` : `${includedCount} Invoices from BMG Fleet`}
+            </div>
+            <div style={{ color: 'var(--text-muted)', marginBottom: '3px', fontSize: '10px', textTransform: 'uppercase', fontWeight: 700, letterSpacing: '0.5px' }}>Message Body</div>
+            <textarea
+              value={emailTarget.body}
+              onChange={(e) => setEmailTarget({ ...emailTarget, body: e.target.value })}
+              rows={4}
+              style={{ width: '100%', padding: '8px 10px', borderRadius: '6px', border: '1px solid var(--border)', background: 'var(--input-bg)', color: 'var(--text-primary)', fontSize: '12px', fontFamily: 'inherit', resize: 'vertical', marginBottom: '8px', lineHeight: 1.5 }}
+              placeholder="Write a note for the customer..."
+            />
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '4px', gap: '8px', flexWrap: 'wrap' }}>
+              <div style={{ color: 'var(--text-muted)' }}>Invoices ({includedCount} selected):</div>
+              <div style={{ display: 'flex', gap: '6px' }}>
+                <button
+                  onClick={verifyInvoices}
+                  disabled={verifyingInvoices || includedCount === 0}
+                  style={{ padding: '2px 8px', borderRadius: '4px', fontSize: '9px', fontWeight: 700, background: 'rgba(251,191,36,0.08)', border: '1px solid rgba(251,191,36,0.25)', color: '#fbbf24', cursor: verifyingInvoices || includedCount === 0 ? 'not-allowed' : 'pointer', opacity: verifyingInvoices || includedCount === 0 ? 0.5 : 1 }}
+                >
+                  {verifyingInvoices ? 'Verifying...' : 'Verify PDFs'}
+                </button>
+                <button
+                  onClick={toggleAll}
+                  style={{ padding: '2px 8px', borderRadius: '4px', fontSize: '9px', fontWeight: 700, background: 'rgba(59,130,246,0.08)', border: '1px solid rgba(59,130,246,0.2)', color: '#60a5fa', cursor: 'pointer' }}
+                >
+                  {allChecked ? 'Uncheck All' : 'Check All'}
+                </button>
+              </div>
+            </div>
+            <div style={{ maxHeight: '260px', overflowY: 'auto', padding: '4px 0' }}>
+              {emailTarget.invoices.map((inv, i) => {
+                const statusColor = inv.verifyStatus === 'ok' ? '#22c55e' : inv.verifyStatus === 'error' ? '#ef4444' : 'var(--text-muted)';
+                const statusIcon = inv.verifyStatus === 'ok' ? '✓' : inv.verifyStatus === 'error' ? '✕' : '';
+                return (
+                  <label key={i} title={inv.verifyError || ''} style={{ display: 'flex', alignItems: 'center', gap: '8px', padding: '3px 6px', borderRadius: '4px', cursor: 'pointer', color: inv.include ? 'var(--text-secondary)' : 'var(--text-muted)', opacity: inv.include ? 1 : 0.55 }}>
+                    <input
+                      type="checkbox"
+                      checked={inv.include}
+                      onChange={() => toggleOne(i)}
+                      style={{ cursor: 'pointer', accentColor: '#22c55e' }}
+                    />
+                    <span style={{ flex: 1 }}>#{inv.invoiceNumber}{inv.po ? ` (PO #${inv.po})` : ''}</span>
+                    {statusIcon && (
+                      <span style={{ fontSize: '11px', fontWeight: 700, color: statusColor, minWidth: '14px', textAlign: 'right' }}>
+                        {statusIcon}
+                      </span>
+                    )}
+                    {inv.verifyStatus === 'error' && inv.verifyError && (
+                      <span style={{ fontSize: '10px', color: '#ef4444', fontStyle: 'italic', flexShrink: 0 }}>
+                        {inv.verifyError.length > 40 ? inv.verifyError.substring(0, 40) + '...' : inv.verifyError}
+                      </span>
+                    )}
+                  </label>
+                );
+              })}
+            </div>
+          </div>
+
+          {/* Customer email + send buttons */}
+          <div style={{ display: 'flex', gap: '8px', alignItems: 'center', flexWrap: 'wrap' }}>
+            <input
+              type="text"
+              placeholder="Customer email(s) — separate multiple with commas"
+              value={emailTarget.email}
+              onChange={(e) => setEmailTarget({ ...emailTarget, email: e.target.value })}
+              style={{ flex: 1, minWidth: '180px', padding: '8px 10px', borderRadius: '6px', fontSize: '12px', border: '1px solid var(--border)', background: 'var(--input-bg)', color: 'var(--text-primary)' }}
+            />
+            <button
+              onClick={() => emailInvoices()}
+              disabled={emailingInvoices || sendingTest || !emailTarget.email || includedCount === 0}
+              style={{ padding: '8px 14px', borderRadius: '6px', fontSize: '11px', fontWeight: 700, background: 'rgba(34,197,94,0.1)', border: '1px solid rgba(34,197,94,0.25)', color: '#22c55e', cursor: emailingInvoices || sendingTest || !emailTarget.email || includedCount === 0 ? 'not-allowed' : 'pointer', opacity: (!emailTarget.email || includedCount === 0) ? 0.5 : 1, whiteSpace: 'nowrap' }}
+            >
+              {emailingInvoices ? 'Sending...' : `Send ${includedCount} to Customer`}
+            </button>
+          </div>
+
+          {/* Test send */}
+          {user?.email && (
+            <div style={{ marginTop: '8px' }}>
+              <button
+                onClick={() => emailInvoices(user.email!)}
+                disabled={sendingTest || emailingInvoices}
+                style={{ padding: '6px 10px', borderRadius: '6px', fontSize: '10px', fontWeight: 700, background: 'rgba(251,191,36,0.08)', border: '1px solid rgba(251,191,36,0.2)', color: '#fbbf24', cursor: sendingTest || emailingInvoices ? 'not-allowed' : 'pointer', whiteSpace: 'nowrap' }}
+              >
+                {sendingTest ? 'Sending test...' : `Send Test to ${user.email}`}
+              </button>
+            </div>
+          )}
+        </div>
+        );
+      })()}
 
       {/* Bulk edit modal */}
       {showBulkEdit && (
@@ -964,7 +1279,16 @@ export default function AdminScansPage() {
       {tab !== 'bulk' && <div style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
         {customerKeys.map(customer => {
           const subGroups = grouped[customer];
-          const subKeys = Object.keys(subGroups).sort();
+          const subKeys = Object.keys(subGroups).sort((a, b) => {
+            if (tab === 'archived') {
+              const aMax = maxInvoiceIn(subGroups[a]);
+              const bMax = maxInvoiceIn(subGroups[b]);
+              if (aMax && bMax) return compareInvoice(aMax, bMax);
+              if (aMax) return -1;
+              if (bMax) return 1;
+            }
+            return a.localeCompare(b);
+          });
           const totalVins = subKeys.reduce((sum, k) => sum + subGroups[k].length, 0);
           const isCustomerCollapsed = !expandedGroups.has(customer);
 
@@ -984,6 +1308,37 @@ export default function AdminScansPage() {
                   <span style={{ fontWeight: 800, fontSize: '14px', color: 'var(--text-primary)' }}>{customer}</span>
                 </div>
                 <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                  {tab === 'archived' && (() => {
+                    const selectedCustomerScans = customerScanIds.filter(id => selectedScans.has(id));
+                    const sourceScans = selectedCustomerScans.length > 0
+                      ? subKeys.flatMap(k => subGroups[k]).filter(s => selectedScans.has(s.id))
+                      : subKeys.flatMap(k => subGroups[k]);
+                    const invoiceMap = new Map<string, { invoiceNumber: string; po?: string }>();
+                    for (const s of sourceScans) {
+                      if (s.invoice_number && !invoiceMap.has(s.invoice_number)) {
+                        invoiceMap.set(s.invoice_number, {
+                          invoiceNumber: s.invoice_number,
+                          po: s.po_number || undefined,
+                        });
+                      }
+                    }
+                    const invoicesForCustomer = [...invoiceMap.values()]
+                      .sort((a, b) => compareInvoice(a.invoiceNumber, b.invoiceNumber))
+                      .map(i => ({ ...i, include: true }));
+                    if (invoicesForCustomer.length === 0) return null;
+                    return (
+                      <button
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          setEmailTarget({ customer, email: '', body: `Please find the attached invoice${invoicesForCustomer.length !== 1 ? 's' : ''} for your recent services.`, invoices: invoicesForCustomer });
+                        }}
+                        style={{ padding: '2px 8px', borderRadius: '4px', fontSize: '9px', fontWeight: 700, background: 'rgba(34,197,94,0.1)', border: '1px solid rgba(34,197,94,0.25)', color: '#22c55e', cursor: 'pointer', whiteSpace: 'nowrap' }}
+                        title={selectedCustomerScans.length > 0 ? 'Email invoices for selected scans' : 'Email all invoices for this customer'}
+                      >
+                        Email {invoicesForCustomer.length} Invoice{invoicesForCustomer.length !== 1 ? 's' : ''}
+                      </button>
+                    );
+                  })()}
                   <button onClick={(e) => { e.stopPropagation(); toggleSelectGroup(customerScanIds); }} style={{ padding: '2px 8px', borderRadius: '4px', fontSize: '9px', fontWeight: 700, background: allCustomerSelected ? 'rgba(59,130,246,0.15)' : 'rgba(59,130,246,0.06)', border: '1px solid rgba(59,130,246,0.2)', color: '#60a5fa', cursor: 'pointer' }}>
                     {allCustomerSelected ? 'Deselect' : 'Select'} All
                   </button>

@@ -1,7 +1,7 @@
 'use client';
 
 import { useState, useEffect, useCallback, useRef } from 'react';
-import { useRouter } from 'next/navigation';
+import { useRouter, useSearchParams } from 'next/navigation';
 import { createClient } from '@/lib/supabase-browser';
 import { useAuth } from '@/components/AuthProvider';
 import { theme } from '@/lib/theme';
@@ -93,6 +93,7 @@ function genKey() {
 
 export default function EstimatesPage() {
   const router = useRouter();
+  const searchParams = useSearchParams();
   const { user, isAdmin, isSales, isGraphicsProduction, profile } = useAuth();
   const supabase = createClient();
 
@@ -164,6 +165,16 @@ export default function EstimatesPage() {
     if (!isAdmin && !isSales && !isGraphicsProduction) { router.push('/home'); return; }
     loadEstimates();
   }, [user, isAdmin, isSales, isGraphicsProduction]);
+
+  // Auto-open estimate from URL param (deep link from notifications/search)
+  useEffect(() => {
+    if (loading) return;
+    const estId = searchParams.get('id');
+    if (estId) {
+      const est = estimates.find(e => e.id === estId);
+      if (est) openEstimate(est);
+    }
+  }, [loading, searchParams]);
 
   const loadEstimates = async () => {
     setLoading(true);

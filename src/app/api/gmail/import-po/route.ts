@@ -81,7 +81,7 @@ async function flagGraphicParts(
             type: 'graphics_flagged',
             title: `Graphics Job Flagged: ${job.title}`,
             body: `PO #${poNumber} (${customer}) has a graphic part that needs review`,
-            url: '/graphics',
+            url: `/graphics?id=${job.id}`,
           });
         }
       }

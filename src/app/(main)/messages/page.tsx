@@ -74,6 +74,15 @@ export default function MessagesPage() {
     }
   }, [user]);
 
+  // Auto-open conversation from URL param (deep link from notifications/search)
+  useEffect(() => {
+    if (loading) return;
+    const convoId = searchParams.get('conversation');
+    if (convoId && conversations.some(c => c.id === convoId)) {
+      openConversation(convoId);
+    }
+  }, [loading, searchParams]);
+
   // Realtime subscription for new messages
   useEffect(() => {
     if (!user) return;

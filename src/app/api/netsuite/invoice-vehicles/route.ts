@@ -133,10 +133,7 @@ export async function POST(req: NextRequest) {
           continue;
         }
 
-        // Build VIN list for the memo
-        const vinList = custScans.map(s => s.vin).join(', ');
-        const poMemo = poNumber ? ` · PO #${poNumber}` : '';
-        const memo = `BMG FleetSuite Invoice${poMemo} — ${custScans.length} vehicle${custScans.length !== 1 ? 's' : ''}: ${vinList.length > 200 ? vinList.slice(0, 200) + '...' : vinList}`;
+        const memo = 'BMG FleetSuite Invoice';
 
         // Find a NetSuite location — use scan's location, fall back to O'Fallon
         let locationId: string | undefined;
@@ -169,6 +166,7 @@ export async function POST(req: NextRequest) {
           customerId: nsCustomer.id,
           locationId,
           memo,
+          ...(poNumber ? { otherrefnum: poNumber } : {}),
           lineItems,
         });
 

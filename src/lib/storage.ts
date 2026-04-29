@@ -6,25 +6,36 @@ const R2_PUBLIC_URL = process.env.NEXT_PUBLIC_R2_PUBLIC_URL || '';
 export const storage = {
   from(bucket: string) {
     return {
-      // Upload a file — returns { error } on failure, null on success
+      // Upload a file directly to R2 via a presigned PUT URL.
+      // Avoids the Vercel ~4.5MB API body limit.
       async upload(path: string, file: File | Blob, options?: { contentType?: string; upsert?: boolean }) {
         try {
-          const formData = new FormData();
-          formData.append('file', file instanceof File ? file : new File([file], 'upload', { type: options?.contentType }));
-          formData.append('bucket', bucket);
-          formData.append('path', path);
+          const contentType =
+            options?.contentType ||
+            (file instanceof File ? file.type : '') ||
+            'application/octet-stream';
 
-          const res = await fetch('/api/storage', {
+          const presignRes = await fetch('/api/storage/presign', {
             method: 'POST',
-            body: formData,
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ bucket, path, contentType }),
           });
-
-          const data = await res.json();
-          if (!data.success) {
-            return { data: null, error: { message: data.error || 'Upload failed' } };
+          const presign = await presignRes.json();
+          if (!presign.success) {
+            return { data: null, error: { message: presign.error || 'Failed to get upload URL' } };
           }
 
-          return { data: { key: data.key, publicUrl: data.publicUrl }, error: null };
+          const putRes = await fetch(presign.url, {
+            method: 'PUT',
+            headers: { 'Content-Type': contentType },
+            body: file,
+          });
+          if (!putRes.ok) {
+            const text = await putRes.text().catch(() => '');
+            return { data: null, error: { message: `Upload failed (${putRes.status}): ${text.slice(0, 200)}` } };
+          }
+
+          return { data: { key: presign.key, publicUrl: presign.publicUrl }, error: null };
         } catch (err: any) {
           return { data: null, error: { message: err.message || 'Network error' } };
         }

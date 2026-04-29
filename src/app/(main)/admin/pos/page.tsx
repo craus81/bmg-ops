@@ -1,7 +1,7 @@
 'use client';
 
 import { useState, useEffect, useRef } from 'react';
-import { useRouter } from 'next/navigation';
+import { useRouter, useSearchParams } from 'next/navigation';
 import { createClient } from '@/lib/supabase-browser';
 import { useAuth } from '@/components/AuthProvider';
 import { parseMasterackPO, type ParsedPO, type ParsedPOLine } from '@/lib/parsePO';
@@ -20,6 +20,7 @@ interface ImportLine extends ParsedPOLine {
 
 export default function POsPage() {
   const router = useRouter();
+  const searchParams = useSearchParams();
   const { isAdmin, user } = useAuth();
   const supabase = createClient();
 
@@ -148,6 +149,15 @@ export default function POsPage() {
     };
     load();
   }, [isAdmin]);
+
+  // Auto-expand PO from URL param (deep link from notifications/search)
+  useEffect(() => {
+    if (loading) return;
+    const poId = searchParams.get('id');
+    if (poId && pos.some(p => p.id === poId)) {
+      setExpandedPo(poId);
+    }
+  }, [loading, searchParams]);
 
   // PDF Upload handler
   const handlePDFUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {

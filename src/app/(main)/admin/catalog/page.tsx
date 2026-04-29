@@ -1,7 +1,7 @@
 'use client';
 
 import { useState, useEffect, useRef } from 'react';
-import { useRouter } from 'next/navigation';
+import { useRouter, useSearchParams } from 'next/navigation';
 import { createClient } from '@/lib/supabase-browser';
 import { useAuth } from '@/components/AuthProvider';
 import { storage } from '@/lib/storage';
@@ -9,6 +9,7 @@ import type { CatalogItem, CatalogProof } from '@/lib/types';
 
 export default function CatalogPage() {
   const router = useRouter();
+  const searchParams = useSearchParams();
   const { isAdmin, user } = useAuth();
   const supabase = createClient();
   const [catalog, setCatalog] = useState<CatalogItem[]>([]);
@@ -44,6 +45,15 @@ export default function CatalogPage() {
     };
     load();
   }, [isAdmin]);
+
+  // Auto-expand catalog item from URL param (deep link from search)
+  useEffect(() => {
+    if (loading) return;
+    const itemId = searchParams.get('id');
+    if (itemId && catalog.some(c => c.id === itemId)) {
+      setProofPanel(itemId);
+    }
+  }, [loading, searchParams]);
 
   const handleUploadProofs = async (catalogId: string, partNumber: string, files: FileList) => {
     setUploading(true);
