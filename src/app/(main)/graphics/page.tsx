@@ -7,6 +7,7 @@ import { storage } from '@/lib/storage';
 import { useAuth } from '@/components/AuthProvider';
 import { theme } from '@/lib/theme';
 import AssignmentPicker from '@/components/AssignmentPicker';
+import GraphicsInvoiceModal from '@/components/GraphicsInvoiceModal';
 import type {
   GraphicsJob, GraphicsJobStatus, GraphicsJobCategory, GraphicsStatusHistory, Profile,
 } from '@/lib/types';
@@ -42,7 +43,7 @@ function toDateInputValue(dateStr: string | null | undefined): string {
 }
 
 // Active statuses (not terminal)
-const ACTIVE_STATUSES: GraphicsJobStatus[] = ['flagged', 'received', 'designing', 'revision', 'printing', 'outgassing', 'cutting', 'packing', 'ready'];
+const ACTIVE_STATUSES: GraphicsJobStatus[] = ['flagged', 'received', 'designing', 'revision', 'printing', 'outgassing', 'cutting', 'packing', 'ready', 'ready_to_pickup'];
 
 export default function GraphicsPage() {
   const router = useRouter();
@@ -59,6 +60,8 @@ export default function GraphicsPage() {
   const [search, setSearch] = useState('');
   const [expandedJobId, setExpandedJobId] = useState<string | null>(null);
   const [editingJob, setEditingJob] = useState<GraphicsJob | null>(null);
+  const [invoiceJob, setInvoiceJob] = useState<GraphicsJob | null>(null);
+  const invoicePromptHandled = useRef<Set<string>>(new Set());
   const [statusHistory, setStatusHistory] = useState<GraphicsStatusHistory[]>([]);
 
   // Status change with comment
@@ -158,7 +161,29 @@ export default function GraphicsPage() {
     router.replace('/graphics', { scroll: false });
   }, [loading, searchParams]);
 
-  // Auto-expand job from URL param (deep link from notifications/search)
+  // Admin "create invoice in FleetSuite?" prompt — opens when navigated
+  // from the bell notification with ?invoiceJob=<id>. Confirms once; on
+  // yes, opens the GraphicsInvoiceModal. Either way, clears the param.
+  useEffect(() => {
+    if (loading) return;
+    const invoiceJobId = searchParams.get('invoiceJob');
+    if (!invoiceJobId) return;
+    if (invoicePromptHandled.current.has(invoiceJobId)) return;
+    const job = jobs.find(j => j.id === invoiceJobId);
+    invoicePromptHandled.current.add(invoiceJobId);
+    router.replace('/graphics', { scroll: false });
+    if (!job) return;
+    if ((job as any).netsuite_invoice_id) {
+      alert(`Already invoiced as #${(job as any).netsuite_invoice_number || (job as any).netsuite_invoice_id}.`);
+      return;
+    }
+    const label = job.title || `Job #${job.job_number || job.id.slice(0, 8)}`;
+    if (window.confirm(`Create invoice in FleetSuite for ${label}?`)) {
+      setInvoiceJob(job);
+    }
+  }, [loading, searchParams, jobs]);
+
+  // Auto-expand job from ?id= URL param (deep link from notifications/search)
   useEffect(() => {
     if (loading) return;
     const jobId = searchParams.get('id');
@@ -331,16 +356,42 @@ export default function GraphicsPage() {
         note: note || null,
       });
 
-      // Notify users via all channels (in-app, SMS, email) per their preferences
+      // Notifications split by target audience:
+      //   - newStatus === 'ready': install-readiness event. Fire to a narrow
+      //     install-target set (assigned installers + admins + opt-ins) via
+      //     /api/graphics/notify-ready. Graphics-team users who want generic
+      //     status-change pings still get them via the second path below.
+      //   - All transitions also fire a generic status-change notification to
+      //     anyone whose preferences include that type — preserves the
+      //     existing awareness for the production team.
+      if (newStatus === 'ready') {
+        fetch('/api/graphics/notify-ready', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ jobId: job.id }),
+        }).catch(() => {});
+      } else if (newStatus === 'ready_to_pickup') {
+        fetch('/api/graphics/notify-pickup', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ jobId: job.id }),
+        }).catch(() => {});
+      } else if (newStatus === 'shipped') {
+        fetch('/api/graphics/notify-shipped-invoice', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ jobId: job.id }),
+        }).catch(() => {});
+      }
+
       const { data: prefs } = await supabase
         .from('notification_preferences')
-        .select('user_id, notify_status_change, notify_ready, notify_shipped, custom_statuses');
+        .select('user_id, notify_status_change, notify_shipped, custom_statuses');
 
       if (prefs) {
-        const notifyUserIds = prefs
+        const statusPingUserIds = prefs
           .filter((p: any) => {
             if (p.user_id === user?.id) return false;
-            if (newStatus === 'ready' && p.notify_ready) return true;
             if (newStatus === 'shipped' && p.notify_shipped) return true;
             if (p.notify_status_change) return true;
             if (p.custom_statuses?.includes(newStatus)) return true;
@@ -348,12 +399,12 @@ export default function GraphicsPage() {
           })
           .map((p: any) => p.user_id);
 
-        if (notifyUserIds.length > 0) {
+        if (statusPingUserIds.length > 0) {
           fetch('/api/notifications/send', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({
-              userIds: notifyUserIds,
+              userIds: statusPingUserIds,
               type: 'graphics_status',
               title: `${job.title} → ${GRAPHICS_STATUS_LABELS[newStatus]}`,
               body: `Job #${job.job_number || job.id.slice(0, 8)} status changed to ${GRAPHICS_STATUS_LABELS[newStatus]}`,
@@ -391,6 +442,61 @@ export default function GraphicsPage() {
     });
     setNewNote('');
     await loadHistory(jobId);
+  };
+
+  // Send proof to customer for approval (magic link)
+  const [sendingApprovalId, setSendingApprovalId] = useState<string | null>(null);
+  // Per-job picker state — clicking "Send proof" opens a small inline file
+  // picker inside the Customer Approval block. The actual API call doesn't
+  // fire until the user picks a file and confirms.
+  const [approvalPickerJobId, setApprovalPickerJobId] = useState<string | null>(null);
+  const [approvalPickerFileId, setApprovalPickerFileId] = useState<string | null>(null);
+
+  const openApprovalPicker = (jobId: string) => {
+    if (sendingApprovalId) return;
+    // Pre-fill with the most recently uploaded file if any (it's the
+    // common case: artist uploads the proof, then sends).
+    const files = jobFiles[jobId] || [];
+    setApprovalPickerJobId(jobId);
+    setApprovalPickerFileId(files[0]?.id || null);
+  };
+
+  const closeApprovalPicker = () => {
+    setApprovalPickerJobId(null);
+    setApprovalPickerFileId(null);
+  };
+
+  const confirmSendForApproval = async (jobId: string) => {
+    if (sendingApprovalId) return;
+    if (!approvalPickerFileId) {
+      alert('Pick a proof file to send.');
+      return;
+    }
+    setSendingApprovalId(jobId);
+    const res = await fetch(`/api/graphics-jobs/${jobId}/send-for-approval`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ proofFileId: approvalPickerFileId }),
+    });
+    const data = await res.json();
+    setSendingApprovalId(null);
+    if (!res.ok) {
+      alert('Send failed: ' + (data.error || 'Unknown error'));
+      return;
+    }
+    closeApprovalPicker();
+    await loadJobs();
+    const emailInfo = data.dispatch?.email
+      ? (data.dispatch.email.ok ? `Email sent to ${data.dispatch.email.target}` : `Email failed: ${data.dispatch.email.error || 'unknown'}`)
+      : null;
+    const smsInfo = data.dispatch?.sms
+      ? (data.dispatch.sms.skipped
+          ? 'SMS skipped (provider disabled)'
+          : data.dispatch.sms.ok
+            ? `SMS sent to ${data.dispatch.sms.target}`
+            : `SMS failed: ${data.dispatch.sms.error || 'unknown'}`)
+      : null;
+    alert(`Proof sent for approval. Link: ${data.approvalUrl}\n\n${[emailInfo, smsInfo].filter(Boolean).join('\n')}`);
   };
 
   // Save job edits
@@ -1044,9 +1150,135 @@ export default function GraphicsPage() {
                           </div>
                         </div>
 
+                        {/* Customer approval */}
+                        <div style={{ marginBottom: '10px', padding: '8px 10px', borderRadius: '8px', background: (job as any).customer_approved ? 'rgba(34,197,94,0.1)' : 'var(--subtle-bg)', border: '1px solid ' + ((job as any).customer_approved ? 'rgba(34,197,94,0.3)' : 'var(--border)') }}>
+                          <div style={{ ...labelStyle, marginBottom: '6px' }}>Customer Approval</div>
+                          {(job as any).customer_approved ? (
+                            <div style={{ fontSize: '11px', color: '#22c55e', fontWeight: 700 }}>
+                              ✓ Approved {(job as any).customer_approved_at ? ` · ${new Date((job as any).customer_approved_at).toLocaleString()}` : ''}
+                            </div>
+                          ) : (job as any).customer_rejected_at ? (
+                            <div>
+                              <div style={{ fontSize: '11px', color: '#ef4444', fontWeight: 700, marginBottom: '4px' }}>Changes requested</div>
+                              {(job as any).customer_rejection_reason && (
+                                <div style={{ fontSize: '11px', color: 'var(--text-body)', fontStyle: 'italic' }}>{(job as any).customer_rejection_reason}</div>
+                              )}
+                              {approvalPickerJobId !== job.id && (
+                                <button
+                                  onClick={() => openApprovalPicker(job.id)}
+                                  disabled={sendingApprovalId === job.id}
+                                  style={{
+                                    marginTop: '6px', padding: '6px 12px', borderRadius: '6px', fontSize: '11px', fontWeight: 700,
+                                    background: 'rgba(59,130,246,0.15)', border: '1px solid rgba(59,130,246,0.3)',
+                                    color: '#60a5fa', cursor: 'pointer',
+                                  }}
+                                >Resend for approval</button>
+                              )}
+                            </div>
+                          ) : (
+                            <div>
+                              {(job as any).sent_for_approval_at && (
+                                <div style={{ fontSize: '11px', color: 'var(--text-muted)', marginBottom: '4px' }}>
+                                  Sent for approval {new Date((job as any).sent_for_approval_at).toLocaleString()}
+                                </div>
+                              )}
+                              {approvalPickerJobId !== job.id && (
+                                <button
+                                  onClick={() => openApprovalPicker(job.id)}
+                                  disabled={sendingApprovalId === job.id}
+                                  style={{
+                                    padding: '6px 12px', borderRadius: '6px', fontSize: '11px', fontWeight: 700,
+                                    background: 'rgba(59,130,246,0.15)', border: '1px solid rgba(59,130,246,0.3)',
+                                    color: '#60a5fa', cursor: 'pointer',
+                                  }}
+                                >{(job as any).sent_for_approval_at ? 'Resend approval link' : 'Send proof for customer approval'}</button>
+                              )}
+                            </div>
+                          )}
+
+                          {/* File picker — opens when user clicks Send / Resend. Shows the
+                              job's attached files with radio buttons; only the chosen file
+                              is sent to the customer. */}
+                          {approvalPickerJobId === job.id && (
+                            <div style={{
+                              marginTop: '8px', padding: '10px', borderRadius: '8px',
+                              background: 'var(--card)', border: '1px solid var(--border)',
+                            }}>
+                              <div style={{ fontSize: '11px', fontWeight: 700, color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.5px', marginBottom: '6px' }}>
+                                Pick the proof to send
+                              </div>
+                              {(jobFiles[job.id] || []).length === 0 ? (
+                                <div style={{ fontSize: '12px', color: 'var(--text-muted)', padding: '8px 0' }}>
+                                  No files attached to this job. Upload a proof first.
+                                </div>
+                              ) : (
+                                <div style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
+                                  {(jobFiles[job.id] || []).map(f => (
+                                    <label key={f.id} style={{
+                                      display: 'flex', alignItems: 'center', gap: '8px',
+                                      padding: '6px 8px', borderRadius: '6px',
+                                      background: approvalPickerFileId === f.id ? 'rgba(59,130,246,0.1)' : 'var(--subtle-bg)',
+                                      border: '1px solid ' + (approvalPickerFileId === f.id ? 'rgba(59,130,246,0.3)' : 'var(--border)'),
+                                      cursor: 'pointer',
+                                    }}>
+                                      <input
+                                        type="radio"
+                                        name={`approval-file-${job.id}`}
+                                        checked={approvalPickerFileId === f.id}
+                                        onChange={() => setApprovalPickerFileId(f.id)}
+                                      />
+                                      <span style={{ fontSize: '12px', color: 'var(--text-primary)', flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                                        {f.file_name}
+                                      </span>
+                                      {f.file_type && (
+                                        <span style={{ fontSize: '10px', color: 'var(--text-muted)' }}>{f.file_type.split('/')[1] || f.file_type}</span>
+                                      )}
+                                    </label>
+                                  ))}
+                                </div>
+                              )}
+                              <div style={{ display: 'flex', gap: '8px', marginTop: '8px' }}>
+                                <button
+                                  onClick={() => confirmSendForApproval(job.id)}
+                                  disabled={!approvalPickerFileId || sendingApprovalId === job.id}
+                                  style={{
+                                    flex: 1, padding: '8px 12px', borderRadius: '6px', fontSize: '12px', fontWeight: 700,
+                                    background: approvalPickerFileId ? '#22c55e' : 'var(--border)',
+                                    border: 'none', color: '#fff',
+                                    cursor: approvalPickerFileId && sendingApprovalId !== job.id ? 'pointer' : 'not-allowed',
+                                    opacity: approvalPickerFileId && sendingApprovalId !== job.id ? 1 : 0.5,
+                                  }}
+                                >{sendingApprovalId === job.id ? 'Sending…' : 'Send to customer'}</button>
+                                <button
+                                  onClick={closeApprovalPicker}
+                                  disabled={sendingApprovalId === job.id}
+                                  style={{
+                                    padding: '8px 12px', borderRadius: '6px', fontSize: '12px', fontWeight: 700,
+                                    background: 'transparent', border: '1px solid var(--border)',
+                                    color: 'var(--text-muted)', cursor: 'pointer',
+                                  }}
+                                >Cancel</button>
+                              </div>
+                            </div>
+                          )}
+                        </div>
+
                         {/* Files */}
                         <div style={{ marginBottom: '10px' }}>
-                          <div style={{ ...labelStyle, marginBottom: '6px' }}>Files &amp; Attachments</div>
+                          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '6px' }}>
+                            <div style={labelStyle}>Files &amp; Attachments</div>
+                            {(jobFiles[job.id] || []).length > 1 && (
+                              <a
+                                href={`/api/graphics-jobs/${job.id}/download-all`}
+                                style={{
+                                  padding: '4px 10px', borderRadius: '6px', fontSize: '11px', fontWeight: 700,
+                                  background: 'rgba(96,165,250,0.12)',
+                                  border: '1px solid rgba(96,165,250,0.3)',
+                                  color: '#60a5fa', textDecoration: 'none',
+                                }}
+                              >⬇ Download all ({(jobFiles[job.id] || []).length})</a>
+                            )}
+                          </div>
                           {(jobFiles[job.id] || []).length > 0 && (
                             <div style={{ display: 'flex', flexDirection: 'column', gap: '4px', marginBottom: '6px' }}>
                               {(jobFiles[job.id] || []).map(f => {
@@ -1816,6 +2048,18 @@ export default function GraphicsPage() {
             </div>
           </div>
         </div>
+      )}
+
+      {invoiceJob && (
+        <GraphicsInvoiceModal
+          job={invoiceJob}
+          onClose={() => setInvoiceJob(null)}
+          onComplete={(result) => {
+            setInvoiceJob(null);
+            alert(`Invoice ${result.invoiceNumber || result.invoiceId || 'created'} in FleetSuite.`);
+            loadJobs();
+          }}
+        />
       )}
     </div>
   );

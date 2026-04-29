@@ -5,6 +5,7 @@ import { useRouter, useSearchParams } from 'next/navigation';
 import { createClient } from '@/lib/supabase-browser';
 import { useAuth } from '@/components/AuthProvider';
 import { theme } from '@/lib/theme';
+import CustomerDefaultsEditor from '@/components/CustomerDefaultsEditor';
 
 interface Part {
   id: string;
@@ -27,6 +28,7 @@ interface LineItem {
   unit_price: number;
   labor_hours: number;
   is_custom: boolean;
+  notes?: string;
 }
 
 interface Estimate {
@@ -112,6 +114,21 @@ export default function EstimatesPage() {
   const [laborRate, setLaborRate] = useState(DEFAULT_LABOR_RATE);
   const [laborOverride, setLaborOverride] = useState<number | null>(null);
   const [lines, setLines] = useState<LineItem[]>([]);
+  // T1.6 install context
+  const [installInstructions, setInstallInstructions] = useState('');
+  const [onSiteContactName, setOnSiteContactName] = useState('');
+  const [onSiteContactPhone, setOnSiteContactPhone] = useState('');
+  const [deliveryPreferences, setDeliveryPreferences] = useState('');
+  const [internalNotes, setInternalNotes] = useState('');
+  const [customerDefaults, setCustomerDefaults] = useState<{
+    delivery_instructions: string | null;
+    billing_contact_name: string | null;
+    billing_contact_email: string | null;
+    ap_email: string | null;
+    internal_notes: string | null;
+  } | null>(null);
+  const [editingCustomerDefaults, setEditingCustomerDefaults] = useState(false);
+  const [savingCustomerDefaults, setSavingCustomerDefaults] = useState(false);
   const [estSortCol, setEstSortCol] = useState<'item_number' | 'quantity' | 'unit_price' | 'labor_hours' | null>(null);
   const [estSortDir, setEstSortDir] = useState<'asc' | 'desc'>('asc');
   const toggleEstSort = (col: typeof estSortCol) => {
@@ -129,6 +146,7 @@ export default function EstimatesPage() {
   const [syncing, setSyncing] = useState(false);
   const [deleting, setDeleting] = useState(false);
   const [convertingToSO, setConvertingToSO] = useState(false);
+  const [sendingForApproval, setSendingForApproval] = useState(false);
 
   // Part search
   const [partSearch, setPartSearch] = useState('');
@@ -269,6 +287,11 @@ export default function EstimatesPage() {
         tax_exempt: taxExempt,
         labor_rate: laborRate,
         labor_hours_override: laborOverride,
+        install_instructions: installInstructions,
+        on_site_contact_name: onSiteContactName,
+        on_site_contact_phone: onSiteContactPhone,
+        delivery_preferences: deliveryPreferences,
+        internal_notes: internalNotes,
         line_items: lines.map(l => ({
           part_id: l.part_id,
           netsuite_item_id: l.netsuite_item_id,
@@ -278,6 +301,7 @@ export default function EstimatesPage() {
           unit_price: l.unit_price,
           labor_hours: l.labor_hours,
           is_custom: l.is_custom,
+          notes: l.notes || null,
         })),
         created_by: user?.id,
       };
@@ -356,6 +380,37 @@ export default function EstimatesPage() {
   };
 
   // ── Convert Estimate to Sales Order in NetSuite ──
+  const sendForApproval = async () => {
+    if (!editingId || sendingForApproval) return;
+    if (!customerId) { alert('Pick a customer first.'); return; }
+    setSendingForApproval(true);
+    // Save current state first so the sent estimate reflects the latest edits
+    await saveEstimate('sent');
+    const res = await fetch(`/api/estimates/${editingId}/send-for-approval`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({}),
+    });
+    const data = await res.json();
+    setSendingForApproval(false);
+    if (!res.ok) {
+      alert('Send failed: ' + (data.error || 'Unknown error'));
+      return;
+    }
+    const emailInfo = data.dispatch?.email
+      ? (data.dispatch.email.ok ? `Email sent to ${data.dispatch.email.target}` : `Email failed: ${data.dispatch.email.error || 'unknown'}`)
+      : null;
+    const smsInfo = data.dispatch?.sms
+      ? (data.dispatch.sms.skipped
+          ? `SMS skipped (provider disabled) — link still works via email`
+          : data.dispatch.sms.ok
+            ? `SMS sent to ${data.dispatch.sms.target}`
+            : `SMS failed: ${data.dispatch.sms.error || 'unknown'}`)
+      : null;
+    alert(`Approval link sent. Link: ${data.approvalUrl}\n\n${[emailInfo, smsInfo].filter(Boolean).join('\n')}`);
+    loadEstimates();
+  };
+
   const convertToSalesOrder = async () => {
     if (!editingId) return;
     const est = estimates.find(e => e.id === editingId);
@@ -389,6 +444,17 @@ export default function EstimatesPage() {
     setConvertingToSO(false);
   };
 
+  // ── Load customer-level operations defaults ──
+  const loadCustomerDefaults = useCallback(async (cid: string | null) => {
+    if (!cid) { setCustomerDefaults(null); return; }
+    const { data } = await supabase
+      .from('customers')
+      .select('delivery_instructions, billing_contact_name, billing_contact_email, ap_email, internal_notes')
+      .eq('id', cid)
+      .maybeSingle();
+    setCustomerDefaults(data as any || null);
+  }, [supabase]);
+
   // ── Open estimate for editing ──
   const openEstimate = async (est: Estimate) => {
     setEditingId(est.id);
@@ -402,14 +468,27 @@ export default function EstimatesPage() {
     setLaborRate(est.labor_rate || DEFAULT_LABOR_RATE);
     setLaborOverride(est.labor_hours_override);
 
-    // Load line items
-    const { data } = await supabase
-      .from('estimate_line_items')
-      .select('*')
-      .eq('estimate_id', est.id)
-      .order('sort_order');
+    // Load install context + line items + customer defaults in parallel
+    const [{ data: fullEst }, { data: lineData }] = await Promise.all([
+      supabase
+        .from('estimates')
+        .select('install_instructions, on_site_contact_name, on_site_contact_phone, delivery_preferences, internal_notes')
+        .eq('id', est.id)
+        .maybeSingle(),
+      supabase
+        .from('estimate_line_items')
+        .select('*')
+        .eq('estimate_id', est.id)
+        .order('sort_order'),
+    ]);
 
-    setLines((data || []).map((l: any) => ({
+    setInstallInstructions(fullEst?.install_instructions || '');
+    setOnSiteContactName(fullEst?.on_site_contact_name || '');
+    setOnSiteContactPhone(fullEst?.on_site_contact_phone || '');
+    setDeliveryPreferences(fullEst?.delivery_preferences || '');
+    setInternalNotes(fullEst?.internal_notes || '');
+
+    setLines((lineData || []).map((l: any) => ({
       key: genKey(),
       part_id: l.part_id,
       netsuite_item_id: l.netsuite_item_id,
@@ -419,7 +498,10 @@ export default function EstimatesPage() {
       unit_price: l.unit_price || 0,
       labor_hours: l.labor_hours || 0,
       is_custom: l.is_custom || false,
+      notes: l.notes || '',
     })));
+
+    if (est.customer_id) loadCustomerDefaults(est.customer_id);
 
     setView('builder');
   };
@@ -440,6 +522,52 @@ export default function EstimatesPage() {
     setPartResults([]);
     setCustSearch('');
     setCustResults([]);
+    setInstallInstructions('');
+    setOnSiteContactName('');
+    setOnSiteContactPhone('');
+    setDeliveryPreferences('');
+    setInternalNotes('');
+    setCustomerDefaults(null);
+  };
+
+  // Prefill install_instructions from the customer's delivery_instructions
+  // when a customer is picked on a NEW estimate (don't clobber existing
+  // values on edit or when the sales rep has already typed something).
+  useEffect(() => {
+    if (editingId) return;
+    if (!customerId) return;
+    loadCustomerDefaults(customerId).then(() => {
+      setInstallInstructions(prev => prev || '');
+    });
+  }, [customerId, editingId, loadCustomerDefaults]);
+
+  useEffect(() => {
+    if (customerDefaults?.delivery_instructions && !installInstructions && !editingId) {
+      setInstallInstructions(customerDefaults.delivery_instructions);
+    }
+  }, [customerDefaults, editingId]);
+
+  // Save customer operations defaults (inline editor)
+  const saveCustomerDefaults = async (defaults: typeof customerDefaults) => {
+    if (!customerId || !defaults) return;
+    setSavingCustomerDefaults(true);
+    const { error } = await supabase
+      .from('customers')
+      .update({
+        delivery_instructions: defaults.delivery_instructions || null,
+        billing_contact_name: defaults.billing_contact_name || null,
+        billing_contact_email: defaults.billing_contact_email || null,
+        ap_email: defaults.ap_email || null,
+        internal_notes: defaults.internal_notes || null,
+      })
+      .eq('id', customerId);
+    setSavingCustomerDefaults(false);
+    if (error) {
+      alert('Failed to save customer defaults: ' + error.message);
+      return;
+    }
+    setCustomerDefaults(defaults);
+    setEditingCustomerDefaults(false);
   };
 
   const deleteEstimate = async (id: string, hasNsId: boolean = false) => {
@@ -676,20 +804,104 @@ export default function EstimatesPage() {
             value={title}
             onChange={e => setTitle(e.target.value)}
             placeholder="e.g. Fleet Upfit — 10 Transits"
-
           />
         </div>
         <div>
-          <div style={labelStyle}>Internal Notes</div>
+          <div style={labelStyle}>Customer-facing Notes</div>
           <input
             style={inputStyle}
             value={notes}
             onChange={e => setNotes(e.target.value)}
-            placeholder="Notes (not pushed to NS)"
-
+            placeholder="Appears on the NS SO memo"
           />
         </div>
       </div>
+
+      {/* ── INSTALL CONTEXT (T1.6) ── */}
+      <details style={{
+        marginBottom: '12px', padding: '10px 12px', borderRadius: '10px',
+        background: 'var(--subtle-bg, #f8fafc)', border: '1px solid var(--border)',
+      }} open={!!(installInstructions || onSiteContactName || onSiteContactPhone || deliveryPreferences || internalNotes)}>
+        <summary style={{ cursor: 'pointer', fontSize: '12px', fontWeight: 700, color: 'var(--text-secondary, #475569)' }}>
+          Install Context
+          {customerDefaults?.delivery_instructions && !installInstructions && !editingId && (
+            <span style={{ marginLeft: '8px', fontSize: '10px', fontWeight: 700, color: 'var(--accent, #2563eb)' }}>
+              · prefilled from customer defaults
+            </span>
+          )}
+        </summary>
+        <div style={{ marginTop: '10px', display: 'grid', gap: '8px' }}>
+          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '8px' }}>
+            <div>
+              <div style={labelStyle}>On-site Contact Name</div>
+              <input
+                style={inputStyle}
+                value={onSiteContactName}
+                onChange={e => setOnSiteContactName(e.target.value)}
+                placeholder="Name"
+              />
+            </div>
+            <div>
+              <div style={labelStyle}>On-site Contact Phone</div>
+              <input
+                style={inputStyle}
+                value={onSiteContactPhone}
+                onChange={e => setOnSiteContactPhone(e.target.value)}
+                placeholder="(555) 555-5555"
+              />
+            </div>
+          </div>
+          <div>
+            <div style={labelStyle}>Install Instructions</div>
+            <textarea
+              style={{ ...inputStyle, minHeight: '52px', resize: 'vertical', fontFamily: 'inherit' }}
+              value={installInstructions}
+              onChange={e => setInstallInstructions(e.target.value)}
+              placeholder="Any job-specific install notes the installer needs"
+            />
+          </div>
+          <div>
+            <div style={labelStyle}>Delivery Preferences</div>
+            <input
+              style={inputStyle}
+              value={deliveryPreferences}
+              onChange={e => setDeliveryPreferences(e.target.value)}
+              placeholder="Dock hours, shipping method, etc."
+            />
+          </div>
+          <div>
+            <div style={labelStyle}>Internal Notes (ops-only)</div>
+            <textarea
+              style={{ ...inputStyle, minHeight: '40px', resize: 'vertical', fontFamily: 'inherit' }}
+              value={internalNotes}
+              onChange={e => setInternalNotes(e.target.value)}
+              placeholder="Not shown to the customer"
+            />
+          </div>
+          {customerId && (
+            <div style={{ display: 'flex', alignItems: 'center', gap: '8px', fontSize: '11px', color: 'var(--text-muted)' }}>
+              <span>Customer-wide defaults:</span>
+              <span>{customerDefaults?.delivery_instructions ? '✓ set' : '(none)'}</span>
+              <button
+                type="button"
+                onClick={() => setEditingCustomerDefaults(true)}
+                style={{ padding: '3px 8px', borderRadius: '6px', border: '1px solid var(--border)', background: 'var(--card)', fontSize: '11px', fontWeight: 700, cursor: 'pointer' }}
+              >Edit defaults</button>
+            </div>
+          )}
+        </div>
+      </details>
+
+      {/* Customer defaults modal */}
+      {editingCustomerDefaults && customerId && (
+        <CustomerDefaultsEditor
+          initial={customerDefaults}
+          customerName={customerName}
+          saving={savingCustomerDefaults}
+          onSave={saveCustomerDefaults}
+          onClose={() => setEditingCustomerDefaults(false)}
+        />
+      )}
 
       {/* ── LINE ITEMS ── */}
       <div style={{ marginBottom: '8px' }}>
@@ -1005,6 +1217,23 @@ export default function EstimatesPage() {
             }}
           >
             {pushing ? 'Pushing to NetSuite...' : syncing ? 'Syncing to NetSuite...' : isPushed ? 'Sync Changes to NetSuite' : 'Push to NetSuite as Estimate'}
+          </button>
+        )}
+
+        {/* Send for Customer Approval (magic link) */}
+        {editingId && customerId && lines.length > 0 && !(estimates.find(e => e.id === editingId) as any)?.customer_approved && (
+          <button
+            onClick={sendForApproval}
+            disabled={sendingForApproval}
+            style={{
+              width: '100%', padding: '12px', borderRadius: '10px',
+              background: sendingForApproval ? 'var(--subtle-bg)' : 'rgba(59,130,246,0.15)',
+              border: '1px solid rgba(59,130,246,0.3)',
+              color: '#3b82f6', fontWeight: 800, fontSize: '13px', cursor: 'pointer',
+              opacity: sendingForApproval ? 0.5 : 1,
+            }}
+          >
+            {sendingForApproval ? 'Sending...' : 'Send to Customer for Approval'}
           </button>
         )}
 

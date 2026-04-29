@@ -7,10 +7,13 @@ import { useAuth } from '@/components/AuthProvider';
 import { storage } from '@/lib/storage';
 import StatusBadge from '@/components/StatusBadge';
 import AssignmentPicker from '@/components/AssignmentPicker';
-import type { FleetCheckin, VehicleTrackingStatus, VehicleStatusHistory, VehiclePhoto } from '@/lib/types';
-import { VEHICLE_STATUS_PIPELINE, VEHICLE_STATUS_LABELS, VEHICLE_STATUS_COLORS } from '@/lib/types';
+import VehiclePhotoTimeline from '@/components/VehiclePhotoTimeline';
+import { openOrCreateVehicleThread } from '@/lib/customer-thread';
+import type { FleetCheckin, VehicleTrackingStatus, VehicleStatusHistory, VehiclePhoto, GraphicsJob } from '@/lib/types';
+import { VEHICLE_STATUS_PIPELINE, VEHICLE_STATUS_LABELS, VEHICLE_STATUS_COLORS, GRAPHICS_STATUS_LABELS } from '@/lib/types';
 import NetSuitePdf from '@/components/NetSuitePdf';
 import ProofThumbnail from '@/components/ProofThumbnail';
+import CompletionModal from '@/components/CompletionModal';
 
 type FilterStatus = VehicleTrackingStatus | 'all' | 'stuck';
 
@@ -41,11 +44,32 @@ export default function TrackingPage() {
   const [vehicleAssignments, setVehicleAssignments] = useState<Record<string, string[]>>({});
   const [assignmentSaving, setAssignmentSaving] = useState(false);
 
+  // Checklist state
+  interface ChecklistTask {
+    id: string;
+    label: string;
+    required: boolean;
+    completed: boolean;
+    task_key: string | null;
+    sort_order: number;
+    completed_at: string | null;
+    completed_by_name: string | null;
+  }
+  const [vehicleTasks, setVehicleTasks] = useState<Record<string, ChecklistTask[]>>({});
+  const [tasksLoading, setTasksLoading] = useState<Record<string, boolean>>({});
+
+  // Matched graphics job (looked up via fleet_checkins.matched_graphics_job_id)
+  const [graphicsJobs, setGraphicsJobs] = useState<Record<string, GraphicsJob | null>>({});
+
+  // Message Customer in-flight flag (per-vehicle so two clicks on different rows don't fight)
+  const [messagingVehicleId, setMessagingVehicleId] = useState<string | null>(null);
+
   // Photos state
   const [vehiclePhotos, setVehiclePhotos] = useState<Record<string, (VehiclePhoto & { url?: string })[]>>({});
   const [photosLoading, setPhotosLoading] = useState<Record<string, boolean>>({});
   const [photoUploading, setPhotoUploading] = useState(false);
   const [showCompletionPrompt, setShowCompletionPrompt] = useState<string | null>(null); // vehicleId
+  const [completionModalVehicleId, setCompletionModalVehicleId] = useState<string | null>(null);
   const photoInputRef = useRef<HTMLInputElement>(null);
   const cameraInputRef = useRef<HTMLInputElement>(null);
 
@@ -155,6 +179,44 @@ export default function TrackingPage() {
         [vehicleId]: data.map((a: any) => a.user_id),
       }));
     }
+  };
+
+  const loadTasks = async (vehicleId: string) => {
+    setTasksLoading(prev => ({ ...prev, [vehicleId]: true }));
+    const { data } = await supabase
+      .from('job_tasks')
+      .select('id, label, required, completed, task_key, sort_order, completed_at, completed_by_name')
+      .eq('job_type', 'fleet_checkin')
+      .eq('job_id', vehicleId)
+      .order('sort_order');
+    setVehicleTasks(prev => ({ ...prev, [vehicleId]: (data || []) as ChecklistTask[] }));
+    setTasksLoading(prev => ({ ...prev, [vehicleId]: false }));
+  };
+
+  const loadGraphicsJob = async (vehicle: FleetCheckin) => {
+    const gjId = (vehicle as any).matched_graphics_job_id;
+    if (!gjId) {
+      setGraphicsJobs(prev => ({ ...prev, [vehicle.id]: null }));
+      return;
+    }
+    const { data } = await supabase
+      .from('graphics_jobs')
+      .select('*')
+      .eq('id', gjId)
+      .maybeSingle();
+    setGraphicsJobs(prev => ({ ...prev, [vehicle.id]: (data as GraphicsJob | null) || null }));
+  };
+
+  const messageCustomer = async (vehicle: FleetCheckin) => {
+    if (messagingVehicleId === vehicle.id) return;
+    setMessagingVehicleId(vehicle.id);
+    const result = await openOrCreateVehicleThread(supabase, vehicle, user?.id);
+    if ('threadId' in result) {
+      router.push(`/admin/inbox?thread=${result.threadId}`);
+    } else {
+      alert('Failed to open thread: ' + result.error);
+    }
+    setMessagingVehicleId(null);
   };
 
   const loadPhotos = async (vehicleId: string) => {
@@ -437,58 +499,57 @@ export default function TrackingPage() {
       loadAssignments(id);
       loadPhotos(id);
       loadNotes(id);
+      loadTasks(id);
+      const v = vehicles.find(x => x.id === id);
+      if (v) loadGraphicsJob(v);
     }
   };
 
-  const updateStatus = useCallback(async (vehicleId: string, newStatus: VehicleTrackingStatus) => {
+  const updateStatus = useCallback(async (vehicleId: string, newStatus: VehicleTrackingStatus, opts: { force?: boolean } = {}) => {
     setUpdatingId(vehicleId);
     setUpdateSuccess(null);
     try {
-      // Get current status first
-      const { data: vehicle, error: fetchErr } = await supabase
-        .from('fleet_checkins')
-        .select('status')
-        .eq('id', vehicleId)
-        .single();
-
-      if (fetchErr || !vehicle) {
-        alert('Vehicle not found');
-        setUpdatingId(null);
-        return;
-      }
-
-      const fromStatus = vehicle.status;
-
-      // Update the status
-      const { error: updateErr } = await supabase
-        .from('fleet_checkins')
-        .update({ status: newStatus })
-        .eq('id', vehicleId);
-
-      if (updateErr) {
-        alert('Update failed: ' + updateErr.message);
-        setUpdatingId(null);
-        return;
-      }
-
-      // Log to status history
-      const { data: { user: authUser } } = await supabase.auth.getUser();
-      if (authUser) {
-        await supabase.from('vehicle_status_history').insert({
-          vehicle_id: vehicleId,
-          from_status: fromStatus,
-          to_status: newStatus,
+      const res = await fetch('/api/vehicle-tracking/update-status', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          vehicleId,
+          newStatus,
           note: statusNote.trim() || null,
-          changed_by: authUser.id,
-          changed_by_name: profile?.full_name || authUser.email || 'Unknown',
-        });
+          force: opts.force,
+        }),
+      });
+      const data = await res.json().catch(() => ({}));
+
+      if (res.status === 422 && Array.isArray(data.missing)) {
+        // Completion requirements missing — surface the list and offer
+        // admin override.
+        const lines = data.missing.join('\n• ');
+        const isAdmin = profile?.role === 'admin';
+        const proceed = isAdmin
+          ? confirm(`Cannot mark complete yet:\n\n• ${lines}\n\nOverride and mark complete anyway?`)
+          : (alert(`Cannot mark complete yet:\n\n• ${lines}\n\nFinish the checklist and upload a completion photo, then try again.`), false);
+        if (proceed) {
+          await updateStatus(vehicleId, newStatus, { force: true });
+        }
+        setUpdatingId(null);
+        return;
+      }
+
+      if (!res.ok) {
+        alert('Update failed: ' + (data.error || 'Unknown error'));
+        setUpdatingId(null);
+        return;
       }
 
       setStatusNote('');
       setUpdateSuccess(`Updated to ${VEHICLE_STATUS_LABELS[newStatus]}`);
       setTimeout(() => setUpdateSuccess(null), 2000);
       await loadVehicles();
-      if (expandedId === vehicleId) loadHistory(vehicleId);
+      if (expandedId === vehicleId) {
+        loadHistory(vehicleId);
+        loadTasks(vehicleId);
+      }
 
       // Prompt for completion photos when marking as complete
       if (newStatus === 'complete') {
@@ -904,6 +965,49 @@ export default function TrackingPage() {
                             color: 'var(--text-primary)', fontSize: '12px', boxSizing: 'border-box',
                           }}
                         />
+
+                        {/* Action buttons: Run Completion Process + Message Customer */}
+                        <div style={{ display: 'flex', gap: '8px', marginTop: '8px' }}>
+                          {status !== 'complete' && status !== 'shipped' && (
+                            <button
+                              type="button"
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                setCompletionModalVehicleId(vehicle.id);
+                              }}
+                              style={{
+                                flex: 1, padding: '12px', borderRadius: '10px',
+                                fontSize: '13px', fontWeight: 800, cursor: 'pointer',
+                                background: '#22c55e', border: '1px solid #22c55e', color: '#fff',
+                                transition: 'all 0.15s',
+                              }}
+                            >
+                              Run Completion Process
+                            </button>
+                          )}
+                          {vehicle.customer_name && (
+                            <button
+                              type="button"
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                messageCustomer(vehicle);
+                              }}
+                              disabled={messagingVehicleId === vehicle.id}
+                              style={{
+                                flex: 1, padding: '12px', borderRadius: '10px',
+                                fontSize: '13px', fontWeight: 800,
+                                cursor: messagingVehicleId === vehicle.id ? 'wait' : 'pointer',
+                                background: 'rgba(96,165,250,0.12)',
+                                border: '1px solid rgba(96,165,250,0.4)',
+                                color: '#60a5fa',
+                                transition: 'all 0.15s',
+                                opacity: messagingVehicleId === vehicle.id ? 0.6 : 1,
+                              }}
+                            >
+                              {messagingVehicleId === vehicle.id ? 'Opening…' : '💬 Message Customer'}
+                            </button>
+                          )}
+                        </div>
                       </div>
 
                     {/* Vehicle Info */}
@@ -935,6 +1039,107 @@ export default function TrackingPage() {
                         </div>
                       )}
                     </div>
+
+                    {/* Install Context — sales-order memo, install instructions, on-site contact, delivery prefs.
+                        Snapshotted from the originating estimate at check-in time (migration 076). */}
+                    {(() => {
+                      const memo = vehicle.sales_order_memo;
+                      const inst = (vehicle as any).install_instructions as string | null | undefined;
+                      const contactName = (vehicle as any).on_site_contact_name as string | null | undefined;
+                      const contactPhone = (vehicle as any).on_site_contact_phone as string | null | undefined;
+                      const delivery = (vehicle as any).delivery_preferences as string | null | undefined;
+                      if (!memo && !inst && !contactName && !contactPhone && !delivery) return null;
+                      return (
+                        <div style={{
+                          marginBottom: '12px', padding: '10px', borderRadius: '8px',
+                          background: 'rgba(96,165,250,0.05)', border: '1px solid rgba(96,165,250,0.18)',
+                        }}>
+                          <div style={{ fontSize: '10px', fontWeight: 700, color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.5px', marginBottom: '6px' }}>
+                            Install Context
+                          </div>
+                          <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
+                            {memo && (
+                              <div>
+                                <div style={{ fontSize: '9px', fontWeight: 700, color: 'var(--text-muted)', textTransform: 'uppercase' }}>SO Memo</div>
+                                <div style={{ fontSize: '12px', color: 'var(--text-primary)', whiteSpace: 'pre-wrap' }}>{memo}</div>
+                              </div>
+                            )}
+                            {inst && (
+                              <div>
+                                <div style={{ fontSize: '9px', fontWeight: 700, color: 'var(--text-muted)', textTransform: 'uppercase' }}>Install Instructions</div>
+                                <div style={{ fontSize: '12px', color: 'var(--text-primary)', whiteSpace: 'pre-wrap' }}>{inst}</div>
+                              </div>
+                            )}
+                            {(contactName || contactPhone) && (
+                              <div>
+                                <div style={{ fontSize: '9px', fontWeight: 700, color: 'var(--text-muted)', textTransform: 'uppercase' }}>On-site Contact</div>
+                                <div style={{ fontSize: '12px', color: 'var(--text-primary)' }}>
+                                  {contactName || ''}
+                                  {contactName && contactPhone && ' · '}
+                                  {contactPhone && (
+                                    <a href={`tel:${contactPhone}`} style={{ color: 'var(--accent, #2563eb)' }}>{contactPhone}</a>
+                                  )}
+                                </div>
+                              </div>
+                            )}
+                            {delivery && (
+                              <div>
+                                <div style={{ fontSize: '9px', fontWeight: 700, color: 'var(--text-muted)', textTransform: 'uppercase' }}>Delivery Preferences</div>
+                                <div style={{ fontSize: '12px', color: 'var(--text-primary)', whiteSpace: 'pre-wrap' }}>{delivery}</div>
+                              </div>
+                            )}
+                          </div>
+                        </div>
+                      );
+                    })()}
+
+                    {/* Completion Notes — what the installer wrote when finishing the job. */}
+                    {(vehicle as any).completion_notes && (
+                      <div style={{
+                        marginBottom: '12px', padding: '10px', borderRadius: '8px',
+                        background: 'rgba(34,197,94,0.06)', border: '1px solid rgba(34,197,94,0.2)',
+                      }}>
+                        <div style={{ fontSize: '10px', fontWeight: 700, color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.5px', marginBottom: '4px' }}>
+                          Completion Notes
+                        </div>
+                        <div style={{ fontSize: '12px', color: 'var(--text-primary)', whiteSpace: 'pre-wrap' }}>
+                          {(vehicle as any).completion_notes}
+                        </div>
+                      </div>
+                    )}
+
+                    {/* Matched Graphics Job — the linked graphics job's spec + status. */}
+                    {(() => {
+                      const gj = graphicsJobs[vehicle.id];
+                      if (!gj) return null;
+                      const spec = [gj.vinyl_color, gj.vinyl_type].filter(Boolean).join(' · ');
+                      return (
+                        <div style={{
+                          marginBottom: '12px', padding: '10px', borderRadius: '8px',
+                          background: 'rgba(167,139,250,0.05)', border: '1px solid rgba(167,139,250,0.2)',
+                        }}>
+                          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '6px' }}>
+                            <div style={{ fontSize: '10px', fontWeight: 700, color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.5px' }}>
+                              Matched Graphics Job
+                            </div>
+                            <a
+                              href={`/graphics?editJob=${gj.id}`}
+                              onClick={(e) => e.stopPropagation()}
+                              style={{ fontSize: '11px', fontWeight: 700, color: 'var(--accent, #2563eb)', textDecoration: 'none' }}
+                            >Open ↗</a>
+                          </div>
+                          <div style={{ fontSize: '12px', fontWeight: 700, color: 'var(--text-primary)' }}>
+                            {gj.title}
+                            {gj.job_number && <span style={{ color: 'var(--text-muted)', fontWeight: 400, marginLeft: '6px' }}>#{gj.job_number}</span>}
+                          </div>
+                          <div style={{ display: 'flex', gap: '12px', flexWrap: 'wrap', fontSize: '11px', color: 'var(--text-secondary)', marginTop: '4px' }}>
+                            <span><strong style={{ color: 'var(--text-muted)' }}>Status:</strong> {GRAPHICS_STATUS_LABELS[gj.status] || gj.status}</span>
+                            <span><strong style={{ color: 'var(--text-muted)' }}>Qty:</strong> {gj.quantity}</span>
+                            {spec && <span><strong style={{ color: 'var(--text-muted)' }}>Vinyl:</strong> {spec}</span>}
+                          </div>
+                        </div>
+                      );
+                    })()}
 
                     {/* Invoice tracking — shown for archived vehicles */}
                     {showArchived && (
@@ -1430,6 +1635,18 @@ export default function TrackingPage() {
                       )}
                     </div>
 
+                    {/* Photo Timeline — unified check-in / during / completion / design files / proofs */}
+                    <div style={{ marginBottom: '12px' }}>
+                      <div style={{ fontSize: '10px', fontWeight: 700, color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.5px', marginBottom: '6px' }}>
+                        Photo Timeline
+                      </div>
+                      <VehiclePhotoTimeline
+                        vin={vehicle.vin}
+                        variant="internal"
+                        refreshKey={vehiclePhotos[vehicle.id]?.length || 0}
+                      />
+                    </div>
+
                     {/* Installer Assignment */}
                     {isAdmin && (
                       <div style={{ marginBottom: '12px' }}>
@@ -1524,6 +1741,72 @@ export default function TrackingPage() {
                           ))}
                         </div>
                       )}
+                    </div>
+
+                    {/* QC Checklist (read-only) */}
+                    <div style={{ marginBottom: '12px' }}>
+                      {(() => {
+                        const tasks = vehicleTasks[vehicle.id] || [];
+                        const loadingTasks = !!tasksLoading[vehicle.id];
+                        const done = tasks.filter(t => t.completed).length;
+                        return (
+                          <>
+                            <div style={{
+                              fontSize: '10px', fontWeight: 700, color: 'var(--text-muted)',
+                              textTransform: 'uppercase', letterSpacing: '0.5px', marginBottom: '6px',
+                              display: 'flex', justifyContent: 'space-between', alignItems: 'center',
+                            }}>
+                              <span>QC Checklist {tasks.length > 0 ? `· ${done}/${tasks.length} done` : ''}</span>
+                            </div>
+                            {loadingTasks ? (
+                              <div style={{ fontSize: '12px', color: 'var(--text-muted)', padding: '8px 0' }}>Loading checklist…</div>
+                            ) : tasks.length === 0 ? (
+                              <div style={{
+                                fontSize: '12px', color: 'var(--text-muted)', padding: '12px',
+                                textAlign: 'center', borderRadius: '8px',
+                                background: 'var(--subtle-bg)', border: '1px dashed var(--border)',
+                              }}>
+                                No checklist for this vehicle yet — it's instantiated when status moves to In Progress.
+                              </div>
+                            ) : (
+                              <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
+                                {tasks.map(t => (
+                                  <div key={t.id} style={{
+                                    padding: '8px 10px', borderRadius: '8px',
+                                    border: `1px solid ${t.completed ? 'rgba(34,197,94,0.4)' : 'var(--border)'}`,
+                                    background: 'var(--subtle-bg)',
+                                  }}>
+                                    <div style={{ display: 'flex', alignItems: 'flex-start', gap: '8px' }}>
+                                      <div style={{
+                                        flexShrink: 0, width: '16px', height: '16px', borderRadius: '4px',
+                                        marginTop: '1px',
+                                        background: t.completed ? '#22c55e' : 'transparent',
+                                        border: `1.5px solid ${t.completed ? '#22c55e' : 'var(--border)'}`,
+                                        color: '#fff', fontSize: '11px', fontWeight: 800,
+                                        display: 'flex', alignItems: 'center', justifyContent: 'center',
+                                      }}>
+                                        {t.completed ? '✓' : ''}
+                                      </div>
+                                      <div style={{ flex: 1, minWidth: 0 }}>
+                                        <div style={{ fontSize: '12px', color: 'var(--text-primary)' }}>
+                                          {t.required && <span style={{ color: 'var(--danger, #ef4444)', marginRight: '4px' }}>*</span>}
+                                          {t.label}
+                                        </div>
+                                        {t.completed && (t.completed_by_name || t.completed_at) && (
+                                          <div style={{ fontSize: '10px', color: 'var(--text-muted)', marginTop: '2px' }}>
+                                            {t.completed_by_name || 'Unknown'}
+                                            {t.completed_at && ` · ${new Date(t.completed_at).toLocaleString([], { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' })}`}
+                                          </div>
+                                        )}
+                                      </div>
+                                    </div>
+                                  </div>
+                                ))}
+                              </div>
+                            )}
+                          </>
+                        );
+                      })()}
                     </div>
 
                     {/* Status History */}
@@ -1643,6 +1926,34 @@ export default function TrackingPage() {
           )}
         </div>
       )}
+
+      {completionModalVehicleId && (() => {
+        const v = vehicles.find(x => x.id === completionModalVehicleId);
+        if (!v) return null;
+        const proofName = (v.proof_file_name || v.proof_file_path || '').toLowerCase();
+        return (
+          <CompletionModal
+            vehicleId={v.id}
+            vehicleVin={v.vin}
+            vehicleLabel={[v.vehicle_year, v.vehicle_make, v.vehicle_model].filter(Boolean).join(' ') || 'Unknown Vehicle'}
+            customerName={v.customer_name}
+            netsuiteSalesOrderId={v.netsuite_sales_order_id}
+            proofUrl={(v as any).proof_url || null}
+            proofIsPdf={proofName.endsWith('.pdf')}
+            graphicsFiles={[]}
+            isAdmin={!!isAdmin}
+            onClose={() => setCompletionModalVehicleId(null)}
+            onComplete={() => {
+              setCompletionModalVehicleId(null);
+              loadVehicles();
+              if (expandedId) {
+                loadHistory(expandedId);
+                loadTasks(expandedId);
+              }
+            }}
+          />
+        );
+      })()}
     </div>
   );
 }

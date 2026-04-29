@@ -25,6 +25,8 @@ export default function InstallerPortalPage() {
   const [hasProfile, setHasProfile] = useState(false);
   const [inviteCount, setInviteCount] = useState(0);
   const [openJobCount, setOpenJobCount] = useState(0);
+  const [readyForInstallCount, setReadyForInstallCount] = useState(0);
+  const [readyForInstallStale, setReadyForInstallStale] = useState(0);
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
@@ -69,6 +71,18 @@ export default function InstallerPortalPage() {
       .is('assigned_installer_id', null);
     setOpenJobCount(openCount || 0);
 
+    // Ready-for-install vehicles assigned to me
+    try {
+      const res = await fetch('/api/installer/ready-for-install?mine=1');
+      if (res.ok) {
+        const data = await res.json();
+        setReadyForInstallCount(data.count || 0);
+        setReadyForInstallStale(
+          (data.vehicles || []).filter((v: any) => v.stale).length
+        );
+      }
+    } catch {}
+
     setLoading(false);
   };
 
@@ -103,6 +117,42 @@ export default function InstallerPortalPage() {
           </div>
           <div style={{ fontSize: '12px', color: 'var(--text-muted)', marginTop: '4px' }}>
             Set up your company info, capabilities, and availability to receive jobs
+          </div>
+        </button>
+      )}
+
+      {/* Ready for Install Banner */}
+      {readyForInstallCount > 0 && (
+        <button
+          onClick={() => router.push('/installer/ready-for-install')}
+          style={{
+            width: '100%', padding: '14px 16px', borderRadius: '14px', textAlign: 'left',
+            background: readyForInstallStale > 0
+              ? 'color-mix(in srgb, var(--danger, #ef4444) 10%, var(--card))'
+              : 'color-mix(in srgb, #4ade80 10%, var(--card))',
+            border: `1px solid ${readyForInstallStale > 0 ? 'var(--danger, #ef4444)' : '#4ade80'}`,
+            marginBottom: '16px',
+            display: 'flex', alignItems: 'center', gap: '12px',
+          }}
+        >
+          <div style={{
+            width: '36px', height: '36px', borderRadius: '50%',
+            background: readyForInstallStale > 0 ? 'var(--danger, #ef4444)' : '#22c55e',
+            color: '#fff',
+            display: 'flex', alignItems: 'center', justifyContent: 'center',
+            fontSize: '14px', fontWeight: 800, flexShrink: 0,
+          }}>
+            {readyForInstallCount}
+          </div>
+          <div>
+            <div style={{ fontSize: '14px', fontWeight: 700, color: 'var(--text-primary)' }}>
+              Ready to install
+            </div>
+            <div style={{ fontSize: '12px', color: 'var(--text-muted)' }}>
+              {readyForInstallStale > 0
+                ? `${readyForInstallStale} waiting more than 7 days`
+                : 'Graphics done, waiting on you'}
+            </div>
           </div>
         </button>
       )}

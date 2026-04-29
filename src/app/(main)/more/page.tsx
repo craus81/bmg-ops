@@ -76,6 +76,9 @@ export default function MorePage() {
           <MenuBtn title="Upfit Projects" sub="Track upfit jobs from estimate to completion" onClick={() => router.push('/upfit')} />
         )}
         {F('reports') && (
+          <MenuBtn title="Reports" sub="Sales by customer detail & other custom reports" onClick={() => router.push('/admin/reports')} />
+        )}
+        {F('reports') && (
           <MenuBtn title="Scan Log" sub="Review scans, match POs, export & invoice" onClick={() => router.push('/admin/scans')} />
         )}
         {F('parts_catalog') && (

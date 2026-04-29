@@ -2,6 +2,7 @@
 
 import { useState, useRef, useEffect, useCallback } from 'react';
 import { isValidVIN } from '@/lib/vin-decoder';
+import { lockOrientation } from '@/lib/orientation-lock';
 
 interface VinScannerProps {
   /** Called when a valid 17-char VIN is scanned */
@@ -45,6 +46,14 @@ export default function VinScanner({ onScan, theme }: VinScannerProps) {
   // Auto-start camera on mount
   useEffect(() => {
     startCamera();
+  }, []);
+
+  // Lock screen to portrait while the scanner is mounted so the camera
+  // preview doesn't reflow mid-scan. No-op where the API isn't allowed
+  // (iOS Safari, desktop without fullscreen).
+  useEffect(() => {
+    const unlock = lockOrientation('portrait');
+    return unlock;
   }, []);
 
   const stopCamera = useCallback(() => {

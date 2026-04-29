@@ -79,6 +79,9 @@ export async function POST(req: NextRequest) {
       labor_rate, labor_hours_override,
       line_items, // array of line item objects
       created_by,
+      // T1.6 install context
+      install_instructions, on_site_contact_name, on_site_contact_phone,
+      delivery_preferences, internal_notes,
     } = body;
 
     const lines = line_items || [];
@@ -110,6 +113,11 @@ export async function POST(req: NextRequest) {
           labor_total: totals.labor_total,
           tax_amount: totals.tax_amount,
           grand_total: totals.grand_total,
+          install_instructions: install_instructions || null,
+          on_site_contact_name: on_site_contact_name || null,
+          on_site_contact_phone: on_site_contact_phone || null,
+          delivery_preferences: delivery_preferences || null,
+          internal_notes: internal_notes || null,
           updated_at: new Date().toISOString(),
         })
         .eq('id', id);
@@ -132,6 +140,7 @@ export async function POST(req: NextRequest) {
           line_total: parseFloat(l.quantity || 1) * parseFloat(l.unit_price || 0),
           labor_hours: parseFloat(l.labor_hours || 0),
           is_custom: !!l.is_custom,
+          notes: l.notes || null,
         }));
         await supabase.from('estimate_line_items').insert(lineRows);
       }
@@ -160,6 +169,11 @@ export async function POST(req: NextRequest) {
           labor_total: totals.labor_total,
           tax_amount: totals.tax_amount,
           grand_total: totals.grand_total,
+          install_instructions: install_instructions || null,
+          on_site_contact_name: on_site_contact_name || null,
+          on_site_contact_phone: on_site_contact_phone || null,
+          delivery_preferences: delivery_preferences || null,
+          internal_notes: internal_notes || null,
           created_by: created_by || null,
         })
         .select()
@@ -181,6 +195,7 @@ export async function POST(req: NextRequest) {
           line_total: parseFloat(l.quantity || 1) * parseFloat(l.unit_price || 0),
           labor_hours: parseFloat(l.labor_hours || 0),
           is_custom: !!l.is_custom,
+          notes: l.notes || null,
         }));
         await supabase.from('estimate_line_items').insert(lineRows);
       }
