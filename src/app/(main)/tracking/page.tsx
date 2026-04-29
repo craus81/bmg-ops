@@ -42,6 +42,20 @@ export default function TrackingPage() {
   const [vehicleAssignments, setVehicleAssignments] = useState<Record<string, string[]>>({});
   const [assignmentSaving, setAssignmentSaving] = useState(false);
 
+  // Checklist state
+  interface ChecklistTask {
+    id: string;
+    label: string;
+    required: boolean;
+    completed: boolean;
+    task_key: string | null;
+    sort_order: number;
+    completed_at: string | null;
+    completed_by_name: string | null;
+  }
+  const [vehicleTasks, setVehicleTasks] = useState<Record<string, ChecklistTask[]>>({});
+  const [tasksLoading, setTasksLoading] = useState<Record<string, boolean>>({});
+
   // Photos state
   const [vehiclePhotos, setVehiclePhotos] = useState<Record<string, (VehiclePhoto & { url?: string })[]>>({});
   const [photosLoading, setPhotosLoading] = useState<Record<string, boolean>>({});
@@ -157,6 +171,18 @@ export default function TrackingPage() {
         [vehicleId]: data.map((a: any) => a.user_id),
       }));
     }
+  };
+
+  const loadTasks = async (vehicleId: string) => {
+    setTasksLoading(prev => ({ ...prev, [vehicleId]: true }));
+    const { data } = await supabase
+      .from('job_tasks')
+      .select('id, label, required, completed, task_key, sort_order, completed_at, completed_by_name')
+      .eq('job_type', 'fleet_checkin')
+      .eq('job_id', vehicleId)
+      .order('sort_order');
+    setVehicleTasks(prev => ({ ...prev, [vehicleId]: (data || []) as ChecklistTask[] }));
+    setTasksLoading(prev => ({ ...prev, [vehicleId]: false }));
   };
 
   const loadPhotos = async (vehicleId: string) => {
@@ -439,6 +465,7 @@ export default function TrackingPage() {
       loadAssignments(id);
       loadPhotos(id);
       loadNotes(id);
+      loadTasks(id);
     }
   };
 
@@ -483,7 +510,10 @@ export default function TrackingPage() {
       setUpdateSuccess(`Updated to ${VEHICLE_STATUS_LABELS[newStatus]}`);
       setTimeout(() => setUpdateSuccess(null), 2000);
       await loadVehicles();
-      if (expandedId === vehicleId) loadHistory(vehicleId);
+      if (expandedId === vehicleId) {
+        loadHistory(vehicleId);
+        loadTasks(vehicleId);
+      }
 
       // Prompt for completion photos when marking as complete
       if (newStatus === 'complete') {
@@ -1540,6 +1570,72 @@ export default function TrackingPage() {
                       )}
                     </div>
 
+                    {/* QC Checklist (read-only) */}
+                    <div style={{ marginBottom: '12px' }}>
+                      {(() => {
+                        const tasks = vehicleTasks[vehicle.id] || [];
+                        const loadingTasks = !!tasksLoading[vehicle.id];
+                        const done = tasks.filter(t => t.completed).length;
+                        return (
+                          <>
+                            <div style={{
+                              fontSize: '10px', fontWeight: 700, color: 'var(--text-muted)',
+                              textTransform: 'uppercase', letterSpacing: '0.5px', marginBottom: '6px',
+                              display: 'flex', justifyContent: 'space-between', alignItems: 'center',
+                            }}>
+                              <span>QC Checklist {tasks.length > 0 ? `· ${done}/${tasks.length} done` : ''}</span>
+                            </div>
+                            {loadingTasks ? (
+                              <div style={{ fontSize: '12px', color: 'var(--text-muted)', padding: '8px 0' }}>Loading checklist…</div>
+                            ) : tasks.length === 0 ? (
+                              <div style={{
+                                fontSize: '12px', color: 'var(--text-muted)', padding: '12px',
+                                textAlign: 'center', borderRadius: '8px',
+                                background: 'var(--subtle-bg)', border: '1px dashed var(--border)',
+                              }}>
+                                No checklist for this vehicle yet — it's instantiated when status moves to In Progress.
+                              </div>
+                            ) : (
+                              <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
+                                {tasks.map(t => (
+                                  <div key={t.id} style={{
+                                    padding: '8px 10px', borderRadius: '8px',
+                                    border: `1px solid ${t.completed ? 'rgba(34,197,94,0.4)' : 'var(--border)'}`,
+                                    background: 'var(--subtle-bg)',
+                                  }}>
+                                    <div style={{ display: 'flex', alignItems: 'flex-start', gap: '8px' }}>
+                                      <div style={{
+                                        flexShrink: 0, width: '16px', height: '16px', borderRadius: '4px',
+                                        marginTop: '1px',
+                                        background: t.completed ? '#22c55e' : 'transparent',
+                                        border: `1.5px solid ${t.completed ? '#22c55e' : 'var(--border)'}`,
+                                        color: '#fff', fontSize: '11px', fontWeight: 800,
+                                        display: 'flex', alignItems: 'center', justifyContent: 'center',
+                                      }}>
+                                        {t.completed ? '✓' : ''}
+                                      </div>
+                                      <div style={{ flex: 1, minWidth: 0 }}>
+                                        <div style={{ fontSize: '12px', color: 'var(--text-primary)' }}>
+                                          {t.required && <span style={{ color: 'var(--danger, #ef4444)', marginRight: '4px' }}>*</span>}
+                                          {t.label}
+                                        </div>
+                                        {t.completed && (t.completed_by_name || t.completed_at) && (
+                                          <div style={{ fontSize: '10px', color: 'var(--text-muted)', marginTop: '2px' }}>
+                                            {t.completed_by_name || 'Unknown'}
+                                            {t.completed_at && ` · ${new Date(t.completed_at).toLocaleString([], { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' })}`}
+                                          </div>
+                                        )}
+                                      </div>
+                                    </div>
+                                  </div>
+                                ))}
+                              </div>
+                            )}
+                          </>
+                        );
+                      })()}
+                    </div>
+
                     {/* Status History */}
                     <div>
                       <div style={{ fontSize: '10px', fontWeight: 700, color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.5px', marginBottom: '6px' }}>
@@ -1677,7 +1773,10 @@ export default function TrackingPage() {
             onComplete={() => {
               setCompletionModalVehicleId(null);
               loadVehicles();
-              if (expandedId) loadHistory(expandedId);
+              if (expandedId) {
+                loadHistory(expandedId);
+                loadTasks(expandedId);
+              }
             }}
           />
         );
