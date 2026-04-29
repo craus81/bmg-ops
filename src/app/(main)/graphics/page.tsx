@@ -7,6 +7,7 @@ import { storage } from '@/lib/storage';
 import { useAuth } from '@/components/AuthProvider';
 import { theme } from '@/lib/theme';
 import AssignmentPicker from '@/components/AssignmentPicker';
+import GraphicsInvoiceModal from '@/components/GraphicsInvoiceModal';
 import type {
   GraphicsJob, GraphicsJobStatus, GraphicsJobCategory, GraphicsStatusHistory, Profile,
 } from '@/lib/types';
@@ -59,6 +60,8 @@ export default function GraphicsPage() {
   const [search, setSearch] = useState('');
   const [expandedJobId, setExpandedJobId] = useState<string | null>(null);
   const [editingJob, setEditingJob] = useState<GraphicsJob | null>(null);
+  const [invoiceJob, setInvoiceJob] = useState<GraphicsJob | null>(null);
+  const invoicePromptHandled = useRef<Set<string>>(new Set());
   const [statusHistory, setStatusHistory] = useState<GraphicsStatusHistory[]>([]);
 
   // Status change with comment
@@ -153,6 +156,28 @@ export default function GraphicsPage() {
     // Clear the query param so refreshing doesn't re-trigger
     router.replace('/graphics', { scroll: false });
   }, [loading, searchParams]);
+
+  // Admin "create invoice in FleetSuite?" prompt — opens when navigated
+  // from the bell notification with ?invoiceJob=<id>. Confirms once; on
+  // yes, opens the GraphicsInvoiceModal. Either way, clears the param.
+  useEffect(() => {
+    if (loading) return;
+    const invoiceJobId = searchParams.get('invoiceJob');
+    if (!invoiceJobId) return;
+    if (invoicePromptHandled.current.has(invoiceJobId)) return;
+    const job = jobs.find(j => j.id === invoiceJobId);
+    invoicePromptHandled.current.add(invoiceJobId);
+    router.replace('/graphics', { scroll: false });
+    if (!job) return;
+    if ((job as any).netsuite_invoice_id) {
+      alert(`Already invoiced as #${(job as any).netsuite_invoice_number || (job as any).netsuite_invoice_id}.`);
+      return;
+    }
+    const label = job.title || `Job #${job.job_number || job.id.slice(0, 8)}`;
+    if (window.confirm(`Create invoice in FleetSuite for ${label}?`)) {
+      setInvoiceJob(job);
+    }
+  }, [loading, searchParams, jobs]);
 
   const loadJobs = async () => {
     // Exclude installed/cancelled by default — they're archived
@@ -331,6 +356,12 @@ export default function GraphicsPage() {
         }).catch(() => {});
       } else if (newStatus === 'ready_to_pickup') {
         fetch('/api/graphics/notify-pickup', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ jobId: job.id }),
+        }).catch(() => {});
+      } else if (newStatus === 'shipped') {
+        fetch('/api/graphics/notify-shipped-invoice', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ jobId: job.id }),
@@ -1721,6 +1752,18 @@ export default function GraphicsPage() {
             </div>
           </div>
         </div>
+      )}
+
+      {invoiceJob && (
+        <GraphicsInvoiceModal
+          job={invoiceJob}
+          onClose={() => setInvoiceJob(null)}
+          onComplete={(result) => {
+            setInvoiceJob(null);
+            alert(`Invoice ${result.invoiceNumber || result.invoiceId || 'created'} in FleetSuite.`);
+            loadJobs();
+          }}
+        />
       )}
     </div>
   );
