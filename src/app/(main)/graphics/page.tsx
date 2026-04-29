@@ -1163,7 +1163,20 @@ export default function GraphicsPage() {
 
                         {/* Files */}
                         <div style={{ marginBottom: '10px' }}>
-                          <div style={{ ...labelStyle, marginBottom: '6px' }}>Files &amp; Attachments</div>
+                          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '6px' }}>
+                            <div style={labelStyle}>Files &amp; Attachments</div>
+                            {(jobFiles[job.id] || []).length > 1 && (
+                              <a
+                                href={`/api/graphics-jobs/${job.id}/download-all`}
+                                style={{
+                                  padding: '4px 10px', borderRadius: '6px', fontSize: '11px', fontWeight: 700,
+                                  background: 'rgba(96,165,250,0.12)',
+                                  border: '1px solid rgba(96,165,250,0.3)',
+                                  color: '#60a5fa', textDecoration: 'none',
+                                }}
+                              >⬇ Download all ({(jobFiles[job.id] || []).length})</a>
+                            )}
+                          </div>
                           {(jobFiles[job.id] || []).length > 0 && (
                             <div style={{ display: 'flex', flexDirection: 'column', gap: '4px', marginBottom: '6px' }}>
                               {(jobFiles[job.id] || []).map(f => {
