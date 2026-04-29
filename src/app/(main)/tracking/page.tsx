@@ -7,6 +7,8 @@ import { useAuth } from '@/components/AuthProvider';
 import { storage } from '@/lib/storage';
 import StatusBadge from '@/components/StatusBadge';
 import AssignmentPicker from '@/components/AssignmentPicker';
+import VehiclePhotoTimeline from '@/components/VehiclePhotoTimeline';
+import { openOrCreateVehicleThread } from '@/lib/customer-thread';
 import type { FleetCheckin, VehicleTrackingStatus, VehicleStatusHistory, VehiclePhoto, GraphicsJob } from '@/lib/types';
 import { VEHICLE_STATUS_PIPELINE, VEHICLE_STATUS_LABELS, VEHICLE_STATUS_COLORS, GRAPHICS_STATUS_LABELS } from '@/lib/types';
 import NetSuitePdf from '@/components/NetSuitePdf';
@@ -58,6 +60,9 @@ export default function TrackingPage() {
 
   // Matched graphics job (looked up via fleet_checkins.matched_graphics_job_id)
   const [graphicsJobs, setGraphicsJobs] = useState<Record<string, GraphicsJob | null>>({});
+
+  // Message Customer in-flight flag (per-vehicle so two clicks on different rows don't fight)
+  const [messagingVehicleId, setMessagingVehicleId] = useState<string | null>(null);
 
   // Photos state
   const [vehiclePhotos, setVehiclePhotos] = useState<Record<string, (VehiclePhoto & { url?: string })[]>>({});
@@ -200,6 +205,18 @@ export default function TrackingPage() {
       .eq('id', gjId)
       .maybeSingle();
     setGraphicsJobs(prev => ({ ...prev, [vehicle.id]: (data as GraphicsJob | null) || null }));
+  };
+
+  const messageCustomer = async (vehicle: FleetCheckin) => {
+    if (messagingVehicleId === vehicle.id) return;
+    setMessagingVehicleId(vehicle.id);
+    const result = await openOrCreateVehicleThread(supabase, vehicle, user?.id);
+    if ('threadId' in result) {
+      router.push(`/admin/inbox?thread=${result.threadId}`);
+    } else {
+      alert('Failed to open thread: ' + result.error);
+    }
+    setMessagingVehicleId(null);
   };
 
   const loadPhotos = async (vehicleId: string) => {
@@ -949,24 +966,48 @@ export default function TrackingPage() {
                           }}
                         />
 
-                        {/* Run Completion Process — opens the full checklist + photo modal */}
-                        {status !== 'complete' && status !== 'shipped' && (
-                          <button
-                            type="button"
-                            onClick={(e) => {
-                              e.stopPropagation();
-                              setCompletionModalVehicleId(vehicle.id);
-                            }}
-                            style={{
-                              width: '100%', padding: '12px', borderRadius: '10px', marginTop: '8px',
-                              fontSize: '13px', fontWeight: 800, cursor: 'pointer',
-                              background: '#22c55e', border: '1px solid #22c55e', color: '#fff',
-                              transition: 'all 0.15s',
-                            }}
-                          >
-                            Run Completion Process
-                          </button>
-                        )}
+                        {/* Action buttons: Run Completion Process + Message Customer */}
+                        <div style={{ display: 'flex', gap: '8px', marginTop: '8px' }}>
+                          {status !== 'complete' && status !== 'shipped' && (
+                            <button
+                              type="button"
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                setCompletionModalVehicleId(vehicle.id);
+                              }}
+                              style={{
+                                flex: 1, padding: '12px', borderRadius: '10px',
+                                fontSize: '13px', fontWeight: 800, cursor: 'pointer',
+                                background: '#22c55e', border: '1px solid #22c55e', color: '#fff',
+                                transition: 'all 0.15s',
+                              }}
+                            >
+                              Run Completion Process
+                            </button>
+                          )}
+                          {vehicle.customer_name && (
+                            <button
+                              type="button"
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                messageCustomer(vehicle);
+                              }}
+                              disabled={messagingVehicleId === vehicle.id}
+                              style={{
+                                flex: 1, padding: '12px', borderRadius: '10px',
+                                fontSize: '13px', fontWeight: 800,
+                                cursor: messagingVehicleId === vehicle.id ? 'wait' : 'pointer',
+                                background: 'rgba(96,165,250,0.12)',
+                                border: '1px solid rgba(96,165,250,0.4)',
+                                color: '#60a5fa',
+                                transition: 'all 0.15s',
+                                opacity: messagingVehicleId === vehicle.id ? 0.6 : 1,
+                              }}
+                            >
+                              {messagingVehicleId === vehicle.id ? 'Opening…' : '💬 Message Customer'}
+                            </button>
+                          )}
+                        </div>
                       </div>
 
                     {/* Vehicle Info */}
@@ -1592,6 +1633,18 @@ export default function TrackingPage() {
                           ))}
                         </div>
                       )}
+                    </div>
+
+                    {/* Photo Timeline — unified check-in / during / completion / design files / proofs */}
+                    <div style={{ marginBottom: '12px' }}>
+                      <div style={{ fontSize: '10px', fontWeight: 700, color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.5px', marginBottom: '6px' }}>
+                        Photo Timeline
+                      </div>
+                      <VehiclePhotoTimeline
+                        vin={vehicle.vin}
+                        variant="internal"
+                        refreshKey={vehiclePhotos[vehicle.id]?.length || 0}
+                      />
                     </div>
 
                     {/* Installer Assignment */}

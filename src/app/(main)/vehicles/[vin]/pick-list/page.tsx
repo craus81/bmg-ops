@@ -6,6 +6,7 @@ import { createClient } from '@/lib/supabase-browser';
 import { useAuth } from '@/components/AuthProvider';
 import VehiclePhotoTimeline from '@/components/VehiclePhotoTimeline';
 import CompletionModal from '@/components/CompletionModal';
+import { openOrCreateVehicleThread } from '@/lib/customer-thread';
 
 interface VehicleData {
   id: string;
@@ -210,75 +211,13 @@ export default function VehiclePickListPage() {
   const openMessageCustomer = async () => {
     if (!vehicle || messagingCustomer) return;
     setMessagingCustomer(true);
-    try {
-      // Find customer row by company_name
-      let customerId: string | null = null;
-      let contactId: string | null = null;
-      if (vehicle.customer_name) {
-        const { data: cust } = await supabase
-          .from('customers')
-          .select('id, email, phone')
-          .ilike('company_name', vehicle.customer_name)
-          .maybeSingle();
-        if (cust) {
-          customerId = cust.id;
-          // Primary contact for this customer
-          const { data: primary } = await supabase
-            .from('external_contacts')
-            .select('id')
-            .eq('customer_id', cust.id)
-            .eq('is_primary', true)
-            .maybeSingle();
-          if (primary) {
-            contactId = primary.id;
-          } else {
-            // Create a primary contact from whatever the customer row has
-            const { data: created } = await supabase
-              .from('external_contacts')
-              .insert({
-                customer_id: cust.id,
-                name: vehicle.customer_name,
-                email: cust.email || null,
-                phone: cust.phone || null,
-                is_primary: true,
-                created_by: user?.id,
-              })
-              .select('id')
-              .single();
-            contactId = created?.id || null;
-          }
-        }
-      }
-
-      if (!contactId) {
-        alert('No contact available for this customer. Add a contact in the inbox first.');
-        setMessagingCustomer(false);
-        return;
-      }
-
-      const res = await fetch('/api/customer-threads', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          contactId,
-          customerId,
-          contextEntityType: 'fleet_checkin',
-          contextEntityId: vehicle.id,
-          subject: `${vehicle.vin} install`,
-        }),
-      });
-      const data = await res.json();
-      if (!res.ok || !data.thread?.id) {
-        alert('Failed to open thread: ' + (data.error || 'Unknown error'));
-        setMessagingCustomer(false);
-        return;
-      }
-      router.push(`/admin/inbox?thread=${data.thread.id}`);
-    } catch (err: any) {
-      alert('Failed to open thread: ' + (err.message || 'Network error'));
-    } finally {
-      setMessagingCustomer(false);
+    const result = await openOrCreateVehicleThread(supabase, vehicle, user?.id);
+    if ('threadId' in result) {
+      router.push(`/admin/inbox?thread=${result.threadId}`);
+    } else {
+      alert('Failed to open thread: ' + result.error);
     }
+    setMessagingCustomer(false);
   };
 
   const toggleTask = async (task: Task) => {
