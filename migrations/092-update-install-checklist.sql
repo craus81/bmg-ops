@@ -1,6 +1,6 @@
--- Migration 080: Update default install checklist + add keyed tasks
+-- Migration 092: Update default install checklist + add keyed tasks
 --
--- The mixed-install default seeded by migration 073 used boilerplate
+-- The mixed-install default seeded by migration 085 used boilerplate
 -- items that didn't match BMG's actual install ceremony. Replace with
 -- the customer-validated list, and introduce a `task_key` column on
 -- job_tasks so the new completion modal can recognise specific tasks

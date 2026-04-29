@@ -1,4 +1,4 @@
--- Migration 081: Add missing updated_at column to job_tasks
+-- Migration 093: Add missing updated_at column to job_tasks
 --
 -- Migration 045 created a BEFORE UPDATE trigger on job_tasks that does
 -- `NEW.updated_at = NOW()`, but migration 025 never added an updated_at

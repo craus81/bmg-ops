@@ -1,4 +1,4 @@
--- Migration 082: Track NetSuite invoice on graphics_jobs
+-- Migration 094: Track NetSuite invoice on graphics_jobs
 --
 -- Graphics ship-out → admin "create invoice in FleetSuite?" prompt creates
 -- a standalone NetSuite invoice (no SO required). Once created, store the

@@ -1,4 +1,4 @@
--- Migration 076: T1.6 Sales → Ops handoff 3-layer install context
+-- Migration 088: T1.6 Sales → Ops handoff 3-layer install context
 --
 -- Adds FleetSuite-owned context fields across the customer/estimate/quote/
 -- purchase_order/fleet_checkin chain so install instructions, on-site

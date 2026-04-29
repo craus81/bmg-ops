@@ -1,4 +1,4 @@
--- Migration 072: T1.1 Graphics → Install handoff
+-- Migration 084: T1.1 Graphics → Install handoff
 --
 -- Adds a distinct user preference for "graphics ready, waiting on me to install"
 -- notifications, separate from the existing notify_ready (which stays for

@@ -1,4 +1,4 @@
--- Migration 077: T1.7 Magic-link estimate approval
+-- Migration 089: T1.7 Magic-link estimate approval
 --
 -- Adds approval/rejection tracking + E-SIGN Act-grade audit metadata to
 -- estimates so a tokenized public page can capture customer acceptance

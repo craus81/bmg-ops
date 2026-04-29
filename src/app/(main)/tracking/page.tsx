@@ -1041,7 +1041,7 @@ export default function TrackingPage() {
                     </div>
 
                     {/* Install Context — sales-order memo, install instructions, on-site contact, delivery prefs.
-                        Snapshotted from the originating estimate at check-in time (migration 076). */}
+                        Snapshotted from the originating estimate at check-in time (migration 088). */}
                     {(() => {
                       const memo = vehicle.sales_order_memo;
                       const inst = (vehicle as any).install_instructions as string | null | undefined;

@@ -1,4 +1,4 @@
--- Migration 078: T1.8 Magic-link graphic proof approval
+-- Migration 090: T1.8 Magic-link graphic proof approval
 --
 -- customer_approved, customer_approved_at, customer_approved_by already
 -- exist on graphics_jobs (migration 019). This migration adds the rest

@@ -1,4 +1,4 @@
--- Migration 075: T1.5 Customer comms — threaded unified inbox
+-- Migration 087: T1.5 Customer comms — threaded unified inbox
 --
 -- Creates three tables separate from the internal peer-to-peer messages
 -- system. Internal chat (conversations + messages) stays untouched;

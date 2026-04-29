@@ -1,4 +1,4 @@
--- Migration 079: Add 'ready_to_pickup' graphics status
+-- Migration 091: Add 'ready_to_pickup' graphics status
 --
 -- New status between 'ready' and 'shipped' for jobs where the customer
 -- will come to BMG to pick up graphics rather than having them shipped.

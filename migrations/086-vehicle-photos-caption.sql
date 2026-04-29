@@ -1,4 +1,4 @@
--- Migration 074: T1.4 Unified photo timeline
+-- Migration 086: T1.4 Unified photo timeline
 --
 -- Adds an optional caption column to vehicle_photos so installers can annotate
 -- a photo at upload time — valuable for dispute protection (e.g. "pre-existing
