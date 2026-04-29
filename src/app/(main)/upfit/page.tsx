@@ -30,6 +30,35 @@ interface UpfitTask {
   creator?: { full_name: string } | null;
 }
 
+interface LinkedGraphicsJob {
+  id: string;
+  job_number: string | null;
+  title: string;
+  status: string;
+  assigned_to: string | null;
+  due_date: string | null;
+  scheduled_install_date: string | null;
+  approval_proof_file_id: string | null;
+  proof_url: string | null;
+  proof_file_name: string | null;
+}
+
+const GRAPHICS_STATUS_COLORS: Record<string, string> = {
+  flagged: '#ef4444',
+  received: '#94a3b8',
+  designing: '#a78bfa',
+  revision: '#f59e0b',
+  printing: '#60a5fa',
+  outgassing: '#60a5fa',
+  cutting: '#60a5fa',
+  packing: '#60a5fa',
+  ready: '#22c55e',
+  ready_to_pickup: '#22c55e',
+  shipped: '#22c55e',
+  installed: '#22c55e',
+  cancelled: '#64748b',
+};
+
 interface UpfitProject {
   id: string;
   project_name: string;
@@ -122,6 +151,9 @@ export default function UpfitProjectsPage() {
 
   // Linked fleet check-in (for handoff display)
   const [linkedCheckin, setLinkedCheckin] = useState<{ id: string; vin: string; status: string; vehicle_year: string | null; vehicle_make: string | null; vehicle_model: string | null } | null>(null);
+
+  // Linked graphics jobs (one upfit project can have multiple graphics jobs)
+  const [linkedGraphics, setLinkedGraphics] = useState<LinkedGraphicsJob[]>([]);
 
   // New project form
   const [showCreate, setShowCreate] = useState(false);
@@ -315,12 +347,72 @@ export default function UpfitProjectsPage() {
     setLinkedCheckin((data as any) || null);
   };
 
+  const loadLinkedGraphics = async (projectId: string) => {
+    const { data: jobs } = await supabase
+      .from('graphics_jobs')
+      .select('id, job_number, title, status, assigned_to, due_date, scheduled_install_date, approval_proof_file_id')
+      .eq('upfit_project_id', projectId)
+      .order('created_at', { ascending: true });
+
+    if (!jobs || jobs.length === 0) {
+      setLinkedGraphics([]);
+      return;
+    }
+
+    // Resolve proof preview URLs. Prefer the per-send approval_proof_file_id
+    // (the file Brian actually sent for approval); fall back to the most
+    // recent uploaded file on the job so the panel still has a thumbnail
+    // during early design stages.
+    const proofIds = jobs.map((j: any) => j.approval_proof_file_id).filter(Boolean);
+    const jobIds = jobs.map((j: any) => j.id);
+
+    const [{ data: explicitProofs }, { data: latestFiles }] = await Promise.all([
+      proofIds.length > 0
+        ? supabase.from('graphics_job_files').select('id, job_id, file_name, storage_path').in('id', proofIds)
+        : Promise.resolve({ data: [] as any[] }),
+      supabase
+        .from('graphics_job_files')
+        .select('id, job_id, file_name, storage_path, uploaded_at')
+        .in('job_id', jobIds)
+        .order('uploaded_at', { ascending: false }),
+    ]);
+
+    const explicitByJob: Record<string, { file_name: string; storage_path: string }> = {};
+    for (const f of explicitProofs || []) {
+      explicitByJob[f.job_id] = { file_name: f.file_name, storage_path: f.storage_path };
+    }
+    const latestByJob: Record<string, { file_name: string; storage_path: string }> = {};
+    for (const f of latestFiles || []) {
+      if (!latestByJob[f.job_id]) {
+        latestByJob[f.job_id] = { file_name: f.file_name, storage_path: f.storage_path };
+      }
+    }
+
+    const enriched: LinkedGraphicsJob[] = jobs.map((j: any) => {
+      const chosen = explicitByJob[j.id] || latestByJob[j.id];
+      return {
+        id: j.id,
+        job_number: j.job_number,
+        title: j.title,
+        status: j.status,
+        assigned_to: j.assigned_to,
+        due_date: j.due_date,
+        scheduled_install_date: j.scheduled_install_date,
+        approval_proof_file_id: j.approval_proof_file_id,
+        proof_url: chosen ? storage.from('graphics-proofs').getPublicUrl(chosen.storage_path).data.publicUrl : null,
+        proof_file_name: chosen ? chosen.file_name : null,
+      };
+    });
+    setLinkedGraphics(enriched);
+  };
+
   const openProject = (p: UpfitProject) => {
     setSelected(p);
     loadNotes(p.id);
     loadTasks(p.id);
     loadFiles(p.id);
     loadLinkedCheckin(p.fleet_checkin_id);
+    loadLinkedGraphics(p.id);
   };
 
   const addNote = async () => {
@@ -514,6 +606,78 @@ export default function UpfitProjectsPage() {
             )}
           </div>
         </div>
+
+        {/* Graphics — linked graphics jobs (from migrations/084-graphics-upfit-project-link.sql).
+            Read-only summary of each linked job's production status, designer,
+            due/install dates, and proof preview. Click through to /graphics?id=
+            to act on the job itself. */}
+        {linkedGraphics.length > 0 && (
+          <>
+            <div style={{ fontSize: '11px', fontWeight: 700, color: theme.textSecondary, marginBottom: '8px', textTransform: 'uppercase', letterSpacing: '0.5px' }}>
+              Graphics ({linkedGraphics.length})
+            </div>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: '6px', marginBottom: '16px' }}>
+              {linkedGraphics.map(g => {
+                const designerName = g.assigned_to ? (profiles[g.assigned_to] || 'Unknown') : null;
+                const statusColor = GRAPHICS_STATUS_COLORS[g.status] || '#94a3b8';
+                const installDate = g.scheduled_install_date || g.due_date;
+                return (
+                  <button
+                    key={g.id}
+                    onClick={() => window.location.assign(`/graphics?id=${g.id}`)}
+                    style={{
+                      textAlign: 'left',
+                      background: theme.card,
+                      border: `1px solid ${theme.border}`,
+                      borderRadius: '10px',
+                      padding: '10px',
+                      display: 'grid',
+                      gridTemplateColumns: g.proof_url ? '64px 1fr' : '1fr',
+                      gap: '10px',
+                      alignItems: 'center',
+                      cursor: 'pointer',
+                    }}
+                  >
+                    {g.proof_url && (
+                      <div style={{ width: '64px', height: '64px', borderRadius: '6px', overflow: 'hidden', background: theme.inputBg, border: `1px solid ${theme.border}`, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+                        <img
+                          src={g.proof_url}
+                          alt={g.proof_file_name || 'Proof'}
+                          style={{ maxWidth: '100%', maxHeight: '100%', objectFit: 'contain' }}
+                          onError={(e) => { (e.currentTarget as HTMLImageElement).style.display = 'none'; }}
+                        />
+                      </div>
+                    )}
+                    <div style={{ minWidth: 0 }}>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '4px' }}>
+                        <span style={{ fontSize: '11px', fontWeight: 700, color: theme.textPrimary }}>
+                          {g.job_number || g.id.slice(0, 8)}
+                        </span>
+                        <span style={{
+                          fontSize: '9px', fontWeight: 700, padding: '2px 6px', borderRadius: '4px',
+                          background: `${statusColor}20`, color: statusColor, border: `1px solid ${statusColor}40`,
+                          textTransform: 'uppercase',
+                        }}>
+                          {g.status.replace(/_/g, ' ')}
+                        </span>
+                      </div>
+                      <div style={{ fontSize: '12px', fontWeight: 600, color: theme.textPrimary, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', marginBottom: '2px' }}>
+                        {g.title}
+                      </div>
+                      <div style={{ fontSize: '10px', color: theme.textMuted, display: 'flex', flexWrap: 'wrap', gap: '10px' }}>
+                        <span>Designer: <span style={{ color: theme.textSecondary, fontWeight: 600 }}>{designerName || 'Unassigned'}</span></span>
+                        {installDate && (
+                          <span>{g.scheduled_install_date ? 'Install' : 'Due'}: <span style={{ color: theme.textSecondary, fontWeight: 600 }}>{fmt(installDate)}</span></span>
+                        )}
+                        {!g.proof_url && <span style={{ fontStyle: 'italic' }}>No proof yet</span>}
+                      </div>
+                    </div>
+                  </button>
+                );
+              })}
+            </div>
+          </>
+        )}
 
         {/* Tasks */}
         <div style={{ fontSize: '11px', fontWeight: 700, color: theme.textSecondary, marginBottom: '8px', textTransform: 'uppercase', letterSpacing: '0.5px', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
