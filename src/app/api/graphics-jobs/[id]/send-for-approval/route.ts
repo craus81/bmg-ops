@@ -75,7 +75,7 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
     .eq('id', job.id);
   if (updErr) return NextResponse.json({ error: updErr.message }, { status: 500 });
 
-  const appUrl = process.env.NEXT_PUBLIC_APP_URL || '';
+  const appUrl = process.env.NEXT_PUBLIC_APP_URL || 'https://bmg-ops.vercel.app';
   const label = job.title || job.job_number || `Job ${params.id.slice(0, 8)}`;
   const dispatch: Record<string, any> = { email: null, sms: null };
 

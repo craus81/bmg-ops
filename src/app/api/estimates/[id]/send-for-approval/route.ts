@@ -94,7 +94,7 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
     return NextResponse.json({ error: 'Failed to mint token: ' + updErr.message }, { status: 500 });
   }
 
-  const appUrl = process.env.NEXT_PUBLIC_APP_URL || '';
+  const appUrl = process.env.NEXT_PUBLIC_APP_URL || 'https://bmg-ops.vercel.app';
   const subject = `[BMG Fleet] Estimate #${estimate.estimate_number} — Ready for your approval`;
 
   const dispatch: Record<string, any> = { email: null, sms: null };

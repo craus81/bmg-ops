@@ -90,7 +90,7 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
     }
     try {
       const { sendEmail, buildNotificationEmail } = await import('@/lib/resend');
-      const appUrl = process.env.NEXT_PUBLIC_APP_URL || '';
+      const appUrl = process.env.NEXT_PUBLIC_APP_URL || 'https://bmg-ops.vercel.app';
       const html = buildNotificationEmail(
         'Message from BMG Fleet',
         messageBody,
