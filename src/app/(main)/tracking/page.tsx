@@ -9,8 +9,8 @@ import StatusBadge from '@/components/StatusBadge';
 import AssignmentPicker from '@/components/AssignmentPicker';
 import VehiclePhotoTimeline from '@/components/VehiclePhotoTimeline';
 import { openOrCreateVehicleThread } from '@/lib/customer-thread';
-import type { FleetCheckin, VehicleTrackingStatus, VehicleStatusHistory, VehiclePhoto, GraphicsJob } from '@/lib/types';
-import { VEHICLE_STATUS_PIPELINE, VEHICLE_STATUS_LABELS, VEHICLE_STATUS_COLORS, GRAPHICS_STATUS_LABELS } from '@/lib/types';
+import type { FleetCheckin, VehicleTrackingStatus, VehicleStatusHistory, VehiclePhoto, GraphicsJob, GraphicsInstallStatus } from '@/lib/types';
+import { VEHICLE_STATUS_PIPELINE, VEHICLE_STATUS_LABELS, VEHICLE_STATUS_COLORS, GRAPHICS_STATUS_LABELS, GRAPHICS_INSTALL_PIPELINE, GRAPHICS_INSTALL_LABELS, GRAPHICS_INSTALL_COLORS } from '@/lib/types';
 import NetSuitePdf from '@/components/NetSuitePdf';
 import ProofThumbnail from '@/components/ProofThumbnail';
 import CompletionModal from '@/components/CompletionModal';
@@ -562,6 +562,44 @@ export default function TrackingPage() {
     setUpdatingId(null);
   }, [statusNote, expandedId, profile]);
 
+  // Graphics install lane (migration 085) — runs in parallel to the upfit
+  // pipeline driven by updateStatus above. Independent state machine, but
+  // the completion ceremony in update-status gates on this being 'complete'
+  // or 'n/a' when a graphics job is linked.
+  const updateGraphicsInstall = useCallback(async (vehicleId: string, newStatus: GraphicsInstallStatus) => {
+    setUpdatingId(vehicleId);
+    setUpdateSuccess(null);
+    try {
+      const res = await fetch('/api/vehicle-tracking/graphics-install-status', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          vehicleId,
+          newStatus,
+          note: statusNote.trim() || null,
+        }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        alert('Graphics install update failed: ' + (data.error || 'Unknown error'));
+        setUpdatingId(null);
+        return;
+      }
+      setStatusNote('');
+      setUpdateSuccess(`Graphics: ${GRAPHICS_INSTALL_LABELS[newStatus]}`);
+      setTimeout(() => setUpdateSuccess(null), 2000);
+      await loadVehicles();
+      if (expandedId === vehicleId) {
+        loadHistory(vehicleId);
+        const v = vehicles.find(x => x.id === vehicleId);
+        if (v) loadGraphicsJob(v);
+      }
+    } catch {
+      alert('Network error — please try again');
+    }
+    setUpdatingId(null);
+  }, [statusNote, expandedId, vehicles]);
+
   const deleteVehicle = async (vehicleId: string) => {
     setDeletingId(vehicleId);
     try {
@@ -1009,6 +1047,71 @@ export default function TrackingPage() {
                           )}
                         </div>
                       </div>
+
+                    {/* Graphics Install Lane (migration 085) — runs in parallel
+                        to the upfit pipeline above, no forced ordering. The
+                        completion ceremony in /api/vehicle-tracking/update-status
+                        gates on this being 'complete' or 'n/a' when a graphics
+                        job is linked. Hidden for pure-upfit jobs whose lane is
+                        backfilled to 'pending' or 'n/a' with no matched job. */}
+                    {(() => {
+                      const lane = ((vehicle as any).graphics_install_status as GraphicsInstallStatus) || 'pending';
+                      const hasGraphics = !!(vehicle as any).matched_graphics_job_id;
+                      const showLane = hasGraphics || (lane !== 'pending' && lane !== 'n/a');
+                      if (!showLane) return null;
+                      const isUpdating = updatingId === vehicle.id;
+                      const isAdmin = profile?.role === 'admin';
+                      // 'n/a' is opt-out and only really makes sense if an
+                      // admin needs to bypass the gate without doing the work
+                      // (e.g. graphics shipped direct to customer); hide it
+                      // from non-admins to keep the row tidy.
+                      const visibleStates = GRAPHICS_INSTALL_PIPELINE.filter(s => s !== 'n/a' || isAdmin);
+                      return (
+                        <div style={{ marginBottom: '12px' }}>
+                          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '6px' }}>
+                            <div style={{ fontSize: '10px', fontWeight: 700, color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.5px' }}>
+                              Graphics Install
+                            </div>
+                            {hasGraphics && graphicsJobs[vehicle.id] && (
+                              <div style={{ fontSize: '10px', color: 'var(--text-muted)' }}>
+                                #{graphicsJobs[vehicle.id]?.job_number || (graphicsJobs[vehicle.id]?.id || '').slice(0, 8)} · {GRAPHICS_STATUS_LABELS[graphicsJobs[vehicle.id]!.status] || graphicsJobs[vehicle.id]!.status}
+                              </div>
+                            )}
+                          </div>
+                          <div style={{ display: 'flex', flexWrap: 'wrap', gap: '6px' }}>
+                            {visibleStates.map(s => {
+                              const colors = GRAPHICS_INSTALL_COLORS[s];
+                              const isCurrent = s === lane;
+                              return (
+                                <button
+                                  key={s}
+                                  type="button"
+                                  onClick={(e) => {
+                                    e.stopPropagation();
+                                    e.preventDefault();
+                                    if (!isCurrent && !isUpdating) {
+                                      updateGraphicsInstall(vehicle.id, s);
+                                    }
+                                  }}
+                                  disabled={isCurrent || isUpdating}
+                                  style={{
+                                    padding: '8px 12px', borderRadius: '8px', fontSize: '12px', fontWeight: 700,
+                                    background: isCurrent ? colors.bg : 'var(--subtle-bg)',
+                                    border: `1.5px solid ${isCurrent ? colors.border : 'var(--border)'}`,
+                                    color: isCurrent ? colors.text : 'var(--text-secondary)',
+                                    opacity: isCurrent ? 1 : (isUpdating ? 0.4 : 1),
+                                    cursor: isCurrent || isUpdating ? 'default' : 'pointer',
+                                    transition: 'all 0.15s',
+                                  }}
+                                >
+                                  {isCurrent ? `● ${GRAPHICS_INSTALL_LABELS[s]}` : GRAPHICS_INSTALL_LABELS[s]}
+                                </button>
+                              );
+                            })}
+                          </div>
+                        </div>
+                      );
+                    })()}
 
                     {/* Vehicle Info */}
                     <div style={{

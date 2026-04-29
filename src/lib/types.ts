@@ -324,9 +324,36 @@ export interface FleetCheckin {
   invoice_number?: string | null;
   date_invoiced?: string | null;
   is_paid?: boolean;
+  // Graphics install lane (migration 085) — runs in parallel to status above
+  graphics_install_status?: GraphicsInstallStatus;
+  graphics_install_completed_at?: string | null;
+  graphics_install_completed_by?: string | null;
+  graphics_install_notes?: string | null;
   created_at: string;
   updated_at: string;
 }
+
+export type GraphicsInstallStatus = 'pending' | 'in_progress' | 'stuck' | 'complete' | 'n/a';
+
+export const GRAPHICS_INSTALL_PIPELINE: GraphicsInstallStatus[] = [
+  'pending', 'in_progress', 'stuck', 'complete', 'n/a',
+];
+
+export const GRAPHICS_INSTALL_LABELS: Record<GraphicsInstallStatus, string> = {
+  pending: 'Pending',
+  in_progress: 'In Progress',
+  stuck: 'Stuck',
+  complete: 'Complete',
+  'n/a': 'N/A',
+};
+
+export const GRAPHICS_INSTALL_COLORS: Record<GraphicsInstallStatus, { bg: string; border: string; text: string }> = {
+  pending:     { bg: 'rgba(148,163,184,0.10)', border: 'rgba(148,163,184,0.40)', text: '#94a3b8' },
+  in_progress: { bg: 'rgba(167,139,250,0.15)', border: 'rgba(167,139,250,0.45)', text: '#a78bfa' },
+  stuck:       { bg: 'rgba(249,115,22,0.15)',  border: 'rgba(249,115,22,0.45)',  text: '#f97316' },
+  complete:    { bg: 'rgba(34,197,94,0.15)',   border: 'rgba(34,197,94,0.45)',   text: '#22c55e' },
+  'n/a':       { bg: 'rgba(100,116,139,0.10)', border: 'rgba(100,116,139,0.35)', text: '#64748b' },
+};
 
 export interface VehicleStatusHistory {
   id: string;

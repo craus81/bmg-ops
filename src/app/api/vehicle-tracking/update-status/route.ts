@@ -46,7 +46,7 @@ export async function POST(request: Request) {
     const [vehicleResult, profileResult] = await Promise.all([
       serviceSupabase
         .from('fleet_checkins')
-        .select('id, status, vin, customer_name, vehicle_year, vehicle_make, vehicle_model, assigned_to, matched_graphics_job_id')
+        .select('id, status, vin, customer_name, vehicle_year, vehicle_make, vehicle_model, assigned_to, matched_graphics_job_id, graphics_install_status')
         .eq('id', vehicleId)
         .single(),
       serviceSupabase.from('profiles').select('id, full_name, role').eq('id', user.id).single(),
@@ -99,6 +99,16 @@ export async function POST(request: Request) {
       const missing: string[] = [];
       if (photoCount === 0) missing.push('Upload at least one completion photo');
       for (const t of unfinished) missing.push(`Required task: ${t.label}`);
+
+      // Graphics lane gate: when a graphics job is linked, the vehicle's
+      // graphics install lane (migration 085) must also be done before the
+      // completion ceremony fires. Standalone-upfit vehicles backfilled to
+      // 'n/a' pass automatically. See /api/vehicle-tracking/graphics-install-status.
+      const graphicsLane = (vehicle as any).graphics_install_status || 'pending';
+      const hasGraphicsJob = !!(vehicle as any).matched_graphics_job_id;
+      if (hasGraphicsJob && graphicsLane !== 'complete' && graphicsLane !== 'n/a') {
+        missing.push(`Graphics install lane is "${graphicsLane}" — mark complete (or N/A) first`);
+      }
 
       if (missing.length > 0 && !(force && isAdmin)) {
         return NextResponse.json({
