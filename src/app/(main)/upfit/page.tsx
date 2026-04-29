@@ -1,6 +1,7 @@
 'use client';
 
 import { useState, useEffect, useRef } from 'react';
+import { useSearchParams } from 'next/navigation';
 import { createClient } from '@/lib/supabase-browser';
 import { storage } from '@/lib/storage';
 import { useAuth } from '@/components/AuthProvider';
@@ -114,6 +115,7 @@ const NOTE_ICONS: Record<string, string> = {
 export default function UpfitProjectsPage() {
   const { user } = useAuth();
   const supabase = createClient();
+  const searchParams = useSearchParams();
 
   const [projects, setProjects] = useState<UpfitProject[]>([]);
   const [loading, setLoading] = useState(true);
@@ -182,6 +184,25 @@ export default function UpfitProjectsPage() {
   };
 
   useEffect(() => { load(); }, []);
+
+  // Deep-link: ?id=<projectId> auto-opens that project so /upfit?id= works
+  // from the graphics page parent-link, the tracking page, etc.
+  useEffect(() => {
+    if (loading) return;
+    const projectId = searchParams.get('id');
+    if (!projectId || selected?.id === projectId) return;
+    const inList = projects.find(p => p.id === projectId);
+    if (inList) {
+      openProject(inList);
+      return;
+    }
+    // Project may be archived/cancelled and filtered out of the active
+    // list — fall back to fetching it directly.
+    (async () => {
+      const { data } = await supabase.from('upfit_projects').select('*').eq('id', projectId).maybeSingle();
+      if (data) openProject(data as UpfitProject);
+    })();
+  }, [loading, searchParams, projects]);
 
   const loadNotes = async (projectId: string) => {
     setLoadingNotes(true);

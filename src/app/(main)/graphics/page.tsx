@@ -53,6 +53,9 @@ export default function GraphicsPage() {
 
   const [jobs, setJobs] = useState<GraphicsJob[]>([]);
   const [profiles, setProfiles] = useState<Profile[]>([]);
+  // Parent upfit projects, keyed by upfit_project_id, populated on mount
+  // for any job that has a non-null upfit_project_id (migration 084).
+  const [upfitProjects, setUpfitProjects] = useState<Record<string, { id: string; project_name: string; status: string; customer_name: string | null }>>({});
   const [loading, setLoading] = useState(true);
   const [viewMode, setViewMode] = useState<ViewMode>('pipeline');
   const [filterStatus, setFilterStatus] = useState<FilterStatus>('active');
@@ -143,6 +146,7 @@ export default function GraphicsPage() {
     if (!isProduction && !isAdmin && !isSales) { router.push('/home'); return; }
     loadJobs();
     loadProfiles();
+    loadUpfitProjects();
   }, [user, isAdmin, isProduction]);
 
   // Auto-open a job for editing when navigated from PO page via ?editJob=<id>
@@ -212,6 +216,18 @@ export default function GraphicsPage() {
       .select('id, full_name, email, role, status')
       .eq('status', 'approved');
     setProfiles((data as Profile[]) || []);
+  };
+
+  const loadUpfitProjects = async () => {
+    // Cheap unconditional load — there are typically far fewer upfit
+    // projects than graphics jobs and the rows are small.
+    const { data } = await supabase
+      .from('upfit_projects')
+      .select('id, project_name, status, customer_name');
+    if (!data) return;
+    const map: Record<string, { id: string; project_name: string; status: string; customer_name: string | null }> = {};
+    for (const p of data as any[]) map[p.id] = p;
+    setUpfitProjects(map);
   };
 
   const loadHistory = async (jobId: string) => {
@@ -982,6 +998,11 @@ export default function GraphicsPage() {
                         {job.scheduled_install_date && <span style={{ color: job.scheduled_install_date === 'N/A' ? 'var(--text-muted)' : '#22d3ee' }}>Install: {job.scheduled_install_date === 'N/A' ? 'N/A' : displayDate(job.scheduled_install_date)}</span>}
                         {job.po_number && <span style={{ color: '#a78bfa', fontWeight: 700 }}>PO #{job.po_number}</span>}
                         {job.estimate_id && <span style={{ padding: '0 4px', borderRadius: '3px', background: 'rgba(96,165,250,0.1)', color: '#60a5fa', fontWeight: 700 }}>Estimate</span>}
+                        {job.upfit_project_id && upfitProjects[job.upfit_project_id] && (
+                          <span style={{ padding: '0 4px', borderRadius: '3px', background: 'rgba(249,115,22,0.12)', color: '#f97316', fontWeight: 700 }} title={upfitProjects[job.upfit_project_id].project_name}>
+                            Upfit
+                          </span>
+                        )}
                         {job.netsuite_invoice_number && <span style={{ padding: '0 4px', borderRadius: '3px', background: 'rgba(34,197,94,0.1)', color: '#22c55e', fontWeight: 700 }}>INV {job.netsuite_invoice_number}</span>}
                       </div>
                     </div>
@@ -1030,6 +1051,54 @@ export default function GraphicsPage() {
                         ))}
                       </div>
                     </div>
+
+                    {/* Parent context — surfaces customer + upfit project (when
+                        linked via migration 084) so the production team has
+                        the deal context without leaving the graphics page.
+                        Hidden if there's no customer AND no upfit project. */}
+                    {(() => {
+                      const upfit = job.upfit_project_id ? upfitProjects[job.upfit_project_id] : null;
+                      const cust = job.customer || upfit?.customer_name || null;
+                      if (!cust && !upfit) return null;
+                      return (
+                        <div style={{
+                          marginBottom: '12px', padding: '10px', borderRadius: '8px',
+                          background: 'rgba(249,115,22,0.05)', border: '1px solid rgba(249,115,22,0.18)',
+                        }}>
+                          <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: '8px' }}>
+                            <div style={{ minWidth: 0, flex: 1 }}>
+                              {cust && (
+                                <div style={{ fontSize: '11px', marginBottom: upfit ? '4px' : 0 }}>
+                                  <span style={{ color: 'var(--text-muted)', fontWeight: 700, textTransform: 'uppercase', fontSize: '9px', letterSpacing: '0.4px', marginRight: '6px' }}>Customer</span>
+                                  <span style={{ color: 'var(--text-body)', fontWeight: 600 }}>{cust}</span>
+                                </div>
+                              )}
+                              {upfit && (
+                                <div style={{ fontSize: '11px' }}>
+                                  <span style={{ color: 'var(--text-muted)', fontWeight: 700, textTransform: 'uppercase', fontSize: '9px', letterSpacing: '0.4px', marginRight: '6px' }}>Upfit Project</span>
+                                  <span style={{ color: 'var(--text-body)', fontWeight: 600 }}>{upfit.project_name}</span>
+                                  <span style={{
+                                    marginLeft: '6px', padding: '1px 6px', borderRadius: '4px', fontSize: '9px', fontWeight: 700,
+                                    background: 'rgba(249,115,22,0.12)', color: '#f97316', textTransform: 'uppercase', letterSpacing: '0.3px',
+                                  }}>{upfit.status.replace(/_/g, ' ')}</span>
+                                </div>
+                              )}
+                            </div>
+                            {upfit && (
+                              <a
+                                href={`/upfit?id=${upfit.id}`}
+                                style={{
+                                  flexShrink: 0, padding: '4px 10px', borderRadius: '6px',
+                                  fontSize: '11px', fontWeight: 700, color: '#f97316',
+                                  background: 'rgba(249,115,22,0.10)', border: '1px solid rgba(249,115,22,0.35)',
+                                  textDecoration: 'none', whiteSpace: 'nowrap',
+                                }}
+                              >Open ↗</a>
+                            )}
+                          </div>
+                        </div>
+                      );
+                    })()}
 
                     {/* Toggle edit mode */}
                     {!isEditing ? (
