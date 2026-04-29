@@ -29,7 +29,32 @@ interface LineItem {
   labor_hours: number;
   is_custom: boolean;
   notes?: string;
+  catalog?: string; // 'upfit' | 'graphics' — drives the graphics-job prompt
 }
+
+interface LinkedGraphicsJob {
+  id: string;
+  job_number: string | null;
+  title: string;
+  status: string;
+  assigned_to: string | null;
+}
+
+const GRAPHICS_STATUS_COLORS: Record<string, string> = {
+  flagged: '#ef4444',
+  received: '#94a3b8',
+  designing: '#a78bfa',
+  revision: '#f59e0b',
+  printing: '#60a5fa',
+  outgassing: '#60a5fa',
+  cutting: '#60a5fa',
+  packing: '#60a5fa',
+  ready: '#22c55e',
+  ready_to_pickup: '#22c55e',
+  shipped: '#22c55e',
+  installed: '#22c55e',
+  cancelled: '#64748b',
+};
 
 interface Estimate {
   id: string;
@@ -160,6 +185,13 @@ export default function EstimatesPage() {
   const [custSearching, setCustSearching] = useState(false);
   const [showCustDropdown, setShowCustDropdown] = useState(false);
 
+  // Graphics-job linkage (for spawning / linking a graphics job to this estimate)
+  const [linkedGraphicsJobs, setLinkedGraphicsJobs] = useState<LinkedGraphicsJob[]>([]);
+  const [graphicsLinking, setGraphicsLinking] = useState(false);
+  const [showGraphicsPicker, setShowGraphicsPicker] = useState(false);
+  const [graphicsPickerSearch, setGraphicsPickerSearch] = useState('');
+  const [graphicsPickerResults, setGraphicsPickerResults] = useState<LinkedGraphicsJob[]>([]);
+
   useEffect(() => {
     if (!user) return;
     if (!isAdmin && !isSales && !isGraphicsProduction) { router.push('/home'); return; }
@@ -233,6 +265,7 @@ export default function EstimatesPage() {
       unit_price: part.sales_price || 0,
       labor_hours: part.labor_hours || 0,
       is_custom: false,
+      catalog: part.catalog,
     };
     setLines(prev => [...prev, line]);
     setPartSearch('');
@@ -488,6 +521,20 @@ export default function EstimatesPage() {
     setDeliveryPreferences(fullEst?.delivery_preferences || '');
     setInternalNotes(fullEst?.internal_notes || '');
 
+    // Look up catalog for any line items backed by a real part so the
+    // graphics-job prompt can detect graphics lines after a reload.
+    const partIds = (lineData || [])
+      .map((l: any) => l.part_id)
+      .filter((id: string | null): id is string => !!id);
+    let catalogByPart: Record<string, string> = {};
+    if (partIds.length > 0) {
+      const { data: parts } = await supabase
+        .from('netsuite_parts')
+        .select('id, catalog')
+        .in('id', partIds);
+      catalogByPart = Object.fromEntries((parts || []).map((p: any) => [p.id, p.catalog]));
+    }
+
     setLines((lineData || []).map((l: any) => ({
       key: genKey(),
       part_id: l.part_id,
@@ -499,11 +546,88 @@ export default function EstimatesPage() {
       labor_hours: l.labor_hours || 0,
       is_custom: l.is_custom || false,
       notes: l.notes || '',
+      catalog: l.part_id ? catalogByPart[l.part_id] : undefined,
     })));
 
     if (est.customer_id) loadCustomerDefaults(est.customer_id);
+    loadLinkedGraphicsJobs(est.id);
 
     setView('builder');
+  };
+
+  // ── Graphics job linkage ──
+  const loadLinkedGraphicsJobs = useCallback(async (estimateId: string) => {
+    const { data } = await supabase
+      .from('graphics_jobs')
+      .select('id, job_number, title, status, assigned_to')
+      .eq('estimate_id', estimateId)
+      .order('created_at', { ascending: true });
+    setLinkedGraphicsJobs((data as LinkedGraphicsJob[]) || []);
+  }, [supabase]);
+
+  const spawnGraphicsJob = async () => {
+    if (!editingId) return;
+    setGraphicsLinking(true);
+    try {
+      const res = await fetch('/api/graphics/from-estimate', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ estimateId: editingId, mode: 'create', userId: user?.id }),
+      });
+      const data = await res.json();
+      if (!res.ok || !data.success) {
+        alert('Failed to spawn graphics job: ' + (data.error || 'Unknown error'));
+        return;
+      }
+      await loadLinkedGraphicsJobs(editingId);
+      const open = window.confirm(`Graphics job ${data.jobNumber} created. Open it now?`);
+      if (open) router.push(`/graphics?id=${data.graphicsJobId}`);
+    } catch {
+      alert('Network error — please try again');
+    }
+    setGraphicsLinking(false);
+  };
+
+  const searchGraphicsJobs = useCallback(async (q: string) => {
+    if (q.length < 2) { setGraphicsPickerResults([]); return; }
+    const { data } = await supabase
+      .from('graphics_jobs')
+      .select('id, job_number, title, status, assigned_to, estimate_id')
+      .is('estimate_id', null)
+      .not('status', 'in', '("installed","cancelled")')
+      .or(`job_number.ilike.%${q}%,title.ilike.%${q}%,customer.ilike.%${q}%`)
+      .order('created_at', { ascending: false })
+      .limit(10);
+    setGraphicsPickerResults((data as LinkedGraphicsJob[]) || []);
+  }, [supabase]);
+
+  useEffect(() => {
+    const t = setTimeout(() => searchGraphicsJobs(graphicsPickerSearch), 300);
+    return () => clearTimeout(t);
+  }, [graphicsPickerSearch, searchGraphicsJobs]);
+
+  const linkGraphicsJob = async (jobId: string) => {
+    if (!editingId) return;
+    setGraphicsLinking(true);
+    try {
+      const res = await fetch('/api/graphics/from-estimate', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ estimateId: editingId, mode: 'link', existingJobId: jobId, userId: user?.id }),
+      });
+      const data = await res.json();
+      if (!res.ok || !data.success) {
+        alert('Failed to link: ' + (data.error || 'Unknown error'));
+        return;
+      }
+      await loadLinkedGraphicsJobs(editingId);
+      setShowGraphicsPicker(false);
+      setGraphicsPickerSearch('');
+      setGraphicsPickerResults([]);
+    } catch {
+      alert('Network error — please try again');
+    }
+    setGraphicsLinking(false);
   };
 
   const resetBuilder = () => {
@@ -528,6 +652,10 @@ export default function EstimatesPage() {
     setDeliveryPreferences('');
     setInternalNotes('');
     setCustomerDefaults(null);
+    setLinkedGraphicsJobs([]);
+    setShowGraphicsPicker(false);
+    setGraphicsPickerSearch('');
+    setGraphicsPickerResults([]);
   };
 
   // Prefill install_instructions from the customer's delivery_instructions
@@ -1052,6 +1180,137 @@ export default function EstimatesPage() {
           </div>
         )}
       </div>
+
+      {/* ── GRAPHICS JOBS PANEL ──
+          Visible once the estimate is saved AND either has a graphics-catalog
+          line or already has linked graphics jobs. Drives the "spawn or link
+          a graphics job for production" prompt for combined upfit+graphics
+          deals — see migrations/084-graphics-upfit-project-link.sql for the
+          downstream upfit_project linkage. */}
+      {editingId && (lines.some(l => l.catalog === 'graphics') || linkedGraphicsJobs.length > 0) && (
+        <div style={{
+          background: 'var(--subtle-bg)', border: '1px solid var(--border)', borderRadius: '10px',
+          padding: '12px', marginBottom: '12px',
+        }}>
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '8px' }}>
+            <div style={labelStyle}>Graphics Jobs</div>
+            <div style={{ display: 'flex', gap: '6px' }}>
+              <button
+                onClick={spawnGraphicsJob}
+                disabled={graphicsLinking}
+                style={{
+                  padding: '4px 10px', borderRadius: '6px', fontSize: '11px', fontWeight: 700,
+                  background: 'rgba(167,139,250,0.12)', border: '1px solid rgba(167,139,250,0.3)',
+                  color: '#a78bfa', cursor: graphicsLinking ? 'wait' : 'pointer',
+                }}
+              >
+                {graphicsLinking ? '…' : '+ Spawn graphics job'}
+              </button>
+              <button
+                onClick={() => setShowGraphicsPicker(s => !s)}
+                disabled={graphicsLinking}
+                style={{
+                  padding: '4px 10px', borderRadius: '6px', fontSize: '11px', fontWeight: 700,
+                  background: 'var(--card)', border: '1px solid var(--border)',
+                  color: 'var(--text-body)', cursor: 'pointer',
+                }}
+              >
+                Link existing
+              </button>
+            </div>
+          </div>
+
+          {/* Empty-state prompt when graphics line is present but nothing is linked */}
+          {linkedGraphicsJobs.length === 0 && (
+            <div style={{ fontSize: '11px', color: 'var(--text-muted)', marginBottom: showGraphicsPicker ? '8px' : '0' }}>
+              This estimate has graphics work. Spawn a new graphics job for production
+              (auto-assigns to the graphics team) or link to one Brian has already started.
+            </div>
+          )}
+
+          {/* Linked job list */}
+          {linkedGraphicsJobs.length > 0 && (
+            <div style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
+              {linkedGraphicsJobs.map(j => (
+                <div
+                  key={j.id}
+                  style={{
+                    display: 'flex', alignItems: 'center', justifyContent: 'space-between',
+                    padding: '6px 8px', borderRadius: '6px', background: 'var(--card)',
+                    border: '1px solid var(--border)', fontSize: '12px',
+                  }}
+                >
+                  <div style={{ display: 'flex', alignItems: 'center', gap: '8px', minWidth: 0 }}>
+                    <span style={{ fontWeight: 700, fontSize: '11px' }}>{j.job_number || j.id.slice(0, 8)}</span>
+                    <span style={{
+                      fontSize: '9px', fontWeight: 700, padding: '2px 6px', borderRadius: '4px',
+                      background: GRAPHICS_STATUS_COLORS[j.status] || '#94a3b8', color: '#fff',
+                      textTransform: 'uppercase',
+                    }}>{j.status.replace(/_/g, ' ')}</span>
+                    <span style={{ color: 'var(--text-muted)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{j.title}</span>
+                  </div>
+                  <button
+                    onClick={() => router.push(`/graphics?id=${j.id}`)}
+                    style={{
+                      padding: '2px 8px', borderRadius: '4px', fontSize: '10px', fontWeight: 700,
+                      background: 'transparent', border: '1px solid var(--border)',
+                      color: 'var(--text-body)', cursor: 'pointer', flexShrink: 0,
+                    }}
+                  >Open</button>
+                </div>
+              ))}
+            </div>
+          )}
+
+          {/* Inline picker for "Link existing" */}
+          {showGraphicsPicker && (
+            <div style={{ position: 'relative', marginTop: '8px' }}>
+              <input
+                placeholder="Search graphics jobs (job #, title, customer)…"
+                value={graphicsPickerSearch}
+                onChange={e => setGraphicsPickerSearch(e.target.value)}
+                style={{ ...inputStyle, background: 'var(--card)' }}
+                autoFocus
+              />
+              {graphicsPickerResults.length > 0 && (
+                <div style={{
+                  position: 'absolute', top: '100%', left: 0, right: 0, zIndex: 50,
+                  background: 'var(--card)', border: '1px solid var(--border)', borderRadius: '8px',
+                  maxHeight: '250px', overflowY: 'auto', marginTop: '2px',
+                }}>
+                  {graphicsPickerResults.map(j => (
+                    <button
+                      key={j.id}
+                      onClick={() => linkGraphicsJob(j.id)}
+                      disabled={graphicsLinking}
+                      style={{
+                        width: '100%', textAlign: 'left', padding: '8px 10px', border: 'none',
+                        background: 'transparent', color: 'var(--text-body)', fontSize: '12px',
+                        cursor: graphicsLinking ? 'wait' : 'pointer', borderBottom: '1px solid var(--border)',
+                      }}
+                    >
+                      <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                        <span style={{ fontWeight: 700, fontSize: '11px' }}>{j.job_number || j.id.slice(0, 8)}</span>
+                        <span style={{
+                          fontSize: '9px', fontWeight: 700, padding: '2px 6px', borderRadius: '4px',
+                          background: GRAPHICS_STATUS_COLORS[j.status] || '#94a3b8', color: '#fff',
+                          textTransform: 'uppercase',
+                        }}>{j.status.replace(/_/g, ' ')}</span>
+                        <span style={{ color: 'var(--text-muted)' }}>{j.title}</span>
+                      </div>
+                    </button>
+                  ))}
+                </div>
+              )}
+              {graphicsPickerSearch.length >= 2 && graphicsPickerResults.length === 0 && (
+                <div style={{ fontSize: '10px', color: 'var(--text-muted)', marginTop: '4px' }}>
+                  No unlinked graphics jobs match. Try "Spawn" to create a new one.
+                </div>
+              )}
+            </div>
+          )}
+        </div>
+      )}
 
       {/* ── LABOR & TAX SECTION ── */}
       <div style={{
