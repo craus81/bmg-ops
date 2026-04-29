@@ -21,11 +21,19 @@ async function loadJobByToken(token: string) {
     .maybeSingle();
   if (error || !job) return { job: null };
 
-  const { data: files } = await supabase
+  // If the sender chose a specific proof file at send-time, the customer
+  // sees only that one. Older jobs sent before the picker landed have no
+  // approval_proof_file_id and fall back to the full file list.
+  let filesQuery = supabase
     .from('graphics_job_files')
     .select('id, file_name, file_type, storage_path, uploaded_at')
-    .eq('job_id', job.id)
-    .order('uploaded_at', { ascending: false });
+    .eq('job_id', job.id);
+  if (job.approval_proof_file_id) {
+    filesQuery = filesQuery.eq('id', job.approval_proof_file_id);
+  } else {
+    filesQuery = filesQuery.order('uploaded_at', { ascending: false });
+  }
+  const { data: files } = await filesQuery;
   return { job, files: files || [] };
 }
 

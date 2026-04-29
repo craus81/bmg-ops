@@ -15,8 +15,10 @@ const supabase = createClient(
 /**
  * POST /api/graphics-jobs/[id]/send-for-approval
  * Mints a 30-day token + dispatches proof approval link via email + SMS.
- * Body: { email?, phone?, expiryDays? } overrides; otherwise resolves via
- * the customer's primary external_contact / synced customer row.
+ * Body: { proofFileId, email?, phone?, expiryDays? }. proofFileId selects
+ * which graphics_job_files row the customer sees on the public approval
+ * page. Email/phone overrides; otherwise resolves via the customer's
+ * primary external_contact / synced customer row.
  */
 export async function POST(req: NextRequest, { params }: { params: { id: string } }) {
   const auth = await requireAuth(req);
@@ -24,6 +26,7 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
 
   const body = await req.json().catch(() => ({}));
   const expiryDays = typeof body.expiryDays === 'number' && body.expiryDays > 0 ? body.expiryDays : 30;
+  const proofFileId: string | null = typeof body.proofFileId === 'string' ? body.proofFileId : null;
 
   const { data: job, error } = await supabase
     .from('graphics_jobs')
@@ -32,6 +35,21 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
     .single();
   if (error || !job) return NextResponse.json({ error: 'Job not found' }, { status: 404 });
   if (job.customer_approved) return NextResponse.json({ error: 'Already approved' }, { status: 409 });
+
+  // Validate proofFileId belongs to the job (if provided). If omitted, the
+  // approval page falls back to showing every attached file — kept for
+  // backward compat with existing callers.
+  if (proofFileId) {
+    const { data: file } = await supabase
+      .from('graphics_job_files')
+      .select('id')
+      .eq('id', proofFileId)
+      .eq('job_id', job.id)
+      .maybeSingle();
+    if (!file) {
+      return NextResponse.json({ error: 'Selected proof file does not belong to this job.' }, { status: 400 });
+    }
+  }
 
   let email: string | null = body.email || null;
   let phone: string | null = body.phone || null;
@@ -68,6 +86,7 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
     .update({
       approval_token: token,
       approval_token_expires_at: expiresAt,
+      approval_proof_file_id: proofFileId,
       sent_for_approval_at: new Date().toISOString(),
       sent_for_approval_by: auth.user.id,
       updated_at: new Date().toISOString(),

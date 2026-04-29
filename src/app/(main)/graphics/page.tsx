@@ -430,13 +430,37 @@ export default function GraphicsPage() {
 
   // Send proof to customer for approval (magic link)
   const [sendingApprovalId, setSendingApprovalId] = useState<string | null>(null);
-  const sendForApproval = async (jobId: string) => {
+  // Per-job picker state — clicking "Send proof" opens a small inline file
+  // picker inside the Customer Approval block. The actual API call doesn't
+  // fire until the user picks a file and confirms.
+  const [approvalPickerJobId, setApprovalPickerJobId] = useState<string | null>(null);
+  const [approvalPickerFileId, setApprovalPickerFileId] = useState<string | null>(null);
+
+  const openApprovalPicker = (jobId: string) => {
     if (sendingApprovalId) return;
+    // Pre-fill with the most recently uploaded file if any (it's the
+    // common case: artist uploads the proof, then sends).
+    const files = jobFiles[jobId] || [];
+    setApprovalPickerJobId(jobId);
+    setApprovalPickerFileId(files[0]?.id || null);
+  };
+
+  const closeApprovalPicker = () => {
+    setApprovalPickerJobId(null);
+    setApprovalPickerFileId(null);
+  };
+
+  const confirmSendForApproval = async (jobId: string) => {
+    if (sendingApprovalId) return;
+    if (!approvalPickerFileId) {
+      alert('Pick a proof file to send.');
+      return;
+    }
     setSendingApprovalId(jobId);
     const res = await fetch(`/api/graphics-jobs/${jobId}/send-for-approval`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({}),
+      body: JSON.stringify({ proofFileId: approvalPickerFileId }),
     });
     const data = await res.json();
     setSendingApprovalId(null);
@@ -444,6 +468,8 @@ export default function GraphicsPage() {
       alert('Send failed: ' + (data.error || 'Unknown error'));
       return;
     }
+    closeApprovalPicker();
+    await loadJobs();
     const emailInfo = data.dispatch?.email
       ? (data.dispatch.email.ok ? `Email sent to ${data.dispatch.email.target}` : `Email failed: ${data.dispatch.email.error || 'unknown'}`)
       : null;
@@ -1035,15 +1061,17 @@ export default function GraphicsPage() {
                               {(job as any).customer_rejection_reason && (
                                 <div style={{ fontSize: '11px', color: 'var(--text-body)', fontStyle: 'italic' }}>{(job as any).customer_rejection_reason}</div>
                               )}
-                              <button
-                                onClick={() => sendForApproval(job.id)}
-                                disabled={sendingApprovalId === job.id}
-                                style={{
-                                  marginTop: '6px', padding: '6px 12px', borderRadius: '6px', fontSize: '11px', fontWeight: 700,
-                                  background: 'rgba(59,130,246,0.15)', border: '1px solid rgba(59,130,246,0.3)',
-                                  color: '#60a5fa', cursor: 'pointer',
-                                }}
-                              >{sendingApprovalId === job.id ? 'Sending...' : 'Resend for approval'}</button>
+                              {approvalPickerJobId !== job.id && (
+                                <button
+                                  onClick={() => openApprovalPicker(job.id)}
+                                  disabled={sendingApprovalId === job.id}
+                                  style={{
+                                    marginTop: '6px', padding: '6px 12px', borderRadius: '6px', fontSize: '11px', fontWeight: 700,
+                                    background: 'rgba(59,130,246,0.15)', border: '1px solid rgba(59,130,246,0.3)',
+                                    color: '#60a5fa', cursor: 'pointer',
+                                  }}
+                                >Resend for approval</button>
+                              )}
                             </div>
                           ) : (
                             <div>
@@ -1052,15 +1080,83 @@ export default function GraphicsPage() {
                                   Sent for approval {new Date((job as any).sent_for_approval_at).toLocaleString()}
                                 </div>
                               )}
-                              <button
-                                onClick={() => sendForApproval(job.id)}
-                                disabled={sendingApprovalId === job.id}
-                                style={{
-                                  padding: '6px 12px', borderRadius: '6px', fontSize: '11px', fontWeight: 700,
-                                  background: 'rgba(59,130,246,0.15)', border: '1px solid rgba(59,130,246,0.3)',
-                                  color: '#60a5fa', cursor: 'pointer',
-                                }}
-                              >{sendingApprovalId === job.id ? 'Sending...' : ((job as any).sent_for_approval_at ? 'Resend approval link' : 'Send proof for customer approval')}</button>
+                              {approvalPickerJobId !== job.id && (
+                                <button
+                                  onClick={() => openApprovalPicker(job.id)}
+                                  disabled={sendingApprovalId === job.id}
+                                  style={{
+                                    padding: '6px 12px', borderRadius: '6px', fontSize: '11px', fontWeight: 700,
+                                    background: 'rgba(59,130,246,0.15)', border: '1px solid rgba(59,130,246,0.3)',
+                                    color: '#60a5fa', cursor: 'pointer',
+                                  }}
+                                >{(job as any).sent_for_approval_at ? 'Resend approval link' : 'Send proof for customer approval'}</button>
+                              )}
+                            </div>
+                          )}
+
+                          {/* File picker — opens when user clicks Send / Resend. Shows the
+                              job's attached files with radio buttons; only the chosen file
+                              is sent to the customer. */}
+                          {approvalPickerJobId === job.id && (
+                            <div style={{
+                              marginTop: '8px', padding: '10px', borderRadius: '8px',
+                              background: 'var(--card)', border: '1px solid var(--border)',
+                            }}>
+                              <div style={{ fontSize: '11px', fontWeight: 700, color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.5px', marginBottom: '6px' }}>
+                                Pick the proof to send
+                              </div>
+                              {(jobFiles[job.id] || []).length === 0 ? (
+                                <div style={{ fontSize: '12px', color: 'var(--text-muted)', padding: '8px 0' }}>
+                                  No files attached to this job. Upload a proof first.
+                                </div>
+                              ) : (
+                                <div style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
+                                  {(jobFiles[job.id] || []).map(f => (
+                                    <label key={f.id} style={{
+                                      display: 'flex', alignItems: 'center', gap: '8px',
+                                      padding: '6px 8px', borderRadius: '6px',
+                                      background: approvalPickerFileId === f.id ? 'rgba(59,130,246,0.1)' : 'var(--subtle-bg)',
+                                      border: '1px solid ' + (approvalPickerFileId === f.id ? 'rgba(59,130,246,0.3)' : 'var(--border)'),
+                                      cursor: 'pointer',
+                                    }}>
+                                      <input
+                                        type="radio"
+                                        name={`approval-file-${job.id}`}
+                                        checked={approvalPickerFileId === f.id}
+                                        onChange={() => setApprovalPickerFileId(f.id)}
+                                      />
+                                      <span style={{ fontSize: '12px', color: 'var(--text-primary)', flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                                        {f.file_name}
+                                      </span>
+                                      {f.file_type && (
+                                        <span style={{ fontSize: '10px', color: 'var(--text-muted)' }}>{f.file_type.split('/')[1] || f.file_type}</span>
+                                      )}
+                                    </label>
+                                  ))}
+                                </div>
+                              )}
+                              <div style={{ display: 'flex', gap: '8px', marginTop: '8px' }}>
+                                <button
+                                  onClick={() => confirmSendForApproval(job.id)}
+                                  disabled={!approvalPickerFileId || sendingApprovalId === job.id}
+                                  style={{
+                                    flex: 1, padding: '8px 12px', borderRadius: '6px', fontSize: '12px', fontWeight: 700,
+                                    background: approvalPickerFileId ? '#22c55e' : 'var(--border)',
+                                    border: 'none', color: '#fff',
+                                    cursor: approvalPickerFileId && sendingApprovalId !== job.id ? 'pointer' : 'not-allowed',
+                                    opacity: approvalPickerFileId && sendingApprovalId !== job.id ? 1 : 0.5,
+                                  }}
+                                >{sendingApprovalId === job.id ? 'Sending…' : 'Send to customer'}</button>
+                                <button
+                                  onClick={closeApprovalPicker}
+                                  disabled={sendingApprovalId === job.id}
+                                  style={{
+                                    padding: '8px 12px', borderRadius: '6px', fontSize: '12px', fontWeight: 700,
+                                    background: 'transparent', border: '1px solid var(--border)',
+                                    color: 'var(--text-muted)', cursor: 'pointer',
+                                  }}
+                                >Cancel</button>
+                              </div>
                             </div>
                           )}
                         </div>
