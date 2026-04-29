@@ -487,6 +487,8 @@ export interface GraphicsJob {
   invoiced_at: string | null;
   invoiced_by: string | null;
   invoice_amount: number | null;
+  // Parent upfit project (null for standalone graphics jobs)
+  upfit_project_id: string | null;
 }
 
 export interface GraphicsStatusHistory {
