@@ -425,6 +425,25 @@ export default function KnowledgePage() {
     setTimeout(() => setBgStatus(prev => prev?.type === 'success' ? null : prev), 5000);
   };
 
+  const handleSyncHelp = async () => {
+    if (!confirm('Sync the help library from docs/help in the repo? This replaces every existing help-category doc.')) return;
+
+    setBgStatus({ message: 'Syncing help library from docs/help…', type: 'processing' });
+    try {
+      const res = await fetch('/api/admin/sync-help-docs', { method: 'POST' });
+      const data = await res.json();
+      if (!res.ok) {
+        setBgStatus({ message: `Sync failed: ${data.error || res.status}`, type: 'error' });
+        return;
+      }
+      setBgStatus({ message: `Synced ${data.inserted} help articles from the repo`, type: 'success' });
+      loadDocs();
+    } catch (err: any) {
+      setBgStatus({ message: `Sync error: ${err.message}`, type: 'error' });
+    }
+    setTimeout(() => setBgStatus(prev => prev?.type === 'success' ? null : prev), 5000);
+  };
+
   const handleReprocessAll = async () => {
     // Only re-process docs that have files (PDFs and images)
     const reprocessable = docs.filter(d => d.file_path && d.file_name && (
@@ -599,6 +618,20 @@ export default function KnowledgePage() {
           Re-process All Files with AI Vision
         </button>
       )}
+
+      {/* Sync help library from repo */}
+      <button
+        onClick={handleSyncHelp}
+        disabled={bgStatus?.type === 'processing'}
+        style={{
+          width: '100%', padding: '8px', borderRadius: '8px', marginBottom: '12px',
+          background: 'rgba(168,85,247,0.06)', border: '1px solid rgba(168,85,247,0.25)',
+          color: '#c084fc', fontSize: '11px', fontWeight: 700, cursor: 'pointer',
+          opacity: bgStatus?.type === 'processing' ? 0.5 : 1,
+        }}
+      >
+        Sync Help Library from Repo (docs/help)
+      </button>
 
       {/* Search + filter */}
       <div style={{ display: 'flex', gap: '8px', marginBottom: '12px' }}>

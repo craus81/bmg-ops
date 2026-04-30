@@ -5,6 +5,9 @@ const nextConfig = {
     serverActions: {
       bodySizeLimit: '100mb',
     },
+    outputFileTracingIncludes: {
+      '/api/admin/sync-help-docs': ['./docs/help/**/*'],
+    },
   },
 };
 
