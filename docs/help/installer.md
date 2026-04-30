@@ -1,209 +1,140 @@
-# Installer guide (Fleet GO)
+# Installer
 
-The **installer** role is mobile-first. The header shows **Fleet GO** +
-"Crew". Default features:
-home, scan, time, messages, CNI management.
+Each section is one task. Read the one you need.
 
-You're typically working from a phone or tablet on the shop floor. Most
-of the day flows through a small set of pages: **Ready for Install →
-Pick-list → Mark Complete**, plus the **Time** clock and CNI jobs queue
-for off-site work.
+---
 
-If your shop has assigned you the broader installer-admin role, you
-also see check-in and in-shop tracking — see `shop-and-field-tech.md`
-for those.
+## See vehicles ready for me to install
 
-## How do I see what vehicles are ready for me to install?
+1. Tap **CNI Jobs** (or **Ready for Install**) in the bottom nav.
+2. The list defaults to **Mine**. Tap **All** to see the whole queue.
+3. Tap a row to open its pick-list.
 
-1. Tap **CNI Jobs** (or **Ready for Install**) in the bottom nav, or go
-   to `/installer/ready-for-install`.
-2. The list shows vehicles whose graphics are ready for install,
-   filtered to **Mine** by default.
-3. Tap **All** to see the whole queue across the shop.
-4. Stale rows (> 7 days waiting) are highlighted so they don't fall
-   through the cracks.
+Vehicles waiting more than 7 days are highlighted.
 
-Tap a row to open its pick-list.
+---
 
-## How do I schedule an install?
+## Schedule an install
 
-From the ready-for-install queue you can schedule inline:
+1. Tap a row in the ready-for-install queue.
+2. Tap **Schedule**.
+3. Pick a date and time.
+4. Tap **Confirm**.
 
-1. Tap a row → **Schedule**.
-2. Pick a date / time slot.
-3. Confirm.
+The slot pushes to the shop's calendar and the job is assigned to you.
 
-This pushes the slot to your shop's Google Calendar (if your shop has
-that integration enabled) and assigns the job to you.
+---
 
-## How do I check in a vehicle? (if your role allows it)
+## Open a vehicle's pick-list
 
-If you have the `fleet_checkin` feature, you can do check-ins from the
-crew app. Otherwise this is the shop tech's job — see
-`shop-and-field-tech.md`.
+Three ways:
 
-1. Tap **Check In** in the bottom nav (or `/fleet`).
-2. Enter the VIN — full 17 chars or the last 8.
-3. If partial: unique → auto-completes. Multiple → picker appears.
-   None → enter the full VIN.
-4. Take check-in photos (exterior, dash, condition).
-5. Confirm customer + delivery instructions.
-6. Tap **Save Check-In**.
-7. To do another for the same customer, tap **Check in another for
-   customer** to keep shared context.
+- From the ready queue, tap a row.
+- From **Scan**, scan the VIN — if there's an open job, tap **Go to
+  Pick-List**.
+- Type the URL: `/vehicles/[VIN]/pick-list`.
 
-## How do I open a pick-list?
+---
 
-1. From the ready-for-install queue, tap a row.
-2. Or scan the VIN (`/scan`) — if there's an active job for that VIN,
-   you'll see a **Go to Pick-List** button on the result.
-3. Or visit `/vehicles/[vin]/pick-list` directly.
+## Check off a QC task
 
-The pick-list is the source of truth for everything you need on a
-single vehicle.
+1. Open the pick-list.
+2. Scroll to **QC Checklist**.
+3. Tap the checkbox next to a task.
 
-## What's on the pick-list?
+It saves automatically. Required tasks have a red asterisk and must
+be checked before you can mark complete.
 
-Top to bottom:
-- **Install context** — blue panel with site info, contact, and any
-  special instructions. Click-to-call works on the contact phone.
-- **Matched graphics job** — links to `/graphics/[id]` and shows the
-  customer-approved proof + every design file inline.
-- **SO memo** — the install instructions copied over from the NetSuite
-  Sales Order.
-- **Photo timeline** — check-in photos, graphics proofs, design files,
-  and any completion photos so far. Filter chips group by category.
-- **QC checklist** — every required and optional task. Tap to toggle.
-  Required items hard-block completion until done.
-- **Completion photo capture** — required upload before mark complete.
-- **Completion notes** — free-form notes for the office.
-- **Mark Complete** button at the bottom.
-- **Message Customer** button (sends to a vehicle-scoped thread).
+---
 
-## How do I check off a QC checklist task?
+## Take a completion photo
 
-1. Tap a task row in the **QC Checklist** section.
-2. The checkbox toggles immediately.
-3. Required items are marked with a red asterisk.
-
-Tasks save server-side with a debounce (no save button). If you see a
-red error toast, your changes didn't go through — usually a 400 means
-your network dropped; pull-to-refresh and try again.
-
-## How do I take a completion photo?
-
-1. Scroll to the **Completion Photos** section on the pick-list.
+1. On the pick-list, scroll to **Completion Photos**.
 2. Tap **Add Photo**.
-3. Camera opens (or photo library, depending on your device).
-4. Snap or pick a photo.
-5. (Optional) Add a caption.
-6. Save.
+3. Snap a photo (or pick one from your library).
+4. (Optional) Type a caption.
+5. Tap **Save**.
 
-You need at least one completion photo before **Mark Complete** is
-allowed. Photos go to Cloudflare R2 storage via the app's R2 helper.
+You need at least one before you can mark complete.
 
-## How do I add notes about the completion?
+---
 
-1. **Completion Notes** field above the **Mark Complete** button.
-2. Type your note (anything from "left turn-signal LED replaced" to
-   "customer requested holding for invoice review").
-3. Tap **Save** (or just leave the field — it auto-saves on blur).
+## Add completion notes
 
-Notes are visible to admins on `/tracking` and to anyone with access
-to that vehicle.
+1. On the pick-list, find the **Completion Notes** field.
+2. Type your note.
 
-## How do I mark a vehicle complete?
+It auto-saves when you tap out of the field.
 
-1. Verify all required QC items are checked.
-2. Verify at least one completion photo is uploaded.
-3. Verify the linked graphics job is in a status that allows install
-   completion (`installed` or admin override).
-4. Tap **Mark Complete**.
-5. Confirm in the modal.
+---
 
-If anything's missing the API returns 422 with a `missing` array. The
-modal shows which item is blocking — fix it and try again.
+## Mark a vehicle complete
 
-On success:
-- The vehicle flips to `complete` status.
-- Shop team gets in-app + email notification.
-- Customer gets email (and SMS when `SMS_PROVIDER_ENABLED=true`).
-- The completion ceremony is recorded with timestamps + actor.
+1. Make sure all required QC tasks are checked.
+2. Make sure at least one completion photo is uploaded.
+3. Tap **Mark Complete** at the bottom of the pick-list.
+4. Confirm.
 
-## What if I can't mark complete because of something out of my control?
+If something's missing, the app tells you what. Fix and try again.
 
-E.g. customer asked you to leave a checklist item undone, or the
-graphics aren't quite right but the customer insists.
+If you're blocked but the customer truly waived a step, an admin can
+**Force Complete** for you.
 
-Ask an admin. Admins have a **Force Complete (Admin)** button on the
-pick-list that skips the checks but records who forced it and why.
-Don't try to work around the checks — they exist so we can defend the
-work later.
+---
 
-## How do I message the customer about a vehicle I'm working on?
+## Message the customer about a vehicle
 
-1. Pick-list → **💬 Message Customer**.
-2. The thread opens in the inbox scoped to that vehicle's check-in.
-3. Type and send.
+1. On the pick-list, tap **💬 Message Customer**.
+2. The thread opens.
+3. Type and tap **Send**.
 
-Office staff can see and reply from `/admin/inbox`. Useful for
-photo updates, ETA confirmations, or asking about discrepancies.
+---
 
-## How do I clock in / out and take breaks?
+## Clock in / out
 
-1. Tap **Time** in the bottom nav (or `/time`).
-2. Tap **Clock In** at the start of your day.
-3. Tap **Start Break** when you take a break, **End Break** to resume.
+1. Tap **Time** in the bottom nav.
+2. Tap **Clock In** at start of day.
+3. Tap **Start Break** / **End Break** as needed.
 4. Tap **Clock Out** at end of day.
 
-The time clock widget tracks your weekly hours and OT. You can
-backdate or edit a missed punch from the entries table — check with
-your shop admin first if your shop requires manager approval for
-edits.
+---
 
-## How do I work CNI jobs?
+## Scan a VIN
 
-CNI ("Customer-Not-Included") jobs are upfits where a customer ships
-the vehicle to BMG, billed at the end.
+1. Tap **Scan** in the bottom nav.
+2. Tap **Scan VIN**.
+3. Point the camera at the VIN barcode.
+4. Tap **Confirm**.
 
-1. Tap **CNI Jobs** in the bottom nav (or `/installer`).
-2. Pick a job from the list (assigned to you, or **All**).
-3. The job page shows: assigned vehicles, parts list, customer notes,
-   files, and a chat/thread with office staff.
-4. Update status as you progress (received → in_progress → complete).
-5. Take photos throughout — they go to the unified photo timeline.
+If decoding fails, tap **Enter Manually** and type the VIN.
 
-If you see a job assigned to "Available" rather than to you, you can
-claim it from `/installer/available`.
+---
 
-## How do I see my profile / preferences?
+## Scan a part number arriving at the shop
 
-1. Tap **Installer → Profile** in the bottom nav (or `/installer/profile`).
-2. Edit name, phone, certifications, equipment list.
-3. Save.
+1. **Scan** → **Scan Part**.
+2. Point at the SKU barcode.
+3. The part is matched to an open PO and the expected quantity is
+   decremented.
 
-This profile is what office staff see when assigning jobs to you.
+If it isn't recognized, tell ops to add it to the catalog.
 
-## How do I scan a part number that arrived?
+---
 
-1. Tap **Scan** in the bottom nav (or `/scan`).
-2. Tap **Scan Part** to open the camera.
-3. Point at the SKU barcode on the part / box.
-4. The scan logs against the matching PO and decrements expected
-   quantity.
+## Work CNI jobs
 
-If the part isn't recognized, tap **Add to Catalog** to create the
-catalog entry — that requires `parts_catalog` access, which not all
-installers have.
+CNI jobs are upfits where a customer ships a vehicle to BMG and is
+billed at the end.
 
-## How do I report a problem with a vehicle / job?
+1. Tap **CNI Jobs** in the bottom nav.
+2. Pick a job from your list, or tap **Available** to claim one.
+3. Update status as you progress: **Received → In Progress → Complete**.
+4. Take photos along the way.
 
-The simplest path is to use **Message Customer** for customer-visible
-issues, or `/admin/inbox` to ping office staff directly. For
-infrastructure problems (the app is broken / the camera won't open),
-tap **AI** to ask the FleetSuite AI for a quick fix or escalate to
-your admin.
+---
 
-The pick-list also has an **Issues** photo category — tag photos that
-document a problem there so they show up under the **Issues** chip on
-the timeline.
+## Edit my profile
+
+1. Tap **Installer → Profile**.
+2. Edit name, phone, certifications, equipment.
+3. Tap **Save**.

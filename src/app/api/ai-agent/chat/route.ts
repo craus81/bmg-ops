@@ -454,7 +454,7 @@ async function executeQuery(q: QuerySpec): Promise<any> {
       id: d.id,
       title: d.title,
       category: d.category,
-      content: d.content?.length > 4000 ? d.content.substring(0, 4000) + '\n... [truncated — document continues]' : d.content,
+      content: d.content?.length > 16000 ? d.content.substring(0, 16000) + '\n... [truncated — document continues]' : d.content,
       tags: d.tags,
       source_file: d.file_name || null,
       file_type: d.file_type,

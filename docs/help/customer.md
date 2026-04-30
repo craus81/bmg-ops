@@ -1,148 +1,105 @@
-# Customer guide
+# Customer
 
-The **customer** role is for fleet customers who log in to see their
-own jobs and approve estimates / proofs. The header brands as
-**Fleet GO** and the customer dashboard is the only page you see.
+Each section is one task.
 
-Default features (`ROLE_DEFAULT_FEATURES.customer`): home only.
+---
 
-Most customer interactions don't require login at all — magic-link
-approvals work without an account. This guide covers both flows.
+## Approve an estimate (no login needed)
 
-## How do I see all my active jobs?
+1. Open the email from BMG and tap the link.
+2. Review the estimate on the public page that opens.
+3. Check **I authorize this work**.
+4. Tap **Accept & Authorize Work**.
 
-If you have a customer account:
+That's it. BMG starts production.
 
-1. Sign in with your work email and the magic link.
-2. The dashboard at `/customer/dashboard` shows every active job for
-   your company:
-   - Vehicles currently in the shop (with current status).
-   - Graphics jobs in production or awaiting approval.
-   - Recent invoices.
+---
 
-If you don't have a customer account, ping your BMG sales rep — they
-can create one for your team.
+## Approve a graphics proof (no login needed)
 
-## How do I approve an estimate? (no login needed)
+1. Open the email and tap the link.
+2. Review the proof file inline.
+3. Check **I approve this proof**.
+4. Tap **Approve Proof**.
 
-When BMG sends an estimate for approval, you'll get an email (and SMS,
-if your phone is on file and SMS is enabled) with a magic link.
+---
 
-1. Click the magic link in the email.
-2. The estimate opens in your browser. No login required.
-3. Review the line items, total, and install instructions.
-4. Check the **I authorize this work** checkbox.
-5. Click **Accept & Authorize Work**.
+## Request changes instead of approving
 
-That's it. The link captures your IP, browser, and how long you spent
-on the page for the audit trail. An immutable HTML snapshot of the
-estimate is stored as a signed PDF-like record. BMG gets notified
-immediately and starts production.
+On either approval page:
 
-If something needs to change, click **Request Changes** instead and
-write what you'd like adjusted. BMG will revise and resend.
+1. Tap **Request Changes** (estimate) or **Request Revision** (proof).
+2. Type what you'd like adjusted.
+3. Tap **Submit**.
 
-## How do I approve a graphics proof? (no login needed)
+BMG revises and sends a fresh link.
 
-When the proof is ready, you get an email with a magic link.
+---
 
-1. Click the link.
-2. The proof opens with the file embedded inline (or a download button
-   for PDFs).
-3. Review carefully — colors, logo placement, text spelling, vehicle
-   coverage.
-4. Check the **I approve this proof** checkbox.
-5. Click **Approve Proof**.
+## My link expired
 
-If something's wrong, click **Request Revision** and write what's off.
-BMG will revise and send a new proof.
+Reply to the email or call BMG. They'll resend.
 
-Once approved, the proof file is locked into BMG's records and
-production runs from that file.
+---
 
-## My approval link expired. What now?
+## My link won't load
 
-Magic links last 30 days. If yours has expired:
+Try these in order:
 
-1. Reply to the email it came from, or call BMG.
-2. They'll resend a fresh link.
-3. Click the new link.
+1. Use the most recent email from BMG (in case multiple were sent).
+2. Check spam.
+3. Open the link on a desktop browser instead of your phone.
+4. Reply to the email — BMG will resend.
 
-The old link no longer works once a new one is issued, but if it's
-still within 30 days you can also try the old link first.
+---
 
-## I clicked the link but it says "stale" or won't load.
+## See all my active jobs
 
-A few things to try:
+If you have a customer login:
 
-1. Make sure you're using the most recent email if BMG sent multiple
-   reminders.
-2. Check your spam folder for newer emails.
-3. Forward the link to your computer browser if the mobile email app
-   is mishandling it.
-4. If still stuck, reply to the email — BMG will resend.
+1. Sign in with the magic link sent to your email.
+2. The dashboard shows every active job, vehicle status, and recent
+   invoices.
 
-## Can I see all the proofs / estimates BMG has sent me?
+If you don't have a login, ask your BMG sales rep to create one.
 
-Currently, no — there's no portal that lists every approval link sent
-to you. You have to keep the emails.
+---
 
-If you want a single dashboard, BMG can create a customer account for
-you (above). That dashboard shows your active jobs but not the full
-history of approval links.
+## Message BMG about a job
 
-## How do I message BMG about a job?
+Two ways:
 
-Two options:
+- **Reply to any BMG email.** The reply lands in BMG's inbox tagged
+  to the right job.
+- **Text the BMG main number.** Same thing.
 
-1. **Reply to any BMG email**. The reply goes into BMG's unified inbox
-   tagged to the right job.
-2. **Text BMG's main number**. Same — your text goes into the inbox
-   and the right person gets paged.
-
-If your phone number is already in BMG's system, your text auto-routes
-to the right thread. If not, BMG creates an "unknown contact" thread
-and matches you up later.
+---
 
 ## What does each job status mean?
 
 For graphics jobs:
-- **new** — Job created, no proof yet.
-- **proof_pending** — Proof sent to you for approval.
-- **approved** — You approved; BMG hasn't started production yet.
-- **revision** — You requested changes; BMG is revising.
-- **in_production** — BMG is cutting / printing your graphics.
-- **ready_to_pickup** — Done, waiting for you to pick up.
-- **shipped** — Shipped to your install location.
-- **installed** — Installed on the vehicle.
+- **New** — Job created, no proof yet.
+- **Proof Pending** — Proof sent, waiting for your approval.
+- **Approved** — You approved; production hasn't started yet.
+- **Revision** — You requested changes; BMG is revising.
+- **In Production** — BMG is cutting / printing.
+- **Ready to Pickup** — Done, waiting for you to pick up.
+- **Shipped** — On its way.
+- **Installed** — Applied to the vehicle.
 
 For vehicles in the shop:
-- **received** — Vehicle has arrived and been checked in.
-- **in_progress** — Work is happening.
-- **complete** — Done, ready for you.
+- **Received** — Vehicle has arrived.
+- **In Progress** — Work is happening.
+- **Complete** — Done, ready for you.
 
-## I want to add another vehicle to a quote. What do I do?
+---
 
-Reply to the original quote email or text BMG. They'll add it to the
-estimate and resend for approval.
+## I'm not the right person to approve
 
-## How do I download an approved proof or signed estimate?
+If the email got forwarded to you and you don't have authority:
 
-After you approve, BMG retains an immutable signed copy. To get it
-yourself, ask BMG — they'll send the PDF.
-
-The signed copies live in a private storage bucket and aren't directly
-downloadable from the customer dashboard. (This may change in a future
-release; for now it's a manual ask.)
-
-## What if I'm not sure I'm the right person to approve?
-
-If the email got forwarded to you and you don't have authority to
-authorize work / approve graphics:
-
-1. **Don't click Accept**. The audit trail records you as the
+1. Don't tap **Accept** — the audit trail records you as the
    approver.
-2. Forward to whoever does have authority. The link still works for
-   them.
-3. Optional: reply to BMG and let them know who you forwarded to so
-   they have a paper trail too.
+2. Forward the email to whoever does have authority. The link still
+   works for them.
+3. (Optional) Reply to BMG to let them know.

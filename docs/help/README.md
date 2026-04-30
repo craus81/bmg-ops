@@ -1,93 +1,59 @@
 # BMG Fleet Help Center
 
-This is the in-app help library for BMG Fleet (the FleetSuite admin app and the
-Fleet GO crew app — same codebase, different surface depending on your role).
-It's the source of truth for "how do I…" answers and is also seeded into the
-in-app knowledge base so the FleetSuite AI assistant and the search box at
-**Admin → Knowledge** can find these articles.
+Plain-English how-tos for everything in the app.
+
+---
 
 ## Start here
 
-If you're new to BMG Fleet, read **`full-job-walkthrough.md`** first.
-It's a plain-English story of one fictional fleet customer from the
-moment you meet them to the moment their trucks ship — covering the
-prospect, estimate, approval, check-in, upfit, graphics, completion,
-and invoice in one continuous narrative.
+**`full-job-walkthrough.md`** is the story of one job from prospect
+to ship. Read this first if you're new to the app.
 
-Once you have the big picture, the role docs below answer the
-"how do I do X?" questions in detail.
+---
 
-## Who should read what
+## By task
 
-- **Admins / owners** → start with `admin.md`, then any workflow doc that
-  touches your day.
-- **Sales reps** → `sales.md` covers estimates, prospects, customer
-  setup, and the sales-pipeline widgets.
-- **Graphics production** → `graphics-production.md` covers the graphics
-  queue, proof approvals, shipping, and invoicing graphics jobs.
-- **Installers / shop techs / field techs** → `installer.md` and
-  `shop-and-field-tech.md` cover check-in, the pick-list, the completion
-  ceremony, and the CNI program.
-- **Customers** → `customer.md` covers the customer dashboard and the
-  magic-link estimate / proof approval pages.
+- `getting-started.md` — sign in, install on phone, profile, sign out.
+- `sales.md` — prospects, estimates, sending for approval, Sales
+  Orders.
+- `graphics-production.md` — graphics queue, proofs, production,
+  shipping, invoicing.
+- `installer.md` — pick-list, QC checklist, completion photos, Mark
+  Complete, CNI jobs, time clock.
+- `shop-and-field-tech.md` — check-in, scan, in-shop, schedule, time
+  clock.
+- `customer.md` — approve estimates and proofs, customer dashboard,
+  message BMG.
+- `admin.md` — users, roles, install checklist templates, inbox,
+  reports, knowledge base.
+- `glossary.md` — common terms.
 
-If you don't know which role you are, look at the header in the app: it says
-**FleetSuite** + "Admin" if you're an admin, and **Fleet GO** + "Crew" if
-you're not.
+---
 
-## How the docs are organized
+## Workflows (cross-team)
 
-Each role doc is task-oriented. Headings are written in the form
-**"How do I …?"** so they map cleanly to questions the FleetSuite AI gets
-asked and to the Admin → Knowledge search.
+- `workflows/graphics-to-install-handoff.md`
+- `workflows/magic-link-approvals.md`
+- `workflows/estimate-to-invoice.md`
+- `workflows/install-completion.md`
 
-Cross-role workflows (graphics → install handoff, magic-link approvals,
-estimate → invoice, install completion) live in `workflows/` because they
-touch multiple roles in sequence.
+---
 
-The `glossary.md` file defines terms used across the docs (VIN, PO, SO,
-proof, upfit, CNI, etc.).
+## Where these docs live
 
-## Where this content lives
+- **Source files** — `docs/help/` in the GitHub repo. Edit here.
+- **In-app** — synced into **Admin → Knowledge** (filter to category
+  **help**).
+- **AI assistant** — answers questions using these articles. Tap the
+  floating mascot button on any page.
 
-- **Markdown source** — `docs/help/` in the `craus81/bmg-ops` repo. Edit
-  here.
-- **In-app knowledge base** — `knowledge_docs` table in Supabase, category
-  `help`. Synced from the markdown files via
-  `scripts/sync-help-docs.ts`. Run that script after editing.
-- **Admin → Knowledge UI** — the `help` category is filterable from the
-  search box; help articles are read-only there. Edit the markdown
-  source instead.
-- **FleetSuite AI** — the AI assistant searches `knowledge_docs` via
-  `/api/ai-agent/chat`. Help articles show up automatically once synced.
+---
 
-## Editing rules of thumb
+## How to update
 
-- One H1 per file (the title); use H2 for "How do I…" tasks; H3 for steps
-  within a task.
-- Reference real route paths so people can copy-paste them
-  (e.g. `/admin/install-checklists`).
-- Reference real button labels in **bold** so search keyword matches work
-  (e.g. **Send for Approval**).
-- When a task has prerequisites or required permissions, call them out in
-  a short list at the top of the section.
-- Don't duplicate procedure across role docs — link to a workflow file
-  in `workflows/` instead.
+1. Edit the markdown file in the repo.
+2. Push to main. Vercel auto-deploys.
+3. Go to **Admin → Knowledge**.
+4. Tap **Sync Help Library from Repo (docs/help)**.
 
-## Re-seeding the knowledge base
-
-After editing any markdown file:
-
-```
-node scripts/sync-help-docs.mjs
-```
-
-That script truncates the `help` category in `knowledge_docs` and re-inserts
-one row per markdown file. Title is the H1, content is the full markdown
-source, tags include `help`, the file basename, and any role keywords from
-the path. It needs `NEXT_PUBLIC_SUPABASE_URL` and
-`SUPABASE_SERVICE_ROLE_KEY` in the environment (auto-loaded from
-`.env.local`).
-
-Use `node scripts/sync-help-docs.mjs --dry-run` to preview parsed titles
-and tags without touching the database.
+The AI and the in-app search pick up your changes within seconds.

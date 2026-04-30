@@ -724,14 +724,14 @@ export default function KnowledgePage() {
                   <div style={{
                     padding: '10px', borderRadius: '8px', background: 'var(--input-bg)',
                     fontSize: '12px', color: 'var(--text-body)', lineHeight: 1.6,
-                    maxHeight: '200px', overflowY: 'auto', whiteSpace: 'pre-wrap',
+                    maxHeight: '400px', overflowY: 'auto', whiteSpace: 'pre-wrap',
                   }}>
                     {hasFile && (
                       <div style={{ fontSize: '9px', color: 'var(--text-label)', marginBottom: '6px', fontWeight: 700, textTransform: 'uppercase' }}>
                         Extracted Text Preview
                       </div>
                     )}
-                    {doc.content.length > 2000 ? doc.content.substring(0, 2000) + '...' : doc.content}
+                    {doc.content}
                   </div>
 
                   {doc.tags && doc.tags.length > 0 && (

@@ -1,170 +1,70 @@
-# Glossary
+# Common terms
 
-Terms used across the BMG Fleet app. Listed alphabetically.
+Words you'll see in BMG Fleet, in plain English.
 
-## A
+---
 
-**Admin** — Top-level role. Sees the full FleetSuite app and every feature.
-Can override permissions per user, approve new accounts, and run all
-admin-only tools.
+**Catalog** — The library of upfit parts and graphics SKUs you can
+add to estimates and POs.
 
-**Approval token** — Single-use URL token that lets a customer accept or
-reject an estimate or graphics proof from email or SMS without logging
-in. 30-day expiry. See `workflows/magic-link-approvals.md`.
+**Check-in** — Recording that a vehicle has arrived at the shop. Done
+at the **Check In** tab.
 
-## C
+**CNI job** — A job where a customer ships their vehicle to BMG to
+get worked on, billed at the end. Has its own queue at **CNI Jobs**.
 
-**Catalog** — The library of upfit parts and graphics SKUs. Lives at
-**Admin → Parts Catalog** for upfit parts and **Admin → Catalog** for
-graphics. Used as the picker when building estimates and POs.
+**Completion ceremony** — The process at the end of an install:
+checklist done, photos taken, notes written, customer notified, done.
 
-**Check-in** — Recording that a vehicle has arrived at the shop and
-capturing arrival photos, current condition, and the customer's
-delivery instructions. Done at `/fleet`.
+**CRM** — Where prospects live before they're real customers. Tap
+**CRM** in the bottom nav.
 
-**CNI** — "Customer-Not-Included" job. Jobs where a customer ships a
-vehicle to BMG to be upfit and graphic'd, billed back at the end. CNI
-jobs have their own admin surface at **Admin → CNI Management** and a
-mobile installer surface at **Installer → CNI Jobs**.
+**Estimate** — Your quote for a job. Built at **Estimates**, sent for
+customer approval, then converted to a Sales Order.
 
-**Completion ceremony** — The structured flow at the end of an install:
-QC checklist done, completion photo captured, completion notes saved,
-customer notified. Run from the **Mark Complete** button on the
-pick-list or from `/tracking` via **Run Completion Process**.
+**FleetSuite** — The admin-facing brand of the app.
 
-**Customer** — Either a NetSuite customer record (ERP) or an internal
-customer profile. Used to scope estimates, POs, jobs, threads, and
-install context.
+**Fleet GO** — The crew-facing brand of the app. Same app, different
+view.
 
-## E
+**Graphics job** — A vinyl, wrap, or decal job. Has stages from new →
+proof → in production → ready → shipped → installed.
 
-**Estimate** — A pre-sale quote of the upfit / graphic work, built at
-`/estimates`. Can be sent for magic-link customer approval. On accept,
-flips to **accepted** and is ready to convert to a NetSuite Sales Order.
+**Inbox** — The unified queue of customer messages (SMS, email, in-app
+threads). Tap **Admin → Inbox**.
 
-## F
+**Install context** — The notes for the shop floor about a job:
+delivery instructions, site contact, anything special. Pre-fills from
+the customer's defaults.
 
-**FleetSuite** — The admin-facing brand of the app (header label "Admin").
+**Magic link** — A single-use link sent by email or SMS. Lets a
+customer approve work without logging in.
 
-**Fleet GO** — The crew-facing brand of the app (header label "Crew"). Same
-codebase — what shows up in the navigation depends on your role.
+**Pick-list** — The mobile installer page for one vehicle. Shows
+proofs, install context, the QC checklist, photo timeline, and the
+**Mark Complete** button.
 
-**FS-CUSTOM** — Permanent NetSuite item used as a placeholder when an
-estimate has a custom line that doesn't map to a real NetSuite item.
-Required for `/estimates` → SO push to succeed.
+**PO** — Purchase Order. A vendor-side order BMG places for parts.
 
-## G
+**Proof** — A graphics design file the customer needs to approve
+before production.
 
-**Graphics job** — A queue item at `/graphics` representing a fleet
-vehicle that needs vinyl / wraps / decals applied. Has stages: new →
-proof_pending → approved → in_production → ready_to_pickup → shipped →
-installed.
+**Prospect** — A pre-customer sales lead. Lives in **CRM**.
 
-**Graphics production** — Role for the graphics team. Sees the queue,
-manages proofs, runs production, marks jobs as shipped.
+**QC checklist** — The required tasks for an install. The installer
+checks them off on the pick-list.
 
-## I
+**Sales Order (SO)** — NetSuite's record of work that's been
+authorized. Created when an accepted estimate is converted.
 
-**Install context** — The 3-layer set of operational notes for an
-upfit / install: customer-default settings, estimate-level overrides,
-and per-vehicle notes. Surfaced on the pick-list and on `/tracking`.
+**Tracking / In-Shop** — The page that shows every vehicle currently
+at the shop. Tap **In-Shop** in the bottom nav.
 
-**Installer** — Role for the upfit shop floor. Mobile-first surface;
-works the pick-list, completion ceremony, time clock, and CNI jobs.
+**Upfit** — Vehicle modification work (lifts, racks, partitions,
+shelving, lighting). The non-graphics half of BMG's business.
 
-## J
+**Upfit project** — A higher-level container for an upfit job that
+may have linked graphics jobs.
 
-**Job tasks** — Individual checklist items inside an install checklist
-(e.g. "Lift kit installed", "Headliner trim verified"). Tracked at the
-installer level via the pick-list.
-
-## M
-
-**Magic link** — A single-use URL sent by email / SMS that grants access
-without a password. Used for both login and customer-facing approvals.
-
-## P
-
-**Pick-list** — The mobile installer page for a single vehicle in the
-shop. Lives at `/vehicles/[vin]/pick-list`. Shows assigned graphics,
-proofs, design files, install context, the QC checklist, photo
-timeline, and a **Mark Complete** button.
-
-**PO** — Purchase Order. A vendor-side order BMG places (e.g. with a part
-supplier). Tracked at `/admin/pos`.
-
-**Proof** — A graphics design file that a customer needs to approve before
-production runs. Sent for approval via magic link.
-
-**Prospect** — A pre-customer sales lead in the CRM. Lives at
-`/admin/prospects`.
-
-## Q
-
-**QC checklist** — Per-vehicle checklist of required tasks before an
-install can be marked complete. Templates managed at
-`/admin/install-checklists`. Auto-instantiated when a vehicle moves
-from `received` to `in_progress`.
-
-## R
-
-**Ready for install** — Status for a vehicle that has at least one
-graphics job marked `ready` and is awaiting an installer to schedule.
-Surfaced at `/installer/ready-for-install`.
-
-**Ready to pickup** — Graphics job status meaning the work is done and
-the customer has been notified to come pick up. Auto-fires the customer
-notification.
-
-## S
-
-**Sales** — Role for the sales / estimating team. Builds estimates,
-manages prospects, owns customer-default install context.
-
-**Sales Order (SO)** — NetSuite-side commitment to deliver work, created
-when an estimate is converted. Carries the install context and notes
-into NetSuite.
-
-**Scan** — VIN scan + log entry. Done at `/scan`. Powers the Fleet
-check-in lookup and the part-shipment receiving flow.
-
-**Service role key** — Supabase admin-level API key used by server-side
-routes (the AI agent, sync scripts) to bypass RLS. Never exposed to the
-browser.
-
-**Shop tech** — Role for warehouse / receiving staff. Does check-ins,
-scans, time tracking, and basic in-shop tracking. Doesn't touch
-estimates, customer comms, or the catalog.
-
-**Signed document** — Immutable HTML snapshot stored in the private
-`signed-documents` bucket whenever a customer accepts an estimate or
-proof via magic link. Includes IP, user agent, time on page, and
-sha256 hash. Audit-grade.
-
-## T
-
-**Thread** — A customer comms thread at `/admin/inbox`. Polymorphic —
-scoped to a fleet check-in, PO, graphics job, estimate, or just the
-customer.
-
-**Tracking** — The in-shop status board at `/tracking`. Shows every
-vehicle currently at the shop, what stage it's in, what's outstanding,
-and lets admins run the completion process.
-
-## U
-
-**Upfit** — Vehicle modification work (lifts, ladder racks, partitions,
-shelving, lighting, etc.). The non-graphics half of BMG's business.
-
-**Upfit project** — A higher-level container for an upfit job that may
-have child graphics jobs linked to it. Lives at `/upfit`.
-
-## V
-
-**View as** — Admin tool for previewing the app the way another role
-sees it. Available from the avatar menu.
-
-**VIN** — Vehicle Identification Number, the 17-character ID for a
-specific vehicle. Used as the primary key across check-ins, photos,
-graphics jobs, and pick-lists. The scanner accepts the last 8+ chars
-for quick lookup.
+**VIN** — The 17-character ID for a specific vehicle. The scanner
+accepts the last 8+ characters for quick lookup.
