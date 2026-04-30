@@ -20,7 +20,7 @@ interface KnowledgeDoc {
   updated_at: string;
 }
 
-const CATEGORIES = ['SOP', 'spec', 'pricing', 'process', 'policy', 'other'];
+const CATEGORIES = ['help', 'SOP', 'spec', 'pricing', 'process', 'policy', 'other'];
 
 const FILE_ICONS: Record<string, string> = {
   'application/pdf': 'PDF',
