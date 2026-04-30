@@ -6,6 +6,17 @@ It's the source of truth for "how do I…" answers and is also seeded into the
 in-app knowledge base so the FleetSuite AI assistant and the search box at
 **Admin → Knowledge** can find these articles.
 
+## Start here
+
+If you're new to BMG Fleet, read **`full-job-walkthrough.md`** first.
+It's a plain-English story of one fictional fleet customer from the
+moment you meet them to the moment their trucks ship — covering the
+prospect, estimate, approval, check-in, upfit, graphics, completion,
+and invoice in one continuous narrative.
+
+Once you have the big picture, the role docs below answer the
+"how do I do X?" questions in detail.
+
 ## Who should read what
 
 - **Admins / owners** → start with `admin.md`, then any workflow doc that
