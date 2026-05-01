@@ -120,7 +120,9 @@ async function updateNetSuiteEstimate(config: ReturnType<typeof getNetSuiteConfi
   lineItems: { itemId: string; quantity: number; rate: number; description?: string }[];
 }) {
   const { oauth, token, baseUrl } = await getOAuthHelpers(config);
-  const url = `${baseUrl}/${nsEstimateId}`;
+  // ?replace=item tells NetSuite to replace the entire item sublist instead of
+  // merging — without it, PATCH appends new lines and leaves old ones in place.
+  const url = `${baseUrl}/${nsEstimateId}?replace=item`;
 
   const authData = oauth.authorize({ url, method: 'PATCH' }, token);
   const authHeader = oauth.toHeader(authData).Authorization;
@@ -134,7 +136,7 @@ async function updateNetSuiteEstimate(config: ReturnType<typeof getNetSuiteConfi
 
   const body: any = {
     entity: { id: payload.customerId },
-    item: { items, replaceAll: true },
+    item: { items },
   };
 
   if (payload.memo) {
