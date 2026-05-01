@@ -1380,7 +1380,6 @@ export default function GraphicsPage() {
                             ref={fileInputRef}
                             type="file"
                             multiple
-                            accept="image/*,.pdf,.eps,.ai,.svg,.psd,.png,.jpg,.jpeg,.tif,.tiff,.zip"
                             onChange={async (e) => {
                               const files = Array.from(e.target.files || []) as File[];
                               if (files.length > 0) await uploadFilesToJob(job.id, files);
@@ -1993,7 +1992,6 @@ export default function GraphicsPage() {
                     ref={createFileInputRef}
                     type="file"
                     multiple
-                    accept="image/*,.pdf,.eps,.ai,.svg,.psd,.png,.jpg,.jpeg,.tif,.tiff,.zip"
                     onChange={(e) => {
                       const files = Array.from(e.target.files || []) as File[];
                       if (files.length > 0) setCreateFiles(prev => [...prev, ...files]);
