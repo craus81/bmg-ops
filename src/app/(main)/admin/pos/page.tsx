@@ -18,6 +18,28 @@ interface ImportLine extends ParsedPOLine {
   new_graphic_package: string;
 }
 
+function formatShipTo(shipTo: PurchaseOrder['ship_to']): string | null {
+  if (!shipTo) return null;
+  const lines = [
+    shipTo.name,
+    shipTo.address,
+    [shipTo.city, shipTo.state].filter(Boolean).join(', '),
+    shipTo.zip,
+  ].map(s => (s || '').trim()).filter(Boolean);
+  return lines.length > 0 ? lines.join('\n') : null;
+}
+
+function buildJobContent(lines: { part_number: string; description: string | null; quantity: number }[]): string | null {
+  if (!lines.length) return null;
+  return lines
+    .map(li => {
+      const desc = (li.description || '').trim();
+      const head = desc ? `${li.part_number} — ${desc}` : li.part_number;
+      return `${head} (Qty: ${li.quantity})`;
+    })
+    .join('\n');
+}
+
 export default function POsPage() {
   const router = useRouter();
   const searchParams = useSearchParams();
@@ -244,7 +266,13 @@ export default function POsPage() {
     // Create PO
     const { data: po, error } = await supabase
       .from('purchase_orders')
-      .insert({ po_number: parsedPO.po_number, customer: parsedPO.customer || 'Masterack', ordered_date: parsedPO.ordered_date || null, created_by: user.id })
+      .insert({
+        po_number: parsedPO.po_number,
+        customer: parsedPO.customer || 'Masterack',
+        ordered_date: parsedPO.ordered_date || null,
+        requested_delivery_date: parsedPO.requested_delivery_date || null,
+        created_by: user.id,
+      })
       .select()
       .single();
 
@@ -331,6 +359,7 @@ export default function POsPage() {
     await supabase.from('purchase_orders').update({
       customer: parsedPO.customer || existingPo.customer,
       ordered_date: parsedPO.ordered_date || existingPo.ordered_date || null,
+      requested_delivery_date: parsedPO.requested_delivery_date || existingPo.requested_delivery_date || null,
     }).eq('id', existingPo.id);
 
     // Auto-create catalog entries for unmatched parts
@@ -918,6 +947,10 @@ export default function POsPage() {
           status: 'received',
           job_category: 'production',
           priority: 'normal',
+          po_number: po.po_number || null,
+          ship_to: formatShipTo(po.ship_to),
+          content: buildJobContent([li]),
+          due_date: po.requested_delivery_date || null,
           created_by: user?.id || null,
         })
         .select('id')
@@ -962,6 +995,10 @@ export default function POsPage() {
           status: 'received',
           job_category: 'production',
           priority: 'normal',
+          po_number: po.po_number || null,
+          ship_to: formatShipTo(po.ship_to),
+          content: buildJobContent(po.line_items),
+          due_date: po.requested_delivery_date || null,
           created_by: user?.id || null,
         })
         .select('id')

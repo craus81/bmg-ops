@@ -20,6 +20,7 @@ export interface ParsedPO {
   po_number: string;
   customer: string;
   ordered_date: string;
+  requested_delivery_date: string;
   lines: ParsedPOLine[];
   debug?: string; // raw text dump for troubleshooting
 }
@@ -99,6 +100,22 @@ export async function parseMasterackPO(file: File, debug = false): Promise<Parse
   for (const line of fullLines) {
     const m = line.text.match(/Ordered\s*Date:\s*(\d{2}\/\d{2}\/\d{2,4})/i);
     if (m) { ordered_date = m[1]; break; }
+  }
+
+  // Extract header-level "REQUESTED DELIVERY DATE" (Masterack PO label).
+  // The date is sometimes on the same line, sometimes on the next line.
+  let requested_delivery_date = '';
+  for (let i = 0; i < fullLines.length; i++) {
+    const text = fullLines[i].text;
+    if (!/REQUESTED\s*DELIVERY\s*DATE/i.test(text)) continue;
+    const inline = text.match(/REQUESTED\s*DELIVERY\s*DATE[^\d]*(\d{2}\/\d{2}\/\d{2,4})/i);
+    if (inline) { requested_delivery_date = inline[1]; break; }
+    // Look at the next 2 lines for a bare date
+    for (let j = 1; j <= 2 && i + j < fullLines.length; j++) {
+      const m = fullLines[i + j].text.match(/(\d{2}\/\d{2}\/\d{2,4})/);
+      if (m) { requested_delivery_date = m[1]; break; }
+    }
+    if (requested_delivery_date) break;
   }
 
   // Find data rows: look for lines starting with "X.000" (line number pattern)
@@ -223,10 +240,27 @@ export async function parseMasterackPO(file: File, debug = false): Promise<Parse
     }
   }
 
+  // Fall back to the earliest per-line delivery date if no header field was found
+  if (!requested_delivery_date) {
+    const sortable = lines
+      .map(l => l.delivery_date)
+      .filter(Boolean)
+      .map(d => {
+        const m = d.match(/^(\d{2})\/(\d{2})\/(\d{2,4})$/);
+        if (!m) return null;
+        const yr = m[3].length === 2 ? `20${m[3]}` : m[3];
+        return { sortKey: `${yr}-${m[1]}-${m[2]}`, original: d };
+      })
+      .filter((x): x is { sortKey: string; original: string } => x !== null)
+      .sort((a, b) => a.sortKey.localeCompare(b.sortKey));
+    if (sortable.length > 0) requested_delivery_date = sortable[0].original;
+  }
+
   return {
     po_number,
     customer: 'Masterack',
     ordered_date,
+    requested_delivery_date,
     lines,
     debug: debug ? debugText : undefined,
   };

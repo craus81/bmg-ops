@@ -91,6 +91,30 @@ async function flagGraphicParts(
   return { flaggedCount: graphicLines.length, flaggedJobs: createdJobs || [] };
 }
 
+// Convert a date to ISO YYYY-MM-DD for Postgres DATE columns. Accepts MM/DD/YY,
+// MM/DD/YYYY, or already-ISO strings; returns null if we can't parse it.
+function normalizeDate(d: string | null | undefined): string | null {
+  if (!d) return null;
+  const s = String(d).trim();
+  if (/^\d{4}-\d{2}-\d{2}/.test(s)) return s.slice(0, 10);
+  const m = s.match(/^(\d{1,2})\/(\d{1,2})\/(\d{2}|\d{4})$/);
+  if (!m) return null;
+  const mo = m[1].padStart(2, '0');
+  const day = m[2].padStart(2, '0');
+  const yr = m[3].length === 2 ? `20${m[3]}` : m[3];
+  return `${yr}-${mo}-${day}`;
+}
+
+// Pick the earliest delivery date across line items as a fallback when the PO
+// has no header-level requested delivery date.
+function earliestLineDeliveryDate(lines: any[]): string | null {
+  const dates = (lines || [])
+    .map(l => normalizeDate(l?.delivery_date))
+    .filter((d): d is string => !!d)
+    .sort();
+  return dates[0] || null;
+}
+
 async function callAnthropicWithRetry(body: any, apiKey: string, maxRetries = 3): Promise<Response> {
   for (let attempt = 0; attempt < maxRetries; attempt++) {
     const res = await fetch('https://api.anthropic.com/v1/messages', {
@@ -127,6 +151,7 @@ CRITICAL: You MUST extract every single line item from the table. Each line item
 LOOK FOR THESE SPECIFIC ELEMENTS:
 - PURCHASE ORDER NUMBER: Usually at top right, labeled "PURCHASE ORDER NUMBER" followed by a number like 35045953
 - ORDERED DATE: Format like MM/DD/YY or MM/DD/YYYY
+- REQUESTED DELIVERY DATE: A header-level date the buyer needs the order delivered by. On Masterack POs it is labeled exactly "REQUESTED DELIVERY DATE". If that header field is not present, use the earliest delivery date across the line items.
 - SHIP TO / DELIVER TO: The address block showing the DESTINATION where items should be delivered. IMPORTANT: POs have multiple address blocks — there is usually a "Supplier" or "Vendor" address (this is BMG Fleet Installation's address — IGNORE IT) and a "Ship To" or "Deliver To" address (this is the actual destination — USE THIS ONE). Never use BMG Fleet Installation's own address as the ship_to. The ship_to should be the customer's facility or job site, like a Masterack plant, dealership, or fleet location.
 - LINE ITEMS TABLE: Each row starts with a line number (1.000, 2.000, etc.) followed by columns of data
 
@@ -142,6 +167,7 @@ Return ONLY valid JSON, no markdown, no backticks, no other text:
   "po_number": "35045953",
   "customer": "Masterack",
   "ordered_date": "03/18/2026",
+  "requested_delivery_date": "03/25/2026",
   "ship_to": {
     "name": "Masterack - Kansas City",
     "address": "1234 Industrial Blvd",
@@ -241,9 +267,15 @@ export async function POST(req: NextRequest) {
         await supabase.from('po_line_items').delete().eq('po_id', existingPO.id);
 
         const customer = extracted.customer || existingPO.customer || 'Unknown';
+        const requestedDelivery =
+          normalizeDate(extracted.requested_delivery_date) ||
+          earliestLineDeliveryDate(extractedLines) ||
+          existingPO.requested_delivery_date ||
+          null;
         await supabase.from('purchase_orders').update({
           customer,
-          ordered_date: extracted.ordered_date || existingPO.ordered_date || null,
+          ordered_date: normalizeDate(extracted.ordered_date) || existingPO.ordered_date || null,
+          requested_delivery_date: requestedDelivery,
           notes: extracted.notes ? String(extracted.notes) : existingPO.notes,
           ship_to: extracted.ship_to || existingPO.ship_to || null,
         }).eq('id', existingPO.id);
@@ -299,7 +331,10 @@ export async function POST(req: NextRequest) {
       const { data: adminUser } = await supabase.from('profiles').select('id').eq('role', 'admin').limit(1).single();
       const insertPayload: any = {
         po_number: String(poNumber), customer,
-        ordered_date: extracted.ordered_date || null,
+        ordered_date: normalizeDate(extracted.ordered_date),
+        requested_delivery_date:
+          normalizeDate(extracted.requested_delivery_date) ||
+          earliestLineDeliveryDate(extractedLines),
         notes: extracted.notes ? String(extracted.notes) : null,
         ship_to: extracted.ship_to || null,
       };
@@ -636,9 +671,15 @@ export async function POST(req: NextRequest) {
 
       // Update PO header
       const customer = extracted.customer || existingPO.customer || 'Unknown';
+      const requestedDelivery =
+        normalizeDate(extracted.requested_delivery_date) ||
+        earliestLineDeliveryDate(extractedLines) ||
+        existingPO.requested_delivery_date ||
+        null;
       const { error: updateErr } = await supabase.from('purchase_orders').update({
         customer,
-        ordered_date: extracted.ordered_date || existingPO.ordered_date || null,
+        ordered_date: normalizeDate(extracted.ordered_date) || existingPO.ordered_date || null,
+        requested_delivery_date: requestedDelivery,
         notes: extracted.notes ? String(extracted.notes) : existingPO.notes,
         ship_to: extracted.ship_to || existingPO.ship_to || null,
       }).eq('id', existingPO.id);
@@ -731,8 +772,12 @@ export async function POST(req: NextRequest) {
       const insertPayload: any = {
         po_number: String(poNumber),
         customer,
-        ordered_date: extracted.ordered_date || null,
+        ordered_date: normalizeDate(extracted.ordered_date),
+        requested_delivery_date:
+          normalizeDate(extracted.requested_delivery_date) ||
+          earliestLineDeliveryDate(extractedLines),
         notes: extracted.notes ? String(extracted.notes) : null,
+        ship_to: extracted.ship_to || null,
       };
       if (adminUser?.id) {
         insertPayload.created_by = adminUser.id;
