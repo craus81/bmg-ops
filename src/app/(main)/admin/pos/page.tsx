@@ -40,6 +40,34 @@ function buildJobContent(lines: { part_number: string; description: string | nul
     .join('\n');
 }
 
+// Mirror a freshly-added catalog row into netsuite_parts so it shows up in
+// the parts catalog and the bulk VIN tools, which both query netsuite_parts.
+// No-op if a row with that item_number already exists.
+async function ensureNetsuitePartMirror(
+  supabase: ReturnType<typeof createClient>,
+  params: { partNumber: string; description: string | null; price: number; billableCustomer: string | null },
+) {
+  const { partNumber, description, price, billableCustomer } = params;
+  if (!partNumber) return;
+  const { data: existing } = await supabase
+    .from('netsuite_parts')
+    .select('id')
+    .eq('item_number', partNumber)
+    .maybeSingle();
+  if (existing) return;
+  await supabase.from('netsuite_parts').insert({
+    netsuite_id: `bmg-${crypto.randomUUID()}`,
+    item_number: partNumber,
+    display_name: description,
+    description,
+    catalog: 'graphics',
+    sales_price: price,
+    billable_customer: billableCustomer,
+    is_active: true,
+  });
+}
+
+
 export default function POsPage() {
   const router = useRouter();
   const searchParams = useSearchParams();
@@ -304,6 +332,12 @@ export default function POsPage() {
           l.catalog_match = newCat as CatalogItem;
           // Update local catalog list
           setCatalog((prev) => [...prev, newCat as CatalogItem]);
+          await ensureNetsuitePartMirror(supabase, {
+            partNumber: l.part_number,
+            description: l.description || null,
+            price: l.final_price,
+            billableCustomer: l.new_end_customer || null,
+          });
         }
       }
     }
@@ -383,6 +417,12 @@ export default function POsPage() {
         if (newCat) {
           l.catalog_match = newCat as CatalogItem;
           setCatalog((prev) => [...prev, newCat as CatalogItem]);
+          await ensureNetsuitePartMirror(supabase, {
+            partNumber: l.part_number,
+            description: l.description || null,
+            price: l.final_price,
+            billableCustomer: l.new_end_customer || null,
+          });
         }
       }
     }
@@ -1045,6 +1085,12 @@ export default function POsPage() {
         setCatalogAddResults(prev => ({ ...prev, [part.part_number]: 'error' }));
       } else {
         setCatalogAddResults(prev => ({ ...prev, [part.part_number]: 'added' }));
+        await ensureNetsuitePartMirror(supabase, {
+          partNumber: part.part_number,
+          description: part.description || null,
+          price: part.unit_price,
+          billableCustomer: customer || null,
+        });
         // Refresh catalog list
         const { data: catData } = await supabase.from('catalog').select('*').order('part_number');
         setCatalog((catData as CatalogItem[]) || []);

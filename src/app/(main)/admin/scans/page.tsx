@@ -492,6 +492,7 @@ export default function AdminScansPage() {
   // Bulk edit — apply part/customer/location to all selected
   const [showBulkEdit, setShowBulkEdit] = useState(false);
   const [bulkEditPart, setBulkEditPart] = useState('');
+  const [bulkEditPartPicked, setBulkEditPartPicked] = useState<{ id: string; item_number: string; display_name: string | null; billable_customer: string | null } | null>(null);
   const [bulkEditCustomer, setBulkEditCustomer] = useState('');
   const [bulkEditLocation, setBulkEditLocation] = useState('');
   const [bulkEditPO, setBulkEditPO] = useState('');
@@ -501,8 +502,13 @@ export default function AdminScansPage() {
     if (ids.length === 0) return;
     const updates: any = {};
     if (bulkEditPart) {
-      const part = allParts.find(p => p.id === bulkEditPart);
-      if (part) { updates.part_number = part.item_number; updates.part_description = part.display_name; updates.billable_customer = part.billable_customer; }
+      if (bulkEditPartPicked) {
+        updates.part_number = bulkEditPartPicked.item_number;
+        updates.part_description = bulkEditPartPicked.display_name;
+        if (!bulkEditCustomer) updates.billable_customer = bulkEditPartPicked.billable_customer;
+      } else {
+        updates.part_number = bulkEditPart.trim();
+      }
     }
     if (bulkEditCustomer) updates.billable_customer = bulkEditCustomer;
     if (bulkEditLocation) {
@@ -546,6 +552,7 @@ export default function AdminScansPage() {
     }
     setShowBulkEdit(false);
     setBulkEditPart('');
+    setBulkEditPartPicked(null);
     setBulkEditCustomer('');
     setBulkEditLocation('');
     setBulkEditPO('');
@@ -933,16 +940,76 @@ export default function AdminScansPage() {
             return (<>
           <div style={{ fontSize: '12px', fontWeight: 700, color: 'var(--text-primary)', marginBottom: '10px' }}>Edit {selectedScans.size} Scan{selectedScans.size !== 1 ? 's' : ''}{selectedPart ? <span style={{ fontSize: '10px', color: 'var(--text-muted)', marginLeft: '6px' }}>({selectedPart})</span> : ''}</div>
           <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '8px', marginBottom: '8px' }}>
-            <div>
+            <div style={{ position: 'relative' }}>
               <div style={{ fontSize: '9px', fontWeight: 700, color: 'var(--text-muted)', textTransform: 'uppercase', marginBottom: '3px' }}>Part Number</div>
-              <select value={bulkEditPart} onChange={e => setBulkEditPart(e.target.value)} style={{ width: '100%', padding: '8px', borderRadius: '6px', border: `1px solid ${theme.border}`, background: 'var(--input-bg)', color: 'var(--text-primary)', fontSize: '11px' }}>
-                <option value="">— No change —</option>
-                {allParts.map(p => <option key={p.id} value={p.id}>{p.item_number}{p.billable_customer ? ` — ${p.billable_customer}` : ''}</option>)}
-              </select>
+              <input
+                value={bulkEditPart}
+                onChange={e => { setBulkEditPart(e.target.value); setBulkEditPartPicked(null); }}
+                placeholder="No change"
+                style={{ width: '100%', padding: '8px', borderRadius: '6px', border: `1px solid ${theme.border}`, background: 'var(--input-bg)', color: 'var(--text-primary)', fontSize: '11px' }}
+              />
+              {bulkEditPart.length >= 2 && !bulkEditPartPicked && (() => {
+                const q = bulkEditPart.toLowerCase();
+                const matches = allParts.filter(p =>
+                  p.item_number.toLowerCase().includes(q) ||
+                  p.display_name?.toLowerCase().includes(q) ||
+                  p.billable_customer?.toLowerCase().includes(q)
+                ).slice(0, 8);
+                if (matches.length === 0) return null;
+                return (
+                  <div style={{ position: 'absolute', top: '100%', left: 0, right: 0, zIndex: 50, background: 'var(--card)', border: `1px solid ${theme.border}`, borderRadius: '6px', boxShadow: '0 4px 12px rgba(0,0,0,0.2)', maxHeight: '200px', overflowY: 'auto', marginTop: '2px' }}>
+                    {matches.map(p => (
+                      <button
+                        key={p.id}
+                        onMouseDown={e => e.preventDefault()}
+                        onClick={() => {
+                          setBulkEditPart(p.item_number);
+                          setBulkEditPartPicked(p);
+                          if (p.billable_customer) setBulkEditCustomer(p.billable_customer);
+                        }}
+                        style={{ display: 'block', width: '100%', padding: '6px 8px', textAlign: 'left', border: 'none', borderBottom: `1px solid ${theme.border}`, background: 'transparent', cursor: 'pointer', fontSize: '11px', color: 'var(--text-primary)' }}
+                      >
+                        <span style={{ fontWeight: 700 }}>{p.item_number}</span>
+                        {p.billable_customer && <span style={{ color: '#a78bfa', marginLeft: '6px' }}>{p.billable_customer}</span>}
+                        {p.display_name && <div style={{ fontSize: '9px', color: 'var(--text-muted)' }}>{p.display_name}</div>}
+                      </button>
+                    ))}
+                  </div>
+                );
+              })()}
             </div>
-            <div>
+            <div style={{ position: 'relative' }}>
               <div style={{ fontSize: '9px', fontWeight: 700, color: 'var(--text-muted)', textTransform: 'uppercase', marginBottom: '3px' }}>Billable Customer</div>
-              <input value={bulkEditCustomer} onChange={e => setBulkEditCustomer(e.target.value)} placeholder="No change" style={{ width: '100%', padding: '8px', borderRadius: '6px', border: `1px solid ${theme.border}`, background: 'var(--input-bg)', color: 'var(--text-primary)', fontSize: '11px' }} />
+              <input
+                value={bulkEditCustomer}
+                onChange={e => setBulkEditCustomer(e.target.value)}
+                placeholder="No change"
+                style={{ width: '100%', padding: '8px', borderRadius: '6px', border: `1px solid ${theme.border}`, background: 'var(--input-bg)', color: 'var(--text-primary)', fontSize: '11px' }}
+              />
+              {bulkEditCustomer.length >= 1 && (() => {
+                const q = bulkEditCustomer.toLowerCase();
+                const set = new Set<string>();
+                for (const p of allParts) {
+                  const c = (p.billable_customer || '').trim();
+                  if (c && c.toLowerCase() !== q && c.toLowerCase().includes(q)) set.add(c);
+                }
+                const matches = [...set].sort().slice(0, 8);
+                if (matches.length === 0) return null;
+                return (
+                  <div style={{ position: 'absolute', top: '100%', left: 0, right: 0, zIndex: 50, background: 'var(--card)', border: `1px solid ${theme.border}`, borderRadius: '6px', boxShadow: '0 4px 12px rgba(0,0,0,0.2)', maxHeight: '200px', overflowY: 'auto', marginTop: '2px' }}>
+                    {matches.map(c => (
+                      <button
+                        key={c}
+                        onMouseDown={e => e.preventDefault()}
+                        onClick={() => setBulkEditCustomer(c)}
+                        style={{ display: 'block', width: '100%', padding: '6px 8px', textAlign: 'left', border: 'none', borderBottom: `1px solid ${theme.border}`, background: 'transparent', cursor: 'pointer', fontSize: '11px', color: 'var(--text-primary)' }}
+                      >
+                        {c}
+                      </button>
+                    ))}
+                  </div>
+                );
+              })()}
             </div>
             <div>
               <div style={{ fontSize: '9px', fontWeight: 700, color: 'var(--text-muted)', textTransform: 'uppercase', marginBottom: '3px' }}>Location</div>
@@ -1202,9 +1269,33 @@ export default function AdminScansPage() {
                 {allLocations.map(l => <option key={l.id} value={l.id}>{l.name}</option>)}
               </select>
             </div>
-            <div>
+            <div style={{ position: 'relative' }}>
               <div style={{ fontSize: '10px', fontWeight: 700, color: 'var(--text-muted)', textTransform: 'uppercase', marginBottom: '4px' }}>Customer</div>
               <input value={bulkCustomer} onChange={e => setBulkCustomer(e.target.value)} placeholder="Override part default" style={{ width: '100%', padding: '10px', borderRadius: '8px', border: `1px solid ${theme.border}`, background: 'var(--input-bg)', color: 'var(--text-primary)', fontSize: '13px' }} />
+              {bulkCustomer.length >= 1 && (() => {
+                const q = bulkCustomer.toLowerCase();
+                const set = new Set<string>();
+                for (const p of allParts) {
+                  const c = (p.billable_customer || '').trim();
+                  if (c && c.toLowerCase() !== q && c.toLowerCase().includes(q)) set.add(c);
+                }
+                const matches = [...set].sort().slice(0, 8);
+                if (matches.length === 0) return null;
+                return (
+                  <div style={{ position: 'absolute', top: '100%', left: 0, right: 0, zIndex: 50, background: 'var(--card)', border: `1px solid ${theme.border}`, borderRadius: '8px', boxShadow: '0 4px 12px rgba(0,0,0,0.2)', maxHeight: '200px', overflowY: 'auto', marginTop: '2px' }}>
+                    {matches.map(c => (
+                      <button
+                        key={c}
+                        onMouseDown={e => e.preventDefault()}
+                        onClick={() => setBulkCustomer(c)}
+                        style={{ display: 'block', width: '100%', padding: '8px 10px', textAlign: 'left', border: 'none', borderBottom: `1px solid ${theme.border}`, background: 'transparent', cursor: 'pointer', fontSize: '12px', color: 'var(--text-primary)' }}
+                      >
+                        {c}
+                      </button>
+                    ))}
+                  </div>
+                );
+              })()}
             </div>
           </div>
 
@@ -1504,13 +1595,77 @@ export default function AdminScansPage() {
                 <div style={{ fontSize: '9px', fontWeight: 700, color: 'var(--text-muted)', textTransform: 'uppercase', marginBottom: '2px' }}>Model</div>
                 <input value={editingScan.vehicle_model || ''} onChange={e => setEditingScan({ ...editingScan, vehicle_model: e.target.value })} style={{ width: '100%', padding: '8px', borderRadius: '6px', border: `1px solid ${theme.border}`, background: 'var(--input-bg)', color: 'var(--text-primary)', fontSize: '12px' }} />
               </div>
-              <div>
+              <div style={{ position: 'relative' }}>
                 <div style={{ fontSize: '9px', fontWeight: 700, color: 'var(--text-muted)', textTransform: 'uppercase', marginBottom: '2px' }}>Part Number</div>
-                <input value={editingScan.part_number || ''} onChange={e => setEditingScan({ ...editingScan, part_number: e.target.value })} style={{ width: '100%', padding: '8px', borderRadius: '6px', border: `1px solid ${theme.border}`, background: 'var(--input-bg)', color: 'var(--text-primary)', fontSize: '12px' }} />
+                <input
+                  value={editingScan.part_number || ''}
+                  onChange={e => setEditingScan({ ...editingScan, part_number: e.target.value })}
+                  style={{ width: '100%', padding: '8px', borderRadius: '6px', border: `1px solid ${theme.border}`, background: 'var(--input-bg)', color: 'var(--text-primary)', fontSize: '12px' }}
+                />
+                {(editingScan.part_number || '').length >= 2 && (() => {
+                  const q = (editingScan.part_number || '').toLowerCase();
+                  const matches = allParts.filter(p =>
+                    p.item_number.toLowerCase() !== q && (
+                      p.item_number.toLowerCase().includes(q) ||
+                      p.display_name?.toLowerCase().includes(q) ||
+                      p.billable_customer?.toLowerCase().includes(q)
+                    )
+                  ).slice(0, 8);
+                  if (matches.length === 0) return null;
+                  return (
+                    <div style={{ position: 'absolute', top: '100%', left: 0, right: 0, zIndex: 50, background: 'var(--card)', border: `1px solid ${theme.border}`, borderRadius: '6px', boxShadow: '0 4px 12px rgba(0,0,0,0.2)', maxHeight: '180px', overflowY: 'auto', marginTop: '2px' }}>
+                      {matches.map(p => (
+                        <button
+                          key={p.id}
+                          onMouseDown={e => e.preventDefault()}
+                          onClick={() => setEditingScan({
+                            ...editingScan,
+                            part_number: p.item_number,
+                            part_description: p.display_name,
+                            ...(editingScan.billable_customer ? {} : { billable_customer: p.billable_customer }),
+                          })}
+                          style={{ display: 'block', width: '100%', padding: '6px 8px', textAlign: 'left', border: 'none', borderBottom: `1px solid ${theme.border}`, background: 'transparent', cursor: 'pointer', fontSize: '11px', color: 'var(--text-primary)' }}
+                        >
+                          <span style={{ fontWeight: 700 }}>{p.item_number}</span>
+                          {p.billable_customer && <span style={{ color: '#a78bfa', marginLeft: '6px' }}>{p.billable_customer}</span>}
+                          {p.display_name && <div style={{ fontSize: '9px', color: 'var(--text-muted)' }}>{p.display_name}</div>}
+                        </button>
+                      ))}
+                    </div>
+                  );
+                })()}
               </div>
-              <div>
+              <div style={{ position: 'relative' }}>
                 <div style={{ fontSize: '9px', fontWeight: 700, color: 'var(--text-muted)', textTransform: 'uppercase', marginBottom: '2px' }}>Billable Customer</div>
-                <input value={editingScan.billable_customer || ''} onChange={e => setEditingScan({ ...editingScan, billable_customer: e.target.value })} style={{ width: '100%', padding: '8px', borderRadius: '6px', border: `1px solid ${theme.border}`, background: 'var(--input-bg)', color: 'var(--text-primary)', fontSize: '12px' }} />
+                <input
+                  value={editingScan.billable_customer || ''}
+                  onChange={e => setEditingScan({ ...editingScan, billable_customer: e.target.value })}
+                  style={{ width: '100%', padding: '8px', borderRadius: '6px', border: `1px solid ${theme.border}`, background: 'var(--input-bg)', color: 'var(--text-primary)', fontSize: '12px' }}
+                />
+                {(editingScan.billable_customer || '').length >= 1 && (() => {
+                  const q = (editingScan.billable_customer || '').toLowerCase();
+                  const set = new Set<string>();
+                  for (const p of allParts) {
+                    const c = (p.billable_customer || '').trim();
+                    if (c && c.toLowerCase() !== q && c.toLowerCase().includes(q)) set.add(c);
+                  }
+                  const matches = [...set].sort().slice(0, 8);
+                  if (matches.length === 0) return null;
+                  return (
+                    <div style={{ position: 'absolute', top: '100%', left: 0, right: 0, zIndex: 50, background: 'var(--card)', border: `1px solid ${theme.border}`, borderRadius: '6px', boxShadow: '0 4px 12px rgba(0,0,0,0.2)', maxHeight: '180px', overflowY: 'auto', marginTop: '2px' }}>
+                      {matches.map(c => (
+                        <button
+                          key={c}
+                          onMouseDown={e => e.preventDefault()}
+                          onClick={() => setEditingScan({ ...editingScan, billable_customer: c })}
+                          style={{ display: 'block', width: '100%', padding: '6px 8px', textAlign: 'left', border: 'none', borderBottom: `1px solid ${theme.border}`, background: 'transparent', cursor: 'pointer', fontSize: '11px', color: 'var(--text-primary)' }}
+                        >
+                          {c}
+                        </button>
+                      ))}
+                    </div>
+                  );
+                })()}
               </div>
               <div style={{ gridColumn: '1 / -1' }}>
                 <div style={{ fontSize: '9px', fontWeight: 700, color: 'var(--text-muted)', textTransform: 'uppercase', marginBottom: '2px' }}>Location</div>
