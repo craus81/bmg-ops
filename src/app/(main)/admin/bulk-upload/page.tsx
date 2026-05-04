@@ -35,9 +35,12 @@ interface ProofRow extends ZipFileEntry {
   customer: string;
   vehicleType: string;
   catalogId: string | null;
+  customerOverridden?: boolean;
 }
 
 type Tab = 'templates' | 'proofs';
+
+const STICKY_CUSTOMER_KEY = 'bulk_upload_sticky_customer';
 
 export default function BulkUploadPage() {
   const router = useRouter();
@@ -58,6 +61,7 @@ export default function BulkUploadPage() {
   // Proof state
   const [proofRows, setProofRows] = useState<ProofRow[]>([]);
   const [catalog, setCatalog] = useState<CatalogItem[]>([]);
+  const [stickyCustomer, setStickyCustomer] = useState('');
 
   // Upload state
   const [uploading, setUploading] = useState(false);
@@ -71,7 +75,29 @@ export default function BulkUploadPage() {
       setCatalog((data as CatalogItem[]) || []);
     };
     loadCatalog();
+    // Restore sticky customer from previous session
+    try {
+      const saved = localStorage.getItem(STICKY_CUSTOMER_KEY);
+      if (saved) setStickyCustomer(saved);
+    } catch {}
   }, [isAdmin]);
+
+  // Persist sticky customer
+  useEffect(() => {
+    try {
+      if (stickyCustomer) localStorage.setItem(STICKY_CUSTOMER_KEY, stickyCustomer);
+      else localStorage.removeItem(STICKY_CUSTOMER_KEY);
+    } catch {}
+  }, [stickyCustomer]);
+
+  // Unique customer list from catalog plus any customers detected from current proof rows (sorted)
+  const customerOptions = Array.from(
+    new Set([
+      ...catalog.map(c => c.end_customer).filter((v): v is string => !!v && v.trim().length > 0),
+      ...proofRows.map(r => r.customer).filter(v => !!v && v.trim().length > 0),
+      ...(stickyCustomer ? [stickyCustomer] : []),
+    ])
+  ).sort((a, b) => a.localeCompare(b));
 
   const handleZipSelect = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
@@ -110,13 +136,14 @@ export default function BulkUploadPage() {
       } else {
         // For proofs, try to auto-match to catalog items by customer
         setProofRows(data.files.map((f: ZipFileEntry) => {
-          const customer = f.suggested.customer || '';
+          const detected = f.suggested.customer || '';
+          const customer = detected || stickyCustomer;
           const vehicleType = f.suggested.vehicle_type || '';
           // Try to find a matching catalog item
-          const match = catalog.find(c =>
+          const match = customer ? catalog.find(c =>
             c.end_customer?.toLowerCase() === customer.toLowerCase() ||
             c.customer?.toLowerCase() === customer.toLowerCase()
-          );
+          ) : undefined;
           return {
             ...f,
             include: true,
@@ -208,6 +235,42 @@ export default function BulkUploadPage() {
 
   const updateProofRow = (index: number, field: keyof ProofRow, value: any) => {
     setProofRows(prev => prev.map((r, i) => i === index ? { ...r, [field]: value } : r));
+  };
+
+  // Change a row's customer and make it sticky for subsequent rows that haven't been overridden
+  const changeRowCustomer = (index: number, value: string) => {
+    setStickyCustomer(value);
+    setProofRows(prev => prev.map((r, i) => {
+      if (i === index) {
+        const match = value ? catalog.find(c =>
+          c.end_customer?.toLowerCase() === value.toLowerCase() ||
+          c.customer?.toLowerCase() === value.toLowerCase()
+        ) : undefined;
+        return { ...r, customer: value, customerOverridden: true, catalogId: match?.id || r.catalogId };
+      }
+      // Apply to later rows that haven't been individually overridden
+      if (i > index && !r.customerOverridden) {
+        const match = value ? catalog.find(c =>
+          c.end_customer?.toLowerCase() === value.toLowerCase() ||
+          c.customer?.toLowerCase() === value.toLowerCase()
+        ) : undefined;
+        return { ...r, customer: value, catalogId: match?.id || r.catalogId };
+      }
+      return r;
+    }));
+  };
+
+  // Apply sticky customer to all rows (header-level action)
+  const applyStickyCustomerToAll = (value: string) => {
+    setStickyCustomer(value);
+    setProofRows(prev => prev.map(r => {
+      if (r.customerOverridden) return r;
+      const match = value ? catalog.find(c =>
+        c.end_customer?.toLowerCase() === value.toLowerCase() ||
+        c.customer?.toLowerCase() === value.toLowerCase()
+      ) : undefined;
+      return { ...r, customer: value, catalogId: match?.id || r.catalogId };
+    }));
   };
 
   // Group template rows by make/model/year for nicer display
@@ -449,6 +512,28 @@ export default function BulkUploadPage() {
       {/* ═══════════ PROOF REVIEW ═══════════ */}
       {tab === 'proofs' && proofRows.length > 0 && !uploadResult && (
         <div>
+          {/* Sticky customer picker */}
+          <div style={{
+            padding: '10px 14px', borderRadius: '10px', marginBottom: '10px',
+            background: 'var(--card)', border: '1px solid var(--border)',
+            display: 'flex', alignItems: 'center', gap: '10px', flexWrap: 'wrap',
+          }}>
+            <div style={{ ...labelStyle, flex: '0 0 auto' }}>Customer</div>
+            <select
+              value={stickyCustomer}
+              onChange={e => applyStickyCustomerToAll(e.target.value)}
+              style={{ ...inputStyle, flex: 1, minWidth: '200px', fontSize: '12px' }}
+            >
+              <option value="">— None (use folder structure) —</option>
+              {customerOptions.map(c => <option key={c} value={c}>{c}</option>)}
+            </select>
+            {stickyCustomer && (
+              <div style={{ fontSize: '10px', color: 'var(--text-muted)', flex: '1 1 100%' }}>
+                Sticky — applied to all proofs that haven't been overridden individually.
+              </div>
+            )}
+          </div>
+
           {/* Summary bar */}
           <div style={{
             display: 'flex', justifyContent: 'space-between', alignItems: 'center',
@@ -498,21 +583,38 @@ export default function BulkUploadPage() {
                         </div>
                       </div>
                       {row.include && (
-                        <select
-                          value={row.catalogId || ''}
-                          onChange={e => updateProofRow(idx, 'catalogId', e.target.value || null)}
-                          style={{
-                            ...inputStyle, width: 'auto', minWidth: '180px',
-                            borderColor: row.catalogId ? 'var(--success-border)' : 'var(--warning-border)',
-                          }}
-                        >
-                          <option value="">— Select catalog item —</option>
-                          {catalog.map(c => (
-                            <option key={c.id} value={c.id}>
-                              {c.part_number} — {c.end_customer} ({c.vehicle_type})
-                            </option>
-                          ))}
-                        </select>
+                        <div style={{ display: 'flex', flexDirection: 'column', gap: '4px', minWidth: '200px' }}>
+                          <select
+                            value={row.customer}
+                            onChange={e => changeRowCustomer(idx, e.target.value)}
+                            style={{ ...inputStyle, fontSize: '11px' }}
+                            title="Customer (sticky — applies to later proofs until overridden)"
+                          >
+                            <option value="">— Customer —</option>
+                            {customerOptions.map(c => <option key={c} value={c}>{c}</option>)}
+                          </select>
+                          <select
+                            value={row.catalogId || ''}
+                            onChange={e => updateProofRow(idx, 'catalogId', e.target.value || null)}
+                            style={{
+                              ...inputStyle, fontSize: '11px',
+                              borderColor: row.catalogId ? 'var(--success-border)' : 'var(--warning-border)',
+                            }}
+                          >
+                            <option value="">— Select catalog item —</option>
+                            {(row.customer
+                              ? catalog.filter(c =>
+                                  c.end_customer?.toLowerCase() === row.customer.toLowerCase() ||
+                                  c.customer?.toLowerCase() === row.customer.toLowerCase()
+                                )
+                              : catalog
+                            ).map(c => (
+                              <option key={c.id} value={c.id}>
+                                {c.part_number} — {c.end_customer} ({c.vehicle_type})
+                              </option>
+                            ))}
+                          </select>
+                        </div>
                       )}
                     </div>
                   </div>
