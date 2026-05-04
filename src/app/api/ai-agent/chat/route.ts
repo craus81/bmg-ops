@@ -67,7 +67,7 @@ SUPABASE TABLES (BMG Fleet App)
    - content (unit-specific info like unit numbers, addresses)
    - notes (internal production notes)
    - vinyl_type, vinyl_color, laminate, print_method, cut_method, premask
-   - status: 'flagged'|'received'|'designing'|'revision'|'printing'|'outgassing'|'cutting'|'packing'|'ready'|'shipped'|'installed'|'cancelled'
+   - status: 'flagged'|'received'|'designing'|'revision'|'printing'|'outgassing'|'cutting'|'packing'|'ready'|'ready_to_pickup'|'shipped'|'picked_up'|'installed'|'cancelled'
    - tracking_number, carrier, ship_to
    - priority ('low'|'normal'|'high'|'rush'), due_date, scheduled_install_date
    - calendar_event_id, assigned_to (FK profiles), created_by (FK profiles)
@@ -209,7 +209,7 @@ Actions let you modify data in the app. Use them when the user asks you to DO so
 
 2. update_graphics_status — Change a graphics job's status
    params: { job_id, new_status, note? }
-   Valid statuses: flagged, received, designing, revision, printing, outgassing, cutting, packing, ready, shipped, installed, cancelled
+   Valid statuses: flagged, received, designing, revision, printing, outgassing, cutting, packing, ready, ready_to_pickup, shipped, picked_up, installed, cancelled
 
 3. send_message — Send a message to a user
    params: { to_user_id, body }

@@ -55,7 +55,7 @@ export default function MyJobsWidget() {
       (data || []).forEach(g => jobs.push({ ...g, type: 'graphics' }));
     }
 
-    const pending = jobs.filter(j => j.type === 'vehicle' ? j.review_status === 'pending' : !['shipped', 'installed', 'cancelled'].includes(j.status)).length;
+    const pending = jobs.filter(j => j.type === 'vehicle' ? j.review_status === 'pending' : !['shipped', 'picked_up', 'installed', 'cancelled'].includes(j.status)).length;
     const approved = jobs.filter(j => j.type === 'vehicle' && j.review_status === 'approved').length;
 
     setStats({ assigned: jobs.length, pending, approved });

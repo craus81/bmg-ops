@@ -52,6 +52,7 @@ const GRAPHICS_STATUS_COLORS: Record<string, string> = {
   ready: '#22c55e',
   ready_to_pickup: '#22c55e',
   shipped: '#22c55e',
+  picked_up: '#22c55e',
   installed: '#22c55e',
   cancelled: '#64748b',
 };

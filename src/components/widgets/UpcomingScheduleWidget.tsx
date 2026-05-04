@@ -43,7 +43,7 @@ export default function UpcomingScheduleWidget() {
 
     if (gfx) {
       for (const g of gfx) {
-        if (['installed', 'cancelled'].includes(g.status || '')) continue;
+        if (['installed', 'picked_up', 'cancelled'].includes(g.status || '')) continue;
         combined.push({
           id: g.id,
           date: g.scheduled_install_date,

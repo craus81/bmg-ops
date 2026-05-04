@@ -9,7 +9,7 @@ import type { GraphicsJobStatus } from '@/lib/types';
 import WidgetShell from './WidgetShell';
 
 const ACTIVE_STATUSES = ['received', 'designing', 'revision', 'printing', 'outgassing', 'cutting', 'packing', 'ready', 'shipped'];
-const DONE_STATUSES = ['installed'];
+const DONE_STATUSES = ['installed', 'picked_up'];
 
 export default function ActiveJobsWidget() {
   const router = useRouter();

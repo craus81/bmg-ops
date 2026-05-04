@@ -32,7 +32,7 @@ function formatCurrency(val: number) {
 function statusColor(status: string): string {
   const s = (status || '').toLowerCase();
   if (['open', 'draft', 'pending', 'flagged', 'received'].includes(s)) return '#fbbf24';
-  if (['complete', 'pushed', 'accepted', 'shipped', 'installed', 'ready'].includes(s)) return '#4ade80';
+  if (['complete', 'pushed', 'accepted', 'shipped', 'picked_up', 'installed', 'ready'].includes(s)) return '#4ade80';
   if (['cancelled', 'denied', 'rejected', 'expired'].includes(s)) return '#ef4444';
   if (['designing', 'printing', 'cutting', 'packing', 'outgassing'].includes(s)) return '#60a5fa';
   return 'var(--text-body)';
