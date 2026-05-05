@@ -138,6 +138,8 @@ export default function POsPage() {
   const poFileInputRef = useRef<HTMLInputElement>(null);
   const [uploadingPoId, setUploadingPoId] = useState<string | null>(null);
   const [uploadingPoPdf, setUploadingPoPdf] = useState(false);
+  // PO list sort direction (by PO number)
+  const [poSort, setPoSort] = useState<'asc' | 'desc'>('asc');
   const [parseError, setParseError] = useState('');
   const [importing, setImporting] = useState(false);
   const [pdfOverwriteExisting, setPdfOverwriteExisting] = useState<any>(null); // existing PO to overwrite
@@ -1207,7 +1209,10 @@ export default function POsPage() {
       if (po.line_items.some((li) => li.part_number.toLowerCase().includes(q) || li.description?.toLowerCase().includes(q))) return true;
       return false;
     })
-    .sort((a, b) => a.po_number.localeCompare(b.po_number, undefined, { numeric: true }));
+    .sort((a, b) => {
+      const cmp = a.po_number.localeCompare(b.po_number, undefined, { numeric: true });
+      return poSort === 'asc' ? cmp : -cmp;
+    });
 
   const closePO = async (poId: string) => {
     await supabase.from('purchase_orders').update({ status: 'closed' }).eq('id', poId);
@@ -1250,8 +1255,21 @@ export default function POsPage() {
       </div>
 
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '8px' }}>
-        <div style={{ fontSize: '11px', fontWeight: 700, color: 'var(--text-label)', textTransform: 'uppercase', letterSpacing: '0.5px' }}>
-          {poTab === 'closed' ? 'Closed' : ''} Purchase Orders ({filteredPos.length}{poSearch ? ` of ${pos.length}` : ''})
+        <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+          <div style={{ fontSize: '11px', fontWeight: 700, color: 'var(--text-label)', textTransform: 'uppercase', letterSpacing: '0.5px' }}>
+            {poTab === 'closed' ? 'Closed' : ''} Purchase Orders ({filteredPos.length}{poSearch ? ` of ${pos.length}` : ''})
+          </div>
+          <button
+            onClick={() => setPoSort(s => s === 'asc' ? 'desc' : 'asc')}
+            title={`Sort PO# ${poSort === 'asc' ? 'descending' : 'ascending'}`}
+            style={{
+              padding: '3px 8px', borderRadius: '6px', fontSize: '10px', fontWeight: 700,
+              background: 'var(--subtle-bg)', border: '1px solid var(--border)',
+              color: 'var(--text-body)', cursor: 'pointer',
+            }}
+          >
+            PO# {poSort === 'asc' ? '▲' : '▼'}
+          </button>
         </div>
         <div style={{ display: 'flex', gap: '6px' }}>
           {!editMode ? (
