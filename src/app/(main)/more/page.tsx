@@ -102,9 +102,6 @@ export default function MorePage() {
         {F('vendor_payments') && (
           <MenuBtn title="Vendor Payments" sub="Manage installer invoices & payments" onClick={() => router.push('/admin/cni')} />
         )}
-        {F('bulk_vin') && (
-          <MenuBtn title="Bulk VIN Upload" sub="Upload VINs in bulk via spreadsheet" onClick={() => router.push('/admin/scans')} />
-        )}
         {F('schedule') && (
           <MenuBtn title="Schedule" sub="Assign jobs to installers" onClick={() => router.push('/admin/schedule')} />
         )}

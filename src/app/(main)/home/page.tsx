@@ -364,6 +364,28 @@ function DashboardOverview() {
             <div style={{ fontSize: '11px', color: theme.textMuted, marginTop: '1px' }}>Approve or deny submissions</div>
           </div>
         </button>
+        <button onClick={() => router.push('/admin/pos')} style={{
+          display: 'flex', alignItems: 'center', gap: '12px', width: '100%',
+          padding: '14px', borderRadius: '14px', textAlign: 'left',
+          border: `1px solid ${theme.border}`, background: theme.card, boxShadow: theme.shadowSm,
+        }}>
+          <div style={{ width: '40px', height: '40px', borderRadius: '10px', background: 'rgba(238,49,32,0.08)', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: '18px', flexShrink: 0 }}></div>
+          <div>
+            <div style={{ fontWeight: 700, fontSize: '14px', color: theme.textPrimary }}>Purchase Orders</div>
+            <div style={{ fontSize: '11px', color: theme.textMuted, marginTop: '1px' }}>Import POs, manage line items</div>
+          </div>
+        </button>
+        <button onClick={() => router.push('/admin/scans')} style={{
+          display: 'flex', alignItems: 'center', gap: '12px', width: '100%',
+          padding: '14px', borderRadius: '14px', textAlign: 'left',
+          border: `1px solid ${theme.border}`, background: theme.card, boxShadow: theme.shadowSm,
+        }}>
+          <div style={{ width: '40px', height: '40px', borderRadius: '10px', background: 'rgba(238,49,32,0.08)', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: '18px', flexShrink: 0 }}></div>
+          <div>
+            <div style={{ fontWeight: 700, fontSize: '14px', color: theme.textPrimary }}>Scan Log</div>
+            <div style={{ fontSize: '11px', color: theme.textMuted, marginTop: '1px' }}>Review scans, match POs, export & invoice</div>
+          </div>
+        </button>
       </div>
     </div>
   );

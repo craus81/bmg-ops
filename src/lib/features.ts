@@ -27,7 +27,6 @@ export const FEATURES = {
   cni_management: 'CNI Management',
   knowledge_base: 'Knowledge Base',
   vendor_payments: 'Vendor Payments',
-  bulk_vin: 'Bulk VIN Upload',
   bulk_upload: 'Bulk Upload (Templates)',
   proof_hygiene: 'Proof Hygiene',
   quoting: 'Estimating / Quoting',
