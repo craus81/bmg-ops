@@ -7,7 +7,7 @@ import type { FeatureKey } from '@/lib/features';
 import {
   Home, Palette, ClipboardCheck, Warehouse, Users,
   CalendarDays, ScanLine, Clock, FileText, Briefcase,
-  LayoutGrid, Settings, MoreHorizontal, Wrench,
+  LayoutGrid, Settings, MoreHorizontal, Wrench, Receipt,
 } from 'lucide-react';
 
 interface BottomNavProps {
@@ -23,13 +23,17 @@ export interface Tab {
   priority: number; // lower = more important, shown first
 }
 
-// All possible tabs with priority — only top 5 + More will show
+// All possible tabs with priority — only top MAX_TABS + More will show
 export const allTabs: Tab[] = [
   { id: 'home', path: '/home', label: 'Home', feature: 'home', priority: 0 },
   { id: 'upfit', path: '/upfit', label: 'Upfit', feature: 'upfit_projects', priority: 0.5 },
   { id: 'graphics', path: '/graphics', label: 'Graphics', feature: 'graphics', priority: 1 },
   { id: 'fleet', path: '/fleet', label: 'Check In', feature: 'fleet_checkin', priority: 2 },
   { id: 'tracking', path: '/tracking', label: 'In-Shop', feature: 'in_shop', priority: 3 },
+  // POs and Scans go after In-Shop so they slot in on the right of the
+  // existing visible tabs without displacing anything.
+  { id: 'pos', path: '/admin/pos', label: 'POs', feature: 'purchase_orders', priority: 3.2 },
+  { id: 'scans', path: '/admin/scans', label: 'Scans', feature: 'reports', priority: 3.3 },
   { id: 'prospects', path: '/admin/prospects', label: 'CRM', feature: 'prospects', priority: 3.5 },
   { id: 'schedule', path: '/admin/schedule', label: 'Schedule', feature: 'schedule', priority: 4 },
   { id: 'scan', path: '/scan', label: 'Scan', feature: 'scan', priority: 5 },
@@ -52,12 +56,14 @@ const TAB_ICONS: Record<string, React.ElementType> = {
   estimates: FileText,
   'installer-portal': Briefcase,
   upfit: Wrench,
+  pos: Receipt,
+  scans: ScanLine,
   'customer-dashboard': LayoutGrid,
   more: MoreHorizontal,
   'customer-settings': Settings,
 };
 
-export const MAX_TABS = 5; // + More = 6 total
+export const MAX_TABS = 7; // + More = 8 total
 
 export default function BottomNav({ clockStatus }: BottomNavProps) {
   const pathname = usePathname();
@@ -102,12 +108,12 @@ export default function BottomNav({ clockStatus }: BottomNavProps) {
       position: 'fixed', bottom: 0, left: 0, right: 0,
       background: theme.navBg,
       borderTop: `1px solid ${theme.border}`,
-      display: 'flex', alignItems: 'center', gap: '4px',
+      display: 'flex', alignItems: 'center', gap: '2px',
       zIndex: 100,
-      padding: '6px 12px',
-      paddingBottom: 'calc(8px + env(safe-area-inset-bottom, 0px))',
-      paddingLeft: 'calc(12px + env(safe-area-inset-left, 0px))',
-      paddingRight: 'calc(12px + env(safe-area-inset-right, 0px))',
+      padding: '4px 6px',
+      paddingBottom: 'calc(6px + env(safe-area-inset-bottom, 0px))',
+      paddingLeft: 'calc(6px + env(safe-area-inset-left, 0px))',
+      paddingRight: 'calc(6px + env(safe-area-inset-right, 0px))',
     }}>
       {tabs.map((tab) => {
         const active = isActive(tab);
@@ -118,15 +124,15 @@ export default function BottomNav({ clockStatus }: BottomNavProps) {
             className={active ? undefined : 'bottom-nav-tab'}
             onClick={() => router.push(tab.path)}
             style={{
-              flex: 1, padding: '6px 4px', display: 'flex',
+              flex: 1, padding: '4px 2px', display: 'flex',
               flexDirection: 'column',
               alignItems: 'center', justifyContent: 'center',
-              gap: '2px',
-              borderRadius: '8px',
+              gap: '1px',
+              borderRadius: '6px',
               background: active ? 'rgba(59,130,246,0.15)' : 'transparent',
               border: active ? '1px solid rgba(59,130,246,0.35)' : '1px solid transparent',
               color: active ? '#60a5fa' : theme.textMuted,
-              fontSize: '9px',
+              fontSize: '8px',
               fontWeight: active ? 800 : 600,
               letterSpacing: '0.01em',
               cursor: 'pointer',
@@ -135,7 +141,7 @@ export default function BottomNav({ clockStatus }: BottomNavProps) {
               transition: 'all 0.15s',
             }}
           >
-            {Icon && <Icon size={18} strokeWidth={active ? 2.5 : 2} />}
+            {Icon && <Icon size={16} strokeWidth={active ? 2.5 : 2} />}
             {tab.label}
           </button>
         );
