@@ -9,7 +9,7 @@ import { theme } from '@/lib/theme';
 import AssignmentPicker from '@/components/AssignmentPicker';
 import GraphicsInvoiceModal from '@/components/GraphicsInvoiceModal';
 import type {
-  GraphicsJob, GraphicsJobStatus, GraphicsJobCategory, GraphicsStatusHistory, Profile,
+  GraphicsJob, GraphicsJobStatus, GraphicsJobCategory, GraphicsStatusHistory, GraphicsJobView, Profile,
 } from '@/lib/types';
 import {
   GRAPHICS_STATUS_LABELS, GRAPHICS_STATUS_COLORS, GRAPHICS_STATUS_ORDER,
@@ -40,6 +40,20 @@ function displayDate(dateStr: string | null | undefined): string {
 function toDateInputValue(dateStr: string | null | undefined): string {
   if (!dateStr) return '';
   return dateStr.substring(0, 10);
+}
+
+function relativeTime(iso: string): string {
+  const then = new Date(iso).getTime();
+  if (!isFinite(then)) return '';
+  const sec = Math.max(0, Math.round((Date.now() - then) / 1000));
+  if (sec < 60) return 'just now';
+  const min = Math.round(sec / 60);
+  if (min < 60) return `${min}m ago`;
+  const hr = Math.round(min / 60);
+  if (hr < 24) return `${hr}h ago`;
+  const day = Math.round(hr / 24);
+  if (day < 7) return `${day}d ago`;
+  return new Date(iso).toLocaleDateString();
 }
 
 // Active statuses (not terminal)
@@ -134,6 +148,10 @@ export default function GraphicsPage() {
   // Job assignments
   const [jobAssignments, setJobAssignments] = useState<Record<string, string[]>>({});
 
+  // Job views — record of who has opened each job (read receipts).
+  // Loaded eagerly for all jobs so the collapsed cards can show "seen by".
+  const [jobViews, setJobViews] = useState<Record<string, GraphicsJobView[]>>({});
+
   // Saving state
   const [saving, setSaving] = useState(false);
 
@@ -161,6 +179,7 @@ export default function GraphicsPage() {
       setFilterStatus('all');
       loadHistory(job.id);
       loadJobAssignments(job.id);
+      recordJobView(job.id);
     }
     router.replace('/graphics', { scroll: false });
   }, [loading, searchParams]);
@@ -196,18 +215,55 @@ export default function GraphicsPage() {
       loadHistory(jobId);
       loadJobAssignments(jobId);
       loadJobFiles(jobId);
+      recordJobView(jobId);
     }
   }, [loading, searchParams]);
 
   const loadJobs = async () => {
     // Exclude installed/cancelled by default — they're archived
-    const { data } = await supabase
-      .from('graphics_jobs')
-      .select('*')
-      .not('status', 'in', '("installed","cancelled")')
-      .order('created_at', { ascending: false });
-    setJobs((data as GraphicsJob[]) || []);
+    const [{ data: jobsData }, { data: viewsData }] = await Promise.all([
+      supabase
+        .from('graphics_jobs')
+        .select('*')
+        .not('status', 'in', '("installed","cancelled")')
+        .order('created_at', { ascending: false }),
+      supabase
+        .from('graphics_job_views')
+        .select('*'),
+    ]);
+    setJobs((jobsData as GraphicsJob[]) || []);
+    setJobViews(groupViewsByJob((viewsData as GraphicsJobView[]) || []));
     setLoading(false);
+  };
+
+  const groupViewsByJob = (rows: GraphicsJobView[]): Record<string, GraphicsJobView[]> => {
+    const out: Record<string, GraphicsJobView[]> = {};
+    for (const v of rows) {
+      (out[v.job_id] ||= []).push(v);
+    }
+    // Newest first within each job
+    for (const k of Object.keys(out)) {
+      out[k].sort((a, b) => b.last_viewed_at.localeCompare(a.last_viewed_at));
+    }
+    return out;
+  };
+
+  const recordJobView = async (jobId: string) => {
+    if (!user) return;
+    const { error } = await supabase.rpc('record_graphics_job_view', { p_job_id: jobId });
+    if (error) {
+      console.warn('Failed to record job view:', error.message);
+      return;
+    }
+    // Refresh just this job's views so the UI reflects the new state
+    const { data } = await supabase
+      .from('graphics_job_views')
+      .select('*')
+      .eq('job_id', jobId);
+    if (data) {
+      setJobViews(prev => ({ ...prev, [jobId]: (data as GraphicsJobView[])
+        .sort((a, b) => b.last_viewed_at.localeCompare(a.last_viewed_at)) }));
+    }
   };
 
   const loadProfiles = async () => {
@@ -963,6 +1019,7 @@ export default function GraphicsPage() {
                       loadHistory(job.id);
                       loadJobAssignments(job.id);
                       loadJobFiles(job.id);
+                      recordJobView(job.id);
                     }
                   }}
                   style={{ padding: '12px', cursor: 'pointer' }}
@@ -1004,6 +1061,25 @@ export default function GraphicsPage() {
                           </span>
                         )}
                         {job.netsuite_invoice_number && <span style={{ padding: '0 4px', borderRadius: '3px', background: 'rgba(34,197,94,0.1)', color: '#22c55e', fontWeight: 700 }}>INV {job.netsuite_invoice_number}</span>}
+                        {(() => {
+                          const others = (jobViews[job.id] || []).filter(v => v.user_id !== user?.id);
+                          if (others.length === 0) return null;
+                          const names = others.map(v => {
+                            const p = profiles.find(pr => pr.id === v.user_id);
+                            return p?.full_name || p?.email || 'Unknown';
+                          });
+                          const tooltip = others
+                            .map((v, i) => `${names[i]} — ${relativeTime(v.last_viewed_at)}`)
+                            .join('\n');
+                          return (
+                            <span
+                              title={`Seen by:\n${tooltip}`}
+                              style={{ padding: '0 4px', borderRadius: '3px', background: 'rgba(148,163,184,0.12)', color: 'var(--text-muted)', fontWeight: 700 }}
+                            >
+                              👁 {others.length}
+                            </span>
+                          );
+                        })()}
                       </div>
                     </div>
                     <div style={{
@@ -1051,6 +1127,38 @@ export default function GraphicsPage() {
                         ))}
                       </div>
                     </div>
+
+                    {/* Seen by — read receipts of who has opened this job. */}
+                    {(() => {
+                      const others = (jobViews[job.id] || []).filter(v => v.user_id !== user?.id);
+                      if (others.length === 0) return null;
+                      return (
+                        <div style={{ marginBottom: '12px' }}>
+                          <div style={labelStyle}>Seen By</div>
+                          <div style={{ display: 'flex', flexDirection: 'column', gap: '3px', marginTop: '4px' }}>
+                            {others.map(v => {
+                              const p = profiles.find(pr => pr.id === v.user_id);
+                              const name = p?.full_name || p?.email || 'Unknown';
+                              return (
+                                <div key={v.id} style={{ fontSize: '11px', color: 'var(--text-body)', display: 'flex', justifyContent: 'space-between', gap: '8px' }}>
+                                  <span>
+                                    {name}
+                                    {v.view_count > 1 && (
+                                      <span style={{ marginLeft: '6px', color: 'var(--text-muted)', fontSize: '10px' }}>
+                                        ({v.view_count}×)
+                                      </span>
+                                    )}
+                                  </span>
+                                  <span style={{ color: 'var(--text-muted)', fontSize: '10px' }}>
+                                    {relativeTime(v.last_viewed_at)}
+                                  </span>
+                                </div>
+                              );
+                            })}
+                          </div>
+                        </div>
+                      );
+                    })()}
 
                     {/* Parent context — surfaces customer + upfit project (when
                         linked via migration 084) so the production team has

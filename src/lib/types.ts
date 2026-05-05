@@ -532,6 +532,15 @@ export interface GraphicsStatusHistory {
   created_at: string;
 }
 
+export interface GraphicsJobView {
+  id: string;
+  job_id: string;
+  user_id: string;
+  first_viewed_at: string;
+  last_viewed_at: string;
+  view_count: number;
+}
+
 export interface NotificationPreferences {
   id: string;
   user_id: string;
