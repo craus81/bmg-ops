@@ -139,7 +139,10 @@ export default function GraphicsPage() {
 
   // Job files
   interface JobFile { id: string; job_id: string; file_name: string; file_type: string | null; file_size: number | null; storage_path: string; uploaded_by: string | null; uploaded_at: string; }
+  interface PoFile { id: string; po_id: string; file_name: string; file_type: string | null; file_size: number | null; storage_path: string; source: string | null; uploaded_at: string; }
   const [jobFiles, setJobFiles] = useState<Record<string, JobFile[]>>({});
+  // PO PDFs surfaced read-only on jobs that link to a PO
+  const [jobPoFiles, setJobPoFiles] = useState<Record<string, PoFile[]>>({});
   const [createFiles, setCreateFiles] = useState<File[]>([]);
   const [uploadingFiles, setUploadingFiles] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
@@ -325,6 +328,16 @@ export default function GraphicsPage() {
       .order('uploaded_at', { ascending: false });
     if (data) {
       setJobFiles(prev => ({ ...prev, [jobId]: data as JobFile[] }));
+    }
+    // If the job is linked to a PO, also surface that PO's PDFs read-only.
+    const job = jobs.find(j => j.id === jobId);
+    if (job?.po_id) {
+      const { data: poData } = await supabase
+        .from('po_files')
+        .select('*')
+        .eq('po_id', job.po_id)
+        .order('uploaded_at', { ascending: false });
+      setJobPoFiles(prev => ({ ...prev, [jobId]: (poData as PoFile[]) || [] }));
     }
   };
 
@@ -1490,6 +1503,27 @@ export default function GraphicsPage() {
                                   </div>
                                 );
                               })}
+                            </div>
+                          )}
+                          {(jobPoFiles[job.id] || []).length > 0 && (
+                            <div style={{ marginBottom: '6px' }}>
+                              <div style={{ fontSize: '9px', fontWeight: 700, color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.3px', marginBottom: '4px' }}>From linked PO</div>
+                              <div style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
+                                {jobPoFiles[job.id].map(f => (
+                                  <div key={f.id} style={{ display: 'flex', alignItems: 'center', gap: '8px', padding: '6px 8px', borderRadius: '8px', background: 'rgba(96,165,250,0.06)', border: '1px dashed rgba(96,165,250,0.3)' }}>
+                                    <span style={{ fontSize: '14px', flexShrink: 0 }}>{'📄'}</span>
+                                    <a
+                                      href={getFileUrl(f.storage_path)}
+                                      target="_blank"
+                                      rel="noopener noreferrer"
+                                      style={{ flex: 1, fontSize: '11px', fontWeight: 600, color: '#60a5fa', textDecoration: 'none', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}
+                                    >
+                                      {f.file_name}
+                                    </a>
+                                    {f.file_size && <span style={{ fontSize: '9px', color: 'var(--text-muted)', flexShrink: 0 }}>{formatFileSize(f.file_size)}</span>}
+                                  </div>
+                                ))}
+                              </div>
                             </div>
                           )}
                           <input

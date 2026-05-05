@@ -5,6 +5,7 @@ import { useRouter, useSearchParams } from 'next/navigation';
 import { createClient } from '@/lib/supabase-browser';
 import { useAuth } from '@/components/AuthProvider';
 import { parseMasterackPO, type ParsedPO, type ParsedPOLine } from '@/lib/parsePO';
+import { storage } from '@/lib/storage';
 import type { PurchaseOrder, POLineItem, CatalogItem } from '@/lib/types';
 
 interface ImportLine extends ParsedPOLine {
@@ -16,6 +17,17 @@ interface ImportLine extends ParsedPOLine {
   new_end_customer: string;
   new_vehicle_type: string;
   new_graphic_package: string;
+}
+
+interface PoFile {
+  id: string;
+  po_id: string;
+  file_name: string;
+  file_type: string | null;
+  file_size: number | null;
+  storage_path: string;
+  source: 'pdf_upload' | 'email_import' | null;
+  uploaded_at: string;
 }
 
 function formatShipTo(shipTo: PurchaseOrder['ship_to']): string | null {
@@ -67,6 +79,32 @@ async function ensureNetsuitePartMirror(
   });
 }
 
+// Upload the source PDF to R2 and record it on the PO so it stays attached
+// to the record (and is visible on linked graphics jobs).
+async function persistPoPdf(
+  supabase: ReturnType<typeof createClient>,
+  poId: string,
+  file: File,
+  uploadedBy: string | null,
+) {
+  const safeName = file.name.replace(/[^a-zA-Z0-9._-]/g, '_');
+  const path = `po-pdfs/${poId}/${Date.now()}-${safeName}`;
+  const { error: upErr } = await storage.from('graphics-proofs').upload(path, file, { contentType: file.type || 'application/pdf' });
+  if (upErr) {
+    console.warn('PO PDF upload failed:', upErr);
+    return;
+  }
+  await supabase.from('po_files').insert({
+    po_id: poId,
+    file_name: file.name,
+    file_type: file.type || 'application/pdf',
+    file_size: file.size,
+    storage_path: path,
+    source: 'pdf_upload',
+    uploaded_by: uploadedBy,
+  });
+}
+
 
 export default function POsPage() {
   const router = useRouter();
@@ -92,7 +130,10 @@ export default function POsPage() {
 
   // PDF Import state
   const [parsedPO, setParsedPO] = useState<ParsedPO | null>(null);
+  const [parsedPdfFile, setParsedPdfFile] = useState<File | null>(null);
   const [importLines, setImportLines] = useState<ImportLine[]>([]);
+  // PO files (PDFs) attached to each PO, lazy-loaded on expand
+  const [poFiles, setPoFiles] = useState<Record<string, PoFile[]>>({});
   const [parseError, setParseError] = useState('');
   const [importing, setImporting] = useState(false);
   const [pdfOverwriteExisting, setPdfOverwriteExisting] = useState<any>(null); // existing PO to overwrite
@@ -256,6 +297,7 @@ export default function POsPage() {
       });
 
       setParsedPO(parsed);
+      setParsedPdfFile(file);
       setImportLines(lines);
     } catch (err: any) {
       setParseError('Error parsing PDF: ' + (err.message || 'Unknown error'));
@@ -355,8 +397,14 @@ export default function POsPage() {
       })))
       .select();
 
+    if (parsedPdfFile) {
+      await persistPoPdf(supabase, po.id, parsedPdfFile, user.id);
+      setPoFiles(prev => { const c = { ...prev }; delete c[po.id]; return c; });
+    }
+
     setPos((prev) => [{ ...po, line_items: (items as POLineItem[]) || [] }, ...prev]);
     setParsedPO(null);
+    setParsedPdfFile(null);
     setImportLines([]);
     setPdfOverwriteExisting(null);
     setShowImport(false);
@@ -440,6 +488,11 @@ export default function POsPage() {
       })))
       .select();
 
+    if (parsedPdfFile) {
+      await persistPoPdf(supabase, existingPo.id, parsedPdfFile, user.id);
+      setPoFiles(prev => { const c = { ...prev }; delete c[existingPo.id]; return c; });
+    }
+
     // Update local state
     setPos((prev) => prev.map((p) =>
       p.id === existingPo.id
@@ -447,6 +500,7 @@ export default function POsPage() {
         : p
     ));
     setParsedPO(null);
+    setParsedPdfFile(null);
     setImportLines([]);
     setPdfOverwriteExisting(null);
     setShowImport(false);
@@ -455,6 +509,7 @@ export default function POsPage() {
 
   const cancelImport = () => {
     setParsedPO(null);
+    setParsedPdfFile(null);
     setImportLines([]);
     setParseError('');
     setPdfOverwriteExisting(null);
@@ -619,9 +674,20 @@ export default function POsPage() {
   };
 
   const toggleExpand = (poId: string) => {
-    setExpandedPo(expandedPo === poId ? null : poId);
+    const opening = expandedPo !== poId;
+    setExpandedPo(opening ? poId : null);
     setEditPoId(null);
     setEditLineId(null);
+    if (opening && !poFiles[poId]) loadPoFiles(poId);
+  };
+
+  const loadPoFiles = async (poId: string) => {
+    const { data } = await supabase
+      .from('po_files')
+      .select('*')
+      .eq('po_id', poId)
+      .order('uploaded_at', { ascending: false });
+    setPoFiles(prev => ({ ...prev, [poId]: (data as PoFile[]) || [] }));
   };
 
   // Gmail import functions
@@ -2186,6 +2252,33 @@ export default function POsPage() {
 
               {isExpanded && (
                 <div style={{ borderTop: '1px solid var(--border)', padding: '10px 12px' }}>
+                  {/* PDF Attachments */}
+                  {(poFiles[po.id] || []).length > 0 && (
+                    <div style={{ marginBottom: '10px' }}>
+                      <div style={labelStyle}>PDF Attachments</div>
+                      <div style={{ display: 'flex', flexDirection: 'column', gap: '4px', marginTop: '4px' }}>
+                        {poFiles[po.id].map(f => (
+                          <a
+                            key={f.id}
+                            href={storage.from('graphics-proofs').getPublicUrl(f.storage_path).data.publicUrl}
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            style={{
+                              display: 'flex', alignItems: 'center', gap: '8px',
+                              padding: '6px 8px', borderRadius: '6px',
+                              background: 'var(--subtle-bg)', border: '1px solid var(--border)',
+                              fontSize: '11px', fontWeight: 600, color: '#60a5fa', textDecoration: 'none',
+                            }}
+                          >
+                            <span style={{ fontSize: '14px' }}>{'📄'}</span>
+                            <span style={{ flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{f.file_name}</span>
+                            {f.source && <span style={{ fontSize: '9px', color: 'var(--text-muted)', textTransform: 'uppercase' }}>{f.source === 'pdf_upload' ? 'PDF' : 'Email'}</span>}
+                            {f.file_size && <span style={{ fontSize: '9px', color: 'var(--text-muted)' }}>{(f.file_size / 1024).toFixed(0)}KB</span>}
+                          </a>
+                        ))}
+                      </div>
+                    </div>
+                  )}
                   {isEditingPO ? (
                     <div style={{ marginBottom: '10px', padding: '8px', background: 'rgba(59,130,246,0.05)', borderRadius: '8px' }}>
                       <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '6px' }}>

@@ -3,6 +3,49 @@ import { getMessage, getPdfAttachments, getAttachment, getHeader } from '@/lib/g
 import { createClient } from '@supabase/supabase-js';
 import { notifyMany } from '@/lib/notify';
 import { requireAuth } from '@/lib/api-auth';
+import { r2Upload } from '@/lib/r2';
+
+// Persist a PO's source PDFs to R2 + record po_files rows. Skips a filename
+// if it's already attached to that PO so re-imports don't duplicate.
+async function savePoFilesToStorage(
+  supabase: any,
+  poId: string,
+  messageId: string,
+  pdfs: { filename: string; attachmentId: string; size?: number }[],
+  cache?: Map<string, string>,
+) {
+  for (const pdf of pdfs) {
+    try {
+      const { data: existing } = await supabase
+        .from('po_files')
+        .select('id')
+        .eq('po_id', poId)
+        .eq('file_name', pdf.filename)
+        .maybeSingle();
+      if (existing) continue;
+
+      const base64 = cache?.get(pdf.attachmentId) || (await getAttachment(messageId, pdf.attachmentId));
+      const buffer = Buffer.from(base64, 'base64');
+      const safeName = pdf.filename.replace(/[^a-zA-Z0-9._-]/g, '_');
+      const path = `po-pdfs/${poId}/${Date.now()}-${safeName}`;
+      const result = await r2Upload('graphics-proofs', path, buffer, 'application/pdf');
+      if (!result.success) {
+        console.warn('R2 upload failed for PO PDF:', pdf.filename, result.error);
+        continue;
+      }
+      await supabase.from('po_files').insert({
+        po_id: poId,
+        file_name: pdf.filename,
+        file_type: 'application/pdf',
+        file_size: buffer.length,
+        storage_path: path,
+        source: 'email_import',
+      });
+    } catch (err) {
+      console.warn(`Failed to save PO file ${pdf.filename}:`, err);
+    }
+  }
+}
 
 /**
  * Check extracted PO lines for graphic parts (02* or RM*) and create flagged graphics jobs.
@@ -303,6 +346,8 @@ export async function POST(req: NextRequest) {
           await supabase.from('po_line_items').insert(lineInserts);
         }
 
+        await savePoFilesToStorage(supabase, existingPO.id, messageId, pdfs);
+
         await supabase.from('gmail_po_imports').upsert({
           message_id: messageId, thread_id: message.threadId, subject, from_email: from,
           received_at: date ? new Date(date).toISOString() : null,
@@ -364,6 +409,8 @@ export async function POST(req: NextRequest) {
       if (lineInserts.length > 0) {
         await supabase.from('po_line_items').insert(lineInserts);
       }
+
+      await savePoFilesToStorage(supabase, newPO.id, messageId, pdfs);
 
       await supabase.from('gmail_po_imports').upsert({
         message_id: messageId, thread_id: message.threadId, subject, from_email: from,
@@ -716,6 +763,8 @@ export async function POST(req: NextRequest) {
         }
       }
 
+      await savePoFilesToStorage(supabase, existingPO.id, messageId, sortedPdfs);
+
       await supabase.from('gmail_po_imports').upsert({
         message_id: messageId,
         thread_id: message.threadId,
@@ -825,6 +874,8 @@ export async function POST(req: NextRequest) {
       if (lineInserts.length > 0) {
         await supabase.from('po_line_items').insert(lineInserts);
       }
+
+      await savePoFilesToStorage(supabase, newPO.id, messageId, sortedPdfs);
 
       await supabase.from('gmail_po_imports').upsert({
         message_id: messageId,
