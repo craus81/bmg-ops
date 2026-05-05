@@ -134,6 +134,10 @@ export default function POsPage() {
   const [importLines, setImportLines] = useState<ImportLine[]>([]);
   // PO files (PDFs) attached to each PO, lazy-loaded on expand
   const [poFiles, setPoFiles] = useState<Record<string, PoFile[]>>({});
+  // Manual PO PDF backfill state
+  const poFileInputRef = useRef<HTMLInputElement>(null);
+  const [uploadingPoId, setUploadingPoId] = useState<string | null>(null);
+  const [uploadingPoPdf, setUploadingPoPdf] = useState(false);
   const [parseError, setParseError] = useState('');
   const [importing, setImporting] = useState(false);
   const [pdfOverwriteExisting, setPdfOverwriteExisting] = useState<any>(null); // existing PO to overwrite
@@ -690,6 +694,28 @@ export default function POsPage() {
     setPoFiles(prev => ({ ...prev, [poId]: (data as PoFile[]) || [] }));
   };
 
+  const triggerPoPdfUpload = (poId: string) => {
+    setUploadingPoId(poId);
+    poFileInputRef.current?.click();
+  };
+
+  const handlePoPdfUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const files = Array.from(e.target.files || []);
+    e.target.value = '';
+    const poId = uploadingPoId;
+    if (!poId || files.length === 0 || !user) {
+      setUploadingPoId(null);
+      return;
+    }
+    setUploadingPoPdf(true);
+    for (const file of files) {
+      await persistPoPdf(supabase, poId, file, user.id);
+    }
+    await loadPoFiles(poId);
+    setUploadingPoPdf(false);
+    setUploadingPoId(null);
+  };
+
   // Gmail import functions
   const searchGmailPOs = async (days = 90) => {
     setEmailLoading(true);
@@ -1198,6 +1224,15 @@ export default function POsPage() {
 
   return (
     <div>
+      {/* Hidden file input used by per-PO "Upload PDF" buttons */}
+      <input
+        ref={poFileInputRef}
+        type="file"
+        accept=".pdf,application/pdf"
+        multiple
+        onChange={handlePoPdfUpload}
+        style={{ display: 'none' }}
+      />
       {/* Open / Closed tabs */}
       <div style={{ display: 'flex', gap: '4px', marginBottom: '10px' }}>
         <button onClick={() => setPoTab('open')} style={{
@@ -2253,9 +2288,23 @@ export default function POsPage() {
               {isExpanded && (
                 <div style={{ borderTop: '1px solid var(--border)', padding: '10px 12px' }}>
                   {/* PDF Attachments */}
-                  {(poFiles[po.id] || []).length > 0 && (
-                    <div style={{ marginBottom: '10px' }}>
+                  <div style={{ marginBottom: '10px' }}>
+                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
                       <div style={labelStyle}>PDF Attachments</div>
+                      <button
+                        onClick={() => triggerPoPdfUpload(po.id)}
+                        disabled={uploadingPoPdf && uploadingPoId === po.id}
+                        style={{
+                          padding: '3px 8px', borderRadius: '6px', fontSize: '10px', fontWeight: 700,
+                          background: 'rgba(96,165,250,0.12)', border: '1px solid rgba(96,165,250,0.3)',
+                          color: '#60a5fa', cursor: uploadingPoPdf && uploadingPoId === po.id ? 'default' : 'pointer',
+                          opacity: uploadingPoPdf && uploadingPoId === po.id ? 0.6 : 1,
+                        }}
+                      >
+                        {uploadingPoPdf && uploadingPoId === po.id ? 'Uploading…' : '+ Upload PDF'}
+                      </button>
+                    </div>
+                    {(poFiles[po.id] || []).length > 0 ? (
                       <div style={{ display: 'flex', flexDirection: 'column', gap: '4px', marginTop: '4px' }}>
                         {poFiles[po.id].map(f => (
                           <a
@@ -2277,8 +2326,11 @@ export default function POsPage() {
                           </a>
                         ))}
                       </div>
-                    </div>
-                  )}
+                    ) : (
+                      <div style={{ fontSize: '11px', color: 'var(--text-muted)', marginTop: '4px' }}>No attachments. Use the button above to add a PDF.</div>
+                    )}
+                  </div>
+
                   {isEditingPO ? (
                     <div style={{ marginBottom: '10px', padding: '8px', background: 'rgba(59,130,246,0.05)', borderRadius: '8px' }}>
                       <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '6px' }}>
