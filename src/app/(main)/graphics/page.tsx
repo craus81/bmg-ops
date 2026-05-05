@@ -221,19 +221,24 @@ export default function GraphicsPage() {
 
   const loadJobs = async () => {
     // Exclude installed/cancelled by default — they're archived
-    const [{ data: jobsData }, { data: viewsData }] = await Promise.all([
-      supabase
-        .from('graphics_jobs')
-        .select('*')
-        .not('status', 'in', '("installed","cancelled")')
-        .order('created_at', { ascending: false }),
-      supabase
-        .from('graphics_job_views')
-        .select('*'),
-    ]);
+    const { data: jobsData } = await supabase
+      .from('graphics_jobs')
+      .select('*')
+      .not('status', 'in', '("installed","cancelled")')
+      .order('created_at', { ascending: false });
     setJobs((jobsData as GraphicsJob[]) || []);
-    setJobViews(groupViewsByJob((viewsData as GraphicsJobView[]) || []));
     setLoading(false);
+
+    // Views are best-effort — if the graphics_job_views table or RPC
+    // hasn't been migrated yet, the page should still render the jobs.
+    try {
+      const { data: viewsData } = await supabase
+        .from('graphics_job_views')
+        .select('*');
+      setJobViews(groupViewsByJob((viewsData as GraphicsJobView[]) || []));
+    } catch (e) {
+      console.warn('graphics_job_views unavailable:', e);
+    }
   };
 
   const groupViewsByJob = (rows: GraphicsJobView[]): Record<string, GraphicsJobView[]> => {
@@ -250,19 +255,22 @@ export default function GraphicsPage() {
 
   const recordJobView = async (jobId: string) => {
     if (!user) return;
-    const { error } = await supabase.rpc('record_graphics_job_view', { p_job_id: jobId });
-    if (error) {
-      console.warn('Failed to record job view:', error.message);
-      return;
-    }
-    // Refresh just this job's views so the UI reflects the new state
-    const { data } = await supabase
-      .from('graphics_job_views')
-      .select('*')
-      .eq('job_id', jobId);
-    if (data) {
-      setJobViews(prev => ({ ...prev, [jobId]: (data as GraphicsJobView[])
-        .sort((a, b) => b.last_viewed_at.localeCompare(a.last_viewed_at)) }));
+    try {
+      const { error } = await supabase.rpc('record_graphics_job_view', { p_job_id: jobId });
+      if (error) {
+        console.warn('Failed to record job view:', error.message);
+        return;
+      }
+      const { data } = await supabase
+        .from('graphics_job_views')
+        .select('*')
+        .eq('job_id', jobId);
+      if (data) {
+        setJobViews(prev => ({ ...prev, [jobId]: (data as GraphicsJobView[])
+          .sort((a, b) => b.last_viewed_at.localeCompare(a.last_viewed_at)) }));
+      }
+    } catch (e) {
+      console.warn('record_graphics_job_view unavailable:', e);
     }
   };
 
