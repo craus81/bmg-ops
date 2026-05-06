@@ -182,6 +182,7 @@ export default function GraphicsPage() {
       setFilterStatus('all');
       loadHistory(job.id);
       loadJobAssignments(job.id);
+      loadJobFiles(job.id);
       recordJobView(job.id);
     }
     router.replace('/graphics', { scroll: false });
@@ -1861,6 +1862,47 @@ export default function GraphicsPage() {
                             value={editJob!.notes || ''}
                             onChange={e => setEditingJob({ ...editJob!, notes: e.target.value })}
                           />
+                        </div>
+
+                        <div style={{ marginBottom: '10px' }}>
+                          <div style={labelStyle}>Files &amp; Attachments</div>
+                          {(jobFiles[job.id] || []).length > 0 && (
+                            <div style={{ display: 'flex', flexDirection: 'column', gap: '4px', marginBottom: '6px' }}>
+                              {(jobFiles[job.id] || []).map(f => {
+                                const isImage = f.file_type?.startsWith('image/');
+                                const isPdf = f.file_type === 'application/pdf';
+                                return (
+                                  <div key={f.id} style={{ display: 'flex', alignItems: 'center', gap: '8px', padding: '6px 8px', borderRadius: '8px', background: 'var(--subtle-bg)' }}>
+                                    <span style={{ fontSize: '14px', flexShrink: 0 }}>{isImage ? '🖼️' : isPdf ? '📄' : '📎'}</span>
+                                    <a href={getFileUrl(f.storage_path)} target="_blank" rel="noopener noreferrer" style={{ flex: 1, fontSize: '11px', fontWeight: 600, color: '#60a5fa', textDecoration: 'none', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                                      {f.file_name}
+                                    </a>
+                                    {f.file_size && <span style={{ fontSize: '9px', color: 'var(--text-muted)', flexShrink: 0 }}>{formatFileSize(f.file_size)}</span>}
+                                    <button onClick={() => deleteJobFile(f)} style={{ padding: '2px 6px', borderRadius: '4px', border: 'none', background: 'rgba(248,113,113,0.1)', color: '#f87171', fontSize: '10px', fontWeight: 700, cursor: 'pointer', flexShrink: 0 }}>✕</button>
+                                  </div>
+                                );
+                              })}
+                            </div>
+                          )}
+                          <input
+                            type="file"
+                            multiple
+                            id={`edit-files-${job.id}`}
+                            onChange={async (e) => {
+                              const files = Array.from(e.target.files || []) as File[];
+                              if (files.length > 0) await uploadFilesToJob(job.id, files);
+                              e.target.value = '';
+                            }}
+                            style={{ display: 'none' }}
+                          />
+                          <button
+                            type="button"
+                            onClick={() => document.getElementById(`edit-files-${job.id}`)?.click()}
+                            disabled={uploadingFiles}
+                            style={{ width: '100%', padding: '8px', borderRadius: '8px', fontSize: '11px', fontWeight: 700, cursor: 'pointer', background: 'var(--subtle-bg)', border: '1px dashed var(--border)', color: uploadingFiles ? 'var(--text-muted)' : 'var(--text-secondary)' }}
+                          >
+                            {uploadingFiles ? 'Uploading...' : '+ Upload Files (proofs, logos, photos)'}
+                          </button>
                         </div>
 
                         <div style={{ display: 'flex', gap: '6px' }}>
