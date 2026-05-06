@@ -163,6 +163,8 @@ export default function UpfitProjectsPage() {
   const [newName, setNewName] = useState('');
   const [newCustomer, setNewCustomer] = useState('');
   const [creating, setCreating] = useState(false);
+  const [createFiles, setCreateFiles] = useState<File[]>([]);
+  const createFileInputRef = useRef<HTMLInputElement>(null);
 
   const load = async () => {
     setLoading(true);
@@ -479,8 +481,14 @@ export default function UpfitProjectsPage() {
       }),
     });
     if (res.ok) {
+      const json = await res.json();
+      const newProjectId = json?.project?.id;
+      if (newProjectId && createFiles.length > 0) {
+        await uploadFiles(newProjectId, createFiles);
+      }
       setNewName('');
       setNewCustomer('');
+      setCreateFiles([]);
       setShowCreate(false);
       load();
     }
@@ -911,9 +919,39 @@ export default function UpfitProjectsPage() {
               placeholder="Customer name"
               style={{ padding: '8px 12px', borderRadius: '8px', border: `1px solid ${theme.border}`, background: theme.inputBg, color: theme.textPrimary, fontSize: '13px', outline: 'none' }}
             />
+            <div>
+              {createFiles.length > 0 && (
+                <div style={{ display: 'flex', flexWrap: 'wrap', gap: '4px', marginBottom: '6px' }}>
+                  {createFiles.map((f, i) => (
+                    <span key={i} style={{ display: 'inline-flex', alignItems: 'center', gap: '4px', padding: '3px 8px', borderRadius: '6px', fontSize: '11px', fontWeight: 600, background: theme.inputBg, border: `1px solid ${theme.border}`, color: theme.textPrimary }}>
+                      {f.name}
+                      <span onClick={() => setCreateFiles(prev => prev.filter((_, idx) => idx !== i))} style={{ cursor: 'pointer', fontSize: '10px', opacity: 0.7 }}>✕</span>
+                    </span>
+                  ))}
+                </div>
+              )}
+              <input
+                ref={createFileInputRef}
+                type="file"
+                multiple
+                onChange={e => {
+                  const fs = Array.from(e.target.files || []);
+                  if (fs.length > 0) setCreateFiles(prev => [...prev, ...fs]);
+                  if (createFileInputRef.current) createFileInputRef.current.value = '';
+                }}
+                style={{ display: 'none' }}
+              />
+              <button
+                type="button"
+                onClick={() => createFileInputRef.current?.click()}
+                style={{ width: '100%', padding: '8px', borderRadius: '8px', background: 'transparent', border: `1px dashed ${theme.border}`, color: theme.textMuted, fontSize: '12px', fontWeight: 700, cursor: 'pointer' }}
+              >
+                + Add Files (PO PDFs, photos, specs)
+              </button>
+            </div>
             <div style={{ display: 'flex', gap: '8px', justifyContent: 'flex-end' }}>
-              <button onClick={() => setShowCreate(false)} style={{ padding: '6px 12px', borderRadius: '6px', background: 'none', border: `1px solid ${theme.border}`, color: theme.textMuted, fontSize: '12px', cursor: 'pointer' }}>Cancel</button>
-              <button onClick={createProject} disabled={creating || !newName.trim()} style={{ padding: '6px 14px', borderRadius: '6px', background: theme.orange, color: '#fff', border: 'none', fontSize: '12px', fontWeight: 700, cursor: 'pointer', opacity: creating || !newName.trim() ? 0.5 : 1 }}>Create</button>
+              <button onClick={() => { setShowCreate(false); setCreateFiles([]); }} style={{ padding: '6px 12px', borderRadius: '6px', background: 'none', border: `1px solid ${theme.border}`, color: theme.textMuted, fontSize: '12px', cursor: 'pointer' }}>Cancel</button>
+              <button onClick={createProject} disabled={creating || !newName.trim()} style={{ padding: '6px 14px', borderRadius: '6px', background: theme.orange, color: '#fff', border: 'none', fontSize: '12px', fontWeight: 700, cursor: 'pointer', opacity: creating || !newName.trim() ? 0.5 : 1 }}>{creating ? 'Creating...' : 'Create'}</button>
             </div>
           </div>
         </div>

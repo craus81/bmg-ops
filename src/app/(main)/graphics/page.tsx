@@ -730,6 +730,33 @@ export default function GraphicsPage() {
         await uploadFilesToJob(data.id, createFiles);
       }
 
+      // If a PO number was entered, link the PO's stored PDFs onto the job.
+      if (createForm.po_number) {
+        const { data: poRow } = await supabase
+          .from('purchase_orders')
+          .select('id')
+          .eq('po_number', createForm.po_number.trim())
+          .maybeSingle();
+        if (poRow?.id) {
+          const { data: poFiles } = await supabase
+            .from('po_files')
+            .select('file_name, file_type, file_size, storage_path')
+            .eq('po_id', poRow.id);
+          if (poFiles && poFiles.length > 0) {
+            await supabase.from('graphics_job_files').insert(
+              poFiles.map((f: any) => ({
+                job_id: data.id,
+                file_name: f.file_name,
+                file_type: f.file_type,
+                file_size: f.file_size,
+                storage_path: f.storage_path,
+                uploaded_by: user?.id || null,
+              }))
+            );
+          }
+        }
+      }
+
       setJobs(prev => [data as GraphicsJob, ...prev]);
       setShowCreate(false);
       setCreateStep('category');

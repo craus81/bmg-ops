@@ -1063,6 +1063,26 @@ export default function POsPage() {
     setAddingToCatalog(null);
   };
 
+  // Link any PDFs already saved on the PO into the new graphics job's files.
+  // Reuses the same R2 storage_path so the PO and job point at one object.
+  const attachPoFilesToGraphicsJob = async (poId: string, jobId: string) => {
+    const { data: poFiles } = await supabase
+      .from('po_files')
+      .select('file_name, file_type, file_size, storage_path')
+      .eq('po_id', poId);
+    if (!poFiles || poFiles.length === 0) return;
+    await supabase.from('graphics_job_files').insert(
+      poFiles.map((f: any) => ({
+        job_id: jobId,
+        file_name: f.file_name,
+        file_type: f.file_type,
+        file_size: f.file_size,
+        storage_path: f.storage_path,
+        uploaded_by: user?.id || null,
+      }))
+    );
+  };
+
   // Create a graphics job from a PO line item
   const createGfxJobFromLine = async (po: PurchaseOrder, li: { id: string; part_number: string; description: string | null; quantity: number }) => {
     setCreatingGfxJob(li.id);
@@ -1100,6 +1120,8 @@ export default function POsPage() {
         changed_by: user?.id || null,
         note: `Created from PO #${po.po_number}`,
       });
+
+      await attachPoFilesToGraphicsJob(po.id, job.id);
 
       setGfxJobResults(prev => ({ ...prev, [li.id]: 'created' }));
     } catch {
@@ -1147,6 +1169,8 @@ export default function POsPage() {
         changed_by: user?.id || null,
         note: `Created from PO #${po.po_number} with ${po.line_items.length} part(s)`,
       });
+
+      await attachPoFilesToGraphicsJob(po.id, job.id);
 
       // Navigate to graphics page with the new job open for editing
       router.push(`/graphics?editJob=${job.id}`);
