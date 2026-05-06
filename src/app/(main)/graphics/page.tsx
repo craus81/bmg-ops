@@ -1905,17 +1905,30 @@ export default function GraphicsPage() {
                           </button>
                         </div>
 
-                        <div style={{ display: 'flex', gap: '6px' }}>
+                        <div style={{
+                          position: 'sticky',
+                          bottom: 'calc(env(safe-area-inset-bottom, 0px))',
+                          display: 'flex',
+                          gap: '6px',
+                          padding: '10px',
+                          marginLeft: '-10px',
+                          marginRight: '-10px',
+                          marginBottom: '-10px',
+                          background: 'var(--card)',
+                          borderTop: '1px solid var(--border)',
+                          backdropFilter: 'blur(6px)',
+                          zIndex: 5,
+                        }}>
                           <button
                             onClick={saveJob}
                             disabled={saving}
-                            style={{ flex: 1, padding: '10px', borderRadius: '8px', background: '#22c55e', color: '#fff', fontSize: '12px', fontWeight: 800, border: 'none', cursor: 'pointer', opacity: saving ? 0.5 : 1 }}
+                            style={{ flex: 1, padding: '12px', borderRadius: '8px', background: '#22c55e', color: '#fff', fontSize: '13px', fontWeight: 800, border: 'none', cursor: 'pointer', opacity: saving ? 0.5 : 1, boxShadow: '0 4px 12px rgba(34,197,94,0.25)' }}
                           >
                             {saving ? 'Saving...' : 'Save Changes'}
                           </button>
                           <button
                             onClick={() => setEditingJob(null)}
-                            style={{ flex: 1, padding: '10px', borderRadius: '8px', background: 'transparent', border: '1px solid var(--border)', color: 'var(--text-body)', fontSize: '12px', fontWeight: 700, cursor: 'pointer' }}
+                            style={{ padding: '12px 18px', borderRadius: '8px', background: 'transparent', border: '1px solid var(--border)', color: 'var(--text-body)', fontSize: '13px', fontWeight: 700, cursor: 'pointer' }}
                           >
                             Cancel
                           </button>
