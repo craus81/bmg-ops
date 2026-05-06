@@ -83,8 +83,10 @@ export async function GET(req: NextRequest) {
         customer = 'Grimco';
       }
 
-      // Skip POs from filtered customers
-      const lowerFrom = (fromName + ' ' + fromEmail + ' ' + subject).toLowerCase();
+      // Skip POs from filtered senders. Match only the sender (name+email) —
+      // including the subject would skip legit Masterack POs whose subjects
+      // mention "BMG FLEET INSTALLATION" (the recipient, not the sender).
+      const lowerFrom = (fromName + ' ' + fromEmail).toLowerCase();
       if (lowerFrom.includes('ranger design') || lowerFrom.includes('enterprise fleet') || lowerFrom.includes('bmg fleet installation')) {
         continue;
       }
