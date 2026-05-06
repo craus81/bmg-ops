@@ -1933,12 +1933,14 @@ export default function TrackingPage() {
                                   {h.from_status && (
                                     <>
                                       <span style={{ color: 'var(--text-muted)' }}>
-                                        {VEHICLE_STATUS_LABELS[h.from_status as VehicleTrackingStatus] || h.from_status}
+                                        {h.from_status.startsWith('graphics:')
+                                          ? `Graphics: ${GRAPHICS_INSTALL_LABELS[h.from_status.slice('graphics:'.length) as GraphicsInstallStatus] || h.from_status.slice('graphics:'.length)}`
+                                          : VEHICLE_STATUS_LABELS[h.from_status as VehicleTrackingStatus] || h.from_status}
                                       </span>
                                       <span style={{ color: 'var(--text-muted)' }}>→</span>
                                     </>
                                   )}
-                                  <StatusBadge status={h.to_status as VehicleTrackingStatus} size="sm" />
+                                  <StatusBadge status={h.to_status} size="sm" />
                                 </div>
                                 <div style={{ fontSize: '10px', color: 'var(--text-muted)' }}>
                                   {timeAgo(h.created_at)}
