@@ -200,6 +200,72 @@ button {
   cursor: pointer;
 }
 
+/* Visible focus ring for keyboard users only. !important wins over the many
+   per-element inline `outline: none` styles scattered across the codebase
+   without forcing a per-page rewrite. :focus-visible only matches when the
+   browser thinks the user is keyboarding (not click/touch focus), so mouse
+   users don't see the ring. */
+:where(input, select, textarea, button, a, [role="button"], [tabindex]):focus-visible {
+  outline: 2px solid var(--orange) !important;
+  outline-offset: 2px;
+  border-radius: 6px;
+}
+
+/* Skip link: visually hidden until focused. Keyboard users tab to it first
+   and can jump past the header/nav to the page content. */
+.skip-to-main {
+  position: absolute;
+  top: 8px;
+  left: 8px;
+  z-index: 1000;
+  padding: 10px 14px;
+  background: var(--orange);
+  color: #fff;
+  font-weight: 700;
+  font-size: 13px;
+  border-radius: 8px;
+  text-decoration: none;
+  transform: translateY(-200%);
+  transition: transform 0.15s;
+}
+.skip-to-main:focus-visible {
+  transform: translateY(0);
+  outline: 2px solid #fff !important;
+  outline-offset: 2px;
+}
+
+/* Visually-hidden text for screen readers — useful for icon-only buttons. */
+.sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
+}
+
+/* Wrap a wide table in <div class="responsive-table">…</div> to make it
+   horizontally scrollable on mobile rather than overflowing the viewport. */
+.responsive-table {
+  width: 100%;
+  overflow-x: auto;
+  -webkit-overflow-scrolling: touch;
+}
+
+/* Honor the user's "reduce motion" setting — disables non-essential animation
+   for users with vestibular disorders or who simply prefer less motion. */
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    animation-duration: 0.001ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.001ms !important;
+    scroll-behavior: auto !important;
+  }
+}
+
 ::selection {
   background: rgba(238,49,32,0.2);
   color: var(--text-primary);

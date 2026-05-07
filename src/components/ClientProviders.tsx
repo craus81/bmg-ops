@@ -93,9 +93,9 @@ function AppShell({ children }: { children: React.ReactNode }) {
   return (
     <div style={{ minHeight: '100vh', paddingBottom: '85px', background: 'var(--bg)' }}>
       <Header clockStatus={clockStatus} activePartNumber={activePart?.part_number} activeEndCustomer={activePart?.end_customer} />
-      <div style={{ maxWidth: '1200px', margin: '0 auto', padding: '14px 20px', boxSizing: 'border-box' }}>
+      <main id="main" style={{ maxWidth: '1200px', margin: '0 auto', padding: '14px 20px', boxSizing: 'border-box' }}>
         {children}
-      </div>
+      </main>
       <BottomNav clockStatus={clockStatus} />
       <AiChat />
     </div>

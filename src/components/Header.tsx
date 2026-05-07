@@ -50,7 +50,7 @@ export default function Header({ clockStatus, activePartNumber, activeEndCustome
   const { createClient } = require('@/lib/supabase-browser');
   const supabase = createClient();
 
-  // Close menu on outside click
+  // Close menu on outside click or Escape (so keyboard users can dismiss it).
   useEffect(() => {
     const handleClick = (e: MouseEvent) => {
       if (menuRef.current && !menuRef.current.contains(e.target as Node)) {
@@ -60,8 +60,20 @@ export default function Header({ clockStatus, activePartNumber, activeEndCustome
         setShowNotifications(false);
       }
     };
-    if (showMenu || showNotifications) document.addEventListener('mousedown', handleClick);
-    return () => document.removeEventListener('mousedown', handleClick);
+    const handleKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') {
+        setShowMenu(false);
+        setShowNotifications(false);
+      }
+    };
+    if (showMenu || showNotifications) {
+      document.addEventListener('mousedown', handleClick);
+      document.addEventListener('keydown', handleKey);
+    }
+    return () => {
+      document.removeEventListener('mousedown', handleClick);
+      document.removeEventListener('keydown', handleKey);
+    };
   }, [showMenu, showNotifications]);
 
   // Set dynamic page title based on role
@@ -385,6 +397,7 @@ export default function Header({ clockStatus, activePartNumber, activeEndCustome
           {/* Chat / Messages */}
           <button
             onClick={() => router.push('/messages')}
+            aria-label={unreadMessages > 0 ? `Chat, ${unreadMessages} unread messages` : 'Chat'}
             style={{
               background: 'transparent',
               border: '1px solid transparent', borderRadius: '8px',
@@ -396,7 +409,7 @@ export default function Header({ clockStatus, activePartNumber, activeEndCustome
           >
             Chat
             {unreadMessages > 0 && (
-              <span style={{
+              <span aria-hidden="true" style={{
                 position: 'absolute', top: '2px', right: '2px',
                 background: '#3b82f6', color: '#fff',
                 fontSize: '9px', fontWeight: 800,
@@ -413,17 +426,23 @@ export default function Header({ clockStatus, activePartNumber, activeEndCustome
 
           {/* Notification bell */}
           <div ref={notifRef} style={{ position: 'relative' }}>
-            <button onClick={handleBellClick} style={{
-              background: showNotifications ? 'rgba(255,255,255,0.12)' : 'transparent',
-              border: '1px solid transparent', borderRadius: '8px',
-              padding: '6px 6px', fontSize: '11px', fontWeight: 600, position: 'relative',
-              color: 'rgba(255,255,255,0.7)',
-              cursor: 'pointer', transition: 'all 0.15s',
-              lineHeight: 1,
-            }}>
+            <button
+              onClick={handleBellClick}
+              aria-haspopup="menu"
+              aria-expanded={showNotifications}
+              aria-label={unreadCount > 0 ? `Alerts, ${unreadCount} unread` : 'Alerts'}
+              style={{
+                background: showNotifications ? 'rgba(255,255,255,0.12)' : 'transparent',
+                border: '1px solid transparent', borderRadius: '8px',
+                padding: '6px 6px', fontSize: '11px', fontWeight: 600, position: 'relative',
+                color: 'rgba(255,255,255,0.7)',
+                cursor: 'pointer', transition: 'all 0.15s',
+                lineHeight: 1,
+              }}
+            >
               Alerts
               {unreadCount > 0 && (
-                <span style={{
+                <span aria-hidden="true" style={{
                   position: 'absolute', top: '2px', right: '2px',
                   background: '#ef4444', color: '#fff',
                   fontSize: '9px', fontWeight: 800,
@@ -565,13 +584,19 @@ export default function Header({ clockStatus, activePartNumber, activeEndCustome
 
           {/* User menu */}
           <div ref={menuRef} style={{ position: 'relative' }}>
-            <button onClick={() => { setShowMenu(!showMenu); setShowNotifications(false); }} style={{
-              background: showMenu ? 'rgba(255,255,255,0.12)' : 'transparent',
-              border: '1px solid transparent', borderRadius: '8px',
-              padding: '6px 8px', fontSize: '11px', color: 'rgba(255,255,255,0.6)',
-              fontWeight: 600, display: 'flex', alignItems: 'center', gap: '4px',
-              transition: 'all 0.15s', maxWidth: '100px', overflow: 'hidden',
-            }}>
+            <button
+              onClick={() => { setShowMenu(!showMenu); setShowNotifications(false); }}
+              aria-haspopup="menu"
+              aria-expanded={showMenu}
+              aria-label={`Account menu for ${profile?.full_name || 'user'}`}
+              style={{
+                background: showMenu ? 'rgba(255,255,255,0.12)' : 'transparent',
+                border: '1px solid transparent', borderRadius: '8px',
+                padding: '6px 8px', fontSize: '11px', color: 'rgba(255,255,255,0.6)',
+                fontWeight: 600, display: 'flex', alignItems: 'center', gap: '4px',
+                transition: 'all 0.15s', maxWidth: '100px', overflow: 'hidden',
+              }}
+            >
               <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
                 {profile?.full_name?.split(' ')[0] || 'Menu'}
               </span>
