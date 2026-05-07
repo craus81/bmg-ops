@@ -700,6 +700,31 @@ function NewQuote({ onCreated, editQuote }: { onCreated: () => void; editQuote?:
     loadTemplates();
   }, []);
 
+  useEffect(() => {
+    if (step !== 4) return;
+    if (templatePreviewUrl) return;
+    if (!selectedTemplate) return;
+    const imgPath = selectedTemplate.template_image_path || selectedTemplate.original_file_path;
+    if (!imgPath) return;
+    const { data } = storage.from('vehicle-templates').getPublicUrl(imgPath);
+    const publicUrl = data.publicUrl;
+    if (imgPath.toLowerCase().endsWith('.pdf')) {
+      (async () => {
+        try {
+          const resp = await fetch(publicUrl);
+          const blob = await resp.blob();
+          const file = new File([blob], 'template.pdf', { type: 'application/pdf' });
+          const { base64, mediaType } = await pdfToImage(file, 1200, 0.9);
+          setTemplatePreviewUrl(`data:${mediaType};base64,${base64}`);
+        } catch (err) {
+          console.error('Failed to render template PDF on calibrate:', err);
+        }
+      })();
+    } else {
+      setTemplatePreviewUrl(publicUrl);
+    }
+  }, [step, templatePreviewUrl, selectedTemplate]);
+
   async function loadTemplates() {
     const { data } = await supabase
       .from('vehicle_templates')
