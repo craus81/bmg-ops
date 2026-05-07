@@ -2,6 +2,11 @@ import { NextRequest, NextResponse } from 'next/server';
 import { createClient } from '@supabase/supabase-js';
 import { createInvoiceFromSO, suiteqlQuery } from '@/lib/netsuite';
 import { requireAuth } from '@/lib/api-auth';
+import { validateBody, z } from '@/lib/validate';
+
+const Schema = z.object({
+  salesOrderIds: z.array(z.string().regex(/^\d{1,15}$/, 'Sales order id must be numeric')).min(1).max(200),
+});
 
 /**
  * POST /api/netsuite/create-invoice
@@ -13,13 +18,11 @@ export async function POST(req: NextRequest) {
   const auth = await requireAuth(req);
   if (auth.error) return auth.error;
 
+  const parsed = await validateBody(req, Schema);
+  if (parsed.error) return parsed.error;
+  const { salesOrderIds } = parsed.data;
+
   try {
-    const { salesOrderIds } = await req.json();
-
-    if (!salesOrderIds || !Array.isArray(salesOrderIds) || salesOrderIds.length === 0) {
-      return NextResponse.json({ error: 'salesOrderIds array required' }, { status: 400 });
-    }
-
     const supabase = createClient(
       process.env.NEXT_PUBLIC_SUPABASE_URL!,
       process.env.SUPABASE_SERVICE_ROLE_KEY!

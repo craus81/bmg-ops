@@ -3,6 +3,9 @@ import { suiteqlQuery } from '@/lib/netsuite';
 import { requireAuth } from '@/lib/api-auth';
 import OAuth from 'oauth-1.0a';
 import CryptoJS from 'crypto-js';
+import { validateBody, z } from '@/lib/validate';
+
+const Schema = z.object({ dryRun: z.boolean().optional() });
 
 function getConfig() {
   return {
@@ -53,8 +56,11 @@ export async function POST(req: NextRequest) {
   const auth = await requireAuth(req);
   if (auth.error) return auth.error;
 
+  const parsed = await validateBody(req, Schema);
+  if (parsed.error) return parsed.error;
+  const dryRun = parsed.data.dryRun ?? false;
+
   try {
-    const { dryRun = false } = await req.json().catch(() => ({}));
 
     const query = `
       SELECT t.id, t.tranid, t.memo, t.otherrefnum

@@ -2,17 +2,19 @@ import { NextRequest, NextResponse } from 'next/server';
 import { createSalesOrder, findCustomer, findItems, findLocation } from '@/lib/netsuite';
 import { createClient } from '@supabase/supabase-js';
 import { requireAuth } from '@/lib/api-auth';
+import { validateBody, z } from '@/lib/validate';
+
+const Schema = z.object({ poId: z.string().uuid() });
 
 export async function POST(req: NextRequest) {
   const auth = await requireAuth(req);
   if (auth.error) return auth.error;
 
-  try {
-    const { poId } = await req.json();
-    if (!poId) {
-      return NextResponse.json({ error: 'poId required' }, { status: 400 });
-    }
+  const parsed = await validateBody(req, Schema);
+  if (parsed.error) return parsed.error;
+  const { poId } = parsed.data;
 
+  try {
     const supabase = createClient(
       process.env.NEXT_PUBLIC_SUPABASE_URL!,
       process.env.SUPABASE_SERVICE_ROLE_KEY!

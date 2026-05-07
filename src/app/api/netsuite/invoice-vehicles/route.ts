@@ -2,6 +2,11 @@ import { NextRequest, NextResponse } from 'next/server';
 import { createClient } from '@supabase/supabase-js';
 import { createDirectInvoice, findCustomer, findItems, findLocation, suiteqlQuery } from '@/lib/netsuite';
 import { requireAuth } from '@/lib/api-auth';
+import { validateBody, z } from '@/lib/validate';
+
+const Schema = z.object({
+  scanIds: z.array(z.string().uuid()).min(1).max(500),
+});
 
 /**
  * POST /api/netsuite/invoice-vehicles
@@ -14,13 +19,11 @@ export async function POST(req: NextRequest) {
   const auth = await requireAuth(req);
   if (auth.error) return auth.error;
 
+  const parsed = await validateBody(req, Schema);
+  if (parsed.error) return parsed.error;
+  const { scanIds } = parsed.data;
+
   try {
-    const { scanIds } = await req.json();
-
-    if (!scanIds || !Array.isArray(scanIds) || scanIds.length === 0) {
-      return NextResponse.json({ error: 'scanIds array required' }, { status: 400 });
-    }
-
     const supabase = createClient(
       process.env.NEXT_PUBLIC_SUPABASE_URL!,
       process.env.SUPABASE_SERVICE_ROLE_KEY!
