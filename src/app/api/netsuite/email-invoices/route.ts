@@ -3,6 +3,23 @@ import { getNetSuitePdf, suiteqlQuery } from '@/lib/netsuite';
 import { sendEmail, buildInvoiceEmail } from '@/lib/resend';
 import { requireAuth } from '@/lib/api-auth';
 import { safeStringLiteral, SqlSafeError } from '@/lib/sql-safe';
+import { validateBody, z } from '@/lib/validate';
+
+const InvoiceItemSchema = z.object({
+  invoiceId: z.string().regex(/^\d{1,15}$/).optional(),
+  invoiceNumber: z.string().trim().min(1).max(60),
+  po: z.string().max(120).optional(),
+});
+
+const EmailInvoicesSchema = z.object({
+  invoices: z.array(InvoiceItemSchema).min(1).max(50),
+  customerName: z.string().max(200).optional().default(''),
+  customerEmail: z
+    .union([z.string().max(2000), z.array(z.string().max(254)).max(20)])
+    .optional(),
+  customBody: z.string().max(10_000).optional(),
+  dryRun: z.boolean().optional(),
+});
 
 /**
  * POST /api/netsuite/email-invoices
@@ -22,40 +39,50 @@ export async function POST(req: NextRequest) {
   const auth = await requireAuth(req);
   if (auth.error) return auth.error;
 
+  const parsed = await validateBody(req, EmailInvoicesSchema);
+  if (parsed.error) return parsed.error;
+  const { invoices, customerName, customerEmail, customBody, dryRun } = parsed.data;
+
   try {
-    const { invoices, customerName, customerEmail, customBody, dryRun } = await req.json();
-
-    if (!invoices || !Array.isArray(invoices) || invoices.length === 0) {
-      return NextResponse.json({ error: 'invoices array required' }, { status: 400 });
-    }
-
     const recipients: string[] = Array.isArray(customerEmail)
-      ? customerEmail.map((e: string) => String(e).trim()).filter(Boolean)
-      : String(customerEmail || '').split(/[,;\s]+/).map(e => e.trim()).filter(Boolean);
+      ? customerEmail.map((e) => e.trim()).filter(Boolean)
+      : String(customerEmail || '').split(/[,;\s]+/).map((e) => e.trim()).filter(Boolean);
 
     if (!dryRun && recipients.length === 0) {
       return NextResponse.json({ error: 'customerEmail required' }, { status: 400 });
+    }
+
+    // Batch resolve any missing invoiceIds in a single SuiteQL query rather
+    // than once-per-invoice. With 50 invoices in a packet this drops 50
+    // round-trips to one.
+    const tranidsToLookup = invoices
+      .filter((inv) => !inv.invoiceId && inv.invoiceNumber)
+      .map((inv) => inv.invoiceNumber);
+    const tranidToId = new Map<string, string>();
+    if (tranidsToLookup.length > 0) {
+      try {
+        const inList = tranidsToLookup
+          .map((t) => `'${safeStringLiteral(t, 60)}'`)
+          .join(', ');
+        const lookup = await suiteqlQuery(
+          `SELECT id, tranid FROM transaction WHERE type = 'CustInvc' AND tranid IN (${inList})`
+        );
+        for (const row of lookup?.items || []) {
+          if (row.tranid && row.id) tranidToId.set(String(row.tranid), String(row.id));
+        }
+      } catch (err: any) {
+        if (err instanceof SqlSafeError) {
+          return NextResponse.json({ error: err.message }, { status: 400 });
+        }
+        throw err;
+      }
     }
 
     const attachments: { filename: string; content: Buffer; contentType: string }[] = [];
     const results: { invoiceNumber: string; status: 'ok' | 'error'; error?: string }[] = [];
 
     for (const inv of invoices) {
-      let invoiceId = inv.invoiceId;
-
-      if (!invoiceId && inv.invoiceNumber) {
-        try {
-          const safeTranid = safeStringLiteral(inv.invoiceNumber, 60);
-          const lookup = await suiteqlQuery(
-            `SELECT id FROM transaction WHERE type = 'CustInvc' AND tranid = '${safeTranid}'`
-          );
-          invoiceId = lookup?.items?.[0]?.id;
-        } catch (err: any) {
-          const msg = err instanceof SqlSafeError ? err.message : (err?.message || 'unknown');
-          results.push({ invoiceNumber: inv.invoiceNumber || 'unknown', status: 'error', error: `Lookup failed: ${msg}` });
-          continue;
-        }
-      }
+      const invoiceId = inv.invoiceId || tranidToId.get(inv.invoiceNumber);
 
       if (!invoiceId) {
         results.push({ invoiceNumber: inv.invoiceNumber || 'unknown', status: 'error', error: 'Invoice number not found in NetSuite' });
@@ -88,8 +115,8 @@ export async function POST(req: NextRequest) {
       }, { status: 400 });
     }
 
-    const invoiceNumbers = invoices.map((inv: any) => inv.invoiceNumber).filter(Boolean);
-    const poNumbers = invoices.map((inv: any) => inv.po).filter(Boolean);
+    const invoiceNumbers = invoices.map((inv) => inv.invoiceNumber).filter(Boolean);
+    const poNumbers = invoices.map((inv) => inv.po).filter((v): v is string => !!v);
 
     const subject = invoiceNumbers.length === 1
       ? `Invoice #${invoiceNumbers[0]} from BMG Fleet`
