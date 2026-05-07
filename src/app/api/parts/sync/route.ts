@@ -2,6 +2,11 @@ import { NextRequest, NextResponse } from 'next/server';
 import { suiteqlQueryAll } from '@/lib/netsuite';
 import { createClient } from '@supabase/supabase-js';
 import { requireAdmin } from '@/lib/api-auth';
+import { validateBody, z } from '@/lib/validate';
+
+const Schema = z.object({
+  userId: z.string().uuid().optional().nullable(),
+});
 
 export const dynamic = 'force-dynamic';
 export const maxDuration = 120; // Allow up to 2 minutes for large syncs
@@ -31,8 +36,9 @@ export async function POST(req: NextRequest) {
   const auth = await requireAdmin(req);
   if (auth.error) return auth.error;
 
-  const body = await req.json().catch(() => ({}));
-  const triggeredBy = body.userId || null;
+  const parsed = await validateBody(req, Schema);
+  if (parsed.error) return parsed.error;
+  const triggeredBy = parsed.data.userId || null;
 
   // Create sync log entry
   const { data: logEntry, error: logError } = await supabase

@@ -2,11 +2,18 @@ import { NextRequest, NextResponse } from 'next/server';
 import { createClient } from '@supabase/supabase-js';
 import { createCustomerOrLead } from '@/lib/netsuite';
 import { requireAuth } from '@/lib/api-auth';
+import { validateBody, z } from '@/lib/validate';
 
 const supabase = createClient(
   process.env.NEXT_PUBLIC_SUPABASE_URL!,
   process.env.SUPABASE_SERVICE_ROLE_KEY!
 );
+
+const Schema = z.object({
+  prospectId: z.string().uuid(),
+  type: z.enum(['customer', 'lead', 'prospect']),
+  userId: z.string().uuid().optional().nullable(),
+});
 
 /**
  * POST /api/prospects/push-to-netsuite
@@ -16,16 +23,11 @@ export async function POST(req: NextRequest) {
   const auth = await requireAuth(req);
   if (auth.error) return auth.error;
 
+  const parsed = await validateBody(req, Schema);
+  if (parsed.error) return parsed.error;
+  const { prospectId, type, userId } = parsed.data;
+
   try {
-    const { prospectId, type, userId } = await req.json();
-
-    if (!prospectId || !type) {
-      return NextResponse.json({ error: 'Missing prospectId or type' }, { status: 400 });
-    }
-
-    if (!['customer', 'lead', 'prospect'].includes(type)) {
-      return NextResponse.json({ error: 'Invalid type. Must be customer, lead, or prospect' }, { status: 400 });
-    }
 
     // Fetch the prospect
     const { data: prospect, error: fetchError } = await supabase

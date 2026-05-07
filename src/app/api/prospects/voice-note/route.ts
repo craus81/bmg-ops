@@ -1,8 +1,15 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { createClient } from '@supabase/supabase-js';
 import { requireAuth } from '@/lib/api-auth';
+import { validateBody, z } from '@/lib/validate';
 
 export const maxDuration = 30;
+
+const Schema = z.object({
+  prospectId: z.string().uuid(),
+  noteText: z.string().trim().min(1).max(20_000),
+  userId: z.string().uuid().optional().nullable(),
+});
 
 const supabase = createClient(
   process.env.NEXT_PUBLIC_SUPABASE_URL!,
@@ -48,12 +55,11 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ error: 'AI not configured' }, { status: 500 });
   }
 
-  try {
-    const { prospectId, noteText, userId } = await req.json();
+  const parsed = await validateBody(req, Schema);
+  if (parsed.error) return parsed.error;
+  const { prospectId, noteText, userId } = parsed.data;
 
-    if (!prospectId || !noteText?.trim()) {
-      return NextResponse.json({ error: 'Missing prospectId or noteText' }, { status: 400 });
-    }
+  try {
 
     const today = new Date().toISOString().split('T')[0];
     const dayOfWeek = new Date().toLocaleDateString('en-US', { weekday: 'long' });

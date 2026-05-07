@@ -1,8 +1,14 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { r2Upload, r2Delete, r2PublicUrl } from '@/lib/r2';
 import { requireAuth } from '@/lib/api-auth';
+import { validateBody, z } from '@/lib/validate';
 
 export const dynamic = 'force-dynamic';
+
+const DeleteSchema = z.object({
+  bucket: z.string().trim().min(1).max(80),
+  path: z.string().trim().min(1).max(1000),
+});
 
 // POST — upload a file to R2
 export async function POST(req: NextRequest) {
@@ -42,13 +48,11 @@ export async function DELETE(req: NextRequest) {
   const auth = await requireAuth(req);
   if (auth.error) return auth.error;
 
+  const parsed = await validateBody(req, DeleteSchema);
+  if (parsed.error) return parsed.error;
+  const { bucket, path } = parsed.data;
+
   try {
-    const { bucket, path } = await req.json();
-
-    if (!bucket || !path) {
-      return NextResponse.json({ error: 'Missing bucket or path' }, { status: 400 });
-    }
-
     const result = await r2Delete(bucket, path);
 
     if (!result.success) {

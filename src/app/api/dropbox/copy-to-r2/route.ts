@@ -3,9 +3,16 @@ import { downloadFile } from '@/lib/dropbox';
 import { r2Upload } from '@/lib/r2';
 import { createClient } from '@supabase/supabase-js';
 import { requireAuth } from '@/lib/api-auth';
+import { validateBody, z } from '@/lib/validate';
 
 export const dynamic = 'force-dynamic';
 export const maxDuration = 60;
+
+const Schema = z.object({
+  dropbox_path: z.string().trim().min(1).max(2000),
+  vehicle_id: z.string().uuid(),
+  customer_name: z.string().max(200).optional().nullable(),
+});
 
 /**
  * Download a file from Dropbox and upload it to R2, then link it to a vehicle.
@@ -16,12 +23,11 @@ export async function POST(req: NextRequest) {
   const auth = await requireAuth(req);
   if (auth.error) return auth.error;
 
-  try {
-    const { dropbox_path, vehicle_id, customer_name } = await req.json();
+  const parsed = await validateBody(req, Schema);
+  if (parsed.error) return parsed.error;
+  const { dropbox_path, vehicle_id, customer_name } = parsed.data;
 
-    if (!dropbox_path || !vehicle_id) {
-      return NextResponse.json({ error: 'dropbox_path and vehicle_id are required' }, { status: 400 });
-    }
+  try {
 
     // Download from Dropbox
     const { buffer, name, contentType } = await downloadFile(dropbox_path);

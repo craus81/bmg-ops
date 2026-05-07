@@ -1,8 +1,15 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { r2PresignPut } from '@/lib/r2';
 import { requireAuth } from '@/lib/api-auth';
+import { validateBody, z } from '@/lib/validate';
 
 export const dynamic = 'force-dynamic';
+
+const Schema = z.object({
+  bucket: z.string().trim().min(1).max(80),
+  path: z.string().trim().min(1).max(1000),
+  contentType: z.string().max(120).optional(),
+});
 
 // POST — return a presigned PUT URL for uploading directly to R2
 // Used for files that would otherwise exceed the 4.5MB API body limit.
@@ -10,12 +17,11 @@ export async function POST(req: NextRequest) {
   const auth = await requireAuth(req);
   if (auth.error) return auth.error;
 
-  try {
-    const { bucket, path, contentType } = await req.json();
+  const parsed = await validateBody(req, Schema);
+  if (parsed.error) return parsed.error;
+  const { bucket, path, contentType } = parsed.data;
 
-    if (!bucket || !path) {
-      return NextResponse.json({ error: 'Missing bucket or path' }, { status: 400 });
-    }
+  try {
 
     const result = await r2PresignPut(
       bucket,

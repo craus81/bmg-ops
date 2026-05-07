@@ -1,11 +1,26 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { createClient } from '@supabase/supabase-js';
 import { requireAuth } from '@/lib/api-auth';
+import { validateBody, z } from '@/lib/validate';
 
 const supabase = createClient(
   process.env.NEXT_PUBLIC_SUPABASE_URL!,
   process.env.SUPABASE_SERVICE_ROLE_KEY!
 );
+
+const SubscribeSchema = z.object({
+  subscription: z.object({
+    endpoint: z.string().url().max(2000),
+    keys: z.object({
+      p256dh: z.string().min(1).max(200),
+      auth: z.string().min(1).max(200),
+    }),
+  }),
+});
+
+const UnsubscribeSchema = z.object({
+  endpoint: z.string().url().max(2000),
+});
 
 /**
  * POST /api/push/subscribe
@@ -17,13 +32,11 @@ export async function POST(req: NextRequest) {
   const auth = await requireAuth(req);
   if (auth.error) return auth.error;
 
+  const parsed = await validateBody(req, SubscribeSchema);
+  if (parsed.error) return parsed.error;
+  const { subscription } = parsed.data;
+
   try {
-    const { subscription } = await req.json();
-
-    if (!subscription?.endpoint || !subscription?.keys?.p256dh || !subscription?.keys?.auth) {
-      return NextResponse.json({ error: 'Invalid subscription' }, { status: 400 });
-    }
-
     // Upsert: if this endpoint already exists, update it
     const { error } = await supabase
       .from('push_subscriptions')
@@ -56,13 +69,11 @@ export async function DELETE(req: NextRequest) {
   const auth = await requireAuth(req);
   if (auth.error) return auth.error;
 
+  const parsed = await validateBody(req, UnsubscribeSchema);
+  if (parsed.error) return parsed.error;
+  const { endpoint } = parsed.data;
+
   try {
-    const { endpoint } = await req.json();
-
-    if (!endpoint) {
-      return NextResponse.json({ error: 'Missing endpoint' }, { status: 400 });
-    }
-
     await supabase
       .from('push_subscriptions')
       .delete()

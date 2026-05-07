@@ -4,6 +4,18 @@ import { createClient } from '@supabase/supabase-js';
 import { notifyMany } from '@/lib/notify';
 import { requireAuth } from '@/lib/api-auth';
 import { r2Upload } from '@/lib/r2';
+import { validateBody, z } from '@/lib/validate';
+
+const ImportSchema = z.object({
+  messageId: z.string().min(1).max(200),
+  autoCreate: z.boolean().optional(),
+  forceOverwrite: z.boolean().optional(),
+  extractOnly: z.boolean().optional(),
+  // Cached AI-extracted PO payload from a previous /api/parse-po call. Shape
+  // is intentionally loose (parser output evolves) — downstream code reads
+  // specific fields with optional access. record(unknown) keeps it open.
+  preExtracted: z.record(z.string(), z.any()).optional(),
+});
 
 // Persist a PO's source PDFs to R2 + record po_files rows. Skips a filename
 // if it's already attached to that PO so re-imports don't duplicate.
@@ -252,11 +264,11 @@ export async function POST(req: NextRequest) {
     if (auth.error) return auth.error;
   }
 
+  const parsed = await validateBody(req, ImportSchema);
+  if (parsed.error) return parsed.error;
+  const { messageId, autoCreate, forceOverwrite, extractOnly, preExtracted } = parsed.data;
+
   try {
-    const { messageId, autoCreate, forceOverwrite, extractOnly, preExtracted } = await req.json();
-    if (!messageId) {
-      return NextResponse.json({ error: 'messageId required' }, { status: 400 });
-    }
 
     const supabase = createClient(
       process.env.NEXT_PUBLIC_SUPABASE_URL!,

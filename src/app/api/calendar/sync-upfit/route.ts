@@ -2,11 +2,14 @@ import { NextRequest, NextResponse } from 'next/server';
 import { createClient } from '@supabase/supabase-js';
 import { syncCalendarEvent, deleteCalendarEvent } from '@/lib/google';
 import { requireAuth } from '@/lib/api-auth';
+import { validateBody, z } from '@/lib/validate';
 
 const supabase = createClient(
   process.env.NEXT_PUBLIC_SUPABASE_URL!,
   process.env.SUPABASE_SERVICE_ROLE_KEY!
 );
+
+const Schema = z.object({ checkinId: z.string().uuid() });
 
 /**
  * POST /api/calendar/sync-upfit
@@ -17,12 +20,11 @@ export async function POST(req: NextRequest) {
   const auth = await requireAuth(req);
   if (auth.error) return auth.error;
 
-  try {
-    const { checkinId } = await req.json();
+  const parsed = await validateBody(req, Schema);
+  if (parsed.error) return parsed.error;
+  const { checkinId } = parsed.data;
 
-    if (!checkinId) {
-      return NextResponse.json({ error: 'Missing checkinId' }, { status: 400 });
-    }
+  try {
 
     const { data: checkin, error } = await supabase
       .from('fleet_checkins')

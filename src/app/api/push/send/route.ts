@@ -1,11 +1,20 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { createClient } from '@supabase/supabase-js';
 import webpush from 'web-push';
+import { validateBody, z } from '@/lib/validate';
 
 const supabase = createClient(
   process.env.NEXT_PUBLIC_SUPABASE_URL!,
   process.env.SUPABASE_SERVICE_ROLE_KEY!
 );
+
+const Schema = z.object({
+  userIds: z.array(z.string().uuid()).min(1).max(500),
+  title: z.string().trim().min(1).max(200),
+  body: z.string().trim().min(1).max(1000),
+  url: z.string().max(2000).optional(),
+  tag: z.string().max(80).optional(),
+});
 
 // Lazy-init VAPID config (avoid calling at module load when env vars may not exist)
 let vapidConfigured = false;
@@ -46,12 +55,11 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ error: 'Push not configured' }, { status: 503 });
   }
 
-  try {
-    const { userIds, title, body, url, tag } = await req.json();
+  const parsed = await validateBody(req, Schema);
+  if (parsed.error) return parsed.error;
+  const { userIds, title, body, url, tag } = parsed.data;
 
-    if (!userIds?.length || !title || !body) {
-      return NextResponse.json({ error: 'Missing required fields' }, { status: 400 });
-    }
+  try {
 
     // Get all push subscriptions for these users
     const { data: subscriptions, error } = await supabase

@@ -2,11 +2,19 @@ import { NextRequest, NextResponse } from 'next/server';
 import { createClient } from '@supabase/supabase-js';
 import { notify } from '@/lib/notify';
 import { requireAuth } from '@/lib/api-auth';
+import { validateBody, z } from '@/lib/validate';
 
 const supabase = createClient(
   process.env.NEXT_PUBLIC_SUPABASE_URL!,
   process.env.SUPABASE_SERVICE_ROLE_KEY!
 );
+
+const Schema = z.object({
+  messageId: z.string().uuid(),
+  conversationId: z.string().uuid(),
+  senderId: z.string().uuid(),
+  body: z.string().trim().min(1).max(10_000),
+});
 
 /**
  * POST /api/messages/send-sms
@@ -20,12 +28,11 @@ export async function POST(req: NextRequest) {
   const auth = await requireAuth(req);
   if (auth.error) return auth.error;
 
-  try {
-    const { messageId, conversationId, senderId, body } = await req.json();
+  const parsed = await validateBody(req, Schema);
+  if (parsed.error) return parsed.error;
+  const { messageId, conversationId, senderId, body } = parsed.data;
 
-    if (!messageId || !conversationId || !senderId || !body) {
-      return NextResponse.json({ error: 'Missing required fields' }, { status: 400 });
-    }
+  try {
 
     // Get conversation to find the recipient
     const { data: convo, error: convoErr } = await supabase

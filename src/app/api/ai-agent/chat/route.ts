@@ -2,8 +2,22 @@ import { NextRequest, NextResponse } from 'next/server';
 import { suiteqlQuery } from '@/lib/netsuite';
 import { createClient } from '@supabase/supabase-js';
 import { requireAuth } from '@/lib/api-auth';
+import { validateBody, z } from '@/lib/validate';
 
 export const dynamic = 'force-dynamic';
+
+const Schema = z.object({
+  messages: z
+    .array(
+      z.object({
+        role: z.enum(['user', 'assistant', 'system']),
+        content: z.string().max(50_000),
+      }),
+    )
+    .min(1)
+    .max(100),
+  userRole: z.string().max(60).optional(),
+});
 
 const supabase = createClient(
   process.env.NEXT_PUBLIC_SUPABASE_URL!,
@@ -839,13 +853,13 @@ export async function POST(req: NextRequest) {
   const auth = await requireAuth(req);
   if (auth.error) return auth.error;
 
-  try {
-    const { messages, userRole } = await req.json() as { messages: Message[]; userRole?: string };
-    const isInstallerRole = userRole === 'installer' || userRole === 'field_tech' || userRole === 'shop_tech';
+  const parsed = await validateBody(req, Schema);
+  if (parsed.error) return parsed.error;
+  const messages = parsed.data.messages as Message[];
+  const userRole = parsed.data.userRole;
+  const isInstallerRole = userRole === 'installer' || userRole === 'field_tech' || userRole === 'shop_tech';
 
-    if (!messages?.length) {
-      return NextResponse.json({ error: 'No messages provided' }, { status: 400 });
-    }
+  try {
 
     const apiKey = process.env.ANTHROPIC_API_KEY;
     if (!apiKey) {

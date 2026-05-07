@@ -2,9 +2,21 @@ import { NextRequest, NextResponse } from 'next/server';
 import { createClient } from '@supabase/supabase-js';
 import { r2Upload, r2Delete, r2PublicUrl } from '@/lib/r2';
 import { requireAdmin } from '@/lib/api-auth';
+import { z } from '@/lib/validate';
 
 export const dynamic = 'force-dynamic';
 export const maxDuration = 120;
+
+const JsonUploadSchema = z.object({
+  title: z.string().max(300).optional().nullable(),
+  category: z.string().max(80).optional().nullable(),
+  tags: z.string().max(2000).optional().nullable(),
+  userId: z.string().uuid().optional().nullable(),
+  fileName: z.string().max(500),
+  fileType: z.string().max(120).optional().nullable(),
+  fileSize: z.number().int().nonnegative(),
+  storagePath: z.string().max(2000),
+});
 
 // Dynamic imports to avoid bundling issues on serverless
 async function extractDocxText(buffer: Buffer): Promise<string> {
@@ -169,8 +181,17 @@ export async function POST(req: NextRequest) {
 
     // ─── Large file path: JSON body with metadata only (file already in storage) ───
     if (contentType.includes('application/json')) {
-      const body = await req.json();
-      const { title, category, tags, userId, fileName, fileType, fileSize, storagePath } = body;
+      let body: any;
+      try {
+        body = await req.json();
+      } catch {
+        return NextResponse.json({ error: 'Invalid JSON body' }, { status: 400 });
+      }
+      const parsed = JsonUploadSchema.safeParse(body);
+      if (!parsed.success) {
+        return NextResponse.json({ error: 'Invalid request', details: parsed.error.issues }, { status: 400 });
+      }
+      const { title, category, tags, userId, fileName, fileType, fileSize, storagePath } = parsed.data;
 
       const docTitle = (title || '').trim() || (fileName || 'Untitled').replace(/\.[^/.]+$/, '');
       const { data: doc, error: insertError } = await supabase

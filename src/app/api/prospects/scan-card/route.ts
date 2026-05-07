@@ -1,7 +1,15 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { requireAuth } from '@/lib/api-auth';
+import { validateBody, z } from '@/lib/validate';
 
 export const maxDuration = 60;
+
+const Schema = z.object({
+  // Base64 of a typical business-card photo. ~10MB ceiling at base64 (≈7.5MB
+  // raw) is ample; refuses pathological payloads aimed at the AI billing.
+  image: z.string().min(1).max(10_000_000),
+  mimeType: z.enum(['image/jpeg', 'image/png', 'image/webp', 'image/gif']).optional(),
+});
 
 /**
  * POST /api/prospects/scan-card
@@ -11,12 +19,11 @@ export async function POST(req: NextRequest) {
   const auth = await requireAuth(req);
   if (auth.error) return auth.error;
 
-  try {
-    const { image, mimeType } = await req.json();
+  const parsed = await validateBody(req, Schema);
+  if (parsed.error) return parsed.error;
+  const { image, mimeType } = parsed.data;
 
-    if (!image) {
-      return NextResponse.json({ error: 'No image provided' }, { status: 400 });
-    }
+  try {
 
     const res = await fetch('https://api.anthropic.com/v1/messages', {
       method: 'POST',

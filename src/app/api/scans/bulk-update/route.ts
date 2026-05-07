@@ -1,25 +1,29 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { createClient } from '@supabase/supabase-js';
 import { requireAuth } from '@/lib/api-auth';
+import { validateBody, z } from '@/lib/validate';
 
 const supabase = createClient(
   process.env.NEXT_PUBLIC_SUPABASE_URL!,
   process.env.SUPABASE_SERVICE_ROLE_KEY!
 );
 
+const Schema = z.object({
+  scanIds: z.array(z.string().uuid()).min(1).max(1000),
+  updates: z.record(z.string(), z.any()).refine((u) => Object.keys(u).length > 0, {
+    message: 'updates object required',
+  }),
+});
+
 export async function POST(req: NextRequest) {
   const auth = await requireAuth(req);
   if (auth.error) return auth.error;
 
-  try {
-    const { scanIds, updates } = await req.json();
+  const parsed = await validateBody(req, Schema);
+  if (parsed.error) return parsed.error;
+  const { scanIds, updates } = parsed.data;
 
-    if (!scanIds || !Array.isArray(scanIds) || scanIds.length === 0) {
-      return NextResponse.json({ error: 'scanIds array required' }, { status: 400 });
-    }
-    if (!updates || Object.keys(updates).length === 0) {
-      return NextResponse.json({ error: 'updates object required' }, { status: 400 });
-    }
+  try {
 
     // Only allow safe fields to be updated
     const allowedFields = [
