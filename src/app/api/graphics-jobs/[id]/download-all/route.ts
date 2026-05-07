@@ -98,7 +98,6 @@ export async function GET(req: NextRequest, { params }: { params: { id: string }
     `graphics-job-${job.id.slice(0, 8)}`,
   );
 
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any -- TS lib types disagree with Node runtime here; Buffer/Uint8Array are valid Response bodies.
   return new Response(buffer as any, {
     status: 200,
     headers: {

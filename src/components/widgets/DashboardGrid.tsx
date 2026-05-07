@@ -59,7 +59,6 @@ const MyJobsWidget = lazy(() => import('./MyJobsWidget'));
 const SalesPipelineWidget = lazy(() => import('./SalesPipelineWidget'));
 const MyAccountsWidget = lazy(() => import('./MyAccountsWidget'));
 
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
 const WIDGET_COMPONENTS: Record<string, React.LazyExoticComponent<any>> = {
   open_pos: OpenPOsWidget,
   needs_attention: NeedsAttentionWidget,
