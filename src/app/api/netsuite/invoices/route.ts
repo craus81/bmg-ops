@@ -1,32 +1,36 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { suiteqlQuery } from '@/lib/netsuite';
 import { requireAuth } from '@/lib/api-auth';
+import { safeIntId, safeLikeTerm, SqlSafeError } from '@/lib/sql-safe';
+import { validateSearchParams, z } from '@/lib/validate';
 
 export const dynamic = 'force-dynamic';
+
+const QuerySchema = z.object({
+  customerId: z.string().regex(/^\d{1,18}$/, 'customerId must be a positive integer'),
+  q: z.string().trim().max(80, 'q too long').optional(),
+});
 
 export async function GET(req: NextRequest) {
   const auth = await requireAuth(req);
   if (auth.error) return auth.error;
 
-  try {
-    const { searchParams } = new URL(req.url);
-    const customerId = searchParams.get('customerId');
-    const search = searchParams.get('q')?.trim() || '';
+  const parsed = validateSearchParams(req, QuerySchema);
+  if (parsed.error) return parsed.error;
+  const { customerId: customerIdRaw, q: rawSearch } = parsed.data;
 
-    if (!customerId) {
-      return NextResponse.json({ error: 'customerId required' }, { status: 400 });
-    }
+  try {
+    const customerId = safeIntId(customerIdRaw, 'customerId');
 
     let searchFilter = '';
-    if (search) {
-      const term = search.replace(/'/g, "''");
+    if (rawSearch) {
+      const term = safeLikeTerm(rawSearch);
       searchFilter = `AND (
-        UPPER(t.tranid) LIKE UPPER('%${term}%')
-        OR UPPER(t.memo) LIKE UPPER('%${term}%')
+        UPPER(t.tranid) LIKE UPPER('%${term}%') ESCAPE '\\'
+        OR UPPER(t.memo) LIKE UPPER('%${term}%') ESCAPE '\\'
       )`;
     }
 
-    // Query invoices — same pattern as working getOpenSalesOrdersByCustomer
     const query = `
       SELECT
         t.id,
@@ -58,6 +62,9 @@ export async function GET(req: NextRequest) {
 
     return NextResponse.json({ invoices, count: invoices.length });
   } catch (err: any) {
+    if (err instanceof SqlSafeError) {
+      return NextResponse.json({ error: err.message }, { status: 400 });
+    }
     console.error('Invoice search error:', err);
     return NextResponse.json({ error: err.message || 'Failed to fetch invoices' }, { status: 500 });
   }

@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { suiteqlQuery } from '@/lib/netsuite';
 import { requireAuth } from '@/lib/api-auth';
+import { safeStringLiteral, SqlSafeError } from '@/lib/sql-safe';
 
 /**
  * GET /api/netsuite/lookup-transaction?tranid=SO123&type=salesOrder
@@ -24,7 +25,15 @@ export async function GET(req: NextRequest) {
     type === 'estimate' ? `t.type = 'Estimate'` :
     `t.type IN ('SalesOrd', 'Estimate')`;
 
-  const safeTranid = tranid.replace(/'/g, "''");
+  let safeTranid: string;
+  try {
+    safeTranid = safeStringLiteral(tranid, 60);
+  } catch (err: any) {
+    if (err instanceof SqlSafeError) {
+      return NextResponse.json({ error: err.message }, { status: 400 });
+    }
+    throw err;
+  }
 
   const query = `
     SELECT

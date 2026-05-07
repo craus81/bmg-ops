@@ -110,7 +110,7 @@ export async function POST(req: NextRequest) {
     }).select('id').single();
 
     // Create reminders for each action
-    const reminders = [];
+    const reminders: any[] = [];
     for (const action of parsed.actions) {
       if (!action.title || !action.due_date) continue;
       const { data: reminder } = await supabase.from('prospect_reminders').insert({

@@ -141,7 +141,7 @@ export async function POST(request: NextRequest) {
       // Handle multi-page PDF response — merge into single result
       if (parsed.pages && Array.isArray(parsed.pages)) {
         const allRows: any[] = [];
-        let header = null;
+        let header: any = null;
         let allNotes: string[] = [];
         for (const page of parsed.pages) {
           if (page.header && !header) header = page.header;

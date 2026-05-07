@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { suiteqlQuery } from '@/lib/netsuite';
 import { requireAuth } from '@/lib/api-auth';
+import { safeIntId, safeIsoDate, SqlSafeError } from '@/lib/sql-safe';
 
 export const dynamic = 'force-dynamic';
 
@@ -10,15 +11,12 @@ export async function GET(req: NextRequest) {
 
   try {
     const { searchParams } = new URL(req.url);
-    const customerId = searchParams.get('customerId');
-    const startDate = searchParams.get('startDate');
-    const endDate = searchParams.get('endDate');
+    const customerId = safeIntId(searchParams.get('customerId'), 'customerId');
+    const startDateRaw = searchParams.get('startDate');
+    const endDateRaw = searchParams.get('endDate');
+    const startDate = startDateRaw ? safeIsoDate(startDateRaw, 'startDate') : null;
+    const endDate = endDateRaw ? safeIsoDate(endDateRaw, 'endDate') : null;
 
-    if (!customerId) {
-      return NextResponse.json({ error: 'customerId required' }, { status: 400 });
-    }
-
-    // Build date filter
     let dateFilter = '';
     if (startDate && endDate) {
       dateFilter = `AND t.trandate >= '${startDate}' AND t.trandate <= '${endDate}'`;
@@ -79,6 +77,9 @@ export async function GET(req: NextRequest) {
       },
     });
   } catch (err: any) {
+    if (err instanceof SqlSafeError) {
+      return NextResponse.json({ error: err.message }, { status: 400 });
+    }
     console.error('Customer purchases error:', err);
     return NextResponse.json({ error: err.message || 'Failed to fetch purchases' }, { status: 500 });
   }

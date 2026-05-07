@@ -215,7 +215,7 @@ export default function DashboardGrid() {
   }
 
   return (
-    <div ref={containerRef} style={{ width: '100%', maxWidth: '100%', overflowX: 'hidden', boxSizing: 'border-box' }}>
+    <div ref={containerRef as any} style={{ width: '100%', maxWidth: '100%', overflowX: 'hidden', boxSizing: 'border-box' }}>
       {/* Toolbar */}
       <div style={{
         display: 'flex', justifyContent: 'space-between', alignItems: 'center',

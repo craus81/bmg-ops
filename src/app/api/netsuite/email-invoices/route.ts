@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { getNetSuitePdf, suiteqlQuery } from '@/lib/netsuite';
 import { sendEmail, buildInvoiceEmail } from '@/lib/resend';
 import { requireAuth } from '@/lib/api-auth';
+import { safeStringLiteral, SqlSafeError } from '@/lib/sql-safe';
 
 /**
  * POST /api/netsuite/email-invoices
@@ -44,12 +45,14 @@ export async function POST(req: NextRequest) {
 
       if (!invoiceId && inv.invoiceNumber) {
         try {
+          const safeTranid = safeStringLiteral(inv.invoiceNumber, 60);
           const lookup = await suiteqlQuery(
-            `SELECT id FROM transaction WHERE type = 'CustInvc' AND tranid = '${String(inv.invoiceNumber).replace(/'/g, "''")}'`
+            `SELECT id FROM transaction WHERE type = 'CustInvc' AND tranid = '${safeTranid}'`
           );
           invoiceId = lookup?.items?.[0]?.id;
         } catch (err: any) {
-          results.push({ invoiceNumber: inv.invoiceNumber || 'unknown', status: 'error', error: `Lookup failed: ${err?.message || 'unknown'}` });
+          const msg = err instanceof SqlSafeError ? err.message : (err?.message || 'unknown');
+          results.push({ invoiceNumber: inv.invoiceNumber || 'unknown', status: 'error', error: `Lookup failed: ${msg}` });
           continue;
         }
       }

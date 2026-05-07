@@ -23,7 +23,7 @@ async function loadEstimateByToken(token: string) {
     .select('*')
     .eq('approval_token', token)
     .maybeSingle();
-  if (error || !estimate) return { estimate: null, error: error?.message || 'not_found' };
+  if (error || !estimate) return { estimate: null, lines: [] as any[], error: error?.message || 'not_found' };
   const { data: lines } = await supabase
     .from('estimate_line_items')
     .select('*')

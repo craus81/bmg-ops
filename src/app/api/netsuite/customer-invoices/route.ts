@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { suiteqlQuery } from '@/lib/netsuite';
 import { requireAuth } from '@/lib/api-auth';
+import { safeIntId, SqlSafeError } from '@/lib/sql-safe';
 
 export const dynamic = 'force-dynamic';
 
@@ -10,11 +11,7 @@ export async function GET(req: NextRequest) {
 
   try {
     const { searchParams } = new URL(req.url);
-    const customerId = searchParams.get('customerId');
-
-    if (!customerId) {
-      return NextResponse.json({ error: 'customerId required' }, { status: 400 });
-    }
+    const customerId = safeIntId(searchParams.get('customerId'), 'customerId');
 
     const query = `
       SELECT
@@ -42,6 +39,9 @@ export async function GET(req: NextRequest) {
 
     return NextResponse.json({ success: true, transactions });
   } catch (e: any) {
+    if (e instanceof SqlSafeError) {
+      return NextResponse.json({ error: e.message }, { status: 400 });
+    }
     console.error('Customer documents error:', e);
     return NextResponse.json({ error: e.message || 'Failed to fetch documents' }, { status: 500 });
   }

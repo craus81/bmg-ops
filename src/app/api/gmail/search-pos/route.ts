@@ -44,7 +44,7 @@ export async function GET(req: NextRequest) {
     const existingPoNumbers = new Set((existingPOs || []).map((p: any) => p.po_number));
 
     // Fetch details for unimported messages
-    const emails = [];
+    const emails: any[] = [];
     for (const msg of messages) {
       const id = msg.id!;
 

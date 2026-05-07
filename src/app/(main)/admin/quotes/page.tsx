@@ -3348,7 +3348,7 @@ function NewQuote({ onCreated, editQuote }: { onCreated: () => void; editQuote?:
                 return (
                   <div key={i} style={{
                     padding: '10px 0',
-                    borderBottom: i < analysis.graphic_elements.length - 1 ? `1px solid ${theme.border}` : 'none',
+                    borderBottom: i < (analysis.graphic_elements?.length ?? 0) - 1 ? `1px solid ${theme.border}` : 'none',
                     opacity: isIncluded ? 1 : 0.45,
                     transition: 'opacity 0.15s',
                   }}>
@@ -3470,7 +3470,7 @@ function NewQuote({ onCreated, editQuote }: { onCreated: () => void; editQuote?:
             <div style={{ background: theme.card, border: `1px solid ${theme.border}`, borderRadius: '12px', padding: '14px', marginBottom: '12px' }}>
               <div style={{ fontSize: '14px', fontWeight: 700, color: theme.textPrimary, marginBottom: '10px' }}>Panel-by-Panel Breakdown</div>
               {analysis.panels?.map((p, i) => (
-                <div key={i} style={{ padding: '10px 0', borderBottom: i < analysis.panels.length - 1 ? `1px solid ${theme.border}` : 'none' }}>
+                <div key={i} style={{ padding: '10px 0', borderBottom: i < (analysis.panels?.length ?? 0) - 1 ? `1px solid ${theme.border}` : 'none' }}>
                   <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
                     <div>
                       <div style={{ fontSize: '14px', fontWeight: 700, color: theme.textPrimary }}>{p.panel_name}</div>

@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { suiteqlQuery } from '@/lib/netsuite';
 import { requireAuth } from '@/lib/api-auth';
+import { safeLikeTerm, SqlSafeError } from '@/lib/sql-safe';
 
 export const dynamic = 'force-dynamic';
 
@@ -18,8 +19,7 @@ export async function GET(req: NextRequest) {
       return NextResponse.json({ results: [], error: 'Search term must be at least 2 characters' });
     }
 
-    // Escape single quotes for SuiteQL
-    const safe = q.replace(/'/g, "''");
+    const safe = safeLikeTerm(q);
 
     const query = `
       SELECT
@@ -30,7 +30,7 @@ export async function GET(req: NextRequest) {
         c.phone
       FROM customer c
       WHERE c.isinactive = 'F'
-        AND (LOWER(c.companyname) LIKE LOWER('%${safe}%') OR LOWER(c.entityid) LIKE LOWER('%${safe}%'))
+        AND (LOWER(c.companyname) LIKE LOWER('%${safe}%') ESCAPE '\\' OR LOWER(c.entityid) LIKE LOWER('%${safe}%') ESCAPE '\\')
       ORDER BY c.companyname
     `;
 
@@ -47,6 +47,9 @@ export async function GET(req: NextRequest) {
 
     return NextResponse.json({ results });
   } catch (err: any) {
+    if (err instanceof SqlSafeError) {
+      return NextResponse.json({ error: err.message }, { status: 400 });
+    }
     console.error('NetSuite customer search error:', err);
     return NextResponse.json({ error: err.message || 'Search failed' }, { status: 500 });
   }
