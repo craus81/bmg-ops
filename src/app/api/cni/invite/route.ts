@@ -1,8 +1,16 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { createClient } from '@supabase/supabase-js';
-import { requireAuth } from '@/lib/api-auth';
+import { requireAdmin } from '@/lib/api-auth';
+import { validateBody, z } from '@/lib/validate';
 
 export const dynamic = 'force-dynamic';
+
+const InviteSchema = z.object({
+  email: z.string().email().max(254),
+  fullName: z.string().trim().min(1).max(120),
+  phone: z.string().trim().max(40).optional().nullable(),
+  companyName: z.string().trim().max(120).optional().nullable(),
+});
 
 const supabase = createClient(
   process.env.NEXT_PUBLIC_SUPABASE_URL!,
@@ -73,15 +81,14 @@ function generatePassword(): string {
 }
 
 export async function POST(req: NextRequest) {
-  const auth = await requireAuth(req);
+  const auth = await requireAdmin(req);
   if (auth.error) return auth.error;
 
-  try {
-    const { email, fullName, phone, companyName } = await req.json();
+  const parsed = await validateBody(req, InviteSchema);
+  if (parsed.error) return parsed.error;
+  const { email, fullName, phone, companyName } = parsed.data;
 
-    if (!email || !fullName) {
-      return NextResponse.json({ error: 'Name and email are required' }, { status: 400 });
-    }
+  try {
 
     // Check if user already exists
     const { data: existing } = await supabase

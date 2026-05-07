@@ -1,8 +1,28 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { createClient } from '@supabase/supabase-js';
 import { requireAdmin } from '@/lib/api-auth';
+import { validateBody, z } from '@/lib/validate';
 
 export const dynamic = 'force-dynamic';
+
+const RoleEnum = z.enum([
+  'admin', 'installer', 'field_tech', 'shop_tech', 'sales', 'graphics_production', 'customer',
+]);
+
+const CreateUserSchema = z
+  .object({
+    email: z.string().email().max(254),
+    password: z.string().min(8).max(128),
+    fullName: z.string().trim().min(1).max(120),
+    role: RoleEnum.optional(),
+    roles: z.array(RoleEnum).max(7).optional(),
+    companyId: z.string().uuid().optional().nullable(),
+    sendInvite: z.boolean().optional(),
+  })
+  .refine((d) => (d.roles && d.roles.length > 0) || !!d.role, {
+    message: 'Must specify role or roles',
+    path: ['role'],
+  });
 
 const supabase = createClient(
   process.env.NEXT_PUBLIC_SUPABASE_URL!,
@@ -55,16 +75,13 @@ export async function POST(req: NextRequest) {
   const auth = await requireAdmin(req);
   if (auth.error) return auth.error;
 
-  try {
-    const { email, password, fullName, role, roles, companyId, sendInvite } = await req.json();
+  const parsed = await validateBody(req, CreateUserSchema);
+  if (parsed.error) return parsed.error;
+  const { email, password, fullName, role, roles, companyId, sendInvite } = parsed.data;
 
-    // Accept roles array or fall back to single role
+  try {
     const userRoles: string[] = (roles && roles.length > 0) ? roles : (role ? [role] : []);
     const primaryRole = userRoles.includes('admin') ? 'admin' : (userRoles[0] || 'installer');
-
-    if (!email || !password || !fullName || userRoles.length === 0) {
-      return NextResponse.json({ error: 'Missing required fields' }, { status: 400 });
-    }
 
     // 1. Create the auth user via Supabase Admin API
     const { data: authData, error: authError } = await supabase.auth.admin.createUser({

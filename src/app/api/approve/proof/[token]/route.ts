@@ -6,8 +6,18 @@ import {
 } from '@/lib/magic-link-approval';
 import { notifyMany } from '@/lib/notify';
 import { r2Get, r2PublicUrl, r2Upload } from '@/lib/r2';
+import { validateBody, z } from '@/lib/validate';
 
 export const dynamic = 'force-dynamic';
+
+const ApprovalSchema = z.object({
+  action: z.enum(['accept', 'reject']),
+  reason: z.string().trim().max(1000).optional(),
+  agreementText: z.string().max(2000).optional(),
+  timeOnPageSeconds: z.number().int().nonnegative().max(86_400).optional().nullable(),
+  deliveryChannel: z.enum(['sms_link', 'email_link']).optional().nullable(),
+  deliveryTarget: z.string().max(254).optional().nullable(),
+});
 
 const supabase = createClient(
   process.env.NEXT_PUBLIC_SUPABASE_URL!,
@@ -104,11 +114,10 @@ export async function POST(req: NextRequest, { params }: { params: { token: stri
     return NextResponse.json({ error: 'Too many attempts' }, { status: 429 });
   }
 
-  const body = await req.json().catch(() => ({}));
+  const parsed = await validateBody(req, ApprovalSchema);
+  if (parsed.error) return parsed.error;
+  const body = parsed.data;
   const action = body.action;
-  if (!['accept', 'reject'].includes(action)) {
-    return NextResponse.json({ error: 'action must be accept or reject' }, { status: 400 });
-  }
 
   const { job, files } = await loadJobByToken(params.token);
   if (!job) return NextResponse.json({ error: 'Invalid token' }, { status: 404 });
@@ -120,7 +129,7 @@ export async function POST(req: NextRequest, { params }: { params: { token: stri
   const metadata = captureMetadata(req, body);
 
   if (action === 'reject') {
-    const reason = (body.reason || '').toString().trim();
+    const reason = (body.reason || '').trim();
     if (!reason) return NextResponse.json({ error: 'reason required' }, { status: 400 });
 
     await supabase

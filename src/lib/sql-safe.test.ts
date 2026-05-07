@@ -29,7 +29,7 @@ describe('safeIntId', () => {
     ['scientific', '1e5'],
     ['SQL fragment', "1; DROP TABLE customer"],
     ['quote injection', "1' OR '1'='1"],
-    ['huge number', '1234567890123456789'],
+    ['huge number', '1234567890123456'],
     ['letters', 'abc'],
     ['mixed', '12a'],
   ])('rejects %s', (_label, input) => {

@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { createClient } from '@supabase/supabase-js';
+import { validateBody, z } from '@/lib/validate';
 
 export const dynamic = 'force-dynamic';
 
@@ -8,18 +9,28 @@ const supabase = createClient(
   process.env.SUPABASE_SERVICE_ROLE_KEY!
 );
 
+const SignupSchema = z.object({
+  userId: z.string().uuid(),
+  email: z.string().email().max(254),
+  fullName: z.string().trim().min(1).max(120),
+  // 'admin' is intentionally excluded — admins must be promoted explicitly,
+  // not self-requested at signup.
+  requestedRole: z
+    .enum(['installer', 'field_tech', 'shop_tech', 'sales', 'graphics_production', 'customer'])
+    .optional(),
+});
+
 /**
  * POST /api/auth/signup
  * Called after supabase.auth.signUp() succeeds on the client.
  * Creates the profile record with status='pending' so admins can approve.
  */
 export async function POST(req: NextRequest) {
-  try {
-    const { userId, email, fullName, requestedRole } = await req.json();
+  const parsed = await validateBody(req, SignupSchema);
+  if (parsed.error) return parsed.error;
+  const { userId, email, fullName, requestedRole } = parsed.data;
 
-    if (!userId || !email || !fullName) {
-      return NextResponse.json({ error: 'Missing required fields' }, { status: 400 });
-    }
+  try {
 
     // Create the profile with pending status
     const { error } = await supabase

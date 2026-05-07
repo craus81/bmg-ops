@@ -22,7 +22,9 @@ export class SqlSafeError extends Error {
 export function safeIntId(value: unknown, field = 'id'): string {
   if (value == null) throw new SqlSafeError(`${field} required`);
   const s = String(value).trim();
-  if (!/^\d{1,18}$/.test(s)) throw new SqlSafeError(`Invalid ${field}`);
+  // NetSuite internal ids are well under 12 digits in practice; cap at 15 to
+  // leave headroom while rejecting obviously oversized payloads.
+  if (!/^\d{1,15}$/.test(s)) throw new SqlSafeError(`Invalid ${field}`);
   return s;
 }
 
