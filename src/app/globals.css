@@ -79,12 +79,15 @@ html, body {
   --login-bg: linear-gradient(165deg, #152838 0%, #0f1e2a 40%, #0a1520 100%);
   --login-input-bg: rgba(255,255,255,0.06);
   --login-input-border: rgba(255,255,255,0.1);
-  --login-label: rgba(255,255,255,0.45);
+  /* Bumped from 0.45 / 0.25 to meet WCAG AA on the dark login gradient.
+     0.45 white on #0e2a38 was ~3.4:1 (fails 4.5:1 for normal text); 0.7 is
+     ~6.6:1. Labels and small fine print were the worst offenders. */
+  --login-label: rgba(255,255,255,0.7);
   --login-text: #ffffff;
-  --login-text-muted: rgba(255,255,255,0.25);
+  --login-text-muted: rgba(255,255,255,0.7);
   --login-tab-active-bg: rgba(255,255,255,0.1);
   --login-tab-active-color: #ffffff;
-  --login-tab-color: rgba(255,255,255,0.4);
+  --login-tab-color: rgba(255,255,255,0.65);
   --login-tab-bg: rgba(255,255,255,0.06);
 
   /* Toggle active tab */

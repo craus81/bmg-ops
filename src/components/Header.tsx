@@ -5,6 +5,7 @@ import { useRouter } from 'next/navigation';
 import { useAuth } from '@/components/AuthProvider';
 import { theme } from '@/lib/theme';
 import UniversalSearch from '@/components/UniversalSearch';
+import { useFocusTrap } from '@/lib/use-focus-trap';
 
 interface HeaderProps {
   clockStatus: 'out' | 'in' | 'break';
@@ -33,6 +34,14 @@ export default function Header({ clockStatus, activePartNumber, activeEndCustome
   const [switching, setSwitching] = useState(false);
   const [switchError, setSwitchError] = useState('');
   const menuRef = useRef<HTMLDivElement>(null);
+
+  const closeSwitchModal = () => {
+    setShowSwitchModal(false);
+    setSwitchError('');
+    setSwitchEmail('');
+    setSwitchPassword('');
+  };
+  const switchModalRef = useFocusTrap<HTMLDivElement>(showSwitchModal, closeSwitchModal);
 
   // Notifications state
   const [showNotifications, setShowNotifications] = useState(false);
@@ -270,12 +279,19 @@ export default function Header({ clockStatus, activePartNumber, activeEndCustome
           </div>
         </header>
         <div style={{ position: 'fixed', inset: 0, zIndex: 200, background: 'rgba(0,0,0,0.6)', display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '20px' }}
-          onClick={() => { setShowSwitchModal(false); setSwitchError(''); }}>
-          <div onClick={(e) => e.stopPropagation()} style={{
-            background: 'var(--card)', borderRadius: '16px', padding: '24px', width: '100%', maxWidth: '360px',
-            border: '1px solid var(--border)', boxShadow: '0 20px 60px rgba(0,0,0,0.3)',
-          }}>
-            <div style={{ fontSize: '18px', fontWeight: 800, color: 'var(--text-primary)', marginBottom: '4px' }}>Switch User</div>
+          onClick={closeSwitchModal}>
+          <div
+            ref={switchModalRef}
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="switch-user-title"
+            onClick={(e) => e.stopPropagation()}
+            style={{
+              background: 'var(--card)', borderRadius: '16px', padding: '24px', width: '100%', maxWidth: '360px',
+              border: '1px solid var(--border)', boxShadow: '0 20px 60px rgba(0,0,0,0.3)',
+            }}
+          >
+            <div id="switch-user-title" style={{ fontSize: '18px', fontWeight: 800, color: 'var(--text-primary)', marginBottom: '4px' }}>Switch User</div>
             <div style={{ fontSize: '12px', color: 'var(--text-muted)', marginBottom: '16px' }}>Sign in as a different account</div>
 
             {switchError && (
@@ -304,7 +320,7 @@ export default function Header({ clockStatus, activePartNumber, activeEndCustome
               opacity: switching || !switchEmail.trim() || !switchPassword.trim() ? 0.4 : 1,
             }}>{switching ? 'Signing in...' : 'Switch Account'}</button>
 
-            <button onClick={() => { setShowSwitchModal(false); setSwitchError(''); setSwitchEmail(''); setSwitchPassword(''); }} style={{
+            <button onClick={closeSwitchModal} style={{
               width: '100%', padding: '10px', borderRadius: '10px', border: '1px solid var(--border)',
               background: 'transparent', color: 'var(--text-secondary)', fontSize: '13px', fontWeight: 700,
             }}>Cancel</button>
