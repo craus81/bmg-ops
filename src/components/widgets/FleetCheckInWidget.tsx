@@ -30,9 +30,9 @@ export default function FleetCheckInWidget() {
       .limit(100);
 
     const all = checkins || [];
-    const today = all.filter(c => c.created_at >= todayStart).length;
-    const week = all.filter(c => c.created_at >= weekStart).length;
-    const month = all.filter(c => c.created_at >= monthStart).length;
+    const today = all.filter((c: any) => c.created_at >= todayStart).length;
+    const week = all.filter((c: any) => c.created_at >= weekStart).length;
+    const month = all.filter((c: any) => c.created_at >= monthStart).length;
 
     setStats({ today, week, month });
     setRecentCheckins(all.slice(0, 5));

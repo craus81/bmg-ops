@@ -34,8 +34,8 @@ export default function MyJobsWidget() {
     }
 
     // Get vehicle jobs
-    const vehicleIds = assignments.filter(a => a.job_type === 'scanned_vehicle').map(a => a.job_id);
-    const graphicsIds = assignments.filter(a => a.job_type === 'graphics_job').map(a => a.job_id);
+    const vehicleIds = assignments.filter((a: any) => a.job_type === 'scanned_vehicle').map((a: any) => a.job_id);
+    const graphicsIds = assignments.filter((a: any) => a.job_type === 'graphics_job').map((a: any) => a.job_id);
 
     const jobs: any[] = [];
 
@@ -44,7 +44,7 @@ export default function MyJobsWidget() {
         .from('scanned_vehicles')
         .select('id, vin, vehicle_year, vehicle_make, vehicle_model, end_customer, review_status, scanned_at')
         .in('id', vehicleIds);
-      (data || []).forEach(v => jobs.push({ ...v, type: 'vehicle' }));
+      (data || []).forEach((v: any) => jobs.push({ ...v, type: 'vehicle' }));
     }
 
     if (graphicsIds.length > 0) {
@@ -52,7 +52,7 @@ export default function MyJobsWidget() {
         .from('graphics_jobs')
         .select('id, title, customer, status, created_at')
         .in('id', graphicsIds);
-      (data || []).forEach(g => jobs.push({ ...g, type: 'graphics' }));
+      (data || []).forEach((g: any) => jobs.push({ ...g, type: 'graphics' }));
     }
 
     const pending = jobs.filter(j => j.type === 'vehicle' ? j.review_status === 'pending' : !['shipped', 'picked_up', 'installed', 'cancelled'].includes(j.status)).length;

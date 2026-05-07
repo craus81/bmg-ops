@@ -23,7 +23,7 @@ export default function TimeClockWidget() {
         .gte('clock_in', today)
         .order('clock_in', { ascending: true });
 
-      setClockedIn((entries || []).map(e => ({
+      setClockedIn((entries || []).map((e: any) => ({
         name: (e.profiles as any)?.full_name || 'Unknown',
         since: e.clock_in,
       })));

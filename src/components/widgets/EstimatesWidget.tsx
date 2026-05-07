@@ -30,7 +30,7 @@ export default function EstimatesWidget() {
       .limit(100);
 
     const all = estimates || [];
-    const recent = all.filter(e => e.created_at >= sevenDaysAgo).length;
+    const recent = all.filter((e: any) => e.created_at >= sevenDaysAgo).length;
 
     setStats({ total: count || 0, recent });
     setRecentEstimates(all.slice(0, 5));

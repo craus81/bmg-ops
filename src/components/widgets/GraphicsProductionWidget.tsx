@@ -35,10 +35,10 @@ export default function GraphicsProductionWidget() {
       .select('id, title, status, customer, created_at')
       .order('created_at', { ascending: false });
 
-    const all = (jobs || []).filter(j => !['installed', 'picked_up', 'cancelled'].includes(j.status || ''));
-    const received = all.filter(j => j.status === 'received').length;
-    const inProduction = all.filter(j => IN_PRODUCTION_STATUSES.includes(j.status)).length;
-    const readyShipped = all.filter(j => j.status === 'ready' || j.status === 'shipped').length;
+    const all = (jobs || []).filter((j: any) => !['installed', 'picked_up', 'cancelled'].includes(j.status || ''));
+    const received = all.filter((j: any) => j.status === 'received').length;
+    const inProduction = all.filter((j: any) => IN_PRODUCTION_STATUSES.includes(j.status)).length;
+    const readyShipped = all.filter((j: any) => j.status === 'ready' || j.status === 'shipped').length;
 
     setStats({ received, inProduction, readyShipped });
     setRecentJobs(all.slice(0, 5));

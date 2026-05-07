@@ -22,8 +22,8 @@ export default function UserManagementWidget() {
       .limit(1000);
 
     const all = profiles || [];
-    const active = all.filter(p => p.status === 'approved');
-    const pending = all.filter(p => p.status === 'pending');
+    const active = all.filter((p: any) => p.status === 'approved');
+    const pending = all.filter((p: any) => p.status === 'pending');
 
     setStats({ active: active.length, pending: pending.length });
     setPendingUsers(pending.slice(0, 3));

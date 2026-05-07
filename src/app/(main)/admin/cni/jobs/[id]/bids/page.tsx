@@ -65,7 +65,7 @@ export default function BidReviewPage() {
 
     if (bidsData && bidsData.length > 0) {
       // Get installer profiles + names
-      const installerIds = bidsData.map(b => b.installer_id);
+      const installerIds = bidsData.map((b: any) => b.installer_id);
       const { data: profiles } = await supabase
         .from('profiles')
         .select('id, full_name')
@@ -80,7 +80,7 @@ export default function BidReviewPage() {
       const cniMap: Record<string, any> = {};
       (cniProfiles || []).forEach((p: any) => { cniMap[p.user_id] = p; });
 
-      setBids(bidsData.map(b => ({
+      setBids(bidsData.map((b: any) => ({
         ...b,
         installer_name: nameMap[b.installer_id] || 'Unknown',
         company_name: cniMap[b.installer_id]?.company_name || null,

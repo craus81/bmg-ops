@@ -21,9 +21,9 @@ export default function VendorPaymentsWidget() {
       .limit(1000);
 
     const all = invoices || [];
-    const pending = all.filter(i => i.status === 'pending');
-    const approved = all.filter(i => i.status === 'approved');
-    const paid = all.filter(i => i.status === 'paid');
+    const pending = all.filter((i: any) => i.status === 'pending');
+    const approved = all.filter((i: any) => i.status === 'approved');
+    const paid = all.filter((i: any) => i.status === 'paid');
 
     setStats({ pending: pending.length, approved: approved.length, paid: paid.length });
     setLoading(false);

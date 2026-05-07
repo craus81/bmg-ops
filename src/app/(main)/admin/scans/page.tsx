@@ -583,7 +583,7 @@ export default function AdminScansPage() {
       let existingQuery = supabase.from('scan_logs').select('vin, part_number').in('vin', vins);
       if (partNum) existingQuery = existingQuery.eq('part_number', partNum);
       const { data: existingScans } = await existingQuery;
-      const existingVins = new Set((existingScans || []).map(s => s.vin));
+      const existingVins = new Set((existingScans || []).map((s: any) => s.vin));
       for (const vin of vins) {
         if (existingVins.has(vin)) { totalDupes++; }
         else { vinPartPairs.push({ vin, part }); }
@@ -1060,7 +1060,7 @@ export default function AdminScansPage() {
             {/* Part number match status */}
             {(() => {
               const partNumbers = (worksheetReview.header.part_number || '').split('/').map((p: string) => p.trim()).filter(Boolean);
-              const matchResults = partNumbers.map(pn => ({
+              const matchResults = partNumbers.map((pn: any) => ({
                 partNumber: pn,
                 match: allParts.find(p => p.item_number.toUpperCase().includes(pn.toUpperCase())),
               }));
@@ -1075,7 +1075,7 @@ export default function AdminScansPage() {
                       style={{ width: '100%', padding: '7px 9px', borderRadius: '6px', border: '1px solid var(--border)', background: 'var(--input-bg)', color: 'var(--text-primary)', fontSize: '13px', fontWeight: 700 }}
                     />
                   </div>
-                  {matchResults.map((r, i) => (
+                  {matchResults.map((r: any, i: any) => (
                     <div key={i} style={{
                       display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '8px',
                       padding: '6px 10px', borderRadius: '6px', marginBottom: '4px',

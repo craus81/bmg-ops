@@ -48,7 +48,7 @@ export default function CniJobChat({ jobId, userId, backPath, jobNumber, jobTitl
 
     if (data) {
       // Get sender names
-      const senderIds = [...new Set(data.map(m => m.sender_id))];
+      const senderIds = [...new Set(data.map((m: any) => m.sender_id))];
       let nameMap: Record<string, string> = {};
       if (senderIds.length > 0) {
         const { data: profiles } = await supabase
@@ -57,15 +57,15 @@ export default function CniJobChat({ jobId, userId, backPath, jobNumber, jobTitl
           .in('id', senderIds);
         if (profiles) profiles.forEach((p: any) => { nameMap[p.id] = p.full_name; });
       }
-      setMessages(data.map(m => ({ ...m, sender_name: nameMap[m.sender_id] || 'Unknown' })));
+      setMessages(data.map((m: any) => ({ ...m, sender_name: nameMap[m.sender_id] || 'Unknown' })));
 
       // Mark unread messages as read
-      const unread = data.filter(m => !m.read_at && m.sender_id !== userId);
+      const unread = data.filter((m: any) => !m.read_at && m.sender_id !== userId);
       if (unread.length > 0) {
         await supabase
           .from('cni_job_messages')
           .update({ read_at: new Date().toISOString() })
-          .in('id', unread.map(m => m.id));
+          .in('id', unread.map((m: any) => m.id));
       }
     }
 

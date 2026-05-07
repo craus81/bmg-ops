@@ -51,7 +51,7 @@ export default function AvailableJobsPage() {
       .select('id, job_id, invite_type, seen_at')
       .eq('installer_id', user.id);
 
-    const inviteJobIds = (invites || []).map(i => i.job_id);
+    const inviteJobIds = (invites || []).map((i: any) => i.job_id);
 
     // Load published jobs (open board) that I haven't been assigned to
     const { data: publishedJobs } = await supabase
@@ -79,11 +79,11 @@ export default function AvailableJobsPage() {
       .select('job_id, response, responded_at')
       .eq('installer_id', user.id);
     const bidMap: Record<string, { response: string; responded_at: string }> = {};
-    (myBids || []).forEach(b => { bidMap[b.job_id] = { response: b.response, responded_at: b.responded_at }; });
+    (myBids || []).forEach((b: any) => { bidMap[b.job_id] = { response: b.response, responded_at: b.responded_at }; });
 
     // Build invite invite map
     const inviteMap: Record<string, any> = {};
-    (invites || []).forEach(i => { inviteMap[i.job_id] = i; });
+    (invites || []).forEach((i: any) => { inviteMap[i.job_id] = i; });
 
     // Merge: invite jobs get invite metadata
     const mergedInvites: AvailableJob[] = inviteJobs.map(j => ({
@@ -96,8 +96,8 @@ export default function AvailableJobsPage() {
 
     // Open board: exclude jobs I already have an invite for (to avoid duplicates)
     const openJobs: AvailableJob[] = (publishedJobs || [])
-      .filter(j => !inviteJobIds.includes(j.id))
-      .map(j => ({
+      .filter((j: any) => !inviteJobIds.includes(j.id))
+      .map((j: any) => ({
         ...j,
         my_bid: bidMap[j.id] || null,
       }));
@@ -105,12 +105,12 @@ export default function AvailableJobsPage() {
     setJobs([...mergedInvites, ...openJobs]);
 
     // Mark unseen invites as seen
-    const unseenInvites = (invites || []).filter(i => !i.seen_at);
+    const unseenInvites = (invites || []).filter((i: any) => !i.seen_at);
     if (unseenInvites.length > 0) {
       await supabase
         .from('cni_job_invites')
         .update({ seen_at: new Date().toISOString() })
-        .in('id', unseenInvites.map(i => i.id));
+        .in('id', unseenInvites.map((i: any) => i.id));
     }
 
     setLoading(false);

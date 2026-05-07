@@ -95,8 +95,8 @@ export default function CustomerDashboard() {
     }
 
     // Separate by type
-    const vehicleIds = assignments.filter(a => a.job_type === 'scanned_vehicle').map(a => a.job_id);
-    const graphicsIds = assignments.filter(a => a.job_type === 'graphics_job').map(a => a.job_id);
+    const vehicleIds = assignments.filter((a: any) => a.job_type === 'scanned_vehicle').map((a: any) => a.job_id);
+    const graphicsIds = assignments.filter((a: any) => a.job_type === 'graphics_job').map((a: any) => a.job_id);
 
     // Load vehicle jobs
     if (vehicleIds.length > 0) {

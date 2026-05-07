@@ -24,9 +24,9 @@ export default function PhotoReviewsWidget() {
       .limit(500);
 
     const all = vehicles || [];
-    const pending = all.filter(v => v.review_status === 'pending');
-    const approved = all.filter(v => v.review_status === 'approved');
-    const denied = all.filter(v => v.review_status === 'denied');
+    const pending = all.filter((v: any) => v.review_status === 'pending');
+    const approved = all.filter((v: any) => v.review_status === 'approved');
+    const denied = all.filter((v: any) => v.review_status === 'denied');
 
     setStats({ pending: pending.length, approved: approved.length, denied: denied.length });
     setRecentPending(pending.slice(0, 3));

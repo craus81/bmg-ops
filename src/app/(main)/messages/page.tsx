@@ -92,7 +92,7 @@ export default function MessagesPage() {
       .on(
         'postgres_changes',
         { event: 'INSERT', schema: 'public', table: 'messages' },
-        (payload) => {
+        (payload: any) => {
           const msg = payload.new as Message;
           // If it's in the active conversation, add it
           if (msg.conversation_id === activeConvoId) {
@@ -113,7 +113,7 @@ export default function MessagesPage() {
       .on(
         'postgres_changes',
         { event: 'UPDATE', schema: 'public', table: 'messages' },
-        (payload) => {
+        (payload: any) => {
           const updated = payload.new as Message;
           // Update read_at for read receipts in the active conversation
           if (updated.read_at && updated.conversation_id === activeConvoId) {
@@ -157,7 +157,7 @@ export default function MessagesPage() {
     }
 
     // Get profiles for all participants
-    const otherUserIds = convos.map(c =>
+    const otherUserIds = convos.map((c: any) =>
       c.participant_1 === user.id ? c.participant_2 : c.participant_1
     );
     const { data: otherProfiles } = await supabase
@@ -165,10 +165,10 @@ export default function MessagesPage() {
       .select('id, full_name, email, role, status')
       .in('id', otherUserIds);
 
-    const profileMap = new Map((otherProfiles || []).map(p => [p.id, p]));
+    const profileMap = new Map((otherProfiles || []).map((p: any) => [p.id, p]));
 
     // Unread counts: one query for all conversations rather than per-convo.
-    const convoIds = convos.map((c) => c.id);
+    const convoIds = convos.map((c: any) => c.id);
     const { data: unreadRows } = await supabase
       .from('messages')
       .select('conversation_id')
@@ -185,14 +185,14 @@ export default function MessagesPage() {
     // doesn't have a clean PostgREST shape) but run them in parallel so the
     // total wait is one RTT instead of N.
     const lastMsgResults = await Promise.all(
-      convos.map((c) =>
+      convos.map((c: any) =>
         supabase
           .from('messages')
           .select('*')
           .eq('conversation_id', c.id)
           .order('created_at', { ascending: false })
           .limit(1)
-          .then(({ data }) => ({ id: c.id, msg: data?.[0] as Message | undefined }))
+          .then(({ data }: any) => ({ id: c.id, msg: data?.[0] as Message | undefined }))
       )
     );
     const lastMsgByConvo = new Map(lastMsgResults.map((r) => [r.id, r.msg]));

@@ -24,7 +24,7 @@ export default function TopCustomersWidget() {
       .select('id, unit_price');
 
     const priceMap: Record<string, number> = {};
-    (poLines || []).forEach(l => { priceMap[l.id] = l.unit_price || 0; });
+    (poLines || []).forEach((l: any) => { priceMap[l.id] = l.unit_price || 0; });
 
     // Aggregate by customer
     const custMap: Record<string, { name: string; vehicles: number; revenue: number }> = {};

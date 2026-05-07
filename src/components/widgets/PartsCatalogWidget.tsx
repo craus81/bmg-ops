@@ -22,8 +22,8 @@ export default function PartsCatalogWidget() {
       .limit(5000);
 
     const all = parts || [];
-    const upfit = all.filter(p => p.catalog === 'upfit');
-    const graphics = all.filter(p => p.catalog === 'graphics');
+    const upfit = all.filter((p: any) => p.catalog === 'upfit');
+    const graphics = all.filter((p: any) => p.catalog === 'graphics');
 
     setStats({ total: all.length, upfit: upfit.length, graphics: graphics.length });
     setLoading(false);

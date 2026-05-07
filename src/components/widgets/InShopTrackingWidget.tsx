@@ -39,18 +39,18 @@ export default function InShopTrackingWidget() {
       .select('id, vin, customer_name, vehicle_year, vehicle_make, vehicle_model, status, updated_at')
       .order('updated_at', { ascending: false });
 
-    const all = (checkins || []).map(c => ({
+    const all = (checkins || []).map((c: any) => ({
       ...c,
       status: c.status === 'checked_in' ? 'received' : c.status,
-    })).filter(c => !['shipped', 'archived'].includes(c.status || ''));
+    })).filter((c: any) => !['shipped', 'archived'].includes(c.status || ''));
     setStats({
-      received: all.filter(c => c.status === 'received').length,
-      in_progress: all.filter(c => c.status === 'in_progress').length,
-      stuck_parts: all.filter(c => c.status === 'stuck_parts').length,
-      stuck_graphics: all.filter(c => c.status === 'stuck_graphics').length,
-      complete: all.filter(c => c.status === 'complete').length,
+      received: all.filter((c: any) => c.status === 'received').length,
+      in_progress: all.filter((c: any) => c.status === 'in_progress').length,
+      stuck_parts: all.filter((c: any) => c.status === 'stuck_parts').length,
+      stuck_graphics: all.filter((c: any) => c.status === 'stuck_graphics').length,
+      complete: all.filter((c: any) => c.status === 'complete').length,
     });
-    const active = all.filter(c => c.status !== 'complete');
+    const active = all.filter((c: any) => c.status !== 'complete');
     setRecentItems(active.length > 0 ? active.slice(0, 5) : all.slice(0, 5));
     setLoading(false);
   };

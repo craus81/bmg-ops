@@ -21,9 +21,9 @@ export default function RevenueSummaryWidget() {
       .from('invoices')
       .select('id, status, payment_amount, paid_at');
 
-    const paid = (invoices || []).filter(i => i.status === 'paid');
-    const pending = (invoices || []).filter(i => i.status === 'pending');
-    const paidTotal = paid.reduce((s, i) => s + (i.payment_amount || 0), 0);
+    const paid = (invoices || []).filter((i: any) => i.status === 'paid');
+    const pending = (invoices || []).filter((i: any) => i.status === 'pending');
+    const paidTotal = paid.reduce((s: any, i: any) => s + (i.payment_amount || 0), 0);
 
     const now = new Date();
     const monthStart = new Date(now.getFullYear(), now.getMonth(), 1).toISOString();
@@ -31,11 +31,11 @@ export default function RevenueSummaryWidget() {
     const lastMonthEnd = new Date(now.getFullYear(), now.getMonth(), 0, 23, 59, 59).toISOString();
 
     const thisMonth = paid
-      .filter(i => i.paid_at && new Date(i.paid_at) >= new Date(monthStart))
-      .reduce((s, i) => s + (i.payment_amount || 0), 0);
+      .filter((i: any) => i.paid_at && new Date(i.paid_at) >= new Date(monthStart))
+      .reduce((s: any, i: any) => s + (i.payment_amount || 0), 0);
     const lastMonth = paid
-      .filter(i => i.paid_at && new Date(i.paid_at) >= new Date(lastMonthStart) && new Date(i.paid_at) <= new Date(lastMonthEnd))
-      .reduce((s, i) => s + (i.payment_amount || 0), 0);
+      .filter((i: any) => i.paid_at && new Date(i.paid_at) >= new Date(lastMonthStart) && new Date(i.paid_at) <= new Date(lastMonthEnd))
+      .reduce((s: any, i: any) => s + (i.payment_amount || 0), 0);
 
     setStats({ paidTotal, paidCount: paid.length, thisMonth, lastMonth, pendingCount: pending.length });
     setLoading(false);

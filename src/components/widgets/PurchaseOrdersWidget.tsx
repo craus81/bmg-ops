@@ -23,7 +23,7 @@ export default function PurchaseOrdersWidget() {
       .limit(500);
 
     const all = pos || [];
-    const open = all.filter(p => p.status === 'open');
+    const open = all.filter((p: any) => p.status === 'open');
 
     setStats({ open: open.length, total: all.length });
     setRecentPOs(open.slice(0, 5));

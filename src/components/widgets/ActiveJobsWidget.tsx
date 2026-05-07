@@ -29,9 +29,9 @@ export default function ActiveJobsWidget() {
       .limit(100);
 
     const all = jobs || [];
-    const received = all.filter(j => j.status === 'received');
-    const inProd = all.filter(j => ['designing', 'revision', 'printing', 'outgassing', 'cutting', 'packing'].includes(j.status));
-    const ready = all.filter(j => j.status === 'ready' || j.status === 'shipped');
+    const received = all.filter((j: any) => j.status === 'received');
+    const inProd = all.filter((j: any) => ['designing', 'revision', 'printing', 'outgassing', 'cutting', 'packing'].includes(j.status));
+    const ready = all.filter((j: any) => j.status === 'ready' || j.status === 'shipped');
 
     setStats({
       received: received.length,

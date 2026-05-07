@@ -181,7 +181,7 @@ export default function CniJobDetailPage() {
       .from('cni_job_invites')
       .select('installer_id')
       .eq('job_id', jobId);
-    setInvitedIds((inviteData || []).map(i => i.installer_id));
+    setInvitedIds((inviteData || []).map((i: any) => i.installer_id));
 
     // Load photo stats
     const { data: photoData } = await supabase
@@ -191,9 +191,9 @@ export default function CniJobDetailPage() {
     if (photoData) {
       setPhotoStats({
         total: photoData.length,
-        pending: photoData.filter(p => p.review_status === 'pending').length,
-        approved: photoData.filter(p => p.review_status === 'approved').length,
-        denied: photoData.filter(p => p.review_status === 'denied').length,
+        pending: photoData.filter((p: any) => p.review_status === 'pending').length,
+        approved: photoData.filter((p: any) => p.review_status === 'approved').length,
+        denied: photoData.filter((p: any) => p.review_status === 'denied').length,
       });
     }
 
@@ -215,7 +215,7 @@ export default function CniJobDetailPage() {
       .eq('job_id', jobId)
       .order('created_at', { ascending: false });
     if (historyData) {
-      const changerIds = [...new Set(historyData.filter(h => h.changed_by).map(h => h.changed_by))];
+      const changerIds = [...new Set(historyData.filter((h: any) => h.changed_by).map((h: any) => h.changed_by))];
       let nameMap: Record<string, string> = {};
       if (changerIds.length > 0) {
         const { data: profiles } = await supabase
@@ -224,7 +224,7 @@ export default function CniJobDetailPage() {
           .in('id', changerIds);
         if (profiles) profiles.forEach((p: any) => { nameMap[p.id] = p.full_name; });
       }
-      setHistory(historyData.map(h => ({ ...h, changer_name: h.changed_by ? nameMap[h.changed_by] : undefined })));
+      setHistory(historyData.map((h: any) => ({ ...h, changer_name: h.changed_by ? nameMap[h.changed_by] : undefined })));
     }
 
     setLoading(false);

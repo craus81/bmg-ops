@@ -281,7 +281,7 @@ function QuoteDetail({ quote, onBack, onEdit }: { quote: Quote; onBack: () => vo
     }
     // Load linked customer name if already set
     if ((quote as any).customer_id) {
-      supabase.from('customers').select('company_name, netsuite_id').eq('id', (quote as any).customer_id).single().then(({ data }) => {
+      supabase.from('customers').select('company_name, netsuite_id').eq('id', (quote as any).customer_id).single().then(({ data }: any) => {
         if (data) {
           setSelectedCustName(data.company_name);
           setSelectedCustNsId(data.netsuite_id);

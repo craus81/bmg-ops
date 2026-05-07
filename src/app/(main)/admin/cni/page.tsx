@@ -67,7 +67,7 @@ export default function CniDashboardPage() {
 
     if (jobsData) {
       // Get installer names for assigned jobs
-      const installerIds = [...new Set(jobsData.filter(j => j.assigned_installer_id).map(j => j.assigned_installer_id))];
+      const installerIds = [...new Set(jobsData.filter((j: any) => j.assigned_installer_id).map((j: any) => j.assigned_installer_id))];
       let nameMap: Record<string, string> = {};
       if (installerIds.length > 0) {
         const { data: profiles } = await supabase
@@ -78,7 +78,7 @@ export default function CniDashboardPage() {
           profiles.forEach((p: any) => { nameMap[p.id] = p.full_name; });
         }
       }
-      setJobs(jobsData.map(j => ({
+      setJobs(jobsData.map((j: any) => ({
         ...j,
         installer_name: j.assigned_installer_id ? nameMap[j.assigned_installer_id] || 'Unknown' : undefined,
       })));
@@ -99,8 +99,8 @@ export default function CniDashboardPage() {
 
     // Pending invoices
     if (jobsData) {
-      setPendingInvoices(jobsData.filter(j => j.status === 'completed_pending_review').length);
-      setBiddingJobs(jobsData.filter(j => j.status === 'bidding_open').length);
+      setPendingInvoices(jobsData.filter((j: any) => j.status === 'completed_pending_review').length);
+      setBiddingJobs(jobsData.filter((j: any) => j.status === 'bidding_open').length);
     }
 
     setLoading(false);

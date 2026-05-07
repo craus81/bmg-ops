@@ -37,7 +37,7 @@ export default function MyAccountsWidget() {
       .not('status', 'in', '("shipped","installed","cancelled")')
       .order('due_date', { ascending: true, nullsFirst: false });
 
-    const mapped: AccountJob[] = (graphicsJobs || []).map(j => ({
+    const mapped: AccountJob[] = (graphicsJobs || []).map((j: any) => ({
       id: j.id,
       title: j.title,
       customer: j.customer,

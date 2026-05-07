@@ -24,7 +24,7 @@ export default function CustomersWidget() {
       .limit(100);
 
     const all = customers || [];
-    const withSpend = all.filter(c => c.ytd_spend > 0);
+    const withSpend = all.filter((c: any) => c.ytd_spend > 0);
 
     setStats({ total: all.length, withSpend: withSpend.length });
     setTopCustomers(all.slice(0, 5));

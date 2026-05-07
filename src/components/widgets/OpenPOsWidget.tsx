@@ -28,12 +28,12 @@ export default function OpenPOsWidget() {
       const { data: lines } = await supabase
         .from('po_line_items')
         .select('po_id, quantity, installed, unit_price')
-        .in('po_id', poData.map(p => p.id));
+        .in('po_id', poData.map((p: any) => p.id));
 
       for (const po of poData) {
-        const poLines = (lines || []).filter(l => l.po_id === po.id);
-        const tv = poLines.reduce((s, l) => s + (l.quantity * l.unit_price), 0);
-        const rv = poLines.reduce((s, l) => s + ((l.quantity - l.installed) * l.unit_price), 0);
+        const poLines = (lines || []).filter((l: any) => l.po_id === po.id);
+        const tv = poLines.reduce((s: any, l: any) => s + (l.quantity * l.unit_price), 0);
+        const rv = poLines.reduce((s: any, l: any) => s + ((l.quantity - l.installed) * l.unit_price), 0);
         totalValue += tv;
         remaining += rv;
         details.push({ ...po, totalValue: tv, remaining: rv });

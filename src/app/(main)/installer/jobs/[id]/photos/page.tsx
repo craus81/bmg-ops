@@ -118,7 +118,7 @@ export default function InstallerPhotoUploadPage() {
           .select('photo_type')
           .eq('job_id', job.id)
           .eq('vin_id', selectedVin);
-        const typesCovered = new Set((allVinPhotos || []).map(p => p.photo_type));
+        const typesCovered = new Set((allVinPhotos || []).map((p: any) => p.photo_type));
         if (REQUIRED_TYPES.every(t => typesCovered.has(t))) {
           await supabase.from('cni_job_vins').update({ photos_submitted: true }).eq('id', selectedVin);
         }

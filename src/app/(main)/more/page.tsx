@@ -18,7 +18,7 @@ export default function MorePage() {
 
   useEffect(() => {
     if (!profile?.company_id) return;
-    supabase.from('companies').select('name').eq('id', profile.company_id).single().then(({ data }) => {
+    supabase.from('companies').select('name').eq('id', profile.company_id).single().then(({ data }: any) => {
       if (data) setCompanyName(data.name);
     });
   }, [profile?.company_id]);
