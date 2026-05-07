@@ -2,6 +2,12 @@ import { NextRequest, NextResponse } from 'next/server';
 import { createSalesOrder, findLocation, suiteqlQuery } from '@/lib/netsuite';
 import { createClient } from '@supabase/supabase-js';
 import { requireAuth } from '@/lib/api-auth';
+import { validateBody, z } from '@/lib/validate';
+import { safeStringLiteral } from '@/lib/sql-safe';
+
+const ConvertSchema = z.object({
+  estimateId: z.string().uuid(),
+});
 
 /**
  * Resolve the NetSuite item id for the FS-CUSTOM placeholder used to land
@@ -26,12 +32,11 @@ export async function POST(req: NextRequest) {
   const auth = await requireAuth(req);
   if (auth.error) return auth.error;
 
-  try {
-    const { estimateId } = await req.json();
-    if (!estimateId) {
-      return NextResponse.json({ error: 'estimateId required' }, { status: 400 });
-    }
+  const parsed = await validateBody(req, ConvertSchema);
+  if (parsed.error) return parsed.error;
+  const { estimateId } = parsed.data;
 
+  try {
     const supabase = createClient(
       process.env.NEXT_PUBLIC_SUPABASE_URL!,
       process.env.SUPABASE_SERVICE_ROLE_KEY!
@@ -62,8 +67,9 @@ export async function POST(req: NextRequest) {
     let customerId = estimate.customer_netsuite_id;
     if (!customerId && estimate.customer_name) {
       try {
+        const safeName = safeStringLiteral(estimate.customer_name, 200);
         const result = await suiteqlQuery(
-          `SELECT c.id FROM customer c WHERE UPPER(c.companyname) = UPPER('${estimate.customer_name.replace(/'/g, "''")}') FETCH FIRST 1 ROWS ONLY`
+          `SELECT c.id FROM customer c WHERE UPPER(c.companyname) = UPPER('${safeName}') FETCH FIRST 1 ROWS ONLY`
         );
         if (result?.items?.[0]?.id) {
           customerId = result.items[0].id.toString();

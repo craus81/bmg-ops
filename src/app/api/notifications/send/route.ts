@@ -2,11 +2,21 @@ import { NextRequest, NextResponse } from 'next/server';
 import { createClient } from '@supabase/supabase-js';
 import { notify, notifyMany } from '@/lib/notify';
 import { requireAuth } from '@/lib/api-auth';
+import { validateBody, z } from '@/lib/validate';
 
 const supabase = createClient(
   process.env.NEXT_PUBLIC_SUPABASE_URL!,
   process.env.SUPABASE_SERVICE_ROLE_KEY!
 );
+
+const NotifySchema = z.object({
+  userIds: z.array(z.string().uuid()).min(1).max(500),
+  type: z.string().trim().min(1).max(60),
+  title: z.string().trim().min(1).max(200),
+  body: z.string().trim().min(1).max(1000),
+  url: z.string().max(2000).optional(),
+  excludeUserId: z.string().uuid().optional(),
+});
 
 /**
  * POST /api/notifications/send
@@ -31,15 +41,13 @@ export async function POST(req: NextRequest) {
     if (auth.error) return auth.error;
   }
 
+  const parsed = await validateBody(req, NotifySchema);
+  if (parsed.error) return parsed.error;
+  const { userIds, type, title, body, url, excludeUserId } = parsed.data;
+
   try {
-    const { userIds, type, title, body, url, excludeUserId } = await req.json();
-
-    if (!userIds || !type || !title || !body) {
-      return NextResponse.json({ error: 'Missing required fields' }, { status: 400 });
-    }
-
     const filteredIds = excludeUserId
-      ? userIds.filter((id: string) => id !== excludeUserId)
+      ? userIds.filter((id) => id !== excludeUserId)
       : userIds;
 
     if (filteredIds.length === 0) {

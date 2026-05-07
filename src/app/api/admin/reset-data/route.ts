@@ -1,6 +1,11 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { createClient } from '@supabase/supabase-js';
 import { requireAdmin } from '@/lib/api-auth';
+import { validateBody, z } from '@/lib/validate';
+
+const ResetSchema = z.object({
+  confirm: z.literal('DELETE ALL DATA'),
+});
 
 /**
  * POST /api/admin/reset-data
@@ -13,16 +18,15 @@ export async function POST(req: NextRequest) {
   const auth = await requireAdmin(req);
   if (auth.error) return auth.error;
 
+  const parsed = await validateBody(req, ResetSchema);
+  if (parsed.error) {
+    return NextResponse.json(
+      { error: 'Safety check failed. Send { confirm: "DELETE ALL DATA" } to proceed.' },
+      { status: 400 }
+    );
+  }
+
   try {
-    const { confirm } = await req.json();
-
-    if (confirm !== 'DELETE ALL DATA') {
-      return NextResponse.json(
-        { error: 'Safety check failed. Send { confirm: "DELETE ALL DATA" } to proceed.' },
-        { status: 400 }
-      );
-    }
-
     const supabase = createClient(
       process.env.NEXT_PUBLIC_SUPABASE_URL!,
       process.env.SUPABASE_SERVICE_ROLE_KEY!

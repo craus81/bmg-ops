@@ -1,8 +1,17 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { createClient } from '@supabase/supabase-js';
 import { requireAuth } from '@/lib/api-auth';
+import { validateBody, z } from '@/lib/validate';
+import { safeIntId } from '@/lib/sql-safe';
 
 export const dynamic = 'force-dynamic';
+
+const PushQuoteSchema = z.object({
+  quoteId: z.string().uuid(),
+  customerId: z.string().optional().nullable(),
+  customerNsId: z.string().regex(/^\d{1,15}$/, 'customerNsId must be a NetSuite numeric id'),
+  userId: z.string().uuid().optional().nullable(),
+});
 
 function getSupabase() {
   return createClient(
@@ -136,8 +145,9 @@ async function createNetSuiteEstimate(config: ReturnType<typeof getNetSuiteConfi
   // Look up the estimate number if we didn't get it
   if (estimateId && !estimateNumber) {
     try {
+      const safeId = safeIntId(estimateId, 'estimateId');
       const { suiteqlQuery } = await import('@/lib/netsuite');
-      const lookup = await suiteqlQuery(`SELECT tranid FROM transaction WHERE id = ${estimateId}`);
+      const lookup = await suiteqlQuery(`SELECT tranid FROM transaction WHERE id = ${safeId}`);
       estimateNumber = lookup?.items?.[0]?.tranid || '';
     } catch {
       // Non-critical
@@ -152,16 +162,12 @@ export async function POST(req: NextRequest) {
   const auth = await requireAuth(req);
   if (auth.error) return auth.error;
 
+  const parsed = await validateBody(req, PushQuoteSchema);
+  if (parsed.error) return parsed.error;
+  const { quoteId, customerId, customerNsId, userId } = parsed.data;
+
   try {
     const supabase = getSupabase();
-    const { quoteId, customerId, customerNsId, userId } = await req.json();
-
-    if (!quoteId) {
-      return NextResponse.json({ error: 'Missing quoteId' }, { status: 400 });
-    }
-    if (!customerNsId) {
-      return NextResponse.json({ error: 'Missing customer NetSuite ID' }, { status: 400 });
-    }
 
     // Load quote
     const { data: quote, error: qErr } = await supabase

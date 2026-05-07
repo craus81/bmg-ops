@@ -1,6 +1,13 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { createClient } from '@supabase/supabase-js';
-import { requireAuth } from '@/lib/api-auth';
+import { requireAdmin } from '@/lib/api-auth';
+import { validateBody, z } from '@/lib/validate';
+
+const ResendInviteSchema = z.object({
+  userId: z.string().uuid(),
+  email: z.string().email().max(254),
+  fullName: z.string().trim().max(120).optional().nullable(),
+});
 
 export const dynamic = 'force-dynamic';
 
@@ -42,15 +49,14 @@ function buildCniReinviteEmailHtml(fullName: string, inviteLink: string): string
 }
 
 export async function POST(req: NextRequest) {
-  const auth = await requireAuth(req);
+  const auth = await requireAdmin(req);
   if (auth.error) return auth.error;
 
-  try {
-    const { userId, email, fullName } = await req.json();
+  const parsed = await validateBody(req, ResendInviteSchema);
+  if (parsed.error) return parsed.error;
+  const { userId, email, fullName } = parsed.data;
 
-    if (!email) {
-      return NextResponse.json({ error: 'Email is required' }, { status: 400 });
-    }
+  try {
 
     // Check if profile is complete to decide redirect destination
     const { data: cniProfile } = await supabase

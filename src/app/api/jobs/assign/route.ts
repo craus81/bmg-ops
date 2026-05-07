@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { createClient } from '@supabase/supabase-js';
 import { notifyMany } from '@/lib/notify';
 import { requireAuth } from '@/lib/api-auth';
+import { validateBody, z } from '@/lib/validate';
 
 export const dynamic = 'force-dynamic';
 
@@ -10,17 +11,33 @@ const supabase = createClient(
   process.env.SUPABASE_SERVICE_ROLE_KEY!
 );
 
+const JobTypeEnum = z.enum(['scanned_vehicle', 'graphics_job']);
+
+const AssignSchema = z.object({
+  jobType: JobTypeEnum,
+  jobId: z.string().uuid(),
+  userIds: z.array(z.string().uuid()).max(50),
+  assignedBy: z.string().uuid().optional().nullable(),
+  notifyUsers: z.boolean().optional(),
+  notifyTeam: z.boolean().optional(),
+  jobTitle: z.string().max(300).optional().nullable(),
+});
+
+const UnassignSchema = z.object({
+  jobType: JobTypeEnum,
+  jobId: z.string().uuid(),
+  userId: z.string().uuid(),
+});
+
 export async function POST(req: NextRequest) {
   const auth = await requireAuth(req);
   if (auth.error) return auth.error;
 
+  const parsed = await validateBody(req, AssignSchema);
+  if (parsed.error) return parsed.error;
+  const { jobType, jobId, userIds, assignedBy, notifyUsers, notifyTeam, jobTitle } = parsed.data;
+
   try {
-    const { jobType, jobId, userIds, assignedBy, notifyUsers, notifyTeam, jobTitle } = await req.json();
-
-    if (!jobType || !jobId || !userIds || !Array.isArray(userIds)) {
-      return NextResponse.json({ error: 'Missing required fields' }, { status: 400 });
-    }
-
     // 1. Delete all existing assignments for this job, then re-insert
     await supabase
       .from('job_assignments')
@@ -30,7 +47,7 @@ export async function POST(req: NextRequest) {
 
     // 2. Insert current assignments
     if (userIds.length > 0) {
-      const assignmentData = userIds.map((userId: string) => ({
+      const assignmentData = userIds.map((userId) => ({
         job_type: jobType,
         job_id: jobId,
         user_id: userId,
@@ -91,7 +108,7 @@ export async function POST(req: NextRequest) {
         // Exclude the person who created it and already-assigned users
         const teamIds = teamMembers
           .map((m: any) => m.id)
-          .filter((id: string) => id !== assignedBy && !userIds.includes(id));
+          .filter((id: string) => id !== assignedBy && !userIds.includes(id as string));
 
         if (teamIds.length > 0) {
           await notifyMany(teamIds, {
@@ -116,9 +133,11 @@ export async function DELETE(req: NextRequest) {
   const auth = await requireAuth(req);
   if (auth.error) return auth.error;
 
-  try {
-    const { jobType, jobId, userId } = await req.json();
+  const parsed = await validateBody(req, UnassignSchema);
+  if (parsed.error) return parsed.error;
+  const { jobType, jobId, userId } = parsed.data;
 
+  try {
     const { error } = await supabase
       .from('job_assignments')
       .delete()

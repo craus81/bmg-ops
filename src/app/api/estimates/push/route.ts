@@ -1,8 +1,18 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { createClient } from '@supabase/supabase-js';
 import { requireAuth } from '@/lib/api-auth';
+import { validateBody, z } from '@/lib/validate';
 
 export const dynamic = 'force-dynamic';
+
+const PushEstimateSchema = z.object({
+  estimateId: z.string().uuid(),
+  userId: z.string().uuid().optional().nullable(),
+});
+
+const DeleteEstimateSchema = z.object({
+  estimateId: z.string().uuid(),
+});
 
 function getSupabase() {
   return createClient(
@@ -190,13 +200,12 @@ export async function POST(req: NextRequest) {
   const auth = await requireAuth(req);
   if (auth.error) return auth.error;
 
+  const parsed = await validateBody(req, PushEstimateSchema);
+  if (parsed.error) return parsed.error;
+  const { estimateId, userId } = parsed.data;
+
   try {
     const supabase = getSupabase();
-    const { estimateId, userId } = await req.json();
-
-    if (!estimateId) {
-      return NextResponse.json({ error: 'Missing estimateId' }, { status: 400 });
-    }
 
     // Load estimate
     const { data: estimate, error: estErr } = await supabase
@@ -350,13 +359,12 @@ export async function DELETE(req: NextRequest) {
   const auth = await requireAuth(req);
   if (auth.error) return auth.error;
 
+  const parsed = await validateBody(req, DeleteEstimateSchema);
+  if (parsed.error) return parsed.error;
+  const { estimateId } = parsed.data;
+
   try {
     const supabase = getSupabase();
-    const { estimateId } = await req.json();
-
-    if (!estimateId) {
-      return NextResponse.json({ error: 'Missing estimateId' }, { status: 400 });
-    }
 
     const { data: estimate, error: estErr } = await supabase
       .from('estimates')

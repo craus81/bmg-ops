@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { createClient } from '@supabase/supabase-js';
 import { requireAdmin } from '@/lib/api-auth';
+import { validateBody, z } from '@/lib/validate';
 
 export const dynamic = 'force-dynamic';
 
@@ -11,16 +12,21 @@ const supabase = createClient(
 
 const appUrl = process.env.NEXT_PUBLIC_APP_URL || 'https://bmg-ops.vercel.app';
 
+const ResendInviteSchema = z.object({
+  userId: z.string().uuid().optional(),
+  email: z.string().email().max(254),
+  fullName: z.string().trim().max(120).optional().nullable(),
+});
+
 export async function POST(req: NextRequest) {
   const auth = await requireAdmin(req);
   if (auth.error) return auth.error;
 
-  try {
-    const { userId, email, fullName } = await req.json();
+  const parsed = await validateBody(req, ResendInviteSchema);
+  if (parsed.error) return parsed.error;
+  const { email, fullName } = parsed.data;
 
-    if (!email) {
-      return NextResponse.json({ error: 'Email is required' }, { status: 400 });
-    }
+  try {
 
     // Generate a fresh magic link
     let inviteLink = appUrl;

@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { createClient } from '@supabase/supabase-js';
-import { requireAuth } from '@/lib/api-auth';
+import { requireAdmin } from '@/lib/api-auth';
+import { validateBody, z } from '@/lib/validate';
 
 export const dynamic = 'force-dynamic';
 
@@ -9,16 +10,23 @@ const supabase = createClient(
   process.env.SUPABASE_SERVICE_ROLE_KEY!
 );
 
+const DeleteInstallerSchema = z.object({
+  userId: z.string().uuid(),
+});
+
 export async function POST(req: NextRequest) {
-  const auth = await requireAuth(req);
+  const auth = await requireAdmin(req);
   if (auth.error) return auth.error;
 
-  try {
-    const { userId } = await req.json();
+  const parsed = await validateBody(req, DeleteInstallerSchema);
+  if (parsed.error) return parsed.error;
+  const { userId } = parsed.data;
 
-    if (!userId) {
-      return NextResponse.json({ error: 'Missing userId' }, { status: 400 });
-    }
+  if (auth.user?.id === userId) {
+    return NextResponse.json({ error: 'Cannot delete your own account' }, { status: 400 });
+  }
+
+  try {
 
     // 1. Delete internal notes for this installer
     const { error: notesError } = await supabase

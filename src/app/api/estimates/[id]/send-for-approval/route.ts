@@ -4,6 +4,7 @@ import { requireAuth } from '@/lib/api-auth';
 import { generateToken } from '@/lib/magic-link-approval';
 import { sendEmail, buildNotificationEmail } from '@/lib/resend';
 import { sendSMS } from '@/lib/sms-provider';
+import { validateBody, z } from '@/lib/validate';
 
 export const dynamic = 'force-dynamic';
 
@@ -11,6 +12,12 @@ const supabase = createClient(
   process.env.NEXT_PUBLIC_SUPABASE_URL!,
   process.env.SUPABASE_SERVICE_ROLE_KEY!
 );
+
+const SendForApprovalSchema = z.object({
+  email: z.string().email().max(254).optional().nullable(),
+  phone: z.string().trim().max(40).optional().nullable(),
+  expiryDays: z.number().int().positive().max(365).optional(),
+});
 
 /**
  * POST /api/estimates/[id]/send-for-approval
@@ -27,8 +34,10 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
   const auth = await requireAuth(req);
   if (auth.error) return auth.error;
 
-  const body = await req.json().catch(() => ({}));
-  const expiryDays = typeof body.expiryDays === 'number' && body.expiryDays > 0 ? body.expiryDays : 30;
+  const parsed = await validateBody(req, SendForApprovalSchema);
+  if (parsed.error) return parsed.error;
+  const body = parsed.data;
+  const expiryDays = body.expiryDays ?? 30;
 
   const { data: estimate, error: eErr } = await supabase
     .from('estimates')
