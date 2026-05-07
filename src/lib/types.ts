@@ -79,6 +79,17 @@ export interface POLineItem {
   unit_price: number;
 }
 
+export interface PoLocation {
+  id: string;
+  name: string;
+  address: string | null;
+  city: string | null;
+  state: string | null;
+  zip: string | null;
+  archived: boolean;
+  created_at: string;
+}
+
 export interface ScannedVehicle {
   id: string;
   vin: string;

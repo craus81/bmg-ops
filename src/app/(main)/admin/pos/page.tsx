@@ -6,7 +6,7 @@ import { createClient } from '@/lib/supabase-browser';
 import { useAuth } from '@/components/AuthProvider';
 import { parseMasterackPO, type ParsedPO, type ParsedPOLine } from '@/lib/parsePO';
 import { storage } from '@/lib/storage';
-import type { PurchaseOrder, POLineItem, CatalogItem } from '@/lib/types';
+import type { PurchaseOrder, POLineItem, CatalogItem, PoLocation } from '@/lib/types';
 
 interface ImportLine extends ParsedPOLine {
   catalog_match: CatalogItem | null;
@@ -303,6 +303,67 @@ export default function POsPage() {
   const [pendingPOs, setPendingPOs] = useState<any[]>([]);
   const [pendingLoading, setPendingLoading] = useState(false);
 
+  // Saved ship-to locations
+  const [locations, setLocations] = useState<PoLocation[]>([]);
+  const [showLocations, setShowLocations] = useState(false);
+  const [locationForm, setLocationForm] = useState({ id: '', name: '', address: '', city: '', state: '', zip: '' });
+  const [locationSaving, setLocationSaving] = useState(false);
+  const [createShipToId, setCreateShipToId] = useState<string>('');
+  const [createShipTo, setCreateShipTo] = useState<NonNullable<PurchaseOrder['ship_to']>>({});
+  const [editShipToId, setEditShipToId] = useState<string>('');
+  const [editShipTo, setEditShipTo] = useState<NonNullable<PurchaseOrder['ship_to']>>({});
+
+  function applyLocationToShipTo(locId: string, setShipToId: (s: string) => void, setShipTo: (s: NonNullable<PurchaseOrder['ship_to']>) => void) {
+    setShipToId(locId);
+    if (!locId) return;
+    const loc = locations.find(l => l.id === locId);
+    if (!loc) return;
+    setShipTo({
+      name: loc.name,
+      address: loc.address || '',
+      city: loc.city || '',
+      state: loc.state || '',
+      zip: loc.zip || '',
+    });
+  }
+
+  async function saveLocation() {
+    if (!locationForm.name.trim()) { alert('Location name is required'); return; }
+    setLocationSaving(true);
+    try {
+      const payload = {
+        name: locationForm.name.trim(),
+        address: locationForm.address.trim() || null,
+        city: locationForm.city.trim() || null,
+        state: locationForm.state.trim() || null,
+        zip: locationForm.zip.trim() || null,
+      };
+      if (locationForm.id) {
+        const { data, error } = await supabase
+          .from('po_locations').update(payload).eq('id', locationForm.id).select().single();
+        if (error) throw error;
+        setLocations(prev => prev.map(l => l.id === locationForm.id ? (data as PoLocation) : l));
+      } else {
+        const { data, error } = await supabase
+          .from('po_locations').insert({ ...payload, created_by: user?.id }).select().single();
+        if (error) throw error;
+        setLocations(prev => [...prev, data as PoLocation].sort((a, b) => a.name.localeCompare(b.name)));
+      }
+      setLocationForm({ id: '', name: '', address: '', city: '', state: '', zip: '' });
+    } catch (err: any) {
+      alert('Failed to save location: ' + (err?.message || 'unknown error'));
+    } finally {
+      setLocationSaving(false);
+    }
+  }
+
+  async function archiveLocation(id: string) {
+    if (!confirm('Remove this location from the picker? Past POs that reference it keep their address.')) return;
+    const { error } = await supabase.from('po_locations').update({ archived: true }).eq('id', id);
+    if (error) { alert('Failed: ' + error.message); return; }
+    setLocations(prev => prev.filter(l => l.id !== id));
+  }
+
   const reviewPendingPO = (pending: any) => {
     if (pending.raw_extraction) {
       setReviewingExtraction({ messageId: pending.message_id, extracted: pending.raw_extraction });
@@ -354,6 +415,13 @@ export default function POsPage() {
         .eq('status', 'pending')
         .order('created_at', { ascending: false });
       setPendingPOs(pending || []);
+
+      const { data: locs } = await supabase
+        .from('po_locations')
+        .select('*')
+        .eq('archived', false)
+        .order('name');
+      setLocations((locs as PoLocation[]) || []);
     };
     load();
   // eslint-disable-next-line react-hooks/exhaustive-deps -- intentional: load once on mount
@@ -643,9 +711,15 @@ export default function POsPage() {
 
   const handleCreate = async () => {
     if (!form.po_number || !form.customer || lineItems.length === 0 || !user) return;
+    const hasShipTo = Object.values(createShipTo).some(v => (v || '').toString().trim());
     const { data: po, error } = await supabase
       .from('purchase_orders')
-      .insert({ po_number: form.po_number, customer: form.customer, created_by: user.id })
+      .insert({
+        po_number: form.po_number,
+        customer: form.customer,
+        created_by: user.id,
+        ship_to: hasShipTo ? createShipTo : null,
+      })
       .select()
       .single();
 
@@ -659,6 +733,8 @@ export default function POsPage() {
     setPos((prev) => [{ ...po, line_items: (items as POLineItem[]) || [] }, ...prev]);
     setForm({ po_number: '', customer: 'Masterack' });
     setLineItems([]);
+    setCreateShipToId('');
+    setCreateShipTo({});
     setShowCreate(false);
   };
 
@@ -743,20 +819,36 @@ export default function POsPage() {
   const startEditPO = (po: PurchaseOrder & { line_items: POLineItem[] }) => {
     setEditPoId(po.id);
     setEditPoForm({ po_number: po.po_number, customer: po.customer, status: po.status });
+    const ship = po.ship_to || {};
+    setEditShipTo({ ...ship });
+    const match = locations.find(l =>
+      (l.name || '').trim() === (ship.name || '').trim() &&
+      (l.address || '') === (ship.address || '') &&
+      (l.city || '') === (ship.city || '') &&
+      (l.state || '') === (ship.state || '') &&
+      (l.zip || '') === (ship.zip || '')
+    );
+    setEditShipToId(match ? match.id : '');
   };
 
   const saveEditPO = async () => {
     if (!editPoId) return;
+    const hasShipTo = Object.values(editShipTo).some(v => (v || '').toString().trim());
     const { error } = await supabase
       .from('purchase_orders')
-      .update({ po_number: editPoForm.po_number, customer: editPoForm.customer, status: editPoForm.status })
+      .update({
+        po_number: editPoForm.po_number,
+        customer: editPoForm.customer,
+        status: editPoForm.status,
+        ship_to: hasShipTo ? editShipTo : null,
+      })
       .eq('id', editPoId);
 
     if (!error) {
       setPos((prev) =>
         prev.map((po) =>
           po.id === editPoId
-            ? { ...po, po_number: editPoForm.po_number, customer: editPoForm.customer, status: editPoForm.status as any }
+            ? { ...po, po_number: editPoForm.po_number, customer: editPoForm.customer, status: editPoForm.status as any, ship_to: hasShipTo ? editShipTo : null }
             : po
         )
       );
@@ -1428,6 +1520,13 @@ export default function POsPage() {
                 style={{ padding: '6px 12px', borderRadius: '8px', background: showImport ? 'var(--subtle-bg)' : 'rgba(59,130,246,0.1)', border: '1px solid rgba(59,130,246,0.25)', color: '#60a5fa', fontSize: '12px', fontWeight: 700 }}
               >
                 {showImport ? 'Cancel' : 'PDF'}
+              </button>
+              <button
+                onClick={() => setShowLocations(s => !s)}
+                title="Manage saved ship-to locations"
+                style={{ padding: '6px 12px', borderRadius: '8px', background: showLocations ? 'var(--subtle-bg)' : 'rgba(148,163,184,0.1)', border: '1px solid rgba(148,163,184,0.25)', color: 'var(--text-body)', fontSize: '12px', fontWeight: 700 }}
+              >
+                Locations
               </button>
               <button
                 onClick={() => { setShowCreate(!showCreate); setShowImport(false); setShowEmailImport(false); }}
@@ -2231,6 +2330,77 @@ export default function POsPage() {
       )}
 
       {/* Manual create form */}
+      {showLocations && (
+        <div style={{ background: 'var(--subtle-bg)', border: '1px solid var(--border)', borderRadius: '10px', padding: '14px', marginBottom: '12px' }}>
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '10px' }}>
+            <div style={{ fontSize: '13px', fontWeight: 800, color: 'var(--text-body)' }}>Saved ship-to locations</div>
+            <button onClick={() => setShowLocations(false)} style={{ fontSize: '12px', fontWeight: 700, background: 'transparent', border: '1px solid var(--border)', color: 'var(--text-body)', borderRadius: '6px', padding: '4px 10px' }}>Close</button>
+          </div>
+          {locations.length > 0 && (
+            <div style={{ marginBottom: '12px' }}>
+              {locations.map(loc => (
+                <div key={loc.id} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: '8px', padding: '8px 10px', borderRadius: '8px', marginBottom: '4px', background: 'var(--card-bg)', border: '1px solid var(--border)' }}>
+                  <div style={{ minWidth: 0, flex: 1 }}>
+                    <div style={{ fontSize: '13px', fontWeight: 700, color: 'var(--text-body)' }}>{loc.name}</div>
+                    <div style={{ fontSize: '11px', color: 'var(--text-label)' }}>
+                      {[loc.address, [loc.city, loc.state].filter(Boolean).join(', '), loc.zip].filter(Boolean).join(' · ') || '—'}
+                    </div>
+                  </div>
+                  <div style={{ display: 'flex', gap: '4px' }}>
+                    <button
+                      onClick={() => setLocationForm({ id: loc.id, name: loc.name, address: loc.address || '', city: loc.city || '', state: loc.state || '', zip: loc.zip || '' })}
+                      style={{ fontSize: '11px', fontWeight: 700, padding: '4px 8px', borderRadius: '6px', background: 'transparent', border: '1px solid var(--border)', color: 'var(--text-body)' }}
+                    >
+                      Edit
+                    </button>
+                    <button
+                      onClick={() => archiveLocation(loc.id)}
+                      style={{ fontSize: '11px', fontWeight: 700, padding: '4px 8px', borderRadius: '6px', background: 'transparent', border: '1px solid rgba(248,113,113,0.3)', color: '#f87171' }}
+                    >
+                      Remove
+                    </button>
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
+          {locations.length === 0 && (
+            <div style={{ fontSize: '12px', color: 'var(--text-label)', marginBottom: '12px' }}>No saved locations yet. Add one below to use it on POs.</div>
+          )}
+          <div style={{ background: 'var(--card-bg)', border: '1px solid var(--border)', borderRadius: '8px', padding: '10px' }}>
+            <div style={{ fontSize: '11px', fontWeight: 700, color: 'var(--text-label)', textTransform: 'uppercase', letterSpacing: '0.5px', marginBottom: '6px' }}>
+              {locationForm.id ? 'Edit location' : 'Add new location'}
+            </div>
+            <div style={{ display: 'grid', gridTemplateColumns: '1fr', gap: '6px' }}>
+              <input placeholder="Location name (e.g., Main Warehouse)" value={locationForm.name} onChange={e => setLocationForm({ ...locationForm, name: e.target.value })} style={inputStyle} />
+              <input placeholder="Street address" value={locationForm.address} onChange={e => setLocationForm({ ...locationForm, address: e.target.value })} style={inputStyle} />
+              <div style={{ display: 'grid', gridTemplateColumns: '2fr 1fr 1fr', gap: '6px' }}>
+                <input placeholder="City" value={locationForm.city} onChange={e => setLocationForm({ ...locationForm, city: e.target.value })} style={inputStyle} />
+                <input placeholder="State" value={locationForm.state} onChange={e => setLocationForm({ ...locationForm, state: e.target.value })} style={inputStyle} />
+                <input placeholder="ZIP" value={locationForm.zip} onChange={e => setLocationForm({ ...locationForm, zip: e.target.value })} style={inputStyle} />
+              </div>
+            </div>
+            <div style={{ display: 'flex', gap: '6px', marginTop: '8px' }}>
+              <button
+                onClick={saveLocation}
+                disabled={locationSaving || !locationForm.name.trim()}
+                style={{ flex: 1, padding: '8px', borderRadius: '8px', background: '#22c55e', color: '#fff', fontSize: '12px', fontWeight: 700, border: 'none', opacity: (locationSaving || !locationForm.name.trim()) ? 0.5 : 1 }}
+              >
+                {locationSaving ? 'Saving…' : (locationForm.id ? 'Save changes' : 'Add location')}
+              </button>
+              {locationForm.id && (
+                <button
+                  onClick={() => setLocationForm({ id: '', name: '', address: '', city: '', state: '', zip: '' })}
+                  style={{ flex: 1, padding: '8px', borderRadius: '8px', background: 'transparent', border: '1px solid var(--border)', color: 'var(--text-body)', fontSize: '12px', fontWeight: 700 }}
+                >
+                  Cancel edit
+                </button>
+              )}
+            </div>
+          </div>
+        </div>
+      )}
+
       {showCreate && (
         <div style={{ background: 'var(--subtle-bg)', border: '1px solid var(--border)', borderRadius: '10px', padding: '14px', marginBottom: '12px' }}>
           <div style={{ marginBottom: '8px' }}>
@@ -2243,6 +2413,15 @@ export default function POsPage() {
               <option>Masterack</option><option>Knapheide</option><option>Bodewell</option><option>Designs That Stick</option>
             </select>
           </div>
+          <ShipToPicker
+            label="Ship To"
+            locations={locations}
+            selectedId={createShipToId}
+            shipTo={createShipTo}
+            onSelect={(id) => applyLocationToShipTo(id, setCreateShipToId, setCreateShipTo)}
+            onChange={(next) => { setCreateShipToId(''); setCreateShipTo(next); }}
+            onManage={() => setShowLocations(true)}
+          />
           <div style={{ marginBottom: '8px' }}>
             <label style={labelStyle}>Add Part Number</label>
             <select onChange={(e) => { if (e.target.value) addLineItem(e.target.value); e.target.value = ''; }} style={inputStyle}>
@@ -2505,6 +2684,17 @@ export default function POsPage() {
                         <select value={editPoForm.status} onChange={(e) => setEditPoForm({ ...editPoForm, status: e.target.value })} style={inputStyle}>
                           <option value="open">Open</option><option value="complete">Complete</option><option value="cancelled">Cancelled</option>
                         </select>
+                      </div>
+                      <div style={{ marginTop: '6px' }}>
+                        <ShipToPicker
+                          label="Ship To"
+                          locations={locations}
+                          selectedId={editShipToId}
+                          shipTo={editShipTo}
+                          onSelect={(id) => applyLocationToShipTo(id, setEditShipToId, setEditShipTo)}
+                          onChange={(next) => { setEditShipToId(''); setEditShipTo(next); }}
+                          onManage={() => setShowLocations(true)}
+                        />
                       </div>
                       <div style={{ display: 'flex', gap: '6px', marginTop: '8px' }}>
                         <button onClick={saveEditPO} style={{ flex: 1, padding: '8px', borderRadius: '8px', background: '#22c55e', color: '#fff', fontSize: '12px', fontWeight: 700, border: 'none' }}>Save</button>
@@ -2829,3 +3019,53 @@ export default function POsPage() {
 
 const labelStyle: React.CSSProperties = { display: 'block', fontSize: '10px', fontWeight: 700, color: 'var(--text-label)', textTransform: 'uppercase', letterSpacing: '0.5px', marginBottom: '4px' };
 const inputStyle: React.CSSProperties = { width: '100%', padding: '10px 12px', borderRadius: '8px', border: '1px solid var(--border)', background: 'var(--input-bg)', color: 'var(--text-body)', fontSize: '13px' };
+
+function ShipToPicker({
+  label,
+  locations,
+  selectedId,
+  shipTo,
+  onSelect,
+  onChange,
+  onManage,
+}: {
+  label: string;
+  locations: PoLocation[];
+  selectedId: string;
+  shipTo: NonNullable<PurchaseOrder['ship_to']>;
+  onSelect: (id: string) => void;
+  onChange: (next: NonNullable<PurchaseOrder['ship_to']>) => void;
+  onManage: () => void;
+}) {
+  return (
+    <div style={{ marginBottom: '8px' }}>
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline' }}>
+        <label style={labelStyle}>{label}</label>
+        <button
+          onClick={onManage}
+          type="button"
+          style={{ fontSize: '10px', fontWeight: 700, color: '#60a5fa', background: 'transparent', border: 'none', cursor: 'pointer', padding: 0, marginBottom: '4px' }}
+        >
+          Manage locations
+        </button>
+      </div>
+      <select value={selectedId} onChange={e => onSelect(e.target.value)} style={{ ...inputStyle, marginBottom: '6px' }}>
+        <option value="">— Select a saved location or enter custom below —</option>
+        {locations.map(l => (
+          <option key={l.id} value={l.id}>
+            {l.name}{l.city ? ` (${l.city}${l.state ? `, ${l.state}` : ''})` : ''}
+          </option>
+        ))}
+      </select>
+      <div style={{ display: 'grid', gridTemplateColumns: '1fr', gap: '6px' }}>
+        <input placeholder="Name" value={shipTo.name || ''} onChange={e => onChange({ ...shipTo, name: e.target.value })} style={inputStyle} />
+        <input placeholder="Street address" value={shipTo.address || ''} onChange={e => onChange({ ...shipTo, address: e.target.value })} style={inputStyle} />
+        <div style={{ display: 'grid', gridTemplateColumns: '2fr 1fr 1fr', gap: '6px' }}>
+          <input placeholder="City" value={shipTo.city || ''} onChange={e => onChange({ ...shipTo, city: e.target.value })} style={inputStyle} />
+          <input placeholder="State" value={shipTo.state || ''} onChange={e => onChange({ ...shipTo, state: e.target.value })} style={inputStyle} />
+          <input placeholder="ZIP" value={shipTo.zip || ''} onChange={e => onChange({ ...shipTo, zip: e.target.value })} style={inputStyle} />
+        </div>
+      </div>
+    </div>
+  );
+}
