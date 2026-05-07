@@ -167,32 +167,47 @@ export default function MessagesPage() {
 
     const profileMap = new Map((otherProfiles || []).map(p => [p.id, p]));
 
-    // Get last message and unread count for each conversation
+    // Unread counts: one query for all conversations rather than per-convo.
+    const convoIds = convos.map((c) => c.id);
+    const { data: unreadRows } = await supabase
+      .from('messages')
+      .select('conversation_id')
+      .in('conversation_id', convoIds)
+      .neq('sender_id', user.id)
+      .is('read_at', null);
+    const unreadByConvo = new Map<string, number>();
+    for (const m of unreadRows || []) {
+      const id = (m as any).conversation_id;
+      unreadByConvo.set(id, (unreadByConvo.get(id) || 0) + 1);
+    }
+
+    // Last messages: still one query per conversation (greatest-n-per-group
+    // doesn't have a clean PostgREST shape) but run them in parallel so the
+    // total wait is one RTT instead of N.
+    const lastMsgResults = await Promise.all(
+      convos.map((c) =>
+        supabase
+          .from('messages')
+          .select('*')
+          .eq('conversation_id', c.id)
+          .order('created_at', { ascending: false })
+          .limit(1)
+          .then(({ data }) => ({ id: c.id, msg: data?.[0] as Message | undefined }))
+      )
+    );
+    const lastMsgByConvo = new Map(lastMsgResults.map((r) => [r.id, r.msg]));
+
     const enriched: ConversationWithDetails[] = [];
     for (const convo of convos) {
       const otherId = convo.participant_1 === user.id ? convo.participant_2 : convo.participant_1;
       const otherUser = profileMap.get(otherId);
       if (!otherUser) continue;
 
-      const { data: lastMsgs } = await supabase
-        .from('messages')
-        .select('*')
-        .eq('conversation_id', convo.id)
-        .order('created_at', { ascending: false })
-        .limit(1);
-
-      const { count: unread } = await supabase
-        .from('messages')
-        .select('*', { count: 'exact', head: true })
-        .eq('conversation_id', convo.id)
-        .neq('sender_id', user.id)
-        .is('read_at', null);
-
       enriched.push({
         ...convo,
         otherUser: otherUser as Profile,
-        lastMessage: lastMsgs?.[0] as Message | undefined,
-        unreadCount: unread || 0,
+        lastMessage: lastMsgByConvo.get(convo.id),
+        unreadCount: unreadByConvo.get(convo.id) || 0,
       });
     }
 
