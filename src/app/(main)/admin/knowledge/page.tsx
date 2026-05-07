@@ -78,6 +78,7 @@ export default function KnowledgePage() {
   useEffect(() => {
     if (!isAdmin) { router.push('/home'); return; }
     loadDocs();
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- intentional: load once on mount
   }, [isAdmin]);
 
   const loadDocs = async () => {

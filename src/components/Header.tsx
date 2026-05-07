@@ -96,6 +96,7 @@ export default function Header({ clockStatus, activePartNumber, activeEndCustome
     loadUnreadCount();
     const interval = setInterval(loadUnreadCount, 30000);
     return () => clearInterval(interval);
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- intentional: load once on mount
   }, [user]);
 
   const loadUnreadCount = async () => {
@@ -132,6 +133,7 @@ export default function Header({ clockStatus, activePartNumber, activeEndCustome
       clearInterval(interval);
       supabase.removeChannel(channel);
     };
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- intentional: load once on mount
   }, [user]);
 
   const loadUnreadMessages = async () => {

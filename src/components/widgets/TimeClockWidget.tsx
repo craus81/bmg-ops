@@ -10,6 +10,7 @@ export default function TimeClockWidget() {
   const [loading, setLoading] = useState(true);
   const [clockedIn, setClockedIn] = useState<{ name: string; since: string }[]>([]);
 
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- intentional: load once on mount
   useEffect(() => { load(); }, []);
 
   const load = async () => {

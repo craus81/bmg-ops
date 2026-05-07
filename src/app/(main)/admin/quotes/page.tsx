@@ -288,6 +288,7 @@ function QuoteDetail({ quote, onBack, onEdit }: { quote: Quote; onBack: () => vo
         }
       });
     }
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- intentional: load once on mount
   }, [quote]);
 
   // Customer search
@@ -698,6 +699,7 @@ function NewQuote({ onCreated, editQuote }: { onCreated: () => void; editQuote?:
 
   useEffect(() => {
     loadTemplates();
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- intentional: load once on mount
   }, []);
 
   useEffect(() => {

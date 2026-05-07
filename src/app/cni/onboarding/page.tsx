@@ -41,6 +41,7 @@ export default function CniOnboardingPage() {
 
   useEffect(() => {
     checkAuth();
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- intentional: load once on mount
   }, []);
 
   const checkAuth = async () => {

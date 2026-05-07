@@ -113,6 +113,7 @@ export default function TrackingPage() {
       setUpdateSuccess('Dropbox connected successfully');
       setTimeout(() => setUpdateSuccess(null), 3000);
     }
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- intentional: load once on mount
   }, []);
 
   // Auto-expand vehicle from URL param (deep link from check-in page)
@@ -126,6 +127,7 @@ export default function TrackingPage() {
       loadPhotos(vehicleId);
       loadNotes(vehicleId);
     }
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- intentional: load once on mount
   }, [loading, searchParams]);
 
   const loadVehicles = async (append = false) => {
@@ -560,6 +562,7 @@ export default function TrackingPage() {
       alert('Network error — please try again');
     }
     setUpdatingId(null);
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- intentional: load once on mount
   }, [statusNote, expandedId, profile]);
 
   // Graphics install lane (migration 085) — runs in parallel to the upfit
@@ -598,6 +601,7 @@ export default function TrackingPage() {
       alert('Network error — please try again');
     }
     setUpdatingId(null);
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- intentional: load once on mount
   }, [statusNote, expandedId, vehicles]);
 
   const deleteVehicle = async (vehicleId: string) => {

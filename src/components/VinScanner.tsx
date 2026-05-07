@@ -41,11 +41,13 @@ export default function VinScanner({ onScan, theme }: VinScannerProps) {
   // Cleanup on unmount
   useEffect(() => {
     return () => { stopCamera(); };
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- intentional: load once on mount
   }, []);
 
   // Auto-start camera on mount
   useEffect(() => {
     startCamera();
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- intentional: load once on mount
   }, []);
 
   // Lock screen to portrait while the scanner is mounted so the camera

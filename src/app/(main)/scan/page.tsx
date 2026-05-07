@@ -99,6 +99,7 @@ export default function ScanPage() {
       window.removeEventListener('offline', handleOffline);
       window.removeEventListener('online', handleOnline);
     };
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- intentional: load once on mount
   }, []);
 
   // Persist active session
@@ -165,6 +166,7 @@ export default function ScanPage() {
 
     const { data } = await query;
     setScans((data || []) as ScanEntry[]);
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- intentional: load once on mount
   }, [selectedParts, customJob, selectedLocation, user?.id]);
 
   useEffect(() => {

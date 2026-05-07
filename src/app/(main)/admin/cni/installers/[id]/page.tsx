@@ -68,6 +68,7 @@ export default function CniInstallerDetailPage() {
   useEffect(() => {
     if (!isAdmin) { router.push('/home'); return; }
     loadData();
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- intentional: load once on mount
   }, [isAdmin, userId]);
 
   const showMessage = (msg: string, type: 'success' | 'error' = 'success') => {

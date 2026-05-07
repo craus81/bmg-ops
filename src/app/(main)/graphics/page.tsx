@@ -168,6 +168,7 @@ export default function GraphicsPage() {
     loadJobs();
     loadProfiles();
     loadUpfitProjects();
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- intentional: load once on mount
   }, [user, isAdmin, isProduction]);
 
   // Auto-open a job for editing when navigated from PO page via ?editJob=<id>
@@ -186,6 +187,7 @@ export default function GraphicsPage() {
       recordJobView(job.id);
     }
     router.replace('/graphics', { scroll: false });
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- intentional: load once on mount
   }, [loading, searchParams]);
 
   // Admin "create invoice in FleetSuite?" prompt — opens when navigated
@@ -208,6 +210,7 @@ export default function GraphicsPage() {
     if (window.confirm(`Create invoice in FleetSuite for ${label}?`)) {
       setInvoiceJob(job);
     }
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- intentional: load once on mount
   }, [loading, searchParams, jobs]);
 
   // Auto-expand job from ?id= URL param (deep link from notifications/search)
@@ -221,6 +224,7 @@ export default function GraphicsPage() {
       loadJobFiles(jobId);
       recordJobView(jobId);
     }
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- intentional: load once on mount
   }, [loading, searchParams]);
 
   const loadJobs = async () => {

@@ -13,6 +13,7 @@ export default function PurchaseOrdersWidget() {
   const [stats, setStats] = useState({ open: 0, total: 0 });
   const [recentPOs, setRecentPOs] = useState<any[]>([]);
 
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- intentional: load once on mount
   useEffect(() => { load(); }, []);
 
   const load = async () => {

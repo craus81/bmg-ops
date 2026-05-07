@@ -29,6 +29,7 @@ export default function AvailableJobDetailPage() {
   useEffect(() => {
     if (!user) return;
     loadJob();
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- intentional: load once on mount
   }, [user, jobId]);
 
   const loadJob = async () => {

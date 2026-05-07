@@ -72,6 +72,7 @@ export default function MessagesPage() {
     if (toUserId) {
       openOrCreateConversation(toUserId);
     }
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- intentional: load once on mount
   }, [user]);
 
   // Auto-open conversation from URL param (deep link from notifications/search)
@@ -81,6 +82,7 @@ export default function MessagesPage() {
     if (convoId && conversations.some(c => c.id === convoId)) {
       openConversation(convoId);
     }
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- intentional: load once on mount
   }, [loading, searchParams]);
 
   // Realtime subscription for new messages
@@ -124,6 +126,7 @@ export default function MessagesPage() {
       .subscribe();
 
     return () => { supabase.removeChannel(channel); };
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- intentional: load once on mount
   }, [user, activeConvoId]);
 
   // Scroll to bottom when messages change

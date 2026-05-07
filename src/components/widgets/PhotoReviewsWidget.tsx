@@ -13,6 +13,7 @@ export default function PhotoReviewsWidget() {
   const [stats, setStats] = useState({ pending: 0, approved: 0, denied: 0 });
   const [recentPending, setRecentPending] = useState<any[]>([]);
 
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- intentional: load once on mount
   useEffect(() => { load(); }, []);
 
   const load = async () => {

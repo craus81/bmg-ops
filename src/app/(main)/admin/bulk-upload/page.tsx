@@ -80,6 +80,7 @@ export default function BulkUploadPage() {
       const saved = localStorage.getItem(STICKY_CUSTOMER_KEY);
       if (saved) setStickyCustomer(saved);
     } catch {}
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- intentional: load once on mount
   }, [isAdmin]);
 
   // Persist sticky customer

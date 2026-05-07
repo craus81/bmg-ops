@@ -21,6 +21,7 @@ export default function MorePage() {
     supabase.from('companies').select('name').eq('id', profile.company_id).single().then(({ data }: any) => {
       if (data) setCompanyName(data.name);
     });
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- intentional: load once on mount
   }, [profile?.company_id]);
 
   useEffect(() => {
@@ -43,6 +44,7 @@ export default function MorePage() {
       }
     };
     load();
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- intentional: load once on mount
   }, [profile]);
 
   const F = hasFeature; // shorthand

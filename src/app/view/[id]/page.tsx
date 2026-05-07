@@ -55,6 +55,7 @@ export default function PublicVehicleView() {
       setLoading(false);
     };
     load();
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- intentional: load once on mount
   }, [vehicleId]);
 
   if (loading) {

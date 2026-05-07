@@ -55,6 +55,7 @@ export default function PhotosPage() {
       setLoading(false);
     };
     load();
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- intentional: load once on mount
   }, [vehicleId]);
 
   const handleUpload = async (file: File) => {

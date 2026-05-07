@@ -14,6 +14,7 @@ export default function RevenueSummaryWidget() {
     pendingCount: 0,
   });
 
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- intentional: load once on mount
   useEffect(() => { load(); }, []);
 
   const load = async () => {

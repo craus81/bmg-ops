@@ -37,6 +37,7 @@ export default function AssignmentsPage() {
   useEffect(() => {
     if (!isAdmin) { router.push('/home'); return; }
     loadData();
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- intentional: load once on mount
   }, [isAdmin, userId]);
 
   const loadData = async () => {

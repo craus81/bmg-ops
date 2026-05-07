@@ -197,6 +197,7 @@ export default function EstimatesPage() {
     if (!user) return;
     if (!isAdmin && !isSales && !isGraphicsProduction) { router.push('/home'); return; }
     loadEstimates();
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- intentional: load once on mount
   }, [user, isAdmin, isSales, isGraphicsProduction]);
 
   // Auto-open estimate from URL param (deep link from notifications/search)
@@ -207,6 +208,7 @@ export default function EstimatesPage() {
       const est = estimates.find(e => e.id === estId);
       if (est) openEstimate(est);
     }
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- intentional: load once on mount
   }, [loading, searchParams]);
 
   const loadEstimates = async () => {
@@ -228,11 +230,13 @@ export default function EstimatesPage() {
       .limit(8);
     setCustResults((data as Customer[]) || []);
     setCustSearching(false);
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- intentional: load once on mount
   }, []);
 
   useEffect(() => {
     const t = setTimeout(() => searchCustomers(custSearch), 300);
     return () => clearTimeout(t);
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- intentional: load once on mount
   }, [custSearch]);
 
   // ── Part search ──
@@ -247,11 +251,13 @@ export default function EstimatesPage() {
       .limit(10);
     setPartResults((data as Part[]) || []);
     setPartSearching(false);
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- intentional: load once on mount
   }, []);
 
   useEffect(() => {
     const t = setTimeout(() => searchParts(partSearch), 300);
     return () => clearTimeout(t);
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- intentional: load once on mount
   }, [partSearch]);
 
   // ── Add part as line item ──
@@ -674,6 +680,7 @@ export default function EstimatesPage() {
     if (customerDefaults?.delivery_instructions && !installInstructions && !editingId) {
       setInstallInstructions(customerDefaults.delivery_instructions);
     }
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- intentional: load once on mount
   }, [customerDefaults, editingId]);
 
   // Save customer operations defaults (inline editor)

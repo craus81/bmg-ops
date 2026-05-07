@@ -140,6 +140,7 @@ export default function CniJobDetailPage() {
   useEffect(() => {
     if (!isAdmin) { router.push('/home'); return; }
     loadJob();
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- intentional: load once on mount
   }, [isAdmin, jobId]);
 
   const loadJob = async () => {

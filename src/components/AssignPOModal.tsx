@@ -38,6 +38,7 @@ export default function AssignPOModal({ open, onClose, vehicleId, vehiclePartNum
       // Load recent POs immediately
       fetchPOs('');
     }
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- intentional: load once on mount
   }, [open]);
 
   useEffect(() => {

@@ -13,6 +13,7 @@ export default function OpenPOsWidget() {
   const [stats, setStats] = useState({ count: 0, totalValue: 0, remaining: 0 });
   const [pos, setPOs] = useState<any[]>([]);
 
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- intentional: load once on mount
   useEffect(() => { load(); }, []);
 
   const load = async () => {

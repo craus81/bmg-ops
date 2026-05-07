@@ -12,6 +12,7 @@ export default function NeedsAttentionWidget() {
   const [loading, setLoading] = useState(true);
   const [items, setItems] = useState<{ label: string; count: number; color: string; path: string }[]>([]);
 
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- intentional: load once on mount
   useEffect(() => { load(); }, []);
 
   const load = async () => {

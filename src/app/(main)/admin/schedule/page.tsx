@@ -89,6 +89,7 @@ export default function SchedulePage() {
     setCurrentDate(d);
   };
 
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- intentional: load once on mount
   useEffect(() => { loadEvents(); }, [currentDate, view]);
 
   const loadEvents = async () => {

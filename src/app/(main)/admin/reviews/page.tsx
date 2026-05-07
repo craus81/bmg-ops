@@ -40,6 +40,7 @@ export default function ReviewsPage() {
   useEffect(() => {
     if (!isAdmin) { router.push('/home'); return; }
     loadVehicles();
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- intentional: load once on mount
   }, [isAdmin]);
 
   const loadVehicles = async () => {

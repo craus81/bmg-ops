@@ -27,6 +27,7 @@ export default function GraphicsProductionWidget() {
   const [stats, setStats] = useState({ received: 0, inProduction: 0, readyShipped: 0 });
   const [recentJobs, setRecentJobs] = useState<any[]>([]);
 
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- intentional: load once on mount
   useEffect(() => { load(); }, []);
 
   const load = async () => {

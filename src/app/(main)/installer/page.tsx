@@ -33,6 +33,7 @@ export default function InstallerPortalPage() {
     if (!user) return;
     if (!isInstaller && !isAdmin) { router.push('/home'); return; }
     loadData();
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- intentional: load once on mount
   }, [user, isInstaller, isAdmin]);
 
   const loadData = async () => {

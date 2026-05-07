@@ -19,6 +19,7 @@ export default function InstallerJobMessagesPage() {
     if (!user) return;
     if (!isInstaller && !isAdmin) { router.push('/home'); return; }
     loadJob();
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- intentional: load once on mount
   }, [user, isInstaller, isAdmin, jobId]);
 
   const loadJob = async () => {

@@ -13,6 +13,7 @@ export default function UserManagementWidget() {
   const [stats, setStats] = useState({ active: 0, pending: 0 });
   const [pendingUsers, setPendingUsers] = useState<any[]>([]);
 
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- intentional: load once on mount
   useEffect(() => { load(); }, []);
 
   const load = async () => {

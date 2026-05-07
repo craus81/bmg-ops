@@ -186,6 +186,7 @@ export default function UpfitProjectsPage() {
     setLoading(false);
   };
 
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- intentional: load once on mount
   useEffect(() => { load(); }, []);
 
   // Deep-link: ?id=<projectId> auto-opens that project so /upfit?id= works
@@ -205,6 +206,7 @@ export default function UpfitProjectsPage() {
       const { data } = await supabase.from('upfit_projects').select('*').eq('id', projectId).maybeSingle();
       if (data) openProject(data as UpfitProject);
     })();
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- intentional: load once on mount
   }, [loading, searchParams, projects]);
 
   const loadNotes = async (projectId: string) => {

@@ -13,6 +13,7 @@ export default function FleetCheckInWidget() {
   const [stats, setStats] = useState({ today: 0, week: 0, month: 0 });
   const [recentCheckins, setRecentCheckins] = useState<any[]>([]);
 
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- intentional: load once on mount
   useEffect(() => { load(); }, []);
 
   const load = async () => {

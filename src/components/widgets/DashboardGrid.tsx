@@ -120,6 +120,7 @@ export default function DashboardGrid() {
   useEffect(() => {
     if (!user?.id) return;
     loadLayout();
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- intentional: load once on mount
   }, [user?.id]);
 
   const loadLayout = async () => {
@@ -160,6 +161,7 @@ export default function DashboardGrid() {
         updated_at: new Date().toISOString(),
       }, { onConflict: 'user_id' });
     setSaving(false);
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- intentional: load once on mount
   }, [user?.id]);
 
   const handleLayoutChange = useCallback((newLayout: Layout) => {

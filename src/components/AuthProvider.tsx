@@ -89,6 +89,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       mountedRef.current = false;
       data?.subscription?.unsubscribe();
     };
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- intentional: load once on mount
   }, []);
 
   const signOut = async () => {

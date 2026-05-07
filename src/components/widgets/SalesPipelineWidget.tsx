@@ -20,6 +20,7 @@ export default function SalesPipelineWidget() {
   useEffect(() => {
     if (!user) return;
     loadPipeline();
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- intentional: load once on mount
   }, [user]);
 
   const loadPipeline = async () => {

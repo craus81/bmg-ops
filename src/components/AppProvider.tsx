@@ -86,6 +86,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
       setAppLoading(false);
     };
     loadSession();
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- intentional: load once on mount
   }, [user]);
 
   // Elapsed timer

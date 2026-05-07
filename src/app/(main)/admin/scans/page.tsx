@@ -69,6 +69,7 @@ export default function AdminScansPage() {
   const [emailTarget, setEmailTarget] = useState<{ customer: string; email: string; body: string; invoices: { invoiceId?: string; invoiceNumber: string; po?: string; include: boolean; verifyStatus?: 'ok' | 'error'; verifyError?: string }[] } | null>(null);
   const [verifyingInvoices, setVerifyingInvoices] = useState(false);
 
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- intentional: load once on mount
   useEffect(() => { loadAll(); }, []);
 
   const loadAll = async () => {
@@ -461,6 +462,7 @@ export default function AdminScansPage() {
         setEmailTarget(t => t ? { ...t, email: saved.join(', ') } : t);
       }
     })();
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- intentional: load once on mount
   }, [emailTarget?.customer]);
 
   // Edit scan

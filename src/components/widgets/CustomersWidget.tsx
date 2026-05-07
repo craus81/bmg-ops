@@ -13,6 +13,7 @@ export default function CustomersWidget() {
   const [stats, setStats] = useState({ total: 0, withSpend: 0 });
   const [topCustomers, setTopCustomers] = useState<any[]>([]);
 
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- intentional: load once on mount
   useEffect(() => { load(); }, []);
 
   const load = async () => {

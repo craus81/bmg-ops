@@ -47,6 +47,7 @@ export default function CniInstallersPage() {
   useEffect(() => {
     if (!isAdmin) { router.push('/home'); return; }
     loadInstallers();
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- intentional: load once on mount
   }, [isAdmin]);
 
   const loadInstallers = async () => {

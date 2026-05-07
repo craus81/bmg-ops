@@ -245,6 +245,7 @@ export default function POsPage() {
       setPendingPOs(pending || []);
     };
     load();
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- intentional: load once on mount
   }, [isAdmin]);
 
   // Auto-expand PO from URL param (deep link from notifications/search)
@@ -254,6 +255,7 @@ export default function POsPage() {
     if (poId && pos.some(p => p.id === poId)) {
       setExpandedPo(poId);
     }
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- intentional: load once on mount
   }, [loading, searchParams]);
 
   // PDF Upload handler

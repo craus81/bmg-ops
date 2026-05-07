@@ -58,6 +58,7 @@ export default function NetSuitePdf({ type, recordId, recordNumber, label }: Net
     };
 
     renderThumb();
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- intentional: load once on mount
   }, [pdfBase64]);
 
   if (!recordId || !recordNumber) return null;

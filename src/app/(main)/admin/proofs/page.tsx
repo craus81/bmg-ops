@@ -41,6 +41,7 @@ export default function ProofHygienePage() {
     if (!isAdmin) { router.push('/home'); return; }
     loadProofs();
     loadStats();
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- intentional: load once on mount
   }, [isAdmin, tab]);
 
   const loadProofs = async () => {

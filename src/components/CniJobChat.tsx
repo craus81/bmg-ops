@@ -33,6 +33,7 @@ export default function CniJobChat({ jobId, userId, backPath, jobNumber, jobTitl
     // Poll every 10s for new messages
     const interval = setInterval(loadMessages, 10000);
     return () => clearInterval(interval);
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- intentional: load once on mount
   }, [jobId]);
 
   useEffect(() => {

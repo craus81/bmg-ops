@@ -42,6 +42,7 @@ export default function AssignmentPicker({
 
   useEffect(() => {
     loadUsers();
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- intentional: load once on mount
   }, []);
 
   const loadUsers = async () => {

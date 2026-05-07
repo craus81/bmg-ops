@@ -27,6 +27,7 @@ export default function MyAccountsWidget() {
   useEffect(() => {
     if (!user) return;
     loadJobs();
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- intentional: load once on mount
   }, [user]);
 
   const loadJobs = async () => {

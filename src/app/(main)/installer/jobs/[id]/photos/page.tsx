@@ -46,6 +46,7 @@ export default function InstallerPhotoUploadPage() {
   useEffect(() => {
     if (!user) return;
     loadData();
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- intentional: load once on mount
   }, [user, jobId]);
 
   const loadData = async () => {

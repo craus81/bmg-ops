@@ -12,6 +12,7 @@ export default function RecentMessagesWidget() {
   const [loading, setLoading] = useState(true);
   const [messages, setMessages] = useState<any[]>([]);
 
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- intentional: load once on mount
   useEffect(() => { load(); }, []);
 
   const load = async () => {

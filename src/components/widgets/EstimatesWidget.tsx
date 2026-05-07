@@ -13,6 +13,7 @@ export default function EstimatesWidget() {
   const [stats, setStats] = useState({ total: 0, recent: 0 });
   const [recentEstimates, setRecentEstimates] = useState<any[]>([]);
 
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- intentional: load once on mount
   useEffect(() => { load(); }, []);
 
   const load = async () => {

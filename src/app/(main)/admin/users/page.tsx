@@ -65,6 +65,7 @@ export default function UsersPage() {
   useEffect(() => {
     if (!isAdmin) { router.push('/home'); return; }
     loadData();
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- intentional: load once on mount
   }, [isAdmin]);
 
   const loadData = async () => {

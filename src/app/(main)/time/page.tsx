@@ -75,6 +75,7 @@ function TeamScreen() {
 
   useEffect(() => {
     loadTeam();
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- intentional: load once on mount
   }, []);
 
   const loadTeam = async () => {
@@ -408,6 +409,7 @@ function HistoryScreen() {
       setLoading(false);
     };
     load();
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- intentional: load once on mount
   }, [user]);
 
   if (loading) return <div style={{ textAlign: 'center', padding: '40px', color: theme.textMuted }}>Loading...</div>;
@@ -455,6 +457,7 @@ function WeekScreen() {
       setLoading(false);
     };
     load();
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- intentional: load once on mount
   }, [user, clockStatus]);
 
   if (loading) return <div style={{ textAlign: 'center', padding: '40px', color: theme.textMuted }}>Loading...</div>;

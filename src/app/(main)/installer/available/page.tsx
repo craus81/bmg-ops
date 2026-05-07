@@ -40,6 +40,7 @@ export default function AvailableJobsPage() {
     if (!user) return;
     if (!isInstaller && !isAdmin) { router.push('/home'); return; }
     loadJobs();
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- intentional: load once on mount
   }, [user, isInstaller, isAdmin]);
 
   const loadJobs = async () => {

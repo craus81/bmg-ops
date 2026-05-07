@@ -12,6 +12,7 @@ export default function VendorPaymentsWidget() {
   const [loading, setLoading] = useState(true);
   const [stats, setStats] = useState({ pending: 0, approved: 0, paid: 0 });
 
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- intentional: load once on mount
   useEffect(() => { load(); }, []);
 
   const load = async () => {

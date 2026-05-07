@@ -12,6 +12,7 @@ export default function PartsCatalogWidget() {
   const [loading, setLoading] = useState(true);
   const [stats, setStats] = useState({ total: 0, upfit: 0, graphics: 0 });
 
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- intentional: load once on mount
   useEffect(() => { load(); }, []);
 
   const load = async () => {

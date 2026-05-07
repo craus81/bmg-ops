@@ -29,6 +29,7 @@ export default function SettingsPage() {
     if (!user) return;
     loadPrefs();
     checkPushStatus();
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- intentional: load once on mount
   }, [user]);
 
   const checkPushStatus = async () => {

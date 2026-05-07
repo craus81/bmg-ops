@@ -67,6 +67,7 @@ function AppShell({ children }: { children: React.ReactNode }) {
       const next = here && here !== '/' && here !== '/login' ? `?next=${encodeURIComponent(here)}` : '';
       router.push(`/login${next}`);
     }
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- intentional: load once on mount
   }, [loading, user]);
 
   if (loading || appLoading) {

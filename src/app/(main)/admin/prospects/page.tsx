@@ -212,6 +212,7 @@ export default function ProspectsPage() {
     if (!hasFeature('prospects') && !isAdmin) { router.push('/home'); return; }
     loadProspects();
     loadProfiles();
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- intentional: load once on mount
   }, []);
 
   // Auto-expand prospect from URL param (deep link from notifications/search)
@@ -221,6 +222,7 @@ export default function ProspectsPage() {
     if (prospectId && prospects.some(p => p.id === prospectId)) {
       toggleExpand(prospectId);
     }
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- intentional: load once on mount
   }, [loading, searchParams]);
 
   // Load metrics once prospects are loaded
@@ -238,6 +240,7 @@ export default function ProspectsPage() {
       setCustomerMetrics(metricsMap);
     };
     loadAllMetrics();
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- intentional: load once on mount
   }, [prospects]);
 
   const loadProspects = async () => {

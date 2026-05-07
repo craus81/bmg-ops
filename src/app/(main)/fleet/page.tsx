@@ -106,6 +106,7 @@ export default function FleetPage() {
 
   useEffect(() => {
     loadRecentCheckins();
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- intentional: load once on mount
   }, []);
 
   const loadRecentCheckins = async () => {

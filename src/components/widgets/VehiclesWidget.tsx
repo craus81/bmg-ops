@@ -13,6 +13,7 @@ export default function VehiclesWidget() {
   const [stats, setStats] = useState({ total: 0, today: 0, week: 0 });
   const [recentVehicles, setRecentVehicles] = useState<any[]>([]);
 
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- intentional: load once on mount
   useEffect(() => { load(); }, []);
 
   const load = async () => {

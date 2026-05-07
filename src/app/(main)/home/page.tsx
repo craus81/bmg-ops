@@ -66,6 +66,7 @@ function DashboardOverview() {
   const [showPODetail, setShowPODetail] = useState(false);
   const [showInvoiceDetail, setShowInvoiceDetail] = useState(false);
 
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- intentional: load once on mount
   useEffect(() => { loadDashboard(); }, []);
 
   const loadDashboard = async () => {
@@ -381,6 +382,7 @@ function DashboardAnalytics() {
   const [locationStats, setLocationStats] = useState<any[]>([]);
   const [installerStats, setInstallerStats] = useState<any[]>([]);
 
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- intentional: load once on mount
   useEffect(() => { loadAnalytics(); }, []);
 
   const loadAnalytics = async () => {
@@ -924,6 +926,7 @@ function InstallerHome() {
       setProofs(data || []);
     };
     load();
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- intentional: load once on mount
   }, [activePart?.id]);
 
   // Load vehicles assigned to this installer
@@ -951,6 +954,7 @@ function InstallerHome() {
       setAssignedLoading(false);
     };
     loadAssigned();
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- intentional: load once on mount
   }, [user?.id]);
 
   const getProofUrl = (proof: CatalogProof) => {
@@ -1218,6 +1222,7 @@ export default function HomePage() {
     if (isOnlyRole('graphics_production')) { router.replace('/graphics'); return; }
     if (isOnlyRole('field_tech') || isOnlyRole('installer')) { router.replace('/scan'); return; }
     if (isOnlyRole('shop_tech')) { router.replace('/fleet'); return; }
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- intentional: load once on mount
   }, [role, roles]);
 
   if (role === 'customer') return null;

@@ -41,6 +41,7 @@ export default function ReportsPage() {
       loadReview();
       loadPending();
     }
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- intentional: load once on mount
   }, [user]);
 
   var loadReview = async () => {

@@ -15,6 +15,7 @@ export default function MyJobsWidget() {
   const [stats, setStats] = useState({ assigned: 0, pending: 0, approved: 0 });
   const [recentJobs, setRecentJobs] = useState<any[]>([]);
 
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- intentional: load once on mount
   useEffect(() => { if (user?.id) load(); }, [user?.id]);
 
   const load = async () => {

@@ -31,6 +31,7 @@ export default function InShopTrackingWidget() {
   const [stats, setStats] = useState({ received: 0, in_progress: 0, stuck_parts: 0, stuck_graphics: 0, complete: 0 });
   const [recentItems, setRecentItems] = useState<any[]>([]);
 
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- intentional: load once on mount
   useEffect(() => { load(); }, [user]);
 
   const load = async () => {
