@@ -725,6 +725,54 @@ function NewQuote({ onCreated, editQuote }: { onCreated: () => void; editQuote?:
     }
   }, [step, templatePreviewUrl, selectedTemplate]);
 
+  useEffect(() => {
+    const proofSrc = proofPreviewForReview || proofPreview;
+    if (!proofSrc) return;
+    const elements = analysis?.graphic_elements;
+    if (!elements?.length) return;
+    const missing = elements.filter(el =>
+      el.crop_w_pct != null && el.crop_h_pct != null &&
+      el.crop_x_pct != null && el.crop_y_pct != null &&
+      el.crop_w_pct > 0 && el.crop_h_pct > 0 &&
+      !elementCrops[el.element_name]
+    );
+    if (missing.length === 0) return;
+
+    const img = new Image();
+    img.crossOrigin = 'anonymous';
+    img.onload = () => {
+      const W = img.naturalWidth;
+      const H = img.naturalHeight;
+      if (!W || !H) return;
+      const next: Record<string, string> = {};
+      for (const el of missing) {
+        const sx = (el.crop_x_pct! / 100) * W;
+        const sy = (el.crop_y_pct! / 100) * H;
+        const sw = (el.crop_w_pct! / 100) * W;
+        const sh = (el.crop_h_pct! / 100) * H;
+        if (sw < 2 || sh < 2) continue;
+        const canvas = document.createElement('canvas');
+        const maxDim = 400;
+        const scale = Math.min(1, maxDim / Math.max(sw, sh));
+        canvas.width = Math.max(1, Math.round(sw * scale));
+        canvas.height = Math.max(1, Math.round(sh * scale));
+        const ctx = canvas.getContext('2d');
+        if (!ctx) continue;
+        try {
+          ctx.drawImage(img, sx, sy, sw, sh, 0, 0, canvas.width, canvas.height);
+          next[el.element_name] = canvas.toDataURL('image/jpeg', 0.85);
+        } catch (err) {
+          console.error('Failed to backfill crop for', el.element_name, err);
+        }
+      }
+      if (Object.keys(next).length > 0) {
+        setElementCrops(prev => ({ ...next, ...prev }));
+      }
+    };
+    img.onerror = (err) => console.error('Backfill: proof image failed to load', err);
+    img.src = proofSrc;
+  }, [analysis, proofPreviewForReview, proofPreview, elementCrops]);
+
   async function loadTemplates() {
     const { data } = await supabase
       .from('vehicle_templates')
@@ -872,6 +920,7 @@ function NewQuote({ onCreated, editQuote }: { onCreated: () => void; editQuote?:
     setAnalysis({ ...analysis, graphic_elements: updatedElements });
     setIncludedElements(prev => new Set(prev).add(newEl.element_name));
     setSelectedBboxIdx(updatedElements.length - 1);
+    cropFromProof(newEl.element_name, imgEl, sx, sy, sw, sh);
   }
 
   // Place a default-position box on the image for an AI-detected element
