@@ -1,8 +1,44 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { createClient } from '@supabase/supabase-js';
 import { requireAuth } from '@/lib/api-auth';
+import { validateBody, z } from '@/lib/validate';
 
 export const dynamic = 'force-dynamic';
+
+const LineItemSchema = z.object({
+  part_id: z.string().uuid().optional().nullable(),
+  netsuite_item_id: z.string().max(40).optional().nullable(),
+  item_number: z.string().max(120).optional().nullable(),
+  description: z.string().max(2000).optional().nullable(),
+  quantity: z.union([z.number(), z.string()]).optional(),
+  unit_price: z.union([z.number(), z.string()]).optional(),
+  labor_hours: z.union([z.number(), z.string()]).optional(),
+  is_custom: z.boolean().optional(),
+  notes: z.string().max(2000).optional().nullable(),
+});
+
+const UpsertEstimateSchema = z.object({
+  id: z.string().uuid().optional(),
+  customer_id: z.string().uuid().optional().nullable(),
+  customer_name: z.string().max(200).optional().nullable(),
+  customer_netsuite_id: z.string().max(40).optional().nullable(),
+  title: z.string().max(300).optional().nullable(),
+  notes: z.string().max(10_000).optional().nullable(),
+  status: z.string().max(40).optional(),
+  tax_rate: z.union([z.number(), z.string()]).optional(),
+  tax_exempt: z.boolean().optional(),
+  labor_rate: z.union([z.number(), z.string()]).optional(),
+  labor_hours_override: z.union([z.number(), z.string()]).optional().nullable(),
+  line_items: z.array(LineItemSchema).max(500).optional(),
+  created_by: z.string().uuid().optional().nullable(),
+  install_instructions: z.string().max(5000).optional().nullable(),
+  on_site_contact_name: z.string().max(120).optional().nullable(),
+  on_site_contact_phone: z.string().max(40).optional().nullable(),
+  delivery_preferences: z.string().max(2000).optional().nullable(),
+  internal_notes: z.string().max(5000).optional().nullable(),
+});
+
+const DeleteSchema = z.object({ id: z.string().uuid() });
 
 function getSupabase() {
   return createClient(
@@ -68,27 +104,29 @@ export async function POST(req: NextRequest) {
   const auth = await requireAuth(req);
   if (auth.error) return auth.error;
 
+  const parsed = await validateBody(req, UpsertEstimateSchema);
+  if (parsed.error) return parsed.error;
+  const {
+    id, // if present, update existing
+    customer_id, customer_name, customer_netsuite_id,
+    title, notes, status,
+    tax_rate, tax_exempt,
+    labor_rate, labor_hours_override,
+    line_items, // array of line item objects
+    created_by,
+    // T1.6 install context
+    install_instructions, on_site_contact_name, on_site_contact_phone,
+    delivery_preferences, internal_notes,
+  } = parsed.data;
+
   try {
     const supabase = getSupabase();
-    const body = await req.json();
-    const {
-      id, // if present, update existing
-      customer_id, customer_name, customer_netsuite_id,
-      title, notes, status,
-      tax_rate, tax_exempt,
-      labor_rate, labor_hours_override,
-      line_items, // array of line item objects
-      created_by,
-      // T1.6 install context
-      install_instructions, on_site_contact_name, on_site_contact_phone,
-      delivery_preferences, internal_notes,
-    } = body;
 
     const lines = line_items || [];
-    const effectiveTaxRate = parseFloat(tax_rate ?? 0.0795);
-    const effectiveLaborRate = parseFloat(labor_rate ?? 85);
+    const effectiveTaxRate = parseFloat(String(tax_rate ?? 0.0795));
+    const effectiveLaborRate = parseFloat(String(labor_rate ?? 85));
     const override = labor_hours_override !== undefined && labor_hours_override !== null
-      ? parseFloat(labor_hours_override)
+      ? parseFloat(String(labor_hours_override))
       : null;
 
     const totals = computeTotals(lines, effectiveTaxRate, !!tax_exempt, effectiveLaborRate, override);
@@ -212,10 +250,12 @@ export async function DELETE(req: NextRequest) {
   const auth = await requireAuth(req);
   if (auth.error) return auth.error;
 
+  const parsed = await validateBody(req, DeleteSchema);
+  if (parsed.error) return parsed.error;
+  const { id } = parsed.data;
+
   try {
     const supabase = getSupabase();
-    const { id } = await req.json();
-    if (!id) return NextResponse.json({ error: 'Missing estimate id' }, { status: 400 });
 
     // Check if this estimate has been pushed to NetSuite
     const { data: estimate } = await supabase

@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { createClient } from '@supabase/supabase-js';
 import { requireAuth } from '@/lib/api-auth';
 import { sendSMS, sendMMS, getActiveProviderName } from '@/lib/sms-provider';
+import { validateBody, z } from '@/lib/validate';
 
 export const dynamic = 'force-dynamic';
 
@@ -9,6 +10,26 @@ const supabase = createClient(
   process.env.NEXT_PUBLIC_SUPABASE_URL!,
   process.env.SUPABASE_SERVICE_ROLE_KEY!
 );
+
+const Schema = z
+  .object({
+    channel: z.enum(['sms', 'mms', 'email']),
+    body: z.string().max(10_000).optional().default(''),
+    attachments: z
+      .array(
+        z.object({
+          url: z.string().url().max(2000),
+          contentType: z.string().max(120).optional(),
+        }),
+      )
+      .max(10)
+      .optional()
+      .default([]),
+  })
+  .refine((d) => !!(d.body?.trim() || (d.attachments && d.attachments.length > 0)), {
+    message: 'body or attachment required',
+    path: ['body'],
+  });
 
 /**
  * POST /api/customer-threads/[id]/messages
@@ -24,17 +45,10 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
   const auth = await requireAuth(req);
   if (auth.error) return auth.error;
 
-  const body = await req.json();
-  const channel = String(body.channel || '').toLowerCase();
-  const messageBody = (body.body || '').trim();
-  const attachments = Array.isArray(body.attachments) ? body.attachments : [];
-
-  if (!['sms', 'mms', 'email'].includes(channel)) {
-    return NextResponse.json({ error: 'channel must be sms|mms|email' }, { status: 400 });
-  }
-  if (!messageBody && attachments.length === 0) {
-    return NextResponse.json({ error: 'body or attachment required' }, { status: 400 });
-  }
+  const parsed = await validateBody(req, Schema);
+  if (parsed.error) return parsed.error;
+  const { channel, body: rawBody, attachments } = parsed.data;
+  const messageBody = rawBody.trim();
 
   // Load thread + contact
   const { data: thread, error: tErr } = await supabase

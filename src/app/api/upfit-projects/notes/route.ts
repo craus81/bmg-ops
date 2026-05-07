@@ -1,11 +1,19 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { createClient } from '@supabase/supabase-js';
 import { requireAuth } from '@/lib/api-auth';
+import { validateBody, z } from '@/lib/validate';
 
 const supabase = createClient(
   process.env.NEXT_PUBLIC_SUPABASE_URL!,
   process.env.SUPABASE_SERVICE_ROLE_KEY!
 );
+
+const CreateNoteSchema = z.object({
+  project_id: z.string().uuid(),
+  note_type: z.string().max(40).optional(),
+  content: z.string().trim().min(1).max(10_000),
+});
+const DeleteNoteSchema = z.object({ id: z.string().uuid() });
 
 /** GET /api/upfit-projects/notes?projectId=xxx — list notes for a project */
 export async function GET(req: NextRequest) {
@@ -30,10 +38,9 @@ export async function POST(req: NextRequest) {
   const auth = await requireAuth(req);
   if (auth.error) return auth.error;
 
-  const body = await req.json();
-  if (!body.project_id || !body.content) {
-    return NextResponse.json({ error: 'project_id and content required' }, { status: 400 });
-  }
+  const parsed = await validateBody(req, CreateNoteSchema);
+  if (parsed.error) return parsed.error;
+  const body = parsed.data;
 
   const { data, error } = await supabase
     .from('upfit_project_notes')
@@ -62,8 +69,9 @@ export async function DELETE(req: NextRequest) {
   const auth = await requireAuth(req);
   if (auth.error) return auth.error;
 
-  const { id } = await req.json();
-  if (!id) return NextResponse.json({ error: 'id required' }, { status: 400 });
+  const parsed = await validateBody(req, DeleteNoteSchema);
+  if (parsed.error) return parsed.error;
+  const { id } = parsed.data;
 
   const { error } = await supabase
     .from('upfit_project_notes')

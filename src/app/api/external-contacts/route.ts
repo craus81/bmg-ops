@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { createClient } from '@supabase/supabase-js';
 import { requireAuth } from '@/lib/api-auth';
+import { validateBody, z } from '@/lib/validate';
 
 export const dynamic = 'force-dynamic';
 
@@ -8,6 +9,22 @@ const supabase = createClient(
   process.env.NEXT_PUBLIC_SUPABASE_URL!,
   process.env.SUPABASE_SERVICE_ROLE_KEY!
 );
+
+const CreateSchema = z
+  .object({
+    customerId: z.string().uuid().optional().nullable(),
+    name: z.string().trim().max(120).optional().nullable(),
+    phone: z.string().max(40).optional().nullable(),
+    email: z.string().email().max(254).optional().nullable(),
+    title: z.string().max(120).optional().nullable(),
+    is_primary: z.boolean().optional(),
+    channel_pref: z.enum(['email', 'sms', 'both', 'none']).optional().nullable(),
+    notes: z.string().max(2000).optional().nullable(),
+  })
+  .refine((d) => !!(d.name || d.phone || d.email), {
+    message: 'name, phone, or email required',
+    path: ['name'],
+  });
 
 /**
  * GET /api/external-contacts?customerId=...&q=...
@@ -42,10 +59,9 @@ export async function POST(req: NextRequest) {
   const auth = await requireAuth(req);
   if (auth.error) return auth.error;
 
-  const body = await req.json();
-  if (!body.name && !body.phone && !body.email) {
-    return NextResponse.json({ error: 'name, phone, or email required' }, { status: 400 });
-  }
+  const parsed = await validateBody(req, CreateSchema);
+  if (parsed.error) return parsed.error;
+  const body = parsed.data;
 
   // If this contact is being marked as primary for a customer, clear
   // any existing primary flag for that customer first.

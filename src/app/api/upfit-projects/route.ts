@@ -1,11 +1,49 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { createClient } from '@supabase/supabase-js';
 import { requireAuth } from '@/lib/api-auth';
+import { validateBody, z } from '@/lib/validate';
 
 const supabase = createClient(
   process.env.NEXT_PUBLIC_SUPABASE_URL!,
   process.env.SUPABASE_SERVICE_ROLE_KEY!
 );
+
+const ProjectFields = {
+  project_name: z.string().trim().max(200),
+  status: z.string().max(40).optional(),
+  prospect_id: z.string().uuid().optional().nullable(),
+  customer_name: z.string().max(200).optional().nullable(),
+  customer_netsuite_id: z.string().max(40).optional().nullable(),
+  estimate_id: z.string().uuid().optional().nullable(),
+  estimate_number: z.string().max(60).optional().nullable(),
+  netsuite_so_id: z.string().max(40).optional().nullable(),
+  netsuite_so_number: z.string().max(60).optional().nullable(),
+  scheduled_date: z.string().max(40).optional().nullable(),
+  scheduled_end_date: z.string().max(40).optional().nullable(),
+  estimated_total: z.number().optional().nullable(),
+  assigned_to: z.string().uuid().optional().nullable(),
+} as const;
+
+const CreateSchema = z.object(ProjectFields);
+const UpdateSchema = z
+  .object({
+    id: z.string().uuid(),
+    project_name: ProjectFields.project_name.optional(),
+    status: ProjectFields.status,
+    prospect_id: ProjectFields.prospect_id,
+    customer_name: ProjectFields.customer_name,
+    customer_netsuite_id: ProjectFields.customer_netsuite_id,
+    estimate_id: ProjectFields.estimate_id,
+    estimate_number: ProjectFields.estimate_number,
+    netsuite_so_id: ProjectFields.netsuite_so_id,
+    netsuite_so_number: ProjectFields.netsuite_so_number,
+    scheduled_date: ProjectFields.scheduled_date,
+    scheduled_end_date: ProjectFields.scheduled_end_date,
+    estimated_total: ProjectFields.estimated_total,
+    assigned_to: ProjectFields.assigned_to,
+  })
+  .passthrough();
+const DeleteSchema = z.object({ id: z.string().uuid() });
 
 /** GET /api/upfit-projects — list all projects, optionally filtered by status */
 export async function GET(req: NextRequest) {
@@ -34,7 +72,9 @@ export async function POST(req: NextRequest) {
   const auth = await requireAuth(req);
   if (auth.error) return auth.error;
 
-  const body = await req.json();
+  const parsed = await validateBody(req, CreateSchema);
+  if (parsed.error) return parsed.error;
+  const body = parsed.data;
 
   const { data, error } = await supabase
     .from('upfit_projects')
@@ -77,10 +117,9 @@ export async function PUT(req: NextRequest) {
   const auth = await requireAuth(req);
   if (auth.error) return auth.error;
 
-  const body = await req.json();
-  const { id, ...fields } = body;
-
-  if (!id) return NextResponse.json({ error: 'id required' }, { status: 400 });
+  const parsed = await validateBody(req, UpdateSchema);
+  if (parsed.error) return parsed.error;
+  const { id, ...fields } = parsed.data as { id: string; [k: string]: any };
 
   // If status is changing, log it as a note
   if (fields.status) {
@@ -118,8 +157,9 @@ export async function DELETE(req: NextRequest) {
   const auth = await requireAuth(req);
   if (auth.error) return auth.error;
 
-  const { id } = await req.json();
-  if (!id) return NextResponse.json({ error: 'id required' }, { status: 400 });
+  const parsed = await validateBody(req, DeleteSchema);
+  if (parsed.error) return parsed.error;
+  const { id } = parsed.data;
 
   const { error } = await supabase
     .from('upfit_projects')

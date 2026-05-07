@@ -2,11 +2,33 @@ import { NextRequest, NextResponse } from 'next/server';
 import { createClient } from '@supabase/supabase-js';
 import { requireAuth } from '@/lib/api-auth';
 import { notify } from '@/lib/notify';
+import { validateBody, z } from '@/lib/validate';
 
 const supabase = createClient(
   process.env.NEXT_PUBLIC_SUPABASE_URL!,
   process.env.SUPABASE_SERVICE_ROLE_KEY!
 );
+
+const CreateSchema = z.object({
+  project_id: z.string().uuid(),
+  title: z.string().trim().min(1).max(300),
+  description: z.string().max(5000).optional().nullable(),
+  assigned_to: z.string().uuid().optional().nullable(),
+  due_date: z.string().max(40).optional().nullable(),
+});
+
+const PatchSchema = z
+  .object({
+    id: z.string().uuid(),
+    title: z.string().trim().max(300).optional(),
+    description: z.string().max(5000).optional().nullable(),
+    assigned_to: z.string().uuid().optional().nullable(),
+    due_date: z.string().max(40).optional().nullable(),
+    completed: z.boolean().optional(),
+  })
+  .passthrough();
+
+const DeleteSchema = z.object({ id: z.string().uuid() });
 
 /** GET /api/upfit-projects/tasks?projectId=xxx — list tasks for a project */
 export async function GET(req: NextRequest) {
@@ -33,10 +55,9 @@ export async function POST(req: NextRequest) {
   const auth = await requireAuth(req);
   if (auth.error) return auth.error;
 
-  const body = await req.json();
-  if (!body.project_id || !body.title) {
-    return NextResponse.json({ error: 'project_id and title required' }, { status: 400 });
-  }
+  const parsed = await validateBody(req, CreateSchema);
+  if (parsed.error) return parsed.error;
+  const body = parsed.data;
 
   const { data, error } = await supabase
     .from('upfit_project_tasks')
@@ -82,9 +103,9 @@ export async function PATCH(req: NextRequest) {
   const auth = await requireAuth(req);
   if (auth.error) return auth.error;
 
-  const body = await req.json();
-  const { id, ...fields } = body;
-  if (!id) return NextResponse.json({ error: 'id required' }, { status: 400 });
+  const parsed = await validateBody(req, PatchSchema);
+  if (parsed.error) return parsed.error;
+  const { id, ...fields } = parsed.data as { id: string; [k: string]: any };
 
   const { data: existing } = await supabase
     .from('upfit_project_tasks')
@@ -149,8 +170,9 @@ export async function DELETE(req: NextRequest) {
   const auth = await requireAuth(req);
   if (auth.error) return auth.error;
 
-  const { id } = await req.json();
-  if (!id) return NextResponse.json({ error: 'id required' }, { status: 400 });
+  const parsed = await validateBody(req, DeleteSchema);
+  if (parsed.error) return parsed.error;
+  const { id } = parsed.data;
 
   const { error } = await supabase
     .from('upfit_project_tasks')

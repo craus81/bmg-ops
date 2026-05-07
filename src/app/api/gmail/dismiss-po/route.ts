@@ -1,22 +1,29 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { createClient } from '@supabase/supabase-js';
 import { requireAuth } from '@/lib/api-auth';
+import { validateBody, z } from '@/lib/validate';
+
+const Schema = z.object({
+  messageId: z.string().min(1).max(200),
+  threadId: z.string().max(200).optional().nullable(),
+  subject: z.string().max(998).optional().nullable(),
+  fromEmail: z.string().max(254).optional().nullable(),
+  poNumber: z.string().max(120).optional().nullable(),
+});
 
 /**
  * POST /api/gmail/dismiss-po
- * Body: { messageId, threadId?, subject?, fromEmail?, poNumber? }
  * Marks a Gmail PO email as skipped so it doesn't show up in future scans.
  */
 export async function POST(req: NextRequest) {
   const auth = await requireAuth(req);
   if (auth.error) return auth.error;
 
-  try {
-    const { messageId, threadId, subject, fromEmail, poNumber } = await req.json();
+  const parsed = await validateBody(req, Schema);
+  if (parsed.error) return parsed.error;
+  const { messageId, threadId, subject, fromEmail, poNumber } = parsed.data;
 
-    if (!messageId) {
-      return NextResponse.json({ error: 'messageId required' }, { status: 400 });
-    }
+  try {
 
     const supabase = createClient(
       process.env.NEXT_PUBLIC_SUPABASE_URL!,

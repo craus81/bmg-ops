@@ -1,11 +1,49 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { createClient } from '@supabase/supabase-js';
 import { requireAuth } from '@/lib/api-auth';
+import { validateBody, z } from '@/lib/validate';
 
 const supabase = createClient(
   process.env.NEXT_PUBLIC_SUPABASE_URL!,
   process.env.SUPABASE_SERVICE_ROLE_KEY!
 );
+
+const ProspectFields = {
+  company_name: z.string().trim().max(200),
+  contact_name: z.string().max(120).optional().nullable(),
+  title: z.string().max(120).optional().nullable(),
+  email: z.string().email().max(254).optional().nullable(),
+  phone: z.string().max(40).optional().nullable(),
+  address: z.string().max(300).optional().nullable(),
+  city: z.string().max(120).optional().nullable(),
+  state: z.string().max(40).optional().nullable(),
+  zip: z.string().max(20).optional().nullable(),
+  website: z.string().max(500).optional().nullable(),
+  notes: z.string().max(5000).optional().nullable(),
+  source: z.string().max(40).optional(),
+  created_by: z.string().uuid().optional().nullable(),
+} as const;
+
+const CreateProspectSchema = z.object(ProspectFields);
+const UpdateProspectSchema = z
+  .object({
+    id: z.string().uuid(),
+    company_name: z.string().trim().max(200).optional(),
+    contact_name: ProspectFields.contact_name,
+    title: ProspectFields.title,
+    email: ProspectFields.email,
+    phone: ProspectFields.phone,
+    address: ProspectFields.address,
+    city: ProspectFields.city,
+    state: ProspectFields.state,
+    zip: ProspectFields.zip,
+    website: ProspectFields.website,
+    notes: ProspectFields.notes,
+    source: ProspectFields.source,
+    created_by: ProspectFields.created_by,
+    netsuite_id: z.string().max(40).optional().nullable(),
+  })
+  .passthrough();
 
 /** GET /api/prospects — list all prospects */
 export async function GET(req: NextRequest) {
@@ -26,7 +64,9 @@ export async function POST(req: NextRequest) {
   const auth = await requireAuth(req);
   if (auth.error) return auth.error;
 
-  const body = await req.json();
+  const parsed = await validateBody(req, CreateProspectSchema);
+  if (parsed.error) return parsed.error;
+  const body = parsed.data;
   const { data, error } = await supabase
     .from('prospects')
     .insert({
@@ -56,9 +96,9 @@ export async function PUT(req: NextRequest) {
   const auth = await requireAuth(req);
   if (auth.error) return auth.error;
 
-  const body = await req.json();
-  const { id, ...fields } = body;
-  if (!id) return NextResponse.json({ error: 'Missing id' }, { status: 400 });
+  const parsed = await validateBody(req, UpdateProspectSchema);
+  if (parsed.error) return parsed.error;
+  const { id, ...fields } = parsed.data;
 
   const { data, error } = await supabase
     .from('prospects')

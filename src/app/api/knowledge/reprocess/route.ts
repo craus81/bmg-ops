@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { createClient } from '@supabase/supabase-js';
 import { r2Get } from '@/lib/r2';
 import { requireAdmin } from '@/lib/api-auth';
+import { validateBody, z } from '@/lib/validate';
 
 export const dynamic = 'force-dynamic';
 export const maxDuration = 120;
@@ -10,6 +11,8 @@ const supabase = createClient(
   process.env.NEXT_PUBLIC_SUPABASE_URL!,
   process.env.SUPABASE_SERVICE_ROLE_KEY!
 );
+
+const Schema = z.object({ docId: z.string().uuid() });
 
 function isPdf(fileName: string): boolean {
   return fileName.toLowerCase().endsWith('.pdf');
@@ -132,12 +135,11 @@ export async function POST(req: NextRequest) {
   const auth = await requireAdmin(req);
   if (auth.error) return auth.error;
 
-  try {
-    const { docId } = await req.json();
+  const parsed = await validateBody(req, Schema);
+  if (parsed.error) return parsed.error;
+  const { docId } = parsed.data;
 
-    if (!docId) {
-      return NextResponse.json({ error: 'Missing docId' }, { status: 400 });
-    }
+  try {
 
     // Get the doc from DB
     const { data: doc, error: fetchErr } = await supabase

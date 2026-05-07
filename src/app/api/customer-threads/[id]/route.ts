@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { createClient } from '@supabase/supabase-js';
 import { requireAuth } from '@/lib/api-auth';
+import { validateBody, z } from '@/lib/validate';
 
 export const dynamic = 'force-dynamic';
 
@@ -8,6 +9,13 @@ const supabase = createClient(
   process.env.NEXT_PUBLIC_SUPABASE_URL!,
   process.env.SUPABASE_SERVICE_ROLE_KEY!
 );
+
+const PatchSchema = z.object({
+  assigned_to: z.string().uuid().optional().nullable(),
+  status: z.enum(['open', 'archived']).optional(),
+  subject: z.string().max(300).optional(),
+  markRead: z.boolean().optional(),
+});
 
 /**
  * GET /api/customer-threads/[id]
@@ -82,11 +90,13 @@ export async function PATCH(req: NextRequest, { params }: { params: { id: string
   const auth = await requireAuth(req);
   if (auth.error) return auth.error;
 
-  const body = await req.json();
+  const parsed = await validateBody(req, PatchSchema);
+  if (parsed.error) return parsed.error;
+  const body = parsed.data;
   const update: Record<string, any> = { updated_at: new Date().toISOString() };
 
   if ('assigned_to' in body) update.assigned_to = body.assigned_to || null;
-  if (body.status && ['open', 'archived'].includes(body.status)) update.status = body.status;
+  if (body.status) update.status = body.status;
   if (typeof body.subject === 'string') update.subject = body.subject;
   if (body.markRead) update.unread_count = 0;
 

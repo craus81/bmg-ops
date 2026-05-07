@@ -1,23 +1,26 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { createClient } from '@supabase/supabase-js';
 import { requireAdmin } from '@/lib/api-auth';
+import { validateBody, z } from '@/lib/validate';
 
 const supabase = createClient(
   process.env.NEXT_PUBLIC_SUPABASE_URL!,
   process.env.SUPABASE_SERVICE_ROLE_KEY!
 );
 
+const Schema = z.object({
+  poIds: z.array(z.string().uuid()).min(1).max(200),
+});
+
 export async function POST(req: NextRequest) {
   const auth = await requireAdmin(req);
   if (auth.error) return auth.error;
 
+  const parsed = await validateBody(req, Schema);
+  if (parsed.error) return parsed.error;
+  const { poIds } = parsed.data;
+
   try {
-    const { poIds } = await req.json();
-
-    if (!poIds || !Array.isArray(poIds) || poIds.length === 0) {
-      return NextResponse.json({ error: 'poIds array required' }, { status: 400 });
-    }
-
     const results: { id: string; success: boolean; error?: string }[] = [];
 
     for (const poId of poIds) {

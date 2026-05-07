@@ -1,19 +1,44 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { createClient } from '@supabase/supabase-js';
 import { requireAuth } from '@/lib/api-auth';
+import { validateBody, z } from '@/lib/validate';
+
+const ContactBase = {
+  name: z.string().trim().min(1).max(120),
+  email: z.string().email().max(254).optional().nullable(),
+  phone: z.string().max(40).optional().nullable(),
+  title: z.string().max(120).optional().nullable(),
+  address: z.string().max(300).optional().nullable(),
+  notes: z.string().max(2000).optional().nullable(),
+};
+
+const CreateSchema = z.object({
+  customer_id: z.string().uuid(),
+  ...ContactBase,
+});
+
+const UpdateSchema = z.object({
+  id: z.string().uuid(),
+  customer_id: z.string().uuid().optional(),
+  name: ContactBase.name.optional(),
+  email: ContactBase.email,
+  phone: ContactBase.phone,
+  title: ContactBase.title,
+  address: ContactBase.address,
+  notes: ContactBase.notes,
+});
+
+const DeleteSchema = z.object({ id: z.string().uuid() });
 
 export async function POST(req: NextRequest) {
   const auth = await requireAuth(req);
   if (auth.error) return auth.error;
 
+  const parsed = await validateBody(req, CreateSchema);
+  if (parsed.error) return parsed.error;
+  const { customer_id, name, email, phone, title, address, notes } = parsed.data;
+
   try {
-    const body = await req.json();
-    const { customer_id, name, email, phone, title, address, notes } = body;
-
-    if (!customer_id || !name) {
-      return NextResponse.json({ error: 'customer_id and name are required' }, { status: 400 });
-    }
-
     const supabase = createClient(
       process.env.NEXT_PUBLIC_SUPABASE_URL!,
       process.env.SUPABASE_SERVICE_ROLE_KEY!
@@ -47,14 +72,11 @@ export async function PUT(req: NextRequest) {
   const auth = await requireAuth(req);
   if (auth.error) return auth.error;
 
+  const parsed = await validateBody(req, UpdateSchema);
+  if (parsed.error) return parsed.error;
+  const { id, ...updates } = parsed.data;
+
   try {
-    const body = await req.json();
-    const { id, ...updates } = body;
-
-    if (!id) {
-      return NextResponse.json({ error: 'id is required' }, { status: 400 });
-    }
-
     const supabase = createClient(
       process.env.NEXT_PUBLIC_SUPABASE_URL!,
       process.env.SUPABASE_SERVICE_ROLE_KEY!
@@ -81,13 +103,11 @@ export async function DELETE(req: NextRequest) {
   const auth = await requireAuth(req);
   if (auth.error) return auth.error;
 
+  const parsed = await validateBody(req, DeleteSchema);
+  if (parsed.error) return parsed.error;
+  const { id } = parsed.data;
+
   try {
-    const { id } = await req.json();
-
-    if (!id) {
-      return NextResponse.json({ error: 'id is required' }, { status: 400 });
-    }
-
     const supabase = createClient(
       process.env.NEXT_PUBLIC_SUPABASE_URL!,
       process.env.SUPABASE_SERVICE_ROLE_KEY!

@@ -1,22 +1,24 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { createClient } from '@supabase/supabase-js';
 import { requireAdmin } from '@/lib/api-auth';
+import { validateBody, z } from '@/lib/validate';
 
 const supabase = createClient(
   process.env.NEXT_PUBLIC_SUPABASE_URL!,
   process.env.SUPABASE_SERVICE_ROLE_KEY!
 );
 
+const Schema = z.object({ lineId: z.string().uuid() });
+
 export async function POST(req: NextRequest) {
   const auth = await requireAdmin(req);
   if (auth.error) return auth.error;
 
-  try {
-    const { lineId } = await req.json();
+  const parsed = await validateBody(req, Schema);
+  if (parsed.error) return parsed.error;
+  const { lineId } = parsed.data;
 
-    if (!lineId) {
-      return NextResponse.json({ error: 'lineId required' }, { status: 400 });
-    }
+  try {
 
     // Clear FK references from scanned_vehicles
     await supabase

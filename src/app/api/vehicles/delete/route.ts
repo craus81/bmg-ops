@@ -1,23 +1,23 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { createClient } from '@supabase/supabase-js';
 import { requireAdmin } from '@/lib/api-auth';
+import { validateBody, z } from '@/lib/validate';
+
+const Schema = z.object({ vehicleId: z.string().uuid() });
 
 /**
  * POST /api/vehicles/delete
- * Body: { vehicleId: string }
  * Deletes a fleet_checkins vehicle and its status history.
- * Uses service role to bypass RLS.
  */
 export async function POST(req: NextRequest) {
   const auth = await requireAdmin(req);
   if (auth.error) return auth.error;
 
-  try {
-    const { vehicleId } = await req.json();
+  const parsed = await validateBody(req, Schema);
+  if (parsed.error) return parsed.error;
+  const { vehicleId } = parsed.data;
 
-    if (!vehicleId) {
-      return NextResponse.json({ error: 'vehicleId required' }, { status: 400 });
-    }
+  try {
 
     const supabase = createClient(
       process.env.NEXT_PUBLIC_SUPABASE_URL!,

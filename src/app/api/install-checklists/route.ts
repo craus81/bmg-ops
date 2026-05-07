@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { createClient } from '@supabase/supabase-js';
 import { requireAuth, requireAdmin } from '@/lib/api-auth';
+import { validateBody, z } from '@/lib/validate';
 
 export const dynamic = 'force-dynamic';
 
@@ -8,6 +9,21 @@ const supabase = createClient(
   process.env.NEXT_PUBLIC_SUPABASE_URL!,
   process.env.SUPABASE_SERVICE_ROLE_KEY!
 );
+
+const TemplateSchema = z.object({
+  name: z.string().trim().min(1).max(200),
+  install_category: z.enum(['upfit', 'graphics', 'mixed']),
+  items: z
+    .array(
+      z.object({
+        label: z.string().trim().min(1).max(300),
+        required: z.boolean().optional(),
+      }),
+    )
+    .min(1)
+    .max(200),
+  is_active: z.boolean().optional(),
+});
 
 /**
  * GET /api/install-checklists — list all templates (readable by any staff)
@@ -34,18 +50,11 @@ export async function POST(req: NextRequest) {
   const auth = await requireAdmin(req);
   if (auth.error) return auth.error;
 
-  const body = await req.json();
-  const { name, install_category, items, is_active } = body || {};
-  if (!name || !install_category || !Array.isArray(items)) {
-    return NextResponse.json({ error: 'name, install_category, and items[] required' }, { status: 400 });
-  }
-  if (!['upfit', 'graphics', 'mixed'].includes(install_category)) {
-    return NextResponse.json({ error: 'install_category must be upfit|graphics|mixed' }, { status: 400 });
-  }
+  const parsed = await validateBody(req, TemplateSchema);
+  if (parsed.error) return parsed.error;
+  const { name, install_category, items, is_active } = parsed.data;
 
-  const cleaned = items
-    .filter((i: any) => i && typeof i.label === 'string' && i.label.trim())
-    .map((i: any) => ({ label: i.label.trim(), required: i.required === true }));
+  const cleaned = items.map((i) => ({ label: i.label.trim(), required: i.required === true }));
 
   const { data, error } = await supabase
     .from('install_checklist_templates')

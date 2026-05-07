@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { createClient } from '@supabase/supabase-js';
 import { requireAuth } from '@/lib/api-auth';
+import { validateBody, z } from '@/lib/validate';
 
 export const dynamic = 'force-dynamic';
 
@@ -8,6 +9,12 @@ const supabase = createClient(
   process.env.NEXT_PUBLIC_SUPABASE_URL!,
   process.env.SUPABASE_SERVICE_ROLE_KEY!
 );
+
+const AssignSchema = z.object({
+  vehicleId: z.string().uuid(),
+  poId: z.string().uuid(),
+  partNumber: z.string().trim().max(120).optional().nullable(),
+});
 
 // GET: Search open POs for the assignment picker
 export async function GET(req: NextRequest) {
@@ -41,12 +48,11 @@ export async function POST(req: NextRequest) {
   const auth = await requireAuth(req);
   if (auth.error) return auth.error;
 
-  try {
-    const { vehicleId, poId, partNumber } = await req.json();
+  const parsed = await validateBody(req, AssignSchema);
+  if (parsed.error) return parsed.error;
+  const { vehicleId, poId, partNumber } = parsed.data;
 
-    if (!vehicleId || !poId) {
-      return NextResponse.json({ error: 'vehicleId and poId required' }, { status: 400 });
-    }
+  try {
 
     // Get PO line items
     const { data: lineItems } = await supabase

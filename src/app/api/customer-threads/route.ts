@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { createClient } from '@supabase/supabase-js';
 import { requireAuth } from '@/lib/api-auth';
+import { validateBody, z } from '@/lib/validate';
 
 export const dynamic = 'force-dynamic';
 
@@ -8,6 +9,21 @@ const supabase = createClient(
   process.env.NEXT_PUBLIC_SUPABASE_URL!,
   process.env.SUPABASE_SERVICE_ROLE_KEY!
 );
+
+const CreateThreadSchema = z
+  .object({
+    contactId: z.string().uuid().optional(),
+    phone: z.string().max(40).optional(),
+    name: z.string().max(120).optional(),
+    customerId: z.string().uuid().optional().nullable(),
+    contextEntityType: z.enum(['fleet_checkin', 'purchase_order', 'graphics_job', 'estimate', 'general']).optional(),
+    contextEntityId: z.string().uuid().optional().nullable(),
+    subject: z.string().max(300).optional().nullable(),
+  })
+  .refine((d) => !!(d.contactId || d.phone), {
+    message: 'contactId or phone required',
+    path: ['contactId'],
+  });
 
 /**
  * GET /api/customer-threads?status=open&assigned=me&unread=1
@@ -75,8 +91,10 @@ export async function POST(req: NextRequest) {
   const auth = await requireAuth(req);
   if (auth.error) return auth.error;
 
-  const body = await req.json();
-  let { contactId, phone, customerId, contextEntityType, contextEntityId, subject } = body || {};
+  const parsed = await validateBody(req, CreateThreadSchema);
+  if (parsed.error) return parsed.error;
+  const body = parsed.data;
+  let { contactId, phone, customerId, contextEntityType, contextEntityId, subject } = body;
 
   // Resolve or create contact by phone if contactId not provided
   if (!contactId && phone) {
@@ -102,8 +120,7 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ error: 'contactId or phone required' }, { status: 400 });
   }
 
-  const ALLOWED_CONTEXTS = ['fleet_checkin', 'purchase_order', 'graphics_job', 'estimate', 'general'];
-  const finalContext = ALLOWED_CONTEXTS.includes(contextEntityType) ? contextEntityType : 'general';
+  const finalContext = contextEntityType || 'general';
 
   // Reuse an existing open thread with the same contact+entity context if one exists
   let threadQuery = supabase
