@@ -654,10 +654,13 @@ export async function createDirectInvoice(payload: {
   const { oauth, token } = createOAuth(config);
   const authHeader = getAuthHeader(oauth, token, { url, method: 'POST' });
 
+  // Omit rate / description when not provided so NetSuite falls back to the
+  // item record's standard rate and description. Sending an explicit 0 / ''
+  // would override those defaults and produce $0 invoices or blank lines.
   const items = payload.lineItems.map((li) => ({
     item: { id: li.itemId },
     quantity: li.quantity,
-    rate: li.rate,
+    ...(li.rate > 0 ? { rate: li.rate } : {}),
     ...(li.description ? { description: li.description } : {}),
   }));
 
@@ -768,10 +771,13 @@ export async function createInvoiceFromSO(payload: {
         })
         .map((line: any) => {
           const lineNum = parseInt(line.linesequencenumber);
+          const rate = parseFloat(line.rate || '0');
+          // Omit rate when the SO line has no price so NetSuite falls back
+          // to the item record's standard rate instead of invoicing at $0.
           return {
             item: { id: line.item },
             quantity: payload.installedQuantities![lineNum],
-            rate: parseFloat(line.rate || '0'),
+            ...(rate > 0 ? { rate } : {}),
           };
         });
     } catch (e) {
