@@ -683,6 +683,9 @@ function NewQuote({ onCreated, editQuote }: { onCreated: () => void; editQuote?:
   const [calibrationMode, setCalibrationMode] = useState(false);
   const [pendingCalibrationBox, setPendingCalibrationBox] = useState<{ xPct: number; yPct: number; wPct: number; hPct: number } | null>(null);
 
+  // Zoom level for the proof image during calibration / element drawing
+  const [proofZoom, setProofZoom] = useState(1);
+
   // Drag-and-drop state for nesting diagram
   const [draggingIdx, setDraggingIdx] = useState<number | null>(null);
   const [dragOffset, setDragOffset] = useState<{ x: number; y: number }>({ x: 0, y: 0 });
@@ -2324,7 +2327,53 @@ function NewQuote({ onCreated, editQuote }: { onCreated: () => void; editQuote?:
                     + (calibrationRegions.length > 0 ? ` · Calibrated` : '')}
               </div>
             </div>
-            <div style={{ display: 'flex', gap: '8px' }}>
+            <div style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>
+              <div style={{
+                display: 'flex', alignItems: 'center', gap: '4px',
+                border: `1px solid ${theme.border}`, borderRadius: '8px', padding: '2px',
+                marginRight: '4px',
+              }}>
+                <button
+                  onClick={() => setProofZoom(z => Math.max(0.5, +(z - 0.25).toFixed(2)))}
+                  disabled={proofZoom <= 0.5}
+                  title="Zoom out"
+                  style={{
+                    width: '28px', height: '28px', borderRadius: '6px', border: 'none',
+                    background: 'transparent', color: theme.textSecondary,
+                    fontSize: '16px', fontWeight: 700,
+                    cursor: proofZoom <= 0.5 ? 'not-allowed' : 'pointer',
+                    opacity: proofZoom <= 0.5 ? 0.4 : 1,
+                  }}
+                >
+                  −
+                </button>
+                <button
+                  onClick={() => setProofZoom(1)}
+                  title="Fit to width"
+                  style={{
+                    minWidth: '52px', height: '28px', padding: '0 8px',
+                    borderRadius: '6px', border: 'none', background: 'transparent',
+                    color: theme.textSecondary, fontSize: '11px', fontWeight: 700,
+                    cursor: 'pointer', fontVariantNumeric: 'tabular-nums',
+                  }}
+                >
+                  {Math.round(proofZoom * 100)}%
+                </button>
+                <button
+                  onClick={() => setProofZoom(z => Math.min(4, +(z + 0.25).toFixed(2)))}
+                  disabled={proofZoom >= 4}
+                  title="Zoom in"
+                  style={{
+                    width: '28px', height: '28px', borderRadius: '6px', border: 'none',
+                    background: 'transparent', color: theme.textSecondary,
+                    fontSize: '16px', fontWeight: 700,
+                    cursor: proofZoom >= 4 ? 'not-allowed' : 'pointer',
+                    opacity: proofZoom >= 4 ? 0.4 : 1,
+                  }}
+                >
+                  +
+                </button>
+              </div>
               <button
                 onClick={() => { setCalibrationMode(false); setPendingCalibrationBox(null); setDrawingNewElement(false); setStep(2); }}
                 style={{
@@ -2431,7 +2480,7 @@ function NewQuote({ onCreated, editQuote }: { onCreated: () => void; editQuote?:
             }}
           >
             {/* Inner wrapper sized exactly to the image so % bounding boxes align */}
-            <div style={{ position: 'relative', display: 'inline-block', width: '100%', overflow: 'visible' }}>
+            <div style={{ position: 'relative', display: 'inline-block', width: `${proofZoom * 100}%`, overflow: 'visible' }}>
               <img
                 ref={proofImgRef}
                 src={proofPreviewForReview || proofPreview || ''}
