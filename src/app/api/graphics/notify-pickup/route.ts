@@ -4,6 +4,7 @@ import { notifyMany } from '@/lib/notify';
 import { requireAuth } from '@/lib/api-auth';
 import { sendEmail, buildNotificationEmail } from '@/lib/resend';
 import { sendSMS } from '@/lib/sms-provider';
+import { validateBody, z } from '@/lib/validate';
 
 export const dynamic = 'force-dynamic';
 
@@ -11,6 +12,8 @@ const supabase = createClient(
   process.env.NEXT_PUBLIC_SUPABASE_URL!,
   process.env.SUPABASE_SERVICE_ROLE_KEY!
 );
+
+const Schema = z.object({ jobId: z.string().uuid() });
 
 /**
  * POST /api/graphics/notify-pickup
@@ -27,9 +30,11 @@ export async function POST(req: NextRequest) {
   const auth = await requireAuth(req);
   if (auth.error) return auth.error;
 
+  const parsed = await validateBody(req, Schema);
+  if (parsed.error) return parsed.error;
+  const { jobId } = parsed.data;
+
   try {
-    const { jobId } = await req.json();
-    if (!jobId) return NextResponse.json({ error: 'Missing jobId' }, { status: 400 });
 
     const { data: job } = await supabase
       .from('graphics_jobs')

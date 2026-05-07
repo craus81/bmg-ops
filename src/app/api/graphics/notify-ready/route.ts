@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { createClient } from '@supabase/supabase-js';
 import { notifyMany } from '@/lib/notify';
 import { requireAuth } from '@/lib/api-auth';
+import { validateBody, z } from '@/lib/validate';
 
 export const dynamic = 'force-dynamic';
 
@@ -9,6 +10,8 @@ const supabase = createClient(
   process.env.NEXT_PUBLIC_SUPABASE_URL!,
   process.env.SUPABASE_SERVICE_ROLE_KEY!
 );
+
+const Schema = z.object({ jobId: z.string().uuid() });
 
 /**
  * POST /api/graphics/notify-ready
@@ -33,12 +36,11 @@ export async function POST(req: NextRequest) {
   const auth = await requireAuth(req);
   if (auth.error) return auth.error;
 
-  try {
-    const { jobId } = await req.json();
-    if (!jobId) {
-      return NextResponse.json({ error: 'Missing jobId' }, { status: 400 });
-    }
+  const parsed = await validateBody(req, Schema);
+  if (parsed.error) return parsed.error;
+  const { jobId } = parsed.data;
 
+  try {
     // Load the graphics job for notification context
     const { data: job } = await supabase
       .from('graphics_jobs')

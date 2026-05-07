@@ -1,8 +1,21 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { createClient } from '@supabase/supabase-js';
 import { requireAuth } from '@/lib/api-auth';
+import { validateBody, z } from '@/lib/validate';
 
 export const dynamic = 'force-dynamic';
+
+const Schema = z
+  .object({
+    estimateId: z.string().uuid(),
+    mode: z.enum(['create', 'link']),
+    existingJobId: z.string().uuid().optional().nullable(),
+    userId: z.string().uuid().optional().nullable(),
+  })
+  .refine((d) => d.mode !== 'link' || !!d.existingJobId, {
+    message: 'existingJobId required for link mode',
+    path: ['existingJobId'],
+  });
 
 function getSupabase() {
   return createClient(
@@ -32,17 +45,12 @@ export async function POST(req: NextRequest) {
   const auth = await requireAuth(req);
   if (auth.error) return auth.error;
 
+  const parsed = await validateBody(req, Schema);
+  if (parsed.error) return parsed.error;
+  const { estimateId, mode, existingJobId, userId } = parsed.data;
+
   try {
     const supabase = getSupabase();
-    const { estimateId, mode, existingJobId, userId } = await req.json();
-
-    if (!estimateId) return NextResponse.json({ error: 'Missing estimateId' }, { status: 400 });
-    if (mode !== 'create' && mode !== 'link') {
-      return NextResponse.json({ error: 'mode must be "create" or "link"' }, { status: 400 });
-    }
-    if (mode === 'link' && !existingJobId) {
-      return NextResponse.json({ error: 'existingJobId required for link mode' }, { status: 400 });
-    }
 
     const { data: estimate, error: estErr } = await supabase
       .from('estimates')

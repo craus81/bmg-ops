@@ -1,8 +1,14 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { createClient } from '@supabase/supabase-js';
 import { requireAuth } from '@/lib/api-auth';
+import { validateBody, z } from '@/lib/validate';
 
 export const dynamic = 'force-dynamic';
+
+const Schema = z.object({
+  jobId: z.string().uuid(),
+  userId: z.string().uuid().optional().nullable(),
+});
 
 function getSupabase() {
   return createClient(
@@ -31,13 +37,12 @@ export async function POST(req: NextRequest) {
   const auth = await requireAuth(req);
   if (auth.error) return auth.error;
 
+  const parsed = await validateBody(req, Schema);
+  if (parsed.error) return parsed.error;
+  const { jobId, userId } = parsed.data;
+
   try {
     const supabase = getSupabase();
-    const { jobId, userId } = await req.json();
-
-    if (!jobId) {
-      return NextResponse.json({ error: 'Missing jobId' }, { status: 400 });
-    }
 
     // Load the graphics job
     const { data: job, error: jobErr } = await supabase

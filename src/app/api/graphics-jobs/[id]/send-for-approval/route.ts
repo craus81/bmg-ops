@@ -4,6 +4,7 @@ import { requireAuth } from '@/lib/api-auth';
 import { generateToken } from '@/lib/magic-link-approval';
 import { sendEmail, buildNotificationEmail } from '@/lib/resend';
 import { sendSMS } from '@/lib/sms-provider';
+import { validateBody, z } from '@/lib/validate';
 
 export const dynamic = 'force-dynamic';
 
@@ -11,6 +12,13 @@ const supabase = createClient(
   process.env.NEXT_PUBLIC_SUPABASE_URL!,
   process.env.SUPABASE_SERVICE_ROLE_KEY!
 );
+
+const Schema = z.object({
+  proofFileId: z.string().uuid().optional().nullable(),
+  email: z.string().email().max(254).optional().nullable(),
+  phone: z.string().max(40).optional().nullable(),
+  expiryDays: z.number().int().positive().max(365).optional(),
+});
 
 /**
  * POST /api/graphics-jobs/[id]/send-for-approval
@@ -24,9 +32,11 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
   const auth = await requireAuth(req);
   if (auth.error) return auth.error;
 
-  const body = await req.json().catch(() => ({}));
-  const expiryDays = typeof body.expiryDays === 'number' && body.expiryDays > 0 ? body.expiryDays : 30;
-  const proofFileId: string | null = typeof body.proofFileId === 'string' ? body.proofFileId : null;
+  const parsed = await validateBody(req, Schema);
+  if (parsed.error) return parsed.error;
+  const body = parsed.data;
+  const expiryDays = body.expiryDays ?? 30;
+  const proofFileId = body.proofFileId ?? null;
 
   const { data: job, error } = await supabase
     .from('graphics_jobs')
