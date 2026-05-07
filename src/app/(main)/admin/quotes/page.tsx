@@ -3268,7 +3268,7 @@ function NewQuote({ onCreated, editQuote }: { onCreated: () => void; editQuote?:
               <div style={{ background: theme.card, border: `1px solid ${theme.border}`, borderRadius: '12px', padding: '14px', marginBottom: '12px' }}>
                 <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '10px' }}>
                   <div style={{ fontSize: '14px', fontWeight: 700, color: theme.textPrimary }}>Nesting Layout</div>
-                  <div style={{ fontSize: '11px', color: theme.textMuted }}>Drag to move, double-click to rotate</div>
+                  <div style={{ fontSize: '11px', color: theme.textMuted }}>Numbers match Element list · panel splits suffixed a/b · drag to move, double-click to rotate</div>
                 </div>
                 {hasOverlaps && (
                   <div style={{
@@ -3389,22 +3389,35 @@ function NewQuote({ onCreated, editQuote }: { onCreated: () => void; editQuote?:
                               />
                             );
                           })()}
-                          {/* Element number label */}
-                          <text
-                            x={elem.x_in + elem.total_width_in / 2}
-                            y={elem.y_in + elem.total_height_in / 2}
-                            textAnchor="middle"
-                            dominantBaseline="middle"
-                            fontSize="1.8"
-                            fill="#fff"
-                            fontWeight="800"
-                            stroke={color}
-                            strokeWidth="0.15"
-                            paintOrder="stroke"
-                            style={{ pointerEvents: 'none' }}
-                          >
-                            {idx + 1}
-                          </text>
+                          {/* Label by source element so layout matches the element list; panel splits get a/b/c. */}
+                          {(() => {
+                            const name = elem.element.element_name;
+                            const panelMatch = name.match(/-(\d+)$/);
+                            const baseName = panelMatch ? name.slice(0, -panelMatch[0].length) : name;
+                            const numMatch = baseName.match(/(\d+)\s*$/);
+                            const baseLabel = numMatch ? numMatch[1] : baseName;
+                            const suffix = panelMatch
+                              ? String.fromCharCode(96 + Math.min(26, parseInt(panelMatch[1], 10)))
+                              : '';
+                            const label = `${baseLabel}${suffix}`;
+                            return (
+                              <text
+                                x={elem.x_in + elem.total_width_in / 2}
+                                y={elem.y_in + elem.total_height_in / 2}
+                                textAnchor="middle"
+                                dominantBaseline="middle"
+                                fontSize="1.8"
+                                fill="#fff"
+                                fontWeight="800"
+                                stroke={color}
+                                strokeWidth="0.15"
+                                paintOrder="stroke"
+                                style={{ pointerEvents: 'none' }}
+                              >
+                                {label}
+                              </text>
+                            );
+                          })()}
                         </g>
                       );
                     })}
