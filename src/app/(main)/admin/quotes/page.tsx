@@ -686,6 +686,9 @@ function NewQuote({ onCreated, editQuote }: { onCreated: () => void; editQuote?:
   // Zoom level for the proof image during calibration / element drawing
   const [proofZoom, setProofZoom] = useState(1);
 
+  // Click-to-enlarge lightbox for the small template/proof reference thumbnails
+  const [enlargedRef, setEnlargedRef] = useState<{ src: string; label: string } | null>(null);
+
   // Drag-and-drop state for nesting diagram
   const [draggingIdx, setDraggingIdx] = useState<number | null>(null);
   const [dragOffset, setDragOffset] = useState<{ x: number; y: number }>({ x: 0, y: 0 });
@@ -2808,16 +2811,18 @@ function NewQuote({ onCreated, editQuote }: { onCreated: () => void; editQuote?:
                         <img
                           src={templatePreviewUrl}
                           alt="Vehicle template"
+                          title="Click to enlarge"
+                          onClick={() => setEnlargedRef({ src: templatePreviewUrl, label: 'Template' })}
                           style={{
-                            width: '100%', height: '80px', objectFit: 'contain',
+                            width: '100%', height: '220px', objectFit: 'contain',
                             borderRadius: '6px', border: `1px solid ${theme.border}`,
-                            background: '#fff',
+                            background: '#fff', cursor: 'zoom-in',
                           }}
                         />
                       ) : (
                         <label style={{
                           display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center',
-                          width: '100%', height: '80px', borderRadius: '6px',
+                          width: '100%', height: '220px', borderRadius: '6px',
                           border: `2px dashed ${theme.border}`, background: theme.inputBg,
                           cursor: 'pointer', fontSize: '11px', color: theme.textMuted, textAlign: 'center',
                         }}>
@@ -2854,10 +2859,15 @@ function NewQuote({ onCreated, editQuote }: { onCreated: () => void; editQuote?:
                         <img
                           src={proofPreviewForReview || proofPreview || ''}
                           alt="Proof design"
+                          title="Click to enlarge"
+                          onClick={() => {
+                            const src = proofPreviewForReview || proofPreview || '';
+                            if (src) setEnlargedRef({ src, label: 'Proof' });
+                          }}
                           style={{
-                            width: '100%', height: '80px', objectFit: 'contain',
+                            width: '100%', height: '220px', objectFit: 'contain',
                             borderRadius: '6px', border: `1px solid #fbbf24`,
-                            background: '#000',
+                            background: '#000', cursor: 'zoom-in',
                           }}
                         />
                       </div>
@@ -3046,6 +3056,55 @@ function NewQuote({ onCreated, editQuote }: { onCreated: () => void; editQuote?:
                   })}
                 </>
               )}
+            </div>
+          )}
+
+          {/* Lightbox — full-resolution view of template / proof reference thumbnails */}
+          {enlargedRef && (
+            <div
+              onClick={() => setEnlargedRef(null)}
+              style={{
+                position: 'fixed', inset: 0, zIndex: 400,
+                background: 'rgba(0,0,0,0.92)',
+                display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center',
+                padding: '40px', cursor: 'zoom-out',
+              }}
+            >
+              <div style={{
+                position: 'absolute', top: 16, left: 20,
+                fontSize: '13px', fontWeight: 700, color: '#fff',
+                textTransform: 'uppercase', letterSpacing: '0.5px',
+              }}>
+                {enlargedRef.label}
+              </div>
+              <button
+                onClick={(e) => { e.stopPropagation(); setEnlargedRef(null); }}
+                style={{
+                  position: 'absolute', top: 12, right: 16,
+                  width: '36px', height: '36px', borderRadius: '8px',
+                  border: '1px solid rgba(255,255,255,0.3)', background: 'rgba(0,0,0,0.4)',
+                  color: '#fff', fontSize: '20px', fontWeight: 700, cursor: 'pointer',
+                }}
+                aria-label="Close"
+              >
+                ×
+              </button>
+              <img
+                src={enlargedRef.src}
+                alt={enlargedRef.label}
+                onClick={(e) => e.stopPropagation()}
+                style={{
+                  maxWidth: '100%', maxHeight: '100%', objectFit: 'contain',
+                  background: enlargedRef.label === 'Proof' ? '#000' : '#fff',
+                  borderRadius: '8px', cursor: 'default',
+                }}
+              />
+              <div style={{
+                position: 'absolute', bottom: 16, left: 0, right: 0, textAlign: 'center',
+                fontSize: '11px', color: 'rgba(255,255,255,0.6)',
+              }}>
+                Click outside the image to close
+              </div>
             </div>
           )}
         </div>
