@@ -270,6 +270,7 @@ export default function POsPage() {
   const [overwriting, setOverwriting] = useState(false);
   // Email PO review/edit state
   const [reviewingExtraction, setReviewingExtraction] = useState<{ messageId: string; extracted: any } | null>(null);
+  const [reviewShipToId, setReviewShipToId] = useState<string>('');
   // NetSuite SO creation state
   const [creatingSOForPo, setCreatingSOForPo] = useState<string | null>(null);
   const [soResults, setSoResults] = useState<Record<string, any>>({});
@@ -465,6 +466,20 @@ export default function POsPage() {
     }
   // eslint-disable-next-line react-hooks/exhaustive-deps -- intentional: load once on mount
   }, [loading, searchParams]);
+
+  useEffect(() => {
+    if (!reviewingExtraction) { setReviewShipToId(''); return; }
+    const ship = reviewingExtraction.extracted.ship_to || {};
+    const match = locations.find(l =>
+      (l.name || '').trim() === (ship.name || '').trim() &&
+      (l.address || '') === (ship.address || '') &&
+      (l.city || '') === (ship.city || '') &&
+      (l.state || '') === (ship.state || '') &&
+      (l.zip || '') === (ship.zip || '')
+    );
+    setReviewShipToId(match ? match.id : '');
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- only fire on review change
+  }, [reviewingExtraction?.messageId, locations]);
 
   useEffect(() => {
     if (!showCreate) return;
@@ -1941,47 +1956,39 @@ export default function POsPage() {
               </div>
             </div>
 
-            {/* Ship To fields */}
+            {/* Ship To picker — same UI as the create/edit flows */}
             <div style={{ marginBottom: '14px' }}>
-              <div style={{ fontSize: '9px', fontWeight: 700, color: 'var(--text-label)', textTransform: 'uppercase', marginBottom: '4px' }}>Ship To</div>
-              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '6px' }}>
-                <div style={{ gridColumn: '1 / -1' }}>
-                  <input
-                    value={reviewingExtraction.extracted.ship_to?.name || ''}
-                    onChange={e => setReviewingExtraction(prev => prev ? { ...prev, extracted: { ...prev.extracted, ship_to: { ...prev.extracted.ship_to, name: e.target.value } } } : prev)}
-                    placeholder="Name"
-                    style={{ width: '100%', padding: '6px 8px', borderRadius: '6px', border: '1px solid var(--border)', background: 'var(--input-bg)', color: 'var(--text-body)', fontSize: '11px' }}
-                  />
-                </div>
-                <div style={{ gridColumn: '1 / -1' }}>
-                  <input
-                    value={reviewingExtraction.extracted.ship_to?.address || ''}
-                    onChange={e => setReviewingExtraction(prev => prev ? { ...prev, extracted: { ...prev.extracted, ship_to: { ...prev.extracted.ship_to, address: e.target.value } } } : prev)}
-                    placeholder="Address"
-                    style={{ width: '100%', padding: '6px 8px', borderRadius: '6px', border: '1px solid var(--border)', background: 'var(--input-bg)', color: 'var(--text-body)', fontSize: '11px' }}
-                  />
-                </div>
-                <input
-                  value={reviewingExtraction.extracted.ship_to?.city || ''}
-                  onChange={e => setReviewingExtraction(prev => prev ? { ...prev, extracted: { ...prev.extracted, ship_to: { ...prev.extracted.ship_to, city: e.target.value } } } : prev)}
-                  placeholder="City"
-                  style={{ width: '100%', padding: '6px 8px', borderRadius: '6px', border: '1px solid var(--border)', background: 'var(--input-bg)', color: 'var(--text-body)', fontSize: '11px' }}
-                />
-                <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '6px' }}>
-                  <input
-                    value={reviewingExtraction.extracted.ship_to?.state || ''}
-                    onChange={e => setReviewingExtraction(prev => prev ? { ...prev, extracted: { ...prev.extracted, ship_to: { ...prev.extracted.ship_to, state: e.target.value } } } : prev)}
-                    placeholder="State"
-                    style={{ width: '100%', padding: '6px 8px', borderRadius: '6px', border: '1px solid var(--border)', background: 'var(--input-bg)', color: 'var(--text-body)', fontSize: '11px' }}
-                  />
-                  <input
-                    value={reviewingExtraction.extracted.ship_to?.zip || ''}
-                    onChange={e => setReviewingExtraction(prev => prev ? { ...prev, extracted: { ...prev.extracted, ship_to: { ...prev.extracted.ship_to, zip: e.target.value } } } : prev)}
-                    placeholder="Zip"
-                    style={{ width: '100%', padding: '6px 8px', borderRadius: '6px', border: '1px solid var(--border)', background: 'var(--input-bg)', color: 'var(--text-body)', fontSize: '11px' }}
-                  />
-                </div>
-              </div>
+              <ShipToPicker
+                label="Ship To"
+                locations={locations}
+                selectedId={reviewShipToId}
+                shipTo={reviewingExtraction.extracted.ship_to || {}}
+                onSelect={(id) => {
+                  setReviewShipToId(id);
+                  if (!id) return;
+                  const loc = locations.find(l => l.id === id);
+                  if (!loc) return;
+                  setReviewingExtraction(prev => prev ? {
+                    ...prev,
+                    extracted: {
+                      ...prev.extracted,
+                      ship_to: {
+                        name: loc.name,
+                        address: loc.address || '',
+                        city: loc.city || '',
+                        state: loc.state || '',
+                        zip: loc.zip || '',
+                      },
+                    },
+                  } : prev);
+                }}
+                onChange={(next) => {
+                  setReviewShipToId('');
+                  setReviewingExtraction(prev => prev ? { ...prev, extracted: { ...prev.extracted, ship_to: next } } : prev);
+                }}
+                onManage={() => setShowLocations(true)}
+                onSave={() => saveShipToAsLocation(reviewingExtraction.extracted.ship_to || {}, setReviewShipToId)}
+              />
             </div>
 
             {/* Line items */}
