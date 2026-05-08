@@ -690,6 +690,9 @@ function NewQuote({ onCreated, editQuote }: { onCreated: () => void; editQuote?:
   // Click-to-enlarge lightbox for the small template/proof reference thumbnails
   const [enlargedRef, setEnlargedRef] = useState<{ src: string; label: string } | null>(null);
 
+  const [editingElementIdx, setEditingElementIdx] = useState<number | null>(null);
+  const [editingElementForm, setEditingElementForm] = useState<{ name: string; type: string }>({ name: '', type: '' });
+
   // Drag-and-drop state for nesting diagram
   const [draggingIdx, setDraggingIdx] = useState<number | null>(null);
   const [dragOffset, setDragOffset] = useState<{ x: number; y: number }>({ x: 0, y: 0 });
@@ -703,7 +706,7 @@ function NewQuote({ onCreated, editQuote }: { onCreated: () => void; editQuote?:
   }, []);
 
   useEffect(() => {
-    if (step !== 4) return;
+    if (step !== 4 && step !== 5) return;
     if (templatePreviewUrl) return;
     if (!selectedTemplate) return;
     const imgPath = selectedTemplate.template_image_path || selectedTemplate.original_file_path;
@@ -1557,6 +1560,43 @@ function NewQuote({ onCreated, editQuote }: { onCreated: () => void; editQuote?:
   }
 
   // Remove a duplicated element
+  function renameElement(idx: number, rawNewName: string, rawNewType?: string) {
+    if (!analysis?.graphic_elements) return;
+    const el = analysis.graphic_elements[idx];
+    const newName = rawNewName.trim();
+    const newType = rawNewType?.trim();
+    if (!newName) return;
+    if (newName !== el.element_name && analysis.graphic_elements.some(e => e.element_name === newName)) {
+      alert(`An element named "${newName}" already exists. Pick a different name.`);
+      return;
+    }
+
+    const updatedElements = analysis.graphic_elements.map((e, i) =>
+      i === idx ? { ...e, element_name: newName, ...(newType ? { element_type: newType } : {}) } : e
+    );
+    setAnalysis({ ...analysis, graphic_elements: updatedElements });
+
+    if (newName !== el.element_name) {
+      setIncludedElements(prev => {
+        if (!prev.has(el.element_name)) return prev;
+        const next = new Set(prev);
+        next.delete(el.element_name);
+        next.add(newName);
+        return next;
+      });
+      setElementCrops(prev => {
+        if (!(el.element_name in prev)) return prev;
+        const next = { ...prev };
+        next[newName] = next[el.element_name];
+        delete next[el.element_name];
+        return next;
+      });
+      if (analysis.graphic_elements) {
+        recalculateNesting(updatedElements, vehicleQty);
+      }
+    }
+  }
+
   function removeElement(idx: number) {
     if (!analysis?.graphic_elements) return;
     const el = analysis.graphic_elements[idx];
@@ -3126,6 +3166,20 @@ function NewQuote({ onCreated, editQuote }: { onCreated: () => void; editQuote?:
             </div>
           )}
 
+          <datalist id="element-type-options">
+            <option value="Logo" />
+            <option value="Side Wrap" />
+            <option value="Door Wrap" />
+            <option value="Stripe" />
+            <option value="Lettering" />
+            <option value="Window Film" />
+            <option value="Hood" />
+            <option value="Roof" />
+            <option value="Rear" />
+            <option value="Decal" />
+            <option value="custom" />
+          </datalist>
+
           {/* Lightbox — full-resolution view of template / proof reference thumbnails */}
           {enlargedRef && (
             <div
@@ -3603,14 +3657,64 @@ function NewQuote({ onCreated, editQuote }: { onCreated: () => void; editQuote?:
                       )}
                       <div style={{ flex: 1, minWidth: 0 }}>
                         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
-                          <div>
-                            <div style={{ fontSize: '14px', fontWeight: 700, color: theme.textPrimary }}>
-                              {el.element_name}
-                              {!isIncluded && <span style={{ fontSize: '10px', color: theme.textMuted, fontWeight: 400, marginLeft: '6px' }}>excluded</span>}
-                            </div>
-                            <div style={{ fontSize: '11px', background: theme.subtleBg, color: theme.textMuted, fontWeight: 600, marginTop: '2px', padding: '2px 6px', borderRadius: '4px', display: 'inline-block' }}>
-                              {el.element_type}
-                            </div>
+                          <div style={{ minWidth: 0, flex: 1 }}>
+                            {editingElementIdx === i ? (
+                              <div style={{ display: 'flex', gap: '6px', flexWrap: 'wrap', alignItems: 'center' }}>
+                                <input
+                                  autoFocus
+                                  value={editingElementForm.name}
+                                  onChange={e => setEditingElementForm(f => ({ ...f, name: e.target.value }))}
+                                  onKeyDown={e => {
+                                    if (e.key === 'Enter') { renameElement(i, editingElementForm.name, editingElementForm.type); setEditingElementIdx(null); }
+                                    else if (e.key === 'Escape') setEditingElementIdx(null);
+                                  }}
+                                  placeholder="Element name"
+                                  style={{ flex: '1 1 140px', minWidth: 0, padding: '6px 8px', fontSize: '13px', fontWeight: 700, borderRadius: '6px', border: `1px solid ${theme.border}`, background: theme.inputBg, color: theme.textPrimary }}
+                                />
+                                <input
+                                  list="element-type-options"
+                                  value={editingElementForm.type}
+                                  onChange={e => setEditingElementForm(f => ({ ...f, type: e.target.value }))}
+                                  onKeyDown={e => {
+                                    if (e.key === 'Enter') { renameElement(i, editingElementForm.name, editingElementForm.type); setEditingElementIdx(null); }
+                                    else if (e.key === 'Escape') setEditingElementIdx(null);
+                                  }}
+                                  placeholder="Type (Logo, Door Wrap…)"
+                                  style={{ flex: '1 1 120px', minWidth: 0, padding: '6px 8px', fontSize: '11px', fontWeight: 600, borderRadius: '6px', border: `1px solid ${theme.border}`, background: theme.inputBg, color: theme.textPrimary }}
+                                />
+                                <button
+                                  onClick={() => { renameElement(i, editingElementForm.name, editingElementForm.type); setEditingElementIdx(null); }}
+                                  style={{ padding: '6px 10px', borderRadius: '6px', border: 'none', background: theme.success || '#22c55e', color: '#fff', fontSize: '11px', fontWeight: 700, cursor: 'pointer' }}
+                                >
+                                  Save
+                                </button>
+                                <button
+                                  onClick={() => setEditingElementIdx(null)}
+                                  style={{ padding: '6px 10px', borderRadius: '6px', border: `1px solid ${theme.border}`, background: 'transparent', color: theme.textSecondary, fontSize: '11px', fontWeight: 700, cursor: 'pointer' }}
+                                >
+                                  Cancel
+                                </button>
+                              </div>
+                            ) : (
+                              <>
+                                <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+                                  <div style={{ fontSize: '14px', fontWeight: 700, color: theme.textPrimary }}>
+                                    {el.element_name}
+                                    {!isIncluded && <span style={{ fontSize: '10px', color: theme.textMuted, fontWeight: 400, marginLeft: '6px' }}>excluded</span>}
+                                  </div>
+                                  <button
+                                    onClick={() => { setEditingElementIdx(i); setEditingElementForm({ name: el.element_name, type: el.element_type || '' }); }}
+                                    title="Rename / categorize"
+                                    style={{ padding: '2px 6px', borderRadius: '4px', border: 'none', background: 'transparent', color: theme.textMuted, fontSize: '11px', cursor: 'pointer' }}
+                                  >
+                                    ✎
+                                  </button>
+                                </div>
+                                <div style={{ fontSize: '11px', background: theme.subtleBg, color: theme.textMuted, fontWeight: 600, marginTop: '2px', padding: '2px 6px', borderRadius: '4px', display: 'inline-block' }}>
+                                  {el.element_type || 'untagged'}
+                                </div>
+                              </>
+                            )}
                           </div>
                           <div style={{ textAlign: 'right', whiteSpace: 'nowrap' }}>
                             <div style={{ fontSize: '13px', fontWeight: 700, color: theme.textPrimary }}>{el.width_in.toFixed(1)}" × {el.height_in.toFixed(1)}"</div>

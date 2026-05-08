@@ -231,10 +231,10 @@ export default function POsPage() {
   const [showImport, setShowImport] = useState(false);
   const [expandedPo, setExpandedPo] = useState<string | null>(null);
   const [editPoId, setEditPoId] = useState<string | null>(null);
-  const [editPoForm, setEditPoForm] = useState({ po_number: '', customer: '', status: '' as string });
+  const [editPoForm, setEditPoForm] = useState({ po_number: '', customer: '', status: '' as string, ordered_date: '', requested_delivery_date: '', notes: '' });
   const [editLineId, setEditLineId] = useState<string | null>(null);
   const [editLineForm, setEditLineForm] = useState({ part_number: '', quantity: '', unit_price: '', installed: '' });
-  const [form, setForm] = useState({ po_number: '', customer: 'Masterack' });
+  const [form, setForm] = useState({ po_number: '', customer: 'Masterack', ordered_date: '', requested_delivery_date: '', notes: '' });
   const [lineItems, setLineItems] = useState<{ catalog_id: string; part_number: string; quantity: number; unit_price: number }[]>([]);
   const fileRef = useRef<HTMLInputElement>(null);
   const [poSearch, setPoSearch] = useState('');
@@ -357,6 +357,35 @@ export default function POsPage() {
     }
   }
 
+  async function saveShipToAsLocation(
+    shipTo: NonNullable<PurchaseOrder['ship_to']>,
+    setSelectedId: (id: string) => void,
+  ) {
+    const defaultName = (shipTo.name || shipTo.address || '').trim();
+    const name = window.prompt('Name this location (e.g., "St. Louis Branch"):', defaultName);
+    if (!name?.trim()) return;
+    try {
+      const { data, error } = await supabase
+        .from('po_locations')
+        .insert({
+          name: name.trim(),
+          address: (shipTo.address || '').trim() || null,
+          city: (shipTo.city || '').trim() || null,
+          state: (shipTo.state || '').trim() || null,
+          zip: (shipTo.zip || '').trim() || null,
+          created_by: user?.id,
+        })
+        .select()
+        .single();
+      if (error) throw error;
+      const loc = data as PoLocation;
+      setLocations(prev => [...prev, loc].sort((a, b) => a.name.localeCompare(b.name)));
+      setSelectedId(loc.id);
+    } catch (err: any) {
+      alert('Failed to save location: ' + (err?.message || 'unknown error'));
+    }
+  }
+
   async function archiveLocation(id: string) {
     if (!confirm('Remove this location from the picker? Past POs that reference it keep their address.')) return;
     const { error } = await supabase.from('po_locations').update({ archived: true }).eq('id', id);
@@ -436,6 +465,35 @@ export default function POsPage() {
     }
   // eslint-disable-next-line react-hooks/exhaustive-deps -- intentional: load once on mount
   }, [loading, searchParams]);
+
+  useEffect(() => {
+    if (!showCreate) return;
+    if (createShipToId) return;
+    if (Object.values(createShipTo).some(v => (v || '').toString().trim())) return;
+    const lastWithShipTo = pos.find(p => p.customer === form.customer && p.ship_to);
+    if (!lastWithShipTo?.ship_to) return;
+    const ship = lastWithShipTo.ship_to;
+    const match = locations.find(l =>
+      (l.name || '').trim() === (ship.name || '').trim() &&
+      (l.address || '') === (ship.address || '') &&
+      (l.city || '') === (ship.city || '') &&
+      (l.state || '') === (ship.state || '') &&
+      (l.zip || '') === (ship.zip || '')
+    );
+    if (match) {
+      setCreateShipToId(match.id);
+      setCreateShipTo({
+        name: match.name,
+        address: match.address || '',
+        city: match.city || '',
+        state: match.state || '',
+        zip: match.zip || '',
+      });
+    } else {
+      setCreateShipTo({ ...ship });
+    }
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- only fire on customer or open
+  }, [showCreate, form.customer]);
 
   // PDF Upload handler
   const handlePDFUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -719,6 +777,9 @@ export default function POsPage() {
         customer: form.customer,
         created_by: user.id,
         ship_to: hasShipTo ? createShipTo : null,
+        ordered_date: form.ordered_date || null,
+        requested_delivery_date: form.requested_delivery_date || null,
+        notes: form.notes.trim() || null,
       })
       .select()
       .single();
@@ -731,7 +792,7 @@ export default function POsPage() {
       .select();
 
     setPos((prev) => [{ ...po, line_items: (items as POLineItem[]) || [] }, ...prev]);
-    setForm({ po_number: '', customer: 'Masterack' });
+    setForm({ po_number: '', customer: 'Masterack', ordered_date: '', requested_delivery_date: '', notes: '' });
     setLineItems([]);
     setCreateShipToId('');
     setCreateShipTo({});
@@ -818,7 +879,14 @@ export default function POsPage() {
 
   const startEditPO = (po: PurchaseOrder & { line_items: POLineItem[] }) => {
     setEditPoId(po.id);
-    setEditPoForm({ po_number: po.po_number, customer: po.customer, status: po.status });
+    setEditPoForm({
+      po_number: po.po_number,
+      customer: po.customer,
+      status: po.status,
+      ordered_date: po.ordered_date ? po.ordered_date.slice(0, 10) : '',
+      requested_delivery_date: po.requested_delivery_date ? po.requested_delivery_date.slice(0, 10) : '',
+      notes: po.notes || '',
+    });
     const ship = po.ship_to || {};
     setEditShipTo({ ...ship });
     const match = locations.find(l =>
@@ -834,21 +902,25 @@ export default function POsPage() {
   const saveEditPO = async () => {
     if (!editPoId) return;
     const hasShipTo = Object.values(editShipTo).some(v => (v || '').toString().trim());
+    const update = {
+      po_number: editPoForm.po_number,
+      customer: editPoForm.customer,
+      status: editPoForm.status,
+      ship_to: hasShipTo ? editShipTo : null,
+      ordered_date: editPoForm.ordered_date || null,
+      requested_delivery_date: editPoForm.requested_delivery_date || null,
+      notes: editPoForm.notes.trim() || null,
+    };
     const { error } = await supabase
       .from('purchase_orders')
-      .update({
-        po_number: editPoForm.po_number,
-        customer: editPoForm.customer,
-        status: editPoForm.status,
-        ship_to: hasShipTo ? editShipTo : null,
-      })
+      .update(update)
       .eq('id', editPoId);
 
     if (!error) {
       setPos((prev) =>
         prev.map((po) =>
           po.id === editPoId
-            ? { ...po, po_number: editPoForm.po_number, customer: editPoForm.customer, status: editPoForm.status as any, ship_to: hasShipTo ? editShipTo : null }
+            ? { ...po, ...update, status: update.status as any }
             : po
         )
       );
@@ -2421,7 +2493,28 @@ export default function POsPage() {
             onSelect={(id) => applyLocationToShipTo(id, setCreateShipToId, setCreateShipTo)}
             onChange={(next) => { setCreateShipToId(''); setCreateShipTo(next); }}
             onManage={() => setShowLocations(true)}
+            onSave={() => saveShipToAsLocation(createShipTo, setCreateShipToId)}
           />
+          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '8px', marginBottom: '8px' }}>
+            <div>
+              <label style={labelStyle}>Ordered Date</label>
+              <input type="date" value={form.ordered_date} onChange={e => setForm({ ...form, ordered_date: e.target.value })} style={inputStyle} />
+            </div>
+            <div>
+              <label style={labelStyle}>Requested Delivery</label>
+              <input type="date" value={form.requested_delivery_date} onChange={e => setForm({ ...form, requested_delivery_date: e.target.value })} style={inputStyle} />
+            </div>
+          </div>
+          <div style={{ marginBottom: '8px' }}>
+            <label style={labelStyle}>Notes</label>
+            <textarea
+              value={form.notes}
+              onChange={e => setForm({ ...form, notes: e.target.value })}
+              placeholder="Internal notes about this PO"
+              rows={2}
+              style={{ ...inputStyle, resize: 'vertical', fontFamily: 'inherit' }}
+            />
+          </div>
           <div style={{ marginBottom: '8px' }}>
             <label style={labelStyle}>Add Part Number</label>
             <select onChange={(e) => { if (e.target.value) addLineItem(e.target.value); e.target.value = ''; }} style={inputStyle}>
@@ -2685,6 +2778,25 @@ export default function POsPage() {
                           <option value="open">Open</option><option value="complete">Complete</option><option value="cancelled">Cancelled</option>
                         </select>
                       </div>
+                      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '6px', marginTop: '6px' }}>
+                        <div>
+                          <label style={labelStyle}>Ordered Date</label>
+                          <input type="date" value={editPoForm.ordered_date} onChange={e => setEditPoForm({ ...editPoForm, ordered_date: e.target.value })} style={inputStyle} />
+                        </div>
+                        <div>
+                          <label style={labelStyle}>Requested Delivery</label>
+                          <input type="date" value={editPoForm.requested_delivery_date} onChange={e => setEditPoForm({ ...editPoForm, requested_delivery_date: e.target.value })} style={inputStyle} />
+                        </div>
+                      </div>
+                      <div style={{ marginTop: '6px' }}>
+                        <label style={labelStyle}>Notes</label>
+                        <textarea
+                          value={editPoForm.notes}
+                          onChange={e => setEditPoForm({ ...editPoForm, notes: e.target.value })}
+                          rows={2}
+                          style={{ ...inputStyle, resize: 'vertical', fontFamily: 'inherit' }}
+                        />
+                      </div>
                       <div style={{ marginTop: '6px' }}>
                         <ShipToPicker
                           label="Ship To"
@@ -2694,6 +2806,7 @@ export default function POsPage() {
                           onSelect={(id) => applyLocationToShipTo(id, setEditShipToId, setEditShipTo)}
                           onChange={(next) => { setEditShipToId(''); setEditShipTo(next); }}
                           onManage={() => setShowLocations(true)}
+                          onSave={() => saveShipToAsLocation(editShipTo, setEditShipToId)}
                         />
                       </div>
                       <div style={{ display: 'flex', gap: '6px', marginTop: '8px' }}>
@@ -3028,6 +3141,7 @@ function ShipToPicker({
   onSelect,
   onChange,
   onManage,
+  onSave,
 }: {
   label: string;
   locations: PoLocation[];
@@ -3036,7 +3150,18 @@ function ShipToPicker({
   onSelect: (id: string) => void;
   onChange: (next: NonNullable<PurchaseOrder['ship_to']>) => void;
   onManage: () => void;
+  onSave: () => void;
 }) {
+  const isCustom = !selectedId;
+  const hasAddress = !!(shipTo.name || shipTo.address || shipTo.city);
+  const matchesExisting = locations.some(l =>
+    (l.name || '').trim() === (shipTo.name || '').trim() &&
+    (l.address || '') === (shipTo.address || '') &&
+    (l.city || '') === (shipTo.city || '') &&
+    (l.state || '') === (shipTo.state || '') &&
+    (l.zip || '') === (shipTo.zip || '')
+  );
+  const showSave = isCustom && hasAddress && !matchesExisting;
   return (
     <div style={{ marginBottom: '8px' }}>
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline' }}>
@@ -3066,6 +3191,15 @@ function ShipToPicker({
           <input placeholder="ZIP" value={shipTo.zip || ''} onChange={e => onChange({ ...shipTo, zip: e.target.value })} style={inputStyle} />
         </div>
       </div>
+      {showSave && (
+        <button
+          type="button"
+          onClick={onSave}
+          style={{ marginTop: '6px', padding: '6px 10px', borderRadius: '6px', background: 'rgba(34,197,94,0.1)', border: '1px solid rgba(34,197,94,0.3)', color: '#22c55e', fontSize: '11px', fontWeight: 700, cursor: 'pointer' }}
+        >
+          + Save this address as a location
+        </button>
+      )}
     </div>
   );
 }
