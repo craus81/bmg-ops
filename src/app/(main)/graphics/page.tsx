@@ -601,7 +601,10 @@ export default function GraphicsPage() {
   const saveJob = async () => {
     if (!editingJob) return;
     setSaving(true);
-    const { id, created_at, created_by, ...updateFields } = editingJob;
+    // assigned_to is owned by the AssignmentPicker (saved immediately via the
+    // /api/jobs/assign route, which also keeps the legacy column in sync). If
+    // we included it here, the stale local value would clobber a fresh save.
+    const { id, created_at, created_by, assigned_to: _assigned_to, ...updateFields } = editingJob;
     // Convert non-date values like "N/A" or empty strings to null for date columns
     const sanitized = {
       ...updateFields,
@@ -1676,7 +1679,7 @@ export default function GraphicsPage() {
                         {/* Action buttons */}
                         <div style={{ display: 'flex', gap: '6px' }}>
                           <button
-                            onClick={() => setEditingJob({ ...job })}
+                            onClick={() => { setEditingJob({ ...job }); loadJobAssignments(job.id); }}
                             style={{ flex: 1, padding: '10px', borderRadius: '8px', background: 'rgba(59,130,246,0.1)', border: '1px solid rgba(59,130,246,0.2)', color: '#60a5fa', fontSize: '12px', fontWeight: 700, cursor: 'pointer' }}
                           >
                             Edit Job
@@ -1778,14 +1781,15 @@ export default function GraphicsPage() {
                             )}
                             {editJob!.calendar_event_id && <div style={{ fontSize: '9px', color: '#22d3ee', marginTop: '2px' }}>Synced to Google Calendar</div>}
                           </div>
-                          <div>
-                            <div style={labelStyle}>Assigned To</div>
-                            <select style={inputStyle} value={editJob!.assigned_to || ''} onChange={e => setEditingJob({ ...editJob!, assigned_to: e.target.value || null })}>
-                              <option value="">— Unassigned —</option>
-                              {profiles.filter(p => ['admin', 'production', 'graphics_production', 'shop_tech'].includes(p.role)).map(p => (
-                                <option key={p.id} value={p.id}>{p.full_name || p.email}</option>
-                              ))}
-                            </select>
+                          <div style={{ gridColumn: '1 / -1' }}>
+                            <AssignmentPicker
+                              jobType="graphics_job"
+                              jobId={editJob!.id}
+                              selectedIds={jobAssignments[editJob!.id] || []}
+                              onChange={(ids) => saveJobAssignments(editJob!.id, ids, editJob!.title)}
+                              roles={['graphics_production', 'production', 'admin', 'field_tech', 'shop_tech', 'installer']}
+                              label="Assigned Team (select one or more)"
+                            />
                           </div>
                         </div>
 
@@ -2256,7 +2260,7 @@ export default function GraphicsPage() {
                     selectedIds={createAssignees}
                     onChange={setCreateAssignees}
                     roles={['graphics_production', 'production', 'admin', 'field_tech', 'shop_tech', 'installer']}
-                    label="Assign Team Members"
+                    label="Assign Team Members (select one or more)"
                   />
                 </div>
 

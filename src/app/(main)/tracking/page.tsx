@@ -102,6 +102,45 @@ export default function TrackingPage() {
   const [dbxCopying, setDbxCopying] = useState(false);
   const [dbxConnected, setDbxConnected] = useState<boolean | null>(null); // null = unknown
 
+  // VIN editing — for fixing a wrong/mis-scanned VIN. Keyed by vehicle id;
+  // when a vehicle id is in the map, that row is in edit mode with the
+  // current draft value.
+  const [vinEdits, setVinEdits] = useState<Record<string, string>>({});
+  const [vinSaving, setVinSaving] = useState<string | null>(null);
+  const [vinError, setVinError] = useState<Record<string, string>>({});
+
+  const startVinEdit = (id: string, currentVin: string) => {
+    setVinEdits(prev => ({ ...prev, [id]: currentVin || '' }));
+    setVinError(prev => ({ ...prev, [id]: '' }));
+  };
+  const cancelVinEdit = (id: string) => {
+    setVinEdits(prev => { const next = { ...prev }; delete next[id]; return next; });
+    setVinError(prev => { const next = { ...prev }; delete next[id]; return next; });
+  };
+  const saveVinEdit = async (id: string) => {
+    const draft = (vinEdits[id] || '').trim().toUpperCase();
+    if (draft.length !== 17) {
+      setVinError(prev => ({ ...prev, [id]: 'VIN must be exactly 17 characters' }));
+      return;
+    }
+    if (/[IOQ]/.test(draft)) {
+      setVinError(prev => ({ ...prev, [id]: 'VIN cannot contain I, O, or Q' }));
+      return;
+    }
+    setVinSaving(id);
+    const { error } = await supabase
+      .from('fleet_checkins')
+      .update({ vin: draft, updated_at: new Date().toISOString() })
+      .eq('id', id);
+    setVinSaving(null);
+    if (error) {
+      setVinError(prev => ({ ...prev, [id]: error.message || 'Failed to save VIN' }));
+      return;
+    }
+    setVehicles(prev => prev.map(v => v.id === id ? { ...v, vin: draft } : v));
+    cancelVinEdit(id);
+  };
+
   useEffect(() => {
     loadVehicles();
     loadProfiles();
@@ -956,6 +995,66 @@ export default function TrackingPage() {
                     onClick={(e) => e.stopPropagation()}
                     style={{ borderTop: '1px solid var(--border)', padding: '14px' }}
                   >
+                    {/* VIN — editable, in case it was scanned or typed wrong */}
+                    <div style={{ marginBottom: '12px' }}>
+                      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '4px' }}>
+                        <div style={{ fontSize: '9px', fontWeight: 700, color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.5px' }}>VIN</div>
+                        {vinEdits[vehicle.id] === undefined ? (
+                          <button
+                            type="button"
+                            onClick={(e) => { e.stopPropagation(); startVinEdit(vehicle.id, vehicle.vin); }}
+                            style={{ fontSize: '10px', fontWeight: 700, color: '#60a5fa', background: 'none', border: 'none', cursor: 'pointer', padding: 0 }}
+                          >Edit</button>
+                        ) : null}
+                      </div>
+                      {vinEdits[vehicle.id] === undefined ? (
+                        <div style={{ fontSize: '13px', fontFamily: 'monospace', color: 'var(--text-primary)', padding: '8px 10px', borderRadius: '8px', background: 'var(--subtle-bg)', border: '1px solid var(--border)' }}>
+                          {vehicle.vin}
+                        </div>
+                      ) : (
+                        <>
+                          <input
+                            type="text"
+                            value={vinEdits[vehicle.id]}
+                            onClick={(e) => e.stopPropagation()}
+                            onChange={(e) => setVinEdits(prev => ({ ...prev, [vehicle.id]: e.target.value.toUpperCase() }))}
+                            maxLength={17}
+                            placeholder="17-character VIN"
+                            style={{
+                              width: '100%', padding: '8px 10px', borderRadius: '8px',
+                              border: '1px solid var(--border)', background: 'var(--input-bg)',
+                              color: 'var(--text-primary)', fontSize: '13px', fontFamily: 'monospace',
+                              letterSpacing: '0.5px', boxSizing: 'border-box', textTransform: 'uppercase',
+                            }}
+                          />
+                          {vinError[vehicle.id] && (
+                            <div style={{ fontSize: '11px', color: '#f87171', marginTop: '4px' }}>{vinError[vehicle.id]}</div>
+                          )}
+                          <div style={{ display: 'flex', gap: '6px', marginTop: '6px' }}>
+                            <button
+                              type="button"
+                              onClick={(e) => { e.stopPropagation(); saveVinEdit(vehicle.id); }}
+                              disabled={vinSaving === vehicle.id}
+                              style={{
+                                flex: 1, padding: '8px', borderRadius: '7px', fontSize: '11px', fontWeight: 700, cursor: 'pointer',
+                                background: '#22c55e', border: 'none', color: '#fff',
+                                opacity: vinSaving === vehicle.id ? 0.5 : 1,
+                              }}
+                            >{vinSaving === vehicle.id ? 'Saving...' : 'Save VIN'}</button>
+                            <button
+                              type="button"
+                              onClick={(e) => { e.stopPropagation(); cancelVinEdit(vehicle.id); }}
+                              disabled={vinSaving === vehicle.id}
+                              style={{
+                                padding: '8px 14px', borderRadius: '7px', fontSize: '11px', fontWeight: 700, cursor: 'pointer',
+                                background: 'transparent', border: '1px solid var(--border)', color: 'var(--text-secondary)',
+                              }}
+                            >Cancel</button>
+                          </div>
+                        </>
+                      )}
+                    </div>
+
                     {/* Status Update Buttons — available to all roles */}
                     <div style={{ marginBottom: '12px' }}>
                         <div style={{ fontSize: '10px', fontWeight: 700, color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.5px', marginBottom: '6px' }}>
