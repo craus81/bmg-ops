@@ -9,6 +9,7 @@ import StatusBadge from '@/components/StatusBadge';
 import AssignmentPicker from '@/components/AssignmentPicker';
 import VehiclePhotoTimeline from '@/components/VehiclePhotoTimeline';
 import { openOrCreateVehicleThread } from '@/lib/customer-thread';
+import { decodeVIN, isValidVIN } from '@/lib/vin-decoder';
 import type { FleetCheckin, VehicleTrackingStatus, VehicleStatusHistory, VehiclePhoto, GraphicsJob, GraphicsInstallStatus } from '@/lib/types';
 import { VEHICLE_STATUS_PIPELINE, VEHICLE_STATUS_LABELS, VEHICLE_STATUS_COLORS, GRAPHICS_STATUS_LABELS, GRAPHICS_INSTALL_PIPELINE, GRAPHICS_INSTALL_LABELS, GRAPHICS_INSTALL_COLORS } from '@/lib/types';
 import NetSuitePdf from '@/components/NetSuitePdf';
@@ -119,25 +120,35 @@ export default function TrackingPage() {
   };
   const saveVinEdit = async (id: string) => {
     const draft = (vinEdits[id] || '').trim().toUpperCase();
-    if (draft.length !== 17) {
-      setVinError(prev => ({ ...prev, [id]: 'VIN must be exactly 17 characters' }));
-      return;
-    }
-    if (/[IOQ]/.test(draft)) {
-      setVinError(prev => ({ ...prev, [id]: 'VIN cannot contain I, O, or Q' }));
+    if (!isValidVIN(draft)) {
+      setVinError(prev => ({ ...prev, [id]: 'VIN must be 17 characters and cannot contain I, O, or Q' }));
       return;
     }
     setVinSaving(id);
+    // Re-decode so the vehicle year/make/model/trim/body_class follow the
+    // corrected VIN. Falls back to whatever decodeVIN returns (offline map
+    // when NHTSA is unreachable); we only overwrite fields the decoder
+    // actually populated so we don't blow away good data with blanks.
+    let decoded: Awaited<ReturnType<typeof decodeVIN>> | null = null;
+    try { decoded = await decodeVIN(draft); } catch { decoded = null; }
+
+    const update: Record<string, any> = { vin: draft, updated_at: new Date().toISOString() };
+    if (decoded?.year) update.vehicle_year = decoded.year;
+    if (decoded?.make) update.vehicle_make = decoded.make;
+    if (decoded?.model) update.vehicle_model = decoded.model;
+    if (decoded?.trim) update.vehicle_trim = decoded.trim;
+    if (decoded?.bodyClass) update.body_class = decoded.bodyClass;
+
     const { error } = await supabase
       .from('fleet_checkins')
-      .update({ vin: draft, updated_at: new Date().toISOString() })
+      .update(update)
       .eq('id', id);
     setVinSaving(null);
     if (error) {
       setVinError(prev => ({ ...prev, [id]: error.message || 'Failed to save VIN' }));
       return;
     }
-    setVehicles(prev => prev.map(v => v.id === id ? { ...v, vin: draft } : v));
+    setVehicles(prev => prev.map(v => v.id === id ? { ...v, ...update } as any : v));
     cancelVinEdit(id);
   };
 
@@ -1040,7 +1051,7 @@ export default function TrackingPage() {
                                 background: '#22c55e', border: 'none', color: '#fff',
                                 opacity: vinSaving === vehicle.id ? 0.5 : 1,
                               }}
-                            >{vinSaving === vehicle.id ? 'Saving...' : 'Save VIN'}</button>
+                            >{vinSaving === vehicle.id ? 'Decoding & saving...' : 'Save VIN'}</button>
                             <button
                               type="button"
                               onClick={(e) => { e.stopPropagation(); cancelVinEdit(vehicle.id); }}
