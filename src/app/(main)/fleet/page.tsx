@@ -8,6 +8,7 @@ import { decodeVIN, isValidVIN } from '@/lib/vin-decoder';
 import VinScanner from '@/components/VinScanner';
 import { theme } from '@/lib/theme';
 import { storage } from '@/lib/storage';
+import { firstGraphicsMatch } from '@/lib/graphics-detection';
 import type { NetsuiteSalesOrder, GraphicsProof, FleetCheckin, VehicleTrackingStatus } from '@/lib/types';
 import { VEHICLE_STATUS_PIPELINE, VEHICLE_STATUS_LABELS, VEHICLE_STATUS_COLORS } from '@/lib/types';
 import NetSuitePdf from '@/components/NetSuitePdf';
@@ -399,6 +400,20 @@ export default function FleetPage() {
       }
     }
 
+    // Scan SO line items + (if linked) estimate line items for graphics
+    // keywords. graphics_signal stores the first matched description so
+    // the inline prompt and queue tab can show *why* the flag fired.
+    let graphicsSignal: string | null = null;
+    const soLines = selectedOrders.flatMap(o => o.line_items || []);
+    graphicsSignal = firstGraphicsMatch(soLines);
+    if (!graphicsSignal && contextSnapshot.source_estimate_id) {
+      const { data: estLines } = await supabase
+        .from('estimate_line_items')
+        .select('item_number, description')
+        .eq('estimate_id', contextSnapshot.source_estimate_id);
+      graphicsSignal = firstGraphicsMatch(estLines || []);
+    }
+
     const { data, error } = await supabase
       .from('fleet_checkins')
       .insert({
@@ -431,6 +446,8 @@ export default function FleetPage() {
         on_site_contact_phone: contextSnapshot.on_site_contact_phone,
         delivery_preferences: contextSnapshot.delivery_preferences,
         source_estimate_id: contextSnapshot.source_estimate_id,
+        needs_graphics: !!graphicsSignal,
+        graphics_signal: graphicsSignal,
       })
       .select()
       .single();
@@ -688,6 +705,41 @@ export default function FleetPage() {
             }}>Proof: {savedCheckin.proof_file_name}</div>
           )}
         </div>
+
+        {/* Graphics-needed prompt — keyword scan at save time flips
+            needs_graphics on fleet_checkins. We surface the matched line
+            description so the installer knows why the prompt fired. */}
+        {(savedCheckin as any).needs_graphics && !(savedCheckin as any).matched_graphics_job_id && (
+          <div style={{
+            margin: '0 0 14px', padding: '12px 14px', borderRadius: '12px',
+            background: 'rgba(251,146,60,0.10)', border: '1px solid rgba(251,146,60,0.35)',
+          }}>
+            <div style={{ fontSize: '11px', fontWeight: 800, color: '#fb923c', textTransform: 'uppercase', letterSpacing: '0.5px', marginBottom: '4px' }}>
+              Graphics Needed
+            </div>
+            <div style={{ fontSize: '12px', color: theme.textPrimary, marginBottom: '8px' }}>
+              This order includes a graphics line item
+              {(savedCheckin as any).graphics_signal ? <>: <span style={{ fontStyle: 'italic' }}>{(savedCheckin as any).graphics_signal}</span></> : null}
+              . Create a graphics production job?
+            </div>
+            <button
+              onClick={() => {
+                const params = new URLSearchParams({
+                  new: '1',
+                  vin: savedCheckin.vin || '',
+                  customer: savedCheckin.customer_name || '',
+                  so: savedCheckin.sales_order_number || '',
+                  checkinId: savedCheckin.id || '',
+                });
+                router.push(`/graphics?${params.toString()}`);
+              }}
+              style={{
+                padding: '8px 14px', borderRadius: '10px', fontSize: '12px', fontWeight: 800,
+                background: '#fb923c', color: '#fff', border: 'none', cursor: 'pointer',
+              }}
+            >+ Create Graphics Job</button>
+          </div>
+        )}
 
         {/* Sales Order PDF Viewer */}
         <NetSuitePdf

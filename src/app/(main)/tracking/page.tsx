@@ -1140,6 +1140,29 @@ export default function TrackingPage() {
                       {(vehicle as any).scheduled_upfit_date && (
                         <div style={{ fontSize: '11px', color: '#3b82f6', fontWeight: 600, marginTop: '1px' }}>Upfit: {new Date((vehicle as any).scheduled_upfit_date + 'T12:00:00').toLocaleDateString()}</div>
                       )}
+                      {(vehicle as any).needs_graphics && !(vehicle as any).matched_graphics_job_id && (
+                        <div
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            const params = new URLSearchParams({
+                              new: '1',
+                              vin: vehicle.vin || '',
+                              customer: vehicle.customer_name || '',
+                              so: vehicle.sales_order_number || '',
+                              checkinId: vehicle.id,
+                            });
+                            router.push(`/graphics?${params.toString()}`);
+                          }}
+                          role="button"
+                          style={{
+                            display: 'inline-block', marginTop: '4px', padding: '2px 8px',
+                            borderRadius: '999px', fontSize: '10px', fontWeight: 800,
+                            background: 'rgba(251,146,60,0.12)', color: '#fb923c',
+                            border: '1px solid rgba(251,146,60,0.35)', cursor: 'pointer',
+                          }}
+                          title={(vehicle as any).graphics_signal || 'Needs graphics job'}
+                        >Needs Graphics</div>
+                      )}
                     </div>
                     <div style={{ textAlign: 'right', flexShrink: 0, marginLeft: '8px' }}>
                       <StatusBadge status={status} />

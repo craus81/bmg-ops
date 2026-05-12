@@ -91,6 +91,11 @@ export default function GraphicsPage() {
   // Create job state
   const [showCreate, setShowCreate] = useState(false);
   const [createStep, setCreateStep] = useState<'category' | 'details'>('category');
+  // Set when /tracking or the post-check-in prompt deep-links into the
+  // create modal; we re-link the resulting graphics_job to the source
+  // check-in so the "Needs Graphics" chip clears automatically.
+  const [prefillCheckinId, setPrefillCheckinId] = useState<string | null>(null);
+  const [awaitingGraphics, setAwaitingGraphics] = useState<any[]>([]);
   const [createForm, setCreateForm] = useState({
     job_category: '' as GraphicsJobCategory | '',
     title: '', part_number: '', part_numbers: [] as string[], partInput: '', customer: '', quantity: 1,
@@ -231,11 +236,42 @@ export default function GraphicsPage() {
   }, [loading, searchParams]);
 
   // Open the create-job modal when other pages deep-link with ?new=1.
+  // Customer / SO / VIN / checkin id flow through URL params from
+  // /tracking and the post-check-in graphics-needed prompt so the new
+  // job can pre-fill those fields and back-link to the source check-in.
   useEffect(() => {
     if (loading) return;
-    if (searchParams.get('new') === '1') setShowCreate(true);
+    if (searchParams.get('new') === '1') {
+      setShowCreate(true);
+      const customer = searchParams.get('customer') || '';
+      const so = searchParams.get('so') || '';
+      const checkinId = searchParams.get('checkinId');
+      if (customer) {
+        setCreateForm(f => ({ ...f, customer, po_number: so || f.po_number }));
+        setCustomerSearch(customer);
+      }
+      if (checkinId) setPrefillCheckinId(checkinId);
+    }
   // eslint-disable-next-line react-hooks/exhaustive-deps -- intentional: load once on mount
   }, [loading, searchParams]);
+
+  // Awaiting-graphics queue: vehicles whose linked SO/estimate scored
+  // positive in the keyword scan but haven't yet been linked to a
+  // graphics_job. Reload alongside jobs so creating one drops it off
+  // the queue immediately.
+  const loadAwaitingGraphics = async () => {
+    const { data } = await supabase
+      .from('fleet_checkins')
+      .select('id, vin, customer_name, sales_order_number, graphics_signal, created_at, vehicle_year, vehicle_make, vehicle_model')
+      .eq('needs_graphics', true)
+      .is('matched_graphics_job_id', null)
+      .neq('status', 'delivered')
+      .order('created_at', { ascending: false })
+      .limit(50);
+    setAwaitingGraphics(data || []);
+  };
+
+  useEffect(() => { loadAwaitingGraphics(); }, []);
 
   const loadJobs = async () => {
     // Exclude installed/cancelled by default — they're archived
@@ -706,6 +742,17 @@ export default function GraphicsPage() {
     }
 
     if (data) {
+      // Back-link to the source fleet check-in when this job was created
+      // from the "Needs Graphics" prompt/chip. Clears the queue entry.
+      if (prefillCheckinId) {
+        await supabase
+          .from('fleet_checkins')
+          .update({ matched_graphics_job_id: data.id })
+          .eq('id', prefillCheckinId);
+        setPrefillCheckinId(null);
+        loadAwaitingGraphics();
+      }
+
       // Log creation
       await supabase.from('graphics_status_history').insert({
         job_id: data.id,
@@ -991,6 +1038,61 @@ export default function GraphicsPage() {
           + New Job
         </button>
       </div>
+
+      {/* Awaiting Graphics queue — fleet_checkins flagged by the keyword
+          scan at save time. Click an entry to open the create modal
+          pre-filled with the customer + SO; saving back-links the new
+          job to the check-in and the entry drops off the list. */}
+      {awaitingGraphics.length > 0 && (
+        <div style={{
+          marginBottom: '12px', padding: '10px 12px', borderRadius: '12px',
+          background: 'rgba(251,146,60,0.06)', border: '1px solid rgba(251,146,60,0.25)',
+        }}>
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '8px' }}>
+            <div style={{ fontSize: '11px', fontWeight: 800, color: '#fb923c', textTransform: 'uppercase', letterSpacing: '0.5px' }}>
+              Awaiting Graphics Job ({awaitingGraphics.length})
+            </div>
+          </div>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
+            {awaitingGraphics.map(ci => {
+              const vehicleTitle = [ci.vehicle_year, ci.vehicle_make, ci.vehicle_model].filter(Boolean).join(' ') || 'Vehicle';
+              return (
+                <button
+                  key={ci.id}
+                  onClick={() => {
+                    setShowCreate(true);
+                    setCreateForm(f => ({ ...f, customer: ci.customer_name || '', po_number: ci.sales_order_number || f.po_number }));
+                    setCustomerSearch(ci.customer_name || '');
+                    setPrefillCheckinId(ci.id);
+                  }}
+                  style={{
+                    display: 'flex', justifyContent: 'space-between', alignItems: 'center',
+                    padding: '8px 10px', borderRadius: '8px', background: 'var(--card)',
+                    border: '1px solid var(--border)', cursor: 'pointer', textAlign: 'left',
+                  }}
+                >
+                  <div style={{ minWidth: 0, flex: 1 }}>
+                    <div style={{ fontSize: '12px', fontWeight: 800, color: 'var(--text-primary)' }}>
+                      {ci.customer_name || 'No Customer'}
+                      {ci.sales_order_number && <span style={{ color: 'var(--text-muted)', fontWeight: 600 }}> · SO #{ci.sales_order_number}</span>}
+                    </div>
+                    <div style={{ fontSize: '11px', color: 'var(--text-secondary)' }}>{vehicleTitle}</div>
+                    {ci.graphics_signal && (
+                      <div style={{ fontSize: '10px', color: '#fb923c', fontStyle: 'italic', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                        {ci.graphics_signal}
+                      </div>
+                    )}
+                  </div>
+                  <div style={{
+                    padding: '4px 10px', borderRadius: '6px', fontSize: '10px', fontWeight: 800,
+                    background: '#fb923c', color: '#fff', flexShrink: 0, marginLeft: '8px',
+                  }}>+ Create</div>
+                </button>
+              );
+            })}
+          </div>
+        </div>
+      )}
 
       {/* Category Filter */}
       <div style={{ display: 'flex', gap: '4px', marginBottom: '8px' }}>
