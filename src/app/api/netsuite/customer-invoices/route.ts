@@ -12,6 +12,12 @@ export async function GET(req: NextRequest) {
   try {
     const { searchParams } = new URL(req.url);
     const customerId = safeIntId(searchParams.get('customerId'), 'customerId');
+    // status=open narrows to open invoices (used by the bulk-download UI).
+    const statusFilter = searchParams.get('status');
+
+    const statusClause = statusFilter === 'open'
+      ? `AND t.type = 'CustInvc' AND BUILTIN.DF(t.status) = 'Open'`
+      : `AND t.type IN ('CustInvc', 'SalesOrd', 'Estimate')`;
 
     const query = `
       SELECT
@@ -23,7 +29,7 @@ export async function GET(req: NextRequest) {
         BUILTIN.DF(t.status) AS status_display
       FROM transaction t
       WHERE t.entity = ${customerId}
-        AND t.type IN ('CustInvc', 'SalesOrd', 'Estimate')
+        ${statusClause}
       ORDER BY t.trandate DESC
     `;
 
