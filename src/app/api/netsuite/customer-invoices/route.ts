@@ -15,10 +15,10 @@ export async function GET(req: NextRequest) {
     // status=open narrows to open invoices (used by the bulk-download UI).
     const statusFilter = searchParams.get('status');
 
-    // 'CustInvc:A' is the canonical status-key for an open invoice — more
-    // reliable than the display string which is admin-customizable.
+    // In this NetSuite install the open-invoice status key is 'A'
+    // (see /api/netsuite/invoices STATUS_MAP).
     const statusClause = statusFilter === 'open'
-      ? `AND t.type = 'CustInvc' AND t.status = 'CustInvc:A'`
+      ? `AND t.type = 'CustInvc' AND t.status = 'A'`
       : `AND t.type IN ('CustInvc', 'SalesOrd', 'Estimate')`;
 
     const query = `
