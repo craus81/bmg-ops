@@ -566,6 +566,58 @@ export default function TrackingPage() {
     setDbxSearching(false);
   };
 
+  const uploadProofForVehicle = async (vehicleId: string, file: File) => {
+    try {
+      const ext = file.name.split('.').pop() || 'bin';
+      const path = `manual-uploads/${Date.now()}-${Math.random().toString(36).slice(2, 6)}.${ext}`;
+      const { error: upErr } = await storage.from('graphics-proofs').upload(path, file, { contentType: file.type });
+      if (upErr) {
+        alert('Upload failed: ' + (upErr.message || 'unknown'));
+        return;
+      }
+      const { data: urlData } = storage.from('graphics-proofs').getPublicUrl(path);
+      const publicUrl = urlData?.publicUrl || null;
+      const { error: dbErr } = await supabase.from('fleet_checkins').update({
+        proof_url: publicUrl,
+        proof_filename: file.name,
+        proof_dropbox_path: null,
+      } as any).eq('id', vehicleId);
+      if (dbErr) {
+        alert('Saved the file but failed to attach it: ' + dbErr.message);
+        return;
+      }
+      setVehicles(prev => prev.map(v =>
+        v.id === vehicleId
+          ? { ...v, proof_url: publicUrl, proof_filename: file.name, proof_dropbox_path: null } as any
+          : v
+      ));
+      setUpdateSuccess('Proof uploaded');
+      setTimeout(() => setUpdateSuccess(null), 2000);
+    } catch (err: any) {
+      alert('Upload failed: ' + (err?.message || String(err)));
+    }
+  };
+
+  const removeProofForVehicle = async (vehicleId: string) => {
+    if (!confirm('Remove the proof file from this vehicle?')) return;
+    const { error } = await supabase.from('fleet_checkins').update({
+      proof_url: null,
+      proof_filename: null,
+      proof_dropbox_path: null,
+    } as any).eq('id', vehicleId);
+    if (error) {
+      alert('Failed to remove proof: ' + error.message);
+      return;
+    }
+    setVehicles(prev => prev.map(v =>
+      v.id === vehicleId
+        ? { ...v, proof_url: null, proof_filename: null, proof_dropbox_path: null } as any
+        : v
+    ));
+    setUpdateSuccess('Proof removed');
+    setTimeout(() => setUpdateSuccess(null), 2000);
+  };
+
   const copyProofToR2 = async (vehicleId: string, dropboxPath: string, customerName: string) => {
     setDbxCopying(true);
     try {
@@ -866,10 +918,18 @@ export default function TrackingPage() {
   return (
     <div>
       {/* Page Header */}
-      <div style={{ marginBottom: '16px' }}>
+      <div style={{ marginBottom: '16px', display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '12px' }}>
         <div style={{ fontSize: '22px', fontWeight: 800, color: 'var(--text-primary)' }}>
           In-Shop
         </div>
+        <button
+          onClick={() => router.push('/graphics?new=1')}
+          style={{
+            padding: '8px 14px', borderRadius: '10px', fontSize: '12px', fontWeight: 700,
+            background: 'var(--navy)', color: '#fff', border: 'none', cursor: 'pointer',
+            flexShrink: 0,
+          }}
+        >+ New Graphics Job</button>
       </div>
 
       {/* Summary Cards */}
@@ -1691,16 +1751,37 @@ export default function TrackingPage() {
                               </div>
                             )}
                           </div>
-                          <button
-                            onClick={() => {
-                              setDbxSearchOpen(vehicle.id);
-                              if (vehicle.customer_name) {
-                                setDbxSearchTerm(vehicle.customer_name);
-                                searchDropboxProofs(vehicle.customer_name);
-                              }
-                            }}
-                            style={{ padding: '4px 8px', borderRadius: '6px', fontSize: '10px', fontWeight: 700, background: 'transparent', border: '1px solid var(--border)', color: 'var(--text-muted)', cursor: 'pointer' }}
-                          >Replace</button>
+                          <div style={{ display: 'flex', gap: '4px', flexShrink: 0 }}>
+                            <input
+                              type="file"
+                              id={`proof-replace-${vehicle.id}`}
+                              accept="image/*,application/pdf,.eps,.ai,.psd"
+                              style={{ display: 'none' }}
+                              onChange={async (e) => {
+                                const f = e.target.files?.[0];
+                                if (f) await uploadProofForVehicle(vehicle.id, f);
+                                if (e.target) e.target.value = '';
+                              }}
+                            />
+                            <button
+                              onClick={() => document.getElementById(`proof-replace-${vehicle.id}`)?.click()}
+                              style={{ padding: '4px 8px', borderRadius: '6px', fontSize: '10px', fontWeight: 700, background: 'transparent', border: '1px solid var(--border)', color: 'var(--text-muted)', cursor: 'pointer' }}
+                            >Upload</button>
+                            <button
+                              onClick={() => {
+                                setDbxSearchOpen(vehicle.id);
+                                if (vehicle.customer_name) {
+                                  setDbxSearchTerm(vehicle.customer_name);
+                                  searchDropboxProofs(vehicle.customer_name);
+                                }
+                              }}
+                              style={{ padding: '4px 8px', borderRadius: '6px', fontSize: '10px', fontWeight: 700, background: 'transparent', border: '1px solid var(--border)', color: 'var(--text-muted)', cursor: 'pointer' }}
+                            >Dropbox</button>
+                            <button
+                              onClick={() => removeProofForVehicle(vehicle.id)}
+                              style={{ padding: '4px 8px', borderRadius: '6px', fontSize: '10px', fontWeight: 700, background: 'transparent', border: '1px solid rgba(248,113,113,0.3)', color: '#f87171', cursor: 'pointer' }}
+                            >Remove</button>
+                          </div>
                         </div>
                       ) : dbxSearchOpen === vehicle.id ? (
                         <div style={{ padding: '12px', borderRadius: '10px', background: 'var(--subtle-bg)', border: '1px solid var(--border)' }}>
@@ -1767,17 +1848,33 @@ export default function TrackingPage() {
                           )}
                         </div>
                       ) : (
-                        <button
-                          onClick={() => {
-                            setDbxSearchOpen(vehicle.id);
-                            // Auto-populate search with customer name
-                            if (vehicle.customer_name) {
-                              setDbxSearchTerm(vehicle.customer_name);
-                              searchDropboxProofs(vehicle.customer_name);
-                            }
-                          }}
-                          style={{ width: '100%', padding: '10px', borderRadius: '8px', fontSize: '12px', fontWeight: 700, background: 'rgba(0,97,254,0.08)', border: '1px dashed rgba(0,97,254,0.3)', color: '#0061fe', cursor: 'pointer' }}
-                        >Find Proof in Dropbox</button>
+                        <div style={{ display: 'flex', gap: '6px' }}>
+                          <input
+                            type="file"
+                            id={`proof-add-${vehicle.id}`}
+                            accept="image/*,application/pdf,.eps,.ai,.psd"
+                            style={{ display: 'none' }}
+                            onChange={async (e) => {
+                              const f = e.target.files?.[0];
+                              if (f) await uploadProofForVehicle(vehicle.id, f);
+                              if (e.target) e.target.value = '';
+                            }}
+                          />
+                          <button
+                            onClick={() => document.getElementById(`proof-add-${vehicle.id}`)?.click()}
+                            style={{ flex: 1, padding: '10px', borderRadius: '8px', fontSize: '12px', fontWeight: 700, background: 'rgba(34,197,94,0.08)', border: '1px dashed rgba(34,197,94,0.3)', color: '#22c55e', cursor: 'pointer' }}
+                          >Upload Proof</button>
+                          <button
+                            onClick={() => {
+                              setDbxSearchOpen(vehicle.id);
+                              if (vehicle.customer_name) {
+                                setDbxSearchTerm(vehicle.customer_name);
+                                searchDropboxProofs(vehicle.customer_name);
+                              }
+                            }}
+                            style={{ flex: 1, padding: '10px', borderRadius: '8px', fontSize: '12px', fontWeight: 700, background: 'rgba(0,97,254,0.08)', border: '1px dashed rgba(0,97,254,0.3)', color: '#0061fe', cursor: 'pointer' }}
+                          >Find in Dropbox</button>
+                        </div>
                       )}
                     </div>
 

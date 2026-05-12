@@ -230,6 +230,13 @@ export default function GraphicsPage() {
   // eslint-disable-next-line react-hooks/exhaustive-deps -- intentional: load once on mount
   }, [loading, searchParams]);
 
+  // Open the create-job modal when other pages deep-link with ?new=1.
+  useEffect(() => {
+    if (loading) return;
+    if (searchParams.get('new') === '1') setShowCreate(true);
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- intentional: load once on mount
+  }, [loading, searchParams]);
+
   const loadJobs = async () => {
     // Exclude installed/cancelled by default — they're archived
     const { data: jobsData } = await supabase
