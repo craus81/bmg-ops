@@ -440,6 +440,21 @@ export default function TrackingPage() {
         .single();
 
       if (insertError) {
+        // 23505 = unique_violation. Happens when the join table already
+        // contains this (checkin, SO) pair — usually because the legacy
+        // primary was backfilled in migration 093 and our in-memory
+        // vehicleSalesOrders cache hadn't caught up yet. Reconcile from
+        // the server instead of treating it as a hard failure.
+        if ((insertError as any).code === '23505') {
+          await loadCheckinSalesOrders([vehicleId]);
+          setSoSearchOpen(null);
+          setSoSearchTerm('');
+          setSoSearchResults([]);
+          setUpdateSuccess('Sales order already linked');
+          setTimeout(() => setUpdateSuccess(null), 2000);
+          setSoLinking(false);
+          return;
+        }
         alert('Failed to link sales order: ' + insertError.message);
         setSoLinking(false);
         return;
