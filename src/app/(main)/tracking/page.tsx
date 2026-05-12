@@ -191,7 +191,7 @@ export default function TrackingPage() {
         setVehicles(data);
       }
       setHasMore(data.length === PAGE_SIZE);
-      loadCheckinSalesOrders(data.map(v => v.id));
+      loadCheckinSalesOrders(data.map((v: FleetCheckin) => v.id));
     }
     if (append) setLoadingMore(false); else setLoading(false);
   };
