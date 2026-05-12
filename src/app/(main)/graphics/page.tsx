@@ -358,12 +358,15 @@ export default function GraphicsPage() {
   const uploadFilesToJob = async (jobId: string, files: File[]) => {
     if (files.length === 0) return;
     setUploadingFiles(true);
+    const errors: string[] = [];
+    let uploaded = 0;
     for (const file of files) {
       const ext = file.name.split('.').pop() || 'bin';
       const path = `graphics-files/${jobId}/${Date.now()}-${Math.random().toString(36).slice(2, 6)}.${ext}`;
       const { error: upErr } = await storage.from('graphics-proofs').upload(path, file, { contentType: file.type });
       if (upErr) {
         console.error('File upload error:', upErr);
+        errors.push(`${file.name}: ${upErr.message || 'storage upload failed'}`);
         continue;
       }
       const { error: dbErr } = await supabase.from('graphics_job_files').insert({
@@ -374,10 +377,21 @@ export default function GraphicsPage() {
         storage_path: path,
         uploaded_by: user?.id,
       });
-      if (dbErr) console.error('File record insert error:', dbErr);
+      if (dbErr) {
+        console.error('File record insert error:', dbErr);
+        errors.push(`${file.name}: ${dbErr.message || 'database insert failed'}`);
+        // Roll back the storage object so the bucket doesn't accumulate
+        // orphaned files when the DB insert is the one rejecting us.
+        await storage.from('graphics-proofs').remove([path]).catch(() => {});
+        continue;
+      }
+      uploaded++;
     }
     setUploadingFiles(false);
     await loadJobFiles(jobId);
+    if (errors.length > 0) {
+      alert(`Uploaded ${uploaded} of ${files.length} file${files.length === 1 ? '' : 's'}.\n\n${errors.join('\n')}`);
+    }
   };
 
   const deleteJobFile = async (file: JobFile) => {
