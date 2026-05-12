@@ -18,6 +18,12 @@ const REPORTS: ReportLink[] = [
     href: '/admin/reports/sales-by-customer-detail',
     source: 'NetSuite',
   },
+  {
+    title: 'Download Open Invoices',
+    blurb: 'Pull every open invoice PDF for a customer from NetSuite and download them as one ZIP. Capped at 60 invoices per pull.',
+    href: '/invoices/bulk-download',
+    source: 'NetSuite',
+  },
 ];
 
 export default function ReportsIndexPage() {
