@@ -345,6 +345,22 @@ export interface FleetCheckin {
   updated_at: string;
 }
 
+// One row per linked NetSuite sales order on a fleet check-in. The first
+// row added is mirrored back into the FleetCheckin legacy columns so
+// pick lists, search, etc. still see "a" sales order. Additional rows
+// only live here.
+export interface CheckinSalesOrder {
+  id: string;
+  checkin_id: string;
+  netsuite_sales_order_id: string;
+  sales_order_number: string | null;
+  customer_name: string | null;
+  sales_order_memo: string | null;
+  sales_order_total: number | null;
+  added_by: string | null;
+  added_at: string;
+}
+
 export type GraphicsInstallStatus = 'pending' | 'in_progress' | 'stuck' | 'complete' | 'n/a';
 
 export const GRAPHICS_INSTALL_PIPELINE: GraphicsInstallStatus[] = [
