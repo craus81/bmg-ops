@@ -25,7 +25,9 @@ export async function GET(req: NextRequest) {
   try {
     const customerId = safeIntId(req.nextUrl.searchParams.get('customerId'), 'customerId');
 
-    // Pull open invoices (status display = "Open") with their balance.
+    // Pull open invoices with their balance. Filter by the status key
+    // ('CustInvc:A' = "Open") rather than the display name, since the
+    // display string can be customized per NetSuite install.
     const listQuery = `
       SELECT
         t.id,
@@ -36,7 +38,7 @@ export async function GET(req: NextRequest) {
       FROM transaction t
       WHERE t.entity = ${customerId}
         AND t.type = 'CustInvc'
-        AND BUILTIN.DF(t.status) = 'Open'
+        AND t.status = 'CustInvc:A'
       ORDER BY t.trandate DESC
     `;
     const listResult = await suiteqlQuery(listQuery, MAX_INVOICES + 1);
