@@ -1168,7 +1168,9 @@ export default function GraphicsPage() {
                 )}
 
                 {/* Expanded view — rendered as a centered modal so deep
-                    links don't open a card off-screen. */}
+                    links don't open a card off-screen. Bounded height with
+                    an inner scroll area so the edit form's sticky-bottom
+                    Save bar can stick correctly. */}
                 {isExpanded && (
                   <div
                     onClick={(e) => {
@@ -1179,9 +1181,8 @@ export default function GraphicsPage() {
                     }}
                     style={{
                       position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.7)',
-                      zIndex: 500, display: 'flex', alignItems: 'flex-start',
+                      zIndex: 500, display: 'flex', alignItems: 'center',
                       justifyContent: 'center', padding: '24px 12px',
-                      overflowY: 'auto', WebkitOverflowScrolling: 'touch',
                     }}
                   >
                   <div
@@ -1191,12 +1192,13 @@ export default function GraphicsPage() {
                       border: `1px solid ${statusColor}44`,
                       boxShadow: '0 16px 60px rgba(0,0,0,0.3)',
                       width: '100%', maxWidth: '720px',
+                      maxHeight: 'calc(100vh - 48px)',
+                      display: 'flex', flexDirection: 'column',
                     }}
                   >
-                    {/* Modal header — title + status + close, sticky so it
-                        stays visible while scrolling long expanded content. */}
+                    {/* Modal header — fixed at top via flex layout. */}
                     <div style={{
-                      position: 'sticky', top: 0, zIndex: 1,
+                      flexShrink: 0,
                       background: 'var(--card)',
                       borderRadius: '14px 14px 0 0',
                       borderBottom: '1px solid var(--border)',
@@ -1243,7 +1245,7 @@ export default function GraphicsPage() {
                         </button>
                       </div>
                     </div>
-                  <div style={{ padding: '12px 14px 16px' }}>
+                  <div style={{ flex: 1, overflowY: 'auto', WebkitOverflowScrolling: 'touch', padding: '12px 14px 16px' }}>
 
                     {/* Quick status change */}
                     <div style={{ marginTop: '10px', marginBottom: '12px' }}>
@@ -2004,9 +2006,9 @@ export default function GraphicsPage() {
                           display: 'flex',
                           gap: '6px',
                           padding: '10px',
-                          marginLeft: '-10px',
-                          marginRight: '-10px',
-                          marginBottom: '-10px',
+                          marginLeft: '-14px',
+                          marginRight: '-14px',
+                          marginBottom: '-16px',
                           background: 'var(--card)',
                           borderTop: '1px solid var(--border)',
                           backdropFilter: 'blur(6px)',
