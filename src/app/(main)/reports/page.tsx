@@ -497,6 +497,27 @@ export default function ReportsPage() {
         {isAdmin ? 'Reports' : 'My Reports'}
       </div>
 
+      {/* Quick-link to the bulk-download tool. Lives outside the tab set
+          because it isn't a scanned-vehicle report — different domain. */}
+      <button
+        onClick={() => router.push('/invoices/bulk-download')}
+        style={{
+          width: '100%', padding: '12px 14px', borderRadius: '12px',
+          background: 'var(--card)', border: '1px solid var(--border)',
+          color: 'var(--text-primary)', fontSize: '13px', fontWeight: 700,
+          textAlign: 'left', display: 'flex', justifyContent: 'space-between',
+          alignItems: 'center', cursor: 'pointer', marginBottom: '12px',
+        }}
+      >
+        <div>
+          <div>Download Open Invoices</div>
+          <div style={{ fontSize: '11px', fontWeight: 500, color: 'var(--text-muted)', marginTop: '2px' }}>
+            Pull every open invoice PDF for a customer as one ZIP.
+          </div>
+        </div>
+        <span style={{ fontSize: '16px', color: 'var(--text-muted)' }}>→</span>
+      </button>
+
       <div style={{ display: 'flex', gap: '4px', marginBottom: '12px', background: 'var(--card)', borderRadius: '10px', padding: '3px' }}>
         <button onClick={function() { switchTab('review'); }} style={{ flex: 1, padding: '8px', borderRadius: '6px', fontSize: '11px', fontWeight: 700, background: tab === 'review' ? 'var(--tab-active-bg)' : 'transparent', border: 'none', color: tab === 'review' ? 'var(--navy)' : 'var(--text-muted)' }}>
           Review {unmatchedCount > 0 ? '(' + unmatchedCount + ')' : ''}
