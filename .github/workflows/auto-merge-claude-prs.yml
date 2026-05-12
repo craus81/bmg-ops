@@ -1,0 +1,30 @@
+name: Auto-merge Claude PRs
+
+# When a PR is opened from a Claude-generated branch (claude/*) into main,
+# enable GitHub's native auto-merge. GitHub then squash-merges the PR
+# automatically once the required status checks on main pass — see
+# Settings → Branches → main → "Require status checks before merging".
+# Right now the only required check should be the Vercel preview
+# deployment, so the PR sits until Vercel reports success and merges.
+
+on:
+  pull_request:
+    types: [opened, reopened, ready_for_review]
+
+permissions:
+  pull-requests: write
+  contents: write
+
+jobs:
+  enable-auto-merge:
+    if: >-
+      startsWith(github.event.pull_request.head.ref, 'claude/') &&
+      github.event.pull_request.base.ref == 'main' &&
+      !github.event.pull_request.draft
+    runs-on: ubuntu-latest
+    steps:
+      - name: Enable auto-merge (squash)
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+        run: gh pr merge --auto --squash "$PR_NUMBER" --repo "$GITHUB_REPOSITORY"

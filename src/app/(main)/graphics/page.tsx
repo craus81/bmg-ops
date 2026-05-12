@@ -150,6 +150,9 @@ export default function GraphicsPage() {
 
   // Job assignments
   const [jobAssignments, setJobAssignments] = useState<Record<string, string[]>>({});
+  // Per-job generation counter for assignment loads. Bumped by saves so that
+  // an in-flight load can detect it's stale and skip overwriting state.
+  const assignmentsLoadGen = useRef<Record<string, number>>({});
 
   // Job views — record of who has opened each job (read receipts).
   // Loaded eagerly for all jobs so the collapsed cards can show "seen by".
@@ -312,11 +315,17 @@ export default function GraphicsPage() {
   };
 
   const loadJobAssignments = async (jobId: string) => {
+    // Bump generation so a concurrent save can invalidate this load. Without
+    // this guard, a load fired on expand/edit can resolve AFTER the user
+    // clicks a name and clobber the optimistic state with stale DB data.
+    const gen = (assignmentsLoadGen.current[jobId] || 0) + 1;
+    assignmentsLoadGen.current[jobId] = gen;
     const { data } = await supabase
       .from('job_assignments')
       .select('user_id')
       .eq('job_type', 'graphics_job')
       .eq('job_id', jobId);
+    if (assignmentsLoadGen.current[jobId] !== gen) return;
     if (data) {
       setJobAssignments(prev => ({
         ...prev,
@@ -394,6 +403,8 @@ export default function GraphicsPage() {
   };
 
   const saveJobAssignments = async (jobId: string, userIds: string[], jobTitle?: string) => {
+    // Invalidate any in-flight load so it can't overwrite this save.
+    assignmentsLoadGen.current[jobId] = (assignmentsLoadGen.current[jobId] || 0) + 1;
     const prev = jobAssignments[jobId] || [];
     setJobAssignments(p => ({ ...p, [jobId]: userIds }));
     try {
@@ -1156,9 +1167,85 @@ export default function GraphicsPage() {
                   </div>
                 )}
 
-                {/* Expanded view */}
+                {/* Expanded view — rendered as a centered modal so deep
+                    links don't open a card off-screen. Bounded height with
+                    an inner scroll area so the edit form's sticky-bottom
+                    Save bar can stick correctly. */}
                 {isExpanded && (
-                  <div style={{ padding: '0 12px 14px', borderTop: '1px solid var(--border)' }}>
+                  <div
+                    onClick={(e) => {
+                      if (e.target === e.currentTarget) {
+                        setExpandedJobId(null);
+                        setEditingJob(null);
+                      }
+                    }}
+                    style={{
+                      position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.7)',
+                      zIndex: 500, display: 'flex', alignItems: 'center',
+                      justifyContent: 'center', padding: '24px 12px',
+                    }}
+                  >
+                  <div
+                    onClick={(e) => e.stopPropagation()}
+                    style={{
+                      background: 'var(--card)', borderRadius: '14px',
+                      border: `1px solid ${statusColor}44`,
+                      boxShadow: '0 16px 60px rgba(0,0,0,0.3)',
+                      width: '100%', maxWidth: '720px',
+                      maxHeight: 'calc(100vh - 48px)',
+                      display: 'flex', flexDirection: 'column',
+                    }}
+                  >
+                    {/* Modal header — fixed at top via flex layout. */}
+                    <div style={{
+                      flexShrink: 0,
+                      background: 'var(--card)',
+                      borderRadius: '14px 14px 0 0',
+                      borderBottom: '1px solid var(--border)',
+                      padding: '12px 14px',
+                      display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: '8px',
+                    }}>
+                      <div style={{ flex: 1, minWidth: 0 }}>
+                        <div style={{ display: 'flex', alignItems: 'center', gap: '6px', marginBottom: '3px' }}>
+                          {job.priority !== 'normal' && (
+                            <span style={{ fontSize: '9px', fontWeight: 800, color: priorityColor(job.priority), textTransform: 'uppercase', padding: '1px 5px', borderRadius: '3px', background: `${priorityColor(job.priority)}15`, border: `1px solid ${priorityColor(job.priority)}33` }}>
+                              {job.priority}
+                            </span>
+                          )}
+                          <div style={{ fontSize: '14px', fontWeight: 800, color: 'var(--text-body)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                            {job.title}
+                          </div>
+                        </div>
+                        <div style={{ fontSize: '10px', color: 'var(--text-label)', display: 'flex', gap: '8px', flexWrap: 'wrap', alignItems: 'center' }}>
+                          {job.customer && <span>{job.customer}</span>}
+                          <span>Qty: {job.quantity}</span>
+                          {job.po_number && <span style={{ color: '#a78bfa', fontWeight: 700 }}>PO #{job.po_number}</span>}
+                        </div>
+                      </div>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: '8px', flexShrink: 0 }}>
+                        <div style={{
+                          padding: '4px 10px', borderRadius: '6px', fontSize: '10px', fontWeight: 700,
+                          background: `${statusColor}18`, border: `1px solid ${statusColor}44`,
+                          color: statusColor, whiteSpace: 'nowrap',
+                        }}>
+                          {GRAPHICS_STATUS_LABELS[job.status]}
+                        </div>
+                        <button
+                          onClick={() => { setExpandedJobId(null); setEditingJob(null); }}
+                          aria-label="Close"
+                          style={{
+                            background: 'transparent', border: '1px solid var(--border)',
+                            color: 'var(--text-label)', cursor: 'pointer',
+                            width: '28px', height: '28px', borderRadius: '6px',
+                            fontSize: '14px', lineHeight: 1,
+                            display: 'flex', alignItems: 'center', justifyContent: 'center',
+                          }}
+                        >
+                          ✕
+                        </button>
+                      </div>
+                    </div>
+                  <div style={{ flex: 1, overflowY: 'auto', WebkitOverflowScrolling: 'touch', padding: '12px 14px 16px' }}>
 
                     {/* Quick status change */}
                     <div style={{ marginTop: '10px', marginBottom: '12px' }}>
@@ -1919,9 +2006,9 @@ export default function GraphicsPage() {
                           display: 'flex',
                           gap: '6px',
                           padding: '10px',
-                          marginLeft: '-10px',
-                          marginRight: '-10px',
-                          marginBottom: '-10px',
+                          marginLeft: '-14px',
+                          marginRight: '-14px',
+                          marginBottom: '-16px',
                           background: 'var(--card)',
                           borderTop: '1px solid var(--border)',
                           backdropFilter: 'blur(6px)',
@@ -1943,6 +2030,8 @@ export default function GraphicsPage() {
                         </div>
                       </div>
                     )}
+                  </div>
+                  </div>
                   </div>
                 )}
               </div>

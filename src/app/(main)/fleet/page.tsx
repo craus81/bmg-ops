@@ -56,7 +56,12 @@ export default function FleetPage() {
   const [salesOrders, setSalesOrders] = useState<NetsuiteSalesOrder[]>([]);
   const [soLoading, setSoLoading] = useState(false);
   const [soError, setSoError] = useState('');
-  const [selectedOrder, setSelectedOrder] = useState<NetsuiteSalesOrder | null>(null);
+  // One vehicle can be checked in against multiple NetSuite sales orders.
+  // selectedOrder (below, derived) keeps the "primary" — the first one
+  // picked — so existing code paths (context snapshot, legacy column
+  // mirror, customer/graphics matching) keep working unchanged.
+  const [selectedOrders, setSelectedOrders] = useState<NetsuiteSalesOrder[]>([]);
+  const selectedOrder = selectedOrders[0] || null;
   const [expandedOrder, setExpandedOrder] = useState<string | null>(null);
 
   // Step 3: Proof
@@ -225,16 +230,30 @@ export default function FleetPage() {
     setSoLoading(false);
   };
 
-  const selectSalesOrder = (order: NetsuiteSalesOrder) => {
-    setSelectedOrder(order);
+  const toggleSalesOrder = (order: NetsuiteSalesOrder) => {
+    setSelectedOrders(prev => {
+      const exists = prev.some(o => o.id === order.id);
+      return exists ? prev.filter(o => o.id !== order.id) : [...prev, order];
+    });
+  };
+
+  // Advance to the proof step using the currently selected SOs. The first
+  // selected order drives the proof / Dropbox search (its customer name).
+  const continueWithSelectedOrders = () => {
+    const first = selectedOrders[0];
     setStep(2);
-    setProofSearch(order.customer_name || '');
-    loadProofs(order.customer_name);
-    if (order.customer_name) searchDropbox(order.customer_name);
+    if (first?.customer_name) {
+      setProofSearch(first.customer_name);
+      loadProofs(first.customer_name);
+      searchDropbox(first.customer_name);
+    } else {
+      setProofSearch('');
+      loadProofs('');
+    }
   };
 
   const skipSalesOrder = () => {
-    setSelectedOrder(null);
+    setSelectedOrders([]);
     setStep(2);
     setProofSearch('');
     loadProofs('');
@@ -373,6 +392,26 @@ export default function FleetPage() {
       return;
     }
 
+    // Persist every selected SO into the join table so multi-SO check-ins
+    // round-trip correctly. The first one is already mirrored into the
+    // legacy columns above; we still insert it here so the join table is
+    // the single source of truth for the tracking page list.
+    if (data?.id && selectedOrders.length > 0) {
+      const rows = selectedOrders.map(o => ({
+        checkin_id: data.id,
+        netsuite_sales_order_id: o.id,
+        sales_order_number: o.sales_order_number,
+        customer_name: o.customer_name,
+        sales_order_memo: o.memo || null,
+        sales_order_total: o.total || null,
+        added_by: user.id,
+      }));
+      const { error: linkErr } = await supabase
+        .from('fleet_checkin_sales_orders')
+        .insert(rows);
+      if (linkErr) console.error('Failed to link additional sales orders:', linkErr);
+    }
+
     // Auto-match graphics job by customer name. The linkage lives on
     // fleet_checkins.matched_graphics_job_id; graphics_jobs has no
     // matched_vehicle_id column (an earlier filter referencing it caused
@@ -431,7 +470,7 @@ export default function FleetPage() {
     setCustomerSearch('');
     setSalesOrders([]);
     setSoError('');
-    setSelectedOrder(null);
+    setSelectedOrders([]);
     setExpandedOrder(null);
     setProofs([]);
     setSelectedProof(null);
@@ -484,10 +523,27 @@ export default function FleetPage() {
     setScheduledUpfitDate(ci.scheduled_upfit_date || '');
     setNotes('');
 
-    // Reconstruct a minimal selectedOrder shape so downstream save writes
-    // the same SO linkage.
-    if (ci.netsuite_sales_order_id && ci.sales_order_number) {
-      setSelectedOrder({
+    // Reconstruct selectedOrders from the join table so every linked SO
+    // is preserved, not just the legacy single-SO mirror.
+    const { data: linkedSos } = await supabase
+      .from('fleet_checkin_sales_orders')
+      .select('netsuite_sales_order_id, sales_order_number, customer_name, sales_order_memo, sales_order_total')
+      .eq('checkin_id', ci.id)
+      .order('added_at', { ascending: true });
+    if (linkedSos && linkedSos.length > 0) {
+      setSelectedOrders(linkedSos.map((r: any) => ({
+        id: r.netsuite_sales_order_id,
+        sales_order_number: r.sales_order_number,
+        customer_name: r.customer_name || '',
+        memo: r.sales_order_memo || '',
+        total: r.sales_order_total || 0,
+        status: null,
+        date: null,
+        line_items: [],
+      })) as any);
+    } else if (ci.netsuite_sales_order_id && ci.sales_order_number) {
+      // Fallback for check-ins not yet backfilled into the join table.
+      setSelectedOrders([{
         id: ci.netsuite_sales_order_id,
         sales_order_number: ci.sales_order_number,
         customer_name: ci.customer_name || '',
@@ -496,9 +552,9 @@ export default function FleetPage() {
         status: null,
         date: null,
         line_items: [],
-      } as any);
+      } as any]);
     } else {
-      setSelectedOrder(null);
+      setSelectedOrders([]);
     }
 
     // Restore proof selection (Supabase or Dropbox).
@@ -560,7 +616,14 @@ export default function FleetPage() {
               marginTop: '8px', padding: '8px 12px', background: theme.successBg,
               border: `1px solid ${theme.successBorder}`, borderRadius: '10px',
               color: theme.success, fontSize: '12px', fontWeight: 700,
-            }}>SO #{savedCheckin.sales_order_number} — {savedCheckin.customer_name}</div>
+            }}>
+              SO #{savedCheckin.sales_order_number} — {savedCheckin.customer_name}
+              {selectedOrders.length > 1 && (
+                <span style={{ marginLeft: '6px', fontWeight: 600, opacity: 0.85 }}>
+                  +{selectedOrders.length - 1} more
+                </span>
+              )}
+            </div>
           ) : savedCheckin.customer_name ? (
             <div style={{
               marginTop: '8px', padding: '8px 12px', background: theme.card,
@@ -645,7 +708,7 @@ export default function FleetPage() {
             </div>
             <button
               onClick={() => {
-                setSelectedOrder(null);
+                setSelectedOrders([]);
                 setManualCustomerName('');
                 setCustomerSearch('');
                 setSelectedProof(null);
@@ -947,23 +1010,35 @@ export default function FleetPage() {
           </div>
         )}
 
-        {/* Sales order results */}
+        {/* Sales order results — multi-select. The first selected order
+            drives proof search and is mirrored into the check-in's legacy
+            single-SO columns; any additional ones live in the join table. */}
         {salesOrders.length > 0 && (
           <div style={{ display: 'flex', flexDirection: 'column', gap: '8px', marginBottom: '12px' }}>
-            {salesOrders.map(so => (
+            {salesOrders.map(so => {
+              const isSelected = selectedOrders.some(o => o.id === so.id);
+              return (
               <div key={so.id} style={{
-                background: theme.card, border: `1px solid ${theme.border}`, borderRadius: '12px',
-                overflow: 'hidden',
+                background: theme.card,
+                border: `1px solid ${isSelected ? theme.success : theme.border}`,
+                borderRadius: '12px', overflow: 'hidden',
               }}>
                 <button
                   onClick={() => setExpandedOrder(expandedOrder === so.id ? null : so.id)}
                   style={{
                     width: '100%', padding: '12px 14px', textAlign: 'left',
                     background: 'transparent', border: 'none', color: theme.textPrimary,
-                    display: 'flex', justifyContent: 'space-between', alignItems: 'center',
+                    display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '8px',
                   }}
                 >
-                  <div>
+                  <div style={{
+                    width: '22px', height: '22px', borderRadius: '6px', flexShrink: 0,
+                    border: `2px solid ${isSelected ? theme.success : theme.border}`,
+                    background: isSelected ? theme.success : 'transparent',
+                    color: '#fff', fontSize: '13px', fontWeight: 800,
+                    display: 'flex', alignItems: 'center', justifyContent: 'center',
+                  }}>{isSelected ? '✓' : ''}</div>
+                  <div style={{ flex: 1, minWidth: 0 }}>
                     <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
                       <span style={{ fontWeight: 800, fontSize: '14px' }}>{so.record_type === 'Invoice' ? 'INV' : so.record_type === 'Estimate' ? 'EST' : 'SO'} #{so.sales_order_number}</span>
                       {so.record_type !== 'Sales Order' && (
@@ -1002,20 +1077,30 @@ export default function FleetPage() {
                         ))}
                       </div>
                     )}
-                    <button onClick={() => selectSalesOrder(so)} style={{
+                    <button onClick={() => toggleSalesOrder(so)} style={{
                       width: '100%', padding: '12px', borderRadius: '10px',
-                      background: theme.success, color: '#fff', fontWeight: 800,
-                      fontSize: '13px', border: 'none',
-                    }}>Select This Order</button>
+                      background: isSelected ? 'transparent' : theme.success,
+                      color: isSelected ? theme.textSecondary : '#fff',
+                      border: isSelected ? `1px solid ${theme.border}` : 'none',
+                      fontWeight: 800, fontSize: '13px',
+                    }}>{isSelected ? 'Remove from Check-In' : 'Add to Check-In'}</button>
                   </div>
                 )}
               </div>
-            ))}
+              );
+            })}
           </div>
         )}
 
         {/* Navigation buttons */}
         <div style={{ display: 'flex', flexDirection: 'column', gap: '8px', marginTop: '8px' }}>
+          {selectedOrders.length > 0 && (
+            <button onClick={continueWithSelectedOrders} style={{
+              width: '100%', padding: '14px', borderRadius: '14px',
+              background: theme.success, color: '#fff', border: 'none',
+              fontSize: '14px', fontWeight: 800,
+            }}>Continue with {selectedOrders.length} order{selectedOrders.length === 1 ? '' : 's'} →</button>
+          )}
           <button onClick={skipSalesOrder} style={{
             width: '100%', padding: '12px', borderRadius: '14px',
             border: `1px solid ${theme.border}`, background: 'transparent',

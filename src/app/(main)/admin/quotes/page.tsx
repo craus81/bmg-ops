@@ -662,6 +662,39 @@ function NewQuote({ onCreated, editQuote }: { onCreated: () => void; editQuote?:
   const touchStartTime = useRef<number>(0);
   const touchMovedEnough = useRef(false);
 
+  // Resizable bottom panel — gives the user control over how much room
+  // the proof image vs the reference panel (template + element list) get.
+  const [bottomPanelHeight, setBottomPanelHeight] = useState<number>(() => {
+    if (typeof window === 'undefined') return 320;
+    return Math.round(window.innerHeight * 0.4);
+  });
+  function startResizeBottomPanel(startClientY: number) {
+    const startHeight = bottomPanelHeight;
+    const viewportH = window.innerHeight;
+    const minH = 80;
+    const maxH = Math.max(minH + 80, viewportH - 180);
+    const apply = (clientY: number) => {
+      const next = Math.max(minH, Math.min(maxH, startHeight + (startClientY - clientY)));
+      setBottomPanelHeight(next);
+    };
+    const onMouseMove = (e: MouseEvent) => apply(e.clientY);
+    const onTouchMove = (e: TouchEvent) => {
+      if (e.touches[0]) { e.preventDefault(); apply(e.touches[0].clientY); }
+    };
+    const cleanup = () => {
+      document.removeEventListener('mousemove', onMouseMove);
+      document.removeEventListener('mouseup', cleanup);
+      document.removeEventListener('touchmove', onTouchMove);
+      document.removeEventListener('touchend', cleanup);
+      document.removeEventListener('touchcancel', cleanup);
+    };
+    document.addEventListener('mousemove', onMouseMove);
+    document.addEventListener('mouseup', cleanup);
+    document.addEventListener('touchmove', onTouchMove, { passive: false });
+    document.addEventListener('touchend', cleanup);
+    document.addEventListener('touchcancel', cleanup);
+  }
+
   // Calibration regions — maps panel edges on proof image to known dimensions
   const [calibrationRegions, setCalibrationRegions] = useState<{
     panel_name: string;
@@ -829,6 +862,7 @@ function NewQuote({ onCreated, editQuote }: { onCreated: () => void; editQuote?:
       const file = new File([blob], `library-proof.${ext}`, { type: blob.type });
       setProofFile(file);
       setProofPreview(proof.url);
+      setProofPreviewForReview(null);
     } catch {
       alert('Could not load proof image');
     }
@@ -1716,6 +1750,9 @@ function NewQuote({ onCreated, editQuote }: { onCreated: () => void; editQuote?:
     const file = e.target.files?.[0];
     if (!file) return;
     setProofFile(file);
+    // Clear the cached compressed preview so the new file is picked up
+    // by Draw Elements / Review (which fall back to this when set).
+    setProofPreviewForReview(null);
 
     // Create preview for images; for PDFs we'll show the filename
     if (file.type.startsWith('image/')) {
@@ -2833,11 +2870,28 @@ function NewQuote({ onCreated, editQuote }: { onCreated: () => void; editQuote?:
             </div>
           </div>
 
+          {/* Splitter — drag to resize the proof tile vs the bottom panel.
+              Hidden when only the compact element-detail panel is open. */}
+          {(calibrationMode || selectedBboxIdx === null) && (
+            <div
+              onMouseDown={(e) => { e.preventDefault(); startResizeBottomPanel(e.clientY); }}
+              onTouchStart={(e) => { if (e.touches[0]) startResizeBottomPanel(e.touches[0].clientY); }}
+              title="Drag to resize"
+              style={{
+                flexShrink: 0, height: '12px', cursor: 'ns-resize', touchAction: 'none',
+                background: theme.card, borderTop: `1px solid ${theme.border}`,
+                display: 'flex', alignItems: 'center', justifyContent: 'center',
+              }}
+            >
+              <div style={{ width: '44px', height: '4px', borderRadius: '2px', background: theme.border }} />
+            </div>
+          )}
+
           {/* Bottom panel — three states: calibration, element detail, or element list */}
           {calibrationMode ? (
             /* ── CALIBRATION PANEL ── */
             <div style={{
-              flexShrink: 0, maxHeight: '50vh', overflow: 'auto',
+              flexShrink: 0, height: `${bottomPanelHeight}px`, overflow: 'auto',
               background: theme.card, borderTop: '3px solid #fbbf24',
               padding: '12px 16px',
             }}>
@@ -3083,7 +3137,7 @@ function NewQuote({ onCreated, editQuote }: { onCreated: () => void; editQuote?:
           })() : (
             /* ── ELEMENT LIST PANEL ── */
             <div style={{
-              flexShrink: 0, maxHeight: '40vh', overflow: 'auto',
+              flexShrink: 0, height: `${bottomPanelHeight}px`, overflow: 'auto',
               background: theme.card, borderTop: `1px solid ${theme.border}`,
               padding: '10px 16px',
             }}>

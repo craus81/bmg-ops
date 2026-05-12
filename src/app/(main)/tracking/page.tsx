@@ -9,7 +9,7 @@ import StatusBadge from '@/components/StatusBadge';
 import AssignmentPicker from '@/components/AssignmentPicker';
 import VehiclePhotoTimeline from '@/components/VehiclePhotoTimeline';
 import { openOrCreateVehicleThread } from '@/lib/customer-thread';
-import type { FleetCheckin, VehicleTrackingStatus, VehicleStatusHistory, VehiclePhoto, GraphicsJob, GraphicsInstallStatus } from '@/lib/types';
+import type { FleetCheckin, VehicleTrackingStatus, VehicleStatusHistory, VehiclePhoto, GraphicsJob, GraphicsInstallStatus, CheckinSalesOrder } from '@/lib/types';
 import { VEHICLE_STATUS_PIPELINE, VEHICLE_STATUS_LABELS, VEHICLE_STATUS_COLORS, GRAPHICS_STATUS_LABELS, GRAPHICS_INSTALL_PIPELINE, GRAPHICS_INSTALL_LABELS, GRAPHICS_INSTALL_COLORS } from '@/lib/types';
 import NetSuitePdf from '@/components/NetSuitePdf';
 import ProofThumbnail from '@/components/ProofThumbnail';
@@ -41,8 +41,15 @@ export default function TrackingPage() {
   const [showArchived, setShowArchived] = useState(false);
   const [deletingId, setDeletingId] = useState<string | null>(null);
   const [archivingId, setArchivingId] = useState<string | null>(null);
+  // All NetSuite sales orders linked to each check-in (keyed by checkin id).
+  // The first one added is also mirrored into FleetCheckin's legacy columns
+  // so other readers — pick list, fleet page, universal search — keep working.
+  const [vehicleSalesOrders, setVehicleSalesOrders] = useState<Record<string, CheckinSalesOrder[]>>({});
   const [vehicleAssignments, setVehicleAssignments] = useState<Record<string, string[]>>({});
   const [assignmentSaving, setAssignmentSaving] = useState(false);
+  // Per-vehicle generation counter for assignment loads. Bumped by saves so
+  // that an in-flight load can detect it's stale and skip overwriting state.
+  const assignmentsLoadGen = useRef<Record<string, number>>({});
 
   // Checklist state
   interface ChecklistTask {
@@ -184,8 +191,24 @@ export default function TrackingPage() {
         setVehicles(data);
       }
       setHasMore(data.length === PAGE_SIZE);
+      loadCheckinSalesOrders(data.map((v: FleetCheckin) => v.id));
     }
     if (append) setLoadingMore(false); else setLoading(false);
+  };
+
+  const loadCheckinSalesOrders = async (checkinIds: string[]) => {
+    if (checkinIds.length === 0) return;
+    const { data } = await supabase
+      .from('fleet_checkin_sales_orders')
+      .select('*')
+      .in('checkin_id', checkinIds)
+      .order('added_at', { ascending: true });
+    if (!data) return;
+    const grouped: Record<string, CheckinSalesOrder[]> = {};
+    for (const row of data as CheckinSalesOrder[]) {
+      (grouped[row.checkin_id] ||= []).push(row);
+    }
+    setVehicleSalesOrders(prev => ({ ...prev, ...grouped }));
   };
 
   const loadProfiles = async () => {
@@ -209,11 +232,17 @@ export default function TrackingPage() {
   };
 
   const loadAssignments = async (vehicleId: string) => {
+    // Bump generation so a concurrent save can invalidate this load. Without
+    // this guard, a load fired on expand can resolve AFTER the user clicks an
+    // installer and clobber the optimistic state with stale DB data.
+    const gen = (assignmentsLoadGen.current[vehicleId] || 0) + 1;
+    assignmentsLoadGen.current[vehicleId] = gen;
     const { data } = await supabase
       .from('job_assignments')
       .select('user_id')
       .eq('job_type', 'scanned_vehicle')
       .eq('job_id', vehicleId);
+    if (assignmentsLoadGen.current[vehicleId] !== gen) return;
     if (data) {
       setVehicleAssignments(prev => ({
         ...prev,
@@ -383,18 +412,73 @@ export default function TrackingPage() {
   const linkSalesOrder = async (vehicleId: string, order: any) => {
     setSoLinking(true);
     try {
-      const { error } = await supabase.from('fleet_checkins').update({
-        netsuite_sales_order_id: order.id,
-        sales_order_number: order.sales_order_number,
-        customer_name: order.customer_name,
-        sales_order_memo: order.memo || null,
-        sales_order_total: order.total || null,
-      }).eq('id', vehicleId);
+      const existing = vehicleSalesOrders[vehicleId] || [];
+      if (existing.some(s => s.netsuite_sales_order_id === order.id)) {
+        setUpdateSuccess('Sales order already linked');
+        setTimeout(() => setUpdateSuccess(null), 2000);
+        setSoSearchOpen(null);
+        setSoSearchTerm('');
+        setSoSearchResults([]);
+        setSoLinking(false);
+        return;
+      }
 
-      if (error) {
-        alert('Failed to link sales order: ' + error.message);
-      } else {
-        // Update local state
+      // Always record the link in the join table so the full list of
+      // SOs on this check-in is preserved.
+      const { data: inserted, error: insertError } = await supabase
+        .from('fleet_checkin_sales_orders')
+        .insert({
+          checkin_id: vehicleId,
+          netsuite_sales_order_id: order.id,
+          sales_order_number: order.sales_order_number,
+          customer_name: order.customer_name,
+          sales_order_memo: order.memo || null,
+          sales_order_total: order.total || null,
+          added_by: user?.id || null,
+        })
+        .select()
+        .single();
+
+      if (insertError) {
+        // 23505 = unique_violation. Happens when the join table already
+        // contains this (checkin, SO) pair — usually because the legacy
+        // primary was backfilled in migration 093 and our in-memory
+        // vehicleSalesOrders cache hadn't caught up yet. Reconcile from
+        // the server instead of treating it as a hard failure.
+        if ((insertError as any).code === '23505') {
+          await loadCheckinSalesOrders([vehicleId]);
+          setSoSearchOpen(null);
+          setSoSearchTerm('');
+          setSoSearchResults([]);
+          setUpdateSuccess('Sales order already linked');
+          setTimeout(() => setUpdateSuccess(null), 2000);
+          setSoLinking(false);
+          return;
+        }
+        alert('Failed to link sales order: ' + insertError.message);
+        setSoLinking(false);
+        return;
+      }
+
+      // Mirror to the legacy single-SO columns only when this is the
+      // first SO — otherwise the existing readers (pick list, search)
+      // would jump to whichever SO was linked last.
+      const isPrimary = existing.length === 0;
+      if (isPrimary) {
+        await supabase.from('fleet_checkins').update({
+          netsuite_sales_order_id: order.id,
+          sales_order_number: order.sales_order_number,
+          customer_name: order.customer_name,
+          sales_order_memo: order.memo || null,
+          sales_order_total: order.total || null,
+        }).eq('id', vehicleId);
+      }
+
+      setVehicleSalesOrders(prev => ({
+        ...prev,
+        [vehicleId]: [...(prev[vehicleId] || []), inserted as CheckinSalesOrder],
+      }));
+      if (isPrimary) {
         setVehicles(prev => prev.map(v =>
           v.id === vehicleId ? {
             ...v,
@@ -405,12 +489,12 @@ export default function TrackingPage() {
             sales_order_total: order.total || null,
           } : v
         ));
-        setSoSearchOpen(null);
-        setSoSearchTerm('');
-        setSoSearchResults([]);
-        setUpdateSuccess('Sales order linked');
-        setTimeout(() => setUpdateSuccess(null), 2000);
       }
+      setSoSearchOpen(null);
+      setSoSearchTerm('');
+      setSoSearchResults([]);
+      setUpdateSuccess('Sales order linked');
+      setTimeout(() => setUpdateSuccess(null), 2000);
     } catch (err) {
       console.error('Link SO error:', err);
       alert('Failed to link sales order');
@@ -418,28 +502,48 @@ export default function TrackingPage() {
     setSoLinking(false);
   };
 
-  const unlinkSalesOrder = async (vehicleId: string) => {
-    if (!confirm('Remove the linked sales order from this vehicle?')) return;
-    const { error } = await supabase.from('fleet_checkins').update({
-      netsuite_sales_order_id: null,
-      sales_order_number: null,
-      sales_order_memo: null,
-      sales_order_total: null,
-    }).eq('id', vehicleId);
+  const unlinkSalesOrder = async (vehicleId: string, soRowId: string) => {
+    const list = vehicleSalesOrders[vehicleId] || [];
+    const target = list.find(s => s.id === soRowId);
+    if (!target) return;
+    if (!confirm(`Remove SO #${target.sales_order_number || target.netsuite_sales_order_id} from this vehicle?`)) return;
 
-    if (!error) {
-      setVehicles(prev => prev.map(v =>
-        v.id === vehicleId ? {
-          ...v,
-          netsuite_sales_order_id: null,
-          sales_order_number: null,
-          sales_order_memo: null,
-          sales_order_total: null,
-        } as any : v
-      ));
-      setUpdateSuccess('Sales order unlinked');
-      setTimeout(() => setUpdateSuccess(null), 2000);
+    const { error } = await supabase
+      .from('fleet_checkin_sales_orders')
+      .delete()
+      .eq('id', soRowId);
+    if (error) {
+      alert('Failed to unlink sales order: ' + error.message);
+      return;
     }
+
+    const remaining = list.filter(s => s.id !== soRowId);
+    setVehicleSalesOrders(prev => ({ ...prev, [vehicleId]: remaining }));
+
+    // If we removed the SO mirrored into the legacy columns, promote the
+    // next oldest (or clear) so single-SO readers stay accurate.
+    const vehicle = vehicles.find(v => v.id === vehicleId);
+    if (vehicle?.netsuite_sales_order_id === target.netsuite_sales_order_id) {
+      const promote = remaining[0];
+      const legacy = promote ? {
+        netsuite_sales_order_id: promote.netsuite_sales_order_id,
+        sales_order_number: promote.sales_order_number,
+        customer_name: promote.customer_name,
+        sales_order_memo: promote.sales_order_memo,
+        sales_order_total: promote.sales_order_total,
+      } : {
+        netsuite_sales_order_id: null,
+        sales_order_number: null,
+        sales_order_memo: null,
+        sales_order_total: null,
+      };
+      await supabase.from('fleet_checkins').update(legacy).eq('id', vehicleId);
+      setVehicles(prev => prev.map(v =>
+        v.id === vehicleId ? { ...v, ...legacy } as any : v
+      ));
+    }
+    setUpdateSuccess('Sales order unlinked');
+    setTimeout(() => setUpdateSuccess(null), 2000);
   };
 
   // ── Dropbox Proof Search ──
@@ -505,6 +609,8 @@ export default function TrackingPage() {
   };
 
   const saveAssignments = async (vehicleId: string, userIds: string[]) => {
+    // Invalidate any in-flight load so it can't overwrite this save.
+    assignmentsLoadGen.current[vehicleId] = (assignmentsLoadGen.current[vehicleId] || 0) + 1;
     setVehicleAssignments(prev => ({ ...prev, [vehicleId]: userIds }));
     setAssignmentSaving(true);
     try {
@@ -1440,105 +1546,121 @@ export default function TrackingPage() {
                       />
                     </div>
 
-                    {/* Sales Order Section */}
-                    {vehicle.netsuite_sales_order_id && vehicle.sales_order_number ? (
-                      <div style={{ marginBottom: '12px' }}>
-                        <NetSuitePdf
-                          type="salesOrder"
-                          recordId={vehicle.netsuite_sales_order_id}
-                          recordNumber={vehicle.sales_order_number}
-                        />
-                        {isAdmin && (
-                          <button
-                            onClick={() => unlinkSalesOrder(vehicle.id)}
-                            style={{
-                              marginTop: '4px', padding: '4px 10px', fontSize: '10px', fontWeight: 600,
-                              background: 'transparent', border: '1px solid var(--border)', borderRadius: '6px',
-                              color: 'var(--text-muted)', cursor: 'pointer',
-                            }}
-                          >Unlink Sales Order</button>
-                        )}
-                      </div>
-                    ) : (
-                      <div style={{ marginBottom: '12px' }}>
-                        {soSearchOpen === vehicle.id ? (
-                          <div style={{
-                            padding: '12px', borderRadius: '10px',
-                            background: 'var(--subtle-bg)', border: '1px solid var(--border)',
-                          }}>
-                            <div style={{ fontSize: '11px', fontWeight: 700, color: 'var(--text-muted)', textTransform: 'uppercase', marginBottom: '6px' }}>
-                              Search NetSuite Sales Orders
+                    {/* Sales Orders — a vehicle may be linked to more than
+                        one NetSuite SO (e.g. upfit billed against several). */}
+                    {(() => {
+                      const linkedSos = vehicleSalesOrders[vehicle.id] || [];
+                      return (
+                        <div style={{ marginBottom: '12px' }}>
+                          {linkedSos.length > 0 && (
+                            <div style={{ display: 'flex', flexDirection: 'column', gap: '6px', marginBottom: '8px' }}>
+                              {linkedSos.map(so => (
+                                <div key={so.id}>
+                                  <NetSuitePdf
+                                    type="salesOrder"
+                                    recordId={so.netsuite_sales_order_id}
+                                    recordNumber={so.sales_order_number || so.netsuite_sales_order_id}
+                                  />
+                                  {isAdmin && (
+                                    <button
+                                      onClick={() => unlinkSalesOrder(vehicle.id, so.id)}
+                                      style={{
+                                        marginTop: '4px', padding: '4px 10px', fontSize: '10px', fontWeight: 600,
+                                        background: 'transparent', border: '1px solid var(--border)', borderRadius: '6px',
+                                        color: 'var(--text-muted)', cursor: 'pointer',
+                                      }}
+                                    >Unlink Sales Order</button>
+                                  )}
+                                </div>
+                              ))}
                             </div>
-                            <div style={{ display: 'flex', gap: '6px', marginBottom: '8px' }}>
-                              <input
-                                value={soSearchTerm}
-                                onChange={(e) => setSoSearchTerm(e.target.value)}
-                                onKeyDown={(e) => { if (e.key === 'Enter') searchSalesOrders(); }}
-                                placeholder="Customer name..."
-                                style={{
-                                  flex: 1, padding: '8px 10px', borderRadius: '8px', fontSize: '13px',
-                                  border: '1px solid var(--border)', background: 'var(--input-bg)',
-                                  color: 'var(--text-primary)',
-                                }}
-                              />
-                              <button
-                                onClick={searchSalesOrders}
-                                disabled={soSearching || !soSearchTerm.trim()}
-                                style={{
-                                  padding: '8px 14px', borderRadius: '8px', fontSize: '12px', fontWeight: 700,
-                                  background: 'var(--navy)', color: '#fff', border: 'none',
-                                  opacity: soSearching || !soSearchTerm.trim() ? 0.5 : 1, cursor: 'pointer',
-                                }}
-                              >{soSearching ? '...' : 'Search'}</button>
-                              <button
-                                onClick={() => { setSoSearchOpen(null); setSoSearchTerm(''); setSoSearchResults([]); }}
-                                style={{
-                                  padding: '8px 10px', borderRadius: '8px', fontSize: '12px', fontWeight: 700,
-                                  background: 'transparent', border: '1px solid var(--border)',
-                                  color: 'var(--text-muted)', cursor: 'pointer',
-                                }}
-                              >Cancel</button>
-                            </div>
-                            {soSearchResults.length > 0 && (
-                              <div style={{ display: 'flex', flexDirection: 'column', gap: '4px', maxHeight: '200px', overflowY: 'auto' }}>
-                                {soSearchResults.map((so: any) => (
-                                  <div
-                                    key={so.id}
-                                    onClick={() => linkSalesOrder(vehicle.id, so)}
-                                    style={{
-                                      padding: '8px 10px', borderRadius: '8px', cursor: 'pointer',
-                                      background: 'var(--card)', border: '1px solid var(--border)',
-                                    }}
-                                  >
-                                    <div style={{ fontSize: '12px', fontWeight: 700, color: 'var(--text-primary)' }}>
-                                      SO #{so.sales_order_number}
-                                    </div>
-                                    <div style={{ fontSize: '11px', color: 'var(--text-secondary)' }}>
-                                      {so.customer_name} · {so.date} · ${so.total?.toLocaleString() || '0'}
-                                    </div>
-                                    {so.memo && (
-                                      <div style={{ fontSize: '10px', color: 'var(--text-muted)', marginTop: '2px' }}>{so.memo}</div>
-                                    )}
-                                  </div>
-                                ))}
+                          )}
+
+                          {soSearchOpen === vehicle.id ? (
+                            <div style={{
+                              padding: '12px', borderRadius: '10px',
+                              background: 'var(--subtle-bg)', border: '1px solid var(--border)',
+                            }}>
+                              <div style={{ fontSize: '11px', fontWeight: 700, color: 'var(--text-muted)', textTransform: 'uppercase', marginBottom: '6px' }}>
+                                Search NetSuite Sales Orders
                               </div>
-                            )}
-                            {soSearching && (
-                              <div style={{ fontSize: '11px', color: 'var(--text-muted)', padding: '8px 0' }}>Searching NetSuite...</div>
-                            )}
-                          </div>
-                        ) : (
-                          <button
-                            onClick={() => setSoSearchOpen(vehicle.id)}
-                            style={{
-                              width: '100%', padding: '10px', borderRadius: '8px', fontSize: '12px', fontWeight: 700,
-                              background: 'rgba(59,130,246,0.08)', border: '1px dashed rgba(59,130,246,0.3)',
-                              color: 'rgb(59,130,246)', cursor: 'pointer',
-                            }}
-                          >+ Link Sales Order</button>
-                        )}
-                      </div>
-                    )}
+                              <div style={{ display: 'flex', gap: '6px', marginBottom: '8px' }}>
+                                <input
+                                  value={soSearchTerm}
+                                  onChange={(e) => setSoSearchTerm(e.target.value)}
+                                  onKeyDown={(e) => { if (e.key === 'Enter') searchSalesOrders(); }}
+                                  placeholder="Customer name..."
+                                  style={{
+                                    flex: 1, padding: '8px 10px', borderRadius: '8px', fontSize: '13px',
+                                    border: '1px solid var(--border)', background: 'var(--input-bg)',
+                                    color: 'var(--text-primary)',
+                                  }}
+                                />
+                                <button
+                                  onClick={searchSalesOrders}
+                                  disabled={soSearching || !soSearchTerm.trim()}
+                                  style={{
+                                    padding: '8px 14px', borderRadius: '8px', fontSize: '12px', fontWeight: 700,
+                                    background: 'var(--navy)', color: '#fff', border: 'none',
+                                    opacity: soSearching || !soSearchTerm.trim() ? 0.5 : 1, cursor: 'pointer',
+                                  }}
+                                >{soSearching ? '...' : 'Search'}</button>
+                                <button
+                                  onClick={() => { setSoSearchOpen(null); setSoSearchTerm(''); setSoSearchResults([]); }}
+                                  style={{
+                                    padding: '8px 10px', borderRadius: '8px', fontSize: '12px', fontWeight: 700,
+                                    background: 'transparent', border: '1px solid var(--border)',
+                                    color: 'var(--text-muted)', cursor: 'pointer',
+                                  }}
+                                >Cancel</button>
+                              </div>
+                              {soSearchResults.length > 0 && (
+                                <div style={{ display: 'flex', flexDirection: 'column', gap: '4px', maxHeight: '200px', overflowY: 'auto' }}>
+                                  {soSearchResults.map((so: any) => {
+                                    const alreadyLinked = linkedSos.some(l => l.netsuite_sales_order_id === so.id);
+                                    return (
+                                      <div
+                                        key={so.id}
+                                        onClick={() => { if (!alreadyLinked) linkSalesOrder(vehicle.id, so); }}
+                                        style={{
+                                          padding: '8px 10px', borderRadius: '8px',
+                                          cursor: alreadyLinked ? 'default' : 'pointer',
+                                          opacity: alreadyLinked ? 0.5 : 1,
+                                          background: 'var(--card)', border: '1px solid var(--border)',
+                                        }}
+                                      >
+                                        <div style={{ fontSize: '12px', fontWeight: 700, color: 'var(--text-primary)' }}>
+                                          SO #{so.sales_order_number}
+                                          {alreadyLinked && <span style={{ marginLeft: '6px', fontSize: '10px', color: 'var(--text-muted)', fontWeight: 600 }}>· already linked</span>}
+                                        </div>
+                                        <div style={{ fontSize: '11px', color: 'var(--text-secondary)' }}>
+                                          {so.customer_name} · {so.date} · ${so.total?.toLocaleString() || '0'}
+                                        </div>
+                                        {so.memo && (
+                                          <div style={{ fontSize: '10px', color: 'var(--text-muted)', marginTop: '2px' }}>{so.memo}</div>
+                                        )}
+                                      </div>
+                                    );
+                                  })}
+                                </div>
+                              )}
+                              {soSearching && (
+                                <div style={{ fontSize: '11px', color: 'var(--text-muted)', padding: '8px 0' }}>Searching NetSuite...</div>
+                              )}
+                            </div>
+                          ) : (
+                            <button
+                              onClick={() => setSoSearchOpen(vehicle.id)}
+                              style={{
+                                width: '100%', padding: '10px', borderRadius: '8px', fontSize: '12px', fontWeight: 700,
+                                background: 'rgba(59,130,246,0.08)', border: '1px dashed rgba(59,130,246,0.3)',
+                                color: 'rgb(59,130,246)', cursor: 'pointer',
+                              }}
+                            >+ {linkedSos.length > 0 ? 'Add Another Sales Order' : 'Link Sales Order'}</button>
+                          )}
+                        </div>
+                      );
+                    })()}
 
                     {/* Proof File (Dropbox) */}
                     <div style={{ marginBottom: '12px' }}>
