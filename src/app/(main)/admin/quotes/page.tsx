@@ -829,6 +829,7 @@ function NewQuote({ onCreated, editQuote }: { onCreated: () => void; editQuote?:
       const file = new File([blob], `library-proof.${ext}`, { type: blob.type });
       setProofFile(file);
       setProofPreview(proof.url);
+      setProofPreviewForReview(null);
     } catch {
       alert('Could not load proof image');
     }
@@ -1716,6 +1717,9 @@ function NewQuote({ onCreated, editQuote }: { onCreated: () => void; editQuote?:
     const file = e.target.files?.[0];
     if (!file) return;
     setProofFile(file);
+    // Clear the cached compressed preview so the new file is picked up
+    // by Draw Elements / Review (which fall back to this when set).
+    setProofPreviewForReview(null);
 
     // Create preview for images; for PDFs we'll show the filename
     if (file.type.startsWith('image/')) {
