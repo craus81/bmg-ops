@@ -150,6 +150,9 @@ export default function GraphicsPage() {
 
   // Job assignments
   const [jobAssignments, setJobAssignments] = useState<Record<string, string[]>>({});
+  // Per-job generation counter for assignment loads. Bumped by saves so that
+  // an in-flight load can detect it's stale and skip overwriting state.
+  const assignmentsLoadGen = useRef<Record<string, number>>({});
 
   // Job views — record of who has opened each job (read receipts).
   // Loaded eagerly for all jobs so the collapsed cards can show "seen by".
@@ -312,11 +315,17 @@ export default function GraphicsPage() {
   };
 
   const loadJobAssignments = async (jobId: string) => {
+    // Bump generation so a concurrent save can invalidate this load. Without
+    // this guard, a load fired on expand/edit can resolve AFTER the user
+    // clicks a name and clobber the optimistic state with stale DB data.
+    const gen = (assignmentsLoadGen.current[jobId] || 0) + 1;
+    assignmentsLoadGen.current[jobId] = gen;
     const { data } = await supabase
       .from('job_assignments')
       .select('user_id')
       .eq('job_type', 'graphics_job')
       .eq('job_id', jobId);
+    if (assignmentsLoadGen.current[jobId] !== gen) return;
     if (data) {
       setJobAssignments(prev => ({
         ...prev,
@@ -394,6 +403,8 @@ export default function GraphicsPage() {
   };
 
   const saveJobAssignments = async (jobId: string, userIds: string[], jobTitle?: string) => {
+    // Invalidate any in-flight load so it can't overwrite this save.
+    assignmentsLoadGen.current[jobId] = (assignmentsLoadGen.current[jobId] || 0) + 1;
     const prev = jobAssignments[jobId] || [];
     setJobAssignments(p => ({ ...p, [jobId]: userIds }));
     try {

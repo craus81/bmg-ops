@@ -43,6 +43,9 @@ export default function TrackingPage() {
   const [archivingId, setArchivingId] = useState<string | null>(null);
   const [vehicleAssignments, setVehicleAssignments] = useState<Record<string, string[]>>({});
   const [assignmentSaving, setAssignmentSaving] = useState(false);
+  // Per-vehicle generation counter for assignment loads. Bumped by saves so
+  // that an in-flight load can detect it's stale and skip overwriting state.
+  const assignmentsLoadGen = useRef<Record<string, number>>({});
 
   // Checklist state
   interface ChecklistTask {
@@ -209,11 +212,17 @@ export default function TrackingPage() {
   };
 
   const loadAssignments = async (vehicleId: string) => {
+    // Bump generation so a concurrent save can invalidate this load. Without
+    // this guard, a load fired on expand can resolve AFTER the user clicks an
+    // installer and clobber the optimistic state with stale DB data.
+    const gen = (assignmentsLoadGen.current[vehicleId] || 0) + 1;
+    assignmentsLoadGen.current[vehicleId] = gen;
     const { data } = await supabase
       .from('job_assignments')
       .select('user_id')
       .eq('job_type', 'scanned_vehicle')
       .eq('job_id', vehicleId);
+    if (assignmentsLoadGen.current[vehicleId] !== gen) return;
     if (data) {
       setVehicleAssignments(prev => ({
         ...prev,
@@ -505,6 +514,8 @@ export default function TrackingPage() {
   };
 
   const saveAssignments = async (vehicleId: string, userIds: string[]) => {
+    // Invalidate any in-flight load so it can't overwrite this save.
+    assignmentsLoadGen.current[vehicleId] = (assignmentsLoadGen.current[vehicleId] || 0) + 1;
     setVehicleAssignments(prev => ({ ...prev, [vehicleId]: userIds }));
     setAssignmentSaving(true);
     try {
