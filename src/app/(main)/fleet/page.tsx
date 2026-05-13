@@ -86,6 +86,7 @@ export default function FleetPage() {
 
   // Final
   const [saving, setSaving] = useState(false);
+  const [saveError, setSaveError] = useState<string | null>(null);
   const [saved, setSaved] = useState(false);
   const [savedCheckin, setSavedCheckin] = useState<FleetCheckin | null>(null);
   const [notes, setNotes] = useState('');
@@ -349,8 +350,17 @@ export default function FleetPage() {
 
   // ─── Save Check-In ────────────────────────────────────────
   const handleSave = async () => {
-    if (!vehicleData || !user) return;
+    setSaveError(null);
+    if (!vehicleData) {
+      setSaveError('No vehicle data loaded — go back and re-enter the VIN.');
+      return;
+    }
+    if (!user) {
+      setSaveError('You appear to be signed out. Please refresh and sign in again.');
+      return;
+    }
     setSaving(true);
+    try {
 
     // Snapshot install context (T1.6) from the originating estimate if
     // one is linked to this sales order. Falls back to customers.delivery_instructions
@@ -453,7 +463,8 @@ export default function FleetPage() {
       .single();
 
     if (error) {
-      setVinError('Failed to save: ' + error.message);
+      console.error('[fleet check-in] insert failed:', error);
+      setSaveError(`Failed to save check-in: ${error.message || 'Unknown error'}${error.code ? ` (${error.code})` : ''}`);
       setSaving(false);
       return;
     }
@@ -525,6 +536,11 @@ export default function FleetPage() {
     setSaved(true);
     setSaving(false);
     loadRecentCheckins();
+    } catch (e: any) {
+      console.error('[fleet check-in] unexpected error during save:', e);
+      setSaveError(`Unexpected error: ${e?.message || String(e)}`);
+      setSaving(false);
+    }
   };
 
   // ─── Reset ────────────────────────────────────────────────
@@ -532,6 +548,7 @@ export default function FleetPage() {
     setStep(0);
     setVin('');
     setVinError('');
+    setSaveError(null);
     setVehicleData(null);
     setCustomerSearch('');
     setSalesOrders([]);
@@ -560,6 +577,7 @@ export default function FleetPage() {
     setStep(0);
     setVin('');
     setVinError('');
+    setSaveError(null);
     setVehicleData(null);
     setDuplicateVehicle(null);
     setPartialVinMatches([]);
@@ -1526,12 +1544,22 @@ export default function FleetPage() {
 
         {/* Actions */}
         <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
+          {saveError && (
+            <div style={{
+              padding: '10px 12px', borderRadius: '10px',
+              background: theme.errorBg, border: `1px solid ${theme.errorBorder}`,
+              color: theme.error, fontSize: '12px', fontWeight: 600,
+              whiteSpace: 'pre-wrap',
+            }}>
+              {saveError}
+            </div>
+          )}
           <button onClick={handleSave} disabled={saving} style={{
             width: '100%', padding: '16px', borderRadius: '14px',
             background: theme.success, color: '#fff', fontSize: '16px', fontWeight: 800,
             border: 'none', opacity: saving ? 0.5 : 1,
           }}>{saving ? 'Saving...' : 'Complete Check-In'}</button>
-          <button onClick={() => setStep(1)} style={{
+          <button onClick={() => { setSaveError(null); setStep(1); }} style={{
             width: '100%', padding: '10px', borderRadius: '14px',
             border: `1px solid ${theme.border}`, background: 'transparent',
             color: theme.textSecondary, fontSize: '13px', fontWeight: 700,
