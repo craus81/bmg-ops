@@ -5,11 +5,11 @@ import { theme } from '@/lib/theme';
 import WidgetShell from './WidgetShell';
 
 const ACTIONS = [
-  { label: 'Jobs & Bills', path: '/jobs', desc: 'Review jobs' },
+  { label: 'Graphics', path: '/graphics', desc: 'Active jobs' },
   { label: 'Scheduler', path: '/admin/schedule', desc: 'Assign work' },
   { label: 'Photo Reviews', path: '/admin/reviews', desc: 'Approve photos' },
   { label: 'CNI Dashboard', path: '/admin/cni', desc: 'Installer program' },
-  { label: 'Customers', path: '/admin/customers', desc: 'Customer directory' },
+  { label: 'Prospects', path: '/admin/prospects', desc: 'CRM & customers' },
   { label: 'Purchase Orders', path: '/admin/pos', desc: 'Import & manage POs' },
   { label: 'Scan Log', path: '/admin/scans', desc: 'Export & invoice' },
 ];

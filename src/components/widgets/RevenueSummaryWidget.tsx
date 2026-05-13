@@ -1,15 +1,17 @@
 'use client';
 
 import { useState, useEffect } from 'react';
+import { useRouter } from 'next/navigation';
 import { createClient } from '@/lib/supabase-browser';
 import { theme } from '@/lib/theme';
 import WidgetShell from './WidgetShell';
 
 export default function RevenueSummaryWidget() {
+  const router = useRouter();
   const supabase = createClient();
   const [loading, setLoading] = useState(true);
   const [stats, setStats] = useState({
-    paidTotal: 0, paidCount: 0,
+    invoicedTotal: 0, invoicedCount: 0,
     thisMonth: 0, lastMonth: 0,
     pendingCount: 0,
   });
@@ -18,27 +20,40 @@ export default function RevenueSummaryWidget() {
   useEffect(() => { load(); }, []);
 
   const load = async () => {
-    const { data: invoices } = await supabase
-      .from('invoices')
-      .select('id, status, payment_amount, paid_at');
+    const yearStart = new Date(new Date().getFullYear(), 0, 1).toISOString();
+    const { data: jobs } = await supabase
+      .from('graphics_jobs')
+      .select('id, status, invoice_amount, invoiced_at')
+      .gte('invoiced_at', yearStart);
 
-    const paid = (invoices || []).filter((i: any) => i.status === 'paid');
-    const pending = (invoices || []).filter((i: any) => i.status === 'pending');
-    const paidTotal = paid.reduce((s: any, i: any) => s + (i.payment_amount || 0), 0);
+    const invoiced = (jobs || []).filter((j: any) => j.invoiced_at);
+    const invoicedTotal = invoiced.reduce((s: number, j: any) => s + (Number(j.invoice_amount) || 0), 0);
+
+    const { count: pendingCount } = await supabase
+      .from('graphics_jobs')
+      .select('*', { count: 'exact', head: true })
+      .in('status', ['ready', 'shipped'])
+      .is('invoiced_at', null);
 
     const now = new Date();
-    const monthStart = new Date(now.getFullYear(), now.getMonth(), 1).toISOString();
-    const lastMonthStart = new Date(now.getFullYear(), now.getMonth() - 1, 1).toISOString();
-    const lastMonthEnd = new Date(now.getFullYear(), now.getMonth(), 0, 23, 59, 59).toISOString();
+    const monthStart = new Date(now.getFullYear(), now.getMonth(), 1);
+    const lastMonthStart = new Date(now.getFullYear(), now.getMonth() - 1, 1);
+    const lastMonthEnd = new Date(now.getFullYear(), now.getMonth(), 0, 23, 59, 59);
 
-    const thisMonth = paid
-      .filter((i: any) => i.paid_at && new Date(i.paid_at) >= new Date(monthStart))
-      .reduce((s: any, i: any) => s + (i.payment_amount || 0), 0);
-    const lastMonth = paid
-      .filter((i: any) => i.paid_at && new Date(i.paid_at) >= new Date(lastMonthStart) && new Date(i.paid_at) <= new Date(lastMonthEnd))
-      .reduce((s: any, i: any) => s + (i.payment_amount || 0), 0);
+    const thisMonth = invoiced
+      .filter((j: any) => new Date(j.invoiced_at) >= monthStart)
+      .reduce((s: number, j: any) => s + (Number(j.invoice_amount) || 0), 0);
+    const lastMonth = invoiced
+      .filter((j: any) => new Date(j.invoiced_at) >= lastMonthStart && new Date(j.invoiced_at) <= lastMonthEnd)
+      .reduce((s: number, j: any) => s + (Number(j.invoice_amount) || 0), 0);
 
-    setStats({ paidTotal, paidCount: paid.length, thisMonth, lastMonth, pendingCount: pending.length });
+    setStats({
+      invoicedTotal,
+      invoicedCount: invoiced.length,
+      thisMonth,
+      lastMonth,
+      pendingCount: pendingCount || 0,
+    });
     setLoading(false);
   };
 
@@ -51,13 +66,13 @@ export default function RevenueSummaryWidget() {
     : 0;
 
   return (
-    <WidgetShell title="Revenue Summary" icon="" loading={loading} accentColor="var(--success)">
+    <WidgetShell title="Revenue Summary" icon="" loading={loading} accentColor="var(--success)" onHeaderClick={() => router.push('/admin/reports')}>
       <div>
         <div style={{ fontSize: '28px', fontWeight: 800, color: theme.textPrimary, letterSpacing: '-1px' }}>
-          {fmt(stats.paidTotal)}
+          {fmt(stats.invoicedTotal)}
         </div>
         <div style={{ fontSize: '11px', color: theme.textMuted, marginTop: '2px' }}>
-          {stats.paidCount} paid &bull; {stats.pendingCount} pending
+          {stats.invoicedCount} invoiced YTD &bull; {stats.pendingCount} awaiting invoice
         </div>
 
         <div style={{ marginTop: '12px', display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '8px' }}>

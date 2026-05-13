@@ -77,7 +77,7 @@ export default function InShopTrackingWidget() {
               const statusColor = STATUS_COLORS[item.status]?.text || 'var(--text-muted)';
               const statusLabel = STATUS_LABELS[item.status] || item.status;
               return (
-                <button key={item.id} onClick={() => router.push('/tracking')} style={{
+                <button key={item.id} onClick={() => router.push(`/tracking?vehicle=${item.id}`)} style={{
                   display: 'flex', justifyContent: 'space-between', alignItems: 'center', width: '100%',
                   padding: '6px 8px', borderRadius: '6px', border: 'none', textAlign: 'left',
                   background: 'var(--subtle-bg)', cursor: 'pointer', fontSize: '11px',

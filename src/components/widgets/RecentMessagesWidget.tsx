@@ -51,7 +51,7 @@ export default function RecentMessagesWidget() {
       ) : (
         <div style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
           {messages.map(m => (
-            <button key={m.id} onClick={() => router.push('/messages')} style={{
+            <button key={m.id} onClick={() => router.push(m.conversation_id ? `/messages?conversation=${m.conversation_id}` : '/messages')} style={{
               display: 'flex', gap: '8px', alignItems: 'start', width: '100%',
               padding: '6px 8px', borderRadius: '6px', border: 'none', textAlign: 'left',
               background: 'var(--subtle-bg)', cursor: 'pointer',

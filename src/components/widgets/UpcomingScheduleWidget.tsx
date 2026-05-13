@@ -125,9 +125,9 @@ export default function UpcomingScheduleWidget() {
       ) : (
         <div style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
           {items.map(item => (
-            <button key={item.id} onClick={() => {
-              if (item.type === 'graphics') router.push('/graphics');
-              else if (item.type === 'upfit') router.push('/tracking');
+            <button key={`${item.type}-${item.id}`} onClick={() => {
+              if (item.type === 'graphics') router.push(`/graphics?id=${item.id}`);
+              else if (item.type === 'upfit') router.push(`/tracking?vehicle=${item.id}`);
               else if (item.type === 'cni') router.push(`/admin/cni/jobs/${item.id}`);
               else router.push('/admin/schedule');
             }} style={{

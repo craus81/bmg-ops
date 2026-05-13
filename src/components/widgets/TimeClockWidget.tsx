@@ -1,11 +1,13 @@
 'use client';
 
 import { useState, useEffect } from 'react';
+import { useRouter } from 'next/navigation';
 import { createClient } from '@/lib/supabase-browser';
 import { theme } from '@/lib/theme';
 import WidgetShell from './WidgetShell';
 
 export default function TimeClockWidget() {
+  const router = useRouter();
   const supabase = createClient();
   const [loading, setLoading] = useState(true);
   const [clockedIn, setClockedIn] = useState<{ name: string; since: string }[]>([]);
@@ -37,7 +39,7 @@ export default function TimeClockWidget() {
   const formatTime = (d: string) => new Date(d).toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit' });
 
   return (
-    <WidgetShell title="Time Clock" icon="" loading={loading}>
+    <WidgetShell title="Time Clock" icon="" loading={loading} onHeaderClick={() => router.push('/time')}>
       <div>
         <div style={{ fontSize: '28px', fontWeight: 800, color: clockedIn.length > 0 ? 'var(--success)' : theme.textMuted, letterSpacing: '-1px' }}>
           {clockedIn.length}

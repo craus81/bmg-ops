@@ -18,22 +18,33 @@ export default function NeedsAttentionWidget() {
   const load = async () => {
     const results: { label: string; count: number; color: string; path: string }[] = [];
 
-    // Pending invoices
-    const { count: pendingInvoices } = await supabase
-      .from('invoices')
+    // Scanned vehicle photos submitted for review and still pending
+    const { count: pendingReviews } = await supabase
+      .from('scanned_vehicles')
       .select('*', { count: 'exact', head: true })
-      .eq('status', 'pending');
-    if ((pendingInvoices || 0) > 0) {
-      results.push({ label: 'Invoices to Review', count: pendingInvoices || 0, color: 'var(--warning)', path: '/jobs' });
+      .eq('submitted_for_review', true)
+      .eq('review_status', 'pending');
+    if ((pendingReviews || 0) > 0) {
+      results.push({ label: 'Photos to Review', count: pendingReviews || 0, color: 'var(--warning)', path: '/admin/reviews' });
     }
 
-    // Unpaid approved invoices
-    const { count: unpaidInvoices } = await supabase
-      .from('invoices')
+    // Graphics jobs just received — need triage / production assignment
+    const { count: gfxReceived } = await supabase
+      .from('graphics_jobs')
       .select('*', { count: 'exact', head: true })
-      .eq('status', 'approved');
-    if ((unpaidInvoices || 0) > 0) {
-      results.push({ label: 'Awaiting Payment', count: unpaidInvoices || 0, color: 'var(--orange)', path: '/jobs' });
+      .eq('status', 'received');
+    if ((gfxReceived || 0) > 0) {
+      results.push({ label: 'New Graphics Jobs', count: gfxReceived || 0, color: 'var(--navy-light)', path: '/graphics' });
+    }
+
+    // Fleet check-ins invoiced but not yet paid
+    const { count: unpaid } = await supabase
+      .from('fleet_checkins')
+      .select('*', { count: 'exact', head: true })
+      .not('invoice_number', 'is', null)
+      .eq('is_paid', false);
+    if ((unpaid || 0) > 0) {
+      results.push({ label: 'Awaiting Payment', count: unpaid || 0, color: 'var(--orange)', path: '/tracking' });
     }
 
     // CNI pending photos (if table exists)
@@ -47,7 +58,7 @@ export default function NeedsAttentionWidget() {
       }
     } catch {}
 
-    // CNI pending invoices
+    // CNI submitted invoices waiting on coordinator approval
     try {
       const { count: cniInvoices } = await supabase
         .from('cni_jobs')
