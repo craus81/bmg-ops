@@ -1,35 +1,23 @@
 'use client';
 
-import { useState, useEffect, useCallback, lazy, Suspense } from 'react';
+import { useState, useEffect, useCallback, useRef, lazy, Suspense } from 'react';
 import {
   ResponsiveGridLayout as RGL,
   useContainerWidth,
   verticalCompactor,
   type LayoutItem,
   type Layout,
-  type ResponsiveLayouts,
 } from 'react-grid-layout';
 import { createClient } from '@/lib/supabase-browser';
 import { useAuth } from '@/components/AuthProvider';
 import { theme } from '@/lib/theme';
-import { WIDGET_REGISTRY, WIDGET_MAP, DEFAULT_WIDGET_IDS, generateDefaultLayout } from './widgetRegistry';
-
-// Generate a mobile layout from widget IDs: 2-column grid, each widget 1 col wide, taller
-function generateMobileLayout(widgetIds: string[]): LayoutItem[] {
-  let x = 0;
-  let y = 0;
-  let rowMaxH = 0;
-  return widgetIds.map(id => {
-    const def = WIDGET_MAP[id];
-    if (!def) return null;
-    const h = Math.max((def.defaultH || 2) + 1, def.minH || 1);
-    if (x >= 2) { x = 0; y += rowMaxH; rowMaxH = 0; }
-    const item: LayoutItem = { i: id, x, y, w: 1, h, minW: 1, minH: def.minH, maxH: def.maxH };
-    rowMaxH = Math.max(rowMaxH, h);
-    x += 1;
-    return item;
-  }).filter(Boolean) as LayoutItem[];
-}
+import {
+  WIDGET_REGISTRY,
+  WIDGET_MAP,
+  DEFAULT_WIDGET_IDS,
+  generateDefaultLayout,
+  generateMobileDefaultLayout,
+} from './widgetRegistry';
 
 // Lazy-load widgets so the grid renders fast
 const OpenPOsWidget = lazy(() => import('./OpenPOsWidget'));
@@ -89,6 +77,7 @@ const WIDGET_COMPONENTS: Record<string, React.LazyExoticComponent<any>> = {
 };
 
 const ROW_HEIGHT = 90;
+const MOBILE_BREAKPOINT = 600;
 
 function WidgetLoader() {
   return (
@@ -105,18 +94,38 @@ function WidgetLoader() {
   );
 }
 
+// Reattach min/max constraints from registry onto a stored layout entry
+function enrich(layoutArr: LayoutItem[], mobile: boolean): LayoutItem[] {
+  return layoutArr.map((l) => {
+    const def = WIDGET_MAP[l.i];
+    if (!def) return l;
+    return {
+      ...l,
+      minW: (mobile ? def.minMobileW : def.minW) ?? def.minW,
+      minH: (mobile ? def.minMobileH : def.minH) ?? def.minH,
+      maxW: def.maxW,
+      maxH: def.maxH,
+    };
+  });
+}
+
 export default function DashboardGrid() {
   const { user } = useAuth();
   const supabase = createClient();
-  const { width, containerRef, mounted } = useContainerWidth();
+  const { width, containerRef } = useContainerWidth();
   const [activeWidgets, setActiveWidgets] = useState<string[]>(DEFAULT_WIDGET_IDS);
   const [lgLayout, setLgLayout] = useState<LayoutItem[]>(generateDefaultLayout(DEFAULT_WIDGET_IDS) as LayoutItem[]);
+  const [smLayout, setSmLayout] = useState<LayoutItem[]>(generateMobileDefaultLayout(DEFAULT_WIDGET_IDS) as LayoutItem[]);
   const [isEditing, setIsEditing] = useState(false);
   const [showPicker, setShowPicker] = useState(false);
   const [loaded, setLoaded] = useState(false);
   const [saving, setSaving] = useState(false);
 
-  // Load saved layout on mount
+  const isMobile = (width || 0) < MOBILE_BREAKPOINT;
+  // Keep latest values available to async save callbacks without rebinding them
+  const stateRef = useRef({ activeWidgets, lgLayout, smLayout, isMobile });
+  stateRef.current = { activeWidgets, lgLayout, smLayout, isMobile };
+
   useEffect(() => {
     if (!user?.id) return;
     loadLayout();
@@ -132,31 +141,41 @@ export default function DashboardGrid() {
 
     if (data) {
       const widgets = (data.widgets || []) as string[];
-      const layout = (data.layout || []) as LayoutItem[];
       const validWidgets = widgets.filter((id: string) => WIDGET_MAP[id]);
+      const raw = data.layout;
+
+      // Two stored shapes: legacy `LayoutItem[]` (lg only) or `{ lg, sm }`
+      let storedLg: LayoutItem[] = [];
+      let storedSm: LayoutItem[] = [];
+      if (Array.isArray(raw)) {
+        storedLg = raw as LayoutItem[];
+      } else if (raw && typeof raw === 'object') {
+        storedLg = (raw.lg || []) as LayoutItem[];
+        storedSm = (raw.sm || []) as LayoutItem[];
+      }
+
       if (validWidgets.length > 0) {
         setActiveWidgets(validWidgets);
-        const enriched: LayoutItem[] = layout
-          .filter((l: LayoutItem) => validWidgets.includes(l.i))
-          .map((l: LayoutItem) => {
-            const def = WIDGET_MAP[l.i];
-            return { ...l, minW: def?.minW, minH: def?.minH, maxW: def?.maxW, maxH: def?.maxH };
-          });
-        setLgLayout(enriched);
+        const lgFiltered = storedLg.filter((l) => validWidgets.includes(l.i));
+        setLgLayout(enrich(lgFiltered.length > 0 ? lgFiltered : (generateDefaultLayout(validWidgets) as LayoutItem[]), false));
+
+        const smFiltered = storedSm.filter((l) => validWidgets.includes(l.i));
+        setSmLayout(enrich(smFiltered.length > 0 ? smFiltered : (generateMobileDefaultLayout(validWidgets) as LayoutItem[]), true));
       }
     }
     setLoaded(true);
   };
 
-  const saveLayout = useCallback(async (widgetIds: string[], layoutArr: readonly LayoutItem[]) => {
+  const saveLayout = useCallback(async (widgetIds: string[], lg: readonly LayoutItem[], sm: readonly LayoutItem[]) => {
     if (!user?.id) return;
     setSaving(true);
-    const clean = layoutArr.map((l) => ({ i: l.i, x: l.x, y: l.y, w: l.w, h: l.h }));
+    const cleanLg = lg.map((l) => ({ i: l.i, x: l.x, y: l.y, w: l.w, h: l.h }));
+    const cleanSm = sm.map((l) => ({ i: l.i, x: l.x, y: l.y, w: l.w, h: l.h }));
     await supabase
       .from('dashboard_layouts')
       .upsert({
         user_id: user.id,
-        layout: clean,
+        layout: { lg: cleanLg, sm: cleanSm },
         widgets: widgetIds,
         updated_at: new Date().toISOString(),
       }, { onConflict: 'user_id' });
@@ -165,8 +184,9 @@ export default function DashboardGrid() {
   }, [user?.id]);
 
   const handleLayoutChange = useCallback((newLayout: Layout) => {
-    // Layout is readonly LayoutItem[], need to copy for state
-    setLgLayout([...newLayout]);
+    const copy = [...newLayout];
+    if (stateRef.current.isMobile) setSmLayout(copy);
+    else setLgLayout(copy);
   }, []);
 
   const toggleWidget = (widgetId: string) => {
@@ -174,16 +194,28 @@ export default function DashboardGrid() {
       if (prev.includes(widgetId)) {
         const next = prev.filter(id => id !== widgetId);
         setLgLayout(old => old.filter((l) => l.i !== widgetId));
+        setSmLayout(old => old.filter((l) => l.i !== widgetId));
         return next;
       } else {
         const def = WIDGET_MAP[widgetId];
         if (!def) return prev;
-        const maxY = lgLayout.reduce((max: number, l) => Math.max(max, l.y + l.h), 0);
-        const newItem: LayoutItem = {
-          i: widgetId, x: 0, y: maxY, w: def.defaultW, h: def.defaultH,
+        const lgMaxY = lgLayout.reduce((m, l) => Math.max(m, l.y + l.h), 0);
+        const lgItem: LayoutItem = {
+          i: widgetId, x: 0, y: lgMaxY, w: def.defaultW, h: def.defaultH,
           minW: def.minW, minH: def.minH, maxW: def.maxW, maxH: def.maxH,
         };
-        setLgLayout(old => [...old, newItem]);
+        setLgLayout(old => [...old, lgItem]);
+
+        const smMaxY = smLayout.reduce((m, l) => Math.max(m, l.y + l.h), 0);
+        const smItem: LayoutItem = {
+          i: widgetId, x: 0, y: smMaxY,
+          w: def.defaultMobileW ?? def.defaultW,
+          h: def.defaultMobileH ?? def.defaultH,
+          minW: def.minMobileW ?? def.minW,
+          minH: def.minMobileH ?? def.minH,
+          maxW: def.maxW, maxH: def.maxH,
+        };
+        setSmLayout(old => [...old, smItem]);
         return [...prev, widgetId];
       }
     });
@@ -192,19 +224,24 @@ export default function DashboardGrid() {
   const handleDoneEditing = () => {
     setIsEditing(false);
     setShowPicker(false);
-    saveLayout(activeWidgets, lgLayout);
+    saveLayout(activeWidgets, lgLayout, smLayout);
   };
 
   const handleDragStop = useCallback((...args: unknown[]) => {
-    // In v2, onDragStop passes (layout, oldItem, newItem, placeholder, e, element)
     const layout = args[0] as Layout;
-    setTimeout(() => { saveLayout(activeWidgets, layout); }, 100);
-  }, [activeWidgets, saveLayout]);
+    const s = stateRef.current;
+    const nextLg = s.isMobile ? s.lgLayout : [...layout];
+    const nextSm = s.isMobile ? [...layout] : s.smLayout;
+    setTimeout(() => { saveLayout(s.activeWidgets, nextLg, nextSm); }, 100);
+  }, [saveLayout]);
 
   const handleResizeStop = useCallback((...args: unknown[]) => {
     const layout = args[0] as Layout;
-    setTimeout(() => { saveLayout(activeWidgets, layout); }, 100);
-  }, [activeWidgets, saveLayout]);
+    const s = stateRef.current;
+    const nextLg = s.isMobile ? s.lgLayout : [...layout];
+    const nextSm = s.isMobile ? [...layout] : s.smLayout;
+    setTimeout(() => { saveLayout(s.activeWidgets, nextLg, nextSm); }, 100);
+  }, [saveLayout]);
 
   if (!loaded) {
     return (
@@ -294,7 +331,9 @@ export default function DashboardGrid() {
           background: 'var(--warning-bg)', border: '1px solid var(--warning-border)',
           borderRadius: '8px',
         }}>
-          Drag widgets to rearrange &bull; Resize from bottom-right corner
+          {isMobile
+            ? 'Drag to rearrange · Resize from bottom-right · Mobile layout saves separately'
+            : 'Drag widgets to rearrange · Resize from bottom-right corner'}
         </div>
       )}
 
@@ -314,9 +353,9 @@ export default function DashboardGrid() {
         <RGL
           className="dashboard-grid"
           width={Math.max((width || 400), 300)}
-          layouts={{ lg: lgLayout, sm: generateMobileLayout(activeWidgets) }}
-          breakpoints={{ lg: 600, sm: 0 }}
-          cols={{ lg: 4, sm: 2 }}
+          layouts={{ lg: lgLayout, sm: smLayout }}
+          breakpoints={{ lg: MOBILE_BREAKPOINT, sm: 0 }}
+          cols={{ lg: 4, sm: 4 }}
           rowHeight={ROW_HEIGHT}
           dragConfig={{ enabled: isEditing, handle: '.widget-drag-handle' }}
           resizeConfig={{ enabled: isEditing }}
