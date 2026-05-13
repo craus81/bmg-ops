@@ -80,7 +80,16 @@ export async function GET(req: NextRequest) {
       }
     }
 
-    // Fetch all-time spend data per customer
+    // Fetch all-time billed revenue per customer.
+    //
+    // We sum CustInvc + CashSale (actual money billed) rather than SalesOrd
+    // (a sales order is just a promise to bill). Direct-invoice flows —
+    // e.g. the graphics-only invoice path from migration 082, or any
+    // customer whose work was billed without a parent SO — were invisible
+    // when this query only counted SalesOrd, which is why Air Dynamics
+    // (and others) showed $0 spend despite having real invoices on file.
+    // CustCred (credit memos) are intentionally excluded for now; refine
+    // later if we want net-of-credits revenue.
     const allTimeQuery = `
       SELECT
         t.entity AS customer_id,
@@ -88,32 +97,32 @@ export async function GET(req: NextRequest) {
         SUM(t.foreigntotal) AS total_spend,
         MAX(t.trandate) AS last_order_date
       FROM transaction t
-      WHERE t.type = 'SalesOrd'
+      WHERE t.type IN ('CustInvc', 'CashSale')
         AND t.entity IS NOT NULL
       GROUP BY t.entity
     `;
 
-    // Fetch YTD spend
+    // Fetch YTD billed revenue
     const ytdQuery = `
       SELECT
         t.entity AS customer_id,
         COUNT(t.id) AS order_count,
         SUM(t.foreigntotal) AS total_spend
       FROM transaction t
-      WHERE t.type = 'SalesOrd'
+      WHERE t.type IN ('CustInvc', 'CashSale')
         AND t.entity IS NOT NULL
         AND EXTRACT(YEAR FROM t.trandate) = ${currentYear}
       GROUP BY t.entity
     `;
 
-    // Fetch last year spend
+    // Fetch last year billed revenue
     const lastYearQuery = `
       SELECT
         t.entity AS customer_id,
         COUNT(t.id) AS order_count,
         SUM(t.foreigntotal) AS total_spend
       FROM transaction t
-      WHERE t.type = 'SalesOrd'
+      WHERE t.type IN ('CustInvc', 'CashSale')
         AND t.entity IS NOT NULL
         AND EXTRACT(YEAR FROM t.trandate) = ${lastYear}
       GROUP BY t.entity

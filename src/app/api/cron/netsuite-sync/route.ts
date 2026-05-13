@@ -95,10 +95,13 @@ export async function GET(req: NextRequest) {
     if (nsCustomers.length > 0) {
       try {
         const custIds = nsCustomers.map((c: any) => c.id).join(',');
+        // Count billed revenue (CustInvc + CashSale), not sales orders. SO
+        // totals miss direct-invoice flows (graphics-only billing, ad-hoc
+        // invoices) — see /api/netsuite/customers for the full rationale.
         const [allTime, ytd, ly] = await Promise.all([
-          suiteqlQueryAll(`SELECT t.entity AS cid, COUNT(t.id) AS cnt, SUM(t.foreigntotal) AS spend, MAX(t.trandate) AS lastdate FROM transaction t WHERE t.type='SalesOrd' AND t.entity IN (${custIds}) GROUP BY t.entity`),
-          suiteqlQueryAll(`SELECT t.entity AS cid, COUNT(t.id) AS cnt, SUM(t.foreigntotal) AS spend FROM transaction t WHERE t.type='SalesOrd' AND t.entity IN (${custIds}) AND EXTRACT(YEAR FROM t.trandate)=${currentYear} GROUP BY t.entity`),
-          suiteqlQueryAll(`SELECT t.entity AS cid, COUNT(t.id) AS cnt, SUM(t.foreigntotal) AS spend FROM transaction t WHERE t.type='SalesOrd' AND t.entity IN (${custIds}) AND EXTRACT(YEAR FROM t.trandate)=${lastYear} GROUP BY t.entity`),
+          suiteqlQueryAll(`SELECT t.entity AS cid, COUNT(t.id) AS cnt, SUM(t.foreigntotal) AS spend, MAX(t.trandate) AS lastdate FROM transaction t WHERE t.type IN ('CustInvc', 'CashSale') AND t.entity IN (${custIds}) GROUP BY t.entity`),
+          suiteqlQueryAll(`SELECT t.entity AS cid, COUNT(t.id) AS cnt, SUM(t.foreigntotal) AS spend FROM transaction t WHERE t.type IN ('CustInvc', 'CashSale') AND t.entity IN (${custIds}) AND EXTRACT(YEAR FROM t.trandate)=${currentYear} GROUP BY t.entity`),
+          suiteqlQueryAll(`SELECT t.entity AS cid, COUNT(t.id) AS cnt, SUM(t.foreigntotal) AS spend FROM transaction t WHERE t.type IN ('CustInvc', 'CashSale') AND t.entity IN (${custIds}) AND EXTRACT(YEAR FROM t.trandate)=${lastYear} GROUP BY t.entity`),
         ]);
         allTime.forEach((r: any) => { allTimeMap[r.cid?.toString()] = r; });
         ytd.forEach((r: any) => { ytdMap[r.cid?.toString()] = r; });
