@@ -1403,6 +1403,11 @@ export default function POsPage() {
         .single();
 
       if (error) throw error;
+      // RLS or any other quirk could let INSERT through but block the
+      // RETURNING SELECT, leaving us with a null `job`. Catch that
+      // explicitly — otherwise the success path runs and we falsely
+      // mark the line "✓ Graphics job created" with no row in the DB.
+      if (!job?.id) throw new Error('Graphics job insert returned no row (possible RLS read denial).');
 
       // Log status history
       await supabase.from('graphics_status_history').insert({
@@ -1416,8 +1421,15 @@ export default function POsPage() {
       await attachPoFilesToGraphicsJob(po.id, job.id);
 
       setGfxJobResults(prev => ({ ...prev, [li.id]: 'created' }));
-    } catch {
+      setCreatingGfxJob(null);
+      // Take the user to the new job so success is unambiguous and they
+      // can finish editing it (spec, due date, etc.) in one motion.
+      router.push(`/graphics?editJob=${job.id}`);
+      return;
+    } catch (err: any) {
+      console.error('[admin/pos] createGfxJobFromLine failed:', err);
       setGfxJobResults(prev => ({ ...prev, [li.id]: 'error' }));
+      alert(`Failed to create graphics job: ${err?.message || String(err)}`);
     }
     setCreatingGfxJob(null);
   };
@@ -1453,6 +1465,7 @@ export default function POsPage() {
         .single();
 
       if (error) throw error;
+      if (!job?.id) throw new Error('Graphics job insert returned no row (possible RLS read denial).');
 
       await supabase.from('graphics_status_history').insert({
         job_id: job.id,
@@ -1466,8 +1479,9 @@ export default function POsPage() {
 
       // Navigate to graphics page with the new job open for editing
       router.push(`/graphics?editJob=${job.id}`);
-    } catch {
-      alert('Failed to create graphics job');
+    } catch (err: any) {
+      console.error('[admin/pos] createGfxJobFromPO failed:', err);
+      alert(`Failed to create graphics job: ${err?.message || String(err)}`);
     }
     setCreatingGfxJobForPo(null);
   };
