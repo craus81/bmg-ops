@@ -70,7 +70,7 @@ export default function GraphicsProductionWidget() {
               const statusColor = STATUS_COLORS[job.status] || 'var(--text-muted)';
               const statusLabel = job.status;
               return (
-                <button key={job.id} onClick={() => router.push('/graphics')} style={{
+                <button key={job.id} onClick={() => router.push(`/graphics?id=${job.id}`)} style={{
                   display: 'flex', justifyContent: 'space-between', alignItems: 'center', width: '100%',
                   padding: '6px 8px', borderRadius: '6px', border: 'none', textAlign: 'left',
                   background: 'var(--subtle-bg)', cursor: 'pointer', fontSize: '11px',

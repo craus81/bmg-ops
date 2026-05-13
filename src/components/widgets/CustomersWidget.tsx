@@ -38,7 +38,7 @@ export default function CustomersWidget() {
   };
 
   return (
-    <WidgetShell title="Customers" icon="" loading={loading} onHeaderClick={() => router.push('/admin/customers')}>
+    <WidgetShell title="Customers" icon="" loading={loading} onHeaderClick={() => router.push('/admin/prospects')}>
       <div>
         <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '6px', marginBottom: '10px' }}>
           <div style={{ textAlign: 'center', background: 'var(--subtle-bg)', borderRadius: '8px', padding: '8px 4px' }}>
@@ -54,7 +54,7 @@ export default function CustomersWidget() {
         {topCustomers.length > 0 && (
           <div style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
             {topCustomers.map(c => (
-              <button key={c.id} onClick={() => router.push('/admin/customers')} style={{
+              <button key={c.id} onClick={() => router.push('/admin/prospects')} style={{
                 display: 'flex', justifyContent: 'space-between', alignItems: 'center', width: '100%',
                 padding: '6px 8px', borderRadius: '6px', border: 'none', textAlign: 'left',
                 background: 'var(--subtle-bg)', cursor: 'pointer', fontSize: '11px',

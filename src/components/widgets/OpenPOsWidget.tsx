@@ -49,7 +49,7 @@ export default function OpenPOsWidget() {
   const fmt = (n: number) => n.toLocaleString('en-US', { style: 'currency', currency: 'USD', minimumFractionDigits: 0, maximumFractionDigits: 0 });
 
   return (
-    <WidgetShell title="Open PO Balance" icon="" loading={loading} accentColor={theme.orange}>
+    <WidgetShell title="Open PO Balance" icon="" loading={loading} accentColor={theme.orange} onHeaderClick={() => router.push('/admin/pos')}>
       <div>
         <div style={{ fontSize: '28px', fontWeight: 800, color: theme.textPrimary, letterSpacing: '-1px' }}>
           {fmt(stats.remaining)}
@@ -61,14 +61,14 @@ export default function OpenPOsWidget() {
         {pos.length > 0 && (
           <div style={{ marginTop: '10px', display: 'flex', flexDirection: 'column', gap: '4px' }}>
             {pos.map(po => (
-              <div key={po.id} style={{
-                display: 'flex', justifyContent: 'space-between', alignItems: 'center',
+              <button key={po.id} onClick={() => router.push(`/admin/pos?id=${po.id}`)} style={{
+                display: 'flex', justifyContent: 'space-between', alignItems: 'center', width: '100%',
                 fontSize: '11px', padding: '6px 8px', borderRadius: '8px',
-                background: 'var(--subtle-bg)',
+                background: 'var(--subtle-bg)', border: 'none', textAlign: 'left', cursor: 'pointer',
               }}>
                 <span style={{ fontWeight: 700, color: theme.textPrimary }}>PO #{po.po_number}</span>
                 <span style={{ fontWeight: 700, color: theme.orange }}>{fmt(po.remaining)}</span>
-              </div>
+              </button>
             ))}
           </div>
         )}

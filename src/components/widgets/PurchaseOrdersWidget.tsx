@@ -48,7 +48,7 @@ export default function PurchaseOrdersWidget() {
         {recentPOs.length > 0 && (
           <div style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
             {recentPOs.map(po => (
-              <button key={po.id} onClick={() => router.push('/admin/pos')} style={{
+              <button key={po.id} onClick={() => router.push(`/admin/pos?id=${po.id}`)} style={{
                 display: 'flex', justifyContent: 'space-between', alignItems: 'center', width: '100%',
                 padding: '6px 8px', borderRadius: '6px', border: 'none', textAlign: 'left',
                 background: 'var(--subtle-bg)', cursor: 'pointer', fontSize: '11px',

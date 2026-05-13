@@ -22,13 +22,14 @@ export default function VehiclesWidget() {
     const weekStart = new Date(now.getFullYear(), now.getMonth(), now.getDate() - now.getDay()).toISOString();
 
     const { count } = await supabase
-      .from('scanned_vehicles')
-      .select('id', { count: 'exact', head: true });
+      .from('scan_logs')
+      .select('id', { count: 'exact', head: true })
+      .is('archived_at', null);
 
     const [todayRes, weekRes, recentRes] = await Promise.all([
-      supabase.from('scanned_vehicles').select('id', { count: 'exact', head: true }).gte('scanned_at', todayStart),
-      supabase.from('scanned_vehicles').select('id', { count: 'exact', head: true }).gte('scanned_at', weekStart),
-      supabase.from('scanned_vehicles').select('id, vin, vehicle_year, vehicle_make, vehicle_model, part_number, scanned_at').order('scanned_at', { ascending: false }).limit(5),
+      supabase.from('scan_logs').select('id', { count: 'exact', head: true }).is('archived_at', null).gte('scanned_at', todayStart),
+      supabase.from('scan_logs').select('id', { count: 'exact', head: true }).is('archived_at', null).gte('scanned_at', weekStart),
+      supabase.from('scan_logs').select('id, vin, vehicle_year, vehicle_make, vehicle_model, part_number, scanned_at').is('archived_at', null).order('scanned_at', { ascending: false }).limit(5),
     ]);
 
     setStats({ total: count || 0, today: todayRes.count || 0, week: weekRes.count || 0 });
@@ -37,12 +38,12 @@ export default function VehiclesWidget() {
   };
 
   return (
-    <WidgetShell title="Vehicles" icon="" loading={loading} onHeaderClick={() => router.push('/vehicles')}>
+    <WidgetShell title="Vehicles" icon="" loading={loading} onHeaderClick={() => router.push('/admin/scans')}>
       <div>
         <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: '6px', marginBottom: '10px' }}>
           <div style={{ textAlign: 'center', background: 'var(--subtle-bg)', borderRadius: '8px', padding: '8px 4px' }}>
             <div style={{ fontSize: '18px', fontWeight: 800, color: '#60a5fa' }}>{stats.total}</div>
-            <div style={{ fontSize: '9px', fontWeight: 600, color: theme.textMuted, textTransform: 'uppercase' }}>Total</div>
+            <div style={{ fontSize: '9px', fontWeight: 600, color: theme.textMuted, textTransform: 'uppercase' }}>Active</div>
           </div>
           <div style={{ textAlign: 'center', background: 'var(--subtle-bg)', borderRadius: '8px', padding: '8px 4px' }}>
             <div style={{ fontSize: '18px', fontWeight: 800, color: 'var(--warning)' }}>{stats.today}</div>
@@ -57,7 +58,7 @@ export default function VehiclesWidget() {
         {recentVehicles.length > 0 && (
           <div style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
             {recentVehicles.map(vehicle => (
-              <button key={vehicle.id} onClick={() => router.push('/vehicles')} style={{
+              <button key={vehicle.id} onClick={() => router.push('/admin/scans')} style={{
                 display: 'flex', justifyContent: 'space-between', alignItems: 'center', width: '100%',
                 padding: '6px 8px', borderRadius: '6px', border: 'none', textAlign: 'left',
                 background: 'var(--subtle-bg)', cursor: 'pointer', fontSize: '11px',

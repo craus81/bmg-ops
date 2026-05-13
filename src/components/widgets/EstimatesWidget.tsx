@@ -55,7 +55,7 @@ export default function EstimatesWidget() {
         {recentEstimates.length > 0 && (
           <div style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
             {recentEstimates.map(estimate => (
-              <button key={estimate.id} onClick={() => router.push('/estimates')} style={{
+              <button key={estimate.id} onClick={() => router.push(`/estimates?id=${estimate.id}`)} style={{
                 display: 'flex', justifyContent: 'space-between', alignItems: 'center', width: '100%',
                 padding: '6px 8px', borderRadius: '6px', border: 'none', textAlign: 'left',
                 background: 'var(--subtle-bg)', cursor: 'pointer', fontSize: '11px',

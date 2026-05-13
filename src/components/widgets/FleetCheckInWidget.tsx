@@ -41,7 +41,7 @@ export default function FleetCheckInWidget() {
   };
 
   return (
-    <WidgetShell title="Fleet Check-In" icon="" loading={loading} onHeaderClick={() => router.push('/fleet')}>
+    <WidgetShell title="Fleet Check-In" icon="" loading={loading} onHeaderClick={() => router.push('/tracking')}>
       <div>
         <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: '6px', marginBottom: '10px' }}>
           <div style={{ textAlign: 'center', background: 'var(--subtle-bg)', borderRadius: '8px', padding: '8px 4px' }}>
@@ -61,7 +61,7 @@ export default function FleetCheckInWidget() {
         {recentCheckins.length > 0 && (
           <div style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
             {recentCheckins.map(checkin => (
-              <button key={checkin.id} onClick={() => router.push('/fleet')} style={{
+              <button key={checkin.id} onClick={() => router.push(`/tracking?vehicle=${checkin.id}`)} style={{
                 display: 'flex', justifyContent: 'space-between', alignItems: 'center', width: '100%',
                 padding: '6px 8px', borderRadius: '6px', border: 'none', textAlign: 'left',
                 background: 'var(--subtle-bg)', cursor: 'pointer', fontSize: '11px',

@@ -47,7 +47,7 @@ export default function OpenQuotesWidget() {
           </div>
           <div style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
             {quotes.slice(0, 5).map(q => (
-              <button key={q.id} onClick={() => router.push('/admin/quotes')} style={{
+              <button key={q.id} onClick={() => router.push(`/admin/quotes?id=${q.id}`)} style={{
                 display: 'flex', justifyContent: 'space-between', alignItems: 'center', width: '100%',
                 padding: '6px 8px', borderRadius: '6px', border: 'none', textAlign: 'left',
                 background: 'var(--subtle-bg)', cursor: 'pointer',
