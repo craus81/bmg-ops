@@ -271,6 +271,7 @@ export default function GraphicsPage() {
     setAwaitingGraphics(data || []);
   };
 
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- load once on mount
   useEffect(() => { loadAwaitingGraphics(); }, []);
 
   const loadJobs = async () => {
