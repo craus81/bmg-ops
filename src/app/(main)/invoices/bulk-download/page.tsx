@@ -28,6 +28,7 @@ export default function BulkInvoiceDownloadPage() {
 
   const [loadingInvoices, setLoadingInvoices] = useState(false);
   const [invoices, setInvoices] = useState<OpenInvoice[]>([]);
+  const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
   const [listError, setListError] = useState<string | null>(null);
 
   const [downloading, setDownloading] = useState(false);
@@ -63,8 +64,13 @@ export default function BulkInvoiceDownloadPage() {
       if (!data.success) {
         setListError(data.error || 'Failed to load invoices');
         setInvoices([]);
+        setSelectedIds(new Set());
       } else {
-        setInvoices(data.transactions || []);
+        const list: OpenInvoice[] = data.transactions || [];
+        setInvoices(list);
+        // Default to every invoice selected — matches the prior all-or-
+        // nothing behavior; users can deselect what they don't want.
+        setSelectedIds(new Set(list.map(i => i.id)));
       }
     } catch (e: any) {
       setListError(e.message || 'Failed to load invoices');
@@ -73,11 +79,12 @@ export default function BulkInvoiceDownloadPage() {
   };
 
   const downloadZip = async () => {
-    if (!customer) return;
+    if (!customer || selectedIds.size === 0) return;
     setDownloading(true);
     setDownloadError(null);
     try {
-      const res = await fetch(`/api/netsuite/open-invoices-zip?customerId=${customer.id}`);
+      const idsParam = Array.from(selectedIds).join(',');
+      const res = await fetch(`/api/netsuite/open-invoices-zip?customerId=${customer.id}&ids=${encodeURIComponent(idsParam)}`);
       if (!res.ok) {
         const data = await res.json().catch(() => ({}));
         setDownloadError(data.error || `Download failed (HTTP ${res.status})`);
@@ -103,7 +110,20 @@ export default function BulkInvoiceDownloadPage() {
     setDownloading(false);
   };
 
-  const totalDue = invoices.reduce((sum, inv) => sum + (inv.total || 0), 0);
+  const selectedInvoices = invoices.filter(inv => selectedIds.has(inv.id));
+  const selectedTotal = selectedInvoices.reduce((sum, inv) => sum + (inv.total || 0), 0);
+  const allSelected = invoices.length > 0 && selectedIds.size === invoices.length;
+
+  const toggleOne = (id: string) => {
+    setSelectedIds(prev => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id); else next.add(id);
+      return next;
+    });
+  };
+  const toggleAll = () => {
+    setSelectedIds(allSelected ? new Set() : new Set(invoices.map(i => i.id)));
+  };
 
   return (
     <div style={{ maxWidth: '720px', margin: '0 auto', padding: '24px 16px' }}>
@@ -189,14 +209,21 @@ export default function BulkInvoiceDownloadPage() {
           ) : (
             <>
               <div style={{
-                display: 'flex', justifyContent: 'space-between', alignItems: 'baseline',
-                marginBottom: '12px',
+                display: 'flex', justifyContent: 'space-between', alignItems: 'center',
+                marginBottom: '12px', gap: '12px',
               }}>
-                <div style={{ fontSize: '14px', fontWeight: 700, color: theme.textPrimary }}>
-                  {invoices.length} open invoice{invoices.length === 1 ? '' : 's'}
-                </div>
-                <div style={{ fontSize: '14px', fontWeight: 700, color: theme.textPrimary }}>
-                  Total due: ${totalDue.toLocaleString('en-US', { minimumFractionDigits: 2 })}
+                <button
+                  onClick={toggleAll}
+                  style={{
+                    fontSize: '12px', fontWeight: 700, color: theme.textPrimary,
+                    background: 'transparent', border: `1px solid ${theme.border}`,
+                    borderRadius: '8px', padding: '6px 10px', cursor: 'pointer',
+                  }}
+                >
+                  {allSelected ? 'Deselect all' : 'Select all'} ({selectedIds.size}/{invoices.length})
+                </button>
+                <div style={{ fontSize: '13px', fontWeight: 700, color: theme.textPrimary, textAlign: 'right' }}>
+                  Selected total: ${selectedTotal.toLocaleString('en-US', { minimumFractionDigits: 2 })}
                 </div>
               </div>
 
@@ -204,36 +231,47 @@ export default function BulkInvoiceDownloadPage() {
                 display: 'flex', flexDirection: 'column', gap: '4px',
                 maxHeight: '320px', overflowY: 'auto', marginBottom: '12px',
               }}>
-                {invoices.map(inv => (
-                  <div key={inv.id} style={{
-                    display: 'flex', justifyContent: 'space-between', alignItems: 'center',
-                    padding: '8px 10px', background: theme.subtleBg, borderRadius: '8px',
-                    fontSize: '12px',
-                  }}>
-                    <div>
-                      <span style={{ fontWeight: 700, color: theme.textPrimary }}>INV #{inv.tranid}</span>
-                      <span style={{ color: theme.textMuted, marginLeft: '8px' }}>{inv.trandate}</span>
-                    </div>
-                    <div style={{ fontWeight: 700, color: theme.textPrimary }}>
-                      ${(inv.total || 0).toLocaleString('en-US', { minimumFractionDigits: 2 })}
-                    </div>
-                  </div>
-                ))}
+                {invoices.map(inv => {
+                  const checked = selectedIds.has(inv.id);
+                  return (
+                    <label key={inv.id} style={{
+                      display: 'flex', justifyContent: 'space-between', alignItems: 'center',
+                      padding: '8px 10px', borderRadius: '8px', fontSize: '12px',
+                      cursor: 'pointer', gap: '10px',
+                      background: checked ? theme.subtleBg : 'transparent',
+                      border: `1px solid ${checked ? theme.border : 'transparent'}`,
+                    }}>
+                      <input
+                        type="checkbox"
+                        checked={checked}
+                        onChange={() => toggleOne(inv.id)}
+                        style={{ flexShrink: 0, width: '16px', height: '16px', cursor: 'pointer' }}
+                      />
+                      <div style={{ flex: 1, minWidth: 0 }}>
+                        <span style={{ fontWeight: 700, color: theme.textPrimary }}>INV #{inv.tranid}</span>
+                        <span style={{ color: theme.textMuted, marginLeft: '8px' }}>{inv.trandate}</span>
+                      </div>
+                      <div style={{ fontWeight: 700, color: theme.textPrimary }}>
+                        ${(inv.total || 0).toLocaleString('en-US', { minimumFractionDigits: 2 })}
+                      </div>
+                    </label>
+                  );
+                })}
               </div>
 
               <button
                 onClick={downloadZip}
-                disabled={downloading}
+                disabled={downloading || selectedIds.size === 0}
                 style={{
                   width: '100%', padding: '14px', borderRadius: '12px',
                   background: theme.success, color: '#fff', fontWeight: 800,
                   fontSize: '14px', border: 'none', cursor: 'pointer',
-                  opacity: downloading ? 0.6 : 1,
+                  opacity: (downloading || selectedIds.size === 0) ? 0.6 : 1,
                 }}
               >
                 {downloading
-                  ? `Building ZIP… (this can take ~${Math.max(5, Math.ceil(invoices.length / 5) * 3)}s)`
-                  : `Download ${invoices.length} invoice${invoices.length === 1 ? '' : 's'} as ZIP`}
+                  ? `Building ZIP… (this can take ~${Math.max(5, Math.ceil(selectedIds.size / 5) * 3)}s)`
+                  : `Download ${selectedIds.size} invoice${selectedIds.size === 1 ? '' : 's'} as ZIP`}
               </button>
 
               {downloadError && (

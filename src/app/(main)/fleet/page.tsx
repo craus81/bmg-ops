@@ -7,6 +7,8 @@ import { createClient } from '@/lib/supabase-browser';
 import { decodeVIN, isValidVIN } from '@/lib/vin-decoder';
 import VinScanner from '@/components/VinScanner';
 import { theme } from '@/lib/theme';
+import { storage } from '@/lib/storage';
+import { firstGraphicsMatch } from '@/lib/graphics-detection';
 import type { NetsuiteSalesOrder, GraphicsProof, FleetCheckin, VehicleTrackingStatus } from '@/lib/types';
 import { VEHICLE_STATUS_PIPELINE, VEHICLE_STATUS_LABELS, VEHICLE_STATUS_COLORS } from '@/lib/types';
 import NetSuitePdf from '@/components/NetSuitePdf';
@@ -69,6 +71,12 @@ export default function FleetPage() {
   const [proofLoading, setProofLoading] = useState(false);
   const [selectedProof, setSelectedProof] = useState<GraphicsProof | null>(null);
   const [proofSearch, setProofSearch] = useState('');
+  const [uploadingProof, setUploadingProof] = useState(false);
+  const uploadProofInputRef = useRef<HTMLInputElement>(null);
+  // URL for the directly-uploaded proof so we can mirror to proof_url on
+  // save (the tracking page expanded view reads proof_url, not the
+  // legacy proof_file_path).
+  const [uploadedProofUrl, setUploadedProofUrl] = useState<string | null>(null);
 
   // Dropbox proof search
   const [dbxResults, setDbxResults] = useState<{ id: string; name: string; path: string; size: number; modified: string; folder: string }[]>([]);
@@ -299,6 +307,44 @@ export default function FleetPage() {
 
   const selectProof = (proof: GraphicsProof) => {
     setSelectedProof(proof);
+    setUploadedProofUrl(null);
+    setDbxSelected(null);
+  };
+
+  // Direct file upload: writes to R2 under the graphics-proofs bucket and
+  // sets selectedProof to a synthetic shape so the save handler picks it
+  // up the same way as a Supabase-side GraphicsProof match.
+  const uploadProofFromDevice = async (file: File) => {
+    setUploadingProof(true);
+    try {
+      const ext = file.name.split('.').pop() || 'bin';
+      const path = `manual-uploads/${Date.now()}-${Math.random().toString(36).slice(2, 6)}.${ext}`;
+      const { error } = await storage.from('graphics-proofs').upload(path, file, { contentType: file.type });
+      if (error) {
+        alert('Upload failed: ' + (error.message || 'unknown error'));
+        setUploadingProof(false);
+        return;
+      }
+      const { data: urlData } = storage.from('graphics-proofs').getPublicUrl(path);
+      setSelectedProof({
+        id: `uploaded-${Date.now()}`,
+        file_name: file.name,
+        storage_path: path,
+        customer_name: selectedOrder?.customer_name || manualCustomerName.trim() || null,
+        vehicle_type: null,
+      } as any);
+      setUploadedProofUrl(urlData?.publicUrl || null);
+      setDbxSelected(null);
+    } catch (err: any) {
+      alert('Upload failed: ' + (err?.message || String(err)));
+    }
+    setUploadingProof(false);
+  };
+
+  const removeSelectedProof = () => {
+    setSelectedProof(null);
+    setDbxSelected(null);
+    setUploadedProofUrl(null);
   };
 
   // ─── Save Check-In ────────────────────────────────────────
@@ -354,6 +400,20 @@ export default function FleetPage() {
       }
     }
 
+    // Scan SO line items + (if linked) estimate line items for graphics
+    // keywords. graphics_signal stores the first matched description so
+    // the inline prompt and queue tab can show *why* the flag fired.
+    let graphicsSignal: string | null = null;
+    const soLines = selectedOrders.flatMap(o => o.line_items || []);
+    graphicsSignal = firstGraphicsMatch(soLines);
+    if (!graphicsSignal && contextSnapshot.source_estimate_id) {
+      const { data: estLines } = await supabase
+        .from('estimate_line_items')
+        .select('item_number, description')
+        .eq('estimate_id', contextSnapshot.source_estimate_id);
+      graphicsSignal = firstGraphicsMatch(estLines || []);
+    }
+
     const { data, error } = await supabase
       .from('fleet_checkins')
       .insert({
@@ -371,7 +431,11 @@ export default function FleetPage() {
         proof_file_path: selectedProof?.storage_path || null,
         proof_file_name: selectedProof?.file_name || null,
         proof_dropbox_path: dbxSelected?.path || null,
-        proof_filename: dbxSelected?.name || null,
+        // A directly-uploaded proof needs proof_url/proof_filename set so
+        // the tracking page (which reads those columns) shows it. Fall
+        // back to dbxSelected for Dropbox-sourced proofs (existing flow).
+        proof_url: uploadedProofUrl || null,
+        proof_filename: uploadedProofUrl ? (selectedProof?.file_name || null) : (dbxSelected?.name || null),
         notes: notes.trim() || null,
         status: 'received',
         checked_in_by: user.id,
@@ -382,6 +446,8 @@ export default function FleetPage() {
         on_site_contact_phone: contextSnapshot.on_site_contact_phone,
         delivery_preferences: contextSnapshot.delivery_preferences,
         source_estimate_id: contextSnapshot.source_estimate_id,
+        needs_graphics: !!graphicsSignal,
+        graphics_signal: graphicsSignal,
       })
       .select()
       .single();
@@ -639,6 +705,41 @@ export default function FleetPage() {
             }}>Proof: {savedCheckin.proof_file_name}</div>
           )}
         </div>
+
+        {/* Graphics-needed prompt — keyword scan at save time flips
+            needs_graphics on fleet_checkins. We surface the matched line
+            description so the installer knows why the prompt fired. */}
+        {(savedCheckin as any).needs_graphics && !(savedCheckin as any).matched_graphics_job_id && (
+          <div style={{
+            margin: '0 0 14px', padding: '12px 14px', borderRadius: '12px',
+            background: 'rgba(251,146,60,0.10)', border: '1px solid rgba(251,146,60,0.35)',
+          }}>
+            <div style={{ fontSize: '11px', fontWeight: 800, color: '#fb923c', textTransform: 'uppercase', letterSpacing: '0.5px', marginBottom: '4px' }}>
+              Graphics Needed
+            </div>
+            <div style={{ fontSize: '12px', color: theme.textPrimary, marginBottom: '8px' }}>
+              This order includes a graphics line item
+              {(savedCheckin as any).graphics_signal ? <>: <span style={{ fontStyle: 'italic' }}>{(savedCheckin as any).graphics_signal}</span></> : null}
+              . Create a graphics production job?
+            </div>
+            <button
+              onClick={() => {
+                const params = new URLSearchParams({
+                  new: '1',
+                  vin: savedCheckin.vin || '',
+                  customer: savedCheckin.customer_name || '',
+                  so: savedCheckin.sales_order_number || '',
+                  checkinId: savedCheckin.id || '',
+                });
+                router.push(`/graphics?${params.toString()}`);
+              }}
+              style={{
+                padding: '8px 14px', borderRadius: '10px', fontSize: '12px', fontWeight: 800,
+                background: '#fb923c', color: '#fff', border: 'none', cursor: 'pointer',
+              }}
+            >+ Create Graphics Job</button>
+          </div>
+        )}
 
         {/* Sales Order PDF Viewer */}
         <NetSuitePdf
@@ -1173,6 +1274,55 @@ export default function FleetPage() {
             }}
           >Search</button>
         </div>
+
+        {/* Upload from device + currently-selected proof. Sits above the
+            Supabase/Dropbox pickers so it's the first option when none of
+            the search results fit. */}
+        <input
+          ref={uploadProofInputRef}
+          type="file"
+          accept="image/*,application/pdf,.eps,.ai,.psd"
+          style={{ display: 'none' }}
+          onChange={async (e) => {
+            const f = e.target.files?.[0];
+            if (f) await uploadProofFromDevice(f);
+            if (e.target) e.target.value = '';
+          }}
+        />
+        <div style={{ display: 'flex', gap: '8px', marginBottom: '10px' }}>
+          <button
+            onClick={() => uploadProofInputRef.current?.click()}
+            disabled={uploadingProof}
+            style={{
+              flex: 1, padding: '10px 12px', borderRadius: '10px', fontSize: '13px', fontWeight: 700,
+              background: 'transparent', border: `1px dashed ${theme.border}`, color: theme.textPrimary,
+              cursor: uploadingProof ? 'wait' : 'pointer', opacity: uploadingProof ? 0.6 : 1,
+            }}
+          >{uploadingProof ? 'Uploading...' : '+ Upload Proof from Device'}</button>
+        </div>
+        {(selectedProof || dbxSelected) && (
+          <div style={{
+            display: 'flex', alignItems: 'center', justifyContent: 'space-between',
+            gap: '8px', padding: '8px 12px', borderRadius: '10px',
+            background: theme.successBg, border: `1px solid ${theme.successBorder}`,
+            marginBottom: '10px',
+          }}>
+            <div style={{ minWidth: 0, flex: 1 }}>
+              <div style={{ fontSize: '10px', fontWeight: 700, color: theme.textMuted, textTransform: 'uppercase' }}>Selected Proof</div>
+              <div style={{ fontSize: '12px', fontWeight: 700, color: theme.textPrimary, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                {selectedProof?.file_name || dbxSelected?.name}
+              </div>
+            </div>
+            <button
+              onClick={removeSelectedProof}
+              style={{
+                padding: '6px 10px', borderRadius: '8px', fontSize: '11px', fontWeight: 700,
+                background: 'transparent', border: `1px solid ${theme.border}`,
+                color: theme.textMuted, cursor: 'pointer', flexShrink: 0,
+              }}
+            >Remove</button>
+          </div>
+        )}
         {selectedOrder?.customer_name && proofSearch && proofSearch !== selectedOrder.customer_name && (
           <button
             onClick={() => { setProofSearch(''); loadProofs(selectedOrder.customer_name); }}

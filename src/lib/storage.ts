@@ -1,7 +1,24 @@
 // Client-side storage helpers that call our R2 API routes
 // Drop-in replacement for supabase.storage.from('bucket').upload() / .getPublicUrl()
 
+import { createClient } from './supabase-browser';
+
 const R2_PUBLIC_URL = process.env.NEXT_PUBLIC_R2_PUBLIC_URL || '';
+
+// Pull the current Supabase access token and attach it as a Bearer header
+// so requireAuth() on our API routes accepts the request even when the
+// cookie-based path fails (e.g. cookie too large, blocked third-party
+// cookies in some browsers, post-deploy stale cookies).
+async function authHeader(): Promise<Record<string, string>> {
+  try {
+    const supabase = createClient();
+    const { data } = await supabase.auth.getSession();
+    const token = data?.session?.access_token;
+    return token ? { Authorization: `Bearer ${token}` } : {};
+  } catch {
+    return {};
+  }
+}
 
 export const storage = {
   from(bucket: string) {
@@ -17,7 +34,7 @@ export const storage = {
 
           const presignRes = await fetch('/api/storage/presign', {
             method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
+            headers: { 'Content-Type': 'application/json', ...(await authHeader()) },
             body: JSON.stringify({ bucket, path, contentType }),
           });
           const presign = await presignRes.json();
@@ -64,7 +81,7 @@ export const storage = {
           try {
             const res = await fetch('/api/storage', {
               method: 'DELETE',
-              headers: { 'Content-Type': 'application/json' },
+              headers: { 'Content-Type': 'application/json', ...(await authHeader()) },
               body: JSON.stringify({ bucket, path }),
             });
             const data = await res.json();

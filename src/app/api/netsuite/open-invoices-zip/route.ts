@@ -25,7 +25,17 @@ export async function GET(req: NextRequest) {
   try {
     const customerId = safeIntId(req.nextUrl.searchParams.get('customerId'), 'customerId');
 
-    // Pull open invoices (status display = "Open") with their balance.
+    // Optional ?ids=1,2,3 restricts the zip to a chosen subset. We still
+    // query NetSuite for the customer's open invoices and intersect, so
+    // the client can't smuggle in invoice IDs from a different customer.
+    const idsParam = req.nextUrl.searchParams.get('ids');
+    const requestedIds = idsParam
+      ? new Set(idsParam.split(',').map(s => s.trim()).filter(s => /^\d+$/.test(s)))
+      : null;
+
+    // Pull open invoices with their balance. In this NetSuite install
+    // the open-invoice status key is 'A' (see /api/netsuite/invoices
+    // STATUS_MAP and AI-agent reference queries).
     const listQuery = `
       SELECT
         t.id,
@@ -36,11 +46,11 @@ export async function GET(req: NextRequest) {
       FROM transaction t
       WHERE t.entity = ${customerId}
         AND t.type = 'CustInvc'
-        AND BUILTIN.DF(t.status) = 'Open'
+        AND t.status = 'A'
       ORDER BY t.trandate DESC
     `;
     const listResult = await suiteqlQuery(listQuery, MAX_INVOICES + 1);
-    const invoices = (listResult?.items || []) as Array<{
+    const allOpen = (listResult?.items || []) as Array<{
       id: string;
       tranid: string;
       trandate: string;
@@ -48,16 +58,24 @@ export async function GET(req: NextRequest) {
       customer_name: string;
     }>;
 
+    const invoices = requestedIds
+      ? allOpen.filter(inv => requestedIds.has(String(inv.id)))
+      : allOpen;
+
     if (invoices.length === 0) {
-      return NextResponse.json({ error: 'No open invoices for this customer.' }, { status: 404 });
+      return NextResponse.json({
+        error: requestedIds
+          ? 'None of the selected invoices are open on this customer.'
+          : 'No open invoices for this customer.',
+      }, { status: 404 });
     }
     if (invoices.length > MAX_INVOICES) {
       return NextResponse.json({
-        error: `Customer has ${invoices.length} open invoices, which is over the ${MAX_INVOICES} synchronous limit. Trim the list or run as a background job.`,
+        error: `Selection has ${invoices.length} invoices, which is over the ${MAX_INVOICES} synchronous limit. Trim the selection or run as a background job.`,
       }, { status: 413 });
     }
 
-    const customerName = invoices[0]?.customer_name || `customer-${customerId}`;
+    const customerName = invoices[0]?.customer_name || allOpen[0]?.customer_name || `customer-${customerId}`;
 
     // Fetch PDFs with a small concurrency cap so we don't hammer NetSuite.
     const results: Array<{ tranid: string; pdfBase64?: string; error?: string }> = [];
