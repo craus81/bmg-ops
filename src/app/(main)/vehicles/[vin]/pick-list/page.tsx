@@ -6,6 +6,7 @@ import { createClient } from '@/lib/supabase-browser';
 import { useAuth } from '@/components/AuthProvider';
 import VehiclePhotoTimeline from '@/components/VehiclePhotoTimeline';
 import CompletionModal from '@/components/CompletionModal';
+import { PartLabel } from '@/components/PartLabel';
 import { openOrCreateVehicleThread } from '@/lib/customer-thread';
 
 interface VehicleData {
@@ -579,7 +580,7 @@ export default function VehiclePickListPage() {
           </div>
           {graphicsJob.part_number && graphicsJob.title !== graphicsJob.part_number && (
             <div style={{ fontSize: '12px', color: 'var(--text-muted)', marginBottom: '4px' }}>
-              Part: {graphicsJob.part_number}
+              Part: <PartLabel partNumber={graphicsJob.part_number} />
             </div>
           )}
           <div style={{ fontSize: '12px', color: 'var(--text-muted)', marginBottom: '8px' }}>

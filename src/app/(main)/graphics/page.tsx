@@ -8,6 +8,7 @@ import { useAuth } from '@/components/AuthProvider';
 import { theme } from '@/lib/theme';
 import AssignmentPicker from '@/components/AssignmentPicker';
 import GraphicsInvoiceModal from '@/components/GraphicsInvoiceModal';
+import { PartLabel } from '@/components/PartLabel';
 import type {
   GraphicsJob, GraphicsJobStatus, GraphicsJobCategory, GraphicsStatusHistory, GraphicsJobView, Profile,
 } from '@/lib/types';
@@ -1240,7 +1241,15 @@ export default function GraphicsPage() {
                           </span>
                         )}
                         {job.customer && <span>{job.customer}</span>}
-                        {job.part_number && job.part_number.split(',').map((pn, i) => <span key={i} style={{ background: 'rgba(59,130,246,0.08)', padding: '0 4px', borderRadius: '3px' }}>{pn.trim()}</span>)}
+                        {job.part_number && job.part_number.split(',').map((pn, i) => {
+                          const trimmed = pn.trim();
+                          if (!trimmed) return null;
+                          return (
+                            <span key={i} style={{ background: 'rgba(59,130,246,0.08)', padding: '0 4px', borderRadius: '3px' }}>
+                              <PartLabel partNumber={trimmed} />
+                            </span>
+                          );
+                        })}
                         <span>Qty: {job.quantity}</span>
                         {job.due_date && <span style={{ color: (parseLocalDate(job.due_date) || new Date()) < new Date() ? '#ef4444' : '#fbbf24' }}>Due: {displayDate(job.due_date)}</span>}
                         {job.scheduled_install_date && <span style={{ color: job.scheduled_install_date === 'N/A' ? 'var(--text-muted)' : '#22d3ee' }}>Install: {job.scheduled_install_date === 'N/A' ? 'N/A' : displayDate(job.scheduled_install_date)}</span>}

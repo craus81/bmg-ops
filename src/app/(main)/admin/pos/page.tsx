@@ -7,6 +7,7 @@ import { useAuth } from '@/components/AuthProvider';
 import { parseMasterackPO, type ParsedPO, type ParsedPOLine } from '@/lib/parsePO';
 import { storage } from '@/lib/storage';
 import type { PurchaseOrder, POLineItem, CatalogItem, PoLocation } from '@/lib/types';
+import { PartLabel } from '@/components/PartLabel';
 
 interface ImportLine extends ParsedPOLine {
   catalog_match: CatalogItem | null;
@@ -2946,9 +2947,9 @@ export default function POsPage() {
                         <div style={{ display: 'flex', gap: '4px', alignItems: 'center', fontSize: '12px' }}>
                           <div style={{ flex: 1 }} onClick={() => startEditLine(li)}>
                             <div style={{ fontWeight: 700, color: 'var(--text-body)' }}>{li.part_number}</div>
-                            {li.description && (
-                              <div style={{ fontSize: '10px', color: 'var(--text-label)', marginTop: '1px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{li.description}</div>
-                            )}
+                            <div style={{ fontSize: '10px', color: 'var(--text-label)', marginTop: '1px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                              <PartLabel partNumber={li.part_number} fallbackDescription={li.description} nameOnly />
+                            </div>
                             <div style={{ height: '3px', background: 'var(--subtle-bg)', borderRadius: '2px', marginTop: '3px', width: '80%' }}>
                               <div style={{ height: '100%', width: `${Math.min(linePct, 100)}%`, background: linePct >= 100 ? '#22c55e' : '#3b82f6', borderRadius: '2px' }} />
                             </div>
