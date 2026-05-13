@@ -39,6 +39,15 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
           if ('serviceWorker' in navigator) {
             window.addEventListener('load', function() {
               navigator.serviceWorker.register('/sw.js');
+              // Safari WindowClient lacks .navigate(), so the service worker
+              // posts NOTIFICATION_NAVIGATE for notification clicks instead.
+              // Route here on the main thread.
+              navigator.serviceWorker.addEventListener('message', function(event) {
+                var data = event && event.data;
+                if (data && data.type === 'NOTIFICATION_NAVIGATE' && typeof data.url === 'string') {
+                  try { window.location.assign(data.url); } catch (e) {}
+                }
+              });
             });
           }
         `}} />
