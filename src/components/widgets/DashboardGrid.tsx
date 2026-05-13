@@ -94,15 +94,21 @@ function WidgetLoader() {
   );
 }
 
-// Reattach min/max constraints from registry onto a stored layout entry
+// Reattach min/max constraints from registry onto a stored layout entry,
+// and clamp w/h up to the current min so previously-saved tiny widgets
+// can't end up below the grabbable-handle floor.
 function enrich(layoutArr: LayoutItem[], mobile: boolean): LayoutItem[] {
   return layoutArr.map((l) => {
     const def = WIDGET_MAP[l.i];
     if (!def) return l;
+    const minW = (mobile ? def.minMobileW : def.minW) ?? def.minW;
+    const minH = (mobile ? def.minMobileH : def.minH) ?? def.minH;
     return {
       ...l,
-      minW: (mobile ? def.minMobileW : def.minW) ?? def.minW,
-      minH: (mobile ? def.minMobileH : def.minH) ?? def.minH,
+      w: minW ? Math.max(l.w, minW) : l.w,
+      h: minH ? Math.max(l.h, minH) : l.h,
+      minW,
+      minH,
       maxW: def.maxW,
       maxH: def.maxH,
     };

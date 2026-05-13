@@ -324,24 +324,36 @@ button {
 }
 .react-grid-item > .react-resizable-handle {
   position: absolute;
-  width: 20px;
-  height: 20px;
-  bottom: 2px;
-  right: 2px;
+  width: 28px;
+  height: 28px;
+  bottom: 0;
+  right: 0;
   cursor: se-resize;
-  z-index: 10;
+  z-index: 20;
+  /* Safari sometimes drops hit-testing on tiny corner elements; force
+     its own compositing layer and a real backing box so the bottom-right
+     corner always grabs cleanly. */
+  touch-action: none;
+  -webkit-transform: translateZ(0);
+  transform: translateZ(0);
+  background: transparent;
 }
 .react-grid-item > .react-resizable-handle::after {
   content: '';
   position: absolute;
-  right: 4px;
-  bottom: 4px;
-  width: 8px;
-  height: 8px;
+  right: 5px;
+  bottom: 5px;
+  width: 12px;
+  height: 12px;
   border-right: 2px solid var(--text-muted);
   border-bottom: 2px solid var(--text-muted);
-  opacity: 0.35;
-  border-radius: 0 0 2px 0;
+  opacity: 0.45;
+  border-radius: 0 0 3px 0;
+  pointer-events: none;
+}
+.react-grid-item.resizing > .react-resizable-handle::after,
+.react-grid-item > .react-resizable-handle:hover::after {
+  opacity: 0.9;
 }
 .react-grid-placeholder {
   background: var(--orange) !important;

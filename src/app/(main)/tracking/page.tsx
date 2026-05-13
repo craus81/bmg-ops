@@ -176,6 +176,21 @@ export default function TrackingPage() {
   // eslint-disable-next-line react-hooks/exhaustive-deps -- intentional: load once on mount
   }, [loading, searchParams]);
 
+  // Lock body scroll and bind Escape while a vehicle detail modal is open
+  useEffect(() => {
+    if (!expandedId) return;
+    const prevOverflow = document.body.style.overflow;
+    document.body.style.overflow = 'hidden';
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') setExpandedId(null);
+    };
+    window.addEventListener('keydown', onKey);
+    return () => {
+      document.body.style.overflow = prevOverflow;
+      window.removeEventListener('keydown', onKey);
+    };
+  }, [expandedId]);
+
   const loadVehicles = async (append = false) => {
     if (append) setLoadingMore(true); else setLoading(true);
     const offset = append ? vehicles.length : 0;
@@ -918,18 +933,10 @@ export default function TrackingPage() {
   return (
     <div>
       {/* Page Header */}
-      <div style={{ marginBottom: '16px', display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '12px' }}>
+      <div style={{ marginBottom: '16px' }}>
         <div style={{ fontSize: '22px', fontWeight: 800, color: 'var(--text-primary)' }}>
           In-Shop
         </div>
-        <button
-          onClick={() => router.push('/graphics?new=1')}
-          style={{
-            padding: '8px 14px', borderRadius: '10px', fontSize: '12px', fontWeight: 700,
-            background: 'var(--navy)', color: '#fff', border: 'none', cursor: 'pointer',
-            flexShrink: 0,
-          }}
-        >+ New Graphics Job</button>
       </div>
 
       {/* Summary Cards */}
@@ -1178,12 +1185,59 @@ export default function TrackingPage() {
                   </div>
                 </div>
 
-                {/* Expanded Detail Panel */}
+                {/* Expanded Detail — popout modal (overlay + centered card) */}
                 {isExpanded && (
-                  <div
-                    onClick={(e) => e.stopPropagation()}
-                    style={{ borderTop: '1px solid var(--border)', padding: '14px' }}
-                  >
+                  <>
+                    {/* Backdrop */}
+                    <div
+                      onClick={() => setExpandedId(null)}
+                      style={{
+                        position: 'fixed', inset: 0,
+                        background: 'rgba(0,0,0,0.55)',
+                        zIndex: 1000,
+                      }}
+                    />
+                    {/* Modal */}
+                    <div
+                      onClick={(e) => e.stopPropagation()}
+                      style={{
+                        position: 'fixed', top: '50%', left: '50%',
+                        transform: 'translate(-50%, -50%)',
+                        width: 'min(720px, 96vw)', maxHeight: '92vh',
+                        overflow: 'auto',
+                        background: 'var(--card)', borderRadius: '14px',
+                        boxShadow: '0 24px 60px rgba(0,0,0,0.35)',
+                        border: '1px solid var(--border)',
+                        zIndex: 1001,
+                      }}
+                    >
+                      {/* Sticky header with vehicle identity + close */}
+                      <div style={{
+                        position: 'sticky', top: 0, zIndex: 2,
+                        display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start',
+                        gap: '12px', padding: '14px 14px 10px',
+                        background: 'var(--card)', borderBottom: '1px solid var(--border)',
+                      }}>
+                        <div style={{ flex: 1, minWidth: 0 }}>
+                          <div style={{ fontWeight: 800, fontSize: '15px', color: 'var(--text-primary)' }}>{vehicle.customer_name || 'No Customer'}</div>
+                          <div style={{ fontSize: '12px', color: 'var(--text-secondary)', marginTop: '2px' }}>{vehicleTitle(vehicle)}</div>
+                          <div style={{ fontSize: '11px', fontFamily: 'monospace', color: 'var(--text-muted)' }}>{vehicle.vin}</div>
+                        </div>
+                        <div style={{ display: 'flex', alignItems: 'center', gap: '8px', flexShrink: 0 }}>
+                          <StatusBadge status={status} />
+                          <button
+                            onClick={() => setExpandedId(null)}
+                            aria-label="Close"
+                            style={{
+                              width: '32px', height: '32px', borderRadius: '8px',
+                              background: 'var(--subtle-bg)', border: '1px solid var(--border)',
+                              color: 'var(--text-muted)', fontSize: '16px', fontWeight: 700,
+                              cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center',
+                            }}
+                          >✕</button>
+                        </div>
+                      </div>
+                      <div style={{ padding: '14px' }}>
                     {/* VIN — editable, in case it was scanned or typed wrong */}
                     <div style={{ marginBottom: '12px' }}>
                       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '4px' }}>
@@ -1503,35 +1557,72 @@ export default function TrackingPage() {
                       </div>
                     )}
 
-                    {/* Matched Graphics Job — the linked graphics job's spec + status. */}
+                    {/* Matched Graphics Job — show the linked job, or a CTA
+                        to create one and link it to this vehicle. */}
                     {(() => {
                       const gj = graphicsJobs[vehicle.id];
-                      if (!gj) return null;
-                      const spec = [gj.vinyl_color, gj.vinyl_type].filter(Boolean).join(' · ');
-                      return (
-                        <div style={{
-                          marginBottom: '12px', padding: '10px', borderRadius: '8px',
-                          background: 'rgba(167,139,250,0.05)', border: '1px solid rgba(167,139,250,0.2)',
-                        }}>
-                          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '6px' }}>
-                            <div style={{ fontSize: '10px', fontWeight: 700, color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.5px' }}>
-                              Matched Graphics Job
+                      if (gj) {
+                        const spec = [gj.vinyl_color, gj.vinyl_type].filter(Boolean).join(' · ');
+                        return (
+                          <div style={{
+                            marginBottom: '12px', padding: '10px', borderRadius: '8px',
+                            background: 'rgba(167,139,250,0.05)', border: '1px solid rgba(167,139,250,0.2)',
+                          }}>
+                            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '6px' }}>
+                              <div style={{ fontSize: '10px', fontWeight: 700, color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.5px' }}>
+                                Matched Graphics Job
+                              </div>
+                              <a
+                                href={`/graphics?editJob=${gj.id}`}
+                                onClick={(e) => e.stopPropagation()}
+                                style={{ fontSize: '11px', fontWeight: 700, color: 'var(--accent, #2563eb)', textDecoration: 'none' }}
+                              >Open ↗</a>
                             </div>
-                            <a
-                              href={`/graphics?editJob=${gj.id}`}
-                              onClick={(e) => e.stopPropagation()}
-                              style={{ fontSize: '11px', fontWeight: 700, color: 'var(--accent, #2563eb)', textDecoration: 'none' }}
-                            >Open ↗</a>
+                            <div style={{ fontSize: '12px', fontWeight: 700, color: 'var(--text-primary)' }}>
+                              {gj.title}
+                              {gj.job_number && <span style={{ color: 'var(--text-muted)', fontWeight: 400, marginLeft: '6px' }}>#{gj.job_number}</span>}
+                            </div>
+                            <div style={{ display: 'flex', gap: '12px', flexWrap: 'wrap', fontSize: '11px', color: 'var(--text-secondary)', marginTop: '4px' }}>
+                              <span><strong style={{ color: 'var(--text-muted)' }}>Status:</strong> {GRAPHICS_STATUS_LABELS[gj.status] || gj.status}</span>
+                              <span><strong style={{ color: 'var(--text-muted)' }}>Qty:</strong> {gj.quantity}</span>
+                              {spec && <span><strong style={{ color: 'var(--text-muted)' }}>Vinyl:</strong> {spec}</span>}
+                            </div>
                           </div>
-                          <div style={{ fontSize: '12px', fontWeight: 700, color: 'var(--text-primary)' }}>
-                            {gj.title}
-                            {gj.job_number && <span style={{ color: 'var(--text-muted)', fontWeight: 400, marginLeft: '6px' }}>#{gj.job_number}</span>}
-                          </div>
-                          <div style={{ display: 'flex', gap: '12px', flexWrap: 'wrap', fontSize: '11px', color: 'var(--text-secondary)', marginTop: '4px' }}>
-                            <span><strong style={{ color: 'var(--text-muted)' }}>Status:</strong> {GRAPHICS_STATUS_LABELS[gj.status] || gj.status}</span>
-                            <span><strong style={{ color: 'var(--text-muted)' }}>Qty:</strong> {gj.quantity}</span>
-                            {spec && <span><strong style={{ color: 'var(--text-muted)' }}>Vinyl:</strong> {spec}</span>}
-                          </div>
+                        );
+                      }
+                      // No graphics job linked yet — show creation CTA that
+                      // prefills VIN/customer/SO and the checkin id so the new
+                      // job comes back linked to this vehicle.
+                      const flagged = !!(vehicle as any).needs_graphics;
+                      return (
+                        <div style={{ marginBottom: '12px' }}>
+                          <button
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              const params = new URLSearchParams({
+                                new: '1',
+                                vin: vehicle.vin || '',
+                                customer: vehicle.customer_name || '',
+                                so: vehicle.sales_order_number || '',
+                                checkinId: vehicle.id,
+                              });
+                              router.push(`/graphics?${params.toString()}`);
+                            }}
+                            style={{
+                              width: '100%', padding: '12px', borderRadius: '10px',
+                              fontSize: '13px', fontWeight: 700, cursor: 'pointer',
+                              background: flagged ? 'rgba(251,146,60,0.1)' : 'rgba(167,139,250,0.08)',
+                              border: `1px dashed ${flagged ? 'rgba(251,146,60,0.45)' : 'rgba(167,139,250,0.4)'}`,
+                              color: flagged ? '#fb923c' : '#a78bfa',
+                            }}
+                          >
+                            + Create Graphics Job for this Vehicle
+                          </button>
+                          {flagged && (vehicle as any).graphics_signal && (
+                            <div style={{ fontSize: '10px', color: 'var(--text-muted)', marginTop: '4px', textAlign: 'center' }}>
+                              Flagged: {(vehicle as any).graphics_signal}
+                            </div>
+                          )}
                         </div>
                       );
                     })()}
@@ -2350,7 +2441,9 @@ export default function TrackingPage() {
                         </button>
                       </div>
                     )}
-                  </div>
+                      </div>{/* end modal padding wrapper */}
+                    </div>{/* end modal */}
+                  </>
                 )}
               </div>
             );
