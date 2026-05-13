@@ -28,7 +28,7 @@ export const WIDGET_REGISTRY: WidgetDef[] = [
     label: 'Active Jobs',
     icon: '',
     description: 'Open jobs count and quick list',
-    defaultW: 2, defaultH: 2, minW: 1, minH: 1,
+    defaultW: 2, defaultH: 2, minW: 2, minH: 2,
     defaultMobileW: 4, defaultMobileH: 3, minMobileW: 2, minMobileH: 2,
   },
   {
@@ -36,7 +36,7 @@ export const WIDGET_REGISTRY: WidgetDef[] = [
     label: 'Needs Attention',
     icon: '',
     description: 'Pending photos, invoices, and bids',
-    defaultW: 2, defaultH: 2, minW: 1, minH: 1,
+    defaultW: 2, defaultH: 2, minW: 2, minH: 2,
     defaultMobileW: 4, defaultMobileH: 3, minMobileW: 2, minMobileH: 2,
   },
   {
@@ -52,7 +52,7 @@ export const WIDGET_REGISTRY: WidgetDef[] = [
     label: 'Revenue Summary',
     icon: '',
     description: 'Monthly revenue and payment trends',
-    defaultW: 2, defaultH: 2, minW: 1, minH: 1,
+    defaultW: 2, defaultH: 2, minW: 2, minH: 2,
     defaultMobileW: 4, defaultMobileH: 3, minMobileW: 2, minMobileH: 2,
   },
   {
@@ -60,7 +60,7 @@ export const WIDGET_REGISTRY: WidgetDef[] = [
     label: 'CNI Program',
     icon: '',
     description: 'CNI job counts and status breakdown',
-    defaultW: 2, defaultH: 2, minW: 1, minH: 1,
+    defaultW: 2, defaultH: 2, minW: 2, minH: 2,
     defaultMobileW: 4, defaultMobileH: 3, minMobileW: 2, minMobileH: 2,
   },
   {
@@ -76,7 +76,7 @@ export const WIDGET_REGISTRY: WidgetDef[] = [
     label: 'Recent Messages',
     icon: '',
     description: 'Latest messages and notifications',
-    defaultW: 2, defaultH: 2, minW: 1, minH: 1,
+    defaultW: 2, defaultH: 2, minW: 2, minH: 2,
     defaultMobileW: 4, defaultMobileH: 3, minMobileW: 2, minMobileH: 2,
   },
   {
@@ -84,15 +84,15 @@ export const WIDGET_REGISTRY: WidgetDef[] = [
     label: 'Time Clock',
     icon: '',
     description: 'Who is clocked in right now',
-    defaultW: 2, defaultH: 2, minW: 1, minH: 1,
-    defaultMobileW: 2, defaultMobileH: 2, minMobileW: 1, minMobileH: 1,
+    defaultW: 2, defaultH: 2, minW: 2, minH: 2,
+    defaultMobileW: 2, defaultMobileH: 2, minMobileW: 2, minMobileH: 2,
   },
   {
     id: 'open_quotes',
     label: 'Open Quotes',
     icon: '',
     description: 'Quotes needing conversion to sales orders',
-    defaultW: 2, defaultH: 2, minW: 1, minH: 1,
+    defaultW: 2, defaultH: 2, minW: 2, minH: 2,
     defaultMobileW: 4, defaultMobileH: 3, minMobileW: 2, minMobileH: 2,
   },
   {
@@ -100,7 +100,7 @@ export const WIDGET_REGISTRY: WidgetDef[] = [
     label: 'Open PO Balance',
     icon: '',
     description: 'Outstanding purchase order values',
-    defaultW: 2, defaultH: 2, minW: 1, minH: 2,
+    defaultW: 2, defaultH: 2, minW: 2, minH: 2,
     defaultMobileW: 4, defaultMobileH: 3, minMobileW: 2, minMobileH: 2,
   },
   {
@@ -108,7 +108,7 @@ export const WIDGET_REGISTRY: WidgetDef[] = [
     label: 'Quick Actions',
     icon: '',
     description: 'Shortcut buttons to common tasks',
-    defaultW: 2, defaultH: 2, minW: 1, minH: 1,
+    defaultW: 2, defaultH: 2, minW: 2, minH: 2,
     defaultMobileW: 4, defaultMobileH: 3, minMobileW: 2, minMobileH: 2,
   },
   {
@@ -116,7 +116,7 @@ export const WIDGET_REGISTRY: WidgetDef[] = [
     label: 'Fleet Check-In',
     icon: '',
     description: 'Recent vehicle check-ins and daily counts',
-    defaultW: 2, defaultH: 2, minW: 1, minH: 1,
+    defaultW: 2, defaultH: 2, minW: 2, minH: 2,
     defaultMobileW: 4, defaultMobileH: 3, minMobileW: 2, minMobileH: 2,
   },
   {
@@ -124,7 +124,7 @@ export const WIDGET_REGISTRY: WidgetDef[] = [
     label: 'Graphics Production',
     icon: '',
     description: 'Graphics job pipeline and status counts',
-    defaultW: 2, defaultH: 2, minW: 1, minH: 1,
+    defaultW: 2, defaultH: 2, minW: 2, minH: 2,
     defaultMobileW: 4, defaultMobileH: 3, minMobileW: 2, minMobileH: 2,
   },
   {
@@ -132,7 +132,7 @@ export const WIDGET_REGISTRY: WidgetDef[] = [
     label: 'In-Shop Tracking',
     icon: '',
     description: 'Vehicles currently in-shop by status',
-    defaultW: 2, defaultH: 2, minW: 1, minH: 1,
+    defaultW: 2, defaultH: 2, minW: 2, minH: 2,
     defaultMobileW: 4, defaultMobileH: 3, minMobileW: 2, minMobileH: 2,
   },
   {
@@ -140,7 +140,7 @@ export const WIDGET_REGISTRY: WidgetDef[] = [
     label: 'Vehicles',
     icon: '',
     description: 'Recent scanned vehicles and counts',
-    defaultW: 2, defaultH: 2, minW: 1, minH: 1,
+    defaultW: 2, defaultH: 2, minW: 2, minH: 2,
     defaultMobileW: 4, defaultMobileH: 3, minMobileW: 2, minMobileH: 2,
   },
   {
@@ -148,7 +148,7 @@ export const WIDGET_REGISTRY: WidgetDef[] = [
     label: 'Estimates',
     icon: '',
     description: 'Recent estimates and totals',
-    defaultW: 2, defaultH: 2, minW: 1, minH: 1,
+    defaultW: 2, defaultH: 2, minW: 2, minH: 2,
     defaultMobileW: 4, defaultMobileH: 3, minMobileW: 2, minMobileH: 2,
   },
   {
@@ -156,7 +156,7 @@ export const WIDGET_REGISTRY: WidgetDef[] = [
     label: 'Customers',
     icon: '',
     description: 'Customer count and top spenders YTD',
-    defaultW: 2, defaultH: 2, minW: 1, minH: 1,
+    defaultW: 2, defaultH: 2, minW: 2, minH: 2,
     defaultMobileW: 4, defaultMobileH: 3, minMobileW: 2, minMobileH: 2,
   },
   {
@@ -164,15 +164,15 @@ export const WIDGET_REGISTRY: WidgetDef[] = [
     label: 'Parts Catalog',
     icon: '',
     description: 'Upfit and graphic parts counts',
-    defaultW: 2, defaultH: 2, minW: 1, minH: 1,
-    defaultMobileW: 2, defaultMobileH: 2, minMobileW: 1, minMobileH: 1,
+    defaultW: 2, defaultH: 2, minW: 2, minH: 2,
+    defaultMobileW: 2, defaultMobileH: 2, minMobileW: 2, minMobileH: 2,
   },
   {
     id: 'photo_reviews',
     label: 'Photo Reviews',
     icon: '',
     description: 'Pending photo approvals and status',
-    defaultW: 2, defaultH: 2, minW: 1, minH: 1,
+    defaultW: 2, defaultH: 2, minW: 2, minH: 2,
     defaultMobileW: 4, defaultMobileH: 3, minMobileW: 2, minMobileH: 2,
   },
   {
@@ -180,7 +180,7 @@ export const WIDGET_REGISTRY: WidgetDef[] = [
     label: 'User Management',
     icon: '',
     description: 'Active users and pending approvals',
-    defaultW: 2, defaultH: 2, minW: 1, minH: 1,
+    defaultW: 2, defaultH: 2, minW: 2, minH: 2,
     defaultMobileW: 4, defaultMobileH: 3, minMobileW: 2, minMobileH: 2,
   },
   {
@@ -188,7 +188,7 @@ export const WIDGET_REGISTRY: WidgetDef[] = [
     label: 'Vendor Payments',
     icon: '',
     description: 'Installer invoice status and payments',
-    defaultW: 2, defaultH: 2, minW: 1, minH: 1,
+    defaultW: 2, defaultH: 2, minW: 2, minH: 2,
     defaultMobileW: 4, defaultMobileH: 3, minMobileW: 2, minMobileH: 2,
   },
   {
@@ -196,7 +196,7 @@ export const WIDGET_REGISTRY: WidgetDef[] = [
     label: 'Purchase Orders',
     icon: '',
     description: 'Open POs and recent orders',
-    defaultW: 2, defaultH: 2, minW: 1, minH: 1,
+    defaultW: 2, defaultH: 2, minW: 2, minH: 2,
     defaultMobileW: 4, defaultMobileH: 3, minMobileW: 2, minMobileH: 2,
   },
   {
@@ -204,15 +204,15 @@ export const WIDGET_REGISTRY: WidgetDef[] = [
     label: 'Reports',
     icon: '',
     description: 'Export vehicle spreadsheets and reports',
-    defaultW: 2, defaultH: 2, minW: 1, minH: 1,
-    defaultMobileW: 2, defaultMobileH: 2, minMobileW: 1, minMobileH: 1,
+    defaultW: 2, defaultH: 2, minW: 2, minH: 2,
+    defaultMobileW: 2, defaultMobileH: 2, minMobileW: 2, minMobileH: 2,
   },
   {
     id: 'my_jobs',
     label: 'My Jobs',
     icon: '',
     description: 'Jobs assigned to you with status',
-    defaultW: 2, defaultH: 2, minW: 1, minH: 2,
+    defaultW: 2, defaultH: 2, minW: 2, minH: 2,
     defaultMobileW: 4, defaultMobileH: 3, minMobileW: 2, minMobileH: 2,
   },
   {
