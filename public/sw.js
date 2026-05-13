@@ -67,26 +67,57 @@ self.addEventListener('push', (event) => {
   );
 });
 
-// Handle notification click — open the app and navigate to the deep link
+// Handle notification click — open the app and navigate to the deep link.
+// Safari's WindowClient does NOT implement .navigate() and Firefox can also
+// reject it for uncontrolled clients, so we fall back to postMessage (handled
+// by the app) and finally to opening a fresh window.
 self.addEventListener('notificationclick', (event) => {
   event.notification.close();
 
   const targetUrl = event.notification.data?.url || '/';
+  const origin = self.location.origin;
+  const targetAbs = new URL(targetUrl, origin).href;
 
-  event.waitUntil(
-    self.clients.matchAll({ type: 'window', includeUncontrolled: true }).then((clients) => {
-      // If app is already open, focus it and navigate
-      for (const client of clients) {
-        if (client.url.includes(self.location.origin)) {
-          client.focus();
-          client.navigate(targetUrl);
+  event.waitUntil((async () => {
+    const allClients = await self.clients.matchAll({ type: 'window', includeUncontrolled: true });
+    const sameOrigin = allClients.filter((c) => {
+      try { return new URL(c.url).origin === origin; } catch { return false; }
+    });
+
+    // 1. If a window is already on the target URL, just focus it.
+    const exact = sameOrigin.find((c) => c.url === targetAbs);
+    if (exact) {
+      return exact.focus();
+    }
+
+    // 2. Otherwise, try to bring an existing window to the front and navigate it.
+    for (const client of sameOrigin) {
+      try {
+        await client.focus();
+      } catch {
+        continue;
+      }
+
+      // navigate() works in Chromium and recent Firefox but is missing on Safari.
+      if (typeof client.navigate === 'function') {
+        try {
+          await client.navigate(targetUrl);
           return;
+        } catch {
+          // fall through to postMessage
         }
       }
-      // Otherwise open a new window
-      return self.clients.openWindow(targetUrl);
-    })
-  );
+
+      // Safari path: tell the app to route itself via the message channel.
+      try {
+        client.postMessage({ type: 'NOTIFICATION_NAVIGATE', url: targetUrl });
+      } catch {}
+      return;
+    }
+
+    // 3. No same-origin window open — open a new one at the deep link.
+    return self.clients.openWindow(targetUrl);
+  })());
 });
 
 // ═══════════ OFFLINE CACHING ═══════════

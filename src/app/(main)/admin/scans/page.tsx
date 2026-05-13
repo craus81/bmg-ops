@@ -3,6 +3,7 @@
 import { useState, useEffect } from 'react';
 import { createClient } from '@/lib/supabase-browser';
 import { useAuth } from '@/components/AuthProvider';
+import { PartLabel } from '@/components/PartLabel';
 import { theme } from '@/lib/theme';
 
 interface ScanLog {
@@ -1542,8 +1543,10 @@ export default function AdminScansPage() {
                                   <div style={{ fontSize: '9px', fontFamily: 'monospace', color: 'var(--text-muted)' }}>{scan.vin}</div>
                                   {scan.part_number && (
                                     <div style={{ fontSize: '9px', color: 'var(--text-secondary)', marginTop: '1px' }}>
-                                      <span style={{ fontWeight: 700 }}>{scan.part_number}</span>
-                                      {scan.part_description && <span style={{ color: 'var(--text-muted)', marginLeft: '4px' }}>{scan.part_description}</span>}
+                                      <PartLabel
+                                        partNumber={scan.part_number}
+                                        fallbackDescription={scan.part_description}
+                                      />
                                     </div>
                                   )}
                                 </div>

@@ -5,6 +5,7 @@ import { useRouter } from 'next/navigation';
 import { createClient } from '@/lib/supabase-browser';
 import { useAuth } from '@/components/AuthProvider';
 import { storage } from '@/lib/storage';
+import { PartLabel } from '@/components/PartLabel';
 
 interface ReviewVehicle {
   id: string;
@@ -342,7 +343,9 @@ export default function ReviewsPage() {
                     <div style={{ fontSize: '11px', color: 'var(--text-muted)', fontFamily: 'monospace', marginTop: '2px' }}>{v.vin}</div>
                     <div style={{ fontSize: '11px', color: 'var(--text-muted)', marginTop: '3px' }}>
                       {v.scanner_name} • {v.photos.length} photo{v.photos.length !== 1 ? 's' : ''}
-                      {v.part_number && ` • ${v.part_number}`}
+                      {v.part_number && (
+                        <> • <PartLabel partNumber={v.part_number} /></>
+                      )}
                     </div>
                   </div>
                   <div style={{ textAlign: 'right' }}>
