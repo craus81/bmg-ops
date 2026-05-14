@@ -296,6 +296,7 @@ export default function POsPage() {
     lastResult: any | null;
   } | null>(null);
   const [gmailRunning, setGmailRunning] = useState(false);
+  const [gmailRunMessage, setGmailRunMessage] = useState<string | null>(null);
   // Batch delete state
   const [editMode, setEditMode] = useState(false);
   // Line item sort
@@ -482,9 +483,23 @@ export default function POsPage() {
 
   const runGmailImportNow = async () => {
     setGmailRunning(true);
+    setGmailRunMessage(null);
     try {
-      await fetch('/api/gmail/auto-import?manual=true');
-    } catch {}
+      const res = await fetch('/api/gmail/auto-import?manual=true');
+      const text = await res.text();
+      let body: any = null;
+      try { body = JSON.parse(text); } catch {}
+      if (!res.ok) {
+        setGmailRunMessage(`HTTP ${res.status}: ${body?.error || text.slice(0, 200)}`);
+      } else if (body?.syncStateWrite && body.syncStateWrite.ok === false) {
+        setGmailRunMessage(`Run completed but sync_state write failed: ${body.syncStateWrite.error}`);
+      } else if (body) {
+        const found = body.results ? body.results.length : (typeof body.imported === 'number' ? body.imported + (body.skipped || 0) + (body.errors || 0) : 0);
+        setGmailRunMessage(`Run completed: ${found} processed · ${body.imported ?? 0} imported · ${body.skipped ?? 0} skipped · ${body.errors ?? 0} errors`);
+      }
+    } catch (err: any) {
+      setGmailRunMessage(`Request failed: ${err?.message || 'unknown'}`);
+    }
     await refreshGmailStatus();
     setGmailRunning(false);
   };
@@ -1640,6 +1655,11 @@ export default function POsPage() {
                 )}
               </div>
               <div style={{ fontSize: '11px', color: 'var(--text-body)', marginTop: '2px' }}>{summary}</div>
+              {gmailRunMessage && (
+                <div style={{ fontSize: '11px', color: 'var(--text-muted)', marginTop: '2px', fontStyle: 'italic' }}>
+                  {gmailRunMessage}
+                </div>
+              )}
             </div>
             <div style={{ display: 'flex', gap: '6px', flexShrink: 0 }}>
               {!gmailStatus.gmailConnected && (

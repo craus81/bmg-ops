@@ -5,21 +5,31 @@ import { createClient } from '@supabase/supabase-js';
 // This route is called by Vercel Cron every hour
 // It searches Gmail for new PO emails and auto-imports them
 
+// Give the function room to walk pages of Gmail results + parse PDFs +
+// kick off downstream work without Vercel's default 10s ceiling.
+export const maxDuration = 60;
+
 const SYNC_TYPE = 'gmail_auto_import';
 
 async function recordRun(
   supabase: any,
   result: Record<string, unknown>,
-) {
+): Promise<{ ok: boolean; error?: string }> {
   try {
-    await supabase.from('sync_state').upsert({
+    const { error } = await supabase.from('sync_state').upsert({
       sync_type: SYNC_TYPE,
       last_synced_at: new Date().toISOString(),
       last_result: result,
       updated_at: new Date().toISOString(),
     }, { onConflict: 'sync_type' });
+    if (error) {
+      console.error('[gmail-auto-import] sync_state upsert error:', error);
+      return { ok: false, error: error.message || JSON.stringify(error) };
+    }
+    return { ok: true };
   } catch (err: any) {
     console.error('[gmail-auto-import] failed to persist sync_state:', err?.message);
+    return { ok: false, error: err?.message || 'unknown sync_state write failure' };
   }
 }
 
@@ -48,8 +58,8 @@ export async function GET(req: NextRequest) {
 
     const messages = await searchPOEmails(afterStr);
     if (messages.length === 0) {
-      await recordRun(supabase, { status: 'ok', messagesFound: 0, imported: 0, skipped: 0, errors: 0 });
-      return NextResponse.json({ message: 'No PO emails found', imported: 0, skipped: 0 });
+      const w = await recordRun(supabase, { status: 'ok', messagesFound: 0, imported: 0, skipped: 0, errors: 0 });
+      return NextResponse.json({ message: 'No PO emails found', imported: 0, skipped: 0, syncStateWrite: w });
     }
 
     // Get already-processed message IDs
@@ -160,7 +170,7 @@ export async function GET(req: NextRequest) {
       }
     }
 
-    await recordRun(supabase, {
+    const okWrite = await recordRun(supabase, {
       status: 'ok',
       messagesFound: messages.length,
       imported,
@@ -177,14 +187,15 @@ export async function GET(req: NextRequest) {
       skipped,
       errors,
       results,
+      syncStateWrite: okWrite,
     });
   } catch (err: any) {
     if (err.message === 'NO_GOOGLE_TOKEN') {
-      await recordRun(supabase, { status: 'error', reason: 'NO_GOOGLE_TOKEN' });
-      return NextResponse.json({ error: 'Gmail not connected', needsAuth: true }, { status: 401 });
+      const w = await recordRun(supabase, { status: 'error', reason: 'NO_GOOGLE_TOKEN' });
+      return NextResponse.json({ error: 'Gmail not connected', needsAuth: true, syncStateWrite: w }, { status: 401 });
     }
     console.error('Auto-import error:', err);
-    await recordRun(supabase, { status: 'error', error: err?.message || 'unknown' });
-    return NextResponse.json({ error: err.message || 'Auto-import failed' }, { status: 500 });
+    const w = await recordRun(supabase, { status: 'error', error: err?.message || 'unknown' });
+    return NextResponse.json({ error: err.message || 'Auto-import failed', syncStateWrite: w }, { status: 500 });
   }
 }
