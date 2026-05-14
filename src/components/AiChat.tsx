@@ -85,16 +85,27 @@ function rowsToCsv(headers: string[], rows: string[][]): string {
 
 function MessageBody({ text }: { text: string }) {
   const segments = parseMessageSegments(text);
-  const [copiedTable, setCopiedTable] = useState<number | null>(null);
 
-  const copyCsv = async (idx: number, headers: string[], rows: string[][]) => {
+  // Trigger a browser CSV download. Built on the standard
+  // Blob + ObjectURL + temporary anchor pattern so it works
+  // across every browser without a server round-trip.
+  const downloadCsv = (idx: number, headers: string[], rows: string[][]) => {
     try {
-      await navigator.clipboard.writeText(rowsToCsv(headers, rows));
-      setCopiedTable(idx);
-      setTimeout(() => setCopiedTable(c => c === idx ? null : c), 1500);
-    } catch {
-      // Some browsers (older Safari) block clipboard from non-user-gesture
-      // contexts; do nothing rather than blow up.
+      const csv = rowsToCsv(headers, rows);
+      // Excel needs a UTF-8 BOM to open special characters cleanly.
+      const blob = new Blob(['﻿', csv], { type: 'text/csv;charset=utf-8' });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      const stamp = new Date().toISOString().replace(/[:.]/g, '-').split('Z')[0];
+      a.download = `fleetsuite-ai-table-${idx + 1}-${stamp}.csv`;
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      // Slight delay before revoking so Safari finishes the download.
+      setTimeout(() => URL.revokeObjectURL(url), 1000);
+    } catch (err) {
+      console.error('[ai chat] CSV download failed:', err);
     }
   };
 
@@ -130,15 +141,16 @@ function MessageBody({ text }: { text: string }) {
             </div>
             <div style={{ display: 'flex', justifyContent: 'flex-end', marginTop: '4px' }}>
               <button
-                onClick={() => copyCsv(i, seg.headers, seg.rows)}
+                onClick={() => downloadCsv(i, seg.headers, seg.rows)}
+                title="Download this table as a .csv file"
                 style={{
                   padding: '3px 9px', borderRadius: '6px',
-                  background: copiedTable === i ? 'rgba(34,197,94,0.15)' : 'rgba(59,130,246,0.1)',
-                  border: `1px solid ${copiedTable === i ? 'rgba(34,197,94,0.4)' : 'rgba(59,130,246,0.25)'}`,
-                  color: copiedTable === i ? '#22c55e' : '#60a5fa',
+                  background: 'rgba(59,130,246,0.1)',
+                  border: '1px solid rgba(59,130,246,0.25)',
+                  color: '#60a5fa',
                   fontSize: '10px', fontWeight: 700, cursor: 'pointer',
                 }}
-              >{copiedTable === i ? 'Copied!' : 'Copy as CSV'}</button>
+              >Download CSV</button>
             </div>
           </div>
         );
