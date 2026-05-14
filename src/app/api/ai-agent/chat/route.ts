@@ -902,6 +902,46 @@ export async function POST(req: NextRequest) {
 
     const claudeMessages: any[] = messages.map(m => ({ role: m.role, content: m.content }));
 
+    // Inject a LIVE DATABASE SNAPSHOT into the system prompt so the model
+    // has hard evidence of which Supabase tables exist and how populated
+    // they are. The model was hallucinating "netsuite_parts doesn't exist"
+    // despite the table being enumerated in the prompt; with real counts
+    // attached it cannot defensibly claim a table is missing.
+    try {
+      const tablesToCheck = [
+        'netsuite_parts',
+        'vehicle_templates',
+        'customers',
+        'prospects',
+        'graphics_jobs',
+        'estimates',
+        'quotes',
+        'fleet_checkins',
+        'scan_logs',
+        'purchase_orders',
+        'knowledge_entries',
+        'cni_jobs',
+      ] as const;
+      const counts = await Promise.all(
+        tablesToCheck.map(async (table) => {
+          try {
+            const { count, error } = await supabase
+              .from(table)
+              .select('*', { count: 'exact', head: true });
+            if (error) return `${table}=ERROR(${error.code || '?'})`;
+            return `${table}=${count ?? 0}`;
+          } catch {
+            return `${table}=ERROR`;
+          }
+        })
+      );
+      systemPrompt += `\n\nLIVE DATABASE SNAPSHOT (Supabase, generated ${new Date().toISOString()}):\n${counts.join(', ')}\n\nThese numbers are authoritative. If a table has count >= 0 here, it EXISTS. Never tell the user "table X doesn't exist" or "isn't set up" for any table appearing in this snapshot. A zero count means the table is empty, not missing — say "no rows" or "the catalog hasn't been populated yet," NOT "the table doesn't exist."`;
+    } catch (err) {
+      // Snapshot is a nice-to-have; if it fails, the prompt still works
+      // without it. Just don't block the chat.
+      console.warn('[ai-agent] failed to build DB snapshot:', err);
+    }
+
     let totalQueriesExecuted = 0;
     const MAX_ROUNDS = 4; // Increased from 3 since we have more data sources
 
