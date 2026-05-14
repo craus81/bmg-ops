@@ -107,6 +107,17 @@ export default function ProspectsPage() {
   const [tagFilter, setTagFilter] = useState<string>('');
   const [expandedId, setExpandedId] = useState<string | null>(null);
 
+  // Sort + extended filters (Ashley's request: spend, recent activity,
+  // owner, open quote, spend tier).
+  type SortBy = 'company' | 'total_spend' | 'ytd_spend' | 'last_order';
+  type SpendTier = 'all' | '10k' | '50k' | '100k';
+  const [sortBy, setSortBy] = useState<SortBy>('company');
+  const [ownerFilter, setOwnerFilter] = useState<string>('all'); // 'all' or user_id
+  const [spendTierFilter, setSpendTierFilter] = useState<SpendTier>('all');
+  const [openQuoteFilter, setOpenQuoteFilter] = useState<boolean>(false);
+  const [openQuoteCustomers, setOpenQuoteCustomers] = useState<Set<string>>(new Set());
+  const [exporting, setExporting] = useState(false);
+
   // Detail data (loaded on expand)
   const [contacts, setContacts] = useState<Record<string, Contact[]>>({});
   const [allContacts, setAllContacts] = useState<(Contact & { company_name?: string; prospect_id: string })[]>([]);
@@ -216,8 +227,24 @@ export default function ProspectsPage() {
     if (!hasFeature('prospects') && !isAdmin) { router.push('/home'); return; }
     loadProspects();
     loadProfiles();
+    loadOpenQuoteCustomers();
   // eslint-disable-next-line react-hooks/exhaustive-deps -- intentional: load once on mount
   }, []);
+
+  // Preload customer names with at least one open quote so the
+  // "open quote" filter doesn't need to round-trip per prospect.
+  const loadOpenQuoteCustomers = async () => {
+    const { data } = await supabase
+      .from('quotes')
+      .select('customer_name')
+      .in('status', ['draft', 'sent']);
+    const names = new Set<string>();
+    for (const row of data || []) {
+      const name = (row as any).customer_name;
+      if (name) names.add(String(name).toLowerCase());
+    }
+    setOpenQuoteCustomers(names);
+  };
 
   // Auto-expand prospect from URL param (deep link from notifications/search)
   useEffect(() => {
@@ -566,16 +593,91 @@ export default function ProspectsPage() {
   // All unique tags for filter
   const allTags = [...new Set(Object.values(tags).flat().map((t: Tag) => t.tag))].sort();
 
+  // Distinct prospect owners (created_by) for the owner filter dropdown.
+  const ownerOptions = (() => {
+    const ids = new Set<string>();
+    for (const p of prospects) if (p.created_by) ids.add(p.created_by);
+    return Array.from(ids).map(id => ({ id, name: profiles[id] || id }))
+      .sort((a, b) => a.name.localeCompare(b.name));
+  })();
+
   // Filter
   const filtered = prospects.filter(p => {
     if (statusFilter !== 'all' && p.status !== statusFilter) return false;
     if (tagFilter && !(tags[p.id] || []).some(t => t.tag === tagFilter)) return false;
+    if (ownerFilter !== 'all' && p.created_by !== ownerFilter) return false;
+    if (openQuoteFilter && !openQuoteCustomers.has((p.company_name || '').toLowerCase())) return false;
+    if (spendTierFilter !== 'all') {
+      const ytd = customerMetrics[p.id]?.ytd_spend || 0;
+      const threshold = spendTierFilter === '10k' ? 10000 : spendTierFilter === '50k' ? 50000 : 100000;
+      if (ytd < threshold) return false;
+    }
     if (search) {
       const s = search.toLowerCase();
       return p.company_name.toLowerCase().includes(s) || (p.contact_name || '').toLowerCase().includes(s) || (p.email || '').toLowerCase().includes(s) || (p.notes || '').toLowerCase().includes(s);
     }
     return true;
   });
+
+  // Sort. Numeric sorts put 0/missing at the bottom by descending revenue;
+  // company name is the default A-Z behavior.
+  const sorted = [...filtered].sort((a, b) => {
+    const ma = customerMetrics[a.id];
+    const mb = customerMetrics[b.id];
+    switch (sortBy) {
+      case 'total_spend':
+        return (mb?.total_spend || 0) - (ma?.total_spend || 0);
+      case 'ytd_spend':
+        return (mb?.ytd_spend || 0) - (ma?.ytd_spend || 0);
+      case 'last_order': {
+        const ad = ma?.last_order_date ? new Date(ma.last_order_date).getTime() : 0;
+        const bd = mb?.last_order_date ? new Date(mb.last_order_date).getTime() : 0;
+        return bd - ad;
+      }
+      case 'company':
+      default:
+        return a.company_name.localeCompare(b.company_name);
+    }
+  });
+
+  const exportToExcel = async () => {
+    setExporting(true);
+    try {
+      const XLSX = await import('xlsx');
+      const rows = sorted.map(p => {
+        const m = customerMetrics[p.id];
+        return {
+          Company: p.company_name,
+          Status: STATUS_LABELS[p.status] || p.status || '',
+          Owner: profiles[p.created_by || ''] || '',
+          'Contact Name': p.contact_name || '',
+          Email: p.email || '',
+          Phone: p.phone || '',
+          Address: p.address || '',
+          City: p.city || '',
+          State: p.state || '',
+          Zip: p.zip || '',
+          'Total Orders': m?.total_orders ?? '',
+          'Total Spend': m?.total_spend ?? '',
+          'YTD Orders': m?.ytd_orders ?? '',
+          'YTD Spend': m?.ytd_spend ?? '',
+          'Last Year Spend': m?.last_year_spend ?? '',
+          'Last Order Date': m?.last_order_date || '',
+          'NetSuite ID': p.netsuite_id || '',
+          'Has Open Quote': openQuoteCustomers.has((p.company_name || '').toLowerCase()) ? 'Y' : '',
+        };
+      });
+      const ws = XLSX.utils.json_to_sheet(rows);
+      const wb = XLSX.utils.book_new();
+      XLSX.utils.book_append_sheet(wb, ws, 'CRM');
+      const today = new Date().toISOString().split('T')[0];
+      XLSX.writeFile(wb, `crm-export-${today}.xlsx`);
+    } catch (err: any) {
+      console.error('[crm export] failed:', err);
+      alert(`Export failed: ${err?.message || err}`);
+    }
+    setExporting(false);
+  };
 
   if (loading) return <div style={{ textAlign: 'center', padding: '40px', color: 'var(--text-muted)' }}>Loading...</div>;
 
@@ -719,7 +821,7 @@ export default function ProspectsPage() {
         placeholder="Search prospects & customers..."
         style={{ ...inputStyle, marginBottom: '8px' }}
       />
-      <div style={{ display: 'flex', gap: '4px', marginBottom: '14px', flexWrap: 'wrap' }}>
+      <div style={{ display: 'flex', gap: '4px', marginBottom: '6px', flexWrap: 'wrap' }}>
         {['all', 'active', 'nurturing', 'converted'].map(s => (
           <button key={s} onClick={() => setStatusFilter(s)} style={{
             padding: '5px 10px', borderRadius: '6px', fontSize: '10px', fontWeight: 700,
@@ -736,14 +838,66 @@ export default function ProspectsPage() {
         )}
       </div>
 
+      {/* Extended filters + sort */}
+      <div style={{ display: 'flex', gap: '6px', marginBottom: '6px', flexWrap: 'wrap', alignItems: 'center' }}>
+        <span style={{ fontSize: '9px', fontWeight: 700, color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.5px' }}>Sort:</span>
+        <select value={sortBy} onChange={e => setSortBy(e.target.value as SortBy)} style={{ padding: '5px 8px', borderRadius: '6px', fontSize: '10px', fontWeight: 700, background: 'var(--input-bg)', border: '1px solid var(--border)', color: 'var(--text-primary)' }}>
+          <option value="company">Company (A-Z)</option>
+          <option value="total_spend">Total Spend ↓</option>
+          <option value="ytd_spend">YTD Spend ↓</option>
+          <option value="last_order">Last Order ↓</option>
+        </select>
+        <span style={{ fontSize: '9px', fontWeight: 700, color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.5px', marginLeft: '4px' }}>Owner:</span>
+        <select value={ownerFilter} onChange={e => setOwnerFilter(e.target.value)} style={{ padding: '5px 8px', borderRadius: '6px', fontSize: '10px', fontWeight: 700, background: 'var(--input-bg)', border: '1px solid var(--border)', color: 'var(--text-primary)' }}>
+          <option value="all">All Owners</option>
+          {ownerOptions.map(o => <option key={o.id} value={o.id}>{o.name}</option>)}
+        </select>
+        <span style={{ fontSize: '9px', fontWeight: 700, color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.5px', marginLeft: '4px' }}>YTD spend:</span>
+        {([
+          { key: 'all', label: 'Any' },
+          { key: '10k', label: '≥ $10k' },
+          { key: '50k', label: '≥ $50k' },
+          { key: '100k', label: '≥ $100k' },
+        ] as { key: SpendTier; label: string }[]).map(t => (
+          <button key={t.key} onClick={() => setSpendTierFilter(t.key)} style={{
+            padding: '4px 9px', borderRadius: '999px', fontSize: '10px', fontWeight: 700, cursor: 'pointer',
+            background: spendTierFilter === t.key ? 'rgba(34,197,94,0.12)' : 'var(--subtle-bg)',
+            border: `1px solid ${spendTierFilter === t.key ? 'rgba(34,197,94,0.4)' : 'var(--border)'}`,
+            color: spendTierFilter === t.key ? '#22c55e' : 'var(--text-muted)',
+          }}>{t.label}</button>
+        ))}
+        <button onClick={() => setOpenQuoteFilter(v => !v)} style={{
+          padding: '4px 9px', borderRadius: '999px', fontSize: '10px', fontWeight: 700, cursor: 'pointer', marginLeft: '4px',
+          background: openQuoteFilter ? 'rgba(251,191,36,0.12)' : 'var(--subtle-bg)',
+          border: `1px solid ${openQuoteFilter ? 'rgba(251,191,36,0.4)' : 'var(--border)'}`,
+          color: openQuoteFilter ? '#f59e0b' : 'var(--text-muted)',
+        }}>{openQuoteFilter ? '✓ Open Quote' : 'Open Quote'}</button>
+      </div>
+
+      {/* Result count + export */}
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '14px' }}>
+        <div style={{ fontSize: '10px', color: 'var(--text-muted)' }}>
+          {sorted.length} of {prospects.length} {prospects.length === 1 ? 'record' : 'records'}
+        </div>
+        <button
+          onClick={exportToExcel}
+          disabled={exporting || sorted.length === 0}
+          style={{
+            padding: '6px 12px', borderRadius: '8px', fontSize: '11px', fontWeight: 700, cursor: 'pointer',
+            background: 'rgba(96,165,250,0.1)', border: '1px solid rgba(96,165,250,0.3)', color: '#60a5fa',
+            opacity: exporting || sorted.length === 0 ? 0.5 : 1,
+          }}
+        >{exporting ? 'Exporting…' : 'Export to Excel'}</button>
+      </div>
+
       {/* Prospect List */}
-      {filtered.length === 0 ? (
+      {sorted.length === 0 ? (
         <div style={{ textAlign: 'center', padding: '40px', color: 'var(--text-muted)' }}>
-          <div style={{ fontSize: '13px', fontWeight: 700 }}>{search ? 'No matching prospects' : 'No prospects yet'}</div>
+          <div style={{ fontSize: '13px', fontWeight: 700 }}>{search ? 'No matching prospects' : 'No prospects match the current filters'}</div>
         </div>
       ) : (
         <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
-          {filtered.map(prospect => {
+          {sorted.map(prospect => {
             const isExpanded = expandedId === prospect.id;
             const pContacts = contacts[prospect.id] || [];
             const pOpps = opportunities[prospect.id] || [];
