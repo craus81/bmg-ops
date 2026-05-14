@@ -98,6 +98,9 @@ export default function MorePage() {
         {F('proof_hygiene') && (
           <MenuBtn title="Proof Hygiene" sub="Assign unmatched proof files from NAS" onClick={() => router.push('/admin/proofs')} />
         )}
+        {F('proof_hygiene') && (
+          <MenuBtn title="Proof Search" sub="Find proof artwork in Dropbox by customer or part" onClick={() => router.push('/admin/proof-search')} />
+        )}
         {F('all_jobs') && (
           <MenuBtn title="CNI Jobs" sub="View all CNI jobs by company" onClick={() => router.push('/admin/cni')} />
         )}
