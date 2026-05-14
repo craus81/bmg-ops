@@ -2524,10 +2524,13 @@ export default function GraphicsPage() {
         </div>
       )}
 
-      {/* Status change comment modal */}
+      {/* Status change comment modal. zIndex must clear the expanded-job
+          modal (500) and the invoice modal (1000) so it stays on top
+          when triggered from inside either of them — otherwise the
+          "verify status change" panel lands underneath the job card. */}
       {pendingStatus && (
         <div style={{
-          position: 'fixed', inset: 0, background: 'var(--overlay)', zIndex: 200,
+          position: 'fixed', inset: 0, background: 'var(--overlay)', zIndex: 1500,
           display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '20px',
         }} onClick={() => setPendingStatus(null)}>
           <div onClick={e => e.stopPropagation()} style={{
