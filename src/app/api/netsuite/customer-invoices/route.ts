@@ -14,6 +14,13 @@ export async function GET(req: NextRequest) {
     const customerId = safeIntId(searchParams.get('customerId'), 'customerId');
     // status=open narrows to open invoices (used by the bulk-download UI).
     const statusFilter = searchParams.get('status');
+    // Pagination — long-history accounts (e.g. Aerodynamics) easily
+    // exceed the old hard-coded 200 cap. Clients can keep paging with
+    // ?limit & ?offset.
+    const rawLimit = parseInt(searchParams.get('limit') || '200', 10);
+    const limit = Number.isFinite(rawLimit) ? Math.max(1, Math.min(rawLimit, 1000)) : 200;
+    const rawOffset = parseInt(searchParams.get('offset') || '0', 10);
+    const offset = Number.isFinite(rawOffset) ? Math.max(0, rawOffset) : 0;
 
     // In this NetSuite install the open-invoice status key is 'A'
     // (see /api/netsuite/invoices STATUS_MAP).
@@ -35,7 +42,7 @@ export async function GET(req: NextRequest) {
       ORDER BY t.trandate DESC
     `;
 
-    const result = await suiteqlQuery(query, 200);
+    const result = await suiteqlQuery(query, limit, offset);
     const transactions = (result?.items || []).map((t: any) => ({
       id: t.id,
       tranid: t.tranid,
@@ -45,7 +52,10 @@ export async function GET(req: NextRequest) {
       status: t.status_display || '',
     }));
 
-    return NextResponse.json({ success: true, transactions });
+    // hasMore is the standard "exhaustively-paginated-or-not" probe —
+    // if we got a full page back, assume there's at least one more.
+    const hasMore = transactions.length === limit;
+    return NextResponse.json({ success: true, transactions, hasMore, limit, offset });
   } catch (e: any) {
     if (e instanceof SqlSafeError) {
       return NextResponse.json({ error: e.message }, { status: 400 });
