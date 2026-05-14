@@ -294,9 +294,11 @@ export default function POsPage() {
     gmailConnected: boolean;
     lastRunAt: string | null;
     lastResult: any | null;
+    recentErrors?: any[];
   } | null>(null);
   const [gmailRunning, setGmailRunning] = useState(false);
   const [gmailRunMessage, setGmailRunMessage] = useState<string | null>(null);
+  const [gmailErrorsOpen, setGmailErrorsOpen] = useState(false);
   // Batch delete state
   const [editMode, setEditMode] = useState(false);
   // Line item sort
@@ -1639,51 +1641,93 @@ export default function POsPage() {
         } else {
           summary = 'No run recorded yet.';
         }
+        const errs = gmailStatus.recentErrors || [];
         return (
           <div style={{
             padding: '8px 12px', borderRadius: '10px', marginBottom: '10px',
             background: tone.bg, border: `1px solid ${tone.border}`,
-            display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '8px',
           }}>
-            <div style={{ display: 'flex', flexDirection: 'column', minWidth: 0 }}>
-              <div style={{ fontSize: '11px', fontWeight: 700, color: tone.color, textTransform: 'uppercase', letterSpacing: '0.5px' }}>
-                Gmail PO Auto-Import
-                {minutesAgo !== null && (
-                  <span style={{ marginLeft: '6px', color: 'var(--text-muted)', fontWeight: 600 }}>
-                    · {minutesAgo < 1 ? 'just now' : minutesAgo < 60 ? `${minutesAgo}m ago` : `${Math.round(minutesAgo / 60)}h ago`}
-                  </span>
+            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '8px' }}>
+              <div style={{ display: 'flex', flexDirection: 'column', minWidth: 0 }}>
+                <div style={{ fontSize: '11px', fontWeight: 700, color: tone.color, textTransform: 'uppercase', letterSpacing: '0.5px' }}>
+                  Gmail PO Auto-Import
+                  {minutesAgo !== null && (
+                    <span style={{ marginLeft: '6px', color: 'var(--text-muted)', fontWeight: 600 }}>
+                      · {minutesAgo < 1 ? 'just now' : minutesAgo < 60 ? `${minutesAgo}m ago` : `${Math.round(minutesAgo / 60)}h ago`}
+                    </span>
+                  )}
+                </div>
+                <div style={{ fontSize: '11px', color: 'var(--text-body)', marginTop: '2px' }}>{summary}</div>
+                {gmailRunMessage && (
+                  <div style={{ fontSize: '11px', color: 'var(--text-muted)', marginTop: '2px', fontStyle: 'italic' }}>
+                    {gmailRunMessage}
+                  </div>
+                )}
+                {errs.length > 0 && (
+                  <button
+                    onClick={() => setGmailErrorsOpen(v => !v)}
+                    style={{
+                      marginTop: '4px', alignSelf: 'flex-start', padding: '2px 0',
+                      background: 'transparent', border: 'none', cursor: 'pointer',
+                      fontSize: '10px', fontWeight: 700, color: '#ef4444', textDecoration: 'underline',
+                    }}
+                  >{gmailErrorsOpen ? 'Hide' : 'Show'} last {errs.length} import error{errs.length === 1 ? '' : 's'}</button>
                 )}
               </div>
-              <div style={{ fontSize: '11px', color: 'var(--text-body)', marginTop: '2px' }}>{summary}</div>
-              {gmailRunMessage && (
-                <div style={{ fontSize: '11px', color: 'var(--text-muted)', marginTop: '2px', fontStyle: 'italic' }}>
-                  {gmailRunMessage}
-                </div>
-              )}
-            </div>
-            <div style={{ display: 'flex', gap: '6px', flexShrink: 0 }}>
-              {!gmailStatus.gmailConnected && (
-                <a
-                  href="/api/auth/google"
+              <div style={{ display: 'flex', gap: '6px', flexShrink: 0 }}>
+                {!gmailStatus.gmailConnected && (
+                  <a
+                    href="/api/auth/google"
+                    style={{
+                      padding: '6px 10px', borderRadius: '6px', fontSize: '11px', fontWeight: 700,
+                      background: 'rgba(59,130,246,0.1)', border: '1px solid rgba(59,130,246,0.3)',
+                      color: '#60a5fa', textDecoration: 'none',
+                    }}
+                  >Connect Gmail</a>
+                )}
+                <button
+                  onClick={runGmailImportNow}
+                  disabled={gmailRunning || !gmailStatus.gmailConnected}
                   style={{
                     padding: '6px 10px', borderRadius: '6px', fontSize: '11px', fontWeight: 700,
-                    background: 'rgba(59,130,246,0.1)', border: '1px solid rgba(59,130,246,0.3)',
-                    color: '#60a5fa', textDecoration: 'none',
+                    background: 'var(--subtle-bg)', border: '1px solid var(--border)',
+                    color: 'var(--text-body)',
+                    cursor: gmailRunning || !gmailStatus.gmailConnected ? 'default' : 'pointer',
+                    opacity: gmailRunning || !gmailStatus.gmailConnected ? 0.5 : 1,
                   }}
-                >Connect Gmail</a>
-              )}
-              <button
-                onClick={runGmailImportNow}
-                disabled={gmailRunning || !gmailStatus.gmailConnected}
-                style={{
-                  padding: '6px 10px', borderRadius: '6px', fontSize: '11px', fontWeight: 700,
-                  background: 'var(--subtle-bg)', border: '1px solid var(--border)',
-                  color: 'var(--text-body)',
-                  cursor: gmailRunning || !gmailStatus.gmailConnected ? 'default' : 'pointer',
-                  opacity: gmailRunning || !gmailStatus.gmailConnected ? 0.5 : 1,
-                }}
-              >{gmailRunning ? 'Running…' : 'Run Now'}</button>
+                >{gmailRunning ? 'Running…' : 'Run Now'}</button>
+              </div>
             </div>
+            {gmailErrorsOpen && errs.length > 0 && (
+              <div style={{
+                marginTop: '10px', paddingTop: '10px', borderTop: `1px dashed ${tone.border}`,
+                display: 'flex', flexDirection: 'column', gap: '6px',
+              }}>
+                {errs.map((e: any, i: number) => (
+                  <div key={e.message_id || i} style={{
+                    padding: '6px 8px', borderRadius: '6px',
+                    background: 'rgba(239,68,68,0.06)', border: '1px solid rgba(239,68,68,0.18)',
+                  }}>
+                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', gap: '8px' }}>
+                      <div style={{ fontSize: '11px', fontWeight: 700, color: 'var(--text-primary)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                        {e.subject || e.attachment_filename || '(no subject)'}
+                      </div>
+                      <div style={{ fontSize: '9px', color: 'var(--text-muted)', flexShrink: 0 }}>
+                        {e.from_email || ''}
+                      </div>
+                    </div>
+                    <div style={{ fontSize: '10px', color: '#ef4444', marginTop: '2px', wordBreak: 'break-word' }}>
+                      {e.error_message || '(no error message recorded)'}
+                    </div>
+                    {(e.received_at || e.created_at) && (
+                      <div style={{ fontSize: '9px', color: 'var(--text-muted)', marginTop: '2px' }}>
+                        {new Date(e.received_at || e.created_at).toLocaleString([], { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' })}
+                      </div>
+                    )}
+                  </div>
+                ))}
+              </div>
+            )}
           </div>
         );
       })()}

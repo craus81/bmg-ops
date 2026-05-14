@@ -16,7 +16,7 @@ export async function GET(req: NextRequest) {
     process.env.SUPABASE_SERVICE_ROLE_KEY!
   );
 
-  const [{ data: tokenRow }, { data: stateRow }] = await Promise.all([
+  const [{ data: tokenRow }, { data: stateRow }, { data: errorRows }] = await Promise.all([
     supabase
       .from('google_tokens')
       .select('id, expiry_date, updated_at')
@@ -28,6 +28,14 @@ export async function GET(req: NextRequest) {
       .select('last_synced_at, last_result, updated_at')
       .eq('sync_type', 'gmail_auto_import')
       .maybeSingle(),
+    // Surface the most recent per-message failures so the UI can show
+    // why imports are erroring, not just the aggregate count.
+    supabase
+      .from('gmail_po_imports')
+      .select('message_id, subject, from_email, received_at, error_message, attachment_filename, created_at')
+      .eq('status', 'error')
+      .order('created_at', { ascending: false })
+      .limit(20),
   ]);
 
   return NextResponse.json({
@@ -35,5 +43,6 @@ export async function GET(req: NextRequest) {
     tokenUpdatedAt: tokenRow?.updated_at || null,
     lastRunAt: stateRow?.last_synced_at || null,
     lastResult: stateRow?.last_result || null,
+    recentErrors: errorRows || [],
   });
 }
