@@ -212,7 +212,10 @@ export default function CompletionModal({
     <div onClick={onClose} style={{
       position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.6)',
       display: 'flex', alignItems: 'flex-start', justifyContent: 'center',
-      zIndex: 1000, padding: '20px', overflowY: 'auto',
+      // zIndex 1500 keeps this on top of /tracking's vehicle popout modal
+      // (which uses 1001) — otherwise "Run Completion Process" mounts the
+      // modal behind the popout card and looks like nothing happened.
+      zIndex: 1500, padding: '20px', overflowY: 'auto',
     }}>
       <div onClick={e => e.stopPropagation()} style={{
         background: 'var(--card)', borderRadius: '14px', maxWidth: '720px', width: '100%',
