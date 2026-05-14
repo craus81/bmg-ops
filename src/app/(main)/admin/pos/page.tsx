@@ -287,6 +287,15 @@ export default function POsPage() {
   const [gfxJobResults, setGfxJobResults] = useState<Record<string, 'created' | 'error'>>({});
   // Create multi-part graphics job from entire PO
   const [creatingGfxJobForPo, setCreatingGfxJobForPo] = useState<string | null>(null); // po id
+  // Gmail PO auto-import status — surfaced in a strip above the PO list so
+  // it's obvious whether the hourly cron is finding emails / connected to
+  // Gmail at all, without anyone having to dig through Vercel logs.
+  const [gmailStatus, setGmailStatus] = useState<{
+    gmailConnected: boolean;
+    lastRunAt: string | null;
+    lastResult: any | null;
+  } | null>(null);
+  const [gmailRunning, setGmailRunning] = useState(false);
   // Batch delete state
   const [editMode, setEditMode] = useState(false);
   // Line item sort
@@ -457,6 +466,28 @@ export default function POsPage() {
     load();
   // eslint-disable-next-line react-hooks/exhaustive-deps -- intentional: load once on mount
   }, [isAdmin]);
+
+  const refreshGmailStatus = async () => {
+    try {
+      const res = await fetch('/api/gmail/auto-import-status');
+      if (res.ok) setGmailStatus(await res.json());
+    } catch {}
+  };
+
+  useEffect(() => {
+    if (!isAdmin) return;
+    refreshGmailStatus();
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- intentional
+  }, [isAdmin]);
+
+  const runGmailImportNow = async () => {
+    setGmailRunning(true);
+    try {
+      await fetch('/api/gmail/auto-import?manual=true');
+    } catch {}
+    await refreshGmailStatus();
+    setGmailRunning(false);
+  };
 
   // Auto-expand PO from URL param (deep link from notifications/search)
   useEffect(() => {
@@ -1569,6 +1600,74 @@ export default function POsPage() {
         onChange={handlePoPdfUpload}
         style={{ display: 'none' }}
       />
+      {/* Gmail auto-import status strip */}
+      {gmailStatus && (() => {
+        const r: any = gmailStatus.lastResult || {};
+        const status = r.status as 'ok' | 'error' | undefined;
+        const minutesAgo = gmailStatus.lastRunAt
+          ? Math.round((Date.now() - new Date(gmailStatus.lastRunAt).getTime()) / 60000)
+          : null;
+        const tone = !gmailStatus.gmailConnected || status === 'error'
+          ? { bg: 'rgba(239,68,68,0.08)', border: 'rgba(239,68,68,0.25)', color: '#ef4444' }
+          : status === 'ok'
+            ? { bg: 'rgba(34,197,94,0.06)', border: 'rgba(34,197,94,0.2)', color: '#22c55e' }
+            : { bg: 'var(--subtle-bg)', border: 'var(--border)', color: 'var(--text-muted)' };
+        let summary = '';
+        if (!gmailStatus.gmailConnected) {
+          summary = 'Gmail is not connected. Connect a mailbox to auto-import POs.';
+        } else if (status === 'error') {
+          summary = `Last run failed: ${r.reason || r.error || 'unknown error'}`;
+        } else if (status === 'ok') {
+          summary = `Last run: ${r.messagesFound ?? 0} email${r.messagesFound === 1 ? '' : 's'} found · ${r.imported ?? 0} imported · ${r.skipped ?? 0} skipped${(r.errors ?? 0) > 0 ? ` · ${r.errors} errors` : ''}`;
+        } else if (gmailStatus.lastRunAt) {
+          summary = 'No detail recorded for last run.';
+        } else {
+          summary = 'No run recorded yet.';
+        }
+        return (
+          <div style={{
+            padding: '8px 12px', borderRadius: '10px', marginBottom: '10px',
+            background: tone.bg, border: `1px solid ${tone.border}`,
+            display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '8px',
+          }}>
+            <div style={{ display: 'flex', flexDirection: 'column', minWidth: 0 }}>
+              <div style={{ fontSize: '11px', fontWeight: 700, color: tone.color, textTransform: 'uppercase', letterSpacing: '0.5px' }}>
+                Gmail PO Auto-Import
+                {minutesAgo !== null && (
+                  <span style={{ marginLeft: '6px', color: 'var(--text-muted)', fontWeight: 600 }}>
+                    · {minutesAgo < 1 ? 'just now' : minutesAgo < 60 ? `${minutesAgo}m ago` : `${Math.round(minutesAgo / 60)}h ago`}
+                  </span>
+                )}
+              </div>
+              <div style={{ fontSize: '11px', color: 'var(--text-body)', marginTop: '2px' }}>{summary}</div>
+            </div>
+            <div style={{ display: 'flex', gap: '6px', flexShrink: 0 }}>
+              {!gmailStatus.gmailConnected && (
+                <a
+                  href="/api/auth/google"
+                  style={{
+                    padding: '6px 10px', borderRadius: '6px', fontSize: '11px', fontWeight: 700,
+                    background: 'rgba(59,130,246,0.1)', border: '1px solid rgba(59,130,246,0.3)',
+                    color: '#60a5fa', textDecoration: 'none',
+                  }}
+                >Connect Gmail</a>
+              )}
+              <button
+                onClick={runGmailImportNow}
+                disabled={gmailRunning || !gmailStatus.gmailConnected}
+                style={{
+                  padding: '6px 10px', borderRadius: '6px', fontSize: '11px', fontWeight: 700,
+                  background: 'var(--subtle-bg)', border: '1px solid var(--border)',
+                  color: 'var(--text-body)',
+                  cursor: gmailRunning || !gmailStatus.gmailConnected ? 'default' : 'pointer',
+                  opacity: gmailRunning || !gmailStatus.gmailConnected ? 0.5 : 1,
+                }}
+              >{gmailRunning ? 'Running…' : 'Run Now'}</button>
+            </div>
+          </div>
+        );
+      })()}
+
       {/* Open / Closed tabs */}
       <div style={{ display: 'flex', gap: '4px', marginBottom: '10px' }}>
         <button onClick={() => setPoTab('open')} style={{

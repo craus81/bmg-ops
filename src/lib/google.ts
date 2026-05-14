@@ -75,13 +75,16 @@ export async function getGmailClient() {
   return google.gmail({ version: 'v1', auth: client });
 }
 
-// Search Gmail for PO emails with PDF attachments
-// Paginates through all results to avoid the default 50-result cap
+// Search Gmail for PO emails with PDF attachments.
+//
+// We accept several common subject patterns — vendors don't all literally
+// say "PO" — to avoid silently missing purchase orders whose subjects say
+// "Purchase Order" or "P.O." instead. has:attachment filename:pdf keeps
+// the noise floor down.
 export async function searchPOEmails(after?: string) {
   const gmail = await getGmailClient();
 
-  // Build search query
-  let q = 'subject:PO has:attachment filename:pdf';
+  let q = '(subject:PO OR subject:"purchase order" OR subject:P.O.) has:attachment filename:pdf';
   if (after) {
     q += ` after:${after}`;
   }

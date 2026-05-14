@@ -5,6 +5,24 @@ import { createClient } from '@supabase/supabase-js';
 // This route is called by Vercel Cron every hour
 // It searches Gmail for new PO emails and auto-imports them
 
+const SYNC_TYPE = 'gmail_auto_import';
+
+async function recordRun(
+  supabase: any,
+  result: Record<string, unknown>,
+) {
+  try {
+    await supabase.from('sync_state').upsert({
+      sync_type: SYNC_TYPE,
+      last_synced_at: new Date().toISOString(),
+      last_result: result,
+      updated_at: new Date().toISOString(),
+    }, { onConflict: 'sync_type' });
+  } catch (err: any) {
+    console.error('[gmail-auto-import] failed to persist sync_state:', err?.message);
+  }
+}
+
 export async function GET(req: NextRequest) {
   // Verify cron secret (optional security)
   const authHeader = req.headers.get('authorization');
@@ -17,12 +35,12 @@ export async function GET(req: NextRequest) {
     }
   }
 
-  try {
-    const supabase = createClient(
-      process.env.NEXT_PUBLIC_SUPABASE_URL!,
-      process.env.SUPABASE_SERVICE_ROLE_KEY!
-    );
+  const supabase = createClient(
+    process.env.NEXT_PUBLIC_SUPABASE_URL!,
+    process.env.SUPABASE_SERVICE_ROLE_KEY!
+  );
 
+  try {
     // Search last 2 days of emails (overlap to catch anything missed)
     const afterDate = new Date();
     afterDate.setDate(afterDate.getDate() - 2);
@@ -30,6 +48,7 @@ export async function GET(req: NextRequest) {
 
     const messages = await searchPOEmails(afterStr);
     if (messages.length === 0) {
+      await recordRun(supabase, { status: 'ok', messagesFound: 0, imported: 0, skipped: 0, errors: 0 });
       return NextResponse.json({ message: 'No PO emails found', imported: 0, skipped: 0 });
     }
 
@@ -141,6 +160,17 @@ export async function GET(req: NextRequest) {
       }
     }
 
+    await recordRun(supabase, {
+      status: 'ok',
+      messagesFound: messages.length,
+      imported,
+      skipped,
+      errors,
+      // Cap stored results so the jsonb stays small. The first few are
+      // enough to debug; the UI panel just shows summary counts anyway.
+      sample: results.slice(0, 10),
+    });
+
     return NextResponse.json({
       message: `Processed ${messages.length} emails`,
       imported,
@@ -150,9 +180,11 @@ export async function GET(req: NextRequest) {
     });
   } catch (err: any) {
     if (err.message === 'NO_GOOGLE_TOKEN') {
+      await recordRun(supabase, { status: 'error', reason: 'NO_GOOGLE_TOKEN' });
       return NextResponse.json({ error: 'Gmail not connected', needsAuth: true }, { status: 401 });
     }
     console.error('Auto-import error:', err);
+    await recordRun(supabase, { status: 'error', error: err?.message || 'unknown' });
     return NextResponse.json({ error: err.message || 'Auto-import failed' }, { status: 500 });
   }
 }
