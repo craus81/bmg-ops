@@ -7,6 +7,7 @@ import { useAuth } from '@/components/AuthProvider';
 import { theme } from '@/lib/theme';
 import NetSuitePdf from '@/components/NetSuitePdf';
 import DropboxProofSearch from '@/components/DropboxProofSearch';
+import { exportProspectPDF } from '@/lib/prospect-pdf';
 
 interface Prospect {
   id: string;
@@ -1156,6 +1157,25 @@ export default function ProspectsPage() {
                         padding: '5px 10px', borderRadius: '6px', fontSize: '10px', fontWeight: 700, cursor: 'pointer',
                         background: prospect.multi_location ? 'rgba(251,191,36,0.1)' : 'var(--subtle-bg)', border: `1px solid ${prospect.multi_location ? 'rgba(251,191,36,0.25)' : 'var(--border)'}`, color: prospect.multi_location ? '#f59e0b' : 'var(--text-muted)',
                       }}>{prospect.multi_location ? '✓ Multi-Location' : 'Multi-Location'}</button>
+                      <button
+                        onClick={() => exportProspectPDF({
+                          prospect,
+                          statusLabel: STATUS_LABELS[prospect.status] || prospect.status || '',
+                          ownerName: profiles[prospect.created_by || ''] || null,
+                          metrics: customerMetrics[prospect.id] || null,
+                          contacts: contacts[prospect.id] || [],
+                          opportunities: opportunities[prospect.id] || [],
+                          activities: activities[prospect.id] || [],
+                          tags: tags[prospect.id] || [],
+                          documents: documents[prospect.id] || [],
+                        })}
+                        title="Download a printable PDF summary of this prospect"
+                        style={{
+                          padding: '5px 10px', borderRadius: '6px', fontSize: '10px', fontWeight: 700, cursor: 'pointer',
+                          background: 'rgba(96,165,250,0.1)', border: '1px solid rgba(96,165,250,0.25)', color: '#60a5fa',
+                          marginLeft: 'auto',
+                        }}
+                      >Export PDF</button>
                     </div>
 
                     {/* Lead source & details */}

@@ -64,6 +64,7 @@ export default function CompletionModal({
   const [photos, setPhotos] = useState<Photo[]>([]);
   const [soLines, setSoLines] = useState<SalesOrderLine[]>([]);
   const [soLinesLoading, setSoLinesLoading] = useState(false);
+  const [soLinesError, setSoLinesError] = useState<string | null>(null);
   const [soLineChecked, setSoLineChecked] = useState<Record<number, boolean>>({});
 
   const [completionNote, setCompletionNote] = useState('');
@@ -98,15 +99,31 @@ export default function CompletionModal({
 
   useEffect(() => { refresh(); }, [refresh]);
 
-  // Lazy-load SO line items the first time the upfit task is expanded
-  const ensureSoLines = useCallback(async () => {
-    if (!netsuiteSalesOrderId || soLines.length > 0 || soLinesLoading) return;
+  // Lazy-load SO line items the first time the upfit task is expanded.
+  // forceReload skips the "already loaded" check so the Retry button can
+  // re-run after a transient failure.
+  const ensureSoLines = useCallback(async (opts: { forceReload?: boolean } = {}) => {
+    if (!netsuiteSalesOrderId) return;
+    if (!opts.forceReload && (soLines.length > 0 || soLinesLoading)) return;
     setSoLinesLoading(true);
+    setSoLinesError(null);
     try {
       const res = await fetch(`/api/netsuite/sales-order-lines/${encodeURIComponent(netsuiteSalesOrderId)}`);
-      const data = await res.json();
-      if (res.ok) setSoLines(data.lines || []);
-    } catch {}
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        // NetSuite hiccups (auth expired, rate-limited, transient 5xx)
+        // used to disappear here. Surface the actual error so the user
+        // sees why the list is empty and so devtools can pick it up.
+        const msg = data?.error || `HTTP ${res.status}`;
+        console.error('[completion modal] failed to load SO lines:', msg);
+        setSoLinesError(msg);
+      } else {
+        setSoLines(data.lines || []);
+      }
+    } catch (err: any) {
+      console.error('[completion modal] SO lines fetch threw:', err);
+      setSoLinesError(err?.message || 'Network error contacting NetSuite');
+    }
     setSoLinesLoading(false);
   }, [netsuiteSalesOrderId, soLines.length, soLinesLoading]);
 
@@ -212,7 +229,10 @@ export default function CompletionModal({
     <div onClick={onClose} style={{
       position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.6)',
       display: 'flex', alignItems: 'flex-start', justifyContent: 'center',
-      zIndex: 1000, padding: '20px', overflowY: 'auto',
+      // zIndex 1500 keeps this on top of /tracking's vehicle popout modal
+      // (which uses 1001) — otherwise "Run Completion Process" mounts the
+      // modal behind the popout card and looks like nothing happened.
+      zIndex: 1500, padding: '20px', overflowY: 'auto',
     }}>
       <div onClick={e => e.stopPropagation()} style={{
         background: 'var(--card)', borderRadius: '14px', maxWidth: '720px', width: '100%',
@@ -360,7 +380,22 @@ export default function CompletionModal({
                           Sales order line items {netsuiteSalesOrderId ? '' : '· no SO linked'}
                         </div>
                         {soLinesLoading && <div style={{ fontSize: '12px', color: 'var(--text-muted)' }}>Loading from NetSuite…</div>}
-                        {!soLinesLoading && soLines.length > 0 && (
+                        {!soLinesLoading && soLinesError && (
+                          <div style={{
+                            padding: '8px 10px', borderRadius: '6px', marginBottom: '6px',
+                            background: 'rgba(239,68,68,0.08)', border: '1px solid rgba(239,68,68,0.2)',
+                            color: '#ef4444', fontSize: '11px',
+                            display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '8px',
+                          }}>
+                            <span>NetSuite error: {soLinesError}</span>
+                            <button
+                              type="button"
+                              onClick={() => ensureSoLines({ forceReload: true })}
+                              style={{ padding: '3px 9px', borderRadius: '5px', fontSize: '10px', fontWeight: 700, background: 'transparent', border: '1px solid rgba(239,68,68,0.3)', color: '#ef4444', cursor: 'pointer' }}
+                            >Retry</button>
+                          </div>
+                        )}
+                        {!soLinesLoading && !soLinesError && soLines.length > 0 && (
                           <div style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
                             {soLines.map(line => {
                               const checked = !!soLineChecked[line.lineNumber];
@@ -387,7 +422,7 @@ export default function CompletionModal({
                             </div>
                           </div>
                         )}
-                        {!soLinesLoading && soLines.length === 0 && netsuiteSalesOrderId && (
+                        {!soLinesLoading && !soLinesError && soLines.length === 0 && netsuiteSalesOrderId && (
                           <div style={{ fontSize: '12px', color: 'var(--text-muted)' }}>No line items found for this SO.</div>
                         )}
                       </div>
