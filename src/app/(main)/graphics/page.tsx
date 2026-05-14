@@ -9,6 +9,7 @@ import { theme } from '@/lib/theme';
 import AssignmentPicker from '@/components/AssignmentPicker';
 import GraphicsInvoiceModal from '@/components/GraphicsInvoiceModal';
 import { PartLabel } from '@/components/PartLabel';
+import DropboxProofSearch from '@/components/DropboxProofSearch';
 import type {
   GraphicsJob, GraphicsJobStatus, GraphicsJobCategory, GraphicsStatusHistory, GraphicsJobView, Profile,
 } from '@/lib/types';
@@ -1804,6 +1805,15 @@ export default function GraphicsPage() {
                           >
                             {uploadingFiles ? 'Uploading...' : '+ Upload Files (proofs, logos, photos)'}
                           </button>
+
+                          {/* Dropbox proof search — pre-fills with customer
+                              so users can find existing artwork without
+                              hand-walking the Dropbox folder tree. */}
+                          <div style={{ marginTop: '8px' }}>
+                            <DropboxProofSearch
+                              defaultQuery={job.customer || job.part_number || ''}
+                            />
+                          </div>
                         </div>
 
                         {/* Team Assignment */}

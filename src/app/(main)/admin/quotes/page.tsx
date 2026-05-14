@@ -6,6 +6,7 @@ import { useAuth } from '@/components/AuthProvider';
 import { createClient } from '@/lib/supabase-browser';
 import { storage } from '@/lib/storage';
 import { theme } from '@/lib/theme';
+import DropboxProofSearch from '@/components/DropboxProofSearch';
 import type { VehicleTemplate, Quote, QuotePanel, QuoteElement, AIAnalysisResult, GraphicElement, RollNestingResult } from '@/lib/types';
 import { applyBleed, nestElementsOnRoll, recalcFromPositions } from '@/lib/nesting-algorithm';
 
@@ -416,6 +417,12 @@ function QuoteDetail({ quote, onBack, onEdit }: { quote: Quote; onBack: () => vo
           <img src={proofUrl} alt="Proof" style={{ width: '100%', borderRadius: '8px' }} />
         </div>
       )}
+
+      {/* Dropbox proof search — pre-fills with the quote customer so the
+          user doesn't have to walk the Dropbox tree to find artwork. */}
+      <div style={{ marginBottom: '12px' }}>
+        <DropboxProofSearch defaultQuery={quote.customer_name || ''} />
+      </div>
 
       {/* Summary */}
       <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '8px', marginBottom: '12px' }}>

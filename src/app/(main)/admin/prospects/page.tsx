@@ -6,6 +6,7 @@ import { createClient } from '@/lib/supabase-browser';
 import { useAuth } from '@/components/AuthProvider';
 import { theme } from '@/lib/theme';
 import NetSuitePdf from '@/components/NetSuitePdf';
+import DropboxProofSearch from '@/components/DropboxProofSearch';
 
 interface Prospect {
   id: string;
@@ -1112,6 +1113,13 @@ export default function ProspectsPage() {
                         </div>
                       </div>
                     )}
+
+                    {/* Dropbox proof search — pre-fills with the company
+                        name so users can find prior artwork without
+                        manually navigating the Dropbox folder tree. */}
+                    <div style={{ marginBottom: '12px' }}>
+                      <DropboxProofSearch defaultQuery={prospect.company_name || ''} />
+                    </div>
 
                     {/* Quick toggles & details */}
                     <div style={{ display: 'flex', gap: '6px', flexWrap: 'wrap', marginBottom: '12px' }}>
