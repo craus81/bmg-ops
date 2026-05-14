@@ -5,9 +5,9 @@ export const maxDuration = 60;
 
 const ANTHROPIC_API_KEY = process.env.ANTHROPIC_API_KEY;
 
-const WORKSHEET_PROMPT = `You are reading a Subcontractor Installation Worksheet. Extract the data as accurately as possible.
+const WORKSHEET_PROMPT = `You are reading one or more Subcontractor Installation Worksheets. Each PAGE of the document is a separate worksheet — a different week, a different job, often a different part number. Treat every page independently.
 
-The sheet has:
+Each page has:
 - A header with: Vendor Name, Part# (one or more part numbers), Date, PO#, Customer
 - A table with numbered rows containing: Order #, VIN Last 8, Unit #
 
@@ -16,25 +16,25 @@ IMPORTANT RULES:
 - Common handwriting confusions: 5/S, 0/O, 1/I, 8/B, 6/G, 2/Z
 - If a field is empty or illegible, use null
 - Only include rows that have data (skip empty numbered rows)
-- The Part# field may contain MULTIPLE part numbers separated by "/" — include ALL of them exactly as written
+- The Part# field may contain MULTIPLE part numbers separated by "/" — include ALL of them exactly as written on that page
 - Part numbers typically start with "06" and are 6+ characters long
 - The Unit # column often contains location names (city, state)
 - IGNORE the Vendor Name and PO# fields
+- Even for a SINGLE-page document, return the pages array with one entry.
+- Do NOT merge rows from different pages — each page's rows stay with that page's header.
 
-Return ONLY valid JSON, no markdown, no backticks, no explanation:
+Return ONLY valid JSON, no markdown, no backticks, no explanation, in this exact shape:
 {
-  "header": {
-    "part_number": "06N5TR/06N179",
-    "customer": "CROWN"
-  },
-  "rows": [
+  "pages": [
     {
-      "row_number": 1,
-      "partial_vin": "TKA34769",
-      "unit_number": "Joliet, IL"
+      "page": 1,
+      "header": { "part_number": "06N5TR/06N179", "customer": "CROWN" },
+      "rows": [
+        { "row_number": 1, "partial_vin": "TKA34769", "unit_number": "Joliet, IL" }
+      ],
+      "notes": "Any observations about legibility for this page"
     }
-  ],
-  "notes": "Any observations about legibility"
+  ]
 }`;
 
 export async function POST(request: NextRequest) {
@@ -133,24 +133,30 @@ export async function POST(request: NextRequest) {
         throw new Error('No JSON found in AI response');
       }
 
-      // Handle array response (multi-page PDF) — Claude returns [{page:1,...}, {page:2,...}]
+      // Normalize to { pages: [...] }. Each page keeps its OWN header,
+      // rows, and notes — never merge across pages, because each page
+      // is a separate worksheet with potentially different part numbers.
+      // Three shapes can come back from Claude:
+      //   1. Already correct: { pages: [...] }
+      //   2. Top-level array: [ { header, rows, notes }, ... ]
+      //   3. Flat single page: { header, rows, notes }
+      let pages: any[];
       if (Array.isArray(parsed)) {
-        parsed = { pages: parsed };
+        pages = parsed;
+      } else if (parsed && Array.isArray(parsed.pages)) {
+        pages = parsed.pages;
+      } else if (parsed && (parsed.header || parsed.rows)) {
+        pages = [{ header: parsed.header || {}, rows: parsed.rows || [], notes: parsed.notes || null }];
+      } else {
+        pages = [];
       }
-
-      // Handle multi-page PDF response — merge into single result
-      if (parsed.pages && Array.isArray(parsed.pages)) {
-        const allRows: any[] = [];
-        let header: any = null;
-        let allNotes: string[] = [];
-        for (const page of parsed.pages) {
-          if (page.header && !header) header = page.header;
-          if (page.header && header && page.header.part_number && !header.part_number) header = page.header;
-          if (page.rows) allRows.push(...page.rows);
-          if (page.notes) allNotes.push(page.notes);
-        }
-        parsed = { header, rows: allRows, notes: allNotes.join('; ') };
-      }
+      pages = pages.map((p: any, i: number) => ({
+        page: p.page ?? i + 1,
+        header: p.header || {},
+        rows: Array.isArray(p.rows) ? p.rows : [],
+        notes: p.notes || null,
+      }));
+      parsed = { pages };
     } catch (parseError) {
       console.error('Failed to parse AI response:', aiText);
       return NextResponse.json(
