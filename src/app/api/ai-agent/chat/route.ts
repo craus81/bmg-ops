@@ -213,8 +213,15 @@ only. Always check the knowledge base in the same round. Never tell the
 user "we don't have wrap dimension data" without first running a
 knowledge search.
 
-Use source "vehicle_search" with a search term for the structured table:
-Example: {"id": "transit_dims", "source": "vehicle_search", "search": "Ford Transit"}
+Use source "vehicle_search" with a search term for the structured table.
+The handler ANDs every search term across name/make/model/variant — pass
+ALL meaningful descriptors at once ("Ford Transit Mid Roof"), don't drop
+them or substitute synonyms. The response includes a "match_type" field:
+"exact" means every term was matched; "fuzzy" means no exact match and
+the items are approximate — when match_type is fuzzy, tell the user the
+specific vehicle wasn't in the table and offer the closest hits, don't
+present them as the answer.
+Example: {"id": "transit_dims", "source": "vehicle_search", "search": "Ford Transit Mid Roof"}
 Example: {"id": "sprinter_dims", "source": "vehicle_search", "search": "Sprinter High Roof"}
 
 Use source "knowledge" in PARALLEL for the docs:
@@ -516,52 +523,75 @@ async function executeQuery(q: QuerySpec): Promise<any> {
   if (source === 'vehicle_search') {
     if (!q.search) throw new Error('No search terms provided for vehicle search');
 
-    const searchTerms = q.search.trim().split(/\s+/).filter(Boolean);
-
-    // Build OR conditions across make, model, variant, name
-    const conditions: string[] = [];
-    for (const term of searchTerms) {
-      if (term.length >= 2) {
-        conditions.push(`name.ilike.%${term}%`);
-        conditions.push(`make.ilike.%${term}%`);
-        conditions.push(`model.ilike.%${term}%`);
-        conditions.push(`variant.ilike.%${term}%`);
-      }
+    const searchTerms = q.search.trim().split(/\s+/).filter(t => t.length >= 2);
+    if (searchTerms.length === 0) {
+      return { items: [], message: 'Search terms too short' };
     }
 
-    if (conditions.length === 0) {
-      return { items: [], message: 'Search terms too short' };
+    // First pass: pull a wide candidate set with an OR-of-ILIKE across the
+    // four name-bearing columns. This is intentionally loose — we then
+    // AND-filter in JS so a query like "Ford Transit Mid Roof" only keeps
+    // rows that contain ALL four words somewhere across name/make/model/
+    // variant. Without that AND step the search was returning anything
+    // matching "Roof" (Sprinters, Citroëns, etc).
+    const orParts: string[] = [];
+    for (const term of searchTerms) {
+      const escaped = term.replace(/[,()]/g, ' ');
+      orParts.push(`name.ilike.%${escaped}%`);
+      orParts.push(`make.ilike.%${escaped}%`);
+      orParts.push(`model.ilike.%${escaped}%`);
+      orParts.push(`variant.ilike.%${escaped}%`);
     }
 
     const { data, error } = await supabase
       .from('vehicle_templates')
       .select('id, name, make, model, year, variant, overall_length_in, overall_height_in, wheelbase_in, panel_data')
-      .or(conditions.join(','))
-      .limit(10);
+      .or(orParts.join(','))
+      .limit(100);
 
     if (error) throw new Error(`Vehicle search failed: ${error.message}`);
 
-    // Score results — prioritize exact make+model matches
-    const scored = (data || []).map(d => {
+    const lowerTerms = searchTerms.map(t => t.toLowerCase());
+    const searchLow = q.search!.toLowerCase();
+
+    type Row = NonNullable<typeof data>[number];
+    const haystackFor = (d: Row) =>
+      `${d.name || ''} ${d.make || ''} ${d.model || ''} ${d.variant || ''}`.toLowerCase();
+
+    // Strict pass: every term must appear somewhere in the haystack.
+    const strict = (data || []).filter(d => {
+      const h = haystackFor(d);
+      return lowerTerms.every(t => h.includes(t));
+    });
+
+    // If the strict filter eliminated everything, fall back to the loose
+    // candidate set so the AI still gets *something* to look at — and
+    // mark the response so it knows the match was approximate.
+    const matchType: 'exact' | 'fuzzy' = strict.length > 0 ? 'exact' : 'fuzzy';
+    const pool: Row[] = strict.length > 0 ? strict : (data || []);
+
+    const scored = pool.map(d => {
       let score = 0;
       const nameLow = (d.name || '').toLowerCase();
-      const searchLow = q.search!.toLowerCase();
+      const makeLow = (d.make || '').toLowerCase();
+      const modelLow = (d.model || '').toLowerCase();
+      const variantLow = (d.variant || '').toLowerCase();
 
-      if (nameLow.includes(searchLow)) score += 10;
-      for (const term of searchTerms) {
-        const tLow = term.toLowerCase();
-        if ((d.make || '').toLowerCase() === tLow) score += 5;
-        if ((d.model || '').toLowerCase() === tLow) score += 5;
-        if ((d.variant || '').toLowerCase().includes(tLow)) score += 3;
-        if (nameLow.includes(tLow)) score += 1;
+      if (nameLow.includes(searchLow)) score += 25;
+      for (const t of lowerTerms) {
+        if (makeLow === t) score += 10;
+        if (modelLow === t) score += 10;
+        if (variantLow.includes(t)) score += 5;
+        if (nameLow.includes(t)) score += 2;
       }
       return { ...d, _score: score };
     });
 
     scored.sort((a, b) => b._score - a._score);
+    const top = scored.slice(0, 10);
 
     // Format panel data for readability
-    const items = scored.map(d => {
+    const items = top.map(d => {
       const panels = (d.panel_data || []).map((p: any) => ({
         label: p.label,
         name: p.name,
@@ -584,7 +614,13 @@ async function executeQuery(q: QuerySpec): Promise<any> {
       };
     });
 
-    return { items };
+    return {
+      items,
+      match_type: matchType,
+      total_candidates: (data || []).length,
+      strict_matches: strict.length,
+      ...(matchType === 'fuzzy' ? { note: `No exact match for "${q.search}". Showing approximate matches across name/make/model/variant.` } : {}),
+    };
   }
 
   if (source === 'action') {
