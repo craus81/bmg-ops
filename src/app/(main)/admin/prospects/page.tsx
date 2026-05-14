@@ -6,6 +6,7 @@ import { createClient } from '@/lib/supabase-browser';
 import { useAuth } from '@/components/AuthProvider';
 import { theme } from '@/lib/theme';
 import NetSuitePdf from '@/components/NetSuitePdf';
+import DropboxProofSearch from '@/components/DropboxProofSearch';
 
 interface Prospect {
   id: string;
@@ -146,6 +147,7 @@ export default function ProspectsPage() {
   const [docsExpanded, setDocsExpanded] = useState<Set<string>>(new Set());
   const [docsShowAll, setDocsShowAll] = useState<Set<string>>(new Set());
   const [docsError, setDocsError] = useState<Record<string, string>>({});
+  const [docsHasMore, setDocsHasMore] = useState<Record<string, boolean>>({});
   // Per-prospect type filter for the NetSuite Documents list. 'all' shows
   // everything; otherwise narrows to a single document type.
   type DocTypeFilter = 'all' | 'invoice' | 'salesOrder' | 'estimate';
@@ -330,12 +332,19 @@ export default function ProspectsPage() {
     if (data) setCustomerMetrics(prev => ({ ...prev, [prospectId]: data }));
   };
 
-  const loadDocuments = async (nsId: string, prospectId: string) => {
-    if (documents[prospectId] || loadingDocs === prospectId) return;
+  // Paginated fetch from /api/netsuite/customer-invoices. First call
+  // (no append) replaces the list; subsequent "Load more" calls append.
+  // Per-prospect hasMore state lets the UI show/hide the load-more
+  // button without re-checking the server until clicked.
+  const DOCS_PAGE_SIZE = 100;
+  const loadDocuments = async (nsId: string, prospectId: string, opts: { append?: boolean } = {}) => {
+    if (loadingDocs === prospectId) return;
+    if (!opts.append && documents[prospectId]) return;
     setLoadingDocs(prospectId);
     setDocsError(prev => { const n = { ...prev }; delete n[prospectId]; return n; });
     try {
-      const res = await fetch(`/api/netsuite/customer-invoices?customerId=${nsId}`);
+      const offset = opts.append ? (documents[prospectId]?.length || 0) : 0;
+      const res = await fetch(`/api/netsuite/customer-invoices?customerId=${nsId}&limit=${DOCS_PAGE_SIZE}&offset=${offset}`);
       const data = await res.json();
       if (!res.ok) {
         throw new Error(data?.error || `HTTP ${res.status}`);
@@ -349,7 +358,11 @@ export default function ProspectsPage() {
         const info = typeMap[t.type] || { type: 'invoice' as const, label: t.type };
         return { id: String(t.id), number: t.tranid || t.id, date: t.trandate || '', status: t.status || '', type: info.type, typeLabel: info.label };
       });
-      setDocuments(prev => ({ ...prev, [prospectId]: docs }));
+      setDocuments(prev => ({
+        ...prev,
+        [prospectId]: opts.append ? [...(prev[prospectId] || []), ...docs] : docs,
+      }));
+      setDocsHasMore(prev => ({ ...prev, [prospectId]: !!data.hasMore }));
     } catch (err: any) {
       console.error('[prospects] loadDocuments failed:', err);
       setDocsError(prev => ({ ...prev, [prospectId]: err?.message || 'Failed to load NetSuite documents' }));
@@ -1098,6 +1111,15 @@ export default function ProspectsPage() {
                                       Show All ({filtered.length})
                                     </button>
                                   )}
+                                  {docsHasMore[prospect.id] && (
+                                    <button
+                                      onClick={() => prospect.netsuite_id && loadDocuments(prospect.netsuite_id, prospect.id, { append: true })}
+                                      disabled={loadingDocs === prospect.id}
+                                      style={{ width: '100%', padding: '6px', borderRadius: '6px', fontSize: '10px', fontWeight: 700, marginTop: '4px', background: 'rgba(96,165,250,0.08)', border: '1px solid rgba(96,165,250,0.2)', color: '#60a5fa', cursor: loadingDocs === prospect.id ? 'default' : 'pointer', opacity: loadingDocs === prospect.id ? 0.5 : 1 }}
+                                    >
+                                      {loadingDocs === prospect.id ? 'Loading more…' : `Load older history (page ${Math.ceil((allDocs.length / 100)) + 1})`}
+                                    </button>
+                                  )}
                                 </div>
                               );
                             })()}
@@ -1112,6 +1134,13 @@ export default function ProspectsPage() {
                         </div>
                       </div>
                     )}
+
+                    {/* Dropbox proof search — pre-fills with the company
+                        name so users can find prior artwork without
+                        manually navigating the Dropbox folder tree. */}
+                    <div style={{ marginBottom: '12px' }}>
+                      <DropboxProofSearch defaultQuery={prospect.company_name || ''} />
+                    </div>
 
                     {/* Quick toggles & details */}
                     <div style={{ display: 'flex', gap: '6px', flexWrap: 'wrap', marginBottom: '12px' }}>
