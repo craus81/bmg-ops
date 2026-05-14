@@ -994,6 +994,31 @@ export async function POST(req: NextRequest) {
       console.warn('[ai-agent] failed to build DB snapshot:', err);
     }
 
+    // Operator-editable instructions from /admin/settings/ai. Each
+    // enabled global rule applies to every chat; user-scoped rules are
+    // only injected when the requesting user owns them. Lets admins
+    // change AI behavior without a deploy.
+    try {
+      const userId = auth.user?.id;
+      const { data: instructions } = await supabase
+        .from('ai_instructions')
+        .select('scope, content, sort_order, user_id')
+        .eq('enabled', true)
+        .or(userId ? `scope.eq.global,user_id.eq.${userId}` : 'scope.eq.global')
+        .order('sort_order', { ascending: true })
+        .order('created_at', { ascending: true });
+      const globalRules = (instructions || []).filter((r: any) => r.scope === 'global');
+      const userRules = (instructions || []).filter((r: any) => r.scope === 'user');
+      if (globalRules.length > 0) {
+        systemPrompt += `\n\nOPERATOR INSTRUCTIONS (global, set in /admin/settings/ai — treat these as authoritative; they override training defaults):\n${globalRules.map((r: any, i: number) => `${i + 1}. ${r.content}`).join('\n')}`;
+      }
+      if (userRules.length > 0) {
+        systemPrompt += `\n\nOPERATOR INSTRUCTIONS (this user's personal preferences):\n${userRules.map((r: any, i: number) => `${i + 1}. ${r.content}`).join('\n')}`;
+      }
+    } catch (err) {
+      console.warn('[ai-agent] failed to load operator instructions:', err);
+    }
+
     let totalQueriesExecuted = 0;
     const MAX_ROUNDS = 4; // Increased from 3 since we have more data sources
 

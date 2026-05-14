@@ -135,6 +135,9 @@ export default function MorePage() {
         {F('cni_management') && !overflowPaths.has('/installer') && (
           <MenuBtn title="CNI Management" sub="Certified Network Installer jobs & profiles" onClick={() => router.push('/admin/cni')} />
         )}
+        {isAdmin && (
+          <MenuBtn title="AI Instructions" sub="Steer FleetSuite AI behavior — global rules, no deploy" onClick={() => router.push('/admin/ai-instructions')} />
+        )}
         {F('knowledge_base') && (
           <MenuBtn title="Knowledge Base" sub="SOPs and docs for AI agent" onClick={() => router.push('/admin/knowledge')} />
         )}
