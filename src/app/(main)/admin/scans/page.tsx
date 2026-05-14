@@ -59,7 +59,12 @@ export default function AdminScansPage() {
   const [bulkProcessing, setBulkProcessing] = useState(false);
   const [bulkResult, setBulkResult] = useState<{ success: number; failed: number; skipped?: number } | null>(null);
   const [scanningWorksheet, setScanningWorksheet] = useState(false);
-  const [worksheetReview, setWorksheetReview] = useState<{ header: any; rows: { row_number: number; partial_vin: string; unit_number: string | null; include: boolean }[]; notes: string | null } | null>(null);
+  // Each worksheet page is reviewed independently — multi-page PDFs are a
+  // week's worth of separate jobs, each with its own part number and VINs.
+  type WSRow = { row_number: number; partial_vin: string; unit_number: string | null; include: boolean };
+  type WSPage = { page: number; header: any; rows: WSRow[]; notes: string | null };
+  const [worksheetReview, setWorksheetReview] = useState<{ pages: WSPage[] } | null>(null);
+  const [worksheetCommitting, setWorksheetCommitting] = useState(false);
   const [worksheetNotes, setWorksheetNotes] = useState<string | null>(null);
 
   // Direct invoice state
@@ -563,6 +568,93 @@ export default function AdminScansPage() {
   };
 
   // Bulk upload handler
+  // Insert scans for each worksheet page using that page's own part
+  // numbers and customer. Multi-page worksheets are typically a week's
+  // worth of separate jobs, so we never merge pages together.
+  const commitWorksheetPages = async () => {
+    if (!worksheetReview) return;
+    setWorksheetCommitting(true);
+    let totalInserted = 0;
+    let totalSkipped = 0;
+    let totalFailed = 0;
+    const selectedLoc = allLocations.find(l => l.id === bulkLocation);
+
+    try {
+      for (const pg of worksheetReview.pages) {
+        const vins = pg.rows
+          .filter(r => r.include && r.partial_vin)
+          .map(r => r.partial_vin.trim().toUpperCase().replace(/[^A-HJ-NPR-Z0-9]/gi, ''))
+          .filter(v => v.length >= 5);
+        if (vins.length === 0) continue;
+
+        const partNumberTokens = (pg.header.part_number || '')
+          .split('/').map((p: string) => p.trim()).filter(Boolean);
+        const matchedParts = partNumberTokens
+          .map((pn: string) => allParts.find(p => p.item_number.toUpperCase().includes(pn.toUpperCase())))
+          .filter(Boolean) as typeof allParts;
+        // Fall back to a single null entry if no parts match — the scan
+        // still gets recorded with the raw VIN, just unmatched.
+        const partsToProcess: (typeof allParts[0] | null)[] = matchedParts.length > 0 ? matchedParts : [null];
+
+        // Find unit_number per VIN from this page's rows so we can copy
+        // it onto location_name.
+        const unitByVin: Record<string, string | null> = {};
+        for (const r of pg.rows) {
+          if (!r.include || !r.partial_vin) continue;
+          const cleaned = r.partial_vin.trim().toUpperCase().replace(/[^A-HJ-NPR-Z0-9]/gi, '');
+          if (cleaned) unitByVin[cleaned] = r.unit_number || null;
+        }
+
+        // Dedup against existing scan_logs rows on this page's parts.
+        const vinPartPairs: { vin: string; part: typeof partsToProcess[0] }[] = [];
+        for (const part of partsToProcess) {
+          const partNum = part?.item_number || '';
+          let q = supabase.from('scan_logs').select('vin, part_number').in('vin', vins);
+          if (partNum) q = q.eq('part_number', partNum);
+          const { data: existing } = await q;
+          const existingVins = new Set((existing || []).map((s: any) => s.vin));
+          for (const vin of vins) {
+            if (existingVins.has(vin)) totalSkipped++;
+            else vinPartPairs.push({ vin, part });
+          }
+        }
+
+        for (const { vin, part } of vinPartPairs) {
+          let vehicleData: any = {};
+          try {
+            const res = await fetch(`https://vpic.nhtsa.dot.gov/api/vehicles/decodevin/${vin}?format=json`);
+            const json = await res.json();
+            const results = json.Results || [];
+            const get = (id: number) => results.find((r: any) => r.VariableId === id)?.Value || null;
+            vehicleData = { vehicle_year: get(29), vehicle_make: get(26), vehicle_model: get(28), vehicle_trim: get(38), body_class: get(5) };
+          } catch {}
+
+          const { error } = await supabase.from('scan_logs').insert({
+            vin,
+            ...vehicleData,
+            part_number: part?.item_number || null,
+            part_description: part?.display_name || null,
+            billable_customer: pg.header.customer || part?.billable_customer || null,
+            location_id: selectedLoc?.id || null,
+            // Prefer the per-row unit_number from the worksheet; fall back
+            // to the bulk-upload location selector.
+            location_name: unitByVin[vin] || selectedLoc?.name || null,
+            scanned_by: user?.id,
+          });
+          if (error) totalFailed++; else totalInserted++;
+        }
+      }
+
+      setWorksheetNotes(`Inserted ${totalInserted} scan${totalInserted === 1 ? '' : 's'} · ${totalSkipped} duplicate${totalSkipped === 1 ? '' : 's'} skipped${totalFailed > 0 ? ` · ${totalFailed} failed` : ''}`);
+      setWorksheetReview(null);
+      loadAll();
+    } catch (err: any) {
+      console.error('[worksheet commit] failed:', err);
+      setWorksheetNotes(`Commit failed: ${err?.message || err}`);
+    }
+    setWorksheetCommitting(false);
+  };
+
   const handleBulkUpload = async () => {
     if (!bulkVins.trim()) return;
     const selectedPartsList = bulkParts.map(bp => allParts.find(p => p.id === bp.id)).filter(Boolean) as typeof allParts;
@@ -683,14 +775,24 @@ export default function AdminScansPage() {
         return;
       }
 
-      const { header, rows, notes } = result.data;
-
-      // Open review modal instead of auto-populating
-      setWorksheetReview({
-        header: header || {},
-        rows: (rows || []).map((r: any) => ({ ...r, include: true })),
-        notes: notes || null,
-      });
+      const pagesRaw: any[] = Array.isArray(result.data?.pages) ? result.data.pages : [];
+      const pages: WSPage[] = pagesRaw.map((p: any, i: number) => ({
+        page: p.page ?? i + 1,
+        header: p.header || {},
+        rows: (p.rows || []).map((r: any) => ({
+          row_number: r.row_number ?? 0,
+          partial_vin: r.partial_vin || '',
+          unit_number: r.unit_number || null,
+          include: true,
+        })),
+        notes: p.notes || null,
+      }));
+      if (pages.length === 0) {
+        setWorksheetNotes('Scan returned no pages. Try a clearer scan.');
+        setScanningWorksheet(false);
+        return;
+      }
+      setWorksheetReview({ pages });
     } catch (err: any) {
       setWorksheetNotes(`Scan error: ${err.message}`);
     }
@@ -1045,172 +1147,182 @@ export default function AdminScansPage() {
         </div>
       )}
 
-      {/* Worksheet Review Modal */}
-      {worksheetReview && (
+      {/* Worksheet Review Modal — per-page sections (each page is its own
+          worksheet with its own part numbers, customer, and VIN list). */}
+      {worksheetReview && (() => {
+        const totalSelected = worksheetReview.pages.reduce((s, pg) => s + pg.rows.filter(r => r.include).length, 0);
+        const totalRows = worksheetReview.pages.reduce((s, pg) => s + pg.rows.length, 0);
+        const updatePage = (pageIdx: number, fn: (p: WSPage) => WSPage) => {
+          setWorksheetReview(prev => {
+            if (!prev) return prev;
+            const pages = [...prev.pages];
+            pages[pageIdx] = fn(pages[pageIdx]);
+            return { ...prev, pages };
+          });
+        };
+        return (
         <div style={{ position: 'fixed', inset: 0, background: 'var(--overlay)', zIndex: 200, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '16px' }} onClick={() => setWorksheetReview(null)}>
-          <div onClick={e => e.stopPropagation()} style={{ background: 'var(--card)', borderRadius: '14px', padding: '18px', width: '100%', maxWidth: '550px', maxHeight: '85vh', overflowY: 'auto', boxShadow: '0 8px 30px rgba(0,0,0,0.3)' }}>
+          <div onClick={e => e.stopPropagation()} style={{ background: 'var(--card)', borderRadius: '14px', padding: '18px', width: '100%', maxWidth: '640px', maxHeight: '90vh', overflowY: 'auto', boxShadow: '0 8px 30px rgba(0,0,0,0.3)' }}>
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '12px' }}>
               <div>
                 <div style={{ fontSize: '15px', fontWeight: 800, color: 'var(--text-primary)' }}>Review Worksheet Scan</div>
                 <div style={{ fontSize: '11px', color: 'var(--text-muted)', marginTop: '2px' }}>
-                  {worksheetReview.rows.filter(r => r.include).length} of {worksheetReview.rows.length} VINs selected
-                  {worksheetReview.notes && <span> · {worksheetReview.notes}</span>}
+                  {worksheetReview.pages.length} page{worksheetReview.pages.length === 1 ? '' : 's'} · {totalSelected} of {totalRows} VINs selected
                 </div>
               </div>
               <button onClick={() => setWorksheetReview(null)} style={{ background: 'none', border: 'none', color: 'var(--text-muted)', fontSize: '18px', cursor: 'pointer' }}>✕</button>
             </div>
 
-            {/* Part number match status */}
-            {(() => {
-              const partNumbers = (worksheetReview.header.part_number || '').split('/').map((p: string) => p.trim()).filter(Boolean);
+            {worksheetReview.pages.map((pg, pageIdx) => {
+              const partNumbers = (pg.header.part_number || '').split('/').map((p: string) => p.trim()).filter(Boolean);
               const matchResults = partNumbers.map((pn: any) => ({
                 partNumber: pn,
                 match: allParts.find(p => p.item_number.toUpperCase().includes(pn.toUpperCase())),
               }));
-
+              const pageSelected = pg.rows.filter(r => r.include).length;
               return (
-                <div style={{ marginBottom: '14px' }}>
-                  <div style={{ marginBottom: '8px' }}>
-                    <div style={{ fontSize: '9px', fontWeight: 700, color: 'var(--text-muted)', textTransform: 'uppercase', marginBottom: '3px' }}>Part Number(s)</div>
-                    <input
-                      value={worksheetReview.header.part_number || ''}
-                      onChange={e => setWorksheetReview(prev => prev ? { ...prev, header: { ...prev.header, part_number: e.target.value } } : prev)}
-                      style={{ width: '100%', padding: '7px 9px', borderRadius: '6px', border: '1px solid var(--border)', background: 'var(--input-bg)', color: 'var(--text-primary)', fontSize: '13px', fontWeight: 700 }}
-                    />
+                <div key={pageIdx} style={{
+                  marginBottom: '14px', padding: '12px',
+                  border: '1px solid var(--border)', borderRadius: '10px',
+                  background: 'var(--subtle-bg)',
+                }}>
+                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', marginBottom: '8px' }}>
+                    <div style={{ fontSize: '11px', fontWeight: 800, color: 'var(--text-primary)', textTransform: 'uppercase', letterSpacing: '0.5px' }}>
+                      Page {pg.page}
+                    </div>
+                    <div style={{ fontSize: '10px', color: 'var(--text-muted)' }}>
+                      {pageSelected} of {pg.rows.length} selected
+                      {pg.notes && <span> · {pg.notes}</span>}
+                    </div>
                   </div>
-                  {matchResults.map((r: any, i: any) => (
-                    <div key={i} style={{
-                      display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '8px',
-                      padding: '6px 10px', borderRadius: '6px', marginBottom: '4px',
-                      background: r.match ? 'rgba(34,197,94,0.06)' : 'rgba(251,191,36,0.06)',
-                      border: `1px solid ${r.match ? 'rgba(34,197,94,0.2)' : 'rgba(251,191,36,0.2)'}`,
+
+                  {/* Header inputs */}
+                  <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '6px', marginBottom: '8px' }}>
+                    <div>
+                      <div style={{ fontSize: '9px', fontWeight: 700, color: 'var(--text-muted)', textTransform: 'uppercase', marginBottom: '3px' }}>Part Number(s)</div>
+                      <input
+                        value={pg.header.part_number || ''}
+                        onChange={e => updatePage(pageIdx, p => ({ ...p, header: { ...p.header, part_number: e.target.value } }))}
+                        style={{ width: '100%', padding: '6px 8px', borderRadius: '6px', border: '1px solid var(--border)', background: 'var(--input-bg)', color: 'var(--text-primary)', fontSize: '12px', fontWeight: 700 }}
+                      />
+                    </div>
+                    <div>
+                      <div style={{ fontSize: '9px', fontWeight: 700, color: 'var(--text-muted)', textTransform: 'uppercase', marginBottom: '3px' }}>Customer</div>
+                      <input
+                        value={pg.header.customer || ''}
+                        onChange={e => updatePage(pageIdx, p => ({ ...p, header: { ...p.header, customer: e.target.value } }))}
+                        style={{ width: '100%', padding: '6px 8px', borderRadius: '6px', border: '1px solid var(--border)', background: 'var(--input-bg)', color: 'var(--text-primary)', fontSize: '12px' }}
+                      />
+                    </div>
+                  </div>
+
+                  {/* Part-match status */}
+                  {matchResults.length > 0 && (
+                    <div style={{ marginBottom: '8px' }}>
+                      {matchResults.map((r: any, i: any) => (
+                        <div key={i} style={{
+                          display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '8px',
+                          padding: '5px 9px', borderRadius: '6px', marginBottom: '3px',
+                          background: r.match ? 'rgba(34,197,94,0.06)' : 'rgba(251,191,36,0.06)',
+                          border: `1px solid ${r.match ? 'rgba(34,197,94,0.2)' : 'rgba(251,191,36,0.2)'}`,
+                        }}>
+                          <div>
+                            <span style={{ fontSize: '11px', fontWeight: 700, color: 'var(--text-primary)' }}>{r.partNumber}</span>
+                            {r.match && <span style={{ fontSize: '10px', color: '#4ade80', marginLeft: '6px' }}>✓ {r.match.display_name || r.match.item_number}{r.match.billable_customer ? ` — ${r.match.billable_customer}` : ''}</span>}
+                            {!r.match && <span style={{ fontSize: '10px', color: '#fbbf24', marginLeft: '6px' }}>Not in catalog</span>}
+                          </div>
+                          {!r.match && (
+                            <button
+                              onClick={async () => {
+                                const { error } = await supabase.from('netsuite_parts').insert({
+                                  netsuite_id: `LOCAL-${r.partNumber}-${Date.now()}`,
+                                  item_number: r.partNumber,
+                                  display_name: r.partNumber,
+                                  billable_customer: pg.header.customer || null,
+                                  is_active: true,
+                                });
+                                if (error) {
+                                  alert(`Failed to add: ${error.message}`);
+                                } else {
+                                  let all: any[] = [];
+                                  let p2 = 0;
+                                  let more = true;
+                                  while (more) {
+                                    const { data } = await supabase.from('netsuite_parts').select('id, item_number, display_name, billable_customer').eq('is_active', true).order('item_number').range(p2 * 1000, (p2 + 1) * 1000 - 1);
+                                    all = [...all, ...(data || [])];
+                                    more = (data || []).length === 1000;
+                                    p2++;
+                                  }
+                                  setAllParts(all as typeof allParts);
+                                }
+                              }}
+                              style={{ padding: '3px 9px', borderRadius: '5px', fontSize: '10px', fontWeight: 700, background: 'rgba(59,130,246,0.1)', border: '1px solid rgba(59,130,246,0.25)', color: '#60a5fa', cursor: 'pointer', whiteSpace: 'nowrap', flexShrink: 0 }}
+                            >+ Add to Catalog</button>
+                          )}
+                        </div>
+                      ))}
+                    </div>
+                  )}
+
+                  {/* VIN rows */}
+                  {pg.rows.map((row, idx) => (
+                    <div key={idx} style={{
+                      display: 'flex', alignItems: 'center', gap: '8px',
+                      padding: '5px 7px', marginBottom: '3px', borderRadius: '6px',
+                      background: row.include ? 'rgba(34,197,94,0.04)' : 'rgba(239,68,68,0.04)',
+                      border: `1px solid ${row.include ? 'rgba(34,197,94,0.15)' : 'rgba(239,68,68,0.15)'}`,
+                      opacity: row.include ? 1 : 0.5,
                     }}>
-                      <div>
-                        <span style={{ fontSize: '12px', fontWeight: 700, color: 'var(--text-primary)' }}>{r.partNumber}</span>
-                        {r.match && <span style={{ fontSize: '10px', color: '#4ade80', marginLeft: '6px' }}>✓ {r.match.display_name || r.match.item_number}{r.match.billable_customer ? ` — ${r.match.billable_customer}` : ''}</span>}
-                        {!r.match && <span style={{ fontSize: '10px', color: '#fbbf24', marginLeft: '6px' }}>Not in catalog</span>}
-                      </div>
-                      {!r.match && (
-                        <button
-                          onClick={async () => {
-                            const { error } = await supabase.from('netsuite_parts').insert({
-                              netsuite_id: `LOCAL-${r.partNumber}-${Date.now()}`,
-                              item_number: r.partNumber,
-                              display_name: r.partNumber,
-                              billable_customer: worksheetReview.header.customer || null,
-                              is_active: true,
-                            });
-                            if (error) {
-                              alert(`Failed to add: ${error.message}`);
-                            } else {
-                              let all: any[] = [];
-                              let pg = 0;
-                              let more = true;
-                              while (more) {
-                                const { data } = await supabase.from('netsuite_parts').select('id, item_number, display_name, billable_customer').eq('is_active', true).order('item_number').range(pg * 1000, (pg + 1) * 1000 - 1);
-                                all = [...all, ...(data || [])];
-                                more = (data || []).length === 1000;
-                                pg++;
-                              }
-                              setAllParts(all as typeof allParts);
-                              setWorksheetReview(prev => prev ? { ...prev } : prev);
-                            }
-                          }}
-                          style={{
-                            padding: '4px 10px', borderRadius: '6px', fontSize: '10px', fontWeight: 700,
-                            background: 'rgba(59,130,246,0.1)', border: '1px solid rgba(59,130,246,0.25)',
-                            color: '#60a5fa', cursor: 'pointer', whiteSpace: 'nowrap', flexShrink: 0,
-                          }}
-                        >
-                          + Add to Catalog
-                        </button>
-                      )}
+                      <input
+                        type="checkbox"
+                        checked={row.include}
+                        onChange={() => updatePage(pageIdx, p => {
+                          const rows = [...p.rows];
+                          rows[idx] = { ...rows[idx], include: !rows[idx].include };
+                          return { ...p, rows };
+                        })}
+                        style={{ width: '14px', height: '14px', flexShrink: 0, accentColor: '#22c55e' }}
+                      />
+                      <span style={{ fontSize: '10px', color: 'var(--text-muted)', width: '20px', flexShrink: 0 }}>{row.row_number}</span>
+                      <input
+                        value={row.partial_vin || ''}
+                        onChange={e => updatePage(pageIdx, p => {
+                          const rows = [...p.rows];
+                          rows[idx] = { ...rows[idx], partial_vin: e.target.value.toUpperCase() };
+                          return { ...p, rows };
+                        })}
+                        style={{ flex: 1, padding: '5px 7px', borderRadius: '5px', border: '1px solid var(--border)', background: 'var(--input-bg)', color: 'var(--text-primary)', fontSize: '12px', fontWeight: 700, fontFamily: 'monospace' }}
+                      />
+                      <input
+                        value={row.unit_number || ''}
+                        onChange={e => updatePage(pageIdx, p => {
+                          const rows = [...p.rows];
+                          rows[idx] = { ...rows[idx], unit_number: e.target.value };
+                          return { ...p, rows };
+                        })}
+                        placeholder="Location"
+                        style={{ width: '110px', padding: '5px 7px', borderRadius: '5px', border: '1px solid var(--border)', background: 'var(--input-bg)', color: 'var(--text-secondary)', fontSize: '11px', flexShrink: 0 }}
+                      />
                     </div>
                   ))}
                 </div>
               );
-            })()}
-
-            {/* VIN rows */}
-            <div style={{ fontSize: '9px', fontWeight: 700, color: 'var(--text-muted)', textTransform: 'uppercase', marginBottom: '6px' }}>
-              VINs ({worksheetReview.rows.filter(r => r.include).length} selected)
-            </div>
-            {worksheetReview.rows.map((row, idx) => (
-              <div key={idx} style={{
-                display: 'flex', alignItems: 'center', gap: '8px',
-                padding: '6px 8px', marginBottom: '3px', borderRadius: '6px',
-                background: row.include ? 'rgba(34,197,94,0.04)' : 'rgba(239,68,68,0.04)',
-                border: `1px solid ${row.include ? 'rgba(34,197,94,0.15)' : 'rgba(239,68,68,0.15)'}`,
-                opacity: row.include ? 1 : 0.5,
-              }}>
-                <input
-                  type="checkbox"
-                  checked={row.include}
-                  onChange={() => setWorksheetReview(prev => {
-                    if (!prev) return prev;
-                    const rows = [...prev.rows];
-                    rows[idx] = { ...rows[idx], include: !rows[idx].include };
-                    return { ...prev, rows };
-                  })}
-                  style={{ width: '14px', height: '14px', flexShrink: 0, accentColor: '#22c55e' }}
-                />
-                <span style={{ fontSize: '10px', color: 'var(--text-muted)', width: '20px', flexShrink: 0 }}>{row.row_number}</span>
-                <input
-                  value={row.partial_vin || ''}
-                  onChange={e => setWorksheetReview(prev => {
-                    if (!prev) return prev;
-                    const rows = [...prev.rows];
-                    rows[idx] = { ...rows[idx], partial_vin: e.target.value.toUpperCase() };
-                    return { ...prev, rows };
-                  })}
-                  style={{ flex: 1, padding: '5px 7px', borderRadius: '5px', border: '1px solid var(--border)', background: 'var(--input-bg)', color: 'var(--text-primary)', fontSize: '12px', fontWeight: 700, fontFamily: 'monospace' }}
-                />
-                <input
-                  value={row.unit_number || ''}
-                  onChange={e => setWorksheetReview(prev => {
-                    if (!prev) return prev;
-                    const rows = [...prev.rows];
-                    rows[idx] = { ...rows[idx], unit_number: e.target.value };
-                    return { ...prev, rows };
-                  })}
-                  placeholder="Location"
-                  style={{ width: '110px', padding: '5px 7px', borderRadius: '5px', border: '1px solid var(--border)', background: 'var(--input-bg)', color: 'var(--text-secondary)', fontSize: '11px', flexShrink: 0 }}
-                />
-              </div>
-            ))}
+            })}
 
             {/* Actions */}
-            <div style={{ display: 'flex', gap: '8px', marginTop: '14px' }}>
+            <div style={{ display: 'flex', gap: '8px', marginTop: '6px' }}>
               <button
-                onClick={() => {
-                  const review = worksheetReview;
-                  if (!review) return;
-                  // Auto-select all matched part numbers
-                  if (review.header?.part_number) {
-                    const partNumbers = review.header.part_number.split('/').map((p: string) => p.trim()).filter(Boolean);
-                    const matched: { id: string; label: string }[] = [];
-                    for (const pn of partNumbers) {
-                      const match = allParts.find(p => p.item_number.toUpperCase().includes(pn.toUpperCase()));
-                      if (match && !matched.some(m => m.id === match.id)) {
-                        matched.push({ id: match.id, label: `${match.item_number}${match.billable_customer ? ` — ${match.billable_customer}` : ''}` });
-                      }
-                    }
-                    if (matched.length > 0) setBulkParts(matched);
-                  }
-                  // Populate VINs (only included ones)
-                  const vins = review.rows.filter(r => r.include && r.partial_vin).map(r => r.partial_vin);
-                  setBulkVins(prev => prev ? prev + '\n' + vins.join('\n') : vins.join('\n'));
-                  setWorksheetNotes(
-                    `Extracted: ${vins.length} VINs` +
-                    (review.header?.part_number ? ` · Part: ${review.header.part_number}` : '') +
-                    (review.header?.customer ? ` · Customer: ${review.header.customer}` : '')
-                  );
-                  setWorksheetReview(null);
+                onClick={() => commitWorksheetPages()}
+                disabled={worksheetCommitting || totalSelected === 0}
+                style={{
+                  flex: 1, padding: '12px', borderRadius: '10px',
+                  background: worksheetCommitting || totalSelected === 0 ? 'var(--subtle-bg)' : '#22c55e',
+                  color: worksheetCommitting || totalSelected === 0 ? 'var(--text-muted)' : '#fff',
+                  fontWeight: 800, fontSize: '13px', border: 'none',
+                  cursor: worksheetCommitting || totalSelected === 0 ? 'default' : 'pointer',
                 }}
-                disabled={worksheetReview.rows.filter(r => r.include).length === 0}
-                style={{ flex: 1, padding: '12px', borderRadius: '10px', background: '#22c55e', color: '#fff', fontWeight: 800, fontSize: '13px', border: 'none', cursor: 'pointer' }}
               >
-                Add {worksheetReview.rows.filter(r => r.include).length} VINs to Upload
+                {worksheetCommitting ? 'Inserting…' : `Insert ${totalSelected} scan${totalSelected === 1 ? '' : 's'} across ${worksheetReview.pages.length} page${worksheetReview.pages.length === 1 ? '' : 's'}`}
               </button>
               <button
                 onClick={() => setWorksheetReview(null)}
@@ -1221,7 +1333,8 @@ export default function AdminScansPage() {
             </div>
           </div>
         </div>
-      )}
+        );
+      })()}
 
       {/* Bulk Upload tab */}
       {tab === 'bulk' && (
