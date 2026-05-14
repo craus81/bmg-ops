@@ -192,7 +192,7 @@ SUPABASE TABLES (BMG Fleet App)
     - Panel labels: A=Driver Side, B=Passenger Side, C=Rear, D=Front/Hood, E=Roof/Hood, F=Roof, G-K=Window Film panels
     - ~550 vehicles with full wrap dimension data
 
-WHEN TO SEARCH VEHICLE TEMPLATES:
+WHEN TO SEARCH VEHICLE TEMPLATES + KNOWLEDGE BASE FOR WRAP DIMENSIONS:
 - ANY question about vehicle dimensions, panel sizes, or wrap measurements
 - "How big is a [vehicle]?", "What are the dimensions for a [vehicle]?"
 - "How much vinyl do I need for a [vehicle]?"
@@ -200,9 +200,25 @@ WHEN TO SEARCH VEHICLE TEMPLATES:
 - Comparing vehicle sizes
 - Any mention of specific vehicle makes/models in the context of wraps or dimensions
 
-Use source "vehicle_search" with a search term:
+IMPORTANT — wrap dimension data lives in TWO places, and you should search
+BOTH (in parallel, in the same query block) before answering:
+  1. vehicle_templates — structured panel-data table (~550 vehicles when synced).
+  2. knowledge_entries — installer / sales / graphics-production guides
+     contain wrap specs, panel layouts, and dimension notes embedded in
+     the prose. The dedicated "vehicle dimension" doc may not have its
+     own title; the data is woven into the broader guides.
+If vehicle_templates returns zero rows for a make/model, that does NOT
+mean the data is missing — it means it's currently in the knowledge base
+only. Always check the knowledge base in the same round. Never tell the
+user "we don't have wrap dimension data" without first running a
+knowledge search.
+
+Use source "vehicle_search" with a search term for the structured table:
 Example: {"id": "transit_dims", "source": "vehicle_search", "search": "Ford Transit"}
 Example: {"id": "sprinter_dims", "source": "vehicle_search", "search": "Sprinter High Roof"}
+
+Use source "knowledge" in PARALLEL for the docs:
+Example: {"id": "transit_knowledge", "source": "knowledge", "search": "Ford Transit wrap dimensions"}
 
 Or use a Supabase SQL query for more complex lookups:
 Example: {"id": "big_vehicles", "source": "supabase", "sql": "SELECT name, panel_data FROM vehicle_templates WHERE overall_length_in > 240 ORDER BY overall_length_in DESC LIMIT 10"}
