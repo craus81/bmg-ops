@@ -1,7 +1,17 @@
 'use client';
 
-import { useState, useRef } from 'react';
+import { useState, useRef, useEffect } from 'react';
 import { useAuth } from '@/components/AuthProvider';
+import { createClient } from '@/lib/supabase-browser';
+
+// Keep the prompt + history under a sane token budget by only sending
+// the most recent N exchanges to the model. The full transcript still
+// lives in the DB and renders in the chat UI.
+const HISTORY_SEND_LIMIT = 20;
+// On chat open, hydrate at most this many rows from the DB. Older messages
+// stay queryable but aren't rendered until the user scrolls back if/when
+// we add that later.
+const HISTORY_LOAD_LIMIT = 200;
 
 interface ChatMessage {
   role: 'user' | 'assistant';
@@ -274,15 +284,52 @@ function MascotSvg({ thinking, size = 52 }: { thinking?: boolean; size?: number 
 }
 
 export default function AiChat() {
-  const { isAdmin, isSales, isGraphicsProduction, isInstaller, profile } = useAuth();
+  const { user, isAdmin, isSales, isGraphicsProduction, isInstaller, profile } = useAuth();
   const hasAccess = isAdmin || isSales || isGraphicsProduction || isInstaller;
+  const supabase = createClient();
   const [isOpen, setIsOpen] = useState(false);
   const [isFullScreen, setIsFullScreen] = useState(false);
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [input, setInput] = useState('');
   const [sending, setSending] = useState(false);
+  const [historyLoaded, setHistoryLoaded] = useState(false);
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLInputElement>(null);
+
+  // Hydrate the conversation from Supabase the first time the chat is
+  // opened. RLS scopes the rows to the current user automatically.
+  useEffect(() => {
+    if (!isOpen || historyLoaded || !user?.id) return;
+    (async () => {
+      const { data } = await supabase
+        .from('ai_chat_history')
+        .select('role, content, created_at')
+        .eq('user_id', user.id)
+        .order('created_at', { ascending: false })
+        .limit(HISTORY_LOAD_LIMIT);
+      const rows = (data || []).reverse();
+      if (rows.length > 0) {
+        setMessages(rows.map((r: any) => ({ role: r.role, content: r.content })));
+        setTimeout(() => messagesEndRef.current?.scrollIntoView({ behavior: 'auto' }), 50);
+      }
+      setHistoryLoaded(true);
+    })();
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- one-shot hydration
+  }, [isOpen, user?.id]);
+
+  // Persist a single turn (user + assistant) to ai_chat_history. RLS lets
+  // each user only write rows tagged with their own user_id.
+  const persistTurn = async (userText: string, assistantText: string) => {
+    if (!user?.id) return;
+    try {
+      await supabase.from('ai_chat_history').insert([
+        { user_id: user.id, role: 'user', content: userText },
+        { user_id: user.id, role: 'assistant', content: assistantText },
+      ]);
+    } catch (err) {
+      console.error('[ai chat] persist failed:', err);
+    }
+  };
 
   // Draggable position
   const [pos, setPos] = useState({ x: -1, y: -1 }); // -1 = use default
@@ -334,10 +381,11 @@ export default function AiChat() {
     setSending(true);
     setTimeout(scrollToBottom, 50);
 
+    let assistantReply = '';
     try {
       const history = [...messages, userMsg]
         .filter(m => !m.loading)
-        .slice(-10)
+        .slice(-HISTORY_SEND_LIMIT)
         .map(m => ({ role: m.role, content: m.content }));
 
       const res = await fetch('/api/ai-agent/chat', {
@@ -349,25 +397,25 @@ export default function AiChat() {
       const data = await res.json();
 
       if (!res.ok || data.error) {
-        setMessages(prev => [
-          ...prev.filter(m => !m.loading),
-          { role: 'assistant', content: data.error || 'Something went wrong. Try again.' },
-        ]);
+        assistantReply = data.error || 'Something went wrong. Try again.';
       } else {
-        setMessages(prev => [
-          ...prev.filter(m => !m.loading),
-          { role: 'assistant', content: data.reply },
-        ]);
+        assistantReply = data.reply || '';
       }
     } catch {
-      setMessages(prev => [
-        ...prev.filter(m => !m.loading),
-        { role: 'assistant', content: 'Network error. Check your connection and try again.' },
-      ]);
+      assistantReply = 'Network error. Check your connection and try again.';
     }
 
+    setMessages(prev => [
+      ...prev.filter(m => !m.loading),
+      { role: 'assistant', content: assistantReply },
+    ]);
     setSending(false);
     setTimeout(scrollToBottom, 50);
+
+    // Persist after the bubble is on screen so it doesn't feel like the
+    // network round-trip blocks rendering. Errors are logged but
+    // intentionally don't block the UI.
+    persistTurn(text, assistantReply);
   };
 
   const handleKeyDown = (e: React.KeyboardEvent) => {
@@ -377,8 +425,19 @@ export default function AiChat() {
     }
   };
 
-  const clearChat = () => {
+  // "New Chat" deletes the persistent history for this user so the next
+  // turn starts fresh. We confirm because chat memory survives sessions
+  // and accidental clears would be costly.
+  const clearChat = async () => {
+    if (!window.confirm('Start a new chat? This deletes your saved conversation history.')) return;
     setMessages([]);
+    if (user?.id) {
+      try {
+        await supabase.from('ai_chat_history').delete().eq('user_id', user.id);
+      } catch (err) {
+        console.error('[ai chat] clear history failed:', err);
+      }
+    }
   };
 
   return (
@@ -496,7 +555,7 @@ export default function AiChat() {
                   onMouseEnter={e => (e.currentTarget.style.color = '#f87171')}
                   onMouseLeave={e => (e.currentTarget.style.color = 'var(--text-label)')}
                 >
-                  Clear
+                  New Chat
                 </button>
               )}
               <button
