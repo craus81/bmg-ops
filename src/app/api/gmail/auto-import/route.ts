@@ -8,7 +8,7 @@ import { createClient } from '@supabase/supabase-js';
 const SYNC_TYPE = 'gmail_auto_import';
 
 async function recordRun(
-  supabase: ReturnType<typeof createClient>,
+  supabase: any,
   result: Record<string, unknown>,
 ) {
   try {
