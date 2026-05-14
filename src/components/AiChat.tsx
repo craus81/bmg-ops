@@ -9,6 +9,134 @@ interface ChatMessage {
   loading?: boolean;
 }
 
+// Parse an assistant message into alternating text and markdown-table
+// segments. A markdown table is a header line | a | b |, a separator
+// line | --- | --- |, and 1+ data rows. Anything else stays as text.
+type Segment = { type: 'text'; text: string } | { type: 'table'; headers: string[]; rows: string[][] };
+
+function splitPipeRow(line: string): string[] {
+  let s = line.trim();
+  if (s.startsWith('|')) s = s.slice(1);
+  if (s.endsWith('|')) s = s.slice(0, -1);
+  return s.split('|').map(c => c.trim());
+}
+
+function isSeparator(line: string): boolean {
+  const cells = splitPipeRow(line);
+  if (cells.length === 0) return false;
+  return cells.every(c => /^:?-+:?$/.test(c));
+}
+
+function parseMessageSegments(text: string): Segment[] {
+  const lines = text.split('\n');
+  const segments: Segment[] = [];
+  let buffer: string[] = [];
+  const flushText = () => {
+    if (buffer.length === 0) return;
+    const t = buffer.join('\n').replace(/^\n+|\n+$/g, '');
+    if (t) segments.push({ type: 'text', text: t });
+    buffer = [];
+  };
+
+  let i = 0;
+  while (i < lines.length) {
+    const line = lines[i];
+    const nextLine = lines[i + 1] || '';
+    const looksLikeHeader = /^\s*\|/.test(line) && line.trim().endsWith('|');
+    if (looksLikeHeader && isSeparator(nextLine)) {
+      // Start of a table
+      flushText();
+      const headers = splitPipeRow(line);
+      const rows: string[][] = [];
+      i += 2;
+      while (i < lines.length) {
+        const row = lines[i];
+        if (!/^\s*\|/.test(row) || !row.trim().endsWith('|')) break;
+        rows.push(splitPipeRow(row));
+        i++;
+      }
+      segments.push({ type: 'table', headers, rows });
+      continue;
+    }
+    buffer.push(line);
+    i++;
+  }
+  flushText();
+  return segments;
+}
+
+function rowsToCsv(headers: string[], rows: string[][]): string {
+  const escape = (s: string) => {
+    const v = s ?? '';
+    return /[",\n]/.test(v) ? `"${v.replace(/"/g, '""')}"` : v;
+  };
+  return [headers, ...rows].map(r => r.map(escape).join(',')).join('\n');
+}
+
+function MessageBody({ text }: { text: string }) {
+  const segments = parseMessageSegments(text);
+  const [copiedTable, setCopiedTable] = useState<number | null>(null);
+
+  const copyCsv = async (idx: number, headers: string[], rows: string[][]) => {
+    try {
+      await navigator.clipboard.writeText(rowsToCsv(headers, rows));
+      setCopiedTable(idx);
+      setTimeout(() => setCopiedTable(c => c === idx ? null : c), 1500);
+    } catch {
+      // Some browsers (older Safari) block clipboard from non-user-gesture
+      // contexts; do nothing rather than blow up.
+    }
+  };
+
+  return (
+    <>
+      {segments.map((seg, i) => {
+        if (seg.type === 'text') {
+          return (
+            <div key={i} style={{ whiteSpace: 'pre-wrap', wordBreak: 'break-word' }}>{seg.text}</div>
+          );
+        }
+        return (
+          <div key={i} style={{ margin: '6px 0' }}>
+            <div style={{ overflowX: 'auto', borderRadius: '6px', border: '1px solid var(--border)' }}>
+              <table style={{ borderCollapse: 'collapse', fontSize: '11px', width: '100%' }}>
+                <thead>
+                  <tr style={{ background: 'rgba(59,130,246,0.08)' }}>
+                    {seg.headers.map((h, j) => (
+                      <th key={j} style={{ textAlign: 'left', padding: '6px 8px', fontWeight: 700, color: 'var(--text-primary)', borderBottom: '1px solid var(--border)' }}>{h}</th>
+                    ))}
+                  </tr>
+                </thead>
+                <tbody>
+                  {seg.rows.map((r, ri) => (
+                    <tr key={ri} style={{ borderBottom: '1px solid var(--border)' }}>
+                      {seg.headers.map((_, ci) => (
+                        <td key={ci} style={{ padding: '5px 8px', color: 'var(--text-body)', verticalAlign: 'top' }}>{r[ci] ?? ''}</td>
+                      ))}
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+            <div style={{ display: 'flex', justifyContent: 'flex-end', marginTop: '4px' }}>
+              <button
+                onClick={() => copyCsv(i, seg.headers, seg.rows)}
+                style={{
+                  padding: '3px 9px', borderRadius: '6px',
+                  background: copiedTable === i ? 'rgba(34,197,94,0.15)' : 'rgba(59,130,246,0.1)',
+                  border: `1px solid ${copiedTable === i ? 'rgba(34,197,94,0.4)' : 'rgba(59,130,246,0.25)'}`,
+                  color: copiedTable === i ? '#22c55e' : '#60a5fa',
+                  fontSize: '10px', fontWeight: 700, cursor: 'pointer',
+                }}
+              >{copiedTable === i ? 'Copied!' : 'Copy as CSV'}</button>
+            </div>
+          </div>
+        );
+      })}
+    </>
+  );
+}
+
 function MascotSvg({ thinking, size = 52 }: { thinking?: boolean; size?: number }) {
   const t = thinking;
   // When thinking: eyes pulse fast and bright, reactor spins/pulses intensely
@@ -149,6 +277,7 @@ export default function AiChat() {
   const { isAdmin, isSales, isGraphicsProduction, isInstaller, profile } = useAuth();
   const hasAccess = isAdmin || isSales || isGraphicsProduction || isInstaller;
   const [isOpen, setIsOpen] = useState(false);
+  const [isFullScreen, setIsFullScreen] = useState(false);
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [input, setInput] = useState('');
   const [sending, setSending] = useState(false);
@@ -297,7 +426,23 @@ export default function AiChat() {
 
       {/* Chat panel */}
       {isOpen && (
-        <div style={{
+        <div style={isFullScreen ? {
+          // Full-screen mode: cover the page content area but leave the
+          // sticky header and bottom nav visible (Ashley's spec).
+          position: 'fixed',
+          top: '72px',
+          bottom: '72px',
+          left: '12px',
+          right: '12px',
+          borderRadius: '16px',
+          background: 'var(--card)',
+          border: '1px solid var(--border)',
+          boxShadow: '0 8px 40px rgba(0,0,0,0.5)',
+          zIndex: 1000,
+          display: 'flex',
+          flexDirection: 'column',
+          overflow: 'hidden',
+        } : {
           position: 'fixed',
           bottom: '80px',
           right: '12px',
@@ -339,7 +484,7 @@ export default function AiChat() {
                 </div>
               </div>
             </div>
-            <div style={{ display: 'flex', gap: '6px' }}>
+            <div style={{ display: 'flex', gap: '6px', alignItems: 'center' }}>
               {messages.length > 0 && (
                 <button
                   onClick={clearChat}
@@ -354,6 +499,18 @@ export default function AiChat() {
                   Clear
                 </button>
               )}
+              <button
+                onClick={() => setIsFullScreen(v => !v)}
+                title={isFullScreen ? 'Exit full screen' : 'Expand to full screen'}
+                aria-label={isFullScreen ? 'Exit full screen' : 'Expand to full screen'}
+                style={{
+                  background: 'none', border: 'none', color: 'var(--text-label)',
+                  fontSize: '14px', cursor: 'pointer', lineHeight: 1,
+                  padding: '4px 6px', borderRadius: '4px',
+                }}
+              >
+                {isFullScreen ? '⤢' : '⤡'}
+              </button>
               <button
                 onClick={() => setIsOpen(false)}
                 style={{
@@ -375,7 +532,9 @@ export default function AiChat() {
             flexDirection: 'column',
             gap: '8px',
             minHeight: '200px',
-            maxHeight: '360px',
+            // In full-screen mode let the messages area flex to fill all
+            // available vertical space; only cap in the compact view.
+            maxHeight: isFullScreen ? undefined : '360px',
           }}>
             {messages.length === 0 && (
               <div style={{ textAlign: 'center', padding: '16px 12px' }}>
@@ -455,7 +614,6 @@ export default function AiChat() {
                   color: msg.role === 'user' ? '#fff' : 'var(--text-body)',
                   fontSize: '12px',
                   lineHeight: '1.5',
-                  whiteSpace: 'pre-wrap',
                   wordBreak: 'break-word',
                 }}>
                   {msg.loading ? (
@@ -465,7 +623,11 @@ export default function AiChat() {
                       <span style={{ animation: 'pulse 1s infinite', animationDelay: '0.4s' }}>●</span>
                       <style>{`@keyframes pulse { 0%, 100% { opacity: 0.3; } 50% { opacity: 1; } }`}</style>
                     </div>
-                  ) : msg.content}
+                  ) : msg.role === 'assistant' ? (
+                    <MessageBody text={msg.content} />
+                  ) : (
+                    <div style={{ whiteSpace: 'pre-wrap' }}>{msg.content}</div>
+                  )}
                 </div>
               </div>
             ))}
