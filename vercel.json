@@ -8,5 +8,15 @@
       "path": "/api/cron/netsuite-sync",
       "schedule": "0 */2 * * *"
     }
+  ],
+  "headers": [
+    {
+      "source": "/.well-known/apple-app-site-association",
+      "headers": [{ "key": "Content-Type", "value": "application/json" }]
+    },
+    {
+      "source": "/.well-known/assetlinks.json",
+      "headers": [{ "key": "Content-Type", "value": "application/json" }]
+    }
   ]
 }

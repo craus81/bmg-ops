@@ -163,12 +163,13 @@ export async function POST(req: NextRequest) {
     if (contactEmail) {
       try {
         const appUrl = process.env.NEXT_PUBLIC_APP_URL || 'https://bmg-ops.vercel.app';
+        const jobCardUrl = `${appUrl}/graphics?id=${job.id}`;
         const emailBody = `Your graphics for ${jobLabel}${job.quantity ? ` (qty ${job.quantity})` : ''} are ready for pickup. ${pickupAddress}`;
         const html = buildNotificationEmail(
           `Your graphics are ready for pickup — ${jobLabel}`,
           emailBody,
-          appUrl,
-          'Reply to this email',
+          jobCardUrl,
+          'Open job card',
         );
         const ok = await sendEmail(
           contactEmail,

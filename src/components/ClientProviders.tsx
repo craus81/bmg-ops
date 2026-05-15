@@ -8,6 +8,7 @@ import { ThemeProvider } from '@/components/ThemeProvider';
 import Header from '@/components/Header';
 import BottomNav from '@/components/BottomNav';
 import AiChat from '@/components/AiChat';
+import DeepLinkHandler from '@/components/DeepLinkHandler';
 
 function PendingScreen() {
   const { signOut } = useAuth();
@@ -108,6 +109,7 @@ export default function ClientProviders({ children }: { children: React.ReactNod
     <ThemeProvider>
       <AuthProvider>
         <AppProvider>
+          <DeepLinkHandler />
           <AppShell>{children}</AppShell>
         </AppProvider>
       </AuthProvider>
