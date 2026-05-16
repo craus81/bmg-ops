@@ -523,7 +523,17 @@ async function executeQuery(q: QuerySpec): Promise<any> {
   if (source === 'vehicle_search') {
     if (!q.search) throw new Error('No search terms provided for vehicle search');
 
-    const searchTerms = q.search.trim().split(/\s+/).filter(t => t.length >= 2);
+    // PostgREST's .or() filter grammar treats , ( ) . as structural and
+    // % _ as ilike wildcards. The old code only stripped ,() — a term
+    // with a "." (the operator separator) still produced a malformed
+    // filter. Sanitize to word chars / space / hyphen / slash, then
+    // split into terms.
+    const cleanSearch = q.search
+      .toLowerCase()
+      .replace(/[^\w\s/-]/g, ' ')
+      .replace(/\s+/g, ' ')
+      .trim();
+    const searchTerms = cleanSearch.split(' ').filter(t => t.length >= 2);
     if (searchTerms.length === 0) {
       return { items: [], message: 'Search terms too short' };
     }
@@ -536,11 +546,10 @@ async function executeQuery(q: QuerySpec): Promise<any> {
     // matching "Roof" (Sprinters, Citroëns, etc).
     const orParts: string[] = [];
     for (const term of searchTerms) {
-      const escaped = term.replace(/[,()]/g, ' ');
-      orParts.push(`name.ilike.%${escaped}%`);
-      orParts.push(`make.ilike.%${escaped}%`);
-      orParts.push(`model.ilike.%${escaped}%`);
-      orParts.push(`variant.ilike.%${escaped}%`);
+      orParts.push(`name.ilike.%${term}%`);
+      orParts.push(`make.ilike.%${term}%`);
+      orParts.push(`model.ilike.%${term}%`);
+      orParts.push(`variant.ilike.%${term}%`);
     }
 
     const { data, error } = await supabase
