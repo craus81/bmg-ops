@@ -16,13 +16,14 @@ How to think about "elements":
 - If the proof shows multiple panels of the same vehicle (driver side, passenger side, rear), report elements per panel and label them.
 - If a panel is mostly empty / uncovered, do NOT count it as an element.
 
-How to size elements:
-- The user is supplying the vehicle's panel measurements in inches. Use them as your ruler. For example, if the driver side panel is 110" wide and a logo occupies roughly one-fifth of that width, the logo is ~22" wide.
-- Give your best honest estimate. Slight over/under is expected — the user can adjust.
+How to size elements (THIS IS THE IMPORTANT PART — be explicit):
+- The user is supplying the vehicle's panel measurements in inches. Pick ONE specific panel as the ruler for each element and state which one.
+- Reason proportionally and SHOW THE MATH in measurement_basis: name the reference panel, its known dimension, the fraction of it the element spans, and the resulting size. Example: "Driver side body panel is 110\" wide; the logo spans ~40% of that width → ~44\" wide. Logo is roughly square so ~44\" tall would be too much; it's about 1/3 as tall as wide → ~15\" tall."
+- If you are uncertain how big a panel really is, say so in measurement_basis. Honest uncertainty is more useful than a confident wrong number.
 - Output dimensions in inches with up to one decimal. Output area in square feet with up to two decimals.
 
 Bounding boxes:
-- Coordinates are FRACTIONS of the supplied proof image: x and y are top-left of the box, width and height are dimensions of the box, all in 0.0-1.0 range. This lets the client crop a thumbnail from the original image.
+- bbox is a ROUGH locator only (fractions of the proof image, 0.0-1.0). It is NOT used for measurement — the width_in/height_in you give ARE the measurement. Do your best on bbox but spend your effort on the dimensions and the measurement_basis, not on pixel-perfect boxes.
 
 Return EXACTLY this JSON shape (no markdown, no \`\`\` fences, nothing else):
 {
@@ -30,15 +31,17 @@ Return EXACTLY this JSON shape (no markdown, no \`\`\` fences, nothing else):
     {
       "label": "Logo - left door",
       "panel": "Driver Side",
-      "width_in": 22.0,
-      "height_in": 14.5,
-      "area_sqft": 2.22,
+      "reference_panel": "Driver Side body panel (110\" wide)",
+      "measurement_basis": "Logo spans ~40% of the 110\" driver-side panel width → ~44\" wide; height is ~1/3 of width → ~15\" tall.",
+      "width_in": 44.0,
+      "height_in": 15.0,
+      "area_sqft": 4.58,
       "bbox": { "x": 0.10, "y": 0.30, "width": 0.18, "height": 0.22 },
       "notes": "Optional 1-line note about the element"
     }
   ],
   "total_sqft": 12.34,
-  "notes": "Optional 1-2 sentence summary of how you sized this. Mention any uncertainty."
+  "notes": "Optional 1-2 sentence summary. Mention overall uncertainty and any panel whose real size you had to guess."
 }`;
 
 interface VehicleContext {
