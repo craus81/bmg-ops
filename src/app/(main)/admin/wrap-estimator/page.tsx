@@ -67,6 +67,12 @@ export default function WrapEstimatorPage() {
   // Proof upload
   const [proofFile, setProofFile] = useState<File | null>(null);
   const [proofDataUrl, setProofDataUrl] = useState<string | null>(null);
+  // Rasterized PNG of the proof (image passthrough, or PDF page 1 via
+  // pdfjs). Used for the numbered overlay AND the per-element crops so
+  // thumbnails work for PDFs too, not just image uploads.
+  const [proofRasterUrl, setProofRasterUrl] = useState<string | null>(null);
+  const [rasterizing, setRasterizing] = useState(false);
+  const [pdfPageCount, setPdfPageCount] = useState<number | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   // Analysis
@@ -138,9 +144,53 @@ export default function WrapEstimatorPage() {
     setProofFile(file);
     setAnalysis(null);
     setError(null);
-    const reader = new FileReader();
-    reader.onload = () => setProofDataUrl(reader.result as string);
-    reader.readAsDataURL(file);
+    setProofRasterUrl(null);
+    setPdfPageCount(null);
+
+    const dataUrl = await new Promise<string>((resolve, reject) => {
+      const r = new FileReader();
+      r.onload = () => resolve(r.result as string);
+      r.onerror = () => reject(new Error('Failed to read file'));
+      r.readAsDataURL(file);
+    });
+    setProofDataUrl(dataUrl);
+
+    const isPdf = file.type === 'application/pdf' || file.name.toLowerCase().endsWith('.pdf');
+    if (!isPdf) {
+      // Image: the data URL is already a usable raster.
+      setProofRasterUrl(dataUrl);
+      return;
+    }
+
+    // PDF: rasterize page 1 to a PNG with pdfjs (same pattern as
+    // ProofThumbnail). Page 1 typically carries the full layout; we
+    // note multi-page so the user knows the overlay only covers p1.
+    setRasterizing(true);
+    try {
+      const pdfjsLib: any = await import('pdfjs-dist');
+      pdfjsLib.GlobalWorkerOptions.workerSrc = '/pdf.worker.min.mjs';
+      const base64 = dataUrl.split(',')[1] || '';
+      const bytes = Uint8Array.from(atob(base64), c => c.charCodeAt(0));
+      const pdf = await pdfjsLib.getDocument({ data: bytes }).promise;
+      setPdfPageCount(pdf.numPages);
+      const page = await pdf.getPage(1);
+      const base = page.getViewport({ scale: 1 });
+      // Cap the long edge ~1600px — enough detail for crops, small
+      // enough to keep canvas + memory sane.
+      const scale = Math.min(1600 / Math.max(base.width, base.height), 2);
+      const viewport = page.getViewport({ scale });
+      const canvas = document.createElement('canvas');
+      canvas.width = viewport.width;
+      canvas.height = viewport.height;
+      const ctx = canvas.getContext('2d')!;
+      await page.render({ canvasContext: ctx, viewport, canvas } as any).promise;
+      setProofRasterUrl(canvas.toDataURL('image/png'));
+    } catch (err: any) {
+      console.error('[wrap-estimator] PDF rasterize failed:', err);
+      // Non-fatal — analysis still works; we just won't have the
+      // overlay/crops for this PDF.
+    }
+    setRasterizing(false);
   };
 
   const analyze = async () => {
@@ -326,9 +376,15 @@ export default function WrapEstimatorPage() {
                   alt="Proof"
                   style={{ maxWidth: '100%', maxHeight: '420px', borderRadius: '8px', display: 'block', margin: '0 auto' }}
                 />
+              ) : proofRasterUrl ? (
+                <img
+                  src={proofRasterUrl}
+                  alt="Proof preview"
+                  style={{ maxWidth: '100%', maxHeight: '420px', borderRadius: '8px', display: 'block', margin: '0 auto' }}
+                />
               ) : (
                 <div style={{ padding: '12px', borderRadius: '8px', background: 'var(--subtle-bg)', fontSize: '12px', color: 'var(--text-muted)', textAlign: 'center' }}>
-                  PDF loaded: {proofFile?.name}
+                  {rasterizing ? 'Rendering PDF preview…' : `PDF loaded: ${proofFile?.name}`}
                 </div>
               )}
               <div style={{ display: 'flex', gap: '8px', marginTop: '10px' }}>
@@ -386,14 +442,56 @@ export default function WrapEstimatorPage() {
             </div>
           </div>
 
+          {/* Annotated proof — numbered boxes laid over the proof image,
+              matching the element row numbers below. */}
+          {proofRasterUrl && (
+            <div style={{ marginBottom: '12px' }}>
+              <div style={{ position: 'relative', display: 'inline-block', maxWidth: '100%', borderRadius: '8px', overflow: 'hidden', border: '1px solid var(--border)' }}>
+                <img src={proofRasterUrl} alt="Proof" style={{ display: 'block', maxWidth: '100%', maxHeight: '480px' }} />
+                {analysis.elements.map((el, i) => {
+                  const b = el.bbox;
+                  if (!b) return null;
+                  return (
+                    <div
+                      key={i}
+                      style={{
+                        position: 'absolute',
+                        left: `${Math.max(0, Math.min(1, b.x)) * 100}%`,
+                        top: `${Math.max(0, Math.min(1, b.y)) * 100}%`,
+                        width: `${Math.max(0, Math.min(1, b.width)) * 100}%`,
+                        height: `${Math.max(0, Math.min(1, b.height)) * 100}%`,
+                        border: '2px solid #3b82f6',
+                        background: 'rgba(59,130,246,0.10)',
+                        boxSizing: 'border-box',
+                        pointerEvents: 'none',
+                      }}
+                    >
+                      <span style={{
+                        position: 'absolute', top: '-2px', left: '-2px',
+                        minWidth: '18px', height: '18px', padding: '0 4px',
+                        background: '#3b82f6', color: '#fff',
+                        fontSize: '11px', fontWeight: 800, lineHeight: '18px',
+                        textAlign: 'center', borderRadius: '0 0 4px 0',
+                      }}>{i + 1}</span>
+                    </div>
+                  );
+                })}
+              </div>
+              {pdfPageCount && pdfPageCount > 1 && (
+                <div style={{ fontSize: '10px', color: 'var(--text-muted)', marginTop: '4px' }}>
+                  Showing page 1 of {pdfPageCount}. Elements the AI placed on other pages are still listed below but not boxed here.
+                </div>
+              )}
+            </div>
+          )}
+
           <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
             {analysis.elements.map((el, i) => (
               <ElementRow
                 key={i}
                 idx={i}
                 element={el}
-                proofDataUrl={proofDataUrl}
-                isImage={!!proofFile?.type.startsWith('image/')}
+                rasterUrl={proofRasterUrl}
                 onChange={(patch) => updateElement(i, patch)}
                 onRemove={() => removeElement(i)}
               />
@@ -405,22 +503,21 @@ export default function WrapEstimatorPage() {
   );
 }
 
-// Crop a region from the proof image using canvas for the thumbnail. Skips
-// rendering the crop for PDFs (no client-side rasterization in this MVP —
-// users still get the dimensions and label).
+// Crop a region from the rasterized proof using canvas for the thumbnail.
+// rasterUrl is set for both image uploads (passthrough) and PDFs (page 1
+// rendered via pdfjs), so crops now work for proofs that are PDFs too.
 function ElementRow({
-  idx, element, proofDataUrl, isImage, onChange, onRemove,
+  idx, element, rasterUrl, onChange, onRemove,
 }: {
   idx: number;
   element: Element;
-  proofDataUrl: string | null;
-  isImage: boolean;
+  rasterUrl: string | null;
   onChange: (patch: Partial<Element>) => void;
   onRemove: () => void;
 }) {
   const [thumb, setThumb] = useState<string | null>(null);
 
-  // Build the cropped thumbnail when we have an image + a bbox.
+  // Build the cropped thumbnail when we have a raster + a bbox.
   const bbox = element.bbox;
   const bboxKey = useMemo(
     () => bbox ? `${bbox.x},${bbox.y},${bbox.width},${bbox.height}` : '',
@@ -428,7 +525,7 @@ function ElementRow({
   );
 
   useEffect(() => {
-    if (!isImage || !proofDataUrl || !bbox) { setThumb(null); return; }
+    if (!rasterUrl || !bbox) { setThumb(null); return; }
     let cancelled = false;
     const img = new Image();
     img.onload = () => {
@@ -447,9 +544,9 @@ function ElementRow({
       ctx.drawImage(img, x, y, w, h, 0, 0, canvas.width, canvas.height);
       setThumb(canvas.toDataURL('image/png'));
     };
-    img.src = proofDataUrl;
+    img.src = rasterUrl;
     return () => { cancelled = true; };
-  }, [proofDataUrl, isImage, bboxKey, bbox]);
+  }, [rasterUrl, bboxKey, bbox]);
 
   return (
     <div style={{
