@@ -20,6 +20,7 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { useAuth } from '@/components/AuthProvider';
 import { createClient } from '@/lib/supabase-browser';
+import { storage } from '@/lib/storage';
 
 interface VehicleTemplate {
   id: string;
@@ -87,7 +88,22 @@ export default function WrapEstimatorPage() {
     }
     const t = setTimeout(async () => {
       setVehicleLoading(true);
-      const terms = q.toLowerCase().split(/\s+/).filter(Boolean);
+      // PostgREST's .or() filter grammar treats , ( ) . as structural and
+      // % _ as ilike wildcards. Raw user text containing any of these
+      // (e.g. "Transit (mid roof)") produces a malformed filter that the
+      // browser/Supabase rejects. Strip everything that isn't a word
+      // char, space, hyphen, or slash before interpolating.
+      const clean = q
+        .toLowerCase()
+        .replace(/[^\w\s/-]/g, ' ')
+        .replace(/\s+/g, ' ')
+        .trim();
+      const terms = clean.split(' ').filter(t => t.length >= 2);
+      if (terms.length === 0) {
+        setVehicleMatches([]);
+        setVehicleLoading(false);
+        return;
+      }
       const orParts: string[] = [];
       for (const term of terms) {
         orParts.push(`name.ilike.%${term}%`);
@@ -95,11 +111,18 @@ export default function WrapEstimatorPage() {
         orParts.push(`model.ilike.%${term}%`);
         orParts.push(`variant.ilike.%${term}%`);
       }
-      const { data } = await supabase
+      const { data, error: qErr } = await supabase
         .from('vehicle_templates')
         .select('id, name, make, model, variant, year, overall_length_in, overall_height_in, wheelbase_in, panel_data')
         .or(orParts.join(','))
         .limit(50);
+      if (qErr) {
+        console.error('[wrap-estimator] vehicle search failed:', qErr);
+        setError(`Vehicle search failed: ${qErr.message}`);
+        setVehicleMatches([]);
+        setVehicleLoading(false);
+        return;
+      }
       // Strict AND filter client-side — match every term in the haystack
       const filtered = (data || []).filter((d: any) => {
         const hay = `${d.name || ''} ${d.make || ''} ${d.model || ''} ${d.variant || ''}`.toLowerCase();
@@ -126,21 +149,28 @@ export default function WrapEstimatorPage() {
     setAnalysis(null);
     setError(null);
     try {
-      // Base64 (without data:; prefix)
-      const dataUrl = await new Promise<string>((resolve, reject) => {
-        const r = new FileReader();
-        r.onload = () => resolve(r.result as string);
-        r.onerror = () => reject(new Error('Failed to read file'));
-        r.readAsDataURL(proofFile);
-      });
-      const base64 = dataUrl.split(',')[1] || '';
       const mediaType = proofFile.type || (proofFile.name.toLowerCase().endsWith('.pdf') ? 'application/pdf' : 'image/jpeg');
+
+      // Upload the proof straight to R2 via the presigned-PUT helper.
+      // This bypasses the platform's ~4.5MB request-body limit that
+      // 413'd PDF uploads when we POSTed base64 inline. The server
+      // then fetches the file by URL.
+      const ext = (proofFile.name.split('.').pop() || 'bin').toLowerCase();
+      const rand = Math.random().toString(36).slice(2, 8);
+      const path = `wrap-estimator/${Date.now()}-${rand}.${ext}`;
+      const up = await storage.from('quote-proofs').upload(path, proofFile, { contentType: mediaType });
+      if (up.error) {
+        setError(`Upload failed: ${up.error.message}`);
+        setAnalyzing(false);
+        return;
+      }
+      const fileUrl = storage.from('quote-proofs').getPublicUrl(path).data.publicUrl;
 
       const res = await fetch('/api/wrap-estimator/analyze', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          imageBase64: base64,
+          fileUrl,
           mediaType,
           vehicle: {
             name: selectedVehicle.name,
