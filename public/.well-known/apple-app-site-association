@@ -1,0 +1,13 @@
+{
+  "applinks": {
+    "apps": [],
+    "details": [
+      {
+        "appIDs": ["REPLACE_WITH_APPLE_TEAM_ID.com.bmgfleet.fleetsuite"],
+        "components": [
+          { "/": "*", "comment": "Open every BMG FleetSuite link (job cards, pick lists, etc.) in the app" }
+        ]
+      }
+    ]
+  }
+}

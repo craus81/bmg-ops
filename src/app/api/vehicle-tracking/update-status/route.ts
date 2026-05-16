@@ -317,12 +317,13 @@ async function notifyCompletion(vehicle: any, actorName: string) {
     try {
       const { sendEmail, buildNotificationEmail } = await import('@/lib/resend');
       const appUrl = process.env.NEXT_PUBLIC_APP_URL || 'https://bmg-ops.vercel.app';
+      const jobCardUrl = `${appUrl}/vehicles/${vehicle.vin}/pick-list`;
       const emailBody = `The install for your ${vehicleLabel} (VIN ending ${vehicle.vin?.slice(-8)}) is complete. Please contact us to arrange pickup.`;
       const html = buildNotificationEmail(
         `Your vehicle is ready — ${vehicleLabel}`,
         emailBody,
-        appUrl,
-        'Reply to this email'
+        jobCardUrl,
+        'Open job card'
       );
       const sent = await sendEmail(customer.email, `[BMG Fleet] Your vehicle is ready — ${vehicleLabel}`, html);
       if (threadId) {
