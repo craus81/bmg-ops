@@ -20,6 +20,7 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { useAuth } from '@/components/AuthProvider';
 import { createClient } from '@/lib/supabase-browser';
+import { storage } from '@/lib/storage';
 
 interface VehicleTemplate {
   id: string;
@@ -148,21 +149,28 @@ export default function WrapEstimatorPage() {
     setAnalysis(null);
     setError(null);
     try {
-      // Base64 (without data:; prefix)
-      const dataUrl = await new Promise<string>((resolve, reject) => {
-        const r = new FileReader();
-        r.onload = () => resolve(r.result as string);
-        r.onerror = () => reject(new Error('Failed to read file'));
-        r.readAsDataURL(proofFile);
-      });
-      const base64 = dataUrl.split(',')[1] || '';
       const mediaType = proofFile.type || (proofFile.name.toLowerCase().endsWith('.pdf') ? 'application/pdf' : 'image/jpeg');
+
+      // Upload the proof straight to R2 via the presigned-PUT helper.
+      // This bypasses the platform's ~4.5MB request-body limit that
+      // 413'd PDF uploads when we POSTed base64 inline. The server
+      // then fetches the file by URL.
+      const ext = (proofFile.name.split('.').pop() || 'bin').toLowerCase();
+      const rand = Math.random().toString(36).slice(2, 8);
+      const path = `wrap-estimator/${Date.now()}-${rand}.${ext}`;
+      const up = await storage.from('quote-proofs').upload(path, proofFile, { contentType: mediaType });
+      if (up.error) {
+        setError(`Upload failed: ${up.error.message}`);
+        setAnalyzing(false);
+        return;
+      }
+      const fileUrl = storage.from('quote-proofs').getPublicUrl(path).data.publicUrl;
 
       const res = await fetch('/api/wrap-estimator/analyze', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          imageBase64: base64,
+          fileUrl,
           mediaType,
           vehicle: {
             name: selectedVehicle.name,

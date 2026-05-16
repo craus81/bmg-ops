@@ -80,17 +80,49 @@ export async function POST(req: NextRequest) {
   }
 
   try {
-    const { imageBase64, mediaType, vehicle } = await req.json() as {
+    const body = await req.json() as {
       imageBase64?: string;
+      // Preferred path: client uploads the proof to R2 first (no Vercel
+      // 4.5MB body cap), then sends just the URL. We fetch the bytes
+      // server-side. imageBase64 is kept for tiny inline payloads.
+      fileUrl?: string;
       mediaType?: string;
       vehicle?: VehicleContext;
     };
+    const { fileUrl, mediaType, vehicle } = body;
+    let { imageBase64 } = body;
 
-    if (!imageBase64) {
-      return NextResponse.json({ error: 'imageBase64 is required' }, { status: 400 });
-    }
     if (!vehicle || !vehicle.name) {
       return NextResponse.json({ error: 'vehicle context (with panel_data) is required' }, { status: 400 });
+    }
+
+    if (!imageBase64) {
+      if (!fileUrl) {
+        return NextResponse.json({ error: 'fileUrl or imageBase64 is required' }, { status: 400 });
+      }
+      // Pull the proof from storage server-side. This sidesteps the
+      // platform request-body limit that 413'd large PDF uploads.
+      try {
+        const fileRes = await fetch(fileUrl);
+        if (!fileRes.ok) {
+          return NextResponse.json(
+            { error: `Could not fetch proof from storage (HTTP ${fileRes.status})` },
+            { status: 502 },
+          );
+        }
+        const buf = Buffer.from(await fileRes.arrayBuffer());
+        // Anthropic caps a single document/image at ~32MB base64.
+        if (buf.byteLength > 24 * 1024 * 1024) {
+          return NextResponse.json(
+            { error: 'Proof is too large to analyze (over ~24MB). Flatten or downsize the PDF/image and retry.' },
+            { status: 413 },
+          );
+        }
+        imageBase64 = buf.toString('base64');
+      } catch (e: any) {
+        console.error('[wrap-estimator] storage fetch failed:', e?.message);
+        return NextResponse.json({ error: `Failed to load proof: ${e?.message || 'unknown'}` }, { status: 502 });
+      }
     }
 
     const isPDF = mediaType === 'application/pdf';
