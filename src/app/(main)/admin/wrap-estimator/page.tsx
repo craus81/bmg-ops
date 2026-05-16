@@ -38,6 +38,8 @@ interface VehicleTemplate {
 interface Element {
   label: string;
   panel?: string | null;
+  reference_panel?: string | null;
+  measurement_basis?: string | null;
   width_in: number;
   height_in: number;
   area_sqft: number;
@@ -448,40 +450,43 @@ export default function WrapEstimatorPage() {
             <div style={{ marginBottom: '12px' }}>
               <div style={{ position: 'relative', display: 'inline-block', maxWidth: '100%', borderRadius: '8px', overflow: 'hidden', border: '1px solid var(--border)' }}>
                 <img src={proofRasterUrl} alt="Proof" style={{ display: 'block', maxWidth: '100%', maxHeight: '480px' }} />
+                {/* Numbered pins at each bbox center. The AI's boxes are
+                    imprecise, so we deliberately DON'T draw rectangles —
+                    a pin just says "roughly here", and the real basis for
+                    the size is the measurement_basis text on each row. */}
                 {analysis.elements.map((el, i) => {
                   const b = el.bbox;
                   if (!b) return null;
+                  const cx = Math.max(0, Math.min(1, b.x + b.width / 2)) * 100;
+                  const cy = Math.max(0, Math.min(1, b.y + b.height / 2)) * 100;
                   return (
-                    <div
+                    <span
                       key={i}
+                      title={el.label}
                       style={{
                         position: 'absolute',
-                        left: `${Math.max(0, Math.min(1, b.x)) * 100}%`,
-                        top: `${Math.max(0, Math.min(1, b.y)) * 100}%`,
-                        width: `${Math.max(0, Math.min(1, b.width)) * 100}%`,
-                        height: `${Math.max(0, Math.min(1, b.height)) * 100}%`,
-                        border: '2px solid #3b82f6',
-                        background: 'rgba(59,130,246,0.10)',
-                        boxSizing: 'border-box',
+                        left: `${cx}%`,
+                        top: `${cy}%`,
+                        transform: 'translate(-50%, -50%)',
+                        minWidth: '20px', height: '20px', padding: '0 5px',
+                        background: '#3b82f6', color: '#fff',
+                        fontSize: '11px', fontWeight: 800, lineHeight: '20px',
+                        textAlign: 'center', borderRadius: '10px',
+                        border: '2px solid #fff',
+                        boxShadow: '0 1px 3px rgba(0,0,0,0.4)',
                         pointerEvents: 'none',
                       }}
-                    >
-                      <span style={{
-                        position: 'absolute', top: '-2px', left: '-2px',
-                        minWidth: '18px', height: '18px', padding: '0 4px',
-                        background: '#3b82f6', color: '#fff',
-                        fontSize: '11px', fontWeight: 800, lineHeight: '18px',
-                        textAlign: 'center', borderRadius: '0 0 4px 0',
-                      }}>{i + 1}</span>
-                    </div>
+                    >{i + 1}</span>
                   );
                 })}
               </div>
-              {pdfPageCount && pdfPageCount > 1 && (
-                <div style={{ fontSize: '10px', color: 'var(--text-muted)', marginTop: '4px' }}>
-                  Showing page 1 of {pdfPageCount}. Elements the AI placed on other pages are still listed below but not boxed here.
-                </div>
-              )}
+              <div style={{ fontSize: '10px', color: 'var(--text-muted)', marginTop: '4px' }}>
+                Pins mark the AI&apos;s rough location for each element — they are not how it measures.
+                Each element&apos;s size comes from the &quot;Basis&quot; reasoning shown in its row.
+                {pdfPageCount && pdfPageCount > 1
+                  ? ` Showing page 1 of ${pdfPageCount}; elements on other pages are still listed below.`
+                  : ''}
+              </div>
             </div>
           )}
 
@@ -581,6 +586,18 @@ function ElementRow({
           {element.panel || ''}
           {element.notes ? `${element.panel ? ' · ' : ''}${element.notes}` : ''}
         </div>
+        {element.measurement_basis && (
+          <div style={{
+            fontSize: '10px', color: 'var(--text-secondary)', marginLeft: '6px',
+            marginTop: '3px', lineHeight: 1.4,
+          }}>
+            <span style={{ fontWeight: 700, color: 'var(--text-muted)' }}>Basis: </span>
+            {element.measurement_basis}
+            {element.reference_panel ? (
+              <span style={{ color: 'var(--text-muted)' }}> (ref: {element.reference_panel})</span>
+            ) : null}
+          </div>
+        )}
       </div>
       <div style={{ display: 'flex', alignItems: 'center', gap: '4px', flexShrink: 0 }}>
         <input
