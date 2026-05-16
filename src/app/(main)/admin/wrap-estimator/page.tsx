@@ -87,7 +87,22 @@ export default function WrapEstimatorPage() {
     }
     const t = setTimeout(async () => {
       setVehicleLoading(true);
-      const terms = q.toLowerCase().split(/\s+/).filter(Boolean);
+      // PostgREST's .or() filter grammar treats , ( ) . as structural and
+      // % _ as ilike wildcards. Raw user text containing any of these
+      // (e.g. "Transit (mid roof)") produces a malformed filter that the
+      // browser/Supabase rejects. Strip everything that isn't a word
+      // char, space, hyphen, or slash before interpolating.
+      const clean = q
+        .toLowerCase()
+        .replace(/[^\w\s/-]/g, ' ')
+        .replace(/\s+/g, ' ')
+        .trim();
+      const terms = clean.split(' ').filter(t => t.length >= 2);
+      if (terms.length === 0) {
+        setVehicleMatches([]);
+        setVehicleLoading(false);
+        return;
+      }
       const orParts: string[] = [];
       for (const term of terms) {
         orParts.push(`name.ilike.%${term}%`);
@@ -95,11 +110,18 @@ export default function WrapEstimatorPage() {
         orParts.push(`model.ilike.%${term}%`);
         orParts.push(`variant.ilike.%${term}%`);
       }
-      const { data } = await supabase
+      const { data, error: qErr } = await supabase
         .from('vehicle_templates')
         .select('id, name, make, model, variant, year, overall_length_in, overall_height_in, wheelbase_in, panel_data')
         .or(orParts.join(','))
         .limit(50);
+      if (qErr) {
+        console.error('[wrap-estimator] vehicle search failed:', qErr);
+        setError(`Vehicle search failed: ${qErr.message}`);
+        setVehicleMatches([]);
+        setVehicleLoading(false);
+        return;
+      }
       // Strict AND filter client-side — match every term in the haystack
       const filtered = (data || []).filter((d: any) => {
         const hay = `${d.name || ''} ${d.make || ''} ${d.model || ''} ${d.variant || ''}`.toLowerCase();
