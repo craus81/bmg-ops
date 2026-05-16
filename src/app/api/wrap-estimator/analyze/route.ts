@@ -22,8 +22,13 @@ How to size elements (THIS IS THE IMPORTANT PART — be explicit):
 - If you are uncertain how big a panel really is, say so in measurement_basis. Honest uncertainty is more useful than a confident wrong number.
 - Output dimensions in inches with up to one decimal. Output area in square feet with up to two decimals.
 
+Multiple page images:
+- You may be given SEVERAL images, one per proof page/panel, each rendered at high resolution. They are numbered starting at 1 in the order provided (the first image is page 1, the next is page 2, and so on).
+- For every element, set "page" to the 1-based number of the image it appears on. If only one image is given, page is always 1.
+- bbox fractions (0.0-1.0) are relative to the page image that element is on, NOT the whole document.
+
 Bounding boxes:
-- bbox is a ROUGH locator only (fractions of the proof image, 0.0-1.0). It is NOT used for measurement — the width_in/height_in you give ARE the measurement. Do your best on bbox but spend your effort on the dimensions and the measurement_basis, not on pixel-perfect boxes.
+- bbox is a ROUGH locator only (fractions of THAT page's image, 0.0-1.0). It is NOT used for measurement — the width_in/height_in you give ARE the measurement. Do your best on bbox but spend your effort on the dimensions and the measurement_basis, not on pixel-perfect boxes.
 
 Return EXACTLY this JSON shape (no markdown, no \`\`\` fences, nothing else):
 {
@@ -31,6 +36,7 @@ Return EXACTLY this JSON shape (no markdown, no \`\`\` fences, nothing else):
     {
       "label": "Logo - left door",
       "panel": "Driver Side",
+      "page": 1,
       "reference_panel": "Driver Side body panel (110\" wide)",
       "measurement_basis": "Logo spans ~40% of the 110\" driver-side panel width → ~44\" wide; height is ~1/3 of width → ~15\" tall.",
       "width_in": 44.0,
@@ -85,66 +91,97 @@ export async function POST(req: NextRequest) {
   try {
     const body = await req.json() as {
       imageBase64?: string;
-      // Preferred path: client uploads the proof to R2 first (no Vercel
-      // 4.5MB body cap), then sends just the URL. We fetch the bytes
-      // server-side. imageBase64 is kept for tiny inline payloads.
+      // Preferred path: client rasterizes the proof to one high-res
+      // image per page, uploads each to R2 (no Vercel 4.5MB body cap),
+      // and sends just the URLs. We fetch the bytes server-side and pass
+      // each page to Claude as its own image so small elements get a
+      // full per-page resolution budget. fileUrl/imageBase64 are kept
+      // for legacy single-file callers.
+      fileUrls?: string[];
       fileUrl?: string;
       mediaType?: string;
       vehicle?: VehicleContext;
     };
-    const { fileUrl, mediaType, vehicle } = body;
-    let { imageBase64 } = body;
+    const { fileUrls, fileUrl, mediaType, vehicle } = body;
+    const { imageBase64 } = body;
 
     if (!vehicle || !vehicle.name) {
       return NextResponse.json({ error: 'vehicle context (with panel_data) is required' }, { status: 400 });
     }
 
-    if (!imageBase64) {
-      if (!fileUrl) {
-        return NextResponse.json({ error: 'fileUrl or imageBase64 is required' }, { status: 400 });
-      }
-      // Pull the proof from storage server-side. This sidesteps the
-      // platform request-body limit that 413'd large PDF uploads.
-      try {
-        const fileRes = await fetch(fileUrl);
-        if (!fileRes.ok) {
-          return NextResponse.json(
-            { error: `Could not fetch proof from storage (HTTP ${fileRes.status})` },
-            { status: 502 },
-          );
+    // Normalize to a list of page URLs. New clients send fileUrls[];
+    // older ones send a single fileUrl; tiny payloads send imageBase64.
+    const urls = (fileUrls && fileUrls.length > 0)
+      ? fileUrls
+      : (fileUrl ? [fileUrl] : []);
+
+    type ContentBlock =
+      | { type: 'document'; source: { type: 'base64'; media_type: 'application/pdf'; data: string } }
+      | { type: 'image'; source: { type: 'base64'; media_type: 'image/jpeg' | 'image/png'; data: string } };
+
+    const fileBlocks: ContentBlock[] = [];
+
+    if (urls.length > 0) {
+      // Pull each page from storage server-side. This sidesteps the
+      // platform request-body limit that 413'd large uploads.
+      for (let i = 0; i < urls.length; i++) {
+        try {
+          const fileRes = await fetch(urls[i]);
+          if (!fileRes.ok) {
+            return NextResponse.json(
+              { error: `Could not fetch proof page ${i + 1} from storage (HTTP ${fileRes.status})` },
+              { status: 502 },
+            );
+          }
+          const buf = Buffer.from(await fileRes.arrayBuffer());
+          // Anthropic caps a single document/image at ~32MB base64.
+          if (buf.byteLength > 24 * 1024 * 1024) {
+            return NextResponse.json(
+              { error: `Proof page ${i + 1} is too large to analyze (over ~24MB). Flatten or downsize and retry.` },
+              { status: 413 },
+            );
+          }
+          const data = buf.toString('base64');
+          if (mediaType === 'application/pdf') {
+            fileBlocks.push({
+              type: 'document',
+              source: { type: 'base64', media_type: 'application/pdf', data },
+            });
+          } else {
+            fileBlocks.push({
+              type: 'image',
+              source: {
+                type: 'base64',
+                media_type: (mediaType === 'image/png' ? 'image/png' : 'image/jpeg'),
+                data,
+              },
+            });
+          }
+        } catch (e: any) {
+          console.error('[wrap-estimator] storage fetch failed:', e?.message);
+          return NextResponse.json({ error: `Failed to load proof page ${i + 1}: ${e?.message || 'unknown'}` }, { status: 502 });
         }
-        const buf = Buffer.from(await fileRes.arrayBuffer());
-        // Anthropic caps a single document/image at ~32MB base64.
-        if (buf.byteLength > 24 * 1024 * 1024) {
-          return NextResponse.json(
-            { error: 'Proof is too large to analyze (over ~24MB). Flatten or downsize the PDF/image and retry.' },
-            { status: 413 },
-          );
-        }
-        imageBase64 = buf.toString('base64');
-      } catch (e: any) {
-        console.error('[wrap-estimator] storage fetch failed:', e?.message);
-        return NextResponse.json({ error: `Failed to load proof: ${e?.message || 'unknown'}` }, { status: 502 });
       }
+    } else if (imageBase64) {
+      fileBlocks.push({
+        type: 'image',
+        source: {
+          type: 'base64',
+          media_type: (mediaType === 'image/png' ? 'image/png' : 'image/jpeg'),
+          data: imageBase64,
+        },
+      });
+    } else {
+      return NextResponse.json({ error: 'fileUrls, fileUrl, or imageBase64 is required' }, { status: 400 });
     }
 
     const isPDF = mediaType === 'application/pdf';
-    const fileContent = isPDF
-      ? {
-          type: 'document' as const,
-          source: { type: 'base64' as const, media_type: 'application/pdf' as const, data: imageBase64 },
-        }
-      : {
-          type: 'image' as const,
-          source: {
-            type: 'base64' as const,
-            media_type: (mediaType || 'image/jpeg') as 'image/jpeg',
-            data: imageBase64,
-          },
-        };
 
     const vehicleSummary = buildVehicleSummary(vehicle);
-    const userText = `Vehicle context — use these dimensions as your scale reference when sizing elements:\n\n${vehicleSummary}\n\nAnalyze the proof below and return the JSON. No preamble.`;
+    const pageNote = fileBlocks.length > 1
+      ? `\n\nYou are given ${fileBlocks.length} page images, in order (image 1 = page 1, image 2 = page 2, …). Set each element's "page" to the 1-based number of the image it appears on.`
+      : '\n\nYou are given 1 page image. Every element's "page" is 1.';
+    const userText = `Vehicle context — use these dimensions as your scale reference when sizing elements:\n\n${vehicleSummary}${pageNote}\n\nAnalyze the proof page image(s) below and return the JSON. No preamble.`;
 
     const response = await fetch('https://api.anthropic.com/v1/messages', {
       method: 'POST',
@@ -163,7 +200,7 @@ export async function POST(req: NextRequest) {
             role: 'user',
             content: [
               { type: 'text', text: userText },
-              fileContent,
+              ...fileBlocks,
             ],
           },
         ],
@@ -197,11 +234,17 @@ export async function POST(req: NextRequest) {
 
     // Recompute area/total client-side as a safety net in case the model
     // miscounts. We trust the dimensions it gave us but never the math.
+    const pageCount = fileBlocks.length;
     const elements = (parsed.elements || []).map((e: any) => {
       const w = parseFloat(e.width_in) || 0;
       const h = parseFloat(e.height_in) || 0;
       const area = Math.round((w * h / 144) * 100) / 100;
-      return { ...e, width_in: w, height_in: h, area_sqft: area };
+      // Clamp page into [1, pageCount] so the UI can index proofPages
+      // safely even if the model returns a stray/out-of-range value.
+      let page = parseInt(e.page, 10);
+      if (!Number.isFinite(page) || page < 1) page = 1;
+      if (page > pageCount) page = pageCount;
+      return { ...e, page, width_in: w, height_in: h, area_sqft: area };
     });
     const totalSqft = Math.round(elements.reduce((s: number, e: any) => s + (e.area_sqft || 0), 0) * 100) / 100;
 

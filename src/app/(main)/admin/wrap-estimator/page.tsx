@@ -40,6 +40,9 @@ interface Element {
   panel?: string | null;
   reference_panel?: string | null;
   measurement_basis?: string | null;
+  // 1-based index into proofPages — which rendered page this element is
+  // on. Defaults to 1 for single-image proofs or if the AI omits it.
+  page?: number;
   width_in: number;
   height_in: number;
   area_sqft: number;
@@ -68,13 +71,13 @@ export default function WrapEstimatorPage() {
 
   // Proof upload
   const [proofFile, setProofFile] = useState<File | null>(null);
-  const [proofDataUrl, setProofDataUrl] = useState<string | null>(null);
-  // Rasterized PNG of the proof (image passthrough, or PDF page 1 via
-  // pdfjs). Used for the numbered overlay AND the per-element crops so
-  // thumbnails work for PDFs too, not just image uploads.
-  const [proofRasterUrl, setProofRasterUrl] = useState<string | null>(null);
+  // High-res rasterized pages. Image uploads → one entry (the image).
+  // PDFs → one PNG per page rendered at high resolution via pdfjs, so
+  // each page gets its own resolution budget when sent to the AI
+  // (instead of one downscaled multi-panel sheet). Indexed 0-based;
+  // element.page is 1-based into this array.
+  const [proofPages, setProofPages] = useState<string[]>([]);
   const [rasterizing, setRasterizing] = useState(false);
-  const [pdfPageCount, setPdfPageCount] = useState<number | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   // Analysis
@@ -146,8 +149,7 @@ export default function WrapEstimatorPage() {
     setProofFile(file);
     setAnalysis(null);
     setError(null);
-    setProofRasterUrl(null);
-    setPdfPageCount(null);
+    setProofPages([]);
 
     const dataUrl = await new Promise<string>((resolve, reject) => {
       const r = new FileReader();
@@ -155,18 +157,18 @@ export default function WrapEstimatorPage() {
       r.onerror = () => reject(new Error('Failed to read file'));
       r.readAsDataURL(file);
     });
-    setProofDataUrl(dataUrl);
 
     const isPdf = file.type === 'application/pdf' || file.name.toLowerCase().endsWith('.pdf');
     if (!isPdf) {
-      // Image: the data URL is already a usable raster.
-      setProofRasterUrl(dataUrl);
+      // Image: the data URL is already a usable raster (single page).
+      setProofPages([dataUrl]);
       return;
     }
 
-    // PDF: rasterize page 1 to a PNG with pdfjs (same pattern as
-    // ProofThumbnail). Page 1 typically carries the full layout; we
-    // note multi-page so the user knows the overlay only covers p1.
+    // PDF: rasterize EVERY page at high resolution. Sending each page
+    // as its own image gives the AI a full resolution budget per page
+    // instead of one downscaled multi-panel sheet, which is what made
+    // small elements (logos) hard to size.
     setRasterizing(true);
     try {
       const pdfjsLib: any = await import('pdfjs-dist');
@@ -174,19 +176,27 @@ export default function WrapEstimatorPage() {
       const base64 = dataUrl.split(',')[1] || '';
       const bytes = Uint8Array.from(atob(base64), c => c.charCodeAt(0));
       const pdf = await pdfjsLib.getDocument({ data: bytes }).promise;
-      setPdfPageCount(pdf.numPages);
-      const page = await pdf.getPage(1);
-      const base = page.getViewport({ scale: 1 });
-      // Cap the long edge ~1600px — enough detail for crops, small
-      // enough to keep canvas + memory sane.
-      const scale = Math.min(1600 / Math.max(base.width, base.height), 2);
-      const viewport = page.getViewport({ scale });
-      const canvas = document.createElement('canvas');
-      canvas.width = viewport.width;
-      canvas.height = viewport.height;
-      const ctx = canvas.getContext('2d')!;
-      await page.render({ canvasContext: ctx, viewport, canvas } as any).promise;
-      setProofRasterUrl(canvas.toDataURL('image/png'));
+      const pages: string[] = [];
+      const MAX_PAGES = 12; // sanity bound on enormous PDFs
+      const pageCount = Math.min(pdf.numPages, MAX_PAGES);
+      for (let p = 1; p <= pageCount; p++) {
+        const page = await pdf.getPage(p);
+        const base = page.getViewport({ scale: 1 });
+        // Target ~2200px long edge. Anthropic resizes images down to
+        // ~1568px, so this guarantees we hand it the sharpest input it
+        // will accept rather than letting its own PDF rasterizer pick a
+        // lower DPI.
+        const scale = Math.min(2200 / Math.max(base.width, base.height), 3);
+        const viewport = page.getViewport({ scale });
+        const canvas = document.createElement('canvas');
+        canvas.width = viewport.width;
+        canvas.height = viewport.height;
+        const ctx = canvas.getContext('2d')!;
+        await page.render({ canvasContext: ctx, viewport, canvas } as any).promise;
+        // JPEG keeps the upload small; quality 0.9 is plenty for sizing.
+        pages.push(canvas.toDataURL('image/jpeg', 0.9));
+      }
+      setProofPages(pages);
     } catch (err: any) {
       console.error('[wrap-estimator] PDF rasterize failed:', err);
       // Non-fatal — analysis still works; we just won't have the
@@ -197,33 +207,42 @@ export default function WrapEstimatorPage() {
 
   const analyze = async () => {
     if (!selectedVehicle || !proofFile) return;
+    if (proofPages.length === 0) {
+      setError(rasterizing ? 'Still rendering the proof — try again in a moment.' : 'Proof not ready yet.');
+      return;
+    }
     setAnalyzing(true);
     setAnalysis(null);
     setError(null);
     try {
-      const mediaType = proofFile.type || (proofFile.name.toLowerCase().endsWith('.pdf') ? 'application/pdf' : 'image/jpeg');
-
-      // Upload the proof straight to R2 via the presigned-PUT helper.
-      // This bypasses the platform's ~4.5MB request-body limit that
-      // 413'd PDF uploads when we POSTed base64 inline. The server
-      // then fetches the file by URL.
-      const ext = (proofFile.name.split('.').pop() || 'bin').toLowerCase();
+      // We send the high-res RASTERIZED pages, not the original file.
+      // For a PDF this means each panel/page is its own large JPEG, so
+      // the AI gets a full resolution budget per page instead of one
+      // downscaled multi-panel sheet (the thing that made small logos
+      // hard to size). Upload each page to R2 via the presigned-PUT
+      // helper (bypasses the platform's ~4.5MB request-body limit) and
+      // hand the server just the URLs.
+      const stamp = Date.now();
       const rand = Math.random().toString(36).slice(2, 8);
-      const path = `wrap-estimator/${Date.now()}-${rand}.${ext}`;
-      const up = await storage.from('quote-proofs').upload(path, proofFile, { contentType: mediaType });
-      if (up.error) {
-        setError(`Upload failed: ${up.error.message}`);
-        setAnalyzing(false);
-        return;
+      const fileUrls: string[] = [];
+      for (let i = 0; i < proofPages.length; i++) {
+        const blob = await (await fetch(proofPages[i])).blob();
+        const path = `wrap-estimator/${stamp}-${rand}-p${i + 1}.jpg`;
+        const up = await storage.from('quote-proofs').upload(path, blob, { contentType: 'image/jpeg' });
+        if (up.error) {
+          setError(`Upload failed (page ${i + 1}): ${up.error.message}`);
+          setAnalyzing(false);
+          return;
+        }
+        fileUrls.push(storage.from('quote-proofs').getPublicUrl(path).data.publicUrl);
       }
-      const fileUrl = storage.from('quote-proofs').getPublicUrl(path).data.publicUrl;
 
       const res = await fetch('/api/wrap-estimator/analyze', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          fileUrl,
-          mediaType,
+          fileUrls,
+          mediaType: 'image/jpeg',
           vehicle: {
             name: selectedVehicle.name,
             make: selectedVehicle.make,
@@ -360,7 +379,7 @@ export default function WrapEstimatorPage() {
             onChange={(e) => { const f = e.target.files?.[0]; if (f) onFilePick(f); if (e.target) e.target.value = ''; }}
             style={{ display: 'none' }}
           />
-          {!proofDataUrl ? (
+          {!proofFile ? (
             <button
               onClick={() => fileInputRef.current?.click()}
               style={{
@@ -371,37 +390,38 @@ export default function WrapEstimatorPage() {
             >Click to upload a proof image or PDF</button>
           ) : (
             <div>
-              {proofFile?.type.startsWith('image/') ? (
-                <img
-                  id="wrap-estimator-proof-img"
-                  src={proofDataUrl}
-                  alt="Proof"
-                  style={{ maxWidth: '100%', maxHeight: '420px', borderRadius: '8px', display: 'block', margin: '0 auto' }}
-                />
-              ) : proofRasterUrl ? (
-                <img
-                  src={proofRasterUrl}
-                  alt="Proof preview"
-                  style={{ maxWidth: '100%', maxHeight: '420px', borderRadius: '8px', display: 'block', margin: '0 auto' }}
-                />
+              {proofPages.length > 0 ? (
+                <div>
+                  <img
+                    id="wrap-estimator-proof-img"
+                    src={proofPages[0]}
+                    alt="Proof"
+                    style={{ maxWidth: '100%', maxHeight: '420px', borderRadius: '8px', display: 'block', margin: '0 auto' }}
+                  />
+                  {proofPages.length > 1 && (
+                    <div style={{ fontSize: '11px', color: 'var(--text-muted)', marginTop: '6px', textAlign: 'center' }}>
+                      {proofPages.length} pages rendered at high resolution — each is sent to the AI separately.
+                    </div>
+                  )}
+                </div>
               ) : (
                 <div style={{ padding: '12px', borderRadius: '8px', background: 'var(--subtle-bg)', fontSize: '12px', color: 'var(--text-muted)', textAlign: 'center' }}>
-                  {rasterizing ? 'Rendering PDF preview…' : `PDF loaded: ${proofFile?.name}`}
+                  {rasterizing ? 'Rendering proof at high resolution…' : `Loading: ${proofFile?.name}`}
                 </div>
               )}
               <div style={{ display: 'flex', gap: '8px', marginTop: '10px' }}>
                 <button
                   onClick={analyze}
-                  disabled={analyzing}
+                  disabled={analyzing || rasterizing || proofPages.length === 0}
                   style={{
                     flex: 1, padding: '10px', borderRadius: '8px', fontSize: '13px', fontWeight: 700,
-                    background: analyzing ? 'var(--subtle-bg)' : '#3b82f6',
-                    color: analyzing ? 'var(--text-muted)' : '#fff',
-                    border: 'none', cursor: analyzing ? 'default' : 'pointer',
+                    background: (analyzing || rasterizing || proofPages.length === 0) ? 'var(--subtle-bg)' : '#3b82f6',
+                    color: (analyzing || rasterizing || proofPages.length === 0) ? 'var(--text-muted)' : '#fff',
+                    border: 'none', cursor: (analyzing || rasterizing || proofPages.length === 0) ? 'default' : 'pointer',
                   }}
-                >{analyzing ? 'Analyzing with AI…' : 'Analyze with AI'}</button>
+                >{analyzing ? 'Analyzing with AI…' : rasterizing ? 'Rendering…' : 'Analyze with AI'}</button>
                 <button
-                  onClick={() => { setProofFile(null); setProofDataUrl(null); setAnalysis(null); }}
+                  onClick={() => { setProofFile(null); setProofPages([]); setAnalysis(null); }}
                   style={{
                     padding: '10px 14px', borderRadius: '8px', fontSize: '13px', fontWeight: 700,
                     background: 'transparent', border: '1px solid var(--border)', color: 'var(--text-muted)',
@@ -444,48 +464,65 @@ export default function WrapEstimatorPage() {
             </div>
           </div>
 
-          {/* Annotated proof — numbered boxes laid over the proof image,
-              matching the element row numbers below. */}
-          {proofRasterUrl && (
-            <div style={{ marginBottom: '12px' }}>
-              <div style={{ position: 'relative', display: 'inline-block', maxWidth: '100%', borderRadius: '8px', overflow: 'hidden', border: '1px solid var(--border)' }}>
-                <img src={proofRasterUrl} alt="Proof" style={{ display: 'block', maxWidth: '100%', maxHeight: '480px' }} />
-                {/* Numbered pins at each bbox center. The AI's boxes are
-                    imprecise, so we deliberately DON'T draw rectangles —
-                    a pin just says "roughly here", and the real basis for
-                    the size is the measurement_basis text on each row. */}
-                {analysis.elements.map((el, i) => {
-                  const b = el.bbox;
-                  if (!b) return null;
-                  const cx = Math.max(0, Math.min(1, b.x + b.width / 2)) * 100;
-                  const cy = Math.max(0, Math.min(1, b.y + b.height / 2)) * 100;
-                  return (
-                    <span
-                      key={i}
-                      title={el.label}
-                      style={{
-                        position: 'absolute',
-                        left: `${cx}%`,
-                        top: `${cy}%`,
-                        transform: 'translate(-50%, -50%)',
-                        minWidth: '20px', height: '20px', padding: '0 5px',
-                        background: '#3b82f6', color: '#fff',
-                        fontSize: '11px', fontWeight: 800, lineHeight: '20px',
-                        textAlign: 'center', borderRadius: '10px',
-                        border: '2px solid #fff',
-                        boxShadow: '0 1px 3px rgba(0,0,0,0.4)',
-                        pointerEvents: 'none',
-                      }}
-                    >{i + 1}</span>
-                  );
-                })}
-              </div>
-              <div style={{ fontSize: '10px', color: 'var(--text-muted)', marginTop: '4px' }}>
+          {/* Annotated proof — one image per rendered page, with numbered
+              pins matching the element row numbers below. Elements are
+              grouped onto the page the AI assigned them (1-based el.page). */}
+          {proofPages.length > 0 && (
+            <div style={{ marginBottom: '12px', display: 'flex', flexDirection: 'column', gap: '10px' }}>
+              {proofPages.map((pageUrl, pageIdx) => {
+                const pageNo = pageIdx + 1;
+                // Each element keeps its original index (used for the pin
+                // number + row alignment). Default missing/invalid page to 1.
+                const onThisPage = analysis.elements
+                  .map((el, i) => ({ el, i }))
+                  .filter(({ el }) => (el.page && el.page >= 1 ? el.page : 1) === pageNo);
+                if (proofPages.length > 1 && onThisPage.length === 0) return null;
+                return (
+                  <div key={pageIdx}>
+                    {proofPages.length > 1 && (
+                      <div style={{ fontSize: '10px', fontWeight: 700, color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.5px', marginBottom: '4px' }}>
+                        Page {pageNo}
+                      </div>
+                    )}
+                    <div style={{ position: 'relative', display: 'inline-block', maxWidth: '100%', borderRadius: '8px', overflow: 'hidden', border: '1px solid var(--border)' }}>
+                      <img src={pageUrl} alt={`Proof page ${pageNo}`} style={{ display: 'block', maxWidth: '100%', maxHeight: '480px' }} />
+                      {/* Numbered pins at each bbox center. The AI's boxes
+                          are imprecise, so we deliberately DON'T draw
+                          rectangles — a pin just says "roughly here", and
+                          the real basis for the size is the
+                          measurement_basis text on each row. */}
+                      {onThisPage.map(({ el, i }) => {
+                        const b = el.bbox;
+                        if (!b) return null;
+                        const cx = Math.max(0, Math.min(1, b.x + b.width / 2)) * 100;
+                        const cy = Math.max(0, Math.min(1, b.y + b.height / 2)) * 100;
+                        return (
+                          <span
+                            key={i}
+                            title={el.label}
+                            style={{
+                              position: 'absolute',
+                              left: `${cx}%`,
+                              top: `${cy}%`,
+                              transform: 'translate(-50%, -50%)',
+                              minWidth: '20px', height: '20px', padding: '0 5px',
+                              background: '#3b82f6', color: '#fff',
+                              fontSize: '11px', fontWeight: 800, lineHeight: '20px',
+                              textAlign: 'center', borderRadius: '10px',
+                              border: '2px solid #fff',
+                              boxShadow: '0 1px 3px rgba(0,0,0,0.4)',
+                              pointerEvents: 'none',
+                            }}
+                          >{i + 1}</span>
+                        );
+                      })}
+                    </div>
+                  </div>
+                );
+              })}
+              <div style={{ fontSize: '10px', color: 'var(--text-muted)' }}>
                 Pins mark the AI&apos;s rough location for each element — they are not how it measures.
                 Each element&apos;s size comes from the &quot;Basis&quot; reasoning shown in its row.
-                {pdfPageCount && pdfPageCount > 1
-                  ? ` Showing page 1 of ${pdfPageCount}; elements on other pages are still listed below.`
-                  : ''}
               </div>
             </div>
           )}
@@ -496,7 +533,7 @@ export default function WrapEstimatorPage() {
                 key={i}
                 idx={i}
                 element={el}
-                rasterUrl={proofRasterUrl}
+                rasterUrl={proofPages[(el.page && el.page >= 1 ? el.page : 1) - 1] || proofPages[0] || null}
                 onChange={(patch) => updateElement(i, patch)}
                 onRemove={() => removeElement(i)}
               />
