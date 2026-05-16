@@ -180,7 +180,7 @@ export async function POST(req: NextRequest) {
     const vehicleSummary = buildVehicleSummary(vehicle);
     const pageNote = fileBlocks.length > 1
       ? `\n\nYou are given ${fileBlocks.length} page images, in order (image 1 = page 1, image 2 = page 2, …). Set each element's "page" to the 1-based number of the image it appears on.`
-      : '\n\nYou are given 1 page image. Every element's "page" is 1.';
+      : `\n\nYou are given 1 page image. Every element's "page" is 1.`;
     const userText = `Vehicle context — use these dimensions as your scale reference when sizing elements:\n\n${vehicleSummary}${pageNote}\n\nAnalyze the proof page image(s) below and return the JSON. No preamble.`;
 
     const response = await fetch('https://api.anthropic.com/v1/messages', {
