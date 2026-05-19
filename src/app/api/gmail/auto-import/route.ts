@@ -83,7 +83,15 @@ export async function GET(req: NextRequest) {
     let imported = 0;
     let skipped = 0;
     let errors = 0;
+    let deferred = 0;
     const results: any[] = [];
+
+    // Stop cleanly before Vercel hard-kills the function so we still return a
+    // summary and write sync_state. Anything not reached this run is picked up
+    // next run (the 2-day search window overlaps), instead of being silently
+    // dropped mid-loop with no record of why.
+    const startedAt = Date.now();
+    const TIME_BUDGET_MS = (maxDuration - 8) * 1000;
 
     for (const msg of messages) {
       const id = msg.id!;
@@ -92,6 +100,11 @@ export async function GET(req: NextRequest) {
       const existingStatus = processedMap.get(id);
       if (existingStatus === 'imported' || existingStatus === 'skipped') {
         skipped++;
+        continue;
+      }
+
+      if (Date.now() - startedAt > TIME_BUDGET_MS) {
+        deferred++;
         continue;
       }
 
@@ -106,7 +119,23 @@ export async function GET(req: NextRequest) {
           body: JSON.stringify({ messageId: id, extractOnly: true }),
         });
 
-        const result = await importRes.json();
+        // import-po can 504 under load, in which case Vercel returns an HTML
+        // error page. Blindly calling .json() on that throws and the message
+        // would be miscounted with a useless "Unexpected token <" error, so
+        // parse defensively and surface the real HTTP status instead.
+        const raw = await importRes.text();
+        let result: any;
+        try {
+          result = JSON.parse(raw);
+        } catch {
+          errors++;
+          results.push({
+            messageId: id,
+            status: 'error',
+            error: `import-po returned non-JSON (HTTP ${importRes.status})`,
+          });
+          continue;
+        }
 
         if (result.status === 'imported' || result.status === 'review') {
           imported++;
@@ -124,7 +153,7 @@ export async function GET(req: NextRequest) {
       }
 
       // Small delay between imports to avoid rate limits
-      await new Promise(r => setTimeout(r, 1000));
+      await new Promise(r => setTimeout(r, 250));
     }
 
     // Send notification to users who opted in for PO alerts
@@ -176,6 +205,7 @@ export async function GET(req: NextRequest) {
       imported,
       skipped,
       errors,
+      deferred,
       // Cap stored results so the jsonb stays small. The first few are
       // enough to debug; the UI panel just shows summary counts anyway.
       sample: results.slice(0, 10),
@@ -186,6 +216,7 @@ export async function GET(req: NextRequest) {
       imported,
       skipped,
       errors,
+      deferred,
       results,
       syncStateWrite: okWrite,
     });

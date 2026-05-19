@@ -6,6 +6,11 @@ import { requireAuth } from '@/lib/api-auth';
 import { r2Upload } from '@/lib/r2';
 import { validateBody, z } from '@/lib/validate';
 
+// PDF download + Claude extraction (with retry/backoff) routinely runs well
+// past Vercel's default ~10s ceiling, which 504s the function mid-extraction
+// and means the PO never lands. Give it the same headroom as the cron.
+export const maxDuration = 60;
+
 const ImportSchema = z.object({
   messageId: z.string().min(1).max(200),
   autoCreate: z.boolean().optional(),
