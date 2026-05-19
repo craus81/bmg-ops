@@ -33,8 +33,21 @@ export async function exchangeCode(code: string) {
   return tokens;
 }
 
+// Per-process cache for the authenticated Gmail client. Without this, every
+// getMessage/getAttachment call re-runs a Supabase round-trip + builds a new
+// OAuth client, which turns the per-message loops in search-pos / import-po
+// into an N+1 that blows past the function timeout on any real PO backlog.
+// The googleapis client refreshes its own access token from the refresh
+// token, so reuse is safe; the short TTL still lets a re-auth take effect.
+let cachedGmail: { client: ReturnType<typeof google.gmail>; at: number } | null = null;
+const GMAIL_CLIENT_TTL_MS = 5 * 60 * 1000;
+
 // Get an authenticated Gmail client using stored refresh token
 export async function getGmailClient() {
+  if (cachedGmail && Date.now() - cachedGmail.at < GMAIL_CLIENT_TTL_MS) {
+    return cachedGmail.client;
+  }
+
   const supabase = createClient(
     process.env.NEXT_PUBLIC_SUPABASE_URL!,
     process.env.SUPABASE_SERVICE_ROLE_KEY!
@@ -72,7 +85,9 @@ export async function getGmailClient() {
     }
   });
 
-  return google.gmail({ version: 'v1', auth: client });
+  const gmail = google.gmail({ version: 'v1', auth: client });
+  cachedGmail = { client: gmail, at: Date.now() };
+  return gmail;
 }
 
 // Search Gmail for PO emails with PDF attachments.

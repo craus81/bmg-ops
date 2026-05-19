@@ -5,6 +5,10 @@ import { requireAuth } from '@/lib/api-auth';
 
 export const dynamic = 'force-dynamic';
 
+// Walking the Gmail result set and fetching per-message details is far slower
+// than Vercel's default ~10s ceiling once an inbox has a real backlog of POs.
+export const maxDuration = 60;
+
 // Search Gmail for PO emails and return unimported ones
 export async function GET(req: NextRequest) {
   const auth = await requireAuth(req);
