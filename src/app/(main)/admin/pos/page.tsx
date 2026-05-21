@@ -837,7 +837,7 @@ export default function POsPage() {
   };
 
   const handleCreate = async () => {
-    if (!form.po_number || !form.customer || lineItems.length === 0 || !user) return;
+    if (!form.po_number || !form.customer || lineItems.length === 0 || !user) return null;
     const hasShipTo = Object.values(createShipTo).some(v => (v || '').toString().trim());
     const { data: po, error } = await supabase
       .from('purchase_orders')
@@ -853,7 +853,7 @@ export default function POsPage() {
       .select()
       .single();
 
-    if (!po || error) { alert('Error: ' + error?.message); return; }
+    if (!po || error) { alert('Error: ' + error?.message); return null; }
 
     const { data: items } = await supabase
       .from('po_line_items')
@@ -866,6 +866,18 @@ export default function POsPage() {
     setCreateShipToId('');
     setCreateShipTo({});
     setShowCreate(false);
+    return po;
+  };
+
+  const handleCreateAndGraphics = async () => {
+    const po = await handleCreate();
+    if (!po) return;
+    const params = new URLSearchParams({
+      new: '1',
+      customer: po.customer || '',
+      so: po.po_number || '',
+    });
+    router.push(`/graphics?${params.toString()}`);
   };
 
   const handleDeletePO = async (poId: string) => {
@@ -2768,17 +2780,31 @@ export default function POsPage() {
             </div>
           )}
 
-          <button
-            onClick={handleCreate}
-            disabled={!form.po_number || lineItems.length === 0}
-            style={{
-              width: '100%', padding: '12px', borderRadius: '10px', background: '#22c55e',
-              color: '#fff', fontWeight: 800, fontSize: '14px', border: 'none',
-              opacity: form.po_number && lineItems.length > 0 ? 1 : 0.4,
-            }}
-          >
-            Create PO
-          </button>
+          <div style={{ display: 'flex', gap: '8px' }}>
+            <button
+              onClick={handleCreate}
+              disabled={!form.po_number || lineItems.length === 0}
+              style={{
+                flex: 1, padding: '12px', borderRadius: '10px', background: '#22c55e',
+                color: '#fff', fontWeight: 800, fontSize: '14px', border: 'none',
+                opacity: form.po_number && lineItems.length > 0 ? 1 : 0.4,
+              }}
+            >
+              Create PO
+            </button>
+            <button
+              onClick={handleCreateAndGraphics}
+              disabled={!form.po_number || lineItems.length === 0}
+              title="Save the PO and jump straight into the graphics-job form with the customer and PO# prefilled"
+              style={{
+                flex: 1, padding: '12px', borderRadius: '10px', background: '#a78bfa',
+                color: '#fff', fontWeight: 800, fontSize: '14px', border: 'none',
+                opacity: form.po_number && lineItems.length > 0 ? 1 : 0.4,
+              }}
+            >
+              Create PO + Graphics Job
+            </button>
+          </div>
         </div>
       )}
 
