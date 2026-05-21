@@ -77,6 +77,8 @@ export default function GraphicsPage() {
   const [filterStatus, setFilterStatus] = useState<FilterStatus>('active');
   const [filterCategory, setFilterCategory] = useState<FilterCategory>('all');
   const [search, setSearch] = useState('');
+  const [sortBy, setSortBy] = useState<'due_date' | 'created_at' | 'status'>('due_date');
+  const [sortDir, setSortDir] = useState<'asc' | 'desc'>('asc');
   const [expandedJobId, setExpandedJobId] = useState<string | null>(null);
   const [editingJob, setEditingJob] = useState<GraphicsJob | null>(null);
   const [invoiceJob, setInvoiceJob] = useState<GraphicsJob | null>(null);
@@ -979,11 +981,26 @@ export default function GraphicsPage() {
     }
     return true;
   }).sort((a, b) => {
-    // Sort by due date soonest first; no due date goes to the end
-    if (a.due_date && b.due_date) return a.due_date.localeCompare(b.due_date);
-    if (a.due_date && !b.due_date) return -1;
-    if (!a.due_date && b.due_date) return 1;
-    return 0;
+    const dirMul = sortDir === 'asc' ? 1 : -1;
+    if (sortBy === 'due_date') {
+      // Missing due dates always sink to the bottom, regardless of direction
+      if (!a.due_date && !b.due_date) return 0;
+      if (!a.due_date) return 1;
+      if (!b.due_date) return -1;
+      return a.due_date.localeCompare(b.due_date) * dirMul;
+    }
+    if (sortBy === 'created_at') {
+      return (a.created_at || '').localeCompare(b.created_at || '') * dirMul;
+    }
+    // status: order by pipeline position
+    const aIdx = GRAPHICS_STATUS_ORDER.indexOf(a.status);
+    const bIdx = GRAPHICS_STATUS_ORDER.indexOf(b.status);
+    if (aIdx !== bIdx) return (aIdx - bIdx) * dirMul;
+    // Tiebreak within a status: soonest due date first
+    if (!a.due_date && !b.due_date) return 0;
+    if (!a.due_date) return 1;
+    if (!b.due_date) return -1;
+    return a.due_date.localeCompare(b.due_date);
   });
 
   // Pipeline counts (hide flagged from non-admins)
@@ -1171,16 +1188,43 @@ export default function GraphicsPage() {
         </button>
       </div>
 
-      {/* Search */}
-      <input
-        placeholder="Search jobs..."
-        value={search}
-        onChange={e => setSearch(e.target.value)}
-        style={{
-          ...inputStyle, marginBottom: '12px',
-          background: 'var(--subtle-bg)', border: '1px solid var(--border)',
-        }}
-      />
+      {/* Search + Sort */}
+      <div style={{ display: 'flex', gap: '6px', marginBottom: '12px', alignItems: 'stretch' }}>
+        <input
+          placeholder="Search jobs..."
+          value={search}
+          onChange={e => setSearch(e.target.value)}
+          style={{
+            ...inputStyle, flex: 1, marginBottom: 0,
+            background: 'var(--subtle-bg)', border: '1px solid var(--border)',
+          }}
+        />
+        <select
+          value={sortBy}
+          onChange={e => setSortBy(e.target.value as 'due_date' | 'created_at' | 'status')}
+          title="Sort jobs by"
+          style={{
+            ...inputStyle, marginBottom: 0, width: 'auto', minWidth: '120px',
+            background: 'var(--subtle-bg)', border: '1px solid var(--border)',
+            cursor: 'pointer',
+          }}
+        >
+          <option value="due_date">Due date</option>
+          <option value="created_at">Date created</option>
+          <option value="status">Status</option>
+        </select>
+        <button
+          onClick={() => setSortDir(sortDir === 'asc' ? 'desc' : 'asc')}
+          title={sortDir === 'asc' ? 'Ascending — click for descending' : 'Descending — click for ascending'}
+          style={{
+            padding: '0 12px', borderRadius: '6px', fontSize: '14px', fontWeight: 700,
+            background: 'var(--subtle-bg)', border: '1px solid var(--border)',
+            color: 'var(--text-label)', cursor: 'pointer', whiteSpace: 'nowrap',
+          }}
+        >
+          {sortDir === 'asc' ? '↑' : '↓'}
+        </button>
+      </div>
 
       {/* Job List */}
       {filteredJobs.length === 0 ? (
