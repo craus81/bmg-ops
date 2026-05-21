@@ -253,6 +253,8 @@ export default function POsPage() {
   const [uploadingPoPdf, setUploadingPoPdf] = useState(false);
   // Auto-popped PDF preview (set after upload or when a file row is clicked)
   const [pdfPreview, setPdfPreview] = useState<{ url: string; name: string } | null>(null);
+  // True while the AI ship-to extraction is running after an upload
+  const [extractingShipTo, setExtractingShipTo] = useState(false);
   // PO list sort direction (by PO number)
   const [poSort, setPoSort] = useState<'asc' | 'desc'>('asc');
   const [parseError, setParseError] = useState('');
@@ -1067,6 +1069,26 @@ export default function POsPage() {
     if (lastUpload) {
       const url = storage.from('graphics-proofs').getPublicUrl(lastUpload.path).data.publicUrl;
       setPdfPreview({ url, name: lastUpload.name });
+      // Mirror the Gmail import behaviour: send the freshly uploaded PDF to
+      // the extraction endpoint so the PO's ship_to gets filled in
+      // automatically. Best-effort; failures are logged but don't block.
+      setExtractingShipTo(true);
+      try {
+        const res = await fetch('/api/pos/extract-ship-to', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ poId, storagePath: lastUpload.path }),
+        });
+        const data = await res.json().catch(() => ({}));
+        if (res.ok && data.ship_to) {
+          setPos(prev => prev.map(p => p.id === poId ? { ...p, ship_to: data.ship_to } : p));
+        } else if (!res.ok) {
+          console.warn('Ship-to extraction failed:', data.error || res.status);
+        }
+      } catch (err) {
+        console.warn('Ship-to extraction threw:', err);
+      }
+      setExtractingShipTo(false);
     }
   };
 
@@ -3349,8 +3371,15 @@ export default function POsPage() {
               display: 'flex', alignItems: 'center', justifyContent: 'space-between',
               gap: '12px', padding: '12px 16px', borderBottom: '1px solid var(--border)',
             }}>
-              <div style={{ fontSize: '13px', fontWeight: 700, color: 'var(--text-primary)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-                {pdfPreview.name}
+              <div style={{ minWidth: 0, flex: 1 }}>
+                <div style={{ fontSize: '13px', fontWeight: 700, color: 'var(--text-primary)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                  {pdfPreview.name}
+                </div>
+                {extractingShipTo && (
+                  <div style={{ fontSize: '11px', fontWeight: 600, color: '#60a5fa', marginTop: '2px' }}>
+                    Reading ship-to from PDF…
+                  </div>
+                )}
               </div>
               <div style={{ display: 'flex', gap: '8px', flexShrink: 0 }}>
                 <a
