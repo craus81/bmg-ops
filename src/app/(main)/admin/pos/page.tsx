@@ -198,13 +198,13 @@ async function persistPoPdf(
   poId: string,
   file: File,
   uploadedBy: string | null,
-) {
+): Promise<{ path: string; name: string } | null> {
   const safeName = file.name.replace(/[^a-zA-Z0-9._-]/g, '_');
   const path = `po-pdfs/${poId}/${Date.now()}-${safeName}`;
   const { error: upErr } = await storage.from('graphics-proofs').upload(path, file, { contentType: file.type || 'application/pdf' });
   if (upErr) {
     console.warn('PO PDF upload failed:', upErr);
-    return;
+    return null;
   }
   await supabase.from('po_files').insert({
     po_id: poId,
@@ -215,6 +215,7 @@ async function persistPoPdf(
     source: 'pdf_upload',
     uploaded_by: uploadedBy,
   });
+  return { path, name: file.name };
 }
 
 
@@ -250,6 +251,10 @@ export default function POsPage() {
   const poFileInputRef = useRef<HTMLInputElement>(null);
   const [uploadingPoId, setUploadingPoId] = useState<string | null>(null);
   const [uploadingPoPdf, setUploadingPoPdf] = useState(false);
+  // Auto-popped PDF preview (set after upload or when a file row is clicked)
+  const [pdfPreview, setPdfPreview] = useState<{ url: string; name: string } | null>(null);
+  // True while the AI ship-to extraction is running after an upload
+  const [extractingShipTo, setExtractingShipTo] = useState(false);
   // PO list sort direction (by PO number)
   const [poSort, setPoSort] = useState<'asc' | 'desc'>('asc');
   const [parseError, setParseError] = useState('');
@@ -832,7 +837,7 @@ export default function POsPage() {
   };
 
   const handleCreate = async () => {
-    if (!form.po_number || !form.customer || lineItems.length === 0 || !user) return;
+    if (!form.po_number || !form.customer || lineItems.length === 0 || !user) return null;
     const hasShipTo = Object.values(createShipTo).some(v => (v || '').toString().trim());
     const { data: po, error } = await supabase
       .from('purchase_orders')
@@ -848,7 +853,7 @@ export default function POsPage() {
       .select()
       .single();
 
-    if (!po || error) { alert('Error: ' + error?.message); return; }
+    if (!po || error) { alert('Error: ' + error?.message); return null; }
 
     const { data: items } = await supabase
       .from('po_line_items')
@@ -861,6 +866,18 @@ export default function POsPage() {
     setCreateShipToId('');
     setCreateShipTo({});
     setShowCreate(false);
+    return po;
+  };
+
+  const handleCreateAndGraphics = async () => {
+    const po = await handleCreate();
+    if (!po) return;
+    const params = new URLSearchParams({
+      new: '1',
+      customer: po.customer || '',
+      so: po.po_number || '',
+    });
+    router.push(`/graphics?${params.toString()}`);
   };
 
   const handleDeletePO = async (poId: string) => {
@@ -1051,12 +1068,40 @@ export default function POsPage() {
       return;
     }
     setUploadingPoPdf(true);
+    let lastUpload: { path: string; name: string } | null = null;
     for (const file of files) {
-      await persistPoPdf(supabase, poId, file, user.id);
+      const result = await persistPoPdf(supabase, poId, file, user.id);
+      if (result) lastUpload = result;
     }
     await loadPoFiles(poId);
     setUploadingPoPdf(false);
     setUploadingPoId(null);
+    // Pop the freshly uploaded PDF into its own preview window so the user
+    // doesn't have to scroll the list to find it.
+    if (lastUpload) {
+      const url = storage.from('graphics-proofs').getPublicUrl(lastUpload.path).data.publicUrl;
+      setPdfPreview({ url, name: lastUpload.name });
+      // Mirror the Gmail import behaviour: send the freshly uploaded PDF to
+      // the extraction endpoint so the PO's ship_to gets filled in
+      // automatically. Best-effort; failures are logged but don't block.
+      setExtractingShipTo(true);
+      try {
+        const res = await fetch('/api/pos/extract-ship-to', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ poId, storagePath: lastUpload.path }),
+        });
+        const data = await res.json().catch(() => ({}));
+        if (res.ok && data.ship_to) {
+          setPos(prev => prev.map(p => p.id === poId ? { ...p, ship_to: data.ship_to } : p));
+        } else if (!res.ok) {
+          console.warn('Ship-to extraction failed:', data.error || res.status);
+        }
+      } catch (err) {
+        console.warn('Ship-to extraction threw:', err);
+      }
+      setExtractingShipTo(false);
+    }
   };
 
   // Gmail import functions
@@ -2735,17 +2780,31 @@ export default function POsPage() {
             </div>
           )}
 
-          <button
-            onClick={handleCreate}
-            disabled={!form.po_number || lineItems.length === 0}
-            style={{
-              width: '100%', padding: '12px', borderRadius: '10px', background: '#22c55e',
-              color: '#fff', fontWeight: 800, fontSize: '14px', border: 'none',
-              opacity: form.po_number && lineItems.length > 0 ? 1 : 0.4,
-            }}
-          >
-            Create PO
-          </button>
+          <div style={{ display: 'flex', gap: '8px' }}>
+            <button
+              onClick={handleCreate}
+              disabled={!form.po_number || lineItems.length === 0}
+              style={{
+                flex: 1, padding: '12px', borderRadius: '10px', background: '#22c55e',
+                color: '#fff', fontWeight: 800, fontSize: '14px', border: 'none',
+                opacity: form.po_number && lineItems.length > 0 ? 1 : 0.4,
+              }}
+            >
+              Create PO
+            </button>
+            <button
+              onClick={handleCreateAndGraphics}
+              disabled={!form.po_number || lineItems.length === 0}
+              title="Save the PO and jump straight into the graphics-job form with the customer and PO# prefilled"
+              style={{
+                flex: 1, padding: '12px', borderRadius: '10px', background: '#a78bfa',
+                color: '#fff', fontWeight: 800, fontSize: '14px', border: 'none',
+                opacity: form.po_number && lineItems.length > 0 ? 1 : 0.4,
+              }}
+            >
+              Create PO + Graphics Job
+            </button>
+          </div>
         </div>
       )}
 
@@ -2919,23 +2978,26 @@ export default function POsPage() {
                     {(poFiles[po.id] || []).length > 0 ? (
                       <div style={{ display: 'flex', flexDirection: 'column', gap: '4px', marginTop: '4px' }}>
                         {poFiles[po.id].map(f => (
-                          <a
+                          <button
                             key={f.id}
-                            href={storage.from('graphics-proofs').getPublicUrl(f.storage_path).data.publicUrl}
-                            target="_blank"
-                            rel="noopener noreferrer"
+                            type="button"
+                            onClick={() => {
+                              const url = storage.from('graphics-proofs').getPublicUrl(f.storage_path).data.publicUrl;
+                              setPdfPreview({ url, name: f.file_name });
+                            }}
                             style={{
                               display: 'flex', alignItems: 'center', gap: '8px',
                               padding: '6px 8px', borderRadius: '6px',
                               background: 'var(--subtle-bg)', border: '1px solid var(--border)',
-                              fontSize: '11px', fontWeight: 600, color: '#60a5fa', textDecoration: 'none',
+                              fontSize: '11px', fontWeight: 600, color: '#60a5fa', textAlign: 'left',
+                              cursor: 'pointer', width: '100%',
                             }}
                           >
                             <span style={{ fontSize: '14px' }}>{'📄'}</span>
                             <span style={{ flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{f.file_name}</span>
                             {f.source && <span style={{ fontSize: '9px', color: 'var(--text-muted)', textTransform: 'uppercase' }}>{f.source === 'pdf_upload' ? 'PDF' : 'Email'}</span>}
                             {f.file_size && <span style={{ fontSize: '9px', color: 'var(--text-muted)' }}>{(f.file_size / 1024).toFixed(0)}KB</span>}
-                          </a>
+                          </button>
                         ))}
                       </div>
                     ) : (
@@ -3311,6 +3373,72 @@ export default function POsPage() {
       <button onClick={() => router.push('/more')} style={{ width: '100%', padding: '10px', borderRadius: '10px', marginTop: '14px', border: '1px solid var(--border)', background: 'transparent', color: 'var(--text-body)', fontSize: '13px', fontWeight: 700 }}>
         ← Back
       </button>
+
+      {pdfPreview && (
+        <div
+          onClick={() => setPdfPreview(null)}
+          style={{
+            position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.7)',
+            zIndex: 2000, display: 'flex', alignItems: 'center', justifyContent: 'center',
+            padding: '20px',
+          }}
+        >
+          <div
+            onClick={e => e.stopPropagation()}
+            style={{
+              background: 'var(--card)', borderRadius: '12px',
+              width: 'min(960px, 100%)', height: 'min(90vh, 100%)',
+              display: 'flex', flexDirection: 'column',
+              border: '1px solid var(--border)', boxShadow: '0 24px 60px rgba(0,0,0,0.4)',
+              overflow: 'hidden',
+            }}
+          >
+            <div style={{
+              display: 'flex', alignItems: 'center', justifyContent: 'space-between',
+              gap: '12px', padding: '12px 16px', borderBottom: '1px solid var(--border)',
+            }}>
+              <div style={{ minWidth: 0, flex: 1 }}>
+                <div style={{ fontSize: '13px', fontWeight: 700, color: 'var(--text-primary)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                  {pdfPreview.name}
+                </div>
+                {extractingShipTo && (
+                  <div style={{ fontSize: '11px', fontWeight: 600, color: '#60a5fa', marginTop: '2px' }}>
+                    Reading ship-to from PDF…
+                  </div>
+                )}
+              </div>
+              <div style={{ display: 'flex', gap: '8px', flexShrink: 0 }}>
+                <a
+                  href={pdfPreview.url}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  style={{
+                    padding: '6px 12px', borderRadius: '6px', fontSize: '11px', fontWeight: 700,
+                    background: 'rgba(96,165,250,0.12)', border: '1px solid rgba(96,165,250,0.3)',
+                    color: '#60a5fa', textDecoration: 'none',
+                  }}
+                >Open in new tab ↗</a>
+                <button
+                  type="button"
+                  onClick={() => setPdfPreview(null)}
+                  aria-label="Close"
+                  style={{
+                    width: '32px', height: '32px', borderRadius: '8px',
+                    background: 'var(--subtle-bg)', border: '1px solid var(--border)',
+                    color: 'var(--text-muted)', fontSize: '16px', fontWeight: 700,
+                    cursor: 'pointer',
+                  }}
+                >✕</button>
+              </div>
+            </div>
+            <iframe
+              src={pdfPreview.url}
+              title={pdfPreview.name}
+              style={{ flex: 1, width: '100%', border: 'none', background: '#525659' }}
+            />
+          </div>
+        </div>
+      )}
     </div>
   );
 }

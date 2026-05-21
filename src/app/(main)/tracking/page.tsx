@@ -2098,7 +2098,14 @@ export default function TrackingPage() {
                         capture="environment"
                         multiple
                         style={{ display: 'none' }}
-                        onChange={(e) => { handlePhotoFiles(vehicle.id, e.target.files); e.target.value = ''; }}
+                        onChange={async (e) => {
+                          const hadFiles = !!(e.target.files && e.target.files.length);
+                          await handlePhotoFiles(vehicle.id, e.target.files);
+                          e.target.value = '';
+                          // Mobile camera capture is single-shot; re-open it so
+                          // the installer keeps shooting until they cancel.
+                          if (hadFiles) cameraInputRef.current?.click();
+                        }}
                       />
                       <input
                         ref={photoInputRef}

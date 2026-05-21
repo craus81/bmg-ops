@@ -155,6 +155,7 @@ export default function CompletionModal({
     const files = Array.from(e.target.files || []);
     if (!files.length || !user) return;
     setUploading(true);
+    let uploadedAny = false;
     try {
       for (let idx = 0; idx < files.length; idx++) {
         const file = files[idx];
@@ -169,12 +170,19 @@ export default function CompletionModal({
           taken_by: user.id,
           caption: idx === 0 && caption.trim() ? caption.trim() : null,
         });
+        uploadedAny = true;
       }
       setCaption('');
       if (fileRef.current) fileRef.current.value = '';
       await refresh();
     } finally {
       setUploading(false);
+    }
+    // Auto re-open the camera after a successful shot so the installer
+    // keeps capturing without re-tapping. Cancelling the camera UI returns
+    // no files and never fires onChange, which breaks the loop naturally.
+    if (uploadedAny) {
+      fileRef.current?.click();
     }
   };
 
