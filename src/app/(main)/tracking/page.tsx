@@ -1316,7 +1316,13 @@ export default function TrackingPage() {
                                   e.stopPropagation();
                                   e.preventDefault();
                                   if (!isCurrent && !isUpdating) {
-                                    updateStatus(vehicle.id, s);
+                                    if (s === 'complete') {
+                                      // Marking complete must go through the completion
+                                      // process (checklist + photos), not a direct status flip.
+                                      setCompletionModalVehicleId(vehicle.id);
+                                    } else {
+                                      updateStatus(vehicle.id, s);
+                                    }
                                   }
                                 }}
                                 disabled={isCurrent || isUpdating}
