@@ -70,6 +70,7 @@ QUERY JSON FORMAT:
   {"id": "name", "source": "netsuite", "sql": "SELECT ..."},
   {"id": "name", "source": "supabase", "sql": "SELECT ..."},
   {"id": "name", "source": "knowledge", "search": "search terms here"},
+  {"id": "name", "source": "knowledge", "list_files": true, "file_type_filter": "pdf"},
   {"id": "name", "source": "action", "action": "action_name", "params": {...}}
 ]}
 
@@ -246,6 +247,42 @@ HOW TO USE KNOWLEDGE RESULTS:
 
 Example: {"id": "vinyl_spec", "source": "knowledge", "search": "vinyl specifications"}
 
+KNOWLEDGE RESPONSE SHAPE — read every field before drawing conclusions:
+- Every knowledge response includes kb_stats { total_docs, total_uploaded_files }.
+  These describe the WHOLE knowledge base, not just the docs you matched.
+- A search response also has matched_count (rows that matched your terms) and
+  returned_count (top-scored rows actually shown, capped at 5).
+- Each search item has has_file (true iff THAT one doc was uploaded as a file).
+
+RULES — do not break these:
+1. NEVER claim "the knowledge base contains no PDFs / no uploaded files / no
+   source files" based on a search response. The search is keyword-scoped and
+   returns at most 5 docs. Only kb_stats.total_uploaded_files (or a list_files
+   query) is authoritative.
+2. If the user asks "do we have any [PDFs / wrap templates / cut sheets / spec
+   files / source files / template files / diagrams / uploaded docs]" — or any
+   question about FILE AVAILABILITY rather than content — use list_files mode,
+   not a keyword search. A keyword search answers "what does the KB SAY about
+   X"; list_files answers "what FILES are in the KB."
+3. If has_file is false on the 5 search results but kb_stats.total_uploaded_files
+   is > 0, that means files exist in the KB but didn't rank in the top 5 for
+   your query. Do not tell the user "everything in there is text only" — run a
+   list_files query (optionally with file_type_filter: "pdf") and report
+   actually.
+4. If kb_stats.total_uploaded_files is 0, you may say there are no uploaded
+   files in the KB — that's the only case where the absence claim is supported.
+
+LIST_FILES MODE — authoritative inventory of uploaded files:
+- {"id": "files", "source": "knowledge", "list_files": true}
+  Returns up to 200 docs where file_path is set (title, file_name, file_type,
+  file_size, category, tags, created_at — no content).
+- Add "file_type_filter": "pdf" (or "image", "docx", etc.) to narrow by MIME
+  type substring. The filter is a case-insensitive substring match against
+  file_type.
+- Use this BEFORE telling the user a file type is missing from the KB.
+
+Example: {"id": "kb_pdfs", "source": "knowledge", "list_files": true, "file_type_filter": "pdf"}
+
 SUPABASE QUERY SYNTAX:
 - Standard PostgreSQL syntax (NOT SuiteQL)
 - Use LIMIT/OFFSET (not FETCH FIRST)
@@ -407,6 +444,8 @@ interface QuerySpec {
   search?: string;
   action?: string;
   params?: Record<string, any>;
+  list_files?: boolean;
+  file_type_filter?: string;
 }
 
 // Try to extract a queries JSON object from Claude's response
@@ -458,7 +497,49 @@ async function executeQuery(q: QuerySpec): Promise<any> {
   }
 
   if (source === 'knowledge') {
-    if (!q.search) throw new Error('No search terms provided for knowledge query');
+    // KB-wide stats — included in every knowledge response so the AI never
+    // overgeneralizes from a single keyword search ("none of the 5 returned
+    // docs had a file" ≠ "the whole KB has no files").
+    const [{ count: kbTotalDocs }, { count: kbTotalFiles }] = await Promise.all([
+      supabase.from('knowledge_docs').select('id', { count: 'exact', head: true }),
+      supabase.from('knowledge_docs').select('id', { count: 'exact', head: true }).not('file_path', 'is', null),
+    ]);
+    const kb_stats = {
+      total_docs: kbTotalDocs || 0,
+      total_uploaded_files: kbTotalFiles || 0,
+      note: 'Counts describe the whole knowledge base. Never claim "the KB has no files" from a keyword search — only the LIST mode (list_files: true) is authoritative on file availability.',
+    };
+
+    // ─── LIST MODE — authoritative file inventory, no keyword search ───
+    if (q.list_files) {
+      let query = supabase
+        .from('knowledge_docs')
+        .select('id, title, category, file_name, file_type, file_size, created_at, tags')
+        .not('file_path', 'is', null)
+        .order('created_at', { ascending: false })
+        .limit(200);
+      if (q.file_type_filter) {
+        query = query.ilike('file_type', `%${q.file_type_filter}%`);
+      }
+      const { data: files, error: listError } = await query;
+      if (listError) throw new Error(`Knowledge file list failed: ${listError.message}`);
+      return {
+        mode: 'list_files',
+        kb_stats,
+        items: (files || []).map(f => ({
+          id: f.id,
+          title: f.title,
+          category: f.category,
+          file_name: f.file_name,
+          file_type: f.file_type,
+          file_size: f.file_size,
+          tags: f.tags,
+          created_at: f.created_at,
+        })),
+      };
+    }
+
+    if (!q.search) throw new Error('No search terms provided for knowledge query (or set list_files: true to list uploaded files)');
 
     // Split search into individual terms for broader matching
     const searchTerms = q.search.trim().split(/\s+/).filter(Boolean);
@@ -476,12 +557,12 @@ async function executeQuery(q: QuerySpec): Promise<any> {
       }
     }
 
-    const { data, error } = await supabase
+    const { data, error, count: matchedCount } = await supabase
       .from('knowledge_docs')
-      .select('id, title, category, content, tags, file_name, file_type, file_size, file_path, created_at')
+      .select('id, title, category, content, tags, file_name, file_type, file_size, file_path, created_at', { count: 'exact' })
       .or(conditions.join(','))
       .order('created_at', { ascending: false })
-      .limit(8);
+      .limit(50);
 
     if (error) throw new Error(`Knowledge search failed: ${error.message}`);
 
@@ -517,7 +598,13 @@ async function executeQuery(q: QuerySpec): Promise<any> {
       file_type: d.file_type,
       has_file: !!d.file_path,
     }));
-    return { items };
+    return {
+      mode: 'search',
+      kb_stats,
+      matched_count: matchedCount ?? items.length,
+      returned_count: items.length,
+      items,
+    };
   }
 
   if (source === 'vehicle_search') {
