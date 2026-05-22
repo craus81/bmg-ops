@@ -8,6 +8,7 @@ import { parseMasterackPO, type ParsedPO, type ParsedPOLine } from '@/lib/parseP
 import { storage } from '@/lib/storage';
 import type { PurchaseOrder, POLineItem, CatalogItem, PoLocation } from '@/lib/types';
 import { PartLabel } from '@/components/PartLabel';
+import { CreateNetsuiteItemModal } from '@/components/CreateNetsuiteItemModal';
 
 interface ImportLine extends ParsedPOLine {
   catalog_match: CatalogItem | null;
@@ -277,6 +278,9 @@ export default function POsPage() {
   // Email PO review/edit state
   const [reviewingExtraction, setReviewingExtraction] = useState<{ messageId: string; extracted: any } | null>(null);
   const [reviewShipToId, setReviewShipToId] = useState<string>('');
+  // NetSuite item creation from a review line: holds the line being created; tracks created lines by index
+  const [createNsItemLine, setCreateNsItemLine] = useState<{ idx: number; partNumber: string; description: string | null } | null>(null);
+  const [createdNsLines, setCreatedNsLines] = useState<Set<number>>(new Set());
   // NetSuite SO creation state
   const [creatingSOForPo, setCreatingSOForPo] = useState<string | null>(null);
   const [soResults, setSoResults] = useState<Record<string, any>>({});
@@ -2235,6 +2239,15 @@ export default function POsPage() {
                     <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
                       {catalogMatch && <span style={{ fontSize: '9px', color: '#4ade80', fontWeight: 600 }}>✓ Catalog match</span>}
                       {!catalogMatch && <span style={{ fontSize: '9px', color: '#fbbf24', fontWeight: 600 }}>No catalog match</span>}
+                      {createdNsLines.has(idx) ? (
+                        <span style={{ fontSize: '9px', color: '#4ade80', fontWeight: 700 }}>✓ NetSuite</span>
+                      ) : (line.part_number || line.supplier_part) ? (
+                        <button
+                          onClick={() => setCreateNsItemLine({ idx, partNumber: (line.part_number || line.supplier_part || '').trim(), description: line.description || null })}
+                          style={{ background: 'rgba(34,197,94,0.1)', border: '1px solid rgba(34,197,94,0.3)', color: '#22c55e', fontSize: '9px', fontWeight: 700, cursor: 'pointer', padding: '2px 6px', borderRadius: '5px' }}
+                          title="Create this part in NetSuite"
+                        >+ NetSuite</button>
+                      ) : null}
                       <button
                         onClick={() => removeReviewLine(idx)}
                         style={{ background: 'none', border: 'none', color: '#ef4444', fontSize: '12px', cursor: 'pointer', padding: '2px 4px' }}
@@ -3438,6 +3451,19 @@ export default function POsPage() {
             />
           </div>
         </div>
+      )}
+
+      {createNsItemLine !== null && (
+        <CreateNetsuiteItemModal
+          initialPartNumber={createNsItemLine.partNumber}
+          initialDescription={createNsItemLine.description}
+          catalog="graphics"
+          onClose={() => setCreateNsItemLine(null)}
+          onCreated={() => {
+            setCreatedNsLines(prev => new Set(prev).add(createNsItemLine.idx));
+            setCreateNsItemLine(null);
+          }}
+        />
       )}
     </div>
   );

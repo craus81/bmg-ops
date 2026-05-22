@@ -4,6 +4,7 @@ import { useState, useEffect } from 'react';
 import { createClient } from '@/lib/supabase-browser';
 import { useAuth } from '@/components/AuthProvider';
 import { PartLabel } from '@/components/PartLabel';
+import { CreateNetsuiteItemModal, type CreatedPart } from '@/components/CreateNetsuiteItemModal';
 import { theme } from '@/lib/theme';
 
 interface ScanLog {
@@ -58,6 +59,7 @@ export default function AdminScansPage() {
   const [bulkCustomer, setBulkCustomer] = useState('');
   const [custMatches, setCustMatches] = useState<{ id: string; company_name: string; entity_id: string | null }[]>([]);
   const [showCustDropdown, setShowCustDropdown] = useState(false);
+  const [createItemFor, setCreateItemFor] = useState<string | null>(null);
   const [bulkVins, setBulkVins] = useState('');
   const [bulkProcessing, setBulkProcessing] = useState(false);
   const [bulkResult, setBulkResult] = useState<{ success: number; failed: number; skipped?: number } | null>(null);
@@ -749,7 +751,8 @@ export default function AdminScansPage() {
 
     setBulkResult({ success, failed, skipped });
     setBulkProcessing(false);
-    if (success > 0) { setBulkVins(''); setBulkCustomer(''); loadAll(); }
+    // Clear VINs for the next batch, but keep customer/part/location sticky for the session
+    if (success > 0) { setBulkVins(''); loadAll(); }
   };
 
   const handleFileUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -1411,9 +1414,11 @@ export default function AdminScansPage() {
                       };
                     });
                   const matches = [...partMatches, ...catMatches].slice(0, 12);
-                  if (matches.length === 0) return <div style={{ fontSize: '10px', color: 'var(--text-muted)', padding: '6px 0' }}>No matching parts</div>;
                   return (
-                    <div style={{ position: 'absolute', top: '100%', left: 0, right: 0, zIndex: 50, background: 'var(--card)', border: `1px solid ${theme.border}`, borderRadius: '8px', boxShadow: '0 4px 12px rgba(0,0,0,0.2)', maxHeight: '200px', overflowY: 'auto', marginTop: '2px' }}>
+                    <div style={{ position: 'absolute', top: '100%', left: 0, right: 0, zIndex: 50, background: 'var(--card)', border: `1px solid ${theme.border}`, borderRadius: '8px', boxShadow: '0 4px 12px rgba(0,0,0,0.2)', maxHeight: '240px', overflowY: 'auto', marginTop: '2px' }}>
+                      {matches.length === 0 && (
+                        <div style={{ fontSize: '10px', color: 'var(--text-muted)', padding: '8px 10px' }}>No matching parts</div>
+                      )}
                       {matches.map(m => (
                         <button key={m.key} onClick={() => { setBulkParts(prev => [...prev, m.add]); setBulkPartSearch(''); }} style={{
                           display: 'block', width: '100%', padding: '8px 10px', textAlign: 'left', border: 'none', borderBottom: `1px solid ${theme.border}`,
@@ -1425,6 +1430,12 @@ export default function AdminScansPage() {
                           {m.sub && <div style={{ fontSize: '10px', color: 'var(--text-muted)' }}>{m.sub}</div>}
                         </button>
                       ))}
+                      <button onMouseDown={e => e.preventDefault()} onClick={() => setCreateItemFor(bulkPartSearch.trim())} style={{
+                        display: 'block', width: '100%', padding: '8px 10px', textAlign: 'left', border: 'none',
+                        background: 'rgba(34,197,94,0.06)', cursor: 'pointer', fontSize: '12px', fontWeight: 700, color: '#22c55e',
+                      }}>
+                        + Create &quot;{bulkPartSearch.trim()}&quot; in NetSuite
+                      </button>
                     </div>
                   );
                 })()}
@@ -1850,6 +1861,26 @@ export default function AdminScansPage() {
             </div>
           </div>
         </div>
+      )}
+
+      {createItemFor !== null && (
+        <CreateNetsuiteItemModal
+          initialPartNumber={createItemFor}
+          billableCustomer={bulkCustomer.trim() || null}
+          onClose={() => setCreateItemFor(null)}
+          onCreated={(part: CreatedPart) => {
+            setAllParts(prev => [{ id: part.id, item_number: part.item_number, display_name: part.display_name, billable_customer: part.billable_customer }, ...prev]);
+            setBulkParts(prev => [...prev, {
+              id: part.id,
+              label: `${part.item_number}${part.billable_customer ? ` — ${part.billable_customer}` : ''}`,
+              partNumber: part.item_number,
+              description: part.display_name,
+              customer: part.billable_customer,
+            }]);
+            setBulkPartSearch('');
+            setCreateItemFor(null);
+          }}
+        />
       )}
     </div>
   );

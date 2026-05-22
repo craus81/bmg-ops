@@ -5,7 +5,6 @@
 
 import OAuth from 'oauth-1.0a';
 import CryptoJS from 'crypto-js';
-import { cached, CACHE_TTL } from './cache';
 import { safeStringLiteral } from './sql-safe';
 
 interface NetSuiteConfig {
@@ -437,6 +436,76 @@ export async function createCustomerOrLead(payload: {
   }
 }
 
+/**
+ * Create an item record in NetSuite.
+ * Uses the REST Record API: POST /services/rest/record/v1/{recordType}
+ * Sends a deliberately minimal field set (itemId + names + description).
+ * If the account requires more (income account, tax schedule, subsidiary),
+ * NetSuite's rejection message is returned verbatim so the caller can show it.
+ */
+export async function createItem(payload: {
+  itemId: string;
+  recordType: string; // e.g. 'serviceSaleItem', 'nonInventoryResaleItem', 'inventoryItem'
+  displayName?: string;
+  description?: string;
+}): Promise<{
+  success: boolean;
+  internalId?: string;
+  netsuiteUrl?: string;
+  error?: string;
+}> {
+  const config = getConfig();
+  const baseUrl = getBaseUrl(config.accountId);
+  // Guard against a bad recordType injecting into the path
+  const recordType = payload.recordType.replace(/[^a-zA-Z]/g, '');
+  if (!recordType) return { success: false, error: 'Invalid item type' };
+  const url = `${baseUrl}/services/rest/record/v1/${recordType}`;
+  const { oauth, token } = createOAuth(config);
+  const authHeader = getAuthHeader(oauth, token, { url, method: 'POST' });
+
+  const body: any = { itemId: payload.itemId };
+  if (payload.displayName) body.displayName = payload.displayName;
+  if (payload.description) body.salesDescription = payload.description;
+
+  try {
+    const response = await fetch(url, {
+      method: 'POST',
+      headers: {
+        'Authorization': authHeader,
+        'Content-Type': 'application/json',
+        'Prefer': 'respondAsync=false',
+      },
+      body: JSON.stringify(body),
+    });
+
+    if (!response.ok) {
+      const text = await response.text();
+      console.error('NetSuite create item error:', response.status, text);
+      // Surface NetSuite's own message — usually names the missing required field
+      let detail = text.slice(0, 400);
+      try {
+        const parsed = JSON.parse(text);
+        detail = parsed?.['o:errorDetails']?.[0]?.detail || parsed?.title || detail;
+      } catch { /* keep raw text */ }
+      return { success: false, error: `NetSuite ${response.status}: ${detail}` };
+    }
+
+    const location = response.headers.get('location') || '';
+    const idMatch = location.match(/\/(\d+)(?:\?|$)/);
+    const internalId = idMatch ? idMatch[1] : undefined;
+
+    const accountForUrl = config.accountId.replace(/-/g, '_').toUpperCase();
+    const netsuiteUrl = internalId
+      ? `https://${accountForUrl}.app.netsuite.com/app/common/item/item.nl?id=${internalId}`
+      : undefined;
+
+    return { success: true, internalId, netsuiteUrl };
+  } catch (error: any) {
+    console.error('NetSuite create item exception:', error);
+    return { success: false, error: error?.message || 'Unknown error' };
+  }
+}
+
 export async function createSalesOrder(payload: {
   customerId: string | number;
   poNumber: string;
@@ -594,37 +663,41 @@ export async function findCustomer(name: string): Promise<{
 /**
  * Look up NetSuite items by part number
  */
-export const findItems = cached(
-  async (partNumbers: string[]): Promise<Record<string, { id: string; name: string; displayName: string; description: string }>> => {
-    if (partNumbers.length === 0) return {};
+/**
+ * Look up NetSuite items by part number. Intentionally NOT cached: the only
+ * callers are invoice / sales-order creation flows, and caching a negative
+ * result (part not yet in NetSuite) would mask a part that was added moments
+ * ago — the lookup must reflect NetSuite's current state every time.
+ */
+export async function findItems(
+  partNumbers: string[],
+): Promise<Record<string, { id: string; name: string; displayName: string; description: string }>> {
+  if (partNumbers.length === 0) return {};
 
-    const conditions = partNumbers
-      .map((p) => `UPPER(i.itemid) = UPPER('${safeStringLiteral(p, 80)}')`)
-      .join(' OR ');
-    const query = `
-      SELECT i.id, i.itemid, i.displayname, i.description
-      FROM item i
-      WHERE ${conditions}
-    `;
+  const conditions = partNumbers
+    .map((p) => `UPPER(i.itemid) = UPPER('${safeStringLiteral(p, 80)}')`)
+    .join(' OR ');
+  const query = `
+    SELECT i.id, i.itemid, i.displayname, i.description
+    FROM item i
+    WHERE ${conditions}
+  `;
 
-    const result = await suiteqlQuery(query);
-    const items = result?.items || [];
-    const map: Record<string, { id: string; name: string; displayName: string; description: string }> = {};
+  const result = await suiteqlQuery(query);
+  const items = result?.items || [];
+  const map: Record<string, { id: string; name: string; displayName: string; description: string }> = {};
 
-    for (const item of items) {
-      map[item.itemid?.toUpperCase()] = {
-        id: item.id?.toString(),
-        name: item.itemid,
-        displayName: item.displayname || item.itemid,
-        description: item.description || item.displayname || item.itemid,
-      };
-    }
+  for (const item of items) {
+    map[item.itemid?.toUpperCase()] = {
+      id: item.id?.toString(),
+      name: item.itemid,
+      displayName: item.displayname || item.itemid,
+      description: item.description || item.displayname || item.itemid,
+    };
+  }
 
-    return map;
-  },
-  ['netsuite', 'find-items'],
-  { revalidate: CACHE_TTL.LONG, tags: ['netsuite:items'] },
-);
+  return map;
+}
 
 /**
  * Create a standalone Invoice in NetSuite (no SO required)
