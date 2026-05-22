@@ -5,7 +5,6 @@
 
 import OAuth from 'oauth-1.0a';
 import CryptoJS from 'crypto-js';
-import { cached, CACHE_TTL } from './cache';
 import { safeStringLiteral } from './sql-safe';
 
 interface NetSuiteConfig {
@@ -664,37 +663,41 @@ export async function findCustomer(name: string): Promise<{
 /**
  * Look up NetSuite items by part number
  */
-export const findItems = cached(
-  async (partNumbers: string[]): Promise<Record<string, { id: string; name: string; displayName: string; description: string }>> => {
-    if (partNumbers.length === 0) return {};
+/**
+ * Look up NetSuite items by part number. Intentionally NOT cached: the only
+ * callers are invoice / sales-order creation flows, and caching a negative
+ * result (part not yet in NetSuite) would mask a part that was added moments
+ * ago — the lookup must reflect NetSuite's current state every time.
+ */
+export async function findItems(
+  partNumbers: string[],
+): Promise<Record<string, { id: string; name: string; displayName: string; description: string }>> {
+  if (partNumbers.length === 0) return {};
 
-    const conditions = partNumbers
-      .map((p) => `UPPER(i.itemid) = UPPER('${safeStringLiteral(p, 80)}')`)
-      .join(' OR ');
-    const query = `
-      SELECT i.id, i.itemid, i.displayname, i.description
-      FROM item i
-      WHERE ${conditions}
-    `;
+  const conditions = partNumbers
+    .map((p) => `UPPER(i.itemid) = UPPER('${safeStringLiteral(p, 80)}')`)
+    .join(' OR ');
+  const query = `
+    SELECT i.id, i.itemid, i.displayname, i.description
+    FROM item i
+    WHERE ${conditions}
+  `;
 
-    const result = await suiteqlQuery(query);
-    const items = result?.items || [];
-    const map: Record<string, { id: string; name: string; displayName: string; description: string }> = {};
+  const result = await suiteqlQuery(query);
+  const items = result?.items || [];
+  const map: Record<string, { id: string; name: string; displayName: string; description: string }> = {};
 
-    for (const item of items) {
-      map[item.itemid?.toUpperCase()] = {
-        id: item.id?.toString(),
-        name: item.itemid,
-        displayName: item.displayname || item.itemid,
-        description: item.description || item.displayname || item.itemid,
-      };
-    }
+  for (const item of items) {
+    map[item.itemid?.toUpperCase()] = {
+      id: item.id?.toString(),
+      name: item.itemid,
+      displayName: item.displayname || item.itemid,
+      description: item.description || item.displayname || item.itemid,
+    };
+  }
 
-    return map;
-  },
-  ['netsuite', 'find-items'],
-  { revalidate: CACHE_TTL.LONG, tags: ['netsuite:items'] },
-);
+  return map;
+}
 
 /**
  * Create a standalone Invoice in NetSuite (no SO required)
