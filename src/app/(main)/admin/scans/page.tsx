@@ -56,6 +56,8 @@ export default function AdminScansPage() {
   const [allCatalog, setAllCatalog] = useState<{ id: string; part_number: string; end_customer: string | null; vehicle_type: string | null; graphic_package: string | null }[]>([]);
   const [bulkLocation, setBulkLocation] = useState<string>('');
   const [bulkCustomer, setBulkCustomer] = useState('');
+  const [custMatches, setCustMatches] = useState<{ id: string; company_name: string; entity_id: string | null }[]>([]);
+  const [showCustDropdown, setShowCustDropdown] = useState(false);
   const [bulkVins, setBulkVins] = useState('');
   const [bulkProcessing, setBulkProcessing] = useState(false);
   const [bulkResult, setBulkResult] = useState<{ success: number; failed: number; skipped?: number } | null>(null);
@@ -78,6 +80,24 @@ export default function AdminScansPage() {
 
   // eslint-disable-next-line react-hooks/exhaustive-deps -- intentional: load once on mount
   useEffect(() => { loadAll(); }, []);
+
+  // Debounced NetSuite customer search for the bulk-upload Customer field
+  useEffect(() => {
+    const q = bulkCustomer.trim();
+    if (q.length < 2) { setCustMatches([]); return; }
+    const t = setTimeout(async () => {
+      const escaped = q.replace(/[%,()]/g, ' ');
+      const { data } = await supabase
+        .from('customers')
+        .select('id, company_name, entity_id')
+        .or(`company_name.ilike.%${escaped}%,entity_id.ilike.%${escaped}%`)
+        .order('company_name')
+        .limit(8);
+      setCustMatches((data || []) as { id: string; company_name: string; entity_id: string | null }[]);
+    }, 250);
+    return () => clearTimeout(t);
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- supabase client is a stable singleton
+  }, [bulkCustomer]);
 
   const loadAll = async () => {
     setLoading(true);
@@ -1419,26 +1439,28 @@ export default function AdminScansPage() {
             </div>
             <div style={{ position: 'relative' }}>
               <div style={{ fontSize: '10px', fontWeight: 700, color: 'var(--text-muted)', textTransform: 'uppercase', marginBottom: '4px' }}>Customer</div>
-              <input value={bulkCustomer} onChange={e => setBulkCustomer(e.target.value)} placeholder="Override part default" style={{ width: '100%', padding: '10px', borderRadius: '8px', border: `1px solid ${theme.border}`, background: 'var(--input-bg)', color: 'var(--text-primary)', fontSize: '13px' }} />
-              {bulkCustomer.length >= 1 && (() => {
-                const q = bulkCustomer.toLowerCase();
-                const set = new Set<string>();
-                for (const p of allParts) {
-                  const c = (p.billable_customer || '').trim();
-                  if (c && c.toLowerCase() !== q && c.toLowerCase().includes(q)) set.add(c);
-                }
-                const matches = [...set].sort().slice(0, 8);
+              <input
+                value={bulkCustomer}
+                onChange={e => { setBulkCustomer(e.target.value); setShowCustDropdown(true); }}
+                onFocus={() => setShowCustDropdown(true)}
+                onBlur={() => setTimeout(() => setShowCustDropdown(false), 150)}
+                placeholder="Search NetSuite customers…"
+                style={{ width: '100%', padding: '10px', borderRadius: '8px', border: `1px solid ${theme.border}`, background: 'var(--input-bg)', color: 'var(--text-primary)', fontSize: '13px' }}
+              />
+              {showCustDropdown && bulkCustomer.trim().length >= 2 && (() => {
+                const matches = custMatches.filter(c => c.company_name.toLowerCase() !== bulkCustomer.trim().toLowerCase());
                 if (matches.length === 0) return null;
                 return (
                   <div style={{ position: 'absolute', top: '100%', left: 0, right: 0, zIndex: 50, background: 'var(--card)', border: `1px solid ${theme.border}`, borderRadius: '8px', boxShadow: '0 4px 12px rgba(0,0,0,0.2)', maxHeight: '200px', overflowY: 'auto', marginTop: '2px' }}>
                     {matches.map(c => (
                       <button
-                        key={c}
+                        key={c.id}
                         onMouseDown={e => e.preventDefault()}
-                        onClick={() => setBulkCustomer(c)}
+                        onClick={() => { setBulkCustomer(c.company_name); setShowCustDropdown(false); }}
                         style={{ display: 'block', width: '100%', padding: '8px 10px', textAlign: 'left', border: 'none', borderBottom: `1px solid ${theme.border}`, background: 'transparent', cursor: 'pointer', fontSize: '12px', color: 'var(--text-primary)' }}
                       >
-                        {c}
+                        <span style={{ fontWeight: 700 }}>{c.company_name}</span>
+                        {c.entity_id && <span style={{ color: 'var(--text-muted)', marginLeft: '6px', fontSize: '10px' }}>{c.entity_id}</span>}
                       </button>
                     ))}
                   </div>
