@@ -109,6 +109,9 @@ export async function POST(req: NextRequest) {
         // Build invoice line items
         const lineItems: { itemId: string | number; quantity: number; rate: number; description: string }[] = [];
         const unmatchedParts: string[] = [];
+        // Track which NetSuite item each part resolved to, so a NetSuite
+        // rejection can name the part + internal ID + type rather than a bare id.
+        const matchDetail: string[] = [];
 
         for (const [partNum, group] of Object.entries(partGroups)) {
           const nsItem = nsItems[partNum.toUpperCase()];
@@ -116,6 +119,7 @@ export async function POST(req: NextRequest) {
             unmatchedParts.push(partNum);
             continue;
           }
+          matchDetail.push(`${partNum} → NS item #${nsItem.id}${nsItem.type ? ` (${nsItem.type})` : ''}`);
           lineItems.push({
             itemId: nsItem.id,
             quantity: group.count,
@@ -199,7 +203,7 @@ export async function POST(req: NextRequest) {
             scanIds: custScans.map(s => s.id),
             vehicleCount: custScans.length,
             status: 'error',
-            error: invoiceResult.error,
+            error: `${invoiceResult.error}${matchDetail.length ? ` — matched: ${matchDetail.join('; ')}` : ''}`,
           });
         }
       } catch (e: any) {

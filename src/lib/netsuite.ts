@@ -668,31 +668,40 @@ export async function findCustomer(name: string): Promise<{
  * callers are invoice / sales-order creation flows, and caching a negative
  * result (part not yet in NetSuite) would mask a part that was added moments
  * ago — the lookup must reflect NetSuite's current state every time.
+ *
+ * Only matches ACTIVE items: an inactive duplicate sharing the same itemid
+ * would otherwise get picked and rejected by NetSuite ("Invalid Field Value
+ * <id> for the field: item") when used on an invoice line.
  */
 export async function findItems(
   partNumbers: string[],
-): Promise<Record<string, { id: string; name: string; displayName: string; description: string }>> {
+): Promise<Record<string, { id: string; name: string; displayName: string; description: string; type: string }>> {
   if (partNumbers.length === 0) return {};
 
   const conditions = partNumbers
     .map((p) => `UPPER(i.itemid) = UPPER('${safeStringLiteral(p, 80)}')`)
     .join(' OR ');
   const query = `
-    SELECT i.id, i.itemid, i.displayname, i.description
+    SELECT i.id, i.itemid, i.displayname, i.description, i.itemtype, i.isinactive
     FROM item i
-    WHERE ${conditions}
+    WHERE (${conditions})
+    AND i.isinactive = 'F'
   `;
 
   const result = await suiteqlQuery(query);
   const items = result?.items || [];
-  const map: Record<string, { id: string; name: string; displayName: string; description: string }> = {};
+  const map: Record<string, { id: string; name: string; displayName: string; description: string; type: string }> = {};
 
   for (const item of items) {
-    map[item.itemid?.toUpperCase()] = {
+    const key = item.itemid?.toUpperCase();
+    // If duplicates somehow remain, keep the first active match deterministically
+    if (key && map[key]) continue;
+    map[key] = {
       id: item.id?.toString(),
       name: item.itemid,
       displayName: item.displayname || item.itemid,
       description: item.description || item.displayname || item.itemid,
+      type: item.itemtype || '',
     };
   }
 
