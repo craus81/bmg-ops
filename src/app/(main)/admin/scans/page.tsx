@@ -51,8 +51,9 @@ export default function AdminScansPage() {
   // Bulk upload state
   const [allParts, setAllParts] = useState<{ id: string; item_number: string; display_name: string | null; billable_customer: string | null }[]>([]);
   const [allLocations, setAllLocations] = useState<{ id: string; name: string }[]>([]);
-  const [bulkParts, setBulkParts] = useState<{ id: string; label: string }[]>([]);
+  const [bulkParts, setBulkParts] = useState<{ id: string; label: string; partNumber: string; description: string | null; customer: string | null }[]>([]);
   const [bulkPartSearch, setBulkPartSearch] = useState('');
+  const [allCatalog, setAllCatalog] = useState<{ id: string; part_number: string; end_customer: string | null; vehicle_type: string | null; graphic_package: string | null }[]>([]);
   const [bulkLocation, setBulkLocation] = useState<string>('');
   const [bulkCustomer, setBulkCustomer] = useState('');
   const [bulkVins, setBulkVins] = useState('');
@@ -80,7 +81,7 @@ export default function AdminScansPage() {
 
   const loadAll = async () => {
     setLoading(true);
-    const [scansRes, archivedRes, profilesRes, partsRes, fullPartsRes, locsRes, posRes] = await Promise.all([
+    const [scansRes, archivedRes, profilesRes, partsRes, fullPartsRes, locsRes, posRes, catalogRes] = await Promise.all([
       supabase.from('scan_logs').select('*').is('archived_at', null).order('scanned_at', { ascending: false }).limit(1000),
       // Paginate archived scans — Supabase caps responses at 1000 rows by default
       (async () => {
@@ -116,8 +117,10 @@ export default function AdminScansPage() {
       })(),
       supabase.from('work_locations').select('id, name').eq('is_active', true).order('name'),
       supabase.from('purchase_orders').select('id, po_number, customer, line_items:po_line_items(id, part_number, quantity, installed)').in('status', ['open', 'complete']).order('po_number'),
+      supabase.from('catalog').select('id, part_number, end_customer, vehicle_type, graphic_package').order('part_number'),
     ]);
     setAllParts((fullPartsRes.data || []) as typeof allParts);
+    setAllCatalog((catalogRes.data || []) as typeof allCatalog);
     setAllLocations((locsRes.data || []) as typeof allLocations);
     setAllPOs((posRes.data || []) as typeof allPOs);
 
@@ -657,7 +660,7 @@ export default function AdminScansPage() {
 
   const handleBulkUpload = async () => {
     if (!bulkVins.trim()) return;
-    const selectedPartsList = bulkParts.map(bp => allParts.find(p => p.id === bp.id)).filter(Boolean) as typeof allParts;
+    const selectedPartsList = bulkParts;
     const selectedLoc = allLocations.find(l => l.id === bulkLocation);
 
     // Parse VINs — one per line, strip whitespace, skip empty
@@ -674,7 +677,7 @@ export default function AdminScansPage() {
     let totalDupes = 0;
     const vinPartPairs: { vin: string; part: typeof partsToProcess[0] }[] = [];
     for (const part of partsToProcess) {
-      const partNum = part?.item_number || '';
+      const partNum = part?.partNumber || '';
       let existingQuery = supabase.from('scan_logs').select('vin, part_number').in('vin', vins);
       if (partNum) existingQuery = existingQuery.eq('part_number', partNum);
       const { data: existingScans } = await existingQuery;
@@ -713,9 +716,9 @@ export default function AdminScansPage() {
       const { error } = await supabase.from('scan_logs').insert({
         vin,
         ...vehicleData,
-        part_number: part?.item_number || null,
-        part_description: part?.display_name || null,
-        billable_customer: bulkCustomer.trim() || part?.billable_customer || null,
+        part_number: part?.partNumber || null,
+        part_description: part?.description || null,
+        billable_customer: bulkCustomer.trim() || part?.customer || null,
         location_id: selectedLoc?.id || null,
         location_name: selectedLoc?.name || null,
         scanned_by: user?.id,
@@ -1359,18 +1362,47 @@ export default function AdminScansPage() {
                 {bulkPartSearch.length >= 2 && (() => {
                   const q = bulkPartSearch.toLowerCase();
                   const selectedIds = new Set(bulkParts.map(bp => bp.id));
-                  const matches = allParts.filter(p => !selectedIds.has(p.id) && (p.item_number.toLowerCase().includes(q) || p.display_name?.toLowerCase().includes(q) || p.billable_customer?.toLowerCase().includes(q))).slice(0, 8);
+                  const partMatches = allParts
+                    .filter(p => !selectedIds.has(p.id) && (p.item_number.toLowerCase().includes(q) || p.display_name?.toLowerCase().includes(q) || p.billable_customer?.toLowerCase().includes(q)))
+                    .slice(0, 8)
+                    .map(p => ({
+                      key: `part:${p.id}`,
+                      id: p.id,
+                      title: p.item_number,
+                      customer: p.billable_customer,
+                      sub: p.display_name,
+                      tag: null as string | null,
+                      add: { id: p.id, label: `${p.item_number}${p.billable_customer ? ` — ${p.billable_customer}` : ''}`, partNumber: p.item_number, description: p.display_name, customer: p.billable_customer },
+                    }));
+                  // Graphics/proofs catalog (separate table from netsuite_parts)
+                  const catMatches = allCatalog
+                    .filter(c => !selectedIds.has(c.id) && (c.part_number.toLowerCase().includes(q) || c.end_customer?.toLowerCase().includes(q) || c.vehicle_type?.toLowerCase().includes(q) || c.graphic_package?.toLowerCase().includes(q)))
+                    .slice(0, 8)
+                    .map(c => {
+                      const sub = [c.vehicle_type, c.graphic_package].filter(Boolean).join(' · ') || null;
+                      return {
+                        key: `cat:${c.id}`,
+                        id: c.id,
+                        title: c.part_number,
+                        customer: c.end_customer,
+                        sub,
+                        tag: 'Graphics catalog' as string | null,
+                        add: { id: c.id, label: `${c.part_number}${c.end_customer ? ` — ${c.end_customer}` : ''}`, partNumber: c.part_number, description: sub, customer: c.end_customer },
+                      };
+                    });
+                  const matches = [...partMatches, ...catMatches].slice(0, 12);
                   if (matches.length === 0) return <div style={{ fontSize: '10px', color: 'var(--text-muted)', padding: '6px 0' }}>No matching parts</div>;
                   return (
                     <div style={{ position: 'absolute', top: '100%', left: 0, right: 0, zIndex: 50, background: 'var(--card)', border: `1px solid ${theme.border}`, borderRadius: '8px', boxShadow: '0 4px 12px rgba(0,0,0,0.2)', maxHeight: '200px', overflowY: 'auto', marginTop: '2px' }}>
-                      {matches.map(p => (
-                        <button key={p.id} onClick={() => { setBulkParts(prev => [...prev, { id: p.id, label: `${p.item_number}${p.billable_customer ? ` — ${p.billable_customer}` : ''}` }]); setBulkPartSearch(''); }} style={{
+                      {matches.map(m => (
+                        <button key={m.key} onClick={() => { setBulkParts(prev => [...prev, m.add]); setBulkPartSearch(''); }} style={{
                           display: 'block', width: '100%', padding: '8px 10px', textAlign: 'left', border: 'none', borderBottom: `1px solid ${theme.border}`,
                           background: 'transparent', cursor: 'pointer', fontSize: '12px', color: 'var(--text-primary)',
                         }}>
-                          <span style={{ fontWeight: 700 }}>{p.item_number}</span>
-                          {p.billable_customer && <span style={{ color: '#a78bfa', marginLeft: '6px' }}>{p.billable_customer}</span>}
-                          {p.display_name && <div style={{ fontSize: '10px', color: 'var(--text-muted)' }}>{p.display_name}</div>}
+                          <span style={{ fontWeight: 700 }}>{m.title}</span>
+                          {m.customer && <span style={{ color: '#a78bfa', marginLeft: '6px' }}>{m.customer}</span>}
+                          {m.tag && <span style={{ fontSize: '9px', fontWeight: 700, color: '#fbbf24', background: 'rgba(251,191,36,0.12)', borderRadius: '4px', padding: '1px 5px', marginLeft: '6px' }}>{m.tag}</span>}
+                          {m.sub && <div style={{ fontSize: '10px', color: 'var(--text-muted)' }}>{m.sub}</div>}
                         </button>
                       ))}
                     </div>
