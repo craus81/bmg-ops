@@ -749,7 +749,8 @@ export default function AdminScansPage() {
 
     setBulkResult({ success, failed, skipped });
     setBulkProcessing(false);
-    if (success > 0) { setBulkVins(''); setBulkCustomer(''); loadAll(); }
+    // Clear VINs for the next batch, but keep customer/part/location sticky for the session
+    if (success > 0) { setBulkVins(''); loadAll(); }
   };
 
   const handleFileUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
