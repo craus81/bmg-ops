@@ -437,6 +437,76 @@ export async function createCustomerOrLead(payload: {
   }
 }
 
+/**
+ * Create an item record in NetSuite.
+ * Uses the REST Record API: POST /services/rest/record/v1/{recordType}
+ * Sends a deliberately minimal field set (itemId + names + description).
+ * If the account requires more (income account, tax schedule, subsidiary),
+ * NetSuite's rejection message is returned verbatim so the caller can show it.
+ */
+export async function createItem(payload: {
+  itemId: string;
+  recordType: string; // e.g. 'serviceSaleItem', 'nonInventoryResaleItem', 'inventoryItem'
+  displayName?: string;
+  description?: string;
+}): Promise<{
+  success: boolean;
+  internalId?: string;
+  netsuiteUrl?: string;
+  error?: string;
+}> {
+  const config = getConfig();
+  const baseUrl = getBaseUrl(config.accountId);
+  // Guard against a bad recordType injecting into the path
+  const recordType = payload.recordType.replace(/[^a-zA-Z]/g, '');
+  if (!recordType) return { success: false, error: 'Invalid item type' };
+  const url = `${baseUrl}/services/rest/record/v1/${recordType}`;
+  const { oauth, token } = createOAuth(config);
+  const authHeader = getAuthHeader(oauth, token, { url, method: 'POST' });
+
+  const body: any = { itemId: payload.itemId };
+  if (payload.displayName) body.displayName = payload.displayName;
+  if (payload.description) body.salesDescription = payload.description;
+
+  try {
+    const response = await fetch(url, {
+      method: 'POST',
+      headers: {
+        'Authorization': authHeader,
+        'Content-Type': 'application/json',
+        'Prefer': 'respondAsync=false',
+      },
+      body: JSON.stringify(body),
+    });
+
+    if (!response.ok) {
+      const text = await response.text();
+      console.error('NetSuite create item error:', response.status, text);
+      // Surface NetSuite's own message — usually names the missing required field
+      let detail = text.slice(0, 400);
+      try {
+        const parsed = JSON.parse(text);
+        detail = parsed?.['o:errorDetails']?.[0]?.detail || parsed?.title || detail;
+      } catch { /* keep raw text */ }
+      return { success: false, error: `NetSuite ${response.status}: ${detail}` };
+    }
+
+    const location = response.headers.get('location') || '';
+    const idMatch = location.match(/\/(\d+)(?:\?|$)/);
+    const internalId = idMatch ? idMatch[1] : undefined;
+
+    const accountForUrl = config.accountId.replace(/-/g, '_').toUpperCase();
+    const netsuiteUrl = internalId
+      ? `https://${accountForUrl}.app.netsuite.com/app/common/item/item.nl?id=${internalId}`
+      : undefined;
+
+    return { success: true, internalId, netsuiteUrl };
+  } catch (error: any) {
+    console.error('NetSuite create item exception:', error);
+    return { success: false, error: error?.message || 'Unknown error' };
+  }
+}
+
 export async function createSalesOrder(payload: {
   customerId: string | number;
   poNumber: string;
