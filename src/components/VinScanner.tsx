@@ -9,6 +9,20 @@ interface VinScannerProps {
   onScan: (vin: string) => void;
   /** Theme object for styling */
   theme: Record<string, string>;
+  /**
+   * Continuous (multi-scan) mode. When true, the camera stays on after a
+   * scan instead of stopping, so the user can scan vehicle after vehicle
+   * without remounting. Detection is gated by `paused`. When false (default),
+   * the camera stops after the first scan — suited to one-shot flows.
+   */
+  continuous?: boolean;
+  /**
+   * Only meaningful with `continuous`. When true, detection is suspended but
+   * the camera stays on. The parent sets this while the just-scanned VIN is
+   * being confirmed/logged, then clears it to resume scanning the next
+   * vehicle — no remount needed.
+   */
+  paused?: boolean;
 }
 
 /**
@@ -19,7 +33,7 @@ interface VinScannerProps {
  * - Torch (flashlight) toggle
  * - Continuous + single-shot autofocus attempts
  */
-export default function VinScanner({ onScan, theme }: VinScannerProps) {
+export default function VinScanner({ onScan, theme, continuous = false, paused = false }: VinScannerProps) {
   const [cameraActive, setCameraActive] = useState(false);
   const [cameraError, setCameraError] = useState('');
   const [scanCount, setScanCount] = useState(0);
@@ -34,6 +48,7 @@ export default function VinScanner({ onScan, theme }: VinScannerProps) {
   const streamRef = useRef<MediaStream | null>(null);
   const intervalRef = useRef<any>(null);
   const foundRef = useRef(false);
+  const cooldownUntilRef = useRef(0);
   const scanCountRef = useRef(0);
   const zxingReaderRef = useRef<any>(null);
   const nativeDetectorRef = useRef<any>(null);
@@ -57,6 +72,18 @@ export default function VinScanner({ onScan, theme }: VinScannerProps) {
     const unlock = lockOrientation('portrait');
     return unlock;
   }, []);
+
+  // Resume detection when the parent clears `paused` (e.g. after the last
+  // scan was logged). The camera stream is never torn down between scans, so
+  // resuming is just re-arming the detector. A short cooldown gives the user
+  // a moment to move to the next vehicle before the same barcode re-triggers.
+  useEffect(() => {
+    if (continuous && !paused) {
+      foundRef.current = false;
+      cooldownUntilRef.current = Date.now() + 800;
+      setLastScanned('');
+    }
+  }, [continuous, paused]);
 
   const stopCamera = useCallback(() => {
     if (intervalRef.current) { clearInterval(intervalRef.current); intervalRef.current = null; }
@@ -252,12 +279,15 @@ export default function VinScanner({ onScan, theme }: VinScannerProps) {
 
   // ── Process a decoded string ──
   const processResult = (rawText: string) => {
-    if (foundRef.current) return;
+    if (foundRef.current || Date.now() < cooldownUntilRef.current) return;
     const clean = rawText.trim().toUpperCase().replace(/[^A-HJ-NPR-Z0-9]/g, '');
     setLastScanned(clean);
     if (clean.length === 17 && isValidVIN(clean)) {
       foundRef.current = true;
-      stopCamera();
+      // One-shot flows stop the camera after a scan. Continuous mode leaves
+      // it running — the parent confirms/logs, then clears `paused` to scan
+      // the next vehicle without a remount.
+      if (!continuous) stopCamera();
       onScan(clean);
     }
   };
@@ -333,6 +363,18 @@ export default function VinScanner({ onScan, theme }: VinScannerProps) {
           border: '3px solid rgba(238,49,32,0.7)', borderRadius: '10px', pointerEvents: 'none',
           boxShadow: '0 0 20px rgba(238,49,32,0.2)',
         }} />
+
+        {/* Paused overlay — shown while the parent confirms the captured VIN */}
+        {paused && (
+          <div style={{
+            position: 'absolute', inset: 0, background: 'rgba(0,0,0,0.55)',
+            display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center',
+            pointerEvents: 'none', textAlign: 'center', padding: '12px',
+          }}>
+            <div style={{ fontSize: '13px', fontWeight: 800, color: '#fff' }}>Scan captured</div>
+            <div style={{ fontSize: '11px', color: '#d1d5db', marginTop: '4px' }}>Confirm below to scan the next vehicle</div>
+          </div>
+        )}
 
         {/* Focus indicator */}
         {focusMsg && (

@@ -28,7 +28,7 @@ export async function POST(req: NextRequest) {
     // Only allow safe fields to be updated
     const allowedFields = [
       'part_number', 'part_description', 'billable_customer',
-      'location_id', 'location_name',
+      'unit_number', 'location_id', 'location_name',
       'po_id', 'po_number', 'po_line_item_id',
       'invoice_number', 'date_invoiced', 'is_paid',
       'archived_at', 'exported_at',
