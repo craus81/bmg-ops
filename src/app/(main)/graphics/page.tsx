@@ -976,6 +976,7 @@ export default function GraphicsPage() {
         j.part_number?.toLowerCase().includes(s) ||
         j.customer?.toLowerCase().includes(s) ||
         j.job_number?.toLowerCase().includes(s) ||
+        j.po_number?.toLowerCase().includes(s) ||
         j.content?.toLowerCase().includes(s)
       );
     }
