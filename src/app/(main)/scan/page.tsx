@@ -330,14 +330,22 @@ export default function ScanPage() {
     } catch {}
   };
 
+  // Part numbers visually conflate O and 0 (e.g. "O6U183" vs "06U183") — some
+  // are stored one way, some the other depending on the source (NetSuite sync
+  // vs PO import vs hand entry). Normalize both sides of the search so a query
+  // for one finds the other. The slice cap is generous so a broad query like
+  // "06u" doesn't hide later matches alphabetically.
+  const normalizePartSearch = (s: string) => s.toLowerCase().replace(/o/g, '0');
   const filteredParts = partSearch
-    ? parts.filter(p => {
-        const s = partSearch.toLowerCase();
-        return p.item_number.toLowerCase().includes(s) ||
-          p.display_name?.toLowerCase().includes(s) ||
-          p.description?.toLowerCase().includes(s) ||
-          p.billable_customer?.toLowerCase().includes(s);
-      }).slice(0, 20)
+    ? (() => {
+        const s = normalizePartSearch(partSearch);
+        return parts.filter(p =>
+          normalizePartSearch(p.item_number || '').includes(s) ||
+          normalizePartSearch(p.display_name || '').includes(s) ||
+          normalizePartSearch(p.description || '').includes(s) ||
+          normalizePartSearch(p.billable_customer || '').includes(s)
+        ).slice(0, 50);
+      })()
     : [];
 
   const partLabel = selectedParts.length > 0
@@ -378,6 +386,14 @@ export default function ScanPage() {
               color: theme.textPrimary, fontWeight: 600, marginBottom: '8px',
             }}
           />
+
+          {partSearch && (
+            <div style={{ fontSize: '10px', color: theme.textMuted, marginBottom: '8px', textAlign: 'right' }}>
+              {filteredParts.length === 0
+                ? `No matches in ${parts.length} active parts`
+                : `${filteredParts.length}${filteredParts.length === 50 ? '+' : ''} of ${parts.length} parts`}
+            </div>
+          )}
 
           {filteredParts.length > 0 && (
             <div style={{ display: 'flex', flexDirection: 'column', gap: '4px', marginBottom: '12px' }}>
