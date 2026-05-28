@@ -252,13 +252,20 @@ export default function ScanPage() {
     let lastData: any = null;
     let lastError: any = null;
 
+    // Work performed at a Masterack facility is billed to Masterack LLC,
+    // regardless of who the part's end customer is. Override here so the
+    // scan_log lands under the right customer in the export/invoice flow.
+    const locationOverrideCustomer = /^masterack/i.test((selectedLocation?.name || '').trim())
+      ? 'Masterack LLC'
+      : null;
+
     for (const pt of partsToScan) {
       const scanData = {
         vin: v,
         ...vehicleData,
         part_number: pt.partNumber,
         part_description: pt.partDesc,
-        billable_customer: pt.billable,
+        billable_customer: locationOverrideCustomer ?? pt.billable,
         unit_number: unitClean,
         location_id: selectedLocation?.id || null,
         location_name: selectedLocation?.name || null,
@@ -486,6 +493,11 @@ export default function ScanPage() {
           }}>
             <div style={{ fontSize: '14px', fontWeight: 800, color: theme.textPrimary }}>{partLabel}</div>
             {partDesc && <div style={{ fontSize: '11px', color: theme.textSecondary }}>{partDesc}</div>}
+            {/^masterack/i.test(selectedLocation?.name || '') && (
+              <div style={{ fontSize: '10px', fontWeight: 700, color: '#a78bfa', marginTop: '2px' }}>
+                Billing: Masterack LLC
+              </div>
+            )}
             <div style={{ fontSize: '11px', color: theme.textMuted, marginTop: '2px' }}>
               {selectedLocation?.name || 'No location'}
               <span style={{ margin: '0 8px' }}>•</span>
