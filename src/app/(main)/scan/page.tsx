@@ -6,6 +6,7 @@ import { storage } from '@/lib/storage';
 import { useAuth } from '@/components/AuthProvider';
 import { theme } from '@/lib/theme';
 import VinScanner from '@/components/VinScanner';
+import { locationBillingOverride } from '@/lib/scan-billing';
 
 interface Part {
   id: string;
@@ -132,13 +133,23 @@ export default function ScanPage() {
   };
 
   const loadParts = async () => {
-    const { data } = await supabase
-      .from('netsuite_parts')
-      .select('id, item_number, display_name, description, billable_customer, catalog')
-      .eq('is_active', true)
-      .order('item_number');
-    setParts((data || []) as Part[]);
-    try { localStorage.setItem('cached_parts', JSON.stringify(data || [])); } catch {}
+    // Page through to defeat PostgREST's default 1k row cap — the catalog
+    // routinely exceeds 1000 active parts, and without this newly-added ones
+    // (e.g. parts created from a PO import) wouldn't appear in the picker.
+    const all: Part[] = [];
+    for (let offset = 0; ; offset += 1000) {
+      const { data } = await supabase
+        .from('netsuite_parts')
+        .select('id, item_number, display_name, description, billable_customer, catalog')
+        .eq('is_active', true)
+        .order('item_number')
+        .range(offset, offset + 999);
+      if (!data || data.length === 0) break;
+      all.push(...(data as Part[]));
+      if (data.length < 1000) break;
+    }
+    setParts(all);
+    try { localStorage.setItem('cached_parts', JSON.stringify(all)); } catch {}
   };
 
   const loadPartProofs = async (partId: string) => {
@@ -252,13 +263,18 @@ export default function ScanPage() {
     let lastData: any = null;
     let lastError: any = null;
 
+    // Some locations bill the facility (e.g. Masterack) regardless of the
+    // part's end customer — apply that override so the scan_log lands under
+    // the right customer in the export/invoice flow.
+    const locationOverrideCustomer = locationBillingOverride(selectedLocation?.name);
+
     for (const pt of partsToScan) {
       const scanData = {
         vin: v,
         ...vehicleData,
         part_number: pt.partNumber,
         part_description: pt.partDesc,
-        billable_customer: pt.billable,
+        billable_customer: locationOverrideCustomer ?? pt.billable,
         unit_number: unitClean,
         location_id: selectedLocation?.id || null,
         location_name: selectedLocation?.name || null,
@@ -486,6 +502,11 @@ export default function ScanPage() {
           }}>
             <div style={{ fontSize: '14px', fontWeight: 800, color: theme.textPrimary }}>{partLabel}</div>
             {partDesc && <div style={{ fontSize: '11px', color: theme.textSecondary }}>{partDesc}</div>}
+            {locationBillingOverride(selectedLocation?.name) && (
+              <div style={{ fontSize: '10px', fontWeight: 700, color: '#a78bfa', marginTop: '2px' }}>
+                Billing: {locationBillingOverride(selectedLocation?.name)}
+              </div>
+            )}
             <div style={{ fontSize: '11px', color: theme.textMuted, marginTop: '2px' }}>
               {selectedLocation?.name || 'No location'}
               <span style={{ margin: '0 8px' }}>•</span>
