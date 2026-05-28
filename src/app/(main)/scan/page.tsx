@@ -133,13 +133,23 @@ export default function ScanPage() {
   };
 
   const loadParts = async () => {
-    const { data } = await supabase
-      .from('netsuite_parts')
-      .select('id, item_number, display_name, description, billable_customer, catalog')
-      .eq('is_active', true)
-      .order('item_number');
-    setParts((data || []) as Part[]);
-    try { localStorage.setItem('cached_parts', JSON.stringify(data || [])); } catch {}
+    // Page through to defeat PostgREST's default 1k row cap — the catalog
+    // routinely exceeds 1000 active parts, and without this newly-added ones
+    // (e.g. parts created from a PO import) wouldn't appear in the picker.
+    const all: Part[] = [];
+    for (let offset = 0; ; offset += 1000) {
+      const { data } = await supabase
+        .from('netsuite_parts')
+        .select('id, item_number, display_name, description, billable_customer, catalog')
+        .eq('is_active', true)
+        .order('item_number')
+        .range(offset, offset + 999);
+      if (!data || data.length === 0) break;
+      all.push(...(data as Part[]));
+      if (data.length < 1000) break;
+    }
+    setParts(all);
+    try { localStorage.setItem('cached_parts', JSON.stringify(all)); } catch {}
   };
 
   const loadPartProofs = async (partId: string) => {
