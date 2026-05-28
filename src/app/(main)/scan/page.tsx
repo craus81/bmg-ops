@@ -27,6 +27,7 @@ interface ScanEntry {
   vehicle_year: string | null;
   vehicle_make: string | null;
   vehicle_model: string | null;
+  unit_number: string | null;
   scanned_at: string;
 }
 
@@ -51,11 +52,16 @@ export default function ScanPage() {
 
   // Scanning
   const [vin, setVin] = useState('');
+  const [unitNumber, setUnitNumber] = useState('');
   const [vinLoading, setVinLoading] = useState(false);
   const [scans, setScans] = useState<ScanEntry[]>([]);
   const [scanError, setScanError] = useState('');
   const [scanSuccess, setScanSuccess] = useState('');
+  // VIN captured by the camera, awaiting confirmation (+ optional unit #).
+  // While set, the camera stays on but pauses detection.
+  const [pendingScan, setPendingScan] = useState<string | null>(null);
   const vinRef = useRef<HTMLInputElement>(null);
+  const unitRef = useRef<HTMLInputElement>(null);
   const [scanMode, setScanMode] = useState<'text' | 'camera'>('text');
 
   // Part files/proofs
@@ -120,6 +126,8 @@ export default function ScanPage() {
     setScans([]);
     setShowCustom(false);
     setVin('');
+    setUnitNumber('');
+    setPendingScan(null);
     try { localStorage.removeItem('scan_session'); } catch {}
   };
 
@@ -155,7 +163,7 @@ export default function ScanPage() {
 
     let query = supabase
       .from('scan_logs')
-      .select('id, vin, vehicle_year, vehicle_make, vehicle_model, scanned_at')
+      .select('id, vin, vehicle_year, vehicle_make, vehicle_model, unit_number, scanned_at')
       .eq('scanned_by', user?.id)
       .gte('scanned_at', todayStart.toISOString())
       .order('scanned_at', { ascending: false });
@@ -173,21 +181,43 @@ export default function ScanPage() {
     if (step === 'scan') loadTodayScans();
   }, [step, loadTodayScans]);
 
+  // Camera detected a VIN — hold it for confirmation so the user can add an
+  // optional unit number. This pauses the scanner (camera stays on) until the
+  // scan is logged or discarded.
   const handleCameraScan = (scannedVin: string) => {
-    setVin(scannedVin);
-    processVin(scannedVin);
+    setScanError('');
+    setScanSuccess('');
+    setUnitNumber('');
+    setPendingScan(scannedVin);
+    setTimeout(() => unitRef.current?.focus(), 100);
+  };
+
+  const confirmPendingScan = async () => {
+    if (!pendingScan) return;
+    const ok = await processVin(pendingScan, unitNumber);
+    if (ok) { setPendingScan(null); setUnitNumber(''); }
+    // On failure (e.g. duplicate) keep the card open so the error is visible
+    // and the user can discard.
+  };
+
+  const discardPendingScan = () => {
+    setPendingScan(null);
+    setUnitNumber('');
+    setScanError('');
   };
 
   const handleScan = async () => {
     const v = vin.trim().toUpperCase();
-    await processVin(v);
+    const ok = await processVin(v, unitNumber);
+    if (ok) setUnitNumber('');
   };
 
-  const processVin = async (v: string) => {
-    if (v.length < 5) { setScanError('VIN too short'); return; }
+  const processVin = async (v: string, unit?: string): Promise<boolean> => {
+    if (v.length < 5) { setScanError('VIN too short'); return false; }
     setScanError('');
     setScanSuccess('');
     setVinLoading(true);
+    const unitClean = unit?.trim() || null;
 
     // Build list of parts to scan (multiple parts = multiple records)
     const partsToScan = selectedParts.length > 0
@@ -200,7 +230,7 @@ export default function ScanPage() {
       if (existing && existing.length > 0) {
         setScanError(`Duplicate — ${v} already scanned for ${pt.partNumber} on ${new Date(existing[0].scanned_at).toLocaleDateString()}`);
         setVinLoading(false);
-        return;
+        return false;
       }
     }
 
@@ -229,6 +259,7 @@ export default function ScanPage() {
         part_number: pt.partNumber,
         part_description: pt.partDesc,
         billable_customer: pt.billable,
+        unit_number: unitClean,
         location_id: selectedLocation?.id || null,
         location_name: selectedLocation?.name || null,
         scanned_by: user?.id,
@@ -241,28 +272,30 @@ export default function ScanPage() {
         try { localStorage.setItem('offline_scans', JSON.stringify(updated)); } catch {}
         lastData = offlineScan;
       } else {
-        const { data, error } = await supabase.from('scan_logs').insert(scanData).select('id, vin, vehicle_year, vehicle_make, vehicle_model, scanned_at').single();
+        const { data, error } = await supabase.from('scan_logs').insert(scanData).select('id, vin, vehicle_year, vehicle_make, vehicle_model, unit_number, scanned_at').single();
         if (error) lastError = error;
         else lastData = data;
       }
     }
 
+    const unitSuffix = unitClean ? ` · Unit ${unitClean}` : '';
     if (isOffline && lastData) {
       setScans(prev => [lastData as ScanEntry, ...prev]);
-      setScanSuccess(`Saved offline: ${[vehicleData.vehicle_year, vehicleData.vehicle_make, vehicleData.vehicle_model].filter(Boolean).join(' ') || v} (${partsToScan.length} part${partsToScan.length > 1 ? 's' : ''})`);
+      setScanSuccess(`Saved offline: ${[vehicleData.vehicle_year, vehicleData.vehicle_make, vehicleData.vehicle_model].filter(Boolean).join(' ') || v}${unitSuffix} (${partsToScan.length} part${partsToScan.length > 1 ? 's' : ''})`);
     } else if (lastError) {
       setScanError('Failed to save: ' + lastError.message);
       setVinLoading(false);
-      return;
+      return false;
     } else if (lastData) {
       setScans(prev => [lastData as ScanEntry, ...prev]);
       const label = [vehicleData.vehicle_year, vehicleData.vehicle_make, vehicleData.vehicle_model].filter(Boolean).join(' ') || 'Scan logged';
-      setScanSuccess(partsToScan.length > 1 ? `${label} (${partsToScan.length} parts)` : label);
+      setScanSuccess(`${label}${unitSuffix}${partsToScan.length > 1 ? ` (${partsToScan.length} parts)` : ''}`);
     }
 
     setVin('');
     setVinLoading(false);
     setTimeout(() => vinRef.current?.focus(), 100);
+    return true;
   };
 
   const syncOfflineScans = async () => {
@@ -459,7 +492,7 @@ export default function ScanPage() {
               <span style={{ fontWeight: 700, color: '#60a5fa' }}>{scans.length} scanned today</span>
             </div>
             <div style={{ display: 'flex', gap: '6px', marginTop: '6px' }}>
-              <button onClick={() => { setStep('part'); setSelectedParts([]); setCustomJob(''); setCustomCustomer(''); setSelectedLocation(null); setScans([]); setShowCustom(false); try { localStorage.removeItem('scan_session'); } catch {} }} style={{
+              <button onClick={() => { setStep('part'); setSelectedParts([]); setCustomJob(''); setCustomCustomer(''); setSelectedLocation(null); setScans([]); setShowCustom(false); setPendingScan(null); setUnitNumber(''); try { localStorage.removeItem('scan_session'); } catch {} }} style={{
                 padding: '4px 10px', borderRadius: '6px', fontSize: '10px', fontWeight: 700,
                 background: 'rgba(107,114,128,0.08)', border: '1px solid rgba(107,114,128,0.2)',
                 color: '#6b7280', cursor: 'pointer',
@@ -507,7 +540,7 @@ export default function ScanPage() {
               background: scanMode === 'camera' ? 'var(--tab-active-bg)' : 'transparent', border: 'none',
               color: scanMode === 'camera' ? 'var(--tab-active-color)' : theme.textMuted,
             }}>Camera</button>
-            <button onClick={() => setScanMode('text')} style={{
+            <button onClick={() => { setScanMode('text'); discardPendingScan(); }} style={{
               flex: 1, padding: '8px', borderRadius: '6px', fontSize: '12px', fontWeight: 700,
               background: scanMode === 'text' ? 'var(--tab-active-bg)' : 'transparent', border: 'none',
               color: scanMode === 'text' ? 'var(--tab-active-color)' : theme.textMuted,
@@ -516,30 +549,85 @@ export default function ScanPage() {
 
           {scanMode === 'camera' ? (
             <div style={{ marginBottom: '10px' }}>
-              <VinScanner onScan={handleCameraScan} theme={theme as unknown as Record<string, string>} />
+              <VinScanner onScan={handleCameraScan} continuous paused={!!pendingScan} theme={theme as unknown as Record<string, string>} />
+
+              {/* Confirm captured VIN + optional unit number */}
+              {pendingScan && (
+                <div style={{
+                  marginTop: '8px', padding: '14px', borderRadius: '12px',
+                  background: 'rgba(34,197,94,0.06)', border: '1px solid rgba(34,197,94,0.3)',
+                }}>
+                  <div style={{ fontSize: '10px', fontWeight: 700, color: theme.textMuted, textTransform: 'uppercase', letterSpacing: '0.5px', marginBottom: '4px' }}>
+                    Captured VIN
+                  </div>
+                  <div style={{ fontSize: '15px', fontWeight: 800, fontFamily: 'monospace', letterSpacing: '1px', color: theme.textPrimary, marginBottom: '10px', wordBreak: 'break-all' }}>
+                    {pendingScan}
+                  </div>
+                  <div style={{ fontSize: '10px', fontWeight: 700, color: theme.textMuted, textTransform: 'uppercase', letterSpacing: '0.5px', marginBottom: '4px' }}>
+                    Unit # (optional)
+                  </div>
+                  <input
+                    ref={unitRef}
+                    value={unitNumber}
+                    onChange={e => setUnitNumber(e.target.value)}
+                    onKeyDown={e => { if (e.key === 'Enter' && !vinLoading) confirmPendingScan(); }}
+                    placeholder="e.g. 4012"
+                    style={{
+                      width: '100%', padding: '12px 14px', borderRadius: '10px', fontSize: '15px',
+                      fontWeight: 700, border: `1px solid ${theme.border}`, background: theme.card,
+                      color: theme.textPrimary, marginBottom: '10px',
+                    }}
+                  />
+                  <div style={{ display: 'flex', gap: '8px' }}>
+                    <button onClick={confirmPendingScan} disabled={vinLoading} style={{
+                      flex: 1, padding: '14px', borderRadius: '10px', fontSize: '15px', fontWeight: 800,
+                      background: vinLoading ? theme.border : '#22c55e', color: '#fff', border: 'none',
+                      cursor: vinLoading ? 'default' : 'pointer', opacity: vinLoading ? 0.6 : 1,
+                    }}>{vinLoading ? 'Saving...' : 'Log & Scan Next'}</button>
+                    <button onClick={discardPendingScan} disabled={vinLoading} style={{
+                      padding: '14px 18px', borderRadius: '10px', fontSize: '13px', fontWeight: 700,
+                      background: 'transparent', border: `1px solid ${theme.border}`, color: theme.textMuted,
+                      cursor: vinLoading ? 'default' : 'pointer',
+                    }}>Discard</button>
+                  </div>
+                </div>
+              )}
             </div>
           ) : (
-          <div style={{ display: 'flex', gap: '8px', marginBottom: '10px' }}>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: '8px', marginBottom: '10px' }}>
+            <div style={{ display: 'flex', gap: '8px' }}>
+              <input
+                ref={vinRef}
+                value={vin}
+                onChange={e => setVin(e.target.value.toUpperCase())}
+                onKeyDown={e => { if (e.key === 'Enter' && vin.trim()) handleScan(); }}
+                placeholder="Scan or type VIN..."
+                autoFocus
+                style={{
+                  flex: 1, padding: '14px 16px', borderRadius: '12px', fontSize: '16px',
+                  fontFamily: 'monospace', fontWeight: 700, letterSpacing: '1px',
+                  border: `1px solid ${theme.border}`, background: theme.card, color: theme.textPrimary,
+                }}
+              />
+              <button onClick={handleScan} disabled={vinLoading || !vin.trim()} style={{
+                padding: '14px 20px', borderRadius: '12px', fontSize: '15px', fontWeight: 800,
+                background: vinLoading || !vin.trim() ? theme.border : theme.navy,
+                color: '#fff', border: 'none',
+                cursor: vinLoading || !vin.trim() ? 'default' : 'pointer',
+                opacity: vinLoading || !vin.trim() ? 0.5 : 1,
+              }}>{vinLoading ? '...' : 'Log'}</button>
+            </div>
             <input
-              ref={vinRef}
-              value={vin}
-              onChange={e => setVin(e.target.value.toUpperCase())}
+              value={unitNumber}
+              onChange={e => setUnitNumber(e.target.value)}
               onKeyDown={e => { if (e.key === 'Enter' && vin.trim()) handleScan(); }}
-              placeholder="Scan or type VIN..."
-              autoFocus
+              placeholder="Unit # (optional)"
               style={{
-                flex: 1, padding: '14px 16px', borderRadius: '12px', fontSize: '16px',
-                fontFamily: 'monospace', fontWeight: 700, letterSpacing: '1px',
-                border: `1px solid ${theme.border}`, background: theme.card, color: theme.textPrimary,
+                width: '100%', padding: '10px 14px', borderRadius: '10px', fontSize: '13px',
+                fontWeight: 600, border: `1px solid ${theme.border}`, background: theme.card,
+                color: theme.textPrimary,
               }}
             />
-            <button onClick={handleScan} disabled={vinLoading || !vin.trim()} style={{
-              padding: '14px 20px', borderRadius: '12px', fontSize: '15px', fontWeight: 800,
-              background: vinLoading || !vin.trim() ? theme.border : theme.navy,
-              color: '#fff', border: 'none',
-              cursor: vinLoading || !vin.trim() ? 'default' : 'pointer',
-              opacity: vinLoading || !vin.trim() ? 0.5 : 1,
-            }}>{vinLoading ? '...' : 'Log'}</button>
           </div>
           )}
 
@@ -568,8 +656,15 @@ export default function ScanPage() {
                       </div>
                       <div style={{ fontSize: '10px', fontFamily: 'monospace', color: theme.textMuted }}>{s.vin}</div>
                     </div>
-                    <div style={{ fontSize: '10px', color: theme.textMuted }}>
-                      {new Date(s.scanned_at).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })}
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '8px', flexShrink: 0 }}>
+                      {s.unit_number && (
+                        <span style={{ fontSize: '10px', fontWeight: 700, padding: '2px 7px', borderRadius: '6px', background: 'rgba(167,139,250,0.12)', color: '#a78bfa' }}>
+                          Unit {s.unit_number}
+                        </span>
+                      )}
+                      <div style={{ fontSize: '10px', color: theme.textMuted }}>
+                        {new Date(s.scanned_at).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })}
+                      </div>
                     </div>
                   </div>
                 ))}

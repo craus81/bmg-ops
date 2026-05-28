@@ -16,6 +16,7 @@ interface ScanLog {
   part_number: string | null;
   part_description: string | null;
   billable_customer: string | null;
+  unit_number: string | null;
   location_name: string | null;
   po_id: string | null;
   po_number: string | null;
@@ -183,6 +184,7 @@ export default function AdminScansPage() {
     return s.vin.toLowerCase().includes(q) ||
       s.part_number?.toLowerCase().includes(q) ||
       s.billable_customer?.toLowerCase().includes(q) ||
+      s.unit_number?.toLowerCase().includes(q) ||
       s.location_name?.toLowerCase().includes(q) ||
       s.po_number?.toLowerCase().includes(q) ||
       [s.vehicle_year, s.vehicle_make, s.vehicle_model].filter(Boolean).join(' ').toLowerCase().includes(q);
@@ -281,11 +283,11 @@ export default function AdminScansPage() {
     if (toExport.length === 0) return;
     setExporting(true);
 
-    const headers = ['VIN', 'Year', 'Make', 'Model', 'Part Number', 'Description', 'Billable Customer', 'Location', 'PO Number', 'Scanned By', 'Date'];
+    const headers = ['VIN', 'Year', 'Make', 'Model', 'Part Number', 'Description', 'Billable Customer', 'Unit #', 'Location', 'PO Number', 'Scanned By', 'Date'];
     const rows = toExport.map(s => [
       s.vin, s.vehicle_year || '', s.vehicle_make || '', s.vehicle_model || '',
       s.part_number || '', s.part_description || '', s.billable_customer || '',
-      s.location_name || '', s.po_number || '',
+      s.unit_number || '', s.location_name || '', s.po_number || '',
       profiles[s.scanned_by || ''] || '', new Date(s.scanned_at).toLocaleString(),
     ]);
 
@@ -500,8 +502,8 @@ export default function AdminScansPage() {
   const [editingScan, setEditingScan] = useState<ScanLog | null>(null);
   const saveEditScan = async () => {
     if (!editingScan) return;
-    const { id, vin, vehicle_year, vehicle_make, vehicle_model, part_number, part_description, billable_customer, location_name } = editingScan;
-    await supabase.from('scan_logs').update({ vin, vehicle_year, vehicle_make, vehicle_model, part_number, part_description, billable_customer, location_name }).eq('id', id);
+    const { id, vin, vehicle_year, vehicle_make, vehicle_model, part_number, part_description, billable_customer, unit_number, location_name } = editingScan;
+    await supabase.from('scan_logs').update({ vin, vehicle_year, vehicle_make, vehicle_model, part_number, part_description, billable_customer, unit_number, location_name }).eq('id', id);
     setEditingScan(null);
     loadAll();
   };
@@ -621,8 +623,7 @@ export default function AdminScansPage() {
         // still gets recorded with the raw VIN, just unmatched.
         const partsToProcess: (typeof allParts[0] | null)[] = matchedParts.length > 0 ? matchedParts : [null];
 
-        // Find unit_number per VIN from this page's rows so we can copy
-        // it onto location_name.
+        // Find unit_number per VIN from this page's rows.
         const unitByVin: Record<string, string | null> = {};
         for (const r of pg.rows) {
           if (!r.include || !r.partial_vin) continue;
@@ -660,10 +661,9 @@ export default function AdminScansPage() {
             part_number: part?.item_number || null,
             part_description: part?.display_name || null,
             billable_customer: pg.header.customer || part?.billable_customer || null,
+            unit_number: unitByVin[vin] || null,
             location_id: selectedLoc?.id || null,
-            // Prefer the per-row unit_number from the worksheet; fall back
-            // to the bulk-upload location selector.
-            location_name: unitByVin[vin] || selectedLoc?.name || null,
+            location_name: selectedLoc?.name || null,
             scanned_by: user?.id,
           });
           if (error) totalFailed++; else totalInserted++;
@@ -1326,7 +1326,7 @@ export default function AdminScansPage() {
                           rows[idx] = { ...rows[idx], unit_number: e.target.value };
                           return { ...p, rows };
                         })}
-                        placeholder="Location"
+                        placeholder="Unit #"
                         style={{ width: '110px', padding: '5px 7px', borderRadius: '5px', border: '1px solid var(--border)', background: 'var(--input-bg)', color: 'var(--text-secondary)', fontSize: '11px', flexShrink: 0 }}
                       />
                     </div>
@@ -1729,6 +1729,11 @@ export default function AdminScansPage() {
                                   )}
                                 </div>
                                 <div style={{ display: 'flex', alignItems: 'center', gap: '4px', flexShrink: 0 }}>
+                                  {scan.unit_number && (
+                                    <span style={{ fontSize: '8px', fontWeight: 700, padding: '2px 5px', borderRadius: '4px', background: 'rgba(167,139,250,0.12)', color: '#a78bfa' }}>
+                                      Unit {scan.unit_number}
+                                    </span>
+                                  )}
                                   {scan.po_number && (
                                     <span style={{ fontSize: '8px', fontWeight: 700, padding: '2px 5px', borderRadius: '4px', background: 'rgba(34,197,94,0.1)', color: '#22c55e' }}>
                                       PO #{scan.po_number}
@@ -1850,7 +1855,11 @@ export default function AdminScansPage() {
                   );
                 })()}
               </div>
-              <div style={{ gridColumn: '1 / -1' }}>
+              <div>
+                <div style={{ fontSize: '9px', fontWeight: 700, color: 'var(--text-muted)', textTransform: 'uppercase', marginBottom: '2px' }}>Unit #</div>
+                <input value={editingScan.unit_number || ''} onChange={e => setEditingScan({ ...editingScan, unit_number: e.target.value })} style={{ width: '100%', padding: '8px', borderRadius: '6px', border: `1px solid ${theme.border}`, background: 'var(--input-bg)', color: 'var(--text-primary)', fontSize: '12px' }} />
+              </div>
+              <div>
                 <div style={{ fontSize: '9px', fontWeight: 700, color: 'var(--text-muted)', textTransform: 'uppercase', marginBottom: '2px' }}>Location</div>
                 <input value={editingScan.location_name || ''} onChange={e => setEditingScan({ ...editingScan, location_name: e.target.value })} style={{ width: '100%', padding: '8px', borderRadius: '6px', border: `1px solid ${theme.border}`, background: 'var(--input-bg)', color: 'var(--text-primary)', fontSize: '12px' }} />
               </div>
