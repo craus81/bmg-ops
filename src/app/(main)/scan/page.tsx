@@ -6,6 +6,7 @@ import { storage } from '@/lib/storage';
 import { useAuth } from '@/components/AuthProvider';
 import { theme } from '@/lib/theme';
 import VinScanner from '@/components/VinScanner';
+import { locationBillingOverride } from '@/lib/scan-billing';
 
 interface Part {
   id: string;
@@ -252,12 +253,10 @@ export default function ScanPage() {
     let lastData: any = null;
     let lastError: any = null;
 
-    // Work performed at a Masterack facility is billed to Masterack LLC,
-    // regardless of who the part's end customer is. Override here so the
-    // scan_log lands under the right customer in the export/invoice flow.
-    const locationOverrideCustomer = /^masterack/i.test((selectedLocation?.name || '').trim())
-      ? 'Masterack LLC'
-      : null;
+    // Some locations bill the facility (e.g. Masterack) regardless of the
+    // part's end customer — apply that override so the scan_log lands under
+    // the right customer in the export/invoice flow.
+    const locationOverrideCustomer = locationBillingOverride(selectedLocation?.name);
 
     for (const pt of partsToScan) {
       const scanData = {
@@ -493,9 +492,9 @@ export default function ScanPage() {
           }}>
             <div style={{ fontSize: '14px', fontWeight: 800, color: theme.textPrimary }}>{partLabel}</div>
             {partDesc && <div style={{ fontSize: '11px', color: theme.textSecondary }}>{partDesc}</div>}
-            {/^masterack/i.test(selectedLocation?.name || '') && (
+            {locationBillingOverride(selectedLocation?.name) && (
               <div style={{ fontSize: '10px', fontWeight: 700, color: '#a78bfa', marginTop: '2px' }}>
-                Billing: Masterack LLC
+                Billing: {locationBillingOverride(selectedLocation?.name)}
               </div>
             )}
             <div style={{ fontSize: '11px', color: theme.textMuted, marginTop: '2px' }}>

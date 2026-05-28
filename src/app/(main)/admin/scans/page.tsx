@@ -6,6 +6,7 @@ import { useAuth } from '@/components/AuthProvider';
 import { PartLabel } from '@/components/PartLabel';
 import { CreateNetsuiteItemModal, type CreatedPart } from '@/components/CreateNetsuiteItemModal';
 import { theme } from '@/lib/theme';
+import { locationBillingOverride } from '@/lib/scan-billing';
 
 interface ScanLog {
   id: string;
@@ -605,6 +606,7 @@ export default function AdminScansPage() {
     let totalSkipped = 0;
     let totalFailed = 0;
     const selectedLoc = allLocations.find(l => l.id === bulkLocation);
+    const locationOverrideCustomer = locationBillingOverride(selectedLoc?.name);
 
     try {
       for (const pg of worksheetReview.pages) {
@@ -660,7 +662,7 @@ export default function AdminScansPage() {
             ...vehicleData,
             part_number: part?.item_number || null,
             part_description: part?.display_name || null,
-            billable_customer: pg.header.customer || part?.billable_customer || null,
+            billable_customer: locationOverrideCustomer ?? (pg.header.customer || part?.billable_customer || null),
             unit_number: unitByVin[vin] || null,
             location_id: selectedLoc?.id || null,
             location_name: selectedLoc?.name || null,
@@ -684,6 +686,7 @@ export default function AdminScansPage() {
     if (!bulkVins.trim()) return;
     const selectedPartsList = bulkParts;
     const selectedLoc = allLocations.find(l => l.id === bulkLocation);
+    const locationOverrideCustomer = locationBillingOverride(selectedLoc?.name);
 
     // Parse VINs — one per line, strip whitespace, skip empty
     const vins = bulkVins.split(/[\n,]+/).map(v => v.trim().toUpperCase().replace(/[^A-HJ-NPR-Z0-9]/gi, '')).filter(v => v.length >= 5);
@@ -740,7 +743,7 @@ export default function AdminScansPage() {
         ...vehicleData,
         part_number: part?.partNumber || null,
         part_description: part?.description || null,
-        billable_customer: bulkCustomer.trim() || part?.customer || null,
+        billable_customer: locationOverrideCustomer ?? (bulkCustomer.trim() || part?.customer || null),
         location_id: selectedLoc?.id || null,
         location_name: selectedLoc?.name || null,
         scanned_by: user?.id,
@@ -1199,6 +1202,16 @@ export default function AdminScansPage() {
               <button onClick={() => setWorksheetReview(null)} style={{ background: 'none', border: 'none', color: 'var(--text-muted)', fontSize: '18px', cursor: 'pointer' }}>✕</button>
             </div>
 
+            {(() => {
+              const override = locationBillingOverride(allLocations.find(l => l.id === bulkLocation)?.name);
+              if (!override) return null;
+              return (
+                <div style={{ padding: '8px 12px', borderRadius: '8px', marginBottom: '12px', background: 'rgba(167,139,250,0.08)', border: '1px solid rgba(167,139,250,0.25)', fontSize: '11px', fontWeight: 700, color: '#a78bfa' }}>
+                  All scans will be billed to {override} (location override)
+                </div>
+              );
+            })()}
+
             {worksheetReview.pages.map((pg, pageIdx) => {
               const partNumbers = (pg.header.part_number || '').split('/').map((p: string) => p.trim()).filter(Boolean);
               const matchResults = partNumbers.map((pn: any) => ({
@@ -1474,6 +1487,15 @@ export default function AdminScansPage() {
                         {c.entity_id && <span style={{ color: 'var(--text-muted)', marginLeft: '6px', fontSize: '10px' }}>{c.entity_id}</span>}
                       </button>
                     ))}
+                  </div>
+                );
+              })()}
+              {(() => {
+                const override = locationBillingOverride(allLocations.find(l => l.id === bulkLocation)?.name);
+                if (!override) return null;
+                return (
+                  <div style={{ fontSize: '10px', fontWeight: 700, color: '#a78bfa', marginTop: '4px' }}>
+                    Will be billed to {override} (location override)
                   </div>
                 );
               })()}
