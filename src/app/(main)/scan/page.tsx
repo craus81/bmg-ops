@@ -66,7 +66,7 @@ export default function ScanPage() {
   const [scanMode, setScanMode] = useState<'text' | 'camera'>('text');
 
   // Part files/proofs
-  const [partProofs, setPartProofs] = useState<{ file_name: string; storage_path: string }[]>([]);
+  const [partProofs, setPartProofs] = useState<{ file_name: string; storage_path: string; bucket: 'graphics-proofs' | 'proofs' }[]>([]);
   const [showProof, setShowProof] = useState<string | null>(null);
 
   // Offline
@@ -132,10 +132,34 @@ export default function ScanPage() {
     try { localStorage.removeItem('scan_session'); } catch {}
   };
 
+  // Two catalogs feed the picker:
+  //   * netsuite_parts — synced from NetSuite + PO-imported parts (used by
+  //     /parts, by invoicing, etc.)
+  //   * catalog        — the graphics catalog at /admin/catalog (proofs,
+  //     vehicle types, end customers — what graphics installers track).
+  // They're separate tables and historically the scan picker only saw
+  // netsuite_parts, so parts that lived only in the graphics catalog
+  // (e.g. 06U183) were silently invisible here. Load both, normalize into
+  // the Part shape, and de-dupe by item_number (prefer netsuite_parts when
+  // both exist — it carries upstream NetSuite/PO billing context).
   const loadParts = async () => {
-    // Page through to defeat PostgREST's default 1k row cap — the catalog
-    // routinely exceeds 1000 active parts, and without this newly-added ones
-    // (e.g. parts created from a PO import) wouldn't appear in the picker.
+    const [netsuiteParts, catalogParts] = await Promise.all([
+      loadNetsuiteParts(),
+      loadCatalogParts(),
+    ]);
+
+    const byItem = new Map<string, Part>();
+    for (const p of catalogParts) byItem.set(p.item_number.toUpperCase(), p);
+    for (const p of netsuiteParts) byItem.set(p.item_number.toUpperCase(), p);
+
+    const all = [...byItem.values()].sort((a, b) =>
+      a.item_number.localeCompare(b.item_number)
+    );
+    setParts(all);
+    try { localStorage.setItem('cached_parts', JSON.stringify(all)); } catch {}
+  };
+
+  const loadNetsuiteParts = async (): Promise<Part[]> => {
     const all: Part[] = [];
     for (let offset = 0; ; offset += 1000) {
       const { data } = await supabase
@@ -148,13 +172,60 @@ export default function ScanPage() {
       all.push(...(data as Part[]));
       if (data.length < 1000) break;
     }
-    setParts(all);
-    try { localStorage.setItem('cached_parts', JSON.stringify(all)); } catch {}
+    return all;
   };
 
-  const loadPartProofs = async (partId: string) => {
-    const { data } = await supabase.from('part_files').select('file_name, storage_path').eq('part_id', partId);
-    setPartProofs((data || []) as { file_name: string; storage_path: string }[]);
+  const loadCatalogParts = async (): Promise<Part[]> => {
+    const all: any[] = [];
+    for (let offset = 0; ; offset += 1000) {
+      const { data } = await supabase
+        .from('catalog')
+        .select('id, part_number, customer, end_customer, vehicle_type, graphic_package, active')
+        .eq('active', true)
+        .order('part_number')
+        .range(offset, offset + 999);
+      if (!data || data.length === 0) break;
+      all.push(...data);
+      if (data.length < 1000) break;
+    }
+    return all.map((c): Part => ({
+      // Synthetic prefixed id so it can't collide with netsuite_parts UUIDs.
+      // We branch on this prefix when loading proofs (catalog_proofs vs
+      // part_files, different storage buckets).
+      id: `cat:${c.id}`,
+      item_number: c.part_number,
+      display_name: [c.vehicle_type, c.graphic_package].filter(Boolean).join(' · ') || c.part_number,
+      description: null,
+      billable_customer: c.end_customer || c.customer || null,
+      catalog: 'graphics',
+    }));
+  };
+
+  const loadPartProofs = async (part: Part) => {
+    if (part.id.startsWith('cat:')) {
+      // Catalog items keep their proofs in `catalog_proofs` (storage bucket
+      // `proofs`), not `part_files` (`graphics-proofs`).
+      const catalogId = part.id.slice(4);
+      const { data } = await supabase
+        .from('catalog_proofs')
+        .select('file_name, file_path')
+        .eq('catalog_id', catalogId);
+      setPartProofs((data || []).map((p: any) => ({
+        file_name: p.file_name,
+        storage_path: p.file_path,
+        bucket: 'proofs' as const,
+      })));
+    } else {
+      const { data } = await supabase
+        .from('part_files')
+        .select('file_name, storage_path')
+        .eq('part_id', part.id);
+      setPartProofs((data || []).map((p: any) => ({
+        file_name: p.file_name,
+        storage_path: p.storage_path,
+        bucket: 'graphics-proofs' as const,
+      })));
+    }
   };
 
   const loadLocations = async () => {
@@ -405,7 +476,7 @@ export default function ScanPage() {
                       setSelectedParts(prev => prev.filter(sp => sp.id !== p.id));
                     } else {
                       setSelectedParts(prev => [...prev, p]);
-                      loadPartProofs(p.id);
+                      loadPartProofs(p);
                     }
                   }} style={{
                     display: 'flex', justifyContent: 'space-between', alignItems: 'center', width: '100%',
@@ -422,7 +493,14 @@ export default function ScanPage() {
                         color: '#fff', fontSize: '12px', fontWeight: 800,
                       }}>{isSelected ? '✓' : ''}</div>
                       <div>
-                        <div style={{ fontWeight: 700, fontSize: '14px', color: theme.textPrimary }}>{p.item_number}</div>
+                        <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+                          <div style={{ fontWeight: 700, fontSize: '14px', color: theme.textPrimary }}>{p.item_number}</div>
+                          {p.id.startsWith('cat:') && (
+                            <span style={{ fontSize: '9px', fontWeight: 700, padding: '1px 6px', borderRadius: '4px', background: 'rgba(251,191,36,0.12)', color: '#fbbf24', letterSpacing: '0.3px' }}>
+                              GRAPHICS
+                            </span>
+                          )}
+                        </div>
                         <div style={{ fontSize: '11px', color: theme.textMuted, marginTop: '1px' }}>{p.display_name || p.description || ''}</div>
                       </div>
                     </div>
@@ -546,7 +624,7 @@ export default function ScanPage() {
           {partProofs.length > 0 && (
             <div style={{ display: 'flex', gap: '4px', marginBottom: '10px', flexWrap: 'wrap' }}>
               {partProofs.map((pf, i) => (
-                <button key={i} onClick={() => setShowProof(storage.from('graphics-proofs').getPublicUrl(pf.storage_path).data.publicUrl)} style={{
+                <button key={i} onClick={() => setShowProof(storage.from(pf.bucket).getPublicUrl(pf.storage_path).data.publicUrl)} style={{
                   padding: '6px 10px', borderRadius: '6px', fontSize: '10px', fontWeight: 700,
                   background: 'rgba(59,130,246,0.08)', border: '1px solid rgba(59,130,246,0.2)',
                   color: '#60a5fa', cursor: 'pointer',
