@@ -545,6 +545,7 @@ export interface GraphicsJob {
   invoiced_at: string | null;
   invoiced_by: string | null;
   invoice_amount: number | null;
+  invoice_pdf_url: string | null;
   // Parent upfit project (null for standalone graphics jobs)
   upfit_project_id: string | null;
 }
