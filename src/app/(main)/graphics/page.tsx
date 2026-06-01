@@ -942,12 +942,38 @@ export default function GraphicsPage() {
 
     setCreatingInvoice(true);
     try {
-      const res = await fetch('/api/graphics/create-invoice', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ jobId: job.id, userId: user?.id }),
-      });
-      const data = await res.json();
+      const postInvoice = async (prices?: Record<string, number>) => {
+        const res = await fetch('/api/graphics/create-invoice', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ jobId: job.id, userId: user?.id, ...(prices ? { prices } : {}) }),
+        });
+        return res.json();
+      };
+
+      let data = await postInvoice();
+
+      // NetSuite has no price for some parts — ask the user to enter one,
+      // then re-submit. Bail out if they cancel.
+      if (data.needsPricing && Array.isArray(data.parts)) {
+        const prices: Record<string, number> = {};
+        for (const part of data.parts) {
+          const label = part.displayName ? `${part.partNumber} (${part.displayName})` : part.partNumber;
+          const input = window.prompt(
+            `No price found in NetSuite or the catalog for:\n${label}\n\nEnter the unit price for this part:`
+          );
+          if (input === null) { setCreatingInvoice(false); return; } // cancelled
+          const val = parseFloat(input.replace(/[^0-9.]/g, ''));
+          if (!(val > 0)) {
+            alert('That price isn\'t valid — invoice cancelled. Please try again.');
+            setCreatingInvoice(false);
+            return;
+          }
+          prices[String(part.partNumber).toUpperCase()] = val;
+        }
+        data = await postInvoice(prices);
+      }
+
       if (data.success) {
         // Update local job state
         setJobs(prev => prev.map(j => j.id === job.id ? {

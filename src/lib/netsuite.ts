@@ -326,6 +326,32 @@ export async function findLocation(name: string): Promise<{ id: string; name: st
 }
 
 /**
+ * Resolve the default NetSuite location for transactions when a caller
+ * doesn't specify one. NetSuite accounts that make Location mandatory
+ * reject invoices with a "Please enter value(s) for: Location" error,
+ * so we fall back to a sensible default: an explicit env override, then
+ * the O'Fallon location (BMG's primary location), then any location.
+ */
+export async function resolveDefaultLocationId(): Promise<string | null> {
+  const envDefault = process.env.NETSUITE_DEFAULT_LOCATION_ID;
+  if (envDefault) return envDefault.toString();
+
+  const fallon = await findLocation('Fallon');
+  if (fallon) return fallon.id;
+
+  try {
+    const result = await suiteqlQuery(
+      "SELECT id FROM location WHERE isinactive = 'F' FETCH FIRST 1 ROWS ONLY"
+    );
+    const id = result?.items?.[0]?.id;
+    if (id) return id.toString();
+  } catch {
+    // Location table may be inaccessible — fall through to null
+  }
+  return null;
+}
+
+/**
  * Create a Customer or Lead record in NetSuite
  * Uses the REST Record API: POST /services/rest/record/v1/customer
  * The 'stage' field determines Customer vs Lead/Prospect
@@ -811,10 +837,14 @@ export async function createDirectInvoice(payload: {
     };
   }
 
+  // NetSuite may require a Location on the invoice header. Use the
+  // caller's location if given, otherwise fall back to the account default.
+  const locationId = payload.locationId ?? (await resolveDefaultLocationId());
+
   const body: any = {
     entity: { id: payload.customerId },
     item: { items },
-    ...(payload.locationId ? { location: { id: payload.locationId } } : {}),
+    ...(locationId ? { location: { id: locationId } } : {}),
     ...(payload.poNumber ? { otherRefNum: payload.poNumber } : {}),
     ...(payload.memo ? { memo: payload.memo } : {}),
     ...(payload.otherrefnum ? { otherrefnum: payload.otherrefnum } : {}),
