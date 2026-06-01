@@ -245,6 +245,41 @@ export async function POST(req: NextRequest) {
       note: `Invoice created: ${result.invoiceNumber || result.invoiceId}${job.po_number ? ` (PO #${job.po_number})` : ''}`,
     });
 
+    // Persist any manually-entered prices back to the parts catalog so the
+    // UI doesn't prompt for them again next time. Update the existing row
+    // by NetSuite id; if the part isn't catalogued yet, insert a minimal
+    // graphics-catalog row. Best-effort — never block the invoice on this.
+    const persistedParts = matched.filter(m => priceOverrides[m.partNumber.toUpperCase()] > 0);
+    for (const m of persistedParts) {
+      try {
+        const { data: existing } = await supabase
+          .from('netsuite_parts')
+          .select('id')
+          .eq('netsuite_id', m.itemId)
+          .maybeSingle();
+
+        if (existing) {
+          await supabase
+            .from('netsuite_parts')
+            .update({ sales_price: m.rate, updated_at: new Date().toISOString() })
+            .eq('id', existing.id);
+        } else {
+          await supabase
+            .from('netsuite_parts')
+            .insert({
+              netsuite_id: m.itemId,
+              item_number: m.partNumber,
+              display_name: m.displayName,
+              sales_price: m.rate,
+              catalog: 'graphics',
+              is_active: true,
+            });
+        }
+      } catch (e) {
+        console.error(`Failed to persist price for part ${m.partNumber}:`, e);
+      }
+    }
+
     return NextResponse.json({
       success: true,
       invoiceId: result.invoiceId,
@@ -252,6 +287,7 @@ export async function POST(req: NextRequest) {
       invoiceAmount,
       lineItemCount: lineItems.length,
       skippedParts: skippedParts.length > 0 ? skippedParts : undefined,
+      savedPrices: persistedParts.length > 0 ? persistedParts.length : undefined,
     });
   } catch (err: any) {
     console.error('Graphics create-invoice error:', err);

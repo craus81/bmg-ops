@@ -986,7 +986,7 @@ export default function GraphicsPage() {
         } : j));
         loadHistory(job.id);
         const printNow = window.confirm(
-          `Invoice created!\nInvoice #: ${data.invoiceNumber || data.invoiceId}\nLine items: ${data.lineItemCount}${data.skippedParts ? '\nSkipped (not in NS): ' + data.skippedParts.join(', ') : ''}\n\nPrint packing list now?`
+          `Invoice created!\nInvoice #: ${data.invoiceNumber || data.invoiceId}\nLine items: ${data.lineItemCount}${data.skippedParts ? '\nSkipped (not in NS): ' + data.skippedParts.join(', ') : ''}${data.savedPrices ? `\nSaved ${data.savedPrices} price(s) to the catalog` : ''}\n\nPrint packing list now?`
         );
         if (printNow) {
           printPackingList(job, {
