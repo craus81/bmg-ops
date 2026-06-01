@@ -4,6 +4,7 @@ import { useState, useEffect, useRef } from 'react';
 import { useRouter, useParams } from 'next/navigation';
 import { createClient } from '@/lib/supabase-browser';
 import { useAuth } from '@/components/AuthProvider';
+import DropZone from '@/components/DropZone';
 
 const REQUIRED_TYPES = ['front', 'back', 'driver_side', 'passenger_side', 'vin_plate'];
 const ALL_TYPES = [...REQUIRED_TYPES, 'detail', 'other'];
@@ -252,7 +253,14 @@ export default function InstallerPhotoUploadPage() {
             style={{ display: 'none' }}
           />
 
-          <div style={{ display: 'flex', gap: '8px' }}>
+          <DropZone
+            onFiles={(files) => { uploadPhotos(files); }}
+            accept="image/*"
+            multiple
+            disabled={uploading}
+            overlayLabel="Drop photos to upload"
+            style={{ display: 'flex', gap: '8px', borderRadius: '10px' }}
+          >
             <button
               onClick={() => fileInputRef.current?.click()}
               disabled={uploading}
@@ -267,7 +275,7 @@ export default function InstallerPhotoUploadPage() {
                   : 'Uploading...'
                 : 'Take / Choose Photos'}
             </button>
-          </div>
+          </DropZone>
         </div>
       )}
 

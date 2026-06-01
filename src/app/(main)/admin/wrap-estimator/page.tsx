@@ -21,6 +21,7 @@ import { useRouter } from 'next/navigation';
 import { useAuth } from '@/components/AuthProvider';
 import { createClient } from '@/lib/supabase-browser';
 import { storage } from '@/lib/storage';
+import DropZone from '@/components/DropZone';
 
 interface VehicleTemplate {
   id: string;
@@ -380,14 +381,22 @@ export default function WrapEstimatorPage() {
             style={{ display: 'none' }}
           />
           {!proofFile ? (
-            <button
-              onClick={() => fileInputRef.current?.click()}
-              style={{
-                width: '100%', padding: '24px', borderRadius: '10px',
-                background: 'var(--subtle-bg)', border: '1px dashed var(--border)',
-                color: 'var(--text-muted)', fontSize: '13px', fontWeight: 700, cursor: 'pointer',
-              }}
-            >Click to upload a proof image or PDF</button>
+            <DropZone
+              onFiles={(files) => { if (files[0]) onFilePick(files[0]); }}
+              accept="image/*,application/pdf,.pdf"
+              multiple={false}
+              overlayLabel="Drop proof to upload"
+              style={{ borderRadius: '10px' }}
+            >
+              <button
+                onClick={() => fileInputRef.current?.click()}
+                style={{
+                  width: '100%', padding: '24px', borderRadius: '10px',
+                  background: 'var(--subtle-bg)', border: '1px dashed var(--border)',
+                  color: 'var(--text-muted)', fontSize: '13px', fontWeight: 700, cursor: 'pointer',
+                }}
+              >Click to upload a proof image or PDF</button>
+            </DropZone>
           ) : (
             <div>
               {proofPages.length > 0 ? (

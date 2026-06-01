@@ -6,6 +6,7 @@ import { createClient } from '@/lib/supabase-browser';
 import { storage } from '@/lib/storage';
 import { useAuth } from '@/components/AuthProvider';
 import { theme } from '@/lib/theme';
+import DropZone from '@/components/DropZone';
 
 interface UpfitNote {
   id: string;
@@ -799,7 +800,13 @@ export default function UpfitProjectsPage() {
         {/* Files */}
         <div style={{ fontSize: '11px', fontWeight: 700, color: theme.textSecondary, marginBottom: '8px', textTransform: 'uppercase', letterSpacing: '0.5px', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
           <span>Files ({files.length})</span>
-          <div>
+          <DropZone
+            onFiles={(files) => { if (files.length > 0 && selected) uploadFiles(selected.id, files); }}
+            multiple
+            disabled={uploadingFiles}
+            overlayLabel="Drop files to upload"
+            style={{ borderRadius: '6px' }}
+          >
             <input
               ref={fileInputRef}
               type="file"
@@ -818,7 +825,7 @@ export default function UpfitProjectsPage() {
             >
               {uploadingFiles ? 'Uploading...' : '+ Upload'}
             </button>
-          </div>
+          </DropZone>
         </div>
         {files.length > 0 && (
           <div style={{ display: 'flex', flexDirection: 'column', gap: '4px', marginBottom: '16px' }}>
@@ -932,24 +939,31 @@ export default function UpfitProjectsPage() {
                   ))}
                 </div>
               )}
-              <input
-                ref={createFileInputRef}
-                type="file"
+              <DropZone
+                onFiles={(files) => { if (files.length > 0) setCreateFiles(prev => [...prev, ...files]); }}
                 multiple
-                onChange={e => {
-                  const fs = Array.from(e.target.files || []);
-                  if (fs.length > 0) setCreateFiles(prev => [...prev, ...fs]);
-                  if (createFileInputRef.current) createFileInputRef.current.value = '';
-                }}
-                style={{ display: 'none' }}
-              />
-              <button
-                type="button"
-                onClick={() => createFileInputRef.current?.click()}
-                style={{ width: '100%', padding: '8px', borderRadius: '8px', background: 'transparent', border: `1px dashed ${theme.border}`, color: theme.textMuted, fontSize: '12px', fontWeight: 700, cursor: 'pointer' }}
+                overlayLabel="Drop files to add"
+                style={{ borderRadius: '8px' }}
               >
-                + Add Files (PO PDFs, photos, specs)
-              </button>
+                <input
+                  ref={createFileInputRef}
+                  type="file"
+                  multiple
+                  onChange={e => {
+                    const fs = Array.from(e.target.files || []);
+                    if (fs.length > 0) setCreateFiles(prev => [...prev, ...fs]);
+                    if (createFileInputRef.current) createFileInputRef.current.value = '';
+                  }}
+                  style={{ display: 'none' }}
+                />
+                <button
+                  type="button"
+                  onClick={() => createFileInputRef.current?.click()}
+                  style={{ width: '100%', padding: '8px', borderRadius: '8px', background: 'transparent', border: `1px dashed ${theme.border}`, color: theme.textMuted, fontSize: '12px', fontWeight: 700, cursor: 'pointer' }}
+                >
+                  + Add Files (PO PDFs, photos, specs)
+                </button>
+              </DropZone>
             </div>
             <div style={{ display: 'flex', gap: '8px', justifyContent: 'flex-end' }}>
               <button onClick={() => { setShowCreate(false); setCreateFiles([]); }} style={{ padding: '6px 12px', borderRadius: '6px', background: 'none', border: `1px solid ${theme.border}`, color: theme.textMuted, fontSize: '12px', cursor: 'pointer' }}>Cancel</button>

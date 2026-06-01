@@ -5,6 +5,7 @@ import { useRouter, useSearchParams } from 'next/navigation';
 import { createClient } from '@/lib/supabase-browser';
 import { useAuth } from '@/components/AuthProvider';
 import { storage } from '@/lib/storage';
+import DropZone from '@/components/DropZone';
 import type { CatalogItem, CatalogProof } from '@/lib/types';
 
 export default function CatalogPage() {
@@ -57,7 +58,7 @@ export default function CatalogPage() {
   // eslint-disable-next-line react-hooks/exhaustive-deps -- intentional: load once on mount
   }, [loading, searchParams]);
 
-  const handleUploadProofs = async (catalogId: string, partNumber: string, files: FileList) => {
+  const handleUploadProofs = async (catalogId: string, partNumber: string, files: File[]) => {
     setUploading(true);
     const newProofs: CatalogProof[] = [];
     const existingCount = (proofMap[catalogId] || []).length;
@@ -238,7 +239,7 @@ export default function CatalogPage() {
         onChange={(e) => {
           if (e.target.files && proofPanel) {
             const cat = catalog.find((c) => c.id === proofPanel);
-            if (cat) handleUploadProofs(proofPanel, cat.part_number, e.target.files);
+            if (cat) handleUploadProofs(proofPanel, cat.part_number, Array.from(e.target.files));
           }
           e.target.value = '';
         }}
@@ -365,19 +366,28 @@ export default function CatalogPage() {
                         )}
 
                         {/* Upload button */}
-                        <button
-                          onClick={() => { setProofPanel(c.id); fileRef.current?.click(); }}
+                        <DropZone
+                          onFiles={(files) => { if (files.length) handleUploadProofs(c.id, c.part_number, files); }}
+                          accept="image/*,application/pdf"
+                          multiple
                           disabled={uploading}
-                          style={{
-                            width: '100%', padding: '10px', borderRadius: '10px',
-                            border: '1px dashed var(--border-strong)',
-                            background: 'transparent', color: 'var(--text-secondary)',
-                            fontSize: '12px', fontWeight: 700,
-                            opacity: uploading ? 0.5 : 1,
-                          }}
+                          overlayLabel="Drop proofs to upload"
+                          style={{ borderRadius: '10px' }}
                         >
-                          {uploading ? 'Uploading...' : '+ Upload Proofs (images or PDFs)'}
-                        </button>
+                          <button
+                            onClick={() => { setProofPanel(c.id); fileRef.current?.click(); }}
+                            disabled={uploading}
+                            style={{
+                              width: '100%', padding: '10px', borderRadius: '10px',
+                              border: '1px dashed var(--border-strong)',
+                              background: 'transparent', color: 'var(--text-secondary)',
+                              fontSize: '12px', fontWeight: 700,
+                              opacity: uploading ? 0.5 : 1,
+                            }}
+                          >
+                            {uploading ? 'Uploading...' : '+ Upload Proofs (images or PDFs)'}
+                          </button>
+                        </DropZone>
                       </div>
                     )}
                     {/* Delete Part button inside expanded proofs panel */}

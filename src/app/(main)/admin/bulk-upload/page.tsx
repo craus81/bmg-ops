@@ -4,6 +4,7 @@ import { useState, useRef, useEffect } from 'react';
 import { useRouter } from 'next/navigation';
 import { createClient } from '@/lib/supabase-browser';
 import { useAuth } from '@/components/AuthProvider';
+import DropZone from '@/components/DropZone';
 import type { CatalogItem } from '@/lib/types';
 
 interface ZipFileEntry {
@@ -100,9 +101,13 @@ export default function BulkUploadPage() {
     ])
   ).sort((a, b) => a.localeCompare(b));
 
-  const handleZipSelect = async (e: React.ChangeEvent<HTMLInputElement>) => {
+  const handleZipSelect = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
-    if (!file) return;
+    if (file) processZipFile(file);
+    if (fileRef.current) fileRef.current.value = '';
+  };
+
+  const processZipFile = async (file: File) => {
     setZipFile(file);
     setError('');
     setUploadResult(null);
@@ -158,8 +163,6 @@ export default function BulkUploadPage() {
       setError(err.message || 'Failed to process ZIP');
     }
     setLoading(false);
-    // Reset the file input so the same file can be re-selected
-    if (fileRef.current) fileRef.current.value = '';
   };
 
   const handleUploadTemplates = async () => {
@@ -370,17 +373,26 @@ export default function BulkUploadPage() {
             onChange={handleZipSelect}
             style={{ display: 'none' }}
           />
-          <button
-            onClick={() => fileRef.current?.click()}
-            style={{
-              width: '100%', padding: '40px 20px', borderRadius: '14px',
-              border: '2px dashed var(--border)', background: 'var(--card)',
-              color: 'var(--text-secondary)', fontSize: '15px', fontWeight: 700,
-              cursor: 'pointer', textAlign: 'center',
-            }}
+          <DropZone
+            onFiles={(files) => { if (files[0]) processZipFile(files[0]); }}
+            accept=".zip"
+            multiple={false}
+            disabled={loading}
+            overlayLabel="Drop ZIP to upload"
+            style={{ borderRadius: '14px' }}
           >
-            Select ZIP File
-          </button>
+            <button
+              onClick={() => fileRef.current?.click()}
+              style={{
+                width: '100%', padding: '40px 20px', borderRadius: '14px',
+                border: '2px dashed var(--border)', background: 'var(--card)',
+                color: 'var(--text-secondary)', fontSize: '15px', fontWeight: 700,
+                cursor: 'pointer', textAlign: 'center',
+              }}
+            >
+              Select ZIP File
+            </button>
+          </DropZone>
         </div>
       )}
 

@@ -9,6 +9,7 @@ import { storage } from '@/lib/storage';
 import type { PurchaseOrder, POLineItem, CatalogItem, PoLocation } from '@/lib/types';
 import { PartLabel } from '@/components/PartLabel';
 import { CreateNetsuiteItemModal } from '@/components/CreateNetsuiteItemModal';
+import DropZone from '@/components/DropZone';
 
 interface ImportLine extends ParsedPOLine {
   catalog_match: CatalogItem | null;
@@ -571,7 +572,11 @@ export default function POsPage() {
   // PDF Upload handler
   const handlePDFUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
-    if (!file) return;
+    if (file) await processPdfFile(file);
+    if (fileRef.current) fileRef.current.value = '';
+  };
+
+  const processPdfFile = async (file: File) => {
     setParseError('');
     setParsedPO(null);
     setImportLines([]);
@@ -620,8 +625,6 @@ export default function POsPage() {
     } catch (err: any) {
       setParseError('Error parsing PDF: ' + (err.message || 'Unknown error'));
     }
-
-    if (fileRef.current) fileRef.current.value = '';
   };
 
   const toggleLineInclude = (idx: number) => {
@@ -1066,11 +1069,15 @@ export default function POsPage() {
   const handlePoPdfUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const files = Array.from(e.target.files || []);
     e.target.value = '';
-    const poId = uploadingPoId;
+    await processPoPdfFiles(uploadingPoId, files);
+  };
+
+  const processPoPdfFiles = async (poId: string | null, files: File[]) => {
     if (!poId || files.length === 0 || !user) {
       setUploadingPoId(null);
       return;
     }
+    setUploadingPoId(poId);
     setUploadingPoPdf(true);
     let lastUpload: { path: string; name: string } | null = null;
     for (const file of files) {
@@ -2458,13 +2465,21 @@ export default function POsPage() {
           <div style={{ fontSize: '11px', color: 'var(--text-label)', marginBottom: '10px' }}>
             Upload a Masterack PO PDF. Part numbers, quantities, and prices will be extracted. You can review and edit before saving.
           </div>
-          <input
-            ref={fileRef}
-            type="file"
+          <DropZone
+            onFiles={(files) => { if (files[0]) processPdfFile(files[0]); }}
             accept=".pdf"
-            onChange={handlePDFUpload}
-            style={{ fontSize: '13px', color: 'var(--text-body)' }}
-          />
+            multiple={false}
+            overlayLabel="Drop PDF to import"
+            style={{ borderRadius: '8px' }}
+          >
+            <input
+              ref={fileRef}
+              type="file"
+              accept=".pdf"
+              onChange={handlePDFUpload}
+              style={{ fontSize: '13px', color: 'var(--text-body)' }}
+            />
+          </DropZone>
           {parseError && (
             <div style={{ marginTop: '10px', padding: '8px 12px', background: 'rgba(239,68,68,0.06)', border: '1px solid rgba(239,68,68,0.2)', borderRadius: '8px', color: '#f87171', fontSize: '12px' }}>
               {parseError}
@@ -2975,18 +2990,27 @@ export default function POsPage() {
                   <div style={{ marginBottom: '10px' }}>
                     <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
                       <div style={labelStyle}>PDF Attachments</div>
-                      <button
-                        onClick={() => triggerPoPdfUpload(po.id)}
+                      <DropZone
+                        onFiles={(files) => { processPoPdfFiles(po.id, files); }}
+                        accept=".pdf,application/pdf"
+                        multiple
                         disabled={uploadingPoPdf && uploadingPoId === po.id}
-                        style={{
-                          padding: '3px 8px', borderRadius: '6px', fontSize: '10px', fontWeight: 700,
-                          background: 'rgba(96,165,250,0.12)', border: '1px solid rgba(96,165,250,0.3)',
-                          color: '#60a5fa', cursor: uploadingPoPdf && uploadingPoId === po.id ? 'default' : 'pointer',
-                          opacity: uploadingPoPdf && uploadingPoId === po.id ? 0.6 : 1,
-                        }}
+                        overlayLabel="Drop PDF to upload"
+                        style={{ borderRadius: '6px' }}
                       >
-                        {uploadingPoPdf && uploadingPoId === po.id ? 'Uploading…' : '+ Upload PDF'}
-                      </button>
+                        <button
+                          onClick={() => triggerPoPdfUpload(po.id)}
+                          disabled={uploadingPoPdf && uploadingPoId === po.id}
+                          style={{
+                            padding: '3px 8px', borderRadius: '6px', fontSize: '10px', fontWeight: 700,
+                            background: 'rgba(96,165,250,0.12)', border: '1px solid rgba(96,165,250,0.3)',
+                            color: '#60a5fa', cursor: uploadingPoPdf && uploadingPoId === po.id ? 'default' : 'pointer',
+                            opacity: uploadingPoPdf && uploadingPoId === po.id ? 0.6 : 1,
+                          }}
+                        >
+                          {uploadingPoPdf && uploadingPoId === po.id ? 'Uploading…' : '+ Upload PDF'}
+                        </button>
+                      </DropZone>
                     </div>
                     {(poFiles[po.id] || []).length > 0 ? (
                       <div style={{ display: 'flex', flexDirection: 'column', gap: '4px', marginTop: '4px' }}>

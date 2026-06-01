@@ -5,6 +5,7 @@ import { useRouter } from 'next/navigation';
 import { createClient } from '@/lib/supabase-browser';
 import { useAuth } from '@/components/AuthProvider';
 import { storage } from '@/lib/storage';
+import DropZone from '@/components/DropZone';
 
 interface KnowledgeDoc {
   id: string;
@@ -120,11 +121,15 @@ export default function KnowledgePage() {
 
   // ─── File upload ───
 
-  const handleFileSelect = (e: React.ChangeEvent<HTMLInputElement>) => {
-    const files = e.target.files;
-    if (!files || files.length === 0) return;
-    setUploadFiles(Array.from(files));
+  const processSelectedFiles = (files: File[]) => {
+    if (files.length === 0) return;
+    setUploadFiles(files);
     setShowUploadForm(true);
+  };
+
+  const handleFileSelect = (e: React.ChangeEvent<HTMLInputElement>) => {
+    processSelectedFiles(Array.from(e.target.files || []));
+    e.target.value = '';
   };
 
   // Split a PDF into chunks of N pages each, returns array of File objects
@@ -560,30 +565,39 @@ export default function KnowledgePage() {
 
       {/* Action buttons */}
       <div style={{ display: 'flex', gap: '8px', marginBottom: '12px' }}>
-        <label
-          style={{
-            flex: 1, padding: '14px', borderRadius: '12px',
-            background: 'linear-gradient(135deg, rgba(59,130,246,0.15), rgba(59,130,246,0.05))',
-            border: '1px dashed rgba(59,130,246,0.4)',
-            color: '#60a5fa', fontWeight: 800, fontSize: '13px',
-            cursor: 'pointer', textAlign: 'center',
-            display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '4px',
-          }}
+        <DropZone
+          onFiles={(files) => processSelectedFiles(files)}
+          accept=".pdf,.docx,.doc,.xlsx,.xls,.csv,.tsv,.txt,.md,.json,.xml,.html,.png,.jpg,.jpeg,.gif,.webp,.svg"
+          multiple
+          disabled={bgStatus?.type === 'processing'}
+          overlayLabel="Drop document to upload"
+          style={{ flex: 1, borderRadius: '12px' }}
         >
-          <span style={{ fontSize: '14px', fontWeight: 700 }}>Upload</span>
-          <span>Upload File</span>
-          <span style={{ fontSize: '9px', color: 'var(--text-label)', fontWeight: 400 }}>
-            PDF, Word, Excel, CSV, TXT, Images
-          </span>
-          <input
-            ref={fileInputRef}
-            type="file"
-            multiple
-            accept=".pdf,.docx,.doc,.xlsx,.xls,.csv,.tsv,.txt,.md,.json,.xml,.html,.png,.jpg,.jpeg,.gif,.webp,.svg"
-            onChange={handleFileSelect}
-            style={{ display: 'none' }}
-          />
-        </label>
+          <label
+            style={{
+              width: '100%', padding: '14px', borderRadius: '12px',
+              background: 'linear-gradient(135deg, rgba(59,130,246,0.15), rgba(59,130,246,0.05))',
+              border: '1px dashed rgba(59,130,246,0.4)',
+              color: '#60a5fa', fontWeight: 800, fontSize: '13px',
+              cursor: 'pointer', textAlign: 'center',
+              display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '4px',
+            }}
+          >
+            <span style={{ fontSize: '14px', fontWeight: 700 }}>Upload</span>
+            <span>Upload File</span>
+            <span style={{ fontSize: '9px', color: 'var(--text-label)', fontWeight: 400 }}>
+              PDF, Word, Excel, CSV, TXT, Images
+            </span>
+            <input
+              ref={fileInputRef}
+              type="file"
+              multiple
+              accept=".pdf,.docx,.doc,.xlsx,.xls,.csv,.tsv,.txt,.md,.json,.xml,.html,.png,.jpg,.jpeg,.gif,.webp,.svg"
+              onChange={handleFileSelect}
+              style={{ display: 'none' }}
+            />
+          </label>
+        </DropZone>
 
         <button
           onClick={() => { setEditingDoc(null); setForm({ title: '', category: 'SOP', content: '', tags: '' }); setShowForm(true); }}

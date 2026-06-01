@@ -5,6 +5,7 @@ import { useRouter } from 'next/navigation';
 import { createClient } from '@/lib/supabase-browser';
 import { storage } from '@/lib/storage';
 import { useAuth } from '@/components/AuthProvider';
+import DropZone from '@/components/DropZone';
 
 interface Part {
   id: string;
@@ -488,11 +489,13 @@ export default function PartsPage() {
                         <>
                           <input ref={partFileRef} type="file" accept="image/*,.pdf,.eps,.ai,.svg" style={{ display: 'none' }}
                             onChange={async (e) => { const f = e.target.files?.[0]; if (f) await uploadPartFile(part.id, f); e.target.value = ''; }} />
+                          <DropZone onFiles={(files) => { if (files[0]) uploadPartFile(part.id, files[0]); }} accept="image/*,.pdf,.eps,.ai,.svg" multiple={false} disabled={uploadingFile} overlayLabel="Drop file to upload" style={{ borderRadius: '6px' }}>
                           <button onClick={() => partFileRef.current?.click()} disabled={uploadingFile} style={{
                             width: '100%', padding: '6px', borderRadius: '6px', fontSize: '10px', fontWeight: 700,
                             background: 'var(--subtle-bg)', border: '1px dashed var(--border)',
                             color: uploadingFile ? 'var(--text-muted)' : 'var(--text-secondary)', cursor: 'pointer',
                           }}>{uploadingFile ? 'Uploading...' : '+ Upload Proof / File'}</button>
+                          </DropZone>
                         </>
                       )}
                     </div>

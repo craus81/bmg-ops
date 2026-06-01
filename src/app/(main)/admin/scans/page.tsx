@@ -5,6 +5,7 @@ import { createClient } from '@/lib/supabase-browser';
 import { useAuth } from '@/components/AuthProvider';
 import { PartLabel } from '@/components/PartLabel';
 import { CreateNetsuiteItemModal, type CreatedPart } from '@/components/CreateNetsuiteItemModal';
+import DropZone from '@/components/DropZone';
 import { theme } from '@/lib/theme';
 import { locationBillingOverride } from '@/lib/scan-billing';
 
@@ -758,15 +759,19 @@ export default function AdminScansPage() {
     if (success > 0) { setBulkVins(''); loadAll(); }
   };
 
-  const handleFileUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0];
-    if (!file) return;
+  const processCsvFile = (file: File) => {
     const reader = new FileReader();
     reader.onload = (ev) => {
       const text = ev.target?.result as string;
       setBulkVins(prev => prev ? prev + '\n' + text : text);
     };
     reader.readAsText(file);
+  };
+
+  const handleFileUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    processCsvFile(file);
     e.target.value = '';
   };
 
@@ -774,6 +779,10 @@ export default function AdminScansPage() {
     const file = e.target.files?.[0];
     if (!file) return;
     e.target.value = '';
+    await processWorksheetFile(file);
+  };
+
+  const processWorksheetFile = async (file: File) => {
     setScanningWorksheet(true);
     setWorksheetNotes(null);
     setBulkResult(null);
@@ -1515,24 +1524,38 @@ export default function AdminScansPage() {
             }}
           />
           <div style={{ display: 'flex', gap: '8px', marginTop: '10px', alignItems: 'center', flexWrap: 'wrap' }}>
-            <label style={{
-              padding: '8px 14px', borderRadius: '8px', fontSize: '12px', fontWeight: 700,
-              background: 'var(--subtle-bg)', border: `1px solid ${theme.border}`,
-              color: 'var(--text-secondary)', cursor: 'pointer',
-            }}>
-              Upload CSV
-              <input type="file" accept=".csv,.txt,.tsv" onChange={handleFileUpload} style={{ display: 'none' }} />
-            </label>
-            <label style={{
-              padding: '8px 14px', borderRadius: '8px', fontSize: '12px', fontWeight: 700,
-              background: scanningWorksheet ? 'rgba(167,139,250,0.15)' : 'rgba(167,139,250,0.08)',
-              border: '1px solid rgba(167,139,250,0.25)',
-              color: '#a78bfa', cursor: scanningWorksheet ? 'default' : 'pointer',
-              opacity: scanningWorksheet ? 0.6 : 1,
-            }}>
-              {scanningWorksheet ? 'Scanning...' : 'Scan Worksheet (OCR)'}
-              <input type="file" accept="image/*,.pdf" capture="environment" onChange={handleWorksheetScan} disabled={scanningWorksheet} style={{ display: 'none' }} />
-            </label>
+            <DropZone
+              onFiles={(files) => { if (files[0]) processCsvFile(files[0]); }}
+              accept=".csv,.txt,.tsv" multiple={false}
+              overlayLabel="Drop file to import"
+              style={{ borderRadius: '8px' }}
+            >
+              <label style={{
+                padding: '8px 14px', borderRadius: '8px', fontSize: '12px', fontWeight: 700,
+                background: 'var(--subtle-bg)', border: `1px solid ${theme.border}`,
+                color: 'var(--text-secondary)', cursor: 'pointer',
+              }}>
+                Upload CSV
+                <input type="file" accept=".csv,.txt,.tsv" onChange={handleFileUpload} style={{ display: 'none' }} />
+              </label>
+            </DropZone>
+            <DropZone
+              onFiles={(files) => { if (files[0]) processWorksheetFile(files[0]); }}
+              accept="image/*,.pdf" multiple={false} disabled={scanningWorksheet}
+              overlayLabel="Drop worksheet to scan"
+              style={{ borderRadius: '8px' }}
+            >
+              <label style={{
+                padding: '8px 14px', borderRadius: '8px', fontSize: '12px', fontWeight: 700,
+                background: scanningWorksheet ? 'rgba(167,139,250,0.15)' : 'rgba(167,139,250,0.08)',
+                border: '1px solid rgba(167,139,250,0.25)',
+                color: '#a78bfa', cursor: scanningWorksheet ? 'default' : 'pointer',
+                opacity: scanningWorksheet ? 0.6 : 1,
+              }}>
+                {scanningWorksheet ? 'Scanning...' : 'Scan Worksheet (OCR)'}
+                <input type="file" accept="image/*,.pdf" capture="environment" onChange={handleWorksheetScan} disabled={scanningWorksheet} style={{ display: 'none' }} />
+              </label>
+            </DropZone>
             <span style={{ fontSize: '11px', color: 'var(--text-muted)', flex: 1 }}>
               {bulkVins.split(/[\n,]+/).filter(v => v.trim().length >= 5).length} VINs detected
             </span>

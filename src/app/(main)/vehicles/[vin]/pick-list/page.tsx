@@ -8,6 +8,7 @@ import VehiclePhotoTimeline from '@/components/VehiclePhotoTimeline';
 import CompletionModal from '@/components/CompletionModal';
 import { PartLabel } from '@/components/PartLabel';
 import { openOrCreateVehicleThread } from '@/lib/customer-thread';
+import DropZone from '@/components/DropZone';
 
 interface VehicleData {
   id: string;
@@ -267,8 +268,7 @@ export default function VehiclePickListPage() {
     }
   };
 
-  const onPhotoPick = (type: 'before' | 'completion') => async (e: React.ChangeEvent<HTMLInputElement>) => {
-    const files = Array.from(e.target.files || []);
+  const processPhotos = async (type: 'before' | 'completion', files: File[]) => {
     const caption = type === 'before' ? beforeCaption : completionCaption;
     for (const f of files) {
       // Only attach the caption to the first file in a multi-select.
@@ -276,6 +276,12 @@ export default function VehiclePickListPage() {
     }
     if (type === 'before') setBeforeCaption('');
     else setCompletionCaption('');
+  };
+
+  const onPhotoPick = (type: 'before' | 'completion') => async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const files = Array.from(e.target.files || []);
+    await processPhotos(type, files);
+    e.target.value = '';
   };
 
   const fileUrl = (storagePath: string) => {
@@ -491,24 +497,33 @@ export default function VehiclePickListPage() {
                 fontSize: '12px', marginBottom: '6px',
               }}
             />
-            <button
-              onClick={() => beforeFileRef.current?.click()}
-              disabled={uploadingPhotoType === 'before'}
-              style={{
-                width: '100%', padding: '8px 12px', borderRadius: '8px',
-                border: '1px dashed var(--border)', background: 'transparent',
-                fontSize: '12px', fontWeight: 700, cursor: 'pointer',
-              }}
-            >{uploadingPhotoType === 'before' ? 'Uploading...' : '+ Take / upload'}</button>
-            <input
-              ref={beforeFileRef}
-              type="file"
+            <DropZone
+              onFiles={(files) => { processPhotos('before', files); }}
               accept="image/*"
-              capture="environment"
               multiple
-              onChange={onPhotoPick('before')}
-              style={{ display: 'none' }}
-            />
+              disabled={uploadingPhotoType === 'before'}
+              overlayLabel="Drop photos to upload"
+              style={{ borderRadius: '8px' }}
+            >
+              <button
+                onClick={() => beforeFileRef.current?.click()}
+                disabled={uploadingPhotoType === 'before'}
+                style={{
+                  width: '100%', padding: '8px 12px', borderRadius: '8px',
+                  border: '1px dashed var(--border)', background: 'transparent',
+                  fontSize: '12px', fontWeight: 700, cursor: 'pointer',
+                }}
+              >{uploadingPhotoType === 'before' ? 'Uploading...' : '+ Take / upload'}</button>
+              <input
+                ref={beforeFileRef}
+                type="file"
+                accept="image/*"
+                capture="environment"
+                multiple
+                onChange={onPhotoPick('before')}
+                style={{ display: 'none' }}
+              />
+            </DropZone>
           </div>
 
           {/* Completion (only while in_progress/complete) */}
@@ -533,25 +548,34 @@ export default function VehiclePickListPage() {
                   fontSize: '12px', marginBottom: '6px',
                 }}
               />
-              <button
-                onClick={() => completionFileRef.current?.click()}
-                disabled={uploadingPhotoType === 'completion' || !canComplete}
-                style={{
-                  width: '100%', padding: '8px 12px', borderRadius: '8px',
-                  border: '1px dashed var(--border)', background: 'transparent',
-                  fontSize: '12px', fontWeight: 700, cursor: canComplete ? 'pointer' : 'not-allowed',
-                  opacity: canComplete ? 1 : 0.5,
-                }}
-              >{uploadingPhotoType === 'completion' ? 'Uploading...' : '+ Take / upload'}</button>
-              <input
-                ref={completionFileRef}
-                type="file"
+              <DropZone
+                onFiles={(files) => { if (canComplete) processPhotos('completion', files); }}
                 accept="image/*"
-                capture="environment"
                 multiple
-                onChange={onPhotoPick('completion')}
-                style={{ display: 'none' }}
-              />
+                disabled={uploadingPhotoType === 'completion' || !canComplete}
+                overlayLabel="Drop photos to upload"
+                style={{ borderRadius: '8px' }}
+              >
+                <button
+                  onClick={() => completionFileRef.current?.click()}
+                  disabled={uploadingPhotoType === 'completion' || !canComplete}
+                  style={{
+                    width: '100%', padding: '8px 12px', borderRadius: '8px',
+                    border: '1px dashed var(--border)', background: 'transparent',
+                    fontSize: '12px', fontWeight: 700, cursor: canComplete ? 'pointer' : 'not-allowed',
+                    opacity: canComplete ? 1 : 0.5,
+                  }}
+                >{uploadingPhotoType === 'completion' ? 'Uploading...' : '+ Take / upload'}</button>
+                <input
+                  ref={completionFileRef}
+                  type="file"
+                  accept="image/*"
+                  capture="environment"
+                  multiple
+                  onChange={onPhotoPick('completion')}
+                  style={{ display: 'none' }}
+                />
+              </DropZone>
             </div>
           )}
         </div>

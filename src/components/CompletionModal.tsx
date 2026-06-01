@@ -5,6 +5,7 @@ import { createClient } from '@/lib/supabase-browser';
 import { storage } from '@/lib/storage';
 import { useAuth } from '@/components/AuthProvider';
 import ProofThumbnail from '@/components/ProofThumbnail';
+import DropZone from '@/components/DropZone';
 
 interface Task {
   id: string;
@@ -151,8 +152,7 @@ export default function CompletionModal({
 
   const photoUrl = (path: string) => storage.from(PHOTO_BUCKET).getPublicUrl(path).data.publicUrl;
 
-  const onPhotoPick = async (e: React.ChangeEvent<HTMLInputElement>) => {
-    const files = Array.from(e.target.files || []);
+  const uploadPhotos = async (files: File[], reopenCamera = false) => {
     if (!files.length || !user) return;
     setUploading(true);
     let uploadedAny = false;
@@ -181,9 +181,14 @@ export default function CompletionModal({
     // Auto re-open the camera after a successful shot so the installer
     // keeps capturing without re-tapping. Cancelling the camera UI returns
     // no files and never fires onChange, which breaks the loop naturally.
-    if (uploadedAny) {
+    // Only applies to the camera/input flow, not drag-and-drop.
+    if (uploadedAny && reopenCamera) {
       fileRef.current?.click();
     }
+  };
+
+  const onPhotoPick = (e: React.ChangeEvent<HTMLInputElement>) => {
+    uploadPhotos(Array.from(e.target.files || []), true);
   };
 
   const submit = async (force = false) => {
@@ -285,17 +290,26 @@ export default function CompletionModal({
               onChange={e => setCaption(e.target.value)}
               style={{ width: '100%', padding: '6px 10px', borderRadius: '6px', border: '1px solid var(--border)', background: 'var(--input-bg)', color: 'var(--text-primary)', fontSize: '12px', marginBottom: '6px' }}
             />
-            <button
-              onClick={() => fileRef.current?.click()}
+            <DropZone
+              onFiles={(files) => { uploadPhotos(files); }}
+              accept="image/*"
+              multiple
               disabled={uploading}
-              style={{
-                width: '100%', padding: '8px 12px', borderRadius: '8px',
-                border: '1px dashed var(--border)', background: 'var(--card)',
-                color: 'var(--text-primary)',
-                fontSize: '12px', fontWeight: 700, cursor: 'pointer',
-              }}
-            >{uploading ? 'Uploading…' : '+ Take / upload completion photo'}</button>
-            <input ref={fileRef} type="file" accept="image/*" capture="environment" multiple onChange={onPhotoPick} style={{ display: 'none' }} />
+              overlayLabel="Drop photos to upload"
+              style={{ borderRadius: '8px' }}
+            >
+              <button
+                onClick={() => fileRef.current?.click()}
+                disabled={uploading}
+                style={{
+                  width: '100%', padding: '8px 12px', borderRadius: '8px',
+                  border: '1px dashed var(--border)', background: 'var(--card)',
+                  color: 'var(--text-primary)',
+                  fontSize: '12px', fontWeight: 700, cursor: 'pointer',
+                }}
+              >{uploading ? 'Uploading…' : '+ Take / upload completion photo'}</button>
+              <input ref={fileRef} type="file" accept="image/*" capture="environment" multiple onChange={onPhotoPick} style={{ display: 'none' }} />
+            </DropZone>
           </div>
 
           {/* Tasks */}

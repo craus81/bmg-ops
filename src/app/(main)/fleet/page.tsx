@@ -13,6 +13,7 @@ import type { NetsuiteSalesOrder, GraphicsProof, FleetCheckin, VehicleTrackingSt
 import { VEHICLE_STATUS_PIPELINE, VEHICLE_STATUS_LABELS, VEHICLE_STATUS_COLORS } from '@/lib/types';
 import NetSuitePdf from '@/components/NetSuitePdf';
 import ProofThumbnail from '@/components/ProofThumbnail';
+import DropZone from '@/components/DropZone';
 
 // ─── Step indicator ────────────────────────────────────────────
 function StepIndicator({ current }: { current: number }) {
@@ -1307,7 +1308,14 @@ export default function FleetPage() {
             if (e.target) e.target.value = '';
           }}
         />
-        <div style={{ display: 'flex', gap: '8px', marginBottom: '10px' }}>
+        <DropZone
+          onFiles={(files) => { if (files[0]) uploadProofFromDevice(files[0]); }}
+          accept="image/*,application/pdf,.eps,.ai,.psd"
+          multiple={false}
+          disabled={uploadingProof}
+          overlayLabel="Drop proof to upload"
+          style={{ display: 'flex', gap: '8px', marginBottom: '10px', borderRadius: '10px' }}
+        >
           <button
             onClick={() => uploadProofInputRef.current?.click()}
             disabled={uploadingProof}
@@ -1317,7 +1325,7 @@ export default function FleetPage() {
               cursor: uploadingProof ? 'wait' : 'pointer', opacity: uploadingProof ? 0.6 : 1,
             }}
           >{uploadingProof ? 'Uploading...' : '+ Upload Proof from Device'}</button>
-        </div>
+        </DropZone>
         {(selectedProof || dbxSelected) && (
           <div style={{
             display: 'flex', alignItems: 'center', justifyContent: 'space-between',

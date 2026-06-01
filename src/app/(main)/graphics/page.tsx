@@ -10,6 +10,7 @@ import AssignmentPicker from '@/components/AssignmentPicker';
 import GraphicsInvoiceModal from '@/components/GraphicsInvoiceModal';
 import { PartLabel } from '@/components/PartLabel';
 import DropboxProofSearch from '@/components/DropboxProofSearch';
+import DropZone from '@/components/DropZone';
 import type {
   GraphicsJob, GraphicsJobStatus, GraphicsJobCategory, GraphicsStatusHistory, GraphicsJobView, Profile,
 } from '@/lib/types';
@@ -1827,29 +1828,37 @@ export default function GraphicsPage() {
                               </div>
                             </div>
                           )}
-                          <input
-                            ref={fileInputRef}
-                            type="file"
+                          <DropZone
+                            onFiles={(files) => { if (files.length > 0) uploadFilesToJob(job.id, files); }}
                             multiple
-                            onChange={async (e) => {
-                              const files = Array.from(e.target.files || []) as File[];
-                              if (files.length > 0) await uploadFilesToJob(job.id, files);
-                              e.target.value = '';
-                            }}
-                            style={{ display: 'none' }}
-                          />
-                          <button
-                            onClick={() => fileInputRef.current?.click()}
                             disabled={uploadingFiles}
-                            style={{
-                              width: '100%', padding: '8px', borderRadius: '8px',
-                              fontSize: '11px', fontWeight: 700, cursor: 'pointer',
-                              background: 'var(--subtle-bg)', border: '1px dashed var(--border)',
-                              color: uploadingFiles ? 'var(--text-muted)' : 'var(--text-secondary)',
-                            }}
+                            overlayLabel="Drop files to upload"
+                            style={{ borderRadius: '8px' }}
                           >
-                            {uploadingFiles ? 'Uploading...' : '+ Upload Files (proofs, logos, photos)'}
-                          </button>
+                            <input
+                              ref={fileInputRef}
+                              type="file"
+                              multiple
+                              onChange={async (e) => {
+                                const files = Array.from(e.target.files || []) as File[];
+                                if (files.length > 0) await uploadFilesToJob(job.id, files);
+                                e.target.value = '';
+                              }}
+                              style={{ display: 'none' }}
+                            />
+                            <button
+                              onClick={() => fileInputRef.current?.click()}
+                              disabled={uploadingFiles}
+                              style={{
+                                width: '100%', padding: '8px', borderRadius: '8px',
+                                fontSize: '11px', fontWeight: 700, cursor: 'pointer',
+                                background: 'var(--subtle-bg)', border: '1px dashed var(--border)',
+                                color: uploadingFiles ? 'var(--text-muted)' : 'var(--text-secondary)',
+                              }}
+                            >
+                              {uploadingFiles ? 'Uploading...' : '+ Upload Files (proofs, logos, photos)'}
+                            </button>
+                          </DropZone>
 
                           {/* Dropbox proof search — pre-fills with customer
                               so users can find existing artwork without
@@ -2167,25 +2176,33 @@ export default function GraphicsPage() {
                               })}
                             </div>
                           )}
-                          <input
-                            type="file"
+                          <DropZone
+                            onFiles={(files) => { if (files.length > 0) uploadFilesToJob(job.id, files); }}
                             multiple
-                            id={`edit-files-${job.id}`}
-                            onChange={async (e) => {
-                              const files = Array.from(e.target.files || []) as File[];
-                              if (files.length > 0) await uploadFilesToJob(job.id, files);
-                              e.target.value = '';
-                            }}
-                            style={{ display: 'none' }}
-                          />
-                          <button
-                            type="button"
-                            onClick={() => document.getElementById(`edit-files-${job.id}`)?.click()}
                             disabled={uploadingFiles}
-                            style={{ width: '100%', padding: '8px', borderRadius: '8px', fontSize: '11px', fontWeight: 700, cursor: 'pointer', background: 'var(--subtle-bg)', border: '1px dashed var(--border)', color: uploadingFiles ? 'var(--text-muted)' : 'var(--text-secondary)' }}
+                            overlayLabel="Drop files to upload"
+                            style={{ borderRadius: '8px' }}
                           >
-                            {uploadingFiles ? 'Uploading...' : '+ Upload Files (proofs, logos, photos)'}
-                          </button>
+                            <input
+                              type="file"
+                              multiple
+                              id={`edit-files-${job.id}`}
+                              onChange={async (e) => {
+                                const files = Array.from(e.target.files || []) as File[];
+                                if (files.length > 0) await uploadFilesToJob(job.id, files);
+                                e.target.value = '';
+                              }}
+                              style={{ display: 'none' }}
+                            />
+                            <button
+                              type="button"
+                              onClick={() => document.getElementById(`edit-files-${job.id}`)?.click()}
+                              disabled={uploadingFiles}
+                              style={{ width: '100%', padding: '8px', borderRadius: '8px', fontSize: '11px', fontWeight: 700, cursor: 'pointer', background: 'var(--subtle-bg)', border: '1px dashed var(--border)', color: uploadingFiles ? 'var(--text-muted)' : 'var(--text-secondary)' }}
+                            >
+                              {uploadingFiles ? 'Uploading...' : '+ Upload Files (proofs, logos, photos)'}
+                            </button>
+                          </DropZone>
                         </div>
 
                         <div style={{
@@ -2505,29 +2522,36 @@ export default function GraphicsPage() {
                       ))}
                     </div>
                   )}
-                  <input
-                    ref={createFileInputRef}
-                    type="file"
+                  <DropZone
+                    onFiles={(files) => { if (files.length > 0) setCreateFiles(prev => [...prev, ...files]); }}
                     multiple
-                    onChange={(e) => {
-                      const files = Array.from(e.target.files || []) as File[];
-                      if (files.length > 0) setCreateFiles(prev => [...prev, ...files]);
-                      e.target.value = '';
-                    }}
-                    style={{ display: 'none' }}
-                  />
-                  <button
-                    type="button"
-                    onClick={() => createFileInputRef.current?.click()}
-                    style={{
-                      width: '100%', padding: '10px', borderRadius: '8px',
-                      fontSize: '11px', fontWeight: 700, cursor: 'pointer',
-                      background: 'var(--subtle-bg)', border: '1px dashed var(--border)',
-                      color: 'var(--text-secondary)',
-                    }}
+                    overlayLabel="Drop files to add"
+                    style={{ borderRadius: '8px' }}
                   >
-                    + Add Files (proofs, logos, photos, PDFs)
-                  </button>
+                    <input
+                      ref={createFileInputRef}
+                      type="file"
+                      multiple
+                      onChange={(e) => {
+                        const files = Array.from(e.target.files || []) as File[];
+                        if (files.length > 0) setCreateFiles(prev => [...prev, ...files]);
+                        e.target.value = '';
+                      }}
+                      style={{ display: 'none' }}
+                    />
+                    <button
+                      type="button"
+                      onClick={() => createFileInputRef.current?.click()}
+                      style={{
+                        width: '100%', padding: '10px', borderRadius: '8px',
+                        fontSize: '11px', fontWeight: 700, cursor: 'pointer',
+                        background: 'var(--subtle-bg)', border: '1px dashed var(--border)',
+                        color: 'var(--text-secondary)',
+                      }}
+                    >
+                      + Add Files (proofs, logos, photos, PDFs)
+                    </button>
+                  </DropZone>
                 </div>
 
                 {/* Assign Team Members */}

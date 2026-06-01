@@ -14,6 +14,7 @@ import { VEHICLE_STATUS_PIPELINE, VEHICLE_STATUS_LABELS, VEHICLE_STATUS_COLORS, 
 import NetSuitePdf from '@/components/NetSuitePdf';
 import ProofThumbnail from '@/components/ProofThumbnail';
 import CompletionModal from '@/components/CompletionModal';
+import DropZone from '@/components/DropZone';
 
 type FilterStatus = VehicleTrackingStatus | 'all' | 'stuck';
 
@@ -357,7 +358,7 @@ export default function TrackingPage() {
     setPhotoUploading(false);
   };
 
-  const handlePhotoFiles = async (vehicleId: string, files: FileList | null) => {
+  const handlePhotoFiles = async (vehicleId: string, files: FileList | File[] | null) => {
     if (!files || files.length === 0) return;
     for (let i = 0; i < files.length; i++) {
       await uploadPhoto(vehicleId, files[i]);
@@ -1883,10 +1884,12 @@ export default function TrackingPage() {
                                 if (e.target) e.target.value = '';
                               }}
                             />
+                            <DropZone onFiles={(files) => { if (files[0]) uploadProofForVehicle(vehicle.id, files[0]); }} accept="image/*,application/pdf,.eps,.ai,.psd" multiple={false} overlayLabel="Drop proof to upload" style={{ borderRadius: '6px' }}>
                             <button
                               onClick={() => document.getElementById(`proof-replace-${vehicle.id}`)?.click()}
                               style={{ padding: '4px 8px', borderRadius: '6px', fontSize: '10px', fontWeight: 700, background: 'transparent', border: '1px solid var(--border)', color: 'var(--text-muted)', cursor: 'pointer' }}
                             >Upload</button>
+                            </DropZone>
                             <button
                               onClick={() => {
                                 setDbxSearchOpen(vehicle.id);
@@ -1980,10 +1983,12 @@ export default function TrackingPage() {
                               if (e.target) e.target.value = '';
                             }}
                           />
+                          <DropZone onFiles={(files) => { if (files[0]) uploadProofForVehicle(vehicle.id, files[0]); }} accept="image/*,application/pdf,.eps,.ai,.psd" multiple={false} overlayLabel="Drop proof to upload" style={{ flex: 1, borderRadius: '8px' }}>
                           <button
                             onClick={() => document.getElementById(`proof-add-${vehicle.id}`)?.click()}
-                            style={{ flex: 1, padding: '10px', borderRadius: '8px', fontSize: '12px', fontWeight: 700, background: 'rgba(34,197,94,0.08)', border: '1px dashed rgba(34,197,94,0.3)', color: '#22c55e', cursor: 'pointer' }}
+                            style={{ width: '100%', padding: '10px', borderRadius: '8px', fontSize: '12px', fontWeight: 700, background: 'rgba(34,197,94,0.08)', border: '1px dashed rgba(34,197,94,0.3)', color: '#22c55e', cursor: 'pointer' }}
                           >Upload Proof</button>
+                          </DropZone>
                           <button
                             onClick={() => {
                               setDbxSearchOpen(vehicle.id);
@@ -1999,7 +2004,7 @@ export default function TrackingPage() {
                     </div>
 
                     {/* Completion Photos */}
-                    <div style={{ marginBottom: '12px' }}>
+                    <DropZone onFiles={(files) => { handlePhotoFiles(vehicle.id, files); }} accept="image/*" multiple disabled={photoUploading} overlayLabel="Drop photos to upload" style={{ marginBottom: '12px', borderRadius: '10px' }}>
                       {/* Completion prompt banner */}
                       {showCompletionPrompt === vehicle.id && (
                         <div style={{
@@ -2185,7 +2190,7 @@ export default function TrackingPage() {
                           ))}
                         </div>
                       )}
-                    </div>
+                    </DropZone>
 
                     {/* Photo Timeline — unified check-in / during / completion / design files / proofs */}
                     <div style={{ marginBottom: '12px' }}>

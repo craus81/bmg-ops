@@ -7,6 +7,7 @@ import { createClient } from '@/lib/supabase-browser';
 import { storage } from '@/lib/storage';
 import { theme } from '@/lib/theme';
 import DropboxProofSearch from '@/components/DropboxProofSearch';
+import DropZone from '@/components/DropZone';
 import type { VehicleTemplate, Quote, QuotePanel, QuoteElement, AIAnalysisResult, GraphicElement, RollNestingResult } from '@/lib/types';
 import { applyBleed, nestElementsOnRoll, recalcFromPositions } from '@/lib/nesting-algorithm';
 
@@ -1753,9 +1754,7 @@ function NewQuote({ onCreated, editQuote }: { onCreated: () => void; editQuote?:
   const proofImgRef = useRef<HTMLImageElement>(null);
 
   // Handle proof file selection
-  function handleProofSelect(e: React.ChangeEvent<HTMLInputElement>) {
-    const file = e.target.files?.[0];
-    if (!file) return;
+  function processProofFile(file: File) {
     setProofFile(file);
     // Clear the cached compressed preview so the new file is picked up
     // by Draw Elements / Review (which fall back to this when set).
@@ -1767,6 +1766,28 @@ function NewQuote({ onCreated, editQuote }: { onCreated: () => void; editQuote?:
       setProofPreview(url);
     } else {
       setProofPreview(null);
+    }
+  }
+
+  function handleProofSelect(e: React.ChangeEvent<HTMLInputElement>) {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    processProofFile(file);
+    e.target.value = '';
+  }
+
+  async function uploadTemplateImage(file: File) {
+    if (!selectedTemplate) return;
+    try {
+      const slug = `${selectedTemplate.make}-${selectedTemplate.model}-${selectedTemplate.year || 'any'}`.toLowerCase().replace(/[^a-z0-9-]/g, '-');
+      const ext = file.name.split('.').pop() || 'png';
+      const path = `previews/${slug}.${ext}`;
+      await storage.from('vehicle-templates').upload(path, file, { upsert: true });
+      await supabase.from('vehicle_templates').update({ template_image_path: path }).eq('id', selectedTemplate.id);
+      const { data } = storage.from('vehicle-templates').getPublicUrl(path);
+      setTemplatePreviewUrl(data.publicUrl);
+    } catch (err) {
+      console.error('Failed to upload template image:', err);
     }
   }
 
@@ -2242,10 +2263,16 @@ function NewQuote({ onCreated, editQuote }: { onCreated: () => void; editQuote?:
           </div>
 
           {/* Upload Area */}
+          <DropZone
+            onFiles={(files) => { if (files[0]) processProofFile(files[0]); }}
+            accept=".pdf,.png,.jpg,.jpeg" multiple={false}
+            overlayLabel="Drop proof to upload"
+            style={{ marginBottom: '16px', borderRadius: '12px' }}
+          >
           <label style={{
             display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center',
             padding: '32px 20px', borderRadius: '12px', border: `2px dashed ${proofFile ? theme.success : theme.border}`,
-            background: proofFile ? theme.successBg : theme.inputBg, cursor: 'pointer', marginBottom: '16px',
+            background: proofFile ? theme.successBg : theme.inputBg, cursor: 'pointer',
           }}>
             <input type="file" accept=".pdf,.png,.jpg,.jpeg" onChange={handleProofSelect} style={{ display: 'none' }} />
             {proofFile ? (
@@ -2266,6 +2293,7 @@ function NewQuote({ onCreated, editQuote }: { onCreated: () => void; editQuote?:
               </>
             )}
           </label>
+          </DropZone>
 
           {/* Proof Library */}
           {proofLibrary.length === 0 && !loadingLibrary && (
@@ -3010,6 +3038,12 @@ function NewQuote({ onCreated, editQuote }: { onCreated: () => void; editQuote?:
                         }}
                       />
                     ) : (
+                      <DropZone
+                        onFiles={(files) => { if (files[0]) uploadTemplateImage(files[0]); }}
+                        accept=".png,.jpg,.jpeg" multiple={false}
+                        overlayLabel="Drop template image to upload"
+                        style={{ borderRadius: '6px' }}
+                      >
                       <label style={{
                         display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center',
                         width: '100%', height: '120px', borderRadius: '6px',
@@ -3022,23 +3056,13 @@ function NewQuote({ onCreated, editQuote }: { onCreated: () => void; editQuote?:
                           style={{ display: 'none' }}
                           onChange={async (e) => {
                             const file = e.target.files?.[0];
-                            if (!file || !selectedTemplate) return;
-                            try {
-                              const slug = `${selectedTemplate.make}-${selectedTemplate.model}-${selectedTemplate.year || 'any'}`.toLowerCase().replace(/[^a-z0-9-]/g, '-');
-                              const ext = file.name.split('.').pop() || 'png';
-                              const path = `previews/${slug}.${ext}`;
-                              await storage.from('vehicle-templates').upload(path, file, { upsert: true });
-                              await supabase.from('vehicle_templates').update({ template_image_path: path }).eq('id', selectedTemplate.id);
-                              const { data } = storage.from('vehicle-templates').getPublicUrl(path);
-                              setTemplatePreviewUrl(data.publicUrl);
-                            } catch (err) {
-                              console.error('Failed to upload template image:', err);
-                            }
+                            if (file) await uploadTemplateImage(file);
                           }}
                         />
                         <span style={{ fontWeight: 700 }}>+ Upload template image</span>
                         <span style={{ fontSize: '10px', marginTop: '2px' }}>helps you identify which panel you drew</span>
                       </label>
+                      </DropZone>
                     )}
                   </div>
 
@@ -4153,6 +4177,12 @@ function TemplatesManager() {
             </div>
 
             <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '8px' }}>
+              <DropZone
+                onFiles={(files) => { if (files[0]) setEpsFile(files[0]); }}
+                accept=".eps" multiple={false} disabled={uploading}
+                overlayLabel="Drop EPS to upload"
+                style={{ borderRadius: '10px' }}
+              >
               <label style={{
                 display: 'flex', flexDirection: 'column', alignItems: 'center', padding: '16px 8px',
                 borderRadius: '10px', border: `2px dashed ${epsFile ? theme.success : theme.border}`,
@@ -4164,7 +4194,14 @@ function TemplatesManager() {
                   {epsFile ? epsFile.name.slice(0, 20) : 'EPS File'}
                 </span>
               </label>
+              </DropZone>
 
+              <DropZone
+                onFiles={(files) => { if (files[0]) setPngFile(files[0]); }}
+                accept=".png,.jpg,.jpeg" multiple={false} disabled={uploading}
+                overlayLabel="Drop image to upload"
+                style={{ borderRadius: '10px' }}
+              >
               <label style={{
                 display: 'flex', flexDirection: 'column', alignItems: 'center', padding: '16px 8px',
                 borderRadius: '10px', border: `2px dashed ${pngFile ? theme.success : theme.border}`,
@@ -4176,6 +4213,7 @@ function TemplatesManager() {
                   {pngFile ? pngFile.name.slice(0, 20) : 'PNG Preview'}
                 </span>
               </label>
+              </DropZone>
             </div>
 
             <div style={{ fontSize: '11px', color: theme.textMuted, lineHeight: 1.4 }}>

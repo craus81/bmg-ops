@@ -4,6 +4,7 @@ import { useState, useEffect, useRef } from 'react';
 import { useRouter, useParams } from 'next/navigation';
 import { createClient } from '@/lib/supabase-browser';
 import { useAuth } from '@/components/AuthProvider';
+import DropZone from '@/components/DropZone';
 
 const INVOICE_STATUS_LABELS: Record<string, { label: string; color: string }> = {
   none: { label: 'Not Submitted', color: 'var(--text-muted)' },
@@ -173,16 +174,25 @@ export default function InstallerInvoicePage() {
             style={{ display: 'none' }}
           />
 
-          <button
-            onClick={() => fileInputRef.current?.click()}
+          <DropZone
+            onFiles={(files) => { if (files[0]) uploadInvoice(files[0]); }}
+            accept=".pdf,.png,.jpg,.jpeg"
+            multiple={false}
             disabled={uploading}
-            style={{
-              width: '100%', padding: '14px', borderRadius: '10px', fontSize: '14px', fontWeight: 700,
-              background: uploading ? 'var(--text-muted)' : 'var(--orange)', color: '#fff', border: 'none',
-            }}
+            overlayLabel="Drop invoice to upload"
+            style={{ borderRadius: '10px' }}
           >
-            {uploading ? 'Uploading...' : job.invoice_file_path ? 'Replace Invoice File' : 'Upload Invoice File'}
-          </button>
+            <button
+              onClick={() => fileInputRef.current?.click()}
+              disabled={uploading}
+              style={{
+                width: '100%', padding: '14px', borderRadius: '10px', fontSize: '14px', fontWeight: 700,
+                background: uploading ? 'var(--text-muted)' : 'var(--orange)', color: '#fff', border: 'none',
+              }}
+            >
+              {uploading ? 'Uploading...' : job.invoice_file_path ? 'Replace Invoice File' : 'Upload Invoice File'}
+            </button>
+          </DropZone>
         </div>
       )}
 
