@@ -709,6 +709,48 @@ export async function findItems(
 }
 
 /**
+ * Look up the base (price level 1) sales price for the given NetSuite item IDs.
+ * Tries the `pricing` matrix table first, falls back to `itemPrice`, then to
+ * the item record's `baseprice` field (table names / fields vary by account).
+ * Returns a map of itemId -> price for items that have a non-zero price.
+ */
+export async function getItemBasePrices(
+  itemIds: (string | number)[]
+): Promise<Record<string, number>> {
+  const ids = Array.from(
+    new Set(itemIds.map((id) => id?.toString()).filter(Boolean))
+  );
+  const priceMap: Record<string, number> = {};
+  if (ids.length === 0) return priceMap;
+
+  const idList = ids.join(',');
+  const sources = [
+    `SELECT p.item AS item_id, p.unitprice AS sales_price FROM pricing p WHERE p.pricelevel = 1 AND p.item IN (${idList})`,
+    `SELECT ip.item AS item_id, ip.unitprice AS sales_price FROM itemPrice ip WHERE ip.pricelevel = 1 AND ip.item IN (${idList})`,
+    `SELECT i.id AS item_id, i.baseprice AS sales_price FROM item i WHERE i.id IN (${idList})`,
+  ];
+
+  for (const sql of sources) {
+    // Stop once every requested item already has a price
+    if (ids.every((id) => id in priceMap)) break;
+    try {
+      const result = await suiteqlQuery(sql);
+      for (const row of result?.items || []) {
+        const id = row.item_id?.toString();
+        const price = parseFloat(row.sales_price || '0');
+        if (id && price > 0 && !(id in priceMap)) {
+          priceMap[id] = price;
+        }
+      }
+    } catch (e) {
+      // Table/column may not exist in this account — fall through to next source
+    }
+  }
+
+  return priceMap;
+}
+
+/**
  * Create a standalone Invoice in NetSuite (no SO required)
  * Used for direct invoicing of scanned vehicles without PO/SO flow
  */
@@ -736,15 +778,38 @@ export async function createDirectInvoice(payload: {
   const { oauth, token } = createOAuth(config);
   const authHeader = getAuthHeader(oauth, token, { url, method: 'POST' });
 
-  // Omit rate / description when not provided so NetSuite falls back to the
-  // item record's standard rate and description. Sending an explicit 0 / ''
-  // would override those defaults and produce $0 invoices or blank lines.
-  const items = payload.lineItems.map((li) => ({
-    item: { id: li.itemId },
-    quantity: li.quantity,
-    ...(li.rate > 0 ? { rate: li.rate } : {}),
-    ...(li.description ? { description: li.description } : {}),
-  }));
+  // When a line has no rate, look up the item's base price in NetSuite and send
+  // it explicitly. NetSuite does not always auto-populate the Amount from the
+  // item default for every item type, and a line with no Amount fails the whole
+  // request ("Please enter a value for Amount"). If an item has no price
+  // anywhere we surface a clear error instead of the cryptic NetSuite one.
+  const missingRateIds = payload.lineItems
+    .filter((li) => !(li.rate > 0))
+    .map((li) => li.itemId);
+  const basePrices = missingRateIds.length > 0
+    ? await getItemBasePrices(missingRateIds)
+    : {};
+
+  const noPriceItems: (string | number)[] = [];
+  const items = payload.lineItems.map((li) => {
+    const rate = li.rate > 0 ? li.rate : basePrices[li.itemId?.toString()] || 0;
+    if (!(rate > 0)) noPriceItems.push(li.itemId);
+    return {
+      item: { id: li.itemId },
+      quantity: li.quantity,
+      rate,
+      // Omit description when not provided so NetSuite falls back to the item
+      // record's standard description instead of blanking the line.
+      ...(li.description ? { description: li.description } : {}),
+    };
+  });
+
+  if (noPriceItems.length > 0) {
+    return {
+      success: false,
+      error: `No price found in NetSuite for item(s): ${noPriceItems.join(', ')}. Set a base price on the NetSuite item (or add it to the parts catalog) before invoicing.`,
+    };
+  }
 
   const body: any = {
     entity: { id: payload.customerId },
@@ -845,23 +910,33 @@ export async function createInvoiceFromSO(payload: {
       const linesResult = await suiteqlQuery(linesQuery);
       const soLines = linesResult?.items || [];
 
-      lineOverrides = soLines
-        .filter((line: any) => {
-          const lineNum = parseInt(line.linesequencenumber);
-          const installedQty = payload.installedQuantities![lineNum];
-          return installedQty !== undefined && installedQty > 0;
-        })
-        .map((line: any) => {
-          const lineNum = parseInt(line.linesequencenumber);
-          const rate = parseFloat(line.rate || '0');
-          // Omit rate when the SO line has no price so NetSuite falls back
-          // to the item record's standard rate instead of invoicing at $0.
-          return {
-            item: { id: line.item },
-            quantity: payload.installedQuantities![lineNum],
-            ...(rate > 0 ? { rate } : {}),
-          };
-        });
+      const billableLines = soLines.filter((line: any) => {
+        const lineNum = parseInt(line.linesequencenumber);
+        const installedQty = payload.installedQuantities![lineNum];
+        return installedQty !== undefined && installedQty > 0;
+      });
+
+      // For lines whose SO rate is 0, look up the item's base price so the
+      // invoice line has an Amount. NetSuite does not reliably auto-populate
+      // the Amount from the item default, and a line with no Amount fails the
+      // whole request ("Please enter a value for Amount").
+      const missingRateIds = billableLines
+        .filter((line: any) => !(parseFloat(line.rate || '0') > 0))
+        .map((line: any) => line.item);
+      const basePrices = missingRateIds.length > 0
+        ? await getItemBasePrices(missingRateIds)
+        : {};
+
+      lineOverrides = billableLines.map((line: any) => {
+        const lineNum = parseInt(line.linesequencenumber);
+        const soRate = parseFloat(line.rate || '0');
+        const rate = soRate > 0 ? soRate : basePrices[line.item?.toString()] || 0;
+        return {
+          item: { id: line.item },
+          quantity: payload.installedQuantities![lineNum],
+          ...(rate > 0 ? { rate } : {}),
+        };
+      });
     } catch (e) {
       console.warn('Could not fetch SO lines for partial invoice, will invoice full SO:', e);
     }
