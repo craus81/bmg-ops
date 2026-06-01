@@ -10,6 +10,7 @@ import AssignmentPicker from '@/components/AssignmentPicker';
 import GraphicsInvoiceModal from '@/components/GraphicsInvoiceModal';
 import { PartLabel } from '@/components/PartLabel';
 import DropboxProofSearch from '@/components/DropboxProofSearch';
+import { exportPackingListPDF, packingListFromJob } from '@/lib/packing-list-pdf';
 import type {
   GraphicsJob, GraphicsJobStatus, GraphicsJobCategory, GraphicsStatusHistory, GraphicsJobView, Profile,
 } from '@/lib/types';
@@ -909,6 +910,17 @@ export default function GraphicsPage() {
     setCreatingEstimate(false);
   };
 
+  // Print a packing list for the job. `overrides` lets us merge in fresh
+  // invoice info right after creating one (before local state catches up).
+  const printPackingList = (job: GraphicsJob, overrides?: Partial<GraphicsJob>) => {
+    try {
+      exportPackingListPDF(packingListFromJob({ ...job, ...overrides }), { print: true });
+    } catch (e) {
+      console.error('Packing list error:', e);
+      alert('Could not generate the packing list.');
+    }
+  };
+
   // Create direct invoice from graphics job (skip SO)
   const createInvoiceFromJob = async (job: GraphicsJob) => {
     if (job.netsuite_invoice_id) {
@@ -937,7 +949,6 @@ export default function GraphicsPage() {
       });
       const data = await res.json();
       if (data.success) {
-        alert(`Invoice created!\nInvoice #: ${data.invoiceNumber || data.invoiceId}\nLine items: ${data.lineItemCount}${data.skippedParts ? '\nSkipped (not in NS): ' + data.skippedParts.join(', ') : ''}`);
         // Update local job state
         setJobs(prev => prev.map(j => j.id === job.id ? {
           ...j,
@@ -948,6 +959,15 @@ export default function GraphicsPage() {
           updated_at: new Date().toISOString(),
         } : j));
         loadHistory(job.id);
+        const printNow = window.confirm(
+          `Invoice created!\nInvoice #: ${data.invoiceNumber || data.invoiceId}\nLine items: ${data.lineItemCount}${data.skippedParts ? '\nSkipped (not in NS): ' + data.skippedParts.join(', ') : ''}\n\nPrint packing list now?`
+        );
+        if (printNow) {
+          printPackingList(job, {
+            netsuite_invoice_id: data.invoiceId,
+            netsuite_invoice_number: data.invoiceNumber,
+          });
+        }
       } else {
         alert('Failed to create invoice: ' + (data.error || 'Unknown error'));
       }
@@ -1907,6 +1927,12 @@ export default function GraphicsPage() {
                                     {job.po_number ? ` — PO #${job.po_number}` : ''}
                                   </div>
                                 </div>
+                                <button
+                                  onClick={() => printPackingList(job)}
+                                  style={{ padding: '6px 10px', borderRadius: '7px', fontSize: '11px', fontWeight: 700, cursor: 'pointer', background: 'rgba(34,197,94,0.12)', border: '1px solid rgba(34,197,94,0.3)', color: '#22c55e', whiteSpace: 'nowrap' }}
+                                >
+                                  Print Packing List
+                                </button>
                               </div>
                             </div>
                           )}
@@ -2642,8 +2668,17 @@ export default function GraphicsPage() {
           job={invoiceJob}
           onClose={() => setInvoiceJob(null)}
           onComplete={(result) => {
+            const job = invoiceJob;
             setInvoiceJob(null);
-            alert(`Invoice ${result.invoiceNumber || result.invoiceId || 'created'} in FleetSuite.`);
+            const printNow = window.confirm(
+              `Invoice ${result.invoiceNumber || result.invoiceId || 'created'} in FleetSuite.\n\nPrint packing list now?`
+            );
+            if (printNow && job) {
+              printPackingList(job, {
+                netsuite_invoice_id: result.invoiceId ?? null,
+                netsuite_invoice_number: result.invoiceNumber ?? null,
+              });
+            }
             loadJobs();
           }}
         />
