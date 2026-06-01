@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { createClient } from '@supabase/supabase-js';
 import { requireAuth } from '@/lib/api-auth';
-import { createDirectInvoice, findItems, suiteqlQuery } from '@/lib/netsuite';
+import { createDirectInvoice, findItems, getItemBasePrices } from '@/lib/netsuite';
 import { validateBody, z } from '@/lib/validate';
 
 export const dynamic = 'force-dynamic';
@@ -9,6 +9,10 @@ export const dynamic = 'force-dynamic';
 const Schema = z.object({
   jobId: z.string().uuid(),
   userId: z.string().uuid().optional().nullable(),
+  // Optional client-supplied unit prices, keyed by part number (case
+  // insensitive). Used to re-submit after the UI prompts for a price on
+  // parts that have no price in the catalog or in NetSuite.
+  prices: z.record(z.string(), z.number().nonnegative()).optional().nullable(),
 });
 
 function getSupabase() {
@@ -31,7 +35,15 @@ export async function POST(req: NextRequest) {
 
   const parsed = await validateBody(req, Schema);
   if (parsed.error) return parsed.error;
-  const { jobId, userId } = parsed.data;
+  const { jobId, userId, prices } = parsed.data;
+
+  // Normalize client-supplied prices to an upper-cased part-number map.
+  const priceOverrides: Record<string, number> = {};
+  if (prices) {
+    for (const [pn, rate] of Object.entries(prices)) {
+      if (typeof rate === 'number' && rate > 0) priceOverrides[pn.trim().toUpperCase()] = rate;
+    }
+  }
 
   try {
     const supabase = getSupabase();
@@ -119,12 +131,20 @@ export async function POST(req: NextRequest) {
     // Look up NS item IDs for the part numbers
     const nsItems = await findItems(partNumbers);
 
-    const lineItems: { itemId: string; quantity: number; rate: number; description?: string }[] = [];
+    // Resolve each matched part to a rate: client override → catalog price.
+    const matched: { partNumber: string; itemId: string; displayName: string; rate: number }[] = [];
     const skippedParts: string[] = [];
 
     for (const pn of partNumbers) {
       const nsItem = nsItems[pn.toUpperCase()];
-      if (nsItem) {
+      if (!nsItem) {
+        skippedParts.push(pn);
+        continue;
+      }
+
+      let rate = priceOverrides[pn.toUpperCase()] || 0;
+
+      if (!(rate > 0)) {
         // Try to get the price from the catalog
         const { data: catalogItem } = await supabase
           .from('netsuite_parts')
@@ -132,26 +152,55 @@ export async function POST(req: NextRequest) {
           .eq('item_number', pn)
           .eq('is_active', true)
           .maybeSingle();
-
-        const rate = catalogItem?.sales_price || 0;
-
-        lineItems.push({
-          itemId: nsItem.id,
-          quantity: job.quantity || 1,
-          rate,
-          description: job.title || nsItem.displayName || pn,
-        });
-      } else {
-        skippedParts.push(pn);
+        rate = catalogItem?.sales_price || 0;
       }
+
+      matched.push({
+        partNumber: pn,
+        itemId: nsItem.id,
+        displayName: nsItem.displayName || pn,
+        rate,
+      });
     }
 
-    if (lineItems.length === 0) {
+    if (matched.length === 0) {
       return NextResponse.json({
         error: `Could not find any of these parts in NetSuite: ${partNumbers.join(', ')}. Make sure part numbers match NetSuite items.`,
         skippedParts,
       }, { status: 400 });
     }
+
+    // For anything still without a price, try the item's NetSuite base price.
+    const stillUnpriced = matched.filter(m => !(m.rate > 0));
+    if (stillUnpriced.length > 0) {
+      const basePrices = await getItemBasePrices(stillUnpriced.map(m => m.itemId));
+      for (const m of stillUnpriced) {
+        const bp = basePrices[m.itemId];
+        if (bp > 0) m.rate = bp;
+      }
+    }
+
+    // Anything STILL without a price needs a manual price from the user.
+    // Surface those parts so the UI can prompt and re-submit with `prices`.
+    const needsPricing = matched.filter(m => !(m.rate > 0));
+    if (needsPricing.length > 0) {
+      return NextResponse.json({
+        needsPricing: true,
+        parts: needsPricing.map(m => ({
+          partNumber: m.partNumber,
+          itemId: m.itemId,
+          displayName: m.displayName,
+        })),
+        skippedParts: skippedParts.length > 0 ? skippedParts : undefined,
+      });
+    }
+
+    const lineItems = matched.map(m => ({
+      itemId: m.itemId,
+      quantity: job.quantity || 1,
+      rate: m.rate,
+      description: job.title || m.displayName || m.partNumber,
+    }));
 
     // Build memo
     const memoParts = [`Graphics Job #${job.job_number || job.id.slice(0, 8)}`];
@@ -196,6 +245,41 @@ export async function POST(req: NextRequest) {
       note: `Invoice created: ${result.invoiceNumber || result.invoiceId}${job.po_number ? ` (PO #${job.po_number})` : ''}`,
     });
 
+    // Persist any manually-entered prices back to the parts catalog so the
+    // UI doesn't prompt for them again next time. Update the existing row
+    // by NetSuite id; if the part isn't catalogued yet, insert a minimal
+    // graphics-catalog row. Best-effort — never block the invoice on this.
+    const persistedParts = matched.filter(m => priceOverrides[m.partNumber.toUpperCase()] > 0);
+    for (const m of persistedParts) {
+      try {
+        const { data: existing } = await supabase
+          .from('netsuite_parts')
+          .select('id')
+          .eq('netsuite_id', m.itemId)
+          .maybeSingle();
+
+        if (existing) {
+          await supabase
+            .from('netsuite_parts')
+            .update({ sales_price: m.rate, updated_at: new Date().toISOString() })
+            .eq('id', existing.id);
+        } else {
+          await supabase
+            .from('netsuite_parts')
+            .insert({
+              netsuite_id: m.itemId,
+              item_number: m.partNumber,
+              display_name: m.displayName,
+              sales_price: m.rate,
+              catalog: 'graphics',
+              is_active: true,
+            });
+        }
+      } catch (e) {
+        console.error(`Failed to persist price for part ${m.partNumber}:`, e);
+      }
+    }
+
     return NextResponse.json({
       success: true,
       invoiceId: result.invoiceId,
@@ -203,6 +287,7 @@ export async function POST(req: NextRequest) {
       invoiceAmount,
       lineItemCount: lineItems.length,
       skippedParts: skippedParts.length > 0 ? skippedParts : undefined,
+      savedPrices: persistedParts.length > 0 ? persistedParts.length : undefined,
     });
   } catch (err: any) {
     console.error('Graphics create-invoice error:', err);
