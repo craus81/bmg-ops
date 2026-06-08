@@ -160,8 +160,16 @@ export default function WrapEstimatorPage() {
 
     const isPdf = file.type === 'application/pdf' || file.name.toLowerCase().endsWith('.pdf');
     if (!isPdf) {
-      // Image: the data URL is already a usable raster (single page).
-      setProofPages([dataUrl]);
+      // Image upload: normalize to a JPEG raster (white background, capped
+      // size) so the bytes always match the image/jpeg media type we declare
+      // to the AI — a PNG/WEBP sent as image/jpeg makes Anthropic 400 — and
+      // so we never exceed its image-dimension limits.
+      try {
+        setProofPages([await rasterizeImageToJpeg(dataUrl)]);
+      } catch (err) {
+        console.error('[wrap-estimator] image normalize failed:', err);
+        setProofPages([dataUrl]); // fall back to the original
+      }
       return;
     }
 
@@ -543,6 +551,33 @@ export default function WrapEstimatorPage() {
       )}
     </div>
   );
+}
+
+// Re-encode an uploaded image (any format pdf.js / the browser can decode:
+// PNG, WEBP, JPEG, …) to a JPEG data URL on a white background, downscaled
+// so the long edge is at most ~2200px. This guarantees the bytes match the
+// image/jpeg media type we send to the AI and keeps within Anthropic's image
+// dimension limits.
+async function rasterizeImageToJpeg(dataUrl: string): Promise<string> {
+  const img = await new Promise<HTMLImageElement>((resolve, reject) => {
+    const im = new Image();
+    im.onload = () => resolve(im);
+    im.onerror = () => reject(new Error('Failed to load image'));
+    im.src = dataUrl;
+  });
+  const longEdge = Math.max(img.naturalWidth, img.naturalHeight) || 1;
+  const scale = Math.min(2200 / longEdge, 1); // only ever downscale
+  const w = Math.max(1, Math.round(img.naturalWidth * scale));
+  const h = Math.max(1, Math.round(img.naturalHeight * scale));
+  const canvas = document.createElement('canvas');
+  canvas.width = w;
+  canvas.height = h;
+  const ctx = canvas.getContext('2d');
+  if (!ctx) return dataUrl;
+  ctx.fillStyle = '#ffffff'; // flatten any transparency
+  ctx.fillRect(0, 0, w, h);
+  ctx.drawImage(img, 0, 0, w, h);
+  return canvas.toDataURL('image/jpeg', 0.9);
 }
 
 // Crop a region from the rasterized proof using canvas for the thumbnail.
