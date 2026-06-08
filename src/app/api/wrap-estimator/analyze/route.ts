@@ -210,7 +210,12 @@ export async function POST(req: NextRequest) {
     if (!response.ok) {
       const errBody = await response.text();
       console.error('[wrap-estimator] Anthropic API error:', response.status, errBody.slice(0, 500));
-      return NextResponse.json({ error: `AI API error: ${response.status}` }, { status: 502 });
+      let detail = '';
+      try { detail = JSON.parse(errBody)?.error?.message || ''; } catch { /* non-JSON body */ }
+      return NextResponse.json(
+        { error: `AI API error: ${response.status}${detail ? ` — ${detail}` : ''}` },
+        { status: 502 },
+      );
     }
 
     const result = await response.json();
