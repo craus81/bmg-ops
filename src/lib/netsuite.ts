@@ -698,65 +698,36 @@ export async function findCustomer(name: string): Promise<{
  * Only matches ACTIVE items: an inactive duplicate sharing the same itemid
  * would otherwise get picked and rejected by NetSuite ("Invalid Field Value
  * <id> for the field: item") when used on an invoice line.
- *
- * When several active items share an itemid, prefers a *sellable* one — an
- * item that has an income account can go on a sales transaction (invoice),
- * whereas a purchase-only item (e.g. "Service for Purchase", no income
- * account) is rejected with the same "Invalid Field Value" error. The
- * returned `sellable` flag lets callers surface an actionable message.
  */
 export async function findItems(
   partNumbers: string[],
-): Promise<Record<string, { id: string; name: string; displayName: string; description: string; type: string; sellable: boolean }>> {
+): Promise<Record<string, { id: string; name: string; displayName: string; description: string; type: string }>> {
   if (partNumbers.length === 0) return {};
 
   const conditions = partNumbers
     .map((p) => `UPPER(i.itemid) = UPPER('${safeStringLiteral(p, 80)}')`)
     .join(' OR ');
+  const query = `
+    SELECT i.id, i.itemid, i.displayname, i.description, i.itemtype, i.isinactive
+    FROM item i
+    WHERE (${conditions})
+    AND i.isinactive = 'F'
+  `;
 
-  // Prefer the query that also reads incomeaccount (used to detect sellable
-  // items). If that column isn't queryable in this account, fall back to the
-  // basic query so invoicing never breaks — sellability is then unknown and
-  // treated as `true` so we don't block valid items.
-  let items: any[] = [];
-  let hasIncomeAccount = true;
-  try {
-    const result = await suiteqlQuery(`
-      SELECT i.id, i.itemid, i.displayname, i.description, i.itemtype, i.isinactive, i.incomeaccount
-      FROM item i
-      WHERE (${conditions})
-      AND i.isinactive = 'F'
-    `);
-    items = result?.items || [];
-  } catch {
-    hasIncomeAccount = false;
-    const result = await suiteqlQuery(`
-      SELECT i.id, i.itemid, i.displayname, i.description, i.itemtype, i.isinactive
-      FROM item i
-      WHERE (${conditions})
-      AND i.isinactive = 'F'
-    `);
-    items = result?.items || [];
-  }
-
-  const map: Record<string, { id: string; name: string; displayName: string; description: string; type: string; sellable: boolean }> = {};
+  const result = await suiteqlQuery(query);
+  const items = result?.items || [];
+  const map: Record<string, { id: string; name: string; displayName: string; description: string; type: string }> = {};
 
   for (const item of items) {
     const key = item.itemid?.toUpperCase();
-    if (!key) continue;
-    // If we couldn't read incomeaccount, sellability is unknown → assume true.
-    const sellable = !hasIncomeAccount || (item.incomeaccount != null && item.incomeaccount !== '');
-    const existing = map[key];
-    // Keep the first match, but upgrade to a sellable duplicate if the one
-    // we kept can't be invoiced.
-    if (existing && (existing.sellable || !sellable)) continue;
+    // If duplicates somehow remain, keep the first active match deterministically
+    if (key && map[key]) continue;
     map[key] = {
       id: item.id?.toString(),
       name: item.itemid,
       displayName: item.displayname || item.itemid,
       description: item.description || item.displayname || item.itemid,
       type: item.itemtype || '',
-      sellable,
     };
   }
 
@@ -893,7 +864,14 @@ export async function createDirectInvoice(payload: {
     if (!response.ok) {
       const text = await response.text();
       console.error('NetSuite create direct invoice error:', text);
-      return { success: false, error: `NetSuite error (${response.status}): ${text}` };
+      // "Invalid Field Value <id> for the following field: item" almost always
+      // means the item isn't shared with the invoice's subsidiary. Surface an
+      // actionable hint instead of the raw NetSuite error.
+      const itemSubsidiaryError = /Invalid Field Value\s+\d+\s+for the following field:\s*item/i.test(text);
+      const hint = itemSubsidiaryError
+        ? ' — This usually means the item is not assigned to the invoice\'s subsidiary in NetSuite. Set the item\'s subsidiary to BMG Fleet Installations and retry.'
+        : '';
+      return { success: false, error: `NetSuite error (${response.status}): ${text}${hint}` };
     }
 
     const location = response.headers.get('Location');
