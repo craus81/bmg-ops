@@ -174,6 +174,7 @@ export default function GraphicsPage() {
   // Estimate & Invoice state
   const [creatingEstimate, setCreatingEstimate] = useState(false);
   const [creatingInvoice, setCreatingInvoice] = useState(false);
+  const [fetchingPdfJobId, setFetchingPdfJobId] = useState<string | null>(null);
 
   useEffect(() => {
     if (!user) return;
@@ -921,6 +922,30 @@ export default function GraphicsPage() {
     }
   };
 
+  // Pull the invoice PDF from NetSuite and store it on the job record.
+  // `silent` is used for the best-effort auto-fetch right after invoicing.
+  const storeInvoicePdf = async (jobId: string, silent = false): Promise<string | null> => {
+    setFetchingPdfJobId(jobId);
+    try {
+      const res = await fetch('/api/graphics/invoice-pdf', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ jobId }),
+      });
+      const data = await res.json();
+      if (data.success && data.url) {
+        setJobs(prev => prev.map(j => j.id === jobId ? { ...j, invoice_pdf_url: data.url } : j));
+        return data.url as string;
+      }
+      if (!silent) alert('Could not get the invoice PDF: ' + (data.error || 'Unknown error'));
+    } catch {
+      if (!silent) alert('Network error fetching the invoice PDF — please try again.');
+    } finally {
+      setFetchingPdfJobId(null);
+    }
+    return null;
+  };
+
   // Create direct invoice from graphics job (skip SO)
   const createInvoiceFromJob = async (job: GraphicsJob) => {
     if (job.netsuite_invoice_id) {
@@ -994,6 +1019,8 @@ export default function GraphicsPage() {
             netsuite_invoice_number: data.invoiceNumber,
           });
         }
+        // Best-effort: pull the invoice PDF and store it on the record.
+        storeInvoicePdf(job.id, true);
       } else {
         alert('Failed to create invoice: ' + (data.error || 'Unknown error'));
       }
@@ -1942,7 +1969,7 @@ export default function GraphicsPage() {
                           {/* Show invoice info if invoiced */}
                           {job.netsuite_invoice_id && (
                             <div style={{ padding: '8px 10px', borderRadius: '8px', background: 'rgba(34,197,94,0.06)', border: '1px solid rgba(34,197,94,0.15)', marginBottom: '6px' }}>
-                              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '8px' }}>
                                 <div>
                                   <a
                                     href={`https://system.netsuite.com/app/accounting/transactions/custinvc.nl?id=${job.netsuite_invoice_id}`}
@@ -1958,12 +1985,32 @@ export default function GraphicsPage() {
                                     {job.po_number ? ` — PO #${job.po_number}` : ''}
                                   </div>
                                 </div>
-                                <button
-                                  onClick={() => printPackingList(job)}
-                                  style={{ padding: '6px 10px', borderRadius: '7px', fontSize: '11px', fontWeight: 700, cursor: 'pointer', background: 'rgba(34,197,94,0.12)', border: '1px solid rgba(34,197,94,0.3)', color: '#22c55e', whiteSpace: 'nowrap' }}
-                                >
-                                  Print Packing List
-                                </button>
+                                <div style={{ display: 'flex', gap: '6px', alignItems: 'center', flexShrink: 0 }}>
+                                  {job.invoice_pdf_url ? (
+                                    <a
+                                      href={job.invoice_pdf_url}
+                                      target="_blank"
+                                      rel="noopener noreferrer"
+                                      style={{ padding: '6px 10px', borderRadius: '7px', fontSize: '11px', fontWeight: 700, cursor: 'pointer', background: 'rgba(59,130,246,0.12)', border: '1px solid rgba(59,130,246,0.3)', color: '#60a5fa', whiteSpace: 'nowrap', textDecoration: 'none' }}
+                                    >
+                                      View Invoice PDF ↗
+                                    </a>
+                                  ) : (
+                                    <button
+                                      onClick={() => storeInvoicePdf(job.id)}
+                                      disabled={fetchingPdfJobId === job.id}
+                                      style={{ padding: '6px 10px', borderRadius: '7px', fontSize: '11px', fontWeight: 700, cursor: fetchingPdfJobId === job.id ? 'default' : 'pointer', background: 'rgba(59,130,246,0.12)', border: '1px solid rgba(59,130,246,0.3)', color: '#60a5fa', whiteSpace: 'nowrap', opacity: fetchingPdfJobId === job.id ? 0.5 : 1 }}
+                                    >
+                                      {fetchingPdfJobId === job.id ? 'Getting…' : 'Get Invoice PDF'}
+                                    </button>
+                                  )}
+                                  <button
+                                    onClick={() => printPackingList(job)}
+                                    style={{ padding: '6px 10px', borderRadius: '7px', fontSize: '11px', fontWeight: 700, cursor: 'pointer', background: 'rgba(34,197,94,0.12)', border: '1px solid rgba(34,197,94,0.3)', color: '#22c55e', whiteSpace: 'nowrap' }}
+                                  >
+                                    Print Packing List
+                                  </button>
+                                </div>
                               </div>
                             </div>
                           )}
@@ -2710,6 +2757,8 @@ export default function GraphicsPage() {
                 netsuite_invoice_number: result.invoiceNumber ?? null,
               });
             }
+            // Best-effort: pull the invoice PDF and store it on the record.
+            if (job) storeInvoicePdf(job.id, true);
             loadJobs();
           }}
         />

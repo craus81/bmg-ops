@@ -698,36 +698,65 @@ export async function findCustomer(name: string): Promise<{
  * Only matches ACTIVE items: an inactive duplicate sharing the same itemid
  * would otherwise get picked and rejected by NetSuite ("Invalid Field Value
  * <id> for the field: item") when used on an invoice line.
+ *
+ * When several active items share an itemid, prefers a *sellable* one — an
+ * item that has an income account can go on a sales transaction (invoice),
+ * whereas a purchase-only item (e.g. "Service for Purchase", no income
+ * account) is rejected with the same "Invalid Field Value" error. The
+ * returned `sellable` flag lets callers surface an actionable message.
  */
 export async function findItems(
   partNumbers: string[],
-): Promise<Record<string, { id: string; name: string; displayName: string; description: string; type: string }>> {
+): Promise<Record<string, { id: string; name: string; displayName: string; description: string; type: string; sellable: boolean }>> {
   if (partNumbers.length === 0) return {};
 
   const conditions = partNumbers
     .map((p) => `UPPER(i.itemid) = UPPER('${safeStringLiteral(p, 80)}')`)
     .join(' OR ');
-  const query = `
-    SELECT i.id, i.itemid, i.displayname, i.description, i.itemtype, i.isinactive
-    FROM item i
-    WHERE (${conditions})
-    AND i.isinactive = 'F'
-  `;
 
-  const result = await suiteqlQuery(query);
-  const items = result?.items || [];
-  const map: Record<string, { id: string; name: string; displayName: string; description: string; type: string }> = {};
+  // Prefer the query that also reads incomeaccount (used to detect sellable
+  // items). If that column isn't queryable in this account, fall back to the
+  // basic query so invoicing never breaks — sellability is then unknown and
+  // treated as `true` so we don't block valid items.
+  let items: any[] = [];
+  let hasIncomeAccount = true;
+  try {
+    const result = await suiteqlQuery(`
+      SELECT i.id, i.itemid, i.displayname, i.description, i.itemtype, i.isinactive, i.incomeaccount
+      FROM item i
+      WHERE (${conditions})
+      AND i.isinactive = 'F'
+    `);
+    items = result?.items || [];
+  } catch {
+    hasIncomeAccount = false;
+    const result = await suiteqlQuery(`
+      SELECT i.id, i.itemid, i.displayname, i.description, i.itemtype, i.isinactive
+      FROM item i
+      WHERE (${conditions})
+      AND i.isinactive = 'F'
+    `);
+    items = result?.items || [];
+  }
+
+  const map: Record<string, { id: string; name: string; displayName: string; description: string; type: string; sellable: boolean }> = {};
 
   for (const item of items) {
     const key = item.itemid?.toUpperCase();
-    // If duplicates somehow remain, keep the first active match deterministically
-    if (key && map[key]) continue;
+    if (!key) continue;
+    // If we couldn't read incomeaccount, sellability is unknown → assume true.
+    const sellable = !hasIncomeAccount || (item.incomeaccount != null && item.incomeaccount !== '');
+    const existing = map[key];
+    // Keep the first match, but upgrade to a sellable duplicate if the one
+    // we kept can't be invoiced.
+    if (existing && (existing.sellable || !sellable)) continue;
     map[key] = {
       id: item.id?.toString(),
       name: item.itemid,
       displayName: item.displayname || item.itemid,
       description: item.description || item.displayname || item.itemid,
       type: item.itemtype || '',
+      sellable,
     };
   }
 
