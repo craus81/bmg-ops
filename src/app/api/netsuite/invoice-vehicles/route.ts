@@ -119,7 +119,7 @@ export async function POST(req: NextRequest) {
             unmatchedParts.push(partNum);
             continue;
           }
-          matchDetail.push(`${partNum} → NS item #${nsItem.id}${nsItem.type ? ` (${nsItem.type})` : ''}${nsItem.sellable ? '' : ' [purchase-only — no income account, not invoiceable]'}`);
+          matchDetail.push(`${partNum} → NS item #${nsItem.id}${nsItem.type ? ` (${nsItem.type})` : ''}`);
           lineItems.push({
             itemId: nsItem.id,
             quantity: group.count,
