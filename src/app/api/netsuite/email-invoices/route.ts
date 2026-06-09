@@ -1,9 +1,60 @@
 import { NextRequest, NextResponse } from 'next/server';
+import { createClient } from '@supabase/supabase-js';
 import { getNetSuitePdf, suiteqlQuery } from '@/lib/netsuite';
 import { sendEmail, buildInvoiceEmail } from '@/lib/resend';
 import { requireAuth } from '@/lib/api-auth';
 import { safeStringLiteral, SqlSafeError } from '@/lib/sql-safe';
 import { validateBody, z } from '@/lib/validate';
+
+/** Quote a value for RFC-4180 CSV output. */
+function csvCell(value: unknown): string {
+  const s = value == null ? '' : String(value);
+  return /[",\r\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
+}
+
+/**
+ * Builds a CSV of the scanned vehicles behind the given invoices, keyed by the
+ * invoice_number stamped on scan_logs at invoice-creation time. Returns null
+ * when no scans match, so the email goes out with just the PDFs.
+ */
+async function buildVinCsv(invoiceNumbers: string[]): Promise<string | null> {
+  if (invoiceNumbers.length === 0) return null;
+  if (!process.env.NEXT_PUBLIC_SUPABASE_URL || !process.env.SUPABASE_SERVICE_ROLE_KEY) {
+    return null;
+  }
+
+  const supabase = createClient(
+    process.env.NEXT_PUBLIC_SUPABASE_URL,
+    process.env.SUPABASE_SERVICE_ROLE_KEY
+  );
+
+  const { data, error } = await supabase
+    .from('scan_logs')
+    .select('invoice_number, vin, vehicle_year, vehicle_make, vehicle_model, vehicle_trim, part_number, part_description, po_number')
+    .in('invoice_number', invoiceNumbers);
+
+  if (error) {
+    console.error('VIN list lookup failed:', error.message);
+    return null;
+  }
+  if (!data || data.length === 0) return null;
+
+  // Sort by invoice then VIN so the CSV reads in a stable, grouped order.
+  const rows = [...data].sort((a, b) =>
+    String(a.invoice_number).localeCompare(String(b.invoice_number)) ||
+    String(a.vin).localeCompare(String(b.vin))
+  );
+
+  const header = ['Invoice', 'VIN', 'Year', 'Make', 'Model', 'Trim', 'Part Number', 'Part Description', 'PO'];
+  const lines = [header.join(',')];
+  for (const r of rows) {
+    lines.push([
+      r.invoice_number, r.vin, r.vehicle_year, r.vehicle_make, r.vehicle_model,
+      r.vehicle_trim, r.part_number, r.part_description, r.po_number,
+    ].map(csvCell).join(','));
+  }
+  return lines.join('\r\n');
+}
 
 const InvoiceItemSchema = z.object({
   invoiceId: z.string().regex(/^\d{1,15}$/).optional(),
@@ -124,6 +175,22 @@ export async function POST(req: NextRequest) {
 
     const html = buildInvoiceEmail(customerName, invoiceNumbers, poNumbers, customBody);
 
+    // Count invoice PDFs before appending the VIN list so the response's `sent`
+    // tally reflects invoices, not attachments.
+    const pdfCount = attachments.length;
+
+    // Attach a VIN list for the scanned vehicles behind these invoices, if any
+    // scan_logs rows are linked by invoice_number. Failures here never block the
+    // invoice send — the PDFs are the essential payload.
+    const vinCsv = await buildVinCsv(invoiceNumbers);
+    if (vinCsv) {
+      attachments.push({
+        filename: 'VIN_List.csv',
+        content: Buffer.from(vinCsv, 'utf-8'),
+        contentType: 'text/csv',
+      });
+    }
+
     const sent = await sendEmail(recipients, subject, html, undefined, attachments);
 
     if (!sent) {
@@ -132,7 +199,8 @@ export async function POST(req: NextRequest) {
 
     return NextResponse.json({
       success: true,
-      sent: attachments.length,
+      sent: pdfCount,
+      vinListAttached: !!vinCsv,
       to: recipients,
       results,
     });
