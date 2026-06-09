@@ -26,6 +26,7 @@ interface ScanLog {
   po_number: string | null;
   po_line_item_id: string | null;
   scanned_by: string | null;
+  scanned_by_company: string | null;
   scanned_at: string;
   exported_at: string | null;
   archived_at: string | null;
@@ -287,13 +288,13 @@ export default function AdminScansPage() {
     if (toExport.length === 0) return;
     setExporting(true);
 
-    const headers = ['VIN', 'Year', 'Make', 'Model', 'Part Number', 'Description', 'Billable Customer', 'Unit #', 'Serial #', 'IMEI', 'CCID', 'Location', 'PO Number', 'Scanned By', 'Date'];
+    const headers = ['VIN', 'Year', 'Make', 'Model', 'Part Number', 'Description', 'Billable Customer', 'Unit #', 'Serial #', 'IMEI', 'CCID', 'Location', 'PO Number', 'Scanned By', 'Company', 'Date'];
     const rows = toExport.map(s => [
       s.vin, s.vehicle_year || '', s.vehicle_make || '', s.vehicle_model || '',
       s.part_number || '', s.part_description || '', s.billable_customer || '',
       s.unit_number || '', s.serial_number || '', s.imei || '', s.iccid || '',
       s.location_name || '', s.po_number || '',
-      profiles[s.scanned_by || ''] || '', new Date(s.scanned_at).toLocaleString(),
+      profiles[s.scanned_by || ''] || '', s.scanned_by_company || '', new Date(s.scanned_at).toLocaleString(),
     ]);
 
     const csv = [headers, ...rows].map(r => r.map(c => `"${(c || '').replace(/"/g, '""')}"`).join(',')).join('\n');
@@ -1767,6 +1768,7 @@ export default function AdminScansPage() {
                                   )}
                                   <div style={{ fontSize: '9px', color: 'var(--text-muted)', textAlign: 'right' }}>
                                     {profiles[scan.scanned_by || ''] || ''}<br />
+                                    {scan.scanned_by_company && (<>{scan.scanned_by_company}<br /></>)}
                                     {new Date(scan.scanned_at).toLocaleDateString([], { month: 'short', day: 'numeric' })}
                                   </div>
                                   <button onClick={() => setEditingScan({ ...scan })} style={{ padding: '2px 5px', borderRadius: '4px', border: 'none', background: 'rgba(59,130,246,0.08)', color: '#60a5fa', fontSize: '9px', fontWeight: 700, cursor: 'pointer' }}>Edit</button>
