@@ -18,6 +18,9 @@ interface ScanLog {
   part_description: string | null;
   billable_customer: string | null;
   unit_number: string | null;
+  serial_number: string | null;
+  imei: string | null;
+  iccid: string | null;
   location_name: string | null;
   po_id: string | null;
   po_number: string | null;
@@ -284,11 +287,12 @@ export default function AdminScansPage() {
     if (toExport.length === 0) return;
     setExporting(true);
 
-    const headers = ['VIN', 'Year', 'Make', 'Model', 'Part Number', 'Description', 'Billable Customer', 'Unit #', 'Location', 'PO Number', 'Scanned By', 'Date'];
+    const headers = ['VIN', 'Year', 'Make', 'Model', 'Part Number', 'Description', 'Billable Customer', 'Unit #', 'Serial #', 'IMEI', 'CCID', 'Location', 'PO Number', 'Scanned By', 'Date'];
     const rows = toExport.map(s => [
       s.vin, s.vehicle_year || '', s.vehicle_make || '', s.vehicle_model || '',
       s.part_number || '', s.part_description || '', s.billable_customer || '',
-      s.unit_number || '', s.location_name || '', s.po_number || '',
+      s.unit_number || '', s.serial_number || '', s.imei || '', s.iccid || '',
+      s.location_name || '', s.po_number || '',
       profiles[s.scanned_by || ''] || '', new Date(s.scanned_at).toLocaleString(),
     ]);
 
