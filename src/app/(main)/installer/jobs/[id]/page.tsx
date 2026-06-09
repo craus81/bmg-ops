@@ -4,6 +4,16 @@ import { useState, useEffect } from 'react';
 import { useRouter, useParams } from 'next/navigation';
 import { createClient } from '@/lib/supabase-browser';
 import { useAuth } from '@/components/AuthProvider';
+import { theme } from '@/lib/theme';
+import VinScanner from '@/components/VinScanner';
+import { isVerizonRfidPart, validateSerial, validateImei, validateIccid } from '@/lib/rfid';
+
+const CAP_ORDER = ['serial', 'imei', 'iccid'] as const;
+type CapField = typeof CAP_ORDER[number];
+const CAP_LABELS: Record<CapField, string> = { serial: 'Serial # (SN)', imei: 'IMEI', iccid: 'CCID (ICCID)' };
+const CAP_VALIDATORS: Record<CapField, (raw: string) => string | null> = {
+  serial: validateSerial, imei: validateImei, iccid: validateIccid,
+};
 
 const STATUS_LABELS: Record<string, string> = {
   assigned_awaiting_scheduling: 'Awaiting Your Schedule Proposal',
@@ -34,6 +44,17 @@ export default function InstallerJobDetailPage() {
   // Schedule proposal
   const [propStart, setPropStart] = useState('');
   const [propEnd, setPropEnd] = useState('');
+
+  // Verizon RFID device capture (modal, one VIN at a time)
+  const [captureVin, setCaptureVin] = useState<any | null>(null);
+  const [capStage, setCapStage] = useState<CapField | 'review'>('serial');
+  const [capData, setCapData] = useState<{ serial?: string; imei?: string; iccid?: string }>({});
+  const [capPending, setCapPending] = useState<string | null>(null);
+  const [capManual, setCapManual] = useState('');
+  const [capMode, setCapMode] = useState<'camera' | 'text'>('camera');
+  const [capError, setCapError] = useState('');
+
+  const isRfidJob = isVerizonRfidPart(job?.part_number);
 
   useEffect(() => {
     if (!user) return;
@@ -103,25 +124,68 @@ export default function InstallerJobDetailPage() {
     setUpdating(false);
   };
 
-  const markVinComplete = async (vinId: string) => {
+  // Complete a VIN via the server route, which logs to scan_logs when the job
+  // has a part number (installers can't write scan_logs directly) and advances
+  // the job to review once every VIN is done.
+  const completeVin = async (
+    vinId: string,
+    device?: { serial_number: string; imei: string; iccid: string },
+  ): Promise<boolean> => {
+    if (!job) return false;
     setUpdating(true);
-    await supabase.from('cni_job_vins').update({
-      status: 'completed',
-      completed_at: new Date().toISOString(),
-    }).eq('id', vinId);
-
-    // Check if all VINs are complete
-    const updated = vins.map(v => v.id === vinId ? { ...v, status: 'completed' } : v);
-    const allComplete = updated.every(v => v.status === 'completed');
-    if (allComplete && job) {
-      await supabase.from('cni_jobs').update({
-        status: 'completed_pending_review',
-        completed_at: new Date().toISOString(),
-      }).eq('id', job.id);
+    try {
+      const { data: { session } } = await supabase.auth.getSession();
+      const res = await fetch('/api/cni/complete-vin', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          ...(session?.access_token ? { Authorization: `Bearer ${session.access_token}` } : {}),
+        },
+        body: JSON.stringify({ jobId: job.id, vinId, ...device }),
+      });
+      const json = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        setCapError(json.error || 'Failed to complete VIN');
+        return false;
+      }
+      await loadJob();
+      return true;
+    } finally {
+      setUpdating(false);
     }
+  };
 
-    await loadJob();
-    setUpdating(false);
+  // ── Verizon RFID capture modal ──
+  const openCapture = (v: any) => {
+    setCaptureVin(v);
+    setCapStage('serial');
+    setCapData({});
+    setCapPending(null);
+    setCapManual('');
+    setCapMode('camera');
+    setCapError('');
+  };
+  const closeCapture = () => { setCaptureVin(null); setCapError(''); };
+
+  const capAdvance = (value: string) => {
+    setCapData(prev => ({ ...prev, [capStage as CapField]: value }));
+    setCapPending(null);
+    setCapManual('');
+    setCapError('');
+    const idx = CAP_ORDER.indexOf(capStage as CapField);
+    setCapStage(idx < CAP_ORDER.length - 1 ? CAP_ORDER[idx + 1] : 'review');
+  };
+  const capConfirm = () => { if (capPending) capAdvance(capPending); };
+  const capManualSubmit = () => {
+    if (capStage === 'review') return;
+    const accepted = CAP_VALIDATORS[capStage](capManual);
+    if (!accepted) { setCapError(`Invalid ${CAP_LABELS[capStage]} — check the number and try again`); return; }
+    capAdvance(accepted);
+  };
+  const capSubmit = async () => {
+    if (!captureVin || !capData.serial || !capData.imei || !capData.iccid) return;
+    const ok = await completeVin(captureVin.id, { serial_number: capData.serial, imei: capData.imei, iccid: capData.iccid });
+    if (ok) closeCapture();
   };
 
   if (loading || !job) {
@@ -369,19 +433,24 @@ export default function InstallerJobDetailPage() {
                 <div style={{ fontSize: '11px', color: 'var(--text-muted)' }}>
                   {[v.vehicle_year, v.vehicle_make, v.vehicle_model].filter(Boolean).join(' ')}
                 </div>
+                {v.imei && (
+                  <div style={{ fontSize: '10px', color: 'var(--text-muted)', fontFamily: 'monospace', marginTop: '2px' }}>
+                    IMEI {v.imei}{v.iccid ? ` · CCID ${v.iccid}` : ''}
+                  </div>
+                )}
               </div>
               {v.status === 'completed' ? (
                 <span style={{ fontSize: '12px', fontWeight: 700, color: 'var(--success)' }}>✓ Done</span>
               ) : job.status === 'in_progress' ? (
                 <button
-                  onClick={() => markVinComplete(v.id)}
+                  onClick={() => isRfidJob ? openCapture(v) : completeVin(v.id)}
                   disabled={updating}
                   style={{
                     padding: '6px 12px', borderRadius: '8px', fontSize: '11px', fontWeight: 700,
                     background: 'var(--success)', color: '#fff', border: 'none',
                   }}
                 >
-                  Mark Complete
+                  {isRfidJob ? 'Capture & Complete' : 'Mark Complete'}
                 </button>
               ) : (
                 <span style={{ fontSize: '11px', color: 'var(--text-muted)' }}>Pending</span>
@@ -439,6 +508,90 @@ export default function InstallerJobDetailPage() {
           </>
         )}
       </div>
+
+      {/* Verizon RFID device capture modal */}
+      {captureVin && (
+        <div onClick={closeCapture} style={{ position: 'fixed', inset: 0, zIndex: 300, background: 'rgba(0,0,0,0.7)', display: 'flex', alignItems: 'flex-end', justifyContent: 'center' }}>
+          <div onClick={e => e.stopPropagation()} style={{ width: '100%', maxWidth: '520px', background: 'var(--card)', borderTopLeftRadius: '18px', borderTopRightRadius: '18px', padding: '16px', maxHeight: '92vh', overflowY: 'auto' }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '10px' }}>
+              <div>
+                <div style={{ fontSize: '15px', fontWeight: 800, color: 'var(--text-primary)' }}>Verizon RFID Capture</div>
+                <div style={{ fontSize: '11px', color: 'var(--text-muted)', fontFamily: 'monospace' }}>{captureVin.vin}</div>
+              </div>
+              <button onClick={closeCapture} style={{ fontSize: '12px', fontWeight: 700, color: 'var(--text-muted)', background: 'transparent', border: 'none', cursor: 'pointer' }}>Cancel</button>
+            </div>
+
+            {/* Progress: SN → IMEI → CCID */}
+            <div style={{ display: 'flex', gap: '6px', marginBottom: '10px' }}>
+              {CAP_ORDER.map(f => {
+                const val = capData[f];
+                const current = capStage === f;
+                return (
+                  <div key={f} style={{ flex: 1, padding: '8px 6px', borderRadius: '8px', border: `1px solid ${val ? 'var(--success-border)' : current ? 'var(--orange)' : 'var(--border)'}`, background: val ? 'var(--success-bg)' : current ? 'var(--orange-soft)' : 'var(--input-bg)' }}>
+                    <div style={{ fontSize: '9px', fontWeight: 800, color: 'var(--text-muted)', textTransform: 'uppercase' }}>{CAP_LABELS[f]}</div>
+                    <div style={{ fontSize: '11px', fontWeight: 700, fontFamily: 'monospace', color: val ? 'var(--success)' : 'var(--text-muted)', marginTop: '2px', wordBreak: 'break-all' }}>
+                      {val ? (val.length > 10 ? `…${val.slice(-9)}` : val) : current ? 'scanning…' : '—'}
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+
+            {capStage !== 'review' && (
+              <div style={{ display: 'flex', gap: '4px', marginBottom: '10px', background: 'var(--input-bg)', borderRadius: '10px', padding: '3px' }}>
+                <button onClick={() => setCapMode('camera')} style={{ flex: 1, padding: '8px', borderRadius: '6px', fontSize: '12px', fontWeight: 700, border: 'none', background: capMode === 'camera' ? 'var(--card)' : 'transparent', color: capMode === 'camera' ? 'var(--text-primary)' : 'var(--text-muted)' }}>Camera</button>
+                <button onClick={() => { setCapMode('text'); setCapPending(null); }} style={{ flex: 1, padding: '8px', borderRadius: '6px', fontSize: '12px', fontWeight: 700, border: 'none', background: capMode === 'text' ? 'var(--card)' : 'transparent', color: capMode === 'text' ? 'var(--text-primary)' : 'var(--text-muted)' }}>Type</button>
+              </div>
+            )}
+
+            {capStage !== 'review' ? (
+              <>
+                <div style={{ fontSize: '12px', fontWeight: 700, color: 'var(--text-primary)', marginBottom: '8px' }}>
+                  Step {CAP_ORDER.indexOf(capStage) + 1} of 3 — scan the <span style={{ color: 'var(--orange)' }}>{CAP_LABELS[capStage]}</span>
+                </div>
+                {capMode === 'camera' ? (
+                  <div>
+                    <VinScanner onScan={(val) => { setCapError(''); setCapPending(val); }} continuous paused={!!capPending} validate={CAP_VALIDATORS[capStage]} scanLabel={CAP_LABELS[capStage]} theme={theme as unknown as Record<string, string>} />
+                    {capPending && (
+                      <div style={{ marginTop: '8px', padding: '14px', borderRadius: '12px', background: 'var(--success-bg)', border: '1px solid var(--success-border)' }}>
+                        <div style={{ fontSize: '10px', fontWeight: 700, color: 'var(--text-muted)', textTransform: 'uppercase', marginBottom: '4px' }}>Captured {CAP_LABELS[capStage]}</div>
+                        <div style={{ fontSize: '16px', fontWeight: 800, fontFamily: 'monospace', color: 'var(--text-primary)', marginBottom: '10px', wordBreak: 'break-all' }}>{capPending}</div>
+                        <div style={{ display: 'flex', gap: '8px' }}>
+                          <button onClick={capConfirm} style={{ flex: 1, padding: '14px', borderRadius: '10px', fontSize: '15px', fontWeight: 800, background: 'var(--success)', color: '#fff', border: 'none', cursor: 'pointer' }}>{capStage === 'iccid' ? 'Confirm — Review' : 'Confirm & Next'}</button>
+                          <button onClick={() => { setCapPending(null); setCapError(''); }} style={{ padding: '14px 18px', borderRadius: '10px', fontSize: '13px', fontWeight: 700, background: 'transparent', border: '1px solid var(--border)', color: 'var(--text-muted)', cursor: 'pointer' }}>Rescan</button>
+                        </div>
+                      </div>
+                    )}
+                  </div>
+                ) : (
+                  <div style={{ display: 'flex', gap: '8px' }}>
+                    <input value={capManual} onChange={e => setCapManual(e.target.value.toUpperCase())} onKeyDown={e => { if (e.key === 'Enter' && capManual.trim()) capManualSubmit(); }} placeholder={`Scan or type ${CAP_LABELS[capStage]}...`} autoFocus style={{ flex: 1, padding: '14px 16px', borderRadius: '12px', fontSize: '16px', fontFamily: 'monospace', fontWeight: 700, border: '1px solid var(--border)', background: 'var(--input-bg)', color: 'var(--text-primary)' }} />
+                    <button onClick={capManualSubmit} disabled={!capManual.trim()} style={{ padding: '14px 20px', borderRadius: '12px', fontSize: '15px', fontWeight: 800, background: capManual.trim() ? 'var(--orange)' : 'var(--border)', color: '#fff', border: 'none', cursor: capManual.trim() ? 'pointer' : 'default' }}>Next</button>
+                  </div>
+                )}
+              </>
+            ) : (
+              <div style={{ padding: '14px', borderRadius: '12px', background: 'var(--input-bg)', border: '1px solid var(--border)' }}>
+                <div style={{ fontSize: '11px', fontWeight: 800, color: 'var(--text-primary)', textTransform: 'uppercase', marginBottom: '10px' }}>Review device</div>
+                {CAP_ORDER.map(f => (
+                  <div key={f} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '6px 0', borderBottom: '1px solid var(--border)' }}>
+                    <div>
+                      <div style={{ fontSize: '9px', fontWeight: 800, color: 'var(--text-muted)', textTransform: 'uppercase' }}>{CAP_LABELS[f]}</div>
+                      <div style={{ fontSize: '13px', fontWeight: 700, fontFamily: 'monospace', color: 'var(--text-primary)', wordBreak: 'break-all' }}>{capData[f] || '—'}</div>
+                    </div>
+                    <button onClick={() => { setCapStage(f); setCapPending(null); setCapManual(''); setCapError(''); }} style={{ padding: '4px 10px', borderRadius: '6px', fontSize: '10px', fontWeight: 700, background: 'var(--subtle-bg)', border: '1px solid var(--border)', color: 'var(--text-secondary)', cursor: 'pointer' }}>Redo</button>
+                  </div>
+                ))}
+                <button onClick={capSubmit} disabled={updating} style={{ width: '100%', marginTop: '12px', padding: '14px', borderRadius: '10px', fontSize: '15px', fontWeight: 800, background: updating ? 'var(--text-muted)' : 'var(--success)', color: '#fff', border: 'none', cursor: updating ? 'default' : 'pointer' }}>{updating ? 'Saving...' : 'Log & Complete VIN'}</button>
+              </div>
+            )}
+
+            {capError && (
+              <div style={{ marginTop: '10px', padding: '8px 12px', borderRadius: '8px', background: 'var(--error-bg)', border: '1px solid var(--error-border)', color: 'var(--error)', fontSize: '12px', fontWeight: 600 }}>{capError}</div>
+            )}
+          </div>
+        </div>
+      )}
 
       <div style={{ height: '80px' }} />
     </div>

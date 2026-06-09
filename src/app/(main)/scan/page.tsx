@@ -7,6 +7,7 @@ import { useAuth } from '@/components/AuthProvider';
 import { theme } from '@/lib/theme';
 import VinScanner from '@/components/VinScanner';
 import { locationBillingOverride } from '@/lib/scan-billing';
+import { VERIZON_RFID_PART, normalizePartNumber, validateSerial, validateImei, validateIccid } from '@/lib/rfid';
 
 interface Part {
   id: string;
@@ -37,32 +38,15 @@ interface ScanEntry {
 
 // Verizon RFID installs get an extra capture flow: after the VIN, the
 // installer scans three device identifiers off the unit's label (serial,
-// IMEI, ICCID). This is gated to exactly this part number — every other part
-// keeps the plain VIN flow.
-const VERIZON_RFID_PART = '06CS901033';
-// Part numbers visually conflate O/0; normalize before comparing.
-const normalizePartNumber = (s: string) => (s || '').toUpperCase().replace(/O/g, '0').replace(/\s+/g, '');
-
-// The three device identifiers, scanned in order after the VIN.
+// IMEI, ICCID). This is gated to exactly VERIZON_RFID_PART — every other part
+// keeps the plain VIN flow. The part constant and field validators live in
+// @/lib/rfid so the CNI installer flow and server route share them.
 type RfidStage = 'vin' | 'serial' | 'imei' | 'iccid' | 'review';
 const RFID_ORDER: Exclude<RfidStage, 'review'>[] = ['vin', 'serial', 'imei', 'iccid'];
 const RFID_LABELS: Record<Exclude<RfidStage, 'review'>, string> = {
   vin: 'VIN', serial: 'Serial # (SN)', imei: 'IMEI', iccid: 'CCID (ICCID)',
 };
-// Per-field acceptance. `vin` uses the scanner's built-in VIN validation
-// (no override), so it's absent here. Each returns the cleaned value or null.
-const validateSerial = (raw: string): string | null => {
-  const c = raw.trim().toUpperCase().replace(/[^A-Z0-9]/g, '');
-  return c.length >= 4 ? c : null;
-};
-const validateImei = (raw: string): string | null => {
-  const d = raw.replace(/\D/g, '');
-  return d.length === 15 ? d : null;
-};
-const validateIccid = (raw: string): string | null => {
-  const d = raw.replace(/\D/g, '');
-  return d.length >= 18 && d.length <= 22 ? d : null;
-};
+// `vin` uses the scanner's built-in VIN validation (no override), so it's absent here.
 const RFID_VALIDATORS: Record<Exclude<RfidStage, 'review' | 'vin'>, (raw: string) => string | null> = {
   serial: validateSerial, imei: validateImei, iccid: validateIccid,
 };
