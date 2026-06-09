@@ -5,10 +5,19 @@ import { isValidVIN } from '@/lib/vin-decoder';
 import { lockOrientation } from '@/lib/orientation-lock';
 
 interface VinScannerProps {
-  /** Called when a valid 17-char VIN is scanned */
-  onScan: (vin: string) => void;
+  /** Called when a value is accepted (a valid VIN by default, or whatever `validate` accepts) */
+  onScan: (value: string) => void;
   /** Theme object for styling */
   theme: Record<string, string>;
+  /**
+   * Generic-capture override. When provided, the scanner stops checking for a
+   * 17-char VIN and instead asks `validate` what to do with each decoded
+   * barcode: return the cleaned string to accept it, or null to reject and
+   * keep scanning. Used to capture non-VIN identifiers (serial, IMEI, ICCID).
+   */
+  validate?: (raw: string) => string | null;
+  /** Short label for what's being scanned (e.g. "IMEI"), shown in the camera overlay. */
+  scanLabel?: string;
   /**
    * Continuous (multi-scan) mode. When true, the camera stays on after a
    * scan instead of stopping, so the user can scan vehicle after vehicle
@@ -33,7 +42,7 @@ interface VinScannerProps {
  * - Torch (flashlight) toggle
  * - Continuous + single-shot autofocus attempts
  */
-export default function VinScanner({ onScan, theme, continuous = false, paused = false }: VinScannerProps) {
+export default function VinScanner({ onScan, theme, continuous = false, paused = false, validate, scanLabel }: VinScannerProps) {
   const [cameraActive, setCameraActive] = useState(false);
   const [cameraError, setCameraError] = useState('');
   const [scanCount, setScanCount] = useState(0);
@@ -52,6 +61,20 @@ export default function VinScanner({ onScan, theme, continuous = false, paused =
   const scanCountRef = useRef(0);
   const zxingReaderRef = useRef<any>(null);
   const nativeDetectorRef = useRef<any>(null);
+
+  // The scan loop is wired up once in startCamera, so it would otherwise close
+  // over the first render's props. Mirror the props that processResult needs
+  // into refs and keep them fresh, so changing `validate`/`onScan` mid-stream
+  // (e.g. advancing VIN → serial → IMEI → ICCID) takes effect without
+  // remounting and restarting the camera.
+  const onScanRef = useRef(onScan);
+  const validateRef = useRef(validate);
+  const continuousRef = useRef(continuous);
+  useEffect(() => {
+    onScanRef.current = onScan;
+    validateRef.current = validate;
+    continuousRef.current = continuous;
+  });
 
   // Cleanup on unmount
   useEffect(() => {
@@ -280,6 +303,22 @@ export default function VinScanner({ onScan, theme, continuous = false, paused =
   // ── Process a decoded string ──
   const processResult = (rawText: string) => {
     if (foundRef.current || Date.now() < cooldownUntilRef.current) return;
+
+    // Generic-capture mode (serial / IMEI / ICCID): the caller decides what's
+    // acceptable. Don't apply VIN-charset stripping — these identifiers are
+    // digits or arbitrary alphanumerics, not VINs.
+    const validateFn = validateRef.current;
+    if (validateFn) {
+      const accepted = validateFn(rawText);
+      setLastScanned(rawText.trim().toUpperCase());
+      if (accepted) {
+        foundRef.current = true;
+        if (!continuousRef.current) stopCamera();
+        onScanRef.current(accepted);
+      }
+      return;
+    }
+
     const clean = rawText.trim().toUpperCase().replace(/[^A-HJ-NPR-Z0-9]/g, '');
     setLastScanned(clean);
     if (clean.length === 17 && isValidVIN(clean)) {
@@ -287,8 +326,8 @@ export default function VinScanner({ onScan, theme, continuous = false, paused =
       // One-shot flows stop the camera after a scan. Continuous mode leaves
       // it running — the parent confirms/logs, then clears `paused` to scan
       // the next vehicle without a remount.
-      if (!continuous) stopCamera();
-      onScan(clean);
+      if (!continuousRef.current) stopCamera();
+      onScanRef.current(clean);
     }
   };
 
@@ -363,6 +402,16 @@ export default function VinScanner({ onScan, theme, continuous = false, paused =
           border: '3px solid rgba(238,49,32,0.7)', borderRadius: '10px', pointerEvents: 'none',
           boxShadow: '0 0 20px rgba(238,49,32,0.2)',
         }} />
+
+        {/* What we're scanning (generic-capture mode) */}
+        {scanLabel && !paused && (
+          <div style={{
+            position: 'absolute', top: '50%', left: '50%', transform: 'translate(-50%, -64px)',
+            padding: '4px 12px', borderRadius: '20px', background: 'rgba(238,49,32,0.85)',
+            color: '#fff', fontSize: '12px', fontWeight: 800, letterSpacing: '0.5px',
+            pointerEvents: 'none', whiteSpace: 'nowrap',
+          }}>Scan {scanLabel}</div>
+        )}
 
         {/* Paused overlay — shown while the parent confirms the captured VIN */}
         {paused && (

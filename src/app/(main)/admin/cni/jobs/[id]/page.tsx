@@ -4,6 +4,7 @@ import { useState, useEffect } from 'react';
 import { useRouter, useParams } from 'next/navigation';
 import { createClient } from '@/lib/supabase-browser';
 import { useAuth } from '@/components/AuthProvider';
+import PartPicker, { type PickedPart } from '@/components/PartPicker';
 
 interface CniJob {
   id: string;
@@ -12,6 +13,9 @@ interface CniJob {
   description: string | null;
   scope: string | null;
   customer_name: string | null;
+  part_number: string | null;
+  part_description: string | null;
+  billable_customer: string | null;
   address: any;
   site_contact_name: string | null;
   site_contact_phone: string | null;
@@ -142,6 +146,15 @@ export default function CniJobDetailPage() {
     loadJob();
   // eslint-disable-next-line react-hooks/exhaustive-deps -- intentional: load once on mount
   }, [isAdmin, jobId]);
+
+  const savePart = async (p: PickedPart | null) => {
+    await supabase.from('cni_jobs').update({
+      part_number: p?.part_number || null,
+      part_description: p?.part_description || null,
+      billable_customer: p?.billable_customer || null,
+    }).eq('id', jobId);
+    await loadJob();
+  };
 
   const loadJob = async () => {
     const { data: jobData } = await supabase
@@ -578,6 +591,21 @@ export default function CniJobDetailPage() {
             </div>
           </div>
         )}
+      </div>
+
+      {/* Part */}
+      <div style={{
+        padding: '14px 16px', borderRadius: '12px', marginBottom: '14px',
+        background: 'var(--card)', border: '1px solid var(--border)',
+      }}>
+        <div style={{ fontSize: '12px', fontWeight: 700, color: 'var(--text-muted)', marginBottom: '4px' }}>PART</div>
+        <div style={{ fontSize: '11px', color: 'var(--text-muted)', marginBottom: '10px' }}>
+          Completed VINs log to the scan log under this part. The Verizon RFID part (06CS901033) prompts the installer to scan SN / IMEI / CCID.
+        </div>
+        <PartPicker
+          value={job.part_number ? { part_number: job.part_number, part_description: job.part_description, billable_customer: job.billable_customer } : null}
+          onChange={savePart}
+        />
       </div>
 
       {/* VINs */}

@@ -4,6 +4,7 @@ import { useState, useEffect } from 'react';
 import { useRouter } from 'next/navigation';
 import { createClient } from '@/lib/supabase-browser';
 import { useAuth } from '@/components/AuthProvider';
+import PartPicker, { type PickedPart } from '@/components/PartPicker';
 
 interface InstallerOption {
   id: string;
@@ -29,6 +30,9 @@ export default function CreateCniJobPage() {
   const [budget, setBudget] = useState('');
   const [deadline, setDeadline] = useState('');
   const [estimatedHours, setEstimatedHours] = useState('');
+
+  // Part (drives scan_logs logging + Verizon RFID device capture on completion)
+  const [part, setPart] = useState<PickedPart | null>(null);
 
   // Location
   const [street, setStreet] = useState('');
@@ -118,6 +122,9 @@ export default function CreateCniJobPage() {
           description: description.trim() || null,
           scope: scope.trim() || null,
           customer_name: customerName.trim() || null,
+          part_number: part?.part_number || null,
+          part_description: part?.part_description || null,
+          billable_customer: part?.billable_customer || null,
           budget: budget ? parseFloat(budget) : null,
           deadline: deadline || null,
           estimated_hours: estimatedHours ? parseFloat(estimatedHours) : null,
@@ -235,6 +242,15 @@ export default function CreateCniJobPage() {
           <label style={labelStyle}>Deadline</label>
           <input style={inputStyle} type="date" value={deadline} onChange={e => setDeadline(e.target.value)} />
         </div>
+      </div>
+
+      {/* Part */}
+      <div style={sectionStyle}>
+        <div style={sectionTitle}>Part</div>
+        <div style={{ fontSize: '12px', color: 'var(--text-muted)', marginBottom: '10px' }}>
+          Setting a part logs each completed VIN to the scan log. The Verizon RFID part (06CS901033) prompts the installer to scan SN / IMEI / CCID.
+        </div>
+        <PartPicker value={part} onChange={setPart} inputStyle={inputStyle} />
       </div>
 
       {/* Install Location */}

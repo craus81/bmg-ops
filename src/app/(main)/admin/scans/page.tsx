@@ -18,6 +18,9 @@ interface ScanLog {
   part_description: string | null;
   billable_customer: string | null;
   unit_number: string | null;
+  serial_number: string | null;
+  imei: string | null;
+  iccid: string | null;
   location_name: string | null;
   po_id: string | null;
   po_number: string | null;
@@ -284,11 +287,12 @@ export default function AdminScansPage() {
     if (toExport.length === 0) return;
     setExporting(true);
 
-    const headers = ['VIN', 'Year', 'Make', 'Model', 'Part Number', 'Description', 'Billable Customer', 'Unit #', 'Location', 'PO Number', 'Scanned By', 'Date'];
+    const headers = ['VIN', 'Year', 'Make', 'Model', 'Part Number', 'Description', 'Billable Customer', 'Unit #', 'Serial #', 'IMEI', 'CCID', 'Location', 'PO Number', 'Scanned By', 'Date'];
     const rows = toExport.map(s => [
       s.vin, s.vehicle_year || '', s.vehicle_make || '', s.vehicle_model || '',
       s.part_number || '', s.part_description || '', s.billable_customer || '',
-      s.unit_number || '', s.location_name || '', s.po_number || '',
+      s.unit_number || '', s.serial_number || '', s.imei || '', s.iccid || '',
+      s.location_name || '', s.po_number || '',
       profiles[s.scanned_by || ''] || '', new Date(s.scanned_at).toLocaleString(),
     ]);
 
@@ -503,8 +507,8 @@ export default function AdminScansPage() {
   const [editingScan, setEditingScan] = useState<ScanLog | null>(null);
   const saveEditScan = async () => {
     if (!editingScan) return;
-    const { id, vin, vehicle_year, vehicle_make, vehicle_model, part_number, part_description, billable_customer, unit_number, location_name } = editingScan;
-    await supabase.from('scan_logs').update({ vin, vehicle_year, vehicle_make, vehicle_model, part_number, part_description, billable_customer, unit_number, location_name }).eq('id', id);
+    const { id, vin, vehicle_year, vehicle_make, vehicle_model, part_number, part_description, billable_customer, unit_number, serial_number, imei, iccid, location_name } = editingScan;
+    await supabase.from('scan_logs').update({ vin, vehicle_year, vehicle_make, vehicle_model, part_number, part_description, billable_customer, unit_number, serial_number: serial_number || null, imei: imei || null, iccid: iccid || null, location_name }).eq('id', id);
     setEditingScan(null);
     loadAll();
   };
@@ -1886,6 +1890,26 @@ export default function AdminScansPage() {
                 <input value={editingScan.location_name || ''} onChange={e => setEditingScan({ ...editingScan, location_name: e.target.value })} style={{ width: '100%', padding: '8px', borderRadius: '6px', border: `1px solid ${theme.border}`, background: 'var(--input-bg)', color: 'var(--text-primary)', fontSize: '12px' }} />
               </div>
             </div>
+
+            {/* Verizon RFID device identifiers — shown for the Verizon part or any
+                scan that already carries device data. */}
+            {((editingScan.part_number || '').toUpperCase().replace(/O/g, '0').replace(/\s+/g, '') === '06CS901033'
+              || editingScan.serial_number || editingScan.imei || editingScan.iccid) && (
+              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: '8px', marginBottom: '12px' }}>
+                <div>
+                  <div style={{ fontSize: '9px', fontWeight: 700, color: 'var(--text-muted)', textTransform: 'uppercase', marginBottom: '2px' }}>Serial # (SN)</div>
+                  <input value={editingScan.serial_number || ''} onChange={e => setEditingScan({ ...editingScan, serial_number: e.target.value.toUpperCase() })} style={{ width: '100%', padding: '8px', borderRadius: '6px', border: `1px solid ${theme.border}`, background: 'var(--input-bg)', color: 'var(--text-primary)', fontSize: '12px', fontFamily: 'monospace' }} />
+                </div>
+                <div>
+                  <div style={{ fontSize: '9px', fontWeight: 700, color: 'var(--text-muted)', textTransform: 'uppercase', marginBottom: '2px' }}>IMEI</div>
+                  <input value={editingScan.imei || ''} onChange={e => setEditingScan({ ...editingScan, imei: e.target.value })} style={{ width: '100%', padding: '8px', borderRadius: '6px', border: `1px solid ${theme.border}`, background: 'var(--input-bg)', color: 'var(--text-primary)', fontSize: '12px', fontFamily: 'monospace' }} />
+                </div>
+                <div>
+                  <div style={{ fontSize: '9px', fontWeight: 700, color: 'var(--text-muted)', textTransform: 'uppercase', marginBottom: '2px' }}>CCID</div>
+                  <input value={editingScan.iccid || ''} onChange={e => setEditingScan({ ...editingScan, iccid: e.target.value })} style={{ width: '100%', padding: '8px', borderRadius: '6px', border: `1px solid ${theme.border}`, background: 'var(--input-bg)', color: 'var(--text-primary)', fontSize: '12px', fontFamily: 'monospace' }} />
+                </div>
+              </div>
+            )}
             <div style={{ display: 'flex', gap: '8px' }}>
               <button onClick={() => setEditingScan(null)} style={{ flex: 1, padding: '10px', borderRadius: '8px', fontSize: '12px', fontWeight: 700, background: 'transparent', border: `1px solid ${theme.border}`, color: 'var(--text-body)', cursor: 'pointer' }}>Cancel</button>
               <button onClick={saveEditScan} style={{ flex: 1, padding: '10px', borderRadius: '8px', fontSize: '12px', fontWeight: 700, background: '#22c55e', color: '#fff', border: 'none', cursor: 'pointer' }}>Save</button>
