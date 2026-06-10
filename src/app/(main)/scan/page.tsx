@@ -6,8 +6,9 @@ import { storage } from '@/lib/storage';
 import { useAuth } from '@/components/AuthProvider';
 import { theme } from '@/lib/theme';
 import VinScanner from '@/components/VinScanner';
+import RfidCapture, { type RfidCompletion } from '@/components/RfidCapture';
 import { locationBillingOverride } from '@/lib/scan-billing';
-import { VERIZON_RFID_PART, normalizePartNumber, validateSerial, validateImei, validateIccid } from '@/lib/rfid';
+import { VERIZON_RFID_PART, normalizePartNumber } from '@/lib/rfid';
 
 interface Part {
   id: string;
@@ -36,20 +37,9 @@ interface ScanEntry {
   scanned_at: string;
 }
 
-// Verizon RFID installs get an extra capture flow: after the VIN, the
-// installer scans three device identifiers off the unit's label (serial,
-// IMEI, ICCID). This is gated to exactly VERIZON_RFID_PART — every other part
-// keeps the plain VIN flow. The part constant and field validators live in
-// @/lib/rfid so the CNI installer flow and server route share them.
-type RfidStage = 'vin' | 'serial' | 'imei' | 'iccid' | 'review';
-const RFID_ORDER: Exclude<RfidStage, 'review'>[] = ['vin', 'serial', 'imei', 'iccid'];
-const RFID_LABELS: Record<Exclude<RfidStage, 'review'>, string> = {
-  vin: 'VIN', serial: 'Serial # (SN)', imei: 'IMEI', iccid: 'CCID (ICCID)',
-};
-// `vin` uses the scanner's built-in VIN validation (no override), so it's absent here.
-const RFID_VALIDATORS: Record<Exclude<RfidStage, 'review' | 'vin'>, (raw: string) => string | null> = {
-  serial: validateSerial, imei: validateImei, iccid: validateIccid,
-};
+// Verizon RFID installs (VERIZON_RFID_PART) get an extra capture flow handled by
+// the shared <RfidCapture> component — VIN then serial / IMEI / CCID. Every
+// other part keeps the plain VIN flow below.
 
 export default function ScanPage() {
   const { user } = useAuth();
@@ -83,14 +73,6 @@ export default function ScanPage() {
   const vinRef = useRef<HTMLInputElement>(null);
   const unitRef = useRef<HTMLInputElement>(null);
   const [scanMode, setScanMode] = useState<'text' | 'camera'>('text');
-
-  // Verizon RFID multi-field capture (only active for VERIZON_RFID_PART).
-  const [rfidStage, setRfidStage] = useState<Exclude<RfidStage, never>>('vin');
-  const [rfidData, setRfidData] = useState<{ vin?: string; serial?: string; imei?: string; iccid?: string }>({});
-  // Value captured by the camera for the current stage, awaiting confirmation.
-  const [rfidPending, setRfidPending] = useState<string | null>(null);
-  const [rfidManual, setRfidManual] = useState('');
-  const rfidManualRef = useRef<HTMLInputElement>(null);
 
   // Part files/proofs
   const [partProofs, setPartProofs] = useState<{ file_name: string; storage_path: string; bucket: 'graphics-proofs' | 'proofs' }[]>([]);
@@ -145,13 +127,6 @@ export default function ScanPage() {
     }
   }, [selectedParts, customJob, customCustomer, selectedLocation]);
 
-  const resetRfid = () => {
-    setRfidStage('vin');
-    setRfidData({});
-    setRfidPending(null);
-    setRfidManual('');
-  };
-
   const endShift = () => {
     setStep('part');
     setSelectedParts([]);
@@ -163,7 +138,6 @@ export default function ScanPage() {
     setVin('');
     setUnitNumber('');
     setPendingScan(null);
-    resetRfid();
     try { localStorage.removeItem('scan_session'); } catch {}
   };
 
@@ -323,70 +297,102 @@ export default function ScanPage() {
     setScanError('');
   };
 
-  // ── Verizon RFID multi-field capture ──
-  // Camera detected a value for the current stage — hold it for confirmation.
-  const handleRfidCameraScan = (value: string) => {
-    setScanError('');
-    setScanSuccess('');
-    setRfidPending(value);
-  };
-
-  // Store the value for the current stage and advance to the next one (or to
-  // the review screen after the last field).
-  const advanceRfid = (value: string) => {
-    setRfidData(prev => ({ ...prev, [rfidStage]: value }));
-    setRfidPending(null);
-    setRfidManual('');
-    const idx = RFID_ORDER.indexOf(rfidStage as Exclude<RfidStage, 'review'>);
-    setRfidStage(idx < RFID_ORDER.length - 1 ? RFID_ORDER[idx + 1] : 'review');
-  };
-
-  const confirmRfidPending = () => {
-    if (rfidPending) advanceRfid(rfidPending);
-  };
-
-  const rescanRfid = () => {
-    setRfidPending(null);
-    setScanError('');
-  };
-
-  // Manual (typed / hardware-scanner) entry for the current stage.
-  const captureRfidManual = () => {
-    const raw = rfidManual;
-    if (rfidStage === 'review') return;
-    if (rfidStage === 'vin') {
-      const v = raw.trim().toUpperCase();
-      if (v.length < 5) { setScanError('VIN too short'); return; }
-      advanceRfid(v);
-      return;
+  // ── Unified scan logging ──
+  // Every scan (plain VIN or Verizon RFID) writes through /api/scans/log so
+  // validation, de-duplication, and company attribution live in one place
+  // (shared with the CNI flow). Offline, queue locally and sync when online.
+  const postScanRecord = async (record: any): Promise<{ ok: boolean; error?: string; id?: string }> => {
+    if (isOffline) {
+      const offlineScan = { ...record, id: crypto.randomUUID(), scanned_at: new Date().toISOString() };
+      const updated = [...pendingOfflineScans, offlineScan];
+      setPendingOfflineScans(updated);
+      try { localStorage.setItem('offline_scans', JSON.stringify(updated)); } catch {}
+      return { ok: true, id: offlineScan.id };
     }
-    const validator = RFID_VALIDATORS[rfidStage];
-    const accepted = validator(raw);
-    if (!accepted) { setScanError(`Invalid ${RFID_LABELS[rfidStage]} — check the number and try again`); return; }
-    setScanError('');
-    advanceRfid(accepted);
+    const { data: { session } } = await supabase.auth.getSession();
+    const res = await fetch('/api/scans/log', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', ...(session?.access_token ? { Authorization: `Bearer ${session.access_token}` } : {}) },
+      body: JSON.stringify(record),
+    });
+    const json = await res.json().catch(() => ({}));
+    if (!res.ok) return { ok: false, error: json.error || 'Failed to save' };
+    return { ok: true, id: json.scanLogId };
   };
 
-  // Jump back to a specific field from the review screen to re-capture it.
-  const editRfidStage = (stage: Exclude<RfidStage, 'review'>) => {
-    setRfidPending(null);
-    setRfidManual('');
-    setScanError('');
-    setRfidStage(stage);
+  // Decode the VIN, then log one row per selected part. Returns the last entry +
+  // a label for the success toast, or an error string. Owns no page state of its
+  // own (callers handle success/error UI), so it's reused by both the plain VIN
+  // flow and the Verizon RFID flow.
+  const logVehicle = async (
+    v: string,
+    unit?: string,
+    deviceFields?: { serial_number: string; imei: string; iccid: string },
+  ): Promise<{ ok: boolean; error?: string; entry?: ScanEntry; label?: string; parts: number; offline: boolean }> => {
+    const unitClean = unit?.trim() || null;
+
+    const partsToScan = selectedParts.length > 0
+      ? selectedParts.map(p => ({ partNumber: p.item_number, partDesc: p.display_name || p.description || p.item_number, billable: p.billable_customer || customCustomer || null }))
+      : [{ partNumber: customJob, partDesc: customJob, billable: customCustomer || null }];
+
+    let vehicleData: any = {};
+    try {
+      const res = await fetch(`https://vpic.nhtsa.dot.gov/api/vehicles/decodevin/${v}?format=json`);
+      const json = await res.json();
+      const results = json.Results || [];
+      const get = (id: number) => results.find((r: any) => r.VariableId === id)?.Value || null;
+      vehicleData = { vehicle_year: get(29), vehicle_make: get(26), vehicle_model: get(28), vehicle_trim: get(38), body_class: get(5) };
+    } catch {}
+
+    // Some locations bill the facility (e.g. Masterack) regardless of the part's
+    // end customer — apply that override so the scan lands under the right
+    // customer in the export/invoice flow.
+    const locationOverrideCustomer = locationBillingOverride(selectedLocation?.name);
+
+    let entry: ScanEntry | undefined;
+    for (const pt of partsToScan) {
+      const record = {
+        vin: v,
+        ...vehicleData,
+        part_number: pt.partNumber,
+        part_description: pt.partDesc,
+        billable_customer: locationOverrideCustomer ?? pt.billable,
+        unit_number: unitClean,
+        serial_number: deviceFields?.serial_number ?? null,
+        imei: deviceFields?.imei ?? null,
+        iccid: deviceFields?.iccid ?? null,
+        location_id: selectedLocation?.id || null,
+        location_name: selectedLocation?.name || null,
+      };
+      const result = await postScanRecord(record);
+      if (!result.ok) return { ok: false, error: result.error, parts: partsToScan.length, offline: isOffline };
+      entry = {
+        id: result.id || crypto.randomUUID(),
+        vin: v,
+        vehicle_year: vehicleData.vehicle_year ?? null,
+        vehicle_make: vehicleData.vehicle_make ?? null,
+        vehicle_model: vehicleData.vehicle_model ?? null,
+        unit_number: unitClean,
+        serial_number: record.serial_number,
+        imei: record.imei,
+        iccid: record.iccid,
+        scanned_at: new Date().toISOString(),
+      };
+    }
+
+    const label = [vehicleData.vehicle_year, vehicleData.vehicle_make, vehicleData.vehicle_model].filter(Boolean).join(' ') || (isOffline ? v : 'Scan logged');
+    return { ok: true, entry, label, parts: partsToScan.length, offline: isOffline };
   };
 
-  // Log the completed device record (VIN + all three identifiers).
-  const logRfid = async () => {
-    const { vin: rVin, serial, imei, iccid } = rfidData;
-    if (!rVin || !serial || !imei || !iccid) {
-      setScanError('Missing one or more required fields');
-      return;
-    }
-    const ok = await processVin(rVin, unitNumber, { serial_number: serial, imei, iccid });
-    if (ok) {
-      resetRfid();
-      setUnitNumber('');
-    }
+  // Verizon RFID capture finished — log it. Returns an error string for the
+  // <RfidCapture> review screen, or null on success.
+  const handleRfidComplete = async (d: RfidCompletion): Promise<string | null> => {
+    const r = await logVehicle(d.vin, d.unit_number || undefined, { serial_number: d.serial_number, imei: d.imei, iccid: d.iccid });
+    if (!r.ok) return r.error || 'Failed to save';
+    if (r.entry) setScans(prev => [r.entry!, ...prev]);
+    const unitSuffix = d.unit_number ? ` · Unit ${d.unit_number}` : '';
+    setScanSuccess(`${r.offline ? 'Saved offline: ' : ''}${r.label}${unitSuffix}`);
+    return null;
   };
 
   const handleScan = async () => {
@@ -404,102 +410,13 @@ export default function ScanPage() {
     setScanError('');
     setScanSuccess('');
     setVinLoading(true);
-    const unitClean = unit?.trim() || null;
-
-    // Build list of parts to scan (multiple parts = multiple records)
-    const partsToScan = selectedParts.length > 0
-      ? selectedParts.map(p => ({ partNumber: p.item_number, partDesc: p.display_name || p.description || p.item_number, billable: p.billable_customer || customCustomer || null }))
-      : [{ partNumber: customJob, partDesc: customJob, billable: customCustomer || null }];
-
-    // Check for duplicate VIN+part combos
-    for (const pt of partsToScan) {
-      const { data: existing } = await supabase.from('scan_logs').select('id, scanned_at').eq('vin', v).eq('part_number', pt.partNumber).limit(1);
-      if (existing && existing.length > 0) {
-        setScanError(`Duplicate — ${v} already scanned for ${pt.partNumber} on ${new Date(existing[0].scanned_at).toLocaleDateString()}`);
-        setVinLoading(false);
-        return false;
-      }
-    }
-
-    // IMEI uniquely identifies a device — guard against logging the same unit
-    // twice (e.g. re-scanning a vehicle that's already in the system).
-    if (deviceFields?.imei) {
-      const { data: dupImei } = await supabase.from('scan_logs').select('id, scanned_at').eq('imei', deviceFields.imei).limit(1);
-      if (dupImei && dupImei.length > 0) {
-        setScanError(`Duplicate — IMEI ${deviceFields.imei} already logged on ${new Date(dupImei[0].scanned_at).toLocaleDateString()}`);
-        setVinLoading(false);
-        return false;
-      }
-    }
-
-    let vehicleData: any = {};
-    try {
-      const res = await fetch(`https://vpic.nhtsa.dot.gov/api/vehicles/decodevin/${v}?format=json`);
-      const json = await res.json();
-      const results = json.Results || [];
-      const get = (id: number) => results.find((r: any) => r.VariableId === id)?.Value || null;
-      vehicleData = {
-        vehicle_year: get(29),
-        vehicle_make: get(26),
-        vehicle_model: get(28),
-        vehicle_trim: get(38),
-        body_class: get(5),
-      };
-    } catch {}
-
-    let lastData: any = null;
-    let lastError: any = null;
-
-    // Some locations bill the facility (e.g. Masterack) regardless of the
-    // part's end customer — apply that override so the scan_log lands under
-    // the right customer in the export/invoice flow.
-    const locationOverrideCustomer = locationBillingOverride(selectedLocation?.name);
-
-    for (const pt of partsToScan) {
-      const scanData = {
-        vin: v,
-        ...vehicleData,
-        part_number: pt.partNumber,
-        part_description: pt.partDesc,
-        billable_customer: locationOverrideCustomer ?? pt.billable,
-        unit_number: unitClean,
-        serial_number: deviceFields?.serial_number ?? null,
-        imei: deviceFields?.imei ?? null,
-        iccid: deviceFields?.iccid ?? null,
-        location_id: selectedLocation?.id || null,
-        location_name: selectedLocation?.name || null,
-        scanned_by: user?.id,
-      };
-
-      if (isOffline) {
-        const offlineScan = { ...scanData, id: crypto.randomUUID(), scanned_at: new Date().toISOString() };
-        const updated = [...pendingOfflineScans, offlineScan];
-        setPendingOfflineScans(updated);
-        try { localStorage.setItem('offline_scans', JSON.stringify(updated)); } catch {}
-        lastData = offlineScan;
-      } else {
-        const { data, error } = await supabase.from('scan_logs').insert(scanData).select('id, vin, vehicle_year, vehicle_make, vehicle_model, unit_number, serial_number, imei, iccid, scanned_at').single();
-        if (error) lastError = error;
-        else lastData = data;
-      }
-    }
-
-    const unitSuffix = unitClean ? ` · Unit ${unitClean}` : '';
-    if (isOffline && lastData) {
-      setScans(prev => [lastData as ScanEntry, ...prev]);
-      setScanSuccess(`Saved offline: ${[vehicleData.vehicle_year, vehicleData.vehicle_make, vehicleData.vehicle_model].filter(Boolean).join(' ') || v}${unitSuffix} (${partsToScan.length} part${partsToScan.length > 1 ? 's' : ''})`);
-    } else if (lastError) {
-      setScanError('Failed to save: ' + lastError.message);
-      setVinLoading(false);
-      return false;
-    } else if (lastData) {
-      setScans(prev => [lastData as ScanEntry, ...prev]);
-      const label = [vehicleData.vehicle_year, vehicleData.vehicle_make, vehicleData.vehicle_model].filter(Boolean).join(' ') || 'Scan logged';
-      setScanSuccess(`${label}${unitSuffix}${partsToScan.length > 1 ? ` (${partsToScan.length} parts)` : ''}`);
-    }
-
-    setVin('');
+    const r = await logVehicle(v, unit, deviceFields);
     setVinLoading(false);
+    if (!r.ok) { setScanError(r.error || 'Failed to save'); return false; }
+    if (r.entry) setScans(prev => [r.entry!, ...prev]);
+    const unitSuffix = unit?.trim() ? ` · Unit ${unit.trim()}` : '';
+    setScanSuccess(`${r.offline ? 'Saved offline: ' : ''}${r.label}${unitSuffix}${r.parts > 1 ? ` (${r.parts} parts)` : ''}`);
+    setVin('');
     setTimeout(() => vinRef.current?.focus(), 100);
     return true;
   };
@@ -510,9 +427,11 @@ export default function ScanPage() {
       if (!cached) return;
       const offlineScans = JSON.parse(cached);
       if (offlineScans.length === 0) return;
+      const { data: { session } } = await supabase.auth.getSession();
+      const headers = { 'Content-Type': 'application/json', ...(session?.access_token ? { Authorization: `Bearer ${session.access_token}` } : {}) };
       for (const scan of offlineScans) {
         const { id, scanned_at, ...rest } = scan;
-        await supabase.from('scan_logs').insert({ ...rest, scanned_at });
+        await fetch('/api/scans/log', { method: 'POST', headers, body: JSON.stringify(rest) }).catch(() => {});
       }
       localStorage.removeItem('offline_scans');
       setPendingOfflineScans([]);
@@ -732,7 +651,7 @@ export default function ScanPage() {
               <span style={{ fontWeight: 700, color: '#60a5fa' }}>{scans.length} scanned today</span>
             </div>
             <div style={{ display: 'flex', gap: '6px', marginTop: '6px' }}>
-              <button onClick={() => { setStep('part'); setSelectedParts([]); setCustomJob(''); setCustomCustomer(''); setSelectedLocation(null); setScans([]); setShowCustom(false); setPendingScan(null); setUnitNumber(''); resetRfid(); try { localStorage.removeItem('scan_session'); } catch {} }} style={{
+              <button onClick={() => { setStep('part'); setSelectedParts([]); setCustomJob(''); setCustomCustomer(''); setSelectedLocation(null); setScans([]); setShowCustom(false); setPendingScan(null); setUnitNumber(''); try { localStorage.removeItem('scan_session'); } catch {} }} style={{
                 padding: '4px 10px', borderRadius: '6px', fontSize: '10px', fontWeight: 700,
                 background: 'rgba(107,114,128,0.08)', border: '1px solid rgba(107,114,128,0.2)',
                 color: '#6b7280', cursor: 'pointer',
@@ -773,141 +692,30 @@ export default function ScanPage() {
             </div>
           )}
 
-          {/* Camera / Text toggle */}
-          <div style={{ display: 'flex', gap: '4px', marginBottom: '10px', background: theme.card, borderRadius: '10px', padding: '3px' }}>
-            <button onClick={() => setScanMode('camera')} style={{
-              flex: 1, padding: '8px', borderRadius: '6px', fontSize: '12px', fontWeight: 700,
-              background: scanMode === 'camera' ? 'var(--tab-active-bg)' : 'transparent', border: 'none',
-              color: scanMode === 'camera' ? 'var(--tab-active-color)' : theme.textMuted,
-            }}>Camera</button>
-            <button onClick={() => { setScanMode('text'); discardPendingScan(); }} style={{
-              flex: 1, padding: '8px', borderRadius: '6px', fontSize: '12px', fontWeight: 700,
-              background: scanMode === 'text' ? 'var(--tab-active-bg)' : 'transparent', border: 'none',
-              color: scanMode === 'text' ? 'var(--tab-active-color)' : theme.textMuted,
-            }}>Type / Scanner</button>
-          </div>
+          {/* Camera / Text toggle (the RFID flow has its own inside the component) */}
+          {!isVerizonRfid && (
+            <div style={{ display: 'flex', gap: '4px', marginBottom: '10px', background: theme.card, borderRadius: '10px', padding: '3px' }}>
+              <button onClick={() => setScanMode('camera')} style={{
+                flex: 1, padding: '8px', borderRadius: '6px', fontSize: '12px', fontWeight: 700,
+                background: scanMode === 'camera' ? 'var(--tab-active-bg)' : 'transparent', border: 'none',
+                color: scanMode === 'camera' ? 'var(--tab-active-color)' : theme.textMuted,
+              }}>Camera</button>
+              <button onClick={() => { setScanMode('text'); discardPendingScan(); }} style={{
+                flex: 1, padding: '8px', borderRadius: '6px', fontSize: '12px', fontWeight: 700,
+                background: scanMode === 'text' ? 'var(--tab-active-bg)' : 'transparent', border: 'none',
+                color: scanMode === 'text' ? 'var(--tab-active-color)' : theme.textMuted,
+              }}>Type / Scanner</button>
+            </div>
+          )}
 
           {isVerizonRfid ? (
             <div style={{ marginBottom: '10px' }}>
-              {/* Progress: VIN → SN → IMEI → CCID. Tap a captured field to redo it. */}
-              <div style={{ display: 'flex', gap: '6px', marginBottom: '10px', flexWrap: 'wrap' }}>
-                {RFID_ORDER.map(st => {
-                  const val = rfidData[st];
-                  const isCurrent = rfidStage === st;
-                  return (
-                    <button key={st} onClick={() => editRfidStage(st)} disabled={!val && !isCurrent} style={{
-                      flex: '1 1 0', minWidth: '70px', padding: '8px 6px', borderRadius: '8px', textAlign: 'left',
-                      border: `1px solid ${val ? 'rgba(34,197,94,0.4)' : isCurrent ? 'rgba(59,130,246,0.5)' : theme.border}`,
-                      background: val ? 'rgba(34,197,94,0.06)' : isCurrent ? 'rgba(59,130,246,0.08)' : theme.card,
-                      cursor: (val || isCurrent) ? 'pointer' : 'default', opacity: (val || isCurrent) ? 1 : 0.5,
-                    }}>
-                      <div style={{ fontSize: '9px', fontWeight: 800, letterSpacing: '0.4px', color: theme.textMuted, textTransform: 'uppercase' }}>{RFID_LABELS[st]}</div>
-                      <div style={{ fontSize: '11px', fontWeight: 700, fontFamily: 'monospace', color: val ? '#22c55e' : theme.textMuted, marginTop: '2px', wordBreak: 'break-all' }}>
-                        {val ? (val.length > 10 ? `…${val.slice(-9)}` : val) : isCurrent ? 'scanning…' : '—'}
-                      </div>
-                    </button>
-                  );
-                })}
-              </div>
-
-              {rfidStage !== 'review' ? (
-                <>
-                  <div style={{ fontSize: '12px', fontWeight: 700, color: theme.textPrimary, marginBottom: '8px' }}>
-                    Step {RFID_ORDER.indexOf(rfidStage as Exclude<RfidStage, 'review'>) + 1} of 4 — scan the <span style={{ color: '#60a5fa' }}>{RFID_LABELS[rfidStage]}</span>
-                  </div>
-
-                  {scanMode === 'camera' ? (
-                    <div>
-                      <VinScanner
-                        onScan={handleRfidCameraScan}
-                        continuous
-                        paused={!!rfidPending}
-                        validate={rfidStage === 'vin' ? undefined : RFID_VALIDATORS[rfidStage as Exclude<RfidStage, 'review' | 'vin'>]}
-                        scanLabel={RFID_LABELS[rfidStage]}
-                        theme={theme as unknown as Record<string, string>}
-                      />
-
-                      {rfidPending && (
-                        <div style={{ marginTop: '8px', padding: '14px', borderRadius: '12px', background: 'rgba(34,197,94,0.06)', border: '1px solid rgba(34,197,94,0.3)' }}>
-                          <div style={{ fontSize: '10px', fontWeight: 700, color: theme.textMuted, textTransform: 'uppercase', letterSpacing: '0.5px', marginBottom: '4px' }}>
-                            Captured {RFID_LABELS[rfidStage]}
-                          </div>
-                          <div style={{ fontSize: '16px', fontWeight: 800, fontFamily: 'monospace', letterSpacing: '1px', color: theme.textPrimary, marginBottom: '10px', wordBreak: 'break-all' }}>
-                            {rfidPending}
-                          </div>
-                          <div style={{ display: 'flex', gap: '8px' }}>
-                            <button onClick={confirmRfidPending} style={{
-                              flex: 1, padding: '14px', borderRadius: '10px', fontSize: '15px', fontWeight: 800,
-                              background: '#22c55e', color: '#fff', border: 'none', cursor: 'pointer',
-                            }}>{rfidStage === 'iccid' ? 'Confirm — Review' : 'Confirm & Next'}</button>
-                            <button onClick={rescanRfid} style={{
-                              padding: '14px 18px', borderRadius: '10px', fontSize: '13px', fontWeight: 700,
-                              background: 'transparent', border: `1px solid ${theme.border}`, color: theme.textMuted, cursor: 'pointer',
-                            }}>Rescan</button>
-                          </div>
-                        </div>
-                      )}
-                    </div>
-                  ) : (
-                    <div style={{ display: 'flex', gap: '8px', marginBottom: '10px' }}>
-                      <input
-                        ref={rfidManualRef}
-                        value={rfidManual}
-                        onChange={e => setRfidManual(e.target.value.toUpperCase())}
-                        onKeyDown={e => { if (e.key === 'Enter' && rfidManual.trim()) captureRfidManual(); }}
-                        placeholder={`Scan or type ${RFID_LABELS[rfidStage]}...`}
-                        autoFocus
-                        style={{
-                          flex: 1, padding: '14px 16px', borderRadius: '12px', fontSize: '16px',
-                          fontFamily: 'monospace', fontWeight: 700, letterSpacing: '1px',
-                          border: `1px solid ${theme.border}`, background: theme.card, color: theme.textPrimary,
-                        }}
-                      />
-                      <button onClick={captureRfidManual} disabled={!rfidManual.trim()} style={{
-                        padding: '14px 20px', borderRadius: '12px', fontSize: '15px', fontWeight: 800,
-                        background: !rfidManual.trim() ? theme.border : theme.navy, color: '#fff', border: 'none',
-                        cursor: !rfidManual.trim() ? 'default' : 'pointer', opacity: !rfidManual.trim() ? 0.5 : 1,
-                      }}>Next</button>
-                    </div>
-                  )}
-                </>
-              ) : (
-                <div style={{ padding: '14px', borderRadius: '12px', background: 'rgba(59,130,246,0.06)', border: '1px solid rgba(59,130,246,0.2)' }}>
-                  <div style={{ fontSize: '11px', fontWeight: 800, color: theme.textPrimary, textTransform: 'uppercase', letterSpacing: '0.5px', marginBottom: '10px' }}>
-                    Review device
-                  </div>
-                  {RFID_ORDER.map(st => (
-                    <div key={st} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '6px 0', borderBottom: `1px solid ${theme.border}` }}>
-                      <div>
-                        <div style={{ fontSize: '9px', fontWeight: 800, color: theme.textMuted, textTransform: 'uppercase', letterSpacing: '0.4px' }}>{RFID_LABELS[st]}</div>
-                        <div style={{ fontSize: '13px', fontWeight: 700, fontFamily: 'monospace', color: theme.textPrimary, wordBreak: 'break-all' }}>{rfidData[st] || '—'}</div>
-                      </div>
-                      <button onClick={() => editRfidStage(st)} style={{
-                        padding: '4px 10px', borderRadius: '6px', fontSize: '10px', fontWeight: 700,
-                        background: 'rgba(107,114,128,0.08)', border: '1px solid rgba(107,114,128,0.2)', color: '#6b7280', cursor: 'pointer', flexShrink: 0,
-                      }}>Redo</button>
-                    </div>
-                  ))}
-                  <div style={{ fontSize: '10px', fontWeight: 700, color: theme.textMuted, textTransform: 'uppercase', letterSpacing: '0.5px', margin: '10px 0 4px' }}>
-                    Unit # (optional)
-                  </div>
-                  <input
-                    value={unitNumber}
-                    onChange={e => setUnitNumber(e.target.value)}
-                    onKeyDown={e => { if (e.key === 'Enter' && !vinLoading) logRfid(); }}
-                    placeholder="e.g. 4012"
-                    style={{
-                      width: '100%', padding: '12px 14px', borderRadius: '10px', fontSize: '15px', fontWeight: 700,
-                      border: `1px solid ${theme.border}`, background: theme.card, color: theme.textPrimary, marginBottom: '10px',
-                    }}
-                  />
-                  <button onClick={logRfid} disabled={vinLoading} style={{
-                    width: '100%', padding: '14px', borderRadius: '10px', fontSize: '15px', fontWeight: 800,
-                    background: vinLoading ? theme.border : '#22c55e', color: '#fff', border: 'none',
-                    cursor: vinLoading ? 'default' : 'pointer', opacity: vinLoading ? 0.6 : 1,
-                  }}>{vinLoading ? 'Saving...' : 'Log & Scan Next'}</button>
-                </div>
-              )}
+              <RfidCapture
+                includeVin
+                showUnit
+                onComplete={handleRfidComplete}
+                theme={theme as unknown as Record<string, string>}
+              />
             </div>
           ) : scanMode === 'camera' ? (
             <div style={{ marginBottom: '10px' }}>

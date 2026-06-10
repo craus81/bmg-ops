@@ -3,6 +3,7 @@ import { createClient } from '@supabase/supabase-js';
 import { requireAuth } from '@/lib/api-auth';
 import { validateBody, z } from '@/lib/validate';
 import { isVerizonRfidPart, validateSerial, validateImei, validateIccid } from '@/lib/rfid';
+import { logScan, resolveScannerCompany } from '@/lib/scan-log';
 
 export const dynamic = 'force-dynamic';
 
@@ -63,55 +64,41 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ error: 'VIN not found for this job' }, { status: 404 });
   }
 
+  // Cleaned device values for mirroring onto the VIN (logScan validates again).
   const rfid = isVerizonRfidPart(job.part_number);
-  let serial: string | null = null;
-  let imei: string | null = null;
-  let iccid: string | null = null;
-
-  if (rfid) {
-    serial = validateSerial(parsed.data.serial_number || '');
-    imei = validateImei(parsed.data.imei || '');
-    iccid = validateIccid(parsed.data.iccid || '');
-    if (!serial || !imei || !iccid) {
-      return NextResponse.json({ error: 'Serial, IMEI, and CCID are all required and must be valid' }, { status: 400 });
-    }
-    // IMEI uniquely identifies a device — guard against re-logging it.
-    const { data: dupImei } = await supabase
-      .from('scan_logs').select('id').eq('imei', imei).limit(1);
-    if (dupImei && dupImei.length > 0) {
-      return NextResponse.json({ error: `IMEI ${imei} is already logged` }, { status: 409 });
-    }
+  const serial = rfid ? validateSerial(parsed.data.serial_number || '') : null;
+  const imei = rfid ? validateImei(parsed.data.imei || '') : null;
+  const iccid = rfid ? validateIccid(parsed.data.iccid || '') : null;
+  if (rfid && (!serial || !imei || !iccid)) {
+    return NextResponse.json({ error: 'Serial, IMEI, and CCID are all required and must be valid' }, { status: 400 });
   }
 
-  // Log to scan_logs (only when the job has a part and this VIN isn't already
-  // logged). Idempotent: re-completing won't create a second row.
+  // Log to scan_logs via the shared helper (same logic as the main scan page).
+  // Only when the job has a part and this VIN isn't already logged — idempotent.
+  const scanner = job.assigned_installer_id || auth.user.id;
   let scanLogId: string | null = vin.scan_log_id;
   if (job.part_number && !vin.scan_log_id) {
     const addr = (job.address || {}) as { city?: string; state?: string };
     const locationName = [addr.city, addr.state].filter(Boolean).join(', ') || job.title || null;
+    const company = await resolveScannerCompany(supabase, scanner);
 
-    const { data: logged, error: logErr } = await supabase
-      .from('scan_logs')
-      .insert({
-        vin: vin.vin,
-        vehicle_year: vin.vehicle_year,
-        vehicle_make: vin.vehicle_make,
-        vehicle_model: vin.vehicle_model,
-        part_number: job.part_number,
-        part_description: job.part_description,
-        billable_customer: job.billable_customer,
-        serial_number: serial,
-        imei,
-        iccid,
-        location_name: locationName,
-        scanned_by: job.assigned_installer_id || auth.user.id,
-      })
-      .select('id')
-      .single();
-    if (logErr) {
-      return NextResponse.json({ error: 'Failed to log scan: ' + logErr.message }, { status: 500 });
+    const result = await logScan(supabase, scanner, company, {
+      vin: vin.vin,
+      vehicle_year: vin.vehicle_year,
+      vehicle_make: vin.vehicle_make,
+      vehicle_model: vin.vehicle_model,
+      part_number: job.part_number,
+      part_description: job.part_description,
+      billable_customer: job.billable_customer,
+      serial_number: serial,
+      imei,
+      iccid,
+      location_name: locationName,
+    });
+    if (!result.ok) {
+      return NextResponse.json({ error: result.error }, { status: result.status });
     }
-    scanLogId = logged.id;
+    scanLogId = result.scanLogId;
   }
 
   // Mark the VIN complete and mirror the captured identifiers onto it.
