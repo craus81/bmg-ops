@@ -98,6 +98,7 @@ export default function ScanPage() {
     } catch {}
 
     // Restore active session (part + location)
+    let restoredJob = false;
     try {
       const session = localStorage.getItem('scan_session');
       if (session) {
@@ -107,9 +108,10 @@ export default function ScanPage() {
         if (s.customJob) { setCustomJob(s.customJob); setShowCustom(true); }
         if (s.customCustomer) { setCustomCustomer(s.customCustomer); }
         if (s.selectedLocation) { setSelectedLocation(s.selectedLocation); }
-        if (s.selectedParts?.length || s.selectedPart || s.customJob) { setStep(s.selectedLocation ? 'scan' : 'location'); }
+        if (s.selectedParts?.length || s.selectedPart || s.customJob) { setStep(s.selectedLocation ? 'scan' : 'location'); restoredJob = true; }
       }
     } catch {}
+    if (!restoredJob) prefillCustomJobDefaults();
 
     return () => {
       window.removeEventListener('offline', handleOffline);
@@ -127,6 +129,26 @@ export default function ScanPage() {
     }
   }, [selectedParts, customJob, customCustomer, selectedLocation]);
 
+  // Stopgap while the CNI custom-job process is in flux: remember the last
+  // custom job/customer beyond End Shift / Switch Part (scan_session only
+  // survives within a shift) so the part number doesn't get retyped every
+  // shift. Overwritten the next time a custom job is continued.
+  const saveCustomJobDefaults = () => {
+    try { localStorage.setItem('custom_job_defaults', JSON.stringify({ customJob, customCustomer })); } catch {}
+  };
+  const prefillCustomJobDefaults = () => {
+    try {
+      const raw = localStorage.getItem('custom_job_defaults');
+      if (!raw) return;
+      const d = JSON.parse(raw);
+      if (d.customJob) {
+        setCustomJob(d.customJob);
+        setCustomCustomer(d.customCustomer || '');
+        setShowCustom(true);
+      }
+    } catch {}
+  };
+
   const endShift = () => {
     setStep('part');
     setSelectedParts([]);
@@ -139,6 +161,7 @@ export default function ScanPage() {
     setUnitNumber('');
     setPendingScan(null);
     try { localStorage.removeItem('scan_session'); } catch {}
+    prefillCustomJobDefaults();
   };
 
   // Two catalogs feed the picker:
@@ -592,7 +615,7 @@ export default function ScanPage() {
                 border: `1px solid ${theme.border}`, background: 'var(--input-bg)',
                 color: theme.textPrimary, fontWeight: 600, marginBottom: '10px',
               }} />
-              <button onClick={() => { if (customJob.trim()) setStep('location'); }} disabled={!customJob.trim()} style={{
+              <button onClick={() => { if (customJob.trim()) { saveCustomJobDefaults(); setStep('location'); } }} disabled={!customJob.trim()} style={{
                 width: '100%', padding: '12px', borderRadius: '10px', fontSize: '14px', fontWeight: 800,
                 background: customJob.trim() ? theme.navy : theme.border, color: '#fff', border: 'none',
                 cursor: customJob.trim() ? 'pointer' : 'default', opacity: customJob.trim() ? 1 : 0.5,
@@ -651,7 +674,7 @@ export default function ScanPage() {
               <span style={{ fontWeight: 700, color: '#60a5fa' }}>{scans.length} scanned today</span>
             </div>
             <div style={{ display: 'flex', gap: '6px', marginTop: '6px' }}>
-              <button onClick={() => { setStep('part'); setSelectedParts([]); setCustomJob(''); setCustomCustomer(''); setSelectedLocation(null); setScans([]); setShowCustom(false); setPendingScan(null); setUnitNumber(''); try { localStorage.removeItem('scan_session'); } catch {} }} style={{
+              <button onClick={() => { setStep('part'); setSelectedParts([]); setCustomJob(''); setCustomCustomer(''); setSelectedLocation(null); setScans([]); setShowCustom(false); setPendingScan(null); setUnitNumber(''); try { localStorage.removeItem('scan_session'); } catch {} prefillCustomJobDefaults(); }} style={{
                 padding: '4px 10px', borderRadius: '6px', fontSize: '10px', fontWeight: 700,
                 background: 'rgba(107,114,128,0.08)', border: '1px solid rgba(107,114,128,0.2)',
                 color: '#6b7280', cursor: 'pointer',
