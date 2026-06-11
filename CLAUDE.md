@@ -30,12 +30,3 @@ Instead, use a branch-per-feature workflow with auto-opened PRs:
 
 Never push to `main` directly. Never force-push. Never reset local main
 to discard committed work without explicit user confirmation.
-
-## Backlog (user-approved June 2026, not yet started)
-
-From the FleetSuite improvement review:
-
-- **Tests for money-handling code**: characterization tests for
-  `src/lib/netsuite.ts`, `computeTotals` in
-  `src/app/api/estimates/route.ts`, `src/lib/parsePO.ts`,
-  `src/lib/nesting-algorithm.ts`, and `src/lib/vin-decoder.ts`.
