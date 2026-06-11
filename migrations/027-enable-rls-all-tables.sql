@@ -12,6 +12,27 @@
 -- NOTE: API routes use service_role key which bypasses RLS entirely.
 
 -- ============================================================
+-- 0a. Replay fix (June 2026 cleanup): customer_job_assignments.job_id
+-- was widened from uuid to text in production between 019 and this
+-- migration but never recorded. The polymorphic policies below compare
+-- job_id against id::text, which fails to type-check unless the column
+-- is text. Drop the 019-era policies that depend on the column first.
+-- No-op on databases where job_id is already text.
+-- ============================================================
+
+DROP POLICY IF EXISTS "Customer can read assigned vehicles" ON scanned_vehicles;
+DROP POLICY IF EXISTS "Customer can read assigned graphics jobs" ON graphics_jobs;
+DROP POLICY IF EXISTS "Customer can approve assigned vehicles" ON scanned_vehicles;
+DROP POLICY IF EXISTS "Customer can approve assigned graphics jobs" ON graphics_jobs;
+ALTER TABLE customer_job_assignments
+  ALTER COLUMN job_id TYPE text USING job_id::text;
+
+-- Also unrecorded: graphics_proofs.graphics_job_id, referenced by the
+-- graphics_proofs policies below. No-op where it already exists.
+ALTER TABLE graphics_proofs
+  ADD COLUMN IF NOT EXISTS graphics_job_id uuid REFERENCES graphics_jobs(id);
+
+-- ============================================================
 -- 0. Enable RLS on ALL tables first
 -- ============================================================
 
