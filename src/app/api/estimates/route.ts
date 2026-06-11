@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { createClient } from '@supabase/supabase-js';
-import { requireAuth } from '@/lib/api-auth';
+import { requireStaff } from '@/lib/api-auth';
 import { validateBody, z } from '@/lib/validate';
 
 export const dynamic = 'force-dynamic';
@@ -75,7 +75,7 @@ function computeTotals(lines: any[], taxRate: number, taxExempt: boolean, laborR
 
 // GET — list estimates
 export async function GET(req: NextRequest) {
-  const auth = await requireAuth(req);
+  const auth = await requireStaff(req);
   if (auth.error) return auth.error;
 
   try {
@@ -101,7 +101,7 @@ export async function GET(req: NextRequest) {
 
 // POST — create or update estimate
 export async function POST(req: NextRequest) {
-  const auth = await requireAuth(req);
+  const auth = await requireStaff(req);
   if (auth.error) return auth.error;
 
   const parsed = await validateBody(req, UpsertEstimateSchema);
@@ -247,7 +247,7 @@ export async function POST(req: NextRequest) {
 
 // DELETE — delete an estimate (also deletes from NetSuite if pushed)
 export async function DELETE(req: NextRequest) {
-  const auth = await requireAuth(req);
+  const auth = await requireStaff(req);
   if (auth.error) return auth.error;
 
   const parsed = await validateBody(req, DeleteSchema);

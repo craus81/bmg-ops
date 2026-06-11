@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { createClient } from '@supabase/supabase-js';
-import { requireAuth } from '@/lib/api-auth';
+import { requireStaff } from '@/lib/api-auth';
 import { validateBody, z } from '@/lib/validate';
 
 const supabase = createClient(
@@ -47,7 +47,7 @@ const UpdateProspectSchema = z
 
 /** GET /api/prospects — list all prospects */
 export async function GET(req: NextRequest) {
-  const auth = await requireAuth(req);
+  const auth = await requireStaff(req);
   if (auth.error) return auth.error;
 
   const { data, error } = await supabase
@@ -61,7 +61,7 @@ export async function GET(req: NextRequest) {
 
 /** POST /api/prospects — create a new prospect */
 export async function POST(req: NextRequest) {
-  const auth = await requireAuth(req);
+  const auth = await requireStaff(req);
   if (auth.error) return auth.error;
 
   const parsed = await validateBody(req, CreateProspectSchema);
@@ -93,7 +93,7 @@ export async function POST(req: NextRequest) {
 
 /** PUT /api/prospects — update a prospect */
 export async function PUT(req: NextRequest) {
-  const auth = await requireAuth(req);
+  const auth = await requireStaff(req);
   if (auth.error) return auth.error;
 
   const parsed = await validateBody(req, UpdateProspectSchema);
@@ -113,7 +113,7 @@ export async function PUT(req: NextRequest) {
 
 /** DELETE /api/prospects — delete a prospect */
 export async function DELETE(req: NextRequest) {
-  const auth = await requireAuth(req);
+  const auth = await requireStaff(req);
   if (auth.error) return auth.error;
 
   const { searchParams } = new URL(req.url);

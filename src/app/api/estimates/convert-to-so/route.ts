@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { createSalesOrder, findLocation, suiteqlQuery } from '@/lib/netsuite';
 import { createClient } from '@supabase/supabase-js';
-import { requireAuth } from '@/lib/api-auth';
+import { requireStaff } from '@/lib/api-auth';
 import { validateBody, z } from '@/lib/validate';
 import { safeStringLiteral } from '@/lib/sql-safe';
 
@@ -29,7 +29,7 @@ async function findCustomItemId(): Promise<string | null> {
 }
 
 export async function POST(req: NextRequest) {
-  const auth = await requireAuth(req);
+  const auth = await requireStaff(req);
   if (auth.error) return auth.error;
 
   const parsed = await validateBody(req, ConvertSchema);

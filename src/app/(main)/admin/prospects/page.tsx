@@ -8,6 +8,7 @@ import { theme } from '@/lib/theme';
 import NetSuitePdf from '@/components/NetSuitePdf';
 import DropboxProofSearch from '@/components/DropboxProofSearch';
 import { exportProspectPDF } from '@/lib/prospect-pdf';
+import { downloadXlsx } from '@/lib/xlsx-export';
 
 interface Prospect {
   id: string;
@@ -657,7 +658,6 @@ export default function ProspectsPage() {
   const exportToExcel = async () => {
     setExporting(true);
     try {
-      const XLSX = await import('xlsx');
       const rows = sorted.map(p => {
         const m = customerMetrics[p.id];
         return {
@@ -681,11 +681,8 @@ export default function ProspectsPage() {
           'Has Open Quote': openQuoteCustomers.has((p.company_name || '').toLowerCase()) ? 'Y' : '',
         };
       });
-      const ws = XLSX.utils.json_to_sheet(rows);
-      const wb = XLSX.utils.book_new();
-      XLSX.utils.book_append_sheet(wb, ws, 'CRM');
       const today = new Date().toISOString().split('T')[0];
-      XLSX.writeFile(wb, `crm-export-${today}.xlsx`);
+      await downloadXlsx(rows, { sheetName: 'CRM', filename: `crm-export-${today}.xlsx` });
     } catch (err: any) {
       console.error('[crm export] failed:', err);
       alert(`Export failed: ${err?.message || err}`);

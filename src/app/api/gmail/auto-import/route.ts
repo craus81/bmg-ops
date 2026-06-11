@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { searchPOEmails, getMessage, getPdfAttachments, getHeader } from '@/lib/google';
 import { createClient } from '@supabase/supabase-js';
+import { requireAdmin } from '@/lib/api-auth';
 
 // This route is called by Vercel Cron every hour
 // It searches Gmail for new PO emails and auto-imports them
@@ -34,15 +35,15 @@ async function recordRun(
 }
 
 export async function GET(req: NextRequest) {
-  // Verify cron secret (optional security)
+  // Allow Vercel Cron with the shared secret; anyone else needs an admin
+  // session (manual trigger from the POs page). Fails closed if CRON_SECRET
+  // is not configured.
   const authHeader = req.headers.get('authorization');
   const cronSecret = process.env.CRON_SECRET;
-  if (cronSecret && authHeader !== `Bearer ${cronSecret}`) {
-    // Allow without secret for manual triggers from the app
-    const isManual = req.nextUrl.searchParams.get('manual') === 'true';
-    if (!isManual) {
-      return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
-    }
+  const isCron = !!cronSecret && authHeader === `Bearer ${cronSecret}`;
+  if (!isCron) {
+    const auth = await requireAdmin(req);
+    if (auth.error) return auth.error;
   }
 
   const supabase = createClient(

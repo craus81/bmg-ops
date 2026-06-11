@@ -4,6 +4,7 @@ import { useState, useEffect } from 'react';
 import { useRouter } from 'next/navigation';
 import { createClient } from '@/lib/supabase-browser';
 import { useAuth } from '@/components/AuthProvider';
+import { downloadXlsx } from '@/lib/xlsx-export';
 
 export default function ReportsPage() {
   const router = useRouter();
@@ -254,39 +255,40 @@ export default function ReportsPage() {
     return v.po_line_items?.purchase_orders?.po_number || '';
   }
 
+  var VEHICLE_COL_WIDTHS = [14, 20, 16, 16, 18, 16, 6, 14, 16, 12, 40];
+
+  function vehicleExportRows(list: any[]) {
+    var baseUrl = window.location.origin;
+    return list.map(function(v: any) {
+      var scanDate = new Date(v.scanned_at);
+      return {
+        'PO Number': getPONumber(v),
+        'VIN': v.vin,
+        'Part Number': v.part_number || '',
+        'Customer': v.customer || '',
+        'End Customer': v.end_customer || '',
+        'Location': v.install_location || '',
+        'Year': v.vehicle_year || '',
+        'Make': v.vehicle_make || '',
+        'Model': v.vehicle_model || '',
+        'Date Scanned': scanDate.toLocaleDateString('en-US', { year: 'numeric', month: '2-digit', day: '2-digit' }),
+        'Photos': baseUrl + '/view/' + v.id,
+      };
+    });
+  }
+
   var handleExportAll = async () => {
     if (vehicles.length === 0) return;
     setExporting(true);
     try {
-      var XLSX = await import('xlsx');
       var now = new Date();
 
-      var baseUrl = window.location.origin;
-      var rows = vehicles.map(function(v: any) {
-        var scanDate = new Date(v.scanned_at);
-        return {
-          'PO Number': getPONumber(v),
-          'VIN': v.vin,
-          'Part Number': v.part_number || '',
-          'Customer': v.customer || '',
-          'End Customer': v.end_customer || '',
-          'Location': v.install_location || '',
-          'Year': v.vehicle_year || '',
-          'Make': v.vehicle_make || '',
-          'Model': v.vehicle_model || '',
-          'Date Scanned': scanDate.toLocaleDateString('en-US', { year: 'numeric', month: '2-digit', day: '2-digit' }),
-          'Photos': baseUrl + '/view/' + v.id,
-        };
-      });
-
-      var ws = XLSX.utils.json_to_sheet(rows);
-      ws['!cols'] = [{ wch: 14 }, { wch: 20 }, { wch: 16 }, { wch: 16 }, { wch: 18 }, { wch: 16 }, { wch: 6 }, { wch: 14 }, { wch: 16 }, { wch: 12 }, { wch: 40 }];
-      var wb = XLSX.utils.book_new();
-      XLSX.utils.book_append_sheet(wb, ws, 'Vehicles');
-
       var dateStr = now.toISOString().slice(0, 10);
-      var filename = 'BMG-Export-' + dateStr + '.xlsx';
-      XLSX.writeFile(wb, filename);
+      await downloadXlsx(vehicleExportRows(vehicles), {
+        sheetName: 'Vehicles',
+        filename: 'BMG-Export-' + dateStr + '.xlsx',
+        colWidths: VEHICLE_COL_WIDTHS,
+      });
 
       var ids = vehicles.map(function(v: any) { return v.id; });
       await supabase
@@ -308,36 +310,15 @@ export default function ReportsPage() {
     if (!custVehicles || custVehicles.length === 0) return;
     setExporting(true);
     try {
-      var XLSX = await import('xlsx');
       var now = new Date();
-
-      var baseUrl = window.location.origin;
-      var rows = custVehicles.map(function(v: any) {
-        var scanDate = new Date(v.scanned_at);
-        return {
-          'PO Number': getPONumber(v),
-          'VIN': v.vin,
-          'Part Number': v.part_number || '',
-          'Customer': v.customer || '',
-          'End Customer': v.end_customer || '',
-          'Location': v.install_location || '',
-          'Year': v.vehicle_year || '',
-          'Make': v.vehicle_make || '',
-          'Model': v.vehicle_model || '',
-          'Date Scanned': scanDate.toLocaleDateString('en-US', { year: 'numeric', month: '2-digit', day: '2-digit' }),
-          'Photos': baseUrl + '/view/' + v.id,
-        };
-      });
-
-      var ws = XLSX.utils.json_to_sheet(rows);
-      ws['!cols'] = [{ wch: 14 }, { wch: 20 }, { wch: 16 }, { wch: 16 }, { wch: 18 }, { wch: 16 }, { wch: 6 }, { wch: 14 }, { wch: 16 }, { wch: 12 }, { wch: 40 }];
-      var wb = XLSX.utils.book_new();
-      XLSX.utils.book_append_sheet(wb, ws, 'Vehicles');
 
       var safeCustomer = customer.replace(/[^a-zA-Z0-9]/g, '_');
       var dateStr = now.toISOString().slice(0, 10);
-      var filename = 'BMG-' + safeCustomer + '-' + dateStr + '.xlsx';
-      XLSX.writeFile(wb, filename);
+      await downloadXlsx(vehicleExportRows(custVehicles), {
+        sheetName: 'Vehicles',
+        filename: 'BMG-' + safeCustomer + '-' + dateStr + '.xlsx',
+        colWidths: VEHICLE_COL_WIDTHS,
+      });
 
       var ids = custVehicles.map(function(v: any) { return v.id; });
       await supabase
@@ -360,37 +341,17 @@ export default function ReportsPage() {
 
   var handleRedownload = async (exportDate: string) => {
     try {
-      var XLSX = await import('xlsx');
       var batch = archives.filter(function(v: any) {
         return v.exported_at && v.exported_at.slice(0, 19) === exportDate.slice(0, 19);
       });
       if (batch.length === 0) return;
 
-      var baseUrl = window.location.origin;
-      var rows = batch.map(function(v: any) {
-        var scanDate = new Date(v.scanned_at);
-        return {
-          'PO Number': getPONumber(v),
-          'VIN': v.vin,
-          'Part Number': v.part_number || '',
-          'Customer': v.customer || '',
-          'End Customer': v.end_customer || '',
-          'Location': v.install_location || '',
-          'Year': v.vehicle_year || '',
-          'Make': v.vehicle_make || '',
-          'Model': v.vehicle_model || '',
-          'Date Scanned': scanDate.toLocaleDateString('en-US', { year: 'numeric', month: '2-digit', day: '2-digit' }),
-          'Photos': baseUrl + '/view/' + v.id,
-        };
-      });
-
-      var ws = XLSX.utils.json_to_sheet(rows);
-      ws['!cols'] = [{ wch: 14 }, { wch: 20 }, { wch: 16 }, { wch: 16 }, { wch: 18 }, { wch: 16 }, { wch: 6 }, { wch: 14 }, { wch: 16 }, { wch: 12 }, { wch: 40 }];
-      var wb = XLSX.utils.book_new();
-      XLSX.utils.book_append_sheet(wb, ws, 'Vehicles');
-
       var dateStr = new Date(exportDate).toISOString().slice(0, 10);
-      XLSX.writeFile(wb, 'BMG-Export-' + dateStr + '.xlsx');
+      await downloadXlsx(vehicleExportRows(batch), {
+        sheetName: 'Vehicles',
+        filename: 'BMG-Export-' + dateStr + '.xlsx',
+        colWidths: VEHICLE_COL_WIDTHS,
+      });
     } catch (e: any) {
       console.error('Re-download error:', e);
     }

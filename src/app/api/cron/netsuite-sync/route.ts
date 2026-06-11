@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { createClient } from '@supabase/supabase-js';
 import { suiteqlQueryAll } from '@/lib/netsuite';
+import { requireAdmin } from '@/lib/api-auth';
 
 export const dynamic = 'force-dynamic';
 export const maxDuration = 120;
@@ -14,14 +15,15 @@ export const maxDuration = 120;
  * Syncs: customers, prospects, contacts (with phone numbers)
  */
 export async function GET(req: NextRequest) {
-  // Verify cron secret
+  // Allow Vercel Cron with the shared secret; anyone else needs an admin
+  // session (manual trigger from the app). Fails closed if CRON_SECRET is
+  // not configured.
   const authHeader = req.headers.get('authorization');
   const cronSecret = process.env.CRON_SECRET;
-  if (cronSecret && authHeader !== `Bearer ${cronSecret}`) {
-    const isManual = req.nextUrl.searchParams.get('manual') === 'true';
-    if (!isManual) {
-      return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
-    }
+  const isCron = !!cronSecret && authHeader === `Bearer ${cronSecret}`;
+  if (!isCron) {
+    const auth = await requireAdmin(req);
+    if (auth.error) return auth.error;
   }
 
   const supabase = createClient(

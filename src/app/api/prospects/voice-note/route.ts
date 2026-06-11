@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { createClient } from '@supabase/supabase-js';
-import { requireAuth } from '@/lib/api-auth';
+import { requireStaff } from '@/lib/api-auth';
 import { validateBody, z } from '@/lib/validate';
 
 export const maxDuration = 30;
@@ -48,7 +48,7 @@ If no specific follow-up actions or dates are mentioned, return an empty actions
 Always return valid JSON, nothing else.`;
 
 export async function POST(req: NextRequest) {
-  const auth = await requireAuth(req);
+  const auth = await requireStaff(req);
   if (auth.error) return auth.error;
 
   if (!ANTHROPIC_API_KEY) {
