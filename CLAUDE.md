@@ -30,16 +30,3 @@ Instead, use a branch-per-feature workflow with auto-opened PRs:
 
 Never push to `main` directly. Never force-push. Never reset local main
 to discard committed work without explicit user confirmation.
-
-## Backlog (user-approved June 2026, not yet started)
-
-From the FleetSuite improvement review:
-
-- **Migration hygiene**: renumber the duplicate 072–078 migration files
-  (14 collisions), move the loose `*.sql` files at the repo root into
-  `migrations/`, and add a minimal migration runner (`schema_migrations`
-  table + apply script).
-- **Tests for money-handling code**: characterization tests for
-  `src/lib/netsuite.ts`, `computeTotals` in
-  `src/app/api/estimates/route.ts`, `src/lib/parsePO.ts`,
-  `src/lib/nesting-algorithm.ts`, and `src/lib/vin-decoder.ts`.
