@@ -12,6 +12,37 @@ interface Attachment {
   contentType?: string;
 }
 
+// Resend's default rate limit is 2 requests/second. Parallel fan-outs
+// (e.g. notifyMany emailing every admin about an access request) used to
+// fire all sends at once and trip 429s, so sends are serialized through
+// this queue with a minimum gap, and rate-limited sends are retried.
+const MIN_SEND_INTERVAL_MS = 600;
+const MAX_RATE_LIMIT_RETRIES = 3;
+
+let sendQueue: Promise<void> = Promise.resolve();
+let lastSendAt = 0;
+
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+function isRateLimitError(error: { name?: string } | null): boolean {
+  return error?.name === 'rate_limit_exceeded';
+}
+
+function enqueueSend<T>(task: () => Promise<T>): Promise<T> {
+  const run = sendQueue.then(async () => {
+    const wait = lastSendAt + MIN_SEND_INTERVAL_MS - Date.now();
+    if (wait > 0) await sleep(wait);
+    return task();
+  });
+  sendQueue = run.then(
+    () => undefined,
+    () => undefined
+  );
+  return run;
+}
+
 /**
  * Send an email via Resend
  * Returns true if successful, false if Resend is not configured or failed
@@ -29,21 +60,29 @@ export async function sendEmail(
   }
 
   try {
-    const { error } = await resend.emails.send({
-      from: `${fromName} <${fromEmail}>`,
-      to,
-      subject,
-      html: htmlBody,
-      text: textBody || htmlBody.replace(/<[^>]*>/g, ''),
-      ...(attachments && attachments.length > 0 ? { attachments } : {}),
+    return await enqueueSend(async () => {
+      for (let attempt = 0; ; attempt++) {
+        const { error } = await resend!.emails.send({
+          from: `${fromName} <${fromEmail}>`,
+          to,
+          subject,
+          html: htmlBody,
+          text: textBody || htmlBody.replace(/<[^>]*>/g, ''),
+          ...(attachments && attachments.length > 0 ? { attachments } : {}),
+        });
+        lastSendAt = Date.now();
+
+        if (!error) return true;
+
+        if (isRateLimitError(error) && attempt < MAX_RATE_LIMIT_RETRIES) {
+          await sleep(MIN_SEND_INTERVAL_MS * 2 ** attempt);
+          continue;
+        }
+
+        console.error('Resend email send failed:', error);
+        return false;
+      }
     });
-
-    if (error) {
-      console.error('Resend email send failed:', error);
-      return false;
-    }
-
-    return true;
   } catch (err) {
     console.error('Resend email send failed:', err);
     return false;
