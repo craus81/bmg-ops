@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { createClient } from '@supabase/supabase-js';
-import { requireAuth } from '@/lib/api-auth';
+import { requireStaff } from '@/lib/api-auth';
 import { validateBody, z } from '@/lib/validate';
 
 export const dynamic = 'force-dynamic';
@@ -197,7 +197,7 @@ async function deleteNetSuiteEstimate(config: ReturnType<typeof getNetSuiteConfi
 
 // POST — push estimate to NetSuite
 export async function POST(req: NextRequest) {
-  const auth = await requireAuth(req);
+  const auth = await requireStaff(req);
   if (auth.error) return auth.error;
 
   const parsed = await validateBody(req, PushEstimateSchema);
@@ -356,7 +356,7 @@ export async function POST(req: NextRequest) {
 
 // DELETE — delete estimate from NetSuite
 export async function DELETE(req: NextRequest) {
-  const auth = await requireAuth(req);
+  const auth = await requireStaff(req);
   if (auth.error) return auth.error;
 
   const parsed = await validateBody(req, DeleteEstimateSchema);

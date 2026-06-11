@@ -79,8 +79,18 @@ function extractAccessToken(req: NextRequest): string | null {
   return null;
 }
 
+// Roles that belong to internal BMG staff. Excludes 'customer' accounts and
+// external CNI 'installer' accounts, which must never see company-wide data.
+const INTERNAL_STAFF_ROLES = ['admin', 'sales', 'graphics_production', 'shop_tech', 'field_tech'];
+
+function profileRoles(profile: any): string[] {
+  return profile?.roles?.length > 0 ? profile.roles : [profile?.role];
+}
+
 /**
- * Verify the request has a valid authenticated session.
+ * Verify the request has a valid authenticated session AND the account has
+ * been approved by an admin. Pending, denied, and deactivated accounts are
+ * rejected. Returns the user's profile so downstream checks can reuse it.
  */
 export async function requireAuth(req: NextRequest): Promise<AuthResult> {
   try {
@@ -101,10 +111,39 @@ export async function requireAuth(req: NextRequest): Promise<AuthResult> {
       return { user: null, error: NextResponse.json({ error: 'Unauthorized' }, { status: 401 }) };
     }
 
-    return { user };
+    const service = createClient(supabaseUrl, supabaseServiceKey);
+    const { data: profile } = await service
+      .from('profiles')
+      .select('id, role, roles, status')
+      .eq('id', user.id)
+      .single();
+
+    if (!profile || profile.status !== 'approved') {
+      return { user, profile, error: NextResponse.json({ error: 'Forbidden: account not approved' }, { status: 403 }) };
+    }
+
+    return { user, profile };
   } catch {
     return { user: null, error: NextResponse.json({ error: 'Unauthorized' }, { status: 401 }) };
   }
+}
+
+/**
+ * Verify the request has a valid session AND the user is internal BMG staff.
+ * Use for routes that expose company-wide data (estimates, prospects,
+ * contacts, reports) which customer and external installer accounts must
+ * not access.
+ */
+export async function requireStaff(req: NextRequest): Promise<AuthResult> {
+  const auth = await requireAuth(req);
+  if (auth.error) return auth;
+
+  const roles = profileRoles(auth.profile);
+  if (!roles.some(r => INTERNAL_STAFF_ROLES.includes(r))) {
+    return { user: auth.user, profile: auth.profile, error: NextResponse.json({ error: 'Forbidden' }, { status: 403 }) };
+  }
+
+  return auth;
 }
 
 /**
@@ -114,23 +153,12 @@ export async function requireAdmin(req: NextRequest): Promise<AuthResult> {
   const auth = await requireAuth(req);
   if (auth.error) return auth;
 
-  const supabase = createClient(supabaseUrl, supabaseServiceKey);
-  const { data: profile } = await supabase
-    .from('profiles')
-    .select('id, role, roles, status')
-    .eq('id', auth.user.id)
-    .single();
-
-  if (!profile || profile.status !== 'approved') {
-    return { user: auth.user, error: NextResponse.json({ error: 'Unauthorized' }, { status: 403 }) };
-  }
-
-  const roles: string[] = profile.roles?.length > 0 ? profile.roles : [profile.role];
+  const roles = profileRoles(auth.profile);
   if (!roles.includes('admin')) {
-    return { user: auth.user, profile, error: NextResponse.json({ error: 'Forbidden: admin required' }, { status: 403 }) };
+    return { user: auth.user, profile: auth.profile, error: NextResponse.json({ error: 'Forbidden: admin required' }, { status: 403 }) };
   }
 
-  return { user: auth.user, profile };
+  return auth;
 }
 
 /**
@@ -140,24 +168,13 @@ export async function requireRole(req: NextRequest, allowedRoles: string[]): Pro
   const auth = await requireAuth(req);
   if (auth.error) return auth;
 
-  const supabase = createClient(supabaseUrl, supabaseServiceKey);
-  const { data: profile } = await supabase
-    .from('profiles')
-    .select('id, role, roles, status')
-    .eq('id', auth.user.id)
-    .single();
-
-  if (!profile || profile.status !== 'approved') {
-    return { user: auth.user, error: NextResponse.json({ error: 'Unauthorized' }, { status: 403 }) };
-  }
-
-  const roles: string[] = profile.roles?.length > 0 ? profile.roles : [profile.role];
-  if (roles.includes('admin')) return { user: auth.user, profile };
+  const roles = profileRoles(auth.profile);
+  if (roles.includes('admin')) return auth;
 
   const hasRole = roles.some(r => allowedRoles.includes(r));
   if (!hasRole) {
-    return { user: auth.user, profile, error: NextResponse.json({ error: 'Forbidden' }, { status: 403 }) };
+    return { user: auth.user, profile: auth.profile, error: NextResponse.json({ error: 'Forbidden' }, { status: 403 }) };
   }
 
-  return { user: auth.user, profile };
+  return auth;
 }
