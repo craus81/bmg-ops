@@ -34,6 +34,7 @@
     "@zxing/library": "^0.21.3",
     "crypto-js": "^4.2.0",
     "dotenv": "^17.3.1",
+    "exceljs": "^4.4.0",
     "googleapis": "^171.4.0",
     "html5-qrcode": "^2.3.8",
     "jspdf": "^4.2.1",
@@ -51,7 +52,6 @@
     "resend": "^6.9.4",
     "twilio": "^5.13.0",
     "web-push": "^3.6.7",
-    "xlsx": "^0.18.5",
     "zod": "^4.4.3"
   },
   "devDependencies": {

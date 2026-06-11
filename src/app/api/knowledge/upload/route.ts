@@ -25,18 +25,39 @@ async function extractDocxText(buffer: Buffer): Promise<string> {
   return result.value;
 }
 
+function xlsxCellText(value: any): string {
+  if (value === null || value === undefined) return '';
+  if (value instanceof Date) return value.toISOString();
+  if (typeof value === 'object') {
+    if ('richText' in value) return value.richText.map((r: any) => r.text || '').join('');
+    if ('result' in value) return xlsxCellText(value.result);
+    if ('text' in value) return String(value.text);
+    if ('error' in value) return String(value.error);
+    return JSON.stringify(value);
+  }
+  return String(value);
+}
+
+function csvEscape(text: string): string {
+  return /[",\n]/.test(text) ? `"${text.replace(/"/g, '""')}"` : text;
+}
+
 async function extractXlsxText(buffer: Buffer): Promise<string> {
-  const XLSX = await import('xlsx');
-  const workbook = XLSX.read(buffer, { type: 'buffer' });
+  const ExcelJS = (await import('exceljs')).default;
+  const workbook = new ExcelJS.Workbook();
+  await workbook.xlsx.load(buffer as any);
   const sheets: string[] = [];
 
-  for (const sheetName of workbook.SheetNames) {
-    const sheet = workbook.Sheets[sheetName];
-    const csv = XLSX.utils.sheet_to_csv(sheet);
-    if (csv.trim()) {
-      sheets.push(`--- Sheet: ${sheetName} ---\n${csv}`);
+  workbook.eachSheet((sheet) => {
+    const lines: string[] = [];
+    sheet.eachRow({ includeEmpty: false }, (row) => {
+      const values = (row.values as any[]).slice(1); // exceljs row values are 1-indexed
+      lines.push(values.map((v) => csvEscape(xlsxCellText(v))).join(','));
+    });
+    if (lines.length > 0) {
+      sheets.push(`--- Sheet: ${sheet.name} ---\n${lines.join('\n')}`);
     }
-  }
+  });
   return sheets.join('\n\n');
 }
 
@@ -61,8 +82,9 @@ function getExtractor(fileName: string): ((buffer: Buffer) => Promise<string> | 
   const map: Record<string, (buffer: Buffer) => Promise<string> | string> = {
     docx: extractDocxText,
     doc: extractDocxText,
+    // Legacy .xls is no longer supported — exceljs only reads .xlsx.
+    // (SheetJS xlsx was dropped for unpatched CVEs in 0.18.x.)
     xlsx: (b) => extractXlsxText(b),
-    xls: (b) => extractXlsxText(b),
     csv: extractCsvText,
     tsv: extractCsvText,
     txt: extractPlainText,
