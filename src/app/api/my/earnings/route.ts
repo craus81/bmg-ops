@@ -1,6 +1,8 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { createClient } from '@supabase/supabase-js';
 import { requireAuth } from '@/lib/api-auth';
+import { validateSearchParams, z } from '@/lib/validate';
+import { rolesOf } from '@/lib/cni-access';
 
 export const dynamic = 'force-dynamic';
 
@@ -9,21 +11,34 @@ const service = createClient(
   process.env.SUPABASE_SERVICE_ROLE_KEY!,
 );
 
+const QuerySchema = z.object({ profileId: z.string().uuid().optional() });
+
 /**
  * The signed-in user's pay credits, enriched for the My Earnings page:
  * CNI credits carry their job number/title, field credits group by part,
  * and each row knows its payout status. Strictly self-scoped — the only
  * cross-user data returned is crew size, which the user already saw when
- * the vehicle was scanned.
+ * the vehicle was scanned. Admins may pass ?profileId= to view another
+ * worker's earnings (the installer-portal preview).
  */
 export async function GET(req: NextRequest) {
   const auth = await requireAuth(req);
   if (auth.error) return auth.error;
 
+  const q = validateSearchParams(req, QuerySchema);
+  if (q.error) return q.error;
+  let target = auth.user.id;
+  if (q.data.profileId && q.data.profileId !== auth.user.id) {
+    if (!rolesOf(auth.profile).includes('admin')) {
+      return NextResponse.json({ error: 'Forbidden' }, { status: 403 });
+    }
+    target = q.data.profileId;
+  }
+
   const { data: credits } = await service
     .from('install_credits')
     .select('id, vin, part_number, source, rate_per_vehicle, share_weight, crew_size, total_weight, amount, payout_id, cni_job_vin_id, created_at')
-    .eq('profile_id', auth.user.id)
+    .eq('profile_id', target)
     .is('voided_at', null)
     .order('created_at', { ascending: false })
     .limit(1000);

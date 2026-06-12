@@ -4,6 +4,8 @@ import { useState, useEffect } from 'react';
 import { useRouter } from 'next/navigation';
 import { createClient } from '@/lib/supabase-browser';
 import { useAuth } from '@/components/AuthProvider';
+import InstallerPreviewBanner from '@/components/InstallerPreviewBanner';
+import { getInstallerPreview } from '@/lib/installer-preview';
 
 interface AvailableJob {
   id: string;
@@ -38,6 +40,9 @@ export default function AvailableJobsPage() {
   const [loading, setLoading] = useState(true);
   const [tab, setTab] = useState<'invites' | 'open'>('invites');
 
+  // Admin preview: scope invites/bids to the previewed installer.
+  const [preview] = useState(() => getInstallerPreview());
+
   useEffect(() => {
     if (!user) return;
     if (!isInstaller && !isAdmin) { router.push('/home'); return; }
@@ -47,12 +52,13 @@ export default function AvailableJobsPage() {
 
   const loadJobs = async () => {
     if (!user) return;
+    const effectiveId = (isAdmin && preview?.profileId) || user.id;
 
     // My company (may be null for unlinked profiles)
     const { data: myProfile } = await supabase
       .from('cni_profiles')
       .select('company_id')
-      .eq('user_id', user.id)
+      .eq('user_id', effectiveId)
       .maybeSingle();
     const myCompanyId: string | null = myProfile?.company_id || null;
 
@@ -61,7 +67,7 @@ export default function AvailableJobsPage() {
     const { data: directInvites } = await supabase
       .from('cni_job_invites')
       .select('id, job_id, invite_type, seen_at')
-      .eq('installer_id', user.id);
+      .eq('installer_id', effectiveId);
 
     let companyInvites: any[] = [];
     if (myCompanyId) {
@@ -102,7 +108,7 @@ export default function AvailableJobsPage() {
     const { data: myBids } = await supabase
       .from('cni_job_bids')
       .select('job_id, response, responded_at')
-      .eq('installer_id', user.id);
+      .eq('installer_id', effectiveId);
     const bidMap: Record<string, { response: string; responded_at: string }> = {};
     (myBids || []).forEach((b: any) => { bidMap[b.job_id] = { response: b.response, responded_at: b.responded_at }; });
 
@@ -114,7 +120,7 @@ export default function AvailableJobsPage() {
         .select('job_id, installer_id, response, responded_at')
         .eq('company_id', myCompanyId);
       (companyBids || []).forEach((b: any) => {
-        if (b.installer_id !== user.id) {
+        if (b.installer_id !== effectiveId) {
           companyBidMap[b.job_id] = { response: b.response, responded_at: b.responded_at };
         }
       });
@@ -167,6 +173,8 @@ export default function AvailableJobsPage() {
 
   return (
     <div>
+      <InstallerPreviewBanner preview={isAdmin ? preview : null} />
+
       {/* Header */}
       <div style={{ display: 'flex', alignItems: 'center', gap: '12px', marginBottom: '16px' }}>
         <button onClick={() => router.push('/installer')} style={{ fontSize: '20px', color: 'var(--text-muted)' }}>←</button>

@@ -137,13 +137,16 @@ export async function POST(req: NextRequest) {
   }
 
   const members = new Map<string, number>();
-  members.set(auth.user.id, 1);
   for (const m of parsed.data.members) {
     if (!allowedIds.has(m.profileId)) {
       return NextResponse.json({ error: 'One or more crew members are not eligible for this shift' }, { status: 400 });
     }
     members.set(m.profileId, m.weight ?? 1);
   }
+  // Whoever scans is on the crew — except an admin (e.g. previewing the
+  // installer portal or starting a shift on a crew's behalf), who may tag a
+  // crew that doesn't include themselves.
+  if (!isAdmin || members.size === 0) members.set(auth.user.id, members.get(auth.user.id) ?? 1);
 
   const { data: shift, error } = await service
     .from('work_shifts')

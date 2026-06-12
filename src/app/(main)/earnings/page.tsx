@@ -4,6 +4,8 @@ import { useState, useEffect } from 'react';
 import { useRouter } from 'next/navigation';
 import { createClient } from '@/lib/supabase-browser';
 import { useAuth } from '@/components/AuthProvider';
+import InstallerPreviewBanner from '@/components/InstallerPreviewBanner';
+import { getInstallerPreview } from '@/lib/installer-preview';
 
 interface EarningRow {
   id: string;
@@ -33,7 +35,9 @@ const STATUS_STYLE: Record<string, { label: string; color: string }> = {
  */
 export default function MyEarningsPage() {
   const router = useRouter();
-  const { user } = useAuth();
+  const { user, isAdmin } = useAuth();
+  // Admin preview: show the previewed installer's earnings instead.
+  const [preview] = useState(() => getInstallerPreview());
   const supabase = createClient();
   const [rows, setRows] = useState<EarningRow[]>([]);
   const [loading, setLoading] = useState(true);
@@ -43,7 +47,8 @@ export default function MyEarningsPage() {
     if (!user) return;
     (async () => {
       const { data: { session } } = await supabase.auth.getSession();
-      const res = await fetch('/api/my/earnings', {
+      const previewParam = isAdmin && preview?.profileId ? `?profileId=${preview.profileId}` : '';
+      const res = await fetch(`/api/my/earnings${previewParam}`, {
         headers: session?.access_token ? { Authorization: `Bearer ${session.access_token}` } : {},
       });
       if (res.ok) setRows((await res.json()).credits || []);
@@ -75,6 +80,8 @@ export default function MyEarningsPage() {
 
   return (
     <div>
+      <InstallerPreviewBanner preview={isAdmin ? preview : null} />
+
       <div style={{ display: 'flex', alignItems: 'center', gap: '12px', marginBottom: '16px' }}>
         <button onClick={() => router.back()} style={{ fontSize: '20px', color: 'var(--text-muted)' }}>←</button>
         <div>

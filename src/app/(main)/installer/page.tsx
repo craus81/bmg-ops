@@ -4,6 +4,8 @@ import { useState, useEffect } from 'react';
 import { useRouter } from 'next/navigation';
 import { createClient } from '@/lib/supabase-browser';
 import { useAuth } from '@/components/AuthProvider';
+import InstallerPreviewBanner from '@/components/InstallerPreviewBanner';
+import { getInstallerPreview, setInstallerPreview, type InstallerPreview } from '@/lib/installer-preview';
 
 const STATUS_LABELS: Record<string, string> = {
   awaiting_assignment: 'Awaiting Assignment',
@@ -29,29 +31,69 @@ export default function InstallerPortalPage() {
   const [readyForInstallStale, setReadyForInstallStale] = useState(0);
   const [loading, setLoading] = useState(true);
 
+  // Admin preview: scope the portal to a chosen installer (admins only).
+  const [preview, setPreview] = useState<InstallerPreview | null>(null);
+  const [previewOptions, setPreviewOptions] = useState<{ profileId: string; name: string; companyId: string | null; companyName: string | null }[]>([]);
+  const [previewSelect, setPreviewSelect] = useState('');
+
   useEffect(() => {
     if (!user) return;
     if (!isInstaller && !isAdmin) { router.push('/home'); return; }
-    loadData();
+    const p = isAdmin ? getInstallerPreview() : null;
+    setPreview(p);
+    loadData(p);
+    if (isAdmin) loadPreviewOptions();
   // eslint-disable-next-line react-hooks/exhaustive-deps -- intentional: load once on mount
   }, [user, isInstaller, isAdmin]);
 
-  const loadData = async () => {
+  const loadPreviewOptions = async () => {
+    const { data: cniProfiles } = await supabase
+      .from('cni_profiles')
+      .select('user_id, company_id, company_name');
+    if (!cniProfiles || cniProfiles.length === 0) return;
+    const { data: profiles } = await supabase
+      .from('profiles')
+      .select('id, full_name')
+      .in('id', cniProfiles.map((p: any) => p.user_id));
+    const names = new Map((profiles || []).map((p: any) => [p.id, p.full_name]));
+    setPreviewOptions(cniProfiles.map((p: any) => ({
+      profileId: p.user_id,
+      name: names.get(p.user_id) || 'Unknown',
+      companyId: p.company_id || null,
+      companyName: p.company_name || null,
+    })).sort((a: any, b: any) => a.name.localeCompare(b.name)));
+  };
+
+  const startPreview = () => {
+    const opt = previewOptions.find(o => o.profileId === previewSelect);
+    if (!opt) return;
+    const p = { profileId: opt.profileId, name: opt.name, companyId: opt.companyId };
+    setInstallerPreview(p);
+    setPreview(p);
+    setLoading(true);
+    loadData(p);
+  };
+
+  const loadData = async (p: InstallerPreview | null) => {
     if (!user) return;
+    // The installer whose portal we're showing: the previewed one (admin
+    // preview) or the signed-in user.
+    const effectiveId = p?.profileId || user.id;
 
     // Check if CNI profile exists
     const { data: profile } = await supabase
       .from('cni_profiles')
       .select('id, profile_complete, company_id')
-      .eq('user_id', user.id)
+      .eq('user_id', effectiveId)
       .single();
-    setHasProfile(!!profile);
+    setHasProfile(!!profile || !!p);
 
     // Load my jobs: assigned to my company (any installer at the company
     // works company jobs) or directly to me (legacy / pre-company jobs).
-    const orFilter = profile?.company_id
-      ? `assigned_installer_id.eq.${user.id},assigned_company_id.eq.${profile.company_id}`
-      : `assigned_installer_id.eq.${user.id}`;
+    const companyId = profile?.company_id || p?.companyId || null;
+    const orFilter = companyId
+      ? `assigned_installer_id.eq.${effectiveId},assigned_company_id.eq.${companyId}`
+      : `assigned_installer_id.eq.${effectiveId}`;
     const { data: jobsData } = await supabase
       .from('cni_jobs')
       .select('id, job_number, title, status, customer_name, deadline, confirmed_schedule_start')
@@ -63,7 +105,7 @@ export default function InstallerPortalPage() {
     const { count: invCount } = await supabase
       .from('cni_job_invites')
       .select('*', { count: 'exact', head: true })
-      .eq('installer_id', user.id)
+      .eq('installer_id', effectiveId)
       .is('seen_at', null);
     setInviteCount(invCount || 0);
 
@@ -107,8 +149,52 @@ export default function InstallerPortalPage() {
         Certified Network Installer
       </div>
 
+      <InstallerPreviewBanner preview={preview} />
+
+      {/* Admin with no preview: pick an installer to view the portal as */}
+      {isAdmin && !preview && (
+        <div style={{
+          padding: '14px 16px', borderRadius: '14px', marginBottom: '16px',
+          background: 'color-mix(in srgb, #a78bfa 8%, var(--card))', border: '1px solid #a78bfa',
+        }}>
+          <div style={{ fontSize: '12px', fontWeight: 800, color: '#a78bfa', marginBottom: '4px' }}>ADMIN PREVIEW</div>
+          <div style={{ fontSize: '12px', color: 'var(--text-muted)', marginBottom: '10px' }}>
+            You&apos;re signed in as an admin, so this portal is empty. Pick a CNI installer to see
+            the portal exactly as they do — their company&apos;s jobs, shifts, and earnings.
+          </div>
+          <div style={{ display: 'flex', gap: '8px' }}>
+            <select
+              value={previewSelect}
+              onChange={e => setPreviewSelect(e.target.value)}
+              style={{
+                flex: 1, padding: '10px 12px', borderRadius: '10px', fontSize: '13px', fontWeight: 600,
+                border: '1px solid var(--border)', background: 'var(--input-bg)', color: 'var(--text-body)',
+              }}
+            >
+              <option value="">Choose an installer…</option>
+              {previewOptions.map(o => (
+                <option key={o.profileId} value={o.profileId}>
+                  {o.name}{o.companyName ? ` — ${o.companyName}` : ''}
+                </option>
+              ))}
+            </select>
+            <button
+              onClick={startPreview}
+              disabled={!previewSelect}
+              style={{
+                padding: '10px 16px', borderRadius: '10px', fontSize: '13px', fontWeight: 700,
+                background: previewSelect ? '#a78bfa' : 'var(--text-muted)', color: '#fff', border: 'none',
+                cursor: previewSelect ? 'pointer' : 'default',
+              }}
+            >
+              Preview
+            </button>
+          </div>
+        </div>
+      )}
+
       {/* Profile prompt */}
-      {!hasProfile && (
+      {!hasProfile && !isAdmin && (
         <button
           onClick={() => router.push('/installer/profile')}
           style={{
