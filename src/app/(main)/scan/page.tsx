@@ -853,6 +853,11 @@ export default function ScanPage() {
                   background: 'rgba(59,130,246,0.08)', border: '1px solid rgba(59,130,246,0.2)',
                   color: '#60a5fa', cursor: 'pointer',
                 }}>{crewInfo?.shift ? 'Edit' : 'Tag Crew'}</button>
+                <a href="/earnings" style={{
+                  padding: '2px 8px', borderRadius: '6px', fontSize: '10px', fontWeight: 700,
+                  background: 'rgba(34,197,94,0.08)', border: '1px solid rgba(34,197,94,0.2)',
+                  color: '#22c55e', textDecoration: 'none',
+                }}>My Earnings</a>
               </div>
             )}
             <div style={{ display: 'flex', gap: '6px', marginTop: '6px' }}>

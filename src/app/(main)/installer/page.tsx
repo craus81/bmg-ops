@@ -233,6 +233,17 @@ export default function InstallerPortalPage() {
           <div style={{ fontSize: '12px', fontWeight: 700, color: 'var(--text-primary)' }}>My Jobs</div>
           <div style={{ fontSize: '11px', color: 'var(--text-muted)' }}>{jobs.length} total</div>
         </button>
+        <button
+          onClick={() => router.push('/earnings')}
+          style={{
+            padding: '14px 12px', borderRadius: '12px', textAlign: 'left',
+            background: 'var(--card)', border: '1px solid var(--border)',
+          }}
+        >
+          <div style={{ fontSize: '12px', fontWeight: 700, color: 'var(--text-muted)', marginBottom: '6px' }}>Pay</div>
+          <div style={{ fontSize: '12px', fontWeight: 700, color: 'var(--text-primary)' }}>My Earnings</div>
+          <div style={{ fontSize: '11px', color: 'var(--text-muted)' }}>per-vehicle pay</div>
+        </button>
       </div>
 
       {/* Active Jobs */}
