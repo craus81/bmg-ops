@@ -2,6 +2,7 @@ node_modules/
 .next
 .vercel
 .env*.local
+tsconfig.tsbuildinfo
 
 # Capacitor native build artifacts
 ios/App/Pods/
