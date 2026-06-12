@@ -304,5 +304,7 @@ Reopening a completed VIN (or archiving/deleting a scan) voids its credits.
   yet, and who sets those up?
 - Does the U-Haul rate vary by vehicle type (box truck vs van vs trailer)? If
   so the rate table needs a second dimension (rate per part + vehicle class).
-- Backfill check: are existing `company_name` values clean enough to key the
-  migration on, or do a few need manual merging first (typos/variants)?
+
+**Resolved:** existing `company_name` values are clean — new employees are
+assigned to a company from a dropdown rather than free-typed — so the
+backfill can key on the exact string with no manual merge pass.
