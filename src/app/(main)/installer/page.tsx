@@ -47,21 +47,25 @@ export default function InstallerPortalPage() {
   }, [user, isInstaller, isAdmin]);
 
   const loadPreviewOptions = async () => {
-    const { data: cniProfiles } = await supabase
-      .from('cni_profiles')
-      .select('user_id, company_id, company_name');
-    if (!cniProfiles || cniProfiles.length === 0) return;
+    // Installer profiles + their company (profiles.company_id → companies).
     const { data: profiles } = await supabase
       .from('profiles')
-      .select('id, full_name')
-      .in('id', cniProfiles.map((p: any) => p.user_id));
-    const names = new Map((profiles || []).map((p: any) => [p.id, p.full_name]));
-    setPreviewOptions(cniProfiles.map((p: any) => ({
-      profileId: p.user_id,
-      name: names.get(p.user_id) || 'Unknown',
+      .select('id, full_name, company_id, role, roles')
+      .or('role.eq.installer,roles.cs.{installer}')
+      .order('full_name');
+    if (!profiles || profiles.length === 0) return;
+    const companyIds = [...new Set(profiles.map((p: any) => p.company_id).filter(Boolean))];
+    const companyNames = new Map<string, string>();
+    if (companyIds.length > 0) {
+      const { data: comps } = await supabase.from('companies').select('id, name').in('id', companyIds);
+      (comps || []).forEach((c: any) => companyNames.set(c.id, c.name));
+    }
+    setPreviewOptions(profiles.map((p: any) => ({
+      profileId: p.id,
+      name: p.full_name || 'Unknown',
       companyId: p.company_id || null,
-      companyName: p.company_name || null,
-    })).sort((a: any, b: any) => a.name.localeCompare(b.name)));
+      companyName: p.company_id ? (companyNames.get(p.company_id) || null) : null,
+    })));
   };
 
   const startPreview = () => {
@@ -80,13 +84,20 @@ export default function InstallerPortalPage() {
     // preview) or the signed-in user.
     const effectiveId = p?.profileId || user.id;
 
-    // Check if CNI profile exists
+    // The effective installer's company comes from their profile (the shared
+    // companies list assigned at access-granting), with the preview's company
+    // as a fallback.
     const { data: profile } = await supabase
-      .from('cni_profiles')
-      .select('id, profile_complete, company_id')
-      .eq('user_id', effectiveId)
+      .from('profiles')
+      .select('company_id')
+      .eq('id', effectiveId)
       .single();
-    setHasProfile(!!profile || !!p);
+    const { data: cniProfile } = await supabase
+      .from('cni_profiles')
+      .select('id')
+      .eq('user_id', effectiveId)
+      .maybeSingle();
+    setHasProfile(!!cniProfile || !!p);
 
     // Load my jobs: assigned to my company (any installer at the company
     // works company jobs) or directly to me (legacy / pre-company jobs).

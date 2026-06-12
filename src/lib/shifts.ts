@@ -33,18 +33,19 @@ export async function memberViews(service: SupabaseClient, shiftId: string): Pro
   }));
 }
 
-/** Roster of approved installers at a CNI company. */
+/**
+ * Roster of approved installers at a company: profiles assigned to it (via
+ * profiles.company_id) that carry an installer role. The company list is the
+ * shared `companies` table, so membership comes straight from access-granting.
+ */
 export async function cniRoster(service: SupabaseClient, companyId: string): Promise<{ profile_id: string; full_name: string }[]> {
-  const { data: cniProfiles } = await service
-    .from('cni_profiles')
-    .select('user_id')
-    .eq('company_id', companyId);
-  if (!cniProfiles || cniProfiles.length === 0) return [];
   const { data: profiles } = await service
     .from('profiles')
-    .select('id, full_name, status')
-    .in('id', cniProfiles.map(p => p.user_id))
-    .eq('status', 'approved');
+    .select('id, full_name, role, roles')
+    .eq('company_id', companyId)
+    .eq('status', 'approved')
+    .or('role.eq.installer,roles.cs.{installer}')
+    .order('full_name');
   return (profiles || []).map(p => ({ profile_id: p.id, full_name: p.full_name }));
 }
 

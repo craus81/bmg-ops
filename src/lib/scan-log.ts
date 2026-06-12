@@ -38,19 +38,26 @@ export type LogScanResult =
   | { ok: false; status: number; error: string };
 
 /**
- * Resolve the external company to stamp on a scan, given the scanning user.
- * CNI installers have a cni_profiles.company_name; internal staff have none.
+ * Resolve the company to stamp on a scan, given the scanning user — their
+ * assigned company (profiles.company_id → companies.name), the same list used
+ * everywhere else. Internal staff without a company stamp null.
  */
 export async function resolveScannerCompany(
   service: SupabaseClient,
   userId: string,
 ): Promise<string | null> {
-  const { data } = await service
-    .from('cni_profiles')
-    .select('company_name')
-    .eq('user_id', userId)
+  const { data: profile } = await service
+    .from('profiles')
+    .select('company_id')
+    .eq('id', userId)
     .maybeSingle();
-  return data?.company_name || null;
+  if (!profile?.company_id) return null;
+  const { data: company } = await service
+    .from('companies')
+    .select('name')
+    .eq('id', profile.company_id)
+    .maybeSingle();
+  return company?.name || null;
 }
 
 /**

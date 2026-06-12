@@ -54,11 +54,11 @@ export default function AvailableJobsPage() {
     if (!user) return;
     const effectiveId = (isAdmin && preview?.profileId) || user.id;
 
-    // My company (may be null for unlinked profiles)
+    // My company comes from the profile (shared companies list).
     const { data: myProfile } = await supabase
-      .from('cni_profiles')
+      .from('profiles')
       .select('company_id')
-      .eq('user_id', effectiveId)
+      .eq('id', effectiveId)
       .maybeSingle();
     const myCompanyId: string | null = myProfile?.company_id || null;
 

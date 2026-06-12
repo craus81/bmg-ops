@@ -12,11 +12,13 @@ interface CniCompany {
   email: string | null;
   netsuite_vendor_id: string | null;
   primary_contact_profile_id: string | null;
-  created_at: string;
+
 }
 
+// Membership lives on profiles.company_id (the shared companies table), so a
+// member is keyed by their profile id (user_id). The per-person NetSuite
+// vendor id still rides on cni_profiles.
 interface Member {
-  cni_profile_id: string;
   user_id: string;
   full_name: string;
   status: string;
@@ -24,10 +26,12 @@ interface Member {
 }
 
 interface UnassignedProfile {
-  cni_profile_id: string;
   user_id: string;
   full_name: string;
 }
+
+// Profiles that carry an installer role can belong to a CNI company.
+const INSTALLER_FILTER = 'role.eq.installer,roles.cs.{installer}';
 
 export default function CniCompanyDetailPage() {
   const router = useRouter();
@@ -56,19 +60,20 @@ export default function CniCompanyDetailPage() {
   const [memberBusy, setMemberBusy] = useState(false);
   const [confirmRemove, setConfirmRemove] = useState<string | null>(null);
   // Per-person NetSuite vendor ids — needed before an employee can go on
-  // individual payouts. Keyed by cni_profile_id; only dirty drafts are kept.
+  // individual payouts. Keyed by user_id; only dirty drafts are kept.
   const [vendorDrafts, setVendorDrafts] = useState<Record<string, string>>({});
 
-  const saveMemberVendorId = async (cniProfileId: string) => {
-    const draft = (vendorDrafts[cniProfileId] || '').trim();
+  const saveMemberVendorId = async (userId: string) => {
+    const draft = (vendorDrafts[userId] || '').trim();
     setMemberBusy(true);
+    // cni_profiles.user_id is unique; upsert so members without a CNI profile
+    // row still get a vendor id recorded.
     await supabase
       .from('cni_profiles')
-      .update({ netsuite_vendor_id: draft || null })
-      .eq('id', cniProfileId);
+      .upsert({ user_id: userId, netsuite_vendor_id: draft || null }, { onConflict: 'user_id' });
     setVendorDrafts(prev => {
       const next = { ...prev };
-      delete next[cniProfileId];
+      delete next[userId];
       return next;
     });
     setMemberBusy(false);
@@ -83,8 +88,8 @@ export default function CniCompanyDetailPage() {
 
   const loadData = async () => {
     const { data: companyData } = await supabase
-      .from('cni_companies')
-      .select('id, name, phone, email, netsuite_vendor_id, primary_contact_profile_id, created_at')
+      .from('companies')
+      .select('id, name, phone, email, netsuite_vendor_id, primary_contact_profile_id')
       .eq('id', companyId)
       .single();
 
@@ -97,55 +102,42 @@ export default function CniCompanyDetailPage() {
       setPrimaryContact(companyData.primary_contact_profile_id || '');
     }
 
-    // Members of this company
+    // Members = installer profiles assigned to this company (profiles.company_id).
     const { data: memberProfiles } = await supabase
-      .from('cni_profiles')
-      .select('id, user_id, netsuite_vendor_id')
-      .eq('company_id', companyId);
+      .from('profiles')
+      .select('id, full_name, status')
+      .eq('company_id', companyId)
+      .or(INSTALLER_FILTER)
+      .order('full_name');
 
-    let memberList: Member[] = [];
-    if (memberProfiles && memberProfiles.length > 0) {
-      const userIds = memberProfiles.map((p: any) => p.user_id);
-      const { data: users } = await supabase
-        .from('profiles')
-        .select('id, full_name, status')
-        .in('id', userIds);
-      const userMap: Record<string, any> = {};
-      (users || []).forEach((u: any) => { userMap[u.id] = u; });
-      memberList = memberProfiles.map((p: any) => ({
-        cni_profile_id: p.id,
-        user_id: p.user_id,
-        full_name: userMap[p.user_id]?.full_name || 'Unknown',
-        status: userMap[p.user_id]?.status || 'unknown',
-        netsuite_vendor_id: p.netsuite_vendor_id,
-      }));
-      memberList.sort((a, b) => a.full_name.localeCompare(b.full_name));
+    // Their per-person NetSuite vendor ids from cni_profiles (if any).
+    const memberIds = (memberProfiles || []).map((p: any) => p.id);
+    const vendorMap: Record<string, string | null> = {};
+    if (memberIds.length > 0) {
+      const { data: cps } = await supabase
+        .from('cni_profiles')
+        .select('user_id, netsuite_vendor_id')
+        .in('user_id', memberIds);
+      (cps || []).forEach((c: any) => { vendorMap[c.user_id] = c.netsuite_vendor_id; });
     }
-    setMembers(memberList);
+    setMembers((memberProfiles || []).map((p: any) => ({
+      user_id: p.id,
+      full_name: p.full_name || 'Unknown',
+      status: p.status || 'unknown',
+      netsuite_vendor_id: vendorMap[p.id] ?? null,
+    })));
 
     // Installers with no company yet (candidates to add)
     const { data: freeProfiles } = await supabase
-      .from('cni_profiles')
-      .select('id, user_id')
-      .is('company_id', null);
-
-    let freeList: UnassignedProfile[] = [];
-    if (freeProfiles && freeProfiles.length > 0) {
-      const freeIds = freeProfiles.map((p: any) => p.user_id);
-      const { data: freeUsers } = await supabase
-        .from('profiles')
-        .select('id, full_name')
-        .in('id', freeIds);
-      const freeMap: Record<string, string> = {};
-      (freeUsers || []).forEach((u: any) => { freeMap[u.id] = u.full_name; });
-      freeList = freeProfiles.map((p: any) => ({
-        cni_profile_id: p.id,
-        user_id: p.user_id,
-        full_name: freeMap[p.user_id] || 'Unknown',
-      }));
-      freeList.sort((a, b) => a.full_name.localeCompare(b.full_name));
-    }
-    setUnassigned(freeList);
+      .from('profiles')
+      .select('id, full_name')
+      .is('company_id', null)
+      .or(INSTALLER_FILTER)
+      .order('full_name');
+    setUnassigned((freeProfiles || []).map((p: any) => ({
+      user_id: p.id,
+      full_name: p.full_name || 'Unknown',
+    })));
 
     // Job metric rollups for this company
     const { data: companyJobs } = await supabase
@@ -174,14 +166,13 @@ export default function CniCompanyDetailPage() {
     setSaving(true);
     setSaveMsg(null);
     const { error } = await supabase
-      .from('cni_companies')
+      .from('companies')
       .update({
         name: name.trim(),
         phone: phone.trim() || null,
         email: email.trim() || null,
         netsuite_vendor_id: vendorId.trim() || null,
         primary_contact_profile_id: primaryContact || null,
-        updated_at: new Date().toISOString(),
       })
       .eq('id', companyId);
     setSaving(false);
@@ -193,32 +184,33 @@ export default function CniCompanyDetailPage() {
     }
   };
 
-  const handleAddMember = async (cniProfileId: string) => {
-    if (!cniProfileId) return;
+  // Membership is profiles.company_id — the same field set on /admin/users,
+  // so changes here and there stay in sync.
+  const handleAddMember = async (userId: string) => {
+    if (!userId) return;
     setMemberBusy(true);
     const { error } = await supabase
-      .from('cni_profiles')
+      .from('profiles')
       .update({ company_id: companyId })
-      .eq('id', cniProfileId);
+      .eq('id', userId);
     setMemberBusy(false);
     setAddSelect('');
     if (!error) loadData();
   };
 
-  const handleRemoveMember = async (cniProfileId: string) => {
+  const handleRemoveMember = async (userId: string) => {
     setMemberBusy(true);
     const { error } = await supabase
-      .from('cni_profiles')
+      .from('profiles')
       .update({ company_id: null })
-      .eq('id', cniProfileId);
+      .eq('id', userId);
     setMemberBusy(false);
     setConfirmRemove(null);
     if (!error) {
       // Clear primary contact if it pointed at the removed member
-      const removed = members.find(m => m.cni_profile_id === cniProfileId);
-      if (removed && company?.primary_contact_profile_id === removed.user_id) {
+      if (company?.primary_contact_profile_id === userId) {
         await supabase
-          .from('cni_companies')
+          .from('companies')
           .update({ primary_contact_profile_id: null })
           .eq('id', companyId);
         setPrimaryContact('');
@@ -381,7 +373,7 @@ export default function CniCompanyDetailPage() {
           <div style={{ display: 'flex', flexDirection: 'column', gap: '8px', marginBottom: '12px' }}>
             {members.map(m => (
               <div
-                key={m.cni_profile_id}
+                key={m.user_id}
                 style={{
                   display: 'flex', justifyContent: 'space-between', alignItems: 'center',
                   padding: '10px 12px', borderRadius: '10px',
@@ -404,18 +396,18 @@ export default function CniCompanyDetailPage() {
                   <div style={{ display: 'flex', alignItems: 'center', gap: '4px', marginTop: '4px' }}>
                     <span style={{ fontSize: '11px', color: 'var(--text-muted)' }}>NetSuite vendor:</span>
                     <input
-                      value={vendorDrafts[m.cni_profile_id] ?? m.netsuite_vendor_id ?? ''}
-                      onChange={e => setVendorDrafts(prev => ({ ...prev, [m.cni_profile_id]: e.target.value }))}
-                      onKeyDown={e => { if (e.key === 'Enter' && vendorDrafts[m.cni_profile_id] !== undefined) saveMemberVendorId(m.cni_profile_id); }}
+                      value={vendorDrafts[m.user_id] ?? m.netsuite_vendor_id ?? ''}
+                      onChange={e => setVendorDrafts(prev => ({ ...prev, [m.user_id]: e.target.value }))}
+                      onKeyDown={e => { if (e.key === 'Enter' && vendorDrafts[m.user_id] !== undefined) saveMemberVendorId(m.user_id); }}
                       placeholder="—"
                       style={{
                         width: '110px', padding: '3px 8px', borderRadius: '6px', fontSize: '11px', fontWeight: 600,
                         border: '1px solid var(--border)', background: 'var(--card)', color: 'var(--text-body)',
                       }}
                     />
-                    {vendorDrafts[m.cni_profile_id] !== undefined && vendorDrafts[m.cni_profile_id] !== (m.netsuite_vendor_id || '') && (
+                    {vendorDrafts[m.user_id] !== undefined && vendorDrafts[m.user_id] !== (m.netsuite_vendor_id || '') && (
                       <button
-                        onClick={() => saveMemberVendorId(m.cni_profile_id)}
+                        onClick={() => saveMemberVendorId(m.user_id)}
                         disabled={memberBusy}
                         style={{ fontSize: '10px', fontWeight: 700, color: 'var(--success)', background: 'transparent', border: 'none', cursor: 'pointer', padding: '2px 4px' }}
                       >
@@ -424,11 +416,11 @@ export default function CniCompanyDetailPage() {
                     )}
                   </div>
                 </div>
-                {confirmRemove === m.cni_profile_id ? (
+                {confirmRemove === m.user_id ? (
                   <div style={{ display: 'flex', gap: '6px', alignItems: 'center' }}>
                     <span style={{ fontSize: '11px', color: 'var(--text-muted)', fontWeight: 600 }}>Remove?</span>
                     <button
-                      onClick={() => handleRemoveMember(m.cni_profile_id)}
+                      onClick={() => handleRemoveMember(m.user_id)}
                       disabled={memberBusy}
                       style={{
                         padding: '5px 10px', borderRadius: '6px', fontSize: '11px', fontWeight: 700,
@@ -449,7 +441,7 @@ export default function CniCompanyDetailPage() {
                   </div>
                 ) : (
                   <button
-                    onClick={() => setConfirmRemove(m.cni_profile_id)}
+                    onClick={() => setConfirmRemove(m.user_id)}
                     style={{
                       padding: '5px 10px', borderRadius: '6px', fontSize: '11px', fontWeight: 700,
                       background: 'var(--card)', color: 'var(--error)', border: '1px solid var(--error-border)', cursor: 'pointer',
@@ -478,7 +470,7 @@ export default function CniCompanyDetailPage() {
           >
             <option value="">Select an installer to add…</option>
             {unassigned.map(p => (
-              <option key={p.cni_profile_id} value={p.cni_profile_id}>{p.full_name}</option>
+              <option key={p.user_id} value={p.user_id}>{p.full_name}</option>
             ))}
           </select>
         )}

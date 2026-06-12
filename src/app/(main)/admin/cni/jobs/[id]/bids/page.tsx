@@ -95,7 +95,7 @@ export default function BidReviewPage() {
       const companyNameMap: Record<string, string> = {};
       if (companyIds.length > 0) {
         const { data: companyRows } = await supabase
-          .from('cni_companies')
+          .from('companies')
           .select('id, name')
           .in('id', companyIds);
         (companyRows || []).forEach((c: any) => { companyNameMap[c.id] = c.name; });

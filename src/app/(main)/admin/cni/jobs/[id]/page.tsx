@@ -5,6 +5,7 @@ import { useRouter, useParams } from 'next/navigation';
 import { createClient } from '@/lib/supabase-browser';
 import { useAuth } from '@/components/AuthProvider';
 import PartPicker, { type PickedPart } from '@/components/PartPicker';
+import { loadCompaniesWithCounts } from '@/lib/cni-companies';
 
 interface CniJob {
   id: string;
@@ -202,7 +203,7 @@ export default function CniJobDetailPage() {
     // Load assigned company name
     if (jobData.assigned_company_id) {
       const { data: company } = await supabase
-        .from('cni_companies')
+        .from('companies')
         .select('name')
         .eq('id', jobData.assigned_company_id)
         .single();
@@ -284,17 +285,7 @@ export default function CniJobDetailPage() {
 
   // Assignment is company-based: any installer at the company works the job.
   const loadCompanyList = async () => {
-    const { data: comps } = await supabase
-      .from('cni_companies')
-      .select('id, name')
-      .order('name');
-    const { data: members } = await supabase
-      .from('cni_profiles')
-      .select('company_id')
-      .not('company_id', 'is', null);
-    const counts = new Map<string, number>();
-    for (const m of members || []) counts.set(m.company_id, (counts.get(m.company_id) || 0) + 1);
-    setCompanies((comps || []).map((c: any) => ({ id: c.id, name: c.name, memberCount: counts.get(c.id) || 0 })));
+    setCompanies(await loadCompaniesWithCounts(supabase));
     setShowAssign(true);
   };
 
@@ -369,21 +360,7 @@ export default function CniJobDetailPage() {
   };
 
   const loadInviteList = async () => {
-    const { data: comps } = await supabase
-      .from('cni_companies')
-      .select('id, name')
-      .order('name');
-    const { data: memberRows } = await supabase
-      .from('cni_profiles')
-      .select('company_id')
-      .not('company_id', 'is', null);
-    const counts = new Map<string, number>();
-    for (const m of memberRows || []) counts.set(m.company_id, (counts.get(m.company_id) || 0) + 1);
-    setInviteCompanies((comps || []).map((c: any) => ({
-      id: c.id,
-      name: c.name,
-      memberCount: counts.get(c.id) || 0,
-    })));
+    setInviteCompanies(await loadCompaniesWithCounts(supabase));
     setShowInvite(true);
   };
 
