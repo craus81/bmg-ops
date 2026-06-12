@@ -1,10 +1,13 @@
 # Per-Vehicle Pay Splits — Design
 
-**Status:** Phase 1 (companies + tracking) is implemented — migration
-`110-companies-and-pay-splits.sql`, shift tagging on both scanning flows,
-credit snapshots, rate table, and the admin companies / pay-rates / crew &
-pay screens. Phases 2 (installer My Earnings, payroll report) and 3
-(payouts) are not yet built.
+**Status:** Phases 1 and 2 are implemented. Phase 1 (companies + tracking):
+migration `110-companies-and-pay-splits.sql`, shift tagging on both scanning
+flows, credit snapshots, rate table, and the admin companies / pay-rates /
+crew & pay screens. Phase 2 (visibility): migration `111-company-bidding.sql`,
+the `/earnings` My Earnings view, the `/admin/payroll` biweekly report
+(anchored 2026-06-15) with CSV export and period locking, and company-level
+bidding/invites with metric rollups. Phase 3 (CNI payouts: per-employee
+NetSuite bills, payout_mode) is not yet built.
 **Scope:** Company-based job assignment, crew shift tagging, per-vehicle pay
 credits, uneven splits, individual payouts, and admin corrections — for both
 CNI installer jobs and BMG field installs (e.g., the U-Haul job billed to
