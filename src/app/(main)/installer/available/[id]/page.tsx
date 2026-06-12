@@ -4,6 +4,8 @@ import { useState, useEffect } from 'react';
 import { useRouter, useParams } from 'next/navigation';
 import { createClient } from '@/lib/supabase-browser';
 import { useAuth } from '@/components/AuthProvider';
+import InstallerPreviewBanner from '@/components/InstallerPreviewBanner';
+import { getInstallerPreview } from '@/lib/installer-preview';
 
 export default function AvailableJobDetailPage() {
   const router = useRouter();
@@ -14,6 +16,9 @@ export default function AvailableJobDetailPage() {
 
   const [job, setJob] = useState<any>(null);
   const [vins, setVins] = useState<any[]>([]);
+  // Admin preview: bids placed while previewing are recorded for the
+  // previewed installer so the company-response flows can be exercised.
+  const [preview] = useState(() => getInstallerPreview());
   const [myBid, setMyBid] = useState<any>(null);
   const [myCompanyId, setMyCompanyId] = useState<string | null>(null);
   const [companyBid, setCompanyBid] = useState<any>(null); // a coworker's bid for my company
@@ -58,7 +63,7 @@ export default function AvailableJobDetailPage() {
     const { data: myProfile } = await supabase
       .from('cni_profiles')
       .select('company_id')
-      .eq('user_id', user.id)
+      .eq('user_id', (isAdmin && preview?.profileId) || user.id)
       .maybeSingle();
     const companyId: string | null = myProfile?.company_id || null;
     setMyCompanyId(companyId);
@@ -68,7 +73,7 @@ export default function AvailableJobDetailPage() {
       .from('cni_job_bids')
       .select('*')
       .eq('job_id', jobId)
-      .eq('installer_id', user.id)
+      .eq('installer_id', (isAdmin && preview?.profileId) || user.id)
       .maybeSingle();
     if (bidData) setMyBid(bidData);
 
@@ -79,7 +84,7 @@ export default function AvailableJobDetailPage() {
         .select('response, responded_at, installer_id')
         .eq('job_id', jobId)
         .eq('company_id', companyId);
-      const coworkerBid = (companyBids || []).find((b: any) => b.installer_id !== user.id);
+      const coworkerBid = (companyBids || []).find((b: any) => b.installer_id !== ((isAdmin && preview?.profileId) || user.id));
       setCompanyBid(coworkerBid || null);
     } else {
       setCompanyBid(null);
@@ -95,7 +100,7 @@ export default function AvailableJobDetailPage() {
     // Upsert bid
     const bidData: any = {
       job_id: job.id,
-      installer_id: user.id,
+      installer_id: (isAdmin && preview?.profileId) || user.id,
       company_id: myCompanyId,
       response: responseType,
       responded_at: new Date().toISOString(),
@@ -145,6 +150,8 @@ export default function AvailableJobDetailPage() {
 
   return (
     <div>
+      <InstallerPreviewBanner preview={isAdmin ? preview : null} />
+
       {/* Header */}
       <div style={{ display: 'flex', alignItems: 'center', gap: '12px', marginBottom: '16px' }}>
         <button onClick={() => router.push('/installer/available')} style={{ fontSize: '20px', color: 'var(--text-muted)' }}>←</button>

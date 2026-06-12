@@ -7,6 +7,8 @@ import { useAuth } from '@/components/AuthProvider';
 import { theme } from '@/lib/theme';
 import RfidCapture, { type RfidCompletion } from '@/components/RfidCapture';
 import { isVerizonRfidPart } from '@/lib/rfid';
+import InstallerPreviewBanner from '@/components/InstallerPreviewBanner';
+import { getInstallerPreview } from '@/lib/installer-preview';
 
 const STATUS_LABELS: Record<string, string> = {
   assigned_awaiting_scheduling: 'Awaiting Your Schedule Proposal',
@@ -56,6 +58,11 @@ export default function InstallerJobDetailPage() {
   const [crewBusy, setCrewBusy] = useState(false);
 
   const isRfidJob = isVerizonRfidPart(job?.part_number);
+
+  // Admin preview: "you"-style displays and crew prechecks follow the
+  // previewed installer; actions still happen as the signed-in account.
+  const [preview] = useState(() => getInstallerPreview());
+  const effectiveId = (isAdmin && preview?.profileId) || user?.id;
 
   useEffect(() => {
     if (!user) return;
@@ -180,7 +187,7 @@ export default function InstallerJobDetailPage() {
     if (shiftInfo?.shift) {
       for (const m of shiftInfo.shift.members) draft.set(m.profile_id, m.share_weight);
     } else if (user) {
-      draft.set(user.id, 1);
+      draft.set(effectiveId || user.id, 1);
     }
     setCrewDraft(draft);
     setCrewError('');
@@ -242,7 +249,7 @@ export default function InstallerJobDetailPage() {
   const myCut = (() => {
     if (!shiftInfo?.shift || shiftInfo.ratePerVehicle == null || !user) return null;
     const members = shiftInfo.shift.members;
-    const me = members.find(m => m.profile_id === user.id);
+    const me = members.find(m => m.profile_id === effectiveId);
     if (!me) return null;
     const total = members.reduce((s, m) => s + m.share_weight, 0);
     if (total <= 0) return null;
@@ -283,6 +290,8 @@ export default function InstallerJobDetailPage() {
 
   return (
     <div>
+      <InstallerPreviewBanner preview={isAdmin ? preview : null} />
+
       {/* Header */}
       <div style={{ display: 'flex', alignItems: 'center', gap: '12px', marginBottom: '16px' }}>
         <button onClick={() => router.push('/installer')} style={{ fontSize: '20px', color: 'var(--text-muted)' }}>←</button>
@@ -501,7 +510,7 @@ export default function InstallerJobDetailPage() {
             <>
               <div style={{ fontSize: '13px', fontWeight: 700, color: 'var(--text-primary)', marginBottom: '2px' }}>
                 On shift: {shiftInfo.shift.members.map(m =>
-                  `${m.profile_id === user?.id ? 'you' : m.full_name}${m.share_weight !== 1 ? ` ×${m.share_weight}` : ''}`
+                  `${m.profile_id === effectiveId ? 'you' : m.full_name}${m.share_weight !== 1 ? ` ×${m.share_weight}` : ''}`
                 ).join(' + ')}
               </div>
               {myCut != null && (
@@ -675,7 +684,7 @@ export default function InstallerJobDetailPage() {
               for (const m of shiftInfo.shift?.members || []) {
                 if (!byId.has(m.profile_id)) byId.set(m.profile_id, m.full_name);
               }
-              if (user && !byId.has(user.id)) byId.set(user.id, 'You');
+              if (effectiveId && !byId.has(effectiveId)) byId.set(effectiveId, 'You');
               return [...byId.entries()].map(([id, name]) => {
                 const checked = crewDraft.has(id);
                 return (
@@ -699,7 +708,7 @@ export default function InstallerJobDetailPage() {
                       }}
                     >{checked ? '✓' : ''}</button>
                     <div style={{ flex: 1, fontSize: '13px', fontWeight: 700, color: 'var(--text-primary)' }}>
-                      {id === user?.id ? `${name === 'You' ? 'You' : name + ' (you)'}` : name}
+                      {id === effectiveId ? `${name === 'You' ? 'You' : name + ' (you)'}` : name}
                     </div>
                     {checked && (
                       <div style={{ display: 'flex', alignItems: 'center', gap: '4px' }}>
