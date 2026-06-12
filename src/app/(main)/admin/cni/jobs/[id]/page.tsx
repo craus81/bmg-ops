@@ -134,8 +134,8 @@ export default function CniJobDetailPage() {
 
   // Distribution
   const [showInvite, setShowInvite] = useState(false);
-  const [inviteInstallers, setInviteInstallers] = useState<any[]>([]);
-  const [invitedIds, setInvitedIds] = useState<string[]>([]);
+  const [inviteCompanies, setInviteCompanies] = useState<{ id: string; name: string; memberCount: number }[]>([]);
+  const [invitedIds, setInvitedIds] = useState<string[]>([]); // invited company ids
   const [bidCount, setBidCount] = useState(0);
 
   // Phase 3: photos + messages
@@ -208,9 +208,9 @@ export default function CniJobDetailPage() {
 
     const { data: inviteData } = await supabase
       .from('cni_job_invites')
-      .select('installer_id')
+      .select('company_id')
       .eq('job_id', jobId);
-    setInvitedIds((inviteData || []).map((i: any) => i.installer_id));
+    setInvitedIds((inviteData || []).map((i: any) => i.company_id).filter(Boolean));
 
     // Load photo stats
     const { data: photoData } = await supabase
@@ -318,36 +318,35 @@ export default function CniJobDetailPage() {
   };
 
   const loadInviteList = async () => {
-    const { data } = await supabase
+    const { data: comps } = await supabase
+      .from('cni_companies')
+      .select('id, name')
+      .order('name');
+    const { data: memberRows } = await supabase
       .from('cni_profiles')
-      .select('user_id, company_name, availability_status, business_address, coverage_radius_miles, jobs_completed, risk_tags')
-      .not('risk_tags', 'cs', '{do_not_assign}');
-    if (data) {
-      const userIds = data.map((p: any) => p.user_id);
-      const { data: profiles } = await supabase
-        .from('profiles')
-        .select('id, full_name')
-        .in('id', userIds);
-      const nameMap: Record<string, string> = {};
-      if (profiles) profiles.forEach((p: any) => { nameMap[p.id] = p.full_name; });
-      setInviteInstallers(data.map((p: any) => ({
-        ...p,
-        full_name: nameMap[p.user_id] || 'Unknown',
-      })));
-    }
+      .select('company_id')
+      .not('company_id', 'is', null);
+    const counts = new Map<string, number>();
+    for (const m of memberRows || []) counts.set(m.company_id, (counts.get(m.company_id) || 0) + 1);
+    setInviteCompanies((comps || []).map((c: any) => ({
+      id: c.id,
+      name: c.name,
+      memberCount: counts.get(c.id) || 0,
+    })));
     setShowInvite(true);
   };
 
-  const sendInvite = async (installerId: string) => {
+  const sendInvite = async (companyId: string) => {
     if (!job || !user) return;
     setUpdating(true);
     await supabase.from('cni_job_invites').upsert({
       job_id: job.id,
-      installer_id: installerId,
+      company_id: companyId,
+      installer_id: null,
       invite_type: 'direct',
       invited_by: user.id,
-    }, { onConflict: 'job_id,installer_id' });
-    setInvitedIds(prev => [...prev, installerId]);
+    }, { onConflict: 'job_id,company_id' });
+    setInvitedIds(prev => [...prev, companyId]);
     setUpdating(false);
   };
 
@@ -490,7 +489,7 @@ export default function CniJobDetailPage() {
                 background: 'var(--subtle-bg)', color: 'var(--text-primary)', border: '1px solid var(--border)',
               }}
             >
-              Invite Installers {invitedIds.length > 0 ? `(${invitedIds.length})` : ''}
+              Invite Companies {invitedIds.length > 0 ? `(${invitedIds.length})` : ''}
             </button>
             {job.distribution_type !== 'published' ? (
               <button
@@ -968,7 +967,7 @@ export default function CniJobDetailPage() {
         </div>
       )}
 
-      {/* Invite Installer Modal */}
+      {/* Invite Company Modal */}
       {showInvite && (
         <div style={{
           position: 'fixed', top: 0, left: 0, right: 0, bottom: 0,
@@ -981,23 +980,23 @@ export default function CniJobDetailPage() {
             border: '1px solid var(--border)',
           }}>
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '16px' }}>
-              <div style={{ fontSize: '16px', fontWeight: 800, color: 'var(--text-primary)' }}>Invite Installers</div>
+              <div style={{ fontSize: '16px', fontWeight: 800, color: 'var(--text-primary)' }}>Invite Companies</div>
               <button onClick={() => setShowInvite(false)} style={{ fontSize: '18px', color: 'var(--text-muted)' }}>✕</button>
             </div>
             <div style={{ fontSize: '12px', color: 'var(--text-muted)', marginBottom: '14px' }}>
-              Send direct invites — installers will see the job and can respond
+              Send direct invites — every installer at the company will see the job and can respond
             </div>
-            {inviteInstallers.length === 0 ? (
+            {inviteCompanies.length === 0 ? (
               <div style={{ padding: '20px', textAlign: 'center', color: 'var(--text-muted)', fontSize: '13px' }}>
-                No CNI installers available
+                No CNI companies available
               </div>
             ) : (
               <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
-                {inviteInstallers.map((inst: any) => {
-                  const alreadyInvited = invitedIds.includes(inst.user_id);
+                {inviteCompanies.map(c => {
+                  const alreadyInvited = invitedIds.includes(c.id);
                   return (
                     <div
-                      key={inst.user_id}
+                      key={c.id}
                       style={{
                         display: 'flex', alignItems: 'center', justifyContent: 'space-between',
                         padding: '12px 14px', borderRadius: '10px',
@@ -1006,21 +1005,16 @@ export default function CniJobDetailPage() {
                       }}
                     >
                       <div>
-                        <div style={{ fontSize: '13px', fontWeight: 700, color: 'var(--text-primary)' }}>{inst.full_name}</div>
+                        <div style={{ fontSize: '13px', fontWeight: 700, color: 'var(--text-primary)' }}>{c.name}</div>
                         <div style={{ fontSize: '11px', color: 'var(--text-muted)' }}>
-                          {inst.company_name || 'Independent'}
-                          {inst.business_address?.city ? ` • ${inst.business_address.city}` : ''}
-                          {' • '}<span style={{
-                            color: inst.availability_status === 'available' ? 'var(--success)' :
-                                   inst.availability_status === 'limited' ? 'var(--warning)' : 'var(--error)',
-                          }}>{inst.availability_status}</span>
+                          {c.memberCount} installer{c.memberCount !== 1 ? 's' : ''}
                         </div>
                       </div>
                       {alreadyInvited ? (
                         <span style={{ fontSize: '11px', fontWeight: 700, color: 'var(--success)' }}>✓ Invited</span>
                       ) : (
                         <button
-                          onClick={() => sendInvite(inst.user_id)}
+                          onClick={() => sendInvite(c.id)}
                           disabled={updating}
                           style={{
                             padding: '6px 12px', borderRadius: '8px', fontSize: '11px', fontWeight: 700,

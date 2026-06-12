@@ -40,6 +40,7 @@ export default function CniCompanyDetailPage() {
   const [company, setCompany] = useState<CniCompany | null>(null);
   const [members, setMembers] = useState<Member[]>([]);
   const [unassigned, setUnassigned] = useState<UnassignedProfile[]>([]);
+  const [metrics, setMetrics] = useState({ total: 0, active: 0, completed: 0, onTime: 0 });
 
   // Editable fields
   const [name, setName] = useState('');
@@ -126,6 +127,22 @@ export default function CniCompanyDetailPage() {
       freeList.sort((a, b) => a.full_name.localeCompare(b.full_name));
     }
     setUnassigned(freeList);
+
+    // Job metric rollups for this company
+    const { data: companyJobs } = await supabase
+      .from('cni_jobs')
+      .select('status, completed_at, deadline')
+      .eq('assigned_company_id', companyId);
+    const jobs = companyJobs || [];
+    setMetrics({
+      total: jobs.length,
+      active: jobs.filter((j: any) => j.status !== 'awaiting_assignment' && j.status !== 'approved_closed').length,
+      completed: jobs.filter((j: any) => j.status === 'approved_closed').length,
+      onTime: jobs.filter((j: any) =>
+        j.status === 'approved_closed' && j.completed_at && j.deadline &&
+        new Date(j.completed_at) <= new Date(j.deadline)
+      ).length,
+    });
 
     setLoading(false);
   };
@@ -227,6 +244,37 @@ export default function CniCompanyDetailPage() {
             {members.length} member{members.length !== 1 ? 's' : ''}
           </div>
         </div>
+      </div>
+
+      {/* Metrics card */}
+      <div style={{
+        padding: '16px', borderRadius: '14px', marginBottom: '14px',
+        background: 'var(--card)', border: '1px solid var(--border)', boxShadow: 'var(--shadow-sm)',
+      }}>
+        <div style={{ fontSize: '11px', fontWeight: 700, color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.5px', marginBottom: '12px' }}>
+          Metrics
+        </div>
+        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr 1fr', gap: '8px' }}>
+          {([
+            { label: 'Jobs', value: metrics.total, color: 'var(--text-primary)' },
+            { label: 'Active', value: metrics.active, color: 'var(--orange)' },
+            { label: 'Completed', value: metrics.completed, color: 'var(--success)' },
+            { label: 'On-Time', value: metrics.onTime, color: 'var(--success)' },
+          ]).map(stat => (
+            <div key={stat.label} style={{
+              padding: '10px 8px', borderRadius: '10px', textAlign: 'center',
+              background: 'var(--subtle-bg)', border: '1px solid var(--border)',
+            }}>
+              <div style={{ fontSize: '18px', fontWeight: 800, color: stat.color }}>{stat.value}</div>
+              <div style={{ fontSize: '10px', fontWeight: 700, color: 'var(--text-muted)' }}>{stat.label}</div>
+            </div>
+          ))}
+        </div>
+        {metrics.completed > 0 && (
+          <div style={{ fontSize: '11px', color: 'var(--text-muted)', marginTop: '8px' }}>
+            {metrics.onTime} of {metrics.completed} completed job{metrics.completed !== 1 ? 's' : ''} finished on or before the deadline.
+          </div>
+        )}
       </div>
 
       {/* Company details card */}

@@ -15,6 +15,8 @@ export default function AvailableJobDetailPage() {
   const [job, setJob] = useState<any>(null);
   const [vins, setVins] = useState<any[]>([]);
   const [myBid, setMyBid] = useState<any>(null);
+  const [myCompanyId, setMyCompanyId] = useState<string | null>(null);
+  const [companyBid, setCompanyBid] = useState<any>(null); // a coworker's bid for my company
   const [loading, setLoading] = useState(true);
   const [submitting, setSubmitting] = useState(false);
 
@@ -52,14 +54,36 @@ export default function AvailableJobDetailPage() {
       .order('sort_order');
     setVins(vinData || []);
 
+    // My company (may be null for unlinked profiles)
+    const { data: myProfile } = await supabase
+      .from('cni_profiles')
+      .select('company_id')
+      .eq('user_id', user.id)
+      .maybeSingle();
+    const companyId: string | null = myProfile?.company_id || null;
+    setMyCompanyId(companyId);
+
     // Check for existing bid
     const { data: bidData } = await supabase
       .from('cni_job_bids')
       .select('*')
       .eq('job_id', jobId)
       .eq('installer_id', user.id)
-      .single();
+      .maybeSingle();
     if (bidData) setMyBid(bidData);
+
+    // Company response: any member's bid counts as the company's (readable via RLS)
+    if (companyId) {
+      const { data: companyBids } = await supabase
+        .from('cni_job_bids')
+        .select('response, responded_at, installer_id')
+        .eq('job_id', jobId)
+        .eq('company_id', companyId);
+      const coworkerBid = (companyBids || []).find((b: any) => b.installer_id !== user.id);
+      setCompanyBid(coworkerBid || null);
+    } else {
+      setCompanyBid(null);
+    }
 
     setLoading(false);
   };
@@ -72,6 +96,7 @@ export default function AvailableJobDetailPage() {
     const bidData: any = {
       job_id: job.id,
       installer_id: user.id,
+      company_id: myCompanyId,
       response: responseType,
       responded_at: new Date().toISOString(),
     };
@@ -261,8 +286,29 @@ export default function AvailableJobDetailPage() {
         </div>
       )}
 
+      {/* Company already responded (a coworker did it) */}
+      {!myBid && companyBid && (
+        <div style={{
+          ...sectionStyle,
+          background: companyBid.response === 'interested'
+            ? 'color-mix(in srgb, var(--success) 8%, var(--card))'
+            : 'color-mix(in srgb, var(--error) 8%, var(--card))',
+          borderColor: companyBid.response === 'interested' ? 'var(--success-border)' : 'var(--error-border)',
+        }}>
+          <div style={{
+            fontSize: '14px', fontWeight: 700, marginBottom: '4px',
+            color: companyBid.response === 'interested' ? 'var(--success)' : 'var(--error)',
+          }}>
+            {companyBid.response === 'interested' ? '✓ Your company responded' : '✕ Your company declined this job'}
+          </div>
+          <div style={{ fontSize: '12px', color: 'var(--text-muted)' }}>
+            Responded {new Date(companyBid.responded_at).toLocaleDateString()}
+          </div>
+        </div>
+      )}
+
       {/* Response Buttons */}
-      {!myBid && !showResponseForm && (
+      {!myBid && !companyBid && !showResponseForm && (
         <div style={{ display: 'flex', gap: '10px', marginBottom: '14px' }}>
           <button
             onClick={() => { setResponseType('interested'); setShowResponseForm(true); }}

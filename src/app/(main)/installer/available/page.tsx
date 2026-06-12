@@ -25,6 +25,8 @@ interface AvailableJob {
   seen_at?: string | null;
   // from bid
   my_bid?: { response: string; responded_at: string } | null;
+  // a coworker at my company responded
+  company_bid?: { response: string; responded_at: string } | null;
 }
 
 export default function AvailableJobsPage() {
@@ -46,13 +48,35 @@ export default function AvailableJobsPage() {
   const loadJobs = async () => {
     if (!user) return;
 
-    // Load my invites (direct invites to me)
-    const { data: invites } = await supabase
+    // My company (may be null for unlinked profiles)
+    const { data: myProfile } = await supabase
+      .from('cni_profiles')
+      .select('company_id')
+      .eq('user_id', user.id)
+      .maybeSingle();
+    const myCompanyId: string | null = myProfile?.company_id || null;
+
+    // Load invites: legacy direct invites to me + company invites for my company.
+    // RLS only returns rows we're allowed to see; de-dupe by job below.
+    const { data: directInvites } = await supabase
       .from('cni_job_invites')
       .select('id, job_id, invite_type, seen_at')
       .eq('installer_id', user.id);
 
-    const inviteJobIds = (invites || []).map((i: any) => i.job_id);
+    let companyInvites: any[] = [];
+    if (myCompanyId) {
+      const { data } = await supabase
+        .from('cni_job_invites')
+        .select('id, job_id, invite_type, seen_at')
+        .eq('company_id', myCompanyId);
+      companyInvites = data || [];
+    }
+
+    // De-dupe by job (direct invite wins if both exist)
+    const invitesByJob: Record<string, any> = {};
+    [...companyInvites, ...(directInvites || [])].forEach((i: any) => { invitesByJob[i.job_id] = i; });
+    const invites = Object.values(invitesByJob);
+    const inviteJobIds = invites.map((i: any) => i.job_id);
 
     // Load published jobs (open board) that I haven't been assigned to
     const { data: publishedJobs } = await supabase
@@ -82,6 +106,20 @@ export default function AvailableJobsPage() {
     const bidMap: Record<string, { response: string; responded_at: string }> = {};
     (myBids || []).forEach((b: any) => { bidMap[b.job_id] = { response: b.response, responded_at: b.responded_at }; });
 
+    // Load my company's bids (any member's bid counts as the company's response)
+    const companyBidMap: Record<string, { response: string; responded_at: string }> = {};
+    if (myCompanyId) {
+      const { data: companyBids } = await supabase
+        .from('cni_job_bids')
+        .select('job_id, installer_id, response, responded_at')
+        .eq('company_id', myCompanyId);
+      (companyBids || []).forEach((b: any) => {
+        if (b.installer_id !== user.id) {
+          companyBidMap[b.job_id] = { response: b.response, responded_at: b.responded_at };
+        }
+      });
+    }
+
     // Build invite invite map
     const inviteMap: Record<string, any> = {};
     (invites || []).forEach((i: any) => { inviteMap[i.job_id] = i; });
@@ -93,6 +131,7 @@ export default function AvailableJobsPage() {
       invite_type: inviteMap[j.id]?.invite_type,
       seen_at: inviteMap[j.id]?.seen_at,
       my_bid: bidMap[j.id] || null,
+      company_bid: companyBidMap[j.id] || null,
     }));
 
     // Open board: exclude jobs I already have an invite for (to avoid duplicates)
@@ -101,6 +140,7 @@ export default function AvailableJobsPage() {
       .map((j: any) => ({
         ...j,
         my_bid: bidMap[j.id] || null,
+        company_bid: companyBidMap[j.id] || null,
       }));
 
     setJobs([...mergedInvites, ...openJobs]);
@@ -195,7 +235,7 @@ export default function AvailableJobsPage() {
 
 function JobCard({ job, onTap }: { job: AvailableJob; onTap: () => void }) {
   const addr = job.address || {};
-  const hasBid = !!job.my_bid;
+  const hasBid = !!job.my_bid || !!job.company_bid;
 
   return (
     <button
@@ -226,7 +266,7 @@ function JobCard({ job, onTap }: { job: AvailableJob; onTap: () => void }) {
               Invited
             </span>
           )}
-          {hasBid && (
+          {job.my_bid ? (
             <span style={{
               fontSize: '10px', fontWeight: 700, padding: '3px 8px', borderRadius: '6px',
               background: job.my_bid?.response === 'interested' ? 'var(--success-bg)' : 'var(--error-bg)',
@@ -234,7 +274,15 @@ function JobCard({ job, onTap }: { job: AvailableJob; onTap: () => void }) {
             }}>
               {job.my_bid?.response === 'interested' ? '✓ Interested' : '✕ Declined'}
             </span>
-          )}
+          ) : job.company_bid ? (
+            <span style={{
+              fontSize: '10px', fontWeight: 700, padding: '3px 8px', borderRadius: '6px',
+              background: job.company_bid.response === 'interested' ? 'var(--success-bg)' : 'var(--error-bg)',
+              color: job.company_bid.response === 'interested' ? 'var(--success)' : 'var(--error)',
+            }}>
+              Company responded
+            </span>
+          ) : null}
         </div>
       </div>
 
