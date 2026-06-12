@@ -33,10 +33,13 @@ export default function InstallerInvoicePage() {
   const loadJob = async () => {
     const { data } = await supabase
       .from('cni_jobs')
-      .select('id, job_number, title, status, budget, invoice_status, invoice_file_path, netsuite_bill_id, assigned_installer_id')
+      .select('id, job_number, title, status, budget, invoice_status, invoice_file_path, netsuite_bill_id, assigned_installer_id, payout_mode')
       .eq('id', jobId)
       .single();
     if (!data) { router.push('/installer'); return; }
+    // Individual-payout jobs have no company invoice — pay statements are
+    // generated from scans instead.
+    if (data.payout_mode === 'individual') { router.push('/earnings'); return; }
     setJob(data);
     setLoading(false);
   };

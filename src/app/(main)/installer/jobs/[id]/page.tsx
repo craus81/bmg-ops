@@ -586,7 +586,26 @@ export default function InstallerJobDetailPage() {
         </div>
       )}
 
-      {/* Invoice */}
+      {/* Invoice — or, on individual-payout jobs, pay statements generated
+          from scans (no invoice upload). */}
+      {job.payout_mode === 'individual' ? (
+        <div style={sectionStyle}>
+          <div style={{ fontSize: '12px', fontWeight: 700, color: 'var(--text-muted)', marginBottom: '6px' }}>PAY</div>
+          <div style={{ fontSize: '13px', color: 'var(--text-primary)', marginBottom: '10px' }}>
+            This job pays each installer individually — your pay statement is generated
+            automatically from the vehicles you complete. No invoice upload needed.
+          </div>
+          <button
+            onClick={() => router.push('/earnings')}
+            style={{
+              width: '100%', padding: '12px', borderRadius: '10px', fontSize: '13px', fontWeight: 700,
+              background: 'var(--success)', color: '#fff', border: 'none',
+            }}
+          >
+            View My Earnings
+          </button>
+        </div>
+      ) : (
       <div style={sectionStyle}>
         <div style={{ fontSize: '12px', fontWeight: 700, color: 'var(--text-muted)', marginBottom: '6px' }}>INVOICE</div>
         {job.invoice_status === 'none' || !job.invoice_status ? (
@@ -634,6 +653,7 @@ export default function InstallerJobDetailPage() {
           </>
         )}
       </div>
+      )}
 
       {/* Crew tag checklist (company roster; weights default to an even split). */}
       {crewOpen && shiftInfo && (

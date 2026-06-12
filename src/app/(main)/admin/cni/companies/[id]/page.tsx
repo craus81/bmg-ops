@@ -55,6 +55,25 @@ export default function CniCompanyDetailPage() {
   const [addSelect, setAddSelect] = useState('');
   const [memberBusy, setMemberBusy] = useState(false);
   const [confirmRemove, setConfirmRemove] = useState<string | null>(null);
+  // Per-person NetSuite vendor ids — needed before an employee can go on
+  // individual payouts. Keyed by cni_profile_id; only dirty drafts are kept.
+  const [vendorDrafts, setVendorDrafts] = useState<Record<string, string>>({});
+
+  const saveMemberVendorId = async (cniProfileId: string) => {
+    const draft = (vendorDrafts[cniProfileId] || '').trim();
+    setMemberBusy(true);
+    await supabase
+      .from('cni_profiles')
+      .update({ netsuite_vendor_id: draft || null })
+      .eq('id', cniProfileId);
+    setVendorDrafts(prev => {
+      const next = { ...prev };
+      delete next[cniProfileId];
+      return next;
+    });
+    setMemberBusy(false);
+    await loadData();
+  };
 
   useEffect(() => {
     if (!isAdmin) { router.push('/home'); return; }
@@ -382,8 +401,27 @@ export default function CniCompanyDetailPage() {
                       {m.status}
                     </span>
                   </div>
-                  <div style={{ fontSize: '11px', color: 'var(--text-muted)', marginTop: '2px' }}>
-                    NetSuite vendor: {m.netsuite_vendor_id || '—'}
+                  <div style={{ display: 'flex', alignItems: 'center', gap: '4px', marginTop: '4px' }}>
+                    <span style={{ fontSize: '11px', color: 'var(--text-muted)' }}>NetSuite vendor:</span>
+                    <input
+                      value={vendorDrafts[m.cni_profile_id] ?? m.netsuite_vendor_id ?? ''}
+                      onChange={e => setVendorDrafts(prev => ({ ...prev, [m.cni_profile_id]: e.target.value }))}
+                      onKeyDown={e => { if (e.key === 'Enter' && vendorDrafts[m.cni_profile_id] !== undefined) saveMemberVendorId(m.cni_profile_id); }}
+                      placeholder="—"
+                      style={{
+                        width: '110px', padding: '3px 8px', borderRadius: '6px', fontSize: '11px', fontWeight: 600,
+                        border: '1px solid var(--border)', background: 'var(--card)', color: 'var(--text-body)',
+                      }}
+                    />
+                    {vendorDrafts[m.cni_profile_id] !== undefined && vendorDrafts[m.cni_profile_id] !== (m.netsuite_vendor_id || '') && (
+                      <button
+                        onClick={() => saveMemberVendorId(m.cni_profile_id)}
+                        disabled={memberBusy}
+                        style={{ fontSize: '10px', fontWeight: 700, color: 'var(--success)', background: 'transparent', border: 'none', cursor: 'pointer', padding: '2px 4px' }}
+                      >
+                        Save
+                      </button>
+                    )}
                   </div>
                 </div>
                 {confirmRemove === m.cni_profile_id ? (

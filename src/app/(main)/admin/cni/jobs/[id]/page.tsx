@@ -44,6 +44,7 @@ interface CniJob {
   invoice_status: string;
   invoice_file_path: string | null;
   netsuite_bill_id: string | null;
+  payout_mode: 'company' | 'individual';
   distribution_type: string;
   published_at: string | null;
   bid_count: number;
@@ -145,6 +146,15 @@ export default function CniJobDetailPage() {
   // Phase 4: invoice + closure
   const [nsBillId, setNsBillId] = useState('');
   const [budgetExceeded, setBudgetExceeded] = useState(false);
+
+  // Individual payout mode: per-employee payouts generated from credits.
+  const [payoutData, setPayoutData] = useState<{
+    payouts: { id: string; profile_name: string; total_amount: number | null; status: string; netsuite_bill_id: string | null; netsuite_vendor_id: string | null; items: { id: string }[] }[];
+    pending: { profile_id: string; profile_name: string; netsuite_vendor_id: string | null; vehicles: number; total: number; unpriced: number }[];
+  } | null>(null);
+  const [payoutBusy, setPayoutBusy] = useState(false);
+  const [payoutError, setPayoutError] = useState('');
+  const [payoutBillDrafts, setPayoutBillDrafts] = useState<Record<string, string>>({});
 
   useEffect(() => {
     if (!isAdmin) { router.push('/home'); return; }
@@ -315,6 +325,47 @@ export default function CniJobDetailPage() {
     await supabase.from('cni_jobs').update({ pay_per_vehicle: rate }).eq('id', job.id);
     setEditingRate(false);
     await loadJob();
+  };
+
+  // ── Individual payouts ──
+  const authHeaders = async () => {
+    const { data: { session } } = await supabase.auth.getSession();
+    return {
+      'Content-Type': 'application/json',
+      ...(session?.access_token ? { Authorization: `Bearer ${session.access_token}` } : {}),
+    } as Record<string, string>;
+  };
+
+  const loadPayouts = async () => {
+    const res = await fetch(`/api/admin/payouts?cniJobId=${jobId}`, { headers: await authHeaders() });
+    if (res.ok) setPayoutData(await res.json());
+  };
+
+  useEffect(() => {
+    if (job?.payout_mode === 'individual') loadPayouts();
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- refresh when mode flips or job reloads
+  }, [job?.payout_mode, jobId]);
+
+  const setPayoutMode = async (mode: 'company' | 'individual') => {
+    if (!job || job.payout_mode === mode) return;
+    await supabase.from('cni_jobs').update({ payout_mode: mode }).eq('id', job.id);
+    await loadJob();
+  };
+
+  const payoutAction = async (body: Record<string, unknown>) => {
+    setPayoutBusy(true);
+    setPayoutError('');
+    try {
+      const res = await fetch('/api/admin/payouts', {
+        method: 'POST', headers: await authHeaders(),
+        body: JSON.stringify(body),
+      });
+      const json = await res.json().catch(() => ({}));
+      if (!res.ok) { setPayoutError(json.error || 'Payout action failed'); return; }
+      await loadPayouts();
+    } finally {
+      setPayoutBusy(false);
+    }
   };
 
   const loadInviteList = async () => {
@@ -595,6 +646,26 @@ export default function CniJobDetailPage() {
             </div>
           )}
           <div>
+            <div style={{ fontSize: '11px', color: 'var(--text-muted)', fontWeight: 600 }}>Payout Mode</div>
+            <div style={{ display: 'flex', gap: '4px', marginTop: '4px' }}>
+              {(['company', 'individual'] as const).map(mode => (
+                <button
+                  key={mode}
+                  onClick={() => setPayoutMode(mode)}
+                  style={{
+                    padding: '4px 10px', borderRadius: '6px', fontSize: '11px', fontWeight: 700,
+                    background: job.payout_mode === mode ? 'var(--orange)' : 'var(--input-bg)',
+                    color: job.payout_mode === mode ? '#fff' : 'var(--text-muted)',
+                    border: job.payout_mode === mode ? '1px solid var(--orange)' : '1px solid var(--border)',
+                    cursor: 'pointer',
+                  }}
+                >
+                  {mode === 'company' ? 'Company' : 'Individual'}
+                </button>
+              ))}
+            </div>
+          </div>
+          <div>
             <div style={{ fontSize: '11px', color: 'var(--text-muted)', fontWeight: 600 }}>Pay / Vehicle</div>
             {editingRate ? (
               <div style={{ display: 'flex', gap: '4px', marginTop: '2px' }}>
@@ -763,6 +834,138 @@ export default function CniJobDetailPage() {
         </div>
       )}
 
+      {/* Individual payouts: per-employee statements generated from credits.
+          Replaces the company invoice flow when payout_mode = individual. */}
+      {job.payout_mode === 'individual' && (
+        <div style={{
+          padding: '14px 16px', borderRadius: '12px', marginBottom: '14px',
+          background: 'var(--card)', border: '1px solid var(--border)',
+        }}>
+          <div style={{ fontSize: '12px', fontWeight: 700, color: 'var(--text-muted)', marginBottom: '8px' }}>EMPLOYEE PAYOUTS</div>
+          <div style={{ fontSize: '11px', color: 'var(--text-muted)', marginBottom: '10px' }}>
+            Each employee is paid directly from their vehicle credits — no company invoice on this job.
+            Approve each payout, create the vendor bill in NetSuite, then record the bill ID here.
+          </div>
+
+          {payoutError && (
+            <div style={{ padding: '8px 12px', borderRadius: '8px', marginBottom: '8px', background: 'var(--error-bg)', border: '1px solid var(--error-border)', color: 'var(--error)', fontSize: '12px', fontWeight: 600 }}>{payoutError}</div>
+          )}
+
+          {/* Existing payouts */}
+          {(payoutData?.payouts || []).map(p => (
+            <div key={p.id} style={{
+              padding: '10px 12px', borderRadius: '10px', marginBottom: '6px',
+              background: 'var(--input-bg)', border: '1px solid var(--border)',
+            }}>
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                <div>
+                  <div style={{ fontSize: '13px', fontWeight: 700, color: 'var(--text-primary)' }}>
+                    {p.profile_name}
+                    <span style={{
+                      marginLeft: '8px', fontSize: '9px', fontWeight: 800, padding: '2px 7px', borderRadius: '5px',
+                      textTransform: 'uppercase', letterSpacing: '0.5px',
+                      background: p.status === 'paid' || p.status === 'billed' ? 'var(--success-bg)' : 'var(--subtle-bg)',
+                      color: p.status === 'paid' || p.status === 'billed' ? 'var(--success)' : p.status === 'approved' ? '#60a5fa' : 'var(--text-muted)',
+                      border: '1px solid var(--border)',
+                    }}>{p.status}</span>
+                  </div>
+                  <div style={{ fontSize: '11px', color: 'var(--text-muted)' }}>
+                    {p.items.length} vehicle{p.items.length === 1 ? '' : 's'}
+                    {p.netsuite_bill_id ? ` · Bill ${p.netsuite_bill_id}` : ''}
+                    {!p.netsuite_vendor_id && p.status !== 'paid' && (
+                      <span style={{ color: 'var(--warning)', fontWeight: 700 }}> · no NetSuite vendor on file</span>
+                    )}
+                  </div>
+                </div>
+                <div style={{ fontSize: '14px', fontWeight: 800, color: 'var(--success)' }}>
+                  ${(p.total_amount || 0).toFixed(2)}
+                </div>
+              </div>
+              <div style={{ display: 'flex', gap: '6px', marginTop: '8px', alignItems: 'center', flexWrap: 'wrap' }}>
+                {p.status === 'draft' && (
+                  <>
+                    <button onClick={() => payoutAction({ action: 'approve', payoutId: p.id })} disabled={payoutBusy} style={{
+                      padding: '7px 14px', borderRadius: '8px', fontSize: '11px', fontWeight: 700,
+                      background: 'var(--success)', color: '#fff', border: 'none',
+                    }}>Approve</button>
+                    <button onClick={() => payoutAction({ action: 'delete_draft', payoutId: p.id })} disabled={payoutBusy} style={{
+                      padding: '7px 14px', borderRadius: '8px', fontSize: '11px', fontWeight: 700,
+                      background: 'transparent', color: 'var(--error)', border: '1px solid var(--error-border)',
+                    }}>Delete Draft</button>
+                  </>
+                )}
+                {p.status === 'approved' && (
+                  <>
+                    <input
+                      value={payoutBillDrafts[p.id] || ''}
+                      onChange={e => setPayoutBillDrafts(prev => ({ ...prev, [p.id]: e.target.value }))}
+                      placeholder="NetSuite Bill ID"
+                      style={{
+                        flex: 1, minWidth: '140px', padding: '7px 10px', borderRadius: '8px', fontSize: '12px',
+                        border: '1px solid var(--border)', background: 'var(--card)', color: 'var(--text-body)',
+                      }}
+                    />
+                    <button
+                      onClick={() => payoutAction({ action: 'record_bill', payoutId: p.id, netsuiteBillId: (payoutBillDrafts[p.id] || '').trim() })}
+                      disabled={payoutBusy || !(payoutBillDrafts[p.id] || '').trim()}
+                      style={{
+                        padding: '7px 14px', borderRadius: '8px', fontSize: '11px', fontWeight: 700,
+                        background: (payoutBillDrafts[p.id] || '').trim() ? 'var(--orange)' : 'var(--text-muted)',
+                        color: '#fff', border: 'none',
+                      }}
+                    >Record Bill</button>
+                  </>
+                )}
+                {p.status === 'billed' && (
+                  <button onClick={() => payoutAction({ action: 'mark_paid', payoutId: p.id })} disabled={payoutBusy} style={{
+                    padding: '7px 14px', borderRadius: '8px', fontSize: '11px', fontWeight: 700,
+                    background: 'var(--subtle-bg)', color: 'var(--text-secondary)', border: '1px solid var(--border)',
+                  }}>Mark Paid</button>
+                )}
+              </div>
+            </div>
+          ))}
+
+          {/* Pending (not yet on a payout) */}
+          {(payoutData?.pending || []).length > 0 && (
+            <>
+              <div style={{ fontSize: '11px', fontWeight: 700, color: 'var(--text-muted)', margin: '10px 0 6px' }}>
+                NOT YET ON A PAYOUT
+              </div>
+              {(payoutData?.pending || []).map(p => (
+                <div key={p.profile_id} style={{ display: 'flex', justifyContent: 'space-between', padding: '6px 12px', fontSize: '12px' }}>
+                  <span style={{ fontWeight: 700, color: 'var(--text-primary)' }}>
+                    {p.profile_name}
+                    {!p.netsuite_vendor_id && <span style={{ color: 'var(--warning)', fontWeight: 600 }}> (no vendor ID)</span>}
+                  </span>
+                  <span style={{ color: 'var(--text-muted)' }}>
+                    {p.vehicles} vehicle{p.vehicles === 1 ? '' : 's'} ·{' '}
+                    <span style={{ fontWeight: 800, color: 'var(--success)' }}>${p.total.toFixed(2)}</span>
+                    {p.unpriced > 0 && <span style={{ color: 'var(--warning)' }}> +{p.unpriced} unpriced</span>}
+                  </span>
+                </div>
+              ))}
+              <button
+                onClick={() => payoutAction({ action: 'generate', cniJobId: job.id })}
+                disabled={payoutBusy}
+                style={{
+                  width: '100%', padding: '12px', borderRadius: '10px', fontSize: '13px', fontWeight: 800,
+                  marginTop: '8px', background: 'var(--orange)', color: '#fff', border: 'none',
+                }}
+              >
+                {payoutBusy ? 'Working...' : 'Generate Payout Statements'}
+              </button>
+            </>
+          )}
+
+          {(payoutData?.payouts || []).length === 0 && (payoutData?.pending || []).length === 0 && (
+            <div style={{ fontSize: '12px', color: 'var(--text-muted)' }}>
+              No credits yet — payouts generate from completed vehicles.
+            </div>
+          )}
+        </div>
+      )}
+
       {/* Invoice & Closure */}
       {job.invoice_status !== 'none' && (
         <div style={{
@@ -896,7 +1099,16 @@ export default function CniJobDetailPage() {
           {(() => {
             const allVinsComplete = vins.length > 0 && vins.every(v => v.status === 'completed');
             const allPhotosApproved = photoStats.total > 0 && photoStats.denied === 0 && photoStats.pending === 0;
-            const invoiceApproved = ['approved', 'billed_in_netsuite'].includes(job.invoice_status);
+            // Individual payout mode has no job invoice — the pay gate is
+            // instead "every credit is on an approved-or-beyond payout".
+            const individual = job.payout_mode === 'individual';
+            const payoutsSettled = individual
+              && (payoutData?.pending || []).length === 0
+              && (payoutData?.payouts || []).length > 0
+              && (payoutData?.payouts || []).every(p => p.status !== 'draft');
+            const invoiceApproved = individual
+              ? payoutsSettled
+              : ['approved', 'billed_in_netsuite'].includes(job.invoice_status);
             const canClose = allVinsComplete && allPhotosApproved && invoiceApproved;
 
             return (
@@ -909,7 +1121,9 @@ export default function CniJobDetailPage() {
                     {allPhotosApproved ? '✓' : '✕'} All photos approved ({photoStats.approved}/{photoStats.total})
                   </div>
                   <div style={{ fontSize: '13px', color: invoiceApproved ? 'var(--success)' : 'var(--error)' }}>
-                    {invoiceApproved ? '✓' : '✕'} Invoice {invoiceApproved ? 'approved' : 'pending'}
+                    {individual
+                      ? `${invoiceApproved ? '✓' : '✕'} Employee payouts ${invoiceApproved ? 'approved' : 'pending'}`
+                      : `${invoiceApproved ? '✓' : '✕'} Invoice ${invoiceApproved ? 'approved' : 'pending'}`}
                   </div>
                 </div>
                 {canClose ? (

@@ -27,6 +27,7 @@ export default function CreateCniJobPage() {
   const [customerName, setCustomerName] = useState('');
   const [budget, setBudget] = useState('');
   const [payPerVehicle, setPayPerVehicle] = useState('');
+  const [payoutMode, setPayoutMode] = useState<'company' | 'individual'>('company');
   const [deadline, setDeadline] = useState('');
   const [estimatedHours, setEstimatedHours] = useState('');
 
@@ -127,6 +128,7 @@ export default function CreateCniJobPage() {
           billable_customer: part?.billable_customer || null,
           budget: budget ? parseFloat(budget) : null,
           pay_per_vehicle: rate,
+          payout_mode: payoutMode,
           deadline: deadline || null,
           estimated_hours: estimatedHours ? parseFloat(estimatedHours) : null,
           address: { street, city, state, zip },
@@ -244,6 +246,31 @@ export default function CreateCniJobPage() {
           <input style={inputStyle} type="number" value={payPerVehicle} onChange={e => setPayPerVehicle(e.target.value)} placeholder="Defaults to budget ÷ VIN count" />
           <div style={{ fontSize: '11px', color: 'var(--text-muted)', marginTop: '4px' }}>
             Each completed vehicle splits this across whoever&apos;s tagged on the crew shift.
+          </div>
+        </div>
+        <div style={{ marginTop: '12px' }}>
+          <label style={labelStyle}>Payout Mode</label>
+          <div style={{ display: 'flex', gap: '8px' }}>
+            {([
+              { mode: 'company' as const, label: 'Company', sub: 'one invoice + bill to the company' },
+              { mode: 'individual' as const, label: 'Individual', sub: 'a NetSuite bill per employee, from their credits' },
+            ]).map(opt => (
+              <button
+                key={opt.mode}
+                onClick={() => setPayoutMode(opt.mode)}
+                style={{
+                  flex: 1, padding: '10px 12px', borderRadius: '10px', textAlign: 'left',
+                  background: payoutMode === opt.mode ? 'var(--success-bg)' : 'var(--input-bg)',
+                  border: payoutMode === opt.mode ? '1px solid var(--success-border)' : '1px solid var(--border)',
+                  cursor: 'pointer',
+                }}
+              >
+                <div style={{ fontSize: '13px', fontWeight: 700, color: 'var(--text-primary)' }}>
+                  {payoutMode === opt.mode ? '✓ ' : ''}{opt.label}
+                </div>
+                <div style={{ fontSize: '10px', color: 'var(--text-muted)', marginTop: '2px' }}>{opt.sub}</div>
+              </button>
+            ))}
           </div>
         </div>
         <div style={{ marginTop: '12px' }}>
