@@ -4,13 +4,14 @@ import { useState, useEffect } from 'react';
 import { useRouter } from 'next/navigation';
 import { createClient } from '@/lib/supabase-browser';
 import { useAuth } from '@/components/AuthProvider';
+import { installerCountsByCompany } from '@/lib/cni-companies';
 
 interface CniCompany {
   id: string;
   name: string;
   netsuite_vendor_id: string | null;
   primary_contact_profile_id: string | null;
-  created_at: string;
+
   member_count: number;
 }
 
@@ -35,22 +36,16 @@ export default function CniCompaniesPage() {
 
   const loadCompanies = async () => {
     const { data: companiesData } = await supabase
-      .from('cni_companies')
-      .select('id, name, netsuite_vendor_id, primary_contact_profile_id, created_at')
+      .from('companies')
+      .select('id, name, netsuite_vendor_id, primary_contact_profile_id')
       .order('name');
 
-    // Member counts per company
-    const { data: cniProfiles } = await supabase
-      .from('cni_profiles')
-      .select('id, user_id, company_id, company_name');
-    const counts: Record<string, number> = {};
-    (cniProfiles || []).forEach((p: any) => {
-      if (p.company_id) counts[p.company_id] = (counts[p.company_id] || 0) + 1;
-    });
+    // Installer counts come from profiles assigned to each company.
+    const counts = await installerCountsByCompany(supabase);
 
     setCompanies((companiesData || []).map((c: any) => ({
       ...c,
-      member_count: counts[c.id] || 0,
+      member_count: counts.get(c.id) || 0,
     })));
     setLoading(false);
   };
@@ -61,7 +56,7 @@ export default function CniCompaniesPage() {
     setCreating(true);
     setCreateError(null);
     const { data, error } = await supabase
-      .from('cni_companies')
+      .from('companies')
       .insert({ name })
       .select('id')
       .single();

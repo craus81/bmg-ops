@@ -59,11 +59,11 @@ export default function AvailableJobDetailPage() {
       .order('sort_order');
     setVins(vinData || []);
 
-    // My company (may be null for unlinked profiles)
+    // My company comes from the profile (shared companies list).
     const { data: myProfile } = await supabase
-      .from('cni_profiles')
+      .from('profiles')
       .select('company_id')
-      .eq('user_id', (isAdmin && preview?.profileId) || user.id)
+      .eq('id', (isAdmin && preview?.profileId) || user.id)
       .maybeSingle();
     const companyId: string | null = myProfile?.company_id || null;
     setMyCompanyId(companyId);

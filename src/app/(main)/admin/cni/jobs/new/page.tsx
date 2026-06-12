@@ -5,12 +5,7 @@ import { useRouter } from 'next/navigation';
 import { createClient } from '@/lib/supabase-browser';
 import { useAuth } from '@/components/AuthProvider';
 import PartPicker, { type PickedPart } from '@/components/PartPicker';
-
-interface CompanyOption {
-  id: string;
-  name: string;
-  memberCount: number;
-}
+import { loadCompaniesWithCounts, type CompanyOption } from '@/lib/cni-companies';
 
 export default function CreateCniJobPage() {
   const router = useRouter();
@@ -67,20 +62,7 @@ export default function CreateCniJobPage() {
   }, [isAdmin]);
 
   const loadCompanies = async () => {
-    const { data: comps } = await supabase
-      .from('cni_companies')
-      .select('id, name')
-      .order('name');
-    if (!comps) return;
-    const { data: members } = await supabase
-      .from('cni_profiles')
-      .select('company_id')
-      .not('company_id', 'is', null);
-    const counts = new Map<string, number>();
-    for (const m of members || []) {
-      counts.set(m.company_id, (counts.get(m.company_id) || 0) + 1);
-    }
-    setCompanies(comps.map((c: any) => ({ id: c.id, name: c.name, memberCount: counts.get(c.id) || 0 })));
+    setCompanies(await loadCompaniesWithCounts(supabase));
   };
 
   const addVin = () => {

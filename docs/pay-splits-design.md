@@ -54,26 +54,29 @@ split per completed vehicle by however many people worked that shift (2-way,
 
 ### 1. Companies — the unit of assignment
 
-```sql
-cni_companies (
-  id UUID PK,
-  name TEXT UNIQUE,
-  primary_contact_profile_id UUID NULL REFERENCES profiles,  -- notify-only, no special powers
-  phone TEXT, email TEXT, address JSONB,
-  netsuite_vendor_id TEXT NULL,        -- company-level vendor (company payout mode)
-  w9_file_path TEXT NULL, insurance_cert_path TEXT NULL, insurance_expiry DATE NULL,
-  created_at TIMESTAMPTZ, updated_at TIMESTAMPTZ
-)
+CNI reuses the **existing `companies` table** — the same list assigned to
+users at access-granting time via `profiles.company_id`, managed on
+`/admin/users`. There is no separate CNI company list. A "CNI company" is a
+`companies` row; its installers are the profiles (with an installer role)
+whose `company_id` points at it.
 
-cni_profiles ADD company_id UUID NULL REFERENCES cni_companies
-cni_jobs    ADD assigned_company_id UUID NULL REFERENCES cni_companies
+```sql
+-- CNI-specific fields added to the shared companies table:
+companies ADD primary_contact_profile_id UUID NULL REFERENCES profiles  -- notify-only
+companies ADD phone TEXT, email TEXT, address JSONB
+companies ADD netsuite_vendor_id TEXT NULL          -- company-level vendor (company payout mode)
+companies ADD w9_file_path TEXT, insurance_cert_path TEXT, insurance_expiry DATE
+
+cni_profiles ADD netsuite_vendor_id TEXT NULL        -- per-person vendor (individual payouts)
+cni_jobs     ADD assigned_company_id UUID NULL REFERENCES companies
 ```
 
-- **Migration/backfill:** create one `cni_companies` row per distinct
-  `cni_profiles.company_name`, link profiles, and set `assigned_company_id`
-  from each job's current installer's company. `company_name` stays as a
-  denormalized display value during transition. `assigned_installer_id`
-  remains for historical jobs but new assignments are company-level.
+- **Membership = `profiles.company_id`** (set on `/admin/users` *or* the CNI
+  companies page — both write the same field, staying in sync). No backfill of
+  a company list is needed; it already exists. Open jobs are backfilled to the
+  assigned installer's `profiles.company_id`; closed jobs stay installer-only.
+  `assigned_installer_id` remains for historical jobs but new assignments are
+  company-level.
 - **No lead.** Any installer at the assigned company can do any job action:
   propose/confirm the schedule, upload photos, message, start shifts, scan,
   and (in company payout mode) upload the invoice. Every action records who
@@ -81,8 +84,8 @@ cni_jobs    ADD assigned_company_id UUID NULL REFERENCES cni_companies
   admin convenience only — zero special workflow powers.
 - **Authorization rework:** every "is this user the assigned installer?" check
   (complete-vin route, job page RLS, photos, messages, invoice) becomes "does
-  this user's `cni_profile.company_id` match the job's
-  `assigned_company_id`?".
+  this user's `profiles.company_id` match the job's `assigned_company_id`?"
+  (via the `cni_user_company_id()` SECURITY DEFINER helper).
 - **Bidding becomes company-level:** invites target a company (delivered to
   all its installers); any member's bid counts as the company's bid (deduped
   per company in the admin review screen); selecting a winner sets

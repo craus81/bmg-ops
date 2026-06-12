@@ -3,24 +3,24 @@
 -- installers); any member's bid counts as the company's bid; selecting a
 -- winner assigns the company.
 
-ALTER TABLE cni_job_invites ADD COLUMN IF NOT EXISTS company_id UUID REFERENCES cni_companies(id);
+ALTER TABLE cni_job_invites ADD COLUMN IF NOT EXISTS company_id UUID REFERENCES companies(id);
 ALTER TABLE cni_job_invites ALTER COLUMN installer_id DROP NOT NULL;
 CREATE UNIQUE INDEX IF NOT EXISTS idx_cni_job_invites_job_company
   ON cni_job_invites(job_id, company_id) WHERE company_id IS NOT NULL;
 
-ALTER TABLE cni_job_bids ADD COLUMN IF NOT EXISTS company_id UUID REFERENCES cni_companies(id);
+ALTER TABLE cni_job_bids ADD COLUMN IF NOT EXISTS company_id UUID REFERENCES companies(id);
 CREATE INDEX IF NOT EXISTS idx_cni_job_bids_company ON cni_job_bids(company_id) WHERE company_id IS NOT NULL;
 
--- Backfill legacy rows through the installer's company.
+-- Backfill legacy rows through the bidder's company (profiles.company_id).
 UPDATE cni_job_invites i
-SET company_id = cp.company_id
-FROM cni_profiles cp
-WHERE i.company_id IS NULL AND i.installer_id IS NOT NULL AND cp.user_id = i.installer_id;
+SET company_id = p.company_id
+FROM profiles p
+WHERE i.company_id IS NULL AND i.installer_id IS NOT NULL AND p.id = i.installer_id;
 
 UPDATE cni_job_bids b
-SET company_id = cp.company_id
-FROM cni_profiles cp
-WHERE b.company_id IS NULL AND cp.user_id = b.installer_id;
+SET company_id = p.company_id
+FROM profiles p
+WHERE b.company_id IS NULL AND p.id = b.installer_id;
 
 -- Any member of the invited company sees the invite; members also see their
 -- company's bids (so a coworker knows the company already responded).

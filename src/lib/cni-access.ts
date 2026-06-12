@@ -15,15 +15,18 @@ export function rolesOf(profile: { role?: string | null; roles?: string[] | null
   return profile.roles?.length ? profile.roles : (profile.role ? [profile.role] : []);
 }
 
-/** The user's CNI company, or null for internal staff / unlinked profiles. */
+/**
+ * The user's company, straight from their profile — the same company they're
+ * assigned at access-granting time. CNI membership is not a separate list.
+ */
 export async function getCniCompanyId(
   service: SupabaseClient,
   userId: string,
 ): Promise<string | null> {
   const { data } = await service
-    .from('cni_profiles')
+    .from('profiles')
     .select('company_id')
-    .eq('user_id', userId)
+    .eq('id', userId)
     .maybeSingle();
   return data?.company_id || null;
 }

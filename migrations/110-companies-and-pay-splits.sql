@@ -7,62 +7,45 @@
 -- shift + credit mechanics with rates from install_pay_rates.
 
 -- ── 1. Companies ──────────────────────────────────────────────────────────
+-- CNI uses the EXISTING `companies` table (the one assigned to users at
+-- access-granting time via profiles.company_id) — there is no separate CNI
+-- company list. A CNI company's installers are simply the profiles whose
+-- company_id points at it. Here we add the CNI-specific fields companies
+-- needs for assignment, payouts, and compliance.
 
-CREATE TABLE IF NOT EXISTS cni_companies (
-  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-  name TEXT UNIQUE NOT NULL,
-  -- Notify-only contact; no special workflow powers (there is no "lead").
-  primary_contact_profile_id UUID REFERENCES profiles(id),
-  phone TEXT,
-  email TEXT,
-  address JSONB DEFAULT '{}'::jsonb,
-  -- Company-level vendor for the lump-sum payout mode (phase 3).
-  netsuite_vendor_id TEXT,
-  -- Company-level compliance docs (per-person docs stay on cni_profiles).
-  w9_file_path TEXT,
-  insurance_cert_path TEXT,
-  insurance_expiry DATE,
-  created_at TIMESTAMPTZ DEFAULT NOW(),
-  updated_at TIMESTAMPTZ DEFAULT NOW()
-);
+ALTER TABLE companies ADD COLUMN IF NOT EXISTS primary_contact_profile_id UUID REFERENCES profiles(id);
+ALTER TABLE companies ADD COLUMN IF NOT EXISTS phone TEXT;
+ALTER TABLE companies ADD COLUMN IF NOT EXISTS email TEXT;
+ALTER TABLE companies ADD COLUMN IF NOT EXISTS address JSONB DEFAULT '{}'::jsonb;
+-- Company-level vendor for the lump-sum payout mode (phase 3).
+ALTER TABLE companies ADD COLUMN IF NOT EXISTS netsuite_vendor_id TEXT;
+-- Company-level compliance docs (per-person docs stay on cni_profiles).
+ALTER TABLE companies ADD COLUMN IF NOT EXISTS w9_file_path TEXT;
+ALTER TABLE companies ADD COLUMN IF NOT EXISTS insurance_cert_path TEXT;
+ALTER TABLE companies ADD COLUMN IF NOT EXISTS insurance_expiry DATE;
 
-ALTER TABLE cni_profiles ADD COLUMN IF NOT EXISTS company_id UUID REFERENCES cni_companies(id);
 -- Per-person vendor for individual payouts (phase 3).
 ALTER TABLE cni_profiles ADD COLUMN IF NOT EXISTS netsuite_vendor_id TEXT;
 
-ALTER TABLE cni_jobs ADD COLUMN IF NOT EXISTS assigned_company_id UUID REFERENCES cni_companies(id);
+ALTER TABLE cni_jobs ADD COLUMN IF NOT EXISTS assigned_company_id UUID REFERENCES companies(id);
 ALTER TABLE cni_jobs ADD COLUMN IF NOT EXISTS pay_per_vehicle NUMERIC(10,2);
 
 -- Curated field crew picker ("field installer" flag on internal profiles;
 -- field_tech-role users are included by the roster query regardless).
 ALTER TABLE profiles ADD COLUMN IF NOT EXISTS is_field_installer BOOLEAN DEFAULT FALSE;
 
--- Backfill: company_name values are clean (assigned from a dropdown), so one
--- company per distinct trimmed name, then link profiles.
-INSERT INTO cni_companies (name)
-SELECT DISTINCT TRIM(company_name)
-FROM cni_profiles
-WHERE company_name IS NOT NULL AND TRIM(company_name) <> ''
-ON CONFLICT (name) DO NOTHING;
-
-UPDATE cni_profiles p
-SET company_id = c.id
-FROM cni_companies c
-WHERE p.company_id IS NULL
-  AND p.company_name IS NOT NULL
-  AND TRIM(p.company_name) = c.name;
-
--- Map open jobs to the assigned installer's company. Closed jobs are left
--- installer-only on purpose: visibility broadens for new/active work only.
+-- Map open jobs to the assigned installer's company (profiles.company_id).
+-- Closed jobs are left installer-only on purpose: visibility broadens for
+-- new/active work only.
 UPDATE cni_jobs j
-SET assigned_company_id = cp.company_id
-FROM cni_profiles cp
+SET assigned_company_id = p.company_id
+FROM profiles p
 WHERE j.assigned_company_id IS NULL
   AND j.assigned_installer_id IS NOT NULL
   AND j.status <> 'approved_closed'
-  AND cp.user_id = j.assigned_installer_id;
+  AND p.id = j.assigned_installer_id
+  AND p.company_id IS NOT NULL;
 
-CREATE INDEX IF NOT EXISTS idx_cni_profiles_company ON cni_profiles(company_id);
 CREATE INDEX IF NOT EXISTS idx_cni_jobs_assigned_company ON cni_jobs(assigned_company_id);
 
 -- ── 2. Shifts ─────────────────────────────────────────────────────────────
@@ -176,25 +159,19 @@ CREATE INDEX IF NOT EXISTS idx_install_credits_payout ON install_credits(payout_
 
 -- ── 5. RLS ────────────────────────────────────────────────────────────────
 
--- The signed-in user's CNI company. SECURITY DEFINER so job policies can use
--- it without recursing into cni_profiles RLS; it only ever returns the
--- caller's own company.
+-- The signed-in user's company, straight from their profile. SECURITY
+-- DEFINER so job policies can use it without tripping profiles RLS; it only
+-- ever returns the caller's own company.
 CREATE OR REPLACE FUNCTION cni_user_company_id()
 RETURNS UUID AS $$
-  SELECT company_id FROM cni_profiles WHERE user_id = auth.uid()
+  SELECT company_id FROM profiles WHERE id = auth.uid()
 $$ LANGUAGE sql SECURITY DEFINER STABLE;
 
-ALTER TABLE cni_companies ENABLE ROW LEVEL SECURITY;
 ALTER TABLE work_shifts ENABLE ROW LEVEL SECURITY;
 ALTER TABLE work_shift_members ENABLE ROW LEVEL SECURITY;
 ALTER TABLE install_pay_rates ENABLE ROW LEVEL SECURITY;
 ALTER TABLE payouts ENABLE ROW LEVEL SECURITY;
 ALTER TABLE install_credits ENABLE ROW LEVEL SECURITY;
-
-CREATE POLICY "Admin full access to cni_companies" ON cni_companies FOR ALL TO authenticated
-  USING (EXISTS (SELECT 1 FROM profiles WHERE id = auth.uid() AND (role = 'admin' OR 'admin' = ANY(roles)) AND status = 'approved'));
-CREATE POLICY "Members can view own company" ON cni_companies FOR SELECT TO authenticated
-  USING (id = cni_user_company_id());
 
 -- Shifts, members, rates, payouts, and credits are written only via
 -- service-role API routes (like scan_logs). Admin reads everything; users
@@ -247,7 +224,8 @@ CREATE POLICY "Company members can rw cni_job_messages" ON cni_job_messages FOR 
 CREATE POLICY "Company members can view cni_job_status_history" ON cni_job_status_history FOR SELECT TO authenticated
   USING (EXISTS (SELECT 1 FROM cni_jobs WHERE id = job_id AND assigned_company_id IS NOT NULL AND assigned_company_id = cni_user_company_id()));
 
--- Company members may read each other's basic CNI profile rows (needed for
--- crew checklists and "who completed what" displays).
-CREATE POLICY "Members can view company cni_profiles" ON cni_profiles FOR SELECT TO authenticated
+-- Company members may read each other's profile rows (crew checklists and
+-- "who completed what" displays). Crew rosters themselves are assembled
+-- server-side via the service role, so this only covers client-side reads.
+CREATE POLICY "Members can view company profiles" ON profiles FOR SELECT TO authenticated
   USING (company_id IS NOT NULL AND company_id = cni_user_company_id());
