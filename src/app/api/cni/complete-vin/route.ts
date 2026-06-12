@@ -4,6 +4,8 @@ import { requireAuth } from '@/lib/api-auth';
 import { validateBody, z } from '@/lib/validate';
 import { isVerizonRfidPart, validateSerial, validateImei, validateIccid } from '@/lib/rfid';
 import { logScan, resolveScannerCompany } from '@/lib/scan-log';
+import { canActOnCniJob } from '@/lib/cni-access';
+import { ensureCniShift, createCompletionCredits } from '@/lib/pay-credits';
 
 export const dynamic = 'force-dynamic';
 
@@ -38,10 +40,11 @@ export async function POST(req: NextRequest) {
   if (parsed.error) return parsed.error;
   const { jobId, vinId } = parsed.data;
 
-  // Load the job and authorize: assigned installer or admin.
+  // Load the job and authorize: any installer at the assigned company, the
+  // legacy assigned installer, or an admin (company model — no lead).
   const { data: job } = await supabase
     .from('cni_jobs')
-    .select('id, assigned_installer_id, part_number, part_description, billable_customer, address, title, status')
+    .select('id, assigned_installer_id, assigned_company_id, pay_per_vehicle, part_number, part_description, billable_customer, address, title, status')
     .eq('id', jobId)
     .single();
   if (!job) return NextResponse.json({ error: 'Job not found' }, { status: 404 });
@@ -50,7 +53,7 @@ export async function POST(req: NextRequest) {
     .from('profiles').select('role, roles').eq('id', auth.user.id).single();
   const roles: string[] = profile?.roles?.length ? profile.roles : (profile?.role ? [profile.role] : []);
   const isAdmin = roles.includes('admin');
-  if (!isAdmin && job.assigned_installer_id !== auth.user.id) {
+  if (!isAdmin && !(await canActOnCniJob(supabase, auth.user.id, job))) {
     return NextResponse.json({ error: 'Forbidden' }, { status: 403 });
   }
 
@@ -75,7 +78,9 @@ export async function POST(req: NextRequest) {
 
   // Log to scan_logs via the shared helper (same logic as the main scan page).
   // Only when the job has a part and this VIN isn't already logged — idempotent.
-  const scanner = job.assigned_installer_id || auth.user.id;
+  // Scans are attributed to whoever actually scanned, not the legacy assigned
+  // installer — with company assignment any crew member may be completing.
+  const scanner = auth.user.id;
   let scanLogId: string | null = vin.scan_log_id;
   if (job.part_number && !vin.scan_log_id) {
     const addr = (job.address || {}) as { city?: string; state?: string };
@@ -101,12 +106,33 @@ export async function POST(req: NextRequest) {
     scanLogId = result.scanLogId;
   }
 
+  // Pay credits: snapshot the active shift's crew for this vehicle. If no
+  // shift was started, an implicit solo shift is created (crew of one).
+  const shift = await ensureCniShift(supabase, jobId, auth.user.id);
+  let creditsError: string | null = shift ? null : 'Failed to open a shift for pay credits';
+  if (shift) {
+    const credits = await createCompletionCredits(supabase, {
+      shiftId: shift.id,
+      source: 'cni',
+      ratePerVehicle: job.pay_per_vehicle != null ? Number(job.pay_per_vehicle) : null,
+      completion: {
+        scanLogId,
+        cniJobVinId: vinId,
+        vin: vin.vin,
+        partNumber: job.part_number,
+      },
+    });
+    if (!credits.ok) creditsError = credits.error || 'Failed to write pay credits';
+  }
+
   // Mark the VIN complete and mirror the captured identifiers onto it.
   const { error: vinErr } = await supabase
     .from('cni_job_vins')
     .update({
       status: 'completed',
       completed_at: new Date().toISOString(),
+      completed_by: auth.user.id,
+      shift_id: shift?.id || null,
       serial_number: serial,
       imei,
       iccid,
@@ -129,5 +155,7 @@ export async function POST(req: NextRequest) {
     jobCompleted = true;
   }
 
-  return NextResponse.json({ success: true, scanLogId, jobCompleted });
+  // A credits failure doesn't undo the completion — the vehicle IS done; the
+  // missing credits surface in the admin shift editor and can be rebuilt.
+  return NextResponse.json({ success: true, scanLogId, jobCompleted, creditsError });
 }
