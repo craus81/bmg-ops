@@ -1,9 +1,10 @@
 # Per-Vehicle Pay Splits — Design
 
 **Status:** Draft for review — no code written yet.
-**Scope:** Crew tagging, per-vehicle pay credits, uneven splits, individual
-payouts, and admin corrections — for both CNI installer jobs and BMG field
-installs (e.g., the U-Haul job billed to Designs That Stick).
+**Scope:** Company-based job assignment, crew shift tagging, per-vehicle pay
+credits, uneven splits, individual payouts, and admin corrections — for both
+CNI installer jobs and BMG field installs (e.g., the U-Haul job billed to
+Designs That Stick).
 
 ## Problem
 
@@ -18,29 +19,72 @@ split per completed vehicle by however many people worked that shift (2-way,
 - Even splits by default, uneven splits when needed.
 - The option to pay employees individually (NetSuite bill per employee) instead
   of one company lump sum.
+- Jobs assigned to the **company**, not to a designated lead installer.
 - The same mechanics on the BMG field side, where workers are payroll employees
   and the output is a per-pay-period earnings report instead of bills.
 
 ## What exists today
 
-- CNI jobs have one `assigned_installer_id` and one lump-sum `budget`. Payment
-  is: installer uploads invoice → admin approves → admin manually creates one
-  NetSuite vendor bill and records `netsuite_bill_id`.
+- CNI jobs have one `assigned_installer_id` (a single person — the whole job
+  lifecycle hangs off them: access, scheduling, photos, messages, invoice) and
+  one lump-sum `budget`. Payment is: installer uploads invoice → admin
+  approves → admin manually creates one NetSuite vendor bill and records
+  `netsuite_bill_id`.
+- "Company" is only a free-text `company_name` on `cni_profiles` — there is no
+  companies table, and compliance docs (W9, insurance) live per person.
 - `cni_job_vins` records `completed_at` but not who completed it.
 - Both completion paths converge on `logScan()` (`src/lib/scan-log.ts`), which
   writes `scan_logs` — except CNI jobs *without* a part number, which complete
   VINs without a scan_log row.
 - The field `/scan` page already has a "shift" concept (part + location locked
   until "End Shift") but no crew or money attached.
-- Multiple `cni_profiles` can share a `company_name`; there is no crew/team
-  table. Field installers are internal users in `profiles`.
+- Field installers are internal users in `profiles`.
 
 ## Core concepts
 
-### 1. Shifts and crew tagging
+### 1. Companies — the unit of assignment
+
+```sql
+cni_companies (
+  id UUID PK,
+  name TEXT UNIQUE,
+  primary_contact_profile_id UUID NULL REFERENCES profiles,  -- notify-only, no special powers
+  phone TEXT, email TEXT, address JSONB,
+  netsuite_vendor_id TEXT NULL,        -- company-level vendor (company payout mode)
+  w9_file_path TEXT NULL, insurance_cert_path TEXT NULL, insurance_expiry DATE NULL,
+  created_at TIMESTAMPTZ, updated_at TIMESTAMPTZ
+)
+
+cni_profiles ADD company_id UUID NULL REFERENCES cni_companies
+cni_jobs    ADD assigned_company_id UUID NULL REFERENCES cni_companies
+```
+
+- **Migration/backfill:** create one `cni_companies` row per distinct
+  `cni_profiles.company_name`, link profiles, and set `assigned_company_id`
+  from each job's current installer's company. `company_name` stays as a
+  denormalized display value during transition. `assigned_installer_id`
+  remains for historical jobs but new assignments are company-level.
+- **No lead.** Any installer at the assigned company can do any job action:
+  propose/confirm the schedule, upload photos, message, start shifts, scan,
+  and (in company payout mode) upload the invoice. Every action records who
+  did it. The company's optional **primary contact** is for notifications and
+  admin convenience only — zero special workflow powers.
+- **Authorization rework:** every "is this user the assigned installer?" check
+  (complete-vin route, job page RLS, photos, messages, invoice) becomes "does
+  this user's `cni_profile.company_id` match the job's
+  `assigned_company_id`?".
+- **Bidding becomes company-level:** invites target a company (delivered to
+  all its installers); any member's bid counts as the company's bid (deduped
+  per company in the admin review screen); selecting a winner sets
+  `assigned_company_id`.
+- **Metrics:** reliability/completion stats roll up per company (per-profile
+  stats remain for individual credit history).
+
+### 2. Shifts and crew tagging
 
 A **shift** is a work session on a job/part with a tagged crew. Whoever is
-scanning starts the shift and checks off who's present.
+scanning starts the shift and checks off who's present — the checklist lists
+the assigned company's installers (no separate per-job roster needed).
 
 ```sql
 work_shifts (
@@ -71,13 +115,13 @@ work_shift_members (
   implicit one-person shift is created if they skip crew tagging).
 
 **Uneven splits:** each member has a `share_weight` (default 1 = even split).
-A lead on double share is weight 2 vs 1/1. Per-vehicle amount =
+A senior installer on double share is weight 2 vs 1/1. Per-vehicle amount =
 `rate × member_weight / Σ weights`. Weights are set at shift start by the
 scanner (or by admin), and admin can override per vehicle after the fact.
 Weights were chosen over percentages because they stay valid when crew size
 changes mid-shift.
 
-### 2. Credits — the per-vehicle pay ledger
+### 3. Credits — the per-vehicle pay ledger
 
 Every completed vehicle generates one **credit row per crew member present**,
 snapshotting the rate, weights, and dollar amount at completion time. The
@@ -117,7 +161,7 @@ Credits are created server-side at the moment of completion:
   active shift. Offline scans queue the shift_id and credits are created at
   sync. Duplicate-scan rejections (409) create no credits.
 
-### 3. Rates
+### 4. Rates
 
 - **CNI jobs:** new `cni_jobs.pay_per_vehicle NUMERIC`, set by admin at job
   creation, defaulting to `budget / vin_count`. Sum of all credits on a job
@@ -139,26 +183,6 @@ install_pay_rates (
 If a field scan has no configured rate, credits are still created with
 `rate_per_vehicle = NULL` and surface in admin as "needs pricing"; setting the
 rate fills in the unpriced credits. Crew tracking never blocks on pricing.
-
-### 4. CNI crew roster
-
-```sql
-cni_job_crew (
-  id UUID PK,
-  job_id UUID REFERENCES cni_jobs ON DELETE CASCADE,
-  profile_id UUID REFERENCES profiles,          -- must have a cni_profile
-  added_by UUID, added_at TIMESTAMPTZ
-)
-```
-
-- The assigned installer stays the **lead** (scheduling, invoice, messages).
-- Admin adds crew members; the lead can also add coworkers whose `cni_profiles`
-  share their `company_name` (soft rule, admin can override).
-- Crew members get read access to the job and appear in the shift-start
-  checklist. **Each employee needs their own login** to see their earnings —
-  that's the tradeoff for the installer-facing visibility requirement.
-- RLS: crew members read the job + their own credits; only admins read/write
-  credits broadly.
 
 ### 5. Payouts
 
@@ -184,16 +208,19 @@ only correction path, keeping the audit trail).
 **CNI — per-job payout mode.** New `cni_jobs.payout_mode`
 (`'company'` default | `'individual'`):
 
-- `company`: today's flow unchanged — one invoice, one NetSuite bill to the
-  company. Credits are informational: the admin job page and the company lead
-  get a per-employee breakdown to check the invoice against / divide pay with.
+- `company`: one invoice, one NetSuite bill to the company (vendor record on
+  `cni_companies.netsuite_vendor_id`). Any company member can upload the
+  invoice — or, since the credits ledger contains every vehicle and amount,
+  the app can generate the invoice and skip the upload entirely. Credits are
+  informational: the admin job page and the company get a per-employee
+  breakdown to divide pay with.
 - `individual`: when the job is approved, the app generates one **draft payout
   per employee** from their credits (an itemized statement: VINs, dates, crew
   size, amounts). Admin approves each, creates the vendor bill in NetSuite
   manually (matching today's manual pattern), and records the bill ID per
   payout. Each employee needs a NetSuite vendor record — store
-  `netsuite_vendor_id` on `cni_profiles`. The job-level invoice upload is
-  skipped in this mode; the generated statements replace it.
+  `netsuite_vendor_id` on `cni_profiles`. No job-level invoice in this mode;
+  the generated statements replace it.
 
 **Field — payroll report.** Field workers are W-2 payroll employees, so field
 credits are never NetSuite-billed. Admin gets a payroll report page: pick a
@@ -216,24 +243,29 @@ Reopening a completed VIN (or archiving/deleting a scan) voids its credits.
 
 ## Installer experience
 
-- **CNI job page:** a shift bar — "On shift: you + Mike + Dana · $25.00/vehicle
-  to you" — with start/end shift and the crew checklist. Completed VINs show
-  the split ("÷3"). New **My Earnings** page: per job and running totals —
+- **CNI job page:** every installer at the assigned company sees the job. A
+  shift bar — "On shift: you + Mike + Dana · $25.00/vehicle to you" — with
+  start/end shift and the company-member checklist. Completed VINs show the
+  split ("÷3"). New **My Earnings** page: per job and running totals —
   vehicles credited, crew size each, their amount, payout status.
 - **Field `/scan` page:** after part + location, an optional "Who's working
   with you?" step (skipping = solo). The locked banner adds crew + "your cut"
   when a rate exists. End Shift closes the work_shift.
-- Employees see only their own numbers; the lead sees the whole crew's
-  breakdown; rates invisible on field scans until priced.
+- Everyone sees their own dollar amounts. Crew composition per vehicle is
+  visible to anyone who was on that shift; other members' dollar figures are
+  not shown (admin sees everything).
 
 ## Admin screens
 
+- **Companies** (`/admin/cni/companies`): company list/detail — members,
+  primary contact, NetSuite vendor ID, compliance docs, rolled-up metrics.
 - **Pay rates** (`/admin/pay-rates`): CRUD for `install_pay_rates`, plus the
   "needs pricing" queue of unpriced credits.
-- **CNI job page additions:** crew roster editor, `pay_per_vehicle` +
-  `payout_mode` fields, shifts list with credit totals, shift/per-vehicle
-  credit editors, per-employee payout statements (individual mode) with
-  NetSuite bill ID entry.
+- **CNI job page changes:** assign to a company (member list shown);
+  `pay_per_vehicle` + `payout_mode` fields; shifts list with credit totals;
+  shift/per-vehicle credit editors; per-employee payout statements
+  (individual mode) with NetSuite bill ID entry. Bid review dedupes per
+  company.
 - **Payroll report** (`/admin/payroll`): pay-period picker, per-employee
   totals + drill-down, CSV export, "mark period paid".
 
@@ -247,14 +279,18 @@ Reopening a completed VIN (or archiving/deleting a scan) voids its credits.
 
 ## Build phases
 
-1. **Tracking** — migrations; shift start/crew tagging on both sides; credit
-   snapshots in `complete-vin` and `logScan()`; rate table + CNI
-   `pay_per_vehicle`; admin shift/credit editing. Tracking starts immediately;
-   money stays invisible to installers until rates are set.
+1. **Companies + tracking** — `cni_companies` migration with backfill from
+   `company_name`; company-based assignment + authorization rework
+   (complete-vin, RLS, photos, messages, invoice); shift start/crew tagging on
+   both sides; credit snapshots in `complete-vin` and `logScan()`; rate table
+   + CNI `pay_per_vehicle`; admin shift/credit editing and companies screen.
+   Tracking starts immediately; money stays invisible to installers until
+   rates are set.
 2. **Visibility** — installer My Earnings + shift-bar UX; admin payroll report
-   with CSV export.
+   with CSV export; company-level bidding/invites and metric rollups.
 3. **Payouts** — `payout_mode` on CNI jobs; generated per-employee statements;
-   NetSuite vendor ID on profiles; bill-ID workflow; credit locking.
+   NetSuite vendor IDs on companies and profiles; bill-ID workflow; credit
+   locking.
 
 ## Open questions
 
@@ -262,7 +298,11 @@ Reopening a completed VIN (or archiving/deleting a scan) voids its credits.
   does it start?).
 - Should the field crew picker list *all* internal profiles or a curated
   "field installer" subset?
+- Compliance docs: move W9/insurance to the company, keep per person, or both?
+  (Per-person W9s matter if individual payouts make employees 1099 vendors.)
 - For `individual` CNI payouts: any employees without NetSuite vendor records
   yet, and who sets those up?
 - Does the U-Haul rate vary by vehicle type (box truck vs van vs trailer)? If
   so the rate table needs a second dimension (rate per part + vehicle class).
+- Backfill check: are existing `company_name` values clean enough to key the
+  migration on, or do a few need manual merging first (typos/variants)?
