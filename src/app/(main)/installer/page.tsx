@@ -42,16 +42,20 @@ export default function InstallerPortalPage() {
     // Check if CNI profile exists
     const { data: profile } = await supabase
       .from('cni_profiles')
-      .select('id, profile_complete')
+      .select('id, profile_complete, company_id')
       .eq('user_id', user.id)
       .single();
     setHasProfile(!!profile);
 
-    // Load assigned jobs
+    // Load my jobs: assigned to my company (any installer at the company
+    // works company jobs) or directly to me (legacy / pre-company jobs).
+    const orFilter = profile?.company_id
+      ? `assigned_installer_id.eq.${user.id},assigned_company_id.eq.${profile.company_id}`
+      : `assigned_installer_id.eq.${user.id}`;
     const { data: jobsData } = await supabase
       .from('cni_jobs')
       .select('id, job_number, title, status, customer_name, deadline, confirmed_schedule_start')
-      .eq('assigned_installer_id', user.id)
+      .or(orFilter)
       .order('created_at', { ascending: false });
     setJobs(jobsData || []);
 

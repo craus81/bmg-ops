@@ -41,9 +41,13 @@ export async function POST(req: NextRequest) {
 
   const shift = await loadShift(service, shiftId);
   if (!shift) return NextResponse.json({ error: 'Shift not found' }, { status: 404 });
-  if (shift.ended_at) return NextResponse.json({ error: 'Shift has ended' }, { status: 400 });
 
+  // Installers manage only open shifts; admins also edit ended ones for
+  // after-the-fact corrections (followed by a credit recompute).
   const isAdmin = rolesOf(auth.profile).includes('admin');
+  if (shift.ended_at && !isAdmin) {
+    return NextResponse.json({ error: 'Shift has ended' }, { status: 400 });
+  }
   if (!(await canManageShift(service, auth.user.id, shift, isAdmin))) {
     return NextResponse.json({ error: 'Forbidden' }, { status: 403 });
   }

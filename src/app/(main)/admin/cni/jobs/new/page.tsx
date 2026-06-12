@@ -6,12 +6,10 @@ import { createClient } from '@/lib/supabase-browser';
 import { useAuth } from '@/components/AuthProvider';
 import PartPicker, { type PickedPart } from '@/components/PartPicker';
 
-interface InstallerOption {
+interface CompanyOption {
   id: string;
-  full_name: string;
-  company_name: string | null;
-  service_area: any;
-  availability_status: string;
+  name: string;
+  memberCount: number;
 }
 
 export default function CreateCniJobPage() {
@@ -20,7 +18,7 @@ export default function CreateCniJobPage() {
   const supabase = createClient();
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState('');
-  const [installers, setInstallers] = useState<InstallerOption[]>([]);
+  const [companies, setCompanies] = useState<CompanyOption[]>([]);
 
   // Job form state
   const [title, setTitle] = useState('');
@@ -28,6 +26,7 @@ export default function CreateCniJobPage() {
   const [scope, setScope] = useState('');
   const [customerName, setCustomerName] = useState('');
   const [budget, setBudget] = useState('');
+  const [payPerVehicle, setPayPerVehicle] = useState('');
   const [deadline, setDeadline] = useState('');
   const [estimatedHours, setEstimatedHours] = useState('');
 
@@ -56,37 +55,31 @@ export default function CreateCniJobPage() {
   const [shipState, setShipState] = useState('');
   const [shipZip, setShipZip] = useState('');
 
-  // Assignment
-  const [assignInstaller, setAssignInstaller] = useState(false);
-  const [selectedInstallerId, setSelectedInstallerId] = useState('');
+  // Assignment — company-based: any installer at the company can work the job.
+  const [assignCompany, setAssignCompany] = useState(false);
+  const [selectedCompanyId, setSelectedCompanyId] = useState('');
 
   useEffect(() => {
     if (!isAdmin) { router.push('/home'); return; }
-    loadInstallers();
+    loadCompanies();
   // eslint-disable-next-line react-hooks/exhaustive-deps -- intentional: load once on mount
   }, [isAdmin]);
 
-  const loadInstallers = async () => {
-    const { data } = await supabase
+  const loadCompanies = async () => {
+    const { data: comps } = await supabase
+      .from('cni_companies')
+      .select('id, name')
+      .order('name');
+    if (!comps) return;
+    const { data: members } = await supabase
       .from('cni_profiles')
-      .select('user_id, company_name, service_area, availability_status')
-      .not('risk_tags', 'cs', '{do_not_assign}');
-    if (data) {
-      const userIds = data.map((p: any) => p.user_id);
-      const { data: profiles } = await supabase
-        .from('profiles')
-        .select('id, full_name')
-        .in('id', userIds);
-      const nameMap: Record<string, string> = {};
-      if (profiles) profiles.forEach((p: any) => { nameMap[p.id] = p.full_name; });
-      setInstallers(data.map((p: any) => ({
-        id: p.user_id,
-        full_name: nameMap[p.user_id] || 'Unknown',
-        company_name: p.company_name,
-        service_area: p.service_area,
-        availability_status: p.availability_status,
-      })));
+      .select('company_id')
+      .not('company_id', 'is', null);
+    const counts = new Map<string, number>();
+    for (const m of members || []) {
+      counts.set(m.company_id, (counts.get(m.company_id) || 0) + 1);
     }
+    setCompanies(comps.map((c: any) => ({ id: c.id, name: c.name, memberCount: counts.get(c.id) || 0 })));
   };
 
   const addVin = () => {
@@ -114,6 +107,13 @@ export default function CreateCniJobPage() {
     try {
       const validVins = vins.filter(v => v.vin.trim());
 
+      // Per-vehicle pay drives the crew splits; default to budget ÷ VINs.
+      const rate = payPerVehicle
+        ? parseFloat(payPerVehicle)
+        : budget && validVins.length > 0
+          ? Math.round((parseFloat(budget) / validVins.length) * 100) / 100
+          : null;
+
       // Create job
       const { data: job, error: jobError } = await supabase
         .from('cni_jobs')
@@ -126,6 +126,7 @@ export default function CreateCniJobPage() {
           part_description: part?.part_description || null,
           billable_customer: part?.billable_customer || null,
           budget: budget ? parseFloat(budget) : null,
+          pay_per_vehicle: rate,
           deadline: deadline || null,
           estimated_hours: estimatedHours ? parseFloat(estimatedHours) : null,
           address: { street, city, state, zip },
@@ -136,9 +137,9 @@ export default function CreateCniJobPage() {
           vin_count: validVins.length || 1,
           requires_shipment: requiresShipment,
           shipping_address: requiresShipment ? { street: shipStreet, city: shipCity, state: shipState, zip: shipZip } : null,
-          assigned_installer_id: assignInstaller && selectedInstallerId ? selectedInstallerId : null,
-          assigned_at: assignInstaller && selectedInstallerId ? new Date().toISOString() : null,
-          status: assignInstaller && selectedInstallerId ? 'assigned_awaiting_scheduling' : 'awaiting_assignment',
+          assigned_company_id: assignCompany && selectedCompanyId ? selectedCompanyId : null,
+          assigned_at: assignCompany && selectedCompanyId ? new Date().toISOString() : null,
+          status: assignCompany && selectedCompanyId ? 'assigned_awaiting_scheduling' : 'awaiting_assignment',
           created_by: user.id,
         })
         .select()
@@ -236,6 +237,13 @@ export default function CreateCniJobPage() {
           <div>
             <label style={labelStyle}>Estimated Hours</label>
             <input style={inputStyle} type="number" value={estimatedHours} onChange={e => setEstimatedHours(e.target.value)} placeholder="0" />
+          </div>
+        </div>
+        <div style={{ marginTop: '12px' }}>
+          <label style={labelStyle}>Pay per Vehicle ($)</label>
+          <input style={inputStyle} type="number" value={payPerVehicle} onChange={e => setPayPerVehicle(e.target.value)} placeholder="Defaults to budget ÷ VIN count" />
+          <div style={{ fontSize: '11px', color: 'var(--text-muted)', marginTop: '4px' }}>
+            Each completed vehicle splits this across whoever&apos;s tagged on the crew shift.
           </div>
         </div>
         <div style={{ marginTop: '12px' }}>
@@ -344,43 +352,46 @@ export default function CreateCniJobPage() {
         )}
       </div>
 
-      {/* Assign Installer */}
+      {/* Assign Company */}
       <div style={sectionStyle}>
-        <div style={sectionTitle}>Assign Installer</div>
+        <div style={sectionTitle}>Assign Installation Company</div>
         <label style={{ display: 'flex', alignItems: 'center', gap: '10px', cursor: 'pointer', marginBottom: '12px' }}>
           <input
-            type="checkbox" checked={assignInstaller}
-            onChange={e => setAssignInstaller(e.target.checked)}
+            type="checkbox" checked={assignCompany}
+            onChange={e => setAssignCompany(e.target.checked)}
             style={{ width: '18px', height: '18px', accentColor: 'var(--orange)' }}
           />
-          <span style={{ fontSize: '13px', color: 'var(--text-primary)', fontWeight: 600 }}>Assign an installer now</span>
+          <span style={{ fontSize: '13px', color: 'var(--text-primary)', fontWeight: 600 }}>Assign a company now</span>
         </label>
-        {assignInstaller && (
+        {assignCompany && (
           <div>
-            {installers.length === 0 ? (
+            <div style={{ fontSize: '11px', color: 'var(--text-muted)', marginBottom: '8px' }}>
+              Every installer at the company can see the job, propose the schedule, and scan — whoever&apos;s working tags the crew per shift.
+            </div>
+            {companies.length === 0 ? (
               <div style={{ fontSize: '12px', color: 'var(--text-muted)', padding: '12px', textAlign: 'center' }}>
-                No CNI installers registered yet
+                No CNI companies yet — they&apos;re created automatically when installers register, or at /admin/cni/companies
               </div>
             ) : (
               <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
-                {installers.map(inst => (
+                {companies.map(c => (
                   <button
-                    key={inst.id}
-                    onClick={() => setSelectedInstallerId(inst.id === selectedInstallerId ? '' : inst.id)}
+                    key={c.id}
+                    onClick={() => setSelectedCompanyId(c.id === selectedCompanyId ? '' : c.id)}
                     style={{
                       display: 'flex', alignItems: 'center', justifyContent: 'space-between',
                       padding: '12px 14px', borderRadius: '10px', textAlign: 'left', width: '100%',
-                      background: inst.id === selectedInstallerId ? 'var(--success-bg)' : 'var(--input-bg)',
-                      border: inst.id === selectedInstallerId ? '1px solid var(--success-border)' : '1px solid var(--border)',
+                      background: c.id === selectedCompanyId ? 'var(--success-bg)' : 'var(--input-bg)',
+                      border: c.id === selectedCompanyId ? '1px solid var(--success-border)' : '1px solid var(--border)',
                     }}
                   >
                     <div>
-                      <div style={{ fontSize: '13px', fontWeight: 700, color: 'var(--text-primary)' }}>{inst.full_name}</div>
+                      <div style={{ fontSize: '13px', fontWeight: 700, color: 'var(--text-primary)' }}>{c.name}</div>
                       <div style={{ fontSize: '11px', color: 'var(--text-muted)' }}>
-                        {inst.company_name || 'Independent'} • {inst.availability_status}
+                        {c.memberCount} installer{c.memberCount === 1 ? '' : 's'}
                       </div>
                     </div>
-                    {inst.id === selectedInstallerId && (
+                    {c.id === selectedCompanyId && (
                       <span style={{ color: 'var(--success)', fontWeight: 700, fontSize: '14px' }}>✓</span>
                     )}
                   </button>

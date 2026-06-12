@@ -23,6 +23,7 @@ interface CniJob {
   is_multi_unit: boolean;
   vin_count: number;
   budget: number | null;
+  pay_per_vehicle: number | null;
   deadline: string | null;
   estimated_hours: number | null;
   requires_shipment: boolean;
@@ -31,6 +32,7 @@ interface CniJob {
   carrier: string | null;
   material_delivered: boolean;
   assigned_installer_id: string | null;
+  assigned_company_id: string | null;
   assigned_at: string | null;
   status: string;
   proposed_schedule_start: string | null;
@@ -125,7 +127,10 @@ export default function CniJobDetailPage() {
 
   // Assignment modal
   const [showAssign, setShowAssign] = useState(false);
-  const [installers, setInstallers] = useState<any[]>([]);
+  const [companyName, setCompanyName] = useState('');
+  const [companies, setCompanies] = useState<{ id: string; name: string; memberCount: number }[]>([]);
+  const [rateDraft, setRateDraft] = useState('');
+  const [editingRate, setEditingRate] = useState(false);
 
   // Distribution
   const [showInvite, setShowInvite] = useState(false);
@@ -182,6 +187,16 @@ export default function CniJobDetailPage() {
         .eq('id', jobData.assigned_installer_id)
         .single();
       if (profile) setInstallerName(profile.full_name);
+    }
+
+    // Load assigned company name
+    if (jobData.assigned_company_id) {
+      const { data: company } = await supabase
+        .from('cni_companies')
+        .select('name')
+        .eq('id', jobData.assigned_company_id)
+        .single();
+      if (company) setCompanyName(company.name);
     }
 
     // Load bid count + invited IDs
@@ -257,15 +272,33 @@ export default function CniJobDetailPage() {
     setUpdating(false);
   };
 
-  const assignInstaller = async (installerId: string) => {
+  // Assignment is company-based: any installer at the company works the job.
+  const loadCompanyList = async () => {
+    const { data: comps } = await supabase
+      .from('cni_companies')
+      .select('id, name')
+      .order('name');
+    const { data: members } = await supabase
+      .from('cni_profiles')
+      .select('company_id')
+      .not('company_id', 'is', null);
+    const counts = new Map<string, number>();
+    for (const m of members || []) counts.set(m.company_id, (counts.get(m.company_id) || 0) + 1);
+    setCompanies((comps || []).map((c: any) => ({ id: c.id, name: c.name, memberCount: counts.get(c.id) || 0 })));
+    setShowAssign(true);
+  };
+
+  const assignCompany = async (companyId: string) => {
     if (!job || updating) return;
     setUpdating(true);
     const { error } = await supabase
       .from('cni_jobs')
       .update({
-        assigned_installer_id: installerId,
+        assigned_company_id: companyId,
         assigned_at: new Date().toISOString(),
-        status: 'assigned_awaiting_scheduling',
+        status: job.status === 'awaiting_assignment' || job.status === 'bidding_open'
+          ? 'assigned_awaiting_scheduling'
+          : job.status,
       })
       .eq('id', job.id);
     if (!error) {
@@ -275,27 +308,13 @@ export default function CniJobDetailPage() {
     setUpdating(false);
   };
 
-  const loadInstallerList = async () => {
-    const { data } = await supabase
-      .from('cni_profiles')
-      .select('user_id, company_name, availability_status')
-      .not('risk_tags', 'cs', '{do_not_assign}');
-    if (data) {
-      const userIds = data.map((p: any) => p.user_id);
-      const { data: profiles } = await supabase
-        .from('profiles')
-        .select('id, full_name')
-        .in('id', userIds);
-      const nameMap: Record<string, string> = {};
-      if (profiles) profiles.forEach((p: any) => { nameMap[p.id] = p.full_name; });
-      setInstallers(data.map((p: any) => ({
-        id: p.user_id,
-        full_name: nameMap[p.user_id] || 'Unknown',
-        company_name: p.company_name,
-        availability_status: p.availability_status,
-      })));
-    }
-    setShowAssign(true);
+  const savePayRate = async () => {
+    if (!job) return;
+    const rate = rateDraft === '' ? null : parseFloat(rateDraft);
+    if (rate !== null && (isNaN(rate) || rate < 0)) return;
+    await supabase.from('cni_jobs').update({ pay_per_vehicle: rate }).eq('id', job.id);
+    setEditingRate(false);
+    await loadJob();
   };
 
   const loadInviteList = async () => {
@@ -404,8 +423,27 @@ export default function CniJobDetailPage() {
         padding: '14px 16px', borderRadius: '12px', marginBottom: '14px',
         background: 'var(--card)', border: '1px solid var(--border)',
       }}>
-        <div style={{ fontSize: '12px', fontWeight: 700, color: 'var(--text-muted)', marginBottom: '6px' }}>INSTALLER</div>
-        {job.assigned_installer_id ? (
+        <div style={{ fontSize: '12px', fontWeight: 700, color: 'var(--text-muted)', marginBottom: '6px' }}>ASSIGNED COMPANY</div>
+        {job.assigned_company_id ? (
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+            <div>
+              <div style={{ fontSize: '14px', fontWeight: 700, color: 'var(--text-primary)' }}>{companyName}</div>
+              <div style={{ fontSize: '11px', color: 'var(--text-muted)' }}>
+                Assigned {job.assigned_at ? new Date(job.assigned_at).toLocaleDateString() : ''} — every installer at the company can work this job
+              </div>
+            </div>
+            <button
+              onClick={() => router.push(`/admin/cni/companies/${job.assigned_company_id}`)}
+              style={{
+                padding: '6px 12px', borderRadius: '8px', fontSize: '11px', fontWeight: 600,
+                background: 'var(--subtle-bg)', color: 'var(--text-secondary)', border: '1px solid var(--border)',
+              }}
+            >
+              View Company
+            </button>
+          </div>
+        ) : job.assigned_installer_id ? (
+          /* Legacy direct-installer assignment (pre-company jobs) */
           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
             <div>
               <div style={{ fontSize: '14px', fontWeight: 700, color: 'var(--text-primary)' }}>{installerName}</div>
@@ -425,19 +463,19 @@ export default function CniJobDetailPage() {
           </div>
         ) : (
           <button
-            onClick={loadInstallerList}
+            onClick={loadCompanyList}
             style={{
               width: '100%', padding: '12px', borderRadius: '10px', fontSize: '13px', fontWeight: 700,
               background: 'var(--orange)', color: '#fff', border: 'none',
             }}
           >
-            Assign Installer
+            Assign Company
           </button>
         )}
       </div>
 
       {/* Distribution & Bids — show when not yet assigned or bidding */}
-      {(!job.assigned_installer_id || job.status === 'bidding_open') && (
+      {(!job.assigned_installer_id && !job.assigned_company_id || job.status === 'bidding_open') && (
         <div style={{
           padding: '14px 16px', borderRadius: '12px', marginBottom: '14px',
           background: 'var(--card)', border: '1px solid var(--border)',
@@ -557,6 +595,34 @@ export default function CniJobDetailPage() {
               <div style={{ fontSize: '14px', fontWeight: 700, color: 'var(--success)' }}>${job.budget.toLocaleString()}</div>
             </div>
           )}
+          <div>
+            <div style={{ fontSize: '11px', color: 'var(--text-muted)', fontWeight: 600 }}>Pay / Vehicle</div>
+            {editingRate ? (
+              <div style={{ display: 'flex', gap: '4px', marginTop: '2px' }}>
+                <input
+                  type="number" value={rateDraft} autoFocus
+                  onChange={e => setRateDraft(e.target.value)}
+                  onKeyDown={e => { if (e.key === 'Enter') savePayRate(); }}
+                  style={{
+                    width: '80px', padding: '4px 8px', borderRadius: '6px', fontSize: '13px', fontWeight: 700,
+                    border: '1px solid var(--border)', background: 'var(--input-bg)', color: 'var(--text-body)',
+                  }}
+                />
+                <button onClick={savePayRate} style={{ fontSize: '11px', fontWeight: 700, color: 'var(--success)', background: 'transparent', border: 'none', cursor: 'pointer' }}>Save</button>
+                <button onClick={() => setEditingRate(false)} style={{ fontSize: '11px', fontWeight: 600, color: 'var(--text-muted)', background: 'transparent', border: 'none', cursor: 'pointer' }}>✕</button>
+              </div>
+            ) : (
+              <div style={{ display: 'flex', alignItems: 'baseline', gap: '6px' }}>
+                <div style={{ fontSize: '14px', fontWeight: 700, color: job.pay_per_vehicle != null ? 'var(--success)' : 'var(--text-muted)' }}>
+                  {job.pay_per_vehicle != null ? `$${Number(job.pay_per_vehicle).toFixed(2)}` : 'Not set'}
+                </div>
+                <button
+                  onClick={() => { setRateDraft(job.pay_per_vehicle != null ? String(job.pay_per_vehicle) : ''); setEditingRate(true); }}
+                  style={{ fontSize: '10px', fontWeight: 700, color: 'var(--orange)', background: 'transparent', border: 'none', cursor: 'pointer', padding: 0 }}
+                >Edit</button>
+              </div>
+            )}
+          </div>
           {job.deadline && (
             <div>
               <div style={{ fontSize: '11px', color: 'var(--text-muted)', fontWeight: 600 }}>Deadline</div>
@@ -643,8 +709,8 @@ export default function CniJobDetailPage() {
         </div>
       )}
 
-      {/* Photos + Messages quick actions */}
-      {job.assigned_installer_id && (
+      {/* Photos + Messages + Crew quick actions */}
+      {(job.assigned_installer_id || job.assigned_company_id) && (
         <div style={{ display: 'flex', gap: '8px', marginBottom: '14px' }}>
           <button
             onClick={() => router.push(`/admin/cni/jobs/${job.id}/photos`)}
@@ -683,6 +749,17 @@ export default function CniJobDetailPage() {
                 {unreadMsgCount} unread
               </div>
             )}
+          </button>
+          <button
+            onClick={() => router.push(`/admin/cni/jobs/${job.id}/shifts`)}
+            style={{
+              flex: 1, padding: '14px', borderRadius: '12px', textAlign: 'center',
+              background: 'var(--card)', border: '1px solid var(--border)',
+            }}
+          >
+            <div style={{ fontSize: '12px', fontWeight: 700, color: 'var(--text-muted)', marginBottom: '4px' }}>Pay</div>
+            <div style={{ fontSize: '12px', fontWeight: 700, color: 'var(--text-primary)' }}>Crew &amp; Pay</div>
+            <div style={{ fontSize: '11px', color: 'var(--text-muted)' }}>shifts · splits</div>
           </button>
         </div>
       )}
@@ -962,7 +1039,7 @@ export default function CniJobDetailPage() {
         </div>
       )}
 
-      {/* Assign Installer Modal */}
+      {/* Assign Company Modal */}
       {showAssign && (
         <div style={{
           position: 'fixed', top: 0, left: 0, right: 0, bottom: 0,
@@ -975,19 +1052,19 @@ export default function CniJobDetailPage() {
             border: '1px solid var(--border)',
           }}>
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '16px' }}>
-              <div style={{ fontSize: '16px', fontWeight: 800, color: 'var(--text-primary)' }}>Assign Installer</div>
+              <div style={{ fontSize: '16px', fontWeight: 800, color: 'var(--text-primary)' }}>Assign Installation Company</div>
               <button onClick={() => setShowAssign(false)} style={{ fontSize: '18px', color: 'var(--text-muted)' }}>✕</button>
             </div>
-            {installers.length === 0 ? (
+            {companies.length === 0 ? (
               <div style={{ padding: '20px', textAlign: 'center', color: 'var(--text-muted)', fontSize: '13px' }}>
-                No CNI installers available
+                No CNI companies available
               </div>
             ) : (
               <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
-                {installers.map((inst: any) => (
+                {companies.map(c => (
                   <button
-                    key={inst.id}
-                    onClick={() => assignInstaller(inst.id)}
+                    key={c.id}
+                    onClick={() => assignCompany(c.id)}
                     disabled={updating}
                     style={{
                       display: 'flex', alignItems: 'center', justifyContent: 'space-between',
@@ -996,15 +1073,9 @@ export default function CniJobDetailPage() {
                     }}
                   >
                     <div>
-                      <div style={{ fontSize: '13px', fontWeight: 700, color: 'var(--text-primary)' }}>{inst.full_name}</div>
+                      <div style={{ fontSize: '13px', fontWeight: 700, color: 'var(--text-primary)' }}>{c.name}</div>
                       <div style={{ fontSize: '11px', color: 'var(--text-muted)' }}>
-                        {inst.company_name || 'Independent'} •{' '}
-                        <span style={{
-                          color: inst.availability_status === 'available' ? 'var(--success)' :
-                                 inst.availability_status === 'limited' ? 'var(--warning)' : 'var(--error)',
-                        }}>
-                          {inst.availability_status}
-                        </span>
+                        {c.memberCount} installer{c.memberCount === 1 ? '' : 's'}
                       </div>
                     </div>
                     <span style={{ color: 'var(--orange)', fontWeight: 700, fontSize: '12px' }}>Assign →</span>
