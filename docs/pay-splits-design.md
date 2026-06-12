@@ -282,7 +282,8 @@ Reopening a completed VIN (or archiving/deleting a scan) voids its credits.
 1. **Companies + tracking** — `cni_companies` migration with backfill from
    `company_name`; company-based assignment + authorization rework
    (complete-vin, RLS, photos, messages, invoice); shift start/crew tagging on
-   both sides; credit snapshots in `complete-vin` and `logScan()`; rate table
+   both sides (field crew picker driven by a new field-installer flag on
+   `profiles`); credit snapshots in `complete-vin` and `logScan()`; rate table
    + CNI `pay_per_vehicle`; admin shift/credit editing and companies screen.
    Tracking starts immediately; money stays invisible to installers until
    rates are set.
@@ -292,19 +293,28 @@ Reopening a completed VIN (or archiving/deleting a scan) voids its credits.
    NetSuite vendor IDs on companies and profiles; bill-ID workflow; credit
    locking.
 
+## Resolved decisions
+
+- **Rates are flat per part/custom job** — U-Haul pay does not vary by vehicle
+  type, so `install_pay_rates` stays one-dimensional.
+- **Payroll periods are biweekly, anchored at 2026-06-15** (period 1 =
+  6/15–6/28, and so on). The payroll report computes periods from that anchor;
+  no per-period configuration needed.
+- **The field crew picker shows a curated field-installer list**, not all
+  internal profiles — a "field installer" flag (or role) on `profiles`,
+  managed by admin.
+- **Compliance docs live at both levels:** company W9/insurance on
+  `cni_companies` (company payout mode) *and* per-person on `cni_profiles`
+  (required before an employee can be put on individual payouts, since that
+  makes them a 1099 vendor).
+- **Company backfill is safe:** existing `company_name` values are clean —
+  new employees are assigned to a company from a dropdown rather than
+  free-typed — so the migration can key on the exact string with no manual
+  merge pass.
+- **Job visibility broadens only for new assignments** — historical/closed
+  jobs stay visible to their original assigned installer only.
+
 ## Open questions
 
-- Pay-period definition for the payroll report (weekly? biweekly? which day
-  does it start?).
-- Should the field crew picker list *all* internal profiles or a curated
-  "field installer" subset?
-- Compliance docs: move W9/insurance to the company, keep per person, or both?
-  (Per-person W9s matter if individual payouts make employees 1099 vendors.)
 - For `individual` CNI payouts: any employees without NetSuite vendor records
   yet, and who sets those up?
-- Does the U-Haul rate vary by vehicle type (box truck vs van vs trailer)? If
-  so the rate table needs a second dimension (rate per part + vehicle class).
-
-**Resolved:** existing `company_name` values are clean — new employees are
-assigned to a company from a dropdown rather than free-typed — so the
-backfill can key on the exact string with no manual merge pass.
