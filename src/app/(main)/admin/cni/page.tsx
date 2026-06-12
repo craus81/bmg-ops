@@ -198,6 +198,7 @@ export default function CniDashboardPage() {
         <QuickLink icon="" label="Companies" sub="Installer companies" onClick={() => router.push('/admin/cni/companies')} />
         <QuickLink icon="" label="Pay Rates" sub="Per-vehicle pay" onClick={() => router.push('/admin/pay-rates')} />
         <QuickLink icon="" label="Payroll" sub="Field install pay" onClick={() => router.push('/admin/payroll')} />
+        <QuickLink icon="" label="Preview Portal" sub="See the installer view" onClick={() => router.push('/installer')} />
       </div>
 
       {/* Filter Tabs */}
