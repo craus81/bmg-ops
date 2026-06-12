@@ -16,8 +16,9 @@ export default function LoginPage() {
   const [password, setPassword] = useState('');
   const [fullName, setFullName] = useState('');
   const [requestedRole, setRequestedRole] = useState('installer');
-  const [mode, setMode] = useState<'password' | 'magic' | 'signup'>('password');
+  const [mode, setMode] = useState<'password' | 'magic' | 'signup' | 'forgot'>('password');
   const [sent, setSent] = useState(false);
+  const [resetSent, setResetSent] = useState(false);
   const [signupDone, setSignupDone] = useState(false);
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(false);
@@ -46,6 +47,17 @@ export default function LoginPage() {
     const { error } = await supabase.auth.signInWithOtp({ email, options: { emailRedirectTo: callback } });
     setLoading(false);
     if (error) setError(error.message); else setSent(true);
+  };
+
+  const handleForgot = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!email) return;
+    setLoading(true); setError('');
+    const { error } = await supabase.auth.resetPasswordForEmail(email, {
+      redirectTo: `${window.location.origin}/auth/callback?next=${encodeURIComponent('/reset-password')}`,
+    });
+    setLoading(false);
+    if (error) setError(error.message); else setResetSent(true);
   };
 
   const handlePassword = async (e: React.FormEvent) => {
@@ -127,7 +139,7 @@ export default function LoginPage() {
             { id: 'magic' as const, label: 'Magic Link' },
             { id: 'signup' as const, label: 'Request Access' },
           ]).map((m) => (
-            <button key={m.id} onClick={() => { setMode(m.id); setError(''); setSignupDone(false); }} style={{
+            <button key={m.id} onClick={() => { setMode(m.id); setError(''); setSignupDone(false); setResetSent(false); }} style={{
               flex: 1, padding: '10px', borderRadius: '8px', fontSize: '11px', fontWeight: 700,
               background: mode === m.id ? 'var(--login-tab-active-bg, rgba(255,255,255,0.1))' : 'transparent',
               color: mode === m.id ? 'var(--login-tab-active-color, #fff)' : 'var(--login-tab-color, rgba(255,255,255,0.4))',
@@ -151,6 +163,19 @@ export default function LoginPage() {
             </button>
           </div>
 
+        /* Reset link sent */
+        ) : resetSent ? (
+          <div style={{ background: 'var(--success-bg)', border: '1px solid var(--success-border)', borderRadius: '14px', padding: '24px', textAlign: 'center' }}>
+            <div style={{ fontSize: '16px', fontWeight: 700, marginBottom: '8px', color: 'var(--text-muted)' }}>Email Sent</div>
+            <div style={{ fontWeight: 700, fontSize: '16px', color: 'var(--success)' }}>Check your email</div>
+            <div style={{ fontSize: '13px', color: 'rgba(255,255,255,0.75)', marginTop: '6px' }}>
+              We sent a password reset link to <strong style={{ color: '#fff' }}>{email}</strong>
+            </div>
+            <button onClick={() => { setResetSent(false); setMode('password'); }} style={{ marginTop: '16px', padding: '10px 20px', borderRadius: '8px', border: '1px solid rgba(255,255,255,0.12)', color: 'rgba(255,255,255,0.75)', fontSize: '13px', fontWeight: 600, background: 'transparent' }}>
+              Back to Sign In
+            </button>
+          </div>
+
         /* Signup done */
         ) : signupDone ? (
           <div style={{ background: 'var(--success-bg)', border: '1px solid var(--success-border)', borderRadius: '14px', padding: '24px', textAlign: 'center' }}>
@@ -166,7 +191,12 @@ export default function LoginPage() {
 
         /* Forms */
         ) : (
-          <form onSubmit={mode === 'password' ? handlePassword : mode === 'magic' ? handleMagicLink : handleSignup}>
+          <form onSubmit={mode === 'password' ? handlePassword : mode === 'magic' ? handleMagicLink : mode === 'forgot' ? handleForgot : handleSignup}>
+            {mode === 'forgot' && (
+              <p style={{ fontSize: '13px', color: 'var(--login-text-muted, rgba(255,255,255,0.5))', marginBottom: '16px', lineHeight: '1.5' }}>
+                Enter your email and we&apos;ll send you a link to set a new password.
+              </p>
+            )}
             {mode === 'signup' && (<>
               <label style={labelStyle}>Full Name</label>
               <input type="text" value={fullName} onChange={(e) => setFullName(e.target.value)} placeholder="Your full name" autoComplete="name" style={inputStyle} />
@@ -186,18 +216,36 @@ export default function LoginPage() {
               </div>
             )}
 
-            <button type="submit" disabled={!email || (mode !== 'magic' && !password) || (mode === 'signup' && !fullName) || loading} style={{
+            <button type="submit" disabled={!email || (mode === 'password' || mode === 'signup' ? !password : false) || (mode === 'signup' && !fullName) || loading} style={{
               width: '100%', padding: '16px', borderRadius: '12px', background: 'var(--orange)',
               color: '#fff', fontSize: '16px', fontWeight: 700,
-              opacity: (email && (mode === 'magic' || password) && (mode !== 'signup' || fullName) && !loading) ? 1 : 0.5,
+              opacity: (email && (mode === 'magic' || mode === 'forgot' || password) && (mode !== 'signup' || fullName) && !loading) ? 1 : 0.5,
               boxShadow: '0 4px 20px rgba(238,49,32,0.3)', transition: 'opacity 0.2s',
             }}>
-              {loading ? (mode === 'signup' ? 'Creating...' : 'Signing in...') : mode === 'password' ? 'Sign In' : mode === 'magic' ? 'Send Magic Link' : 'Request Access'}
+              {loading ? (mode === 'signup' ? 'Creating...' : mode === 'forgot' ? 'Sending...' : 'Signing in...') : mode === 'password' ? 'Sign In' : mode === 'magic' ? 'Send Magic Link' : mode === 'forgot' ? 'Send Reset Link' : 'Request Access'}
             </button>
 
-            <p style={{ textAlign: 'center', fontSize: '12px', color: 'var(--login-text-muted, rgba(255,255,255,0.25))', marginTop: '16px' }}>
-              {mode === 'password' ? 'Contact admin for password reset' : mode === 'magic' ? 'No password needed — we\'ll email you a link' : 'Admin will review your request'}
-            </p>
+            {mode === 'password' ? (
+              <button type="button" onClick={() => { setMode('forgot'); setError(''); }} style={{
+                display: 'block', margin: '16px auto 0', background: 'transparent', border: 'none',
+                fontSize: '12px', color: 'var(--login-text-muted, rgba(255,255,255,0.4))',
+                textDecoration: 'underline', cursor: 'pointer',
+              }}>
+                Forgot password?
+              </button>
+            ) : mode === 'forgot' ? (
+              <button type="button" onClick={() => { setMode('password'); setError(''); }} style={{
+                display: 'block', margin: '16px auto 0', background: 'transparent', border: 'none',
+                fontSize: '12px', color: 'var(--login-text-muted, rgba(255,255,255,0.4))',
+                textDecoration: 'underline', cursor: 'pointer',
+              }}>
+                Back to Sign In
+              </button>
+            ) : (
+              <p style={{ textAlign: 'center', fontSize: '12px', color: 'var(--login-text-muted, rgba(255,255,255,0.25))', marginTop: '16px' }}>
+                {mode === 'magic' ? 'No password needed — we\'ll email you a link' : 'Admin will review your request'}
+              </p>
+            )}
           </form>
         )}
       </div>
