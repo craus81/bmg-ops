@@ -113,6 +113,12 @@ work_shift_members (
 - A solo worker is just a crew of one — full rate, no behavior change. The
   field side can therefore roll out without affecting solo installers (an
   implicit one-person shift is created if they skip crew tagging).
+- **Anyone currently on the shift can tag/untag members** (not just whoever
+  started it), so a shift is never stranded if the starter leaves early.
+  Every roster change records who made it.
+- Shifts are per job, so a company can run concurrent shifts on different
+  jobs. One person appearing on two open shifts at once is allowed but
+  surfaced in admin as a probable mistake.
 
 **Uneven splits:** each member has a `share_weight` (default 1 = even split).
 A senior installer on double share is weight 2 vs 1/1. Per-vehicle amount =
