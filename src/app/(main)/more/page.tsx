@@ -144,7 +144,7 @@ export default function MorePage() {
         {F('knowledge_base') && (
           <MenuBtn title="Knowledge Base" sub="SOPs and docs for AI agent" onClick={() => router.push('/admin/knowledge')} />
         )}
-        <MenuBtn title="Notification Settings" sub="Configure your alert preferences" onClick={() => router.push('/settings')} />
+        <MenuBtn title="Settings" sub="Password, alerts & notification preferences" onClick={() => router.push('/settings')} />
       </div>
 
       {/* Theme Toggle */}

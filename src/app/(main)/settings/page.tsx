@@ -18,6 +18,13 @@ export default function SettingsPage() {
   const [saving, setSaving] = useState(false);
   const [saved, setSaved] = useState(false);
 
+  // Change password state
+  const [newPassword, setNewPassword] = useState('');
+  const [confirmPassword, setConfirmPassword] = useState('');
+  const [pwSaving, setPwSaving] = useState(false);
+  const [pwSaved, setPwSaved] = useState(false);
+  const [pwError, setPwError] = useState('');
+
   // Push notification state
   const [pushSupported, setPushSupported] = useState(false);
   const [pushEnabled, setPushEnabled] = useState(false);
@@ -64,6 +71,25 @@ export default function SettingsPage() {
     }
 
     setPushLoading(false);
+  };
+
+  const handleChangePassword = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (newPassword.length < 6) { setPwError('Password must be at least 6 characters'); return; }
+    if (newPassword !== confirmPassword) { setPwError('Passwords do not match'); return; }
+    setPwSaving(true);
+    setPwError('');
+    setPwSaved(false);
+    const { error } = await supabase.auth.updateUser({ password: newPassword });
+    setPwSaving(false);
+    if (error) {
+      setPwError(error.message);
+      return;
+    }
+    setNewPassword('');
+    setConfirmPassword('');
+    setPwSaved(true);
+    setTimeout(() => setPwSaved(false), 3000);
   };
 
   const loadPrefs = async () => {
@@ -170,7 +196,61 @@ export default function SettingsPage() {
 
   return (
     <div>
-      <div style={{ fontSize: '22px', fontWeight: 800, marginBottom: '16px' }}>Notification Settings</div>
+      <div style={{ fontSize: '22px', fontWeight: 800, marginBottom: '16px' }}>Settings</div>
+
+      {/* Account Security */}
+      <div style={sectionStyle}>
+        <div style={{ fontSize: '14px', fontWeight: 800, color: 'var(--text-body)', marginBottom: '4px' }}>Change Password</div>
+        <div style={{ fontSize: '11px', color: 'var(--text-label)', marginBottom: '10px' }}>
+          Set a new password for {profile?.email || 'your account'}. You&apos;ll use it next time you sign in.
+        </div>
+
+        <form onSubmit={handleChangePassword}>
+          <div style={labelStyle}>New Password</div>
+          <input
+            type="password"
+            style={{ ...inputStyle, marginBottom: '8px' }}
+            placeholder="At least 6 characters"
+            autoComplete="new-password"
+            value={newPassword}
+            onChange={e => { setNewPassword(e.target.value); setPwError(''); }}
+          />
+
+          <div style={labelStyle}>Confirm New Password</div>
+          <input
+            type="password"
+            style={{ ...inputStyle, marginBottom: '8px' }}
+            placeholder="Re-enter your new password"
+            autoComplete="new-password"
+            value={confirmPassword}
+            onChange={e => { setConfirmPassword(e.target.value); setPwError(''); }}
+          />
+
+          {pwError && (
+            <div style={{ padding: '8px 10px', borderRadius: '8px', background: 'rgba(239,68,68,0.08)', border: '1px solid rgba(239,68,68,0.2)', marginBottom: '8px' }}>
+              <div style={{ fontSize: '11px', color: '#ef4444' }}>{pwError}</div>
+            </div>
+          )}
+
+          <button
+            type="submit"
+            disabled={pwSaving || !newPassword || !confirmPassword}
+            style={{
+              width: '100%', padding: '12px', borderRadius: '10px',
+              background: pwSaved ? 'rgba(34,197,94,0.12)' : 'rgba(59,130,246,0.12)',
+              border: `1px solid ${pwSaved ? 'rgba(34,197,94,0.3)' : 'rgba(59,130,246,0.3)'}`,
+              color: pwSaved ? '#22c55e' : '#3b82f6',
+              fontSize: '13px', fontWeight: 700,
+              cursor: pwSaving || !newPassword || !confirmPassword ? 'not-allowed' : 'pointer',
+              opacity: pwSaving ? 0.5 : 1,
+            }}
+          >
+            {pwSaving ? 'Updating...' : pwSaved ? 'Password Updated!' : 'Update Password'}
+          </button>
+        </form>
+      </div>
+
+      <div style={{ fontSize: '16px', fontWeight: 800, marginBottom: '10px', marginTop: '20px' }}>Notifications</div>
 
       {/* Graphics Job Notifications */}
       <div style={sectionStyle}>

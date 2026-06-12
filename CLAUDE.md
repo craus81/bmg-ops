@@ -23,6 +23,9 @@ Instead, use a branch-per-feature workflow with auto-opened PRs:
    - Open a PR against `main` via the GitHub MCP
      (`mcp__github__create_pull_request`) with a summary of the batched
      commits.
+   - Always subscribe to the new PR's activity
+     (`mcp__github__subscribe_pr_activity`) and respond to review
+     comments / fix CI failures as events arrive — no need to ask.
 4. **Don't reset local `main` after cutting the branch.** Next batch
    keeps going from the same HEAD. Subsequent PRs will include prior
    unmerged commits until those PRs are merged in order — that's a
