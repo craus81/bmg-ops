@@ -3,11 +3,14 @@ import { createClient } from '@supabase/supabase-js';
 import { requireAuth } from '@/lib/api-auth';
 import { validateBody, z } from '@/lib/validate';
 import { logScan, resolveScannerCompany } from '@/lib/scan-log';
+import { createCompletionCredits, getFieldRate } from '@/lib/pay-credits';
+import { loadShift, canManageShift } from '@/lib/shifts';
 
 export const dynamic = 'force-dynamic';
 
 const Schema = z.object({
   vin: z.string().trim().min(5).max(17),
+  shift_id: z.string().uuid().optional().nullable(),
   vehicle_year: z.string().trim().max(8).optional().nullable(),
   vehicle_make: z.string().trim().max(100).optional().nullable(),
   vehicle_model: z.string().trim().max(100).optional().nullable(),
@@ -55,12 +58,50 @@ export async function POST(req: NextRequest) {
 
   const parsed = await validateBody(req, Schema);
   if (parsed.error) return parsed.error;
+  const { shift_id, ...record } = parsed.data;
+
+  // Resolve the crew shift (if any). A bad/stale shift reference must NOT
+  // reject the scan — offline scans sync after the fact and the scan record
+  // is the critical data; missing credits are fixable in the admin editor.
+  let shift = null;
+  let creditsError: string | null = null;
+  if (shift_id) {
+    shift = await loadShift(service, shift_id);
+    const isAdmin = roles.includes('admin');
+    if (!shift || shift.context !== 'field') {
+      shift = null;
+      creditsError = 'Shift not found — scan saved without pay credits';
+    } else if (shift.ended_at) {
+      // Ended shifts still credit (offline scans from that shift syncing late).
+    } else if (!(await canManageShift(service, auth.user.id, shift, isAdmin))) {
+      shift = null;
+      creditsError = 'You are not on this shift — scan saved without pay credits';
+    }
+  }
 
   const company = await resolveScannerCompany(service, auth.user.id);
-  const result = await logScan(service, auth.user.id, company, parsed.data);
+  const result = await logScan(service, auth.user.id, company, record);
 
   if (!result.ok) {
     return NextResponse.json({ error: result.error }, { status: result.status });
   }
-  return NextResponse.json({ success: true, scanLogId: result.scanLogId });
+
+  // Pay credits: snapshot the shift's crew for this vehicle. Unpriced parts
+  // still get credits (amount NULL) and land in the admin needs-pricing queue.
+  if (shift) {
+    const rate = await getFieldRate(service, record.part_number);
+    const credits = await createCompletionCredits(service, {
+      shiftId: shift.id,
+      source: 'field',
+      ratePerVehicle: rate,
+      completion: {
+        scanLogId: result.scanLogId,
+        vin: record.vin.trim().toUpperCase(),
+        partNumber: record.part_number,
+      },
+    });
+    if (!credits.ok) creditsError = credits.error || 'Failed to write pay credits';
+  }
+
+  return NextResponse.json({ success: true, scanLogId: result.scanLogId, creditsError });
 }

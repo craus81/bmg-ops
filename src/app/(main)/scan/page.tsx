@@ -82,6 +82,27 @@ export default function ScanPage() {
   const [isOffline, setIsOffline] = useState(false);
   const [pendingOfflineScans, setPendingOfflineScans] = useState<any[]>([]);
 
+  // Crew shift (pay splits): scans carry a shift_id so each vehicle's pay
+  // splits across whoever's tagged in. Solo scanning gets an implicit
+  // one-person shift on first scan. The ref mirrors state so back-to-back
+  // awaits in one scan don't race the setState.
+  const [shiftId, setShiftId] = useState<string | null>(null);
+  const shiftIdRef = useRef<string | null>(null);
+  const [crewInfo, setCrewInfo] = useState<{
+    shift: { id: string; started_by: string; members: { profile_id: string; full_name: string; share_weight: number }[] } | null;
+    roster: { profile_id: string; full_name: string }[];
+    ratePerVehicle: number | null;
+  } | null>(null);
+  const [crewOpen, setCrewOpen] = useState(false);
+  const [crewDraft, setCrewDraft] = useState<Map<string, number>>(new Map());
+  const [crewError, setCrewError] = useState('');
+  const [crewBusy, setCrewBusy] = useState(false);
+
+  const setActiveShift = (id: string | null) => {
+    shiftIdRef.current = id;
+    setShiftId(id);
+  };
+
   useEffect(() => {
     loadParts();
     loadLocations();
@@ -108,6 +129,7 @@ export default function ScanPage() {
         if (s.customJob) { setCustomJob(s.customJob); setShowCustom(true); }
         if (s.customCustomer) { setCustomCustomer(s.customCustomer); }
         if (s.selectedLocation) { setSelectedLocation(s.selectedLocation); }
+        if (s.shiftId) { shiftIdRef.current = s.shiftId; setShiftId(s.shiftId); }
         if (s.selectedParts?.length || s.selectedPart || s.customJob) { setStep(s.selectedLocation ? 'scan' : 'location'); restoredJob = true; }
       }
     } catch {}
@@ -124,10 +146,10 @@ export default function ScanPage() {
   useEffect(() => {
     if (selectedParts.length > 0 || customJob) {
       try {
-        localStorage.setItem('scan_session', JSON.stringify({ selectedParts, customJob, customCustomer, selectedLocation }));
+        localStorage.setItem('scan_session', JSON.stringify({ selectedParts, customJob, customCustomer, selectedLocation, shiftId }));
       } catch {}
     }
-  }, [selectedParts, customJob, customCustomer, selectedLocation]);
+  }, [selectedParts, customJob, customCustomer, selectedLocation, shiftId]);
 
   // Stopgap while the CNI custom-job process is in flux: remember the last
   // custom job/customer beyond End Shift / Switch Part (scan_session only
@@ -149,7 +171,141 @@ export default function ScanPage() {
     } catch {}
   };
 
+  // ── Crew shift (pay splits) ──
+  const authHeaders = async () => {
+    const { data: { session } } = await supabase.auth.getSession();
+    return {
+      'Content-Type': 'application/json',
+      ...(session?.access_token ? { Authorization: `Bearer ${session.access_token}` } : {}),
+    } as Record<string, string>;
+  };
+
+  const loadCrew = useCallback(async () => {
+    if (isOffline) return;
+    try {
+      const sid = shiftIdRef.current;
+      const res = await fetch(`/api/shifts?context=field${sid ? `&shiftId=${sid}` : ''}`, { headers: await authHeaders() });
+      if (!res.ok) return;
+      const json = await res.json();
+      setCrewInfo(json);
+      // Stale shift (ended elsewhere / not found): drop it so the next scan
+      // starts a fresh one.
+      if (sid && !json.shift) setActiveShift(null);
+    } catch {}
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isOffline]);
+
+  useEffect(() => {
+    if (step === 'scan') loadCrew();
+  }, [step, shiftId, loadCrew]);
+
+  /**
+   * The shift to attach scans to. Lazily starts an implicit solo shift on the
+   * first scan if the crew was never tagged — solo is just a crew of one.
+   * Returns null offline (queued scans keep whatever shift id existed).
+   */
+  const ensureShift = async (): Promise<string | null> => {
+    if (shiftIdRef.current) return shiftIdRef.current;
+    if (isOffline) return null;
+    try {
+      const res = await fetch('/api/shifts', {
+        method: 'POST',
+        headers: await authHeaders(),
+        body: JSON.stringify({
+          context: 'field',
+          partNumber: selectedParts[0]?.item_number || customJob || null,
+          locationId: selectedLocation?.id || null,
+          locationName: selectedLocation?.name || null,
+          members: [...crewDraft.entries()].map(([profileId, weight]) => ({ profileId, weight })),
+        }),
+      });
+      if (!res.ok) return null;
+      const json = await res.json();
+      setActiveShift(json.shift.id);
+      setCrewInfo(prev => ({ shift: json.shift, roster: prev?.roster || [], ratePerVehicle: json.ratePerVehicle ?? prev?.ratePerVehicle ?? null }));
+      return json.shift.id as string;
+    } catch {
+      return null;
+    }
+  };
+
+  const openCrewPanel = () => {
+    const draft = new Map<string, number>();
+    if (crewInfo?.shift) {
+      for (const m of crewInfo.shift.members) draft.set(m.profile_id, m.share_weight);
+    } else if (user) {
+      draft.set(user.id, 1);
+    }
+    setCrewDraft(draft);
+    setCrewError('');
+    setCrewOpen(true);
+  };
+
+  const saveCrew = async () => {
+    if (!user) return;
+    setCrewBusy(true);
+    setCrewError('');
+    try {
+      const headers = await authHeaders();
+      if (!shiftIdRef.current) {
+        const res = await fetch('/api/shifts', {
+          method: 'POST', headers,
+          body: JSON.stringify({
+            context: 'field',
+            partNumber: selectedParts[0]?.item_number || customJob || null,
+            locationId: selectedLocation?.id || null,
+            locationName: selectedLocation?.name || null,
+            members: [...crewDraft.entries()].map(([profileId, weight]) => ({ profileId, weight })),
+          }),
+        });
+        const json = await res.json().catch(() => ({}));
+        if (!res.ok) { setCrewError(json.error || 'Failed to start shift'); return; }
+        setActiveShift(json.shift.id);
+      } else {
+        const current = new Map((crewInfo?.shift?.members || []).map(m => [m.profile_id, m.share_weight]));
+        const add = [...crewDraft.entries()].filter(([id]) => !current.has(id)).map(([profileId, weight]) => ({ profileId, weight }));
+        const remove = [...current.keys()].filter(id => !crewDraft.has(id));
+        const setWeight = [...crewDraft.entries()]
+          .filter(([id, w]) => current.has(id) && current.get(id) !== w)
+          .map(([profileId, weight]) => ({ profileId, weight }));
+        const res = await fetch('/api/shifts/members', {
+          method: 'POST', headers,
+          body: JSON.stringify({ shiftId: shiftIdRef.current, add, remove, setWeight }),
+        });
+        const json = await res.json().catch(() => ({}));
+        if (!res.ok) { setCrewError(json.error || 'Failed to update crew'); return; }
+      }
+      setCrewOpen(false);
+      await loadCrew();
+    } finally {
+      setCrewBusy(false);
+    }
+  };
+
+  // End the server-side crew shift (fire-and-forget; scans already carry it).
+  const closeServerShift = () => {
+    const sid = shiftIdRef.current;
+    setActiveShift(null);
+    setCrewInfo(prev => prev ? { ...prev, shift: null } : prev);
+    if (!sid) return;
+    authHeaders().then(headers =>
+      fetch('/api/shifts/end', { method: 'POST', headers, body: JSON.stringify({ shiftId: sid }) })
+    ).catch(() => {});
+  };
+
+  // Your cut per vehicle on the current crew (display only — the server
+  // snapshots the real amounts per scan).
+  const myCut = (() => {
+    if (!crewInfo?.shift || crewInfo.ratePerVehicle == null || !user) return null;
+    const me = crewInfo.shift.members.find(m => m.profile_id === user.id);
+    if (!me) return null;
+    const total = crewInfo.shift.members.reduce((s, m) => s + m.share_weight, 0);
+    if (total <= 0) return null;
+    return (crewInfo.ratePerVehicle * me.share_weight) / total;
+  })();
+
   const endShift = () => {
+    closeServerShift();
     setStep('part');
     setSelectedParts([]);
     setCustomJob('');
@@ -358,6 +514,9 @@ export default function ScanPage() {
       ? selectedParts.map(p => ({ partNumber: p.item_number, partDesc: p.display_name || p.description || p.item_number, billable: p.billable_customer || customCustomer || null }))
       : [{ partNumber: customJob, partDesc: customJob, billable: customCustomer || null }];
 
+    // Crew shift for pay credits — implicit solo shift if none was tagged.
+    const sid = await ensureShift();
+
     let vehicleData: any = {};
     try {
       const res = await fetch(`https://vpic.nhtsa.dot.gov/api/vehicles/decodevin/${v}?format=json`);
@@ -386,6 +545,7 @@ export default function ScanPage() {
         iccid: deviceFields?.iccid ?? null,
         location_id: selectedLocation?.id || null,
         location_name: selectedLocation?.name || null,
+        shift_id: sid,
       };
       const result = await postScanRecord(record);
       if (!result.ok) return { ok: false, error: result.error, parts: partsToScan.length, offline: isOffline };
@@ -673,8 +833,35 @@ export default function ScanPage() {
               <span style={{ margin: '0 8px' }}>•</span>
               <span style={{ fontWeight: 700, color: '#60a5fa' }}>{scans.length} scanned today</span>
             </div>
+            {!isOffline && (
+              <div style={{ display: 'flex', alignItems: 'center', gap: '6px', marginTop: '4px' }}>
+                <span style={{ fontSize: '11px', color: theme.textMuted }}>
+                  Crew:{' '}
+                  <span style={{ fontWeight: 700, color: theme.textPrimary }}>
+                    {crewInfo?.shift
+                      ? crewInfo.shift.members.map(m =>
+                          `${m.profile_id === user?.id ? 'you' : m.full_name}${m.share_weight !== 1 ? ` ×${m.share_weight}` : ''}`
+                        ).join(' + ')
+                      : 'just you'}
+                  </span>
+                  {myCut != null && (
+                    <span style={{ fontWeight: 700, color: '#22c55e' }}> · ${myCut.toFixed(2)}/vehicle to you</span>
+                  )}
+                </span>
+                <button onClick={openCrewPanel} style={{
+                  padding: '2px 8px', borderRadius: '6px', fontSize: '10px', fontWeight: 700,
+                  background: 'rgba(59,130,246,0.08)', border: '1px solid rgba(59,130,246,0.2)',
+                  color: '#60a5fa', cursor: 'pointer',
+                }}>{crewInfo?.shift ? 'Edit' : 'Tag Crew'}</button>
+                <a href="/earnings" style={{
+                  padding: '2px 8px', borderRadius: '6px', fontSize: '10px', fontWeight: 700,
+                  background: 'rgba(34,197,94,0.08)', border: '1px solid rgba(34,197,94,0.2)',
+                  color: '#22c55e', textDecoration: 'none',
+                }}>My Earnings</a>
+              </div>
+            )}
             <div style={{ display: 'flex', gap: '6px', marginTop: '6px' }}>
-              <button onClick={() => { setStep('part'); setSelectedParts([]); setCustomJob(''); setCustomCustomer(''); setSelectedLocation(null); setScans([]); setShowCustom(false); setPendingScan(null); setUnitNumber(''); try { localStorage.removeItem('scan_session'); } catch {} prefillCustomJobDefaults(); }} style={{
+              <button onClick={() => { closeServerShift(); setStep('part'); setSelectedParts([]); setCustomJob(''); setCustomCustomer(''); setSelectedLocation(null); setScans([]); setShowCustom(false); setPendingScan(null); setUnitNumber(''); try { localStorage.removeItem('scan_session'); } catch {} prefillCustomJobDefaults(); }} style={{
                 padding: '4px 10px', borderRadius: '6px', fontSize: '10px', fontWeight: 700,
                 background: 'rgba(107,114,128,0.08)', border: '1px solid rgba(107,114,128,0.2)',
                 color: '#6b7280', cursor: 'pointer',
@@ -822,6 +1009,93 @@ export default function ScanPage() {
               }}
             />
           </div>
+          )}
+
+          {/* Crew tag checklist (field installers; weights default to an even split) */}
+          {crewOpen && (
+            <div onClick={() => setCrewOpen(false)} style={{ position: 'fixed', inset: 0, zIndex: 300, background: 'rgba(0,0,0,0.7)', display: 'flex', alignItems: 'flex-end', justifyContent: 'center' }}>
+              <div onClick={e => e.stopPropagation()} style={{ width: '100%', maxWidth: '520px', background: theme.card, borderTopLeftRadius: '18px', borderTopRightRadius: '18px', padding: '16px', maxHeight: '92vh', overflowY: 'auto' }}>
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '4px' }}>
+                  <div style={{ fontSize: '15px', fontWeight: 800, color: theme.textPrimary }}>Who&apos;s working this shift?</div>
+                  <button onClick={() => setCrewOpen(false)} style={{ fontSize: '12px', fontWeight: 700, color: theme.textMuted, background: 'transparent', border: 'none', cursor: 'pointer' }}>Cancel</button>
+                </div>
+                <div style={{ fontSize: '11px', color: theme.textMuted, marginBottom: '12px' }}>
+                  Each scanned vehicle splits its pay across the tagged crew. Even split by default —
+                  change a share for an uneven split (2 = double share). Tag/untag anytime; it only
+                  affects vehicles scanned after the change.
+                </div>
+
+                {(() => {
+                  const byId = new Map((crewInfo?.roster || []).map(r => [r.profile_id, r.full_name]));
+                  for (const m of crewInfo?.shift?.members || []) {
+                    if (!byId.has(m.profile_id)) byId.set(m.profile_id, m.full_name);
+                  }
+                  if (user && !byId.has(user.id)) byId.set(user.id, 'You');
+                  return [...byId.entries()].map(([id, name]) => {
+                    const checked = crewDraft.has(id);
+                    return (
+                      <div key={id} style={{
+                        display: 'flex', alignItems: 'center', gap: '10px', padding: '10px 12px',
+                        borderRadius: '10px', marginBottom: '6px',
+                        background: checked ? 'rgba(34,197,94,0.06)' : theme.card,
+                        border: checked ? '1px solid rgba(34,197,94,0.3)' : `1px solid ${theme.border}`,
+                      }}>
+                        <button
+                          onClick={() => {
+                            const next = new Map(crewDraft);
+                            if (checked) next.delete(id); else next.set(id, 1);
+                            setCrewDraft(next);
+                          }}
+                          style={{
+                            width: '22px', height: '22px', borderRadius: '6px', flexShrink: 0,
+                            border: checked ? '2px solid #22c55e' : `2px solid ${theme.border}`,
+                            background: checked ? '#22c55e' : 'transparent',
+                            color: '#fff', fontSize: '13px', fontWeight: 800, cursor: 'pointer',
+                          }}
+                        >{checked ? '✓' : ''}</button>
+                        <div style={{ flex: 1, fontSize: '13px', fontWeight: 700, color: theme.textPrimary }}>
+                          {id === user?.id ? (name === 'You' ? 'You' : `${name} (you)`) : name}
+                        </div>
+                        {checked && (
+                          <div style={{ display: 'flex', alignItems: 'center', gap: '4px' }}>
+                            <span style={{ fontSize: '10px', color: theme.textMuted, fontWeight: 600 }}>share</span>
+                            <input
+                              type="number" min="0.5" step="0.5" value={crewDraft.get(id)}
+                              onChange={e => {
+                                const w = parseFloat(e.target.value);
+                                if (!isNaN(w) && w > 0) setCrewDraft(new Map(crewDraft).set(id, w));
+                              }}
+                              style={{
+                                width: '56px', padding: '6px 8px', borderRadius: '8px', fontSize: '13px',
+                                fontWeight: 700, textAlign: 'center',
+                                border: `1px solid ${theme.border}`, background: 'var(--input-bg)', color: theme.textPrimary,
+                              }}
+                            />
+                          </div>
+                        )}
+                      </div>
+                    );
+                  });
+                })()}
+
+                {crewError && (
+                  <div style={{ padding: '8px 12px', borderRadius: '8px', margin: '8px 0', background: theme.errorBg, border: `1px solid ${theme.errorBorder}`, color: theme.error, fontSize: '12px', fontWeight: 600 }}>{crewError}</div>
+                )}
+
+                <button
+                  onClick={saveCrew}
+                  disabled={crewBusy || crewDraft.size === 0}
+                  style={{
+                    width: '100%', padding: '14px', borderRadius: '10px', fontSize: '14px', fontWeight: 800,
+                    marginTop: '8px', border: 'none', color: '#fff',
+                    background: crewBusy || crewDraft.size === 0 ? theme.border : '#22c55e',
+                    cursor: crewBusy || crewDraft.size === 0 ? 'default' : 'pointer',
+                  }}
+                >
+                  {crewBusy ? 'Saving...' : crewInfo?.shift ? 'Update Crew' : `Tag ${crewDraft.size} ${crewDraft.size === 1 ? 'person' : 'people'} In`}
+                </button>
+              </div>
+            </div>
           )}
 
           {scanError && (
