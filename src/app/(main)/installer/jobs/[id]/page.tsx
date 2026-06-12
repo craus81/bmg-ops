@@ -43,6 +43,18 @@ export default function InstallerJobDetailPage() {
   // Error from a direct (non-RFID) "Mark Complete"; RFID errors show in the modal.
   const [actionError, setActionError] = useState('');
 
+  // Crew shift (pay splits): the open shift on this job, the company roster
+  // for the tag checklist, and the job's per-vehicle rate.
+  const [shiftInfo, setShiftInfo] = useState<{
+    shift: { id: string; members: { profile_id: string; full_name: string; share_weight: number }[] } | null;
+    roster: { profile_id: string; full_name: string }[];
+    ratePerVehicle: number | null;
+  } | null>(null);
+  const [crewOpen, setCrewOpen] = useState(false);
+  const [crewDraft, setCrewDraft] = useState<Map<string, number>>(new Map());
+  const [crewError, setCrewError] = useState('');
+  const [crewBusy, setCrewBusy] = useState(false);
+
   const isRfidJob = isVerizonRfidPart(job?.part_number);
 
   useEffect(() => {
@@ -141,6 +153,101 @@ export default function InstallerJobDetailPage() {
       setUpdating(false);
     }
   };
+
+  // ── Crew shift (pay splits) ──
+  const authHeaders = async () => {
+    const { data: { session } } = await supabase.auth.getSession();
+    return {
+      'Content-Type': 'application/json',
+      ...(session?.access_token ? { Authorization: `Bearer ${session.access_token}` } : {}),
+    };
+  };
+
+  const loadShift = async () => {
+    try {
+      const res = await fetch(`/api/shifts?cniJobId=${jobId}`, { headers: await authHeaders() });
+      if (res.ok) setShiftInfo(await res.json());
+    } catch {}
+  };
+
+  useEffect(() => {
+    if (job?.status === 'in_progress') loadShift();
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- refresh when the job page (re)loads
+  }, [job?.status, jobId]);
+
+  const openCrewPanel = () => {
+    const draft = new Map<string, number>();
+    if (shiftInfo?.shift) {
+      for (const m of shiftInfo.shift.members) draft.set(m.profile_id, m.share_weight);
+    } else if (user) {
+      draft.set(user.id, 1);
+    }
+    setCrewDraft(draft);
+    setCrewError('');
+    setCrewOpen(true);
+  };
+
+  const saveCrew = async () => {
+    if (!user) return;
+    setCrewBusy(true);
+    setCrewError('');
+    try {
+      const headers = await authHeaders();
+      if (!shiftInfo?.shift) {
+        const res = await fetch('/api/shifts', {
+          method: 'POST', headers,
+          body: JSON.stringify({
+            context: 'cni', cniJobId: jobId,
+            members: [...crewDraft.entries()].map(([profileId, weight]) => ({ profileId, weight })),
+          }),
+        });
+        const json = await res.json().catch(() => ({}));
+        if (!res.ok) { setCrewError(json.error || 'Failed to start shift'); return; }
+      } else {
+        const current = new Map(shiftInfo.shift.members.map(m => [m.profile_id, m.share_weight]));
+        const add = [...crewDraft.entries()].filter(([id]) => !current.has(id)).map(([profileId, weight]) => ({ profileId, weight }));
+        const remove = [...current.keys()].filter(id => !crewDraft.has(id));
+        const setWeight = [...crewDraft.entries()]
+          .filter(([id, w]) => current.has(id) && current.get(id) !== w)
+          .map(([profileId, weight]) => ({ profileId, weight }));
+        const res = await fetch('/api/shifts/members', {
+          method: 'POST', headers,
+          body: JSON.stringify({ shiftId: shiftInfo.shift.id, add, remove, setWeight }),
+        });
+        const json = await res.json().catch(() => ({}));
+        if (!res.ok) { setCrewError(json.error || 'Failed to update crew'); return; }
+      }
+      setCrewOpen(false);
+      await loadShift();
+    } finally {
+      setCrewBusy(false);
+    }
+  };
+
+  const endShift = async () => {
+    if (!shiftInfo?.shift) return;
+    setCrewBusy(true);
+    try {
+      await fetch('/api/shifts/end', {
+        method: 'POST', headers: await authHeaders(),
+        body: JSON.stringify({ shiftId: shiftInfo.shift.id }),
+      });
+      await loadShift();
+    } finally {
+      setCrewBusy(false);
+    }
+  };
+
+  // Your cut per vehicle on the current crew: rate × your weight / Σ weights.
+  const myCut = (() => {
+    if (!shiftInfo?.shift || shiftInfo.ratePerVehicle == null || !user) return null;
+    const members = shiftInfo.shift.members;
+    const me = members.find(m => m.profile_id === user.id);
+    if (!me) return null;
+    const total = members.reduce((s, m) => s + m.share_weight, 0);
+    if (total <= 0) return null;
+    return (shiftInfo.ratePerVehicle * me.share_weight) / total;
+  })();
 
   const openCapture = (v: any) => { setActionError(''); setCaptureVin(v); };
   const closeCapture = () => setCaptureVin(null);
@@ -382,6 +489,53 @@ export default function InstallerJobDetailPage() {
         </div>
       )}
 
+      {/* Crew shift (pay splits) */}
+      {job.status === 'in_progress' && shiftInfo && (
+        <div style={{
+          ...sectionStyle,
+          background: shiftInfo.shift ? 'var(--success-bg)' : 'var(--card)',
+          borderColor: shiftInfo.shift ? 'var(--success-border)' : 'var(--border)',
+        }}>
+          <div style={{ fontSize: '12px', fontWeight: 700, color: 'var(--text-muted)', marginBottom: '8px' }}>CREW SHIFT</div>
+          {shiftInfo.shift ? (
+            <>
+              <div style={{ fontSize: '13px', fontWeight: 700, color: 'var(--text-primary)', marginBottom: '2px' }}>
+                On shift: {shiftInfo.shift.members.map(m =>
+                  `${m.profile_id === user?.id ? 'you' : m.full_name}${m.share_weight !== 1 ? ` ×${m.share_weight}` : ''}`
+                ).join(' + ')}
+              </div>
+              {myCut != null && (
+                <div style={{ fontSize: '12px', fontWeight: 700, color: 'var(--success)', marginBottom: '8px' }}>
+                  ${myCut.toFixed(2)}/vehicle to you ({shiftInfo.shift.members.length === 1 ? 'solo' : `split ${shiftInfo.shift.members.length} ways`})
+                </div>
+              )}
+              {myCut == null && <div style={{ marginBottom: '8px' }} />}
+              <div style={{ display: 'flex', gap: '8px' }}>
+                <button onClick={openCrewPanel} disabled={crewBusy} style={{
+                  flex: 1, padding: '10px', borderRadius: '8px', fontSize: '12px', fontWeight: 700,
+                  background: 'var(--card)', border: '1px solid var(--border)', color: 'var(--text-primary)',
+                }}>Edit Crew</button>
+                <button onClick={endShift} disabled={crewBusy} style={{
+                  padding: '10px 14px', borderRadius: '8px', fontSize: '12px', fontWeight: 700,
+                  background: 'transparent', border: '1px solid var(--border)', color: 'var(--text-muted)',
+                }}>End Shift</button>
+              </div>
+            </>
+          ) : (
+            <>
+              <div style={{ fontSize: '12px', color: 'var(--text-muted)', marginBottom: '8px' }}>
+                Tag who&apos;s working before you scan — each completed vehicle splits
+                {shiftInfo.ratePerVehicle != null ? ` $${shiftInfo.ratePerVehicle.toFixed(2)}` : ' the per-vehicle pay'} across the crew.
+              </div>
+              <button onClick={openCrewPanel} style={{
+                width: '100%', padding: '12px', borderRadius: '10px', fontSize: '13px', fontWeight: 700,
+                background: 'var(--orange)', color: '#fff', border: 'none',
+              }}>Start Shift — Tag Your Crew</button>
+            </>
+          )}
+        </div>
+      )}
+
       {/* VINs with completion */}
       {vins.length > 0 && (
         <div style={sectionStyle}>
@@ -480,6 +634,93 @@ export default function InstallerJobDetailPage() {
           </>
         )}
       </div>
+
+      {/* Crew tag checklist (company roster; weights default to an even split). */}
+      {crewOpen && shiftInfo && (
+        <div onClick={() => setCrewOpen(false)} style={{ position: 'fixed', inset: 0, zIndex: 300, background: 'rgba(0,0,0,0.7)', display: 'flex', alignItems: 'flex-end', justifyContent: 'center' }}>
+          <div onClick={e => e.stopPropagation()} style={{ width: '100%', maxWidth: '520px', background: 'var(--card)', borderTopLeftRadius: '18px', borderTopRightRadius: '18px', padding: '16px', maxHeight: '92vh', overflowY: 'auto' }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '4px' }}>
+              <div style={{ fontSize: '15px', fontWeight: 800, color: 'var(--text-primary)' }}>Who&apos;s working this shift?</div>
+              <button onClick={() => setCrewOpen(false)} style={{ fontSize: '12px', fontWeight: 700, color: 'var(--text-muted)', background: 'transparent', border: 'none', cursor: 'pointer' }}>Cancel</button>
+            </div>
+            <div style={{ fontSize: '11px', color: 'var(--text-muted)', marginBottom: '12px' }}>
+              Pay splits evenly by default — change a share for an uneven split (2 = double share).
+              You can tag and untag people during the shift; it only affects vehicles completed after the change.
+            </div>
+
+            {(() => {
+              // Roster plus anyone already on the shift (e.g. legacy installer
+              // not yet linked to the company).
+              const byId = new Map(shiftInfo.roster.map(r => [r.profile_id, r.full_name]));
+              for (const m of shiftInfo.shift?.members || []) {
+                if (!byId.has(m.profile_id)) byId.set(m.profile_id, m.full_name);
+              }
+              if (user && !byId.has(user.id)) byId.set(user.id, 'You');
+              return [...byId.entries()].map(([id, name]) => {
+                const checked = crewDraft.has(id);
+                return (
+                  <div key={id} style={{
+                    display: 'flex', alignItems: 'center', gap: '10px', padding: '10px 12px',
+                    borderRadius: '10px', marginBottom: '6px',
+                    background: checked ? 'var(--success-bg)' : 'var(--input-bg)',
+                    border: checked ? '1px solid var(--success-border)' : '1px solid var(--border)',
+                  }}>
+                    <button
+                      onClick={() => {
+                        const next = new Map(crewDraft);
+                        if (checked) next.delete(id); else next.set(id, 1);
+                        setCrewDraft(next);
+                      }}
+                      style={{
+                        width: '22px', height: '22px', borderRadius: '6px', flexShrink: 0,
+                        border: checked ? '2px solid var(--success)' : '2px solid var(--border)',
+                        background: checked ? 'var(--success)' : 'transparent',
+                        color: '#fff', fontSize: '13px', fontWeight: 800, cursor: 'pointer',
+                      }}
+                    >{checked ? '✓' : ''}</button>
+                    <div style={{ flex: 1, fontSize: '13px', fontWeight: 700, color: 'var(--text-primary)' }}>
+                      {id === user?.id ? `${name === 'You' ? 'You' : name + ' (you)'}` : name}
+                    </div>
+                    {checked && (
+                      <div style={{ display: 'flex', alignItems: 'center', gap: '4px' }}>
+                        <span style={{ fontSize: '10px', color: 'var(--text-muted)', fontWeight: 600 }}>share</span>
+                        <input
+                          type="number" min="0.5" step="0.5" value={crewDraft.get(id)}
+                          onChange={e => {
+                            const w = parseFloat(e.target.value);
+                            if (!isNaN(w) && w > 0) setCrewDraft(new Map(crewDraft).set(id, w));
+                          }}
+                          style={{
+                            width: '56px', padding: '6px 8px', borderRadius: '8px', fontSize: '13px',
+                            fontWeight: 700, textAlign: 'center',
+                            border: '1px solid var(--border)', background: 'var(--card)', color: 'var(--text-primary)',
+                          }}
+                        />
+                      </div>
+                    )}
+                  </div>
+                );
+              });
+            })()}
+
+            {crewError && (
+              <div style={{ padding: '8px 12px', borderRadius: '8px', margin: '8px 0', background: 'var(--error-bg)', border: '1px solid var(--error-border)', color: 'var(--error)', fontSize: '12px', fontWeight: 600 }}>{crewError}</div>
+            )}
+
+            <button
+              onClick={saveCrew}
+              disabled={crewBusy || crewDraft.size === 0}
+              style={{
+                width: '100%', padding: '14px', borderRadius: '10px', fontSize: '14px', fontWeight: 800,
+                marginTop: '8px', border: 'none', color: '#fff',
+                background: crewBusy || crewDraft.size === 0 ? 'var(--text-muted)' : 'var(--success)',
+              }}
+            >
+              {crewBusy ? 'Saving...' : shiftInfo.shift ? 'Update Crew' : `Start Shift (${crewDraft.size} ${crewDraft.size === 1 ? 'person' : 'people'})`}
+            </button>
+          </div>
+        </div>
+      )}
 
       {/* Verizon RFID device capture modal (VIN known from the job). */}
       {captureVin && (

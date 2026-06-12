@@ -60,17 +60,22 @@ export async function POST(req: NextRequest) {
   if (parsed.error) return parsed.error;
   const { shift_id, ...record } = parsed.data;
 
-  // Validate the crew shift (if any) BEFORE logging, so a scan never lands
-  // without its pay credits because of a bad shift reference.
+  // Resolve the crew shift (if any). A bad/stale shift reference must NOT
+  // reject the scan — offline scans sync after the fact and the scan record
+  // is the critical data; missing credits are fixable in the admin editor.
   let shift = null;
+  let creditsError: string | null = null;
   if (shift_id) {
     shift = await loadShift(service, shift_id);
-    if (!shift || shift.context !== 'field' || shift.ended_at) {
-      return NextResponse.json({ error: 'Shift not found or already ended — re-tag your crew' }, { status: 400 });
-    }
     const isAdmin = roles.includes('admin');
-    if (!(await canManageShift(service, auth.user.id, shift, isAdmin))) {
-      return NextResponse.json({ error: 'You are not on this shift' }, { status: 403 });
+    if (!shift || shift.context !== 'field') {
+      shift = null;
+      creditsError = 'Shift not found — scan saved without pay credits';
+    } else if (shift.ended_at) {
+      // Ended shifts still credit (offline scans from that shift syncing late).
+    } else if (!(await canManageShift(service, auth.user.id, shift, isAdmin))) {
+      shift = null;
+      creditsError = 'You are not on this shift — scan saved without pay credits';
     }
   }
 
@@ -83,7 +88,6 @@ export async function POST(req: NextRequest) {
 
   // Pay credits: snapshot the shift's crew for this vehicle. Unpriced parts
   // still get credits (amount NULL) and land in the admin needs-pricing queue.
-  let creditsError: string | null = null;
   if (shift) {
     const rate = await getFieldRate(service, record.part_number);
     const credits = await createCompletionCredits(service, {
