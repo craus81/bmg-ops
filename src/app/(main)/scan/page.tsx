@@ -304,26 +304,6 @@ export default function ScanPage() {
     return (crewInfo.ratePerVehicle * me.share_weight) / total;
   })();
 
-  // Stopgap while the CNI custom-job process is in flux: remember the last
-  // custom job/customer beyond End Shift / Switch Part (scan_session only
-  // survives within a shift) so the part number doesn't get retyped every
-  // shift. Overwritten the next time a custom job is continued.
-  const saveCustomJobDefaults = () => {
-    try { localStorage.setItem('custom_job_defaults', JSON.stringify({ customJob, customCustomer })); } catch {}
-  };
-  const prefillCustomJobDefaults = () => {
-    try {
-      const raw = localStorage.getItem('custom_job_defaults');
-      if (!raw) return;
-      const d = JSON.parse(raw);
-      if (d.customJob) {
-        setCustomJob(d.customJob);
-        setCustomCustomer(d.customCustomer || '');
-        setShowCustom(true);
-      }
-    } catch {}
-  };
-
   const endShift = () => {
     closeServerShift();
     setStep('part');
