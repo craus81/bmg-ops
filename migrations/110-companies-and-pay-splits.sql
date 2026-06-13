@@ -161,11 +161,18 @@ CREATE INDEX IF NOT EXISTS idx_install_credits_payout ON install_credits(payout_
 
 -- The signed-in user's company, straight from their profile. SECURITY
 -- DEFINER so job policies can use it without tripping profiles RLS; it only
--- ever returns the caller's own company.
+-- ever returns the caller's own company. search_path is pinned and the table
+-- schema-qualified so the function resolves under the hardened (empty)
+-- search_path that SECURITY DEFINER functions run with.
 CREATE OR REPLACE FUNCTION cni_user_company_id()
-RETURNS UUID AS $$
-  SELECT company_id FROM profiles WHERE id = auth.uid()
-$$ LANGUAGE sql SECURITY DEFINER STABLE;
+RETURNS UUID
+LANGUAGE sql
+SECURITY DEFINER
+STABLE
+SET search_path = public
+AS $$
+  SELECT company_id FROM public.profiles WHERE id = auth.uid()
+$$;
 
 ALTER TABLE work_shifts ENABLE ROW LEVEL SECURITY;
 ALTER TABLE work_shift_members ENABLE ROW LEVEL SECURITY;
