@@ -9,6 +9,7 @@ import RfidCapture, { type RfidCompletion } from '@/components/RfidCapture';
 import { isVerizonRfidPart } from '@/lib/rfid';
 import InstallerPreviewBanner from '@/components/InstallerPreviewBanner';
 import { getInstallerPreview } from '@/lib/installer-preview';
+import JobAttachments from '@/components/JobAttachments';
 
 const STATUS_LABELS: Record<string, string> = {
   assigned_awaiting_scheduling: 'Awaiting Schedule from BMG',
@@ -420,6 +421,14 @@ export default function InstallerJobDetailPage() {
           </div>
         )}
       </div>
+
+      {/* Files & Proofs (read-only for installers) */}
+      {Array.isArray(job.attachments) && job.attachments.length > 0 && (
+        <div style={sectionStyle}>
+          <div style={{ fontSize: '12px', fontWeight: 700, color: 'var(--text-muted)', marginBottom: '10px' }}>FILES &amp; PROOFS</div>
+          <JobAttachments jobId={job.id} attachments={job.attachments} />
+        </div>
+      )}
 
       {/* Material Shipment */}
       {job.requires_shipment && (
