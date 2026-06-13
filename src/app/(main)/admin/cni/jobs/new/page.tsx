@@ -6,6 +6,7 @@ import { createClient } from '@/lib/supabase-browser';
 import { useAuth } from '@/components/AuthProvider';
 import PartPicker, { type PickedPart } from '@/components/PartPicker';
 import { loadCompaniesWithCounts, type CompanyOption } from '@/lib/cni-companies';
+import { uploadJobFiles } from '@/lib/job-files';
 
 export default function CreateCniJobPage() {
   const router = useRouter();
@@ -28,6 +29,10 @@ export default function CreateCniJobPage() {
 
   // Part (drives scan_logs logging + Verizon RFID device capture on completion)
   const [part, setPart] = useState<PickedPart | null>(null);
+
+  // Files describing the job (proofs / photos / docs) — uploaded after the
+  // job is created so they can live under its id.
+  const [jobFiles, setJobFiles] = useState<File[]>([]);
 
   // Location
   const [street, setStreet] = useState('');
@@ -145,6 +150,14 @@ export default function CreateCniJobPage() {
           .from('cni_job_vins')
           .insert(vinRecords);
         if (vinError) console.error('VIN insert error:', vinError);
+      }
+
+      // Upload attachments under the new job's id, then save the list.
+      if (jobFiles.length > 0 && job) {
+        const { uploaded } = await uploadJobFiles(job.id, jobFiles);
+        if (uploaded.length > 0) {
+          await supabase.from('cni_jobs').update({ attachments: uploaded }).eq('id', job.id);
+        }
       }
 
       router.push(`/admin/cni/jobs/${job.id}`);
@@ -268,6 +281,41 @@ export default function CreateCniJobPage() {
           Setting a part logs each completed VIN to the scan log. The Verizon RFID part (06CS901033) prompts the installer to scan SN / IMEI / CCID.
         </div>
         <PartPicker value={part} onChange={setPart} inputStyle={inputStyle} />
+      </div>
+
+      {/* Files & Proofs */}
+      <div style={sectionStyle}>
+        <div style={sectionTitle}>Files &amp; Proofs</div>
+        <div style={{ fontSize: '12px', color: 'var(--text-muted)', marginBottom: '10px' }}>
+          Attach proofs, photos, or any documents that describe the job. The assigned company&apos;s installers can download these.
+        </div>
+        <input
+          type="file"
+          multiple
+          onChange={e => setJobFiles(prev => [...prev, ...Array.from(e.target.files || [])])}
+          style={{ fontSize: '13px', color: 'var(--text-body)' }}
+        />
+        {jobFiles.length > 0 && (
+          <div style={{ display: 'flex', flexDirection: 'column', gap: '6px', marginTop: '10px' }}>
+            {jobFiles.map((f, i) => (
+              <div key={i} style={{
+                display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '8px',
+                padding: '8px 12px', borderRadius: '8px', background: 'var(--input-bg)', border: '1px solid var(--border)',
+              }}>
+                <span style={{ fontSize: '13px', fontWeight: 600, color: 'var(--text-primary)', wordBreak: 'break-all' }}>{f.name}</span>
+                <button
+                  onClick={() => setJobFiles(prev => prev.filter((_, j) => j !== i))}
+                  style={{ flexShrink: 0, fontSize: '11px', fontWeight: 700, color: 'var(--error)', background: 'transparent', border: 'none', cursor: 'pointer' }}
+                >
+                  Remove
+                </button>
+              </div>
+            ))}
+            <div style={{ fontSize: '11px', color: 'var(--text-muted)' }}>
+              Uploads after the job is created.
+            </div>
+          </div>
+        )}
       </div>
 
       {/* Install Location */}

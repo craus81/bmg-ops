@@ -6,6 +6,7 @@ import { createClient } from '@/lib/supabase-browser';
 import { useAuth } from '@/components/AuthProvider';
 import PartPicker, { type PickedPart } from '@/components/PartPicker';
 import { loadCompaniesWithCounts } from '@/lib/cni-companies';
+import JobAttachments from '@/components/JobAttachments';
 
 interface CniJob {
   id: string;
@@ -793,6 +794,15 @@ export default function CniJobDetailPage() {
             </div>
           </div>
         )}
+      </div>
+
+      {/* Files & Proofs */}
+      <div style={{
+        padding: '14px 16px', borderRadius: '12px', marginBottom: '14px',
+        background: 'var(--card)', border: '1px solid var(--border)',
+      }}>
+        <div style={{ fontSize: '12px', fontWeight: 700, color: 'var(--text-muted)', marginBottom: '10px' }}>FILES &amp; PROOFS</div>
+        <JobAttachments jobId={job.id} attachments={(job as any).attachments || []} editable onChange={loadJob} />
       </div>
 
       {/* Part */}
