@@ -11,10 +11,10 @@ import InstallerPreviewBanner from '@/components/InstallerPreviewBanner';
 import { getInstallerPreview } from '@/lib/installer-preview';
 
 const STATUS_LABELS: Record<string, string> = {
-  assigned_awaiting_scheduling: 'Awaiting Your Schedule Proposal',
+  assigned_awaiting_scheduling: 'Awaiting Schedule from BMG',
   bidding_open: 'Open for Bids',
-  scheduling_proposed: 'Schedule Proposed — Awaiting Approval',
-  scheduled_pending_confirmation: 'Confirm Your Schedule',
+  scheduling_proposed: 'Schedule Proposed',
+  scheduled_pending_confirmation: 'Accept or Decline Your Schedule',
   scheduled_confirmed: 'Scheduled',
   in_progress: 'In Progress',
   completed_pending_review: 'Under Review',
@@ -35,10 +35,6 @@ export default function InstallerJobDetailPage() {
 
   const [photoCount, setPhotoCount] = useState(0);
   const [unreadMsgCount, setUnreadMsgCount] = useState(0);
-
-  // Schedule proposal
-  const [propStart, setPropStart] = useState('');
-  const [propEnd, setPropEnd] = useState('');
 
   // Verizon RFID device capture (modal, one VIN at a time)
   const [captureVin, setCaptureVin] = useState<any | null>(null);
@@ -107,26 +103,29 @@ export default function InstallerJobDetailPage() {
     setLoading(false);
   };
 
-  const proposeSchedule = async () => {
-    if (!propStart || !job) return;
+  // Admin proposes the schedule; the installer accepts it...
+  const acceptSchedule = async () => {
+    if (!job) return;
     setUpdating(true);
     await supabase.from('cni_jobs').update({
-      proposed_schedule_start: propStart,
-      proposed_schedule_end: propEnd || propStart,
-      status: 'scheduling_proposed',
+      schedule_confirmed_at: new Date().toISOString(),
+      status: 'scheduled_confirmed',
     }).eq('id', job.id);
     await loadJob();
     setUpdating(false);
   };
 
-  const confirmSchedule = async () => {
+  // ...or declines it (with an optional reason), bouncing it back to the
+  // admin to propose a new time.
+  const declineSchedule = async () => {
     if (!job) return;
+    const note = window.prompt('Optional: why are you declining this time? (helps BMG pick a new one)') || null;
     setUpdating(true);
     await supabase.from('cni_jobs').update({
-      confirmed_schedule_start: job.proposed_schedule_start,
-      confirmed_schedule_end: job.proposed_schedule_end,
-      schedule_confirmed_at: new Date().toISOString(),
-      status: 'scheduled_confirmed',
+      status: 'assigned_awaiting_scheduling',
+      schedule_decline_note: note,
+      scheduled_start_at: null,
+      scheduled_end_at: null,
     }).eq('id', job.id);
     await loadJob();
     setUpdating(false);
@@ -315,68 +314,65 @@ export default function InstallerJobDetailPage() {
         </div>
       </div>
 
-      {/* Action: Propose Schedule */}
+      {/* Awaiting a schedule from BMG (admin proposes, not the installer) */}
       {job.status === 'assigned_awaiting_scheduling' && (
         <div style={{ ...sectionStyle, background: 'var(--warning-bg)', borderColor: 'var(--warning-border)' }}>
-          <div style={{ fontSize: '14px', fontWeight: 700, color: 'var(--warning)', marginBottom: '12px' }}>
-            Propose Your Schedule
+          <div style={{ fontSize: '14px', fontWeight: 700, color: 'var(--warning)', marginBottom: '4px' }}>
+            Awaiting a Proposed Time
           </div>
-          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '10px', marginBottom: '12px' }}>
-            <div>
-              <label style={{ fontSize: '12px', fontWeight: 600, color: 'var(--text-label)', display: 'block', marginBottom: '4px' }}>Start Date</label>
-              <input style={inputStyle} type="date" value={propStart} onChange={e => setPropStart(e.target.value)} />
-            </div>
-            <div>
-              <label style={{ fontSize: '12px', fontWeight: 600, color: 'var(--text-label)', display: 'block', marginBottom: '4px' }}>End Date</label>
-              <input style={inputStyle} type="date" value={propEnd} onChange={e => setPropEnd(e.target.value)} />
-            </div>
+          <div style={{ fontSize: '13px', color: 'var(--text-primary)' }}>
+            BMG will propose a start date and time. You&apos;ll be able to accept or decline it here.
           </div>
-          <button
-            onClick={proposeSchedule}
-            disabled={!propStart || updating}
-            style={{
-              width: '100%', padding: '14px', borderRadius: '10px', fontSize: '14px', fontWeight: 700,
-              background: propStart ? 'var(--orange)' : 'var(--text-muted)', color: '#fff', border: 'none',
-            }}
-          >
-            {updating ? 'Submitting...' : 'Submit Schedule Proposal'}
-          </button>
         </div>
       )}
 
-      {/* Action: Confirm Schedule */}
+      {/* Action: Accept or Decline the proposed schedule */}
       {job.status === 'scheduled_pending_confirmation' && (
         <div style={{ ...sectionStyle, background: 'var(--success-bg)', borderColor: 'var(--success-border)' }}>
           <div style={{ fontSize: '14px', fontWeight: 700, color: 'var(--success)', marginBottom: '8px' }}>
-            Your Schedule Has Been Approved
+            Proposed Schedule
           </div>
-          <div style={{ fontSize: '13px', color: 'var(--text-primary)', marginBottom: '12px' }}>
-            {job.proposed_schedule_start ? new Date(job.proposed_schedule_start).toLocaleDateString() : ''}
-            {job.proposed_schedule_end && job.proposed_schedule_end !== job.proposed_schedule_start
-              ? ` — ${new Date(job.proposed_schedule_end).toLocaleDateString()}`
+          <div style={{ fontSize: '15px', fontWeight: 700, color: 'var(--text-primary)', marginBottom: '12px' }}>
+            {job.scheduled_start_at
+              ? new Date(job.scheduled_start_at).toLocaleString([], { weekday: 'short', month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' })
+              : 'Time TBD'}
+            {job.scheduled_end_at
+              ? ` — ${new Date(job.scheduled_end_at).toLocaleString([], { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' })}`
               : ''}
           </div>
-          <button
-            onClick={confirmSchedule}
-            disabled={updating}
-            style={{
-              width: '100%', padding: '14px', borderRadius: '10px', fontSize: '14px', fontWeight: 700,
-              background: 'var(--success)', color: '#fff', border: 'none',
-            }}
-          >
-            {updating ? 'Confirming...' : 'Confirm Schedule'}
-          </button>
+          <div style={{ display: 'flex', gap: '8px' }}>
+            <button
+              onClick={acceptSchedule}
+              disabled={updating}
+              style={{
+                flex: 1, padding: '14px', borderRadius: '10px', fontSize: '14px', fontWeight: 700,
+                background: 'var(--success)', color: '#fff', border: 'none',
+              }}
+            >
+              {updating ? '...' : 'Accept'}
+            </button>
+            <button
+              onClick={declineSchedule}
+              disabled={updating}
+              style={{
+                padding: '14px 18px', borderRadius: '10px', fontSize: '14px', fontWeight: 700,
+                background: 'transparent', color: 'var(--error)', border: '1px solid var(--error-border)',
+              }}
+            >
+              Decline
+            </button>
+          </div>
         </div>
       )}
 
       {/* Confirmed Schedule */}
-      {job.confirmed_schedule_start && (
+      {job.scheduled_start_at && job.status !== 'scheduled_pending_confirmation' && job.status !== 'assigned_awaiting_scheduling' && (
         <div style={sectionStyle}>
-          <div style={{ fontSize: '12px', fontWeight: 700, color: 'var(--text-muted)', marginBottom: '6px' }}>CONFIRMED SCHEDULE</div>
+          <div style={{ fontSize: '12px', fontWeight: 700, color: 'var(--text-muted)', marginBottom: '6px' }}>SCHEDULE</div>
           <div style={{ fontSize: '14px', fontWeight: 700, color: 'var(--success)' }}>
-            {new Date(job.confirmed_schedule_start).toLocaleDateString()}
-            {job.confirmed_schedule_end && job.confirmed_schedule_end !== job.confirmed_schedule_start
-              ? ` — ${new Date(job.confirmed_schedule_end).toLocaleDateString()}`
+            {new Date(job.scheduled_start_at).toLocaleString([], { weekday: 'short', month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' })}
+            {job.scheduled_end_at
+              ? ` — ${new Date(job.scheduled_end_at).toLocaleString([], { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' })}`
               : ''}
           </div>
         </div>
