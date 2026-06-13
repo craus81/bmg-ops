@@ -41,6 +41,9 @@ interface CniJob {
   confirmed_schedule_start: string | null;
   confirmed_schedule_end: string | null;
   schedule_confirmed_at: string | null;
+  scheduled_start_at: string | null;
+  scheduled_end_at: string | null;
+  schedule_decline_note: string | null;
   completed_at: string | null;
   invoice_status: string;
   invoice_file_path: string | null;
@@ -80,7 +83,7 @@ const STATUS_LABELS: Record<string, string> = {
   bidding_open: 'Bidding Open',
   assigned_awaiting_scheduling: 'Assigned — Awaiting Scheduling',
   scheduling_proposed: 'Scheduling Proposed',
-  scheduled_pending_confirmation: 'Scheduled — Pending Confirmation',
+  scheduled_pending_confirmation: 'Awaiting Installer Acceptance',
   scheduled_confirmed: 'Scheduled (Confirmed)',
   in_progress: 'In Progress',
   completed_pending_review: 'Completed — Pending Review',
@@ -104,7 +107,7 @@ const NEXT_STATUSES: Record<string, string[]> = {
   awaiting_assignment: ['bidding_open', 'assigned_awaiting_scheduling'],
   bidding_open: ['assigned_awaiting_scheduling'],
   assigned_awaiting_scheduling: [],
-  scheduling_proposed: ['scheduled_pending_confirmation'],
+  scheduling_proposed: [],
   scheduled_pending_confirmation: [],
   scheduled_confirmed: ['in_progress'],
   in_progress: [],
@@ -133,6 +136,11 @@ export default function CniJobDetailPage() {
   const [companies, setCompanies] = useState<{ id: string; name: string; memberCount: number }[]>([]);
   const [rateDraft, setRateDraft] = useState('');
   const [editingRate, setEditingRate] = useState(false);
+
+  // Scheduling (admin proposes a date+time)
+  const [schedStart, setSchedStart] = useState('');   // datetime-local value
+  const [schedEnd, setSchedEnd] = useState('');
+  const [editingSchedule, setEditingSchedule] = useState(false);
 
   // Distribution
   const [showInvite, setShowInvite] = useState(false);
@@ -280,6 +288,40 @@ export default function CniJobDetailPage() {
     if (!error) {
       await loadJob();
     }
+    setUpdating(false);
+  };
+
+  // ISO timestamp → value for <input type="datetime-local"> (local time).
+  const toLocalInput = (iso: string) => {
+    const d = new Date(iso);
+    return new Date(d.getTime() - d.getTimezoneOffset() * 60000).toISOString().slice(0, 16);
+  };
+
+  // Admin proposes a start date+time → installer accepts/declines.
+  const proposeSchedule = async () => {
+    if (!job || !schedStart) return;
+    setUpdating(true);
+    await supabase.from('cni_jobs').update({
+      scheduled_start_at: new Date(schedStart).toISOString(),
+      scheduled_end_at: schedEnd ? new Date(schedEnd).toISOString() : null,
+      schedule_decline_note: null,
+      schedule_confirmed_at: null,
+      status: 'scheduled_pending_confirmation',
+    }).eq('id', job.id);
+    setEditingSchedule(false);
+    await loadJob();
+    setUpdating(false);
+  };
+
+  // Accept on the installer's behalf (e.g. a verbal commitment).
+  const confirmForInstaller = async () => {
+    if (!job) return;
+    setUpdating(true);
+    await supabase.from('cni_jobs').update({
+      schedule_confirmed_at: new Date().toISOString(),
+      status: 'scheduled_confirmed',
+    }).eq('id', job.id);
+    await loadJob();
     setUpdating(false);
   };
 
@@ -556,50 +598,97 @@ export default function CniJobDetailPage() {
         </div>
       )}
 
-      {/* Schedule */}
-      {job.confirmed_schedule_start && (
+      {/* Schedule — admin proposes a date+time; installer accepts/declines,
+          or the admin accepts on their behalf (verbal commitment). */}
+      {['assigned_awaiting_scheduling', 'scheduled_pending_confirmation', 'scheduled_confirmed'].includes(job.status) && (
         <div style={{
           padding: '14px 16px', borderRadius: '12px', marginBottom: '14px',
           background: 'var(--card)', border: '1px solid var(--border)',
         }}>
-          <div style={{ fontSize: '12px', fontWeight: 700, color: 'var(--text-muted)', marginBottom: '6px' }}>SCHEDULE</div>
-          <div style={{ fontSize: '14px', fontWeight: 600, color: 'var(--text-primary)' }}>
-            {new Date(job.confirmed_schedule_start).toLocaleDateString()}
-            {job.confirmed_schedule_end && job.confirmed_schedule_end !== job.confirmed_schedule_start
-              ? ` — ${new Date(job.confirmed_schedule_end).toLocaleDateString()}`
-              : ''}
-          </div>
-          {job.schedule_confirmed_at && (
-            <div style={{ fontSize: '11px', color: 'var(--success)', marginTop: '2px' }}>
-              ✓ Confirmed {new Date(job.schedule_confirmed_at).toLocaleDateString()}
+          <div style={{ fontSize: '12px', fontWeight: 700, color: 'var(--text-muted)', marginBottom: '8px' }}>SCHEDULE</div>
+
+          {job.schedule_decline_note && job.status === 'assigned_awaiting_scheduling' && (
+            <div style={{ padding: '8px 12px', borderRadius: '8px', marginBottom: '10px', background: 'var(--error-bg)', border: '1px solid var(--error-border)', color: 'var(--error)', fontSize: '12px', fontWeight: 600 }}>
+              Installer declined the last time — &ldquo;{job.schedule_decline_note}&rdquo;
             </div>
           )}
-        </div>
-      )}
-      {job.proposed_schedule_start && !job.confirmed_schedule_start && (
-        <div style={{
-          padding: '14px 16px', borderRadius: '12px', marginBottom: '14px',
-          background: 'var(--card)', border: '1px solid var(--border)',
-        }}>
-          <div style={{ fontSize: '12px', fontWeight: 700, color: 'var(--text-muted)', marginBottom: '6px' }}>PROPOSED SCHEDULE</div>
-          <div style={{ fontSize: '14px', fontWeight: 600, color: '#60a5fa' }}>
-            {new Date(job.proposed_schedule_start).toLocaleDateString()}
-            {job.proposed_schedule_end && job.proposed_schedule_end !== job.proposed_schedule_start
-              ? ` — ${new Date(job.proposed_schedule_end).toLocaleDateString()}`
-              : ''}
-          </div>
-          <div style={{ display: 'flex', gap: '8px', marginTop: '10px' }}>
-            <button
-              onClick={() => updateStatus('scheduled_pending_confirmation')}
-              disabled={updating}
-              style={{
-                flex: 1, padding: '10px', borderRadius: '8px', fontSize: '12px', fontWeight: 700,
-                background: 'var(--success)', color: '#fff', border: 'none',
-              }}
-            >
-              Approve Schedule
-            </button>
-          </div>
+
+          {job.status === 'scheduled_confirmed' ? (
+            <>
+              <div style={{ fontSize: '15px', fontWeight: 700, color: 'var(--success)' }}>
+                {job.scheduled_start_at ? new Date(job.scheduled_start_at).toLocaleString([], { weekday: 'short', month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' }) : '—'}
+                {job.scheduled_end_at ? ` — ${new Date(job.scheduled_end_at).toLocaleString([], { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' })}` : ''}
+              </div>
+              {job.schedule_confirmed_at && (
+                <div style={{ fontSize: '11px', color: 'var(--success)', marginTop: '2px' }}>
+                  ✓ Accepted {new Date(job.schedule_confirmed_at).toLocaleDateString()}
+                </div>
+              )}
+            </>
+          ) : (job.status === 'scheduled_pending_confirmation' && !editingSchedule) ? (
+            <>
+              <div style={{ fontSize: '15px', fontWeight: 700, color: '#60a5fa' }}>
+                {job.scheduled_start_at ? new Date(job.scheduled_start_at).toLocaleString([], { weekday: 'short', month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' }) : '—'}
+                {job.scheduled_end_at ? ` — ${new Date(job.scheduled_end_at).toLocaleString([], { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' })}` : ''}
+              </div>
+              <div style={{ fontSize: '12px', color: 'var(--text-muted)', marginTop: '2px', marginBottom: '10px' }}>
+                Waiting for the installer to accept or decline.
+              </div>
+              <div style={{ display: 'flex', gap: '8px' }}>
+                <button
+                  onClick={confirmForInstaller}
+                  disabled={updating}
+                  style={{ flex: 1, padding: '10px', borderRadius: '8px', fontSize: '12px', fontWeight: 700, background: 'var(--success)', color: '#fff', border: 'none' }}
+                >
+                  Accept for Installer
+                </button>
+                <button
+                  onClick={() => {
+                    setSchedStart(job.scheduled_start_at ? toLocalInput(job.scheduled_start_at) : '');
+                    setSchedEnd(job.scheduled_end_at ? toLocalInput(job.scheduled_end_at) : '');
+                    setEditingSchedule(true);
+                  }}
+                  disabled={updating}
+                  style={{ padding: '10px 14px', borderRadius: '8px', fontSize: '12px', fontWeight: 700, background: 'var(--subtle-bg)', color: 'var(--text-secondary)', border: '1px solid var(--border)' }}
+                >
+                  Change Time
+                </button>
+              </div>
+            </>
+          ) : (
+            <>
+              <div style={{ fontSize: '12px', color: 'var(--text-muted)', marginBottom: '10px' }}>
+                Propose a start date and time. The installer accepts or declines — or you can accept for them.
+              </div>
+              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '10px', marginBottom: '10px' }}>
+                <div>
+                  <label style={{ fontSize: '11px', fontWeight: 700, color: 'var(--text-label)', display: 'block', marginBottom: '4px' }}>Start *</label>
+                  <input type="datetime-local" value={schedStart} onChange={e => setSchedStart(e.target.value)}
+                    style={{ width: '100%', padding: '10px', borderRadius: '8px', border: '1px solid var(--border)', background: 'var(--input-bg)', color: 'var(--text-body)', fontSize: '13px' }} />
+                </div>
+                <div>
+                  <label style={{ fontSize: '11px', fontWeight: 700, color: 'var(--text-label)', display: 'block', marginBottom: '4px' }}>End (optional)</label>
+                  <input type="datetime-local" value={schedEnd} onChange={e => setSchedEnd(e.target.value)}
+                    style={{ width: '100%', padding: '10px', borderRadius: '8px', border: '1px solid var(--border)', background: 'var(--input-bg)', color: 'var(--text-body)', fontSize: '13px' }} />
+                </div>
+              </div>
+              <div style={{ display: 'flex', gap: '8px' }}>
+                <button
+                  onClick={proposeSchedule}
+                  disabled={!schedStart || updating}
+                  style={{ flex: 1, padding: '11px', borderRadius: '8px', fontSize: '13px', fontWeight: 700, background: schedStart ? 'var(--orange)' : 'var(--text-muted)', color: '#fff', border: 'none' }}
+                >
+                  {updating ? 'Sending...' : 'Propose to Installer'}
+                </button>
+                {editingSchedule && (
+                  <button onClick={() => setEditingSchedule(false)} disabled={updating}
+                    style={{ padding: '11px 14px', borderRadius: '8px', fontSize: '12px', fontWeight: 700, background: 'transparent', border: '1px solid var(--border)', color: 'var(--text-muted)' }}>
+                    Cancel
+                  </button>
+                )}
+              </div>
+            </>
+          )}
         </div>
       )}
 
