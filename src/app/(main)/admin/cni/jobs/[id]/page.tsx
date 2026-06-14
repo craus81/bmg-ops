@@ -142,6 +142,7 @@ export default function CniJobDetailPage() {
   const [schedStart, setSchedStart] = useState('');   // datetime-local value
   const [schedEnd, setSchedEnd] = useState('');
   const [editingSchedule, setEditingSchedule] = useState(false);
+  const [scheduleError, setScheduleError] = useState('');
 
   // Distribution
   const [showInvite, setShowInvite] = useState(false);
@@ -302,28 +303,32 @@ export default function CniJobDetailPage() {
   const proposeSchedule = async () => {
     if (!job || !schedStart) return;
     setUpdating(true);
-    await supabase.from('cni_jobs').update({
+    setScheduleError('');
+    const { error } = await supabase.from('cni_jobs').update({
       scheduled_start_at: new Date(schedStart).toISOString(),
       scheduled_end_at: schedEnd ? new Date(schedEnd).toISOString() : null,
       schedule_decline_note: null,
       schedule_confirmed_at: null,
       status: 'scheduled_pending_confirmation',
     }).eq('id', job.id);
+    setUpdating(false);
+    if (error) { setScheduleError(error.message); return; }
     setEditingSchedule(false);
     await loadJob();
-    setUpdating(false);
   };
 
   // Accept on the installer's behalf (e.g. a verbal commitment).
   const confirmForInstaller = async () => {
     if (!job) return;
     setUpdating(true);
-    await supabase.from('cni_jobs').update({
+    setScheduleError('');
+    const { error } = await supabase.from('cni_jobs').update({
       schedule_confirmed_at: new Date().toISOString(),
       status: 'scheduled_confirmed',
     }).eq('id', job.id);
-    await loadJob();
     setUpdating(false);
+    if (error) { setScheduleError(error.message); return; }
+    await loadJob();
   };
 
   // Assignment is company-based: any installer at the company works the job.
@@ -607,6 +612,14 @@ export default function CniJobDetailPage() {
           background: 'var(--card)', border: '1px solid var(--border)',
         }}>
           <div style={{ fontSize: '12px', fontWeight: 700, color: 'var(--text-muted)', marginBottom: '8px' }}>SCHEDULE</div>
+
+          {scheduleError && (
+            <div style={{ padding: '8px 12px', borderRadius: '8px', marginBottom: '10px', background: 'var(--error-bg)', border: '1px solid var(--error-border)', color: 'var(--error)', fontSize: '12px', fontWeight: 600 }}>
+              {/column .* does not exist/i.test(scheduleError)
+                ? 'Scheduling columns are missing from the database — run the consolidated SQL (migration 113) in the Supabase SQL editor, then retry.'
+                : scheduleError}
+            </div>
+          )}
 
           {job.schedule_decline_note && job.status === 'assigned_awaiting_scheduling' && (
             <div style={{ padding: '8px 12px', borderRadius: '8px', marginBottom: '10px', background: 'var(--error-bg)', border: '1px solid var(--error-border)', color: 'var(--error)', fontSize: '12px', fontWeight: 600 }}>

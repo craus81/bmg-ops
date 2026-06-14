@@ -108,12 +108,14 @@ export default function InstallerJobDetailPage() {
   const acceptSchedule = async () => {
     if (!job) return;
     setUpdating(true);
-    await supabase.from('cni_jobs').update({
+    setActionError('');
+    const { error } = await supabase.from('cni_jobs').update({
       schedule_confirmed_at: new Date().toISOString(),
       status: 'scheduled_confirmed',
     }).eq('id', job.id);
-    await loadJob();
     setUpdating(false);
+    if (error) { setActionError(error.message); return; }
+    await loadJob();
   };
 
   // ...or declines it (with an optional reason), bouncing it back to the
@@ -122,14 +124,16 @@ export default function InstallerJobDetailPage() {
     if (!job) return;
     const note = window.prompt('Optional: why are you declining this time? (helps BMG pick a new one)') || null;
     setUpdating(true);
-    await supabase.from('cni_jobs').update({
+    setActionError('');
+    const { error } = await supabase.from('cni_jobs').update({
       status: 'assigned_awaiting_scheduling',
       schedule_decline_note: note,
       scheduled_start_at: null,
       scheduled_end_at: null,
     }).eq('id', job.id);
-    await loadJob();
     setUpdating(false);
+    if (error) { setActionError(error.message); return; }
+    await loadJob();
   };
 
   // Complete a VIN via the server route, which logs to scan_logs when the job
@@ -363,6 +367,13 @@ export default function InstallerJobDetailPage() {
               Decline
             </button>
           </div>
+          {actionError && (
+            <div style={{ marginTop: '10px', padding: '8px 12px', borderRadius: '8px', background: 'var(--error-bg)', border: '1px solid var(--error-border)', color: 'var(--error)', fontSize: '12px', fontWeight: 600 }}>
+              {/column .* does not exist/i.test(actionError)
+                ? 'Scheduling isn’t set up in the database yet — ask BMG to run the latest SQL update.'
+                : actionError}
+            </div>
+          )}
         </div>
       )}
 
