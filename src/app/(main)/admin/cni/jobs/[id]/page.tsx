@@ -285,7 +285,7 @@ export default function CniJobDetailPage() {
     setUpdating(true);
     const { error } = await supabase
       .from('cni_jobs')
-      .update({ status: newStatus })
+      .update({ status: newStatus, updated_by: user?.id })
       .eq('id', job.id);
     if (!error) {
       await loadJob();
@@ -310,6 +310,7 @@ export default function CniJobDetailPage() {
       schedule_decline_note: null,
       schedule_confirmed_at: null,
       status: 'scheduled_pending_confirmation',
+      updated_by: user?.id,
     }).eq('id', job.id);
     setUpdating(false);
     if (error) { setScheduleError(error.message); return; }
@@ -325,6 +326,7 @@ export default function CniJobDetailPage() {
     const { error } = await supabase.from('cni_jobs').update({
       schedule_confirmed_at: new Date().toISOString(),
       status: 'scheduled_confirmed',
+      updated_by: user?.id,
     }).eq('id', job.id);
     setUpdating(false);
     if (error) { setScheduleError(error.message); return; }
@@ -348,6 +350,7 @@ export default function CniJobDetailPage() {
         status: job.status === 'awaiting_assignment' || job.status === 'bidding_open'
           ? 'assigned_awaiting_scheduling'
           : job.status,
+        updated_by: user?.id,
       })
       .eq('id', job.id);
     if (!error) {
