@@ -151,6 +151,7 @@ export async function POST(req: NextRequest) {
     await supabase.from('cni_jobs').update({
       status: 'completed_pending_review',
       completed_at: new Date().toISOString(),
+      updated_by: auth.user.id,
     }).eq('id', jobId);
     jobCompleted = true;
   }

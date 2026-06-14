@@ -112,6 +112,7 @@ export default function InstallerJobDetailPage() {
     const { error } = await supabase.from('cni_jobs').update({
       schedule_confirmed_at: new Date().toISOString(),
       status: 'scheduled_confirmed',
+      updated_by: user?.id,
     }).eq('id', job.id);
     setUpdating(false);
     if (error) { setActionError(error.message); return; }
@@ -130,6 +131,7 @@ export default function InstallerJobDetailPage() {
       schedule_decline_note: note,
       scheduled_start_at: null,
       scheduled_end_at: null,
+      updated_by: user?.id,
     }).eq('id', job.id);
     setUpdating(false);
     if (error) { setActionError(error.message); return; }

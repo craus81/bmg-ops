@@ -61,6 +61,10 @@ ALTER TABLE cni_jobs ADD COLUMN IF NOT EXISTS schedule_decline_note TEXT;
 -- 114: job attachments (proofs / photos / docs)
 ALTER TABLE cni_jobs ADD COLUMN IF NOT EXISTS attachments JSONB DEFAULT '[]'::jsonb;
 
+-- 115: column the migration-045 status-change trigger expects (without it,
+-- every status-changing UPDATE on cni_jobs errors "no field updated_by").
+ALTER TABLE cni_jobs ADD COLUMN IF NOT EXISTS updated_by UUID REFERENCES profiles(id);
+
 -- ── 2. Pay-splits tables ────────────────────────────────────────────────────
 
 CREATE TABLE IF NOT EXISTS work_shifts (
