@@ -60,6 +60,12 @@ export default function CniJobShiftsPage() {
   const [editVehicle, setEditVehicle] = useState<{ credits: Credit[] } | null>(null);
   const [vehicleDraft, setVehicleDraft] = useState<Map<string, number>>(new Map());
 
+  // Retroactive back-pay: completed vehicles that have no credits yet (work
+  // done before crew tagging existed).
+  const [uncoveredCount, setUncoveredCount] = useState(0);
+  const [backfillOpen, setBackfillOpen] = useState(false);
+  const [backfillDraft, setBackfillDraft] = useState<Map<string, number>>(new Map());
+
   const authHeaders = async () => {
     const { data: { session } } = await supabase.auth.getSession();
     return {
@@ -75,9 +81,18 @@ export default function CniJobShiftsPage() {
       fetch(`/api/shifts?cniJobId=${jobId}`, { headers }),
       supabase.from('cni_jobs').select('title, job_number, pay_per_vehicle').eq('id', jobId).single(),
     ]);
-    if (creditsRes.ok) setShifts((await creditsRes.json()).shifts || []);
+    const loadedShifts: Shift[] = creditsRes.ok ? ((await creditsRes.json()).shifts || []) : [];
+    setShifts(loadedShifts);
     if (shiftRes.ok) setRoster((await shiftRes.json()).roster || []);
     if (jobRes.data) setJobTitle(`${jobRes.data.job_number} — ${jobRes.data.title}`);
+
+    // Completed vehicles with no live credits yet → candidates for back-pay.
+    const credited = new Set<string>();
+    for (const s of loadedShifts) for (const c of s.credits) if (c.cni_job_vin_id) credited.add(c.cni_job_vin_id);
+    const { data: completed } = await supabase
+      .from('cni_job_vins').select('id').eq('job_id', jobId).eq('status', 'completed');
+    setUncoveredCount((completed || []).filter((v: { id: string }) => !credited.has(v.id)).length);
+
     setLoading(false);
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [jobId]);
@@ -89,6 +104,36 @@ export default function CniJobShiftsPage() {
   }, [isAdmin, jobId]);
 
   const flash = (msg: string) => { setNotice(msg); setTimeout(() => setNotice(''), 4000); };
+
+  // ── Retroactive back-pay for already-completed vehicles ──
+  const openBackfill = () => {
+    setBackfillDraft(new Map());
+    setError('');
+    setBackfillOpen(true);
+  };
+
+  const applyBackfill = async () => {
+    if (backfillDraft.size === 0) return;
+    setBusy(true);
+    setError('');
+    try {
+      const res = await fetch('/api/admin/credits', {
+        method: 'POST', headers: await authHeaders(),
+        body: JSON.stringify({
+          action: 'backfill_job',
+          cniJobId: jobId,
+          entries: [...backfillDraft.entries()].map(([profileId, weight]) => ({ profileId, weight })),
+        }),
+      });
+      const json = await res.json().catch(() => ({}));
+      if (!res.ok) { setError(json.error || 'Back-pay failed'); return; }
+      setBackfillOpen(false);
+      flash(`Backfilled ${json.created} vehicle${json.created === 1 ? '' : 's'}${json.skipped ? `, skipped ${json.skipped} already credited` : ''}`);
+      await load();
+    } finally {
+      setBusy(false);
+    }
+  };
 
   // ── Shift roster edit + recompute ──
   const openShiftEditor = (s: Shift) => {
@@ -300,6 +345,23 @@ export default function CniJobShiftsPage() {
         </div>
       )}
 
+      {/* Retroactive back-pay for vehicles completed before crew tagging */}
+      {uncoveredCount > 0 && (
+        <div style={{ padding: '14px 16px', borderRadius: '12px', marginBottom: '14px', background: 'var(--warning-bg)', border: '1px solid var(--warning-border)' }}>
+          <div style={{ fontSize: '13px', fontWeight: 800, color: 'var(--warning)', marginBottom: '2px' }}>
+            {uncoveredCount} completed vehicle{uncoveredCount === 1 ? '' : 's'} with no pay yet
+          </div>
+          <div style={{ fontSize: '12px', color: 'var(--text-secondary)', marginBottom: '10px' }}>
+            These were finished before the crew was tagged. Pick who worked the job and their shares — pay
+            splits across them for each of these vehicles at the job&apos;s per-vehicle rate.
+          </div>
+          <button onClick={openBackfill} disabled={busy} style={{
+            padding: '10px 14px', borderRadius: '8px', fontSize: '13px', fontWeight: 700,
+            background: 'var(--orange)', color: '#fff', border: 'none',
+          }}>Back-Pay These Vehicles</button>
+        </div>
+      )}
+
       {/* Shifts */}
       {shifts.length === 0 ? (
         <div style={{ padding: '24px', textAlign: 'center', color: 'var(--text-muted)', fontSize: '13px', background: 'var(--card)', border: '1px solid var(--border)', borderRadius: '12px' }}>
@@ -378,6 +440,34 @@ export default function CniJobShiftsPage() {
           )}
         </div>
       ))}
+
+      {/* Back-pay crew picker modal */}
+      {backfillOpen && (
+        <div onClick={() => setBackfillOpen(false)} style={{ position: 'fixed', inset: 0, zIndex: 200, background: 'rgba(0,0,0,0.6)', display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '20px' }}>
+          <div onClick={e => e.stopPropagation()} style={{ background: 'var(--card)', borderRadius: '16px', padding: '20px', maxWidth: '420px', width: '100%', maxHeight: '85vh', overflowY: 'auto', border: '1px solid var(--border)' }}>
+            <div style={{ fontSize: '15px', fontWeight: 800, color: 'var(--text-primary)', marginBottom: '4px' }}>
+              Who worked this job?
+            </div>
+            <div style={{ fontSize: '11px', color: 'var(--text-muted)', marginBottom: '12px' }}>
+              Each of the {uncoveredCount} uncredited vehicle{uncoveredCount === 1 ? '' : 's'} pays out split across the
+              people below (even split by default; change a share for an uneven split). Vehicles that already have
+              pay are skipped.
+            </div>
+            {weightEditor(backfillDraft, setBackfillDraft, editorPeople([]))}
+            {error && <div style={{ padding: '8px 12px', borderRadius: '8px', margin: '8px 0', background: 'var(--error-bg)', border: '1px solid var(--error-border)', color: 'var(--error)', fontSize: '12px', fontWeight: 600 }}>{error}</div>}
+            <div style={{ display: 'flex', gap: '8px', marginTop: '8px' }}>
+              <button onClick={applyBackfill} disabled={busy || backfillDraft.size === 0} style={{
+                flex: 1, padding: '12px', borderRadius: '10px', fontSize: '13px', fontWeight: 800,
+                background: busy || backfillDraft.size === 0 ? 'var(--text-muted)' : 'var(--orange)', color: '#fff', border: 'none',
+              }}>{busy ? 'Working...' : 'Back-Pay'}</button>
+              <button onClick={() => setBackfillOpen(false)} disabled={busy} style={{
+                padding: '12px 16px', borderRadius: '10px', fontSize: '12px', fontWeight: 700,
+                background: 'transparent', border: '1px solid var(--border)', color: 'var(--text-muted)',
+              }}>Cancel</button>
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* Shift roster editor modal */}
       {editShift && (
