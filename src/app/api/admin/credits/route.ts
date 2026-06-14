@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { createClient } from '@supabase/supabase-js';
 import { requireAdmin } from '@/lib/api-auth';
 import { validateBody, validateSearchParams, z } from '@/lib/validate';
-import { rewriteVehicleCredits, recomputeShiftCredits } from '@/lib/pay-credits';
+import { rewriteVehicleCredits, recomputeShiftCredits, backfillJobCredits } from '@/lib/pay-credits';
 import { memberViews } from '@/lib/shifts';
 
 export const dynamic = 'force-dynamic';
@@ -85,6 +85,14 @@ const PostSchema = z.union([
     action: z.literal('recompute_shift'),
     shiftId: z.string().uuid(),
   }),
+  z.object({
+    action: z.literal('backfill_job'),
+    cniJobId: z.string().uuid(),
+    entries: z.array(z.object({
+      profileId: z.string().uuid(),
+      weight: z.number().positive().max(99),
+    })).min(1).max(50),
+  }),
 ]);
 
 /**
@@ -109,6 +117,16 @@ export async function POST(req: NextRequest) {
     });
     if (!r.ok) return NextResponse.json({ error: r.error }, { status: 400 });
     return NextResponse.json({ success: true });
+  }
+
+  if (parsed.data.action === 'backfill_job') {
+    const r = await backfillJobCredits(service, {
+      cniJobId: parsed.data.cniJobId,
+      entries: parsed.data.entries.map(e => ({ profile_id: e.profileId, share_weight: e.weight })),
+      createdBy: auth.user.id,
+    });
+    if (!r.ok) return NextResponse.json({ error: r.error }, { status: 400 });
+    return NextResponse.json({ success: true, created: r.created, skipped: r.skipped });
   }
 
   const r = await recomputeShiftCredits(service, parsed.data.shiftId, auth.user.id);

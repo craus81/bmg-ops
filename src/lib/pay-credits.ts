@@ -153,6 +153,68 @@ export async function createCompletionCredits(
   return { ok: true };
 }
 
+/**
+ * Retroactively pay out a CNI job whose vehicles were completed before crew
+ * tagging existed. Creates one closed "backfill" shift with the given crew and
+ * snapshots credits for every completed VIN on the job that doesn't already
+ * have live credits (so it's safe to run after a partial tagging, and safe to
+ * re-run). Uses the job's pay_per_vehicle; unpriced if that's null.
+ */
+export async function backfillJobCredits(
+  service: SupabaseClient,
+  opts: { cniJobId: string; entries: ShiftMember[]; createdBy: string },
+): Promise<{ ok: boolean; created: number; skipped: number; error?: string }> {
+  const { cniJobId, entries, createdBy } = opts;
+  if (entries.length === 0) return { ok: false, created: 0, skipped: 0, error: 'At least one crew member required' };
+
+  const { data: job } = await service
+    .from('cni_jobs').select('id, pay_per_vehicle, part_number').eq('id', cniJobId).single();
+  if (!job) return { ok: false, created: 0, skipped: 0, error: 'Job not found' };
+  const rate = job.pay_per_vehicle != null ? Number(job.pay_per_vehicle) : null;
+
+  const { data: vins } = await service
+    .from('cni_job_vins')
+    .select('id, vin, status')
+    .eq('job_id', cniJobId)
+    .eq('status', 'completed');
+  if (!vins || vins.length === 0) {
+    return { ok: false, created: 0, skipped: 0, error: 'No completed vehicles on this job to pay out' };
+  }
+
+  // A closed shift to hang the backfilled credits on.
+  const now = new Date().toISOString();
+  const { data: shift, error: shiftErr } = await service
+    .from('work_shifts')
+    .insert({ context: 'cni', cni_job_id: cniJobId, started_by: createdBy, started_at: now, ended_at: now })
+    .select('id')
+    .single();
+  if (shiftErr || !shift) {
+    return { ok: false, created: 0, skipped: 0, error: 'Failed to create shift: ' + (shiftErr?.message || 'unknown') };
+  }
+  const { error: memErr } = await service.from('work_shift_members').insert(
+    entries.map(m => ({ shift_id: shift.id, profile_id: m.profile_id, share_weight: m.share_weight, added_by: createdBy })),
+  );
+  if (memErr) return { ok: false, created: 0, skipped: 0, error: 'Failed to add crew: ' + memErr.message };
+
+  let created = 0;
+  let skipped = 0;
+  for (const v of vins) {
+    // createCompletionCredits skips vehicles that already have live credits.
+    const { data: existing } = await service
+      .from('install_credits').select('id').eq('cni_job_vin_id', v.id).is('voided_at', null).limit(1);
+    if (existing && existing.length > 0) { skipped++; continue; }
+    const r = await createCompletionCredits(service, {
+      shiftId: shift.id,
+      source: 'cni',
+      ratePerVehicle: rate,
+      completion: { cniJobVinId: v.id, vin: v.vin, partNumber: job.part_number },
+    });
+    if (!r.ok) return { ok: false, created, skipped, error: r.error };
+    created++;
+  }
+  return { ok: true, created, skipped };
+}
+
 /** Field rate lookup: active install_pay_rates row for this part/custom job. */
 export async function getFieldRate(
   service: SupabaseClient,
