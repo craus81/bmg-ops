@@ -180,6 +180,56 @@ export default function CniJobDetailPage() {
     }
   };
 
+  // Add a completed vehicle that was never scanned, crediting a chosen crew.
+  const [addVinOpen, setAddVinOpen] = useState(false);
+  const [addForm, setAddForm] = useState({ vin: '', vehicle_year: '', vehicle_make: '', vehicle_model: '', serial_number: '', imei: '', iccid: '' });
+  const [addRoster, setAddRoster] = useState<{ profile_id: string; full_name: string }[]>([]);
+  const [addCrew, setAddCrew] = useState<Map<string, number>>(new Map());
+  const [addBusy, setAddBusy] = useState(false);
+  const [addError, setAddError] = useState('');
+
+  const openAddVin = async () => {
+    setAddForm({ vin: '', vehicle_year: '', vehicle_make: '', vehicle_model: '', serial_number: '', imei: '', iccid: '' });
+    setAddCrew(new Map());
+    setAddError('');
+    setAddVinOpen(true);
+    const { data: { session } } = await supabase.auth.getSession();
+    const res = await fetch(`/api/shifts?cniJobId=${jobId}`, {
+      headers: session?.access_token ? { Authorization: `Bearer ${session.access_token}` } : {},
+    });
+    if (res.ok) setAddRoster((await res.json()).roster || []);
+  };
+
+  const submitAddVin = async () => {
+    if (!addForm.vin.trim() || addCrew.size === 0) return;
+    setAddBusy(true);
+    setAddError('');
+    try {
+      const { data: { session } } = await supabase.auth.getSession();
+      const res = await fetch('/api/cni/add-completed-vin', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', ...(session?.access_token ? { Authorization: `Bearer ${session.access_token}` } : {}) },
+        body: JSON.stringify({
+          jobId,
+          vin: addForm.vin,
+          vehicle_year: addForm.vehicle_year || null,
+          vehicle_make: addForm.vehicle_make || null,
+          vehicle_model: addForm.vehicle_model || null,
+          serial_number: addForm.serial_number || null,
+          imei: addForm.imei || null,
+          iccid: addForm.iccid || null,
+          entries: [...addCrew.entries()].map(([profileId, weight]) => ({ profileId, weight })),
+        }),
+      });
+      const json = await res.json().catch(() => ({}));
+      if (!res.ok) { setAddError(json.error || 'Failed to add vehicle'); return; }
+      setAddVinOpen(false);
+      await loadJob();
+    } finally {
+      setAddBusy(false);
+    }
+  };
+
   // Distribution
   const [showInvite, setShowInvite] = useState(false);
   const [inviteCompanies, setInviteCompanies] = useState<{ id: string; name: string; memberCount: number }[]>([]);
@@ -899,8 +949,14 @@ export default function CniJobDetailPage() {
           padding: '14px 16px', borderRadius: '12px', marginBottom: '14px',
           background: 'var(--card)', border: '1px solid var(--border)',
         }}>
-          <div style={{ fontSize: '12px', fontWeight: 700, color: 'var(--text-muted)', marginBottom: '10px' }}>
-            VINS ({vins.length})
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '10px' }}>
+            <div style={{ fontSize: '12px', fontWeight: 700, color: 'var(--text-muted)' }}>
+              VINS ({vins.length})
+            </div>
+            <button onClick={openAddVin} style={{
+              padding: '5px 10px', borderRadius: '6px', fontSize: '11px', fontWeight: 700,
+              background: 'var(--subtle-bg)', color: 'var(--text-primary)', border: '1px solid var(--border)',
+            }}>+ Add Vehicle</button>
           </div>
           {vins.map(v => {
             const deviceJob = isVerizonRfidPart(job.part_number) || !!(job as any).device_capture;
@@ -1451,6 +1507,67 @@ export default function CniJobDetailPage() {
           </div>
         </div>
       )}
+
+      {/* Add Completed Vehicle (never-scanned) modal */}
+      {addVinOpen && (() => {
+        const deviceJob = isVerizonRfidPart(job.part_number) || !!(job as any).device_capture;
+        const people = addRoster;
+        return (
+        <div onClick={() => setAddVinOpen(false)} style={{ position: 'fixed', inset: 0, zIndex: 200, background: 'rgba(0,0,0,0.6)', display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '20px' }}>
+          <div onClick={e => e.stopPropagation()} style={{ background: 'var(--card)', borderRadius: '16px', padding: '20px', maxWidth: '440px', width: '100%', maxHeight: '88vh', overflowY: 'auto', border: '1px solid var(--border)' }}>
+            <div style={{ fontSize: '15px', fontWeight: 800, color: 'var(--text-primary)', marginBottom: '4px' }}>Add a Completed Vehicle</div>
+            <div style={{ fontSize: '11px', color: 'var(--text-muted)', marginBottom: '12px' }}>
+              For a vehicle that was installed but never scanned. It&apos;s added to the job as completed, logged to the scan log, and credited to the crew you pick.
+            </div>
+
+            <input value={addForm.vin} onChange={e => setAddForm(f => ({ ...f, vin: e.target.value.toUpperCase() }))} placeholder="VIN" maxLength={17}
+              style={{ width: '100%', padding: '10px 12px', borderRadius: '8px', fontSize: '14px', fontFamily: 'monospace', letterSpacing: '0.5px', marginBottom: '8px', border: '1px solid var(--border)', background: 'var(--input-bg)', color: 'var(--text-body)' }} />
+            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: '6px', marginBottom: '8px' }}>
+              <input value={addForm.vehicle_year} onChange={e => setAddForm(f => ({ ...f, vehicle_year: e.target.value }))} placeholder="Year" style={{ padding: '8px 10px', borderRadius: '8px', fontSize: '13px', border: '1px solid var(--border)', background: 'var(--input-bg)', color: 'var(--text-body)' }} />
+              <input value={addForm.vehicle_make} onChange={e => setAddForm(f => ({ ...f, vehicle_make: e.target.value }))} placeholder="Make" style={{ padding: '8px 10px', borderRadius: '8px', fontSize: '13px', border: '1px solid var(--border)', background: 'var(--input-bg)', color: 'var(--text-body)' }} />
+              <input value={addForm.vehicle_model} onChange={e => setAddForm(f => ({ ...f, vehicle_model: e.target.value }))} placeholder="Model" style={{ padding: '8px 10px', borderRadius: '8px', fontSize: '13px', border: '1px solid var(--border)', background: 'var(--input-bg)', color: 'var(--text-body)' }} />
+            </div>
+
+            {deviceJob && (
+              <div style={{ marginBottom: '10px' }}>
+                <div style={{ fontSize: '11px', fontWeight: 700, color: 'var(--text-muted)', marginBottom: '4px' }}>DEVICE IDS (required)</div>
+                <input value={addForm.serial_number} onChange={e => setAddForm(f => ({ ...f, serial_number: e.target.value }))} placeholder="Serial #" style={{ width: '100%', padding: '8px 10px', borderRadius: '8px', fontSize: '13px', fontFamily: 'monospace', marginBottom: '6px', border: '1px solid var(--border)', background: 'var(--input-bg)', color: 'var(--text-body)' }} />
+                <input value={addForm.imei} onChange={e => setAddForm(f => ({ ...f, imei: e.target.value }))} placeholder="IMEI (15 digits)" style={{ width: '100%', padding: '8px 10px', borderRadius: '8px', fontSize: '13px', fontFamily: 'monospace', marginBottom: '6px', border: '1px solid var(--border)', background: 'var(--input-bg)', color: 'var(--text-body)' }} />
+                <input value={addForm.iccid} onChange={e => setAddForm(f => ({ ...f, iccid: e.target.value }))} placeholder="CCID (18–22 digits)" style={{ width: '100%', padding: '8px 10px', borderRadius: '8px', fontSize: '13px', fontFamily: 'monospace', border: '1px solid var(--border)', background: 'var(--input-bg)', color: 'var(--text-body)' }} />
+              </div>
+            )}
+
+            <div style={{ fontSize: '11px', fontWeight: 700, color: 'var(--text-muted)', marginBottom: '6px' }}>WHO INSTALLED IT? (credit)</div>
+            {people.length === 0 ? (
+              <div style={{ fontSize: '12px', color: 'var(--text-muted)', marginBottom: '8px' }}>No installers found for the assigned company.</div>
+            ) : people.map(p => {
+              const checked = addCrew.has(p.profile_id);
+              return (
+                <div key={p.profile_id} style={{ display: 'flex', alignItems: 'center', gap: '10px', padding: '8px 10px', borderRadius: '8px', marginBottom: '5px', background: checked ? 'var(--success-bg)' : 'var(--input-bg)', border: checked ? '1px solid var(--success-border)' : '1px solid var(--border)' }}>
+                  <button onClick={() => { const next = new Map(addCrew); if (checked) next.delete(p.profile_id); else next.set(p.profile_id, 1); setAddCrew(next); }}
+                    style={{ width: '20px', height: '20px', borderRadius: '5px', flexShrink: 0, border: checked ? '2px solid var(--success)' : '2px solid var(--border)', background: checked ? 'var(--success)' : 'transparent', color: '#fff', fontSize: '12px', fontWeight: 800, cursor: 'pointer' }}>{checked ? '✓' : ''}</button>
+                  <div style={{ flex: 1, fontSize: '13px', fontWeight: 700, color: 'var(--text-primary)' }}>{p.full_name}</div>
+                  {checked && (
+                    <input type="number" min="0.5" step="0.5" value={addCrew.get(p.profile_id)}
+                      onChange={e => { const w = parseFloat(e.target.value); if (!isNaN(w) && w > 0) setAddCrew(new Map(addCrew).set(p.profile_id, w)); }}
+                      style={{ width: '54px', padding: '5px 8px', borderRadius: '6px', fontSize: '13px', fontWeight: 700, textAlign: 'center', border: '1px solid var(--border)', background: 'var(--card)', color: 'var(--text-primary)' }} />
+                  )}
+                </div>
+              );
+            })}
+
+            {addError && <div style={{ padding: '8px 12px', borderRadius: '8px', margin: '8px 0', background: 'var(--error-bg)', border: '1px solid var(--error-border)', color: 'var(--error)', fontSize: '12px', fontWeight: 600 }}>{addError}</div>}
+            <div style={{ display: 'flex', gap: '8px', marginTop: '10px' }}>
+              <button onClick={submitAddVin} disabled={addBusy || !addForm.vin.trim() || addCrew.size === 0} style={{
+                flex: 1, padding: '12px', borderRadius: '10px', fontSize: '13px', fontWeight: 800,
+                background: addBusy || !addForm.vin.trim() || addCrew.size === 0 ? 'var(--text-muted)' : 'var(--orange)', color: '#fff', border: 'none',
+              }}>{addBusy ? 'Adding...' : 'Add & Credit Vehicle'}</button>
+              <button onClick={() => setAddVinOpen(false)} disabled={addBusy} style={{ padding: '12px 16px', borderRadius: '10px', fontSize: '12px', fontWeight: 700, background: 'transparent', border: '1px solid var(--border)', color: 'var(--text-muted)' }}>Cancel</button>
+            </div>
+          </div>
+        </div>
+        );
+      })()}
 
       {/* Assign Company Modal */}
       {showAssign && (
