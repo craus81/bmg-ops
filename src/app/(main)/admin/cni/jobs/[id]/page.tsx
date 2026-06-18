@@ -243,26 +243,20 @@ export default function CniJobDetailPage() {
   const [addCrew, setAddCrew] = useState<Map<string, number>>(new Map());
   const [addBusy, setAddBusy] = useState(false);
   const [addError, setAddError] = useState('');
-  // Camera scanning into the Add Vehicle form (which field is being scanned).
-  const [scanField, setScanField] = useState<null | 'vin' | 'serial_number' | 'imei' | 'iccid'>(null);
-
-  const SCAN_META: Record<string, { label: string; validate?: (raw: string) => string | null }> = {
-    vin: { label: 'VIN' },
-    serial_number: { label: 'Serial #', validate: validateSerial },
-    imei: { label: 'IMEI', validate: validateImei },
-    iccid: { label: 'CCID', validate: validateIccid },
-  };
+  // Camera scanning — shared by the Add Vehicle form and the per-vehicle
+  // device editor. `apply` drops the scanned value into the right field.
+  const [scanReq, setScanReq] = useState<null | { label: string; validate?: (raw: string) => string | null; apply: (v: string) => void }>(null);
 
   const handleScanResult = (value: string) => {
-    if (scanField) setAddForm(f => ({ ...f, [scanField]: value }));
-    setScanField(null);
+    scanReq?.apply(value);
+    setScanReq(null);
   };
 
   const openAddVin = async () => {
     setAddForm({ vin: '', vehicle_year: '', vehicle_make: '', vehicle_model: '', serial_number: '', imei: '', iccid: '' });
     setAddCrew(new Map());
     setAddError('');
-    setScanField(null);
+    setScanReq(null);
     setAddVinOpen(true);
     const { data: { session } } = await supabase.auth.getSession();
     const res = await fetch(`/api/shifts?cniJobId=${jobId}`, {
@@ -1088,17 +1082,19 @@ export default function CniJobDetailPage() {
               {deviceJob && editDeviceVin === v.id && (
                 <div style={{ marginTop: '8px', paddingTop: '8px', borderTop: '1px solid var(--border)', display: 'flex', flexDirection: 'column', gap: '6px' }}>
                   {([
-                    { key: 'serial_number' as const, label: 'Serial #' },
-                    { key: 'imei' as const, label: 'IMEI (15 digits)' },
-                    { key: 'iccid' as const, label: 'CCID (18–22 digits)' },
+                    { key: 'serial_number' as const, label: 'Serial #', scanLabel: 'Serial #', validate: validateSerial },
+                    { key: 'imei' as const, label: 'IMEI (15 digits)', scanLabel: 'IMEI', validate: validateImei },
+                    { key: 'iccid' as const, label: 'CCID (18–22 digits)', scanLabel: 'CCID', validate: validateIccid },
                   ]).map(f => (
-                    <input
-                      key={f.key}
-                      value={deviceDraft[f.key]}
-                      onChange={e => setDeviceDraft(d => ({ ...d, [f.key]: e.target.value }))}
-                      placeholder={f.label}
-                      style={{ width: '100%', padding: '8px 10px', borderRadius: '8px', fontSize: '13px', fontFamily: 'monospace', border: '1px solid var(--border)', background: 'var(--card)', color: 'var(--text-body)' }}
-                    />
+                    <div key={f.key} style={{ display: 'flex', gap: '6px' }}>
+                      <input
+                        value={deviceDraft[f.key]}
+                        onChange={e => setDeviceDraft(d => ({ ...d, [f.key]: e.target.value }))}
+                        placeholder={f.label}
+                        style={{ flex: 1, padding: '8px 10px', borderRadius: '8px', fontSize: '13px', fontFamily: 'monospace', border: '1px solid var(--border)', background: 'var(--card)', color: 'var(--text-body)' }}
+                      />
+                      <button onClick={() => setScanReq({ label: f.scanLabel, validate: f.validate, apply: val => setDeviceDraft(d => ({ ...d, [f.key]: val })) })} title={`Scan ${f.scanLabel}`} style={{ flexShrink: 0, padding: '0 12px', borderRadius: '8px', fontSize: '12px', fontWeight: 700, background: 'var(--subtle-bg)', color: 'var(--text-primary)', border: '1px solid var(--border)' }}>Scan</button>
+                    </div>
                   ))}
                   {deviceError && (
                     <div style={{ fontSize: '11px', color: 'var(--error)', fontWeight: 600 }}>{deviceError}</div>
@@ -1649,17 +1645,17 @@ export default function CniJobDetailPage() {
       )}
 
       {/* Camera scanner overlay for the Add Vehicle form */}
-      {addVinOpen && scanField && (
+      {scanReq && (
         <div style={{ position: 'fixed', inset: 0, zIndex: 320, background: 'rgba(0,0,0,0.9)', display: 'flex', flexDirection: 'column', padding: '16px', paddingTop: 'calc(16px + env(safe-area-inset-top, 0px))' }}>
-          <div style={{ color: '#fff', fontWeight: 800, fontSize: '16px', marginBottom: '4px' }}>Scan {SCAN_META[scanField].label}</div>
+          <div style={{ color: '#fff', fontWeight: 800, fontSize: '16px', marginBottom: '4px' }}>Scan {scanReq.label}</div>
           <div style={{ color: 'rgba(255,255,255,0.6)', fontSize: '12px', marginBottom: '12px' }}>Point the camera at the barcode. It fills in automatically.</div>
           <VinScanner
             onScan={handleScanResult}
             theme={theme as unknown as Record<string, string>}
-            validate={SCAN_META[scanField].validate}
-            scanLabel={SCAN_META[scanField].label}
+            validate={scanReq.validate}
+            scanLabel={scanReq.label}
           />
-          <button onClick={() => setScanField(null)} style={{ marginTop: '14px', padding: '14px', borderRadius: '10px', fontSize: '14px', fontWeight: 700, background: 'rgba(255,255,255,0.12)', color: '#fff', border: '1px solid rgba(255,255,255,0.2)' }}>Cancel</button>
+          <button onClick={() => setScanReq(null)} style={{ marginTop: '14px', padding: '14px', borderRadius: '10px', fontSize: '14px', fontWeight: 700, background: 'rgba(255,255,255,0.12)', color: '#fff', border: '1px solid rgba(255,255,255,0.2)' }}>Cancel</button>
         </div>
       )}
 
@@ -1678,7 +1674,7 @@ export default function CniJobDetailPage() {
             <div style={{ display: 'flex', gap: '6px', marginBottom: '8px' }}>
               <input value={addForm.vin} onChange={e => setAddForm(f => ({ ...f, vin: e.target.value.toUpperCase() }))} placeholder="VIN" maxLength={17}
                 style={{ flex: 1, padding: '10px 12px', borderRadius: '8px', fontSize: '14px', fontFamily: 'monospace', letterSpacing: '0.5px', border: '1px solid var(--border)', background: 'var(--input-bg)', color: 'var(--text-body)' }} />
-              <button onClick={() => setScanField('vin')} title="Scan VIN" style={{ flexShrink: 0, padding: '0 14px', borderRadius: '8px', fontSize: '13px', fontWeight: 700, background: 'var(--orange)', color: '#fff', border: 'none' }}>Scan</button>
+              <button onClick={() => setScanReq({ label: 'VIN', apply: v => setAddForm(f => ({ ...f, vin: v.toUpperCase() })) })} title="Scan VIN" style={{ flexShrink: 0, padding: '0 14px', borderRadius: '8px', fontSize: '13px', fontWeight: 700, background: 'var(--orange)', color: '#fff', border: 'none' }}>Scan</button>
             </div>
             <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: '6px', marginBottom: '8px' }}>
               <input value={addForm.vehicle_year} onChange={e => setAddForm(f => ({ ...f, vehicle_year: e.target.value }))} placeholder="Year" style={{ padding: '8px 10px', borderRadius: '8px', fontSize: '13px', border: '1px solid var(--border)', background: 'var(--input-bg)', color: 'var(--text-body)' }} />
@@ -1690,14 +1686,14 @@ export default function CniJobDetailPage() {
               <div style={{ marginBottom: '10px' }}>
                 <div style={{ fontSize: '11px', fontWeight: 700, color: 'var(--text-muted)', marginBottom: '4px' }}>DEVICE IDS (required)</div>
                 {([
-                  { key: 'serial_number' as const, ph: 'Serial #', field: 'serial_number' as const },
-                  { key: 'imei' as const, ph: 'IMEI (15 digits)', field: 'imei' as const },
-                  { key: 'iccid' as const, ph: 'CCID (18–22 digits)', field: 'iccid' as const },
+                  { ph: 'Serial #', field: 'serial_number' as const, label: 'Serial #', validate: validateSerial },
+                  { ph: 'IMEI (15 digits)', field: 'imei' as const, label: 'IMEI', validate: validateImei },
+                  { ph: 'CCID (18–22 digits)', field: 'iccid' as const, label: 'CCID', validate: validateIccid },
                 ]).map(d => (
-                  <div key={d.key} style={{ display: 'flex', gap: '6px', marginBottom: '6px' }}>
+                  <div key={d.field} style={{ display: 'flex', gap: '6px', marginBottom: '6px' }}>
                     <input value={addForm[d.field]} onChange={e => setAddForm(f => ({ ...f, [d.field]: e.target.value }))} placeholder={d.ph}
                       style={{ flex: 1, padding: '8px 10px', borderRadius: '8px', fontSize: '13px', fontFamily: 'monospace', border: '1px solid var(--border)', background: 'var(--input-bg)', color: 'var(--text-body)' }} />
-                    <button onClick={() => setScanField(d.field)} title={`Scan ${d.ph}`} style={{ flexShrink: 0, padding: '0 12px', borderRadius: '8px', fontSize: '12px', fontWeight: 700, background: 'var(--subtle-bg)', color: 'var(--text-primary)', border: '1px solid var(--border)' }}>Scan</button>
+                    <button onClick={() => setScanReq({ label: d.label, validate: d.validate, apply: v => setAddForm(f => ({ ...f, [d.field]: v })) })} title={`Scan ${d.ph}`} style={{ flexShrink: 0, padding: '0 12px', borderRadius: '8px', fontSize: '12px', fontWeight: 700, background: 'var(--subtle-bg)', color: 'var(--text-primary)', border: '1px solid var(--border)' }}>Scan</button>
                   </div>
                 ))}
               </div>
