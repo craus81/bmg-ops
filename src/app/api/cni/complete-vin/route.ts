@@ -44,7 +44,7 @@ export async function POST(req: NextRequest) {
   // legacy assigned installer, or an admin (company model — no lead).
   const { data: job } = await supabase
     .from('cni_jobs')
-    .select('id, assigned_installer_id, assigned_company_id, pay_per_vehicle, part_number, part_description, billable_customer, address, title, status')
+    .select('id, assigned_installer_id, assigned_company_id, pay_per_vehicle, part_number, part_description, billable_customer, address, title, status, device_capture')
     .eq('id', jobId)
     .single();
   if (!job) return NextResponse.json({ error: 'Job not found' }, { status: 404 });
@@ -67,8 +67,9 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ error: 'VIN not found for this job' }, { status: 404 });
   }
 
-  // Cleaned device values for mirroring onto the VIN (logScan validates again).
-  const rfid = isVerizonRfidPart(job.part_number);
+  // Device capture (serial / IMEI / ICCID) applies to the Verizon RFID part
+  // or any job flagged for it.
+  const rfid = isVerizonRfidPart(job.part_number) || !!job.device_capture;
   const serial = rfid ? validateSerial(parsed.data.serial_number || '') : null;
   const imei = rfid ? validateImei(parsed.data.imei || '') : null;
   const iccid = rfid ? validateIccid(parsed.data.iccid || '') : null;

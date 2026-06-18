@@ -54,7 +54,7 @@ export default function InstallerJobDetailPage() {
   const [crewError, setCrewError] = useState('');
   const [crewBusy, setCrewBusy] = useState(false);
 
-  const isRfidJob = isVerizonRfidPart(job?.part_number);
+  const isRfidJob = isVerizonRfidPart(job?.part_number) || !!job?.device_capture;
 
   // Admin preview: "you"-style displays and crew prechecks follow the
   // previewed installer; actions still happen as the signed-in account.
