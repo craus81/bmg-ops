@@ -215,6 +215,86 @@ export async function backfillJobCredits(
   return { ok: true, created, skipped };
 }
 
+/**
+ * Tag the installer(s) for a single completed vehicle — one VIN at a time
+ * instead of bulk back-pay. Works whether or not the vehicle already has
+ * credits: if it does, they're voided first (refusing if any is locked on a
+ * payout); then a fresh closed one-vehicle shift is created with `entries` and
+ * credits are snapshotted at the job's pay_per_vehicle. Also stamps the VIN's
+ * shift_id so the Crew & Pay view groups it correctly.
+ */
+export async function assignVehicleCredits(
+  service: SupabaseClient,
+  opts: { cniJobVinId: string; entries: ShiftMember[]; assignedBy: string },
+): Promise<{ ok: boolean; error?: string }> {
+  const { cniJobVinId, entries, assignedBy } = opts;
+  if (entries.length === 0) return { ok: false, error: 'At least one crew member required' };
+
+  const { data: vin } = await service
+    .from('cni_job_vins')
+    .select('id, vin, job_id, scan_log_id, status')
+    .eq('id', cniJobVinId)
+    .single();
+  if (!vin) return { ok: false, error: 'Vehicle not found' };
+
+  const { data: job } = await service
+    .from('cni_jobs').select('id, pay_per_vehicle, part_number').eq('id', vin.job_id).single();
+  if (!job) return { ok: false, error: 'Job not found' };
+  const rate = job.pay_per_vehicle != null ? Number(job.pay_per_vehicle) : null;
+
+  // Void any existing live credits for this vehicle (refuse if locked). Match
+  // on the VIN row id and on the scan it came from, since older credits may be
+  // keyed by scan_log_id only.
+  const orRef = vin.scan_log_id
+    ? `cni_job_vin_id.eq.${cniJobVinId},scan_log_id.eq.${vin.scan_log_id}`
+    : `cni_job_vin_id.eq.${cniJobVinId}`;
+  const { data: live } = await service
+    .from('install_credits')
+    .select('id, payout_id')
+    .or(orRef)
+    .is('voided_at', null);
+  if (live && live.some(c => c.payout_id)) {
+    return { ok: false, error: 'Credits are on a payout and locked — void the payout first' };
+  }
+  const now = new Date().toISOString();
+  if (live && live.length > 0) {
+    const { error: voidErr } = await service
+      .from('install_credits')
+      .update({ voided_at: now, voided_by: assignedBy })
+      .in('id', live.map(c => c.id));
+    if (voidErr) return { ok: false, error: 'Failed to void existing credits: ' + voidErr.message };
+  }
+
+  // A closed one-vehicle shift to hang the assignment on.
+  const { data: shift, error: shiftErr } = await service
+    .from('work_shifts')
+    .insert({ context: 'cni', cni_job_id: vin.job_id, started_by: assignedBy, started_at: now, ended_at: now })
+    .select('id')
+    .single();
+  if (shiftErr || !shift) {
+    return { ok: false, error: 'Failed to create shift: ' + (shiftErr?.message || 'unknown') };
+  }
+  const { error: memErr } = await service.from('work_shift_members').insert(
+    entries.map(m => ({ shift_id: shift.id, profile_id: m.profile_id, share_weight: m.share_weight, added_by: assignedBy })),
+  );
+  if (memErr) return { ok: false, error: 'Failed to add crew: ' + memErr.message };
+
+  const r = await createCompletionCredits(service, {
+    shiftId: shift.id,
+    source: 'cni',
+    ratePerVehicle: rate,
+    completion: { cniJobVinId, scanLogId: vin.scan_log_id, vin: vin.vin, partNumber: job.part_number },
+  });
+  if (!r.ok) return { ok: false, error: r.error };
+
+  await service
+    .from('cni_job_vins')
+    .update({ shift_id: shift.id })
+    .eq('id', cniJobVinId);
+
+  return { ok: true };
+}
+
 /** Field rate lookup: active install_pay_rates row for this part/custom job. */
 export async function getFieldRate(
   service: SupabaseClient,
