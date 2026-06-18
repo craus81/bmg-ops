@@ -91,6 +91,7 @@ export default function CreateCniJobPage() {
 
   const handleSubmit = async () => {
     if (!title.trim()) { setError('Job title is required'); return; }
+    if (!part?.part_number) { setError('A part number is required — every CNI job is tracked by its part'); return; }
     if (!user) return;
 
     setSaving(true);
@@ -281,9 +282,9 @@ export default function CreateCniJobPage() {
 
       {/* Part */}
       <div style={sectionStyle}>
-        <div style={sectionTitle}>Part</div>
+        <div style={sectionTitle}>Part *</div>
         <div style={{ fontSize: '12px', color: 'var(--text-muted)', marginBottom: '10px' }}>
-          Setting a part logs each completed VIN to the scan log. The Verizon RFID part (06CS901033) prompts the installer to scan SN / IMEI / CCID.
+          Required — every CNI job is tracked by its part number, which drives scan logging, billing, pay rate, and device capture. The Verizon RFID part (06CS901033) prompts the installer to scan SN / IMEI / CCID.
         </div>
         <PartPicker value={part} onChange={setPart} inputStyle={inputStyle} />
         <label style={{ display: 'flex', alignItems: 'center', gap: '10px', cursor: 'pointer', marginTop: '14px' }}>
@@ -480,15 +481,15 @@ export default function CreateCniJobPage() {
       {/* Submit */}
       <button
         onClick={handleSubmit}
-        disabled={saving || !title.trim()}
+        disabled={saving || !title.trim() || !part?.part_number}
         style={{
           width: '100%', padding: '16px', borderRadius: '12px',
-          background: saving || !title.trim() ? 'var(--text-muted)' : 'var(--orange)',
+          background: saving || !title.trim() || !part?.part_number ? 'var(--text-muted)' : 'var(--orange)',
           color: '#fff', fontSize: '15px', fontWeight: 700, border: 'none',
           marginBottom: '100px',
         }}
       >
-        {saving ? 'Creating Job...' : 'Create CNI Job'}
+        {saving ? 'Creating Job...' : !part?.part_number ? 'Select a Part to Continue' : 'Create CNI Job'}
       </button>
     </div>
   );
