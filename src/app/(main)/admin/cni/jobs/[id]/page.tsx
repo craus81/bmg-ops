@@ -944,21 +944,25 @@ export default function CniJobDetailPage() {
       </div>
 
       {/* VINs */}
-      {vins.length > 0 && (
-        <div style={{
-          padding: '14px 16px', borderRadius: '12px', marginBottom: '14px',
-          background: 'var(--card)', border: '1px solid var(--border)',
-        }}>
-          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '10px' }}>
-            <div style={{ fontSize: '12px', fontWeight: 700, color: 'var(--text-muted)' }}>
-              VINS ({vins.length})
-            </div>
-            <button onClick={openAddVin} style={{
-              padding: '5px 10px', borderRadius: '6px', fontSize: '11px', fontWeight: 700,
-              background: 'var(--subtle-bg)', color: 'var(--text-primary)', border: '1px solid var(--border)',
-            }}>+ Add Vehicle</button>
+      <div style={{
+        padding: '14px 16px', borderRadius: '12px', marginBottom: '14px',
+        background: 'var(--card)', border: '1px solid var(--border)',
+      }}>
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '10px' }}>
+          <div style={{ fontSize: '12px', fontWeight: 700, color: 'var(--text-muted)' }}>
+            VINS ({vins.length})
           </div>
-          {vins.map(v => {
+          <button onClick={openAddVin} style={{
+            padding: '5px 10px', borderRadius: '6px', fontSize: '11px', fontWeight: 700,
+            background: 'var(--orange)', color: '#fff', border: 'none',
+          }}>+ Add Vehicle</button>
+        </div>
+        {vins.length === 0 && (
+          <div style={{ fontSize: '12px', color: 'var(--text-muted)', padding: '4px 0' }}>
+            No vehicles on this job yet. Use <strong>+ Add Vehicle</strong> to add one that was installed but never scanned (and credit the installer), or add VINs when creating the job.
+          </div>
+        )}
+        {vins.map(v => {
             const deviceJob = isVerizonRfidPart(job.part_number) || !!(job as any).device_capture;
             const hasDevices = !!(v.serial_number && v.imei && v.iccid);
             return (
@@ -1037,8 +1041,7 @@ export default function CniJobDetailPage() {
             </div>
             );
           })}
-        </div>
-      )}
+      </div>
 
       {/* Photos + Messages + Crew quick actions */}
       {(job.assigned_installer_id || job.assigned_company_id) && (
