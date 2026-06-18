@@ -7,6 +7,7 @@ import { useAuth } from '@/components/AuthProvider';
 import PartPicker, { type PickedPart } from '@/components/PartPicker';
 import { loadCompaniesWithCounts } from '@/lib/cni-companies';
 import JobAttachments from '@/components/JobAttachments';
+import { isVerizonRfidPart } from '@/lib/rfid';
 
 interface CniJob {
   id: string;
@@ -172,6 +173,14 @@ export default function CniJobDetailPage() {
     loadJob();
   // eslint-disable-next-line react-hooks/exhaustive-deps -- intentional: load once on mount
   }, [isAdmin, jobId]);
+
+  const saveDeviceCapture = async (on: boolean) => {
+    if (!job) return;
+    setUpdating(true);
+    await supabase.from('cni_jobs').update({ device_capture: on }).eq('id', jobId);
+    await loadJob();
+    setUpdating(false);
+  };
 
   const savePart = async (p: PickedPart | null) => {
     await supabase.from('cni_jobs').update({
@@ -834,6 +843,19 @@ export default function CniJobDetailPage() {
           value={job.part_number ? { part_number: job.part_number, part_description: job.part_description, billable_customer: job.billable_customer } : null}
           onChange={savePart}
         />
+        <label style={{ display: 'flex', alignItems: 'center', gap: '10px', cursor: 'pointer', marginTop: '12px' }}>
+          <input
+            type="checkbox"
+            checked={isVerizonRfidPart(job.part_number) || !!(job as any).device_capture}
+            disabled={isVerizonRfidPart(job.part_number) || updating}
+            onChange={e => saveDeviceCapture(e.target.checked)}
+            style={{ width: '18px', height: '18px', accentColor: 'var(--orange)' }}
+          />
+          <span style={{ fontSize: '13px', color: 'var(--text-primary)', fontWeight: 600 }}>
+            Require device capture — installer scans serial #, IMEI, and CCID per vehicle
+            {isVerizonRfidPart(job.part_number) && <span style={{ color: 'var(--text-muted)', fontWeight: 400 }}> (always on for the Verizon RFID part)</span>}
+          </span>
+        </label>
       </div>
 
       {/* VINs */}

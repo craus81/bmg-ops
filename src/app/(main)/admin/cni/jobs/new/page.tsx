@@ -7,6 +7,7 @@ import { useAuth } from '@/components/AuthProvider';
 import PartPicker, { type PickedPart } from '@/components/PartPicker';
 import { loadCompaniesWithCounts, type CompanyOption } from '@/lib/cni-companies';
 import { uploadJobFiles } from '@/lib/job-files';
+import { isVerizonRfidPart } from '@/lib/rfid';
 
 export default function CreateCniJobPage() {
   const router = useRouter();
@@ -33,6 +34,9 @@ export default function CreateCniJobPage() {
   // Files describing the job (proofs / photos / docs) — uploaded after the
   // job is created so they can live under its id.
   const [jobFiles, setJobFiles] = useState<File[]>([]);
+
+  // Require per-vehicle device capture (serial / IMEI / CCID).
+  const [deviceCapture, setDeviceCapture] = useState(false);
 
   // Location
   const [street, setStreet] = useState('');
@@ -113,6 +117,7 @@ export default function CreateCniJobPage() {
           part_number: part?.part_number || null,
           part_description: part?.part_description || null,
           billable_customer: part?.billable_customer || null,
+          device_capture: deviceCapture || isVerizonRfidPart(part?.part_number),
           budget: budget ? parseFloat(budget) : null,
           pay_per_vehicle: rate,
           payout_mode: payoutMode,
@@ -281,6 +286,19 @@ export default function CreateCniJobPage() {
           Setting a part logs each completed VIN to the scan log. The Verizon RFID part (06CS901033) prompts the installer to scan SN / IMEI / CCID.
         </div>
         <PartPicker value={part} onChange={setPart} inputStyle={inputStyle} />
+        <label style={{ display: 'flex', alignItems: 'center', gap: '10px', cursor: 'pointer', marginTop: '14px' }}>
+          <input
+            type="checkbox"
+            checked={deviceCapture || isVerizonRfidPart(part?.part_number)}
+            disabled={isVerizonRfidPart(part?.part_number)}
+            onChange={e => setDeviceCapture(e.target.checked)}
+            style={{ width: '18px', height: '18px', accentColor: 'var(--orange)' }}
+          />
+          <span style={{ fontSize: '13px', color: 'var(--text-primary)', fontWeight: 600 }}>
+            Require device capture — installer scans serial #, IMEI, and CCID per vehicle
+            {isVerizonRfidPart(part?.part_number) && <span style={{ color: 'var(--text-muted)', fontWeight: 400 }}> (always on for the Verizon RFID part)</span>}
+          </span>
+        </label>
       </div>
 
       {/* Files & Proofs */}

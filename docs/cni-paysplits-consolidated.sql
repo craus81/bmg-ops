@@ -65,6 +65,9 @@ ALTER TABLE cni_jobs ADD COLUMN IF NOT EXISTS attachments JSONB DEFAULT '[]'::js
 -- every status-changing UPDATE on cni_jobs errors "no field updated_by").
 ALTER TABLE cni_jobs ADD COLUMN IF NOT EXISTS updated_by UUID REFERENCES profiles(id);
 
+-- 116: per-job device capture (serial / IMEI / ICCID), independent of part
+ALTER TABLE cni_jobs ADD COLUMN IF NOT EXISTS device_capture BOOLEAN DEFAULT FALSE;
+
 -- ── 2. Pay-splits tables ────────────────────────────────────────────────────
 
 CREATE TABLE IF NOT EXISTS work_shifts (
