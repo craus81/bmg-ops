@@ -68,6 +68,10 @@ interface CniVin {
   completed_at: string | null;
   photos_submitted: boolean;
   photos_approved: boolean;
+  serial_number: string | null;
+  imei: string | null;
+  iccid: string | null;
+  scan_log_id: string | null;
 }
 
 interface StatusHistoryEntry {
@@ -144,6 +148,37 @@ export default function CniJobDetailPage() {
   const [schedEnd, setSchedEnd] = useState('');
   const [editingSchedule, setEditingSchedule] = useState(false);
   const [scheduleError, setScheduleError] = useState('');
+
+  // Per-vehicle device-ID editor (serial / IMEI / CCID)
+  const [editDeviceVin, setEditDeviceVin] = useState<string | null>(null);
+  const [deviceDraft, setDeviceDraft] = useState({ serial_number: '', imei: '', iccid: '' });
+  const [deviceBusy, setDeviceBusy] = useState(false);
+  const [deviceError, setDeviceError] = useState('');
+
+  const openDeviceEditor = (v: CniVin) => {
+    setDeviceDraft({ serial_number: v.serial_number || '', imei: v.imei || '', iccid: v.iccid || '' });
+    setDeviceError('');
+    setEditDeviceVin(v.id);
+  };
+
+  const saveDevices = async (vinId: string) => {
+    setDeviceBusy(true);
+    setDeviceError('');
+    try {
+      const { data: { session } } = await supabase.auth.getSession();
+      const res = await fetch('/api/cni/edit-vin-devices', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', ...(session?.access_token ? { Authorization: `Bearer ${session.access_token}` } : {}) },
+        body: JSON.stringify({ vinId, ...deviceDraft }),
+      });
+      const json = await res.json().catch(() => ({}));
+      if (!res.ok) { setDeviceError(json.error || 'Failed to save'); return; }
+      setEditDeviceVin(null);
+      await loadJob();
+    } finally {
+      setDeviceBusy(false);
+    }
+  };
 
   // Distribution
   const [showInvite, setShowInvite] = useState(false);
@@ -867,29 +902,85 @@ export default function CniJobDetailPage() {
           <div style={{ fontSize: '12px', fontWeight: 700, color: 'var(--text-muted)', marginBottom: '10px' }}>
             VINS ({vins.length})
           </div>
-          {vins.map(v => (
+          {vins.map(v => {
+            const deviceJob = isVerizonRfidPart(job.part_number) || !!(job as any).device_capture;
+            const hasDevices = !!(v.serial_number && v.imei && v.iccid);
+            return (
             <div key={v.id} style={{
-              display: 'flex', justifyContent: 'space-between', alignItems: 'center',
               padding: '10px 12px', borderRadius: '8px', marginBottom: '6px',
               background: 'var(--input-bg)', border: '1px solid var(--border)',
             }}>
-              <div>
-                <div style={{ fontSize: '13px', fontWeight: 700, color: 'var(--text-primary)', fontFamily: 'monospace' }}>
-                  {v.vin}
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                <div>
+                  <div style={{ fontSize: '13px', fontWeight: 700, color: 'var(--text-primary)', fontFamily: 'monospace' }}>
+                    {v.vin}
+                  </div>
+                  <div style={{ fontSize: '11px', color: 'var(--text-muted)' }}>
+                    {[v.vehicle_year, v.vehicle_make, v.vehicle_model].filter(Boolean).join(' ')}
+                  </div>
                 </div>
-                <div style={{ fontSize: '11px', color: 'var(--text-muted)' }}>
-                  {[v.vehicle_year, v.vehicle_make, v.vehicle_model].filter(Boolean).join(' ')}
-                </div>
+                <span style={{
+                  fontSize: '10px', fontWeight: 700, padding: '3px 8px', borderRadius: '6px',
+                  color: v.status === 'completed' ? 'var(--success)' : v.status === 'in_progress' ? 'var(--orange)' : 'var(--text-muted)',
+                  background: v.status === 'completed' ? 'var(--success-bg)' : v.status === 'in_progress' ? 'var(--orange-soft)' : 'var(--subtle-bg)',
+                }}>
+                  {v.status === 'completed' ? '✓ Complete' : v.status === 'in_progress' ? 'In Progress' : 'Pending'}
+                </span>
               </div>
-              <span style={{
-                fontSize: '10px', fontWeight: 700, padding: '3px 8px', borderRadius: '6px',
-                color: v.status === 'completed' ? 'var(--success)' : v.status === 'in_progress' ? 'var(--orange)' : 'var(--text-muted)',
-                background: v.status === 'completed' ? 'var(--success-bg)' : v.status === 'in_progress' ? 'var(--orange-soft)' : 'var(--subtle-bg)',
-              }}>
-                {v.status === 'completed' ? '✓ Complete' : v.status === 'in_progress' ? 'In Progress' : 'Pending'}
-              </span>
+
+              {/* Device IDs (RFID / device-capture jobs) */}
+              {deviceJob && editDeviceVin !== v.id && (
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '8px', marginTop: '8px', paddingTop: '8px', borderTop: '1px solid var(--border)' }}>
+                  <div style={{ fontSize: '10px', fontFamily: 'monospace', color: hasDevices ? 'var(--text-secondary)' : 'var(--warning)' }}>
+                    {hasDevices
+                      ? <>SN {v.serial_number} · IMEI {v.imei} · CCID {v.iccid}</>
+                      : 'No device IDs captured'}
+                  </div>
+                  <button onClick={() => openDeviceEditor(v)} style={{
+                    flexShrink: 0, padding: '4px 10px', borderRadius: '6px', fontSize: '10px', fontWeight: 700,
+                    background: hasDevices ? 'var(--subtle-bg)' : 'var(--orange)',
+                    color: hasDevices ? 'var(--text-secondary)' : '#fff',
+                    border: hasDevices ? '1px solid var(--border)' : 'none',
+                  }}>
+                    {hasDevices ? 'Edit' : 'Add Device IDs'}
+                  </button>
+                </div>
+              )}
+
+              {/* Inline device editor */}
+              {deviceJob && editDeviceVin === v.id && (
+                <div style={{ marginTop: '8px', paddingTop: '8px', borderTop: '1px solid var(--border)', display: 'flex', flexDirection: 'column', gap: '6px' }}>
+                  {([
+                    { key: 'serial_number' as const, label: 'Serial #' },
+                    { key: 'imei' as const, label: 'IMEI (15 digits)' },
+                    { key: 'iccid' as const, label: 'CCID (18–22 digits)' },
+                  ]).map(f => (
+                    <input
+                      key={f.key}
+                      value={deviceDraft[f.key]}
+                      onChange={e => setDeviceDraft(d => ({ ...d, [f.key]: e.target.value }))}
+                      placeholder={f.label}
+                      style={{ width: '100%', padding: '8px 10px', borderRadius: '8px', fontSize: '13px', fontFamily: 'monospace', border: '1px solid var(--border)', background: 'var(--card)', color: 'var(--text-body)' }}
+                    />
+                  ))}
+                  {deviceError && (
+                    <div style={{ fontSize: '11px', color: 'var(--error)', fontWeight: 600 }}>{deviceError}</div>
+                  )}
+                  <div style={{ display: 'flex', gap: '6px' }}>
+                    <button onClick={() => saveDevices(v.id)} disabled={deviceBusy} style={{
+                      flex: 1, padding: '9px', borderRadius: '8px', fontSize: '12px', fontWeight: 700,
+                      background: deviceBusy ? 'var(--text-muted)' : 'var(--success)', color: '#fff', border: 'none',
+                    }}>{deviceBusy ? 'Saving...' : 'Save Device IDs'}</button>
+                    <button onClick={() => setEditDeviceVin(null)} disabled={deviceBusy} style={{
+                      padding: '9px 12px', borderRadius: '8px', fontSize: '12px', fontWeight: 700,
+                      background: 'transparent', border: '1px solid var(--border)', color: 'var(--text-muted)',
+                    }}>Cancel</button>
+                  </div>
+                </div>
+              )}
             </div>
-          ))}
+            );
+          })}
         </div>
       )}
 
