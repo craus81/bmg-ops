@@ -180,6 +180,53 @@ export default function CniJobDetailPage() {
     }
   };
 
+  // Import vehicles already scanned (under the job's part) but not on the job.
+  const [importCandidates, setImportCandidates] = useState<{ scanLogId: string; vin: string; vehicle: string; hasDevices: boolean; scanned_at: string; scanned_by_name: string }[]>([]);
+  const [importOpen, setImportOpen] = useState(false);
+  const [importSel, setImportSel] = useState<Set<string>>(new Set());
+  const [importBusy, setImportBusy] = useState(false);
+  const [importError, setImportError] = useState('');
+
+  const fetchImportCandidates = async () => {
+    const { data: { session } } = await supabase.auth.getSession();
+    const res = await fetch(`/api/cni/import-scans?cniJobId=${jobId}`, {
+      headers: session?.access_token ? { Authorization: `Bearer ${session.access_token}` } : {},
+    });
+    if (res.ok) setImportCandidates((await res.json()).candidates || []);
+  };
+
+  useEffect(() => {
+    if (job?.part_number) fetchImportCandidates();
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- refresh when the job/part loads
+  }, [job?.part_number, jobId]);
+
+  const openImport = () => {
+    setImportSel(new Set(importCandidates.map(c => c.scanLogId)));
+    setImportError('');
+    setImportOpen(true);
+  };
+
+  const submitImport = async () => {
+    if (importSel.size === 0) return;
+    setImportBusy(true);
+    setImportError('');
+    try {
+      const { data: { session } } = await supabase.auth.getSession();
+      const res = await fetch('/api/cni/import-scans', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', ...(session?.access_token ? { Authorization: `Bearer ${session.access_token}` } : {}) },
+        body: JSON.stringify({ cniJobId: jobId, scanLogIds: [...importSel] }),
+      });
+      const json = await res.json().catch(() => ({}));
+      if (!res.ok) { setImportError(json.error || 'Import failed'); return; }
+      setImportOpen(false);
+      await loadJob();
+      await fetchImportCandidates();
+    } finally {
+      setImportBusy(false);
+    }
+  };
+
   // Add a completed vehicle that was never scanned, crediting a chosen crew.
   const [addVinOpen, setAddVinOpen] = useState(false);
   const [addForm, setAddForm] = useState({ vin: '', vehicle_year: '', vehicle_make: '', vehicle_model: '', serial_number: '', imei: '', iccid: '' });
@@ -952,10 +999,18 @@ export default function CniJobDetailPage() {
           <div style={{ fontSize: '12px', fontWeight: 700, color: 'var(--text-muted)' }}>
             VINS ({vins.length})
           </div>
-          <button onClick={openAddVin} style={{
-            padding: '5px 10px', borderRadius: '6px', fontSize: '11px', fontWeight: 700,
-            background: 'var(--orange)', color: '#fff', border: 'none',
-          }}>+ Add Vehicle</button>
+          <div style={{ display: 'flex', gap: '6px' }}>
+            {importCandidates.length > 0 && (
+              <button onClick={openImport} style={{
+                padding: '5px 10px', borderRadius: '6px', fontSize: '11px', fontWeight: 700,
+                background: 'color-mix(in srgb, var(--orange) 12%, var(--card))', color: 'var(--orange)', border: '1px solid var(--orange)',
+              }}>Import {importCandidates.length} Scanned</button>
+            )}
+            <button onClick={openAddVin} style={{
+              padding: '5px 10px', borderRadius: '6px', fontSize: '11px', fontWeight: 700,
+              background: 'var(--orange)', color: '#fff', border: 'none',
+            }}>+ Add Vehicle</button>
+          </div>
         </div>
         {vins.length === 0 && (
           <div style={{ fontSize: '12px', color: 'var(--text-muted)', padding: '4px 0' }}>
@@ -1507,6 +1562,49 @@ export default function CniJobDetailPage() {
                 })}
               </div>
             )}
+          </div>
+        </div>
+      )}
+
+      {/* Import already-scanned vehicles modal */}
+      {importOpen && (
+        <div onClick={() => setImportOpen(false)} style={{ position: 'fixed', inset: 0, zIndex: 200, background: 'rgba(0,0,0,0.6)', display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '20px' }}>
+          <div onClick={e => e.stopPropagation()} style={{ background: 'var(--card)', borderRadius: '16px', padding: '20px', maxWidth: '460px', width: '100%', maxHeight: '88vh', overflowY: 'auto', border: '1px solid var(--border)' }}>
+            <div style={{ fontSize: '15px', fontWeight: 800, color: 'var(--text-primary)', marginBottom: '4px' }}>Import Scanned Vehicles</div>
+            <div style={{ fontSize: '11px', color: 'var(--text-muted)', marginBottom: '12px' }}>
+              These were scanned under part <strong>{job.part_number}</strong> but aren&apos;t on any CNI job. Importing adds them here as completed (with their device IDs); the existing scan and any pay it earned come with it.
+            </div>
+
+            <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '8px' }}>
+              <button onClick={() => setImportSel(new Set(importCandidates.map(c => c.scanLogId)))} style={{ fontSize: '11px', fontWeight: 700, color: 'var(--orange)', background: 'transparent', border: 'none', cursor: 'pointer' }}>Select all</button>
+              <button onClick={() => setImportSel(new Set())} style={{ fontSize: '11px', fontWeight: 700, color: 'var(--text-muted)', background: 'transparent', border: 'none', cursor: 'pointer' }}>Clear</button>
+            </div>
+
+            {importCandidates.map(c => {
+              const checked = importSel.has(c.scanLogId);
+              return (
+                <div key={c.scanLogId} onClick={() => { const n = new Set(importSel); if (checked) n.delete(c.scanLogId); else n.add(c.scanLogId); setImportSel(n); }}
+                  style={{ display: 'flex', alignItems: 'center', gap: '10px', padding: '9px 10px', borderRadius: '8px', marginBottom: '5px', cursor: 'pointer', background: checked ? 'var(--success-bg)' : 'var(--input-bg)', border: checked ? '1px solid var(--success-border)' : '1px solid var(--border)' }}>
+                  <div style={{ width: '18px', height: '18px', borderRadius: '5px', flexShrink: 0, display: 'flex', alignItems: 'center', justifyContent: 'center', border: checked ? '2px solid var(--success)' : '2px solid var(--border)', background: checked ? 'var(--success)' : 'transparent', color: '#fff', fontSize: '11px', fontWeight: 800 }}>{checked ? '✓' : ''}</div>
+                  <div style={{ flex: 1, minWidth: 0 }}>
+                    <div style={{ fontSize: '12px', fontWeight: 700, fontFamily: 'monospace', color: 'var(--text-primary)' }}>{c.vin}</div>
+                    <div style={{ fontSize: '10px', color: 'var(--text-muted)' }}>
+                      {c.vehicle || '—'} · {new Date(c.scanned_at).toLocaleDateString()} · {c.scanned_by_name}
+                      {!c.hasDevices && <span style={{ color: 'var(--warning)' }}> · no device IDs</span>}
+                    </div>
+                  </div>
+                </div>
+              );
+            })}
+
+            {importError && <div style={{ padding: '8px 12px', borderRadius: '8px', margin: '8px 0', background: 'var(--error-bg)', border: '1px solid var(--error-border)', color: 'var(--error)', fontSize: '12px', fontWeight: 600 }}>{importError}</div>}
+            <div style={{ display: 'flex', gap: '8px', marginTop: '10px' }}>
+              <button onClick={submitImport} disabled={importBusy || importSel.size === 0} style={{
+                flex: 1, padding: '12px', borderRadius: '10px', fontSize: '13px', fontWeight: 800,
+                background: importBusy || importSel.size === 0 ? 'var(--text-muted)' : 'var(--orange)', color: '#fff', border: 'none',
+              }}>{importBusy ? 'Importing...' : `Import ${importSel.size} Vehicle${importSel.size === 1 ? '' : 's'}`}</button>
+              <button onClick={() => setImportOpen(false)} disabled={importBusy} style={{ padding: '12px 16px', borderRadius: '10px', fontSize: '12px', fontWeight: 700, background: 'transparent', border: '1px solid var(--border)', color: 'var(--text-muted)' }}>Cancel</button>
+            </div>
           </div>
         </div>
       )}
