@@ -186,10 +186,12 @@ export default function CniJobDetailPage() {
   const [importSel, setImportSel] = useState<Set<string>>(new Set());
   const [importBusy, setImportBusy] = useState(false);
   const [importError, setImportError] = useState('');
+  const [importPartLike, setImportPartLike] = useState('');
 
-  const fetchImportCandidates = async () => {
+  const fetchImportCandidates = async (partLike?: string) => {
     const { data: { session } } = await supabase.auth.getSession();
-    const res = await fetch(`/api/cni/import-scans?cniJobId=${jobId}`, {
+    const q = (partLike ?? '').trim() ? `&partLike=${encodeURIComponent((partLike ?? '').trim())}` : '';
+    const res = await fetch(`/api/cni/import-scans?cniJobId=${jobId}${q}`, {
       headers: session?.access_token ? { Authorization: `Bearer ${session.access_token}` } : {},
     });
     if (res.ok) setImportCandidates((await res.json()).candidates || []);
@@ -206,6 +208,11 @@ export default function CniJobDetailPage() {
     setImportOpen(true);
   };
 
+  const searchImport = async () => {
+    await fetchImportCandidates(importPartLike);
+    setImportSel(new Set());
+  };
+
   const submitImport = async () => {
     if (importSel.size === 0) return;
     setImportBusy(true);
@@ -215,7 +222,7 @@ export default function CniJobDetailPage() {
       const res = await fetch('/api/cni/import-scans', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', ...(session?.access_token ? { Authorization: `Bearer ${session.access_token}` } : {}) },
-        body: JSON.stringify({ cniJobId: jobId, scanLogIds: [...importSel] }),
+        body: JSON.stringify({ cniJobId: jobId, partLike: importPartLike.trim() || undefined, scanLogIds: [...importSel] }),
       });
       const json = await res.json().catch(() => ({}));
       if (!res.ok) { setImportError(json.error || 'Import failed'); return; }
@@ -1000,12 +1007,10 @@ export default function CniJobDetailPage() {
             VINS ({vins.length})
           </div>
           <div style={{ display: 'flex', gap: '6px' }}>
-            {importCandidates.length > 0 && (
-              <button onClick={openImport} style={{
-                padding: '5px 10px', borderRadius: '6px', fontSize: '11px', fontWeight: 700,
-                background: 'color-mix(in srgb, var(--orange) 12%, var(--card))', color: 'var(--orange)', border: '1px solid var(--orange)',
-              }}>Import {importCandidates.length} Scanned</button>
-            )}
+            <button onClick={openImport} style={{
+              padding: '5px 10px', borderRadius: '6px', fontSize: '11px', fontWeight: 700,
+              background: 'color-mix(in srgb, var(--orange) 12%, var(--card))', color: 'var(--orange)', border: '1px solid var(--orange)',
+            }}>Import Scanned{importCandidates.length > 0 ? ` (${importCandidates.length})` : ''}</button>
             <button onClick={openAddVin} style={{
               padding: '5px 10px', borderRadius: '6px', fontSize: '11px', fontWeight: 700,
               background: 'var(--orange)', color: '#fff', border: 'none',
@@ -1571,10 +1576,25 @@ export default function CniJobDetailPage() {
         <div onClick={() => setImportOpen(false)} style={{ position: 'fixed', inset: 0, zIndex: 200, background: 'rgba(0,0,0,0.6)', display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '20px' }}>
           <div onClick={e => e.stopPropagation()} style={{ background: 'var(--card)', borderRadius: '16px', padding: '20px', maxWidth: '460px', width: '100%', maxHeight: '88vh', overflowY: 'auto', border: '1px solid var(--border)' }}>
             <div style={{ fontSize: '15px', fontWeight: 800, color: 'var(--text-primary)', marginBottom: '4px' }}>Import Scanned Vehicles</div>
-            <div style={{ fontSize: '11px', color: 'var(--text-muted)', marginBottom: '12px' }}>
-              These were scanned under part <strong>{job.part_number}</strong> but aren&apos;t on any CNI job. Importing adds them here as completed (with their device IDs); the existing scan and any pay it earned come with it.
+            <div style={{ fontSize: '11px', color: 'var(--text-muted)', marginBottom: '10px' }}>
+              Pull in vehicles already in the scan log that aren&apos;t on any CNI job. By default this matches the job&apos;s part (<strong>{job.part_number || '—'}</strong>); search another part (e.g. <strong>rfid</strong>) to find scans logged under a different name. Imported scans are re-stamped to this job&apos;s part.
             </div>
 
+            <div style={{ display: 'flex', gap: '6px', marginBottom: '10px' }}>
+              <input
+                value={importPartLike}
+                onChange={e => setImportPartLike(e.target.value)}
+                onKeyDown={e => { if (e.key === 'Enter') searchImport(); }}
+                placeholder={`Part contains… (default: ${job.part_number || 'job part'})`}
+                style={{ flex: 1, padding: '8px 10px', borderRadius: '8px', fontSize: '13px', border: '1px solid var(--border)', background: 'var(--input-bg)', color: 'var(--text-body)' }}
+              />
+              <button onClick={searchImport} style={{ padding: '8px 14px', borderRadius: '8px', fontSize: '12px', fontWeight: 700, background: 'var(--subtle-bg)', color: 'var(--text-primary)', border: '1px solid var(--border)' }}>Search</button>
+            </div>
+
+            {importCandidates.length === 0 ? (
+              <div style={{ fontSize: '12px', color: 'var(--text-muted)', padding: '8px 0' }}>No unattached scans match. Try a different part above (e.g. &ldquo;rfid&rdquo;).</div>
+            ) : (
+            <>
             <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '8px' }}>
               <button onClick={() => setImportSel(new Set(importCandidates.map(c => c.scanLogId)))} style={{ fontSize: '11px', fontWeight: 700, color: 'var(--orange)', background: 'transparent', border: 'none', cursor: 'pointer' }}>Select all</button>
               <button onClick={() => setImportSel(new Set())} style={{ fontSize: '11px', fontWeight: 700, color: 'var(--text-muted)', background: 'transparent', border: 'none', cursor: 'pointer' }}>Clear</button>
@@ -1596,6 +1616,8 @@ export default function CniJobDetailPage() {
                 </div>
               );
             })}
+            </>
+            )}
 
             {importError && <div style={{ padding: '8px 12px', borderRadius: '8px', margin: '8px 0', background: 'var(--error-bg)', border: '1px solid var(--error-border)', color: 'var(--error)', fontSize: '12px', fontWeight: 600 }}>{importError}</div>}
             <div style={{ display: 'flex', gap: '8px', marginTop: '10px' }}>
