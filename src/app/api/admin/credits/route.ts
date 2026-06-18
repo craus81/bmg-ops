@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { createClient } from '@supabase/supabase-js';
 import { requireAdmin } from '@/lib/api-auth';
 import { validateBody, validateSearchParams, z } from '@/lib/validate';
-import { rewriteVehicleCredits, recomputeShiftCredits, backfillJobCredits } from '@/lib/pay-credits';
+import { rewriteVehicleCredits, recomputeShiftCredits, backfillJobCredits, assignVehicleCredits } from '@/lib/pay-credits';
 import { memberViews } from '@/lib/shifts';
 
 export const dynamic = 'force-dynamic';
@@ -93,6 +93,14 @@ const PostSchema = z.union([
       weight: z.number().positive().max(99),
     })).min(1).max(50),
   }),
+  z.object({
+    action: z.literal('assign_vehicle'),
+    cniJobVinId: z.string().uuid(),
+    entries: z.array(z.object({
+      profileId: z.string().uuid(),
+      weight: z.number().positive().max(99),
+    })).min(1).max(50),
+  }),
 ]);
 
 /**
@@ -127,6 +135,16 @@ export async function POST(req: NextRequest) {
     });
     if (!r.ok) return NextResponse.json({ error: r.error }, { status: 400 });
     return NextResponse.json({ success: true, created: r.created, skipped: r.skipped });
+  }
+
+  if (parsed.data.action === 'assign_vehicle') {
+    const r = await assignVehicleCredits(service, {
+      cniJobVinId: parsed.data.cniJobVinId,
+      entries: parsed.data.entries.map(e => ({ profile_id: e.profileId, share_weight: e.weight })),
+      assignedBy: auth.user.id,
+    });
+    if (!r.ok) return NextResponse.json({ error: r.error }, { status: 400 });
+    return NextResponse.json({ success: true });
   }
 
   const r = await recomputeShiftCredits(service, parsed.data.shiftId, auth.user.id);

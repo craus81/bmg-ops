@@ -30,6 +30,12 @@ interface Shift {
   members: Member[];
   credits: Credit[];
 }
+interface CompletedVin {
+  id: string;
+  vin: string;
+  vehicle: string;
+  completed_at: string | null;
+}
 
 /**
  * Admin crew & pay editor for one CNI job: every shift with its roster and
@@ -66,6 +72,11 @@ export default function CniJobShiftsPage() {
   const [backfillOpen, setBackfillOpen] = useState(false);
   const [backfillDraft, setBackfillDraft] = useState<Map<string, number>>(new Map());
 
+  // Per-vehicle installer tagging: every completed VIN, assignable one at a time.
+  const [completedVins, setCompletedVins] = useState<CompletedVin[]>([]);
+  const [assignVin, setAssignVin] = useState<CompletedVin | null>(null);
+  const [assignDraft, setAssignDraft] = useState<Map<string, number>>(new Map());
+
   const authHeaders = async () => {
     const { data: { session } } = await supabase.auth.getSession();
     return {
@@ -90,8 +101,21 @@ export default function CniJobShiftsPage() {
     const credited = new Set<string>();
     for (const s of loadedShifts) for (const c of s.credits) if (c.cni_job_vin_id) credited.add(c.cni_job_vin_id);
     const { data: completed } = await supabase
-      .from('cni_job_vins').select('id').eq('job_id', jobId).eq('status', 'completed');
-    setUncoveredCount((completed || []).filter((v: { id: string }) => !credited.has(v.id)).length);
+      .from('cni_job_vins')
+      .select('id, vin, vehicle_year, vehicle_make, vehicle_model, completed_at')
+      .eq('job_id', jobId).eq('status', 'completed')
+      .order('completed_at', { ascending: true });
+    const completedRows = (completed || []) as {
+      id: string; vin: string; vehicle_year: string | null; vehicle_make: string | null;
+      vehicle_model: string | null; completed_at: string | null;
+    }[];
+    setCompletedVins(completedRows.map(v => ({
+      id: v.id,
+      vin: v.vin,
+      vehicle: [v.vehicle_year, v.vehicle_make, v.vehicle_model].filter(Boolean).join(' '),
+      completed_at: v.completed_at,
+    })));
+    setUncoveredCount(completedRows.filter(v => !credited.has(v.id)).length);
 
     setLoading(false);
   // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -222,6 +246,36 @@ export default function CniJobShiftsPage() {
     }
   };
 
+  // ── Per-vehicle installer tagging ──
+  const openAssign = (v: CompletedVin, currentCredits: Credit[]) => {
+    setAssignDraft(new Map(currentCredits.map(c => [c.profile_id, Number(c.share_weight)])));
+    setError('');
+    setAssignVin(v);
+  };
+
+  const applyAssign = async () => {
+    if (!assignVin || assignDraft.size === 0) return;
+    setBusy(true);
+    setError('');
+    try {
+      const res = await fetch('/api/admin/credits', {
+        method: 'POST', headers: await authHeaders(),
+        body: JSON.stringify({
+          action: 'assign_vehicle',
+          cniJobVinId: assignVin.id,
+          entries: [...assignDraft.entries()].map(([profileId, weight]) => ({ profileId, weight })),
+        }),
+      });
+      const json = await res.json().catch(() => ({}));
+      if (!res.ok) { setError(json.error || 'Failed to assign installer'); return; }
+      setAssignVin(null);
+      flash('Installer tagged for vehicle');
+      await load();
+    } finally {
+      setBusy(false);
+    }
+  };
+
   if (loading) {
     return <div style={{ padding: '20px', textAlign: 'center', color: 'var(--text-muted)' }}>Loading...</div>;
   }
@@ -236,6 +290,17 @@ export default function CniJobShiftsPage() {
       if (c.amount != null) t.amount += Number(c.amount);
       else t.unpriced++;
       totals.set(c.profile_id, t);
+    }
+  }
+
+  // Live credits keyed by completed VIN id, for the per-vehicle tagging list.
+  const creditsByVin = new Map<string, Credit[]>();
+  for (const s of shifts) {
+    for (const c of s.credits) {
+      if (!c.cni_job_vin_id) continue;
+      const arr = creditsByVin.get(c.cni_job_vin_id) || [];
+      arr.push(c);
+      creditsByVin.set(c.cni_job_vin_id, arr);
     }
   }
 
@@ -359,6 +424,61 @@ export default function CniJobShiftsPage() {
             padding: '10px 14px', borderRadius: '8px', fontSize: '13px', fontWeight: 700,
             background: 'var(--orange)', color: '#fff', border: 'none',
           }}>Back-Pay These Vehicles</button>
+        </div>
+      )}
+
+      {/* Per-vehicle installer tagging */}
+      {completedVins.length > 0 && (
+        <div style={{ padding: '14px 16px', borderRadius: '12px', marginBottom: '14px', background: 'var(--card)', border: '1px solid var(--border)' }}>
+          <div style={{ fontSize: '12px', fontWeight: 700, color: 'var(--text-muted)', marginBottom: '2px' }}>VEHICLES — TAG AN INSTALLER</div>
+          <div style={{ fontSize: '11px', color: 'var(--text-muted)', marginBottom: '10px' }}>
+            Assign who completed each vehicle one at a time. The per-vehicle rate splits across whoever you tag.
+          </div>
+          {completedVins.map(v => {
+            const credits = creditsByVin.get(v.id) || [];
+            const locked = credits.some(c => c.payout_id);
+            const assigned = credits.length > 0;
+            return (
+              <div key={v.id} style={{
+                padding: '10px 12px', borderRadius: '10px', marginBottom: '6px',
+                background: 'var(--input-bg)', border: '1px solid var(--border)',
+              }}>
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '8px' }}>
+                  <div style={{ minWidth: 0 }}>
+                    <div style={{ fontSize: '12px', fontWeight: 700, fontFamily: 'monospace', color: 'var(--text-primary)' }}>{v.vin}</div>
+                    {v.vehicle && <div style={{ fontSize: '11px', color: 'var(--text-muted)' }}>{v.vehicle}</div>}
+                  </div>
+                  {locked ? (
+                    <span style={{ fontSize: '10px', fontWeight: 700, color: 'var(--text-muted)', flexShrink: 0 }}>locked (paid out)</span>
+                  ) : (
+                    <button onClick={() => openAssign(v, credits)} disabled={busy} style={{
+                      padding: '6px 12px', borderRadius: '8px', fontSize: '11px', fontWeight: 700, flexShrink: 0,
+                      background: assigned ? 'var(--subtle-bg)' : 'var(--orange)',
+                      color: assigned ? 'var(--text-secondary)' : '#fff',
+                      border: assigned ? '1px solid var(--border)' : 'none',
+                    }}>{assigned ? 'Reassign' : 'Tag Installer'}</button>
+                  )}
+                </div>
+                <div style={{ marginTop: '6px' }}>
+                  {assigned ? (
+                    <div style={{ display: 'flex', flexWrap: 'wrap', gap: '6px' }}>
+                      {credits.map(c => (
+                        <span key={c.id} style={{
+                          fontSize: '11px', fontWeight: 700, padding: '3px 8px', borderRadius: '6px',
+                          background: 'var(--card)', border: '1px solid var(--border)', color: 'var(--text-primary)',
+                        }}>
+                          {c.profile_name}: {c.amount != null ? `$${Number(c.amount).toFixed(2)}` : '—'}
+                          {Number(c.share_weight) !== 1 ? ` (×${c.share_weight})` : ''}
+                        </span>
+                      ))}
+                    </div>
+                  ) : (
+                    <span style={{ fontSize: '11px', fontWeight: 700, color: 'var(--warning)' }}>Unassigned — no pay yet</span>
+                  )}
+                </div>
+              </div>
+            );
+          })}
         </div>
       )}
 
@@ -517,6 +637,35 @@ export default function CniJobShiftsPage() {
                 background: busy || vehicleDraft.size === 0 ? 'var(--text-muted)' : 'var(--orange)', color: '#fff', border: 'none',
               }}>{busy ? 'Saving...' : 'Save Split'}</button>
               <button onClick={() => setEditVehicle(null)} disabled={busy} style={{
+                padding: '12px 16px', borderRadius: '10px', fontSize: '12px', fontWeight: 700,
+                background: 'transparent', border: '1px solid var(--border)', color: 'var(--text-muted)',
+              }}>Cancel</button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Per-vehicle assign-installer modal */}
+      {assignVin && (
+        <div onClick={() => setAssignVin(null)} style={{ position: 'fixed', inset: 0, zIndex: 200, background: 'rgba(0,0,0,0.6)', display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '20px' }}>
+          <div onClick={e => e.stopPropagation()} style={{ background: 'var(--card)', borderRadius: '16px', padding: '20px', maxWidth: '420px', width: '100%', maxHeight: '85vh', overflowY: 'auto', border: '1px solid var(--border)' }}>
+            <div style={{ fontSize: '15px', fontWeight: 800, color: 'var(--text-primary)', marginBottom: '4px' }}>
+              Tag Installer — <span style={{ fontFamily: 'monospace' }}>{assignVin.vin}</span>
+            </div>
+            <div style={{ fontSize: '11px', color: 'var(--text-muted)', marginBottom: '12px' }}>
+              Pick who completed this vehicle. The per-vehicle rate splits across them by share (even by default;
+              change a share for an uneven split). Only this vehicle changes.
+            </div>
+            {weightEditor(assignDraft, setAssignDraft, editorPeople(
+              (creditsByVin.get(assignVin.id) || []).map(c => ({ profile_id: c.profile_id, full_name: c.profile_name })),
+            ))}
+            {error && <div style={{ padding: '8px 12px', borderRadius: '8px', margin: '8px 0', background: 'var(--error-bg)', border: '1px solid var(--error-border)', color: 'var(--error)', fontSize: '12px', fontWeight: 600 }}>{error}</div>}
+            <div style={{ display: 'flex', gap: '8px', marginTop: '8px' }}>
+              <button onClick={applyAssign} disabled={busy || assignDraft.size === 0} style={{
+                flex: 1, padding: '12px', borderRadius: '10px', fontSize: '13px', fontWeight: 800,
+                background: busy || assignDraft.size === 0 ? 'var(--text-muted)' : 'var(--orange)', color: '#fff', border: 'none',
+              }}>{busy ? 'Saving...' : 'Save'}</button>
+              <button onClick={() => setAssignVin(null)} disabled={busy} style={{
                 padding: '12px 16px', borderRadius: '10px', fontSize: '12px', fontWeight: 700,
                 background: 'transparent', border: '1px solid var(--border)', color: 'var(--text-muted)',
               }}>Cancel</button>
