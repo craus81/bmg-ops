@@ -7,7 +7,9 @@ import { useAuth } from '@/components/AuthProvider';
 import PartPicker, { type PickedPart } from '@/components/PartPicker';
 import { loadCompaniesWithCounts } from '@/lib/cni-companies';
 import JobAttachments from '@/components/JobAttachments';
-import { isVerizonRfidPart } from '@/lib/rfid';
+import { isVerizonRfidPart, validateSerial, validateImei, validateIccid } from '@/lib/rfid';
+import VinScanner from '@/components/VinScanner';
+import { theme } from '@/lib/theme';
 
 interface CniJob {
   id: string;
@@ -241,11 +243,26 @@ export default function CniJobDetailPage() {
   const [addCrew, setAddCrew] = useState<Map<string, number>>(new Map());
   const [addBusy, setAddBusy] = useState(false);
   const [addError, setAddError] = useState('');
+  // Camera scanning into the Add Vehicle form (which field is being scanned).
+  const [scanField, setScanField] = useState<null | 'vin' | 'serial_number' | 'imei' | 'iccid'>(null);
+
+  const SCAN_META: Record<string, { label: string; validate?: (raw: string) => string | null }> = {
+    vin: { label: 'VIN' },
+    serial_number: { label: 'Serial #', validate: validateSerial },
+    imei: { label: 'IMEI', validate: validateImei },
+    iccid: { label: 'CCID', validate: validateIccid },
+  };
+
+  const handleScanResult = (value: string) => {
+    if (scanField) setAddForm(f => ({ ...f, [scanField]: value }));
+    setScanField(null);
+  };
 
   const openAddVin = async () => {
     setAddForm({ vin: '', vehicle_year: '', vehicle_make: '', vehicle_model: '', serial_number: '', imei: '', iccid: '' });
     setAddCrew(new Map());
     setAddError('');
+    setScanField(null);
     setAddVinOpen(true);
     const { data: { session } } = await supabase.auth.getSession();
     const res = await fetch(`/api/shifts?cniJobId=${jobId}`, {
@@ -1631,6 +1648,21 @@ export default function CniJobDetailPage() {
         </div>
       )}
 
+      {/* Camera scanner overlay for the Add Vehicle form */}
+      {addVinOpen && scanField && (
+        <div style={{ position: 'fixed', inset: 0, zIndex: 320, background: 'rgba(0,0,0,0.9)', display: 'flex', flexDirection: 'column', padding: '16px', paddingTop: 'calc(16px + env(safe-area-inset-top, 0px))' }}>
+          <div style={{ color: '#fff', fontWeight: 800, fontSize: '16px', marginBottom: '4px' }}>Scan {SCAN_META[scanField].label}</div>
+          <div style={{ color: 'rgba(255,255,255,0.6)', fontSize: '12px', marginBottom: '12px' }}>Point the camera at the barcode. It fills in automatically.</div>
+          <VinScanner
+            onScan={handleScanResult}
+            theme={theme as unknown as Record<string, string>}
+            validate={SCAN_META[scanField].validate}
+            scanLabel={SCAN_META[scanField].label}
+          />
+          <button onClick={() => setScanField(null)} style={{ marginTop: '14px', padding: '14px', borderRadius: '10px', fontSize: '14px', fontWeight: 700, background: 'rgba(255,255,255,0.12)', color: '#fff', border: '1px solid rgba(255,255,255,0.2)' }}>Cancel</button>
+        </div>
+      )}
+
       {/* Add Completed Vehicle (never-scanned) modal */}
       {addVinOpen && (() => {
         const deviceJob = isVerizonRfidPart(job.part_number) || !!(job as any).device_capture;
@@ -1643,8 +1675,11 @@ export default function CniJobDetailPage() {
               For a vehicle that was installed but never scanned. It&apos;s added to the job as completed, logged to the scan log, and credited to the crew you pick.
             </div>
 
-            <input value={addForm.vin} onChange={e => setAddForm(f => ({ ...f, vin: e.target.value.toUpperCase() }))} placeholder="VIN" maxLength={17}
-              style={{ width: '100%', padding: '10px 12px', borderRadius: '8px', fontSize: '14px', fontFamily: 'monospace', letterSpacing: '0.5px', marginBottom: '8px', border: '1px solid var(--border)', background: 'var(--input-bg)', color: 'var(--text-body)' }} />
+            <div style={{ display: 'flex', gap: '6px', marginBottom: '8px' }}>
+              <input value={addForm.vin} onChange={e => setAddForm(f => ({ ...f, vin: e.target.value.toUpperCase() }))} placeholder="VIN" maxLength={17}
+                style={{ flex: 1, padding: '10px 12px', borderRadius: '8px', fontSize: '14px', fontFamily: 'monospace', letterSpacing: '0.5px', border: '1px solid var(--border)', background: 'var(--input-bg)', color: 'var(--text-body)' }} />
+              <button onClick={() => setScanField('vin')} title="Scan VIN" style={{ flexShrink: 0, padding: '0 14px', borderRadius: '8px', fontSize: '13px', fontWeight: 700, background: 'var(--orange)', color: '#fff', border: 'none' }}>Scan</button>
+            </div>
             <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: '6px', marginBottom: '8px' }}>
               <input value={addForm.vehicle_year} onChange={e => setAddForm(f => ({ ...f, vehicle_year: e.target.value }))} placeholder="Year" style={{ padding: '8px 10px', borderRadius: '8px', fontSize: '13px', border: '1px solid var(--border)', background: 'var(--input-bg)', color: 'var(--text-body)' }} />
               <input value={addForm.vehicle_make} onChange={e => setAddForm(f => ({ ...f, vehicle_make: e.target.value }))} placeholder="Make" style={{ padding: '8px 10px', borderRadius: '8px', fontSize: '13px', border: '1px solid var(--border)', background: 'var(--input-bg)', color: 'var(--text-body)' }} />
@@ -1654,9 +1689,17 @@ export default function CniJobDetailPage() {
             {deviceJob && (
               <div style={{ marginBottom: '10px' }}>
                 <div style={{ fontSize: '11px', fontWeight: 700, color: 'var(--text-muted)', marginBottom: '4px' }}>DEVICE IDS (required)</div>
-                <input value={addForm.serial_number} onChange={e => setAddForm(f => ({ ...f, serial_number: e.target.value }))} placeholder="Serial #" style={{ width: '100%', padding: '8px 10px', borderRadius: '8px', fontSize: '13px', fontFamily: 'monospace', marginBottom: '6px', border: '1px solid var(--border)', background: 'var(--input-bg)', color: 'var(--text-body)' }} />
-                <input value={addForm.imei} onChange={e => setAddForm(f => ({ ...f, imei: e.target.value }))} placeholder="IMEI (15 digits)" style={{ width: '100%', padding: '8px 10px', borderRadius: '8px', fontSize: '13px', fontFamily: 'monospace', marginBottom: '6px', border: '1px solid var(--border)', background: 'var(--input-bg)', color: 'var(--text-body)' }} />
-                <input value={addForm.iccid} onChange={e => setAddForm(f => ({ ...f, iccid: e.target.value }))} placeholder="CCID (18–22 digits)" style={{ width: '100%', padding: '8px 10px', borderRadius: '8px', fontSize: '13px', fontFamily: 'monospace', border: '1px solid var(--border)', background: 'var(--input-bg)', color: 'var(--text-body)' }} />
+                {([
+                  { key: 'serial_number' as const, ph: 'Serial #', field: 'serial_number' as const },
+                  { key: 'imei' as const, ph: 'IMEI (15 digits)', field: 'imei' as const },
+                  { key: 'iccid' as const, ph: 'CCID (18–22 digits)', field: 'iccid' as const },
+                ]).map(d => (
+                  <div key={d.key} style={{ display: 'flex', gap: '6px', marginBottom: '6px' }}>
+                    <input value={addForm[d.field]} onChange={e => setAddForm(f => ({ ...f, [d.field]: e.target.value }))} placeholder={d.ph}
+                      style={{ flex: 1, padding: '8px 10px', borderRadius: '8px', fontSize: '13px', fontFamily: 'monospace', border: '1px solid var(--border)', background: 'var(--input-bg)', color: 'var(--text-body)' }} />
+                    <button onClick={() => setScanField(d.field)} title={`Scan ${d.ph}`} style={{ flexShrink: 0, padding: '0 12px', borderRadius: '8px', fontSize: '12px', fontWeight: 700, background: 'var(--subtle-bg)', color: 'var(--text-primary)', border: '1px solid var(--border)' }}>Scan</button>
+                  </div>
+                ))}
               </div>
             )}
 
