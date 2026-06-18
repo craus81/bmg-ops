@@ -6,6 +6,7 @@ import { createClient } from '@/lib/supabase-browser';
 import { useAuth } from '@/components/AuthProvider';
 import { theme } from '@/lib/theme';
 import RfidCapture, { type RfidCompletion } from '@/components/RfidCapture';
+import VinScanner from '@/components/VinScanner';
 import { isVerizonRfidPart } from '@/lib/rfid';
 import InstallerPreviewBanner from '@/components/InstallerPreviewBanner';
 import { getInstallerPreview } from '@/lib/installer-preview';
@@ -275,6 +276,36 @@ export default function InstallerJobDetailPage() {
   const markComplete = async (vinId: string) => {
     const err = await completeVin(vinId);
     if (err) setActionError(err);
+  };
+
+  // Scan a vehicle straight onto the job (VINs aren't pre-loaded). The server
+  // adds it, logs the scan, and credits the active crew shift.
+  const [scanNewOpen, setScanNewOpen] = useState(false);
+  const [scanNewError, setScanNewError] = useState('');
+  const [scanNewBusy, setScanNewBusy] = useState(false);
+
+  const postScanVehicle = async (payload: { vin: string; serial_number?: string; imei?: string; iccid?: string }): Promise<string | null> => {
+    if (!job) return 'No job loaded';
+    const v = payload.vin.trim().toUpperCase();
+    if (v.length < 5) return 'VIN too short';
+    setScanNewBusy(true);
+    try {
+      const res = await fetch('/api/cni/scan-vehicle', {
+        method: 'POST', headers: await authHeaders(),
+        body: JSON.stringify({ jobId: job.id, ...payload, vin: v }),
+      });
+      const json = await res.json().catch(() => ({}));
+      if (!res.ok) return json.error || 'Failed to add vehicle';
+      await loadJob();
+      return null;
+    } finally {
+      setScanNewBusy(false);
+    }
+  };
+
+  // RFID job: RfidCapture scans VIN + SN/IMEI/CCID, then hands them here.
+  const handleScanNewRfid = async (d: RfidCompletion): Promise<string | null> => {
+    return postScanVehicle({ vin: d.vin, serial_number: d.serial_number, imei: d.imei, iccid: d.iccid });
   };
 
   if (loading || !job) {
@@ -563,12 +594,25 @@ export default function InstallerJobDetailPage() {
         </div>
       )}
 
-      {/* VINs with completion */}
-      {vins.length > 0 && (
+      {/* Vehicles — scanned onto the job (nothing pre-loaded) */}
+      {(vins.length > 0 || job.status === 'in_progress') && (
         <div style={sectionStyle}>
-          <div style={{ fontSize: '12px', fontWeight: 700, color: 'var(--text-muted)', marginBottom: '10px' }}>
-            VEHICLES ({vins.filter(v => v.status === 'completed').length}/{vins.length} complete)
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '10px' }}>
+            <div style={{ fontSize: '12px', fontWeight: 700, color: 'var(--text-muted)' }}>
+              VEHICLES ({vins.filter(v => v.status === 'completed').length}/{vins.length} complete)
+            </div>
+            {job.status === 'in_progress' && (
+              <button onClick={() => { setScanNewError(''); setScanNewOpen(true); }} style={{
+                padding: '6px 12px', borderRadius: '8px', fontSize: '12px', fontWeight: 700,
+                background: 'var(--orange)', color: '#fff', border: 'none',
+              }}>+ Scan a Vehicle</button>
+            )}
           </div>
+          {vins.length === 0 && (
+            <div style={{ fontSize: '12px', color: 'var(--text-muted)', padding: '4px 0 8px' }}>
+              No vehicles yet — tap <strong>Scan a Vehicle</strong> to scan each one as you complete it.
+            </div>
+          )}
           {vins.map(v => (
             <div key={v.id} style={{
               display: 'flex', justifyContent: 'space-between', alignItems: 'center',
@@ -788,6 +832,47 @@ export default function InstallerJobDetailPage() {
               onLogged={closeCapture}
               theme={theme as unknown as Record<string, string>}
             />
+          </div>
+        </div>
+      )}
+
+      {/* Scan a new vehicle onto the job (VINs aren't pre-loaded). */}
+      {scanNewOpen && (
+        <div onClick={() => setScanNewOpen(false)} style={{ position: 'fixed', inset: 0, zIndex: 300, background: 'rgba(0,0,0,0.7)', display: 'flex', alignItems: 'flex-end', justifyContent: 'center' }}>
+          <div onClick={e => e.stopPropagation()} style={{ width: '100%', maxWidth: '520px', background: 'var(--card)', borderTopLeftRadius: '18px', borderTopRightRadius: '18px', padding: '16px', maxHeight: '92vh', overflowY: 'auto' }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '10px' }}>
+              <div style={{ fontSize: '15px', fontWeight: 800, color: 'var(--text-primary)' }}>
+                {isRfidJob ? 'Scan Vehicle & Device' : 'Scan Vehicle'}
+              </div>
+              <button onClick={() => setScanNewOpen(false)} style={{ fontSize: '12px', fontWeight: 700, color: 'var(--text-muted)', background: 'transparent', border: 'none', cursor: 'pointer' }}>Cancel</button>
+            </div>
+
+            {scanNewError && (
+              <div style={{ padding: '8px 12px', borderRadius: '8px', marginBottom: '8px', background: 'var(--error-bg)', border: '1px solid var(--error-border)', color: 'var(--error)', fontSize: '12px', fontWeight: 600 }}>{scanNewError}</div>
+            )}
+
+            {isRfidJob ? (
+              <RfidCapture
+                includeVin
+                onComplete={handleScanNewRfid}
+                onLogged={() => setScanNewOpen(false)}
+                theme={theme as unknown as Record<string, string>}
+              />
+            ) : (
+              <>
+                <div style={{ fontSize: '12px', color: 'var(--text-muted)', marginBottom: '8px' }}>Scan or point the camera at the VIN barcode.</div>
+                <VinScanner
+                  onScan={async (vin) => {
+                    setScanNewError('');
+                    const err = await postScanVehicle({ vin });
+                    if (err) setScanNewError(err);
+                    else setScanNewOpen(false);
+                  }}
+                  theme={theme as unknown as Record<string, string>}
+                />
+                {scanNewBusy && <div style={{ fontSize: '12px', color: 'var(--text-muted)', marginTop: '8px' }}>Saving…</div>}
+              </>
+            )}
           </div>
         </div>
       )}
