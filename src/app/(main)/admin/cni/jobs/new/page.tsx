@@ -47,12 +47,6 @@ export default function CreateCniJobPage() {
   const [siteContactPhone, setSiteContactPhone] = useState('');
   const [siteContactEmail, setSiteContactEmail] = useState('');
 
-  // VINs
-  const [isMultiUnit, setIsMultiUnit] = useState(false);
-  const [vins, setVins] = useState<{ vin: string; year: string; make: string; model: string }[]>([
-    { vin: '', year: '', make: '', model: '' },
-  ]);
-
   // Materials
   const [requiresShipment, setRequiresShipment] = useState(false);
   const [shipStreet, setShipStreet] = useState('');
@@ -74,21 +68,6 @@ export default function CreateCniJobPage() {
     setCompanies(await loadCompaniesWithCounts(supabase));
   };
 
-  const addVin = () => {
-    setVins([...vins, { vin: '', year: '', make: '', model: '' }]);
-  };
-
-  const removeVin = (idx: number) => {
-    if (vins.length <= 1) return;
-    setVins(vins.filter((_, i) => i !== idx));
-  };
-
-  const updateVin = (idx: number, field: string, value: string) => {
-    const updated = [...vins];
-    (updated[idx] as any)[field] = value;
-    setVins(updated);
-  };
-
   const handleSubmit = async () => {
     if (!title.trim()) { setError('Job title is required'); return; }
     if (!part?.part_number) { setError('A part number is required — every CNI job is tracked by its part'); return; }
@@ -98,14 +77,9 @@ export default function CreateCniJobPage() {
     setError('');
 
     try {
-      const validVins = vins.filter(v => v.vin.trim());
-
-      // Per-vehicle pay drives the crew splits; default to budget ÷ VINs.
-      const rate = payPerVehicle
-        ? parseFloat(payPerVehicle)
-        : budget && validVins.length > 0
-          ? Math.round((parseFloat(budget) / validVins.length) * 100) / 100
-          : null;
+      // Per-vehicle pay drives the crew splits. Vehicles are scanned in the
+      // field, not pre-loaded, so the rate is set explicitly here.
+      const rate = payPerVehicle ? parseFloat(payPerVehicle) : null;
 
       // Create job
       const { data: job, error: jobError } = await supabase
@@ -128,8 +102,6 @@ export default function CreateCniJobPage() {
           site_contact_name: siteContactName.trim() || null,
           site_contact_phone: siteContactPhone.trim() || null,
           site_contact_email: siteContactEmail.trim() || null,
-          is_multi_unit: validVins.length > 1,
-          vin_count: validVins.length || 1,
           requires_shipment: requiresShipment,
           shipping_address: requiresShipment ? { street: shipStreet, city: shipCity, state: shipState, zip: shipZip } : null,
           assigned_company_id: assignCompany && selectedCompanyId ? selectedCompanyId : null,
@@ -141,22 +113,6 @@ export default function CreateCniJobPage() {
         .single();
 
       if (jobError) throw jobError;
-
-      // Create VIN records
-      if (validVins.length > 0 && job) {
-        const vinRecords = validVins.map((v, i) => ({
-          job_id: job.id,
-          vin: v.vin.trim().toUpperCase(),
-          vehicle_year: v.year.trim() || null,
-          vehicle_make: v.make.trim() || null,
-          vehicle_model: v.model.trim() || null,
-          sort_order: i,
-        }));
-        const { error: vinError } = await supabase
-          .from('cni_job_vins')
-          .insert(vinRecords);
-        if (vinError) console.error('VIN insert error:', vinError);
-      }
 
       // Upload attachments under the new job's id, then save the list.
       if (jobFiles.length > 0 && job) {
@@ -366,42 +322,6 @@ export default function CreateCniJobPage() {
           </div>
           <input style={{ ...inputStyle, marginTop: '10px' }} value={siteContactEmail} onChange={e => setSiteContactEmail(e.target.value)} placeholder="Email" />
         </div>
-      </div>
-
-      {/* VINs */}
-      <div style={sectionStyle}>
-        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '14px' }}>
-          <div style={sectionTitle}>VINs</div>
-          <button onClick={addVin} style={{
-            padding: '6px 12px', borderRadius: '8px', fontSize: '12px', fontWeight: 700,
-            background: 'var(--subtle-bg)', color: 'var(--text-secondary)', border: '1px solid var(--border)',
-          }}>
-            + Add VIN
-          </button>
-        </div>
-        {vins.map((v, i) => (
-          <div key={i} style={{
-            padding: '12px', borderRadius: '10px', marginBottom: '8px',
-            background: 'var(--input-bg)', border: '1px solid var(--border)',
-          }}>
-            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '8px' }}>
-              <span style={{ fontSize: '11px', fontWeight: 700, color: 'var(--text-muted)' }}>VIN #{i + 1}</span>
-              {vins.length > 1 && (
-                <button onClick={() => removeVin(i)} style={{ fontSize: '11px', color: 'var(--error)', fontWeight: 600 }}>Remove</button>
-              )}
-            </div>
-            <input
-              style={{ ...inputStyle, marginBottom: '8px', fontFamily: 'monospace', textTransform: 'uppercase' }}
-              value={v.vin} onChange={e => updateVin(i, 'vin', e.target.value)}
-              placeholder="VIN" maxLength={17}
-            />
-            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: '8px' }}>
-              <input style={inputStyle} value={v.year} onChange={e => updateVin(i, 'year', e.target.value)} placeholder="Year" />
-              <input style={inputStyle} value={v.make} onChange={e => updateVin(i, 'make', e.target.value)} placeholder="Make" />
-              <input style={inputStyle} value={v.model} onChange={e => updateVin(i, 'model', e.target.value)} placeholder="Model" />
-            </div>
-          </div>
-        ))}
       </div>
 
       {/* Materials */}
