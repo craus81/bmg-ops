@@ -320,7 +320,7 @@ export default function InstallerPortalPage() {
           </div>
         </button>
         <button
-          onClick={() => router.push('/installer/jobs')}
+          onClick={() => document.getElementById('active-jobs')?.scrollIntoView({ behavior: 'smooth' })}
           style={{
             padding: '14px 12px', borderRadius: '12px', textAlign: 'left',
             background: 'var(--card)', border: '1px solid var(--border)',
@@ -344,7 +344,7 @@ export default function InstallerPortalPage() {
       </div>
 
       {/* Active Jobs */}
-      <div style={{ fontSize: '12px', fontWeight: 700, color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.8px', marginBottom: '10px' }}>
+      <div id="active-jobs" style={{ fontSize: '12px', fontWeight: 700, color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.8px', marginBottom: '10px', scrollMarginTop: '12px' }}>
         Active Jobs ({activeJobs.length})
       </div>
       {activeJobs.length === 0 ? (

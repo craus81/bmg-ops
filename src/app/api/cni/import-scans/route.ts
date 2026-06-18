@@ -16,6 +16,7 @@ interface ScanRow {
   vehicle_year: string | null;
   vehicle_make: string | null;
   vehicle_model: string | null;
+  part_number: string | null;
   serial_number: string | null;
   imei: string | null;
   iccid: string | null;
@@ -25,41 +26,48 @@ interface ScanRow {
 }
 
 /**
- * Scan-log rows that match the job's part, aren't already linked to any CNI
- * job VIN, and whose VIN isn't already on this job — i.e. vehicles that were
- * scanned (e.g. via the field /scan flow) but never attached to the CNI job.
+ * Scan-log rows that match a part, aren't already linked to any CNI job VIN,
+ * and whose VIN isn't already on this job — vehicles that were scanned (e.g.
+ * via the field /scan flow) but never attached to the CNI job. `partLike`
+ * matches the part loosely (contains, case-insensitive) so scans logged under
+ * a free-text part like "rfid" can be found; with no `partLike` it matches the
+ * job's exact part.
  */
-async function candidates(cniJobId: string): Promise<{ part: string | null; rows: ScanRow[] }> {
+async function candidates(cniJobId: string, partLike?: string): Promise<{ jobPart: string | null; rows: ScanRow[] }> {
   const { data: job } = await service
     .from('cni_jobs').select('part_number').eq('id', cniJobId).single();
-  const part = job?.part_number || null;
-  if (!part) return { part, rows: [] };
+  const jobPart = job?.part_number || null;
 
-  const { data: scans } = await service
+  let query = service
     .from('scan_logs')
-    .select('id, vin, vehicle_year, vehicle_make, vehicle_model, serial_number, imei, iccid, scanned_at, scanned_by, scanned_by_company')
-    .eq('part_number', part)
+    .select('id, vin, vehicle_year, vehicle_make, vehicle_model, part_number, serial_number, imei, iccid, scanned_at, scanned_by, scanned_by_company')
     .order('scanned_at', { ascending: false })
     .limit(1000);
-  if (!scans || scans.length === 0) return { part, rows: [] };
+  if (partLike && partLike.trim()) query = query.ilike('part_number', `%${partLike.trim()}%`);
+  else if (jobPart) query = query.eq('part_number', jobPart);
+  else return { jobPart, rows: [] };
 
-  // Scan logs already attached to a CNI job VIN (anywhere).
+  const { data: scans } = await query;
+  if (!scans || scans.length === 0) return { jobPart, rows: [] };
+
   const { data: linked } = await service
     .from('cni_job_vins').select('scan_log_id').not('scan_log_id', 'is', null);
   const linkedSet = new Set((linked || []).map(l => l.scan_log_id));
 
-  // VINs already on this job (avoid duplicates if added another way).
   const { data: jobVins } = await service
     .from('cni_job_vins').select('vin').eq('job_id', cniJobId);
   const jobVinSet = new Set((jobVins || []).map(v => v.vin));
 
   return {
-    part,
+    jobPart,
     rows: (scans as ScanRow[]).filter(s => !linkedSet.has(s.id) && !jobVinSet.has(s.vin)),
   };
 }
 
-const GetSchema = z.object({ cniJobId: z.string().uuid() });
+const GetSchema = z.object({
+  cniJobId: z.string().uuid(),
+  partLike: z.string().trim().max(120).optional(),
+});
 
 /** GET — list importable scanned vehicles for the job, with scanner names. */
 export async function GET(req: NextRequest) {
@@ -68,7 +76,7 @@ export async function GET(req: NextRequest) {
   const q = validateSearchParams(req, GetSchema);
   if (q.error) return q.error;
 
-  const { part, rows } = await candidates(q.data.cniJobId);
+  const { jobPart, rows } = await candidates(q.data.cniJobId, q.data.partLike);
   const scannerIds = [...new Set(rows.map(r => r.scanned_by).filter(Boolean))] as string[];
   const names = new Map<string, string>();
   if (scannerIds.length > 0) {
@@ -76,11 +84,12 @@ export async function GET(req: NextRequest) {
     for (const p of profiles || []) names.set(p.id, p.full_name);
   }
   return NextResponse.json({
-    part,
+    jobPart,
     candidates: rows.map(r => ({
       scanLogId: r.id,
       vin: r.vin,
       vehicle: [r.vehicle_year, r.vehicle_make, r.vehicle_model].filter(Boolean).join(' '),
+      partNumber: r.part_number,
       hasDevices: !!(r.serial_number && r.imei && r.iccid),
       scanned_at: r.scanned_at,
       scanned_by_name: r.scanned_by ? (names.get(r.scanned_by) || r.scanned_by_company || 'Unknown') : (r.scanned_by_company || '—'),
@@ -90,13 +99,16 @@ export async function GET(req: NextRequest) {
 
 const PostSchema = z.object({
   cniJobId: z.string().uuid(),
+  partLike: z.string().trim().max(120).optional(),
   scanLogIds: z.array(z.string().uuid()).min(1).max(500),
 });
 
 /**
  * POST — import the chosen scans onto the job as completed VINs. Reuses the
- * existing scan_logs row (no duplicate) and re-links any of its pay credits to
- * the new VIN so back-pay/recompute see them and don't double-pay.
+ * existing scan_logs row (no duplicate), re-stamps its part to the job's part
+ * (so a scan logged under "rfid" gets consolidated under the real part for
+ * reporting/invoicing), and re-links any of its pay credits to the new VIN so
+ * back-pay/recompute see them and don't double-pay.
  */
 export async function POST(req: NextRequest) {
   const auth = await requireAdmin(req);
@@ -104,10 +116,14 @@ export async function POST(req: NextRequest) {
 
   const parsed = await validateBody(req, PostSchema);
   if (parsed.error) return parsed.error;
-  const { cniJobId, scanLogIds } = parsed.data;
+  const { cniJobId, partLike, scanLogIds } = parsed.data;
+
+  const { data: job } = await service
+    .from('cni_jobs').select('part_number, part_description, billable_customer').eq('id', cniJobId).single();
+  if (!job) return NextResponse.json({ error: 'Job not found' }, { status: 404 });
 
   // Re-fetch the eligible set so a stale client can't import linked/dup scans.
-  const { rows } = await candidates(cniJobId);
+  const { rows } = await candidates(cniJobId, partLike);
   const eligible = new Map(rows.map(r => [r.id, r]));
 
   const { data: maxVin } = await service
@@ -118,7 +134,7 @@ export async function POST(req: NextRequest) {
   let imported = 0;
   for (const scanLogId of scanLogIds) {
     const s = eligible.get(scanLogId);
-    if (!s) continue; // already linked / not eligible — skip silently
+    if (!s) continue;
 
     const { data: newVin, error } = await service
       .from('cni_job_vins')
@@ -143,10 +159,18 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ error: 'Failed to import ' + s.vin + ': ' + (error?.message || 'unknown'), imported }, { status: 500 });
     }
 
-    // Associate any existing credits from this scan with the new job VIN.
+    // Consolidate the scan under the job's real part (e.g. "rfid" → 06CS901033).
+    if (job.part_number && s.part_number !== job.part_number) {
+      await service
+        .from('scan_logs')
+        .update({ part_number: job.part_number, part_description: job.part_description, billable_customer: job.billable_customer })
+        .eq('id', s.id);
+    }
+
+    // Associate (and re-stamp) any existing credits from this scan.
     await service
       .from('install_credits')
-      .update({ cni_job_vin_id: newVin.id })
+      .update({ cni_job_vin_id: newVin.id, part_number: job.part_number })
       .eq('scan_log_id', s.id)
       .is('cni_job_vin_id', null)
       .is('voided_at', null);
