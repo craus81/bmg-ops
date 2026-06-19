@@ -564,11 +564,14 @@ export async function createSalesOrder(payload: {
 
   const authHeader = getAuthHeader(oauth, token, { url, method: 'POST' });
 
-  // Build line items for NetSuite
+  // Build line items for NetSuite. For any line with an explicit rate, pin the
+  // price level to "Custom" (internal id -1) so NetSuite keeps our rate instead
+  // of re-sourcing it from the item's / customer's default price level. Lines
+  // with no rate fall through to NetSuite's normal price-level sourcing.
   const items = payload.lineItems.map((li) => ({
     item: { id: li.itemId },
     quantity: li.quantity,
-    rate: li.rate,
+    ...(li.rate > 0 ? { price: { id: '-1' }, rate: li.rate } : {}),
     ...(li.description ? { description: li.description } : {}),
   }));
 
@@ -823,6 +826,12 @@ export async function createDirectInvoice(payload: {
     return {
       item: { id: li.itemId },
       quantity: li.quantity,
+      // Pin the line's price level to "Custom" (internal id -1) so NetSuite
+      // honors the rate we send. Without this, NetSuite re-sources the rate
+      // from the item's / customer's default price level, which can differ
+      // from the catalog price and silently change the invoice total
+      // (e.g. billing 160.00 when the catalog price is 177.50).
+      price: { id: '-1' },
       rate,
       // Omit description when not provided so NetSuite falls back to the item
       // record's standard description instead of blanking the line.
@@ -971,7 +980,9 @@ export async function createInvoiceFromSO(payload: {
         return {
           item: { id: line.item },
           quantity: payload.installedQuantities![lineNum],
-          ...(rate > 0 ? { rate } : {}),
+          // Pin "Custom" price level (id -1) so NetSuite keeps the rate we send
+          // rather than re-sourcing it from the item's / customer's price level.
+          ...(rate > 0 ? { price: { id: '-1' }, rate } : {}),
         };
       });
     } catch (e) {

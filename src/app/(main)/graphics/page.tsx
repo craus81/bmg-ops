@@ -7,10 +7,10 @@ import { storage } from '@/lib/storage';
 import { useAuth } from '@/components/AuthProvider';
 import { theme } from '@/lib/theme';
 import AssignmentPicker from '@/components/AssignmentPicker';
-import GraphicsInvoiceModal from '@/components/GraphicsInvoiceModal';
+import GraphicsInvoiceReviewModal from '@/components/GraphicsInvoiceReviewModal';
 import { PartLabel } from '@/components/PartLabel';
 import DropboxProofSearch from '@/components/DropboxProofSearch';
-import { exportPackingListPDF, packingListFromJob } from '@/lib/packing-list-pdf';
+import { exportPackingListPDF, packingListFromJob, type PackingListLine } from '@/lib/packing-list-pdf';
 import type {
   GraphicsJob, GraphicsJobStatus, GraphicsJobCategory, GraphicsStatusHistory, GraphicsJobView, Profile,
 } from '@/lib/types';
@@ -173,7 +173,6 @@ export default function GraphicsPage() {
 
   // Estimate & Invoice state
   const [creatingEstimate, setCreatingEstimate] = useState(false);
-  const [creatingInvoice, setCreatingInvoice] = useState(false);
   const [fetchingPdfJobId, setFetchingPdfJobId] = useState<string | null>(null);
 
   useEffect(() => {
@@ -206,7 +205,7 @@ export default function GraphicsPage() {
 
   // Admin "create invoice in FleetSuite?" prompt — opens when navigated
   // from the bell notification with ?invoiceJob=<id>. Confirms once; on
-  // yes, opens the GraphicsInvoiceModal. Either way, clears the param.
+  // yes, opens the invoice review modal. Either way, clears the param.
   useEffect(() => {
     if (loading) return;
     const invoiceJobId = searchParams.get('invoiceJob');
@@ -913,9 +912,12 @@ export default function GraphicsPage() {
 
   // Print a packing list for the job. `overrides` lets us merge in fresh
   // invoice info right after creating one (before local state catches up).
-  const printPackingList = (job: GraphicsJob, overrides?: Partial<GraphicsJob>) => {
+  const printPackingList = (job: GraphicsJob, overrides?: Partial<GraphicsJob>, lines?: PackingListLine[]) => {
     try {
-      exportPackingListPDF(packingListFromJob({ ...job, ...overrides }), { print: true });
+      exportPackingListPDF(
+        packingListFromJob({ ...job, ...overrides }, lines && lines.length > 0 ? { lines } : undefined),
+        { print: true },
+      );
     } catch (e) {
       console.error('Packing list error:', e);
       alert('Could not generate the packing list.');
@@ -944,90 +946,6 @@ export default function GraphicsPage() {
       setFetchingPdfJobId(null);
     }
     return null;
-  };
-
-  // Create direct invoice from graphics job (skip SO)
-  const createInvoiceFromJob = async (job: GraphicsJob) => {
-    if (job.netsuite_invoice_id) {
-      alert(`This job already has an invoice: ${job.netsuite_invoice_number || job.netsuite_invoice_id}`);
-      return;
-    }
-    if (!job.part_number) {
-      alert('Please add part numbers to this job before creating an invoice.');
-      return;
-    }
-    if (!job.customer) {
-      alert('Please set the customer on this job before creating an invoice.');
-      return;
-    }
-    const msg = job.po_number
-      ? `Create a direct invoice in NetSuite for PO #${job.po_number}?\nThis will skip the Sales Order and go straight to Invoice.`
-      : 'Create a direct invoice in NetSuite for this job?\nThis will skip the Sales Order and go straight to Invoice.';
-    if (!window.confirm(msg)) return;
-
-    setCreatingInvoice(true);
-    try {
-      const postInvoice = async (prices?: Record<string, number>) => {
-        const res = await fetch('/api/graphics/create-invoice', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ jobId: job.id, userId: user?.id, ...(prices ? { prices } : {}) }),
-        });
-        return res.json();
-      };
-
-      let data = await postInvoice();
-
-      // NetSuite has no price for some parts — ask the user to enter one,
-      // then re-submit. Bail out if they cancel.
-      if (data.needsPricing && Array.isArray(data.parts)) {
-        const prices: Record<string, number> = {};
-        for (const part of data.parts) {
-          const label = part.displayName ? `${part.partNumber} (${part.displayName})` : part.partNumber;
-          const input = window.prompt(
-            `No price found in NetSuite or the catalog for:\n${label}\n\nEnter the unit price for this part:`
-          );
-          if (input === null) { setCreatingInvoice(false); return; } // cancelled
-          const val = parseFloat(input.replace(/[^0-9.]/g, ''));
-          if (!(val > 0)) {
-            alert('That price isn\'t valid — invoice cancelled. Please try again.');
-            setCreatingInvoice(false);
-            return;
-          }
-          prices[String(part.partNumber).toUpperCase()] = val;
-        }
-        data = await postInvoice(prices);
-      }
-
-      if (data.success) {
-        // Update local job state
-        setJobs(prev => prev.map(j => j.id === job.id ? {
-          ...j,
-          netsuite_invoice_id: data.invoiceId,
-          netsuite_invoice_number: data.invoiceNumber,
-          invoice_amount: data.invoiceAmount,
-          invoiced_at: new Date().toISOString(),
-          updated_at: new Date().toISOString(),
-        } : j));
-        loadHistory(job.id);
-        const printNow = window.confirm(
-          `Invoice created!\nInvoice #: ${data.invoiceNumber || data.invoiceId}\nLine items: ${data.lineItemCount}${data.skippedParts ? '\nSkipped (not in NS): ' + data.skippedParts.join(', ') : ''}${data.savedPrices ? `\nSaved ${data.savedPrices} price(s) to the catalog` : ''}\n\nPrint packing list now?`
-        );
-        if (printNow) {
-          printPackingList(job, {
-            netsuite_invoice_id: data.invoiceId,
-            netsuite_invoice_number: data.invoiceNumber,
-          });
-        }
-        // Best-effort: pull the invoice PDF and store it on the record.
-        storeInvoicePdf(job.id, true);
-      } else {
-        alert('Failed to create invoice: ' + (data.error || 'Unknown error'));
-      }
-    } catch {
-      alert('Network error — please try again');
-    }
-    setCreatingInvoice(false);
   };
 
   // Filter jobs
@@ -2040,15 +1958,13 @@ export default function GraphicsPage() {
                               )}
                               {!job.netsuite_invoice_id && (
                                 <button
-                                  onClick={() => createInvoiceFromJob(job)}
-                                  disabled={creatingInvoice}
+                                  onClick={() => setInvoiceJob(job)}
                                   style={{
                                     flex: 1, padding: '8px', borderRadius: '7px', fontSize: '11px', fontWeight: 700, cursor: 'pointer',
                                     background: 'rgba(34,197,94,0.08)', border: '1px solid rgba(34,197,94,0.2)', color: '#22c55e',
-                                    opacity: creatingInvoice ? 0.5 : 1,
                                   }}
                                 >
-                                  {creatingInvoice ? 'Creating...' : 'Create Invoice'}
+                                  Review &amp; Invoice
                                 </button>
                               )}
                             </div>
@@ -2742,24 +2658,36 @@ export default function GraphicsPage() {
       )}
 
       {invoiceJob && (
-        <GraphicsInvoiceModal
+        <GraphicsInvoiceReviewModal
           job={invoiceJob}
           onClose={() => setInvoiceJob(null)}
           onComplete={(result) => {
             const job = invoiceJob;
             setInvoiceJob(null);
+            if (job) {
+              // Reflect the new invoice locally right away.
+              setJobs(prev => prev.map(j => j.id === job.id ? {
+                ...j,
+                netsuite_invoice_id: result.invoiceId ?? j.netsuite_invoice_id,
+                netsuite_invoice_number: result.invoiceNumber ?? j.netsuite_invoice_number,
+                invoice_amount: result.invoiceAmount ?? j.invoice_amount,
+                invoiced_at: new Date().toISOString(),
+                updated_at: new Date().toISOString(),
+              } : j));
+              loadHistory(job.id);
+            }
             const printNow = window.confirm(
               `Invoice ${result.invoiceNumber || result.invoiceId || 'created'} in FleetSuite.\n\nPrint packing list now?`
             );
+            // Reuse the verified lines so the packing list matches the invoice.
             if (printNow && job) {
               printPackingList(job, {
                 netsuite_invoice_id: result.invoiceId ?? null,
                 netsuite_invoice_number: result.invoiceNumber ?? null,
-              });
+              }, result.lines);
             }
             // Best-effort: pull the invoice PDF and store it on the record.
             if (job) storeInvoicePdf(job.id, true);
-            loadJobs();
           }}
         />
       )}

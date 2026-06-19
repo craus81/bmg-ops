@@ -228,11 +228,15 @@ export async function POST(req: NextRequest) {
       .from('netsuite_parts')
       .select('*', { count: 'exact', head: true });
 
-    // Mark parts not in this sync as inactive (they were removed from NetSuite)
+    // Mark parts not in this sync as inactive (they were removed from NetSuite).
+    // Only touch NetSuite-sourced rows — manual graphics parts (folded in from
+    // the old proof catalog, source='manual', netsuite_id NULL) are not managed
+    // by the sync and must survive it.
     const syncedIds = nsItems.map((item: any) => item.id?.toString());
     await supabase
       .from('netsuite_parts')
       .update({ is_active: false, updated_at: now })
+      .eq('source', 'netsuite')
       .not('netsuite_id', 'in', `(${syncedIds.join(',')})`);
 
     // Update sync log
