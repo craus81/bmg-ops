@@ -27,6 +27,9 @@ const Schema = z.object({
   prices: z.record(z.string(), z.number().nonnegative()).optional().nullable(),
   // Verified lines from the review screen. When provided, these win.
   lines: z.array(VerifiedLineSchema).min(1).max(500).optional().nullable(),
+  // Customer override from the review screen (the user can search/swap the
+  // customer there). Falls back to resolving from the job when absent.
+  customerNsId: z.union([z.string().regex(/^\d{1,20}$/), z.number().int().nonnegative()]).optional().nullable(),
 });
 
 function getSupabase() {
@@ -51,7 +54,7 @@ export async function POST(req: NextRequest) {
 
   const parsed = await validateBody(req, Schema);
   if (parsed.error) return parsed.error;
-  const { jobId, userId, prices, lines: verifiedLines } = parsed.data;
+  const { jobId, userId, prices, lines: verifiedLines, customerNsId: clientCustomerNsId } = parsed.data;
 
   // Normalize client-supplied prices to an upper-cased part-number map.
   const priceOverrides: Record<string, number> = {};
@@ -83,7 +86,8 @@ export async function POST(req: NextRequest) {
       }, { status: 400 });
     }
 
-    const customerNsId = await resolveCustomerNsId(supabase, job);
+    const customerNsId = (clientCustomerNsId != null ? String(clientCustomerNsId) : null)
+      || await resolveCustomerNsId(supabase, job);
     if (!customerNsId) {
       return NextResponse.json({
         error: 'No NetSuite customer found for this job. Please set the customer on the job first.',

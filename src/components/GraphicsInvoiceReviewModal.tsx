@@ -3,28 +3,46 @@
 /**
  * Review & verify a graphics job's invoice lines BEFORE anything is created.
  *
- * Opens on "Create Invoice". Pulls a proposed set of lines from
+ * Opens on "Review & Invoice". Pulls a proposed set of lines from
  * /api/graphics/invoice-preview (one per part, quantities from the linked PO,
- * prices from the catalog/NetSuite), lets the user correct quantities, rates
- * and descriptions, then either prints a matching packing list or creates the
- * invoice with the verified lines. This is the fix for "quantities on the
- * invoice don't match reality" — nothing is created until it's been checked.
+ * prices from the catalog/NetSuite), then lets the user fully edit them:
+ * change quantities/rates/descriptions, pick or swap the NetSuite item per
+ * line, add ad-hoc lines, and search/override the customer. From here they can
+ * print a matching packing list or create the invoice with the verified lines.
+ * Nothing is created until it's been checked — the fix for "quantities on the
+ * invoice don't match reality".
  */
 
 import { useState, useEffect, useCallback } from 'react';
+import { createClient } from '@/lib/supabase-browser';
 import type { GraphicsJob } from '@/lib/types';
 import { exportPackingListPDF, packingListFromJob, type PackingListLine } from '@/lib/packing-list-pdf';
+
+interface CustomerRow {
+  id: string;
+  netsuite_id: string | null;
+  company_name: string | null;
+  entity_id: string | null;
+}
+
+interface PartRow {
+  id: string;
+  netsuite_id: string | null;
+  item_number: string | null;
+  display_name: string | null;
+  description: string | null;
+  sales_price: number | null;
+}
 
 interface ReviewLine {
   key: string;
   partNumber: string;
-  itemId: string | null;
+  itemId: string | null;       // NetSuite internal id; null = no item picked yet
   displayName: string;
   description: string;
   quantity: number;
   rate: number;
-  found: boolean;
-  qtySource: 'po' | 'job';
+  qtySource: 'po' | 'job' | 'manual';
 }
 
 interface Props {
@@ -41,18 +59,33 @@ interface Props {
 const genKey = () => Math.random().toString(36).slice(2, 10);
 
 export default function GraphicsInvoiceReviewModal({ job, onClose, onComplete }: Props) {
+  const supabase = createClient();
+
   const [loading, setLoading] = useState(true);
   const [loadError, setLoadError] = useState<string | null>(null);
+  const [alreadyInvoiced, setAlreadyInvoiced] = useState<{ number?: string | null } | null>(null);
 
+  // ── Customer (resolved, with optional override) ──
   const [customer, setCustomer] = useState<{ netsuiteId: string | null; name: string | null }>({ netsuiteId: null, name: null });
+  const [customerOverride, setCustomerOverride] = useState<CustomerRow | null>(null);
+  const [editingCustomer, setEditingCustomer] = useState(false);
+  const [custSearch, setCustSearch] = useState('');
+  const [custResults, setCustResults] = useState<CustomerRow[]>([]);
+  const [custSearching, setCustSearching] = useState(false);
+
   const [poNumber, setPoNumber] = useState<string | null>(null);
   const [lines, setLines] = useState<ReviewLine[]>([]);
-  const [skippedParts, setSkippedParts] = useState<string[]>([]);
-  const [alreadyInvoiced, setAlreadyInvoiced] = useState<{ number?: string | null } | null>(null);
+
+  // ── Per-row NetSuite item picker ──
+  const [activePartRow, setActivePartRow] = useState<string | null>(null);
+  const [partSearch, setPartSearch] = useState('');
+  const [partResults, setPartResults] = useState<PartRow[]>([]);
+  const [partSearching, setPartSearching] = useState(false);
 
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
+  // ── Load proposed lines ──
   useEffect(() => {
     let cancelled = false;
     (async () => {
@@ -71,7 +104,6 @@ export default function GraphicsInvoiceReviewModal({ job, onClose, onComplete }:
         } else {
           setCustomer(data.customer || { netsuiteId: null, name: null });
           setPoNumber(data.poNumber || null);
-          setSkippedParts(data.skippedParts || []);
           setLines((data.lines || []).map((l: any) => ({
             key: genKey(),
             partNumber: l.partNumber,
@@ -80,7 +112,6 @@ export default function GraphicsInvoiceReviewModal({ job, onClose, onComplete }:
             description: l.displayName || l.partNumber || '',
             quantity: l.quantity,
             rate: l.rate,
-            found: l.found,
             qtySource: l.qtySource,
           })));
         }
@@ -92,6 +123,45 @@ export default function GraphicsInvoiceReviewModal({ job, onClose, onComplete }:
     return () => { cancelled = true; };
   }, [job.id]);
 
+  // ── Customer search (debounced) ──
+  useEffect(() => {
+    if (!editingCustomer || custSearch.length < 2) { setCustResults([]); return; }
+    let cancelled = false;
+    setCustSearching(true);
+    const t = setTimeout(async () => {
+      const { data } = await supabase
+        .from('customers')
+        .select('id, netsuite_id, company_name, entity_id')
+        .or(`company_name.ilike.%${custSearch}%,entity_id.ilike.%${custSearch}%`)
+        .limit(8);
+      if (!cancelled) {
+        setCustResults((data as CustomerRow[]) || []);
+        setCustSearching(false);
+      }
+    }, 300);
+    return () => { cancelled = true; clearTimeout(t); };
+  }, [custSearch, editingCustomer, supabase]);
+
+  // ── Part search (debounced, only for the row being edited) ──
+  useEffect(() => {
+    if (!activePartRow || partSearch.length < 2) { setPartResults([]); return; }
+    let cancelled = false;
+    setPartSearching(true);
+    const t = setTimeout(async () => {
+      const { data } = await supabase
+        .from('netsuite_parts')
+        .select('id, netsuite_id, item_number, display_name, description, sales_price')
+        .eq('is_active', true)
+        .or(`item_number.ilike.%${partSearch}%,display_name.ilike.%${partSearch}%,description.ilike.%${partSearch}%`)
+        .limit(10);
+      if (!cancelled) {
+        setPartResults((data as PartRow[]) || []);
+        setPartSearching(false);
+      }
+    }, 300);
+    return () => { cancelled = true; clearTimeout(t); };
+  }, [partSearch, activePartRow, supabase]);
+
   const updateLine = useCallback((key: string, patch: Partial<ReviewLine>) => {
     setLines(prev => prev.map(l => l.key === key ? { ...l, ...patch } : l));
   }, []);
@@ -100,12 +170,40 @@ export default function GraphicsInvoiceReviewModal({ job, onClose, onComplete }:
     setLines(prev => prev.filter(l => l.key !== key));
   }, []);
 
-  // Lines that can go on the invoice (matched to a NetSuite item, qty > 0).
-  const invoiceLines = lines.filter(l => l.found && l.itemId && l.quantity > 0);
+  const addLine = useCallback(() => {
+    const key = genKey();
+    setLines(prev => [...prev, {
+      key, partNumber: '', itemId: null, displayName: '', description: '',
+      quantity: 1, rate: 0, qtySource: 'manual',
+    }]);
+    setActivePartRow(key);
+    setPartSearch('');
+    setPartResults([]);
+  }, []);
+
+  const pickPart = useCallback((rowKey: string, part: PartRow) => {
+    updateLine(rowKey, {
+      itemId: part.netsuite_id,
+      partNumber: part.item_number || '',
+      displayName: part.display_name || part.description || part.item_number || '',
+      description: part.display_name || part.description || part.item_number || '',
+      rate: part.sales_price ?? 0,
+    });
+    setActivePartRow(null);
+    setPartSearch('');
+    setPartResults([]);
+  }, [updateLine]);
+
+  const effectiveCustomer = customerOverride
+    ? { netsuiteId: customerOverride.netsuite_id, name: customerOverride.company_name || customerOverride.entity_id }
+    : customer;
+
+  // Lines that can go on the invoice (item picked + qty > 0).
+  const invoiceLines = lines.filter(l => l.itemId && l.quantity > 0);
   const unpriced = invoiceLines.filter(l => !(l.rate > 0));
   const total = invoiceLines.reduce((sum, l) => sum + l.quantity * l.rate, 0);
 
-  // Packing list reflects everything being shipped (qty > 0), found or not.
+  // Packing list reflects everything being shipped (qty > 0), item or not.
   const packingLines = (): PackingListLine[] =>
     lines.filter(l => l.quantity > 0).map(l => ({
       partNumber: l.partNumber,
@@ -113,7 +211,7 @@ export default function GraphicsInvoiceReviewModal({ job, onClose, onComplete }:
       quantity: l.quantity,
     }));
 
-  const canCreate = !!customer.netsuiteId && invoiceLines.length > 0 && unpriced.length === 0 && !submitting;
+  const canCreate = !!effectiveCustomer.netsuiteId && invoiceLines.length > 0 && unpriced.length === 0 && !submitting;
 
   const printPackingList = () => {
     try {
@@ -133,6 +231,7 @@ export default function GraphicsInvoiceReviewModal({ job, onClose, onComplete }:
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           jobId: job.id,
+          customerNsId: effectiveCustomer.netsuiteId,
           lines: invoiceLines.map(l => ({
             itemId: l.itemId,
             quantity: l.quantity,
@@ -164,6 +263,10 @@ export default function GraphicsInvoiceReviewModal({ job, onClose, onComplete }:
     width: '100%', padding: '6px 8px', borderRadius: '6px',
     border: '1px solid var(--border)', background: 'var(--input-bg)',
     color: 'var(--text-primary)', fontSize: '12px', boxSizing: 'border-box',
+  };
+  const searchInput: React.CSSProperties = {
+    width: '100%', padding: '7px 10px', borderRadius: '6px', border: '1px solid var(--border)',
+    background: 'var(--input-bg)', color: 'var(--text-primary)', fontSize: '12px', boxSizing: 'border-box',
   };
 
   return (
@@ -199,28 +302,58 @@ export default function GraphicsInvoiceReviewModal({ job, onClose, onComplete }:
           ) : (
             <>
               {/* Customer */}
-              <div style={{ fontSize: '12px', color: 'var(--text-primary)' }}>
-                <span style={{ color: 'var(--text-muted)', fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.5px', fontSize: '11px' }}>Customer</span>
-                <div style={{ marginTop: '4px' }}>
-                  {customer.name || '—'}
-                  {customer.netsuiteId
-                    ? <span style={{ color: 'var(--text-muted)', marginLeft: '8px' }}>NS {customer.netsuiteId}</span>
-                    : <span style={{ color: 'var(--danger, #ef4444)', marginLeft: '8px', fontWeight: 700 }}>· no NetSuite customer — set it on the job first</span>}
-                </div>
+              <div>
+                <div style={{ fontSize: '11px', color: 'var(--text-muted)', marginBottom: '4px', fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.5px' }}>Customer</div>
+                {editingCustomer ? (
+                  <div>
+                    <input
+                      type="text" autoFocus value={custSearch}
+                      onChange={e => setCustSearch(e.target.value)}
+                      placeholder="Search customer by name or entity id…"
+                      style={searchInput}
+                    />
+                    {custSearching && <div style={{ fontSize: '11px', color: 'var(--text-muted)', marginTop: '4px' }}>Searching…</div>}
+                    {custResults.length > 0 && (
+                      <div style={{ marginTop: '6px', maxHeight: '180px', overflowY: 'auto', borderRadius: '8px', border: '1px solid var(--border)', background: 'var(--card)' }}>
+                        {custResults.map(c => (
+                          <button
+                            key={c.id}
+                            onClick={() => { setCustomerOverride(c); setEditingCustomer(false); setCustResults([]); setCustSearch(''); }}
+                            disabled={!c.netsuite_id}
+                            title={!c.netsuite_id ? 'No NetSuite id on this customer record' : undefined}
+                            style={{
+                              width: '100%', textAlign: 'left', padding: '8px 10px', border: 'none', background: 'transparent',
+                              color: 'var(--text-primary)', fontSize: '12px', cursor: c.netsuite_id ? 'pointer' : 'not-allowed',
+                              opacity: c.netsuite_id ? 1 : 0.4, borderTop: '1px solid var(--border)',
+                            }}
+                          >
+                            <div style={{ fontWeight: 700 }}>{c.company_name || c.entity_id}</div>
+                            <div style={{ fontSize: '11px', color: 'var(--text-muted)' }}>{c.entity_id} {c.netsuite_id ? `· NS ${c.netsuite_id}` : '· no NetSuite id'}</div>
+                          </button>
+                        ))}
+                      </div>
+                    )}
+                    <button onClick={() => { setEditingCustomer(false); setCustSearch(''); setCustResults([]); }} style={{ marginTop: '6px', padding: '4px 10px', borderRadius: '6px', border: '1px solid var(--border)', background: 'transparent', color: 'var(--text-muted)', fontSize: '11px', fontWeight: 700, cursor: 'pointer' }}>Cancel</button>
+                  </div>
+                ) : (
+                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '10px' }}>
+                    <div style={{ fontSize: '13px', color: 'var(--text-primary)' }}>
+                      {effectiveCustomer.name || <span style={{ color: 'var(--text-muted)' }}>No customer</span>}
+                      {effectiveCustomer.netsuiteId
+                        ? <span style={{ color: 'var(--text-muted)', marginLeft: '8px' }}>NS {effectiveCustomer.netsuiteId}</span>
+                        : <span style={{ color: 'var(--danger, #ef4444)', marginLeft: '8px', fontWeight: 700, fontSize: '11px' }}>· no NetSuite customer — search one below</span>}
+                    </div>
+                    <button onClick={() => { setEditingCustomer(true); setCustSearch(''); }} style={{ background: 'transparent', border: 'none', color: '#60a5fa', fontSize: '11px', fontWeight: 700, cursor: 'pointer', whiteSpace: 'nowrap' }}>
+                      {effectiveCustomer.netsuiteId ? 'Change' : 'Search'}
+                    </button>
+                  </div>
+                )}
               </div>
 
               {/* Quantity source hint */}
               <div style={{ fontSize: '11px', color: 'var(--text-muted)' }}>
-                Quantities are suggested from {poNumber ? `PO #${poNumber}` : 'the linked PO'} where parts match, otherwise the job quantity ({job.quantity || 1}).
-                Check each line before creating anything.
+                Quantities are suggested from {poNumber ? `PO #${poNumber}` : 'the linked PO'} where parts match, otherwise the job quantity ({job.quantity || 1}). Check each line before creating anything.
               </div>
-
-              {/* Parts not in NetSuite */}
-              {skippedParts.length > 0 && (
-                <div style={{ padding: '8px 10px', borderRadius: '8px', background: 'rgba(245,158,11,0.08)', border: '1px solid rgba(245,158,11,0.25)', fontSize: '11px', color: '#f59e0b' }}>
-                  Not found in NetSuite (won't be invoiced): {skippedParts.join(', ')}
-                </div>
-              )}
 
               {/* Lines */}
               <div>
@@ -233,59 +366,96 @@ export default function GraphicsInvoiceReviewModal({ job, onClose, onComplete }:
                 </div>
                 <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
                   {lines.length === 0 && (
-                    <div style={{ fontSize: '12px', color: 'var(--text-muted)', padding: '8px' }}>No parts on this job.</div>
+                    <div style={{ fontSize: '12px', color: 'var(--text-muted)', padding: '8px' }}>No parts on this job — add a line below.</div>
                   )}
                   {lines.map(line => {
-                    const lineUnpriced = line.found && !(line.rate > 0);
+                    const lineUnpriced = !!line.itemId && !(line.rate > 0);
+                    const needsItem = !line.itemId;
+                    if (activePartRow === line.key) {
+                      return (
+                        <div key={line.key} style={{ padding: '10px', borderRadius: '8px', border: '1px solid var(--border)', background: 'var(--card)' }}>
+                          <input
+                            type="text" autoFocus value={partSearch}
+                            onChange={e => setPartSearch(e.target.value)}
+                            placeholder="Search NetSuite items by part number or name…"
+                            style={searchInput}
+                          />
+                          {partSearching && <div style={{ fontSize: '11px', color: 'var(--text-muted)', marginTop: '4px' }}>Searching…</div>}
+                          {partResults.length > 0 && (
+                            <div style={{ marginTop: '6px', maxHeight: '180px', overflowY: 'auto', borderRadius: '6px', border: '1px solid var(--border)', background: 'var(--card)' }}>
+                              {partResults.map(p => (
+                                <button
+                                  key={p.id}
+                                  onClick={() => pickPart(line.key, p)}
+                                  disabled={!p.netsuite_id}
+                                  style={{
+                                    width: '100%', textAlign: 'left', padding: '6px 10px', border: 'none', background: 'transparent',
+                                    color: 'var(--text-primary)', fontSize: '12px', cursor: p.netsuite_id ? 'pointer' : 'not-allowed',
+                                    opacity: p.netsuite_id ? 1 : 0.4, borderTop: '1px solid var(--border)',
+                                  }}
+                                >
+                                  <div style={{ fontWeight: 700 }}>{p.item_number}</div>
+                                  <div style={{ fontSize: '11px', color: 'var(--text-muted)' }}>
+                                    {p.display_name || p.description}{p.sales_price != null && ` · $${p.sales_price.toFixed(2)}`}
+                                  </div>
+                                </button>
+                              ))}
+                            </div>
+                          )}
+                          <button
+                            onClick={() => { setActivePartRow(null); setPartSearch(''); setPartResults([]); if (needsItem && !line.partNumber) removeLine(line.key); }}
+                            style={{ marginTop: '6px', padding: '4px 10px', borderRadius: '6px', border: '1px solid var(--border)', background: 'transparent', color: 'var(--text-muted)', fontSize: '11px', fontWeight: 700, cursor: 'pointer' }}
+                          >Cancel</button>
+                        </div>
+                      );
+                    }
                     return (
                       <div key={line.key} style={{
                         padding: '10px', borderRadius: '8px',
-                        border: `1px solid ${line.found ? 'var(--border)' : 'rgba(245,158,11,0.4)'}`,
-                        background: line.found ? 'var(--card)' : 'rgba(245,158,11,0.04)',
+                        border: `1px solid ${needsItem ? 'rgba(245,158,11,0.4)' : 'var(--border)'}`,
+                        background: needsItem ? 'rgba(245,158,11,0.04)' : 'var(--card)',
                       }}>
                         <div style={{ display: 'grid', gridTemplateColumns: '1fr 80px 110px 70px 28px', gap: '8px', alignItems: 'center' }}>
-                          {/* Part + description */}
                           <div style={{ minWidth: 0 }}>
-                            <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
-                              <span style={{ fontSize: '13px', fontWeight: 700, color: 'var(--text-primary)' }}>{line.partNumber || '—'}</span>
+                            <div style={{ display: 'flex', alignItems: 'center', gap: '6px', flexWrap: 'wrap' }}>
+                              <span style={{ fontSize: '13px', fontWeight: 700, color: 'var(--text-primary)' }}>{line.partNumber || 'No part'}</span>
                               {line.qtySource === 'po' && (
                                 <span style={{ fontSize: '9px', fontWeight: 700, padding: '1px 5px', borderRadius: '4px', background: 'rgba(167,139,250,0.15)', color: '#a78bfa' }}>PO QTY</span>
                               )}
-                              {!line.found && (
-                                <span style={{ fontSize: '9px', fontWeight: 700, padding: '1px 5px', borderRadius: '4px', background: 'rgba(245,158,11,0.15)', color: '#f59e0b' }}>NOT IN NS</span>
-                              )}
+                              <button
+                                onClick={() => { setActivePartRow(line.key); setPartSearch(line.partNumber || ''); }}
+                                style={{ background: 'transparent', border: 'none', color: '#60a5fa', fontSize: '10px', fontWeight: 700, cursor: 'pointer', padding: 0 }}
+                              >{line.itemId ? 'change item' : 'pick item'}</button>
                             </div>
                             <input
-                              type="text"
-                              value={line.description}
+                              type="text" value={line.description}
                               onChange={e => updateLine(line.key, { description: e.target.value })}
                               placeholder="Description"
                               style={{ ...numInput, marginTop: '6px', fontSize: '11px' }}
                             />
                           </div>
-                          {/* Qty */}
                           <input
                             type="number" min={0} step={1} value={line.quantity}
                             onChange={e => updateLine(line.key, { quantity: Math.max(0, parseFloat(e.target.value) || 0) })}
                             style={{ ...numInput, textAlign: 'center' }}
                           />
-                          {/* Rate */}
                           <input
                             type="number" min={0} step={0.01} value={line.rate}
                             onChange={e => updateLine(line.key, { rate: Math.max(0, parseFloat(e.target.value) || 0) })}
                             style={{ ...numInput, textAlign: 'center', border: `1px solid ${lineUnpriced ? 'var(--danger, #ef4444)' : 'var(--border)'}` }}
                           />
-                          {/* Line total */}
                           <div style={{ fontSize: '12px', color: 'var(--text-secondary)', textAlign: 'right' }}>
                             ${(line.quantity * line.rate).toFixed(2)}
                           </div>
-                          {/* Remove */}
                           <button
                             onClick={() => removeLine(line.key)}
                             title="Remove line"
                             style={{ background: 'transparent', border: 'none', color: 'var(--danger, #ef4444)', fontSize: '16px', cursor: 'pointer', padding: 0 }}
                           >✕</button>
                         </div>
+                        {needsItem && (
+                          <div style={{ fontSize: '10px', color: '#f59e0b', marginTop: '6px' }}>No NetSuite item — pick one to invoice this line (it still appears on the packing list).</div>
+                        )}
                         {lineUnpriced && (
                           <div style={{ fontSize: '10px', color: 'var(--danger, #ef4444)', marginTop: '6px' }}>Enter a price for this part to invoice it.</div>
                         )}
@@ -293,6 +463,10 @@ export default function GraphicsInvoiceReviewModal({ job, onClose, onComplete }:
                     );
                   })}
                 </div>
+                <button
+                  onClick={addLine}
+                  style={{ marginTop: '8px', padding: '8px 12px', borderRadius: '8px', border: '1px dashed var(--border)', background: 'transparent', color: '#60a5fa', fontSize: '12px', fontWeight: 700, cursor: 'pointer' }}
+                >+ Add line</button>
               </div>
 
               {/* Total */}
@@ -330,7 +504,7 @@ export default function GraphicsInvoiceReviewModal({ job, onClose, onComplete }:
               <button
                 onClick={createInvoice}
                 disabled={!canCreate}
-                title={!customer.netsuiteId ? 'Set the customer on the job first' : unpriced.length > 0 ? 'Some lines need a price' : undefined}
+                title={!effectiveCustomer.netsuiteId ? 'Set or search a customer first' : unpriced.length > 0 ? 'Some lines need a price' : undefined}
                 style={{
                   padding: '10px 18px', borderRadius: '10px', border: 'none',
                   background: canCreate ? '#22c55e' : 'var(--border)', color: '#fff', fontSize: '14px', fontWeight: 800,
