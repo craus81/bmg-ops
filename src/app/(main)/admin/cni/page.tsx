@@ -196,6 +196,7 @@ export default function CniDashboardPage() {
         <QuickLink icon="" label="All Jobs" sub={`${jobs.length} total`} onClick={() => setStatusFilter('all')} />
         <QuickLink icon="" label="Installers" sub={`${installerCount} registered`} onClick={() => router.push('/admin/cni/installers')} />
         <QuickLink icon="" label="Companies" sub="Installer companies" onClick={() => router.push('/admin/cni/companies')} />
+        <QuickLink icon="" label="Vendor IDs" sub="NetSuite payout IDs" onClick={() => router.push('/admin/cni/vendor-ids')} />
         <QuickLink icon="" label="Pay Rates" sub="Per-vehicle pay" onClick={() => router.push('/admin/pay-rates')} />
         <QuickLink icon="" label="Payroll" sub="Field install pay" onClick={() => router.push('/admin/payroll')} />
         <QuickLink icon="" label="Preview Portal" sub="See the installer view" onClick={() => router.push('/installer')} />

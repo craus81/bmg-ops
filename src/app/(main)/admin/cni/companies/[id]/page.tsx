@@ -66,18 +66,40 @@ export default function CniCompanyDetailPage() {
   const saveMemberVendorId = async (userId: string) => {
     const draft = (vendorDrafts[userId] || '').trim();
     setMemberBusy(true);
-    // cni_profiles.user_id is unique; upsert so members without a CNI profile
-    // row still get a vendor id recorded.
-    await supabase
-      .from('cni_profiles')
-      .upsert({ user_id: userId, netsuite_vendor_id: draft || null }, { onConflict: 'user_id' });
-    setVendorDrafts(prev => {
-      const next = { ...prev };
-      delete next[userId];
-      return next;
-    });
+    setSaveMsg(null);
+    // Save through the admin API (service role). Writing cni_profiles straight
+    // from the browser is silently dropped by RLS for multi-role admins whose
+    // scalar `role` isn't literally 'admin', which is why this used to do
+    // nothing. The API also surfaces errors instead of swallowing them.
+    try {
+      const { data: { session } } = await supabase.auth.getSession();
+      const res = await fetch('/api/cni/installers', {
+        method: 'PATCH',
+        headers: {
+          'Content-Type': 'application/json',
+          ...(session?.access_token ? { Authorization: `Bearer ${session.access_token}` } : {}),
+        },
+        body: JSON.stringify({ userId, netsuiteVendorId: draft || null }),
+      });
+      const data = await res.json();
+      if (!res.ok) {
+        setSaveMsg({ success: false, message: data.error || 'Failed to save vendor ID' });
+        setMemberBusy(false);
+        return;
+      }
+      setMembers(prev => prev.map(m =>
+        m.user_id === userId ? { ...m, netsuite_vendor_id: data.netsuite_vendor_id } : m,
+      ));
+      setVendorDrafts(prev => {
+        const next = { ...prev };
+        delete next[userId];
+        return next;
+      });
+      setSaveMsg({ success: true, message: 'Vendor ID saved' });
+    } catch {
+      setSaveMsg({ success: false, message: 'Network error saving vendor ID' });
+    }
     setMemberBusy(false);
-    await loadData();
   };
 
   useEffect(() => {
@@ -110,15 +132,21 @@ export default function CniCompanyDetailPage() {
       .or(INSTALLER_FILTER)
       .order('full_name');
 
-    // Their per-person NetSuite vendor ids from cni_profiles (if any).
-    const memberIds = (memberProfiles || []).map((p: any) => p.id);
+    // Their per-person NetSuite vendor ids — read through the admin API
+    // (service role) so they aren't hidden by cni_profiles RLS for multi-role
+    // admins (same reason the save goes through the API).
     const vendorMap: Record<string, string | null> = {};
-    if (memberIds.length > 0) {
-      const { data: cps } = await supabase
-        .from('cni_profiles')
-        .select('user_id, netsuite_vendor_id')
-        .in('user_id', memberIds);
-      (cps || []).forEach((c: any) => { vendorMap[c.user_id] = c.netsuite_vendor_id; });
+    try {
+      const { data: { session } } = await supabase.auth.getSession();
+      const res = await fetch(`/api/cni/installers?companyId=${companyId}`, {
+        headers: session?.access_token ? { Authorization: `Bearer ${session.access_token}` } : {},
+      });
+      if (res.ok) {
+        const data = await res.json();
+        (data.installers || []).forEach((i: any) => { vendorMap[i.user_id] = i.netsuite_vendor_id; });
+      }
+    } catch {
+      // leave vendorMap empty on failure; inputs just show blank
     }
     setMembers((memberProfiles || []).map((p: any) => ({
       user_id: p.id,
@@ -475,7 +503,14 @@ export default function CniCompanyDetailPage() {
           </select>
         )}
         <div style={{ fontSize: '11px', color: 'var(--text-muted)', marginTop: '6px' }}>
-          Only installers without a company are listed. Per-person NetSuite vendor IDs are read-only here (editable in phase 3).
+          Only installers without a company are listed. To set NetSuite vendor IDs for everyone in one place, use the{' '}
+          <button
+            onClick={() => router.push('/admin/cni/vendor-ids')}
+            style={{ color: 'var(--orange)', fontWeight: 700, background: 'none', border: 'none', cursor: 'pointer', padding: 0, fontSize: '11px' }}
+          >
+            Vendor IDs
+          </button>{' '}
+          page.
         </div>
       </div>
 
