@@ -45,11 +45,19 @@ ALTER TABLE part_files ADD COLUMN IF NOT EXISTS label      text;
 
 -- New FK from PO lines + schedule assignments to the unified catalog. Additive:
 -- the old catalog_id columns stay in place until the retire phase.
-ALTER TABLE po_line_items       ADD COLUMN IF NOT EXISTS part_id uuid REFERENCES netsuite_parts(id);
-ALTER TABLE schedule_assignments ADD COLUMN IF NOT EXISTS part_id uuid REFERENCES netsuite_parts(id);
+ALTER TABLE po_line_items ADD COLUMN IF NOT EXISTS part_id uuid REFERENCES netsuite_parts(id);
+CREATE INDEX IF NOT EXISTS idx_po_line_items_part ON po_line_items(part_id);
 
-CREATE INDEX IF NOT EXISTS idx_po_line_items_part        ON po_line_items(part_id);
-CREATE INDEX IF NOT EXISTS idx_schedule_assignments_part ON schedule_assignments(part_id);
+-- schedule_assignments predates the migration runner and only exists in some
+-- environments — guard it so this migration doesn't fail where the scheduling
+-- table was never created.
+DO $$
+BEGIN
+  IF to_regclass('public.schedule_assignments') IS NOT NULL THEN
+    ALTER TABLE schedule_assignments ADD COLUMN IF NOT EXISTS part_id uuid REFERENCES netsuite_parts(id);
+    CREATE INDEX IF NOT EXISTS idx_schedule_assignments_part ON schedule_assignments(part_id);
+  END IF;
+END $$;
 
 -- ---------------------------------------------------------------------------
 -- B. Backfill: fold proof-catalog rows into netsuite_parts
@@ -131,8 +139,13 @@ FROM catalog c
 JOIN netsuite_parts np ON lower(np.item_number) = lower(c.part_number)
 WHERE pli.catalog_id = c.id AND pli.part_id IS NULL;
 
-UPDATE schedule_assignments sa
-SET part_id = np.id
-FROM catalog c
-JOIN netsuite_parts np ON lower(np.item_number) = lower(c.part_number)
-WHERE sa.catalog_id = c.id AND sa.part_id IS NULL;
+DO $$
+BEGIN
+  IF to_regclass('public.schedule_assignments') IS NOT NULL THEN
+    UPDATE schedule_assignments sa
+    SET part_id = np.id
+    FROM catalog c
+    JOIN netsuite_parts np ON lower(np.item_number) = lower(c.part_number)
+    WHERE sa.catalog_id = c.id AND sa.part_id IS NULL;
+  END IF;
+END $$;
