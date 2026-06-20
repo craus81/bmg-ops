@@ -77,6 +77,17 @@ export default function PartsPage() {
   // eslint-disable-next-line react-hooks/exhaustive-deps -- intentional: load once on mount
   }, [catalog]);
 
+  // Deep-link from global search: /parts?catalog=graphics&q=06U183
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+    const params = new URLSearchParams(window.location.search);
+    const c = params.get('catalog');
+    const q = params.get('q');
+    if (c === 'graphics' || c === 'upfit') setCatalog(c);
+    if (q) setSearch(q);
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- read URL once on mount
+  }, []);
+
   const loadParts = async () => {
     setLoading(true);
     // Supabase returns max 1000 rows by default — paginate to get all

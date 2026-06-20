@@ -56,12 +56,12 @@ export async function GET(req: NextRequest) {
       .order('created_at', { ascending: false })
       .limit(MAX_PER_GROUP),
 
-    // Parts Catalog — search by part number, description, customer
+    // Parts Catalog — search the unified catalog by part number, name, customer
     supabase
-      .from('catalog')
-      .select('id, part_number, customer, end_customer, vehicle_type, graphic_package, price')
-      .eq('active', true)
-      .or(`part_number.ilike.${like},end_customer.ilike.${like},vehicle_type.ilike.${like},graphic_package.ilike.${like}`)
+      .from('netsuite_parts')
+      .select('id, item_number, display_name, billable_customer, vehicle_type, graphic_package, sales_price, catalog')
+      .eq('is_active', true)
+      .or(`item_number.ilike.${like},display_name.ilike.${like},billable_customer.ilike.${like},vehicle_type.ilike.${like},graphic_package.ilike.${like}`)
       .limit(MAX_PER_GROUP),
 
     // Customers & Prospects — search by company name, contact, email
@@ -147,7 +147,19 @@ export async function GET(req: NextRequest) {
   if (vehicles.data?.length) results.vehicles = vehicles.data;
   if (graphicsJobs.data?.length) results.graphics_jobs = graphicsJobs.data;
   if (allEstimates.length > 0) results.estimates = allEstimates;
-  if (parts.data?.length) results.parts = parts.data;
+  if (parts.data?.length) {
+    // Map the unified catalog row onto the shape UniversalSearch renders.
+    results.parts = parts.data.map((p: any) => ({
+      id: p.id,
+      catalog: p.catalog,
+      part_number: p.item_number,
+      display_name: p.display_name,
+      price: p.sales_price || 0,
+      end_customer: p.billable_customer,
+      vehicle_type: p.vehicle_type,
+      graphic_package: p.graphic_package,
+    }));
+  }
   if (customers.data?.length) results.customers = customers.data;
   if (messages.data?.length) results.messages = messages.data;
   if (quotes.data?.length) results.quotes = quotes.data;
