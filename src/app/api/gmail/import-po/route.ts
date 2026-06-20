@@ -340,8 +340,8 @@ export async function POST(req: NextRequest) {
           ship_to: extracted.ship_to || existingPO.ship_to || null,
         }).eq('id', existingPO.id);
 
-        const { data: catalogData } = await supabase.from('catalog').select('*').eq('active', true);
-        const catalogItems = catalogData || [];
+        const { data: catalogData } = await supabase.from('netsuite_parts').select('id, item_number').eq('is_active', true);
+        const catalogItems = (catalogData || []).map((p: any) => ({ id: p.id, part_number: p.item_number }));
 
         const lineInserts = extractedLines.map((l: any) => {
           const partNum = l.supplier_part || l.part_number;
@@ -351,7 +351,7 @@ export async function POST(req: NextRequest) {
           );
           return {
             po_id: existingPO.id,
-            ...(catalogMatch?.id ? { catalog_id: catalogMatch.id } : {}),
+            ...(catalogMatch?.id ? { part_id: catalogMatch.id } : {}),
             part_number: partNum,
             description: l.description || null,
             quantity: parseInt(l.quantity) || 0,
@@ -386,8 +386,8 @@ export async function POST(req: NextRequest) {
       }
 
       // Create new PO from reviewed data
-      const { data: catalogData } = await supabase.from('catalog').select('*').eq('active', true);
-      const catalogItems = catalogData || [];
+      const { data: catalogData } = await supabase.from('netsuite_parts').select('id, item_number').eq('is_active', true);
+      const catalogItems = (catalogData || []).map((p: any) => ({ id: p.id, part_number: p.item_number }));
       const customer = extracted.customer || 'Unknown';
 
       const { data: adminUser } = await supabase.from('profiles').select('id').eq('role', 'admin').limit(1).single();
@@ -415,7 +415,7 @@ export async function POST(req: NextRequest) {
         );
         return {
           po_id: newPO.id,
-          ...(catalogMatch?.id ? { catalog_id: catalogMatch.id } : {}),
+          ...(catalogMatch?.id ? { part_id: catalogMatch.id } : {}),
           part_number: partNum,
           description: l.description || null,
           quantity: parseInt(l.quantity) || 0,
@@ -752,8 +752,8 @@ export async function POST(req: NextRequest) {
       }
 
       // Get catalog for part matching
-      const { data: catalogData } = await supabase.from('catalog').select('*').eq('active', true);
-      const catalogItems = catalogData || [];
+      const { data: catalogData } = await supabase.from('netsuite_parts').select('id, item_number').eq('is_active', true);
+      const catalogItems = (catalogData || []).map((p: any) => ({ id: p.id, part_number: p.item_number }));
 
       // Insert new line items
       const lineInserts = extractedLines.map((l: any) => {
@@ -764,7 +764,7 @@ export async function POST(req: NextRequest) {
         );
         return {
           po_id: existingPO.id,
-          ...(catalogMatch?.id ? { catalog_id: catalogMatch.id } : {}),
+          ...(catalogMatch?.id ? { part_id: catalogMatch.id } : {}),
           part_number: partNum,
           description: l.description || null,
           quantity: parseInt(l.quantity) || 0,
@@ -823,8 +823,8 @@ export async function POST(req: NextRequest) {
 
     // Create new PO
     if (autoCreate !== false) {
-      const { data: catalogData } = await supabase.from('catalog').select('*').eq('active', true);
-      const catalogItems = catalogData || [];
+      const { data: catalogData } = await supabase.from('netsuite_parts').select('id, item_number').eq('is_active', true);
+      const catalogItems = (catalogData || []).map((p: any) => ({ id: p.id, part_number: p.item_number }));
 
       const customer = extracted.customer || 'Unknown';
 
@@ -880,7 +880,7 @@ export async function POST(req: NextRequest) {
         );
         return {
           po_id: newPO.id,
-          ...(catalogMatch?.id ? { catalog_id: catalogMatch.id } : {}),
+          ...(catalogMatch?.id ? { part_id: catalogMatch.id } : {}),
           part_number: partNum,
           description: l.description || null,
           quantity: parseInt(l.quantity) || 0,
