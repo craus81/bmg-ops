@@ -62,7 +62,7 @@ export async function GET(req: NextRequest) {
       .select('id, item_number, display_name, billable_customer, vehicle_type, graphic_package, sales_price, catalog')
       .eq('is_active', true)
       .or(`item_number.ilike.${like},display_name.ilike.${like},billable_customer.ilike.${like},vehicle_type.ilike.${like},graphic_package.ilike.${like}`)
-      .limit(MAX_PER_GROUP),
+      .limit(MAX_PER_GROUP * 4),
 
     // Customers & Prospects — search by company name, contact, email
     supabase
@@ -148,17 +148,27 @@ export async function GET(req: NextRequest) {
   if (graphicsJobs.data?.length) results.graphics_jobs = graphicsJobs.data;
   if (allEstimates.length > 0) results.estimates = allEstimates;
   if (parts.data?.length) {
-    // Map the unified catalog row onto the shape UniversalSearch renders.
-    results.parts = parts.data.map((p: any) => ({
-      id: p.id,
-      catalog: p.catalog,
-      part_number: p.item_number,
-      display_name: p.display_name,
-      price: p.sales_price || 0,
-      end_customer: p.billable_customer,
-      vehicle_type: p.vehicle_type,
-      graphic_package: p.graphic_package,
-    }));
+    // De-dupe by item number (legacy data can carry >1 row per part), then map
+    // onto the shape UniversalSearch renders.
+    const seen = new Set<string>();
+    results.parts = parts.data
+      .filter((p: any) => {
+        const k = (p.item_number || '').toUpperCase();
+        if (seen.has(k)) return false;
+        seen.add(k);
+        return true;
+      })
+      .slice(0, MAX_PER_GROUP)
+      .map((p: any) => ({
+        id: p.id,
+        catalog: p.catalog,
+        part_number: p.item_number,
+        display_name: p.display_name,
+        price: p.sales_price || 0,
+        end_customer: p.billable_customer,
+        vehicle_type: p.vehicle_type,
+        graphic_package: p.graphic_package,
+      }));
   }
   if (customers.data?.length) results.customers = customers.data;
   if (messages.data?.length) results.messages = messages.data;
