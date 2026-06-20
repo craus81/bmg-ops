@@ -109,13 +109,13 @@ function renderResult(group: string, item: any, router: any, onClose: () => void
 
     case 'parts':
       return (
-        <button key={item.id} onClick={() => navigate(`/admin/catalog?id=${item.id}`)} style={resultBtnStyle}>
+        <button key={item.id} onClick={() => navigate(`/parts?catalog=${item.catalog || 'upfit'}&q=${encodeURIComponent(item.part_number)}`)} style={resultBtnStyle}>
           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'start' }}>
             <span style={titleStyle}>{item.part_number}</span>
             {item.price > 0 && <span style={valueStyle}>{formatCurrency(item.price)}</span>}
           </div>
           <div style={subtitleStyle}>
-            {[item.end_customer, item.vehicle_type, item.graphic_package].filter(Boolean).join(' · ')}
+            {[item.end_customer, item.vehicle_type, item.graphic_package].filter(Boolean).join(' · ') || item.display_name || ''}
           </div>
         </button>
       );
