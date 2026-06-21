@@ -2,6 +2,7 @@
 
 import { useState, useEffect } from 'react';
 import { useRouter } from 'next/navigation';
+import { usePopout } from '@/components/Popout';
 import { createClient } from '@/lib/supabase-browser';
 import { useAuth } from '@/components/AuthProvider';
 import { theme } from '@/lib/theme';
@@ -9,6 +10,7 @@ import WidgetShell from './WidgetShell';
 
 export default function MyJobsWidget() {
   const router = useRouter();
+  const { open: openPopout } = usePopout();
   const supabase = createClient();
   const { user } = useAuth();
   const [loading, setLoading] = useState(true);
@@ -78,8 +80,8 @@ export default function MyJobsWidget() {
   };
 
   const navigateTo = (job: any) => {
-    if (job.type === 'graphics') router.push(`/graphics?id=${job.id}`);
-    else if (job.type === 'checkin') router.push(`/tracking?vehicle=${job.id}`);
+    if (job.type === 'graphics') openPopout('graphics_jobs', job.id);
+    else if (job.type === 'checkin') openPopout('vehicles', job.id);
     else router.push('/admin/reviews');
   };
 

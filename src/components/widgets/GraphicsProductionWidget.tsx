@@ -2,6 +2,7 @@
 
 import { useState, useEffect } from 'react';
 import { useRouter } from 'next/navigation';
+import { usePopout } from '@/components/Popout';
 import { createClient } from '@/lib/supabase-browser';
 import { theme } from '@/lib/theme';
 import WidgetShell from './WidgetShell';
@@ -22,6 +23,7 @@ const IN_PRODUCTION_STATUSES = ['designing', 'revision', 'printing', 'outgassing
 
 export default function GraphicsProductionWidget() {
   const router = useRouter();
+  const { open: openPopout } = usePopout();
   const supabase = createClient();
   const [loading, setLoading] = useState(true);
   const [stats, setStats] = useState({ received: 0, inProduction: 0, readyShipped: 0 });
@@ -70,7 +72,7 @@ export default function GraphicsProductionWidget() {
               const statusColor = STATUS_COLORS[job.status] || 'var(--text-muted)';
               const statusLabel = job.status;
               return (
-                <button key={job.id} onClick={() => router.push(`/graphics?id=${job.id}`)} style={{
+                <button key={job.id} onClick={() => openPopout('graphics_jobs', job.id)} style={{
                   display: 'flex', justifyContent: 'space-between', alignItems: 'center', width: '100%',
                   padding: '6px 8px', borderRadius: '6px', border: 'none', textAlign: 'left',
                   background: 'var(--subtle-bg)', cursor: 'pointer', fontSize: '11px',
