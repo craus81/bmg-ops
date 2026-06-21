@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useEffect, useRef } from 'react';
+import { useState, useEffect, useRef, useMemo } from 'react';
 import { useRouter } from 'next/navigation';
 import { createClient } from '@/lib/supabase-browser';
 import { storage } from '@/lib/storage';
@@ -37,6 +37,19 @@ interface SyncLog {
   error: string | null;
 }
 
+// Time window for the "completed" (scan) count. Calendar-period-to-date.
+type CompletedRange = 'day' | 'week' | 'month' | 'year' | 'all';
+const RANGES: { id: CompletedRange; label: string }[] = [
+  { id: 'day', label: 'Today' },
+  { id: 'week', label: 'Week' },
+  { id: 'month', label: 'Month' },
+  { id: 'year', label: 'Year' },
+  { id: 'all', label: 'All' },
+];
+const RANGE_PHRASE: Record<CompletedRange, string> = {
+  day: 'today', week: 'this week', month: 'this month', year: 'this year', all: 'all time',
+};
+
 export default function PartsPage() {
   const router = useRouter();
   const { user, isAdmin, isSales } = useAuth();
@@ -59,6 +72,13 @@ export default function PartsPage() {
   const [sortDir, setSortDir] = useState<'asc' | 'desc'>('asc');
   const [laborValue, setLaborValue] = useState('');
 
+  // Completed (scan) + PO-quantity stats, keyed by uppercased item number.
+  const [range, setRange] = useState<CompletedRange>('all');
+  const [scanRows, setScanRows] = useState<{ part: string; at: string }[]>([]);
+  const [poOpenByPart, setPoOpenByPart] = useState<Record<string, number>>({});
+  const [poAllByPart, setPoAllByPart] = useState<Record<string, number>>({});
+  const [statsLoading, setStatsLoading] = useState(true);
+
   // Billable customer editing
   const [editingCustomer, setEditingCustomer] = useState<string | null>(null);
   const [customerValue, setCustomerValue] = useState('');
@@ -68,11 +88,16 @@ export default function PartsPage() {
   const [partFiles, setPartFiles] = useState<Record<string, PartFile[]>>({});
   const [uploadingFile, setUploadingFile] = useState(false);
   const partFileRef = useRef<HTMLInputElement>(null);
+  // Monotonic token to ignore stale loadParts() responses. A deep-link switches
+  // catalog right after mount, so a slower earlier load must not clobber it.
+  const loadReqRef = useRef(0);
 
   useEffect(() => {
     if (!isAdmin && !isSales) { router.push('/home'); return; }
-    loadParts();
+    // loadParts() is driven by the [catalog] effect below (fires on mount too),
+    // so we don't call it here — a second call just races the first.
     loadLastSync();
+    loadStats();
   // eslint-disable-next-line react-hooks/exhaustive-deps -- intentional: load once on mount
   }, [isAdmin, isSales]);
 
@@ -93,6 +118,7 @@ export default function PartsPage() {
   }, []);
 
   const loadParts = async () => {
+    const reqId = ++loadReqRef.current;
     setLoading(true);
     // Supabase returns max 1000 rows by default — paginate to get all
     let allParts: Part[] = [];
@@ -127,6 +153,7 @@ export default function PartsPage() {
       const cur = byItem.get(key);
       if (!cur || score(p) > score(cur)) byItem.set(key, p);
     }
+    if (loadReqRef.current !== reqId) return; // superseded by a newer load
     setParts([...byItem.values()].sort((a, b) => a.item_number.localeCompare(b.item_number)));
     setLoading(false);
   };
@@ -139,6 +166,55 @@ export default function PartsPage() {
       .limit(1)
       .single();
     if (data) setLastSync(data as SyncLog);
+  };
+
+  // Pull scans ("completed") + PO quantities once and aggregate per part. Runs
+  // in the background after parts so the catalog itself renders immediately.
+  const loadStats = async () => {
+    setStatsLoading(true);
+
+    const fetchAll = async (table: string, cols: string): Promise<any[]> => {
+      let all: any[] = [];
+      let pg = 0;
+      let more = true;
+      while (more) {
+        const { data } = await supabase.from(table).select(cols).range(pg * 1000, pg * 1000 + 999);
+        const batch = data || [];
+        all = all.concat(batch);
+        more = batch.length === 1000;
+        pg++;
+      }
+      return all;
+    };
+
+    const [scanData, poData, lineData] = await Promise.all([
+      fetchAll('scan_logs', 'part_number, scanned_at'),
+      fetchAll('purchase_orders', 'id, status'),
+      fetchAll('po_line_items', 'part_number, quantity, po_id'),
+    ]);
+
+    setScanRows(
+      scanData
+        .filter((s) => s.part_number)
+        .map((s) => ({ part: String(s.part_number).toUpperCase(), at: s.scanned_at }))
+    );
+
+    // PO status by id, so line-item quantities can be split into open vs. all.
+    const poStatus = new Map<string, string>();
+    for (const p of poData) poStatus.set(p.id, p.status);
+
+    const open: Record<string, number> = {};
+    const all: Record<string, number> = {};
+    for (const l of lineData) {
+      if (!l.part_number) continue;
+      const key = String(l.part_number).toUpperCase();
+      const q = l.quantity || 0;
+      all[key] = (all[key] || 0) + q;
+      if (poStatus.get(l.po_id) === 'open') open[key] = (open[key] || 0) + q;
+    }
+    setPoOpenByPart(open);
+    setPoAllByPart(all);
+    setStatsLoading(false);
   };
 
   const handleSync = async () => {
@@ -244,6 +320,37 @@ export default function PartsPage() {
     else { setSortCol(col); setSortDir('asc'); }
   };
   const sortIndicator = (col: typeof sortCol) => sortCol === col ? (sortDir === 'asc' ? ' ▲' : ' ▼') : '';
+
+  // Start of the selected window (ms). Recompute completed counts client-side
+  // from the loaded scans, so changing the range needs no refetch.
+  const rangeStartMs = useMemo(() => {
+    if (range === 'all') return 0;
+    const now = new Date();
+    if (range === 'day') return new Date(now.getFullYear(), now.getMonth(), now.getDate()).getTime();
+    if (range === 'week') { const d = new Date(now.getFullYear(), now.getMonth(), now.getDate()); d.setDate(d.getDate() - d.getDay()); return d.getTime(); }
+    if (range === 'month') return new Date(now.getFullYear(), now.getMonth(), 1).getTime();
+    return new Date(now.getFullYear(), 0, 1).getTime(); // year
+  }, [range]);
+
+  const completedByPart = useMemo(() => {
+    const m: Record<string, number> = {};
+    for (const r of scanRows) {
+      if (rangeStartMs && new Date(r.at).getTime() < rangeStartMs) continue;
+      m[r.part] = (m[r.part] || 0) + 1;
+    }
+    return m;
+  }, [scanRows, rangeStartMs]);
+
+  // Catalog-wide roll-up for the header line.
+  const catalogTotals = useMemo(() => {
+    let completed = 0, openPo = 0;
+    for (const p of parts) {
+      const k = (p.item_number || '').toUpperCase();
+      completed += completedByPart[k] || 0;
+      openPo += poOpenByPart[k] || 0;
+    }
+    return { completed, openPo };
+  }, [parts, completedByPart, poOpenByPart]);
 
   const filtered = parts.filter(p => {
     if (!search) return true;
@@ -356,6 +463,30 @@ export default function PartsPage() {
         style={{ ...inputStyle, marginBottom: '10px' }}
       />
 
+      {/* Completed time-range filter + catalog roll-up */}
+      <div style={{ marginBottom: '10px' }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: '6px', flexWrap: 'wrap' }}>
+          <span style={{ fontSize: '10px', fontWeight: 800, color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.3px' }}>Completed</span>
+          {RANGES.map(r => (
+            <button key={r.id} onClick={() => setRange(r.id)} style={{
+              padding: '4px 10px', borderRadius: '8px', fontSize: '11px', fontWeight: 700,
+              background: range === r.id ? 'var(--tab-active-bg)' : 'transparent',
+              border: range === r.id ? '1px solid var(--tab-active-border)' : '1px solid var(--border)',
+              color: range === r.id ? 'var(--text-primary)' : 'var(--text-muted)', cursor: 'pointer',
+            }}>{r.label}</button>
+          ))}
+        </div>
+        <div style={{ fontSize: '11px', color: 'var(--text-muted)', marginTop: '6px' }}>
+          {statsLoading ? 'Loading stats…' : (
+            <>
+              <span style={{ color: '#34d399', fontWeight: 800 }}>{catalogTotals.completed}</span> completed {RANGE_PHRASE[range]}
+              {' · '}
+              <span style={{ color: '#60a5fa', fontWeight: 800 }}>{formatQty(catalogTotals.openPo)}</span> on open POs
+            </>
+          )}
+        </div>
+      </div>
+
       {/* Parts list */}
       {loading ? (
         <div style={{ textAlign: 'center', padding: '40px', color: 'var(--text-muted)' }}>Loading parts...</div>
@@ -386,6 +517,8 @@ export default function PartsPage() {
           {filtered.map(part => {
             const isExpanded = expandedId === part.id;
             const isEditingLabor = editingLabor === part.id;
+            const key = (part.item_number || '').toUpperCase();
+            const completed = completedByPart[key] || 0;
             const margin = part.sales_price > 0 && part.purchase_price > 0
               ? ((part.sales_price - part.purchase_price) / part.sales_price * 100).toFixed(1)
               : null;
@@ -417,6 +550,11 @@ export default function PartsPage() {
                           {part.vendor}
                         </span>
                       )}
+                      {completed > 0 && (
+                        <span title={`Completed ${RANGE_PHRASE[range]}`} style={{ fontSize: '8px', fontWeight: 800, padding: '1px 5px', borderRadius: '4px', background: 'rgba(52,211,153,0.12)', border: '1px solid rgba(52,211,153,0.3)', color: '#34d399', whiteSpace: 'nowrap', flexShrink: 0 }}>
+                          ✓ {completed}
+                        </span>
+                      )}
                     </div>
                     <div style={{ fontSize: '10px', color: 'var(--text-muted)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
                       {part.display_name || part.description || '—'}
@@ -441,6 +579,9 @@ export default function PartsPage() {
                       <DetailField label="Purchase Price" value={formatCurrency(part.purchase_price)} color="#60a5fa" />
                       <DetailField label="Qty On Hand" value={formatQty(part.quantity_on_hand)} color={part.quantity_on_hand > 0 ? 'var(--text-primary)' : 'var(--error)'} />
                       <DetailField label="Qty Available" value={formatQty(part.quantity_available)} color={part.quantity_available > 0 ? 'var(--text-primary)' : 'var(--error)'} />
+                      <DetailField label={`Completed · ${RANGE_PHRASE[range]}`} value={statsLoading ? '…' : completed.toString()} color="#34d399" />
+                      <DetailField label="On Open POs" value={statsLoading ? '…' : formatQty(poOpenByPart[key] || 0)} color="#60a5fa" />
+                      <DetailField label="On All POs" value={statsLoading ? '…' : formatQty(poAllByPart[key] || 0)} color="var(--text-secondary)" />
                       {margin && (
                         <DetailField label="Margin" value={`${margin}%`} color={parseFloat(margin) > 30 ? '#34d399' : '#f59e0b'} />
                       )}

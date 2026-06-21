@@ -69,7 +69,7 @@ async function fetchItem(
     case 'purchase_orders': {
       const { data } = await supabase
         .from('purchase_orders')
-        .select('id, po_number, customer, status, ordered_date, ship_to, po_line_items(id, part_number, description, quantity, unit_price)')
+        .select('id, po_number, customer, status, ordered_date, ship_to, po_line_items(id, part_number, description, quantity, unit_price, installed)')
         .eq('id', id).maybeSingle();
       return data;
     }
@@ -148,6 +148,11 @@ export function renderDetail(type: PopoutType, item: any) {
     case 'purchase_orders': {
       const lines = item.po_line_items || item.line_items || [];
       const total = lines.reduce((s: number, l: any) => s + (l.quantity * l.unit_price), 0);
+      const totalQty = lines.reduce((s: number, l: any) => s + (l.quantity || 0), 0);
+      const totalDone = lines.reduce((s: number, l: any) => s + (l.installed || 0), 0);
+      // Green when fully done, amber when partway, muted when nothing's done yet.
+      const doneColor = (done: number, qty: number) =>
+        qty > 0 && done >= qty ? '#34d399' : done > 0 ? '#fbbf24' : 'var(--text-label)';
       return (
         <div>
           {detailRow('PO #', item.po_number)}
@@ -164,9 +169,21 @@ export function renderDetail(type: PopoutType, item: any) {
                     <div style={{ fontSize: '12px', fontWeight: 700, color: 'var(--text-body)' }}>{l.part_number}</div>
                     {l.description && <div style={{ fontSize: '10px', color: 'var(--text-label)' }}>{l.description}</div>}
                   </div>
-                  <div style={{ fontSize: '11px', color: 'var(--text-body)', whiteSpace: 'nowrap' }}>{l.quantity} × {formatCurrency(l.unit_price)}</div>
+                  <div style={{ textAlign: 'right', whiteSpace: 'nowrap' }}>
+                    <div style={{ fontSize: '11px', color: 'var(--text-body)' }}>{l.quantity} × {formatCurrency(l.unit_price)}</div>
+                    <div style={{ fontSize: '10px', fontWeight: 700, color: doneColor(l.installed || 0, l.quantity || 0) }}>{l.installed || 0} of {l.quantity || 0} done</div>
+                  </div>
                 </div>
               ))}
+              {totalQty > 0 && (
+                <div style={{ display: 'flex', justifyContent: 'space-between', padding: '8px 0 0' }}>
+                  <span style={{ fontSize: '12px', color: 'var(--text-label)', fontWeight: 800 }}>QUANTITY</span>
+                  <span style={{ fontSize: '13px', fontWeight: 800 }}>
+                    <span style={{ color: doneColor(totalDone, totalQty) }}>{totalDone}</span>
+                    <span style={{ color: 'var(--text-label)' }}> / {totalQty} done</span>
+                  </span>
+                </div>
+              )}
               {total > 0 && (
                 <div style={{ display: 'flex', justifyContent: 'space-between', padding: '8px 0 0' }}>
                   <span style={{ fontSize: '12px', color: 'var(--text-label)', fontWeight: 800 }}>TOTAL</span>
