@@ -75,7 +75,7 @@ export default function PartsPage() {
   // Completed (scan) + PO-quantity stats, keyed by uppercased item number.
   const [range, setRange] = useState<CompletedRange>('all');
   const [scanRows, setScanRows] = useState<{ part: string; at: string }[]>([]);
-  const [poOpenByPart, setPoOpenByPart] = useState<Record<string, number>>({});
+  const [poRemainingByPart, setPoRemainingByPart] = useState<Record<string, number>>({});
   const [poAllByPart, setPoAllByPart] = useState<Record<string, number>>({});
   const [statsLoading, setStatsLoading] = useState(true);
 
@@ -190,7 +190,7 @@ export default function PartsPage() {
     const [scanData, poData, lineData] = await Promise.all([
       fetchAll('scan_logs', 'part_number, scanned_at'),
       fetchAll('purchase_orders', 'id, status'),
-      fetchAll('po_line_items', 'part_number, quantity, po_id'),
+      fetchAll('po_line_items', 'part_number, quantity, installed, po_id'),
     ]);
 
     setScanRows(
@@ -203,16 +203,20 @@ export default function PartsPage() {
     const poStatus = new Map<string, string>();
     for (const p of poData) poStatus.set(p.id, p.status);
 
-    const open: Record<string, number> = {};
+    // "remaining" = units still to do on OPEN POs (ordered minus installed);
+    // "all" = total ever ordered across every PO.
+    const remaining: Record<string, number> = {};
     const all: Record<string, number> = {};
     for (const l of lineData) {
       if (!l.part_number) continue;
       const key = String(l.part_number).toUpperCase();
       const q = l.quantity || 0;
       all[key] = (all[key] || 0) + q;
-      if (poStatus.get(l.po_id) === 'open') open[key] = (open[key] || 0) + q;
+      if (poStatus.get(l.po_id) === 'open') {
+        remaining[key] = (remaining[key] || 0) + Math.max(0, q - (l.installed || 0));
+      }
     }
-    setPoOpenByPart(open);
+    setPoRemainingByPart(remaining);
     setPoAllByPart(all);
     setStatsLoading(false);
   };
@@ -343,14 +347,14 @@ export default function PartsPage() {
 
   // Catalog-wide roll-up for the header line.
   const catalogTotals = useMemo(() => {
-    let completed = 0, openPo = 0;
+    let completed = 0, remaining = 0;
     for (const p of parts) {
       const k = (p.item_number || '').toUpperCase();
       completed += completedByPart[k] || 0;
-      openPo += poOpenByPart[k] || 0;
+      remaining += poRemainingByPart[k] || 0;
     }
-    return { completed, openPo };
-  }, [parts, completedByPart, poOpenByPart]);
+    return { completed, remaining };
+  }, [parts, completedByPart, poRemainingByPart]);
 
   const filtered = parts.filter(p => {
     if (!search) return true;
@@ -481,7 +485,7 @@ export default function PartsPage() {
             <>
               <span style={{ color: '#34d399', fontWeight: 800 }}>{catalogTotals.completed}</span> completed {RANGE_PHRASE[range]}
               {' · '}
-              <span style={{ color: '#60a5fa', fontWeight: 800 }}>{formatQty(catalogTotals.openPo)}</span> on open POs
+              <span style={{ color: '#60a5fa', fontWeight: 800 }}>{formatQty(catalogTotals.remaining)}</span> open on POs
             </>
           )}
         </div>
@@ -580,7 +584,7 @@ export default function PartsPage() {
                       <DetailField label="Qty On Hand" value={formatQty(part.quantity_on_hand)} color={part.quantity_on_hand > 0 ? 'var(--text-primary)' : 'var(--error)'} />
                       <DetailField label="Qty Available" value={formatQty(part.quantity_available)} color={part.quantity_available > 0 ? 'var(--text-primary)' : 'var(--error)'} />
                       <DetailField label={`Completed · ${RANGE_PHRASE[range]}`} value={statsLoading ? '…' : completed.toString()} color="#34d399" />
-                      <DetailField label="On Open POs" value={statsLoading ? '…' : formatQty(poOpenByPart[key] || 0)} color="#60a5fa" />
+                      <DetailField label="Open on POs" value={statsLoading ? '…' : formatQty(poRemainingByPart[key] || 0)} color="#60a5fa" />
                       <DetailField label="On All POs" value={statsLoading ? '…' : formatQty(poAllByPart[key] || 0)} color="var(--text-secondary)" />
                       {margin && (
                         <DetailField label="Margin" value={`${margin}%`} color={parseFloat(margin) > 30 ? '#34d399' : '#f59e0b'} />
