@@ -5,6 +5,7 @@ import { useRouter } from 'next/navigation';
 import { createClient } from '@/lib/supabase-browser';
 import { storage } from '@/lib/storage';
 import { useAuth } from '@/components/AuthProvider';
+import EmailProofSearch, { type EmailProofFile } from '@/components/EmailProofSearch';
 
 interface Part {
   id: string;
@@ -88,6 +89,8 @@ export default function PartsPage() {
   const [partFiles, setPartFiles] = useState<Record<string, PartFile[]>>({});
   const [uploadingFile, setUploadingFile] = useState(false);
   const partFileRef = useRef<HTMLInputElement>(null);
+  // Which part (if any) currently has the "search email for a proof" panel open.
+  const [emailSearchPart, setEmailSearchPart] = useState<string | null>(null);
   // Monotonic token to ignore stale loadParts() responses. A deep-link switches
   // catalog right after mount, so a slower earlier load must not clobber it.
   const loadReqRef = useRef(0);
@@ -308,6 +311,24 @@ export default function PartsPage() {
       await loadPartFiles(partId);
     }
     setUploadingFile(false);
+  };
+
+  // Pull a proof straight out of email and attach it to this part. The server
+  // downloads the chosen Gmail attachment, stores it in the graphics-proofs
+  // bucket, and records a part_files row — same end state as a manual upload.
+  const attachEmailProof = async (partId: string, file: EmailProofFile) => {
+    const { data } = await supabase.auth.getSession();
+    const token = data?.session?.access_token;
+    const res = await fetch(`/api/parts/${partId}/attach-proof`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', ...(token ? { Authorization: `Bearer ${token}` } : {}) },
+      body: JSON.stringify({ messageId: file.messageId, attachmentId: file.attachmentId, filename: file.filename }),
+    });
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({}));
+      throw new Error(err.error || `Attach failed (${res.status})`);
+    }
+    await loadPartFiles(partId);
   };
 
   const deletePartFile = async (file: PartFile) => {
@@ -687,6 +708,22 @@ export default function PartsPage() {
                             background: 'var(--subtle-bg)', border: '1px dashed var(--border)',
                             color: uploadingFile ? 'var(--text-muted)' : 'var(--text-secondary)', cursor: 'pointer',
                           }}>{uploadingFile ? 'Uploading...' : '+ Upload Proof / File'}</button>
+                          <button onClick={() => setEmailSearchPart(prev => prev === part.id ? null : part.id)} style={{
+                            width: '100%', marginTop: '4px', padding: '6px', borderRadius: '6px', fontSize: '10px', fontWeight: 700,
+                            background: 'var(--subtle-bg)', border: '1px dashed var(--border)',
+                            color: 'var(--text-secondary)', cursor: 'pointer',
+                          }}>{emailSearchPart === part.id ? '✕ Close Email Search' : '🔎 Search Email for Proof'}</button>
+                          {emailSearchPart === part.id && (
+                            <div style={{ marginTop: '6px' }}>
+                              <EmailProofSearch
+                                defaultQuery={part.billable_customer || part.display_name || part.item_number}
+                                autoSearch
+                                useLabel="Attach to Part"
+                                embedded
+                                onUse={(file) => attachEmailProof(part.id, file)}
+                              />
+                            </div>
+                          )}
                         </>
                       )}
                     </div>
