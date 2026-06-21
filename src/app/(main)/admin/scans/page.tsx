@@ -1278,13 +1278,31 @@ export default function AdminScansPage() {
                           {!r.match && (
                             <button
                               onClick={async () => {
-                                const { error } = await supabase.from('netsuite_parts').insert({
-                                  netsuite_id: `LOCAL-${r.partNumber}-${Date.now()}`,
-                                  item_number: r.partNumber,
-                                  display_name: r.partNumber,
-                                  billable_customer: pg.header.customer || null,
-                                  is_active: true,
-                                });
+                                // Guard against duplicates: the part may already
+                                // exist (a manual row, or one not in the loaded
+                                // set). ilike is a case-insensitive superset —
+                                // confirm an exact match before inserting.
+                                const { data: candidates } = await supabase
+                                  .from('netsuite_parts')
+                                  .select('id, item_number')
+                                  .ilike('item_number', r.partNumber);
+                                const dupe = ((candidates as any[]) || []).some(
+                                  (c) => (c.item_number || '').toUpperCase() === (r.partNumber || '').toUpperCase()
+                                );
+                                let error: any = null;
+                                if (!dupe) {
+                                  // Manual row (no NetSuite item): netsuite_id NULL +
+                                  // source 'manual' so a NetSuite sync won't wipe it.
+                                  ({ error } = await supabase.from('netsuite_parts').insert({
+                                    netsuite_id: null,
+                                    item_number: r.partNumber,
+                                    display_name: r.partNumber,
+                                    catalog: 'graphics',
+                                    source: 'manual',
+                                    billable_customer: pg.header.customer || null,
+                                    is_active: true,
+                                  }));
+                                }
                                 if (error) {
                                   alert(`Failed to add: ${error.message}`);
                                 } else {

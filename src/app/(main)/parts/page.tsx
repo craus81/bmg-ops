@@ -110,7 +110,20 @@ export default function PartsPage() {
       hasMore = batch.length === pageSize;
       page++;
     }
-    setParts(allParts);
+    // Collapse duplicate rows for the same item number (legacy data: pre-merge
+    // mirrors, repeated "add to catalog", etc.) — keep the most authoritative.
+    const isRealNs = (p: Part) => !!p.netsuite_id && !/^(LOCAL-|bmg-)/i.test(p.netsuite_id);
+    const score = (p: Part) =>
+      (isRealNs(p) ? 4 : 0) +
+      (p.display_name && p.display_name !== p.item_number ? 2 : 0) +
+      ((p.sales_price || 0) > 0 ? 1 : 0);
+    const byItem = new Map<string, Part>();
+    for (const p of allParts) {
+      const key = (p.item_number || '').toUpperCase();
+      const cur = byItem.get(key);
+      if (!cur || score(p) > score(cur)) byItem.set(key, p);
+    }
+    setParts([...byItem.values()].sort((a, b) => a.item_number.localeCompare(b.item_number)));
     setLoading(false);
   };
 
