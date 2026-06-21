@@ -3,6 +3,7 @@ import { createClient } from '@supabase/supabase-js';
 import { requireAuth } from '@/lib/api-auth';
 import { validateBody, z } from '@/lib/validate';
 import { logScan, resolveScannerCompany } from '@/lib/scan-log';
+import { matchScansToOpenPos } from '@/lib/scan-match';
 import { createCompletionCredits, getFieldRate } from '@/lib/pay-credits';
 import { loadShift, canManageShift } from '@/lib/shifts';
 
@@ -101,6 +102,14 @@ export async function POST(req: NextRequest) {
       },
     });
     if (!credits.ok) creditsError = credits.error || 'Failed to write pay credits';
+  }
+
+  // Auto-match this scan to an open PO by part number (location breaks ties).
+  // Best-effort: a match failure must never fail the scan itself.
+  try {
+    await matchScansToOpenPos(service, [result.scanLogId]);
+  } catch (err) {
+    console.warn('Scan auto-match failed:', err);
   }
 
   return NextResponse.json({ success: true, scanLogId: result.scanLogId, creditsError });
