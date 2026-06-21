@@ -2,12 +2,14 @@
 
 import { useState, useEffect } from 'react';
 import { useRouter } from 'next/navigation';
+import { usePopout } from '@/components/Popout';
 import { createClient } from '@/lib/supabase-browser';
 import { theme } from '@/lib/theme';
 import WidgetShell from './WidgetShell';
 
 export default function FleetCheckInWidget() {
   const router = useRouter();
+  const { open: openPopout } = usePopout();
   const supabase = createClient();
   const [loading, setLoading] = useState(true);
   const [stats, setStats] = useState({ today: 0, week: 0, month: 0 });
@@ -61,7 +63,7 @@ export default function FleetCheckInWidget() {
         {recentCheckins.length > 0 && (
           <div style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
             {recentCheckins.map(checkin => (
-              <button key={checkin.id} onClick={() => router.push(`/tracking?vehicle=${checkin.id}`)} style={{
+              <button key={checkin.id} onClick={() => openPopout('vehicles', checkin.id)} style={{
                 display: 'flex', justifyContent: 'space-between', alignItems: 'center', width: '100%',
                 padding: '6px 8px', borderRadius: '6px', border: 'none', textAlign: 'left',
                 background: 'var(--subtle-bg)', cursor: 'pointer', fontSize: '11px',

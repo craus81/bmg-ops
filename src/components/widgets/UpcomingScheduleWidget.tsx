@@ -2,6 +2,7 @@
 
 import { useState, useEffect } from 'react';
 import { useRouter } from 'next/navigation';
+import { usePopout } from '@/components/Popout';
 import { createClient } from '@/lib/supabase-browser';
 import { theme } from '@/lib/theme';
 import WidgetShell from './WidgetShell';
@@ -16,6 +17,7 @@ interface ScheduleItem {
 
 export default function UpcomingScheduleWidget() {
   const router = useRouter();
+  const { open: openPopout } = usePopout();
   const supabase = createClient();
   const [loading, setLoading] = useState(true);
   const [items, setItems] = useState<ScheduleItem[]>([]);
@@ -126,8 +128,8 @@ export default function UpcomingScheduleWidget() {
         <div style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
           {items.map(item => (
             <button key={`${item.type}-${item.id}`} onClick={() => {
-              if (item.type === 'graphics') router.push(`/graphics?id=${item.id}`);
-              else if (item.type === 'upfit') router.push(`/tracking?vehicle=${item.id}`);
+              if (item.type === 'graphics') openPopout('graphics_jobs', item.id);
+              else if (item.type === 'upfit') openPopout('vehicles', item.id);
               else if (item.type === 'cni') router.push(`/admin/cni/jobs/${item.id}`);
               else router.push('/admin/schedule');
             }} style={{

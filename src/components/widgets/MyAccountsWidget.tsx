@@ -2,6 +2,7 @@
 
 import { useState, useEffect } from 'react';
 import { useRouter } from 'next/navigation';
+import { usePopout } from '@/components/Popout';
 import { createClient } from '@/lib/supabase-browser';
 import { useAuth } from '@/components/AuthProvider';
 import { GRAPHICS_STATUS_LABELS, GRAPHICS_STATUS_COLORS } from '@/lib/types';
@@ -19,6 +20,7 @@ interface AccountJob {
 
 export default function MyAccountsWidget() {
   const router = useRouter();
+  const { open: openPopout } = usePopout();
   const { user } = useAuth();
   const supabase = createClient();
   const [jobs, setJobs] = useState<AccountJob[]>([]);
@@ -77,7 +79,7 @@ export default function MyAccountsWidget() {
                 const statusColor = GRAPHICS_STATUS_COLORS[job.status] || '#6b7280';
                 const isOverdue = job.due_date && new Date(job.due_date) < new Date();
                 return (
-                  <div key={job.id} onClick={() => router.push(`/graphics?id=${job.id}`)} style={{
+                  <div key={job.id} onClick={() => openPopout('graphics_jobs', job.id)} style={{
                     display: 'flex', alignItems: 'center', gap: '6px',
                     padding: '5px 6px', borderRadius: '6px', cursor: 'pointer',
                     background: 'var(--bg)', marginBottom: '2px',

@@ -2,12 +2,14 @@
 
 import { useState, useEffect } from 'react';
 import { useRouter } from 'next/navigation';
+import { usePopout } from '@/components/Popout';
 import { createClient } from '@/lib/supabase-browser';
 import { theme } from '@/lib/theme';
 import WidgetShell from './WidgetShell';
 
 export default function RecentMessagesWidget() {
   const router = useRouter();
+  const { open: openPopout } = usePopout();
   const supabase = createClient();
   const [loading, setLoading] = useState(true);
   const [messages, setMessages] = useState<any[]>([]);
@@ -51,7 +53,7 @@ export default function RecentMessagesWidget() {
       ) : (
         <div style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
           {messages.map(m => (
-            <button key={m.id} onClick={() => router.push(m.conversation_id ? `/messages?conversation=${m.conversation_id}` : '/messages')} style={{
+            <button key={m.id} onClick={() => openPopout('messages', m.id)} style={{
               display: 'flex', gap: '8px', alignItems: 'start', width: '100%',
               padding: '6px 8px', borderRadius: '6px', border: 'none', textAlign: 'left',
               background: 'var(--subtle-bg)', cursor: 'pointer',
