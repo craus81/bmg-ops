@@ -50,6 +50,10 @@ export default function PartsPage() {
   const [syncMessage, setSyncMessage] = useState('');
   const [lastSync, setLastSync] = useState<SyncLog | null>(null);
   const [expandedId, setExpandedId] = useState<string | null>(null);
+  // Deep-link focus: the item number to open + scroll to once parts load, and
+  // the row to briefly highlight so it's obvious where the search landed you.
+  const [pendingFocus, setPendingFocus] = useState<string | null>(null);
+  const [highlightId, setHighlightId] = useState<string | null>(null);
   const [editingLabor, setEditingLabor] = useState<string | null>(null);
   const [sortCol, setSortCol] = useState<'item_number' | 'sales_price' | 'quantity_on_hand' | 'labor_hours'>('item_number');
   const [sortDir, setSortDir] = useState<'asc' | 'desc'>('asc');
@@ -84,7 +88,7 @@ export default function PartsPage() {
     const c = params.get('catalog');
     const q = params.get('q');
     if (c === 'graphics' || c === 'upfit') setCatalog(c);
-    if (q) setSearch(q);
+    if (q) { setSearch(q); setPendingFocus(q.toUpperCase()); }
   // eslint-disable-next-line react-hooks/exhaustive-deps -- read URL once on mount
   }, []);
 
@@ -195,6 +199,24 @@ export default function PartsPage() {
     const { data } = await supabase.from('part_files').select('*').eq('part_id', partId).order('uploaded_at', { ascending: false });
     if (data) setPartFiles(prev => ({ ...prev, [partId]: data as PartFile[] }));
   };
+
+  // Once parts have loaded, open + scroll to the deep-linked item (exact item
+  // number match from global search) and highlight it briefly.
+  useEffect(() => {
+    if (!pendingFocus || parts.length === 0) return;
+    const target = parts.find(p => (p.item_number || '').toUpperCase() === pendingFocus);
+    if (!target) return;
+    setPendingFocus(null);
+    setExpandedId(target.id);
+    loadPartFiles(target.id);
+    setHighlightId(target.id);
+    const t = setTimeout(() => setHighlightId(null), 2500);
+    requestAnimationFrame(() => {
+      document.getElementById(`part-row-${target.id}`)?.scrollIntoView({ behavior: 'smooth', block: 'center' });
+    });
+    return () => clearTimeout(t);
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- focus once parts arrive
+  }, [parts, pendingFocus]);
 
   const uploadPartFile = async (partId: string, file: File) => {
     setUploadingFile(true);
@@ -369,9 +391,12 @@ export default function PartsPage() {
               : null;
 
             return (
-              <div key={part.id} style={{
+              <div key={part.id} id={`part-row-${part.id}`} style={{
                 borderRadius: '10px',
-                background: 'var(--card)', border: '1px solid var(--border)',
+                background: 'var(--card)',
+                border: highlightId === part.id ? '1px solid #60a5fa' : '1px solid var(--border)',
+                boxShadow: highlightId === part.id ? '0 0 0 2px rgba(96,165,250,0.5)' : undefined,
+                transition: 'box-shadow 0.3s ease, border-color 0.3s ease',
                 overflow: 'hidden',
               }}>
                 {/* Row summary */}
