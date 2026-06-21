@@ -27,7 +27,7 @@ export async function GET(req: NextRequest) {
     // Purchase Orders — search by PO number, customer, line item part numbers
     supabase
       .from('purchase_orders')
-      .select('id, po_number, customer, status, ordered_date, created_at, ship_to, po_line_items(id, part_number, description, quantity, unit_price)')
+      .select('id, po_number, customer, status, ordered_date, created_at, ship_to, po_line_items(id, part_number, description, quantity, unit_price, installed)')
       .or(`po_number.ilike.${like},customer.ilike.${like}`)
       .order('created_at', { ascending: false })
       .limit(MAX_PER_GROUP),
@@ -106,7 +106,7 @@ export async function GET(req: NextRequest) {
     if (newPoIds.length > 0) {
       const { data: additionalPOs } = await supabase
         .from('purchase_orders')
-        .select('id, po_number, customer, status, ordered_date, created_at, ship_to, po_line_items(id, part_number, description, quantity, unit_price)')
+        .select('id, po_number, customer, status, ordered_date, created_at, ship_to, po_line_items(id, part_number, description, quantity, unit_price, installed)')
         .in('id', newPoIds)
         .limit(MAX_PER_GROUP);
       poFromLineItems = additionalPOs || [];
