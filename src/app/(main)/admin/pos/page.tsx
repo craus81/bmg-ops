@@ -288,6 +288,8 @@ export default function POsPage() {
   const [showCreate, setShowCreate] = useState(false);
   const [showImport, setShowImport] = useState(false);
   const [expandedPo, setExpandedPo] = useState<string | null>(null);
+  // Deep-link target to briefly highlight after search/notification navigation.
+  const [highlightPo, setHighlightPo] = useState<string | null>(null);
   const [editPoId, setEditPoId] = useState<string | null>(null);
   const [editPoForm, setEditPoForm] = useState({ po_number: '', customer: '', status: '' as string, ordered_date: '', requested_delivery_date: '', notes: '' });
   const [editLineId, setEditLineId] = useState<string | null>(null);
@@ -569,14 +571,26 @@ export default function POsPage() {
     setGmailRunning(false);
   };
 
-  // Auto-expand PO from URL param (deep link from notifications/search)
+  // Auto-open PO from URL param (deep link from notifications/search): switch to
+  // the right tab, clear any filter, expand it, then scroll to + highlight it so
+  // it's not buried somewhere down the list.
   useEffect(() => {
     if (loading) return;
     const poId = searchParams.get('id');
-    if (poId && pos.some(p => p.id === poId)) {
-      setExpandedPo(poId);
-    }
-  // eslint-disable-next-line react-hooks/exhaustive-deps -- intentional: load once on mount
+    if (!poId) return;
+    const target = pos.find(p => p.id === poId);
+    if (!target) return;
+    setPoTab(target.status === 'closed' ? 'closed' : 'open');
+    setPoSearch('');
+    setExpandedPo(poId);
+    setHighlightPo(poId);
+    const clear = setTimeout(() => setHighlightPo(null), 2500);
+    // Defer the scroll so the right tab/expanded row is in the DOM first.
+    setTimeout(() => {
+      document.getElementById(`po-row-${poId}`)?.scrollIntoView({ behavior: 'smooth', block: 'center' });
+    }, 200);
+    return () => clearTimeout(clear);
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- intentional: deep-link once after load
   }, [loading, searchParams]);
 
   useEffect(() => {
@@ -2914,7 +2928,7 @@ export default function POsPage() {
         const displayDate = po.ordered_date ? new Date(po.ordered_date + 'T00:00:00') : new Date(po.created_at);
 
         return (
-            <div key={po.id} style={{ background: 'var(--subtle-bg)', border: editMode && selectedForDelete.has(po.id) ? '1px solid rgba(248,113,113,0.5)' : '1px solid var(--border)', borderRadius: '10px', marginBottom: '6px', overflow: 'hidden' }}>
+            <div key={po.id} id={`po-row-${po.id}`} style={{ background: 'var(--subtle-bg)', border: highlightPo === po.id ? '1px solid #60a5fa' : (editMode && selectedForDelete.has(po.id) ? '1px solid rgba(248,113,113,0.5)' : '1px solid var(--border)'), boxShadow: highlightPo === po.id ? '0 0 0 2px rgba(96,165,250,0.5)' : undefined, transition: 'box-shadow 0.3s ease, border-color 0.3s ease', borderRadius: '10px', marginBottom: '6px', overflow: 'hidden' }}>
               <div onClick={() => editMode ? toggleDeleteSelection(po.id) : toggleExpand(po.id)} style={{ padding: '12px', cursor: 'pointer' }}>
                 <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'start' }}>
                   <div style={{ display: 'flex', alignItems: 'start', gap: '8px' }}>
