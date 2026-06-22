@@ -85,6 +85,12 @@ export default function PartsPage() {
   const [editingCustomer, setEditingCustomer] = useState<string | null>(null);
   const [customerValue, setCustomerValue] = useState('');
 
+  // Description editing (writes back to NetSuite for synced parts)
+  const [editingDescription, setEditingDescription] = useState<string | null>(null);
+  const [descValue, setDescValue] = useState('');
+  const [savingDescription, setSavingDescription] = useState(false);
+  const [descError, setDescError] = useState<string | null>(null);
+
   // Part files
   interface PartFile { id: string; part_id: string; file_name: string; file_type: string | null; file_size: number | null; storage_path: string; }
   const [partFiles, setPartFiles] = useState<Record<string, PartFile[]>>({});
@@ -278,6 +284,33 @@ export default function PartsPage() {
     setParts(prev => prev.map(p => p.id === partId ? { ...p, billable_customer: customerValue.trim() || null } : p));
     setEditingCustomer(null);
     setCustomerValue('');
+  };
+
+  // Save an edited description. For NetSuite-synced parts the server writes it
+  // back to NetSuite first (so the next sync doesn't revert it), then mirrors it
+  // locally; we reflect the saved value in the list on success.
+  const saveDescription = async (partId: string) => {
+    setSavingDescription(true);
+    setDescError(null);
+    try {
+      const { data } = await supabase.auth.getSession();
+      const token = data?.session?.access_token;
+      const res = await fetch(`/api/parts/${partId}/description`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json', ...(token ? { Authorization: `Bearer ${token}` } : {}) },
+        body: JSON.stringify({ description: descValue }),
+      });
+      const body = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        setDescError(body.error || `Save failed (${res.status})`);
+        return;
+      }
+      setParts(prev => prev.map(p => p.id === partId ? { ...p, description: body.description } : p));
+      setEditingDescription(null);
+      setDescValue('');
+    } finally {
+      setSavingDescription(false);
+    }
   };
 
   const loadPartFiles = async (partId: string) => {
@@ -676,11 +709,34 @@ export default function PartsPage() {
                       )}
                     </div>
 
-                    {part.description && (
-                      <div style={{ marginTop: '8px', fontSize: '11px', color: 'var(--text-muted)', lineHeight: 1.5 }}>
-                        {part.description}
-                      </div>
-                    )}
+                    {/* Description (editable by admins; writes back to NetSuite) */}
+                    <div style={{ marginTop: '10px' }}>
+                      <div style={{ fontSize: '9px', fontWeight: 700, color: 'var(--text-muted)', textTransform: 'uppercase', marginBottom: '4px' }}>Description</div>
+                      {editingDescription === part.id ? (
+                        <div style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
+                          <textarea value={descValue} onChange={e => setDescValue(e.target.value)} autoFocus rows={3}
+                            onKeyDown={e => { if (e.key === 'Escape') { setEditingDescription(null); setDescError(null); } }}
+                            style={{ ...inputStyle, padding: '6px 8px', width: '100%', resize: 'vertical', fontFamily: 'inherit' }} />
+                          {descError && <div style={{ fontSize: '10px', color: '#ef4444' }}>{descError}</div>}
+                          <div style={{ display: 'flex', gap: '4px', alignItems: 'center' }}>
+                            <button onClick={() => saveDescription(part.id)} disabled={savingDescription}
+                              style={{ padding: '6px 10px', borderRadius: '6px', background: '#22c55e', color: '#fff', fontSize: '10px', fontWeight: 700, border: 'none', cursor: savingDescription ? 'default' : 'pointer', opacity: savingDescription ? 0.6 : 1 }}>
+                              {savingDescription ? 'Saving…' : 'Save'}</button>
+                            <button onClick={() => { setEditingDescription(null); setDescError(null); }} disabled={savingDescription}
+                              style={{ padding: '6px 10px', borderRadius: '6px', background: 'var(--subtle-bg)', color: 'var(--text-secondary)', fontSize: '10px', fontWeight: 700, border: '1px solid var(--border)', cursor: 'pointer' }}>Cancel</button>
+                            {part.netsuite_id && <span style={{ fontSize: '9px', color: 'var(--text-muted)' }}>Saves to NetSuite</span>}
+                          </div>
+                        </div>
+                      ) : isAdmin ? (
+                        <div onClick={() => { setEditingDescription(part.id); setDescValue(part.description || ''); setDescError(null); }}
+                          style={{ fontSize: '11px', color: part.description ? 'var(--text-muted)' : 'var(--text-muted)', lineHeight: 1.5, cursor: 'pointer' }}>
+                          {part.description || '— Add description'}
+                          <span style={{ fontSize: '9px', color: 'var(--text-muted)', marginLeft: '4px', fontWeight: 700 }}>Edit</span>
+                        </div>
+                      ) : (
+                        part.description && <div style={{ fontSize: '11px', color: 'var(--text-muted)', lineHeight: 1.5 }}>{part.description}</div>
+                      )}
+                    </div>
 
                     {/* Billable Customer */}
                     {isAdmin && (
