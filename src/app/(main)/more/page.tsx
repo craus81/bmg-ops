@@ -105,7 +105,7 @@ export default function MorePage() {
           <MenuBtn title="Proof Search" sub="Find proof artwork in Dropbox by customer or part" onClick={() => router.push('/admin/proof-search')} />
         )}
         {F('all_jobs') && (
-          <MenuBtn title="CNI Jobs" sub="View all CNI jobs by company" onClick={() => router.push('/admin/cni')} />
+          <MenuBtn title="Certified Network Installs" sub="View all CNI jobs by company" onClick={() => router.push('/admin/cni')} />
         )}
         {F('vendor_payments') && (
           <MenuBtn title="Vendor Payments" sub="Manage installer invoices & payments" onClick={() => router.push('/admin/cni')} />
