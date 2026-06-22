@@ -85,10 +85,12 @@ export default function CniDashboardPage() {
       })));
     }
 
-    // Count CNI installers
+    // Count CNI installers — anyone tagged installer in user management,
+    // whether or not they've completed a cni_profiles onboarding record.
     const { count } = await supabase
-      .from('cni_profiles')
-      .select('*', { count: 'exact', head: true });
+      .from('profiles')
+      .select('*', { count: 'exact', head: true })
+      .or('role.eq.installer,roles.cs.{installer}');
     setInstallerCount(count || 0);
 
     // Pending photo reviews

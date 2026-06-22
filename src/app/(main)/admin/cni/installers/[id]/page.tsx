@@ -48,7 +48,7 @@ export default function CniInstallerDetailPage() {
 
   // Editable internal fields
   const [completionReliability, setCompletionReliability] = useState('good');
-  const [photoQuality, setPhotoQuality] = useState('good');
+  const [photoQuality, setPhotoQuality] = useState('pass');
   const [communicationRating, setCommunicationRating] = useState('responsive');
   const [riskTags, setRiskTags] = useState<string[]>([]);
 
@@ -78,26 +78,47 @@ export default function CniInstallerDetailPage() {
   };
 
   const loadData = async () => {
-    const { data: cniData } = await supabase
-      .from('cni_profiles')
-      .select('*')
-      .eq('user_id', userId)
-      .single();
-    setProfile(cniData);
-
-    if (cniData) {
-      setCompletionReliability(cniData.completion_reliability || 'good');
-      setPhotoQuality(cniData.photo_quality || 'good');
-      setCommunicationRating(cniData.communication_rating || 'responsive');
-      setRiskTags(cniData.risk_tags || []);
-    }
-
     const { data: userData } = await supabase
       .from('profiles')
-      .select('full_name, email, deactivated, deactivated_at')
+      .select('full_name, email, deactivated, deactivated_at, role, roles, company_id')
       .eq('id', userId)
       .single();
     setUserProfile(userData);
+
+    let { data: cniData } = await supabase
+      .from('cni_profiles')
+      .select('*')
+      .eq('user_id', userId)
+      .maybeSingle();
+
+    // Self-heal: a user tagged installer in user management may not have a
+    // cni_profiles onboarding record yet. Create a blank one so this page —
+    // and its edits/saves — work without a separate provisioning step.
+    const isInstaller = userData?.role === 'installer' || (userData?.roles || []).includes('installer');
+    if (!cniData && userData && isInstaller) {
+      let companyName: string | null = null;
+      if (userData.company_id) {
+        const { data: comp } = await supabase
+          .from('companies').select('name').eq('id', userData.company_id).maybeSingle();
+        companyName = comp?.name || null;
+      }
+      // photo_quality is set explicitly: its table default ('good') is invalid
+      // under the column's own CHECK, so an insert that omits it fails.
+      const { data: created } = await supabase
+        .from('cni_profiles')
+        .upsert({ user_id: userId, company_name: companyName, photo_quality: 'pass' }, { onConflict: 'user_id' })
+        .select('*')
+        .single();
+      cniData = created || null;
+    }
+    setProfile(cniData || {});
+
+    if (cniData) {
+      setCompletionReliability(cniData.completion_reliability || 'good');
+      setPhotoQuality(cniData.photo_quality || 'pass');
+      setCommunicationRating(cniData.communication_rating || 'responsive');
+      setRiskTags(cniData.risk_tags || []);
+    }
 
     const { data: jobsData } = await supabase
       .from('cni_jobs')
@@ -293,10 +314,10 @@ export default function CniInstallerDetailPage() {
     return <div style={{ padding: '20px', textAlign: 'center', color: 'var(--text-muted)' }}>Loading...</div>;
   }
 
-  if (!profile || !userProfile) {
+  if (!userProfile) {
     return (
       <div style={{ padding: '20px', textAlign: 'center' }}>
-        <div style={{ color: 'var(--text-muted)', marginBottom: '12px' }}>CNI profile not found</div>
+        <div style={{ color: 'var(--text-muted)', marginBottom: '12px' }}>Installer not found</div>
         <button onClick={() => router.push('/admin/cni/installers')} style={{ color: 'var(--orange)', fontWeight: 600, background: 'none', border: 'none', cursor: 'pointer' }}>← Back</button>
       </div>
     );

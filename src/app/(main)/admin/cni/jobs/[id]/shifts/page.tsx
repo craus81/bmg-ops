@@ -35,6 +35,8 @@ interface CompletedVin {
   vin: string;
   vehicle: string;
   completed_at: string | null;
+  scannedBy: string | null;
+  scannedByName: string | null;
 }
 
 /**
@@ -102,18 +104,28 @@ export default function CniJobShiftsPage() {
     for (const s of loadedShifts) for (const c of s.credits) if (c.cni_job_vin_id) credited.add(c.cni_job_vin_id);
     const { data: completed } = await supabase
       .from('cni_job_vins')
-      .select('id, vin, vehicle_year, vehicle_make, vehicle_model, completed_at')
+      .select('id, vin, vehicle_year, vehicle_make, vehicle_model, completed_at, completed_by')
       .eq('job_id', jobId).eq('status', 'completed')
       .order('completed_at', { ascending: true });
     const completedRows = (completed || []) as {
       id: string; vin: string; vehicle_year: string | null; vehicle_make: string | null;
-      vehicle_model: string | null; completed_at: string | null;
+      vehicle_model: string | null; completed_at: string | null; completed_by: string | null;
     }[];
+    // Resolve the name of whoever scanned/completed each vehicle, so vehicles
+    // brought in from outside the CNI tab can be paid to the person who did it.
+    const scannerIds = [...new Set(completedRows.map(v => v.completed_by).filter(Boolean))] as string[];
+    const scannerNames = new Map<string, string>();
+    if (scannerIds.length > 0) {
+      const { data: sp } = await supabase.from('profiles').select('id, full_name').in('id', scannerIds);
+      for (const p of sp || []) scannerNames.set(p.id, p.full_name);
+    }
     setCompletedVins(completedRows.map(v => ({
       id: v.id,
       vin: v.vin,
       vehicle: [v.vehicle_year, v.vehicle_make, v.vehicle_model].filter(Boolean).join(' '),
       completed_at: v.completed_at,
+      scannedBy: v.completed_by,
+      scannedByName: v.completed_by ? (scannerNames.get(v.completed_by) || null) : null,
     })));
     setUncoveredCount(completedRows.filter(v => !credited.has(v.id)).length);
 
@@ -248,7 +260,16 @@ export default function CniJobShiftsPage() {
 
   // ── Per-vehicle installer tagging ──
   const openAssign = (v: CompletedVin, currentCredits: Credit[]) => {
-    setAssignDraft(new Map(currentCredits.map(c => [c.profile_id, Number(c.share_weight)])));
+    if (currentCredits.length > 0) {
+      // Editing an existing split — start from who's already credited.
+      setAssignDraft(new Map(currentCredits.map(c => [c.profile_id, Number(c.share_weight)])));
+    } else if (v.scannedBy) {
+      // Unassigned — default to paying whoever scanned it (the common case for
+      // vehicles imported from outside the CNI tab). Admin can still adjust.
+      setAssignDraft(new Map([[v.scannedBy, 1]]));
+    } else {
+      setAssignDraft(new Map());
+    }
     setError('');
     setAssignVin(v);
   };
@@ -473,7 +494,14 @@ export default function CniJobShiftsPage() {
                       ))}
                     </div>
                   ) : (
-                    <span style={{ fontSize: '11px', fontWeight: 700, color: 'var(--warning)' }}>Unassigned — no pay yet</span>
+                    <div style={{ display: 'flex', flexWrap: 'wrap', gap: '8px', alignItems: 'center' }}>
+                      <span style={{ fontSize: '11px', fontWeight: 700, color: 'var(--warning)' }}>Unassigned — no pay yet</span>
+                      {v.scannedByName && (
+                        <span style={{ fontSize: '11px', color: 'var(--text-muted)' }}>
+                          Scanned by <strong style={{ color: 'var(--text-secondary)' }}>{v.scannedByName}</strong>
+                        </span>
+                      )}
+                    </div>
                   )}
                 </div>
               </div>
@@ -655,10 +683,14 @@ export default function CniJobShiftsPage() {
             <div style={{ fontSize: '11px', color: 'var(--text-muted)', marginBottom: '12px' }}>
               Pick who completed this vehicle. The per-vehicle rate splits across them by share (even by default;
               change a share for an uneven split). Only this vehicle changes.
+              {assignVin.scannedByName && (
+                <> Pre-filled with <strong style={{ color: 'var(--text-secondary)' }}>{assignVin.scannedByName}</strong>, who scanned it.</>
+              )}
             </div>
-            {weightEditor(assignDraft, setAssignDraft, editorPeople(
-              (creditsByVin.get(assignVin.id) || []).map(c => ({ profile_id: c.profile_id, full_name: c.profile_name })),
-            ))}
+            {weightEditor(assignDraft, setAssignDraft, editorPeople([
+              ...(creditsByVin.get(assignVin.id) || []).map(c => ({ profile_id: c.profile_id, full_name: c.profile_name })),
+              ...(assignVin.scannedBy && assignVin.scannedByName ? [{ profile_id: assignVin.scannedBy, full_name: assignVin.scannedByName }] : []),
+            ]))}
             {error && <div style={{ padding: '8px 12px', borderRadius: '8px', margin: '8px 0', background: 'var(--error-bg)', border: '1px solid var(--error-border)', color: 'var(--error)', fontSize: '12px', fontWeight: 600 }}>{error}</div>}
             <div style={{ display: 'flex', gap: '8px', marginTop: '8px' }}>
               <button onClick={applyAssign} disabled={busy || assignDraft.size === 0} style={{
