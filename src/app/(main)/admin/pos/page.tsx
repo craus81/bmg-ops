@@ -300,7 +300,10 @@ export default function POsPage() {
   const [addLineForm, setAddLineForm] = useState({ part_number: '', quantity: '1', unit_price: '' });
   const [addingLine, setAddingLine] = useState(false);
   const [form, setForm] = useState({ po_number: '', customer: 'Masterack', ordered_date: '', requested_delivery_date: '', notes: '' });
-  const [lineItems, setLineItems] = useState<{ part_id: string; part_number: string; quantity: number; unit_price: number }[]>([]);
+  const [lineItems, setLineItems] = useState<{ part_id: string | null; part_number: string; quantity: number; unit_price: number }[]>([]);
+  // Staging form for adding a line while building a new PO — mirrors the
+  // existing-PO "+ Add Line" form (catalog prefill + free-text fallback).
+  const [createLineForm, setCreateLineForm] = useState({ part_number: '', quantity: '1', unit_price: '' });
   const fileRef = useRef<HTMLInputElement>(null);
   const [poSearch, setPoSearch] = useState('');
 
@@ -883,10 +886,24 @@ export default function POsPage() {
     setShowImport(false);
   };
 
-  const addLineItem = (catId: string) => {
+  // Quick-pick from the catalog dropdown when building a new PO: prefill the
+  // part number and price so the user can adjust qty/price before adding.
+  const pickCreateLinePart = (catId: string) => {
     const item = catalog.find((c) => c.id === catId);
     if (!item) return;
-    setLineItems((prev) => [...prev, { part_id: item.id, part_number: item.part_number, quantity: 1, unit_price: item.price }]);
+    setCreateLineForm((prev) => ({ ...prev, part_number: item.part_number, unit_price: item.price.toString() }));
+  };
+
+  // Stage a line for the new PO. Mirrors the existing-PO "+ Add Line" form:
+  // catalog parts link part_id; free-typed parts stage with part_id null.
+  const addCreateLine = () => {
+    const partNum = createLineForm.part_number.trim();
+    if (!partNum) { alert('Enter or pick a part number'); return; }
+    const qty = parseInt(createLineForm.quantity) || 1;
+    const price = parseFloat(createLineForm.unit_price) || 0;
+    const catalogMatch = catalog.find((c) => c.part_number.toUpperCase() === partNum.toUpperCase());
+    setLineItems((prev) => [...prev, { part_id: catalogMatch?.id || null, part_number: partNum, quantity: qty, unit_price: price }]);
+    setCreateLineForm({ part_number: '', quantity: '1', unit_price: '' });
   };
 
   const handleCreate = async () => {
@@ -916,6 +933,7 @@ export default function POsPage() {
     setPos((prev) => [{ ...po, line_items: (items as POLineItem[]) || [] }, ...prev]);
     setForm({ po_number: '', customer: 'Masterack', ordered_date: '', requested_delivery_date: '', notes: '' });
     setLineItems([]);
+    setCreateLineForm({ part_number: '', quantity: '1', unit_price: '' });
     setCreateShipToId('');
     setCreateShipTo({});
     setShowCreate(false);
@@ -2839,13 +2857,40 @@ export default function POsPage() {
             />
           </div>
           <div style={{ marginBottom: '8px' }}>
-            <label style={labelStyle}>Add Part Number</label>
-            <select onChange={(e) => { if (e.target.value) addLineItem(e.target.value); e.target.value = ''; }} style={inputStyle}>
-              <option value="">Select part number...</option>
+            <label style={labelStyle}>Add Part</label>
+            <select
+              value=""
+              onChange={(e) => { if (e.target.value) pickCreateLinePart(e.target.value); e.target.value = ''; }}
+              style={{ ...inputStyle, marginBottom: '6px' }}
+            >
+              <option value="">Pick from catalog…</option>
               {catalog.filter((c) => c.customer === form.customer || !c.customer).map((c) => (
                 <option key={c.id} value={c.id}>{c.part_number} — {c.graphic_package || c.end_customer} (${c.price})</option>
               ))}
             </select>
+            <input
+              value={createLineForm.part_number}
+              onChange={(e) => setCreateLineForm({ ...createLineForm, part_number: e.target.value })}
+              placeholder="Type or pick a part number…"
+              style={{ ...inputStyle, marginBottom: '6px', fontWeight: 700 }}
+            />
+            <div style={{ display: 'flex', gap: '6px', alignItems: 'end' }}>
+              <div style={{ flex: 1 }}>
+                <label style={{ ...labelStyle, fontSize: '9px' }}>Qty</label>
+                <input type="number" value={createLineForm.quantity} onChange={(e) => setCreateLineForm({ ...createLineForm, quantity: e.target.value })} style={inputStyle} min={1} />
+              </div>
+              <div style={{ flex: 1 }}>
+                <label style={{ ...labelStyle, fontSize: '9px' }}>Unit Price</label>
+                <input type="number" value={createLineForm.unit_price} onChange={(e) => setCreateLineForm({ ...createLineForm, unit_price: e.target.value })} style={inputStyle} step="0.01" />
+              </div>
+              <button
+                onClick={addCreateLine}
+                disabled={!createLineForm.part_number.trim()}
+                style={{ padding: '10px 14px', borderRadius: '8px', background: '#22c55e', color: '#fff', fontWeight: 700, fontSize: '13px', border: 'none', opacity: createLineForm.part_number.trim() ? 1 : 0.5, cursor: createLineForm.part_number.trim() ? 'pointer' : 'default' }}
+              >
+                + Add
+              </button>
+            </div>
           </div>
 
           {lineItems.length > 0 && (
