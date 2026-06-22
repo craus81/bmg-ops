@@ -48,7 +48,7 @@ export default function CniInstallerDetailPage() {
 
   // Editable internal fields
   const [completionReliability, setCompletionReliability] = useState('good');
-  const [photoQuality, setPhotoQuality] = useState('good');
+  const [photoQuality, setPhotoQuality] = useState('pass');
   const [communicationRating, setCommunicationRating] = useState('responsive');
   const [riskTags, setRiskTags] = useState<string[]>([]);
 
@@ -102,9 +102,11 @@ export default function CniInstallerDetailPage() {
           .from('companies').select('name').eq('id', userData.company_id).maybeSingle();
         companyName = comp?.name || null;
       }
+      // photo_quality is set explicitly: its table default ('good') is invalid
+      // under the column's own CHECK, so an insert that omits it fails.
       const { data: created } = await supabase
         .from('cni_profiles')
-        .upsert({ user_id: userId, company_name: companyName }, { onConflict: 'user_id' })
+        .upsert({ user_id: userId, company_name: companyName, photo_quality: 'pass' }, { onConflict: 'user_id' })
         .select('*')
         .single();
       cniData = created || null;
@@ -113,7 +115,7 @@ export default function CniInstallerDetailPage() {
 
     if (cniData) {
       setCompletionReliability(cniData.completion_reliability || 'good');
-      setPhotoQuality(cniData.photo_quality || 'good');
+      setPhotoQuality(cniData.photo_quality || 'pass');
       setCommunicationRating(cniData.communication_rating || 'responsive');
       setRiskTags(cniData.risk_tags || []);
     }

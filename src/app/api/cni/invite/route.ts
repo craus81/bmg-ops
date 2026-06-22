@@ -130,12 +130,15 @@ export async function POST(req: NextRequest) {
       status: 'approved',
     }, { onConflict: 'id' });
 
-    // 3. Create a stub CNI profile so they show up in the installers list
+    // 3. Create a stub CNI profile so they show up in the installers list.
+    // photo_quality is set explicitly because the column's table default
+    // ('good') is invalid under its own CHECK, which would fail the insert.
     await supabase.from('cni_profiles').upsert({
       user_id: userId,
       company_name: companyName || null,
       phone: phone || null,
       availability_status: 'available',
+      photo_quality: 'pass',
       service_types: [],
       equipment_capabilities: [],
       risk_tags: [],

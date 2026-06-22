@@ -66,11 +66,22 @@ export default function CniCompanyDetailPage() {
   const saveMemberVendorId = async (userId: string) => {
     const draft = (vendorDrafts[userId] || '').trim();
     setMemberBusy(true);
-    // cni_profiles.user_id is unique; upsert so members without a CNI profile
-    // row still get a vendor id recorded.
-    await supabase
-      .from('cni_profiles')
-      .upsert({ user_id: userId, netsuite_vendor_id: draft || null }, { onConflict: 'user_id' });
+    // Update the existing CNI profile if there is one; otherwise create a
+    // minimal row. We set photo_quality explicitly because the column's table
+    // default ('good') is invalid under its own CHECK — relying on it would
+    // make the insert fail. An update leaves other fields untouched.
+    const { data: existing } = await supabase
+      .from('cni_profiles').select('id').eq('user_id', userId).maybeSingle();
+    if (existing) {
+      await supabase
+        .from('cni_profiles')
+        .update({ netsuite_vendor_id: draft || null })
+        .eq('user_id', userId);
+    } else {
+      await supabase
+        .from('cni_profiles')
+        .insert({ user_id: userId, netsuite_vendor_id: draft || null, photo_quality: 'pass' });
+    }
     setVendorDrafts(prev => {
       const next = { ...prev };
       delete next[userId];
