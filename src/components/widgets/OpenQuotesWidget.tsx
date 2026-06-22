@@ -2,12 +2,14 @@
 
 import { useState, useEffect } from 'react';
 import { useRouter } from 'next/navigation';
+import { usePopout } from '@/components/Popout';
 import { createClient } from '@/lib/supabase-browser';
 import { theme } from '@/lib/theme';
 import WidgetShell from './WidgetShell';
 
 export default function OpenQuotesWidget() {
   const router = useRouter();
+  const { open: openPopout } = usePopout();
   const supabase = createClient();
   const [loading, setLoading] = useState(true);
   const [quotes, setQuotes] = useState<any[]>([]);
@@ -47,7 +49,7 @@ export default function OpenQuotesWidget() {
           </div>
           <div style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
             {quotes.slice(0, 5).map(q => (
-              <button key={q.id} onClick={() => router.push(`/admin/quotes?id=${q.id}`)} style={{
+              <button key={q.id} onClick={() => openPopout('quotes', q.id)} style={{
                 display: 'flex', justifyContent: 'space-between', alignItems: 'center', width: '100%',
                 padding: '6px 8px', borderRadius: '6px', border: 'none', textAlign: 'left',
                 background: 'var(--subtle-bg)', cursor: 'pointer',

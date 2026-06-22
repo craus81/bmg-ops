@@ -1,7 +1,7 @@
 'use client';
 
 import { useState, useRef, useEffect, useCallback } from 'react';
-import { useRouter } from 'next/navigation';
+import { usePopout, PopoutType } from '@/components/Popout';
 
 interface UniversalSearchProps {
   open: boolean;
@@ -38,18 +38,16 @@ function statusColor(status: string): string {
   return 'var(--text-body)';
 }
 
-function renderResult(group: string, item: any, router: any, onClose: () => void) {
-  const navigate = (path: string) => {
-    onClose();
-    router.push(path);
-  };
+function renderResult(group: string, item: any, onSelect: (group: string, item: any) => void) {
+  // Tapping a result pops out the shared detail view instead of navigating away.
+  const select = () => onSelect(group, item);
 
   switch (group) {
     case 'purchase_orders': {
       const totalValue = (item.po_line_items || []).reduce((s: number, l: any) => s + (l.quantity * l.unit_price), 0);
       const lineCount = (item.po_line_items || []).length;
       return (
-        <button key={item.id} onClick={() => navigate(`/admin/pos?id=${item.id}`)} style={resultBtnStyle}>
+        <button key={item.id} onClick={select} style={resultBtnStyle}>
           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'start' }}>
             <div>
               <span style={titleStyle}>PO #{item.po_number}</span>
@@ -69,7 +67,7 @@ function renderResult(group: string, item: any, router: any, onClose: () => void
 
     case 'vehicles':
       return (
-        <button key={item.id} onClick={() => navigate(`/tracking?vehicle=${item.id}`)} style={resultBtnStyle}>
+        <button key={item.id} onClick={select} style={resultBtnStyle}>
           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'start' }}>
             <span style={titleStyle}>{item.vehicle_year} {item.vehicle_make} {item.vehicle_model}</span>
             <span style={{ ...statusBadge, color: statusColor(item.status) }}>{item.status}</span>
@@ -82,7 +80,7 @@ function renderResult(group: string, item: any, router: any, onClose: () => void
 
     case 'graphics_jobs':
       return (
-        <button key={item.id} onClick={() => navigate(`/graphics?id=${item.id}`)} style={resultBtnStyle}>
+        <button key={item.id} onClick={select} style={resultBtnStyle}>
           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'start' }}>
             <span style={titleStyle}>{item.job_number ? `#${item.job_number} ` : ''}{item.title || item.part_number}</span>
             <span style={{ ...statusBadge, color: statusColor(item.status) }}>{item.status}</span>
@@ -95,7 +93,7 @@ function renderResult(group: string, item: any, router: any, onClose: () => void
 
     case 'estimates':
       return (
-        <button key={item.id} onClick={() => navigate(`/estimates?id=${item.id}`)} style={resultBtnStyle}>
+        <button key={item.id} onClick={select} style={resultBtnStyle}>
           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'start' }}>
             <span style={titleStyle}>{item.estimate_number || 'Estimate'}</span>
             <div>
@@ -109,20 +107,20 @@ function renderResult(group: string, item: any, router: any, onClose: () => void
 
     case 'parts':
       return (
-        <button key={item.id} onClick={() => navigate(`/admin/catalog?id=${item.id}`)} style={resultBtnStyle}>
+        <button key={item.id} onClick={select} style={resultBtnStyle}>
           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'start' }}>
             <span style={titleStyle}>{item.part_number}</span>
             {item.price > 0 && <span style={valueStyle}>{formatCurrency(item.price)}</span>}
           </div>
           <div style={subtitleStyle}>
-            {[item.end_customer, item.vehicle_type, item.graphic_package].filter(Boolean).join(' · ')}
+            {[item.end_customer, item.vehicle_type, item.graphic_package].filter(Boolean).join(' · ') || item.display_name || ''}
           </div>
         </button>
       );
 
     case 'customers':
       return (
-        <button key={item.id} onClick={() => navigate(`/admin/prospects?id=${item.id}`)} style={resultBtnStyle}>
+        <button key={item.id} onClick={select} style={resultBtnStyle}>
           <span style={titleStyle}>{item.company_name}</span>
           <div style={subtitleStyle}>
             {item.contact_name || ''}{item.email ? ` · ${item.email}` : ''}{item.status === 'converted' ? ' · Customer' : item.status === 'active' ? ' · Prospect' : ''}
@@ -132,7 +130,7 @@ function renderResult(group: string, item: any, router: any, onClose: () => void
 
     case 'messages':
       return (
-        <button key={item.id} onClick={() => navigate(`/messages?conversation=${item.conversation_id}`)} style={resultBtnStyle}>
+        <button key={item.id} onClick={select} style={resultBtnStyle}>
           <div style={{ ...subtitleStyle, fontSize: '12px', color: 'var(--text-secondary)' }}>
             {(item.body || '').length > 120 ? item.body.substring(0, 120) + '...' : item.body}
           </div>
@@ -142,7 +140,7 @@ function renderResult(group: string, item: any, router: any, onClose: () => void
 
     case 'quotes':
       return (
-        <button key={item.id} onClick={() => navigate(`/admin/quotes?id=${item.id}`)} style={resultBtnStyle}>
+        <button key={item.id} onClick={select} style={resultBtnStyle}>
           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'start' }}>
             <span style={titleStyle}>{item.quote_number}</span>
             <div>
@@ -183,12 +181,18 @@ const valueStyle: React.CSSProperties = {
 };
 
 export default function UniversalSearch({ open, onClose }: UniversalSearchProps) {
-  const router = useRouter();
+  const { open: openPopout } = usePopout();
   const inputRef = useRef<HTMLInputElement>(null);
   const [query, setQuery] = useState('');
   const [results, setResults] = useState<Record<string, any[]>>({});
   const [searching, setSearching] = useState(false);
   const debounceRef = useRef<NodeJS.Timeout | null>(null);
+
+  // Tapping a result closes the search and pops out the shared detail view.
+  const openDetail = useCallback((group: string, item: any) => {
+    onClose();
+    openPopout(group as PopoutType, item);
+  }, [onClose, openPopout]);
 
   // Focus input when opened
   useEffect(() => {
@@ -330,7 +334,7 @@ export default function UniversalSearch({ open, onClose }: UniversalSearchProps)
                 </div>
 
                 {/* Group results */}
-                {items.map((item: any) => renderResult(group, item, router, onClose))}
+                {items.map((item: any) => renderResult(group, item, openDetail))}
               </div>
             );
           })}

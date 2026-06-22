@@ -2,6 +2,7 @@
 
 import { useState, useRef, useEffect } from 'react';
 import { useRouter } from 'next/navigation';
+import { usePopout } from '@/components/Popout';
 import { useAuth } from '@/components/AuthProvider';
 import { createClient } from '@/lib/supabase-browser';
 import { decodeVIN, isValidVIN } from '@/lib/vin-decoder';
@@ -40,6 +41,7 @@ function StepIndicator({ current }: { current: number }) {
 export default function FleetPage() {
   const { user, profile } = useAuth();
   const router = useRouter();
+  const { open: openPopout } = usePopout();
   const supabase = createClient();
 
   // Workflow state
@@ -1034,7 +1036,7 @@ export default function FleetPage() {
                   <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '8px' }}>
                     <div
                       style={{ flex: 1, cursor: 'pointer', minWidth: 0 }}
-                      onClick={() => router.push(`/tracking?vehicle=${ci.id}`)}
+                      onClick={() => openPopout('vehicles', ci.id)}
                     >
                       <div style={{ fontWeight: 700, fontSize: '13px' }}>
                         {[ci.vehicle_year, ci.vehicle_make, ci.vehicle_model].filter(Boolean).join(' ') || 'Unknown'}

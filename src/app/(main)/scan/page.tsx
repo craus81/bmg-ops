@@ -17,6 +17,7 @@ interface Part {
   description: string | null;
   billable_customer: string | null;
   catalog: string;
+  source: string;
 }
 
 interface Location {
@@ -320,26 +321,22 @@ export default function ScanPage() {
     prefillCustomJobDefaults();
   };
 
-  // Two catalogs feed the picker:
-  //   * netsuite_parts — synced from NetSuite + PO-imported parts (used by
-  //     /parts, by invoicing, etc.)
-  //   * catalog        — the graphics catalog at /admin/catalog (proofs,
-  //     vehicle types, end customers — what graphics installers track).
-  // They're separate tables and historically the scan picker only saw
-  // netsuite_parts, so parts that lived only in the graphics catalog
-  // (e.g. 06U183) were silently invisible here. Load both, normalize into
-  // the Part shape, and de-dupe by item_number (prefer netsuite_parts when
-  // both exist — it carries upstream NetSuite/PO billing context).
+  // The unified netsuite_parts catalog now carries both NetSuite-synced parts
+  // and the graphics-only parts folded in from the old proof catalog (migration
+  // 117, source='manual') — so the parts that used to live only in the graphics
+  // catalog (e.g. 06U183) are visible here without a second query. De-dupe by
+  // item number, preferring the NetSuite-synced row when a manual one collides
+  // (it carries upstream NetSuite/PO billing context).
   const loadParts = async () => {
-    const [netsuiteParts, catalogParts] = await Promise.all([
-      loadNetsuiteParts(),
-      loadCatalogParts(),
-    ]);
-
+    const netsuiteParts = await loadNetsuiteParts();
     const byItem = new Map<string, Part>();
-    for (const p of catalogParts) byItem.set(p.item_number.toUpperCase(), p);
-    for (const p of netsuiteParts) byItem.set(p.item_number.toUpperCase(), p);
-
+    for (const p of netsuiteParts) {
+      const key = p.item_number.toUpperCase();
+      const existing = byItem.get(key);
+      if (!existing || (p.source === 'netsuite' && existing.source !== 'netsuite')) {
+        byItem.set(key, p);
+      }
+    }
     const all = [...byItem.values()].sort((a, b) =>
       a.item_number.localeCompare(b.item_number)
     );
@@ -352,7 +349,7 @@ export default function ScanPage() {
     for (let offset = 0; ; offset += 1000) {
       const { data } = await supabase
         .from('netsuite_parts')
-        .select('id, item_number, display_name, description, billable_customer, catalog')
+        .select('id, item_number, display_name, description, billable_customer, catalog, source')
         .eq('is_active', true)
         .order('item_number')
         .range(offset, offset + 999);
@@ -363,57 +360,19 @@ export default function ScanPage() {
     return all;
   };
 
-  const loadCatalogParts = async (): Promise<Part[]> => {
-    const all: any[] = [];
-    for (let offset = 0; ; offset += 1000) {
-      const { data } = await supabase
-        .from('catalog')
-        .select('id, part_number, customer, end_customer, vehicle_type, graphic_package, active')
-        .eq('active', true)
-        .order('part_number')
-        .range(offset, offset + 999);
-      if (!data || data.length === 0) break;
-      all.push(...data);
-      if (data.length < 1000) break;
-    }
-    return all.map((c): Part => ({
-      // Synthetic prefixed id so it can't collide with netsuite_parts UUIDs.
-      // We branch on this prefix when loading proofs (catalog_proofs vs
-      // part_files, different storage buckets).
-      id: `cat:${c.id}`,
-      item_number: c.part_number,
-      display_name: [c.vehicle_type, c.graphic_package].filter(Boolean).join(' · ') || c.part_number,
-      description: null,
-      billable_customer: c.end_customer || c.customer || null,
-      catalog: 'graphics',
-    }));
-  };
-
   const loadPartProofs = async (part: Part) => {
-    if (part.id.startsWith('cat:')) {
-      // Catalog items keep their proofs in `catalog_proofs` (storage bucket
-      // `proofs`), not `part_files` (`graphics-proofs`).
-      const catalogId = part.id.slice(4);
-      const { data } = await supabase
-        .from('catalog_proofs')
-        .select('file_name, file_path')
-        .eq('catalog_id', catalogId);
-      setPartProofs((data || []).map((p: any) => ({
-        file_name: p.file_name,
-        storage_path: p.file_path,
-        bucket: 'proofs' as const,
-      })));
-    } else {
-      const { data } = await supabase
-        .from('part_files')
-        .select('file_name, storage_path')
-        .eq('part_id', part.id);
-      setPartProofs((data || []).map((p: any) => ({
-        file_name: p.file_name,
-        storage_path: p.storage_path,
-        bucket: 'graphics-proofs' as const,
-      })));
-    }
+    // Proofs live in part_files; the bucket column says where the object is —
+    // `graphics-proofs` natively, or `proofs` for images folded in from the old
+    // proof catalog by migration 117.
+    const { data } = await supabase
+      .from('part_files')
+      .select('file_name, storage_path, bucket')
+      .eq('part_id', part.id);
+    setPartProofs((data || []).map((p: any) => ({
+      file_name: p.file_name,
+      storage_path: p.storage_path,
+      bucket: (p.bucket || 'graphics-proofs') as 'graphics-proofs' | 'proofs',
+    })));
   };
 
   const loadLocations = async () => {
@@ -722,7 +681,7 @@ export default function ScanPage() {
                       <div>
                         <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
                           <div style={{ fontWeight: 700, fontSize: '14px', color: theme.textPrimary }}>{p.item_number}</div>
-                          {p.id.startsWith('cat:') && (
+                          {p.catalog === 'graphics' && (
                             <span style={{ fontSize: '9px', fontWeight: 700, padding: '1px 6px', borderRadius: '4px', background: 'rgba(251,191,36,0.12)', color: '#fbbf24', letterSpacing: '0.3px' }}>
                               GRAPHICS
                             </span>

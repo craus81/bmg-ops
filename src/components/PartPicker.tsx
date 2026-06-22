@@ -25,8 +25,8 @@ interface PartPickerProps {
 const norm = (s: string) => (s || '').toLowerCase().replace(/o/g, '0');
 
 /**
- * Single-part picker that merges the two catalogs the scan flow uses
- * (netsuite_parts + the graphics `catalog`), de-duped by item number. Pick a
+ * Single-part picker over the unified netsuite_parts catalog (which now also
+ * carries the graphics-only parts folded in from the old proof catalog). Pick a
  * part to drive part-specific behavior (e.g. the Verizon RFID device capture).
  */
 export default function PartPicker({ value, onChange, inputStyle }: PartPickerProps) {
@@ -39,29 +39,10 @@ export default function PartPicker({ value, onChange, inputStyle }: PartPickerPr
     (async () => {
       const byItem = new Map<string, PartOption>();
 
-      // Graphics catalog first so netsuite_parts wins on collision.
-      for (let offset = 0; ; offset += 1000) {
-        const { data } = await supabase
-          .from('catalog')
-          .select('part_number, customer, end_customer, vehicle_type, graphic_package, active')
-          .eq('active', true).order('part_number').range(offset, offset + 999);
-        if (!data || data.length === 0) break;
-        for (const c of data as any[]) {
-          byItem.set((c.part_number || '').toUpperCase(), {
-            item_number: c.part_number,
-            part_number: c.part_number,
-            part_description: [c.vehicle_type, c.graphic_package].filter(Boolean).join(' · ') || null,
-            billable_customer: c.end_customer || c.customer || null,
-            graphics: true,
-          });
-        }
-        if (data.length < 1000) break;
-      }
-
       for (let offset = 0; ; offset += 1000) {
         const { data } = await supabase
           .from('netsuite_parts')
-          .select('item_number, display_name, description, billable_customer')
+          .select('item_number, display_name, description, billable_customer, catalog')
           .eq('is_active', true).order('item_number').range(offset, offset + 999);
         if (!data || data.length === 0) break;
         for (const p of data as any[]) {
@@ -70,7 +51,7 @@ export default function PartPicker({ value, onChange, inputStyle }: PartPickerPr
             part_number: p.item_number,
             part_description: p.display_name || p.description || null,
             billable_customer: p.billable_customer || null,
-            graphics: false,
+            graphics: p.catalog === 'graphics',
           });
         }
         if (data.length < 1000) break;

@@ -131,8 +131,8 @@ describe('createSalesOrder', () => {
       otherRefNum: 'PO-9001',
       item: {
         items: [
-          { item: { id: '55' }, quantity: 2, rate: 125.5, description: 'Shelf unit' },
-          { item: { id: '56' }, quantity: 1, rate: 80 },
+          { item: { id: '55' }, quantity: 2, price: { id: '-1' }, rate: 125.5, description: 'Shelf unit' },
+          { item: { id: '56' }, quantity: 1, price: { id: '-1' }, rate: 80 },
         ],
       },
       location: { id: '7' },
@@ -186,7 +186,7 @@ describe('createDirectInvoice', () => {
     const body = JSON.parse(fetchMock.mock.calls[0][1].body);
     expect(body).toEqual({
       entity: { id: 9 },
-      item: { items: [{ item: { id: '55' }, quantity: 3, rate: 42.5 }] },
+      item: { items: [{ item: { id: '55' }, quantity: 3, price: { id: '-1' }, rate: 42.5 }] },
       location: { id: '7' },
       otherRefNum: 'PO-1',
     });

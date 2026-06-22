@@ -27,7 +27,7 @@ export async function GET(req: NextRequest) {
     // Purchase Orders — search by PO number, customer, line item part numbers
     supabase
       .from('purchase_orders')
-      .select('id, po_number, customer, status, ordered_date, created_at, ship_to, po_line_items(id, part_number, description, quantity, unit_price)')
+      .select('id, po_number, customer, status, ordered_date, created_at, ship_to, po_line_items(id, part_number, description, quantity, unit_price, installed)')
       .or(`po_number.ilike.${like},customer.ilike.${like}`)
       .order('created_at', { ascending: false })
       .limit(MAX_PER_GROUP),
@@ -56,13 +56,13 @@ export async function GET(req: NextRequest) {
       .order('created_at', { ascending: false })
       .limit(MAX_PER_GROUP),
 
-    // Parts Catalog — search by part number, description, customer
+    // Parts Catalog — search the unified catalog by part number, name, customer
     supabase
-      .from('catalog')
-      .select('id, part_number, customer, end_customer, vehicle_type, graphic_package, price')
-      .eq('active', true)
-      .or(`part_number.ilike.${like},end_customer.ilike.${like},vehicle_type.ilike.${like},graphic_package.ilike.${like}`)
-      .limit(MAX_PER_GROUP),
+      .from('netsuite_parts')
+      .select('id, item_number, display_name, billable_customer, vehicle_type, graphic_package, sales_price, catalog')
+      .eq('is_active', true)
+      .or(`item_number.ilike.${like},display_name.ilike.${like},billable_customer.ilike.${like},vehicle_type.ilike.${like},graphic_package.ilike.${like}`)
+      .limit(MAX_PER_GROUP * 4),
 
     // Customers & Prospects — search by company name, contact, email
     supabase
@@ -106,7 +106,7 @@ export async function GET(req: NextRequest) {
     if (newPoIds.length > 0) {
       const { data: additionalPOs } = await supabase
         .from('purchase_orders')
-        .select('id, po_number, customer, status, ordered_date, created_at, ship_to, po_line_items(id, part_number, description, quantity, unit_price)')
+        .select('id, po_number, customer, status, ordered_date, created_at, ship_to, po_line_items(id, part_number, description, quantity, unit_price, installed)')
         .in('id', newPoIds)
         .limit(MAX_PER_GROUP);
       poFromLineItems = additionalPOs || [];
@@ -147,7 +147,29 @@ export async function GET(req: NextRequest) {
   if (vehicles.data?.length) results.vehicles = vehicles.data;
   if (graphicsJobs.data?.length) results.graphics_jobs = graphicsJobs.data;
   if (allEstimates.length > 0) results.estimates = allEstimates;
-  if (parts.data?.length) results.parts = parts.data;
+  if (parts.data?.length) {
+    // De-dupe by item number (legacy data can carry >1 row per part), then map
+    // onto the shape UniversalSearch renders.
+    const seen = new Set<string>();
+    results.parts = parts.data
+      .filter((p: any) => {
+        const k = (p.item_number || '').toUpperCase();
+        if (seen.has(k)) return false;
+        seen.add(k);
+        return true;
+      })
+      .slice(0, MAX_PER_GROUP)
+      .map((p: any) => ({
+        id: p.id,
+        catalog: p.catalog,
+        part_number: p.item_number,
+        display_name: p.display_name,
+        price: p.sales_price || 0,
+        end_customer: p.billable_customer,
+        vehicle_type: p.vehicle_type,
+        graphic_package: p.graphic_package,
+      }));
+  }
   if (customers.data?.length) results.customers = customers.data;
   if (messages.data?.length) results.messages = messages.data;
   if (quotes.data?.length) results.quotes = quotes.data;

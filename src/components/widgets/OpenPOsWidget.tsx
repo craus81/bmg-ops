@@ -2,12 +2,14 @@
 
 import { useState, useEffect } from 'react';
 import { useRouter } from 'next/navigation';
+import { usePopout } from '@/components/Popout';
 import { createClient } from '@/lib/supabase-browser';
 import { theme } from '@/lib/theme';
 import WidgetShell from './WidgetShell';
 
 export default function OpenPOsWidget() {
   const router = useRouter();
+  const { open: openPopout } = usePopout();
   const supabase = createClient();
   const [loading, setLoading] = useState(true);
   const [stats, setStats] = useState({ count: 0, totalValue: 0, remaining: 0 });
@@ -61,7 +63,7 @@ export default function OpenPOsWidget() {
         {pos.length > 0 && (
           <div style={{ marginTop: '10px', display: 'flex', flexDirection: 'column', gap: '4px' }}>
             {pos.map(po => (
-              <button key={po.id} onClick={() => router.push(`/admin/pos?id=${po.id}`)} style={{
+              <button key={po.id} onClick={() => openPopout('purchase_orders', po.id)} style={{
                 display: 'flex', justifyContent: 'space-between', alignItems: 'center', width: '100%',
                 fontSize: '11px', padding: '6px 8px', borderRadius: '8px',
                 background: 'var(--subtle-bg)', border: 'none', textAlign: 'left', cursor: 'pointer',

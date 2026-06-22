@@ -5,6 +5,7 @@ import { useRouter } from 'next/navigation';
 import { AuthProvider, useAuth } from '@/components/AuthProvider';
 import { AppProvider, useApp } from '@/components/AppProvider';
 import { ThemeProvider } from '@/components/ThemeProvider';
+import { PopoutProvider } from '@/components/Popout';
 import Header from '@/components/Header';
 import BottomNav from '@/components/BottomNav';
 import AiChat from '@/components/AiChat';
@@ -109,8 +110,10 @@ export default function ClientProviders({ children }: { children: React.ReactNod
     <ThemeProvider>
       <AuthProvider>
         <AppProvider>
-          <DeepLinkHandler />
-          <AppShell>{children}</AppShell>
+          <PopoutProvider>
+            <DeepLinkHandler />
+            <AppShell>{children}</AppShell>
+          </PopoutProvider>
         </AppProvider>
       </AuthProvider>
     </ThemeProvider>

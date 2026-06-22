@@ -2,6 +2,7 @@
 
 import { useState, useEffect, useCallback, useRef } from 'react';
 import { useRouter, useSearchParams } from 'next/navigation';
+import { usePopout } from '@/components/Popout';
 import { createClient } from '@/lib/supabase-browser';
 import { useAuth } from '@/components/AuthProvider';
 import { theme } from '@/lib/theme';
@@ -119,6 +120,7 @@ function genKey() {
 
 export default function EstimatesPage() {
   const router = useRouter();
+  const { open: openPopout } = usePopout();
   const searchParams = useSearchParams();
   const { user, isAdmin, isSales, isGraphicsProduction, profile } = useAuth();
   const supabase = createClient();
@@ -1258,7 +1260,7 @@ export default function EstimatesPage() {
                     <span style={{ color: 'var(--text-muted)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{j.title}</span>
                   </div>
                   <button
-                    onClick={() => router.push(`/graphics?id=${j.id}`)}
+                    onClick={() => openPopout('graphics_jobs', j.id)}
                     style={{
                       padding: '2px 8px', borderRadius: '4px', fontSize: '10px', fontWeight: 700,
                       background: 'transparent', border: '1px solid var(--border)',

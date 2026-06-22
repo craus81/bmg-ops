@@ -393,13 +393,29 @@ function DashboardAnalytics() {
 
     const allVehicles = vehicles || [];
 
-    // ── Get catalog for pricing ──
-    const { data: catalog } = await supabase
-      .from('catalog')
-      .select('id, part_number, customer, end_customer, vehicle_type, graphic_package, price, active');
-
-    const catalogMap: Record<string, any> = {};
-    (catalog || []).forEach((c: any) => { catalogMap[c.part_number] = c; });
+    // ── Get unified catalog for pricing: by uppercased item number, and by id
+    //    for schedule assignments that carry a part_id ──
+    const catalogMap: Record<string, { customer: string; price: number }> = {};
+    const priceById: Record<string, number> = {};
+    for (let offset = 0; ; offset += 1000) {
+      const { data } = await supabase
+        .from('netsuite_parts')
+        .select('id, item_number, customer, billable_customer, sales_price')
+        .eq('is_active', true)
+        .order('item_number')
+        .range(offset, offset + 999);
+      if (!data || data.length === 0) break;
+      for (const c of data as any[]) {
+        priceById[c.id] = c.sales_price || 0;
+        if (c.item_number) {
+          catalogMap[c.item_number.toUpperCase()] = {
+            customer: c.customer || c.billable_customer || '',
+            price: c.sales_price || 0,
+          };
+        }
+      }
+      if (data.length < 1000) break;
+    }
 
     // ── Get PO line items for revenue data ──
     const { data: poLines } = await supabase
@@ -453,7 +469,7 @@ function DashboardAnalytics() {
     for (const v of allVehicles) {
       const pn = v.part_number || 'Unknown';
       if (!partMap[pn]) {
-        const cat = catalogMap[pn];
+        const cat = catalogMap[pn.toUpperCase()];
         partMap[pn] = {
           partNumber: pn,
           customer: v.customer || cat?.customer || '',
@@ -470,8 +486,8 @@ function DashboardAnalytics() {
       // Revenue from PO line item
       if (v.po_line_item_id && poLineMap[v.po_line_item_id]) {
         partMap[pn].revenue += poLineMap[v.po_line_item_id].unit_price;
-      } else if (catalogMap[pn]) {
-        partMap[pn].revenue += catalogMap[pn].price;
+      } else if (catalogMap[pn.toUpperCase()]) {
+        partMap[pn].revenue += catalogMap[pn.toUpperCase()].price;
       }
 
       // Cost from invoices
@@ -516,7 +532,7 @@ function DashboardAnalytics() {
     // ═══════════════════════════════════════════
     const { data: scheduleData } = await supabase
       .from('schedule_assignments')
-      .select('id, location_id, catalog_id, quantity, status');
+      .select('id, location_id, catalog_id, part_id, quantity, status');
 
     const { data: locations } = await supabase.from('locations').select('id, name');
     const locationMap: Record<string, string> = {};
@@ -533,12 +549,10 @@ function DashboardAnalytics() {
       locStats[locName].scheduledJobs++;
       locStats[locName].scheduledQty += sa.quantity || 0;
 
-      // Revenue estimate from catalog
-      if (sa.catalog_id) {
-        const cat = (catalog || []).find((c: any) => c.id === sa.catalog_id);
-        if (cat) {
-          locStats[locName].revenue += cat.price * (sa.quantity || 1);
-        }
+      // Revenue estimate from the unified catalog (via the part_id backfilled
+      // by migration 117).
+      if (sa.part_id && priceById[sa.part_id] != null) {
+        locStats[locName].revenue += priceById[sa.part_id] * (sa.quantity || 1);
       }
     }
 

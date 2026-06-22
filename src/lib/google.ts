@@ -180,6 +180,60 @@ export function getPdfAttachments(message: any): { filename: string; attachmentI
   return attachments;
 }
 
+// ── Proof attachments (PDFs + photo/design files) ──────────────
+// What a vehicle-graphics or print proof actually arrives as. Mirrors the
+// classification in scripts/extract-email-proofs.mjs so the in-app picker and
+// the bulk script agree on what counts as a proof.
+const PROOF_ALWAYS_EXT = new Set(['pdf', 'ai', 'eps', 'psd', 'tif', 'tiff', 'svg']);
+const PROOF_RASTER_EXT = new Set(['jpg', 'jpeg', 'png', 'gif', 'bmp', 'webp', 'heic', 'heif']);
+// Raster images must clear this size so we don't surface signature logos and
+// tracking pixels. PDFs and design-source files always count.
+const PROOF_MIN_RASTER_BYTES = 25000;
+
+function proofExt(filename: string): string {
+  const m = /\.([a-z0-9]+)$/i.exec(filename || '');
+  return m ? m[1].toLowerCase() : '';
+}
+
+export interface ProofAttachment {
+  filename: string;
+  attachmentId: string;
+  size: number;
+  mimeType: string;
+}
+
+// Walk a message's MIME parts and return the attachments that look like proofs.
+export function getProofAttachments(message: any): ProofAttachment[] {
+  const out: ProofAttachment[] = [];
+  function walk(part: any) {
+    if (!part) return;
+    const filename: string = part.filename || '';
+    const attachmentId: string | undefined = part.body?.attachmentId;
+    const size: number = part.body?.size || 0;
+    if (filename && attachmentId) {
+      const ext = proofExt(filename);
+      const keep = PROOF_ALWAYS_EXT.has(ext) || (PROOF_RASTER_EXT.has(ext) && size >= PROOF_MIN_RASTER_BYTES);
+      if (keep) out.push({ filename, attachmentId, size, mimeType: part.mimeType || '' });
+    }
+    if (part.parts) for (const p of part.parts) walk(p);
+  }
+  walk(message.payload);
+  return out;
+}
+
+// Best-effort content type for a proof, falling back to the file extension when
+// Gmail reports a generic/empty mimeType.
+export function proofContentType(filename: string, mimeType?: string): string {
+  if (mimeType && mimeType !== 'application/octet-stream') return mimeType;
+  const map: Record<string, string> = {
+    pdf: 'application/pdf', png: 'image/png', jpg: 'image/jpeg', jpeg: 'image/jpeg',
+    gif: 'image/gif', bmp: 'image/bmp', webp: 'image/webp', heic: 'image/heic',
+    heif: 'image/heif', tif: 'image/tiff', tiff: 'image/tiff', svg: 'image/svg+xml',
+    eps: 'application/postscript', ai: 'application/illustrator', psd: 'image/vnd.adobe.photoshop',
+  };
+  return map[proofExt(filename)] || 'application/octet-stream';
+}
+
 // Extract header value from message
 export function getHeader(message: any, name: string): string {
   const headers = message.payload?.headers || [];

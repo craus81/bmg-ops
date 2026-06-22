@@ -165,31 +165,86 @@ function printPo(po: PurchaseOrder & { line_items: POLineItem[] }) {
   w.onload = () => { w.focus(); w.print(); };
 }
 
-// Mirror a freshly-added catalog row into netsuite_parts so it shows up in
-// the parts catalog and the bulk VIN tools, which both query netsuite_parts.
-// No-op if a row with that item_number already exists.
-async function ensureNetsuitePartMirror(
+// ── Unified parts catalog (phase 2) ──────────────────────────────────────
+// The catalog the PO screen matches against is now netsuite_parts (the merged
+// catalog), not the old `catalog` table. These helpers load it in the
+// CatalogItem shape the screen already works in, and create manual (non-
+// NetSuite) parts as source='manual' with a NULL netsuite_id so the NetSuite
+// sync never deactivates them.
+const PART_FIELDS =
+  'id, item_number, customer, billable_customer, vehicle_type, graphic_package, sales_price, proof_pages, is_active';
+
+function partToCatalogItem(p: any): CatalogItem {
+  return {
+    id: p.id,
+    part_number: p.item_number,
+    customer: p.customer || '',
+    end_customer: p.billable_customer || '',
+    vehicle_type: p.vehicle_type || '',
+    graphic_package: p.graphic_package || '',
+    price: Number(p.sales_price) || 0,
+    proof_pages: p.proof_pages ?? 1,
+    active: p.is_active !== false,
+  };
+}
+
+async function loadUnifiedCatalog(
   supabase: ReturnType<typeof createClient>,
-  params: { partNumber: string; description: string | null; price: number; billableCustomer: string | null },
-) {
-  const { partNumber, description, price, billableCustomer } = params;
-  if (!partNumber) return;
-  const { data: existing } = await supabase
+): Promise<CatalogItem[]> {
+  const { data } = await supabase
     .from('netsuite_parts')
-    .select('id')
-    .eq('item_number', partNumber)
-    .maybeSingle();
-  if (existing) return;
-  await supabase.from('netsuite_parts').insert({
-    netsuite_id: `bmg-${crypto.randomUUID()}`,
-    item_number: partNumber,
-    display_name: description,
-    description,
-    catalog: 'graphics',
-    sales_price: price,
-    billable_customer: billableCustomer,
-    is_active: true,
-  });
+    .select(PART_FIELDS)
+    .eq('is_active', true)
+    .order('item_number');
+  return ((data as any[]) || []).map(partToCatalogItem);
+}
+
+// Find a part by item number (case-insensitive), creating a manual row if it
+// doesn't exist yet. Returns it in CatalogItem shape (its id is a part_id).
+async function findOrCreateManualPart(
+  supabase: ReturnType<typeof createClient>,
+  params: {
+    partNumber: string;
+    description?: string | null;
+    price?: number;
+    customer?: string | null;
+    billableCustomer?: string | null;
+    vehicleType?: string | null;
+    graphicPackage?: string | null;
+  },
+): Promise<CatalogItem | null> {
+  const partNumber = (params.partNumber || '').trim();
+  if (!partNumber) return null;
+  // ilike fetches a case-insensitive superset; narrow to an exact match in JS
+  // so wildcard chars in a part number can't cause a false positive.
+  const { data: candidates } = await supabase
+    .from('netsuite_parts')
+    .select(PART_FIELDS)
+    .ilike('item_number', partNumber);
+  const existing = ((candidates as any[]) || []).find(
+    (c) => (c.item_number || '').toUpperCase() === partNumber.toUpperCase(),
+  );
+  if (existing) return partToCatalogItem(existing);
+
+  const { data: created } = await supabase
+    .from('netsuite_parts')
+    .insert({
+      netsuite_id: null,
+      item_number: partNumber,
+      display_name: params.description || partNumber,
+      description: params.description || null,
+      catalog: 'graphics',
+      source: 'manual',
+      sales_price: params.price || 0,
+      customer: params.customer || null,
+      billable_customer: params.billableCustomer || null,
+      vehicle_type: params.vehicleType || null,
+      graphic_package: params.graphicPackage || null,
+      is_active: true,
+    })
+    .select(PART_FIELDS)
+    .single();
+  return created ? partToCatalogItem(created as any) : null;
 }
 
 // Upload the source PDF to R2 and record it on the PO so it stays attached
@@ -233,12 +288,14 @@ export default function POsPage() {
   const [showCreate, setShowCreate] = useState(false);
   const [showImport, setShowImport] = useState(false);
   const [expandedPo, setExpandedPo] = useState<string | null>(null);
+  // Deep-link target to briefly highlight after search/notification navigation.
+  const [highlightPo, setHighlightPo] = useState<string | null>(null);
   const [editPoId, setEditPoId] = useState<string | null>(null);
   const [editPoForm, setEditPoForm] = useState({ po_number: '', customer: '', status: '' as string, ordered_date: '', requested_delivery_date: '', notes: '' });
   const [editLineId, setEditLineId] = useState<string | null>(null);
   const [editLineForm, setEditLineForm] = useState({ part_number: '', quantity: '', unit_price: '', installed: '' });
   const [form, setForm] = useState({ po_number: '', customer: 'Masterack', ordered_date: '', requested_delivery_date: '', notes: '' });
-  const [lineItems, setLineItems] = useState<{ catalog_id: string; part_number: string; quantity: number; unit_price: number }[]>([]);
+  const [lineItems, setLineItems] = useState<{ part_id: string; part_number: string; quantity: number; unit_price: number }[]>([]);
   const fileRef = useRef<HTMLInputElement>(null);
   const [poSearch, setPoSearch] = useState('');
 
@@ -456,8 +513,7 @@ export default function POsPage() {
         }));
       setPos(mapped);
 
-      const { data: catData } = await supabase.from('catalog').select('*').order('part_number');
-      setCatalog((catData as CatalogItem[]) || []);
+      setCatalog(await loadUnifiedCatalog(supabase));
       setLoading(false);
 
       // Load pending PO queue
@@ -515,14 +571,26 @@ export default function POsPage() {
     setGmailRunning(false);
   };
 
-  // Auto-expand PO from URL param (deep link from notifications/search)
+  // Auto-open PO from URL param (deep link from notifications/search): switch to
+  // the right tab, clear any filter, expand it, then scroll to + highlight it so
+  // it's not buried somewhere down the list.
   useEffect(() => {
     if (loading) return;
     const poId = searchParams.get('id');
-    if (poId && pos.some(p => p.id === poId)) {
-      setExpandedPo(poId);
-    }
-  // eslint-disable-next-line react-hooks/exhaustive-deps -- intentional: load once on mount
+    if (!poId) return;
+    const target = pos.find(p => p.id === poId);
+    if (!target) return;
+    setPoTab(target.status === 'closed' ? 'closed' : 'open');
+    setPoSearch('');
+    setExpandedPo(poId);
+    setHighlightPo(poId);
+    const clear = setTimeout(() => setHighlightPo(null), 2500);
+    // Defer the scroll so the right tab/expanded row is in the DOM first.
+    setTimeout(() => {
+      document.getElementById(`po-row-${poId}`)?.scrollIntoView({ behavior: 'smooth', block: 'center' });
+    }, 200);
+    return () => clearTimeout(clear);
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- intentional: deep-link once after load
   }, [loading, searchParams]);
 
   useEffect(() => {
@@ -670,34 +738,22 @@ export default function POsPage() {
       return;
     }
 
-    // Auto-create catalog entries for unmatched parts
+    // Auto-create catalog parts for unmatched lines (manual rows in netsuite_parts)
     for (const l of linesToImport) {
       if (!l.catalog_match) {
-        const { data: newCat } = await supabase
-          .from('catalog')
-          .insert({
-            part_number: l.part_number,
-            customer: 'Masterack',
-            end_customer: l.new_end_customer || '',
-            vehicle_type: l.new_vehicle_type || '',
-            graphic_package: l.new_graphic_package || l.description || '',
-            price: l.final_price,
-            proof_pages: 1,
-            active: true,
-          })
-          .select()
-          .single();
-
-        if (newCat) {
-          l.catalog_match = newCat as CatalogItem;
+        const created = await findOrCreateManualPart(supabase, {
+          partNumber: l.part_number,
+          description: l.description || null,
+          price: l.final_price,
+          customer: 'Masterack',
+          billableCustomer: l.new_end_customer || null,
+          vehicleType: l.new_vehicle_type || null,
+          graphicPackage: l.new_graphic_package || l.description || null,
+        });
+        if (created) {
+          l.catalog_match = created;
           // Update local catalog list
-          setCatalog((prev) => [...prev, newCat as CatalogItem]);
-          await ensureNetsuitePartMirror(supabase, {
-            partNumber: l.part_number,
-            description: l.description || null,
-            price: l.final_price,
-            billableCustomer: l.new_end_customer || null,
-          });
+          setCatalog((prev) => [...prev, created]);
         }
       }
     }
@@ -707,7 +763,7 @@ export default function POsPage() {
       .from('po_line_items')
       .insert(linesToImport.map((l) => ({
         po_id: po.id,
-        catalog_id: l.catalog_match?.id || null,
+        part_id: l.catalog_match?.id || null,
         part_number: l.part_number,
         description: l.description || null,
         quantity: l.quantity,
@@ -762,33 +818,21 @@ export default function POsPage() {
       requested_delivery_date: parsedPO.requested_delivery_date || existingPo.requested_delivery_date || null,
     }).eq('id', existingPo.id);
 
-    // Auto-create catalog entries for unmatched parts
+    // Auto-create catalog parts for unmatched lines (manual rows in netsuite_parts)
     for (const l of linesToImport) {
       if (!l.catalog_match) {
-        const { data: newCat } = await supabase
-          .from('catalog')
-          .insert({
-            part_number: l.part_number,
-            customer: parsedPO.customer || 'Masterack',
-            end_customer: l.new_end_customer || '',
-            vehicle_type: l.new_vehicle_type || '',
-            graphic_package: l.new_graphic_package || l.description || '',
-            price: l.final_price,
-            proof_pages: 1,
-            active: true,
-          })
-          .select()
-          .single();
-
-        if (newCat) {
-          l.catalog_match = newCat as CatalogItem;
-          setCatalog((prev) => [...prev, newCat as CatalogItem]);
-          await ensureNetsuitePartMirror(supabase, {
-            partNumber: l.part_number,
-            description: l.description || null,
-            price: l.final_price,
-            billableCustomer: l.new_end_customer || null,
-          });
+        const created = await findOrCreateManualPart(supabase, {
+          partNumber: l.part_number,
+          description: l.description || null,
+          price: l.final_price,
+          customer: parsedPO.customer || 'Masterack',
+          billableCustomer: l.new_end_customer || null,
+          vehicleType: l.new_vehicle_type || null,
+          graphicPackage: l.new_graphic_package || l.description || null,
+        });
+        if (created) {
+          l.catalog_match = created;
+          setCatalog((prev) => [...prev, created]);
         }
       }
     }
@@ -798,7 +842,7 @@ export default function POsPage() {
       .from('po_line_items')
       .insert(linesToImport.map((l) => ({
         po_id: existingPo.id,
-        catalog_id: l.catalog_match?.id || null,
+        part_id: l.catalog_match?.id || null,
         part_number: l.part_number,
         description: l.description || null,
         quantity: l.quantity,
@@ -837,7 +881,7 @@ export default function POsPage() {
   const addLineItem = (catId: string) => {
     const item = catalog.find((c) => c.id === catId);
     if (!item) return;
-    setLineItems((prev) => [...prev, { catalog_id: item.id, part_number: item.part_number, quantity: 1, unit_price: item.price }]);
+    setLineItems((prev) => [...prev, { part_id: item.id, part_number: item.part_number, quantity: 1, unit_price: item.price }]);
   };
 
   const handleCreate = async () => {
@@ -1428,24 +1472,18 @@ export default function POsPage() {
   const addLineItemToCatalog = async (li: { id: string; part_number: string; description: string | null; unit_price: number }, customer: string) => {
     setAddingToCatalog(li.part_number);
     try {
-      const { error } = await supabase
-        .from('catalog')
-        .insert({
-          part_number: li.part_number,
-          customer: customer || '',
-          end_customer: '',
-          vehicle_type: '',
-          graphic_package: li.description || '',
-          price: li.unit_price,
-          proof_pages: 0,
-          active: true,
-        });
-      if (error) {
+      const created = await findOrCreateManualPart(supabase, {
+        partNumber: li.part_number,
+        description: li.description || null,
+        price: li.unit_price,
+        customer: customer || null,
+        graphicPackage: li.description || null,
+      });
+      if (!created) {
         setCatalogAddResults(prev => ({ ...prev, [li.part_number]: 'error' }));
       } else {
         setCatalogAddResults(prev => ({ ...prev, [li.part_number]: 'added' }));
-        const { data: catData } = await supabase.from('catalog').select('*').order('part_number');
-        setCatalog((catData as CatalogItem[]) || []);
+        setCatalog(await loadUnifiedCatalog(supabase));
       }
     } catch {
       setCatalogAddResults(prev => ({ ...prev, [li.part_number]: 'error' }));
@@ -1587,35 +1625,19 @@ export default function POsPage() {
   const addPartToCatalog = async (part: { part_number: string; description: string; unit_price: number }, customer: string) => {
     setAddingToCatalog(part.part_number);
     try {
-      const { data, error } = await supabase
-        .from('catalog')
-        .insert({
-          part_number: part.part_number,
-          customer: customer || 'Masterack',
-          end_customer: '',
-          vehicle_type: '',
-          graphic_package: part.description,
-          price: part.unit_price,
-          proof_pages: 0,
-          active: true,
-        })
-        .select()
-        .single();
-
-      if (error) {
-        console.error('Failed to add to catalog:', error);
+      const created = await findOrCreateManualPart(supabase, {
+        partNumber: part.part_number,
+        description: part.description || null,
+        price: part.unit_price,
+        customer: customer || 'Masterack',
+        graphicPackage: part.description || null,
+      });
+      if (!created) {
         setCatalogAddResults(prev => ({ ...prev, [part.part_number]: 'error' }));
       } else {
         setCatalogAddResults(prev => ({ ...prev, [part.part_number]: 'added' }));
-        await ensureNetsuitePartMirror(supabase, {
-          partNumber: part.part_number,
-          description: part.description || null,
-          price: part.unit_price,
-          billableCustomer: customer || null,
-        });
         // Refresh catalog list
-        const { data: catData } = await supabase.from('catalog').select('*').order('part_number');
-        setCatalog((catData as CatalogItem[]) || []);
+        setCatalog(await loadUnifiedCatalog(supabase));
       }
     } catch (err) {
       setCatalogAddResults(prev => ({ ...prev, [part.part_number]: 'error' }));
@@ -2906,7 +2928,7 @@ export default function POsPage() {
         const displayDate = po.ordered_date ? new Date(po.ordered_date + 'T00:00:00') : new Date(po.created_at);
 
         return (
-            <div key={po.id} style={{ background: 'var(--subtle-bg)', border: editMode && selectedForDelete.has(po.id) ? '1px solid rgba(248,113,113,0.5)' : '1px solid var(--border)', borderRadius: '10px', marginBottom: '6px', overflow: 'hidden' }}>
+            <div key={po.id} id={`po-row-${po.id}`} style={{ background: 'var(--subtle-bg)', border: highlightPo === po.id ? '1px solid #60a5fa' : (editMode && selectedForDelete.has(po.id) ? '1px solid rgba(248,113,113,0.5)' : '1px solid var(--border)'), boxShadow: highlightPo === po.id ? '0 0 0 2px rgba(96,165,250,0.5)' : undefined, transition: 'box-shadow 0.3s ease, border-color 0.3s ease', borderRadius: '10px', marginBottom: '6px', overflow: 'hidden' }}>
               <div onClick={() => editMode ? toggleDeleteSelection(po.id) : toggleExpand(po.id)} style={{ padding: '12px', cursor: 'pointer' }}>
                 <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'start' }}>
                   <div style={{ display: 'flex', alignItems: 'start', gap: '8px' }}>

@@ -77,10 +77,6 @@ export async function GET(req: NextRequest) {
       .select('po_number');
     const existingPoNumbers = new Set((existingPOs || []).map((p: any) => p.po_number));
 
-    // Get catalog for part matching
-    const { data: catalogData } = await supabase.from('catalog').select('*').eq('active', true);
-    const catalogItems = catalogData || [];
-
     let imported = 0;
     let skipped = 0;
     let errors = 0;
