@@ -5,6 +5,8 @@ import { useRouter } from 'next/navigation';
 import { createClient } from '@/lib/supabase-browser';
 import { storage } from '@/lib/storage';
 import { useAuth } from '@/components/AuthProvider';
+import EmailProofSearch, { type EmailProofFile } from '@/components/EmailProofSearch';
+import DropboxProofSearch, { type DropboxProofFile } from '@/components/DropboxProofSearch';
 
 interface Part {
   id: string;
@@ -88,6 +90,9 @@ export default function PartsPage() {
   const [partFiles, setPartFiles] = useState<Record<string, PartFile[]>>({});
   const [uploadingFile, setUploadingFile] = useState(false);
   const partFileRef = useRef<HTMLInputElement>(null);
+  // Which part (if any) has a proof-search panel open, and from which source.
+  // Only one panel is open at a time so the two sources don't stack.
+  const [proofSearch, setProofSearch] = useState<{ partId: string; source: 'email' | 'dropbox' } | null>(null);
   // Monotonic token to ignore stale loadParts() responses. A deep-link switches
   // catalog right after mount, so a slower earlier load must not clobber it.
   const loadReqRef = useRef(0);
@@ -308,6 +313,40 @@ export default function PartsPage() {
       await loadPartFiles(partId);
     }
     setUploadingFile(false);
+  };
+
+  // Pull a proof straight out of email and attach it to this part. The server
+  // downloads the chosen Gmail attachment, stores it in the graphics-proofs
+  // bucket, and records a part_files row — same end state as a manual upload.
+  const attachEmailProof = async (partId: string, file: EmailProofFile) => {
+    const { data } = await supabase.auth.getSession();
+    const token = data?.session?.access_token;
+    const res = await fetch(`/api/parts/${partId}/attach-proof`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', ...(token ? { Authorization: `Bearer ${token}` } : {}) },
+      body: JSON.stringify({ messageId: file.messageId, attachmentId: file.attachmentId, filename: file.filename }),
+    });
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({}));
+      throw new Error(err.error || `Attach failed (${res.status})`);
+    }
+    await loadPartFiles(partId);
+  };
+
+  // Same as attachEmailProof, but the server pulls the file from Dropbox.
+  const attachDropboxProof = async (partId: string, file: DropboxProofFile) => {
+    const { data } = await supabase.auth.getSession();
+    const token = data?.session?.access_token;
+    const res = await fetch(`/api/parts/${partId}/attach-dropbox-proof`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', ...(token ? { Authorization: `Bearer ${token}` } : {}) },
+      body: JSON.stringify({ dropboxPath: file.path, filename: file.name }),
+    });
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({}));
+      throw new Error(err.error || `Attach failed (${res.status})`);
+    }
+    await loadPartFiles(partId);
   };
 
   const deletePartFile = async (file: PartFile) => {
@@ -687,6 +726,40 @@ export default function PartsPage() {
                             background: 'var(--subtle-bg)', border: '1px dashed var(--border)',
                             color: uploadingFile ? 'var(--text-muted)' : 'var(--text-secondary)', cursor: 'pointer',
                           }}>{uploadingFile ? 'Uploading...' : '+ Upload Proof / File'}</button>
+                          <div style={{ display: 'flex', gap: '4px', marginTop: '4px' }}>
+                            <button onClick={() => setProofSearch(prev => prev?.partId === part.id && prev.source === 'email' ? null : { partId: part.id, source: 'email' })} style={{
+                              flex: 1, padding: '6px', borderRadius: '6px', fontSize: '10px', fontWeight: 700,
+                              background: 'var(--subtle-bg)', border: '1px dashed var(--border)',
+                              color: proofSearch?.partId === part.id && proofSearch.source === 'email' ? '#ea4335' : 'var(--text-secondary)', cursor: 'pointer',
+                            }}>{proofSearch?.partId === part.id && proofSearch.source === 'email' ? '✕ Close Email' : '🔎 Search Email'}</button>
+                            <button onClick={() => setProofSearch(prev => prev?.partId === part.id && prev.source === 'dropbox' ? null : { partId: part.id, source: 'dropbox' })} style={{
+                              flex: 1, padding: '6px', borderRadius: '6px', fontSize: '10px', fontWeight: 700,
+                              background: 'var(--subtle-bg)', border: '1px dashed var(--border)',
+                              color: proofSearch?.partId === part.id && proofSearch.source === 'dropbox' ? '#0061fe' : 'var(--text-secondary)', cursor: 'pointer',
+                            }}>{proofSearch?.partId === part.id && proofSearch.source === 'dropbox' ? '✕ Close Dropbox' : '🔎 Search Dropbox'}</button>
+                          </div>
+                          {proofSearch?.partId === part.id && proofSearch.source === 'email' && (
+                            <div style={{ marginTop: '6px' }}>
+                              <EmailProofSearch
+                                defaultQuery={part.billable_customer || part.display_name || part.item_number}
+                                autoSearch
+                                useLabel="Attach to Part"
+                                embedded
+                                onUse={(file) => attachEmailProof(part.id, file)}
+                              />
+                            </div>
+                          )}
+                          {proofSearch?.partId === part.id && proofSearch.source === 'dropbox' && (
+                            <div style={{ marginTop: '6px' }}>
+                              <DropboxProofSearch
+                                defaultQuery={part.billable_customer || part.display_name || part.item_number}
+                                autoSearch
+                                useLabel="Attach to Part"
+                                embedded
+                                onUse={(file) => attachDropboxProof(part.id, file)}
+                              />
+                            </div>
+                          )}
                         </>
                       )}
                     </div>
