@@ -204,10 +204,18 @@ export default function CniJobDetailPage() {
   // eslint-disable-next-line react-hooks/exhaustive-deps -- refresh when the job/part loads
   }, [job?.part_number, jobId]);
 
-  const openImport = () => {
-    setImportSel(new Set(importCandidates.map(c => c.scanLogId)));
+  const openImport = async () => {
     setImportError('');
     setImportOpen(true);
+    // RFID / device-capture jobs: field scans were usually logged under the
+    // free-text part "rfid", not the job's catalog part. If the exact-part
+    // search turned up nothing, probe "rfid" automatically so those scans show
+    // up without the admin having to guess the search term.
+    if (importCandidates.length === 0 && (isVerizonRfidPart(job?.part_number) || !!(job as any)?.device_capture)) {
+      setImportPartLike('rfid');
+      await fetchImportCandidates('rfid');
+    }
+    setImportSel(new Set(importCandidates.map(c => c.scanLogId)));
   };
 
   const searchImport = async () => {
@@ -309,6 +317,11 @@ export default function CniJobDetailPage() {
   const [nsBillId, setNsBillId] = useState('');
   const [budgetExceeded, setBudgetExceeded] = useState(false);
 
+  // Completed vehicles that still have no live pay credit — they need an
+  // installer tagged in Crew & Pay. Surfaced here so retroactive crediting is
+  // discoverable from the job page.
+  const [uncreditedCount, setUncreditedCount] = useState(0);
+
   // Individual payout mode: per-employee payouts generated from credits.
   const [payoutData, setPayoutData] = useState<{
     payouts: { id: string; profile_name: string; total_amount: number | null; status: string; netsuite_bill_id: string | null; netsuite_vendor_id: string | null; items: { id: string }[] }[];
@@ -358,6 +371,22 @@ export default function CniJobDetailPage() {
       .eq('job_id', jobId)
       .order('sort_order');
     setVins(vinData || []);
+
+    // Count completed vehicles that have no live pay credit yet — these need an
+    // installer tagged in Crew & Pay. Mirrors the shifts page's credited set.
+    try {
+      const { data: { session } } = await supabase.auth.getSession();
+      const res = await fetch(`/api/admin/credits?cniJobId=${jobId}`, {
+        headers: session?.access_token ? { Authorization: `Bearer ${session.access_token}` } : {},
+      });
+      if (res.ok) {
+        const { shifts } = await res.json();
+        const credited = new Set<string>();
+        for (const s of shifts || []) for (const c of (s.credits || [])) if (c.cni_job_vin_id) credited.add(c.cni_job_vin_id);
+        const completed = (vinData || []).filter((v: any) => v.status === 'completed');
+        setUncreditedCount(completed.filter((v: any) => !credited.has(v.id)).length);
+      }
+    } catch { /* non-fatal — count just won't show */ }
 
     // Load installer name
     if (jobData.assigned_installer_id) {
@@ -449,6 +478,21 @@ export default function CniJobDetailPage() {
     if (!error) {
       await loadJob();
     }
+    setUpdating(false);
+  };
+
+  // Reopen a job that auto-completed (or was closed) back to In Progress so the
+  // crew can finish more vehicles or so credits can be tagged. Clears the
+  // completion timestamp; the status-history trigger logs the change.
+  const reopenJob = async () => {
+    if (!job || updating) return;
+    if (!window.confirm('Reopen this job and move it back to In Progress? Use this if it was marked complete too early — e.g. more vehicles still need to be scanned or installers still need to be tagged for pay.')) return;
+    setUpdating(true);
+    const { error } = await supabase
+      .from('cni_jobs')
+      .update({ status: 'in_progress', completed_at: null, updated_by: user?.id })
+      .eq('id', job.id);
+    if (!error) await loadJob();
     setUpdating(false);
   };
 
@@ -636,23 +680,33 @@ export default function CniJobDetailPage() {
             {STATUS_LABELS[job.status]}
           </div>
         </div>
-        {nextStatuses.length > 0 && (
-          <div style={{ display: 'flex', gap: '6px' }}>
-            {nextStatuses.map(ns => (
-              <button
-                key={ns}
-                onClick={() => updateStatus(ns)}
-                disabled={updating}
-                style={{
-                  padding: '8px 14px', borderRadius: '8px', fontSize: '11px', fontWeight: 700,
-                  background: 'var(--orange)', color: '#fff', border: 'none',
-                }}
-              >
-                → {STATUS_LABELS[ns]?.split(' ')[0] || ns}
-              </button>
-            ))}
-          </div>
-        )}
+        <div style={{ display: 'flex', gap: '6px' }}>
+          {(job.status === 'completed_pending_review' || job.status === 'approved_closed') && (
+            <button
+              onClick={reopenJob}
+              disabled={updating}
+              style={{
+                padding: '8px 14px', borderRadius: '8px', fontSize: '11px', fontWeight: 700,
+                background: 'transparent', color: 'var(--text-secondary)', border: '1px solid var(--border)',
+              }}
+            >
+              ↺ Reopen
+            </button>
+          )}
+          {nextStatuses.map(ns => (
+            <button
+              key={ns}
+              onClick={() => updateStatus(ns)}
+              disabled={updating}
+              style={{
+                padding: '8px 14px', borderRadius: '8px', fontSize: '11px', fontWeight: 700,
+                background: 'var(--orange)', color: '#fff', border: 'none',
+              }}
+            >
+              → {STATUS_LABELS[ns]?.split(' ')[0] || ns}
+            </button>
+          ))}
+        </div>
       </div>
 
       {/* Assignment */}
@@ -1161,12 +1215,19 @@ export default function CniJobDetailPage() {
             onClick={() => router.push(`/admin/cni/jobs/${job.id}/shifts`)}
             style={{
               flex: 1, padding: '14px', borderRadius: '12px', textAlign: 'center',
-              background: 'var(--card)', border: '1px solid var(--border)',
+              background: uncreditedCount > 0 ? 'color-mix(in srgb, var(--warning) 8%, var(--card))' : 'var(--card)',
+              border: uncreditedCount > 0 ? '1px solid var(--warning)' : '1px solid var(--border)',
             }}
           >
             <div style={{ fontSize: '12px', fontWeight: 700, color: 'var(--text-muted)', marginBottom: '4px' }}>Pay</div>
             <div style={{ fontSize: '12px', fontWeight: 700, color: 'var(--text-primary)' }}>Crew &amp; Pay</div>
-            <div style={{ fontSize: '11px', color: 'var(--text-muted)' }}>shifts · splits</div>
+            {uncreditedCount > 0 ? (
+              <div style={{ fontSize: '11px', fontWeight: 700, color: 'var(--warning)' }}>
+                {uncreditedCount} need pay
+              </div>
+            ) : (
+              <div style={{ fontSize: '11px', color: 'var(--text-muted)' }}>shifts · splits</div>
+            )}
           </button>
         </div>
       )}
