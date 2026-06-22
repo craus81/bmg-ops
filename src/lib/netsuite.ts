@@ -1097,6 +1097,42 @@ export async function getNetSuitePdf(
   }
 }
 
+/**
+ * Update an item's description in NetSuite via the item RESTlet.
+ *
+ * NetSuite is the source of truth for the parts catalog (the sync overwrites
+ * description on every run), so a description edit only sticks if it's written
+ * back to NetSuite. We use a RESTlet rather than the REST Record API because
+ * updating via REST requires the exact item record-type endpoint, which we
+ * don't store; the RESTlet resolves it from the internal id (see
+ * scripts/netsuite-item-restlet.js).
+ */
+export async function updateItemDescription(
+  internalId: string | number,
+  description: string,
+): Promise<{ success: boolean; recordType?: string; error?: string }> {
+  const restletUrl = process.env.NETSUITE_ITEM_RESTLET_URL;
+  if (!restletUrl) {
+    return {
+      success: false,
+      error: 'Item RESTlet not configured. Set NETSUITE_ITEM_RESTLET_URL (deploy scripts/netsuite-item-restlet.js).',
+    };
+  }
+
+  try {
+    const result = await callRestlet(restletUrl, 'POST', undefined, {
+      itemId: String(internalId),
+      description,
+    });
+    if (result?.success) {
+      return { success: true, recordType: result.recordType };
+    }
+    return { success: false, error: result?.error || 'NetSuite update failed' };
+  } catch (e: any) {
+    return { success: false, error: e?.message || 'NetSuite update failed' };
+  }
+}
+
 /** @deprecated Use getNetSuitePdf('salesOrder', id) instead */
 export async function getSalesOrderPdf(salesOrderId: string) {
   return getNetSuitePdf('salesOrder', salesOrderId);
