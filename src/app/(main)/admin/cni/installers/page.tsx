@@ -51,27 +51,53 @@ export default function CniInstallersPage() {
   }, [isAdmin]);
 
   const loadInstallers = async () => {
-    const { data: profiles } = await supabase
+    // Primary source: any user tagged as installer in profiles.
+    const { data: users } = await supabase
+      .from('profiles')
+      .select('id, full_name, email, deactivated, company_id, role, roles')
+      .or('role.eq.installer,roles.cs.{installer}');
+
+    if (!users || users.length === 0) { setLoading(false); return; }
+
+    const userIds = users.map((u: any) => u.id);
+    const companyIds = [...new Set(users.map((u: any) => u.company_id).filter(Boolean))];
+
+    // Pull cni_profiles extra data (availability, service_types, ratings, etc.).
+    const { data: cniRows } = await supabase
       .from('cni_profiles')
       .select('user_id, company_name, availability_status, service_types, risk_tags, jobs_completed, profile_complete, communication_rating, completion_reliability, photo_quality, coverage_radius_miles, business_address')
-      .order('created_at', { ascending: false });
+      .in('user_id', userIds);
+    const cniMap: Record<string, any> = {};
+    if (cniRows) cniRows.forEach((r: any) => { cniMap[r.user_id] = r; });
 
-    if (profiles) {
-      const userIds = profiles.map((p: any) => p.user_id);
-      const { data: users } = await supabase
-        .from('profiles')
-        .select('id, full_name, email, deactivated')
-        .in('id', userIds);
-      const userMap: Record<string, any> = {};
-      if (users) users.forEach((u: any) => { userMap[u.id] = u; });
-
-      setInstallers(profiles.map((p: any) => ({
-        ...p,
-        full_name: userMap[p.user_id]?.full_name || 'Unknown',
-        email: userMap[p.user_id]?.email || '',
-        deactivated: userMap[p.user_id]?.deactivated || false,
-      })));
+    // Resolve company names for profiles-sourced users.
+    const companyMap: Record<string, string> = {};
+    if (companyIds.length > 0) {
+      const { data: companies } = await supabase
+        .from('companies').select('id, name').in('id', companyIds);
+      if (companies) companies.forEach((c: any) => { companyMap[c.id] = c.name; });
     }
+
+    setInstallers(users.map((u: any) => {
+      const cni = cniMap[u.id] || {};
+      return {
+        user_id: u.id,
+        full_name: u.full_name || 'Unknown',
+        email: u.email || '',
+        deactivated: u.deactivated || false,
+        company_name: cni.company_name || (u.company_id ? companyMap[u.company_id] : null) || null,
+        availability_status: cni.availability_status || 'unknown',
+        service_types: cni.service_types || [],
+        risk_tags: cni.risk_tags || [],
+        jobs_completed: cni.jobs_completed || 0,
+        profile_complete: cni.profile_complete || false,
+        communication_rating: cni.communication_rating || '',
+        completion_reliability: cni.completion_reliability || '',
+        photo_quality: cni.photo_quality || '',
+        coverage_radius_miles: cni.coverage_radius_miles || null,
+        business_address: cni.business_address || null,
+      };
+    }));
     setLoading(false);
   };
 
@@ -343,18 +369,20 @@ export default function CniInstallersPage() {
                   </div>
                 </div>
                 <div style={{ display: 'flex', gap: '4px', alignItems: 'center' }}>
-                  <span style={{
-                    fontSize: '10px', fontWeight: 700, padding: '3px 8px', borderRadius: '6px',
-                    background: inst.availability_status === 'available' ? 'var(--success-bg)' :
-                               inst.availability_status === 'limited' ? 'var(--warning-bg)' : 'var(--error-bg)',
-                    color: inst.availability_status === 'available' ? 'var(--success)' :
-                           inst.availability_status === 'limited' ? 'var(--warning)' : 'var(--error)',
-                    border: `1px solid ${inst.availability_status === 'available' ? 'var(--success-border)' :
-                            inst.availability_status === 'limited' ? 'var(--warning-border)' : 'var(--error-border)'}`,
-                    textTransform: 'capitalize',
-                  }}>
-                    {inst.availability_status}
-                  </span>
+                  {inst.availability_status !== 'unknown' && (
+                    <span style={{
+                      fontSize: '10px', fontWeight: 700, padding: '3px 8px', borderRadius: '6px',
+                      background: inst.availability_status === 'available' ? 'var(--success-bg)' :
+                                 inst.availability_status === 'limited' ? 'var(--warning-bg)' : 'var(--error-bg)',
+                      color: inst.availability_status === 'available' ? 'var(--success)' :
+                             inst.availability_status === 'limited' ? 'var(--warning)' : 'var(--error)',
+                      border: `1px solid ${inst.availability_status === 'available' ? 'var(--success-border)' :
+                              inst.availability_status === 'limited' ? 'var(--warning-border)' : 'var(--error-border)'}`,
+                      textTransform: 'capitalize',
+                    }}>
+                      {inst.availability_status}
+                    </span>
+                  )}
                   {inst.risk_tags.includes('do_not_assign') && (
                     <span style={{ fontSize: '10px', fontWeight: 700, padding: '3px 8px', borderRadius: '6px', background: 'var(--error-bg)', color: 'var(--error)', border: '1px solid var(--error-border)' }}>DNA</span>
                   )}
