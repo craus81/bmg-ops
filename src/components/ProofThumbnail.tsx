@@ -5,6 +5,8 @@ import { useState, useRef, useEffect } from 'react';
 interface ProofThumbnailProps {
   /** Dropbox file path — uses Dropbox thumbnail API */
   dropboxPath?: string;
+  /** Direct URL to an image (e.g. a same-origin attachment endpoint) — shown as-is */
+  imageUrl?: string;
   /** Direct URL to a PDF (e.g. R2 public URL) — renders page 1 via pdfjs */
   pdfUrl?: string;
   /** Base64 PDF data — renders page 1 via pdfjs */
@@ -24,6 +26,7 @@ interface ProofThumbnailProps {
  */
 export default function ProofThumbnail({
   dropboxPath,
+  imageUrl,
   pdfUrl,
   pdfBase64,
   label = 'PDF',
@@ -91,7 +94,7 @@ export default function ProofThumbnail({
   }, [pdfUrl, pdfBase64, dropboxPath, expandedSize]);
 
   const currentSize = expanded ? expandedSize : thumbSize;
-  const src = dropboxThumbUrl || imgSrc;
+  const src = dropboxThumbUrl || imageUrl || imgSrc;
 
   if (!src && !loading && !error) {
     // Nothing to render yet
