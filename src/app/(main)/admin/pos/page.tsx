@@ -2858,16 +2858,9 @@ export default function POsPage() {
           </div>
           <div style={{ marginBottom: '8px' }}>
             <label style={labelStyle}>Add Part</label>
-            <select
-              value=""
-              onChange={(e) => { if (e.target.value) pickCreateLinePart(e.target.value); e.target.value = ''; }}
-              style={{ ...inputStyle, marginBottom: '6px' }}
-            >
-              <option value="">Pick from catalog…</option>
-              {catalog.filter((c) => c.customer === form.customer || !c.customer).map((c) => (
-                <option key={c.id} value={c.id}>{c.part_number} — {c.graphic_package || c.end_customer} (${c.price})</option>
-              ))}
-            </select>
+            <div style={{ marginBottom: '6px' }}>
+              <CatalogPartSearch catalog={catalog} customer={form.customer} onPick={(c) => pickCreateLinePart(c.id)} />
+            </div>
             <input
               value={createLineForm.part_number}
               onChange={(e) => setCreateLineForm({ ...createLineForm, part_number: e.target.value })}
@@ -3369,17 +3362,13 @@ export default function POsPage() {
                   {addLinePoId === po.id ? (
                     <div style={{ padding: '10px 0 8px', borderBottom: '1px solid rgba(30,45,61,0.5)' }}>
                       <div style={{ marginBottom: '6px' }}>
-                        <label style={{ ...labelStyle, fontSize: '9px' }}>Pick from Catalog</label>
-                        <select
-                          value=""
-                          onChange={(e) => { if (e.target.value) pickAddLinePart(e.target.value); e.target.value = ''; }}
-                          style={{ ...inputStyle, padding: '6px 8px', fontSize: '12px' }}
-                        >
-                          <option value="">Select part number…</option>
-                          {catalog.filter((c) => c.customer === po.customer || !c.customer).map((c) => (
-                            <option key={c.id} value={c.id}>{c.part_number} — {c.graphic_package || c.end_customer} (${c.price})</option>
-                          ))}
-                        </select>
+                        <label style={{ ...labelStyle, fontSize: '9px' }}>Search Catalog</label>
+                        <CatalogPartSearch
+                          catalog={catalog}
+                          customer={po.customer}
+                          onPick={(c) => pickAddLinePart(c.id)}
+                          inputStyle={{ ...inputStyle, padding: '6px 8px', fontSize: '12px' }}
+                        />
                       </div>
                       <div style={{ marginBottom: '6px' }}>
                         <label style={{ ...labelStyle, fontSize: '9px' }}>Part Number</label>
@@ -3638,6 +3627,72 @@ export default function POsPage() {
 
 const labelStyle: React.CSSProperties = { display: 'block', fontSize: '10px', fontWeight: 700, color: 'var(--text-label)', textTransform: 'uppercase', letterSpacing: '0.5px', marginBottom: '4px' };
 const inputStyle: React.CSSProperties = { width: '100%', padding: '10px 12px', borderRadius: '8px', border: '1px solid var(--border)', background: 'var(--input-bg)', color: 'var(--text-body)', fontSize: '13px' };
+
+// Inline search/autocomplete over the loaded catalog. Replaces the long
+// part-number dropdown: type to filter, click a hit to fill the line's part
+// number + price. The plain-text part-number field below stays as the
+// fallback for parts that aren't in the catalog.
+function CatalogPartSearch({
+  catalog,
+  customer,
+  onPick,
+  inputStyle: inputStyleProp,
+}: {
+  catalog: CatalogItem[];
+  customer: string;
+  onPick: (item: CatalogItem) => void;
+  inputStyle?: React.CSSProperties;
+}) {
+  const [query, setQuery] = useState('');
+  // Part numbers visually conflate O/0; normalize both sides (mirrors PartPicker).
+  const norm = (s: string) => (s || '').toLowerCase().replace(/o/g, '0');
+  const q = query.trim();
+  const matches = q
+    ? (() => {
+        const n = norm(q);
+        return catalog
+          .filter((c) => c.customer === customer || !c.customer)
+          .filter((c) =>
+            norm(c.part_number).includes(n) ||
+            norm(c.graphic_package || '').includes(n) ||
+            norm(c.end_customer || '').includes(n)
+          )
+          .slice(0, 20);
+      })()
+    : [];
+  return (
+    <div>
+      <input
+        value={query}
+        onChange={(e) => setQuery(e.target.value)}
+        placeholder="Search catalog by part #, package, or customer…"
+        style={inputStyleProp || inputStyle}
+      />
+      {matches.length > 0 && (
+        <div style={{ display: 'flex', flexDirection: 'column', gap: '4px', marginTop: '6px', maxHeight: '220px', overflowY: 'auto' }}>
+          {matches.map((c) => (
+            <button
+              key={c.id}
+              type="button"
+              onClick={() => { onPick(c); setQuery(''); }}
+              style={{
+                display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '8px',
+                padding: '8px 10px', borderRadius: '8px', textAlign: 'left', width: '100%',
+                background: 'var(--input-bg)', border: '1px solid var(--border)', cursor: 'pointer',
+              }}
+            >
+              <span style={{ fontSize: '12px', fontWeight: 700, color: 'var(--text-body)' }}>
+                {c.part_number}
+                <span style={{ fontWeight: 400, color: 'var(--text-label)' }}> — {c.graphic_package || c.end_customer}</span>
+              </span>
+              <span style={{ fontSize: '11px', color: 'var(--text-label)', flexShrink: 0 }}>${c.price}</span>
+            </button>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
 
 function ShipToPicker({
   label,
