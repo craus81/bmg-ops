@@ -2,6 +2,11 @@
 
 import { useEffect, useState } from 'react';
 import { createClient } from '@/lib/supabase-browser';
+import ProofThumbnail from '@/components/ProofThumbnail';
+
+// Extensions a browser can render directly in an <img>. heic/heif/tif and
+// design-source files (ai/eps/psd) can't be previewed, so they get a badge.
+const IMG_EXT = new Set(['jpg', 'jpeg', 'png', 'gif', 'bmp', 'webp', 'svg']);
 
 // Result row shape returned by /api/gmail/search-proofs — one per attachment.
 export interface EmailProofFile {
@@ -32,6 +37,29 @@ interface Props {
 function senderName(from: string): string {
   const m = /"?([^"<]+)"?\s*</.exec(from);
   return (m ? m[1] : from).trim();
+}
+
+// A small preview of a result so you can see the proof before attaching.
+// Images render directly; PDFs render their first page (pdfjs); anything that
+// can't be previewed (ai/eps/psd/tif/heic) shows its file-type badge.
+function ResultThumbnail({ file }: { file: EmailProofFile }) {
+  const ext = (file.filename.split('.').pop() || '').toLowerCase();
+  const url = `/api/gmail/attachment?messageId=${encodeURIComponent(file.messageId)}&attachmentId=${encodeURIComponent(file.attachmentId)}&filename=${encodeURIComponent(file.filename)}`;
+
+  if (IMG_EXT.has(ext)) {
+    return <ProofThumbnail imageUrl={url} label={file.filename} thumbSize={48} expandedSize={280} />;
+  }
+  if (ext === 'pdf') {
+    return <ProofThumbnail pdfUrl={url} label={file.filename} thumbSize={48} expandedSize={280} />;
+  }
+  return (
+    <div style={{
+      width: 48, height: 48, flexShrink: 0, borderRadius: '6px',
+      background: 'var(--subtle-bg)', border: '1px solid var(--border)',
+      display: 'flex', alignItems: 'center', justifyContent: 'center',
+      fontSize: '10px', fontWeight: 700, color: 'var(--text-muted)', textTransform: 'uppercase',
+    }}>{ext || 'file'}</div>
+  );
 }
 
 // Search the Gmail inbox for proof attachments (PDFs + photo/design files) and
@@ -160,6 +188,7 @@ export default function EmailProofSearch({
                 background: 'var(--card)', border: '1px solid var(--border)',
                 opacity: isUsed ? 0.6 : 1,
               }}>
+                <ResultThumbnail file={file} />
                 <div style={{ flex: 1, minWidth: 0 }}>
                   <div style={{ fontSize: '12px', fontWeight: 700, color: 'var(--text-primary)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{file.filename}</div>
                   <div style={{ fontSize: '10px', color: 'var(--text-muted)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
