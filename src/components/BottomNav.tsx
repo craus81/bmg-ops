@@ -39,7 +39,7 @@ export const allTabs: Tab[] = [
   { id: 'scan', path: '/scan', label: 'Scan', feature: 'scan', priority: 5 },
   { id: 'time', path: '/time', label: 'Time', feature: 'time', priority: 6 },
   { id: 'estimates', path: '/estimates', label: 'Estimates', feature: 'estimates', priority: 7 },
-  { id: 'installer-portal', path: '/installer', label: 'CNI Jobs', feature: 'cni_management', priority: 8 },
+  { id: 'installer-portal', path: '/installer', label: 'Certified Network Installs', feature: 'cni_management', priority: 8 },
   // Customer-only
   { id: 'customer-dashboard', path: '/customer/dashboard', label: 'My Jobs', feature: 'home', priority: 0 },
 ];
@@ -136,7 +136,8 @@ export default function BottomNav({ clockStatus }: BottomNavProps) {
               fontWeight: active ? 800 : 600,
               letterSpacing: '0.01em',
               cursor: 'pointer',
-              whiteSpace: 'nowrap',
+              textAlign: 'center',
+              lineHeight: 1.1,
               minWidth: 0,
               transition: 'all 0.15s',
             }}
