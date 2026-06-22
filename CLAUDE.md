@@ -16,9 +16,9 @@ Instead, use a branch-per-feature workflow with auto-opened PRs:
    one automatically after every commit.
 3. **When the user signals**:
    - Pick a short topic name based on the batched commits.
-   - Cut a branch at the current `main` HEAD: `claude/<short-topic>`
-     (naming convention is flexible — the user doesn't care, just keep
-     it short and descriptive).
+   - Cut a **brand-new** branch at the current `main` HEAD:
+     `claude/<short-topic>` (naming convention is flexible — the user
+     doesn't care, just keep it short and descriptive).
    - Push it: `git push -u origin claude/<short-topic>`.
    - Open a PR against `main` via the GitHub MCP
      (`mcp__github__create_pull_request`) with a summary of the batched
@@ -26,10 +26,18 @@ Instead, use a branch-per-feature workflow with auto-opened PRs:
    - Always subscribe to the new PR's activity
      (`mcp__github__subscribe_pr_activity`) and respond to review
      comments / fix CI failures as events arrive — no need to ask.
-4. **Don't reset local `main` after cutting the branch.** Next batch
-   keeps going from the same HEAD. Subsequent PRs will include prior
-   unmerged commits until those PRs are merged in order — that's a
-   known tradeoff of this workflow.
+4. **One fresh branch per PR — never reuse a branch across PRs.** PRs are
+   squash-merged, so a reused branch still carries its old individual
+   commits and collides with `main`'s squashed version on the next PR (a
+   guaranteed merge conflict). Every signal gets a new `claude/<topic>`.
+5. **After a PR merges, resync local `main` to the remote** before the
+   next batch: `git fetch origin main` then fast-forward
+   (`git checkout main && git merge --ff-only origin/main`). If you
+   batched on local `main` and it won't fast-forward, reset it
+   (`git reset --hard origin/main`) — that's safe here, the work lives on
+   in the squash. The next branch is cut from the merged HEAD, so it
+   contains only its own changes and stays conflict-free.
 
-Never push to `main` directly. Never force-push. Never reset local main
-to discard committed work without explicit user confirmation.
+Never push to `main` directly. Never force-push. Don't reset local `main`
+to discard *unmerged* work without explicit user confirmation — resyncing
+to `origin/main` after the matching PR has merged (step 5) is expected.
