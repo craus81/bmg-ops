@@ -294,6 +294,11 @@ export default function POsPage() {
   const [editPoForm, setEditPoForm] = useState({ po_number: '', customer: '', status: '' as string, ordered_date: '', requested_delivery_date: '', notes: '' });
   const [editLineId, setEditLineId] = useState<string | null>(null);
   const [editLineForm, setEditLineForm] = useState({ part_number: '', quantity: '', unit_price: '', installed: '' });
+  // Add-a-line state: lets the user tack on a part the scan missed while
+  // viewing a PO. Keyed by PO id so only one PO's form is open at a time.
+  const [addLinePoId, setAddLinePoId] = useState<string | null>(null);
+  const [addLineForm, setAddLineForm] = useState({ part_number: '', quantity: '1', unit_price: '' });
+  const [addingLine, setAddingLine] = useState(false);
   const [form, setForm] = useState({ po_number: '', customer: 'Masterack', ordered_date: '', requested_delivery_date: '', notes: '' });
   const [lineItems, setLineItems] = useState<{ part_id: string; part_number: string; quantity: number; unit_price: number }[]>([]);
   const fileRef = useRef<HTMLInputElement>(null);
@@ -1085,11 +1090,64 @@ export default function POsPage() {
     }
   };
 
+  const startAddLine = (poId: string) => {
+    setEditLineId(null);
+    setAddLinePoId(poId);
+    setAddLineForm({ part_number: '', quantity: '1', unit_price: '' });
+  };
+
+  const cancelAddLine = () => {
+    setAddLinePoId(null);
+    setAddLineForm({ part_number: '', quantity: '1', unit_price: '' });
+  };
+
+  // Quick-pick from the catalog dropdown: fill in the part number and the
+  // catalog price. The user can still tweak qty/price before adding.
+  const pickAddLinePart = (catId: string) => {
+    const item = catalog.find((c) => c.id === catId);
+    if (!item) return;
+    setAddLineForm((prev) => ({ ...prev, part_number: item.part_number, unit_price: item.price.toString() }));
+  };
+
+  const saveAddLine = async (poId: string) => {
+    const partNum = addLineForm.part_number.trim();
+    if (!partNum) { alert('Enter or pick a part number'); return; }
+    const qty = parseInt(addLineForm.quantity) || 1;
+    const price = parseFloat(addLineForm.unit_price) || 0;
+    // Link the catalog part when the number matches, mirroring the PDF/email
+    // import paths. PartLabel resolves the display name from part_number, so
+    // we leave description null like the manual-create flow.
+    const catalogMatch = catalog.find((c) => c.part_number.toUpperCase() === partNum.toUpperCase());
+    setAddingLine(true);
+    const { data, error } = await supabase
+      .from('po_line_items')
+      .insert({
+        po_id: poId,
+        ...(catalogMatch?.id ? { part_id: catalogMatch.id } : {}),
+        part_number: partNum,
+        quantity: qty,
+        unit_price: price,
+      })
+      .select()
+      .single();
+    setAddingLine(false);
+    if (error || !data) { alert('Error adding line: ' + (error?.message || 'unknown')); return; }
+    setPos((prev) =>
+      prev.map((po) =>
+        po.id === poId ? { ...po, line_items: [...po.line_items, data as POLineItem] } : po
+      )
+    );
+    // Keep the form open with cleared fields so several missed parts can be
+    // added back-to-back. Cancel/Done closes it.
+    setAddLineForm({ part_number: '', quantity: '1', unit_price: '' });
+  };
+
   const toggleExpand = (poId: string) => {
     const opening = expandedPo !== poId;
     setExpandedPo(opening ? poId : null);
     setEditPoId(null);
     setEditLineId(null);
+    setAddLinePoId(null);
     if (opening && !poFiles[poId]) loadPoFiles(poId);
   };
 
@@ -3261,6 +3319,48 @@ export default function POsPage() {
                       </div>
                     );
                   })}
+
+                  {/* Add a line for a part the scan missed */}
+                  {addLinePoId === po.id ? (
+                    <div style={{ padding: '10px 0 8px', borderBottom: '1px solid rgba(30,45,61,0.5)' }}>
+                      <div style={{ marginBottom: '6px' }}>
+                        <label style={{ ...labelStyle, fontSize: '9px' }}>Pick from Catalog</label>
+                        <select
+                          value=""
+                          onChange={(e) => { if (e.target.value) pickAddLinePart(e.target.value); e.target.value = ''; }}
+                          style={{ ...inputStyle, padding: '6px 8px', fontSize: '12px' }}
+                        >
+                          <option value="">Select part number…</option>
+                          {catalog.filter((c) => c.customer === po.customer || !c.customer).map((c) => (
+                            <option key={c.id} value={c.id}>{c.part_number} — {c.graphic_package || c.end_customer} (${c.price})</option>
+                          ))}
+                        </select>
+                      </div>
+                      <div style={{ marginBottom: '6px' }}>
+                        <label style={{ ...labelStyle, fontSize: '9px' }}>Part Number</label>
+                        <input value={addLineForm.part_number} onChange={(e) => setAddLineForm({ ...addLineForm, part_number: e.target.value })} placeholder="Type or pick a part…" style={{ ...inputStyle, padding: '6px 8px', fontSize: '12px', fontWeight: 700 }} />
+                      </div>
+                      <div style={{ display: 'flex', gap: '6px', alignItems: 'end' }}>
+                        <div style={{ flex: 1 }}>
+                          <label style={{ ...labelStyle, fontSize: '9px' }}>Qty</label>
+                          <input type="number" value={addLineForm.quantity} onChange={(e) => setAddLineForm({ ...addLineForm, quantity: e.target.value })} style={{ ...inputStyle, padding: '6px 8px', fontSize: '12px' }} min={1} />
+                        </div>
+                        <div style={{ flex: 1 }}>
+                          <label style={{ ...labelStyle, fontSize: '9px' }}>Unit Price</label>
+                          <input type="number" value={addLineForm.unit_price} onChange={(e) => setAddLineForm({ ...addLineForm, unit_price: e.target.value })} style={{ ...inputStyle, padding: '6px 8px', fontSize: '12px' }} step="0.01" />
+                        </div>
+                        <button onClick={() => saveAddLine(po.id)} disabled={addingLine || !addLineForm.part_number.trim()} style={{ padding: '6px 10px', borderRadius: '6px', background: '#22c55e', color: '#fff', fontSize: '11px', fontWeight: 700, border: 'none', opacity: addingLine || !addLineForm.part_number.trim() ? 0.5 : 1, cursor: addingLine ? 'default' : 'pointer' }}>{addingLine ? '…' : '✓ Add'}</button>
+                        <button onClick={cancelAddLine} style={{ padding: '6px 10px', borderRadius: '6px', background: 'transparent', border: '1px solid var(--border)', color: 'var(--text-body)', fontSize: '11px', fontWeight: 700, cursor: 'pointer' }}>Done</button>
+                      </div>
+                    </div>
+                  ) : (
+                    <button
+                      onClick={() => startAddLine(po.id)}
+                      style={{ width: '100%', marginTop: '8px', padding: '8px', borderRadius: '8px', background: 'rgba(34,197,94,0.08)', border: '1px dashed rgba(34,197,94,0.4)', color: '#22c55e', fontSize: '12px', fontWeight: 700, cursor: 'pointer' }}
+                    >
+                      + Add Line
+                    </button>
+                  )}
 
                   <div style={{ display: 'flex', gap: '4px', padding: '10px 0 4px', fontSize: '13px' }}>
                     <div style={{ flex: 1, fontWeight: 800, color: 'var(--text-body)' }}>Total</div>
