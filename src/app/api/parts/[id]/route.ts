@@ -8,8 +8,11 @@ import { updateItemFields } from '@/lib/netsuite';
 export const maxDuration = 60;
 
 // Edit a catalog part's core fields. All optional, but at least one is required.
+// item_number is the part number (NetSuite "Item Name/Number") and is required
+// to be non-empty when present, since the column is NOT NULL.
 const Schema = z
   .object({
+    item_number: z.string().trim().min(1).max(120).optional(),
     display_name: z.string().trim().max(300).optional(),
     description: z.string().max(4000).optional(),
     sales_price: z.number().nonnegative().optional(),
@@ -17,6 +20,7 @@ const Schema = z
   })
   .refine(
     (v) =>
+      v.item_number !== undefined ||
       v.display_name !== undefined ||
       v.description !== undefined ||
       v.sales_price !== undefined ||
@@ -27,6 +31,7 @@ const Schema = z
 // Maps a local netsuite_parts column to the NetSuite field name(s) the RESTlet
 // reports back in `fieldsSet`, so we can confirm the write actually landed.
 const NS_FIELD: Record<string, string[]> = {
+  item_number: ['itemid'],
   display_name: ['displayname'],
   sales_price: ['baseprice'],
   purchase_price: ['cost'],
@@ -64,8 +69,29 @@ export async function PATCH(req: NextRequest, { params }: { params: { id: string
       .maybeSingle();
     if (!part) return NextResponse.json({ error: 'Part not found' }, { status: 404 });
 
+    // Renaming the part number: refuse to collide with another part. There's no
+    // DB unique constraint, and the catalog's dedup would silently hide one of
+    // the two — so block it here (case-insensitive, ignoring this same row).
+    if (patch.item_number) {
+      const { data: dups } = await supabase
+        .from('netsuite_parts')
+        .select('id, item_number')
+        .ilike('item_number', patch.item_number)
+        .neq('id', partId);
+      const clash = (dups || []).find(
+        (d) => (d.item_number || '').toLowerCase() === patch.item_number!.toLowerCase(),
+      );
+      if (clash) {
+        return NextResponse.json(
+          { error: `Another part already uses the number "${patch.item_number}".` },
+          { status: 409 },
+        );
+      }
+    }
+
     if (isRealNetsuiteId(part.netsuite_id)) {
       const res = await updateItemFields(part.netsuite_id!, {
+        itemNumber: patch.item_number,
         description: patch.description,
         displayName: patch.display_name,
         salesPrice: patch.sales_price,
