@@ -55,6 +55,16 @@ const RANGE_PHRASE: Record<CompletedRange, string> = {
 // Core part fields an admin can edit inline (written back to NetSuite).
 type EditableField = 'item_number' | 'display_name' | 'sales_price' | 'purchase_price';
 
+// A real NetSuite-synced part has a numeric internal id, not a local placeholder.
+const isRealNsPart = (p: { netsuite_id: string | null }) => !!p.netsuite_id && !/^(LOCAL-|bmg-)/i.test(p.netsuite_id);
+// Pick the best survivor when merging duplicates: prefer a real NetSuite row,
+// then one with a real display name, then one with a price.
+const partScore = (p: Part) =>
+  (isRealNsPart(p) ? 4 : 0) +
+  (p.display_name && p.display_name !== p.item_number ? 2 : 0) +
+  ((p.sales_price || 0) > 0 ? 1 : 0);
+const bestKeeperId = (g: Part[]) => [...g].sort((a, b) => partScore(b) - partScore(a))[0].id;
+
 export default function PartsPage() {
   const router = useRouter();
   const { user, isAdmin, isSales } = useAuth();
@@ -69,6 +79,12 @@ export default function PartsPage() {
   const [lastSync, setLastSync] = useState<SyncLog | null>(null);
   const [expandedId, setExpandedId] = useState<string | null>(null);
   const [deletingId, setDeletingId] = useState<string | null>(null);
+  // Duplicate cleanup: groups of rows sharing a part number, the chosen survivor
+  // per group, and which group is mid-merge.
+  const [duplicateGroups, setDuplicateGroups] = useState<Part[][]>([]);
+  const [showDuplicates, setShowDuplicates] = useState(false);
+  const [keeperByGroup, setKeeperByGroup] = useState<Record<string, string>>({});
+  const [merging, setMerging] = useState<string | null>(null);
   // Deep-link focus: the item number to open + scroll to once parts load, and
   // the row to briefly highlight so it's obvious where the search landed you.
   const [pendingFocus, setPendingFocus] = useState<string | null>(null);
@@ -178,6 +194,21 @@ export default function PartsPage() {
     }
     if (loadReqRef.current !== reqId) return; // superseded by a newer load
     setParts([...byItem.values()].sort((a, b) => a.item_number.localeCompare(b.item_number)));
+
+    // Duplicate groups (>1 row sharing a part number) for the merge panel — the
+    // display above collapses them, so this is the only place they're surfaced.
+    const groups = new Map<string, Part[]>();
+    for (const p of allParts) {
+      const k = (p.item_number || '').trim().toLowerCase();
+      if (!k) continue;
+      if (!groups.has(k)) groups.set(k, []);
+      groups.get(k)!.push(p);
+    }
+    setDuplicateGroups(
+      [...groups.values()]
+        .filter((g) => g.length > 1)
+        .sort((a, b) => a[0].item_number.localeCompare(b[0].item_number)),
+    );
     setLoading(false);
   };
 
@@ -416,6 +447,43 @@ export default function PartsPage() {
     }
   };
 
+  // Fold a group of duplicate rows into the chosen survivor. Proofs, PO lines,
+  // scans and estimates move to the keeper; the rest are removed. Local only.
+  const mergeGroup = async (groupKey: string, group: Part[]) => {
+    const keepId = keeperByGroup[groupKey] || bestKeeperId(group);
+    const mergeIds = group.filter(p => p.id !== keepId).map(p => p.id);
+    if (mergeIds.length === 0) return;
+    const itemNumber = group.find(p => p.id === keepId)?.item_number || group[0].item_number;
+    if (!window.confirm(
+      `Merge ${mergeIds.length} duplicate row${mergeIds.length === 1 ? '' : 's'} of "${itemNumber}" into the selected one?\n\n` +
+      `Proofs, PO lines, scans and estimates move to the kept part; the others are removed. NetSuite is not changed.`
+    )) return;
+
+    setMerging(groupKey);
+    try {
+      const { data } = await supabase.auth.getSession();
+      const token = data?.session?.access_token;
+      const res = await fetch('/api/parts/merge', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', ...(token ? { Authorization: `Bearer ${token}` } : {}) },
+        body: JSON.stringify({ keepId, mergeIds }),
+      });
+      const body = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        setSyncMessage(`Merge failed: ${body.error || res.status}`);
+        setTimeout(() => setSyncMessage(''), 6000);
+        return;
+      }
+      const moved = body.movedReferences ? ` · moved ${body.movedReferences} reference${body.movedReferences === 1 ? '' : 's'}` : '';
+      const warn = body.netsuiteDuplicateWarning ? ' (a NetSuite-side duplicate may return on the next sync)' : '';
+      setSyncMessage(`Merged ${body.mergedCount} duplicate${body.mergedCount === 1 ? '' : 's'} of "${itemNumber}"${moved}.${warn}`);
+      setTimeout(() => setSyncMessage(''), 7000);
+      await loadParts(); // recomputes the duplicate groups
+    } finally {
+      setMerging(null);
+    }
+  };
+
   const loadPartFiles = async (partId: string) => {
     const { data } = await supabase.from('part_files').select('*').eq('part_id', partId).order('uploaded_at', { ascending: false });
     if (data) setPartFiles(prev => ({ ...prev, [partId]: data as PartFile[] }));
@@ -633,6 +701,78 @@ export default function PartsPage() {
           </button>
         ))}
       </div>
+
+      {/* Duplicate cleanup — merge rows that share a part number */}
+      {isAdmin && duplicateGroups.length > 0 && (
+        <div style={{ marginBottom: '10px' }}>
+          <button
+            onClick={() => setShowDuplicates(s => !s)}
+            style={{
+              width: '100%', padding: '9px 12px', borderRadius: '10px', textAlign: 'left',
+              background: 'rgba(251,191,36,0.10)', border: '1px solid rgba(251,191,36,0.30)',
+              color: '#f59e0b', fontSize: '12px', fontWeight: 700, cursor: 'pointer',
+              display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '8px',
+            }}
+          >
+            <span>⚠ {duplicateGroups.length} duplicate part number{duplicateGroups.length === 1 ? '' : 's'} in {catalog}</span>
+            <span style={{ whiteSpace: 'nowrap' }}>{showDuplicates ? 'Hide ▴' : 'Review & merge ▾'}</span>
+          </button>
+
+          {showDuplicates && (
+            <div style={{ marginTop: '8px', display: 'flex', flexDirection: 'column', gap: '8px' }}>
+              {duplicateGroups.map(group => {
+                const gk = (group[0].item_number || '').trim().toLowerCase();
+                const keepId = keeperByGroup[gk] || bestKeeperId(group);
+                const isMerging = merging === gk;
+                return (
+                  <div key={gk} style={{ background: 'var(--card)', border: '1px solid var(--border)', borderRadius: '12px', padding: '10px' }}>
+                    <div style={{ fontSize: '13px', fontWeight: 800, color: 'var(--text-primary)', marginBottom: '6px' }}>
+                      {group[0].item_number} <span style={{ fontSize: '10px', fontWeight: 700, color: 'var(--text-muted)' }}>×{group.length}</span>
+                    </div>
+                    <div style={{ fontSize: '9px', fontWeight: 700, color: 'var(--text-muted)', textTransform: 'uppercase', marginBottom: '4px' }}>
+                      Keep which row?
+                    </div>
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: '3px' }}>
+                      {group.map(p => {
+                        const selected = p.id === keepId;
+                        return (
+                          <label key={p.id} style={{
+                            display: 'flex', alignItems: 'center', gap: '8px', padding: '6px 8px', borderRadius: '8px', cursor: 'pointer',
+                            background: selected ? 'var(--tab-active-bg)' : 'var(--subtle-bg)',
+                            border: `1px solid ${selected ? 'var(--tab-active-border)' : 'var(--border)'}`,
+                          }}>
+                            <input type="radio" name={`keep-${gk}`} checked={selected}
+                              onChange={() => setKeeperByGroup(prev => ({ ...prev, [gk]: p.id }))} />
+                            <span style={{
+                              fontSize: '9px', fontWeight: 800, padding: '1px 6px', borderRadius: '4px', whiteSpace: 'nowrap',
+                              background: isRealNsPart(p) ? 'rgba(52,211,153,0.12)' : 'rgba(148,163,184,0.15)',
+                              border: `1px solid ${isRealNsPart(p) ? 'rgba(52,211,153,0.3)' : 'rgba(148,163,184,0.3)'}`,
+                              color: isRealNsPart(p) ? '#34d399' : 'var(--text-muted)',
+                            }}>{isRealNsPart(p) ? 'NetSuite' : 'local'}</span>
+                            <span style={{ fontSize: '11px', fontWeight: 700, color: '#34d399', minWidth: '54px' }}>{formatCurrency(p.sales_price)}</span>
+                            <span style={{ fontSize: '11px', color: 'var(--text-secondary)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                              {p.display_name || p.description || '—'}
+                            </span>
+                          </label>
+                        );
+                      })}
+                    </div>
+                    <button onClick={() => mergeGroup(gk, group)} disabled={isMerging}
+                      style={{
+                        width: '100%', marginTop: '8px', padding: '8px', borderRadius: '8px',
+                        background: isMerging ? 'var(--subtle-bg)' : 'var(--accent)', color: '#fff',
+                        fontSize: '11px', fontWeight: 800, border: 'none',
+                        cursor: isMerging ? 'default' : 'pointer', opacity: isMerging ? 0.6 : 1,
+                      }}>
+                      {isMerging ? 'Merging…' : `Merge ${group.length - 1} other${group.length - 1 === 1 ? '' : 's'} into selected`}
+                    </button>
+                  </div>
+                );
+              })}
+            </div>
+          )}
+        </div>
+      )}
 
       {/* Search */}
       <input
