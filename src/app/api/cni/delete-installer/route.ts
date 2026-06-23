@@ -15,15 +15,19 @@ const DeleteInstallerSchema = z.object({
 });
 
 // References we clear automatically rather than treat as a blocker: the
-// account's own CNI extended data (cni_profiles), internal notes admins wrote
-// about / as them, and the deactivated_by audit pointer. None of these are real
-// job / financial / photo history. Per-user tables that reference auth.users
-// with ON DELETE CASCADE (notifications, dashboard layouts, push subscriptions,
-// feature overrides, AI chat, …) aren't listed — they vanish on their own when
-// the auth user is deleted, so they never reach the blocker list.
+// account's own personal data — CNI extended profile, internal notes admins
+// wrote about / as them, the user's notification rows + preferences — and the
+// deactivated_by audit pointer. None of these are real job / financial / photo
+// history. Per-user tables whose auth.users FK is ON DELETE CASCADE (dashboard
+// layouts, push subscriptions, feature overrides, AI chat, …) aren't listed —
+// they vanish on their own when the auth user is deleted. notifications and
+// notification_preferences are baseline tables with NO ACTION FKs, so they do
+// reach the blocker list and must be cleared explicitly (step 3).
 const AUTO_CLEAR = new Set([
   'public.cni_internal_notes',
   'public.cni_profiles',
+  'public.notifications',
+  'public.notification_preferences',
   'public.profiles', // only the deactivated_by FK reaches here; nulled below
 ]);
 
@@ -72,6 +76,8 @@ export async function POST(req: NextRequest) {
     await supabase.from('cni_internal_notes').delete().eq('installer_id', userId);
     await supabase.from('cni_internal_notes').delete().eq('created_by', userId);
     await supabase.from('cni_profiles').delete().eq('user_id', userId);
+    await supabase.from('notifications').delete().eq('user_id', userId);
+    await supabase.from('notification_preferences').delete().eq('user_id', userId);
     await supabase.from('profiles').update({ deactivated_by: null }).eq('deactivated_by', userId);
 
     // 4. Delete the profile row.
