@@ -53,7 +53,7 @@ const RANGE_PHRASE: Record<CompletedRange, string> = {
 };
 
 // Core part fields an admin can edit inline (written back to NetSuite).
-type EditableField = 'display_name' | 'sales_price' | 'purchase_price';
+type EditableField = 'item_number' | 'display_name' | 'sales_price' | 'purchase_price';
 
 export default function PartsPage() {
   const router = useRouter();
@@ -342,9 +342,11 @@ export default function PartsPage() {
   const savePartField = async (partId: string) => {
     if (!editField) return;
     const { field } = editField;
-    const patch: { display_name?: string; sales_price?: number; purchase_price?: number } = {};
-    if (field === 'display_name') {
-      patch.display_name = editFieldValue.trim();
+    const patch: { item_number?: string; display_name?: string; sales_price?: number; purchase_price?: number } = {};
+    if (field === 'item_number' || field === 'display_name') {
+      const v = editFieldValue.trim();
+      if (field === 'item_number' && !v) { setFieldError('Part number cannot be empty'); return; }
+      patch[field] = v;
     } else {
       const num = parseFloat(editFieldValue);
       if (isNaN(num) || num < 0) { setFieldError('Enter a valid amount'); return; }
@@ -778,7 +780,20 @@ export default function PartsPage() {
                       </div>
                     </div>
 
-                    {/* Display Name (editable by admins; writes back to NetSuite) */}
+                    {/* Part Number & Display Name (editable by admins; written back to NetSuite) */}
+                    {isAdmin && (
+                      <div style={{ marginTop: '10px' }}>
+                        <InlineEditField
+                          label="Part Number"
+                          display={part.item_number}
+                          color="var(--text-primary)"
+                          isEditing={fieldEditing('item_number')} value={editFieldValue} onValueChange={setEditFieldValue}
+                          onEdit={() => startFieldEdit(part.id, 'item_number', part.item_number)}
+                          onSave={() => savePartField(part.id)} onCancel={cancelFieldEdit}
+                          saving={savingField} error={fieldErr('item_number')} placeholder="Part number"
+                        />
+                      </div>
+                    )}
                     {isAdmin && (
                       <div style={{ marginTop: '10px' }}>
                         <InlineEditField

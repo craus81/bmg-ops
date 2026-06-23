@@ -1147,6 +1147,7 @@ export async function updateItemDescription(
 export async function updateItemFields(
   internalId: string | number,
   fields: {
+    itemNumber?: string;
     description?: string;
     displayName?: string;
     salesPrice?: number;
@@ -1162,6 +1163,7 @@ export async function updateItemFields(
   }
 
   const payload: Record<string, unknown> = { itemId: String(internalId) };
+  if (fields.itemNumber !== undefined) payload.itemNumber = fields.itemNumber;
   if (fields.description !== undefined) payload.description = fields.description;
   if (fields.displayName !== undefined) payload.displayName = fields.displayName;
   if (fields.salesPrice !== undefined) payload.salesPrice = fields.salesPrice;

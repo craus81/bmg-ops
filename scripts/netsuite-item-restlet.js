@@ -4,6 +4,7 @@
  * Updates editable fields on an item record so BMG Ops staff can edit a part in
  * the app and have it written back to NetSuite (the source of truth), instead
  * of a local-only edit that the next parts sync would overwrite. Handles:
+ *   - itemNumber    → itemid (the "Item Name/Number" — the part number)
  *   - description   → salesdescription / purchasedescription
  *   - displayName   → displayname
  *   - purchasePrice → cost
@@ -20,6 +21,7 @@
  * POST body (itemId required; everything else optional, send only what changed):
  *   {
  *     "itemId": "12345",
+ *     "itemNumber": "0602S029",
  *     "description": "New description text",
  *     "displayName": "New display name",
  *     "salesPrice": 123.45,
@@ -54,15 +56,16 @@ define(['N/search', 'N/record'], function (search, record) {
       return { success: false, error: 'Missing parameter: itemId' };
     }
 
+    var hasItemNumber = typeof body.itemNumber === 'string' && body.itemNumber !== '';
     var hasDescription = typeof body.description === 'string';
     var hasDisplayName = typeof body.displayName === 'string';
     var hasSalesPrice = isProvided(body.salesPrice);
     var hasPurchasePrice = isProvided(body.purchasePrice);
 
-    if (!hasDescription && !hasDisplayName && !hasSalesPrice && !hasPurchasePrice) {
+    if (!hasItemNumber && !hasDescription && !hasDisplayName && !hasSalesPrice && !hasPurchasePrice) {
       return {
         success: false,
-        error: 'Nothing to update: provide description, displayName, salesPrice, or purchasePrice',
+        error: 'Nothing to update: provide itemNumber, description, displayName, salesPrice, or purchasePrice',
       };
     }
 
@@ -85,6 +88,13 @@ define(['N/search', 'N/record'], function (search, record) {
 
       var rec = record.load({ type: recordType, id: parseInt(itemId, 10), isDynamic: false });
       var fieldsSet = [];
+
+      // Item name/number — the part number staff key on. Editable on every type.
+      // NetSuite enforces its own uniqueness, so save() throws on a clash.
+      if (hasItemNumber) {
+        rec.setValue({ fieldId: 'itemid', value: body.itemNumber });
+        fieldsSet.push('itemid');
+      }
 
       // Description — items expose it as salesdescription and/or
       // purchasedescription depending on type. Set whichever exist so the
