@@ -46,7 +46,7 @@ The script expects this layout:
     VehicleType/X/       ← archived, ignored entirely
 ```
 
-Files that can't be cleanly parsed are flagged as "needs review" in BMG Ops. Use the Proof Hygiene panel to assign them.
+Files that can't be cleanly parsed are flagged as "needs review" in the `graphics_proofs` table for manual follow-up.
 
 ## Files
 - `sync_proofs.py` — main sync script

@@ -28,7 +28,7 @@ export const FEATURES = {
   knowledge_base: 'Knowledge Base',
   vendor_payments: 'Vendor Payments',
   bulk_upload: 'Bulk Upload (Templates)',
-  proof_hygiene: 'Proof Hygiene',
+  proof_hygiene: 'Proof Search', // legacy key — now gates the Proof Search page only
   quoting: 'Estimating / Quoting',
   all_jobs: 'CNI Jobs',
   catalog_management: 'Part Catalog Management',
