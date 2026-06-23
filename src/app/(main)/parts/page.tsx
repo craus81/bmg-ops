@@ -68,6 +68,7 @@ export default function PartsPage() {
   const [syncMessage, setSyncMessage] = useState('');
   const [lastSync, setLastSync] = useState<SyncLog | null>(null);
   const [expandedId, setExpandedId] = useState<string | null>(null);
+  const [deletingId, setDeletingId] = useState<string | null>(null);
   // Deep-link focus: the item number to open + scroll to once parts load, and
   // the row to briefly highlight so it's obvious where the search landed you.
   const [pendingFocus, setPendingFocus] = useState<string | null>(null);
@@ -379,6 +380,39 @@ export default function PartsPage() {
       cancelFieldEdit();
     } finally {
       setSavingField(false);
+    }
+  };
+
+  // Delete a part from FleetSuite only (the local mirror) — NetSuite is left
+  // alone. For clearing duplicates / rows that are wrong locally but right in
+  // NetSuite. If the item still lives in NetSuite, a later sync may re-add it.
+  const deletePart = async (part: Part) => {
+    if (!window.confirm(
+      `Delete "${part.item_number}" from FleetSuite?\n\n` +
+      `This removes it from this app only — NetSuite is not changed. If the item ` +
+      `still exists in NetSuite, a future sync may re-add it.`
+    )) return;
+
+    setDeletingId(part.id);
+    try {
+      const { data } = await supabase.auth.getSession();
+      const token = data?.session?.access_token;
+      const res = await fetch(`/api/parts/${part.id}`, {
+        method: 'DELETE',
+        headers: { ...(token ? { Authorization: `Bearer ${token}` } : {}) },
+      });
+      const body = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        setSyncMessage(`Delete failed: ${body.error || res.status}`);
+        setTimeout(() => setSyncMessage(''), 5000);
+        return;
+      }
+      setParts(prev => prev.filter(p => p.id !== part.id));
+      setExpandedId(null);
+      setSyncMessage(`Deleted "${part.item_number}" from FleetSuite.`);
+      setTimeout(() => setSyncMessage(''), 5000);
+    } finally {
+      setDeletingId(null);
     }
   };
 
@@ -938,6 +972,23 @@ export default function PartsPage() {
                         </>
                       )}
                     </div>
+
+                    {/* Delete from FleetSuite (local mirror only; NetSuite untouched) */}
+                    {isAdmin && (
+                      <button
+                        onClick={() => deletePart(part)}
+                        disabled={deletingId === part.id}
+                        style={{
+                          width: '100%', marginTop: '12px', padding: '9px', borderRadius: '10px',
+                          background: 'rgba(248,113,113,0.08)', border: '1px solid rgba(248,113,113,0.25)',
+                          color: '#f87171', fontSize: '12px', fontWeight: 700,
+                          cursor: deletingId === part.id ? 'default' : 'pointer',
+                          opacity: deletingId === part.id ? 0.6 : 1,
+                        }}
+                      >
+                        {deletingId === part.id ? 'Deleting…' : 'Delete from FleetSuite'}
+                      </button>
+                    )}
                   </div>
                 )}
               </div>
