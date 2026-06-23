@@ -1,11 +1,56 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { createClient } from '@supabase/supabase-js';
+import { createClient, SupabaseClient } from '@supabase/supabase-js';
 import { requireAdmin } from '@/lib/api-auth';
 import { validateBody, z } from '@/lib/validate';
 import { updateItemFields } from '@/lib/netsuite';
 
 // Writing back to NetSuite (RESTlet round-trip) can exceed the default ceiling.
 export const maxDuration = 60;
+
+// Tables that store the part number as a plain string snapshot (as opposed to
+// the stable part_id FK). When a part is renamed we carry these over to the new
+// number so history, reports, and pay-rate lookups keyed by the string keep
+// matching the part. `column` is the part-number column on that table.
+const PART_NUMBER_REFS: { table: string; column: string }[] = [
+  { table: 'scan_logs', column: 'part_number' },
+  { table: 'po_line_items', column: 'part_number' },
+  { table: 'estimate_line_items', column: 'item_number' },
+  { table: 'graphics_jobs', column: 'part_number' },
+  { table: 'cni_jobs', column: 'part_number' },
+  { table: 'work_shifts', column: 'part_number' },
+  { table: 'install_credits', column: 'part_number' },
+  { table: 'install_pay_rates', column: 'part_number' },
+];
+
+// Escape LIKE wildcards so an old number containing % or _ matches literally.
+const likeLiteral = (s: string) => s.replace(/([%_\\])/g, '\\$1');
+
+// Carry every string reference to `oldNumber` over to `newNumber` (matched
+// case-insensitively, like the rest of the app's part matching). Best-effort:
+// a table may be absent in some environments, and install_pay_rates.part_number
+// is UNIQUE so a pre-existing rate row for the new number would reject the
+// update — skip those rather than failing a rename that already committed.
+// Returns the total rows updated across all tables.
+async function sweepPartNumberReferences(
+  supabase: SupabaseClient,
+  oldNumber: string,
+  newNumber: string,
+): Promise<number> {
+  const pattern = likeLiteral(oldNumber);
+  let total = 0;
+  for (const ref of PART_NUMBER_REFS) {
+    const { count, error } = await supabase
+      .from(ref.table)
+      .update({ [ref.column]: newNumber }, { count: 'exact' })
+      .ilike(ref.column, pattern);
+    if (error) {
+      console.warn(`[part-rename] sweep ${ref.table}.${ref.column} skipped: ${error.message}`);
+      continue;
+    }
+    total += count || 0;
+  }
+  return total;
+}
 
 // Edit a catalog part's core fields. All optional, but at least one is required.
 // item_number is the part number (NetSuite "Item Name/Number") and is required
@@ -64,7 +109,7 @@ export async function PATCH(req: NextRequest, { params }: { params: { id: string
 
     const { data: part } = await supabase
       .from('netsuite_parts')
-      .select('id, netsuite_id')
+      .select('id, netsuite_id, item_number')
       .eq('id', partId)
       .maybeSingle();
     if (!part) return NextResponse.json({ error: 'Part not found' }, { status: 404 });
@@ -129,10 +174,24 @@ export async function PATCH(req: NextRequest, { params }: { params: { id: string
       .eq('id', partId);
     if (error) return NextResponse.json({ error: error.message }, { status: 500 });
 
+    // The rename has committed. Carry historical string references (scans, PO
+    // lines, estimates, jobs, pay rates…) over to the new number. Best-effort:
+    // a sweep failure must not fail the rename, so swallow and just log.
+    let sweptReferences = 0;
+    const oldNumber = part.item_number as string | null;
+    if (patch.item_number && oldNumber && patch.item_number !== oldNumber) {
+      try {
+        sweptReferences = await sweepPartNumberReferences(supabase, oldNumber, patch.item_number);
+      } catch (e: any) {
+        console.error('[part-rename] reference sweep failed:', e?.message || e);
+      }
+    }
+
     return NextResponse.json({
       success: true,
       ...patch,
       syncedToNetsuite: isRealNetsuiteId(part.netsuite_id),
+      sweptReferences,
     });
   } catch (err: any) {
     console.error('part update error:', err);
