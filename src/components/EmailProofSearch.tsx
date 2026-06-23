@@ -26,9 +26,11 @@ interface Props {
   defaultQuery?: string;
   /** Run the initial search automatically when defaultQuery is set. */
   autoSearch?: boolean;
-  /** Called when the user picks a result. Should download + attach the file. */
-  onUse: (file: EmailProofFile) => Promise<void> | void;
-  /** Label for the action button. */
+  /** If provided, each result shows an action button (e.g. "Attach") that calls
+   *  back with the file. Without it, results render as "Open" links only
+   *  (read-only browse, e.g. the global Proof Search page). */
+  onUse?: (file: EmailProofFile) => Promise<void> | void;
+  /** Label for the action button when onUse is provided. */
   useLabel?: string;
   /** Compact rendering (no padding/border around the wrapper). */
   embedded?: boolean;
@@ -39,12 +41,18 @@ function senderName(from: string): string {
   return (m ? m[1] : from).trim();
 }
 
+// Same-origin URL that streams one attachment's bytes (cookie-authed). Used for
+// the inline preview and the browse-mode "Open" link.
+function attachmentUrl(file: EmailProofFile): string {
+  return `/api/gmail/attachment?messageId=${encodeURIComponent(file.messageId)}&attachmentId=${encodeURIComponent(file.attachmentId)}&filename=${encodeURIComponent(file.filename)}`;
+}
+
 // A small preview of a result so you can see the proof before attaching.
 // Images render directly; PDFs render their first page (pdfjs); anything that
 // can't be previewed (ai/eps/psd/tif/heic) shows its file-type badge.
 function ResultThumbnail({ file }: { file: EmailProofFile }) {
   const ext = (file.filename.split('.').pop() || '').toLowerCase();
-  const url = `/api/gmail/attachment?messageId=${encodeURIComponent(file.messageId)}&attachmentId=${encodeURIComponent(file.attachmentId)}&filename=${encodeURIComponent(file.filename)}`;
+  const url = attachmentUrl(file);
 
   if (IMG_EXT.has(ext)) {
     return <ProofThumbnail imageUrl={url} label={file.filename} thumbSize={48} expandedSize={280} />;
@@ -198,29 +206,43 @@ export default function EmailProofSearch({
                     {file.subject}
                   </div>
                 </div>
-                <button
-                  onClick={async () => {
-                    if (isUsed || isPending) return;
-                    setPendingId(file.id);
-                    try {
-                      await onUse(file);
-                      setUsedIds((prev) => { const n = new Set(prev); n.add(file.id); return n; });
-                    } catch (err: any) {
-                      setError(err?.message || 'Attach failed');
-                    } finally {
-                      setPendingId(null);
-                    }
-                  }}
-                  disabled={isUsed || isPending}
-                  style={{
-                    padding: '5px 10px', borderRadius: '6px', fontSize: '10px', fontWeight: 700, flexShrink: 0,
-                    background: isUsed ? 'rgba(34,197,94,0.12)' : 'rgba(234,67,53,0.1)',
-                    border: `1px solid ${isUsed ? 'rgba(34,197,94,0.3)' : 'rgba(234,67,53,0.3)'}`,
-                    color: isUsed ? '#22c55e' : '#ea4335',
-                    cursor: isUsed || isPending ? 'default' : 'pointer',
-                    whiteSpace: 'nowrap',
-                  }}
-                >{isUsed ? '✓ Attached' : isPending ? '…' : useLabel}</button>
+                <div style={{ display: 'flex', gap: '4px', flexShrink: 0 }}>
+                  <a
+                    href={attachmentUrl(file)}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    style={{
+                      padding: '5px 10px', borderRadius: '6px', fontSize: '10px', fontWeight: 700,
+                      background: 'transparent', border: '1px solid var(--border)',
+                      color: 'var(--text-muted)', textDecoration: 'none', whiteSpace: 'nowrap',
+                    }}
+                  >Open</a>
+                  {onUse ? (
+                    <button
+                      onClick={async () => {
+                        if (isUsed || isPending) return;
+                        setPendingId(file.id);
+                        try {
+                          await onUse(file);
+                          setUsedIds((prev) => { const n = new Set(prev); n.add(file.id); return n; });
+                        } catch (err: any) {
+                          setError(err?.message || 'Attach failed');
+                        } finally {
+                          setPendingId(null);
+                        }
+                      }}
+                      disabled={isUsed || isPending}
+                      style={{
+                        padding: '5px 10px', borderRadius: '6px', fontSize: '10px', fontWeight: 700, flexShrink: 0,
+                        background: isUsed ? 'rgba(34,197,94,0.12)' : 'rgba(234,67,53,0.1)',
+                        border: `1px solid ${isUsed ? 'rgba(34,197,94,0.3)' : 'rgba(234,67,53,0.3)'}`,
+                        color: isUsed ? '#22c55e' : '#ea4335',
+                        cursor: isUsed || isPending ? 'default' : 'pointer',
+                        whiteSpace: 'nowrap',
+                      }}
+                    >{isUsed ? '✓ Attached' : isPending ? '…' : useLabel}</button>
+                  ) : null}
+                </div>
               </div>
             );
           })}
