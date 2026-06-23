@@ -4,40 +4,54 @@
 
 Pushes to `main` are currently broken (the local git proxy returns
 HTTP 403). Do not attempt to push to `main` — it will fail and waste
-retries. The stop hook will keep complaining that local main is ahead
-of `origin/main`; that's expected and can be ignored.
+retries.
 
-Instead, use a branch-per-feature workflow with auto-opened PRs:
+**Default: ship every change as its own PR — don't batch, and don't wait
+to be asked.** As soon as a change is complete and verified, cut a
+branch, push, and open the PR. (The user will say when they want to go
+back to batching — see the bottom of this section.)
 
-1. **Batch commits on local `main`** as you work. Multiple commits per
-   batch is fine — that's the point.
-2. **Wait for the user to say "create the branch"** (or equivalent —
-   "open the PR", "ship it", etc.) before cutting a branch. Don't cut
-   one automatically after every commit.
-3. **When the user signals**:
-   - Pick a short topic name based on the batched commits.
-   - Cut a **brand-new** branch at the current `main` HEAD:
-     `claude/<short-topic>` (naming convention is flexible — the user
-     doesn't care, just keep it short and descriptive).
-   - Push it: `git push -u origin claude/<short-topic>`.
-   - Open a PR against `main` via the GitHub MCP
-     (`mcp__github__create_pull_request`) with a summary of the batched
-     commits.
-   - Always subscribe to the new PR's activity
-     (`mcp__github__subscribe_pr_activity`) and respond to review
-     comments / fix CI failures as events arrive — no need to ask.
+Per change:
+
+1. **Work on a feature branch, never on local `main`.** Cut a brand-new
+   branch from a synced `main` HEAD *before* you commit:
+   `git checkout main && git checkout -b claude/<short-topic>` (keep the
+   topic short and descriptive; naming is flexible). Commit your work on
+   that branch. Keeping commits off local `main` is also what keeps the
+   stop hook quiet — see the note below.
+2. **Push immediately** after committing: `git push -u origin
+   claude/<short-topic>`. Never end a turn with unpushed commits.
+3. **Open a PR** against `main` via the GitHub MCP
+   (`mcp__github__create_pull_request`) summarizing the change, and
+   **always subscribe** (`mcp__github__subscribe_pr_activity`) — respond
+   to review comments / fix CI failures as events arrive, no need to ask.
 4. **One fresh branch per PR — never reuse a branch across PRs.** PRs are
    squash-merged, so a reused branch still carries its old individual
    commits and collides with `main`'s squashed version on the next PR (a
-   guaranteed merge conflict). Every signal gets a new `claude/<topic>`.
+   guaranteed merge conflict). Every change gets a new `claude/<topic>`.
 5. **After a PR merges, resync local `main` to the remote** before the
-   next batch: `git fetch origin main` then fast-forward
-   (`git checkout main && git merge --ff-only origin/main`). If you
-   batched on local `main` and it won't fast-forward, reset it
-   (`git reset --hard origin/main`) — that's safe here, the work lives on
-   in the squash. The next branch is cut from the merged HEAD, so it
-   contains only its own changes and stays conflict-free.
+   next change: `git fetch origin main` then `git checkout main && git
+   merge --ff-only origin/main` (or `git reset --hard origin/main` if it
+   won't fast-forward — safe here, the work lives on in the squash). Cut
+   the next branch from this merged HEAD so it stays conflict-free.
 
 Never push to `main` directly. Never force-push. Don't reset local `main`
 to discard *unmerged* work without explicit user confirmation — resyncing
 to `origin/main` after the matching PR has merged (step 5) is expected.
+
+**Stop-hook "Unverified" nag.** The commits ARE signed and use
+`noreply@anthropic.com`, and they show as Verified once squash-merged on
+GitHub. The local stop hook flags them anyway because this container has
+no `ssh-keygen` and no readable signing public key, so git's `%G?` can't
+verify the SSH signature and returns `N` — which the hook treats as
+"unsigned." Nothing is wrong, and `git commit --amend --reset-author`
+will NOT help (it re-signs with the same locally-unverifiable key). The
+hook only fires for commits sitting *ahead of their upstream*, so the
+branch-first flow above (commit on a branch, push right away, keep local
+`main` synced) avoids it. If the nag still appears in the brief window
+before a push, ignore it.
+
+**If the user asks to batch** (e.g. "start batching", "hold these"):
+accumulate commits on local `main` and wait for a "ship it" / "create the
+branch" signal before cutting the branch + PR. Stay in batch mode until
+they tell you to go back to auto-shipping.
