@@ -369,6 +369,13 @@ export default function PartsPage() {
         return;
       }
       setParts(prev => prev.map(p => p.id === partId ? { ...p, ...patch } : p));
+      // On a rename, the server also carries old part-number strings (scans, PO
+      // lines, estimates, …) over to the new number — confirm how many moved.
+      if (field === 'item_number' && typeof body.sweptReferences === 'number' && body.sweptReferences > 0) {
+        const n = body.sweptReferences;
+        setSyncMessage(`Renamed — updated ${n} historical reference${n === 1 ? '' : 's'} to the new number.`);
+        setTimeout(() => setSyncMessage(''), 5000);
+      }
       cancelFieldEdit();
     } finally {
       setSavingField(false);
