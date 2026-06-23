@@ -198,3 +198,57 @@ export async function PATCH(req: NextRequest, { params }: { params: { id: string
     return NextResponse.json({ error: err.message || 'Update failed' }, { status: 500 });
   }
 }
+
+// Delete a part from FleetSuite (the local catalog mirror) ONLY — NetSuite is
+// never touched. This is for cleaning up duplicate or stale rows, or ones that
+// are wrong locally but correct in NetSuite. NOTE: if the item still exists in
+// NetSuite, the next "Sync Now" will re-add it (NetSuite is the source of
+// truth) — only rows with no live NetSuite twin stay gone.
+export async function DELETE(req: NextRequest, { params }: { params: { id: string } }) {
+  const auth = await requireAdmin(req);
+  if (auth.error) return auth.error;
+  const partId = params.id;
+
+  try {
+    const supabase = createClient(
+      process.env.NEXT_PUBLIC_SUPABASE_URL!,
+      process.env.SUPABASE_SERVICE_ROLE_KEY!,
+    );
+
+    const { data: part } = await supabase
+      .from('netsuite_parts')
+      .select('id, item_number')
+      .eq('id', partId)
+      .maybeSingle();
+    if (!part) return NextResponse.json({ error: 'Part not found' }, { status: 404 });
+
+    // Remove attached files from storage. The part_files rows themselves cascade
+    // when the part is deleted, but the stored objects would otherwise linger.
+    const { data: files } = await supabase
+      .from('part_files')
+      .select('storage_path')
+      .eq('part_id', partId);
+    const paths = (files || []).map((f) => f.storage_path).filter(Boolean);
+    if (paths.length > 0) {
+      const { error: rmErr } = await supabase.storage.from('graphics-proofs').remove(paths);
+      if (rmErr) console.warn(`[part-delete] storage cleanup failed: ${rmErr.message}`);
+    }
+
+    // Detach references whose FK has no auto rule — po_line_items and
+    // schedule_assignments have no ON DELETE, so the delete would fail while
+    // they point at this row. estimate_line_items (ON DELETE SET NULL) and
+    // part_files (CASCADE) handle themselves. The part_number string stays on
+    // those rows so they remain identifiable and can re-match later.
+    await supabase.from('po_line_items').update({ part_id: null }).eq('part_id', partId);
+    // schedule_assignments only exists in some environments — error ignored.
+    await supabase.from('schedule_assignments').update({ part_id: null }).eq('part_id', partId);
+
+    const { error } = await supabase.from('netsuite_parts').delete().eq('id', partId);
+    if (error) return NextResponse.json({ error: error.message }, { status: 500 });
+
+    return NextResponse.json({ success: true, deleted: part.item_number });
+  } catch (err: any) {
+    console.error('part delete error:', err);
+    return NextResponse.json({ error: err.message || 'Delete failed' }, { status: 500 });
+  }
+}
