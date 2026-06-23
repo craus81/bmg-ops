@@ -1133,6 +1133,51 @@ export async function updateItemDescription(
   }
 }
 
+/**
+ * Update editable fields on an item in NetSuite via the item RESTlet.
+ *
+ * NetSuite is the source of truth for the parts catalog (the sync overwrites
+ * these fields on every run), so an edit only sticks if it's written back to
+ * NetSuite. Send only the fields that changed. `fieldsSet` echoes the NetSuite
+ * fields actually written, so the caller can confirm the edit landed (e.g.
+ * detect a RESTlet deployment that predates a field and needs re-uploading).
+ *
+ * Requires the extended scripts/netsuite-item-restlet.js to be deployed.
+ */
+export async function updateItemFields(
+  internalId: string | number,
+  fields: {
+    description?: string;
+    displayName?: string;
+    salesPrice?: number;
+    purchasePrice?: number;
+  },
+): Promise<{ success: boolean; recordType?: string; fieldsSet?: string[]; error?: string }> {
+  const restletUrl = process.env.NETSUITE_ITEM_RESTLET_URL;
+  if (!restletUrl) {
+    return {
+      success: false,
+      error: 'Item RESTlet not configured. Set NETSUITE_ITEM_RESTLET_URL (deploy scripts/netsuite-item-restlet.js).',
+    };
+  }
+
+  const payload: Record<string, unknown> = { itemId: String(internalId) };
+  if (fields.description !== undefined) payload.description = fields.description;
+  if (fields.displayName !== undefined) payload.displayName = fields.displayName;
+  if (fields.salesPrice !== undefined) payload.salesPrice = fields.salesPrice;
+  if (fields.purchasePrice !== undefined) payload.purchasePrice = fields.purchasePrice;
+
+  try {
+    const result = await callRestlet(restletUrl, 'POST', undefined, payload);
+    if (result?.success) {
+      return { success: true, recordType: result.recordType, fieldsSet: result.fieldsSet || [] };
+    }
+    return { success: false, error: result?.error || 'NetSuite update failed' };
+  } catch (e: any) {
+    return { success: false, error: e?.message || 'NetSuite update failed' };
+  }
+}
+
 /** @deprecated Use getNetSuitePdf('salesOrder', id) instead */
 export async function getSalesOrderPdf(salesOrderId: string) {
   return getNetSuitePdf('salesOrder', salesOrderId);

@@ -52,6 +52,9 @@ const RANGE_PHRASE: Record<CompletedRange, string> = {
   day: 'today', week: 'this week', month: 'this month', year: 'this year', all: 'all time',
 };
 
+// Core part fields an admin can edit inline (written back to NetSuite).
+type EditableField = 'display_name' | 'sales_price' | 'purchase_price';
+
 export default function PartsPage() {
   const router = useRouter();
   const { user, isAdmin, isSales } = useAuth();
@@ -90,6 +93,14 @@ export default function PartsPage() {
   const [descValue, setDescValue] = useState('');
   const [savingDescription, setSavingDescription] = useState(false);
   const [descError, setDescError] = useState<string | null>(null);
+
+  // Core synced-field editing (display name, sales/purchase price). Edits write
+  // back to NetSuite via /api/parts/[id], then mirror locally. One field edits
+  // at a time across the whole list, so a single set of state vars is enough.
+  const [editField, setEditField] = useState<{ id: string; field: EditableField } | null>(null);
+  const [editFieldValue, setEditFieldValue] = useState('');
+  const [savingField, setSavingField] = useState(false);
+  const [fieldError, setFieldError] = useState<string | null>(null);
 
   // Part files
   interface PartFile { id: string; part_id: string; file_name: string; file_type: string | null; file_size: number | null; storage_path: string; }
@@ -310,6 +321,55 @@ export default function PartsPage() {
       setDescValue('');
     } finally {
       setSavingDescription(false);
+    }
+  };
+
+  const startFieldEdit = (partId: string, field: EditableField, current: string) => {
+    setEditField({ id: partId, field });
+    setEditFieldValue(current);
+    setFieldError(null);
+  };
+
+  const cancelFieldEdit = () => {
+    setEditField(null);
+    setEditFieldValue('');
+    setFieldError(null);
+  };
+
+  // Save an edited core field. For NetSuite-synced parts the server writes it
+  // back to NetSuite first (so the next sync doesn't revert it), then mirrors
+  // the value locally; we reflect the saved value in the list on success.
+  const savePartField = async (partId: string) => {
+    if (!editField) return;
+    const { field } = editField;
+    const patch: { display_name?: string; sales_price?: number; purchase_price?: number } = {};
+    if (field === 'display_name') {
+      patch.display_name = editFieldValue.trim();
+    } else {
+      const num = parseFloat(editFieldValue);
+      if (isNaN(num) || num < 0) { setFieldError('Enter a valid amount'); return; }
+      patch[field] = num;
+    }
+
+    setSavingField(true);
+    setFieldError(null);
+    try {
+      const { data } = await supabase.auth.getSession();
+      const token = data?.session?.access_token;
+      const res = await fetch(`/api/parts/${partId}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json', ...(token ? { Authorization: `Bearer ${token}` } : {}) },
+        body: JSON.stringify(patch),
+      });
+      const body = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        setFieldError(body.error || `Save failed (${res.status})`);
+        return;
+      }
+      setParts(prev => prev.map(p => p.id === partId ? { ...p, ...patch } : p));
+      cancelFieldEdit();
+    } finally {
+      setSavingField(false);
     }
   };
 
@@ -593,6 +653,8 @@ export default function PartsPage() {
           {filtered.map(part => {
             const isExpanded = expandedId === part.id;
             const isEditingLabor = editingLabor === part.id;
+            const fieldEditing = (f: EditableField) => editField?.id === part.id && editField?.field === f;
+            const fieldErr = (f: EditableField) => (fieldEditing(f) ? fieldError : null);
             const key = (part.item_number || '').toUpperCase();
             const completed = completedByPart[key] || 0;
             const margin = part.sales_price > 0 && part.purchase_price > 0
@@ -651,8 +713,28 @@ export default function PartsPage() {
                 {isExpanded && (
                   <div style={{ padding: '0 12px 12px', borderTop: '1px solid var(--border)' }}>
                     <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '8px', marginTop: '10px' }}>
-                      <DetailField label="Sales Price" value={formatCurrency(part.sales_price)} color="#34d399" />
-                      <DetailField label="Purchase Price" value={formatCurrency(part.purchase_price)} color="#60a5fa" />
+                      {isAdmin ? (
+                        <InlineEditField
+                          label="Sales Price" display={formatCurrency(part.sales_price)} color="#34d399"
+                          isEditing={fieldEditing('sales_price')} value={editFieldValue} onValueChange={setEditFieldValue}
+                          onEdit={() => startFieldEdit(part.id, 'sales_price', part.sales_price ? String(part.sales_price) : '')}
+                          onSave={() => savePartField(part.id)} onCancel={cancelFieldEdit}
+                          saving={savingField} error={fieldErr('sales_price')} inputType="number" step="0.01"
+                        />
+                      ) : (
+                        <DetailField label="Sales Price" value={formatCurrency(part.sales_price)} color="#34d399" />
+                      )}
+                      {isAdmin ? (
+                        <InlineEditField
+                          label="Purchase Price" display={formatCurrency(part.purchase_price)} color="#60a5fa"
+                          isEditing={fieldEditing('purchase_price')} value={editFieldValue} onValueChange={setEditFieldValue}
+                          onEdit={() => startFieldEdit(part.id, 'purchase_price', part.purchase_price ? String(part.purchase_price) : '')}
+                          onSave={() => savePartField(part.id)} onCancel={cancelFieldEdit}
+                          saving={savingField} error={fieldErr('purchase_price')} inputType="number" step="0.01"
+                        />
+                      ) : (
+                        <DetailField label="Purchase Price" value={formatCurrency(part.purchase_price)} color="#60a5fa" />
+                      )}
                       <DetailField label="Qty On Hand" value={formatQty(part.quantity_on_hand)} color={part.quantity_on_hand > 0 ? 'var(--text-primary)' : 'var(--error)'} />
                       <DetailField label="Qty Available" value={formatQty(part.quantity_available)} color={part.quantity_available > 0 ? 'var(--text-primary)' : 'var(--error)'} />
                       <DetailField label={`Completed · ${RANGE_PHRASE[range]}`} value={statsLoading ? '…' : completed.toString()} color="#34d399" />
@@ -695,6 +777,21 @@ export default function PartsPage() {
                         )}
                       </div>
                     </div>
+
+                    {/* Display Name (editable by admins; writes back to NetSuite) */}
+                    {isAdmin && (
+                      <div style={{ marginTop: '10px' }}>
+                        <InlineEditField
+                          label="Display Name"
+                          display={part.display_name || '— Set display name'}
+                          color={part.display_name ? 'var(--text-primary)' : 'var(--text-muted)'}
+                          isEditing={fieldEditing('display_name')} value={editFieldValue} onValueChange={setEditFieldValue}
+                          onEdit={() => startFieldEdit(part.id, 'display_name', part.display_name || '')}
+                          onSave={() => savePartField(part.id)} onCancel={cancelFieldEdit}
+                          saving={savingField} error={fieldErr('display_name')} placeholder="Display name"
+                        />
+                      </div>
+                    )}
 
                     {/* Extra info */}
                     <div style={{ marginTop: '10px', display: 'flex', gap: '6px', flexWrap: 'wrap' }}>
@@ -846,6 +943,65 @@ function DetailField({ label, value, color }: { label: string; value: string; co
       <div style={{ fontSize: '14px', fontWeight: 700, color }}>
         {value}
       </div>
+    </div>
+  );
+}
+
+// Click-to-edit detail field. Shows the value with an "Edit" hint; clicking
+// swaps in an input with Save/cancel. Used for the NetSuite-backed core fields
+// (display name, sales/purchase price) so admins can edit them in place.
+function InlineEditField({
+  label, display, color, isEditing, value, onValueChange, onEdit, onSave, onCancel, saving, error, inputType = 'text', step, placeholder,
+}: {
+  label: string;
+  display: string;
+  color: string;
+  isEditing: boolean;
+  value: string;
+  onValueChange: (v: string) => void;
+  onEdit: () => void;
+  onSave: () => void;
+  onCancel: () => void;
+  saving: boolean;
+  error: string | null;
+  inputType?: string;
+  step?: string;
+  placeholder?: string;
+}) {
+  return (
+    <div>
+      <div style={{ fontSize: '9px', fontWeight: 700, color: 'var(--text-muted)', textTransform: 'uppercase', marginBottom: '2px' }}>
+        {label}
+      </div>
+      {isEditing ? (
+        <div style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
+          <div style={{ display: 'flex', gap: '4px' }}>
+            <input
+              type={inputType}
+              step={step}
+              min={inputType === 'number' ? '0' : undefined}
+              value={value}
+              placeholder={placeholder}
+              autoFocus
+              onChange={e => onValueChange(e.target.value)}
+              onKeyDown={e => { if (e.key === 'Enter') onSave(); if (e.key === 'Escape') onCancel(); }}
+              style={{
+                flex: 1, minWidth: 0, padding: '5px 7px', borderRadius: '6px',
+                border: '1px solid var(--border)', background: 'var(--input-bg)',
+                color: 'var(--text-primary)', fontSize: '12px',
+              }}
+            />
+            <button onClick={onSave} disabled={saving} style={{ padding: '5px 9px', borderRadius: '6px', background: '#22c55e', color: '#fff', fontSize: '10px', fontWeight: 700, border: 'none', cursor: saving ? 'default' : 'pointer', opacity: saving ? 0.6 : 1 }}>{saving ? '…' : 'Save'}</button>
+            <button onClick={onCancel} disabled={saving} style={{ padding: '5px 8px', borderRadius: '6px', background: 'var(--subtle-bg)', color: 'var(--text-secondary)', fontSize: '10px', fontWeight: 700, border: '1px solid var(--border)', cursor: 'pointer' }}>✕</button>
+          </div>
+          {error && <div style={{ fontSize: '10px', color: '#ef4444' }}>{error}</div>}
+        </div>
+      ) : (
+        <div onClick={onEdit} style={{ fontSize: '14px', fontWeight: 700, color, cursor: 'pointer' }}>
+          {display}
+          <span style={{ fontSize: '9px', color: 'var(--text-muted)', marginLeft: '4px' }}>Edit</span>
+        </div>
+      )}
     </div>
   );
 }

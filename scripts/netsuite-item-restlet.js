@@ -1,10 +1,15 @@
 /**
  * NetSuite RESTlet — Item Field Updater
  *
- * Updates the description on an item record. Used by BMG Ops so staff can edit
- * a part's description in the app and have it written back to NetSuite (the
- * source of truth), instead of a local-only edit that the next parts sync would
- * overwrite.
+ * Updates editable fields on an item record so BMG Ops staff can edit a part in
+ * the app and have it written back to NetSuite (the source of truth), instead
+ * of a local-only edit that the next parts sync would overwrite. Handles:
+ *   - description   → salesdescription / purchasedescription
+ *   - displayName   → displayname
+ *   - purchasePrice → cost
+ *   - salesPrice    → base price (price level "Base Price", first quantity tier)
+ *
+ * Send only the fields that changed; any combination is allowed.
  *
  * Why a RESTlet (and not the REST Record API): updating via the REST Record API
  * requires knowing the item's exact record-type endpoint (inventoryItem vs
@@ -12,7 +17,14 @@
  * we don't store and can't reliably derive. SuiteScript resolves the exact
  * record type from the item's internal id, so this works for any item type.
  *
- * POST body: { "itemId": "12345", "description": "New description text" }
+ * POST body (itemId required; everything else optional, send only what changed):
+ *   {
+ *     "itemId": "12345",
+ *     "description": "New description text",
+ *     "displayName": "New display name",
+ *     "salesPrice": 123.45,
+ *     "purchasePrice": 67.89
+ *   }
  * Returns JSON: { success: true, itemId, recordType, fieldsSet: [...] }
  *           or: { success: false, error: "..." }
  *
@@ -22,20 +34,36 @@
  *   3. Deploy the script (role with item edit permission) and note the External URL
  *   4. Set NETSUITE_ITEM_RESTLET_URL in your .env to that URL
  *
+ * NOTE: if you previously deployed the description-only version of this script,
+ * re-upload this file and the deployment picks up the new fields automatically.
+ *
  * @NApiVersion 2.1
  * @NScriptType Restlet
  */
 define(['N/search', 'N/record'], function (search, record) {
 
+  function isProvided(v) {
+    return v !== undefined && v !== null && v !== '';
+  }
+
   function post(body) {
-    var itemId = body && body.itemId;
-    var description = body && body.description;
+    body = body || {};
+    var itemId = body.itemId;
 
     if (!itemId) {
       return { success: false, error: 'Missing parameter: itemId' };
     }
-    if (typeof description !== 'string') {
-      return { success: false, error: 'Missing parameter: description' };
+
+    var hasDescription = typeof body.description === 'string';
+    var hasDisplayName = typeof body.displayName === 'string';
+    var hasSalesPrice = isProvided(body.salesPrice);
+    var hasPurchasePrice = isProvided(body.purchasePrice);
+
+    if (!hasDescription && !hasDisplayName && !hasSalesPrice && !hasPurchasePrice) {
+      return {
+        success: false,
+        error: 'Nothing to update: provide description, displayName, salesPrice, or purchasePrice',
+      };
     }
 
     try {
@@ -56,22 +84,51 @@ define(['N/search', 'N/record'], function (search, record) {
       }
 
       var rec = record.load({ type: recordType, id: parseInt(itemId, 10), isDynamic: false });
+      var fieldsSet = [];
 
-      // Items expose the "Description" as salesdescription and/or
+      // Description — items expose it as salesdescription and/or
       // purchasedescription depending on type. Set whichever exist so the
       // change is visible regardless of which the catalog sync reads.
-      var fieldsSet = [];
-      ['salesdescription', 'purchasedescription'].forEach(function (fieldId) {
-        try {
-          rec.setValue({ fieldId: fieldId, value: description });
-          fieldsSet.push(fieldId);
-        } catch (e) {
-          // Field not present on this item type — skip it.
+      if (hasDescription) {
+        var descSet = false;
+        ['salesdescription', 'purchasedescription'].forEach(function (fieldId) {
+          try {
+            rec.setValue({ fieldId: fieldId, value: body.description });
+            fieldsSet.push(fieldId);
+            descSet = true;
+          } catch (e) {
+            // Field not present on this item type — skip it.
+          }
+        });
+        if (!descSet) {
+          return { success: false, error: 'No description field on record type ' + recordType };
         }
-      });
+      }
 
-      if (fieldsSet.length === 0) {
-        return { success: false, error: 'No description field on record type ' + recordType };
+      // Display name — standard field on every item type.
+      if (hasDisplayName) {
+        rec.setValue({ fieldId: 'displayname', value: body.displayName });
+        fieldsSet.push('displayname');
+      }
+
+      // Purchase price → cost. Only purchasable item types (inventory,
+      // non-inventory/service "for resale" or "for purchase") have it; setValue
+      // throws on sale-only items, which surfaces as a clear error to the app.
+      if (hasPurchasePrice) {
+        rec.setValue({ fieldId: 'cost', value: parseFloat(body.purchasePrice) });
+        fieldsSet.push('cost');
+      }
+
+      // Sales price → base price = price level "Base Price" (internal id 1),
+      // first quantity tier, stored in the 'price1' sublist field 'price_1_',
+      // line 0. This is the same value the parts sync reads (pricelevel = 1).
+      if (hasSalesPrice) {
+        var lineCount = rec.getLineCount({ sublistId: 'price1' });
+        if (lineCount < 1) {
+          return { success: false, error: 'No base price line on item ' + itemId };
+        }
+        rec.setSublistValue({ sublistId: 'price1', fieldId: 'price_1_', line: 0, value: parseFloat(body.salesPrice) });
+        fieldsSet.push('baseprice');
       }
 
       rec.save({ enableSourcing: false, ignoreMandatoryFields: true });
