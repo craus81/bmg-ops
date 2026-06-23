@@ -2,8 +2,13 @@ import { NextRequest, NextResponse } from 'next/server';
 import { createClient } from '@supabase/supabase-js';
 import { requireAdmin } from '@/lib/api-auth';
 import { validateBody, validateSearchParams, z } from '@/lib/validate';
+import { assignVehicleCredits } from '@/lib/pay-credits';
 
 export const dynamic = 'force-dynamic';
+
+// Insert + re-link + credit each vehicle; a large batch can exceed the default
+// function timeout.
+export const maxDuration = 60;
 
 const service = createClient(
   process.env.NEXT_PUBLIC_SUPABASE_URL!,
@@ -43,8 +48,10 @@ async function candidates(cniJobId: string, partLike?: string): Promise<{ jobPar
     .select('id, vin, vehicle_year, vehicle_make, vehicle_model, part_number, serial_number, imei, iccid, scanned_at, scanned_by, scanned_by_company')
     .order('scanned_at', { ascending: false })
     .limit(1000);
+  // Part numbers are case-insensitive — match with ilike so a scan logged as
+  // "06cs901033" still lines up with a job part of "06CS901033".
   if (partLike && partLike.trim()) query = query.ilike('part_number', `%${partLike.trim()}%`);
-  else if (jobPart) query = query.eq('part_number', jobPart);
+  else if (jobPart) query = query.ilike('part_number', jobPart);
   else return { jobPart, rows: [] };
 
   const { data: scans } = await query;
@@ -131,7 +138,10 @@ export async function POST(req: NextRequest) {
     .order('sort_order', { ascending: false }).limit(1).maybeSingle();
   let sortOrder = ((maxVin?.sort_order as number | undefined) ?? -1) + 1;
 
+  const assignedBy = auth.user?.id;
   let imported = 0;
+  let credited = 0;
+  const creditErrors: string[] = [];
   for (const scanLogId of scanLogIds) {
     const s = eligible.get(scanLogId);
     if (!s) continue;
@@ -175,8 +185,31 @@ export async function POST(req: NextRequest) {
       .is('cni_job_vin_id', null)
       .is('voided_at', null);
 
+    // If the vehicle still has no live credit — field scans logged without an
+    // active shift never created one — attribute it to the installer who
+    // scanned it, at the job's pay rate, so imported work is paid just like a
+    // vehicle completed on the job. Admins can re-tag afterward if the scanner
+    // wasn't the installer who did the work.
+    if (s.scanned_by && assignedBy) {
+      const { data: live } = await service
+        .from('install_credits')
+        .select('id')
+        .or(`scan_log_id.eq.${s.id},cni_job_vin_id.eq.${newVin.id}`)
+        .is('voided_at', null)
+        .limit(1);
+      if (!live || live.length === 0) {
+        const r = await assignVehicleCredits(service, {
+          cniJobVinId: newVin.id,
+          entries: [{ profile_id: s.scanned_by, share_weight: 1 }],
+          assignedBy,
+        });
+        if (r.ok) credited++;
+        else creditErrors.push(`${s.vin}: ${r.error}`);
+      }
+    }
+
     imported++;
   }
 
-  return NextResponse.json({ success: true, imported });
+  return NextResponse.json({ success: true, imported, credited, creditErrors });
 }
