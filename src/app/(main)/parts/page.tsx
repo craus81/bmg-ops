@@ -1119,14 +1119,15 @@ export default function PartsPage() {
                         onClick={() => deletePart(part)}
                         disabled={deletingId === part.id}
                         style={{
-                          width: '100%', marginTop: '12px', padding: '9px', borderRadius: '10px',
-                          background: 'rgba(248,113,113,0.08)', border: '1px solid rgba(248,113,113,0.25)',
-                          color: '#f87171', fontSize: '12px', fontWeight: 700,
+                          width: '100%', marginTop: '12px', padding: '10px', borderRadius: '10px',
+                          background: deletingId === part.id ? 'var(--subtle-bg)' : '#ef4444',
+                          border: '1px solid #ef4444',
+                          color: '#fff', fontSize: '12px', fontWeight: 800,
                           cursor: deletingId === part.id ? 'default' : 'pointer',
                           opacity: deletingId === part.id ? 0.6 : 1,
                         }}
                       >
-                        {deletingId === part.id ? 'Deleting…' : 'Delete from FleetSuite'}
+                        {deletingId === part.id ? 'Deleting…' : '🗑  Delete from FleetSuite'}
                       </button>
                     )}
                   </div>
@@ -1212,7 +1213,11 @@ function InlineEditField({
       ) : (
         <div onClick={onEdit} style={{ fontSize: '14px', fontWeight: 700, color, cursor: 'pointer' }}>
           {display}
-          <span style={{ fontSize: '9px', color: 'var(--text-muted)', marginLeft: '4px' }}>Edit</span>
+          <span style={{
+            fontSize: '10px', fontWeight: 800, color: 'var(--accent)', marginLeft: '6px',
+            whiteSpace: 'nowrap', border: '1px solid var(--accent)', borderRadius: '5px',
+            padding: '0 5px', opacity: 0.9,
+          }}>✎ Edit</span>
         </div>
       )}
     </div>
