@@ -5,6 +5,7 @@ import { useRouter, useSearchParams } from 'next/navigation';
 import { createClient } from '@/lib/supabase-browser';
 import { storage } from '@/lib/storage';
 import { useAuth } from '@/components/AuthProvider';
+import { useDialog } from '@/components/DialogProvider';
 import { theme } from '@/lib/theme';
 import AssignmentPicker from '@/components/AssignmentPicker';
 import GraphicsInvoiceReviewModal from '@/components/GraphicsInvoiceReviewModal';
@@ -66,6 +67,7 @@ export default function GraphicsPage() {
   const router = useRouter();
   const searchParams = useSearchParams();
   const { user, isAdmin, isProduction, isSales, profile } = useAuth();
+  const dialog = useDialog();
   const supabase = createClient();
 
   const [jobs, setJobs] = useState<GraphicsJob[]>([]);
@@ -215,14 +217,16 @@ export default function GraphicsPage() {
     invoicePromptHandled.current.add(invoiceJobId);
     router.replace('/graphics', { scroll: false });
     if (!job) return;
-    if ((job as any).netsuite_invoice_id) {
-      alert(`Already invoiced as #${(job as any).netsuite_invoice_number || (job as any).netsuite_invoice_id}.`);
-      return;
-    }
-    const label = job.title || `Job #${job.job_number || job.id.slice(0, 8)}`;
-    if (window.confirm(`Create invoice in FleetSuite for ${label}?`)) {
-      setInvoiceJob(job);
-    }
+    (async () => {
+      if ((job as any).netsuite_invoice_id) {
+        await dialog.alert(`Already invoiced as #${(job as any).netsuite_invoice_number || (job as any).netsuite_invoice_id}.`);
+        return;
+      }
+      const label = job.title || `Job #${job.job_number || job.id.slice(0, 8)}`;
+      if (await dialog.confirm(`Create invoice in FleetSuite for ${label}?`)) {
+        setInvoiceJob(job);
+      }
+    })();
   // eslint-disable-next-line react-hooks/exhaustive-deps -- intentional: load once on mount
   }, [loading, searchParams, jobs]);
 
@@ -439,12 +443,12 @@ export default function GraphicsPage() {
     setUploadingFiles(false);
     await loadJobFiles(jobId);
     if (errors.length > 0) {
-      alert(`Uploaded ${uploaded} of ${files.length} file${files.length === 1 ? '' : 's'}.\n\n${errors.join('\n')}`);
+      await dialog.alert(`Uploaded ${uploaded} of ${files.length} file${files.length === 1 ? '' : 's'}.\n\n${errors.join('\n')}`);
     }
   };
 
   const deleteJobFile = async (file: JobFile) => {
-    if (!window.confirm(`Delete "${file.file_name}"?`)) return;
+    if (!(await dialog.confirm(`Delete "${file.file_name}"?`, { destructive: true, confirmLabel: 'Delete' }))) return;
     await storage.from('graphics-proofs').remove([file.storage_path]);
     await supabase.from('graphics_job_files').delete().eq('id', file.id);
     setJobFiles(prev => ({
@@ -641,7 +645,7 @@ export default function GraphicsPage() {
   const confirmSendForApproval = async (jobId: string) => {
     if (sendingApprovalId) return;
     if (!approvalPickerFileId) {
-      alert('Pick a proof file to send.');
+      await dialog.alert('Pick a proof file to send.');
       return;
     }
     setSendingApprovalId(jobId);
@@ -653,7 +657,7 @@ export default function GraphicsPage() {
     const data = await res.json();
     setSendingApprovalId(null);
     if (!res.ok) {
-      alert('Send failed: ' + (data.error || 'Unknown error'));
+      await dialog.alert('Send failed: ' + (data.error || 'Unknown error'));
       return;
     }
     closeApprovalPicker();
@@ -668,7 +672,7 @@ export default function GraphicsPage() {
             ? `SMS sent to ${data.dispatch.sms.target}`
             : `SMS failed: ${data.dispatch.sms.error || 'unknown'}`)
       : null;
-    alert(`Proof sent for approval. Link: ${data.approvalUrl}\n\n${[emailInfo, smsInfo].filter(Boolean).join('\n')}`);
+    await dialog.alert(`Proof sent for approval. Link: ${data.approvalUrl}\n\n${[emailInfo, smsInfo].filter(Boolean).join('\n')}`);
   };
 
   // Save job edits
@@ -742,7 +746,7 @@ export default function GraphicsPage() {
       .single();
 
     if (error) {
-      alert('Failed to create job: ' + error.message);
+      await dialog.alert('Failed to create job: ' + error.message);
       setCreating(false);
       return;
     }
@@ -867,7 +871,7 @@ export default function GraphicsPage() {
 
   // Delete job
   const deleteJob = async (jobId: string) => {
-    if (!window.confirm('Delete this graphics job? This cannot be undone.')) return;
+    if (!(await dialog.confirm('Delete this graphics job? This cannot be undone.', { destructive: true, confirmLabel: 'Delete' }))) return;
     const { error } = await supabase.from('graphics_jobs').delete().eq('id', jobId);
     if (!error) {
       setJobs(prev => prev.filter(j => j.id !== jobId));
@@ -879,14 +883,14 @@ export default function GraphicsPage() {
   // Create estimate from graphics job
   const createEstimateFromJob = async (job: GraphicsJob) => {
     if (job.estimate_id) {
-      alert('This job already has an estimate linked.');
+      await dialog.alert('This job already has an estimate linked.');
       return;
     }
     if (!job.part_number && !job.customer) {
-      alert('Please add at least a part number or customer to this job before creating an estimate.');
+      await dialog.alert('Please add at least a part number or customer to this job before creating an estimate.');
       return;
     }
-    if (!window.confirm('Create an estimate from this graphics job? The estimate will be pre-populated with the job\'s part numbers and customer.')) return;
+    if (!(await dialog.confirm('Create an estimate from this graphics job? The estimate will be pre-populated with the job\'s part numbers and customer.'))) return;
 
     setCreatingEstimate(true);
     try {
@@ -897,22 +901,22 @@ export default function GraphicsPage() {
       });
       const data = await res.json();
       if (data.success) {
-        alert(`Estimate created: ${data.estimate_number}\n${data.line_item_count} line item${data.line_item_count !== 1 ? 's' : ''}\nTotal: $${data.grand_total?.toFixed(2) || '0.00'}\n\nYou can edit this estimate on the Estimates page.`);
+        await dialog.alert(`Estimate created: ${data.estimate_number}\n${data.line_item_count} line item${data.line_item_count !== 1 ? 's' : ''}\nTotal: $${data.grand_total?.toFixed(2) || '0.00'}\n\nYou can edit this estimate on the Estimates page.`);
         // Update local job state
         setJobs(prev => prev.map(j => j.id === job.id ? { ...j, estimate_id: data.estimate_id, updated_at: new Date().toISOString() } : j));
         loadHistory(job.id);
       } else {
-        alert('Failed to create estimate: ' + (data.error || 'Unknown error'));
+        await dialog.alert('Failed to create estimate: ' + (data.error || 'Unknown error'));
       }
     } catch {
-      alert('Network error — please try again');
+      await dialog.alert('Network error — please try again');
     }
     setCreatingEstimate(false);
   };
 
   // Print a packing list for the job. `overrides` lets us merge in fresh
   // invoice info right after creating one (before local state catches up).
-  const printPackingList = (job: GraphicsJob, overrides?: Partial<GraphicsJob>, lines?: PackingListLine[]) => {
+  const printPackingList = async (job: GraphicsJob, overrides?: Partial<GraphicsJob>, lines?: PackingListLine[]) => {
     try {
       exportPackingListPDF(
         packingListFromJob({ ...job, ...overrides }, lines && lines.length > 0 ? { lines } : undefined),
@@ -920,7 +924,7 @@ export default function GraphicsPage() {
       );
     } catch (e) {
       console.error('Packing list error:', e);
-      alert('Could not generate the packing list.');
+      await dialog.alert('Could not generate the packing list.');
     }
   };
 
@@ -939,9 +943,9 @@ export default function GraphicsPage() {
         setJobs(prev => prev.map(j => j.id === jobId ? { ...j, invoice_pdf_url: data.url } : j));
         return data.url as string;
       }
-      if (!silent) alert('Could not get the invoice PDF: ' + (data.error || 'Unknown error'));
+      if (!silent) await dialog.alert('Could not get the invoice PDF: ' + (data.error || 'Unknown error'));
     } catch {
-      if (!silent) alert('Network error fetching the invoice PDF — please try again.');
+      if (!silent) await dialog.alert('Network error fetching the invoice PDF — please try again.');
     } finally {
       setFetchingPdfJobId(null);
     }
@@ -2661,7 +2665,7 @@ export default function GraphicsPage() {
         <GraphicsInvoiceReviewModal
           job={invoiceJob}
           onClose={() => setInvoiceJob(null)}
-          onComplete={(result) => {
+          onComplete={async (result) => {
             const job = invoiceJob;
             setInvoiceJob(null);
             if (job) {
@@ -2676,7 +2680,7 @@ export default function GraphicsPage() {
               } : j));
               loadHistory(job.id);
             }
-            const printNow = window.confirm(
+            const printNow = await dialog.confirm(
               `Invoice ${result.invoiceNumber || result.invoiceId || 'created'} in FleetSuite.\n\nPrint packing list now?`
             );
             // Reuse the verified lines so the packing list matches the invoice.

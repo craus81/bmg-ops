@@ -9,6 +9,7 @@ import { storage } from '@/lib/storage';
 import type { PurchaseOrder, POLineItem, CatalogItem, PoLocation } from '@/lib/types';
 import { PartLabel } from '@/components/PartLabel';
 import { CreateNetsuiteItemModal } from '@/components/CreateNetsuiteItemModal';
+import { useDialog } from '@/components/DialogProvider';
 
 interface ImportLine extends ParsedPOLine {
   catalog_match: CatalogItem | null;
@@ -84,7 +85,7 @@ function downloadPoCsv(po: PurchaseOrder & { line_items: POLineItem[] }) {
   URL.revokeObjectURL(url);
 }
 
-function printPo(po: PurchaseOrder & { line_items: POLineItem[] }) {
+async function printPo(po: PurchaseOrder & { line_items: POLineItem[] }, alertFn: (message: string) => Promise<void>) {
   const ship = formatShipTo(po.ship_to);
   const total = po.line_items.reduce((s, li) => s + li.quantity * li.unit_price, 0);
   const escape = (s: string) => s.replace(/[&<>"']/g, c => (
@@ -158,7 +159,7 @@ function printPo(po: PurchaseOrder & { line_items: POLineItem[] }) {
 </body>
 </html>`;
   const w = window.open('', '_blank');
-  if (!w) { alert('Pop-up blocked. Allow pop-ups to print.'); return; }
+  if (!w) { await alertFn('Pop-up blocked. Allow pop-ups to print.'); return; }
   w.document.open();
   w.document.write(html);
   w.document.close();
@@ -279,6 +280,7 @@ export default function POsPage() {
   const router = useRouter();
   const searchParams = useSearchParams();
   const { isAdmin, user } = useAuth();
+  const dialog = useDialog();
   const supabase = createClient();
 
   const [pos, setPos] = useState<(PurchaseOrder & { line_items: POLineItem[]; po_invoices?: any[] })[]>([]);
@@ -416,7 +418,7 @@ export default function POsPage() {
   }
 
   async function saveLocation() {
-    if (!locationForm.name.trim()) { alert('Location name is required'); return; }
+    if (!locationForm.name.trim()) { await dialog.alert('Location name is required'); return; }
     setLocationSaving(true);
     try {
       const payload = {
@@ -439,7 +441,7 @@ export default function POsPage() {
       }
       setLocationForm({ id: '', name: '', address: '', city: '', state: '', zip: '' });
     } catch (err: any) {
-      alert('Failed to save location: ' + (err?.message || 'unknown error'));
+      await dialog.alert('Failed to save location: ' + (err?.message || 'unknown error'));
     } finally {
       setLocationSaving(false);
     }
@@ -450,7 +452,7 @@ export default function POsPage() {
     setSelectedId: (id: string) => void,
   ) {
     const defaultName = (shipTo.name || shipTo.address || '').trim();
-    const name = window.prompt('Name this location (e.g., "St. Louis Branch"):', defaultName);
+    const name = await dialog.prompt('Name this location (e.g., "St. Louis Branch"):', defaultName);
     if (!name?.trim()) return;
     try {
       const { data, error } = await supabase
@@ -470,14 +472,14 @@ export default function POsPage() {
       setLocations(prev => [...prev, loc].sort((a, b) => a.name.localeCompare(b.name)));
       setSelectedId(loc.id);
     } catch (err: any) {
-      alert('Failed to save location: ' + (err?.message || 'unknown error'));
+      await dialog.alert('Failed to save location: ' + (err?.message || 'unknown error'));
     }
   }
 
   async function archiveLocation(id: string) {
-    if (!confirm('Remove this location from the picker? Past POs that reference it keep their address.')) return;
+    if (!(await dialog.confirm('Remove this location from the picker? Past POs that reference it keep their address.', { destructive: true, confirmLabel: 'Remove' }))) return;
     const { error } = await supabase.from('po_locations').update({ archived: true }).eq('id', id);
-    if (error) { alert('Failed: ' + error.message); return; }
+    if (error) { await dialog.alert('Failed: ' + error.message); return; }
     setLocations(prev => prev.filter(l => l.id !== id));
   }
 
@@ -741,7 +743,7 @@ export default function POsPage() {
       .single();
 
     if (!po || error) {
-      alert('Error creating PO: ' + error?.message);
+      await dialog.alert('Error creating PO: ' + error?.message);
       setImporting(false);
       return;
     }
@@ -814,7 +816,7 @@ export default function POsPage() {
     // Delete old line items
     const { error: deleteErr } = await supabase.from('po_line_items').delete().eq('po_id', existingPo.id);
     if (deleteErr) {
-      alert('Error removing old line items: ' + deleteErr.message);
+      await dialog.alert('Error removing old line items: ' + deleteErr.message);
       setImporting(false);
       return;
     }
@@ -896,9 +898,9 @@ export default function POsPage() {
 
   // Stage a line for the new PO. Mirrors the existing-PO "+ Add Line" form:
   // catalog parts link part_id; free-typed parts stage with part_id null.
-  const addCreateLine = () => {
+  const addCreateLine = async () => {
     const partNum = createLineForm.part_number.trim();
-    if (!partNum) { alert('Enter or pick a part number'); return; }
+    if (!partNum) { await dialog.alert('Enter or pick a part number'); return; }
     const qty = parseInt(createLineForm.quantity) || 1;
     const price = parseFloat(createLineForm.unit_price) || 0;
     const catalogMatch = catalog.find((c) => c.part_number.toUpperCase() === partNum.toUpperCase());
@@ -923,7 +925,7 @@ export default function POsPage() {
       .select()
       .single();
 
-    if (!po || error) { alert('Error: ' + error?.message); return null; }
+    if (!po || error) { await dialog.alert('Error: ' + error?.message); return null; }
 
     const { data: items } = await supabase
       .from('po_line_items')
@@ -962,10 +964,10 @@ export default function POsPage() {
       if (data.success) {
         setPos((prev) => prev.filter((p) => p.id !== poId));
       } else {
-        alert(`Failed to delete PO: ${data.results?.[0]?.error || data.error || 'Unknown error'}`);
+        await dialog.alert(`Failed to delete PO: ${data.results?.[0]?.error || data.error || 'Unknown error'}`);
       }
     } catch {
-      alert('Delete failed — please try again');
+      await dialog.alert('Delete failed — please try again');
     }
   };
 
@@ -981,7 +983,7 @@ export default function POsPage() {
   const handleBatchDelete = async () => {
     if (selectedForDelete.size === 0) return;
     const count = selectedForDelete.size;
-    if (!window.confirm(`Delete ${count} PO${count !== 1 ? 's' : ''} and all their line items? This cannot be undone.`)) return;
+    if (!(await dialog.confirm(`Delete ${count} PO${count !== 1 ? 's' : ''} and all their line items? This cannot be undone.`, { destructive: true, confirmLabel: 'Delete' }))) return;
 
     setDeletingBatch(true);
     try {
@@ -997,10 +999,10 @@ export default function POsPage() {
       }
       if (!data.success) {
         const failed = data.results.filter((r: any) => !r.success);
-        alert(`${data.deleted} of ${data.total} POs deleted. ${failed.length} failed.`);
+        await dialog.alert(`${data.deleted} of ${data.total} POs deleted. ${failed.length} failed.`);
       }
     } catch {
-      alert('Batch delete failed — please try again');
+      await dialog.alert('Batch delete failed — please try again');
     }
     setSelectedForDelete(new Set());
     setEditMode(false);
@@ -1025,7 +1027,7 @@ export default function POsPage() {
         );
       }
     } catch {
-      alert('Failed to delete line item');
+      await dialog.alert('Failed to delete line item');
     }
   };
 
@@ -1129,7 +1131,7 @@ export default function POsPage() {
 
   const saveAddLine = async (poId: string) => {
     const partNum = addLineForm.part_number.trim();
-    if (!partNum) { alert('Enter or pick a part number'); return; }
+    if (!partNum) { await dialog.alert('Enter or pick a part number'); return; }
     const qty = parseInt(addLineForm.quantity) || 1;
     const price = parseFloat(addLineForm.unit_price) || 0;
     // Link the catalog part when the number matches, mirroring the PDF/email
@@ -1149,7 +1151,7 @@ export default function POsPage() {
       .select()
       .single();
     setAddingLine(false);
-    if (error || !data) { alert('Error adding line: ' + (error?.message || 'unknown')); return; }
+    if (error || !data) { await dialog.alert('Error adding line: ' + (error?.message || 'unknown')); return; }
     setPos((prev) =>
       prev.map((po) =>
         po.id === poId ? { ...po, line_items: [...po.line_items, data as POLineItem] } : po
@@ -1641,7 +1643,7 @@ export default function POsPage() {
     } catch (err: any) {
       console.error('[admin/pos] createGfxJobFromLine failed:', err);
       setGfxJobResults(prev => ({ ...prev, [li.id]: 'error' }));
-      alert(`Failed to create graphics job: ${err?.message || String(err)}`);
+      await dialog.alert(`Failed to create graphics job: ${err?.message || String(err)}`);
     }
     setCreatingGfxJob(null);
   };
@@ -1693,7 +1695,7 @@ export default function POsPage() {
       router.push(`/graphics?editJob=${job.id}`);
     } catch (err: any) {
       console.error('[admin/pos] createGfxJobFromPO failed:', err);
-      alert(`Failed to create graphics job: ${err?.message || String(err)}`);
+      await dialog.alert(`Failed to create graphics job: ${err?.message || String(err)}`);
     }
     setCreatingGfxJobForPo(null);
   };
@@ -3315,7 +3317,7 @@ export default function POsPage() {
                           <div style={{ width: '65px', textAlign: 'right', color: 'var(--text-body)', fontSize: '11px' }} onClick={() => startEditLine(li)}>{fmt(li.unit_price)}</div>
                           <div style={{ width: '55px', textAlign: 'right', fontWeight: 700, color: 'var(--text-body)' }}>{fmt(lineTotal)}</div>
                           <button
-                            onClick={() => { if (window.confirm(`Remove ${li.part_number} from this PO?`)) handleDeleteLineItem(li.id, po.id); }}
+                            onClick={async () => { if (await dialog.confirm(`Remove ${li.part_number} from this PO?`, { destructive: true, confirmLabel: 'Remove' })) handleDeleteLineItem(li.id, po.id); }}
                             style={{ width: '24px', background: 'none', border: 'none', color: '#f87171', fontSize: '14px', padding: 0, cursor: 'pointer' }}
                           >
                             ×
@@ -3480,7 +3482,7 @@ export default function POsPage() {
                   {/* Print / CSV export */}
                   <div style={{ display: 'flex', gap: '6px', marginTop: '10px' }}>
                     <button
-                      onClick={(e) => { e.stopPropagation(); printPo(po); }}
+                      onClick={(e) => { e.stopPropagation(); printPo(po, dialog.alert); }}
                       style={{
                         flex: 1, padding: '8px', borderRadius: '8px',
                         background: 'rgba(148,163,184,0.08)', border: '1px solid rgba(148,163,184,0.25)',
@@ -3522,9 +3524,9 @@ export default function POsPage() {
                       </button>
                     )}
                     <button
-                      onClick={(e) => {
+                      onClick={async (e) => {
                         e.stopPropagation();
-                        if (window.confirm(`Delete PO #${po.po_number} and all its line items? This cannot be undone.`)) {
+                        if (await dialog.confirm(`Delete PO #${po.po_number} and all its line items? This cannot be undone.`, { destructive: true, confirmLabel: 'Delete' })) {
                           handleDeletePO(po.id);
                         }
                       }}

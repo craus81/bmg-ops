@@ -14,6 +14,7 @@ import { VEHICLE_STATUS_PIPELINE, VEHICLE_STATUS_LABELS, VEHICLE_STATUS_COLORS, 
 import NetSuitePdf from '@/components/NetSuitePdf';
 import ProofThumbnail from '@/components/ProofThumbnail';
 import CompletionModal from '@/components/CompletionModal';
+import { useDialog } from '@/components/DialogProvider';
 
 type FilterStatus = VehicleTrackingStatus | 'all' | 'stuck';
 
@@ -21,6 +22,7 @@ export default function TrackingPage() {
   const router = useRouter();
   const searchParams = useSearchParams();
   const { isAdmin, user, profile } = useAuth();
+  const dialog = useDialog();
   const supabase = createClient();
 
   const [vehicles, setVehicles] = useState<FleetCheckin[]>([]);
@@ -299,7 +301,7 @@ export default function TrackingPage() {
     if ('threadId' in result) {
       router.push(`/admin/inbox?thread=${result.threadId}`);
     } else {
-      alert('Failed to open thread: ' + result.error);
+      await dialog.alert('Failed to open thread: ' + result.error);
     }
     setMessagingVehicleId(null);
   };
@@ -330,7 +332,7 @@ export default function TrackingPage() {
       const { error: uploadErr } = await storage.from('photos').upload(path, file, { contentType: file.type });
       if (uploadErr) {
         console.error('Photo upload error:', uploadErr.message);
-        alert('Photo upload failed: ' + uploadErr.message);
+        await dialog.alert('Photo upload failed: ' + uploadErr.message);
         setPhotoUploading(false);
         return;
       }
@@ -344,7 +346,7 @@ export default function TrackingPage() {
 
       if (dbErr) {
         console.error('Photo DB insert error:', dbErr.message);
-        alert('Photo upload failed: ' + dbErr.message);
+        await dialog.alert('Photo upload failed: ' + dbErr.message);
         setPhotoUploading(false);
         return;
       }
@@ -352,7 +354,7 @@ export default function TrackingPage() {
       await loadPhotos(vehicleId);
     } catch (err: any) {
       console.error('Photo upload error:', err);
-      alert('Photo upload failed');
+      await dialog.alert('Photo upload failed');
     }
     setPhotoUploading(false);
   };
@@ -365,7 +367,7 @@ export default function TrackingPage() {
   };
 
   const deletePhoto = async (vehicleId: string, photoId: string, storagePath: string) => {
-    if (!confirm('Delete this photo?')) return;
+    if (!(await dialog.confirm('Delete this photo?', { destructive: true, confirmLabel: 'Delete' }))) return;
     await storage.from('photos').remove([storagePath]);
     await supabase.from('vehicle_photos').delete().eq('id', photoId);
     await loadPhotos(vehicleId);
@@ -402,7 +404,7 @@ export default function TrackingPage() {
   };
 
   const deleteNote = async (vehicleId: string, noteId: string) => {
-    if (!confirm('Delete this note?')) return;
+    if (!(await dialog.confirm('Delete this note?', { destructive: true, confirmLabel: 'Delete' }))) return;
     await supabase.from('vehicle_notes').delete().eq('id', noteId);
     await loadNotes(vehicleId);
   };
@@ -470,7 +472,7 @@ export default function TrackingPage() {
           setSoLinking(false);
           return;
         }
-        alert('Failed to link sales order: ' + insertError.message);
+        await dialog.alert('Failed to link sales order: ' + insertError.message);
         setSoLinking(false);
         return;
       }
@@ -512,7 +514,7 @@ export default function TrackingPage() {
       setTimeout(() => setUpdateSuccess(null), 2000);
     } catch (err) {
       console.error('Link SO error:', err);
-      alert('Failed to link sales order');
+      await dialog.alert('Failed to link sales order');
     }
     setSoLinking(false);
   };
@@ -521,14 +523,14 @@ export default function TrackingPage() {
     const list = vehicleSalesOrders[vehicleId] || [];
     const target = list.find(s => s.id === soRowId);
     if (!target) return;
-    if (!confirm(`Remove SO #${target.sales_order_number || target.netsuite_sales_order_id} from this vehicle?`)) return;
+    if (!(await dialog.confirm(`Remove SO #${target.sales_order_number || target.netsuite_sales_order_id} from this vehicle?`, { destructive: true, confirmLabel: 'Remove' }))) return;
 
     const { error } = await supabase
       .from('fleet_checkin_sales_orders')
       .delete()
       .eq('id', soRowId);
     if (error) {
-      alert('Failed to unlink sales order: ' + error.message);
+      await dialog.alert('Failed to unlink sales order: ' + error.message);
       return;
     }
 
@@ -587,7 +589,7 @@ export default function TrackingPage() {
       const path = `manual-uploads/${Date.now()}-${Math.random().toString(36).slice(2, 6)}.${ext}`;
       const { error: upErr } = await storage.from('graphics-proofs').upload(path, file, { contentType: file.type });
       if (upErr) {
-        alert('Upload failed: ' + (upErr.message || 'unknown'));
+        await dialog.alert('Upload failed: ' + (upErr.message || 'unknown'));
         return;
       }
       const { data: urlData } = storage.from('graphics-proofs').getPublicUrl(path);
@@ -598,7 +600,7 @@ export default function TrackingPage() {
         proof_dropbox_path: null,
       } as any).eq('id', vehicleId);
       if (dbErr) {
-        alert('Saved the file but failed to attach it: ' + dbErr.message);
+        await dialog.alert('Saved the file but failed to attach it: ' + dbErr.message);
         return;
       }
       setVehicles(prev => prev.map(v =>
@@ -609,19 +611,19 @@ export default function TrackingPage() {
       setUpdateSuccess('Proof uploaded');
       setTimeout(() => setUpdateSuccess(null), 2000);
     } catch (err: any) {
-      alert('Upload failed: ' + (err?.message || String(err)));
+      await dialog.alert('Upload failed: ' + (err?.message || String(err)));
     }
   };
 
   const removeProofForVehicle = async (vehicleId: string) => {
-    if (!confirm('Remove the proof file from this vehicle?')) return;
+    if (!(await dialog.confirm('Remove the proof file from this vehicle?', { destructive: true, confirmLabel: 'Remove' }))) return;
     const { error } = await supabase.from('fleet_checkins').update({
       proof_url: null,
       proof_filename: null,
       proof_dropbox_path: null,
     } as any).eq('id', vehicleId);
     if (error) {
-      alert('Failed to remove proof: ' + error.message);
+      await dialog.alert('Failed to remove proof: ' + error.message);
       return;
     }
     setVehicles(prev => prev.map(v =>
@@ -653,10 +655,10 @@ export default function TrackingPage() {
         setUpdateSuccess('Proof linked from Dropbox');
         setTimeout(() => setUpdateSuccess(null), 3000);
       } else {
-        alert(`Failed to copy proof: ${data.error}`);
+        await dialog.alert(`Failed to copy proof: ${data.error}`);
       }
     } catch (err: any) {
-      alert(`Error: ${err.message}`);
+      await dialog.alert(`Error: ${err.message}`);
     }
     setDbxCopying(false);
   };
@@ -668,10 +670,10 @@ export default function TrackingPage() {
       if (data.authUrl) {
         window.location.href = data.authUrl;
       } else {
-        alert('Dropbox not configured. Add DROPBOX_APP_KEY and DROPBOX_APP_SECRET to environment variables.');
+        await dialog.alert('Dropbox not configured. Add DROPBOX_APP_KEY and DROPBOX_APP_SECRET to environment variables.');
       }
     } catch {
-      alert('Failed to start Dropbox connection');
+      await dialog.alert('Failed to start Dropbox connection');
     }
   };
 
@@ -740,9 +742,12 @@ export default function TrackingPage() {
         // admin override.
         const lines = data.missing.join('\n• ');
         const isAdmin = profile?.role === 'admin';
-        const proceed = isAdmin
-          ? confirm(`Cannot mark complete yet:\n\n• ${lines}\n\nOverride and mark complete anyway?`)
-          : (alert(`Cannot mark complete yet:\n\n• ${lines}\n\nFinish the checklist and upload a completion photo, then try again.`), false);
+        let proceed = false;
+        if (isAdmin) {
+          proceed = await dialog.confirm(`Cannot mark complete yet:\n\n• ${lines}\n\nOverride and mark complete anyway?`);
+        } else {
+          await dialog.alert(`Cannot mark complete yet:\n\n• ${lines}\n\nFinish the checklist and upload a completion photo, then try again.`);
+        }
         if (proceed) {
           await updateStatus(vehicleId, newStatus, { force: true });
         }
@@ -751,7 +756,7 @@ export default function TrackingPage() {
       }
 
       if (!res.ok) {
-        alert('Update failed: ' + (data.error || 'Unknown error'));
+        await dialog.alert('Update failed: ' + (data.error || 'Unknown error'));
         setUpdatingId(null);
         return;
       }
@@ -771,7 +776,7 @@ export default function TrackingPage() {
         loadPhotos(vehicleId);
       }
     } catch (err) {
-      alert('Network error — please try again');
+      await dialog.alert('Network error — please try again');
     }
     setUpdatingId(null);
   // eslint-disable-next-line react-hooks/exhaustive-deps -- intentional: load once on mount
@@ -796,7 +801,7 @@ export default function TrackingPage() {
       });
       const data = await res.json().catch(() => ({}));
       if (!res.ok) {
-        alert('Graphics install update failed: ' + (data.error || 'Unknown error'));
+        await dialog.alert('Graphics install update failed: ' + (data.error || 'Unknown error'));
         setUpdatingId(null);
         return;
       }
@@ -810,7 +815,7 @@ export default function TrackingPage() {
         if (v) loadGraphicsJob(v);
       }
     } catch {
-      alert('Network error — please try again');
+      await dialog.alert('Network error — please try again');
     }
     setUpdatingId(null);
   // eslint-disable-next-line react-hooks/exhaustive-deps -- intentional: load once on mount
@@ -826,7 +831,7 @@ export default function TrackingPage() {
       });
       const data = await res.json();
       if (!res.ok) {
-        alert('Delete failed: ' + (data.error || 'Unknown error'));
+        await dialog.alert('Delete failed: ' + (data.error || 'Unknown error'));
       } else {
         setVehicles(prev => prev.filter(v => v.id !== vehicleId));
         setExpandedId(null);
@@ -834,7 +839,7 @@ export default function TrackingPage() {
         setTimeout(() => setUpdateSuccess(null), 2000);
       }
     } catch {
-      alert('Network error — please try again');
+      await dialog.alert('Network error — please try again');
     }
     setDeletingId(null);
   };
@@ -849,7 +854,7 @@ export default function TrackingPage() {
       });
       const data = await res.json();
       if (!res.ok) {
-        alert('Archive failed: ' + (data.error || 'Unknown error'));
+        await dialog.alert('Archive failed: ' + (data.error || 'Unknown error'));
       } else {
         setVehicles(prev => prev.map(v =>
           v.id === vehicleId ? { ...v, archived_at: unarchive ? null : new Date().toISOString() } as any : v
@@ -859,7 +864,7 @@ export default function TrackingPage() {
         setTimeout(() => setUpdateSuccess(null), 2000);
       }
     } catch {
-      alert('Network error — please try again');
+      await dialog.alert('Network error — please try again');
     }
     setArchivingId(null);
   };
@@ -2438,9 +2443,9 @@ export default function TrackingPage() {
                           </button>
                         )}
                         <button
-                          onClick={(e) => {
+                          onClick={async (e) => {
                             e.stopPropagation();
-                            if (window.confirm(`Permanently delete this vehicle (${vehicle.vin})? This cannot be undone.`)) {
+                            if (await dialog.confirm(`Permanently delete this vehicle (${vehicle.vin})? This cannot be undone.`, { destructive: true, confirmLabel: 'Delete' })) {
                               deleteVehicle(vehicle.id);
                             }
                           }}

@@ -5,6 +5,7 @@ import { useRouter, useSearchParams } from 'next/navigation';
 import { usePopout } from '@/components/Popout';
 import { createClient } from '@/lib/supabase-browser';
 import { useAuth } from '@/components/AuthProvider';
+import { useDialog } from '@/components/DialogProvider';
 import { theme } from '@/lib/theme';
 import CustomerDefaultsEditor from '@/components/CustomerDefaultsEditor';
 
@@ -123,6 +124,7 @@ export default function EstimatesPage() {
   const { open: openPopout } = usePopout();
   const searchParams = useSearchParams();
   const { user, isAdmin, isSales, isGraphicsProduction, profile } = useAuth();
+  const dialog = useDialog();
   const supabase = createClient();
 
   const [view, setView] = useState<ViewMode>('list');
@@ -359,10 +361,10 @@ export default function EstimatesPage() {
         if (!editingId) setEditingId(data.id);
         await loadEstimates();
       } else {
-        alert('Save failed: ' + (data.error || 'Unknown error'));
+        await dialog.alert('Save failed: ' + (data.error || 'Unknown error'));
       }
     } catch (err) {
-      alert('Network error — please try again');
+      await dialog.alert('Network error — please try again');
     }
     setSaving(false);
   };
@@ -370,22 +372,22 @@ export default function EstimatesPage() {
   // ── Push to NetSuite (initial push or sync update) ──
   const pushToNetSuite = async (isSync: boolean = false) => {
     if (!editingId) {
-      alert('Please save the estimate first');
+      await dialog.alert('Please save the estimate first');
       return;
     }
     if (!customerNsId) {
-      alert('Please select a customer with a NetSuite ID');
+      await dialog.alert('Please select a customer with a NetSuite ID');
       return;
     }
     if (lines.length === 0) {
-      alert('Please add at least one line item');
+      await dialog.alert('Please add at least one line item');
       return;
     }
 
     const confirmMsg = isSync
       ? 'Sync changes to NetSuite? This will update the existing Estimate in NetSuite.'
       : 'Push this estimate to NetSuite? This will create an Estimate record in NetSuite.';
-    if (!window.confirm(confirmMsg)) return;
+    if (!(await dialog.confirm(confirmMsg))) return;
 
     // Save first to ensure latest data
     await saveEstimate(isSync ? 'pushed' : 'draft');
@@ -407,15 +409,15 @@ export default function EstimatesPage() {
         const msg = data.updated
           ? 'Estimate synced to NetSuite!'
           : `Estimate pushed to NetSuite!\nEstimate #: ${data.netsuite_estimate_number || data.netsuite_estimate_id}`;
-        alert(msg);
+        await dialog.alert(msg);
         await loadEstimates();
         resetBuilder();
         setView('list');
       } else {
-        alert((isSync ? 'Sync' : 'Push') + ' failed: ' + (data.error || 'Unknown error'));
+        await dialog.alert((isSync ? 'Sync' : 'Push') + ' failed: ' + (data.error || 'Unknown error'));
       }
     } catch {
-      alert('Network error — please try again');
+      await dialog.alert('Network error — please try again');
     }
     setPushing(false);
     setSyncing(false);
@@ -424,7 +426,7 @@ export default function EstimatesPage() {
   // ── Convert Estimate to Sales Order in NetSuite ──
   const sendForApproval = async () => {
     if (!editingId || sendingForApproval) return;
-    if (!customerId) { alert('Pick a customer first.'); return; }
+    if (!customerId) { await dialog.alert('Pick a customer first.'); return; }
     setSendingForApproval(true);
     // Save current state first so the sent estimate reflects the latest edits
     await saveEstimate('sent');
@@ -436,7 +438,7 @@ export default function EstimatesPage() {
     const data = await res.json();
     setSendingForApproval(false);
     if (!res.ok) {
-      alert('Send failed: ' + (data.error || 'Unknown error'));
+      await dialog.alert('Send failed: ' + (data.error || 'Unknown error'));
       return;
     }
     const emailInfo = data.dispatch?.email
@@ -449,7 +451,7 @@ export default function EstimatesPage() {
             ? `SMS sent to ${data.dispatch.sms.target}`
             : `SMS failed: ${data.dispatch.sms.error || 'unknown'}`)
       : null;
-    alert(`Approval link sent. Link: ${data.approvalUrl}\n\n${[emailInfo, smsInfo].filter(Boolean).join('\n')}`);
+    await dialog.alert(`Approval link sent. Link: ${data.approvalUrl}\n\n${[emailInfo, smsInfo].filter(Boolean).join('\n')}`);
     loadEstimates();
   };
 
@@ -457,10 +459,10 @@ export default function EstimatesPage() {
     if (!editingId) return;
     const est = estimates.find(e => e.id === editingId);
     if (est?.netsuite_so_id) {
-      alert(`This estimate already has a Sales Order: SO #${est.netsuite_so_number || est.netsuite_so_id}`);
+      await dialog.alert(`This estimate already has a Sales Order: SO #${est.netsuite_so_number || est.netsuite_so_id}`);
       return;
     }
-    if (!confirm('Create a Sales Order in NetSuite from this estimate?')) return;
+    if (!(await dialog.confirm('Create a Sales Order in NetSuite from this estimate?'))) return;
 
     setConvertingToSO(true);
     try {
@@ -471,17 +473,17 @@ export default function EstimatesPage() {
       });
       const data = await res.json();
       if (res.ok && data.status === 'created') {
-        alert(`Sales Order created!\nSO #: ${data.salesOrderNumber || data.salesOrderId}\nLine items: ${data.lineItemCount}${data.skippedItems ? '\nSkipped (no NS item): ' + data.skippedItems.join(', ') : ''}`);
+        await dialog.alert(`Sales Order created!\nSO #: ${data.salesOrderNumber || data.salesOrderId}\nLine items: ${data.lineItemCount}${data.skippedItems ? '\nSkipped (no NS item): ' + data.skippedItems.join(', ') : ''}`);
         await loadEstimates();
         resetBuilder();
         setView('list');
       } else if (data.status === 'already_created') {
-        alert(data.message);
+        await dialog.alert(data.message);
       } else {
-        alert('Failed: ' + (data.error || 'Unknown error'));
+        await dialog.alert('Failed: ' + (data.error || 'Unknown error'));
       }
     } catch {
-      alert('Network error — please try again');
+      await dialog.alert('Network error — please try again');
     }
     setConvertingToSO(false);
   };
@@ -585,14 +587,14 @@ export default function EstimatesPage() {
       });
       const data = await res.json();
       if (!res.ok || !data.success) {
-        alert('Failed to spawn graphics job: ' + (data.error || 'Unknown error'));
+        await dialog.alert('Failed to spawn graphics job: ' + (data.error || 'Unknown error'));
         return;
       }
       await loadLinkedGraphicsJobs(editingId);
-      const open = window.confirm(`Graphics job ${data.jobNumber} created. Open it now?`);
+      const open = await dialog.confirm(`Graphics job ${data.jobNumber} created. Open it now?`);
       if (open) router.push(`/graphics?id=${data.graphicsJobId}`);
     } catch {
-      alert('Network error — please try again');
+      await dialog.alert('Network error — please try again');
     }
     setGraphicsLinking(false);
   };
@@ -626,7 +628,7 @@ export default function EstimatesPage() {
       });
       const data = await res.json();
       if (!res.ok || !data.success) {
-        alert('Failed to link: ' + (data.error || 'Unknown error'));
+        await dialog.alert('Failed to link: ' + (data.error || 'Unknown error'));
         return;
       }
       await loadLinkedGraphicsJobs(editingId);
@@ -634,7 +636,7 @@ export default function EstimatesPage() {
       setGraphicsPickerSearch('');
       setGraphicsPickerResults([]);
     } catch {
-      alert('Network error — please try again');
+      await dialog.alert('Network error — please try again');
     }
     setGraphicsLinking(false);
   };
@@ -701,7 +703,7 @@ export default function EstimatesPage() {
       .eq('id', customerId);
     setSavingCustomerDefaults(false);
     if (error) {
-      alert('Failed to save customer defaults: ' + error.message);
+      await dialog.alert('Failed to save customer defaults: ' + error.message);
       return;
     }
     setCustomerDefaults(defaults);
@@ -712,7 +714,7 @@ export default function EstimatesPage() {
     const msg = hasNsId
       ? 'Delete this estimate? This will ALSO delete it from NetSuite. This cannot be undone.'
       : 'Delete this estimate? This cannot be undone.';
-    if (!window.confirm(msg)) return;
+    if (!(await dialog.confirm(msg, { destructive: true, confirmLabel: 'Delete' }))) return;
 
     setDeleting(true);
     try {
@@ -723,10 +725,10 @@ export default function EstimatesPage() {
       });
       const data = await res.json();
       if (!data.success && data.error) {
-        alert('Delete failed: ' + data.error);
+        await dialog.alert('Delete failed: ' + data.error);
       }
     } catch {
-      alert('Network error — please try again');
+      await dialog.alert('Network error — please try again');
     }
     setDeleting(false);
     await loadEstimates();
