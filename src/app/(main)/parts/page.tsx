@@ -28,6 +28,11 @@ interface Part {
   requires_po_match: boolean;
   is_active: boolean;
   last_synced_at: string;
+  // Graphics metadata (folded in from the old catalog; local, not NetSuite-synced)
+  vehicle_type: string | null;
+  graphic_package: string | null;
+  customer: string | null;
+  proof_pages: number | null;
 }
 
 interface SyncLog {
@@ -52,8 +57,15 @@ const RANGE_PHRASE: Record<CompletedRange, string> = {
   day: 'today', week: 'this week', month: 'this month', year: 'this year', all: 'all time',
 };
 
-// Core part fields an admin can edit inline (written back to NetSuite).
-type EditableField = 'item_number' | 'display_name' | 'sales_price' | 'purchase_price';
+// Part fields an admin can edit inline. The "NetSuite" set writes back to
+// NetSuite via /api/parts/[id]; the "graphics" set is local-only metadata
+// (folded in from the old catalog, never overwritten by the sync) and updates
+// netsuite_parts directly.
+type EditableField =
+  | 'item_number' | 'display_name' | 'sales_price' | 'purchase_price'
+  | 'vehicle_type' | 'graphic_package' | 'customer' | 'proof_pages';
+const NETSUITE_FIELDS: EditableField[] = ['item_number', 'display_name', 'sales_price', 'purchase_price'];
+const TEXT_FIELDS: EditableField[] = ['item_number', 'display_name', 'vehicle_type', 'graphic_package', 'customer'];
 
 // A real NetSuite-synced part has a numeric internal id, not a local placeholder.
 const isRealNsPart = (p: { netsuite_id: string | null }) => !!p.netsuite_id && !/^(LOCAL-|bmg-)/i.test(p.netsuite_id);
@@ -368,46 +380,58 @@ export default function PartsPage() {
     setFieldError(null);
   };
 
-  // Save an edited core field. For NetSuite-synced parts the server writes it
-  // back to NetSuite first (so the next sync doesn't revert it), then mirrors
-  // the value locally; we reflect the saved value in the list on success.
+  // Save an edited part field. NetSuite-backed fields (number, name, prices) go
+  // through /api/parts/[id], which writes the change back to NetSuite before
+  // mirroring it locally. Graphics metadata (vehicle type, package, brand, proof
+  // pages) is local-only — the sync never touches it — so it updates the row
+  // directly.
   const savePartField = async (partId: string) => {
     if (!editField) return;
     const { field } = editField;
-    const patch: { item_number?: string; display_name?: string; sales_price?: number; purchase_price?: number } = {};
-    if (field === 'item_number' || field === 'display_name') {
+
+    let value: string | number;
+    if (TEXT_FIELDS.includes(field)) {
       const v = editFieldValue.trim();
       if (field === 'item_number' && !v) { setFieldError('Part number cannot be empty'); return; }
-      patch[field] = v;
+      value = v;
     } else {
-      const num = parseFloat(editFieldValue);
-      if (isNaN(num) || num < 0) { setFieldError('Enter a valid amount'); return; }
-      patch[field] = num;
+      const num = field === 'proof_pages' ? parseInt(editFieldValue, 10) : parseFloat(editFieldValue);
+      if (isNaN(num) || num < 0) { setFieldError('Enter a valid number'); return; }
+      value = field === 'proof_pages' ? Math.max(1, num) : num;
     }
 
     setSavingField(true);
     setFieldError(null);
     try {
-      const { data } = await supabase.auth.getSession();
-      const token = data?.session?.access_token;
-      const res = await fetch(`/api/parts/${partId}`, {
-        method: 'PATCH',
-        headers: { 'Content-Type': 'application/json', ...(token ? { Authorization: `Bearer ${token}` } : {}) },
-        body: JSON.stringify(patch),
-      });
-      const body = await res.json().catch(() => ({}));
-      if (!res.ok) {
-        setFieldError(body.error || `Save failed (${res.status})`);
-        return;
+      if (NETSUITE_FIELDS.includes(field)) {
+        const { data } = await supabase.auth.getSession();
+        const token = data?.session?.access_token;
+        const res = await fetch(`/api/parts/${partId}`, {
+          method: 'PATCH',
+          headers: { 'Content-Type': 'application/json', ...(token ? { Authorization: `Bearer ${token}` } : {}) },
+          body: JSON.stringify({ [field]: value }),
+        });
+        const body = await res.json().catch(() => ({}));
+        if (!res.ok) {
+          setFieldError(body.error || `Save failed (${res.status})`);
+          return;
+        }
+        // On a rename, the server also carries old part-number strings (scans, PO
+        // lines, estimates, …) over to the new number — confirm how many moved.
+        if (field === 'item_number' && typeof body.sweptReferences === 'number' && body.sweptReferences > 0) {
+          const n = body.sweptReferences;
+          setSyncMessage(`Renamed — updated ${n} historical reference${n === 1 ? '' : 's'} to the new number.`);
+          setTimeout(() => setSyncMessage(''), 5000);
+        }
+      } else {
+        // Local-only graphics metadata — admins can update netsuite_parts under RLS.
+        const { error } = await supabase
+          .from('netsuite_parts')
+          .update({ [field]: value, updated_at: new Date().toISOString() })
+          .eq('id', partId);
+        if (error) { setFieldError(error.message); return; }
       }
-      setParts(prev => prev.map(p => p.id === partId ? { ...p, ...patch } : p));
-      // On a rename, the server also carries old part-number strings (scans, PO
-      // lines, estimates, …) over to the new number — confirm how many moved.
-      if (field === 'item_number' && typeof body.sweptReferences === 'number' && body.sweptReferences > 0) {
-        const n = body.sweptReferences;
-        setSyncMessage(`Renamed — updated ${n} historical reference${n === 1 ? '' : 's'} to the new number.`);
-        setTimeout(() => setSyncMessage(''), 5000);
-      }
+      setParts(prev => prev.map(p => p.id === partId ? ({ ...p, [field]: value } as Part) : p));
       cancelFieldEdit();
     } finally {
       setSavingField(false);
@@ -840,6 +864,10 @@ export default function PartsPage() {
             const isEditingLabor = editingLabor === part.id;
             const fieldEditing = (f: EditableField) => editField?.id === part.id && editField?.field === f;
             const fieldErr = (f: EditableField) => (fieldEditing(f) ? fieldError : null);
+            // Graphics metadata is relevant on the graphics catalog, or on any
+            // part that already carries some — show its editors there.
+            const showGraphics = isAdmin && (catalog === 'graphics'
+              || !!(part.vehicle_type || part.graphic_package || part.customer || (part.proof_pages && part.proof_pages !== 1)));
             const key = (part.item_number || '').toUpperCase();
             const completed = completedByPart[key] || 0;
             const margin = part.sales_price > 0 && part.purchase_price > 0
@@ -988,6 +1016,46 @@ export default function PartsPage() {
                           onSave={() => savePartField(part.id)} onCancel={cancelFieldEdit}
                           saving={savingField} error={fieldErr('display_name')} placeholder="Display name"
                         />
+                      </div>
+                    )}
+
+                    {/* Graphics metadata (local-only; folded in from the old catalog) */}
+                    {showGraphics && (
+                      <div style={{ marginTop: '12px' }}>
+                        <div style={{ fontSize: '9px', fontWeight: 800, color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.3px', marginBottom: '6px' }}>Graphics</div>
+                        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '8px' }}>
+                          <InlineEditField
+                            label="Vehicle Type" display={part.vehicle_type || '—'}
+                            color={part.vehicle_type ? 'var(--text-primary)' : 'var(--text-muted)'}
+                            isEditing={fieldEditing('vehicle_type')} value={editFieldValue} onValueChange={setEditFieldValue}
+                            onEdit={() => startFieldEdit(part.id, 'vehicle_type', part.vehicle_type || '')}
+                            onSave={() => savePartField(part.id)} onCancel={cancelFieldEdit}
+                            saving={savingField} error={fieldErr('vehicle_type')} placeholder="e.g. Transit 148"
+                          />
+                          <InlineEditField
+                            label="Graphic Package" display={part.graphic_package || '—'}
+                            color={part.graphic_package ? 'var(--text-primary)' : 'var(--text-muted)'}
+                            isEditing={fieldEditing('graphic_package')} value={editFieldValue} onValueChange={setEditFieldValue}
+                            onEdit={() => startFieldEdit(part.id, 'graphic_package', part.graphic_package || '')}
+                            onSave={() => savePartField(part.id)} onCancel={cancelFieldEdit}
+                            saving={savingField} error={fieldErr('graphic_package')} placeholder="Package"
+                          />
+                          <InlineEditField
+                            label="Brand" display={part.customer || '—'}
+                            color={part.customer ? 'var(--text-primary)' : 'var(--text-muted)'}
+                            isEditing={fieldEditing('customer')} value={editFieldValue} onValueChange={setEditFieldValue}
+                            onEdit={() => startFieldEdit(part.id, 'customer', part.customer || '')}
+                            onSave={() => savePartField(part.id)} onCancel={cancelFieldEdit}
+                            saving={savingField} error={fieldErr('customer')} placeholder="e.g. Masterack"
+                          />
+                          <InlineEditField
+                            label="Proof Pages" display={String(part.proof_pages ?? 1)} color="var(--text-primary)"
+                            isEditing={fieldEditing('proof_pages')} value={editFieldValue} onValueChange={setEditFieldValue}
+                            onEdit={() => startFieldEdit(part.id, 'proof_pages', String(part.proof_pages ?? 1))}
+                            onSave={() => savePartField(part.id)} onCancel={cancelFieldEdit}
+                            saving={savingField} error={fieldErr('proof_pages')} inputType="number" step="1"
+                          />
+                        </div>
                       </div>
                     )}
 
