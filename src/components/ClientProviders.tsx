@@ -6,6 +6,7 @@ import { AuthProvider, useAuth } from '@/components/AuthProvider';
 import { AppProvider, useApp } from '@/components/AppProvider';
 import { ThemeProvider } from '@/components/ThemeProvider';
 import { PopoutProvider } from '@/components/Popout';
+import { DialogProvider } from '@/components/DialogProvider';
 import Header from '@/components/Header';
 import BottomNav from '@/components/BottomNav';
 import AiChat from '@/components/AiChat';
@@ -111,8 +112,10 @@ export default function ClientProviders({ children }: { children: React.ReactNod
       <AuthProvider>
         <AppProvider>
           <PopoutProvider>
-            <DeepLinkHandler />
-            <AppShell>{children}</AppShell>
+            <DialogProvider>
+              <DeepLinkHandler />
+              <AppShell>{children}</AppShell>
+            </DialogProvider>
           </PopoutProvider>
         </AppProvider>
       </AuthProvider>
