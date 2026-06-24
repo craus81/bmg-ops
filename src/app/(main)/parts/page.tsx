@@ -120,7 +120,7 @@ export default function PartsPage() {
   const [fieldError, setFieldError] = useState<string | null>(null);
 
   // Part files
-  interface PartFile { id: string; part_id: string; file_name: string; file_type: string | null; file_size: number | null; storage_path: string; }
+  interface PartFile { id: string; part_id: string; file_name: string; file_type: string | null; file_size: number | null; storage_path: string; bucket: string | null; }
   const [partFiles, setPartFiles] = useState<Record<string, PartFile[]>>({});
   const [uploadingFile, setUploadingFile] = useState(false);
   const partFileRef = useRef<HTMLInputElement>(null);
@@ -555,12 +555,14 @@ export default function PartsPage() {
 
   const deletePartFile = async (file: PartFile) => {
     if (!window.confirm(`Delete "${file.file_name}"?`)) return;
-    await storage.from('graphics-proofs').remove([file.storage_path]);
+    await storage.from(file.bucket || 'graphics-proofs').remove([file.storage_path]);
     await supabase.from('part_files').delete().eq('id', file.id);
     setPartFiles(prev => ({ ...prev, [file.part_id]: (prev[file.part_id] || []).filter(f => f.id !== file.id) }));
   };
 
-  const getFileUrl = (path: string) => storage.from('graphics-proofs').getPublicUrl(path).data.publicUrl;
+  // Folded-in proofs from the old catalog live in the 'proofs' bucket; native
+  // part files live in 'graphics-proofs'. Honor each file's own bucket.
+  const getFileUrl = (file: PartFile) => storage.from(file.bucket || 'graphics-proofs').getPublicUrl(file.storage_path).data.publicUrl;
 
   const toggleSort = (col: typeof sortCol) => {
     if (sortCol === col) setSortDir(d => d === 'asc' ? 'desc' : 'asc');
@@ -1057,7 +1059,7 @@ export default function PartsPage() {
                       <div style={{ fontSize: '9px', fontWeight: 700, color: 'var(--text-muted)', textTransform: 'uppercase', marginBottom: '4px' }}>Files &amp; Proofs</div>
                       {(partFiles[part.id] || []).map(f => (
                         <div key={f.id} style={{ display: 'flex', alignItems: 'center', gap: '8px', padding: '4px 6px', borderRadius: '6px', background: 'var(--subtle-bg)', marginBottom: '3px' }}>
-                          <a href={getFileUrl(f.storage_path)} target="_blank" rel="noopener noreferrer"
+                          <a href={getFileUrl(f)} target="_blank" rel="noopener noreferrer"
                             style={{ flex: 1, fontSize: '11px', fontWeight: 600, color: '#60a5fa', textDecoration: 'none', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
                             {f.file_name}
                           </a>
