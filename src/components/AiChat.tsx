@@ -2,6 +2,7 @@
 
 import { useState, useRef, useEffect } from 'react';
 import { useAuth } from '@/components/AuthProvider';
+import { useDialog } from '@/components/DialogProvider';
 import { createClient } from '@/lib/supabase-browser';
 
 // Keep the prompt + history under a sane token budget by only sending
@@ -297,6 +298,7 @@ function MascotSvg({ thinking, size = 52 }: { thinking?: boolean; size?: number 
 
 export default function AiChat() {
   const { user, isAdmin, isSales, isGraphicsProduction, isInstaller, profile } = useAuth();
+  const dialog = useDialog();
   const hasAccess = isAdmin || isSales || isGraphicsProduction || isInstaller;
   const supabase = createClient();
   const [isOpen, setIsOpen] = useState(false);
@@ -441,7 +443,7 @@ export default function AiChat() {
   // turn starts fresh. We confirm because chat memory survives sessions
   // and accidental clears would be costly.
   const clearChat = async () => {
-    if (!window.confirm('Start a new chat? This deletes your saved conversation history.')) return;
+    if (!(await dialog.confirm('Start a new chat? This deletes your saved conversation history.', { destructive: true, confirmLabel: 'New Chat' }))) return;
     setMessages([]);
     if (user?.id) {
       try {

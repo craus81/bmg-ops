@@ -3,6 +3,7 @@
 import { useState, useEffect, useCallback } from 'react';
 import { useRouter } from 'next/navigation';
 import { useAuth } from '@/components/AuthProvider';
+import { useDialog } from '@/components/DialogProvider';
 
 type Category = 'upfit' | 'graphics' | 'mixed';
 interface ChecklistItem {
@@ -28,6 +29,7 @@ const CATEGORY_LABELS: Record<Category, string> = {
 export default function InstallChecklistsAdminPage() {
   const router = useRouter();
   const { user, isAdmin } = useAuth();
+  const dialog = useDialog();
 
   const [templates, setTemplates] = useState<Template[]>([]);
   const [loading, setLoading] = useState(true);
@@ -78,7 +80,7 @@ export default function InstallChecklistsAdminPage() {
     if (!draft) return;
     const cleaned = draft.items.filter(i => i.label.trim());
     if (!draft.name.trim() || cleaned.length === 0) {
-      alert('Template needs a name and at least one item.');
+      await dialog.alert('Template needs a name and at least one item.');
       return;
     }
     setSaving(true);
@@ -100,7 +102,7 @@ export default function InstallChecklistsAdminPage() {
     setSaving(false);
     if (!res.ok) {
       const data = await res.json().catch(() => ({}));
-      alert('Save failed: ' + (data.error || 'Unknown error'));
+      await dialog.alert('Save failed: ' + (data.error || 'Unknown error'));
       return;
     }
     cancelEdit();
@@ -108,11 +110,11 @@ export default function InstallChecklistsAdminPage() {
   };
 
   const deleteTemplate = async (id: string) => {
-    if (!confirm('Archive this template? Existing checklists already instantiated on vehicles are unaffected.')) return;
+    if (!(await dialog.confirm('Archive this template? Existing checklists already instantiated on vehicles are unaffected.', { destructive: true, confirmLabel: 'Archive' }))) return;
     const res = await fetch(`/api/install-checklists/${id}`, { method: 'DELETE' });
     if (!res.ok) {
       const data = await res.json().catch(() => ({}));
-      alert('Delete failed: ' + (data.error || 'Unknown error'));
+      await dialog.alert('Delete failed: ' + (data.error || 'Unknown error'));
       return;
     }
     load();

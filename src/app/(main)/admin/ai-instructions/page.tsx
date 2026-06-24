@@ -3,6 +3,7 @@
 import { useEffect, useState, useCallback } from 'react';
 import { useRouter } from 'next/navigation';
 import { useAuth } from '@/components/AuthProvider';
+import { useDialog } from '@/components/DialogProvider';
 import { createClient } from '@/lib/supabase-browser';
 
 // Admin-editable rules that get prepended to FleetSuite AI's system
@@ -27,6 +28,7 @@ export default function AiInstructionsPage() {
   const router = useRouter();
   const { isAdmin, user } = useAuth();
   const supabase = createClient();
+  const dialog = useDialog();
 
   const [rows, setRows] = useState<Instruction[]>([]);
   const [loading, setLoading] = useState(true);
@@ -89,17 +91,17 @@ export default function AiInstructionsPage() {
       .update({ enabled: !row.enabled, updated_at: new Date().toISOString() })
       .eq('id', row.id);
     if (err) {
-      alert(`Failed to update: ${err.message}`);
+      await dialog.alert(`Failed to update: ${err.message}`);
       return;
     }
     load();
   };
 
   const remove = async (row: Instruction) => {
-    if (!confirm('Delete this instruction? It will stop influencing the AI immediately.')) return;
+    if (!(await dialog.confirm('Delete this instruction? It will stop influencing the AI immediately.', { destructive: true, confirmLabel: 'Delete' }))) return;
     const { error: err } = await supabase.from('ai_instructions').delete().eq('id', row.id);
     if (err) {
-      alert(`Failed to delete: ${err.message}`);
+      await dialog.alert(`Failed to delete: ${err.message}`);
       return;
     }
     load();
@@ -119,7 +121,7 @@ export default function AiInstructionsPage() {
       .update({ content: text, updated_at: new Date().toISOString() })
       .eq('id', editingId);
     if (err) {
-      alert(`Failed to save: ${err.message}`);
+      await dialog.alert(`Failed to save: ${err.message}`);
       return;
     }
     setEditingId(null);

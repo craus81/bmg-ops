@@ -4,6 +4,7 @@ import { useState, useEffect, useRef } from 'react';
 import { useRouter, useSearchParams } from 'next/navigation';
 import { createClient } from '@/lib/supabase-browser';
 import { useAuth } from '@/components/AuthProvider';
+import { useDialog } from '@/components/DialogProvider';
 import { theme } from '@/lib/theme';
 import NetSuitePdf from '@/components/NetSuitePdf';
 import DropboxProofSearch from '@/components/DropboxProofSearch';
@@ -101,6 +102,7 @@ export default function ProspectsPage() {
   const searchParams = useSearchParams();
   const { user, isAdmin, isSales, hasFeature } = useAuth();
   const supabase = createClient();
+  const dialog = useDialog();
 
   const [prospects, setProspects] = useState<Prospect[]>([]);
   const [loading, setLoading] = useState(true);
@@ -170,9 +172,9 @@ export default function ProspectsPage() {
   const [voiceResult, setVoiceResult] = useState<{ summary: string; reminders: number } | null>(null);
   const recognitionRef = useRef<any>(null);
 
-  const startVoiceNote = (prospectId: string) => {
+  const startVoiceNote = async (prospectId: string) => {
     const SpeechRecognition = (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition;
-    if (!SpeechRecognition) { alert('Speech recognition not supported in this browser. Try Chrome.'); return; }
+    if (!SpeechRecognition) { await dialog.alert('Speech recognition not supported in this browser. Try Chrome.'); return; }
 
     const recognition = new SpeechRecognition();
     recognition.continuous = true;
@@ -576,8 +578,8 @@ export default function ProspectsPage() {
 
   // Convert to customer (push to NetSuite + preserve data)
   const convertToCustomer = async (prospect: Prospect) => {
-    if (prospect.netsuite_id) { alert('Already pushed to NetSuite'); return; }
-    if (!window.confirm(`Convert "${prospect.company_name}" to a customer in NetSuite? All prospect data will be preserved.`)) return;
+    if (prospect.netsuite_id) { await dialog.alert('Already pushed to NetSuite'); return; }
+    if (!(await dialog.confirm(`Convert "${prospect.company_name}" to a customer in NetSuite? All prospect data will be preserved.`, { confirmLabel: 'Convert' }))) return;
     try {
       const res = await fetch('/api/prospects/push-to-netsuite', {
         method: 'POST',
@@ -590,16 +592,16 @@ export default function ProspectsPage() {
         setProspects(prev => prev.map(p => p.id === prospect.id ? { ...p, status: 'converted', netsuite_id: data.customerId, netsuite_url: data.netsuiteUrl, converted_customer_id: data.customerId } : p));
         logActivity(prospect.id, 'status_change', `Converted to NetSuite customer #${data.entityId}`);
       } else {
-        alert('Failed: ' + (data.error || 'Unknown error'));
+        await dialog.alert('Failed: ' + (data.error || 'Unknown error'));
       }
     } catch (e) {
-      alert('Network error');
+      await dialog.alert('Network error');
     }
   };
 
   // Delete prospect
   const deleteProspect = async (id: string) => {
-    if (!window.confirm('Delete this prospect and all associated data?')) return;
+    if (!(await dialog.confirm('Delete this prospect and all associated data?', { destructive: true, confirmLabel: 'Delete' }))) return;
     await supabase.from('prospects').delete().eq('id', id);
     setProspects(prev => prev.filter(p => p.id !== id));
     setExpandedId(null);
@@ -685,7 +687,7 @@ export default function ProspectsPage() {
       await downloadXlsx(rows, { sheetName: 'CRM', filename: `crm-export-${today}.xlsx` });
     } catch (err: any) {
       console.error('[crm export] failed:', err);
-      alert(`Export failed: ${err?.message || err}`);
+      await dialog.alert(`Export failed: ${err?.message || err}`);
     }
     setExporting(false);
   };
@@ -706,9 +708,9 @@ export default function ProspectsPage() {
             try {
               const res = await fetch('/api/netsuite/customers');
               const data = await res.json();
-              alert(`Customers: ${data.synced || 0}\nCRM: ${data.prospectsSynced || 0}\nContacts: ${data.contactsSynced || 0} synced, ${data.contactsSkipped || 0} skipped, ${data.contactErrors || 0} errors${data.restApiError ? '\nREST API error (HTTP ' + data.restApiError.status + '): ' + data.restApiError.body : ''}${data.firstContactError ? '\nContact error: ' + data.firstContactError : ''}${data.firstProspectError ? '\nCRM error: ' + data.firstProspectError : ''}`);
+              await dialog.alert(`Customers: ${data.synced || 0}\nCRM: ${data.prospectsSynced || 0}\nContacts: ${data.contactsSynced || 0} synced, ${data.contactsSkipped || 0} skipped, ${data.contactErrors || 0} errors${data.restApiError ? '\nREST API error (HTTP ' + data.restApiError.status + '): ' + data.restApiError.body : ''}${data.firstContactError ? '\nContact error: ' + data.firstContactError : ''}${data.firstProspectError ? '\nCRM error: ' + data.firstProspectError : ''}`);
               loadProspects();
-            } catch { alert('Sync failed'); }
+            } catch { await dialog.alert('Sync failed'); }
             setSyncing(false);
           }} disabled={syncing} style={{
             padding: '8px 12px', borderRadius: '8px', fontSize: '11px', fontWeight: 700,
@@ -778,13 +780,13 @@ export default function ProspectsPage() {
                 const res = await fetch('/api/netsuite/contacts/sync', { method: 'POST' });
                 const data = await res.json().catch(() => ({}));
                 if (!res.ok) {
-                  alert(`Sync failed (HTTP ${res.status}): ${data.error || 'Unknown'}`);
+                  await dialog.alert(`Sync failed (HTTP ${res.status}): ${data.error || 'Unknown'}`);
                 } else {
-                  alert(`Contacts synced: ${data.contactsSynced || 0}\nPhones: ${data.phonesFound || 0}\nProcessed: ${data.customersProcessed || 0} this run\nPreviously done: ${data.alreadyDone || 0}\nRemaining: ${data.remaining || 0} of ${data.totalCustomers || '?'}${data.timedOut ? '\n\nTap Sync again to continue' : ''}`);
+                  await dialog.alert(`Contacts synced: ${data.contactsSynced || 0}\nPhones: ${data.phonesFound || 0}\nProcessed: ${data.customersProcessed || 0} this run\nPreviously done: ${data.alreadyDone || 0}\nRemaining: ${data.remaining || 0} of ${data.totalCustomers || '?'}${data.timedOut ? '\n\nTap Sync again to continue' : ''}`);
                   setContactsLoaded(false);
                   loadAllContacts();
                 }
-              } catch (err: any) { alert('Sync failed: ' + (err.message || 'Network error')); }
+              } catch (err: any) { await dialog.alert('Sync failed: ' + (err.message || 'Network error')); }
               setSyncingContacts(false);
             }} disabled={syncingContacts} style={{
               padding: '8px 12px', borderRadius: '8px', fontSize: '11px', fontWeight: 700,

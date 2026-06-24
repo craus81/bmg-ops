@@ -3,6 +3,7 @@
 import { useState, useEffect, useRef, useCallback } from 'react';
 import { useSearchParams } from 'next/navigation';
 import { useAuth } from '@/components/AuthProvider';
+import { useDialog } from '@/components/DialogProvider';
 import { createClient } from '@/lib/supabase-browser';
 import { storage } from '@/lib/storage';
 import { theme } from '@/lib/theme';
@@ -276,6 +277,7 @@ function QuotesList({ onEdit }: { onEdit: (q: Quote) => void }) {
 // ============ Quote Detail View ============
 function QuoteDetail({ quote, onBack, onEdit }: { quote: Quote; onBack: () => void; onEdit: (q: Quote) => void }) {
   const { user } = useAuth();
+  const dialog = useDialog();
   const [panels, setPanels] = useState<QuotePanel[]>([]);
   const [elements, setElements] = useState<QuoteElement[]>([]);
   const [loading, setLoading] = useState(true);
@@ -349,8 +351,8 @@ function QuoteDetail({ quote, onBack, onEdit }: { quote: Quote; onBack: () => vo
   }
 
   async function pushToNetSuite() {
-    if (!selectedCustNsId) { alert('Please select a customer first'); return; }
-    if (!window.confirm('Push this quote to NetSuite as an Estimate?')) return;
+    if (!selectedCustNsId) { await dialog.alert('Please select a customer first'); return; }
+    if (!(await dialog.confirm('Push this quote to NetSuite as an Estimate?', { confirmLabel: 'Push' }))) return;
     setPushing(true);
     try {
       const res = await fetch('/api/quotes/push', {
@@ -365,13 +367,13 @@ function QuoteDetail({ quote, onBack, onEdit }: { quote: Quote; onBack: () => vo
       });
       const data = await res.json();
       if (data.success) {
-        alert(`Pushed to NetSuite!\nEstimate #: ${data.netsuite_estimate_number || data.netsuite_estimate_id}`);
+        await dialog.alert(`Pushed to NetSuite!\nEstimate #: ${data.netsuite_estimate_number || data.netsuite_estimate_id}`);
         onBack();
       } else {
-        alert('Push failed: ' + (data.error || 'Unknown error'));
+        await dialog.alert('Push failed: ' + (data.error || 'Unknown error'));
       }
     } catch {
-      alert('Network error — please try again');
+      await dialog.alert('Network error — please try again');
     }
     setPushing(false);
   }
@@ -636,6 +638,7 @@ function QuoteDetail({ quote, onBack, onEdit }: { quote: Quote; onBack: () => vo
 // ============ New Quote Creator ============
 function NewQuote({ onCreated, editQuote }: { onCreated: () => void; editQuote?: Quote | null }) {
   const { user } = useAuth();
+  const dialog = useDialog();
   const [step, setStep] = useState(1);
 
   // Step 1: Customer + Vehicle
@@ -889,7 +892,7 @@ function NewQuote({ onCreated, editQuote }: { onCreated: () => void; editQuote?:
       setProofPreview(proof.url);
       setProofPreviewForReview(null);
     } catch {
-      alert('Could not load proof image');
+      await dialog.alert('Could not load proof image');
     }
   }
 
@@ -1618,14 +1621,14 @@ function NewQuote({ onCreated, editQuote }: { onCreated: () => void; editQuote?:
   }
 
   // Remove a duplicated element
-  function renameElement(idx: number, rawNewName: string, rawNewType?: string) {
+  async function renameElement(idx: number, rawNewName: string, rawNewType?: string) {
     if (!analysis?.graphic_elements) return;
     const el = analysis.graphic_elements[idx];
     const newName = rawNewName.trim();
     const newType = rawNewType?.trim();
     if (!newName) return;
     if (newName !== el.element_name && analysis.graphic_elements.some(e => e.element_name === newName)) {
-      alert(`An element named "${newName}" already exists. Pick a different name.`);
+      await dialog.alert(`An element named "${newName}" already exists. Pick a different name.`);
       return;
     }
 
@@ -2113,7 +2116,7 @@ function NewQuote({ onCreated, editQuote }: { onCreated: () => void; editQuote?:
 
       onCreated();
     } catch (err: any) {
-      alert('Error saving quote: ' + (err.message || 'Unknown error'));
+      await dialog.alert('Error saving quote: ' + (err.message || 'Unknown error'));
     } finally {
       setSaving(false);
     }
@@ -3983,6 +3986,7 @@ function NewQuote({ onCreated, editQuote }: { onCreated: () => void; editQuote?:
 // ============ Template Manager ============
 function TemplatesManager() {
   const { user } = useAuth();
+  const dialog = useDialog();
   const [templates, setTemplates] = useState<VehicleTemplate[]>([]);
   const [loading, setLoading] = useState(true);
   const [showUpload, setShowUpload] = useState(false);
@@ -4061,14 +4065,14 @@ function TemplatesManager() {
       setShowUpload(false);
       loadTemplates();
     } catch (err: any) {
-      alert('Upload error: ' + (err.message || 'Unknown error'));
+      await dialog.alert('Upload error: ' + (err.message || 'Unknown error'));
     } finally {
       setUploading(false);
     }
   }
 
   async function deleteTemplate(id: string) {
-    if (!confirm('Delete this template?')) return;
+    if (!(await dialog.confirm('Delete this template?', { destructive: true, confirmLabel: 'Delete' }))) return;
     await supabase.from('vehicle_templates').delete().eq('id', id);
     loadTemplates();
   }
@@ -4190,8 +4194,8 @@ function TemplatesManager() {
                     </div>
                   )}
                   <button
-                    onClick={() => {
-                      if (window.confirm(`Delete template "${t.name}"? This cannot be undone.`)) deleteTemplate(t.id);
+                    onClick={async () => {
+                      if (await dialog.confirm(`Delete template "${t.name}"? This cannot be undone.`, { destructive: true, confirmLabel: 'Delete' })) deleteTemplate(t.id);
                     }}
                     style={{
                       marginTop: '8px', padding: '6px 14px', borderRadius: '8px',

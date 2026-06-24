@@ -4,6 +4,7 @@ import { useState, useEffect } from 'react';
 import { useRouter, useParams } from 'next/navigation';
 import { createClient } from '@/lib/supabase-browser';
 import { useAuth } from '@/components/AuthProvider';
+import { useDialog } from '@/components/DialogProvider';
 import { theme } from '@/lib/theme';
 
 const RISK_TAG_OPTIONS = [
@@ -34,6 +35,7 @@ export default function CniInstallerDetailPage() {
   const userId = params.id as string;
   const { isAdmin, user } = useAuth();
   const supabase = createClient();
+  const dialog = useDialog();
 
   const [profile, setProfile] = useState<any>(null);
   const [userProfile, setUserProfile] = useState<any>(null);
@@ -232,7 +234,7 @@ export default function CniInstallerDetailPage() {
   // ── Deactivate / Reactivate ──
   const handleDeactivate = async () => {
     const name = userProfile?.full_name || 'this installer';
-    if (!window.confirm(`Deactivate ${name}? They will no longer be able to log in.`)) return;
+    if (!(await dialog.confirm(`Deactivate ${name}? They will no longer be able to log in.`, { confirmLabel: 'Deactivate' }))) return;
 
     const { error } = await supabase.from('profiles')
       .update({ deactivated: true, deactivated_at: new Date().toISOString() })
@@ -262,8 +264,8 @@ export default function CniInstallerDetailPage() {
   // ── Delete ──
   const handleDelete = async () => {
     const name = userProfile?.full_name || 'this installer';
-    if (!window.confirm(`Permanently delete ${name}? This cannot be undone.`)) return;
-    if (!window.confirm(`Are you absolutely sure? This will remove ${name} and all their CNI data from the system entirely.`)) return;
+    if (!(await dialog.confirm(`Permanently delete ${name}? This cannot be undone.`, { destructive: true, confirmLabel: 'Delete' }))) return;
+    if (!(await dialog.confirm(`Are you absolutely sure? This will remove ${name} and all their CNI data from the system entirely.`, { destructive: true, confirmLabel: 'Delete' }))) return;
 
     setDeleting(true);
     try {

@@ -5,6 +5,7 @@ import { useSearchParams } from 'next/navigation';
 import { createClient } from '@/lib/supabase-browser';
 import { storage } from '@/lib/storage';
 import { useAuth } from '@/components/AuthProvider';
+import { useDialog } from '@/components/DialogProvider';
 import { theme } from '@/lib/theme';
 
 interface UpfitNote {
@@ -116,6 +117,7 @@ const NOTE_ICONS: Record<string, string> = {
 export default function UpfitProjectsPage() {
   const { user } = useAuth();
   const supabase = createClient();
+  const dialog = useDialog();
   const searchParams = useSearchParams();
 
   const [projects, setProjects] = useState<UpfitProject[]>([]);
@@ -304,7 +306,7 @@ export default function UpfitProjectsPage() {
   };
 
   const deleteFile = async (file: UpfitFile) => {
-    if (!window.confirm(`Delete "${file.file_name}"?`)) return;
+    if (!(await dialog.confirm(`Delete "${file.file_name}"?`, { destructive: true, confirmLabel: 'Delete' }))) return;
     await storage.from('upfit-files').remove([file.storage_path]);
     await supabase.from('upfit_project_files').delete().eq('id', file.id);
     setFiles(prev => prev.filter(f => f.id !== file.id));
@@ -784,7 +786,7 @@ export default function UpfitProjectsPage() {
                     {profileList.map(p => <option key={p.id} value={p.id}>{p.full_name}</option>)}
                   </select>
                   <button
-                    onClick={() => { if (confirm(`Delete task "${t.title}"?`)) deleteTask(t.id); }}
+                    onClick={async () => { if (await dialog.confirm(`Delete task "${t.title}"?`, { destructive: true, confirmLabel: 'Delete' })) deleteTask(t.id); }}
                     style={{ padding: '4px 6px', borderRadius: '5px', background: 'none', border: 'none', color: theme.textMuted, fontSize: '12px', cursor: 'pointer' }}
                     title="Delete task"
                   >

@@ -4,6 +4,7 @@ import { useState, useEffect } from 'react';
 import { useRouter, useParams } from 'next/navigation';
 import { createClient } from '@/lib/supabase-browser';
 import { useAuth } from '@/components/AuthProvider';
+import { useDialog } from '@/components/DialogProvider';
 
 interface Assignment {
   id: string;
@@ -25,6 +26,7 @@ export default function AssignmentsPage() {
   const userId = params.userId as string;
   const { isAdmin } = useAuth();
   const supabase = createClient();
+  const dialog = useDialog();
 
   const [customerName, setCustomerName] = useState('');
   const [assignments, setAssignments] = useState<Assignment[]>([]);
@@ -100,14 +102,14 @@ export default function AssignmentsPage() {
       });
 
     if (error) {
-      alert('Failed to assign: ' + error.message);
+      await dialog.alert('Failed to assign: ' + error.message);
     } else {
       loadData();
     }
   };
 
   const removeAssignment = async (assignmentId: string) => {
-    if (!confirm('Remove this job assignment?')) return;
+    if (!(await dialog.confirm('Remove this job assignment?', { destructive: true, confirmLabel: 'Remove' }))) return;
     await supabase.from('customer_job_assignments').delete().eq('id', assignmentId);
     loadData();
   };

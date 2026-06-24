@@ -4,6 +4,7 @@ import { useState, useEffect, useRef, useCallback } from 'react';
 import { createClient } from '@/lib/supabase-browser';
 import { storage } from '@/lib/storage';
 import { useAuth } from '@/components/AuthProvider';
+import { useDialog } from '@/components/DialogProvider';
 import ProofThumbnail from '@/components/ProofThumbnail';
 
 interface Task {
@@ -59,6 +60,7 @@ export default function CompletionModal({
 }: Props) {
   const supabase = createClient();
   const { user, profile } = useAuth();
+  const dialog = useDialog();
 
   const [tasks, setTasks] = useState<Task[]>([]);
   const [photos, setPhotos] = useState<Photo[]>([]);
@@ -162,7 +164,7 @@ export default function CompletionModal({
         const ext = file.name.split('.').pop()?.toLowerCase() || 'jpg';
         const path = `vehicles/${vehicleId}/completion-${Date.now()}-${idx}.${ext}`;
         const { error: upErr } = await storage.from(PHOTO_BUCKET).upload(path, file, { contentType: file.type });
-        if (upErr) { alert('Upload failed: ' + upErr.message); continue; }
+        if (upErr) { await dialog.alert('Upload failed: ' + upErr.message); continue; }
         await supabase.from('vehicle_photos').insert({
           vehicle_id: vehicleId,
           storage_path: path,
@@ -217,13 +219,13 @@ export default function CompletionModal({
   };
 
   const resetChecklist = async () => {
-    if (!confirm('Reset the checklist for this vehicle from the active template? Existing check-offs will be lost.')) return;
+    if (!(await dialog.confirm('Reset the checklist for this vehicle from the active template? Existing check-offs will be lost.', { destructive: true, confirmLabel: 'Reset' }))) return;
     setResetting(true);
     const res = await fetch(`/api/vehicle-tracking/${vehicleId}/refresh-checklist`, { method: 'POST' });
     setResetting(false);
     if (!res.ok) {
       const d = await res.json().catch(() => ({}));
-      alert('Reset failed: ' + (d.error || 'Unknown error'));
+      await dialog.alert('Reset failed: ' + (d.error || 'Unknown error'));
       return;
     }
     refresh();

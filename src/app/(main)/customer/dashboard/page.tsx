@@ -4,6 +4,7 @@ import { useState, useEffect } from 'react';
 import { useRouter } from 'next/navigation';
 import { createClient } from '@/lib/supabase-browser';
 import { useAuth } from '@/components/AuthProvider';
+import { useDialog } from '@/components/DialogProvider';
 
 interface AssignedJob {
   id: string;
@@ -64,6 +65,7 @@ export default function CustomerDashboard() {
   const router = useRouter();
   const { user, profile } = useAuth();
   const supabase = createClient();
+  const dialog = useDialog();
 
   const [vehicleJobs, setVehicleJobs] = useState<VehicleJob[]>([]);
   const [graphicsJobs, setGraphicsJobs] = useState<GraphicsJob[]>([]);
@@ -123,7 +125,7 @@ export default function CustomerDashboard() {
   };
 
   const handleApprove = async (type: 'vehicle' | 'graphics', jobId: string) => {
-    if (!confirm('Approve this completed work?')) return;
+    if (!(await dialog.confirm('Approve this completed work?'))) return;
 
     const table = type === 'vehicle' ? 'scanned_vehicles' : 'graphics_jobs';
     const { error } = await supabase
