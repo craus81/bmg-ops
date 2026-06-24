@@ -3,6 +3,7 @@
 import { useState, useEffect } from 'react';
 import { createClient } from '@/lib/supabase-browser';
 import { useAuth } from '@/components/AuthProvider';
+import { useDialog } from '@/components/DialogProvider';
 import { PartLabel } from '@/components/PartLabel';
 import { CreateNetsuiteItemModal, type CreatedPart } from '@/components/CreateNetsuiteItemModal';
 import { theme } from '@/lib/theme';
@@ -40,6 +41,7 @@ type ViewTab = 'ready' | 'waiting' | 'exported' | 'archived' | 'bulk';
 
 export default function AdminScansPage() {
   const { user } = useAuth();
+  const dialog = useDialog();
   const supabase = createClient();
 
   const [scans, setScans] = useState<ScanLog[]>([]);
@@ -274,10 +276,10 @@ export default function AdminScansPage() {
     try {
       const res = await fetch('/api/scans/match-po', { method: 'POST' });
       const data = await res.json();
-      alert(`Matched ${data.matched} of ${data.total} unmatched scans`);
+      await dialog.alert(`Matched ${data.matched} of ${data.total} unmatched scans`);
       await loadAll();
     } catch {
-      alert('Match failed');
+      await dialog.alert('Match failed');
     }
     setMatching(false);
   };
@@ -329,7 +331,7 @@ export default function AdminScansPage() {
   const createInvoice = async () => {
     const ids = [...selectedScans];
     if (ids.length === 0) return;
-    if (!window.confirm(`Create NetSuite invoice for ${ids.length} scan${ids.length !== 1 ? 's' : ''}? This will bill the customer directly.`)) return;
+    if (!(await dialog.confirm(`Create NetSuite invoice for ${ids.length} scan${ids.length !== 1 ? 's' : ''}? This will bill the customer directly.`))) return;
     setInvoicing(true);
     setInvoiceResult(null);
     try {
@@ -340,7 +342,7 @@ export default function AdminScansPage() {
       });
       const data = await res.json();
       if (!res.ok) {
-        alert(`Invoice failed: ${data.error || 'Unknown error'}`);
+        await dialog.alert(`Invoice failed: ${data.error || 'Unknown error'}`);
       } else {
         setInvoiceResult(data);
 
@@ -366,7 +368,7 @@ export default function AdminScansPage() {
         loadAll();
       }
     } catch (e: any) {
-      alert(`Invoice failed: ${e.message}`);
+      await dialog.alert(`Invoice failed: ${e.message}`);
     }
     setInvoicing(false);
   };
@@ -431,7 +433,7 @@ export default function AdminScansPage() {
         }),
       } : t);
     } catch (e: any) {
-      alert(`Verification failed: ${e.message}`);
+      await dialog.alert(`Verification failed: ${e.message}`);
     }
     setVerifyingInvoices(false);
   };
@@ -441,12 +443,12 @@ export default function AdminScansPage() {
     const isTest = !!overrideEmail;
     const recipients = isTest ? [overrideEmail!] : parseEmails(emailTarget.email);
     if (recipients.length === 0) {
-      alert('Please enter at least one valid email address');
+      await dialog.alert('Please enter at least one valid email address');
       return;
     }
     const invoicesToSend = emailTarget.invoices.filter(i => i.include);
     if (invoicesToSend.length === 0) {
-      alert('Please select at least one invoice to send');
+      await dialog.alert('Please select at least one invoice to send');
       return;
     }
     if (isTest) setSendingTest(true); else setEmailingInvoices(true);
@@ -478,16 +480,16 @@ export default function AdminScansPage() {
             }),
           } : t);
         }
-        alert(`${data.error || 'Email failed'}`);
+        await dialog.alert(`${data.error || 'Email failed'}`);
       } else if (isTest) {
-        alert(`Test email sent to ${recipients[0]} — check your inbox to preview`);
+        await dialog.alert(`Test email sent to ${recipients[0]} — check your inbox to preview`);
       } else {
         await saveBillingEmails(emailTarget.customer, recipients);
-        alert(`Sent ${data.sent} invoice${data.sent !== 1 ? 's' : ''} to ${recipients.join(', ')}`);
+        await dialog.alert(`Sent ${data.sent} invoice${data.sent !== 1 ? 's' : ''} to ${recipients.join(', ')}`);
         setEmailTarget(null);
       }
     } catch (e: any) {
-      alert(`Email failed: ${e.message}`);
+      await dialog.alert(`Email failed: ${e.message}`);
     }
     if (isTest) setSendingTest(false); else setEmailingInvoices(false);
   };
@@ -516,7 +518,7 @@ export default function AdminScansPage() {
 
   // Delete
   const deleteScan = async (id: string) => {
-    if (!window.confirm('Delete this scan?')) return;
+    if (!(await dialog.confirm('Delete this scan?', { destructive: true, confirmLabel: 'Delete' }))) return;
     await supabase.from('scan_logs').delete().eq('id', id);
     loadAll();
   };
@@ -524,7 +526,7 @@ export default function AdminScansPage() {
   const bulkDelete = async () => {
     const count = selectedScans.size;
     if (count === 0) return;
-    if (!window.confirm(`Delete ${count} scan${count !== 1 ? 's' : ''}? This cannot be undone.`)) return;
+    if (!(await dialog.confirm(`Delete ${count} scan${count !== 1 ? 's' : ''}? This cannot be undone.`, { destructive: true, confirmLabel: 'Delete' }))) return;
     await supabase.from('scan_logs').delete().in('id', [...selectedScans]);
     setSelectedScans(new Set());
     loadAll();
@@ -584,11 +586,11 @@ export default function AdminScansPage() {
       });
       const data = await res.json();
       if (!res.ok || !data.success) {
-        alert(`Failed to update: ${data.error || 'Unknown error'}`);
+        await dialog.alert(`Failed to update: ${data.error || 'Unknown error'}`);
         return;
       }
     } catch (err: any) {
-      alert(`Update failed: ${err.message}`);
+      await dialog.alert(`Update failed: ${err.message}`);
       return;
     }
     setShowBulkEdit(false);
@@ -719,12 +721,12 @@ export default function AdminScansPage() {
     }
 
     if (vinPartPairs.length === 0) {
-      alert(`All VINs already exist for the selected part number${partsToProcess.length > 1 ? 's' : ''}.`);
+      await dialog.alert(`All VINs already exist for the selected part number${partsToProcess.length > 1 ? 's' : ''}.`);
       setBulkProcessing(false);
       return;
     }
     if (totalDupes > 0) {
-      if (!window.confirm(`${totalDupes} duplicate${totalDupes !== 1 ? 's' : ''} will be skipped.\n\nContinue uploading ${vinPartPairs.length} scan${vinPartPairs.length !== 1 ? 's' : ''}?`)) {
+      if (!(await dialog.confirm(`${totalDupes} duplicate${totalDupes !== 1 ? 's' : ''} will be skipped.\n\nContinue uploading ${vinPartPairs.length} scan${vinPartPairs.length !== 1 ? 's' : ''}?`))) {
         setBulkProcessing(false);
         return;
       }
@@ -1304,7 +1306,7 @@ export default function AdminScansPage() {
                                   }));
                                 }
                                 if (error) {
-                                  alert(`Failed to add: ${error.message}`);
+                                  await dialog.alert(`Failed to add: ${error.message}`);
                                 } else {
                                   let all: any[] = [];
                                   let p2 = 0;
