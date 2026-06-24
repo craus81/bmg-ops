@@ -1,6 +1,7 @@
 'use client';
 
 import { useRef, useState, useEffect, ReactNode } from 'react';
+import { useDialog } from '@/components/DialogProvider';
 
 interface SwipeToDeleteProps {
   onDelete: () => void;
@@ -9,6 +10,7 @@ interface SwipeToDeleteProps {
 }
 
 export default function SwipeToDelete({ onDelete, confirmMessage, children }: SwipeToDeleteProps) {
+  const dialog = useDialog();
   const startX = useRef(0);
   const currentX = useRef(0);
   const [offset, setOffset] = useState(0);
@@ -45,7 +47,7 @@ export default function SwipeToDelete({ onDelete, confirmMessage, children }: Sw
 
   const handleDelete = async () => {
     if (confirmMessage) {
-      if (!window.confirm(confirmMessage)) {
+      if (!(await dialog.confirm(confirmMessage, { destructive: true, confirmLabel: 'Delete' }))) {
         setOffset(0);
         setShowDelete(false);
         return;

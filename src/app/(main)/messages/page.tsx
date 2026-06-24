@@ -4,6 +4,7 @@ import { useState, useEffect, useRef, useCallback } from 'react';
 import { useRouter, useSearchParams } from 'next/navigation';
 import { createClient } from '@/lib/supabase-browser';
 import { useAuth } from '@/components/AuthProvider';
+import { useDialog } from '@/components/DialogProvider';
 import { theme } from '@/lib/theme';
 import type { Profile, Conversation, Message } from '@/lib/types';
 
@@ -18,6 +19,7 @@ export default function MessagesPage() {
   const searchParams = useSearchParams();
   const { user } = useAuth();
   const supabase = createClient();
+  const dialog = useDialog();
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLInputElement>(null);
 
@@ -51,7 +53,7 @@ export default function MessagesPage() {
     const ids = Array.from(selectedMsgs);
     const { error } = await supabase.from('messages').delete().in('id', ids);
     setDeleting(false);
-    if (error) { alert('Could not delete messages'); return; }
+    if (error) { await dialog.alert('Could not delete messages'); return; }
     setMessages(prev => prev.filter(m => !selectedMsgs.has(m.id)));
     exitEditMode();
   };

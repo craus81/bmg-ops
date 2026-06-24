@@ -4,6 +4,7 @@ import { useState, useEffect, useRef } from 'react';
 import { useRouter, useSearchParams } from 'next/navigation';
 import { createClient } from '@/lib/supabase-browser';
 import { useAuth } from '@/components/AuthProvider';
+import { useDialog } from '@/components/DialogProvider';
 import { storage } from '@/lib/storage';
 
 interface Photo {
@@ -19,6 +20,7 @@ export default function PhotosPage() {
   const vehicleId = params.get('id');
   const { user } = useAuth();
   const supabase = createClient();
+  const dialog = useDialog();
 
   const [photos, setPhotos] = useState<Photo[]>([]);
   const [vehicle, setVehicle] = useState<any>(null);
@@ -70,7 +72,7 @@ export default function PhotosPage() {
       .upload(path, file, { contentType: file.type });
 
     if (upErr) {
-      alert('Upload failed: ' + upErr.message);
+      await dialog.alert('Upload failed: ' + upErr.message);
       setUploading(false);
       return;
     }

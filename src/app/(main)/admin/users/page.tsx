@@ -4,6 +4,7 @@ import { useState, useEffect } from 'react';
 import { useRouter } from 'next/navigation';
 import { createClient } from '@/lib/supabase-browser';
 import { useAuth } from '@/components/AuthProvider';
+import { useDialog } from '@/components/DialogProvider';
 import type { Profile, AppRole } from '@/lib/types';
 import { FEATURES, ROLE_DEFAULT_FEATURES, resolveFeatures, type FeatureKey } from '@/lib/features';
 
@@ -37,6 +38,7 @@ export default function UsersPage() {
   const router = useRouter();
   const { isAdmin } = useAuth();
   const supabase = createClient();
+  const dialog = useDialog();
   const [users, setUsers] = useState<(Profile & { company_id?: string; company_name?: string })[]>([]);
   const [companies, setCompanies] = useState<Company[]>([]);
   const [loading, setLoading] = useState(true);
@@ -98,7 +100,7 @@ export default function UsersPage() {
       .single();
 
     if (error) {
-      alert('Failed to create company: ' + error.message);
+      await dialog.alert('Failed to create company: ' + error.message);
       return null;
     }
 
@@ -222,12 +224,12 @@ export default function UsersPage() {
     let companyId = pendingCompanies[userId] || existingUser?.company_id;
 
     if (!companyId) {
-      alert('Please select a company before approving.');
+      await dialog.alert('Please select a company before approving.');
       return;
     }
 
     if (companyId === '__new__') {
-      alert('Please create the new company first.');
+      await dialog.alert('Please create the new company first.');
       return;
     }
 
@@ -285,7 +287,7 @@ export default function UsersPage() {
   };
 
   const handleDeactivate = async (userId: string, userName: string) => {
-    if (!window.confirm(`Deactivate ${userName}? They will no longer be able to log in.`)) return;
+    if (!(await dialog.confirm(`Deactivate ${userName}? They will no longer be able to log in.`, { confirmLabel: 'Deactivate' }))) return;
 
     const { error } = await supabase
       .from('profiles')
@@ -313,8 +315,8 @@ export default function UsersPage() {
   };
 
   const handleDeleteUser = async (userId: string, userName: string) => {
-    if (!window.confirm(`Permanently delete ${userName}? This cannot be undone.`)) return;
-    if (!window.confirm(`Are you absolutely sure? This will remove ${userName} from the system entirely.`)) return;
+    if (!(await dialog.confirm(`Permanently delete ${userName}? This cannot be undone.`, { destructive: true, confirmLabel: 'Delete' }))) return;
+    if (!(await dialog.confirm(`Are you absolutely sure? This will remove ${userName} from the system entirely.`, { destructive: true, confirmLabel: 'Delete' }))) return;
 
     try {
       const res = await fetch('/api/admin/delete-user', {
@@ -393,7 +395,7 @@ export default function UsersPage() {
       setCreateMessage('User updated.');
       setTimeout(() => setCreateMessage(''), 3000);
     } else {
-      alert('Failed to update: ' + error.message);
+      await dialog.alert('Failed to update: ' + error.message);
     }
     setSaving(false);
   };

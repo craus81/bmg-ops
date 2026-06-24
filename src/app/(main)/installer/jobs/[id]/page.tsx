@@ -4,6 +4,7 @@ import { useState, useEffect } from 'react';
 import { useRouter, useParams } from 'next/navigation';
 import { createClient } from '@/lib/supabase-browser';
 import { useAuth } from '@/components/AuthProvider';
+import { useDialog } from '@/components/DialogProvider';
 import { theme } from '@/lib/theme';
 import RfidCapture, { type RfidCompletion } from '@/components/RfidCapture';
 import VinScanner from '@/components/VinScanner';
@@ -29,6 +30,7 @@ export default function InstallerJobDetailPage() {
   const jobId = params.id as string;
   const { user, isInstaller, isAdmin } = useAuth();
   const supabase = createClient();
+  const dialog = useDialog();
 
   const [job, setJob] = useState<any>(null);
   const [vins, setVins] = useState<any[]>([]);
@@ -124,7 +126,7 @@ export default function InstallerJobDetailPage() {
   // admin to propose a new time.
   const declineSchedule = async () => {
     if (!job) return;
-    const note = window.prompt('Optional: why are you declining this time? (helps BMG pick a new one)') || null;
+    const note = (await dialog.prompt('Optional: why are you declining this time? (helps BMG pick a new one)')) || null;
     setUpdating(true);
     setActionError('');
     const { error } = await supabase.from('cni_jobs').update({

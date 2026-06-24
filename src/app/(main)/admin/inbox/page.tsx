@@ -3,6 +3,7 @@
 import { useState, useEffect, useCallback, useRef } from 'react';
 import { useRouter, useSearchParams } from 'next/navigation';
 import { useAuth } from '@/components/AuthProvider';
+import { useDialog } from '@/components/DialogProvider';
 
 type ThreadFilter = 'all' | 'unread' | 'mine' | 'unassigned' | 'archived';
 
@@ -50,6 +51,7 @@ export default function AdminInboxPage() {
   const router = useRouter();
   const searchParams = useSearchParams();
   const { user, isAdmin, isSales } = useAuth();
+  const dialog = useDialog();
 
   const [filter, setFilter] = useState<ThreadFilter>('all');
   const [threads, setThreads] = useState<ThreadSummary[]>([]);
@@ -151,10 +153,10 @@ export default function AdminInboxPage() {
     });
     const data = await res.json();
     if (!res.ok) {
-      alert('Send failed: ' + (data.error || 'Unknown error'));
+      await dialog.alert('Send failed: ' + (data.error || 'Unknown error'));
     } else {
       if (data.dispatch?.status === 'pending') {
-        alert('Message saved, but SMS provider is disabled. It will send once SMS_PROVIDER_ENABLED is true.');
+        await dialog.alert('Message saved, but SMS provider is disabled. It will send once SMS_PROVIDER_ENABLED is true.');
       }
       setComposeBody('');
       await loadDetail(detail.thread.id);

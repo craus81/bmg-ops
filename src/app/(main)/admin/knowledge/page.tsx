@@ -4,6 +4,7 @@ import { useState, useEffect, useRef } from 'react';
 import { useRouter } from 'next/navigation';
 import { createClient } from '@/lib/supabase-browser';
 import { useAuth } from '@/components/AuthProvider';
+import { useDialog } from '@/components/DialogProvider';
 import { storage } from '@/lib/storage';
 
 interface KnowledgeDoc {
@@ -51,6 +52,7 @@ export default function KnowledgePage() {
   const router = useRouter();
   const { user, isAdmin } = useAuth();
   const supabase = createClient();
+  const dialog = useDialog();
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   const [docs, setDocs] = useState<KnowledgeDoc[]>([]);
@@ -200,7 +202,7 @@ export default function KnowledgePage() {
     // Check for oversized non-PDF files before closing modal
     const oversized = uploadFiles.filter(f => f.size / (1024 * 1024) > MAX_API_SIZE && !f.name.toLowerCase().endsWith('.pdf'));
     if (oversized.length > 0) {
-      alert(`These files are too large (non-PDF files must be under ${MAX_API_SIZE} MB):\n${oversized.map(f => f.name).join('\n')}`);
+      await dialog.alert(`These files are too large (non-PDF files must be under ${MAX_API_SIZE} MB):\n${oversized.map(f => f.name).join('\n')}`);
       return;
     }
 
@@ -218,7 +220,7 @@ export default function KnowledgePage() {
     }
 
     if (dupeNames.length > 0) {
-      const proceed = confirm(
+      const proceed = await dialog.confirm(
         `These files already exist in the knowledge base:\n\n${dupeNames.join('\n')}\n\nOnly chunks with missing or failed AI content will be re-processed (saving API credits).\n\nContinue?`
       );
       if (!proceed) return;
@@ -363,7 +365,7 @@ export default function KnowledgePage() {
   };
 
   const deleteDoc = async (id: string, filePath?: string | null) => {
-    if (!confirm('Delete this knowledge doc?')) return;
+    if (!(await dialog.confirm('Delete this knowledge doc?', { destructive: true, confirmLabel: 'Delete' }))) return;
 
     // Delete file from storage if it exists
     if (filePath) {
@@ -427,7 +429,7 @@ export default function KnowledgePage() {
   };
 
   const handleSyncHelp = async () => {
-    if (!confirm('Sync the help library from docs/help in the repo? This replaces every existing help-category doc.')) return;
+    if (!(await dialog.confirm('Sync the help library from docs/help in the repo? This replaces every existing help-category doc.', { confirmLabel: 'Sync' }))) return;
 
     setBgStatus({ message: 'Syncing help library from docs/help…', type: 'processing' });
     try {
@@ -458,7 +460,7 @@ export default function KnowledgePage() {
       return;
     }
 
-    if (!confirm(`Re-process ${reprocessable.length} file${reprocessable.length > 1 ? 's' : ''} with updated AI vision? This will replace existing extracted text.`)) return;
+    if (!(await dialog.confirm(`Re-process ${reprocessable.length} file${reprocessable.length > 1 ? 's' : ''} with updated AI vision? This will replace existing extracted text.`, { confirmLabel: 'Re-process' }))) return;
 
     let completed = 0;
     let failed = 0;

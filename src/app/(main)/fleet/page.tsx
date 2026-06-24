@@ -4,6 +4,7 @@ import { useState, useRef, useEffect } from 'react';
 import { useRouter } from 'next/navigation';
 import { usePopout } from '@/components/Popout';
 import { useAuth } from '@/components/AuthProvider';
+import { useDialog } from '@/components/DialogProvider';
 import { createClient } from '@/lib/supabase-browser';
 import { decodeVIN, isValidVIN } from '@/lib/vin-decoder';
 import VinScanner from '@/components/VinScanner';
@@ -43,6 +44,7 @@ export default function FleetPage() {
   const router = useRouter();
   const { open: openPopout } = usePopout();
   const supabase = createClient();
+  const dialog = useDialog();
 
   // Workflow state
   const [step, setStep] = useState(0);
@@ -324,7 +326,7 @@ export default function FleetPage() {
       const path = `manual-uploads/${Date.now()}-${Math.random().toString(36).slice(2, 6)}.${ext}`;
       const { error } = await storage.from('graphics-proofs').upload(path, file, { contentType: file.type });
       if (error) {
-        alert('Upload failed: ' + (error.message || 'unknown error'));
+        await dialog.alert('Upload failed: ' + (error.message || 'unknown error'));
         setUploadingProof(false);
         return;
       }
@@ -339,7 +341,7 @@ export default function FleetPage() {
       setUploadedProofUrl(urlData?.publicUrl || null);
       setDbxSelected(null);
     } catch (err: any) {
-      alert('Upload failed: ' + (err?.message || String(err)));
+      await dialog.alert('Upload failed: ' + (err?.message || String(err)));
     }
     setUploadingProof(false);
   };
@@ -926,9 +928,9 @@ export default function FleetPage() {
                       } else {
                         const data = await res.json().catch(() => ({}));
                         if (res.status === 422 && Array.isArray(data.missing)) {
-                          alert(`Cannot mark complete yet:\n\n• ${data.missing.join('\n• ')}`);
+                          await dialog.alert(`Cannot mark complete yet:\n\n• ${data.missing.join('\n• ')}`);
                         } else {
-                          alert('Update failed: ' + (data.error || 'Unknown error'));
+                          await dialog.alert('Update failed: ' + (data.error || 'Unknown error'));
                         }
                       }
                       setUpdatingDupStatus(false);

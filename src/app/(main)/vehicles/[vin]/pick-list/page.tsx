@@ -4,6 +4,7 @@ import { useState, useEffect, useCallback, useRef } from 'react';
 import { useRouter, useParams } from 'next/navigation';
 import { createClient } from '@/lib/supabase-browser';
 import { useAuth } from '@/components/AuthProvider';
+import { useDialog } from '@/components/DialogProvider';
 import VehiclePhotoTimeline from '@/components/VehiclePhotoTimeline';
 import CompletionModal from '@/components/CompletionModal';
 import { PartLabel } from '@/components/PartLabel';
@@ -82,6 +83,7 @@ export default function VehiclePickListPage() {
   const vin = (params?.vin || '').toUpperCase();
   const { user, profile, isInstaller, isAdmin } = useAuth();
   const supabase = createClient();
+  const dialog = useDialog();
 
   const [vehicle, setVehicle] = useState<VehicleData | null>(null);
   const [graphicsJob, setGraphicsJob] = useState<GraphicsJobData | null>(null);
@@ -216,7 +218,7 @@ export default function VehiclePickListPage() {
     if ('threadId' in result) {
       router.push(`/admin/inbox?thread=${result.threadId}`);
     } else {
-      alert('Failed to open thread: ' + result.error);
+      await dialog.alert('Failed to open thread: ' + result.error);
     }
     setMessagingCustomer(false);
   };
@@ -244,7 +246,7 @@ export default function VehiclePickListPage() {
       const path = `vehicles/${vehicle.id}/${type}-${Date.now()}.${ext}`;
       const { error: upErr } = await supabase.storage.from('photos').upload(path, file, { contentType: file.type });
       if (upErr) {
-        alert('Upload failed: ' + upErr.message);
+        await dialog.alert('Upload failed: ' + upErr.message);
       } else {
         const { error: dbErr } = await supabase.from('vehicle_photos').insert({
           vehicle_id: vehicle.id,
@@ -254,7 +256,7 @@ export default function VehiclePickListPage() {
           caption: caption?.trim() || null,
         });
         if (dbErr) {
-          alert('Failed to save photo: ' + dbErr.message);
+          await dialog.alert('Failed to save photo: ' + dbErr.message);
         } else {
           await load();
           setPhotoRefreshKey(k => k + 1);
