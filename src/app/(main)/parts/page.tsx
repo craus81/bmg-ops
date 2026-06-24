@@ -97,6 +97,12 @@ export default function PartsPage() {
   const [showDuplicates, setShowDuplicates] = useState(false);
   const [keeperByGroup, setKeeperByGroup] = useState<Record<string, string>>({});
   const [merging, setMerging] = useState<string | null>(null);
+  // In-app confirmation dialog. Native window.confirm() hangs the Capacitor
+  // webview (the app loads the site remotely), so we resolve a promise from a
+  // rendered modal instead — works the same on web and in the app.
+  const [confirmState, setConfirmState] = useState<{ message: string; confirmLabel: string; resolve: (ok: boolean) => void } | null>(null);
+  const confirmAsync = (message: string, confirmLabel = 'Confirm') =>
+    new Promise<boolean>((resolve) => setConfirmState({ message, confirmLabel, resolve }));
   // Deep-link focus: the item number to open + scroll to once parts load, and
   // the row to briefly highlight so it's obvious where the search landed you.
   const [pendingFocus, setPendingFocus] = useState<string | null>(null);
@@ -442,11 +448,12 @@ export default function PartsPage() {
   // alone. For clearing duplicates / rows that are wrong locally but right in
   // NetSuite. If the item still lives in NetSuite, a later sync may re-add it.
   const deletePart = async (part: Part) => {
-    if (!window.confirm(
+    if (!(await confirmAsync(
       `Delete "${part.item_number}" from FleetSuite?\n\n` +
       `This removes it from this app only — NetSuite is not changed. If the item ` +
-      `still exists in NetSuite, a future sync may re-add it.`
-    )) return;
+      `still exists in NetSuite, a future sync may re-add it.`,
+      'Delete',
+    ))) return;
 
     setDeletingId(part.id);
     try {
@@ -478,10 +485,11 @@ export default function PartsPage() {
     const mergeIds = group.filter(p => p.id !== keepId).map(p => p.id);
     if (mergeIds.length === 0) return;
     const itemNumber = group.find(p => p.id === keepId)?.item_number || group[0].item_number;
-    if (!window.confirm(
+    if (!(await confirmAsync(
       `Merge ${mergeIds.length} duplicate row${mergeIds.length === 1 ? '' : 's'} of "${itemNumber}" into the selected one?\n\n` +
-      `Proofs, PO lines, scans and estimates move to the kept part; the others are removed. NetSuite is not changed.`
-    )) return;
+      `Proofs, PO lines, scans and estimates move to the kept part; the others are removed. NetSuite is not changed.`,
+      'Merge',
+    ))) return;
 
     setMerging(groupKey);
     try {
@@ -578,7 +586,7 @@ export default function PartsPage() {
   };
 
   const deletePartFile = async (file: PartFile) => {
-    if (!window.confirm(`Delete "${file.file_name}"?`)) return;
+    if (!(await confirmAsync(`Delete "${file.file_name}"?`, 'Delete'))) return;
     await storage.from(file.bucket || 'graphics-proofs').remove([file.storage_path]);
     await supabase.from('part_files').delete().eq('id', file.id);
     setPartFiles(prev => ({ ...prev, [file.part_id]: (prev[file.part_id] || []).filter(f => f.id !== file.id) }));
@@ -658,6 +666,34 @@ export default function PartsPage() {
 
   return (
     <div>
+      {/* In-app confirmation (replaces window.confirm, which hangs the app webview) */}
+      {confirmState && (
+        <div
+          onClick={() => { confirmState.resolve(false); setConfirmState(null); }}
+          style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.6)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 2000, padding: '20px' }}
+        >
+          <div onClick={e => e.stopPropagation()} style={{ background: 'var(--card)', border: '1px solid var(--border)', borderRadius: '14px', maxWidth: '400px', width: '100%', padding: '18px', boxShadow: '0 16px 60px rgba(0,0,0,0.35)' }}>
+            <div style={{ fontSize: '13px', color: 'var(--text-primary)', lineHeight: 1.5, whiteSpace: 'pre-line', marginBottom: '16px' }}>
+              {confirmState.message}
+            </div>
+            <div style={{ display: 'flex', gap: '8px' }}>
+              <button
+                onClick={() => { confirmState.resolve(true); setConfirmState(null); }}
+                style={{ flex: 1, padding: '11px', borderRadius: '10px', background: '#ef4444', color: '#fff', fontSize: '13px', fontWeight: 800, border: 'none', cursor: 'pointer' }}
+              >
+                {confirmState.confirmLabel}
+              </button>
+              <button
+                onClick={() => { confirmState.resolve(false); setConfirmState(null); }}
+                style={{ flex: 1, padding: '11px', borderRadius: '10px', background: 'transparent', border: '1px solid var(--border)', color: 'var(--text-secondary)', fontSize: '13px', fontWeight: 700, cursor: 'pointer' }}
+              >
+                Cancel
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* Header */}
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: '14px' }}>
         <div>
