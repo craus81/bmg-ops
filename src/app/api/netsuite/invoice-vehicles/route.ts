@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { createClient } from '@supabase/supabase-js';
-import { createDirectInvoice, findCustomer, findItems, findLocation, suiteqlQuery } from '@/lib/netsuite';
+import { createDirectInvoice, findCustomer, findItems } from '@/lib/netsuite';
+import { resolveInvoiceLocation } from '@/lib/invoice-location';
 import { requireAuth } from '@/lib/api-auth';
 import { validateBody, z } from '@/lib/validate';
 
@@ -142,19 +143,25 @@ export async function POST(req: NextRequest) {
 
         const memo = 'BMG FleetSuite Invoice';
 
-        // Find a NetSuite location — use scan's location, fall back to O'Fallon
-        let locationId: string | undefined;
-        const firstLocation = custScans.find(s => s.location_name)?.location_name;
-        const loc = await findLocation(firstLocation || "Fallon");
-        if (loc) locationId = loc.id;
-
-        // If location lookup failed, try a broader search
-        if (!locationId) {
-          try {
-            const locResult = await suiteqlQuery("SELECT id FROM location WHERE UPPER(name) LIKE '%FALLON%' FETCH FIRST 1 ROWS ONLY");
-            if (locResult?.items?.[0]?.id) locationId = locResult.items[0].id.toString();
-          } catch {}
+        // Resolve the NetSuite location from our PO rules: the billed customer
+        // plus the plant signal from the PO ship-to / scan work location.
+        // O'Fallon is the built-in default.
+        let poShipTo: { city?: string; name?: string } | null = null;
+        if (poNumber) {
+          const { data: po } = await supabase
+            .from('purchase_orders')
+            .select('ship_to')
+            .eq('po_number', poNumber)
+            .maybeSingle();
+          poShipTo = (po?.ship_to as { city?: string; name?: string } | null) || null;
         }
+        const firstLocation = custScans.find(s => s.location_name)?.location_name;
+        const { id: locationId } = await resolveInvoiceLocation({
+          customerName,
+          city: poShipTo?.city,
+          name: poShipTo?.name,
+          locationName: firstLocation,
+        });
 
         if (!locationId) {
           results.push({
@@ -163,7 +170,7 @@ export async function POST(req: NextRequest) {
             scanIds: custScans.map(s => s.id),
             vehicleCount: custScans.length,
             status: 'error',
-            error: 'Could not find O\'Fallon location in NetSuite',
+            error: 'Could not resolve a NetSuite location for this invoice',
           });
           continue;
         }

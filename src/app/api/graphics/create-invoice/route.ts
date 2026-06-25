@@ -3,6 +3,7 @@ import { createClient } from '@supabase/supabase-js';
 import { requireAuth } from '@/lib/api-auth';
 import { createDirectInvoice, findItems, getItemBasePrices } from '@/lib/netsuite';
 import { resolveCustomerNsId } from '@/lib/graphics-invoice';
+import { resolveInvoiceLocation } from '@/lib/invoice-location';
 import { validateBody, z } from '@/lib/validate';
 
 export const dynamic = 'force-dynamic';
@@ -191,7 +192,34 @@ export async function POST(req: NextRequest) {
     if (job.customer) memoParts.push(job.customer);
     const memo = memoParts.join(' — ');
 
-    const result = await createDirectInvoice({ customerId: customerNsId, memo, lineItems });
+    // Resolve the NetSuite location from the job's PO (customer + ship-to),
+    // falling back to the job's own customer/ship-to when it has no PO.
+    let locCustomer: string | null = job.customer;
+    let poShipTo: { city?: string; name?: string } | null = null;
+    if (job.po_id) {
+      const { data: po } = await supabase
+        .from('purchase_orders')
+        .select('customer, ship_to')
+        .eq('id', job.po_id)
+        .maybeSingle();
+      if (po) {
+        locCustomer = po.customer || job.customer;
+        poShipTo = po.ship_to || null;
+      }
+    }
+    const { id: locationId } = await resolveInvoiceLocation({
+      customerName: locCustomer,
+      city: poShipTo?.city,
+      name: poShipTo?.name,
+      locationName: job.ship_to,
+    });
+
+    const result = await createDirectInvoice({
+      customerId: customerNsId,
+      memo,
+      lineItems,
+      locationId: locationId ?? undefined,
+    });
 
     if (!result.success) {
       return NextResponse.json({ error: result.error }, { status: 500 });

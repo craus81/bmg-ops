@@ -923,6 +923,7 @@ export async function createDirectInvoice(payload: {
 export async function createInvoiceFromSO(payload: {
   salesOrderId: string;
   installedQuantities?: Record<number, number>; // lineNumber -> installed qty
+  locationId?: string | number;
   memo?: string;
 }): Promise<{
   success: boolean;
@@ -993,6 +994,12 @@ export async function createInvoiceFromSO(payload: {
   const body: any = {};
   if (payload.memo) {
     body.memo = payload.memo;
+  }
+  // Override the location the SO→invoice transform would otherwise inherit, so
+  // the invoice books to the location our PO rules resolved (header-level, the
+  // same field createDirectInvoice/createSalesOrder set).
+  if (payload.locationId) {
+    body.location = { id: payload.locationId };
   }
   if (lineOverrides && lineOverrides.length > 0) {
     body.item = { items: lineOverrides };
