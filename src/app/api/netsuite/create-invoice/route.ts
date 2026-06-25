@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { createClient } from '@supabase/supabase-js';
 import { createInvoiceFromSO, suiteqlQuery } from '@/lib/netsuite';
+import { resolveInvoiceLocation } from '@/lib/invoice-location';
 import { requireAuth } from '@/lib/api-auth';
 import { validateBody, z } from '@/lib/validate';
 
@@ -119,10 +120,20 @@ export async function POST(req: NextRequest) {
           continue;
         }
 
+        // Book the invoice to the location our PO rules resolve from the PO's
+        // customer + ship-to, instead of whatever the SO→invoice transform
+        // would inherit.
+        const { id: locationId } = await resolveInvoiceLocation({
+          customerName: po.customer,
+          city: po.ship_to?.city,
+          name: po.ship_to?.name,
+        });
+
         // Create the invoice
         const invoiceResult = await createInvoiceFromSO({
           salesOrderId: soId,
           installedQuantities,
+          locationId: locationId ?? undefined,
           memo: `Invoice from BMG FleetSuite — PO #${po.po_number}`,
         });
 
