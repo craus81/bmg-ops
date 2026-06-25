@@ -1059,6 +1059,53 @@ export async function createInvoiceFromSO(payload: {
 }
 
 /**
+ * Update the header Location on an existing NetSuite invoice.
+ * PATCH /services/rest/record/v1/invoice/{id} with { location: { id } }.
+ *
+ * Used by the retroactive location backfill. NetSuite rejects edits to an
+ * invoice in a closed/locked accounting period; that error is returned
+ * verbatim so the caller can record it and move on rather than abort the run.
+ */
+export async function updateInvoiceLocation(
+  invoiceId: string | number,
+  locationId: string | number,
+): Promise<{ success: boolean; error?: string }> {
+  const config = getConfig();
+  const baseUrl = getBaseUrl(config.accountId);
+  const url = `${baseUrl}/services/rest/record/v1/invoice/${invoiceId}`;
+  const { oauth, token } = createOAuth(config);
+  const authHeader = getAuthHeader(oauth, token, { url, method: 'PATCH' });
+
+  try {
+    const response = await fetch(url, {
+      method: 'PATCH',
+      headers: {
+        'Authorization': authHeader,
+        'Content-Type': 'application/json',
+        'Prefer': 'respondAsync=false',
+      },
+      body: JSON.stringify({ location: { id: locationId.toString() } }),
+    });
+
+    if (!response.ok) {
+      const text = await response.text();
+      // Surface NetSuite's own message — for a closed period it names the
+      // period; for permissions it names the missing right.
+      let detail = text.slice(0, 400);
+      try {
+        const parsed = JSON.parse(text);
+        detail = parsed?.['o:errorDetails']?.[0]?.detail || parsed?.title || detail;
+      } catch { /* keep raw text */ }
+      return { success: false, error: `NetSuite ${response.status}: ${detail}` };
+    }
+
+    return { success: true };
+  } catch (e: any) {
+    return { success: false, error: e?.message || 'Unknown error' };
+  }
+}
+
+/**
  * Fetch a transaction PDF from the NetSuite RESTlet.
  * Supports: salesOrder, invoice (matches the RESTlet's query params).
  */
