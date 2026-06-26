@@ -1,11 +1,12 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { createClient } from '@supabase/supabase-js';
+import { createClient, SupabaseClient } from '@supabase/supabase-js';
 import { requireAdmin } from '@/lib/api-auth';
 import { suiteqlQuery, suiteqlQueryAll, updateInvoiceLocation } from '@/lib/netsuite';
 import { resolveInvoiceLocation } from '@/lib/invoice-location';
 import { validateBody, z } from '@/lib/validate';
 
 export const dynamic = 'force-dynamic';
+export const maxDuration = 60;
 
 /**
  * POST /api/netsuite/backfill-invoice-locations
@@ -21,15 +22,17 @@ export const dynamic = 'force-dynamic';
  *
  * Body (all optional):
  *   { dryRun?: boolean=true, limit?: number, invoiceIds?: string[], customer?: string }
- *   - invoiceIds: restrict to a hand-picked set (test batch / re-run).
+ *   - invoiceIds: restrict to a hand-picked set. This is also the FAST path —
+ *     when present, only those invoices are looked up (no broad scan), so it's
+ *     the right way to apply in chunks without timing out.
  *   - customer:   case-insensitive substring filter on the invoice's customer.
  *   - limit:      cap how many *changes* are processed (applies after filtering).
  *
- * Enumeration of "all FleetSuite invoices":
+ * Enumeration of "all FleetSuite invoices" (only when invoiceIds is omitted):
  *   - NetSuite invoices whose memo mentions FleetSuite (scan + SO-transform
  *     invoices stamp it), and
  *   - graphics-job invoices recorded in our DB (their memo doesn't say
- *     "FleetSuite", so they're picked up from graphics_jobs.netsuite_invoice_id).
+ *     "FleetSuite", so they come from graphics_jobs.netsuite_invoice_id).
  * Each invoice's target location is resolved from its NetSuite customer plus
  * the ship-to of its linked PO.
  */
@@ -44,6 +47,7 @@ const Schema = z.object({
 });
 
 type ShipTo = { city?: string; name?: string } | null;
+type PoEntry = { ship_to: ShipTo; customer: string | null };
 
 /** Pull a PO number out of a memo like "... — PO #ABC123". */
 function poNumberFromMemo(memo: string | null | undefined): string | null {
@@ -87,6 +91,54 @@ function toInvRow(r: any): InvRow {
   };
 }
 
+/** Fetch invoice rows (current location + customer) for an explicit id set. */
+async function fetchInvoiceRows(ids: string[]): Promise<InvRow[]> {
+  const rows: InvRow[] = [];
+  for (const ids200 of chunk(ids, 200)) {
+    const list = ids200.map((i) => `'${i}'`).join(',');
+    const res = await suiteqlQuery(`SELECT ${INV_SELECT} WHERE t.type = 'CustInvc' AND t.id IN (${list})`);
+    for (const r of res?.items || []) {
+      const row = toInvRow(r);
+      if (row.id) rows.push(row);
+    }
+  }
+  return rows;
+}
+
+/** Load purchase_orders for the referenced numbers/ids into lookup maps. */
+async function loadPoMaps(
+  supabase: SupabaseClient,
+  poNumbers: string[],
+  poIds: string[],
+): Promise<{ byNumber: Map<string, PoEntry>; byId: Map<string, PoEntry> }> {
+  const byNumber = new Map<string, PoEntry>();
+  const byId = new Map<string, PoEntry>();
+  const ingest = (rows: any[] | null | undefined) => {
+    for (const po of rows || []) {
+      const entry: PoEntry = { ship_to: (po.ship_to as ShipTo) || null, customer: po.customer ?? null };
+      if (po.id) byId.set(po.id, entry);
+      if (po.po_number) byNumber.set(po.po_number.trim().toUpperCase(), entry);
+    }
+  };
+  for (const c of chunk(poNumbers, 300)) {
+    if (!c.length) continue;
+    const { data } = await supabase
+      .from('purchase_orders')
+      .select('id, po_number, customer, ship_to')
+      .in('po_number', c);
+    ingest(data);
+  }
+  for (const c of chunk(poIds, 300)) {
+    if (!c.length) continue;
+    const { data } = await supabase
+      .from('purchase_orders')
+      .select('id, po_number, customer, ship_to')
+      .in('id', c);
+    ingest(data);
+  }
+  return { byNumber, byId };
+}
+
 export async function POST(req: NextRequest) {
   const auth = await requireAdmin(req);
   if (auth.error) return auth.error;
@@ -95,7 +147,7 @@ export async function POST(req: NextRequest) {
   if (parsed.error) return parsed.error;
   const dryRun = parsed.data.dryRun ?? true;
   const { limit, invoiceIds, customer } = parsed.data;
-  const idFilter = invoiceIds && invoiceIds.length > 0 ? new Set(invoiceIds) : null;
+  const scoped = invoiceIds && invoiceIds.length > 0 ? invoiceIds : null;
 
   try {
     const supabase = createClient(
@@ -103,75 +155,81 @@ export async function POST(req: NextRequest) {
       process.env.SUPABASE_SERVICE_ROLE_KEY!
     );
 
-    // ── PO lookup maps (for ship-to → which Masterack plant) ──────────────
-    const { data: pos } = await supabase
-      .from('purchase_orders')
-      .select('id, po_number, customer, ship_to, netsuite_invoice_id');
-    const poById = new Map<string, { ship_to: ShipTo; customer: string | null }>();
-    const poByNumber = new Map<string, { ship_to: ShipTo; customer: string | null }>();
-    const poInvoiceIds = new Set<string>();
-    for (const po of pos || []) {
-      const entry = { ship_to: (po.ship_to as ShipTo) || null, customer: po.customer ?? null };
-      if (po.id) poById.set(po.id, entry);
-      if (po.po_number) poByNumber.set(po.po_number.trim().toUpperCase(), entry);
-      if (po.netsuite_invoice_id) poInvoiceIds.add(po.netsuite_invoice_id.toString());
-    }
-
-    // Multi-invoice PO records.
-    const { data: poInvoices } = await supabase
-      .from('po_invoices')
-      .select('netsuite_invoice_id, purchase_order_id');
-    const poInvoiceToPoId = new Map<string, string>();
-    for (const pi of poInvoices || []) {
-      if (pi.netsuite_invoice_id) {
-        poInvoiceIds.add(pi.netsuite_invoice_id.toString());
-        if (pi.purchase_order_id) poInvoiceToPoId.set(pi.netsuite_invoice_id.toString(), pi.purchase_order_id);
+    // ── 1. Determine the candidate invoice rows ───────────────────────────
+    // Scoped: look up exactly the requested invoices — no broad scan, so a
+    // targeted apply stays fast. Full: discover every FleetSuite invoice.
+    const rowsById = new Map<string, InvRow>();
+    if (scoped) {
+      for (const row of await fetchInvoiceRows(scoped)) rowsById.set(row.id, row);
+    } else {
+      const memoRows = await suiteqlQueryAll(
+        `SELECT ${INV_SELECT} WHERE t.type = 'CustInvc' AND UPPER(t.memo) LIKE '%FLEETSUITE%'`
+      );
+      for (const r of memoRows) {
+        const row = toInvRow(r);
+        if (row.id) rowsById.set(row.id, row);
       }
+      // Graphics + multi-invoice PO records whose memo doesn't say FleetSuite.
+      const [{ data: gIds }, { data: piIds }] = await Promise.all([
+        supabase.from('graphics_jobs').select('netsuite_invoice_id').not('netsuite_invoice_id', 'is', null),
+        supabase.from('po_invoices').select('netsuite_invoice_id'),
+      ]);
+      const extra = Array.from(
+        new Set([
+          ...(gIds || []).map((r) => r.netsuite_invoice_id?.toString()),
+          ...(piIds || []).map((r) => r.netsuite_invoice_id?.toString()),
+        ])
+      ).filter((id): id is string => !!id && !rowsById.has(id));
+      for (const row of await fetchInvoiceRows(extra)) rowsById.set(row.id, row);
     }
 
-    // ── Graphics-job invoices (memo doesn't say "FleetSuite") ─────────────
-    const { data: gJobs } = await supabase
-      .from('graphics_jobs')
-      .select('netsuite_invoice_id, customer, ship_to, po_id')
-      .not('netsuite_invoice_id', 'is', null);
-    const graphicsByInvId = new Map<string, { customer: string | null; ship_to: string | null; po_id: string | null }>();
+    const candidateIds = Array.from(rowsById.keys());
+    if (candidateIds.length === 0) {
+      return NextResponse.json({
+        dryRun,
+        summary: { fleetSuiteInvoices: 0, alreadyCorrect: 0, indeterminateKept: 0, toChange: 0, processed: 0, applied: 0, failed: 0, closedPeriodSkips: 0, byTargetLocation: {} },
+        changes: [],
+      });
+    }
+
+    // ── 2. Load only the supporting data these invoices reference ─────────
+    const graphicsByInvId = new Map<string, { ship_to: string | null; po_id: string | null }>();
+    const poInvoiceToPoId = new Map<string, string>();
+    const [{ data: gJobs }, { data: poInvoices }] = await Promise.all([
+      supabase.from('graphics_jobs').select('netsuite_invoice_id, ship_to, po_id').in('netsuite_invoice_id', candidateIds),
+      supabase.from('po_invoices').select('netsuite_invoice_id, purchase_order_id').in('netsuite_invoice_id', candidateIds),
+    ]);
     for (const j of gJobs || []) {
       if (j.netsuite_invoice_id) {
         graphicsByInvId.set(j.netsuite_invoice_id.toString(), {
-          customer: j.customer ?? null,
           ship_to: (j.ship_to as string | null) ?? null,
           po_id: j.po_id ?? null,
         });
       }
     }
-
-    // ── Gather invoice rows (current location + customer) ─────────────────
-    // 1) Everything with a FleetSuite memo (scan + SO-transform invoices).
-    const rowsById = new Map<string, InvRow>();
-    const memoRows = await suiteqlQueryAll(
-      `SELECT ${INV_SELECT} WHERE t.type = 'CustInvc' AND UPPER(t.memo) LIKE '%FLEETSUITE%'`
-    );
-    for (const r of memoRows) {
-      const row = toInvRow(r);
-      if (row.id) rowsById.set(row.id, row);
-    }
-
-    // 2) Graphics + PO-linked invoice ids not already covered by the memo pass.
-    const extraIds = Array.from(
-      new Set([...graphicsByInvId.keys(), ...poInvoiceIds])
-    ).filter((id) => !rowsById.has(id));
-    for (const ids of chunk(extraIds, 200)) {
-      const list = ids.map((i) => `'${i}'`).join(',');
-      const res = await suiteqlQuery(
-        `SELECT ${INV_SELECT} WHERE t.type = 'CustInvc' AND t.id IN (${list})`
-      );
-      for (const r of res?.items || []) {
-        const row = toInvRow(r);
-        if (row.id) rowsById.set(row.id, row);
+    for (const pi of poInvoices || []) {
+      if (pi.netsuite_invoice_id && pi.purchase_order_id) {
+        poInvoiceToPoId.set(pi.netsuite_invoice_id.toString(), pi.purchase_order_id);
       }
     }
 
-    // ── Resolve target location per invoice and classify ──────────────────
+    // PO numbers referenced by the invoices (otherrefnum / "PO #" in memo) and
+    // PO ids referenced via graphics jobs / multi-invoice records.
+    const refPoNumbers = new Set<string>();
+    for (const row of rowsById.values()) {
+      const pn = (row.otherrefnum || poNumberFromMemo(row.memo) || '').trim().toUpperCase();
+      if (pn) refPoNumbers.add(pn);
+    }
+    const refPoIds = new Set<string>();
+    for (const g of graphicsByInvId.values()) if (g.po_id) refPoIds.add(g.po_id);
+    for (const poId of poInvoiceToPoId.values()) refPoIds.add(poId);
+    const { byNumber: poByNumber, byId: poById } = await loadPoMaps(
+      supabase,
+      Array.from(refPoNumbers),
+      Array.from(refPoIds),
+    );
+
+    // ── 3. Resolve target location per invoice and classify ───────────────
     const changes: {
       invoiceId: string;
       invoiceNumber: string | null;
@@ -188,7 +246,6 @@ export async function POST(req: NextRequest) {
     const byTarget: Record<string, number> = {};
 
     for (const row of rowsById.values()) {
-      if (idFilter && !idFilter.has(row.id)) continue;
       if (customer && !(row.customer_name || '').toLowerCase().includes(customer.toLowerCase())) continue;
       considered++;
 
@@ -246,7 +303,7 @@ export async function POST(req: NextRequest) {
     changes.sort((a, b) => Number(a.invoiceId) - Number(b.invoiceId));
     const toProcess = limit ? changes.slice(0, limit) : changes;
 
-    // ── Apply (only when explicitly not a dry run) ────────────────────────
+    // ── 4. Apply (only when explicitly not a dry run) ─────────────────────
     let applied = 0;
     let failed = 0;
     const closedPeriod: string[] = [];
