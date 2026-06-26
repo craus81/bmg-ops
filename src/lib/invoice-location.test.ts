@@ -1,5 +1,6 @@
 import { describe, it, expect, afterEach } from 'vitest';
 import {
+  pickInvoiceLocation,
   pickInvoiceLocationName,
   resolveInvoiceLocation,
   KNOWN_LOCATION_IDS,
@@ -47,6 +48,26 @@ describe('pickInvoiceLocationName', () => {
   });
 });
 
+describe('pickInvoiceLocation confidence', () => {
+  // `confident` gates the backfill: it must be false ONLY when we fell back to
+  // O'Fallon for a Masterack invoice whose plant we couldn't identify, so the
+  // backfill never overwrites an already-correct plant with that guess.
+  it('is not confident for Masterack with an indeterminate plant', () => {
+    expect(pickInvoiceLocation({ customerName: 'Masterack LLC' })).toEqual({ name: "O'Fallon", confident: false });
+    expect(pickInvoiceLocation({ customerName: 'Masterack', city: 'Detroit' })).toEqual({ name: "O'Fallon", confident: false });
+  });
+
+  it('is confident for a matched Masterack plant', () => {
+    expect(pickInvoiceLocation({ customerName: 'Masterack LLC', city: 'Wentzville' })).toEqual({ name: 'Wentzville', confident: true });
+    expect(pickInvoiceLocation({ locationName: 'Masterack - Kansas City' })).toEqual({ name: 'Kansas City', confident: true });
+  });
+
+  it('is confident for Designs That Stick and for the everything-else O\'Fallon', () => {
+    expect(pickInvoiceLocation({ customerName: 'Designs That Stick' })).toEqual({ name: 'Kansas City', confident: true });
+    expect(pickInvoiceLocation({ customerName: 'Acme Fleet' })).toEqual({ name: "O'Fallon", confident: true });
+  });
+});
+
 describe('resolveInvoiceLocation', () => {
   afterEach(() => __resetLocationCache());
 
@@ -57,11 +78,13 @@ describe('resolveInvoiceLocation', () => {
     expect(await resolveInvoiceLocation({ customerName: 'Masterack LLC', city: 'Kansas City' })).toEqual({
       id: KNOWN_LOCATION_IDS.kansascity,
       name: 'Kansas City',
+      confident: true,
     });
     __resetLocationCache();
     expect(await resolveInvoiceLocation({ customerName: 'Acme' })).toEqual({
       id: KNOWN_LOCATION_IDS.ofallon,
       name: "O'Fallon",
+      confident: true,
     });
   });
 });

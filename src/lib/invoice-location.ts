@@ -54,11 +54,24 @@ function norm(s: string | null | undefined): string {
   return (s || '').toLowerCase().replace(/[^a-z0-9]/g, '');
 }
 
+export interface LocationDecision {
+  name: NsLocationName;
+  /**
+   * Whether the location is a positive match rather than a fallback. False
+   * only for a Masterack invoice whose plant we couldn't identify — there we
+   * fall back to O'Fallon as a placeholder, not a real match. The retroactive
+   * backfill uses this to avoid overwriting an already-correct plant location
+   * with that O'Fallon guess.
+   */
+  confident: boolean;
+}
+
 /**
- * Pure rule: pick the NetSuite location NAME for a customer + ship-to. Does no
- * NetSuite I/O, so it is cheap and unit-tested in isolation.
+ * Pure rule: pick the NetSuite location for a customer + ship-to, plus a
+ * `confident` flag (see LocationDecision). Does no NetSuite I/O, so it is
+ * cheap and unit-tested in isolation.
  */
-export function pickInvoiceLocationName(hint: LocationHint): NsLocationName {
+export function pickInvoiceLocation(hint: LocationHint): LocationDecision {
   const cust = norm(hint.customerName);
   // Everything we know about where the work happened, in one normalized blob.
   const blob = norm(
@@ -68,20 +81,26 @@ export function pickInvoiceLocationName(hint: LocationHint): NsLocationName {
   const isMasterack = cust.includes('masterack') || blob.includes('masterack');
   if (isMasterack) {
     // Distinguish the three Masterack plants by the ship-to / work location.
-    if (blob.includes('socialcircle')) return 'Social Circle';
-    if (blob.includes('wentzville')) return 'Wentzville';
-    if (blob.includes('kansascity')) return 'Kansas City';
-    // Masterack PO whose plant we can't identify — default to O'Fallon rather
-    // than guess a plant. (Surfaced in the backfill dry-run for review.)
-    return "O'Fallon";
+    if (blob.includes('socialcircle')) return { name: 'Social Circle', confident: true };
+    if (blob.includes('wentzville')) return { name: 'Wentzville', confident: true };
+    if (blob.includes('kansascity')) return { name: 'Kansas City', confident: true };
+    // Masterack PO whose plant we can't identify — O'Fallon as a placeholder,
+    // not a positive match. Fine for a new invoice; the backfill must NOT use
+    // this to overwrite an existing plant location (see `confident`).
+    return { name: "O'Fallon", confident: false };
   }
 
   if (cust.includes('designsthatstick') || blob.includes('designsthatstick')) {
-    return 'Kansas City';
+    return { name: 'Kansas City', confident: true };
   }
 
   // Everything else books to O'Fallon.
-  return "O'Fallon";
+  return { name: "O'Fallon", confident: true };
+}
+
+/** Back-compat convenience: just the resolved location name. */
+export function pickInvoiceLocationName(hint: LocationHint): NsLocationName {
+  return pickInvoiceLocation(hint).name;
 }
 
 // Memoized live name→id map for NetSuite locations (a ~4-row reference table).
@@ -118,10 +137,10 @@ export function __resetLocationCache(): void {
  */
 export async function resolveInvoiceLocation(
   hint: LocationHint
-): Promise<{ id: string | null; name: NsLocationName }> {
-  const name = pickInvoiceLocationName(hint);
+): Promise<{ id: string | null; name: NsLocationName; confident: boolean }> {
+  const { name, confident } = pickInvoiceLocation(hint);
   const key = norm(name);
   const map = await getLocationNameToId();
   const id = map.get(key) || KNOWN_LOCATION_IDS[key] || process.env.NETSUITE_DEFAULT_LOCATION_ID || null;
-  return { id, name };
+  return { id, name, confident };
 }

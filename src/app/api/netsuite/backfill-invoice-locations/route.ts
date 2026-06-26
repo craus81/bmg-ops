@@ -184,6 +184,7 @@ export async function POST(req: NextRequest) {
     }[] = [];
     let correct = 0;
     let considered = 0;
+    let indeterminate = 0;
     const byTarget: Record<string, number> = {};
 
     for (const row of rowsById.values()) {
@@ -216,6 +217,14 @@ export async function POST(req: NextRequest) {
         locationName,
       });
       if (!target.id) continue; // resolver always defaults to O'Fallon, so this is unreachable in practice
+
+      // Masterack invoice whose plant we couldn't identify: `target` is an
+      // O'Fallon placeholder, not a positive match. Never overwrite a
+      // possibly-correct existing plant location with that guess — leave it.
+      if (!target.confident) {
+        indeterminate++;
+        continue;
+      }
 
       byTarget[target.name] = (byTarget[target.name] || 0) + 1;
 
@@ -263,6 +272,7 @@ export async function POST(req: NextRequest) {
       summary: {
         fleetSuiteInvoices: considered,
         alreadyCorrect: correct,
+        indeterminateKept: indeterminate,
         toChange: changes.length,
         processed: dryRun ? 0 : toProcess.length,
         applied,
