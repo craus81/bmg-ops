@@ -1076,6 +1076,10 @@ export async function updateInvoiceLocation(
   const { oauth, token } = createOAuth(config);
   const authHeader = getAuthHeader(oauth, token, { url, method: 'PATCH' });
 
+  // Bound each PATCH so one slow/hung NetSuite call fails just this invoice
+  // rather than stalling a whole backfill batch into a gateway timeout.
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), 25000);
   try {
     const response = await fetch(url, {
       method: 'PATCH',
@@ -1085,6 +1089,7 @@ export async function updateInvoiceLocation(
         'Prefer': 'respondAsync=false',
       },
       body: JSON.stringify({ location: { id: locationId.toString() } }),
+      signal: controller.signal,
     });
 
     if (!response.ok) {
@@ -1101,7 +1106,10 @@ export async function updateInvoiceLocation(
 
     return { success: true };
   } catch (e: any) {
-    return { success: false, error: e?.message || 'Unknown error' };
+    const msg = e?.name === 'AbortError' ? 'NetSuite request timed out' : e?.message || 'Unknown error';
+    return { success: false, error: msg };
+  } finally {
+    clearTimeout(timer);
   }
 }
 
