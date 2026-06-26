@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { createClient, SupabaseClient } from '@supabase/supabase-js';
 import { requireAdmin } from '@/lib/api-auth';
 import { suiteqlQuery, suiteqlQueryAll, updateInvoiceLocation } from '@/lib/netsuite';
-import { resolveInvoiceLocation } from '@/lib/invoice-location';
+import { resolveInvoiceLocation, getActiveLocations } from '@/lib/invoice-location';
 import { validateBody, z } from '@/lib/validate';
 
 export const dynamic = 'force-dynamic';
@@ -44,6 +44,9 @@ const Schema = z.object({
   limit: z.number().int().positive().max(10000).optional(),
   invoiceIds: z.array(NumericId).max(5000).optional(),
   customer: z.string().max(200).optional(),
+  // Manual overrides from the admin picker: set these exact invoice → location
+  // pairs (bypasses the rule). Applied directly, no enumeration.
+  assignments: z.array(z.object({ invoiceId: NumericId, locationId: NumericId })).max(5000).optional(),
 });
 
 type ShipTo = { city?: string; name?: string } | null;
@@ -146,14 +149,49 @@ export async function POST(req: NextRequest) {
   const parsed = await validateBody(req, Schema);
   if (parsed.error) return parsed.error;
   const dryRun = parsed.data.dryRun ?? true;
-  const { limit, invoiceIds, customer } = parsed.data;
+  const { limit, invoiceIds, customer, assignments } = parsed.data;
   const scoped = invoiceIds && invoiceIds.length > 0 ? invoiceIds : null;
+
+  // ── Manual apply: set exactly the given invoice → location pairs ──────────
+  // The picker sends these (in small chunks) to apply hand-picked locations.
+  // No enumeration — just the PATCHes — so it stays well under the time limit.
+  if (assignments && assignments.length > 0) {
+    if (dryRun) {
+      return NextResponse.json({ dryRun: true, summary: { processed: 0, applied: 0, failed: 0, closedPeriodSkips: 0 } });
+    }
+    let applied = 0;
+    let failed = 0;
+    const closedPeriod: string[] = [];
+    const results: { invoiceId: string; locationId: string; applied: boolean; error?: string }[] = [];
+    for (const a of assignments) {
+      const res = await updateInvoiceLocation(a.invoiceId, a.locationId);
+      if (res.success) {
+        applied++;
+        results.push({ invoiceId: a.invoiceId, locationId: a.locationId, applied: true });
+      } else {
+        failed++;
+        if (/period/i.test(res.error || '')) closedPeriod.push(a.invoiceId);
+        results.push({ invoiceId: a.invoiceId, locationId: a.locationId, applied: false, error: res.error });
+      }
+    }
+    return NextResponse.json({
+      dryRun: false,
+      summary: { processed: assignments.length, applied, failed, closedPeriodSkips: closedPeriod.length },
+      ...(closedPeriod.length ? { closedPeriodInvoices: closedPeriod } : {}),
+      results,
+    });
+  }
 
   try {
     const supabase = createClient(
       process.env.NEXT_PUBLIC_SUPABASE_URL!,
       process.env.SUPABASE_SERVICE_ROLE_KEY!
     );
+
+    // NetSuite locations — for the picker options and for naming the current
+    // location of each invoice (the invoice query gives us only its id).
+    const locations = await getActiveLocations();
+    const idToName = new Map(locations.map((l) => [l.id, l.name]));
 
     // ── 1. Determine the candidate invoice rows ───────────────────────────
     // Scoped: look up exactly the requested invoices — no broad scan, so a
@@ -187,8 +225,10 @@ export async function POST(req: NextRequest) {
     if (candidateIds.length === 0) {
       return NextResponse.json({
         dryRun,
+        locations,
         summary: { fleetSuiteInvoices: 0, alreadyCorrect: 0, indeterminateKept: 0, toChange: 0, processed: 0, applied: 0, failed: 0, closedPeriodSkips: 0, byTargetLocation: {} },
         changes: [],
+        invoices: [],
       });
     }
 
@@ -240,6 +280,17 @@ export async function POST(req: NextRequest) {
       applied?: boolean;
       error?: string;
     }[] = [];
+    // Every invoice (for the admin picker): current + suggested location.
+    const invoices: {
+      invoiceId: string;
+      invoiceNumber: string | null;
+      customer: string | null;
+      currentLocationId: string | null;
+      currentLocationName: string | null;
+      suggestedLocationId: string;
+      suggestedLocation: string;
+      confident: boolean;
+    }[] = [];
     let correct = 0;
     let considered = 0;
     let indeterminate = 0;
@@ -274,6 +325,18 @@ export async function POST(req: NextRequest) {
         locationName,
       });
       if (!target.id) continue; // resolver always defaults to O'Fallon, so this is unreachable in practice
+
+      // Record every invoice for the picker (current + suggested location).
+      invoices.push({
+        invoiceId: row.id,
+        invoiceNumber: row.tranid,
+        customer: row.customer_name,
+        currentLocationId: row.location_id,
+        currentLocationName: row.location_id ? idToName.get(row.location_id) || row.location_id : null,
+        suggestedLocationId: target.id,
+        suggestedLocation: target.name,
+        confident: target.confident,
+      });
 
       // Masterack invoice whose plant we couldn't identify: `target` is an
       // O'Fallon placeholder, not a positive match. Never overwrite a
@@ -324,8 +387,10 @@ export async function POST(req: NextRequest) {
 
     // Cap the detail payload; counts are always complete.
     const DETAIL_CAP = 1000;
+    invoices.sort((a, b) => Number(a.invoiceId) - Number(b.invoiceId));
     return NextResponse.json({
       dryRun,
+      locations,
       summary: {
         fleetSuiteInvoices: considered,
         alreadyCorrect: correct,
@@ -340,6 +405,7 @@ export async function POST(req: NextRequest) {
       ...(closedPeriod.length ? { closedPeriodInvoices: closedPeriod } : {}),
       changes: toProcess.slice(0, DETAIL_CAP),
       ...(toProcess.length > DETAIL_CAP ? { changesTruncated: toProcess.length - DETAIL_CAP } : {}),
+      invoices: invoices.slice(0, 5000),
     });
   } catch (err: any) {
     console.error('Backfill invoice locations error:', err);

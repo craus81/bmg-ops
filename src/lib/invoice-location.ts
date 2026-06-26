@@ -103,27 +103,48 @@ export function pickInvoiceLocationName(hint: LocationHint): NsLocationName {
   return pickInvoiceLocation(hint).name;
 }
 
-// Memoized live name→id map for NetSuite locations (a ~4-row reference table).
-let locCache: { at: number; map: Map<string, string> } | null = null;
+// Memoized list of active NetSuite locations (a ~4-row reference table).
+let locCache: { at: number; rows: { id: string; name: string }[] } | null = null;
 const LOC_TTL_MS = 60 * 60 * 1000; // 1h — locations are slow-changing reference data
 
-async function getLocationNameToId(): Promise<Map<string, string>> {
-  if (locCache && Date.now() - locCache.at < LOC_TTL_MS) return locCache.map;
-  const map = new Map<string, string>();
+/**
+ * All active NetSuite locations (id + name), cached. Falls back to the known
+ * production locations if NetSuite is unreachable so the picker / resolver
+ * always have the four to work with.
+ */
+export async function getActiveLocations(): Promise<{ id: string; name: string }[]> {
+  if (locCache && Date.now() - locCache.at < LOC_TTL_MS) return locCache.rows;
+  let rows: { id: string; name: string }[] = [];
   try {
     const result = await suiteqlQuery("SELECT id, name FROM location WHERE isinactive = 'F'");
-    for (const row of result?.items || []) {
-      const key = norm(row.name);
-      if (key && row.id != null) map.set(key, row.id.toString());
-    }
+    rows = (result?.items || [])
+      .filter((r: any) => r.id != null && r.name)
+      .map((r: any) => ({ id: r.id.toString(), name: r.name as string }));
   } catch {
-    // NetSuite unreachable — fall back to KNOWN_LOCATION_IDS below.
+    // NetSuite unreachable — fall through to the known set below.
   }
-  locCache = { at: Date.now(), map };
+  if (rows.length === 0) {
+    rows = [
+      { id: '1', name: "O'Fallon" },
+      { id: '2', name: 'Wentzville' },
+      { id: '3', name: 'Kansas City' },
+      { id: '5', name: 'Social Circle' },
+    ];
+  }
+  locCache = { at: Date.now(), rows };
+  return rows;
+}
+
+async function getLocationNameToId(): Promise<Map<string, string>> {
+  const map = new Map<string, string>();
+  for (const r of await getActiveLocations()) {
+    const key = norm(r.name);
+    if (key) map.set(key, r.id);
+  }
   return map;
 }
 
-/** Test seam: drop the memoized location map so a test can re-stub the lookup. */
+/** Test seam: drop the memoized location list so a test can re-stub the lookup. */
 export function __resetLocationCache(): void {
   locCache = null;
 }
