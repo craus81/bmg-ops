@@ -48,7 +48,11 @@ async function callBackfill(body: Record<string, unknown>): Promise<any> {
   return json;
 }
 
-const CHUNK = 10;
+// NetSuite invoice PATCHes are slow (several seconds each), and the serverless
+// function has a 60s ceiling — so keep the per-request batch small. A chunk
+// that errors (e.g. a transient timeout) is recorded and skipped, not fatal;
+// re-running mops up whatever's left since applied invoices become no-ops.
+const CHUNK = 4;
 
 export default function InvoiceLocationsPage() {
   const router = useRouter();
@@ -59,7 +63,7 @@ export default function InvoiceLocationsPage() {
   const [applying, setApplying] = useState(false);
   const [plan, setPlan] = useState<Plan | null>(null);
   const [progress, setProgress] = useState<{ done: number; total: number; applied: number; failed: number } | null>(null);
-  const [result, setResult] = useState<{ applied: number; failed: number; closed: string[] } | null>(null);
+  const [result, setResult] = useState<{ applied: number; failed: number; closed: string[]; errors: string[] } | null>(null);
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
@@ -94,24 +98,25 @@ export default function InvoiceLocationsPage() {
     let applied = 0;
     let failed = 0;
     const closed: string[] = [];
+    const errors: string[] = [];
     setProgress({ done: 0, total: ids.length, applied, failed });
-    try {
-      for (let i = 0; i < ids.length; i += CHUNK) {
+    for (let i = 0; i < ids.length; i += CHUNK) {
+      try {
         const r = await callBackfill({ dryRun: false, invoiceIds: ids.slice(i, i + CHUNK) });
         applied += r.summary?.applied || 0;
         failed += r.summary?.failed || 0;
         if (Array.isArray(r.closedPeriodInvoices)) closed.push(...r.closedPeriodInvoices);
-        setProgress({ done: Math.min(i + CHUNK, ids.length), total: ids.length, applied, failed });
+      } catch (e: any) {
+        // A timed-out / failed chunk isn't fatal — record it and keep going.
+        errors.push(e?.message || 'chunk failed');
       }
-      setResult({ applied, failed, closed });
-      // Refresh the preview so the table reflects the new NetSuite state.
-      setPlan(await callBackfill({}));
-    } catch (e: any) {
-      setError(`Stopped after applying ${applied}: ${e?.message || 'apply failed'}`);
-    } finally {
-      setApplying(false);
-      setProgress(null);
+      setProgress({ done: Math.min(i + CHUNK, ids.length), total: ids.length, applied, failed });
     }
+    setResult({ applied, failed, closed, errors });
+    // Refresh the preview so the table reflects the new NetSuite state.
+    try { setPlan(await callBackfill({})); } catch { /* keep the prior preview */ }
+    setApplying(false);
+    setProgress(null);
   }
 
   const card: CSSProperties = {
@@ -176,16 +181,30 @@ export default function InvoiceLocationsPage() {
       )}
 
       {result && (
-        <div style={{ ...card, background: theme.successBg, borderColor: theme.successBorder }}>
-          <div style={{ fontWeight: 700, marginBottom: 4 }}>Done</div>
+        <div
+          style={{
+            ...card,
+            background: result.errors.length ? theme.warningBg : theme.successBg,
+            borderColor: result.errors.length ? theme.warningBorder : theme.successBorder,
+          }}
+        >
+          <div style={{ fontWeight: 700, marginBottom: 4 }}>
+            {result.errors.length ? 'Finished — some chunks need a re-run' : 'Done'}
+          </div>
           <div style={{ fontSize: 14 }}>
             Applied <strong>{result.applied}</strong>, failed <strong>{result.failed}</strong>
             {result.closed.length > 0 && (
               <>
-                {' '}— skipped (closed period): {result.closed.join(', ')}
+                {' '}— skipped (closed period): {Array.from(new Set(result.closed)).join(', ')}
               </>
             )}
           </div>
+          {result.errors.length > 0 && (
+            <div style={{ fontSize: 13, marginTop: 8, color: theme.textSecondary }}>
+              {result.errors.length} chunk{result.errors.length !== 1 ? 's' : ''} didn&apos;t complete (usually a timeout).
+              Click <strong>Preview changes</strong> then <strong>Apply</strong> again to finish — already-applied invoices are skipped.
+            </div>
+          )}
         </div>
       )}
 
