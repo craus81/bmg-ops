@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { createClient, SupabaseClient } from '@supabase/supabase-js';
 import { requireAdmin } from '@/lib/api-auth';
-import { suiteqlQuery, suiteqlQueryAll, updateInvoiceLocation } from '@/lib/netsuite';
+import { suiteqlQuery, suiteqlQueryAll, updateInvoiceLocation, netSuiteInvoiceUrl } from '@/lib/netsuite';
 import { resolveInvoiceLocation, getActiveLocations } from '@/lib/invoice-location';
 import { validateBody, z } from '@/lib/validate';
 
@@ -285,6 +285,8 @@ export async function POST(req: NextRequest) {
       invoiceId: string;
       invoiceNumber: string | null;
       customer: string | null;
+      memo: string | null;
+      netsuiteUrl: string | null;
       currentLocationId: string | null;
       currentLocationName: string | null;
       suggestedLocationId: string;
@@ -331,6 +333,8 @@ export async function POST(req: NextRequest) {
         invoiceId: row.id,
         invoiceNumber: row.tranid,
         customer: row.customer_name,
+        memo: row.memo,
+        netsuiteUrl: netSuiteInvoiceUrl(row.id),
         currentLocationId: row.location_id,
         currentLocationName: row.location_id ? idToName.get(row.location_id) || row.location_id : null,
         suggestedLocationId: target.id,
