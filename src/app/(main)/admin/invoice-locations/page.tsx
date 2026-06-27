@@ -17,6 +17,8 @@ interface InvoiceRow {
   invoiceId: string;
   invoiceNumber: string | null;
   customer: string | null;
+  memo: string | null;
+  netsuiteUrl: string | null;
   currentLocationId: string | null;
   currentLocationName: string | null;
   suggestedLocationId: string;
@@ -108,7 +110,7 @@ export default function InvoiceLocationsPage() {
     const q = search.trim().toLowerCase();
     return invoices.filter((inv) => {
       if (filter !== 'all' && statusOf(inv) !== filter) return false;
-      if (q && !(`${inv.invoiceNumber || ''} ${inv.customer || ''}`.toLowerCase().includes(q))) return false;
+      if (q && !(`${inv.invoiceNumber || ''} ${inv.customer || ''} ${inv.memo || ''}`.toLowerCase().includes(q))) return false;
       return true;
     });
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -232,6 +234,7 @@ export default function InvoiceLocationsPage() {
             <thead>
               <tr style={{ background: theme.subtleBg, textAlign: 'left' }}>
                 <th style={th}>Invoice</th>
+                <th style={th}>For (memo)</th>
                 <th style={th}>Customer</th>
                 <th style={th}>Current</th>
                 <th style={th}>Set to</th>
@@ -243,7 +246,18 @@ export default function InvoiceLocationsPage() {
                 const status = statusOf(inv);
                 return (
                   <tr key={inv.invoiceId} style={{ borderTop: `1px solid ${theme.border}`, background: status === 'pending' ? theme.warningBg : 'transparent' }}>
-                    <td style={td}>{inv.invoiceNumber || inv.invoiceId}</td>
+                    <td style={td}>
+                      {inv.netsuiteUrl ? (
+                        <a href={inv.netsuiteUrl} target="_blank" rel="noopener noreferrer" style={{ color: theme.orange, fontWeight: 600, textDecoration: 'none' }}>
+                          {inv.invoiceNumber || inv.invoiceId} ↗
+                        </a>
+                      ) : (
+                        inv.invoiceNumber || inv.invoiceId
+                      )}
+                    </td>
+                    <td style={{ ...td, maxWidth: 280, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', color: theme.textSecondary }} title={inv.memo || ''}>
+                      {inv.memo || '—'}
+                    </td>
                     <td style={td}>{inv.customer || '—'}</td>
                     <td style={{ ...td, color: theme.textMuted }}>{inv.currentLocationName || '—'}</td>
                     <td style={td}>
@@ -262,7 +276,7 @@ export default function InvoiceLocationsPage() {
                 );
               })}
               {visible.length === 0 && (
-                <tr><td style={{ ...td, color: theme.textMuted }} colSpan={5}>No invoices match this filter.</td></tr>
+                <tr><td style={{ ...td, color: theme.textMuted }} colSpan={6}>No invoices match this filter.</td></tr>
               )}
             </tbody>
           </table>
