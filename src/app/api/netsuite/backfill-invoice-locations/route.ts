@@ -45,8 +45,13 @@ const Schema = z.object({
   invoiceIds: z.array(NumericId).max(5000).optional(),
   customer: z.string().max(200).optional(),
   // Manual overrides from the admin picker: set these exact invoice → location
-  // pairs (bypasses the rule). Applied directly, no enumeration.
-  assignments: z.array(z.object({ invoiceId: NumericId, locationId: NumericId })).max(5000).optional(),
+  // pairs (bypasses the rule). Applied directly, no enumeration. The optional
+  // poNumber lets us remember the PO → location decision for future invoices.
+  assignments: z.array(z.object({
+    invoiceId: NumericId,
+    locationId: NumericId,
+    poNumber: z.string().max(120).optional(),
+  })).max(5000).optional(),
 });
 
 type ShipTo = { city?: string; name?: string } | null;
@@ -159,19 +164,42 @@ export async function POST(req: NextRequest) {
     if (dryRun) {
       return NextResponse.json({ dryRun: true, summary: { processed: 0, applied: 0, failed: 0, closedPeriodSkips: 0 } });
     }
+    const supabase = createClient(process.env.NEXT_PUBLIC_SUPABASE_URL!, process.env.SUPABASE_SERVICE_ROLE_KEY!);
+    const idToName = new Map((await getActiveLocations()).map((l) => [l.id, l.name]));
     let applied = 0;
     let failed = 0;
     const closedPeriod: string[] = [];
     const results: { invoiceId: string; locationId: string; applied: boolean; error?: string }[] = [];
+    const poOverrides = new Map<string, string>(); // normalized PO -> locationId, from successful applies
     for (const a of assignments) {
       const res = await updateInvoiceLocation(a.invoiceId, a.locationId);
       if (res.success) {
         applied++;
         results.push({ invoiceId: a.invoiceId, locationId: a.locationId, applied: true });
+        const poKey = (a.poNumber || '').trim().toUpperCase();
+        if (poKey) poOverrides.set(poKey, a.locationId);
       } else {
         failed++;
         if (/period/i.test(res.error || '')) closedPeriod.push(a.invoiceId);
         results.push({ invoiceId: a.invoiceId, locationId: a.locationId, applied: false, error: res.error });
+      }
+    }
+    // Remember each PO -> location decision so future invoices for that PO book
+    // to it automatically. Best-effort: skipped if the table isn't there yet.
+    if (poOverrides.size > 0) {
+      try {
+        await supabase.from('po_location_overrides').upsert(
+          Array.from(poOverrides.entries()).map(([po_number, location_id]) => ({
+            po_number,
+            location_id,
+            location_name: idToName.get(location_id) || null,
+            updated_by: auth.user?.id ?? null,
+            updated_at: new Date().toISOString(),
+          })),
+          { onConflict: 'po_number' },
+        );
+      } catch {
+        // overrides table missing (migration not run) — recording is best-effort.
       }
     }
     return NextResponse.json({
@@ -192,6 +220,22 @@ export async function POST(req: NextRequest) {
     // location of each invoice (the invoice query gives us only its id).
     const locations = await getActiveLocations();
     const idToName = new Map(locations.map((l) => [l.id, l.name]));
+
+    // Learned PO → location overrides, preferred over the rule below.
+    const overrideByPo = new Map<string, { id: string; name: string }>();
+    try {
+      const { data: ovr } = await supabase
+        .from('po_location_overrides')
+        .select('po_number, location_id, location_name');
+      for (const o of ovr || []) {
+        if (o.po_number && o.location_id) {
+          const id = o.location_id.toString();
+          overrideByPo.set(o.po_number.toString().toUpperCase(), { id, name: o.location_name || idToName.get(id) || '' });
+        }
+      }
+    } catch {
+      // overrides table missing (migration not run) — no overrides.
+    }
 
     // ── 1. Determine the candidate invoice rows ───────────────────────────
     // Scoped: look up exactly the requested invoices — no broad scan, so a
@@ -326,12 +370,16 @@ export async function POST(req: NextRequest) {
         }
       }
 
-      const target = await resolveInvoiceLocation({
-        customerName: row.customer_name,
-        city: shipTo?.city,
-        name: shipTo?.name,
-        locationName,
-      });
+      // A learned PO override wins; otherwise fall back to the rule.
+      const ovr = poNumber ? overrideByPo.get(poNumber.toUpperCase()) : undefined;
+      const target = ovr
+        ? { id: ovr.id, name: ovr.name || idToName.get(ovr.id) || ovr.id, confident: true }
+        : await resolveInvoiceLocation({
+            customerName: row.customer_name,
+            city: shipTo?.city,
+            name: shipTo?.name,
+            locationName,
+          });
       if (!target.id) continue; // resolver always defaults to O'Fallon, so this is unreachable in practice
 
       // Record every invoice for the picker (current + suggested location).

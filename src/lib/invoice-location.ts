@@ -19,6 +19,7 @@
  * bills to a non-O'Fallon site, extend pickInvoiceLocationName below.
  */
 
+import type { SupabaseClient } from '@supabase/supabase-js';
 import { suiteqlQuery } from './netsuite';
 
 /** Canonical NetSuite location names, spelled as they appear in NetSuite. */
@@ -164,4 +165,36 @@ export async function resolveInvoiceLocation(
   const map = await getLocationNameToId();
   const id = map.get(key) || KNOWN_LOCATION_IDS[key] || process.env.NETSUITE_DEFAULT_LOCATION_ID || null;
   return { id, name, confident };
+}
+
+/**
+ * Resolve an invoice's location, preferring a learned PO override when one
+ * exists. Staff set these from the Invoice Locations admin tool; once a PO has
+ * a recorded location, every future invoice for that PO books to it (the same
+ * PO always means the same location). Falls back to the rule when there's no
+ * override — and is resilient if the po_location_overrides table doesn't exist
+ * yet (the migration hasn't run), so creation never breaks.
+ */
+export async function resolveLocationWithOverride(
+  supabase: SupabaseClient,
+  poNumber: string | null | undefined,
+  hint: LocationHint,
+): Promise<{ id: string | null; name: string; confident: boolean; fromOverride: boolean }> {
+  const key = (poNumber || '').trim().toUpperCase();
+  if (key) {
+    try {
+      const { data } = await supabase
+        .from('po_location_overrides')
+        .select('location_id, location_name')
+        .eq('po_number', key)
+        .maybeSingle();
+      if (data?.location_id) {
+        return { id: data.location_id.toString(), name: data.location_name || '', confident: true, fromOverride: true };
+      }
+    } catch {
+      // Table missing / query error — fall back to the rule below.
+    }
+  }
+  const r = await resolveInvoiceLocation(hint);
+  return { id: r.id, name: r.name, confident: r.confident, fromOverride: false };
 }
