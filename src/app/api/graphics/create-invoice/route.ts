@@ -3,7 +3,7 @@ import { createClient } from '@supabase/supabase-js';
 import { requireAuth } from '@/lib/api-auth';
 import { createDirectInvoice, findItems, getItemBasePrices } from '@/lib/netsuite';
 import { resolveCustomerNsId } from '@/lib/graphics-invoice';
-import { resolveInvoiceLocation } from '@/lib/invoice-location';
+import { resolveLocationWithOverride } from '@/lib/invoice-location';
 import { validateBody, z } from '@/lib/validate';
 
 export const dynamic = 'force-dynamic';
@@ -207,7 +207,7 @@ export async function POST(req: NextRequest) {
         poShipTo = po.ship_to || null;
       }
     }
-    const { id: locationId } = await resolveInvoiceLocation({
+    const { id: locationId } = await resolveLocationWithOverride(supabase, job.po_number, {
       customerName: locCustomer,
       city: poShipTo?.city,
       name: poShipTo?.name,

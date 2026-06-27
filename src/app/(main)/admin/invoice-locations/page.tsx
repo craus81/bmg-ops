@@ -218,7 +218,11 @@ export default function InvoiceLocationsPage() {
     );
     if (!ok) return;
 
-    const assignments = pending.map((inv) => ({ invoiceId: inv.invoiceId, locationId: picks[inv.invoiceId] }));
+    const assignments = pending.map((inv) => ({
+      invoiceId: inv.invoiceId,
+      locationId: picks[inv.invoiceId],
+      poNumber: inv.poNumber || undefined,
+    }));
     setApplying(true);
     setError(null);
     setResult(null);

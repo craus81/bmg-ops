@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { createClient } from '@supabase/supabase-js';
 import { createDirectInvoice, findCustomer, findItems } from '@/lib/netsuite';
-import { resolveInvoiceLocation } from '@/lib/invoice-location';
+import { resolveLocationWithOverride } from '@/lib/invoice-location';
 import { requireAuth } from '@/lib/api-auth';
 import { validateBody, z } from '@/lib/validate';
 
@@ -156,7 +156,7 @@ export async function POST(req: NextRequest) {
           poShipTo = (po?.ship_to as { city?: string; name?: string } | null) || null;
         }
         const firstLocation = custScans.find(s => s.location_name)?.location_name;
-        const { id: locationId } = await resolveInvoiceLocation({
+        const { id: locationId } = await resolveLocationWithOverride(supabase, poNumber, {
           customerName,
           city: poShipTo?.city,
           name: poShipTo?.name,
