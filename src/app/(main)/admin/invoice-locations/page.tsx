@@ -1,38 +1,35 @@
 'use client';
 
-import { useEffect, useState, type CSSProperties } from 'react';
+import { useEffect, useMemo, useState, type CSSProperties } from 'react';
 import { useRouter } from 'next/navigation';
 import { useAuth } from '@/components/AuthProvider';
 import { useDialog } from '@/components/DialogProvider';
 import { theme } from '@/lib/theme';
 
 const ENDPOINT = '/api/netsuite/backfill-invoice-locations';
+// NetSuite invoice PATCHes are slow (several seconds each) and the function has
+// a 60s ceiling, so apply only a few per request; a failed chunk is reported,
+// not fatal (re-applying is a no-op for invoices already on the chosen location).
+const CHUNK = 4;
 
-interface Change {
+interface Loc { id: string; name: string }
+interface InvoiceRow {
   invoiceId: string;
   invoiceNumber: string | null;
   customer: string | null;
-  fromLocationId: string | null;
-  toLocationId: string;
-  toLocation: string;
+  currentLocationId: string | null;
+  currentLocationName: string | null;
+  suggestedLocationId: string;
+  suggestedLocation: string;
+  confident: boolean;
 }
-interface Plan {
-  summary: {
-    fleetSuiteInvoices: number;
-    alreadyCorrect: number;
-    indeterminateKept: number;
-    toChange: number;
-    byTargetLocation: Record<string, number>;
-  };
-  changes: Change[];
-  closedPeriodInvoices?: string[];
+interface ListResponse {
+  locations: Loc[];
+  invoices: InvoiceRow[];
+  summary: { fleetSuiteInvoices: number; alreadyCorrect: number; indeterminateKept: number; toChange: number };
 }
 
-/**
- * Read the backfill endpoint safely: it can return a non-JSON body on a
- * gateway timeout, so we parse defensively and surface the HTTP status rather
- * than throwing an opaque JSON error.
- */
+/** Read the endpoint safely — a gateway timeout returns non-JSON. */
 async function callBackfill(body: Record<string, unknown>): Promise<any> {
   const res = await fetch(ENDPOINT, {
     method: 'POST',
@@ -48,11 +45,7 @@ async function callBackfill(body: Record<string, unknown>): Promise<any> {
   return json;
 }
 
-// NetSuite invoice PATCHes are slow (several seconds each), and the serverless
-// function has a 60s ceiling — so keep the per-request batch small. A chunk
-// that errors (e.g. a transient timeout) is recorded and skipped, not fatal;
-// re-running mops up whatever's left since applied invoices become no-ops.
-const CHUNK = 4;
+type Filter = 'all' | 'pending' | 'indeterminate' | 'correct';
 
 export default function InvoiceLocationsPage() {
   const router = useRouter();
@@ -61,37 +54,75 @@ export default function InvoiceLocationsPage() {
 
   const [loading, setLoading] = useState(false);
   const [applying, setApplying] = useState(false);
-  const [plan, setPlan] = useState<Plan | null>(null);
-  const [progress, setProgress] = useState<{ done: number; total: number; applied: number; failed: number } | null>(null);
+  const [locations, setLocations] = useState<Loc[]>([]);
+  const [invoices, setInvoices] = useState<InvoiceRow[]>([]);
+  const [picks, setPicks] = useState<Record<string, string>>({});
+  const [summary, setSummary] = useState<ListResponse['summary'] | null>(null);
+  const [progress, setProgress] = useState<{ done: number; total: number } | null>(null);
   const [result, setResult] = useState<{ applied: number; failed: number; closed: string[]; errors: string[] } | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [filter, setFilter] = useState<Filter>('all');
+  const [search, setSearch] = useState('');
 
   useEffect(() => {
     if (isAdmin === false) router.push('/home');
   }, [isAdmin, router]);
 
-  async function runPreview() {
+  // Default each invoice's pick: the rule's suggestion when it's confident,
+  // otherwise leave it on its current location (indeterminate stays put).
+  function defaultPick(inv: InvoiceRow): string {
+    return inv.confident ? inv.suggestedLocationId : inv.currentLocationId || inv.suggestedLocationId;
+  }
+
+  async function load() {
     setError(null);
     setResult(null);
     setLoading(true);
     try {
-      setPlan(await callBackfill({}));
+      const data: ListResponse = await callBackfill({});
+      setLocations(data.locations || []);
+      setInvoices(data.invoices || []);
+      setSummary(data.summary || null);
+      const p: Record<string, string> = {};
+      for (const inv of data.invoices || []) p[inv.invoiceId] = defaultPick(inv);
+      setPicks(p);
     } catch (e: any) {
-      setError(e?.message || 'Preview failed');
+      setError(e?.message || 'Failed to load invoices');
     } finally {
       setLoading(false);
     }
   }
 
+  const pending = useMemo(
+    () => invoices.filter((inv) => picks[inv.invoiceId] && picks[inv.invoiceId] !== inv.currentLocationId),
+    [invoices, picks],
+  );
+
+  function statusOf(inv: InvoiceRow): Filter {
+    if (picks[inv.invoiceId] && picks[inv.invoiceId] !== inv.currentLocationId) return 'pending';
+    if (!inv.confident) return 'indeterminate';
+    return 'correct';
+  }
+
+  const visible = useMemo(() => {
+    const q = search.trim().toLowerCase();
+    return invoices.filter((inv) => {
+      if (filter !== 'all' && statusOf(inv) !== filter) return false;
+      if (q && !(`${inv.invoiceNumber || ''} ${inv.customer || ''}`.toLowerCase().includes(q))) return false;
+      return true;
+    });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [invoices, picks, filter, search]);
+
   async function apply() {
-    if (!plan || plan.changes.length === 0) return;
-    const ids = plan.changes.map((c) => c.invoiceId);
+    if (pending.length === 0) return;
     const ok = await dialog.confirm(
-      `Apply ${ids.length} location change${ids.length !== 1 ? 's' : ''} to NetSuite? Invoices already on the right location, or in a closed period, are skipped automatically.`,
+      `Apply ${pending.length} location change${pending.length !== 1 ? 's' : ''} to NetSuite? Invoices in a closed period will be reported and skipped.`,
       { confirmLabel: 'Apply changes' },
     );
     if (!ok) return;
 
+    const assignments = pending.map((inv) => ({ invoiceId: inv.invoiceId, locationId: picks[inv.invoiceId] }));
     setApplying(true);
     setError(null);
     setResult(null);
@@ -99,81 +130,71 @@ export default function InvoiceLocationsPage() {
     let failed = 0;
     const closed: string[] = [];
     const errors: string[] = [];
-    setProgress({ done: 0, total: ids.length, applied, failed });
-    for (let i = 0; i < ids.length; i += CHUNK) {
+    setProgress({ done: 0, total: assignments.length });
+    for (let i = 0; i < assignments.length; i += CHUNK) {
       try {
-        const r = await callBackfill({ dryRun: false, invoiceIds: ids.slice(i, i + CHUNK) });
+        const r = await callBackfill({ dryRun: false, assignments: assignments.slice(i, i + CHUNK) });
         applied += r.summary?.applied || 0;
         failed += r.summary?.failed || 0;
         if (Array.isArray(r.closedPeriodInvoices)) closed.push(...r.closedPeriodInvoices);
       } catch (e: any) {
-        // A timed-out / failed chunk isn't fatal — record it and keep going.
         errors.push(e?.message || 'chunk failed');
       }
-      setProgress({ done: Math.min(i + CHUNK, ids.length), total: ids.length, applied, failed });
+      setProgress({ done: Math.min(i + CHUNK, assignments.length), total: assignments.length });
     }
     setResult({ applied, failed, closed, errors });
-    // Refresh the preview so the table reflects the new NetSuite state.
-    try { setPlan(await callBackfill({})); } catch { /* keep the prior preview */ }
     setApplying(false);
     setProgress(null);
+    await load(); // refresh current locations from NetSuite
   }
 
-  const card: CSSProperties = {
-    background: theme.card,
-    border: `1px solid ${theme.border}`,
-    borderRadius: 12,
-    padding: 16,
-    marginBottom: 16,
-  };
-  const btn: CSSProperties = {
-    background: theme.orange,
-    color: '#fff',
-    border: 'none',
-    borderRadius: 8,
-    padding: '10px 18px',
-    fontWeight: 600,
-    fontSize: 14,
-    cursor: 'pointer',
-  };
-
+  const card: CSSProperties = { background: theme.card, border: `1px solid ${theme.border}`, borderRadius: 12, padding: 16, marginBottom: 16 };
+  const btn: CSSProperties = { background: theme.orange, color: '#fff', border: 'none', borderRadius: 8, padding: '10px 18px', fontWeight: 600, fontSize: 14, cursor: 'pointer' };
   const busy = loading || applying;
 
   return (
-    <div style={{ maxWidth: 920, margin: '0 auto', padding: 16, color: theme.textPrimary }}>
+    <div style={{ maxWidth: 1040, margin: '0 auto', padding: 16, color: theme.textPrimary }}>
       <h1 style={{ fontSize: 22, fontWeight: 700, marginBottom: 4 }}>Invoice Locations</h1>
       <p style={{ color: theme.textSecondary, fontSize: 14, marginBottom: 16 }}>
-        Set the NetSuite Location on existing FleetSuite invoices to match the PO rules
-        (Masterack → its plant, Designs That Stick → Kansas City, everything else → O&apos;Fallon).
-        Preview is read-only; nothing changes until you click Apply.
+        Every FleetSuite invoice with its current NetSuite location. The dropdown is pre-filled with the
+        rule&apos;s suggestion (Masterack → plant, Designs That Stick → Kansas City, others → O&apos;Fallon);
+        adjust any of them, then apply. Indeterminate invoices are left on their current location for you to set.
       </p>
 
-      <div style={{ display: 'flex', gap: 10, marginBottom: 16 }}>
-        <button onClick={runPreview} disabled={busy} style={{ ...btn, opacity: busy ? 0.6 : 1 }}>
-          {loading ? 'Previewing…' : 'Preview changes'}
+      <div style={{ display: 'flex', gap: 10, marginBottom: 16, flexWrap: 'wrap', alignItems: 'center' }}>
+        <button onClick={load} disabled={busy} style={{ ...btn, opacity: busy ? 0.6 : 1 }}>
+          {loading ? 'Loading…' : invoices.length ? 'Reload' : 'Load invoices'}
         </button>
-        {plan && plan.changes.length > 0 && (
-          <button
-            onClick={apply}
-            disabled={busy}
-            style={{ ...btn, background: theme.success, opacity: busy ? 0.6 : 1 }}
-          >
-            {applying ? 'Applying…' : `Apply ${plan.changes.length} change${plan.changes.length !== 1 ? 's' : ''}`}
+        {invoices.length > 0 && (
+          <button onClick={apply} disabled={busy || pending.length === 0} style={{ ...btn, background: theme.success, opacity: busy || pending.length === 0 ? 0.5 : 1 }}>
+            {applying ? 'Applying…' : `Apply ${pending.length} change${pending.length !== 1 ? 's' : ''}`}
           </button>
+        )}
+        {invoices.length > 0 && (
+          <>
+            <select value={filter} onChange={(e) => setFilter(e.target.value as Filter)} style={selectStyle}>
+              <option value="all">All ({invoices.length})</option>
+              <option value="pending">Pending changes ({pending.length})</option>
+              <option value="indeterminate">Indeterminate ({invoices.filter((i) => !i.confident).length})</option>
+              <option value="correct">Already correct</option>
+            </select>
+            <input
+              value={search}
+              onChange={(e) => setSearch(e.target.value)}
+              placeholder="Search invoice # or customer"
+              style={{ ...selectStyle, minWidth: 220 }}
+            />
+          </>
         )}
       </div>
 
       {error && (
-        <div style={{ ...card, background: theme.errorBg, borderColor: theme.errorBorder, color: theme.error }}>
-          {error}
-        </div>
+        <div style={{ ...card, background: theme.errorBg, borderColor: theme.errorBorder, color: theme.error }}>{error}</div>
       )}
 
       {progress && (
         <div style={card}>
-          <div style={{ fontWeight: 600, marginBottom: 8 }}>
-            Applying… {progress.done}/{progress.total} (applied {progress.applied}, failed {progress.failed})
-          </div>
+          <div style={{ fontWeight: 600, marginBottom: 8 }}>Applying… {progress.done}/{progress.total}</div>
           <div style={{ height: 8, background: theme.progressTrack, borderRadius: 4, overflow: 'hidden' }}>
             <div style={{ height: '100%', width: `${(progress.done / progress.total) * 100}%`, background: theme.orange }} />
           </div>
@@ -181,72 +202,71 @@ export default function InvoiceLocationsPage() {
       )}
 
       {result && (
-        <div
-          style={{
-            ...card,
-            background: result.errors.length ? theme.warningBg : theme.successBg,
-            borderColor: result.errors.length ? theme.warningBorder : theme.successBorder,
-          }}
-        >
-          <div style={{ fontWeight: 700, marginBottom: 4 }}>
-            {result.errors.length ? 'Finished — some chunks need a re-run' : 'Done'}
-          </div>
+        <div style={{ ...card, background: result.errors.length ? theme.warningBg : theme.successBg, borderColor: result.errors.length ? theme.warningBorder : theme.successBorder }}>
+          <div style={{ fontWeight: 700, marginBottom: 4 }}>{result.errors.length ? 'Finished — some chunks need a re-run' : 'Done'}</div>
           <div style={{ fontSize: 14 }}>
             Applied <strong>{result.applied}</strong>, failed <strong>{result.failed}</strong>
-            {result.closed.length > 0 && (
-              <>
-                {' '}— skipped (closed period): {Array.from(new Set(result.closed)).join(', ')}
-              </>
-            )}
+            {result.closed.length > 0 && <> {' '}— skipped (closed period): {Array.from(new Set(result.closed)).join(', ')}</>}
           </div>
           {result.errors.length > 0 && (
             <div style={{ fontSize: 13, marginTop: 8, color: theme.textSecondary }}>
-              {result.errors.length} chunk{result.errors.length !== 1 ? 's' : ''} didn&apos;t complete (usually a timeout).
-              Click <strong>Preview changes</strong> then <strong>Apply</strong> again to finish — already-applied invoices are skipped.
+              {result.errors.length} chunk{result.errors.length !== 1 ? 's' : ''} didn&apos;t complete (usually a timeout). Just Apply again to finish.
             </div>
           )}
         </div>
       )}
 
-      {plan && (
-        <>
-          <div style={{ ...card, display: 'flex', flexWrap: 'wrap', gap: 20 }}>
-            <Stat label="FleetSuite invoices" value={plan.summary.fleetSuiteInvoices} />
-            <Stat label="Already correct" value={plan.summary.alreadyCorrect} />
-            <Stat label="To change" value={plan.summary.toChange} highlight />
-            <Stat label="Indeterminate (kept)" value={plan.summary.indeterminateKept} />
-            {Object.entries(plan.summary.byTargetLocation || {}).map(([loc, n]) => (
-              <Stat key={loc} label={`→ ${loc}`} value={n} />
-            ))}
-          </div>
+      {summary && (
+        <div style={{ ...card, display: 'flex', flexWrap: 'wrap', gap: 20 }}>
+          <Stat label="FleetSuite invoices" value={summary.fleetSuiteInvoices} />
+          <Stat label="Already correct" value={summary.alreadyCorrect} />
+          <Stat label="Rule suggests a change" value={summary.toChange} highlight />
+          <Stat label="Indeterminate" value={summary.indeterminateKept} />
+          <Stat label="Pending (your picks)" value={pending.length} highlight />
+        </div>
+      )}
 
-          {plan.changes.length === 0 ? (
-            <div style={card}>Every FleetSuite invoice is already on the right location. Nothing to change. 🎉</div>
-          ) : (
-            <div style={{ ...card, padding: 0, overflow: 'hidden' }}>
-              <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 13 }}>
-                <thead>
-                  <tr style={{ background: theme.subtleBg, textAlign: 'left' }}>
-                    <th style={th}>Invoice</th>
-                    <th style={th}>Customer</th>
-                    <th style={th}>From (id)</th>
-                    <th style={th}>To</th>
+      {invoices.length > 0 && (
+        <div style={{ ...card, padding: 0, overflow: 'auto' }}>
+          <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 13 }}>
+            <thead>
+              <tr style={{ background: theme.subtleBg, textAlign: 'left' }}>
+                <th style={th}>Invoice</th>
+                <th style={th}>Customer</th>
+                <th style={th}>Current</th>
+                <th style={th}>Set to</th>
+                <th style={th}>Status</th>
+              </tr>
+            </thead>
+            <tbody>
+              {visible.map((inv) => {
+                const status = statusOf(inv);
+                return (
+                  <tr key={inv.invoiceId} style={{ borderTop: `1px solid ${theme.border}`, background: status === 'pending' ? theme.warningBg : 'transparent' }}>
+                    <td style={td}>{inv.invoiceNumber || inv.invoiceId}</td>
+                    <td style={td}>{inv.customer || '—'}</td>
+                    <td style={{ ...td, color: theme.textMuted }}>{inv.currentLocationName || '—'}</td>
+                    <td style={td}>
+                      <select
+                        value={picks[inv.invoiceId] || ''}
+                        onChange={(e) => setPicks((p) => ({ ...p, [inv.invoiceId]: e.target.value }))}
+                        style={selectStyle}
+                      >
+                        {locations.map((l) => (
+                          <option key={l.id} value={l.id}>{l.name}</option>
+                        ))}
+                      </select>
+                    </td>
+                    <td style={td}><Badge status={status} /></td>
                   </tr>
-                </thead>
-                <tbody>
-                  {plan.changes.map((c) => (
-                    <tr key={c.invoiceId} style={{ borderTop: `1px solid ${theme.border}` }}>
-                      <td style={td}>{c.invoiceNumber || c.invoiceId}</td>
-                      <td style={td}>{c.customer || '—'}</td>
-                      <td style={{ ...td, color: theme.textMuted }}>{c.fromLocationId ?? '—'}</td>
-                      <td style={{ ...td, fontWeight: 600 }}>{c.toLocation}</td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
-          )}
-        </>
+                );
+              })}
+              {visible.length === 0 && (
+                <tr><td style={{ ...td, color: theme.textMuted }} colSpan={5}>No invoices match this filter.</td></tr>
+              )}
+            </tbody>
+          </table>
+        </div>
       )}
     </div>
   );
@@ -261,5 +281,24 @@ function Stat({ label, value, highlight }: { label: string; value: number; highl
   );
 }
 
-const th: CSSProperties = { padding: '10px 12px', fontWeight: 600, fontSize: 12, color: theme.textSecondary };
-const td: CSSProperties = { padding: '8px 12px' };
+function Badge({ status }: { status: Filter }) {
+  const map: Record<Filter, { label: string; color: string }> = {
+    pending: { label: 'will change', color: theme.warning },
+    indeterminate: { label: 'indeterminate', color: theme.textMuted },
+    correct: { label: 'correct', color: theme.success },
+    all: { label: '', color: theme.textMuted },
+  };
+  const s = map[status];
+  return <span style={{ fontSize: 12, fontWeight: 600, color: s.color }}>{s.label}</span>;
+}
+
+const th: CSSProperties = { padding: '10px 12px', fontWeight: 600, fontSize: 12, color: theme.textSecondary, whiteSpace: 'nowrap' };
+const td: CSSProperties = { padding: '8px 12px', verticalAlign: 'middle' };
+const selectStyle: CSSProperties = {
+  background: theme.inputBg,
+  color: theme.textPrimary,
+  border: `1px solid ${theme.border}`,
+  borderRadius: 6,
+  padding: '6px 8px',
+  fontSize: 13,
+};
