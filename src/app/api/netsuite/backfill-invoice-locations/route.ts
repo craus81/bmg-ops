@@ -50,7 +50,7 @@ const Schema = z.object({
 });
 
 type ShipTo = { city?: string; name?: string } | null;
-type PoEntry = { ship_to: ShipTo; customer: string | null };
+type PoEntry = { ship_to: ShipTo; customer: string | null; po_number: string | null };
 
 /** Pull a PO number out of a memo like "... — PO #ABC123". */
 function poNumberFromMemo(memo: string | null | undefined): string | null {
@@ -118,7 +118,7 @@ async function loadPoMaps(
   const byId = new Map<string, PoEntry>();
   const ingest = (rows: any[] | null | undefined) => {
     for (const po of rows || []) {
-      const entry: PoEntry = { ship_to: (po.ship_to as ShipTo) || null, customer: po.customer ?? null };
+      const entry: PoEntry = { ship_to: (po.ship_to as ShipTo) || null, customer: po.customer ?? null, po_number: po.po_number ?? null };
       if (po.id) byId.set(po.id, entry);
       if (po.po_number) byNumber.set(po.po_number.trim().toUpperCase(), entry);
     }
@@ -286,6 +286,7 @@ export async function POST(req: NextRequest) {
       invoiceNumber: string | null;
       customer: string | null;
       memo: string | null;
+      poNumber: string | null;
       currentLocationId: string | null;
       currentLocationName: string | null;
       suggestedLocationId: string;
@@ -301,22 +302,28 @@ export async function POST(req: NextRequest) {
       if (customer && !(row.customer_name || '').toLowerCase().includes(customer.toLowerCase())) continue;
       considered++;
 
-      // Build the location hint: NetSuite customer + the linked PO's ship-to.
+      // Build the location hint (NetSuite customer + the linked PO's ship-to),
+      // and capture the PO number so the picker can group invoices by PO.
       let shipTo: ShipTo = null;
       let locationName: string | null = null;
+      let poNumber: string | null = null;
       const g = graphicsByInvId.get(row.id);
       if (g) {
         locationName = g.ship_to;
         const po = g.po_id ? poById.get(g.po_id) : null;
-        if (po) shipTo = po.ship_to;
+        if (po) { shipTo = po.ship_to; poNumber = po.po_number; }
       }
-      if (!shipTo) {
+      if (!poNumber) {
         const poId = poInvoiceToPoId.get(row.id);
-        if (poId && poById.get(poId)) shipTo = poById.get(poId)!.ship_to;
+        const po = poId ? poById.get(poId) : null;
+        if (po) { if (!shipTo) shipTo = po.ship_to; poNumber = po.po_number; }
       }
-      if (!shipTo) {
-        const poNum = (row.otherrefnum || poNumberFromMemo(row.memo) || '').trim().toUpperCase();
-        if (poNum && poByNumber.get(poNum)) shipTo = poByNumber.get(poNum)!.ship_to;
+      if (!poNumber) {
+        const raw = (row.otherrefnum || poNumberFromMemo(row.memo) || '').trim();
+        if (raw) {
+          poNumber = raw;
+          if (!shipTo) { const po = poByNumber.get(raw.toUpperCase()); if (po) shipTo = po.ship_to; }
+        }
       }
 
       const target = await resolveInvoiceLocation({
@@ -333,6 +340,7 @@ export async function POST(req: NextRequest) {
         invoiceNumber: row.tranid,
         customer: row.customer_name,
         memo: row.memo,
+        poNumber,
         currentLocationId: row.location_id,
         currentLocationName: row.location_id ? idToName.get(row.location_id) || row.location_id : null,
         suggestedLocationId: target.id,
