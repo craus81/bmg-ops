@@ -18,7 +18,6 @@ interface InvoiceRow {
   invoiceNumber: string | null;
   customer: string | null;
   memo: string | null;
-  netsuiteUrl: string | null;
   currentLocationId: string | null;
   currentLocationName: string | null;
   suggestedLocationId: string;
@@ -65,6 +64,7 @@ export default function InvoiceLocationsPage() {
   const [error, setError] = useState<string | null>(null);
   const [filter, setFilter] = useState<Filter>('all');
   const [search, setSearch] = useState('');
+  const [pdfLoadingId, setPdfLoadingId] = useState<string | null>(null);
 
   useEffect(() => {
     if (isAdmin === false) router.push('/home');
@@ -92,6 +92,36 @@ export default function InvoiceLocationsPage() {
       setError(e?.message || 'Failed to load invoices');
     } finally {
       setLoading(false);
+    }
+  }
+
+  // Open the invoice's PDF (pulled from NetSuite via the RESTlet, same as the
+  // rest of the app) in a new tab — no NetSuite login. The blank tab is opened
+  // synchronously inside the click so popup blockers don't eat it.
+  async function openInvoicePdf(inv: InvoiceRow) {
+    const win = window.open('', '_blank');
+    if (win) win.document.write('Loading invoice PDF…');
+    setPdfLoadingId(inv.invoiceId);
+    setError(null);
+    try {
+      const res = await fetch(`/api/netsuite/pdf?type=invoice&id=${encodeURIComponent(inv.invoiceId)}`);
+      const text = await res.text();
+      let data: any = null;
+      try { data = JSON.parse(text); } catch { /* non-JSON */ }
+      if (!res.ok || !data?.success || !data.pdfBase64) {
+        throw new Error(data?.error || `Couldn't load PDF (HTTP ${res.status})`);
+      }
+      const raw = atob(data.pdfBase64);
+      const bytes = new Uint8Array(raw.length);
+      for (let i = 0; i < raw.length; i++) bytes[i] = raw.charCodeAt(i);
+      const url = URL.createObjectURL(new Blob([bytes], { type: 'application/pdf' }));
+      if (win) win.location.href = url;
+      else window.open(url, '_blank');
+    } catch (e: any) {
+      if (win) win.close();
+      setError(`${inv.invoiceNumber || inv.invoiceId}: ${e?.message || 'PDF failed'}`);
+    } finally {
+      setPdfLoadingId(null);
     }
   }
 
@@ -247,13 +277,14 @@ export default function InvoiceLocationsPage() {
                 return (
                   <tr key={inv.invoiceId} style={{ borderTop: `1px solid ${theme.border}`, background: status === 'pending' ? theme.warningBg : 'transparent' }}>
                     <td style={td}>
-                      {inv.netsuiteUrl ? (
-                        <a href={inv.netsuiteUrl} target="_blank" rel="noopener noreferrer" style={{ color: theme.orange, fontWeight: 600, textDecoration: 'none' }}>
-                          {inv.invoiceNumber || inv.invoiceId} ↗
-                        </a>
-                      ) : (
-                        inv.invoiceNumber || inv.invoiceId
-                      )}
+                      <button
+                        onClick={() => openInvoicePdf(inv)}
+                        disabled={pdfLoadingId === inv.invoiceId}
+                        title="Open the invoice PDF"
+                        style={{ background: 'none', border: 'none', padding: 0, color: theme.orange, fontWeight: 600, cursor: 'pointer', textDecoration: 'underline', whiteSpace: 'nowrap' }}
+                      >
+                        {inv.invoiceNumber || inv.invoiceId} {pdfLoadingId === inv.invoiceId ? '…' : '📄'}
+                      </button>
                     </td>
                     <td style={{ ...td, maxWidth: 280, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', color: theme.textSecondary }} title={inv.memo || ''}>
                       {inv.memo || '—'}

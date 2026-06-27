@@ -1114,19 +1114,6 @@ export async function updateInvoiceLocation(
 }
 
 /**
- * Build the NetSuite UI URL for an invoice record, so staff can click through
- * from the app to see what an invoice is for. Mirrors the account-host format
- * used for the customer / item links above. Returns null if the account isn't
- * configured.
- */
-export function netSuiteInvoiceUrl(invoiceId: string | number): string | null {
-  const accountId = process.env.NETSUITE_ACCOUNT_ID;
-  if (!accountId) return null;
-  const acct = accountId.replace(/-/g, '_').toUpperCase();
-  return `https://${acct}.app.netsuite.com/app/accounting/transactions/custinvc.nl?id=${invoiceId}`;
-}
-
-/**
  * Fetch a transaction PDF from the NetSuite RESTlet.
  * Supports: salesOrder, invoice (matches the RESTlet's query params).
  */
