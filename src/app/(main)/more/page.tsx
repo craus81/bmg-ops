@@ -119,6 +119,9 @@ export default function MorePage() {
         {isAdmin && (
           <MenuBtn title="Invoice Locations" sub="Backfill NetSuite invoice locations from the PO" onClick={() => router.push('/admin/invoice-locations')} />
         )}
+        {isAdmin && (
+          <MenuBtn title="Import Installs" sub="Bulk-import installs from a spreadsheet, credited to a CNI installer" onClick={() => router.push('/admin/import-installs')} />
+        )}
         {F('photo_reviews') && (
           <MenuBtn
             title="Photo Reviews"
