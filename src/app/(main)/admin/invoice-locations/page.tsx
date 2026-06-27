@@ -21,6 +21,7 @@ interface InvoiceRow {
   invoiceNumber: string | null;
   customer: string | null;
   memo: string | null;
+  poNumber: string | null;
   currentLocationId: string | null;
   currentLocationName: string | null;
   suggestedLocationId: string;
@@ -87,10 +88,17 @@ export default function InvoiceLocationsPage() {
     try { localStorage.setItem(STORAGE_KEY, JSON.stringify(map)); } catch { /* storage unavailable */ }
   }, [picks, invoices]);
 
-  // Default each invoice's pick: the rule's suggestion when it's confident,
-  // otherwise leave it on its current location (indeterminate stays put).
-  function defaultPick(inv: InvoiceRow): string {
-    return inv.confident ? inv.suggestedLocationId : inv.currentLocationId || inv.suggestedLocationId;
+  // Set an invoice's location — and, since same PO always means same location,
+  // every other loaded invoice from the same PO along with it.
+  function setPick(invoiceId: string, locationId: string) {
+    const poKey = invoices.find((i) => i.invoiceId === invoiceId)?.poNumber?.toUpperCase();
+    setPicks((prev) => {
+      const next = { ...prev, [invoiceId]: locationId };
+      if (poKey) {
+        for (const sib of invoices) if (sib.poNumber?.toUpperCase() === poKey) next[sib.invoiceId] = locationId;
+      }
+      return next;
+    });
   }
 
   async function load() {
@@ -102,14 +110,33 @@ export default function InvoiceLocationsPage() {
       setLocations(data.locations || []);
       setInvoices(data.invoices || []);
       setSummary(data.summary || null);
-      // Start from the rule's defaults, then overlay any unapplied picks saved
-      // from a previous visit (so navigating away never loses the work).
+      // Same PO always means same location: decide each PO's location from a
+      // confident sibling, else from a sibling already placed on a non-O'Fallon
+      // location, and apply it to the whole group — so indeterminate invoices
+      // inherit a placed sibling's location automatically.
+      const invs = data.invoices || [];
+      const oFallonId =
+        (data.locations || []).find((l) => l.name.toLowerCase().replace(/[^a-z0-9]/g, '') === 'ofallon')?.id || null;
+      const byPo: Record<string, InvoiceRow[]> = {};
+      for (const inv of invs) if (inv.poNumber) (byPo[inv.poNumber.toUpperCase()] ||= []).push(inv);
+      const groupDecided: Record<string, string> = {};
+      for (const [key, group] of Object.entries(byPo)) {
+        const conf = group.find((i) => i.confident);
+        if (conf) { groupDecided[key] = conf.suggestedLocationId; continue; }
+        const placed = group.find((i) => i.currentLocationId && i.currentLocationId !== oFallonId);
+        if (placed?.currentLocationId) groupDecided[key] = placed.currentLocationId;
+      }
       const p: Record<string, string> = {};
-      for (const inv of data.invoices || []) p[inv.invoiceId] = defaultPick(inv);
+      for (const inv of invs) {
+        const decided = inv.poNumber ? groupDecided[inv.poNumber.toUpperCase()] : undefined;
+        p[inv.invoiceId] = decided || (inv.confident ? inv.suggestedLocationId : inv.currentLocationId || inv.suggestedLocationId);
+      }
+      // Overlay any unapplied picks saved from a previous visit (highest
+      // priority — the user's explicit work is never lost).
       let restored = 0;
       try {
         const saved: Record<string, string> = JSON.parse(localStorage.getItem(STORAGE_KEY) || '{}');
-        for (const inv of data.invoices || []) {
+        for (const inv of invs) {
           const s = saved[inv.invoiceId];
           if (s) {
             p[inv.invoiceId] = s;
@@ -169,11 +196,17 @@ export default function InvoiceLocationsPage() {
 
   const visible = useMemo(() => {
     const q = search.trim().toLowerCase();
-    return invoices.filter((inv) => {
+    const rows = invoices.filter((inv) => {
       if (filter !== 'all' && statusOf(inv) !== filter) return false;
       if (q && !(`${inv.invoiceNumber || ''} ${inv.customer || ''} ${inv.memo || ''}`.toLowerCase().includes(q))) return false;
       return true;
     });
+    // Cluster invoices from the same PO together so the shared location is obvious.
+    return rows.sort(
+      (a, b) =>
+        (a.poNumber || '~').localeCompare(b.poNumber || '~') ||
+        (a.invoiceNumber || '').localeCompare(b.invoiceNumber || ''),
+    );
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [invoices, picks, filter, search]);
 
@@ -220,8 +253,9 @@ export default function InvoiceLocationsPage() {
       <h1 style={{ fontSize: 22, fontWeight: 700, marginBottom: 4 }}>Invoice Locations</h1>
       <p style={{ color: theme.textSecondary, fontSize: 14, marginBottom: 16 }}>
         Every FleetSuite invoice with its current NetSuite location. The dropdown is pre-filled with the
-        rule&apos;s suggestion (Masterack → plant, Designs That Stick → Kansas City, others → O&apos;Fallon);
-        adjust any of them, then apply. Indeterminate invoices are left on their current location for you to set.
+        rule&apos;s suggestion (Masterack → plant, Designs That Stick → Kansas City, others → O&apos;Fallon).
+        Same PO always means same location, so setting one invoice sets every invoice from that PO to match —
+        and an indeterminate invoice inherits its PO&apos;s location from any already-placed sibling.
       </p>
 
       <div style={{ display: 'flex', gap: 10, marginBottom: 16, flexWrap: 'wrap', alignItems: 'center' }}>
@@ -303,6 +337,7 @@ export default function InvoiceLocationsPage() {
                 <th style={th}>Invoice</th>
                 <th style={th}>For (memo)</th>
                 <th style={th}>Customer</th>
+                <th style={th}>PO</th>
                 <th style={th}>Current</th>
                 <th style={th}>Set to</th>
                 <th style={th}>Status</th>
@@ -327,11 +362,12 @@ export default function InvoiceLocationsPage() {
                       {inv.memo || '—'}
                     </td>
                     <td style={td}>{inv.customer || '—'}</td>
+                    <td style={{ ...td, color: theme.textMuted, whiteSpace: 'nowrap' }}>{inv.poNumber || '—'}</td>
                     <td style={{ ...td, color: theme.textMuted }}>{inv.currentLocationName || '—'}</td>
                     <td style={td}>
                       <select
                         value={picks[inv.invoiceId] || ''}
-                        onChange={(e) => setPicks((p) => ({ ...p, [inv.invoiceId]: e.target.value }))}
+                        onChange={(e) => setPick(inv.invoiceId, e.target.value)}
                         style={selectStyle}
                       >
                         {locations.map((l) => (
@@ -344,7 +380,7 @@ export default function InvoiceLocationsPage() {
                 );
               })}
               {visible.length === 0 && (
-                <tr><td style={{ ...td, color: theme.textMuted }} colSpan={6}>No invoices match this filter.</td></tr>
+                <tr><td style={{ ...td, color: theme.textMuted }} colSpan={7}>No invoices match this filter.</td></tr>
               )}
             </tbody>
           </table>
