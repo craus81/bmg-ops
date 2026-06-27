@@ -11,6 +11,9 @@ const ENDPOINT = '/api/netsuite/backfill-invoice-locations';
 // a 60s ceiling, so apply only a few per request; a failed chunk is reported,
 // not fatal (re-applying is a no-op for invoices already on the chosen location).
 const CHUNK = 4;
+// Persist unapplied picks here so closing the tab / navigating away doesn't
+// lose the work — they're restored on the next load.
+const STORAGE_KEY = 'invoiceLocationPendingPicks';
 
 interface Loc { id: string; name: string }
 interface InvoiceRow {
@@ -65,10 +68,24 @@ export default function InvoiceLocationsPage() {
   const [filter, setFilter] = useState<Filter>('all');
   const [search, setSearch] = useState('');
   const [pdfLoadingId, setPdfLoadingId] = useState<string | null>(null);
+  const [restoredCount, setRestoredCount] = useState(0);
 
   useEffect(() => {
     if (isAdmin === false) router.push('/home');
   }, [isAdmin, router]);
+
+  // Persist the user's unapplied picks (those that differ from the invoice's
+  // current location) so the work survives a tab close / navigation. Skipped
+  // until invoices are loaded so an empty initial state can't clobber storage.
+  useEffect(() => {
+    if (invoices.length === 0) return;
+    const map: Record<string, string> = {};
+    for (const inv of invoices) {
+      const pick = picks[inv.invoiceId];
+      if (pick && pick !== inv.currentLocationId) map[inv.invoiceId] = pick;
+    }
+    try { localStorage.setItem(STORAGE_KEY, JSON.stringify(map)); } catch { /* storage unavailable */ }
+  }, [picks, invoices]);
 
   // Default each invoice's pick: the rule's suggestion when it's confident,
   // otherwise leave it on its current location (indeterminate stays put).
@@ -85,9 +102,23 @@ export default function InvoiceLocationsPage() {
       setLocations(data.locations || []);
       setInvoices(data.invoices || []);
       setSummary(data.summary || null);
+      // Start from the rule's defaults, then overlay any unapplied picks saved
+      // from a previous visit (so navigating away never loses the work).
       const p: Record<string, string> = {};
       for (const inv of data.invoices || []) p[inv.invoiceId] = defaultPick(inv);
+      let restored = 0;
+      try {
+        const saved: Record<string, string> = JSON.parse(localStorage.getItem(STORAGE_KEY) || '{}');
+        for (const inv of data.invoices || []) {
+          const s = saved[inv.invoiceId];
+          if (s) {
+            p[inv.invoiceId] = s;
+            if (s !== inv.currentLocationId) restored++;
+          }
+        }
+      } catch { /* storage unavailable / bad JSON */ }
       setPicks(p);
+      setRestoredCount(restored);
     } catch (e: any) {
       setError(e?.message || 'Failed to load invoices');
     } finally {
@@ -222,6 +253,12 @@ export default function InvoiceLocationsPage() {
 
       {error && (
         <div style={{ ...card, background: theme.errorBg, borderColor: theme.errorBorder, color: theme.error }}>{error}</div>
+      )}
+
+      {restoredCount > 0 && (
+        <div style={{ ...card, background: theme.warningBg, borderColor: theme.warningBorder, fontSize: 13 }}>
+          Restored <strong>{restoredCount}</strong> unapplied change{restoredCount !== 1 ? 's' : ''} from before — review and Apply when ready.
+        </div>
       )}
 
       {progress && (
