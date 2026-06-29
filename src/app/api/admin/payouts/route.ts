@@ -2,11 +2,15 @@ import { NextRequest, NextResponse } from 'next/server';
 import { createClient } from '@supabase/supabase-js';
 import { requireAdmin } from '@/lib/api-auth';
 import { validateBody, validateSearchParams, z } from '@/lib/validate';
-import { findExpenseAccount, createVendorBill } from '@/lib/netsuite';
+import { findExpenseAccount, findSubsidiary, findLocation, createVendorBill } from '@/lib/netsuite';
 
 // GL account for installer pay (BMG "Subcontractors", acct # 53000).
 const SUBCONTRACTOR_ACCT_NUMBER = '53000';
 const SUBCONTRACTOR_ACCT_NAME = 'Subcontractors';
+// Vendor bills post under this subsidiary.
+const BILL_SUBSIDIARY_NAME = 'BMG Fleet Installations';
+// Locations the admin can post a bill to.
+const BILL_LOCATIONS = ['Wentzville', 'Kansas City', "O'Fallon", 'Social Circle'] as const;
 
 export const dynamic = 'force-dynamic';
 
@@ -103,7 +107,7 @@ export async function GET(req: NextRequest) {
 const PostSchema = z.union([
   z.object({ action: z.literal('generate'), cniJobId: z.string().uuid() }),
   z.object({ action: z.literal('approve'), payoutId: z.string().uuid() }),
-  z.object({ action: z.literal('create_bill'), payoutId: z.string().uuid() }),
+  z.object({ action: z.literal('create_bill'), payoutId: z.string().uuid(), location: z.enum(BILL_LOCATIONS) }),
   z.object({ action: z.literal('record_bill'), payoutId: z.string().uuid(), netsuiteBillId: z.string().trim().min(1).max(64) }),
   z.object({ action: z.literal('mark_paid'), payoutId: z.string().uuid() }),
   z.object({ action: z.literal('delete_draft'), payoutId: z.string().uuid() }),
@@ -210,6 +214,16 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ error: `Could not find the "${SUBCONTRACTOR_ACCT_NAME}" account (#${SUBCONTRACTOR_ACCT_NUMBER}) in NetSuite` }, { status: 400 });
     }
 
+    const subsidiary = await findSubsidiary(BILL_SUBSIDIARY_NAME);
+    if (!subsidiary) {
+      return NextResponse.json({ error: `Could not find the "${BILL_SUBSIDIARY_NAME}" subsidiary in NetSuite` }, { status: 400 });
+    }
+
+    const location = await findLocation(body.location);
+    if (!location) {
+      return NextResponse.json({ error: `Could not find the "${body.location}" location in NetSuite` }, { status: 400 });
+    }
+
     // A memo that ties the bill back to the job for reconciliation.
     const [{ data: job }, { data: prof }] = await Promise.all([
       service.from('cni_jobs').select('job_number, title').eq('id', payout.cni_job_id).maybeSingle(),
@@ -217,7 +231,11 @@ export async function POST(req: NextRequest) {
     ]);
     const memo = `Installer pay — ${prof?.full_name || 'installer'}${job?.job_number ? ` — ${job.job_number}` : ''}`;
 
-    const bill = await createVendorBill({ vendorId, accountId: account.id, amount, memo, lineMemo: memo });
+    const bill = await createVendorBill({
+      vendorId, accountId: account.id, amount,
+      subsidiaryId: subsidiary.id, locationId: location.id,
+      memo, lineMemo: memo,
+    });
     if (!bill.success) {
       return NextResponse.json({ error: bill.error || 'Failed to create vendor bill' }, { status: 502 });
     }
