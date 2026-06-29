@@ -144,6 +144,8 @@ export default function CniJobDetailPage() {
   const [companies, setCompanies] = useState<{ id: string; name: string; memberCount: number }[]>([]);
   const [rateDraft, setRateDraft] = useState('');
   const [editingRate, setEditingRate] = useState(false);
+  const [rateBusy, setRateBusy] = useState(false);
+  const [rateNotice, setRateNotice] = useState('');
 
   // Scheduling (admin proposes a date+time)
   const [schedStart, setSchedStart] = useState('');   // datetime-local value
@@ -528,9 +530,27 @@ export default function CniJobDetailPage() {
     if (!job) return;
     const rate = rateDraft === '' ? null : parseFloat(rateDraft);
     if (rate !== null && (isNaN(rate) || rate < 0)) return;
-    await supabase.from('cni_jobs').update({ pay_per_vehicle: rate }).eq('id', job.id);
-    setEditingRate(false);
-    await loadJob();
+    setRateBusy(true);
+    setRateNotice('');
+    try {
+      // Server updates the rate AND re-prices existing unlocked credits so the
+      // change applies retroactively to vehicles already completed.
+      const res = await fetch('/api/cni/update-pay-rate', {
+        method: 'POST', headers: await authHeaders(),
+        body: JSON.stringify({ jobId: job.id, rate }),
+      });
+      const json = await res.json().catch(() => ({}));
+      if (!res.ok) { setRateNotice(json.error || 'Failed to update rate'); return; }
+      const parts: string[] = [];
+      if (json.repriced > 0) parts.push(`re-priced ${json.repriced} vehicle${json.repriced === 1 ? '' : 's'}`);
+      if (json.lockedSkipped > 0) parts.push(`${json.lockedSkipped} already paid left unchanged`);
+      setRateNotice(parts.length ? `Rate saved — ${parts.join(', ')}.` : 'Rate saved.');
+      setEditingRate(false);
+      await loadJob();
+      if (job.payout_mode === 'individual') await loadPayouts();
+    } finally {
+      setRateBusy(false);
+    }
   };
 
   // ── Individual payouts ──
@@ -917,7 +937,7 @@ export default function CniJobDetailPage() {
             {editingRate ? (
               <div style={{ display: 'flex', gap: '4px', marginTop: '2px' }}>
                 <input
-                  type="number" value={rateDraft} autoFocus
+                  type="number" value={rateDraft} autoFocus disabled={rateBusy}
                   onChange={e => setRateDraft(e.target.value)}
                   onKeyDown={e => { if (e.key === 'Enter') savePayRate(); }}
                   style={{
@@ -925,8 +945,8 @@ export default function CniJobDetailPage() {
                     border: '1px solid var(--border)', background: 'var(--input-bg)', color: 'var(--text-body)',
                   }}
                 />
-                <button onClick={savePayRate} style={{ fontSize: '11px', fontWeight: 700, color: 'var(--success)', background: 'transparent', border: 'none', cursor: 'pointer' }}>Save</button>
-                <button onClick={() => setEditingRate(false)} style={{ fontSize: '11px', fontWeight: 600, color: 'var(--text-muted)', background: 'transparent', border: 'none', cursor: 'pointer' }}>✕</button>
+                <button onClick={savePayRate} disabled={rateBusy} style={{ fontSize: '11px', fontWeight: 700, color: 'var(--success)', background: 'transparent', border: 'none', cursor: rateBusy ? 'default' : 'pointer' }}>{rateBusy ? 'Saving…' : 'Save'}</button>
+                <button onClick={() => setEditingRate(false)} disabled={rateBusy} style={{ fontSize: '11px', fontWeight: 600, color: 'var(--text-muted)', background: 'transparent', border: 'none', cursor: 'pointer' }}>✕</button>
               </div>
             ) : (
               <div style={{ display: 'flex', alignItems: 'baseline', gap: '6px' }}>
@@ -934,10 +954,13 @@ export default function CniJobDetailPage() {
                   {job.pay_per_vehicle != null ? `$${Number(job.pay_per_vehicle).toFixed(2)}` : 'Not set'}
                 </div>
                 <button
-                  onClick={() => { setRateDraft(job.pay_per_vehicle != null ? String(job.pay_per_vehicle) : ''); setEditingRate(true); }}
+                  onClick={() => { setRateDraft(job.pay_per_vehicle != null ? String(job.pay_per_vehicle) : ''); setRateNotice(''); setEditingRate(true); }}
                   style={{ fontSize: '10px', fontWeight: 700, color: 'var(--orange)', background: 'transparent', border: 'none', cursor: 'pointer', padding: 0 }}
                 >Edit</button>
               </div>
+            )}
+            {rateNotice && (
+              <div style={{ fontSize: '10px', fontWeight: 600, color: 'var(--text-muted)', marginTop: '3px', maxWidth: '180px' }}>{rateNotice}</div>
             )}
           </div>
           {job.deadline && (
