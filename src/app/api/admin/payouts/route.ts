@@ -10,9 +10,10 @@ import { findLocation, createVendorBill } from '@/lib/netsuite';
 // are what the REST Record API needs anyway. Env vars override.
 // "Subcontractors" GL account (#53000) → internal id 223.
 const SUBCONTRACTOR_ACCT_ID = process.env.NETSUITE_SUBCONTRACTOR_ACCOUNT_ID || '223';
-// Subsidiary is intentionally NOT set on the bill — NetSuite derives it from
-// the vendor (matching the working invoice flow, which derives it from the
-// customer). Setting it explicitly was triggering a 500 UNEXPECTED_ERROR.
+// "BMG Fleet Installations" subsidiary → internal id 2. NetSuite requires it
+// on the bill (it does NOT derive it from the vendor here — the manual UI form
+// lists subsidiary as required).
+const BILL_SUBSIDIARY_ID = process.env.NETSUITE_SUBSIDIARY_ID || '2';
 // Locations the admin can post a bill to (resolved by name — that lookup works).
 const BILL_LOCATIONS = ['Wentzville', 'Kansas City', "O'Fallon", 'Social Circle'] as const;
 
@@ -235,7 +236,7 @@ export async function POST(req: NextRequest) {
       const bill = await createVendorBill({
         vendorId, accountId: SUBCONTRACTOR_ACCT_ID, amount,
         referenceNo,
-        locationId: location.id,
+        subsidiaryId: BILL_SUBSIDIARY_ID, locationId: location.id,
         memo, lineMemo: memo,
       });
       if (!bill.success) {
