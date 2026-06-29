@@ -31,6 +31,13 @@ export interface ScanRecordInput {
   iccid?: string | null;
   location_id?: string | null;
   location_name?: string | null;
+  /**
+   * Admin escape hatch: skip the "all three device IDs required" gate for an
+   * RFID part so a missed vehicle can still be logged and credited. Whatever
+   * device IDs ARE provided are still validated; missing ones are stored null.
+   * Never set from an installer scan path — admin-only callers opt in.
+   */
+  skipDeviceValidation?: boolean;
 }
 
 export type LogScanResult =
@@ -81,7 +88,7 @@ export async function logScan(
     serial = validateSerial(serial || '');
     imei = validateImei(imei || '');
     iccid = validateIccid(iccid || '');
-    if (!serial || !imei || !iccid) {
+    if (!rec.skipDeviceValidation && (!serial || !imei || !iccid)) {
       return { ok: false, status: 400, error: 'Serial, IMEI, and CCID are all required and must be valid' };
     }
   }

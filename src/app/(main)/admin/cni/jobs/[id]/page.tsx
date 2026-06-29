@@ -239,6 +239,7 @@ export default function CniJobDetailPage() {
   // Add a completed vehicle that was never scanned, crediting a chosen crew.
   const [addVinOpen, setAddVinOpen] = useState(false);
   const [addForm, setAddForm] = useState({ vin: '', vehicle_year: '', vehicle_make: '', vehicle_model: '', serial_number: '', imei: '', iccid: '' });
+  const [addSkipDevices, setAddSkipDevices] = useState(false);
   const [addRoster, setAddRoster] = useState<{ profile_id: string; full_name: string }[]>([]);
   const [addCrew, setAddCrew] = useState<Map<string, number>>(new Map());
   const [addBusy, setAddBusy] = useState(false);
@@ -254,6 +255,7 @@ export default function CniJobDetailPage() {
 
   const openAddVin = async () => {
     setAddForm({ vin: '', vehicle_year: '', vehicle_make: '', vehicle_model: '', serial_number: '', imei: '', iccid: '' });
+    setAddSkipDevices(false);
     setAddCrew(new Map());
     setAddError('');
     setScanReq(null);
@@ -283,6 +285,7 @@ export default function CniJobDetailPage() {
           serial_number: addForm.serial_number || null,
           imei: addForm.imei || null,
           iccid: addForm.iccid || null,
+          skip_devices: addSkipDevices,
           entries: [...addCrew.entries()].map(([profileId, weight]) => ({ profileId, weight })),
         }),
       });
@@ -1684,8 +1687,18 @@ export default function CniJobDetailPage() {
 
             {deviceJob && (
               <div style={{ marginBottom: '10px' }}>
-                <div style={{ fontSize: '11px', fontWeight: 700, color: 'var(--text-muted)', marginBottom: '4px' }}>DEVICE IDS (required)</div>
-                {([
+                <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '4px' }}>
+                  <div style={{ fontSize: '11px', fontWeight: 700, color: 'var(--text-muted)' }}>DEVICE IDS {addSkipDevices ? '(skipped)' : '(required)'}</div>
+                  <label style={{ display: 'flex', alignItems: 'center', gap: '6px', fontSize: '11px', fontWeight: 700, color: 'var(--text-muted)', cursor: 'pointer' }}>
+                    <input type="checkbox" checked={addSkipDevices} onChange={e => setAddSkipDevices(e.target.checked)} style={{ cursor: 'pointer' }} />
+                    No device IDs — credit anyway
+                  </label>
+                </div>
+                {addSkipDevices ? (
+                  <div style={{ fontSize: '11px', color: 'var(--text-muted)', padding: '4px 0 2px' }}>
+                    The VIN will be logged and credited without serial / IMEI / CCID. Add them later from the vehicle&apos;s device editor.
+                  </div>
+                ) : ([
                   { ph: 'Serial #', field: 'serial_number' as const, label: 'Serial #', validate: validateSerial },
                   { ph: 'IMEI (15 digits)', field: 'imei' as const, label: 'IMEI', validate: validateImei },
                   { ph: 'CCID (18–22 digits)', field: 'iccid' as const, label: 'CCID', validate: validateIccid },
