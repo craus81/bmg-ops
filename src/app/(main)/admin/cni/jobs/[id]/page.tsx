@@ -327,6 +327,9 @@ export default function CniJobDetailPage() {
   const [payoutBillDrafts, setPayoutBillDrafts] = useState<Record<string, string>>({});
   // Location chosen per payout before creating its NetSuite vendor bill.
   const [payoutBillLocation, setPayoutBillLocation] = useState<Record<string, string>>({});
+  // The single payout whose NetSuite bill is currently being created (so only
+  // that row shows a busy state, not every approved payout at once).
+  const [billingId, setBillingId] = useState<string | null>(null);
   // Order the per-installer payout lists by installer name, vehicle count, or pay.
   const [payoutSort, setPayoutSort] = useState<'total' | 'name' | 'vehicles'>('total');
 
@@ -596,6 +599,24 @@ export default function CniJobDetailPage() {
       await loadPayouts();
     } finally {
       setPayoutBusy(false);
+    }
+  };
+
+  // Create one installer's NetSuite vendor bill. Tracked per-payout so only
+  // the clicked row shows "Creating bill…" — not every approved payout.
+  const createBill = async (payoutId: string, location: string) => {
+    setBillingId(payoutId);
+    setPayoutError('');
+    try {
+      const res = await fetch('/api/admin/payouts', {
+        method: 'POST', headers: await authHeaders(),
+        body: JSON.stringify({ action: 'create_bill', payoutId, location }),
+      });
+      const json = await res.json().catch(() => ({}));
+      if (!res.ok) { setPayoutError(json.error || 'Failed to create vendor bill'); return; }
+      await loadPayouts();
+    } finally {
+      setBillingId(null);
     }
   };
 
@@ -1288,13 +1309,15 @@ export default function CniJobDetailPage() {
                 )}
                 {p.status === 'approved' && (() => {
                   const loc = payoutBillLocation[p.id] || '';
-                  const canBill = !!p.netsuite_vendor_id && !!loc && !payoutBusy;
+                  const billing = billingId === p.id;
+                  const otherBilling = billingId !== null && !billing;
+                  const canBill = !!p.netsuite_vendor_id && !!loc && !billing && !otherBilling && !payoutBusy;
                   return (
                   <>
                     <select
                       value={loc}
                       onChange={e => setPayoutBillLocation(prev => ({ ...prev, [p.id]: e.target.value }))}
-                      disabled={payoutBusy || !p.netsuite_vendor_id}
+                      disabled={payoutBusy || billing || !p.netsuite_vendor_id}
                       style={{
                         padding: '7px 8px', borderRadius: '8px', fontSize: '11px', fontWeight: 700,
                         border: '1px solid var(--border)', background: 'var(--card)', color: 'var(--text-body)',
@@ -1304,7 +1327,7 @@ export default function CniJobDetailPage() {
                       {BILL_LOCATIONS.map(l => <option key={l} value={l}>{l}</option>)}
                     </select>
                     <button
-                      onClick={() => payoutAction({ action: 'create_bill', payoutId: p.id, location: loc })}
+                      onClick={() => createBill(p.id, loc)}
                       disabled={!canBill}
                       title={!p.netsuite_vendor_id ? 'This installer has no NetSuite vendor ID on file' : !loc ? 'Choose a location first' : 'Create the vendor bill in NetSuite'}
                       style={{
@@ -1312,7 +1335,7 @@ export default function CniJobDetailPage() {
                         background: canBill ? 'var(--success)' : 'var(--text-muted)',
                         color: '#fff', border: 'none', cursor: canBill ? 'pointer' : 'default',
                       }}
-                    >{payoutBusy ? 'Working…' : 'Create Bill in NetSuite'}</button>
+                    >{billing ? 'Creating bill…' : 'Create Bill in NetSuite'}</button>
                     <span style={{ fontSize: '10px', color: 'var(--text-muted)', alignSelf: 'center' }}>or paste an existing one:</span>
                     <input
                       value={payoutBillDrafts[p.id] || ''}
