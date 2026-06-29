@@ -2,6 +2,11 @@ import { NextRequest, NextResponse } from 'next/server';
 import { createClient } from '@supabase/supabase-js';
 import { requireAdmin } from '@/lib/api-auth';
 import { validateBody, validateSearchParams, z } from '@/lib/validate';
+import { findExpenseAccount, createVendorBill } from '@/lib/netsuite';
+
+// GL account for installer pay (BMG "Subcontractors", acct # 53000).
+const SUBCONTRACTOR_ACCT_NUMBER = '53000';
+const SUBCONTRACTOR_ACCT_NAME = 'Subcontractors';
 
 export const dynamic = 'force-dynamic';
 
@@ -98,6 +103,7 @@ export async function GET(req: NextRequest) {
 const PostSchema = z.union([
   z.object({ action: z.literal('generate'), cniJobId: z.string().uuid() }),
   z.object({ action: z.literal('approve'), payoutId: z.string().uuid() }),
+  z.object({ action: z.literal('create_bill'), payoutId: z.string().uuid() }),
   z.object({ action: z.literal('record_bill'), payoutId: z.string().uuid(), netsuiteBillId: z.string().trim().min(1).max(64) }),
   z.object({ action: z.literal('mark_paid'), payoutId: z.string().uuid() }),
   z.object({ action: z.literal('delete_draft'), payoutId: z.string().uuid() }),
@@ -107,8 +113,8 @@ const PostSchema = z.union([
  * Individual-mode payout lifecycle. Statuses move draft → approved → billed
  * → paid; credits lock the moment they're linked to a payout, and only a
  * draft can be deleted (which unlinks its credits so they can regenerate).
- * NetSuite vendor bills are created manually — record_bill just stores the
- * bill id, matching the job-invoice flow.
+ * create_bill creates the NetSuite vendor bill for an approved payout and
+ * stores its id; record_bill stores a manually-created bill id instead.
  */
 export async function POST(req: NextRequest) {
   const auth = await requireAdmin(req);
@@ -177,10 +183,53 @@ export async function POST(req: NextRequest) {
   // Single-payout transitions.
   const { data: payout } = await service
     .from('payouts')
-    .select('id, status, kind')
+    .select('id, status, kind, profile_id, cni_job_id, total_amount')
     .eq('id', body.payoutId)
     .single();
   if (!payout) return NextResponse.json({ error: 'Payout not found' }, { status: 404 });
+
+  if (body.action === 'create_bill') {
+    if (payout.status !== 'approved') {
+      return NextResponse.json({ error: `Payout is ${payout.status} — only approved payouts can be billed` }, { status: 400 });
+    }
+    const amount = payout.total_amount != null ? Number(payout.total_amount) : 0;
+    if (!(amount > 0)) {
+      return NextResponse.json({ error: 'Payout has no amount to bill' }, { status: 400 });
+    }
+
+    // The installer must have a NetSuite vendor record to bill against.
+    const { data: cniProfile } = await service
+      .from('cni_profiles').select('netsuite_vendor_id').eq('user_id', payout.profile_id).maybeSingle();
+    const vendorId = cniProfile?.netsuite_vendor_id;
+    if (!vendorId) {
+      return NextResponse.json({ error: 'This installer has no NetSuite vendor ID on file — set it in Vendor IDs first' }, { status: 400 });
+    }
+
+    const account = await findExpenseAccount({ number: SUBCONTRACTOR_ACCT_NUMBER, name: SUBCONTRACTOR_ACCT_NAME });
+    if (!account) {
+      return NextResponse.json({ error: `Could not find the "${SUBCONTRACTOR_ACCT_NAME}" account (#${SUBCONTRACTOR_ACCT_NUMBER}) in NetSuite` }, { status: 400 });
+    }
+
+    // A memo that ties the bill back to the job for reconciliation.
+    const [{ data: job }, { data: prof }] = await Promise.all([
+      service.from('cni_jobs').select('job_number, title').eq('id', payout.cni_job_id).maybeSingle(),
+      service.from('profiles').select('full_name').eq('id', payout.profile_id).maybeSingle(),
+    ]);
+    const memo = `Installer pay — ${prof?.full_name || 'installer'}${job?.job_number ? ` — ${job.job_number}` : ''}`;
+
+    const bill = await createVendorBill({ vendorId, accountId: account.id, amount, memo, lineMemo: memo });
+    if (!bill.success) {
+      return NextResponse.json({ error: bill.error || 'Failed to create vendor bill' }, { status: 502 });
+    }
+    const billRef = bill.billNumber || bill.billId || '';
+
+    const { error } = await service
+      .from('payouts')
+      .update({ status: 'billed', netsuite_bill_id: billRef })
+      .eq('id', payout.id);
+    if (error) return NextResponse.json({ error: 'Bill created in NetSuite but failed to update payout: ' + error.message }, { status: 500 });
+    return NextResponse.json({ success: true, netsuiteBillId: billRef });
+  }
 
   if (body.action === 'delete_draft') {
     if (payout.status !== 'draft') {

@@ -915,6 +915,114 @@ export async function createDirectInvoice(payload: {
 }
 
 /**
+ * Resolve a GL account's NetSuite internal id from its account number and/or
+ * name (e.g. number "53000" / name "Subcontractors"). The internal id is what
+ * the REST Record API needs on a transaction line — the account NUMBER is not
+ * it. An explicit env override wins; otherwise we match the account number
+ * exactly first, then fall back to a name contains-match. Active accounts only.
+ */
+export async function findExpenseAccount(opts: { number?: string; name?: string }): Promise<{ id: string; name: string; number: string | null } | null> {
+  const envId = process.env.NETSUITE_SUBCONTRACTOR_ACCOUNT_ID;
+  if (envId) return { id: envId.toString(), name: opts.name || 'Subcontractors', number: opts.number || null };
+
+  const num = (opts.number || '').trim().replace(/'/g, "''");
+  const name = (opts.name || '').trim().replace(/'/g, "''");
+  const conds: string[] = [];
+  if (num) conds.push(`acctnumber = '${num}'`);
+  if (name) conds.push(`UPPER(acctname) LIKE UPPER('%${name}%')`);
+  if (conds.length === 0) return null;
+
+  const query = `
+    SELECT id, acctname, acctnumber
+    FROM account
+    WHERE isinactive = 'F' AND (${conds.join(' OR ')})
+    ORDER BY CASE WHEN acctnumber = '${num}' THEN 0 ELSE 1 END
+    FETCH FIRST 1 ROWS ONLY
+  `;
+  const result = await suiteqlQuery(query);
+  const row = result?.items?.[0];
+  return row ? { id: row.id?.toString(), name: row.acctname, number: row.acctnumber ?? null } : null;
+}
+
+/**
+ * Create a Vendor Bill in NetSuite for an installer payout.
+ * Uses the REST Record API: POST /services/rest/record/v1/vendorBill
+ * Books a single expense line (the payout total) to the given GL account.
+ */
+export async function createVendorBill(payload: {
+  vendorId: string | number;
+  accountId: string | number;
+  amount: number;
+  memo?: string;
+  lineMemo?: string;
+}): Promise<{ success: boolean; billId?: string; billNumber?: string; error?: string }> {
+  const config = getConfig();
+  const baseUrl = getBaseUrl(config.accountId);
+  const url = `${baseUrl}/services/rest/record/v1/vendorBill`;
+  const { oauth, token } = createOAuth(config);
+  const authHeader = getAuthHeader(oauth, token, { url, method: 'POST' });
+
+  const body: any = {
+    entity: { id: payload.vendorId },
+    expense: {
+      items: [
+        {
+          account: { id: payload.accountId },
+          amount: payload.amount,
+          ...(payload.lineMemo ? { memo: payload.lineMemo } : {}),
+        },
+      ],
+    },
+    ...(payload.memo ? { memo: payload.memo } : {}),
+  };
+
+  try {
+    const response = await fetch(url, {
+      method: 'POST',
+      headers: {
+        'Authorization': authHeader,
+        'Content-Type': 'application/json',
+        'Prefer': 'respondAsync=false',
+      },
+      body: JSON.stringify(body),
+    });
+
+    if (!response.ok) {
+      const text = await response.text();
+      console.error('NetSuite create vendor bill error:', text);
+      return { success: false, error: `NetSuite error (${response.status}): ${text}` };
+    }
+
+    // The created record's id comes back in the Location header (and/or body).
+    const location = response.headers.get('Location');
+    let billId = '';
+    if (location) {
+      const match = location.match(/\/(\d+)$/);
+      billId = match?.[1] || '';
+    }
+    let billNumber = '';
+    try {
+      const result = await response.json();
+      billId = billId || result.id?.toString() || '';
+      billNumber = result.tranId || result.tranid || '';
+    } catch {
+      // 204 No Content
+    }
+    if (billId && !billNumber) {
+      try {
+        const lookup = await suiteqlQuery(`SELECT tranid FROM transaction WHERE id = ${billId}`);
+        billNumber = lookup?.items?.[0]?.tranid || '';
+      } catch {
+        // Non-critical — the internal id is enough to record the bill.
+      }
+    }
+    return { success: true, billId, billNumber };
+  } catch (e: any) {
+    return { success: false, error: `Failed to create vendor bill: ${e.message}` };
+  }
+}
+
+/**
  * Create an Invoice in NetSuite by transforming a Sales Order
  * Uses: POST /services/rest/record/v1/invoice
  * The transform endpoint creates an invoice from an existing SO
