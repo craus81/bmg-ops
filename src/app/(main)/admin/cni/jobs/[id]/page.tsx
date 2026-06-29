@@ -1283,12 +1283,23 @@ export default function CniJobDetailPage() {
                 )}
                 {p.status === 'approved' && (
                   <>
+                    <button
+                      onClick={() => payoutAction({ action: 'create_bill', payoutId: p.id })}
+                      disabled={payoutBusy || !p.netsuite_vendor_id}
+                      title={!p.netsuite_vendor_id ? 'This installer has no NetSuite vendor ID on file' : 'Create the vendor bill in NetSuite'}
+                      style={{
+                        padding: '7px 14px', borderRadius: '8px', fontSize: '11px', fontWeight: 700,
+                        background: p.netsuite_vendor_id ? 'var(--success)' : 'var(--text-muted)',
+                        color: '#fff', border: 'none', cursor: p.netsuite_vendor_id && !payoutBusy ? 'pointer' : 'default',
+                      }}
+                    >{payoutBusy ? 'Working…' : 'Create Bill in NetSuite'}</button>
+                    <span style={{ fontSize: '10px', color: 'var(--text-muted)', alignSelf: 'center' }}>or paste an existing one:</span>
                     <input
                       value={payoutBillDrafts[p.id] || ''}
                       onChange={e => setPayoutBillDrafts(prev => ({ ...prev, [p.id]: e.target.value }))}
                       placeholder="NetSuite Bill ID"
                       style={{
-                        flex: 1, minWidth: '140px', padding: '7px 10px', borderRadius: '8px', fontSize: '12px',
+                        flex: 1, minWidth: '120px', padding: '7px 10px', borderRadius: '8px', fontSize: '12px',
                         border: '1px solid var(--border)', background: 'var(--card)', color: 'var(--text-body)',
                       }}
                     />
