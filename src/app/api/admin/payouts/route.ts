@@ -2,14 +2,17 @@ import { NextRequest, NextResponse } from 'next/server';
 import { createClient } from '@supabase/supabase-js';
 import { requireAdmin } from '@/lib/api-auth';
 import { validateBody, validateSearchParams, z } from '@/lib/validate';
-import { findExpenseAccount, findSubsidiary, findLocation, createVendorBill } from '@/lib/netsuite';
+import { findLocation, createVendorBill } from '@/lib/netsuite';
 
-// GL account for installer pay (BMG "Subcontractors", acct # 53000).
-const SUBCONTRACTOR_ACCT_NUMBER = '53000';
-const SUBCONTRACTOR_ACCT_NAME = 'Subcontractors';
-// Vendor bills post under this subsidiary.
-const BILL_SUBSIDIARY_NAME = 'BMG Fleet Installations';
-// Locations the admin can post a bill to.
+// NetSuite internal ids are used directly: this integration's role can't
+// query the `account` / `subsidiary` tables via SuiteQL ("Record 'account'
+// was not found"), only `location`. Internal ids (not the GL account NUMBER)
+// are what the REST Record API needs anyway. Env vars override.
+// "Subcontractors" GL account (#53000) → internal id 223.
+const SUBCONTRACTOR_ACCT_ID = process.env.NETSUITE_SUBCONTRACTOR_ACCOUNT_ID || '223';
+// "BMG Fleet Installations" subsidiary → internal id 2.
+const BILL_SUBSIDIARY_ID = process.env.NETSUITE_SUBSIDIARY_ID || '2';
+// Locations the admin can post a bill to (resolved by name — that lookup works).
 const BILL_LOCATIONS = ['Wentzville', 'Kansas City', "O'Fallon", 'Social Circle'] as const;
 
 export const dynamic = 'force-dynamic';
@@ -213,16 +216,6 @@ export async function POST(req: NextRequest) {
     // missing config). Catch so the real reason reaches the user instead of a
     // bare 500 the UI can only show as "Payout action failed".
     try {
-      const account = await findExpenseAccount({ number: SUBCONTRACTOR_ACCT_NUMBER, name: SUBCONTRACTOR_ACCT_NAME });
-      if (!account) {
-        return NextResponse.json({ error: `Could not find the "${SUBCONTRACTOR_ACCT_NAME}" account (#${SUBCONTRACTOR_ACCT_NUMBER}) in NetSuite` }, { status: 400 });
-      }
-
-      const subsidiary = await findSubsidiary(BILL_SUBSIDIARY_NAME);
-      if (!subsidiary) {
-        return NextResponse.json({ error: `Could not find the "${BILL_SUBSIDIARY_NAME}" subsidiary in NetSuite` }, { status: 400 });
-      }
-
       const location = await findLocation(body.location);
       if (!location) {
         return NextResponse.json({ error: `Could not find the "${body.location}" location in NetSuite` }, { status: 400 });
@@ -236,8 +229,8 @@ export async function POST(req: NextRequest) {
       const memo = `Installer pay — ${prof?.full_name || 'installer'}${job?.job_number ? ` — ${job.job_number}` : ''}`;
 
       const bill = await createVendorBill({
-        vendorId, accountId: account.id, amount,
-        subsidiaryId: subsidiary.id, locationId: location.id,
+        vendorId, accountId: SUBCONTRACTOR_ACCT_ID, amount,
+        subsidiaryId: BILL_SUBSIDIARY_ID, locationId: location.id,
         memo, lineMemo: memo,
       });
       if (!bill.success) {
