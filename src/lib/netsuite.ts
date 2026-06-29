@@ -945,6 +945,26 @@ export async function findExpenseAccount(opts: { number?: string; name?: string 
 }
 
 /**
+ * Resolve a NetSuite subsidiary's internal id by name (e.g. "BMG Fleet
+ * Installations"). An explicit env override (NETSUITE_SUBSIDIARY_ID) wins.
+ */
+export async function findSubsidiary(name: string): Promise<{ id: string; name: string } | null> {
+  const envId = process.env.NETSUITE_SUBSIDIARY_ID;
+  if (envId) return { id: envId.toString(), name };
+
+  const term = name.trim().replace(/'/g, "''");
+  const query = `
+    SELECT id, name
+    FROM subsidiary
+    WHERE UPPER(name) LIKE UPPER('%${term}%')
+    FETCH FIRST 1 ROWS ONLY
+  `;
+  const result = await suiteqlQuery(query);
+  const row = result?.items?.[0];
+  return row ? { id: row.id?.toString(), name: row.name } : null;
+}
+
+/**
  * Create a Vendor Bill in NetSuite for an installer payout.
  * Uses the REST Record API: POST /services/rest/record/v1/vendorBill
  * Books a single expense line (the payout total) to the given GL account.
@@ -953,6 +973,8 @@ export async function createVendorBill(payload: {
   vendorId: string | number;
   accountId: string | number;
   amount: number;
+  subsidiaryId?: string | number;
+  locationId?: string | number;
   memo?: string;
   lineMemo?: string;
 }): Promise<{ success: boolean; billId?: string; billNumber?: string; error?: string }> {
@@ -964,11 +986,14 @@ export async function createVendorBill(payload: {
 
   const body: any = {
     entity: { id: payload.vendorId },
+    ...(payload.subsidiaryId ? { subsidiary: { id: payload.subsidiaryId } } : {}),
+    ...(payload.locationId ? { location: { id: payload.locationId } } : {}),
     expense: {
       items: [
         {
           account: { id: payload.accountId },
           amount: payload.amount,
+          ...(payload.locationId ? { location: { id: payload.locationId } } : {}),
           ...(payload.lineMemo ? { memo: payload.lineMemo } : {}),
         },
       ],
