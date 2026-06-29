@@ -1019,8 +1019,10 @@ export async function createVendorBill(payload: {
 
     if (!response.ok) {
       const text = await response.text();
-      console.error('NetSuite create vendor bill error:', text);
-      return { success: false, error: `NetSuite error (${response.status}): ${text}` };
+      console.error('NetSuite create vendor bill error:', text, '\nrequest body:', JSON.stringify(body));
+      // Include the exact body we sent so an opaque UNEXPECTED_ERROR can be
+      // diagnosed against what NetSuite actually received.
+      return { success: false, error: `NetSuite error (${response.status}): ${text} | sent: ${JSON.stringify(body)}` };
     }
 
     // The created record's id comes back in the Location header (and/or body).
