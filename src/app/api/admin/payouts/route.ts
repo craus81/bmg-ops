@@ -228,9 +228,13 @@ export async function POST(req: NextRequest) {
         service.from('profiles').select('full_name').eq('id', payout.profile_id).maybeSingle(),
       ]);
       const memo = `Installer pay — ${prof?.full_name || 'installer'}${job?.job_number ? ` — ${job.job_number}` : ''}`;
+      // Reference No. (tranId) — required by NetSuite when bills aren't
+      // auto-numbered. Unique per vendor: job number + a short payout id.
+      const referenceNo = `${job?.job_number ? job.job_number + '-' : 'CNI-'}${payout.id.slice(0, 8)}`;
 
       const bill = await createVendorBill({
         vendorId, accountId: SUBCONTRACTOR_ACCT_ID, amount,
+        referenceNo,
         locationId: location.id,
         memo, lineMemo: memo,
       });
