@@ -52,6 +52,8 @@ export default function CniDashboardPage() {
   const [biddingJobs, setBiddingJobs] = useState(0);
   const [loading, setLoading] = useState(true);
   const [statusFilter, setStatusFilter] = useState<string>('active');
+  // When on, group the job list by assigned installer (A–Z); unassigned last.
+  const [sortByInstaller, setSortByInstaller] = useState(false);
 
   useEffect(() => {
     if (!isAdmin) { router.push('/home'); return; }
@@ -114,6 +116,11 @@ export default function CniDashboardPage() {
     if (statusFilter === 'all') return true;
     return j.status === statusFilter;
   });
+
+  // '~' sorts after any letter, so unassigned jobs fall to the bottom.
+  const displayJobs = sortByInstaller
+    ? [...filteredJobs].sort((a, b) => (a.installer_name || '~~~').localeCompare(b.installer_name || '~~~'))
+    : filteredJobs;
 
   const statusCounts = jobs.reduce((acc, j) => {
     acc[j.status] = (acc[j.status] || 0) + 1;
@@ -230,8 +237,23 @@ export default function CniDashboardPage() {
         ))}
       </div>
 
+      {/* Sort toggle — order the job list by assigned installer */}
+      <div style={{ display: 'flex', justifyContent: 'flex-end', marginBottom: '10px' }}>
+        <button
+          onClick={() => setSortByInstaller(v => !v)}
+          style={{
+            padding: '6px 12px', borderRadius: '8px', fontSize: '12px', fontWeight: 700, cursor: 'pointer',
+            background: sortByInstaller ? 'var(--orange)' : 'var(--card)',
+            color: sortByInstaller ? '#fff' : 'var(--text-secondary)',
+            border: sortByInstaller ? 'none' : '1px solid var(--border)',
+          }}
+        >
+          {sortByInstaller ? '✓ Sorted by installer' : 'Sort by installer'}
+        </button>
+      </div>
+
       {/* Job List */}
-      {filteredJobs.length === 0 ? (
+      {displayJobs.length === 0 ? (
         <div style={{
           padding: '40px 20px', textAlign: 'center',
           background: 'var(--card)', borderRadius: '14px',
@@ -241,7 +263,7 @@ export default function CniDashboardPage() {
         </div>
       ) : (
         <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
-          {filteredJobs.map(job => (
+          {displayJobs.map(job => (
             <button
               key={job.id}
               onClick={() => router.push(`/admin/cni/jobs/${job.id}`)}

@@ -320,6 +320,8 @@ export default function CniJobDetailPage() {
   const [payoutBusy, setPayoutBusy] = useState(false);
   const [payoutError, setPayoutError] = useState('');
   const [payoutBillDrafts, setPayoutBillDrafts] = useState<Record<string, string>>({});
+  // Order the per-installer payout lists by installer name, vehicle count, or pay.
+  const [payoutSort, setPayoutSort] = useState<'total' | 'name' | 'vehicles'>('total');
 
   useEffect(() => {
     if (!isAdmin) { router.push('/home'); return; }
@@ -1181,7 +1183,25 @@ export default function CniJobDetailPage() {
           padding: '14px 16px', borderRadius: '12px', marginBottom: '14px',
           background: 'var(--card)', border: '1px solid var(--border)',
         }}>
-          <div style={{ fontSize: '12px', fontWeight: 700, color: 'var(--text-muted)', marginBottom: '8px' }}>EMPLOYEE PAYOUTS</div>
+          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '8px', marginBottom: '8px' }}>
+            <div style={{ fontSize: '12px', fontWeight: 700, color: 'var(--text-muted)' }}>EMPLOYEE PAYOUTS</div>
+            {((payoutData?.payouts || []).length + (payoutData?.pending || []).length) > 1 && (
+              <div style={{ display: 'flex', gap: '4px' }}>
+                {([
+                  { id: 'total' as const, label: 'Pay' },
+                  { id: 'vehicles' as const, label: 'Vehicles' },
+                  { id: 'name' as const, label: 'Installer' },
+                ]).map(s => (
+                  <button key={s.id} onClick={() => setPayoutSort(s.id)} style={{
+                    padding: '4px 10px', borderRadius: '7px', fontSize: '11px', fontWeight: 700, cursor: 'pointer',
+                    background: payoutSort === s.id ? 'var(--orange)' : 'var(--card)',
+                    color: payoutSort === s.id ? '#fff' : 'var(--text-secondary)',
+                    border: payoutSort === s.id ? 'none' : '1px solid var(--border)',
+                  }}>{s.label}</button>
+                ))}
+              </div>
+            )}
+          </div>
           <div style={{ fontSize: '11px', color: 'var(--text-muted)', marginBottom: '10px' }}>
             Each employee is paid directly from their vehicle credits — no company invoice on this job.
             Approve each payout, create the vendor bill in NetSuite, then record the bill ID here.
@@ -1192,7 +1212,11 @@ export default function CniJobDetailPage() {
           )}
 
           {/* Existing payouts */}
-          {(payoutData?.payouts || []).map(p => (
+          {[...(payoutData?.payouts || [])].sort((a, b) =>
+            payoutSort === 'name' ? a.profile_name.localeCompare(b.profile_name)
+            : payoutSort === 'vehicles' ? b.items.length - a.items.length
+            : (b.total_amount || 0) - (a.total_amount || 0),
+          ).map(p => (
             <div key={p.id} style={{
               padding: '10px 12px', borderRadius: '10px', marginBottom: '6px',
               background: 'var(--input-bg)', border: '1px solid var(--border)',
@@ -1272,7 +1296,11 @@ export default function CniJobDetailPage() {
               <div style={{ fontSize: '11px', fontWeight: 700, color: 'var(--text-muted)', margin: '10px 0 6px' }}>
                 NOT YET ON A PAYOUT
               </div>
-              {(payoutData?.pending || []).map(p => (
+              {[...(payoutData?.pending || [])].sort((a, b) =>
+                payoutSort === 'name' ? a.profile_name.localeCompare(b.profile_name)
+                : payoutSort === 'vehicles' ? b.vehicles - a.vehicles
+                : b.total - a.total,
+              ).map(p => (
                 <div key={p.profile_id} style={{ display: 'flex', justifyContent: 'space-between', padding: '6px 12px', fontSize: '12px' }}>
                   <span style={{ fontWeight: 700, color: 'var(--text-primary)' }}>
                     {p.profile_name}

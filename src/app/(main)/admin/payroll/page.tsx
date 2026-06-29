@@ -37,6 +37,9 @@ export default function PayrollPage() {
   const [notice, setNotice] = useState('');
   const [openPerson, setOpenPerson] = useState<string | null>(null);
   const [confirmPay, setConfirmPay] = useState(false);
+  // How the per-installer list is ordered. Default keeps the old behavior
+  // (biggest payout first); 'name' lets you find a given installer fast.
+  const [sortBy, setSortBy] = useState<'total' | 'name' | 'vehicles'>('total');
 
   const authHeaders = async () => {
     const { data: { session } } = await supabase.auth.getSession();
@@ -74,7 +77,11 @@ export default function PayrollPage() {
     if (c.payout_id) t.locked++;
     byPerson.set(c.profile_id, t);
   }
-  const people = [...byPerson.entries()].sort((a, b) => b[1].total - a[1].total);
+  const people = [...byPerson.entries()].sort((a, b) =>
+    sortBy === 'name' ? a[1].name.localeCompare(b[1].name)
+    : sortBy === 'vehicles' ? b[1].rows.length - a[1].rows.length
+    : b[1].total - a[1].total,
+  );
   const grandTotal = people.reduce((s, [, p]) => s + p.total, 0);
   const unpricedTotal = credits.filter(c => c.amount == null).length;
   const openCount = credits.filter(c => !c.payout_id).length;
@@ -179,6 +186,25 @@ export default function PayrollPage() {
         </div>
       ) : (
         <>
+          {/* Sort control — order the installer list by name, vehicles, or pay */}
+          <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '10px' }}>
+            <span style={{ fontSize: '11px', fontWeight: 700, color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.5px' }}>Sort</span>
+            <div style={{ display: 'flex', gap: '4px' }}>
+              {([
+                { id: 'total' as const, label: 'Pay' },
+                { id: 'vehicles' as const, label: 'Vehicles' },
+                { id: 'name' as const, label: 'Installer' },
+              ]).map(s => (
+                <button key={s.id} onClick={() => setSortBy(s.id)} style={{
+                  padding: '6px 12px', borderRadius: '8px', fontSize: '12px', fontWeight: 700, cursor: 'pointer',
+                  background: sortBy === s.id ? 'var(--orange)' : 'var(--card)',
+                  color: sortBy === s.id ? '#fff' : 'var(--text-secondary)',
+                  border: sortBy === s.id ? 'none' : '1px solid var(--border)',
+                }}>{s.label}</button>
+              ))}
+            </div>
+          </div>
+
           {/* Per-person totals with drill-down */}
           <div style={{ borderRadius: '12px', marginBottom: '14px', background: 'var(--card)', border: '1px solid var(--border)', overflow: 'hidden' }}>
             {people.map(([pid, p]) => (
