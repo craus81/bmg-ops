@@ -17,6 +17,9 @@ const Schema = z.object({
   serial_number: z.string().trim().max(64).optional().nullable(),
   imei: z.string().trim().max(32).optional().nullable(),
   iccid: z.string().trim().max(32).optional().nullable(),
+  // Admin bypass: add the VIN and credit the crew even when the device IDs
+  // (serial / IMEI / CCID) for an RFID job are missing.
+  skip_devices: z.boolean().optional(),
   entries: z.array(z.object({
     profileId: z.string().uuid(),
     weight: z.number().positive().max(99),
@@ -40,7 +43,7 @@ export async function POST(req: NextRequest) {
 
   const parsed = await validateBody(req, Schema);
   if (parsed.error) return parsed.error;
-  const { jobId, entries } = parsed.data;
+  const { jobId, entries, skip_devices: skipDevices } = parsed.data;
   const vin = parsed.data.vin.trim().toUpperCase();
 
   const { data: job } = await supabase
@@ -50,14 +53,16 @@ export async function POST(req: NextRequest) {
     .single();
   if (!job) return NextResponse.json({ error: 'Job not found' }, { status: 404 });
 
-  // Device IDs are required when the job captures devices (Verizon part or flag).
+  // Device IDs are required when the job captures devices (Verizon part or
+  // flag) — unless the admin opts to skip them to log a missed vehicle.
+  // Whatever IDs ARE provided are still validated; missing ones stay null.
   const rfid = isVerizonRfidPart(job.part_number) || !!job.device_capture;
   let serial: string | null = null, imei: string | null = null, iccid: string | null = null;
   if (rfid) {
     serial = validateSerial(parsed.data.serial_number || '');
     imei = validateImei(parsed.data.imei || '');
     iccid = validateIccid(parsed.data.iccid || '');
-    if (!serial || !imei || !iccid) {
+    if (!skipDevices && (!serial || !imei || !iccid)) {
       return NextResponse.json({ error: 'Serial, IMEI, and CCID are all required and must be valid' }, { status: 400 });
     }
   }
@@ -109,6 +114,7 @@ export async function POST(req: NextRequest) {
       imei,
       iccid,
       location_name: locationName,
+      skipDeviceValidation: skipDevices,
     });
     if (!result.ok) {
       await supabase.from('cni_job_vins').delete().eq('id', newVin.id);
