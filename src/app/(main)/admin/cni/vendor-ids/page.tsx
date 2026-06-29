@@ -139,6 +139,9 @@ export default function CniVendorIdsPage() {
             {installers.length} installer{installers.length !== 1 ? 's' : ''}
             {activeMissing > 0 && <span style={{ color: 'var(--warning)', fontWeight: 700 }}> • {activeMissing} missing</span>}
           </div>
+          <div style={{ fontSize: '11px', color: 'var(--text-muted)', marginTop: '2px' }}>
+            Enter the vendor&apos;s <strong>numeric NetSuite internal id</strong> (e.g. 1234), not their name — bills won&apos;t post otherwise.
+          </div>
         </div>
       </div>
 
