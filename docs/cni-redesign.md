@@ -270,41 +270,147 @@ a "system of record" for bank/SSN data.
 
 ---
 
-## 3. The invoicing bridge (Flow B made real)
+## 3. The invoicing bridge (Flow B made real) — deep dive
 
-This is the user's stated #1 pain. Target experience:
+This is the user's stated #1 pain: "no way to invoice based on CNI jobs / pull
+VINs from CNI jobs into scans to invoice off a PO." The good news from the audit
+is that **the engine already exists and is reusable** — the work is mostly about
+stamping the right data at completion and surfacing it, not building a new
+invoice path.
 
-### 3.1 On the CNI job detail page
+### 3.0 The key realization: the bridge is a *stamp*, not a new pipeline
 
-A **"Billing" panel** showing:
-- the job's customer + PO (from §1.2), editable;
-- the list of completed VINs with their `scan_log_id` status:
-  - ✅ in Scan Log, matched to PO, **ready to invoice**
-  - ⚠️ in Scan Log, **waiting for PO** (with a "attach PO" action right here)
-  - ⛔ completed but **not yet in Scan Log** (missing part — fix inline)
-- a **"Invoice this job"** action that selects this job's ready VINs and calls
-  the existing `invoice-vehicles` endpoint — the same engine the Scan Log uses,
-  just scoped to one job.
+`POST /api/netsuite/invoice-vehicles` already does exactly what we want. Reading
+it (`src/app/api/netsuite/invoice-vehicles/route.ts`):
 
-This is the "pull VINs from CNI jobs into scans to invoice off a PO" capability,
-made explicit and one-click. The data link (`cni_job_vins.scan_log_id`) already
-exists; we're surfacing it as an action instead of leaving it implicit.
+- Input is just `{ scanIds: string[] }`.
+- It groups scans by **`billable_customer` + `po_number`**, one invoice per group.
+- It resolves the customer with `findCustomer(billable_customer)` (by **name**),
+  prices each part from `netsuite_parts.sales_price`, resolves the NetSuite
+  location from the **PO's `ship_to`** (+ overrides), and sets the invoice's
+  reference number (`otherrefnum`) to the **`po_number`**.
+- **It does *not* read `po_line_items` at all** — it does not validate the part
+  against the PO, does not check remaining quantity, does not touch `installed`.
+  The PO is used only for *location* and the *reference number*.
 
-### 3.2 In the Scan Log (`/admin/scans`)
+So whether a CNI job's VINs are invoiceable comes down to **two string fields on
+their `scan_logs` rows**: `billable_customer` (must resolve to a NetSuite
+customer) and `po_number` (drives location + reference). Today CNI completion
+stamps `billable_customer` from the *part* (usually null) and never stamps a PO —
+which is precisely why nothing is invoiceable. Fix the stamp and the existing
+engine just works.
 
-- Add a **source column + filter** ("CNI job CNI-…-001" vs field scan). Today
-  CNI scans are indistinguishable from field scans, so you can't find "the VINs
-  from that job."
-- Allow **creating/attaching a PO from the Scan Log** for stuck "Waiting for PO"
-  scans (today the only fix is editing the DB by hand).
+### 3.1 What gets stamped, and from where
 
-### 3.3 Fix the silent failure modes
+When a CNI VIN is completed (`complete-vin` / `scan-vehicle` /
+`add-completed-vin`), the `logScan()` call should stamp:
 
-- Resolve and store `netsuite_customer_id` on the job at creation (§1.2) so
-  invoicing doesn't depend on an exact `billable_customer` string match.
-- Surface invoice-precondition failures (part not in `netsuite_parts`, customer
-  unresolved, no open PO) as **visible states on the job's Billing panel**,
-  not as a generic NetSuite 500 at invoice time.
+| scan_logs field | today | target source |
+|---|---|---|
+| `billable_customer` | job's *part* `billable_customer` (often null) | **the job's customer** (§1.2 `customer_name` / resolved customer) |
+| `po_id` / `po_number` | never set | **the job's PO** (§1.2 `cni_jobs.po_id` → `po_number`) |
+| `part_number` | job part (gated) | job part — **and log even when null** (§1.3) so the VIN still appears, flagged "needs part" |
+
+Net effect: a VIN completed on a CNI job that has a customer + PO lands in the
+Scan Log already **ready to invoice**, attributed to the right customer and PO.
+
+**One engine change for robustness:** `invoice-vehicles` resolves the customer by
+name string, which is the #1 silent failure ("Customer not found"). Add an
+optional `customerId` path: when a CNI job has a resolved `netsuite_customer_id`
+(§1.2, set via a customer picker at job creation), stamp it onto the scan (new
+nullable `scan_logs.netsuite_customer_id`) and let the engine prefer it over the
+name lookup. Falls back to the existing name match for field scans.
+
+### 3.2 The two roles of a PO (don't conflate them)
+
+The audit shows a PO does two *separate* jobs; the design must treat them
+separately:
+
+1. **Scan→PO match** (`src/lib/scan-match.ts`) — auto-attaches a `po_number` to a
+   scan *only* if an **open** PO has a line with the matching part and
+   `installed < quantity`, and **increments `installed`**. This is the
+   fulfillment/tracking ledger. It's also what gates the Scan Log's "Ready" vs
+   "Waiting for PO" tabs.
+2. **Invoice** (`invoice-vehicles`) — needs only the `po_number` string.
+
+Because a CNI job *knows* its PO up front (§1.2), we don't have to rely on the
+fuzzy auto-match to attach it. Target behavior at completion:
+
+- **Always stamp the job's `po_id`/`po_number` directly** onto the scan (the job
+  is the source of truth for which PO this work bills against). This means CNI
+  scans are **never stuck in "Waiting for PO"** when the job has a PO.
+- **Best-effort line bind for tracking:** if the job's part matches an open PO
+  line with remaining qty, also set `po_line_item_id` and increment `installed`
+  (reuse `scan-match` logic). If it doesn't match a line, still keep the PO
+  header stamp and surface a soft **"part not on PO"** warning — invoicing isn't
+  blocked (the engine doesn't check), but tracking is incomplete and the admin
+  should know.
+
+### 3.3 The CNI job "Billing" panel (new section on the job page)
+
+The job detail page (`src/app/(main)/admin/cni/jobs/[id]/page.tsx`, ~1900 lines)
+today has *only* Flow-A money UI (installer payouts, uploaded invoice file). Add a
+**Billing panel** (Flow B), placed after the VINs section:
+
+- **Header:** the job's customer + PO, **editable inline** (pick/Change PO,
+  pick/Change customer). Shows the resolved NetSuite customer + PO ship-to →
+  location preview so the admin sees where it'll bill *before* sending.
+- **Per-VIN billing status** (joins `cni_job_vins.scan_log_id` → `scan_logs`):
+  - ✅ in Scan Log, has customer + PO → **ready to invoice**
+  - 🧾 already invoiced (`invoice_number` set) → shows the NS invoice #
+  - ⚠️ in Scan Log but missing customer/PO → **fix inline** (attach PO / set
+    customer right here)
+  - ⛔ completed but **not in Scan Log** (job had no part) → **"log to Scan Log"**
+    action that backfills the row
+- **"Invoice this job"** button: collects the ready VINs' `scan_log_id`s →
+  `POST /api/netsuite/invoice-vehicles` → on success runs the **same
+  post-invoice bookkeeping the Scan Log page does** (`bulk-update` to set
+  `invoice_number`, `date_invoiced`, `archived_at`). ⚠️ Note: the engine itself
+  only sets `exported_at`; the invoice-number/archive stamping lives in the
+  page handler (`src/app/(main)/admin/scans/page.tsx` `createInvoice`). To avoid
+  duplicating that, **move the post-invoice bookkeeping into the
+  `invoice-vehicles` endpoint** so both the Scan Log and the job page get it for
+  free (small refactor, removes a latent drift bug).
+
+This is the literal "pull VINs from CNI jobs into scans to invoice off a PO,"
+one click, scoped to a job — built on the link (`cni_job_vins.scan_log_id`) that
+already exists but was never surfaced.
+
+### 3.4 Scan Log changes (`/admin/scans`)
+
+- **Source column + filter.** CNI scans are today indistinguishable from field
+  scans. Add a "source" derived from `cni_job_vins.scan_log_id` (and/or a job
+  ref on the scan) so you can filter to "CNI job CNI-…-001" and batch-invoice a
+  job's VINs from the Scan Log too.
+- **Attach-PO from a stuck scan.** For "Waiting for PO" rows, allow attaching an
+  existing PO inline (today the only fix is editing the DB). Reuses the §3.2
+  direct-stamp + best-effort-line-bind.
+
+### 3.5 The PO supply gap (call it out now)
+
+POs are **import-only** today — Gmail auto-import + AI extraction, or admin PDF
+upload (`src/app/api/gmail/import-po`). **There is no manual "create PO" UI.** So
+"invoice a CNI job off a PO" presumes that customer's PO has been imported. Two
+options, to decide (see §6 Q5):
+
+- **(a)** Rely on import — the CNI customer's PO must be imported before the job
+  can be invoiced (fine when CNI customers email POs like the upfit side does).
+- **(b)** Add a lightweight **manual "create PO"** path (number, customer,
+  ship-to, line items) for CNI customers who don't send importable POs. Smaller
+  than it sounds: it's one insert into `purchase_orders` + `po_line_items`.
+
+### 3.6 Failure modes, made visible (not 500s)
+
+Every precondition that silently fails today becomes a **state on the Billing
+panel**, checked before the invoice call:
+
+| precondition | today | target |
+|---|---|---|
+| job has no part | VIN never reaches Scan Log | ⛔ "not in Scan Log — log it" action |
+| `billable_customer` doesn't match NetSuite | NS "Customer not found" at invoice | resolved customer shown up front (§3.1 `customerId`) |
+| part not in `netsuite_parts` | "No parts matched in NetSuite" | flagged on the VIN row before sending |
+| no PO / wrong PO | stuck in "Waiting for PO" | PO shown + editable on the panel; never silently stuck |
+| location unresolved | "Could not resolve a NetSuite location" | location preview from PO ship-to shown before sending |
 
 ---
 
@@ -335,8 +441,13 @@ Each phase is independently shippable as its own PR(s).
   `po_number` to `cni_jobs`; wire job creation to resolve a NetSuite customer and
   (optionally) attach a PO. Remove the `part_number` logging gate so every
   completed VIN reaches `scan_logs`.
-- **Phase 3 — The invoicing bridge.** Job Billing panel + "Invoice this job";
-  Scan Log source filter + attach-PO-from-scan; visible precondition states.
+- **Phase 3 — The invoicing bridge (§3).** Stamp `billable_customer` (job
+  customer) + `po_id`/`po_number` (job PO) onto `scan_logs` at completion;
+  optional `customerId` path on `invoice-vehicles` + move post-invoice
+  bookkeeping into the endpoint; CNI Job **Billing panel** with per-VIN states +
+  "Invoice this job"; Scan Log source filter + attach-PO-from-scan; visible
+  precondition states instead of NetSuite 500s. Optional sub-PR: manual
+  "create PO" path (§3.5, pending §6 Q5).
 - **Phase 4 — Onboarding & vendor provisioning (§2.4).** One invite-or-create-
   company flow; staged onboarding with W-9/insurance upload (R2) + structured
   tax; secure forward-only banking step; `createVendor()` that mints the NetSuite
@@ -365,6 +476,13 @@ slower order is the numeric one. To be decided.
 4. **Company compliance docs** — keep per-company W9/insurance (needs upload UI)
    or per-person only (drop the company columns)? *Leaning: both, per §2.4
    decision 3 (company-level when payout_mode = company; per-person otherwise).*
+5. **PO supply for CNI billing (§3.5)** — rely on PO import only, or add a
+   lightweight manual "create PO" path for CNI customers who don't email
+   importable POs? *Leaning: add manual create — it's a small insert and removes
+   a hard dependency on the import pipeline for the CNI side.*
+6. **Customer at job creation** — resolve `netsuite_customer_id` via a customer
+   picker at job-creation time (robust invoicing, §3.1), or keep free-text +
+   resolve by name at invoice time? *Leaning: picker at creation.*
 
 ### Resolved (2026-06-29) — onboarding & vendor provisioning (§2.4)
 - **Payment rail:** NetSuite Electronic Bank Payments (ACH) — bank details go to
