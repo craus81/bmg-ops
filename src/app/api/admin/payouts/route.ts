@@ -209,44 +209,52 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ error: 'This installer has no NetSuite vendor ID on file — set it in Vendor IDs first' }, { status: 400 });
     }
 
-    const account = await findExpenseAccount({ number: SUBCONTRACTOR_ACCT_NUMBER, name: SUBCONTRACTOR_ACCT_NAME });
-    if (!account) {
-      return NextResponse.json({ error: `Could not find the "${SUBCONTRACTOR_ACCT_NAME}" account (#${SUBCONTRACTOR_ACCT_NUMBER}) in NetSuite` }, { status: 400 });
+    // NetSuite lookups + bill creation throw on any API/SuiteQL error (or
+    // missing config). Catch so the real reason reaches the user instead of a
+    // bare 500 the UI can only show as "Payout action failed".
+    try {
+      const account = await findExpenseAccount({ number: SUBCONTRACTOR_ACCT_NUMBER, name: SUBCONTRACTOR_ACCT_NAME });
+      if (!account) {
+        return NextResponse.json({ error: `Could not find the "${SUBCONTRACTOR_ACCT_NAME}" account (#${SUBCONTRACTOR_ACCT_NUMBER}) in NetSuite` }, { status: 400 });
+      }
+
+      const subsidiary = await findSubsidiary(BILL_SUBSIDIARY_NAME);
+      if (!subsidiary) {
+        return NextResponse.json({ error: `Could not find the "${BILL_SUBSIDIARY_NAME}" subsidiary in NetSuite` }, { status: 400 });
+      }
+
+      const location = await findLocation(body.location);
+      if (!location) {
+        return NextResponse.json({ error: `Could not find the "${body.location}" location in NetSuite` }, { status: 400 });
+      }
+
+      // A memo that ties the bill back to the job for reconciliation.
+      const [{ data: job }, { data: prof }] = await Promise.all([
+        service.from('cni_jobs').select('job_number, title').eq('id', payout.cni_job_id).maybeSingle(),
+        service.from('profiles').select('full_name').eq('id', payout.profile_id).maybeSingle(),
+      ]);
+      const memo = `Installer pay — ${prof?.full_name || 'installer'}${job?.job_number ? ` — ${job.job_number}` : ''}`;
+
+      const bill = await createVendorBill({
+        vendorId, accountId: account.id, amount,
+        subsidiaryId: subsidiary.id, locationId: location.id,
+        memo, lineMemo: memo,
+      });
+      if (!bill.success) {
+        return NextResponse.json({ error: bill.error || 'Failed to create vendor bill' }, { status: 502 });
+      }
+      const billRef = bill.billNumber || bill.billId || '';
+
+      const { error } = await service
+        .from('payouts')
+        .update({ status: 'billed', netsuite_bill_id: billRef })
+        .eq('id', payout.id);
+      if (error) return NextResponse.json({ error: 'Bill created in NetSuite but failed to update payout: ' + error.message }, { status: 500 });
+      return NextResponse.json({ success: true, netsuiteBillId: billRef });
+    } catch (e: any) {
+      console.error('create_bill error:', e);
+      return NextResponse.json({ error: 'Vendor bill failed: ' + (e?.message || 'unknown error') }, { status: 502 });
     }
-
-    const subsidiary = await findSubsidiary(BILL_SUBSIDIARY_NAME);
-    if (!subsidiary) {
-      return NextResponse.json({ error: `Could not find the "${BILL_SUBSIDIARY_NAME}" subsidiary in NetSuite` }, { status: 400 });
-    }
-
-    const location = await findLocation(body.location);
-    if (!location) {
-      return NextResponse.json({ error: `Could not find the "${body.location}" location in NetSuite` }, { status: 400 });
-    }
-
-    // A memo that ties the bill back to the job for reconciliation.
-    const [{ data: job }, { data: prof }] = await Promise.all([
-      service.from('cni_jobs').select('job_number, title').eq('id', payout.cni_job_id).maybeSingle(),
-      service.from('profiles').select('full_name').eq('id', payout.profile_id).maybeSingle(),
-    ]);
-    const memo = `Installer pay — ${prof?.full_name || 'installer'}${job?.job_number ? ` — ${job.job_number}` : ''}`;
-
-    const bill = await createVendorBill({
-      vendorId, accountId: account.id, amount,
-      subsidiaryId: subsidiary.id, locationId: location.id,
-      memo, lineMemo: memo,
-    });
-    if (!bill.success) {
-      return NextResponse.json({ error: bill.error || 'Failed to create vendor bill' }, { status: 502 });
-    }
-    const billRef = bill.billNumber || bill.billId || '';
-
-    const { error } = await service
-      .from('payouts')
-      .update({ status: 'billed', netsuite_bill_id: billRef })
-      .eq('id', payout.id);
-    if (error) return NextResponse.json({ error: 'Bill created in NetSuite but failed to update payout: ' + error.message }, { status: 500 });
-    return NextResponse.json({ success: true, netsuiteBillId: billRef });
   }
 
   if (body.action === 'delete_draft') {
