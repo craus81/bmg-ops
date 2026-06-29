@@ -55,3 +55,12 @@ before a push, ignore it.
 accumulate commits on local `main` and wait for a "ship it" / "create the
 branch" signal before cutting the branch + PR. Stay in batch mode until
 they tell you to go back to auto-shipping.
+
+## Domain notes
+
+- **CNI installer payouts → NetSuite vendor bills:** see
+  `docs/cni-vendor-bills.md`. Key trap: an installer's
+  `cni_profiles.netsuite_vendor_id` must be the vendor's numeric NetSuite
+  **Internal ID**, not the **Entity ID**/name — a name 500s the bill create.
+  The doc also covers the required bill fields (subsidiary 2, account 223,
+  header-only location, reference no.) and the SuiteQL/role limitations.
