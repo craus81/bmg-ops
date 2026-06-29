@@ -973,6 +973,7 @@ export async function createVendorBill(payload: {
   vendorId: string | number;
   accountId: string | number;
   amount: number;
+  referenceNo?: string;
   subsidiaryId?: string | number;
   locationId?: string | number;
   memo?: string;
@@ -984,11 +985,13 @@ export async function createVendorBill(payload: {
   const { oauth, token } = createOAuth(config);
   const authHeader = getAuthHeader(oauth, token, { url, method: 'POST' });
 
-  // Location is set on the HEADER only (one location per bill). Setting it on
-  // the expense line too triggers a NetSuite 500 unless per-line locations are
-  // enabled, so keep the line minimal: account + amount (+ memo).
+  // tranId is the vendor bill's "Reference No." — required when the account
+  // doesn't auto-number bills, so always send one. Location is HEADER only
+  // (one location per bill); a line-level location triggers a 500 unless
+  // per-line locations are on, so keep the line minimal: account + amount.
   const body: any = {
     entity: { id: payload.vendorId },
+    ...(payload.referenceNo ? { tranId: payload.referenceNo } : {}),
     ...(payload.subsidiaryId ? { subsidiary: { id: payload.subsidiaryId } } : {}),
     ...(payload.locationId ? { location: { id: payload.locationId } } : {}),
     expense: {
