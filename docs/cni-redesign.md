@@ -169,8 +169,104 @@ on the CNI dashboard, not as separate top-level menu items.
 Today "invite installer" never creates a company and never sets `company_id`;
 "create company" never invites anyone. Target: the invite flow picks **or
 creates** a company at invite time, so a new installer is never left unassigned.
-Company-level compliance upload UI added here (or the company compliance columns
-dropped if we decide docs live per-person only).
+The full onboarding → vendor-provisioning design is §2.4.
+
+### 2.4 Onboarding & NetSuite vendor provisioning (deep dive)
+
+The endgame: **FleetSuite collects the full installer/vendor packet — identity,
+W-9/tax, insurance, and banking — and on approval *mints the NetSuite vendor
+itself*, writing the Internal ID back automatically.** This replaces the manual
+"create the vendor in NetSuite by hand, copy the numeric Internal ID, paste it
+into FleetSuite" hop that `docs/cni-vendor-bills.md` warns about (and that was
+the entire first-rollout failure).
+
+**Current reality (starting point):**
+- W-9 / insurance: the invite email *promises* upload
+  (`src/app/api/cni/invite/route.ts:60`) but **no upload UI exists**; the admin
+  page only displays `✓/✕` from `w9_file_path` / `insurance_cert_path`
+  (`src/app/(main)/admin/cni/installers/[id]/page.tsx:602–626`), columns nothing
+  ever writes.
+- Bank data: not modeled anywhere.
+- Vendor creation: no `createVendor` in `src/lib/netsuite.ts` — only
+  `createCustomerOrLead`, `createItem`, `createSalesOrder`, `createDirectInvoice`,
+  `createVendorBill`. Vendor IDs are hand-entered.
+- Plumbing we already have: file uploads → Cloudflare R2 presign
+  (`src/lib/r2.ts`); NetSuite record create pattern proven by
+  `createCustomerOrLead` (`POST /services/rest/record/v1/customer`, read the new
+  Internal ID off the response `location` header) and RESTlet calls via
+  `callRestlet`.
+
+**Decisions locked (2026-06-29):**
+1. **Payment rail = NetSuite Electronic Bank Payments (EBP / SuitePayments).**
+   Bank/ACH details land in NetSuite, on its EBP **Entity Bank Details** record
+   (a managed custom record), not on the base vendor record.
+2. **Bank + Tax ID are forward-only — FleetSuite does NOT retain them.** Collect
+   in a secure form, push to NetSuite, then keep only **last-4 + a
+   `bank_synced_at` flag**. FleetSuite never becomes a store of full account /
+   routing / SSN-EIN numbers. (W-9 and insurance *documents* are retained in R2
+   with restricted access — those are files, not raw numbers.)
+3. **Vendor level follows `cni_jobs.payout_mode`:**
+   - `company` mode → one **company vendor**; bank/W-9 captured at the company
+     level; Internal ID → `companies.netsuite_vendor_id`.
+   - `individual` mode → one **person vendor** per installer; bank/W-9 at the
+     person level; Internal ID → `cni_profiles.netsuite_vendor_id`.
+
+**Target onboarding flow (staged):**
+
+1. **Admin invite** (as today) → installer gets a login.
+2. **Installer self-onboarding** — steps:
+   - *Identity & capabilities* (today's fields).
+   - *Tax / W-9* — upload the W-9 PDF **and** capture legal name + Tax ID
+     (EIN/SSN) + 1099-eligibility (NetSuite needs these structured, not just the
+     file). The Tax ID is forward-only (decision 2).
+   - *Insurance* — upload certificate + expiry (reuse `insurance_expiry`; add a
+     renewal reminder).
+   - *Banking* — routing + account number + account type, ACH. Forward-only.
+3. **Admin review & approve** — admin sees the complete packet, verifies, clicks
+   **"Create NetSuite Vendor."**
+4. **FleetSuite provisions the vendor** (new `createVendor()`):
+   - `POST /services/rest/record/v1/vendor` — `isPerson` true (person) or false
+     (company), name, `subsidiary {id: 2}` (BMG Fleet Installations),
+     `taxIdNum`, `is1099Eligible`, email/phone, `addressBook`.
+   - Read the new Internal ID off the `location` header → store on
+     `companies.netsuite_vendor_id` or `cni_profiles.netsuite_vendor_id` per
+     payout level. **This is what eliminates the manual-paste gotcha** — and the
+     `create_bill` flow then works because the ID is already correct/numeric.
+   - **Bank details** push to the EBP **Entity Bank Details** record. This very
+     likely needs a small **SuiteScript RESTlet** on the NetSuite side (the EBP
+     bank-details custom record isn't in the standard REST record catalog), so
+     bank-data sync is a distinct sub-task gated on that script + permissions.
+   - Optionally copy the W-9 / insurance PDFs into the NetSuite **File Cabinet**
+     and attach to the vendor.
+   - On success: store `last4` + `bank_synced_at`; never persist the rest.
+
+**NetSuite-side prerequisites (must confirm with the NetSuite admin):**
+- Integration role gains **Lists → Vendors (Create)** (today it only has
+  Transactions → Bills, per `docs/cni-vendor-bills.md`).
+- For bank sync: the **EBP SuiteApp** installed, plus a RESTlet (or permissions)
+  exposing the Entity Bank Details record, and role access to it.
+- For doc attach: **File Cabinet** permission.
+
+**Schema deltas (sketch):**
+```sql
+-- forward-only banking state (NO full numbers stored)
+ALTER TABLE companies     ADD COLUMN bank_last4 TEXT, ADD COLUMN bank_synced_at TIMESTAMPTZ;
+ALTER TABLE cni_profiles  ADD COLUMN bank_last4 TEXT, ADD COLUMN bank_synced_at TIMESTAMPTZ;
+-- structured tax (forward-only value; retain only eligibility + a synced flag)
+ALTER TABLE companies     ADD COLUMN is_1099 BOOLEAN, ADD COLUMN tax_synced_at TIMESTAMPTZ;
+ALTER TABLE cni_profiles  ADD COLUMN is_1099 BOOLEAN, ADD COLUMN tax_synced_at TIMESTAMPTZ;
+-- vendor provisioning audit
+ALTER TABLE companies     ADD COLUMN vendor_provisioned_at TIMESTAMPTZ;
+ALTER TABLE cni_profiles  ADD COLUMN vendor_provisioned_at TIMESTAMPTZ;
+-- (netsuite_vendor_id already exists on both; now auto-populated, not hand-typed)
+```
+
+**Security posture:** the banking/Tax-ID step is the only place full sensitive
+numbers exist in FleetSuite, and only in-flight. The submit handler pushes to
+NetSuite server-side and discards the raw values; they are never written to a
+table, never logged, never emailed. Retained docs (W-9/insurance PDFs) sit in R2
+behind presigned, access-controlled URLs. This keeps FleetSuite out of scope as
+a "system of record" for bank/SSN data.
 
 ---
 
@@ -241,8 +337,13 @@ Each phase is independently shippable as its own PR(s).
   completed VIN reaches `scan_logs`.
 - **Phase 3 — The invoicing bridge.** Job Billing panel + "Invoice this job";
   Scan Log source filter + attach-PO-from-scan; visible precondition states.
-- **Phase 4 — Onboarding unification.** One invite-or-create-company flow;
-  compliance upload UI (or drop unused company compliance columns).
+- **Phase 4 — Onboarding & vendor provisioning (§2.4).** One invite-or-create-
+  company flow; staged onboarding with W-9/insurance upload (R2) + structured
+  tax; secure forward-only banking step; `createVendor()` that mints the NetSuite
+  vendor and auto-stores the Internal ID; EBP bank-details RESTlet for ACH sync.
+  *Gated on NetSuite-side prerequisites (role perms, EBP, File Cabinet).* Split
+  into sub-PRs: (4a) docs upload + status, (4b) `createVendor` + auto-ID,
+  (4c) EBP bank sync.
 
 Recommended order if we want the user's pain addressed soonest: **Phase 2 → 3**
 first (the invoicing they asked for), then **0 → 1 → 4** as cleanup — at the cost
@@ -262,7 +363,18 @@ slower order is the numeric one. To be decided.
    invoice time with fuzzy matching? Leaning: picker at creation.
 3. **Phase order** (§5) — pain-first vs cleanup-first.
 4. **Company compliance docs** — keep per-company W9/insurance (needs upload UI)
-   or per-person only (drop the company columns)?
+   or per-person only (drop the company columns)? *Leaning: both, per §2.4
+   decision 3 (company-level when payout_mode = company; per-person otherwise).*
+
+### Resolved (2026-06-29) — onboarding & vendor provisioning (§2.4)
+- **Payment rail:** NetSuite Electronic Bank Payments (ACH) — bank details go to
+  NetSuite's EBP Entity Bank Details record.
+- **Sensitive-data posture:** forward-only — FleetSuite collects bank/Tax ID,
+  pushes to NetSuite, retains only last-4 + a synced flag.
+- **Vendor level:** both, driven by `cni_jobs.payout_mode` (company vendor for
+  company mode, person vendor for individual mode).
+- **Still to confirm with NetSuite admin:** Vendors-Create role permission, EBP
+  SuiteApp + a bank-details RESTlet, File Cabinet access.
 
 ---
 
