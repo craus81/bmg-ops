@@ -422,6 +422,74 @@ export async function recomputeShiftCredits(
 }
 
 /**
+ * Apply a CNI job's pay_per_vehicle change to credits already on the books:
+ * re-price every live (non-voided), unlocked credit for the job's completed
+ * vehicles at `rate`, preserving each vehicle's exact roster and weights.
+ * Vehicles whose credits are on a payout are locked and left unchanged (and
+ * reported). Vehicles already at `rate` are skipped. Each re-price voids the
+ * old snapshot rows and inserts fresh ones, so the audit trail is preserved.
+ */
+export async function repriceJobCredits(
+  service: SupabaseClient,
+  opts: { cniJobId: string; rate: number | null; editedBy: string },
+): Promise<{ ok: boolean; repriced: number; lockedSkipped: number; error?: string }> {
+  const { cniJobId, rate, editedBy } = opts;
+
+  // The job's vehicles, with the scan each came from (older credits key on
+  // scan_log_id, newer ones on cni_job_vin_id — match on either).
+  const { data: vins } = await service
+    .from('cni_job_vins')
+    .select('id, scan_log_id')
+    .eq('job_id', cniJobId);
+  if (!vins || vins.length === 0) return { ok: true, repriced: 0, lockedSkipped: 0 };
+
+  const vinIds = vins.map(v => v.id);
+  const scanIds = vins.map(v => v.scan_log_id).filter(Boolean) as string[];
+  const orParts: string[] = [];
+  if (vinIds.length) orParts.push(`cni_job_vin_id.in.(${vinIds.join(',')})`);
+  if (scanIds.length) orParts.push(`scan_log_id.in.(${scanIds.join(',')})`);
+  if (orParts.length === 0) return { ok: true, repriced: 0, lockedSkipped: 0 };
+
+  const { data: live } = await service
+    .from('install_credits')
+    .select('id, scan_log_id, cni_job_vin_id, profile_id, share_weight, rate_per_vehicle, payout_id')
+    .or(orParts.join(','))
+    .is('voided_at', null);
+  if (!live || live.length === 0) return { ok: true, repriced: 0, lockedSkipped: 0 };
+
+  // Group per vehicle; track lock state, whether the rate already matches, and
+  // the current roster so the re-price keeps the same split.
+  type Group = { scanLogId: string | null; cniJobVinId: string | null; locked: boolean; sameRate: boolean; members: ShiftMember[] };
+  const groups = new Map<string, Group>();
+  for (const c of live) {
+    const key = c.scan_log_id || c.cni_job_vin_id!;
+    const g: Group = groups.get(key) || { scanLogId: c.scan_log_id, cniJobVinId: c.cni_job_vin_id, locked: false, sameRate: true, members: [] };
+    if (c.payout_id) g.locked = true;
+    const cur = c.rate_per_vehicle != null ? Number(c.rate_per_vehicle) : null;
+    if (cur !== rate) g.sameRate = false;
+    g.members.push({ profile_id: c.profile_id, share_weight: Number(c.share_weight) });
+    groups.set(key, g);
+  }
+
+  let repriced = 0;
+  let lockedSkipped = 0;
+  for (const g of groups.values()) {
+    if (g.locked) { lockedSkipped++; continue; }
+    if (g.sameRate) continue;
+    const r = await rewriteVehicleCredits(service, {
+      scanLogId: g.scanLogId,
+      cniJobVinId: g.cniJobVinId,
+      entries: g.members,
+      editedBy,
+      ratePerVehicle: rate,
+    });
+    if (!r.ok) return { ok: false, repriced, lockedSkipped, error: r.error };
+    repriced++;
+  }
+  return { ok: true, repriced, lockedSkipped };
+}
+
+/**
  * Fill in field credits that were captured before their part had a rate.
  * Groups by vehicle so each group splits the new rate by its stored weights.
  */
