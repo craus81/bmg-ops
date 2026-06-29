@@ -209,9 +209,15 @@ export async function POST(req: NextRequest) {
     // The installer must have a NetSuite vendor record to bill against.
     const { data: cniProfile } = await service
       .from('cni_profiles').select('netsuite_vendor_id').eq('user_id', payout.profile_id).maybeSingle();
-    const vendorId = cniProfile?.netsuite_vendor_id;
+    const vendorId = cniProfile?.netsuite_vendor_id?.trim();
     if (!vendorId) {
       return NextResponse.json({ error: 'This installer has no NetSuite vendor ID on file — set it in Vendor IDs first' }, { status: 400 });
+    }
+    // NetSuite needs the vendor's numeric internal id here. A name (or anything
+    // non-numeric) makes the bill create fail with an opaque 500, so reject it
+    // up front with an actionable message.
+    if (!/^\d+$/.test(vendorId)) {
+      return NextResponse.json({ error: `This installer's NetSuite vendor ID is "${vendorId}", which isn't a valid id — it must be the vendor's numeric NetSuite internal id (e.g. 1234), not a name. Fix it on the Vendor IDs page.` }, { status: 400 });
     }
 
     // NetSuite lookups + bill creation throw on any API/SuiteQL error (or
