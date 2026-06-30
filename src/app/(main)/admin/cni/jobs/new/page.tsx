@@ -24,6 +24,9 @@ export default function CreateCniJobPage() {
   const [customerName, setCustomerName] = useState('');
   const [budget, setBudget] = useState('');
   const [payPerVehicle, setPayPerVehicle] = useState('');
+  // Optional expected vehicle count — counts down as VINs are scanned so the
+  // installer sees what's left. Blank = open-ended. Not a completion gate.
+  const [targetQuantity, setTargetQuantity] = useState('');
   const [payoutMode, setPayoutMode] = useState<'company' | 'individual'>('company');
   const [deadline, setDeadline] = useState('');
   const [estimatedHours, setEstimatedHours] = useState('');
@@ -95,6 +98,7 @@ export default function CreateCniJobPage() {
           billable_customer: part?.billable_customer || null,
           device_capture: deviceCapture || isVerizonRfidPart(part?.part_number),
           budget: budget ? parseFloat(budget) : null,
+          target_quantity: targetQuantity ? parseInt(targetQuantity) : null,
           pay_per_vehicle: rate,
           payout_mode: payoutMode,
           deadline: deadline || null,
@@ -197,6 +201,10 @@ export default function CreateCniJobPage() {
           <div>
             <label style={labelStyle}>Estimated Hours</label>
             <input style={inputStyle} type="number" value={estimatedHours} onChange={e => setEstimatedHours(e.target.value)} placeholder="0" />
+          </div>
+          <div>
+            <label style={labelStyle}>Target Vehicles</label>
+            <input style={inputStyle} type="number" value={targetQuantity} onChange={e => setTargetQuantity(e.target.value)} placeholder="Optional — counts down as scanned" />
           </div>
         </div>
         <div style={{ marginTop: '12px' }}>
