@@ -177,7 +177,10 @@ apology note.
    installer's `company_id`: **find-or-create** a `companies` row by exact name
    (values are clean — `docs/pay-splits-design.md:329-332`) and set
    `profiles.company_id`.
-2. Verify every active installer now has a `company_id`; report exceptions.
+2. For any installer still without a `company_id` (no name either):
+   **auto-create a one-person company** from their full name and link it — per
+   the resolved policy that every installer belongs to a company (§6, resolved).
+   After this, **no active installer is company-less**; report any exceptions.
 3. Drop `cni_profiles.company_name` and the dead fields
    (`primary_contact_name`, `skill_level`, `referred_by`).
 
@@ -203,13 +206,12 @@ apology note.
 company** and sets `profiles.company_id` at invite time, so no installer is ever
 left unassigned; the invite stub stops writing `company_name`.
 
-**Solo installers (decision — §6 Q8):** today a company-less installer shows as
-"Independent" (`installers/[id]/page.tsx:373`). Either (a) **every installer
-belongs to a company** — a solo installer is a one-person company auto-created at
-invite, keeping assignment + payout uniform (recommended), or (b) "Independent"
-(`company_id` null) stays valid and is handled by individual payout mode only.
-This decides whether the migration auto-creates one-person companies for
-company-less installers.
+**Solo installers (resolved 2026-06-29):** **every installer belongs to a
+company.** A solo installer is a one-person company, auto-created at invite — so
+assignment, bidding, and payout have no special "independent" path. The
+"Independent" display (`installers/[id]/page.tsx:373`) goes away; the migration
+auto-creates one-person companies for any company-less installer (step 2 above),
+and invite always creates-or-links a company.
 
 ---
 
@@ -531,10 +533,12 @@ slower order is the numeric one. To be decided.
    lightweight manual "create PO" path for CNI customers who don't email
    importable POs? *Leaning: add manual create — it's a small insert and removes
    a hard dependency on the import pipeline for the CNI side.*
-8. **Solo installers (§1.5)** — every installer belongs to a company (solo = a
-   one-person company auto-created at invite; recommended), or keep "Independent"
-   (`company_id` null) as a valid state via individual payout only? *Decides
-   whether the migration auto-creates one-person companies.*
+### Resolved (2026-06-29) — identity consolidation (§1.5)
+- **Every installer belongs to a company.** Solo = a one-person company,
+  auto-created at invite; no "Independent" path. Migration auto-creates one-person
+  companies for company-less installers; `profiles.company_id → companies` is the
+  single membership source of truth; `cni_profiles.company_name` + dead fields
+  dropped; one vendor-id editor; installer-page company picker sets `company_id`.
 
 ### Resolved (2026-06-29) — CNI billing = field flow (§1.2, §3)
 - **CNI scanning IS field scanning.** Installer picks a part before scanning,
