@@ -144,20 +144,12 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ error: 'Failed to complete VIN: ' + vinErr.message }, { status: 500 });
   }
 
-  // If every VIN on the job is now complete, advance the job to review.
-  let jobCompleted = false;
-  const { data: remaining } = await supabase
-    .from('cni_job_vins').select('id').eq('job_id', jobId).neq('status', 'completed');
-  if ((remaining?.length || 0) === 0 && job.status === 'in_progress') {
-    await supabase.from('cni_jobs').update({
-      status: 'completed_pending_review',
-      completed_at: new Date().toISOString(),
-      updated_by: auth.user.id,
-    }).eq('id', jobId);
-    jobCompleted = true;
-  }
+  // Completion is now an explicit "Mark Job Complete" action (installer or
+  // admin), NOT auto-advanced when the VIN list empties. In the scan-as-you-go
+  // model the first scanned vehicle leaves zero pending VINs, which would
+  // otherwise mark the whole job done after one car. See docs/cni-redesign.md §2.5.
 
   // A credits failure doesn't undo the completion — the vehicle IS done; the
   // missing credits surface in the admin shift editor and can be rebuilt.
-  return NextResponse.json({ success: true, scanLogId, jobCompleted, creditsError });
+  return NextResponse.json({ success: true, scanLogId, creditsError });
 }

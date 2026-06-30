@@ -139,14 +139,9 @@ export async function POST(req: NextRequest) {
     .eq('id', vinId);
   if (vinErr) return NextResponse.json({ error: 'Failed to complete VIN: ' + vinErr.message }, { status: 500 });
 
-  // Advance the job to review if everything is now complete.
-  let jobCompleted = false;
-  const { data: remaining } = await supabase
-    .from('cni_job_vins').select('id').eq('job_id', jobId).neq('status', 'completed');
-  if ((remaining?.length || 0) === 0 && job.status === 'in_progress') {
-    await supabase.from('cni_jobs').update({ status: 'completed_pending_review', completed_at: new Date().toISOString(), updated_by: auth.user.id }).eq('id', jobId);
-    jobCompleted = true;
-  }
+  // Completion is an explicit "Mark Job Complete" action now, not auto-advanced
+  // when no VIN is left pending — scanning vehicles one-by-one would otherwise
+  // mark the job done after the first car. See docs/cni-redesign.md §2.5.
 
-  return NextResponse.json({ success: true, vinId, scanLogId, jobCompleted, creditsError });
+  return NextResponse.json({ success: true, vinId, scanLogId, creditsError });
 }
