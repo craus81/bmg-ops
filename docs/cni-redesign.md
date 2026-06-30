@@ -255,13 +255,17 @@ scan enters the system; all three converge on `logScan()` + pay credits:
 credits; the worksheet/photo path joins the same tool; the dead root file is
 removed.
 
-**Wrinkle — full VIN vs last-8 (§6 Q9).** Worksheet photos give VIN *last-8*; to
-bill/pay cleanly we want the full VIN. Options: (a) reconcile last-8 against a
-known VIN source (a list attached to the job, prior scans, the customer's
-PO/fleet list); (b) accept last-8 + Unit# as a **draft** the admin completes
-before it bills; (c) require full VINs for typed/spreadsheet entry and treat
-worksheet last-8 as draft-only. Photos of the **full** VIN (windshield/barcode)
-sidestep it via OCR/barcode decode.
+**Full VIN vs last-8 — doesn't matter for billing/pay (resolved 2026-06-29).**
+Billing and pay never key off the VIN string: PO matching is by **part number**
+(`scan-match`), the invoice sends vehicle **counts** (not VINs) to NetSuite
+(`invoice-vehicles`), and pay is rate × vehicles. The VIN is just a
+reference/dedup token, and `logScan` only requires ≥5 chars — so an 8-char VIN
+flows through unchanged. **No reconciliation step; accept last-8 or full VIN as
+entered.** Two honest, non-blocking caveats: (a) auto-decoding year/make/model
+needs a full VIN — a last-8 row just won't auto-fill vehicle details (admin can
+type them or leave blank); (b) dedup is `(vin, part_number)`, so the same vehicle
+entered once full and once last-8 wouldn't be caught as a dup — an edge case only
+when a vehicle arrives via two different channels, not within one worksheet/list.
 
 ---
 
@@ -548,7 +552,8 @@ Each phase is independently shippable as its own PR(s).
   scan-worksheet + add-completed-vin into one admin bulk-entry tool: company +
   crew + part + location, then VINs via paste / spreadsheet / photo-PDF, each →
   `logScan()` + pay credits. Fix import-installs to credit a real company + write
-  credits; delete the dead root `bulk-vin-upload-code.tsx`. (§6 Q9 for last-8.)
+  credits; delete the dead root `bulk-vin-upload-code.tsx`. Last-8 or full VIN
+  both accepted as-is (no reconciliation).
 - **Phase 3 — Unify billing + harden PO accounting (§3).** Keep the scan-time PO
   decrement (it's correct); add a **DB unique index** on `scan_logs (vin,
   part_number)` so dup scans (and thus dup decrements/invoices) are impossible by
@@ -589,11 +594,12 @@ slower order is the numeric one. To be decided.
    lightweight manual "create PO" path for CNI customers who don't email
    importable POs? *Leaning: add manual create — it's a small insert and removes
    a hard dependency on the import pipeline for the CNI side.*
-9. **Full VIN vs worksheet last-8 (§1.6)** — for photo/worksheet ingestion that
-   yields VIN last-8, do we reconcile against a known VIN source, accept last-8 +
-   Unit# as a draft the admin completes, or require full VINs except for
-   draft-only worksheet rows? *Leaning: accept as draft, complete before it
-   bills; full-VIN photos (windshield/barcode) skip the issue.*
+### Resolved (2026-06-29) — bulk ingestion (§1.6)
+- **Last-8 or full VIN both work; no reconciliation.** Billing/pay key off
+  part + PO + customer + vehicle count, not the VIN string, so an 8-char VIN
+  flows through `logScan` unchanged. Caveats (non-blocking): full VIN needed only
+  to auto-decode year/make/model; cross-channel dup of the same vehicle in two
+  VIN formats isn't caught by `(vin, part_number)` dedup.
 
 ### Resolved (2026-06-29) — identity consolidation (§1.5)
 - **Every installer belongs to a company.** Solo = a one-person company,
