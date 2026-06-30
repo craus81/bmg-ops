@@ -488,7 +488,8 @@ Each phase is independently shippable as its own PR(s).
   fields. Refactor: installer-page company **picker** (sets `company_id`, kills
   the trap); installers list reads `companies.name`; **one** vendor-id editor
   (companies rows read-only → link); vendor id shown by payout mode; collapse the
-  3 nav entries to 1. *No new billing — pure de-duplication.* Gated on §6 Q8.
+  3 nav entries to 1. Every installer ends up in a company (one-person companies
+  auto-created). *No new billing — pure de-duplication.*
 - **Phase 2 — CNI scans = field scans (§1.2/§1.3).** Give CNI the field shift
   model: pick a part before scanning, held persistent until switched; log every
   scan to `scan_logs` via the shift's part (remove the `if (job.part_number)`
