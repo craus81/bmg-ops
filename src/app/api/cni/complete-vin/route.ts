@@ -5,7 +5,7 @@ import { validateBody, z } from '@/lib/validate';
 import { isVerizonRfidPart, validateSerial, validateImei, validateIccid } from '@/lib/rfid';
 import { logScan, resolveScannerCompany } from '@/lib/scan-log';
 import { canActOnCniJob } from '@/lib/cni-access';
-import { ensureCniShift, createCompletionCredits } from '@/lib/pay-credits';
+import { ensureCniShift, createCompletionCredits, getOpenCniShift } from '@/lib/pay-credits';
 
 export const dynamic = 'force-dynamic';
 
@@ -67,9 +67,17 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ error: 'VIN not found for this job' }, { status: 404 });
   }
 
+  // The part is whatever the crew picked for the open shift (CNI field-shift
+  // model, §1.2), falling back to the job's default when no shift part is set.
+  // It drives RFID device capture, the scan_logs row, and the pay credit.
+  const open = await getOpenCniShift(supabase, jobId);
+  const effPart = open?.part_number ?? job.part_number;
+  const effPartDescription = open?.part_number ? open.part_description : job.part_description;
+  const effBillableCustomer = open?.part_number ? open.billable_customer : job.billable_customer;
+
   // Device capture (serial / IMEI / ICCID) applies to the Verizon RFID part
   // or any job flagged for it.
-  const rfid = isVerizonRfidPart(job.part_number) || !!job.device_capture;
+  const rfid = isVerizonRfidPart(effPart) || !!job.device_capture;
   const serial = rfid ? validateSerial(parsed.data.serial_number || '') : null;
   const imei = rfid ? validateImei(parsed.data.imei || '') : null;
   const iccid = rfid ? validateIccid(parsed.data.iccid || '') : null;
@@ -96,9 +104,9 @@ export async function POST(req: NextRequest) {
       vehicle_year: vin.vehicle_year,
       vehicle_make: vin.vehicle_make,
       vehicle_model: vin.vehicle_model,
-      part_number: job.part_number,
-      part_description: job.part_description,
-      billable_customer: job.billable_customer,
+      part_number: effPart,
+      part_description: effPartDescription,
+      billable_customer: effBillableCustomer,
       serial_number: serial,
       imei,
       iccid,
@@ -123,7 +131,7 @@ export async function POST(req: NextRequest) {
         scanLogId,
         cniJobVinId: vinId,
         vin: vin.vin,
-        partNumber: job.part_number,
+        partNumber: effPart,
       },
     });
     if (!credits.ok) creditsError = credits.error || 'Failed to write pay credits';

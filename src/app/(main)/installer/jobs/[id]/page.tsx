@@ -8,6 +8,7 @@ import { useDialog } from '@/components/DialogProvider';
 import { theme } from '@/lib/theme';
 import RfidCapture, { type RfidCompletion } from '@/components/RfidCapture';
 import VinScanner from '@/components/VinScanner';
+import PartPicker, { type PickedPart } from '@/components/PartPicker';
 import { isVerizonRfidPart } from '@/lib/rfid';
 import InstallerPreviewBanner from '@/components/InstallerPreviewBanner';
 import { getInstallerPreview } from '@/lib/installer-preview';
@@ -48,7 +49,13 @@ export default function InstallerJobDetailPage() {
   // Crew shift (pay splits): the open shift on this job, the company roster
   // for the tag checklist, and the job's per-vehicle rate.
   const [shiftInfo, setShiftInfo] = useState<{
-    shift: { id: string; members: { profile_id: string; full_name: string; share_weight: number }[] } | null;
+    shift: {
+      id: string;
+      part_number: string | null;
+      part_description: string | null;
+      billable_customer: string | null;
+      members: { profile_id: string; full_name: string; share_weight: number }[];
+    } | null;
     roster: { profile_id: string; full_name: string }[];
     ratePerVehicle: number | null;
   } | null>(null);
@@ -56,8 +63,24 @@ export default function InstallerJobDetailPage() {
   const [crewDraft, setCrewDraft] = useState<Map<string, number>>(new Map());
   const [crewError, setCrewError] = useState('');
   const [crewBusy, setCrewBusy] = useState(false);
+  // Part picked for the shift: the start-shift draft, and a mid-shift "change
+  // part" panel. Held on the open shift; defaults to the job's part (§1.2).
+  const [partDraft, setPartDraft] = useState<PickedPart | null>(null);
+  const [changePartOpen, setChangePartOpen] = useState(false);
+  const [partBusy, setPartBusy] = useState(false);
 
-  const isRfidJob = isVerizonRfidPart(job?.part_number) || !!job?.device_capture;
+  // The job's default part, as a picker value (pre-fills the shift part).
+  const jobPart: PickedPart | null = job?.part_number
+    ? { part_number: job.part_number, part_description: job.part_description ?? null, billable_customer: job.billable_customer ?? null }
+    : null;
+  // The part the open shift is scanning under (what actually bills), if any.
+  const shiftPart: PickedPart | null = shiftInfo?.shift?.part_number
+    ? { part_number: shiftInfo.shift.part_number, part_description: shiftInfo.shift.part_description, billable_customer: shiftInfo.shift.billable_customer }
+    : null;
+  // The effective part: the shift's choice wins; else the job default. Drives
+  // the RFID device-capture UI just like the server keys completion off it.
+  const effectivePart = shiftPart || jobPart;
+  const isRfidJob = isVerizonRfidPart(effectivePart?.part_number) || !!job?.device_capture;
 
   // Admin preview: "you"-style displays and crew prechecks follow the
   // previewed installer; actions still happen as the signed-in account.
@@ -199,6 +222,8 @@ export default function InstallerJobDetailPage() {
       draft.set(effectiveId || user.id, 1);
     }
     setCrewDraft(draft);
+    // Pre-fill the part: the open shift's choice, else the job's default part.
+    setPartDraft(shiftPart || jobPart);
     setCrewError('');
     setCrewOpen(true);
   };
@@ -214,6 +239,9 @@ export default function InstallerJobDetailPage() {
           method: 'POST', headers,
           body: JSON.stringify({
             context: 'cni', cniJobId: jobId,
+            partNumber: partDraft?.part_number ?? null,
+            partDescription: partDraft?.part_description ?? null,
+            billableCustomer: partDraft?.billable_customer ?? null,
             members: [...crewDraft.entries()].map(([profileId, weight]) => ({ profileId, weight })),
           }),
         });
@@ -251,6 +279,34 @@ export default function InstallerJobDetailPage() {
       await loadShift();
     } finally {
       setCrewBusy(false);
+    }
+  };
+
+  // Switch the part the open shift scans under (held on the shift, §1.2).
+  // Vehicles completed after this bill under the new part; already-logged
+  // scans keep theirs.
+  const saveShiftPart = async (part: PickedPart | null) => {
+    if (!shiftInfo?.shift) return;
+    setPartBusy(true);
+    try {
+      const res = await fetch('/api/shifts/part', {
+        method: 'POST', headers: await authHeaders(),
+        body: JSON.stringify({
+          shiftId: shiftInfo.shift.id,
+          partNumber: part?.part_number ?? null,
+          partDescription: part?.part_description ?? null,
+          billableCustomer: part?.billable_customer ?? null,
+        }),
+      });
+      if (!res.ok) {
+        const json = await res.json().catch(() => ({}));
+        setCrewError(json.error || 'Failed to set the part');
+        return;
+      }
+      setChangePartOpen(false);
+      await loadShift();
+    } finally {
+      setPartBusy(false);
     }
   };
 
@@ -595,6 +651,26 @@ export default function InstallerJobDetailPage() {
                 </div>
               )}
               {myCut == null && <div style={{ marginBottom: '8px' }} />}
+              {/* Part the shift scans under — what each completed vehicle bills. */}
+              <div style={{
+                display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '8px',
+                padding: '8px 10px', borderRadius: '8px', marginBottom: '8px',
+                background: shiftPart ? 'var(--card)' : 'var(--warning-bg)',
+                border: shiftPart ? '1px solid var(--border)' : '1px solid var(--warning-border)',
+              }}>
+                <div style={{ minWidth: 0 }}>
+                  <div style={{ fontSize: '10px', fontWeight: 700, color: 'var(--text-muted)' }}>SCANNING PART</div>
+                  {shiftPart ? (
+                    <div style={{ fontSize: '13px', fontWeight: 700, color: 'var(--text-primary)', fontFamily: 'monospace' }}>{shiftPart.part_number}</div>
+                  ) : (
+                    <div style={{ fontSize: '12px', fontWeight: 600, color: 'var(--warning)' }}>No part — set one so scans can be billed</div>
+                  )}
+                </div>
+                <button onClick={() => { setCrewError(''); setPartDraft(shiftPart); setChangePartOpen(true); }} disabled={crewBusy || partBusy} style={{
+                  padding: '8px 12px', borderRadius: '8px', fontSize: '12px', fontWeight: 700, flexShrink: 0,
+                  background: 'var(--card)', border: '1px solid var(--border)', color: 'var(--text-primary)',
+                }}>{shiftPart ? 'Change Part' : 'Pick Part'}</button>
+              </div>
               <div style={{ display: 'flex', gap: '8px' }}>
                 <button onClick={openCrewPanel} disabled={crewBusy} style={{
                   flex: 1, padding: '10px', borderRadius: '8px', fontSize: '12px', fontWeight: 700,
@@ -785,6 +861,21 @@ export default function InstallerJobDetailPage() {
               You can tag and untag people during the shift; it only affects vehicles completed after the change.
             </div>
 
+            {/* Part for this shift — every vehicle you complete bills under it.
+                Pre-filled from the job's default; pick another to switch. Only
+                shown when starting; mid-shift use "Change Part" on the shift. */}
+            {!shiftInfo.shift && (
+              <div style={{ marginBottom: '12px' }}>
+                <div style={{ fontSize: '11px', fontWeight: 700, color: 'var(--text-muted)', marginBottom: '6px' }}>
+                  PART FOR THIS SHIFT
+                </div>
+                <PartPicker value={partDraft} onChange={setPartDraft} />
+                <div style={{ fontSize: '10px', color: 'var(--text-muted)', marginTop: '4px' }}>
+                  Optional — without a part, scans land in the Scan Log flagged “needs part.”
+                </div>
+              </div>
+            )}
+
             {(() => {
               // Roster plus anyone already on the shift (e.g. legacy installer
               // not yet linked to the company).
@@ -854,6 +945,36 @@ export default function InstallerJobDetailPage() {
               }}
             >
               {crewBusy ? 'Saving...' : shiftInfo.shift ? 'Update Crew' : `Start Shift (${crewDraft.size} ${crewDraft.size === 1 ? 'person' : 'people'})`}
+            </button>
+          </div>
+        </div>
+      )}
+
+      {/* Change the part the open shift scans under (mid-shift, §1.2). */}
+      {changePartOpen && shiftInfo?.shift && (
+        <div onClick={() => setChangePartOpen(false)} style={{ position: 'fixed', inset: 0, zIndex: 300, background: 'rgba(0,0,0,0.7)', display: 'flex', alignItems: 'flex-end', justifyContent: 'center' }}>
+          <div onClick={e => e.stopPropagation()} style={{ width: '100%', maxWidth: '520px', background: 'var(--card)', borderTopLeftRadius: '18px', borderTopRightRadius: '18px', padding: '16px', maxHeight: '92vh', overflowY: 'auto' }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '4px' }}>
+              <div style={{ fontSize: '15px', fontWeight: 800, color: 'var(--text-primary)' }}>Part for this shift</div>
+              <button onClick={() => setChangePartOpen(false)} style={{ fontSize: '12px', fontWeight: 700, color: 'var(--text-muted)', background: 'transparent', border: 'none', cursor: 'pointer' }}>Cancel</button>
+            </div>
+            <div style={{ fontSize: '11px', color: 'var(--text-muted)', marginBottom: '12px' }}>
+              Vehicles you complete after this bill under the new part. Already-scanned vehicles keep the part they were logged with.
+            </div>
+            <PartPicker value={partDraft} onChange={setPartDraft} />
+            {crewError && (
+              <div style={{ padding: '8px 12px', borderRadius: '8px', margin: '8px 0', background: 'var(--error-bg)', border: '1px solid var(--error-border)', color: 'var(--error)', fontSize: '12px', fontWeight: 600 }}>{crewError}</div>
+            )}
+            <button
+              onClick={() => saveShiftPart(partDraft)}
+              disabled={partBusy}
+              style={{
+                width: '100%', padding: '14px', borderRadius: '10px', fontSize: '14px', fontWeight: 800,
+                marginTop: '10px', border: 'none', color: '#fff',
+                background: partBusy ? 'var(--text-muted)' : 'var(--success)',
+              }}
+            >
+              {partBusy ? 'Saving...' : partDraft ? 'Use This Part' : 'Clear Part'}
             </button>
           </div>
         </div>

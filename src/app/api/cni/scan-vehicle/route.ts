@@ -5,7 +5,7 @@ import { validateBody, z } from '@/lib/validate';
 import { isVerizonRfidPart, validateSerial, validateImei, validateIccid } from '@/lib/rfid';
 import { logScan, resolveScannerCompany } from '@/lib/scan-log';
 import { canActOnCniJob, rolesOf } from '@/lib/cni-access';
-import { ensureCniShift, createCompletionCredits } from '@/lib/pay-credits';
+import { ensureCniShift, createCompletionCredits, getOpenCniShift } from '@/lib/pay-credits';
 
 export const dynamic = 'force-dynamic';
 
@@ -54,7 +54,14 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ error: 'Forbidden' }, { status: 403 });
   }
 
-  const rfid = isVerizonRfidPart(job.part_number) || !!job.device_capture;
+  // The part is whatever the crew picked for the open shift (CNI field-shift
+  // model, §1.2), falling back to the job's default when no shift part is set.
+  const open = await getOpenCniShift(supabase, jobId);
+  const effPart = open?.part_number ?? job.part_number;
+  const effPartDescription = open?.part_number ? open.part_description : job.part_description;
+  const effBillableCustomer = open?.part_number ? open.billable_customer : job.billable_customer;
+
+  const rfid = isVerizonRfidPart(effPart) || !!job.device_capture;
   const serial = rfid ? validateSerial(parsed.data.serial_number || '') : null;
   const imei = rfid ? validateImei(parsed.data.imei || '') : null;
   const iccid = rfid ? validateIccid(parsed.data.iccid || '') : null;
@@ -109,9 +116,9 @@ export async function POST(req: NextRequest) {
       vehicle_year: parsed.data.vehicle_year || null,
       vehicle_make: parsed.data.vehicle_make || null,
       vehicle_model: parsed.data.vehicle_model || null,
-      part_number: job.part_number,
-      part_description: job.part_description,
-      billable_customer: job.billable_customer,
+      part_number: effPart,
+      part_description: effPartDescription,
+      billable_customer: effBillableCustomer,
       serial_number: serial, imei, iccid,
       location_name: locationName,
     });
@@ -130,7 +137,7 @@ export async function POST(req: NextRequest) {
     const credits = await createCompletionCredits(supabase, {
       shiftId: shift.id, source: 'cni',
       ratePerVehicle: job.pay_per_vehicle != null ? Number(job.pay_per_vehicle) : null,
-      completion: { scanLogId, cniJobVinId: vinId, vin, partNumber: job.part_number },
+      completion: { scanLogId, cniJobVinId: vinId, vin, partNumber: effPart },
     });
     if (!credits.ok) creditsError = credits.error || 'Failed to write pay credits';
   }
