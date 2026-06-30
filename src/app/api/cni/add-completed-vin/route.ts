@@ -95,10 +95,12 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ error: 'Failed to add vehicle: ' + (vinErr?.message || 'unknown') }, { status: 500 });
   }
 
-  // Log to scan_logs (canonical record) when the job has a part. On failure
-  // (e.g. duplicate VIN+part), undo the VIN insert so nothing is left dangling.
+  // Always log to scan_logs (canonical record), even without a part — the VIN
+  // then shows in the Scan Log flagged "needs part" instead of vanishing from
+  // billing (docs/cni-redesign.md §1.3). On failure (e.g. duplicate VIN+part),
+  // undo the VIN insert so nothing is left dangling.
   let scanLogId: string | null = null;
-  if (job.part_number) {
+  {
     const company = await resolveScannerCompany(supabase, auth.user.id);
     const addr = (job.address || {}) as { city?: string; state?: string };
     const locationName = [addr.city, addr.state].filter(Boolean).join(', ') || job.title || null;

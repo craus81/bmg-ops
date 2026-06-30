@@ -98,7 +98,9 @@ export async function POST(req: NextRequest) {
 
   // Log to scan_logs (canonical) when the job has a part and not already logged.
   let scanLogId: string | null = priorScanLogId || null;
-  if (job.part_number && !scanLogId) {
+  // Always log to scan_logs (part may be null → "needs part" in the Scan Log,
+  // rather than the VIN vanishing from billing). See docs/cni-redesign.md §1.3.
+  if (!scanLogId) {
     const addr = (job.address || {}) as { city?: string; state?: string };
     const locationName = [addr.city, addr.state].filter(Boolean).join(', ') || job.title || null;
     const company = await resolveScannerCompany(supabase, auth.user.id);
