@@ -185,12 +185,31 @@ export async function POST(req: NextRequest) {
         });
 
         if (invoiceResult.success) {
-          // Mark scans as exported if not already
+          const nowIso = new Date().toISOString();
+
+          // Fold the full invoice bookkeeping into the endpoint so every caller
+          // gets identical accounting in one server-side step, instead of a
+          // separate client-side call that could fail after NetSuite already
+          // billed (docs/cni-redesign.md §3.3). Only when an invoice number came
+          // back — otherwise leave the scans visible for manual handling, as the
+          // page did before.
+          if (invoiceResult.invoiceNumber) {
+            await supabase
+              .from('scan_logs')
+              .update({
+                invoice_number: invoiceResult.invoiceNumber,
+                date_invoiced: nowIso.slice(0, 10),
+                archived_at: nowIso,
+              })
+              .in('id', custScans.map(s => s.id));
+          }
+
+          // Mark scans as exported if not already (preserve any earlier export time).
           const unexportedIds = custScans.filter(s => !s.exported_at).map(s => s.id);
           if (unexportedIds.length > 0) {
             await supabase
               .from('scan_logs')
-              .update({ exported_at: new Date().toISOString(), exported_by: auth.user.id })
+              .update({ exported_at: nowIso, exported_by: auth.user.id })
               .in('id', unexportedIds);
           }
 
