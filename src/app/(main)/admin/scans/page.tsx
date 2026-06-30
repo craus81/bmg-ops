@@ -346,25 +346,9 @@ export default function AdminScansPage() {
       } else {
         setInvoiceResult(data);
 
-        // Auto-archive invoiced scans per PO group with correct invoice number
-        const successResults = (data.results || []).filter((r: any) => r.status === 'success' && r.invoiceNumber);
-        const today = new Date().toISOString().slice(0, 10);
-        for (const result of successResults) {
-          const groupIds = result.scanIds || ids;
-          await fetch('/api/scans/bulk-update', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-              scanIds: groupIds,
-              updates: {
-                archived_at: new Date().toISOString(),
-                invoice_number: result.invoiceNumber,
-                date_invoiced: today,
-              },
-            }),
-          });
-        }
-
+        // The endpoint now stamps invoice_number / date_invoiced / archived_at
+        // (plus exported_at) on each successfully invoiced group itself, so
+        // there's no client-side follow-up call to keep in sync (§3.3).
         loadAll();
       }
     } catch (e: any) {
