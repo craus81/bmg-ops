@@ -120,7 +120,25 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ error: 'User created but no ID returned' }, { status: 500 });
     }
 
-    // 2. Create profile with installer role
+    // 2a. Every installer belongs to a company (the authoritative membership
+    // link is profiles.company_id -> companies). Find-or-create one from the
+    // typed company name, falling back to a one-person company named after the
+    // installer when none was given.
+    const compName = (companyName || fullName).trim();
+    let companyId: string | null = null;
+    if (compName) {
+      const { data: existingCo } = await supabase
+        .from('companies').select('id').ilike('name', compName).limit(1).maybeSingle();
+      if (existingCo) {
+        companyId = existingCo.id;
+      } else {
+        const { data: newCo } = await supabase
+          .from('companies').insert({ name: compName }).select('id').single();
+        companyId = newCo?.id || null;
+      }
+    }
+
+    // 2b. Create profile with installer role + company membership
     await supabase.from('profiles').upsert({
       id: userId,
       email: email.toLowerCase().trim(),
@@ -128,14 +146,17 @@ export async function POST(req: NextRequest) {
       role: 'installer',
       roles: ['installer'],
       status: 'approved',
+      company_id: companyId,
     }, { onConflict: 'id' });
 
     // 3. Create a stub CNI profile so they show up in the installers list.
-    // photo_quality is set explicitly because the column's table default
-    // ('good') is invalid under its own CHECK, which would fail the insert.
+    // company_name is kept as a transitional display fallback in sync with the
+    // company we just linked (a later migration drops it). photo_quality is set
+    // explicitly because the column's table default ('good') is invalid under
+    // its own CHECK, which would fail the insert.
     await supabase.from('cni_profiles').upsert({
       user_id: userId,
-      company_name: companyName || null,
+      company_name: compName || null,
       phone: phone || null,
       availability_status: 'available',
       photo_quality: 'pass',
