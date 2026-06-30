@@ -417,7 +417,7 @@ pre-loaded-list assumptions and *finishing* the company migration, not a rebuild
 | 2 | **Distribute & assign** | `bidding_open` → … | Admin: direct-assign a company, *or* invite companies, *or* publish to board → pick winner → `assigned_company_id`. Bidding is optional. |
 | 3 | **Schedule** | `scheduling…` → `scheduled_confirmed` | Admin proposes a datetime (`scheduled_start_at`, migration 113); company confirms/declines; admin may confirm on their behalf. |
 | 4 | **In progress** | `in_progress` | Admin "Start Work". Installer **starts a shift, picks the part** (defaults to the job's if set), held persistent; **scans VINs** (each → `scan_logs` + credits + `cni_job_vins`), like field. Crew tagged on the shift. |
-| 5 | **Complete** | `completed_pending_review` | **Installer-driven** "End Shift / Mark Job Complete" — *not* auto-on-empty (see fix). |
+| 5 | **Complete** | `completed_pending_review` | **Installer-driven** "End Shift / Mark Job Complete" — *not* auto-on-empty (see fix). Optional **target quantity** gives a countdown. |
 | 6 | **Review & close** | `approved_closed` | Admin reviews per-VIN photos → approves → closes → unlocks payout. Billing (Scan Log → invoice) runs independently. |
 
 **The one real bug to fix — premature auto-completion.** Today `complete-vin`
@@ -434,8 +434,16 @@ auto-advance-on-empty.
 - **Part at creation = optional default**, not required (`new/page.tsx:73` drops
   the hard check). The installer picks the part at shift start (§1.2),
   pre-filled from the job's default if present.
-- **Drop `is_multi_unit` / `vin_count` as scope gates** — keep only as an optional
-  "expected count" reference shown to the installer; never a completion gate.
+- **Optional target quantity instead of a pre-loaded VIN list (resolved
+  2026-06-29).** Completion isn't important to BMG's internal system — billing
+  and pay flow from scans regardless. But it's useful for the **CNI to see what's
+  left**. So at assignment the admin can set an optional **`target_quantity`**
+  (expected vehicles) — or leave it **null = open-ended**. As vehicles are
+  scanned, the installer sees a countdown ("12 of 30 done · 18 left"); reaching
+  the target may *prompt* "looks done?" but never force-completes. Open-ended jobs
+  rely purely on the explicit "Mark Job Complete". Replaces `vin_count` /
+  `is_multi_unit` as gates (those stay only as legacy/no-op). Not a completion
+  gate — purely a progress indicator + optional admin visibility.
 - **Finish the company migration on lifecycle stragglers:** the status-history
   trigger + RLS (migration 035) and various checks still key on
   `assigned_installer_id`; move them to `assigned_company_id` /
@@ -461,6 +469,52 @@ admin (or the installer) to reopen `completed_pending_review → in_progress` to
 add them before closing? Today reopening a completed VIN voids its credits;
 job-level reopen needs to *not* disturb already-credited vehicles. *Leaning:
 yes, allow reopen-before-close; closing (`approved_closed`) is the hard stop.*
+
+### 2.6 Scheduling & calendar (foundation + the part to decide with Ashley)
+
+Scheduling is **not greenfield** — the pieces exist and are partly wired:
+
+- **CNI scheduling fields** already exist: admin proposes `scheduled_start_at` /
+  `scheduled_end_at` (migration 113), installer confirms/declines (§2.5 phase 3).
+- **A unified calendar view** already exists at `/admin/schedule` — a week/month
+  grid that renders **CNI as a first-class event type** alongside graphics,
+  upfit, reminders (`schedule/page.tsx` TYPE_COLORS/TYPE_LABELS include `cni`).
+- **A proven Google Calendar sync pattern** exists: `/api/calendar/sync-upfit`
+  pushes a job's scheduled date → a GCal event and stores `calendar_event_id`
+  back on the row; `sync-graphics` does the same for graphics jobs. The
+  Google_Calendar integration is connected.
+
+**The clear, low-risk extension (recommended default):**
+- Add **`/api/calendar/sync-cni`** mirroring `sync-upfit`: when a CNI job's
+  schedule is confirmed, create/update a GCal event and store
+  `cni_jobs.calendar_event_id`; clear it if unscheduled. (One new endpoint +
+  one column, following an existing template.)
+- Give the **installer/company an agenda view** of their upcoming confirmed jobs
+  (date, address, target qty, part) — the schedule they actually work from.
+- Keep `/admin/schedule` as the single cross-type calendar (CNI events already
+  render there once they carry a confirmed datetime).
+
+**The part to decide with Ashley (preferences, not architecture).** These are
+workflow/policy choices the system should *support* but shouldn't hardcode
+blindly — flagged for Ashley's experience (§6 Q11):
+- **Whose calendar?** One shared BMG "CNI installs" Google Calendar, per-coordinator
+  calendars, and/or do installers get calendar invites to their own email?
+- **Multi-day / windows.** Many CNI visits span days or are a date *range*, not a
+  single slot — does scheduling need start+end windows, all-day events, recurring?
+- **Reminders & lead time.** Auto-reminder cadence (e.g. 48h/24h before) and to
+  whom (installer, coordinator, site contact)?
+- **Capacity / conflicts.** Should the calendar warn when a company is double-booked
+  across jobs, or is that overkill?
+- **Site contact coordination.** Does the site contact (the customer's location
+  POC on the job) get an invite / confirmation email?
+- **Holds vs confirmed.** Proposed-but-unconfirmed schedules shown as tentative
+  holds on the calendar, or only confirmed ones?
+
+Recommendation: build the §2.5 confirm/decline flow + `sync-cni` + installer
+agenda as the **foundation now** (it's the obvious, reversible part), and lock
+the preference list above with Ashley before adding reminders / multi-day /
+capacity logic — so we don't bake in guesses about how the scheduling actually
+runs day to day.
 
 ---
 
@@ -682,6 +736,19 @@ slower order is the numeric one. To be decided.
     `completed_pending_review` job to `in_progress` to add late vehicles before
     closing (without disturbing already-credited VINs)? *Leaning: yes; closing is
     the hard stop.*
+11. **Scheduling/calendar preferences (§2.6) — for Ashley.** Whose calendar
+    (shared vs per-coordinator vs installer invites); multi-day/windows;
+    reminder cadence + recipients; double-book warnings; site-contact invites;
+    tentative holds vs confirmed-only. *Build the foundation (confirm/decline +
+    `sync-cni` + installer agenda) now; lock these with Ashley before reminders /
+    multi-day / capacity logic.*
+
+### Resolved (2026-06-29) — job lifecycle completion (§2.5)
+- **Completion is a CNI-facing progress nicety, not a system gate.** Billing/pay
+  flow from scans regardless. Admin optionally sets a **`target_quantity`** at
+  assignment (or leaves it open-ended) that counts down as vehicles are scanned;
+  completion is the explicit installer "Mark Job Complete" (premature
+  auto-completion removed). 
 
 ### Resolved (2026-06-29) — bulk ingestion (§1.6) + dedup (§3.2)
 - **Last-8 or full VIN both work; no reconciliation.** Billing/pay key off
