@@ -402,6 +402,66 @@ table, never logged, never emailed. Retained docs (W-9/insurance PDFs) sit in R2
 behind presigned, access-controlled URLs. This keeps FleetSuite out of scope as
 a "system of record" for bank/SSN data.
 
+### 2.5 Job lifecycle — what stays, what changes (deep dive)
+
+**Good news:** the lifecycle already supports most of the target model —
+company-based assignment + RLS, **ad-hoc scan-during-work** (no pre-loaded VIN
+list), crew shifts, and the audit trail. This is mostly *removing* a couple of
+pre-loaded-list assumptions and *finishing* the company migration, not a rebuild.
+
+**Target lifecycle (6 phases):**
+
+| # | Phase | Status | Who drives it |
+|---|---|---|---|
+| 1 | **Create** | `awaiting_assignment` | Admin: title, customer, optional **default** part, payout mode, pay rate. **No VINs, no required part** (§1.3). |
+| 2 | **Distribute & assign** | `bidding_open` → … | Admin: direct-assign a company, *or* invite companies, *or* publish to board → pick winner → `assigned_company_id`. Bidding is optional. |
+| 3 | **Schedule** | `scheduling…` → `scheduled_confirmed` | Admin proposes a datetime (`scheduled_start_at`, migration 113); company confirms/declines; admin may confirm on their behalf. |
+| 4 | **In progress** | `in_progress` | Admin "Start Work". Installer **starts a shift, picks the part** (defaults to the job's if set), held persistent; **scans VINs** (each → `scan_logs` + credits + `cni_job_vins`), like field. Crew tagged on the shift. |
+| 5 | **Complete** | `completed_pending_review` | **Installer-driven** "End Shift / Mark Job Complete" — *not* auto-on-empty (see fix). |
+| 6 | **Review & close** | `approved_closed` | Admin reviews per-VIN photos → approves → closes → unlocks payout. Billing (Scan Log → invoice) runs independently. |
+
+**The one real bug to fix — premature auto-completion.** Today `complete-vin`
+(`route.ts:151-157`) and `scan-vehicle` advance the job to
+`completed_pending_review` the moment **no VIN is left in a non-completed
+status**. That was right for a *pre-loaded list* (finish the list → done). In the
+**discovered-VIN** model every scanned vehicle is immediately completed, so "zero
+pending" is true after the **first** scan — the job would mark itself done after
+one vehicle. Fix: **completion becomes an explicit installer action** ("End Shift
+/ Mark Job Complete"), with an admin "mark complete" too. Remove the
+auto-advance-on-empty.
+
+**Other changes (mostly deletions / cleanup):**
+- **Part at creation = optional default**, not required (`new/page.tsx:73` drops
+  the hard check). The installer picks the part at shift start (§1.2),
+  pre-filled from the job's default if present.
+- **Drop `is_multi_unit` / `vin_count` as scope gates** — keep only as an optional
+  "expected count" reference shown to the installer; never a completion gate.
+- **Finish the company migration on lifecycle stragglers:** the status-history
+  trigger + RLS (migration 035) and various checks still key on
+  `assigned_installer_id`; move them to `assigned_company_id` /
+  `cni_user_company_id()`. The bids page drops its legacy `assignFromBid`
+  (individual) path — company invites/bids (migration 111) fully supersede the
+  per-installer ones (036). `assigned_installer_id` stays read-only for
+  historical jobs.
+- **Photo review stays**, but the **required photo set becomes configurable per
+  job** — an RFID/device-capture job needs different evidence than a full wrap,
+  and forcing 5 fixed angles on every job is friction. (Today's required types
+  are hard-coded, migration 038.)
+- **Naming cleanup:** `/installer/ready-for-install` is the **upfit
+  `fleet_checkins` queue, not CNI** — rename/relocate so it isn't mistaken for a
+  CNI "ready" state.
+
+**What stays unchanged:** the distribution/bidding model, admin-proposes
+scheduling (113), crew shifts + pay credits, the status-history audit, and the
+installer bidding board (`/installer/available`).
+
+**Open question (§6 Q10):** **reopen for stragglers.** A site visit can spill —
+a few more vehicles show up after the installer marked the job complete. Allow an
+admin (or the installer) to reopen `completed_pending_review → in_progress` to
+add them before closing? Today reopening a completed VIN voids its credits;
+job-level reopen needs to *not* disturb already-credited vehicles. *Leaning:
+yes, allow reopen-before-close; closing (`approved_closed`) is the hard stop.*
+
 ---
 
 ## 3. Billing: CNI rides the field path, and the PO is consumed at invoice
@@ -564,10 +624,14 @@ Each phase is independently shippable as its own PR(s).
   (companies rows read-only → link); vendor id shown by payout mode; collapse the
   3 nav entries to 1. Every installer ends up in a company (one-person companies
   auto-created). *No new billing — pure de-duplication.*
-- **Phase 2 — CNI scans = field scans (§1.2/§1.3).** Give CNI the field shift
-  model: pick a part before scanning, held persistent until switched; log every
-  scan to `scan_logs` via the shift's part (remove the `if (job.part_number)`
-  gate); create `cni_job_vins` from scanning; no PO/customer/VIN on the job.
+- **Phase 2 — CNI scans = field scans + lifecycle fix (§1.2/§1.3/§2.5).** Give
+  CNI the field shift model: pick a part before scanning, held persistent until
+  switched; log every scan via the shift's part (remove the `if (job.part_number)`
+  gate); create `cni_job_vins` from scanning; no PO/customer/VIN on the job. **Fix
+  premature auto-completion** — make completion an explicit installer "End Shift /
+  Mark Job Complete" instead of auto-on-empty; part at creation becomes an
+  optional default; drop `vin_count`/`is_multi_unit` as gates; per-job configurable
+  photo set; finish moving status-history/RLS off `assigned_installer_id`.
 - **Phase 3a — "Scan for an installer" tool (§1.6).** Unify import-installs +
   scan-worksheet + add-completed-vin into one admin bulk-entry tool: company +
   crew + part + location, then VINs via paste / spreadsheet / photo-PDF, each →
@@ -614,6 +678,11 @@ slower order is the numeric one. To be decided.
    lightweight manual "create PO" path for CNI customers who don't email
    importable POs? *Leaning: add manual create — it's a small insert and removes
    a hard dependency on the import pipeline for the CNI side.*
+10. **Reopen for stragglers (§2.5)** — allow reopening a
+    `completed_pending_review` job to `in_progress` to add late vehicles before
+    closing (without disturbing already-credited VINs)? *Leaning: yes; closing is
+    the hard stop.*
+
 ### Resolved (2026-06-29) — bulk ingestion (§1.6) + dedup (§3.2)
 - **Last-8 or full VIN both work; no reconciliation.** Billing/pay key off
   part + PO + customer + vehicle count, not the VIN string, so an 8-char VIN
