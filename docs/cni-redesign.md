@@ -137,6 +137,80 @@ Plan: migrate the remaining readers (photo review, etc.) to `scan_logs` /
 `cni_job_*`, verify nothing writes to `scanned_vehicles`, then drop it. Tracked
 as its own phase (§3, Phase 0) because it's cross-cutting cleanup, not CNI-only.
 
+### 1.5 Identity consolidation — migration & refactor (deep dive)
+
+The "duplicate instances" feeling comes from one installer being modeled three
+times (`profiles`, `cni_profiles`, `companies`) with the pages disagreeing on
+which is authoritative. The fix is cheaper than it looks, because the spine
+already exists.
+
+**Finding that makes this cheap:** `profiles.company_id → companies` is *already*
+the de-facto source of truth. Everything that matters keys off it —
+- `/api/cni/installers` GET resolves the company name from `company_id`
+  (`route.ts:73-74`), not from `cni_profiles.company_name`;
+- RLS via `cni_user_company_id()` (migration 110);
+- scan attribution `resolveScannerCompany` (`src/lib/scan-log.ts:52-68`);
+- job assignment `cni_jobs.assigned_company_id`;
+- the entire companies page (add/remove member = set `profiles.company_id`,
+  `companies/[id]/page.tsx:221-233`).
+
+Only **four surfaces** still read/write the denormalized
+`cni_profiles.company_name`: the installers list, the installer detail edit form,
+the invite stub (`/api/cni/invite`), and onboarding/installer-profile. So
+consolidation is mostly **deleting a redundant copy**, not re-plumbing.
+
+**The "change company" trap, exactly (confirmed):** `installers/[id]` *reads* the
+real name from `companies` on load and even re-syncs it into `company_name`
+(`page.tsx:101-111`) — but the edit form's "Company" field writes **only**
+`cni_profiles.company_name` (`page.tsx:202-203`) and never touches
+`profiles.company_id`. An admin "changing the company" changes a label, not
+membership.
+
+**Two editors for the same field (confirmed):** both `/admin/cni/vendor-ids` and
+the companies-page member rows PATCH `/api/cni/installers`, which upserts
+`cni_profiles.netsuite_vendor_id` (`route.ts:117-118`). Same field, two UIs, no
+cross-awareness — plus the companies page carries a "use the Vendor IDs page"
+apology note.
+
+**Migration (one-time):**
+1. For each distinct `cni_profiles.company_name` not already represented by the
+   installer's `company_id`: **find-or-create** a `companies` row by exact name
+   (values are clean — `docs/pay-splits-design.md:329-332`) and set
+   `profiles.company_id`.
+2. Verify every active installer now has a `company_id`; report exceptions.
+3. Drop `cni_profiles.company_name` and the dead fields
+   (`primary_contact_name`, `skill_level`, `referred_by`).
+
+**Page / API refactors:**
+- **installers/[id]:** replace the free-text "Company" field with a **company
+  picker that sets `profiles.company_id`** (find-or-create inline), or a
+  read-only company link + a "Change company" action. Remove the `company_name`
+  write entirely — this kills the trap.
+- **installers list:** read the company from `company_id → companies.name` (the
+  API already returns exactly this).
+- **One vendor-id editor:** keep the bulk `vendor-ids` page as the single editing
+  surface and make the companies-page member rows **read-only with a link to
+  it** — or extract one shared `<VendorIdEditor>` used in both (they already
+  PATCH the same idempotent endpoint). Drop the apology note.
+- **Show the right vendor id by payout mode:** the **company**
+  `netsuite_vendor_id` when the company defaults to `company` payout, the
+  **per-person** ones when `individual` — never both at once (ties to §2.4).
+- **Nav:** collapse the three `/admin/cni` entries (`all_jobs`,
+  `vendor_payments`, `cni_management`) to **one** "CNI" entry; Jobs / Companies /
+  Installers / Pay become tabs (§2.2).
+
+**Creation unification (with §2.3/§2.4):** the invite flow **picks or creates a
+company** and sets `profiles.company_id` at invite time, so no installer is ever
+left unassigned; the invite stub stops writing `company_name`.
+
+**Solo installers (decision — §6 Q8):** today a company-less installer shows as
+"Independent" (`installers/[id]/page.tsx:373`). Either (a) **every installer
+belongs to a company** — a solo installer is a one-person company auto-created at
+invite, keeping assignment + payout uniform (recommended), or (b) "Independent"
+(`company_id` null) stays valid and is handled by individual payout mode only.
+This decides whether the migration auto-creates one-person companies for
+company-less installers.
+
 ---
 
 ## 2. Target pages & navigation
@@ -407,10 +481,12 @@ Each phase is independently shippable as its own PR(s).
 
 - **Phase 0 — Legacy cleanup.** Migrate remaining `scanned_vehicles` readers to
   `scan_logs`; drop the table. (Unblocks reasoning about "duplicate tables.")
-- **Phase 1 — Identity consolidation.** Backfill `company_name` → real
-  `companies` rows; drop `cni_profiles.company_name` + dead fields; one vendor-id
-  editor; fix the installer-page company trap; collapse the 3 nav entries to 1.
-  *No new billing yet — pure de-duplication.*
+- **Phase 1 — Identity consolidation (§1.5).** Migration: find-or-create
+  `companies` from `company_name` + set `company_id`; drop `company_name` + dead
+  fields. Refactor: installer-page company **picker** (sets `company_id`, kills
+  the trap); installers list reads `companies.name`; **one** vendor-id editor
+  (companies rows read-only → link); vendor id shown by payout mode; collapse the
+  3 nav entries to 1. *No new billing — pure de-duplication.* Gated on §6 Q8.
 - **Phase 2 — CNI scans = field scans (§1.2/§1.3).** Give CNI the field shift
   model: pick a part before scanning, held persistent until switched; log every
   scan to `scan_logs` via the shift's part (remove the `if (job.part_number)`
@@ -455,6 +531,11 @@ slower order is the numeric one. To be decided.
    lightweight manual "create PO" path for CNI customers who don't email
    importable POs? *Leaning: add manual create — it's a small insert and removes
    a hard dependency on the import pipeline for the CNI side.*
+8. **Solo installers (§1.5)** — every installer belongs to a company (solo = a
+   one-person company auto-created at invite; recommended), or keep "Independent"
+   (`company_id` null) as a valid state via individual payout only? *Decides
+   whether the migration auto-creates one-person companies.*
+
 ### Resolved (2026-06-29) — CNI billing = field flow (§1.2, §3)
 - **CNI scanning IS field scanning.** Installer picks a part before scanning,
   held persistent until they switch it (field shift model). No PO/customer/VIN
