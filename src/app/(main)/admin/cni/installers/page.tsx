@@ -85,7 +85,7 @@ export default function CniInstallersPage() {
         full_name: u.full_name || 'Unknown',
         email: u.email || '',
         deactivated: u.deactivated || false,
-        company_name: cni.company_name || (u.company_id ? companyMap[u.company_id] : null) || null,
+        company_name: (u.company_id ? companyMap[u.company_id] : null) || cni.company_name || null,
         availability_status: cni.availability_status || 'unknown',
         service_types: cni.service_types || [],
         risk_tags: cni.risk_tags || [],

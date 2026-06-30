@@ -6,6 +6,7 @@ import { createClient } from '@/lib/supabase-browser';
 import { useAuth } from '@/components/AuthProvider';
 import { useDialog } from '@/components/DialogProvider';
 import { theme } from '@/lib/theme';
+import { loadCompaniesWithCounts, type CompanyOption } from '@/lib/cni-companies';
 
 const RISK_TAG_OPTIONS = [
   { id: 'preferred', label: 'Preferred', color: 'var(--success)' },
@@ -54,10 +55,15 @@ export default function CniInstallerDetailPage() {
   const [communicationRating, setCommunicationRating] = useState('responsive');
   const [riskTags, setRiskTags] = useState<string[]>([]);
 
+  // Company is the single source of truth via profiles.company_id — the picker
+  // sets that, not a free-text string (which used to silently NOT change the
+  // installer's actual company). New-company name, when filled, takes priority.
+  const [companies, setCompanies] = useState<CompanyOption[]>([]);
+
   // Edit mode
   const [isEditing, setIsEditing] = useState(false);
   const [editForm, setEditForm] = useState({
-    fullName: '', email: '', companyName: '', phone: '',
+    fullName: '', email: '', companyId: '', newCompanyName: '', phone: '',
     street: '', city: '', state: '', zip: '',
     coverageRadius: '', serviceTypes: [] as string[], equipmentCapabilities: [] as string[],
     availabilityStatus: 'available',
@@ -80,6 +86,8 @@ export default function CniInstallerDetailPage() {
   };
 
   const loadData = async () => {
+    setCompanies(await loadCompaniesWithCounts(supabase));
+
     const { data: userData } = await supabase
       .from('profiles')
       .select('full_name, email, deactivated, deactivated_at, role, roles, company_id')
@@ -165,7 +173,8 @@ export default function CniInstallerDetailPage() {
     setEditForm({
       fullName: userProfile?.full_name || '',
       email: userProfile?.email || '',
-      companyName: profile?.company_name || '',
+      companyId: userProfile?.company_id || '',
+      newCompanyName: '',
       phone: profile?.phone || '',
       street: addr.street || '',
       city: addr.city || '',
@@ -186,10 +195,35 @@ export default function CniInstallerDetailPage() {
     }
     setSaving(true);
 
-    // Update profiles table (name, email)
+    // Resolve the company: a typed new name wins (create-or-reuse it), else the
+    // picked existing company. This sets profiles.company_id — the authoritative
+    // membership link — instead of a free-text label that changed nothing.
+    let companyId: string | null = editForm.companyId || null;
+    let companyName: string | null = companies.find(c => c.id === companyId)?.name || null;
+    const newName = editForm.newCompanyName.trim();
+    if (newName) {
+      const existing = companies.find(c => c.name.toLowerCase() === newName.toLowerCase());
+      if (existing) {
+        companyId = existing.id;
+        companyName = existing.name;
+      } else {
+        const { data: created, error: compErr } = await supabase
+          .from('companies').insert({ name: newName }).select('id, name').single();
+        if (compErr || !created) {
+          showMessage('Failed to create company: ' + (compErr?.message || 'unknown'), 'error');
+          setSaving(false);
+          return;
+        }
+        companyId = created.id;
+        companyName = created.name;
+      }
+    }
+
+    // Update profiles table (name, email, company membership)
     const { error: profileErr } = await supabase.from('profiles').update({
       full_name: editForm.fullName.trim(),
       email: editForm.email.trim().toLowerCase(),
+      company_id: companyId,
     }).eq('id', userId);
 
     if (profileErr) {
@@ -198,9 +232,10 @@ export default function CniInstallerDetailPage() {
       return;
     }
 
-    // Update cni_profiles table
+    // Update cni_profiles table. company_name is kept in sync with the chosen
+    // company as a transitional display fallback (a later migration drops it).
     const { error: cniErr } = await supabase.from('cni_profiles').update({
-      company_name: editForm.companyName.trim() || null,
+      company_name: companyName,
       phone: editForm.phone.trim() || null,
       business_address: {
         street: editForm.street.trim(),
@@ -370,7 +405,7 @@ export default function CniInstallerDetailPage() {
             {userProfile.full_name}
           </div>
           <div style={{ fontSize: '12px', color: 'var(--text-muted)' }}>
-            {profile.company_name || 'Independent'} • {userProfile.email}
+            {companies.find(c => c.id === userProfile.company_id)?.name || profile.company_name || 'Independent'} • {userProfile.email}
           </div>
         </div>
         {!isEditing && (
@@ -445,8 +480,26 @@ export default function CniInstallerDetailPage() {
               <input style={inputStyle} value={editForm.email} onChange={e => setEditForm({ ...editForm, email: e.target.value })} />
             </div>
             <div>
-              <label style={labelStyle}>Company Name</label>
-              <input style={inputStyle} value={editForm.companyName} onChange={e => setEditForm({ ...editForm, companyName: e.target.value })} />
+              <label style={labelStyle}>Company</label>
+              <select
+                style={inputStyle}
+                value={editForm.companyId}
+                onChange={e => setEditForm({ ...editForm, companyId: e.target.value, newCompanyName: '' })}
+              >
+                <option value="">— Select a company —</option>
+                {companies.map(c => (
+                  <option key={c.id} value={c.id}>{c.name}</option>
+                ))}
+              </select>
+              <input
+                style={{ ...inputStyle, marginTop: '6px' }}
+                placeholder="…or type a new company to create"
+                value={editForm.newCompanyName}
+                onChange={e => setEditForm({ ...editForm, newCompanyName: e.target.value })}
+              />
+              <div style={{ fontSize: '11px', color: 'var(--text-muted)', marginTop: '4px' }}>
+                Sets the installer&apos;s actual company (membership), not just a label.
+              </div>
             </div>
             <div>
               <label style={labelStyle}>Phone</label>
