@@ -263,9 +263,9 @@ reference/dedup token, and `logScan` only requires ≥5 chars — so an 8-char V
 flows through unchanged. **No reconciliation step; accept last-8 or full VIN as
 entered.** Two honest, non-blocking caveats: (a) auto-decoding year/make/model
 needs a full VIN — a last-8 row just won't auto-fill vehicle details (admin can
-type them or leave blank); (b) dedup is `(vin, part_number)`, so the same vehicle
-entered once full and once last-8 wouldn't be caught as a dup — an edge case only
-when a vehicle arrives via two different channels, not within one worksheet/list.
+type them or leave blank); (b) ~~cross-format dedup~~ — **resolved**: dedup now
+compares the VIN **last-8** (§3.2), so the same vehicle entered once full and once
+as last-8 *is* caught (flagged, with admin override).
 
 ---
 
@@ -448,13 +448,33 @@ with a 409 (`src/lib/scan-log.ts:96-114`). One vehicle+part ⇒ one `scan_logs`
 row ⇒ one decrement ⇒ one invoice line. The no-duplicate-scan rule is what makes
 "no duplicate invoices" fall out for free — exactly as expected.
 
-**One hardening to make that guarantee bulletproof.** The dedup today is an
-application-level *check-then-insert* (SELECT then INSERT), which (a) has a small
-race window under concurrent scans and (b) is skipped entirely when
-`part_number` is null. Add a **DB unique index** so the database enforces it:
-`CREATE UNIQUE INDEX ON scan_logs (vin, part_number) WHERE part_number IS NOT
-NULL;` (plus the existing IMEI uniqueness). Then duplicate decrements/invoices are
-impossible by construction, not by a racy guard.
+**Dedup on the last-8 of the VIN, as a soft flag with admin override
+(resolved 2026-06-29).** Today's check is exact `vin + part_number`, so the same
+vehicle entered once as a full 17-char VIN and once as the last-8 slips through
+as two rows (the §1.6 caveat). Fix it by comparing the **last 8 characters**:
+
+- Add a generated, indexed column:
+  `vin_last8 TEXT GENERATED ALWAYS AS (upper(right(vin, 8))) STORED`, with
+  `INDEX (vin_last8, part_number)`.
+- `logScan` checks for an existing row with the same `vin_last8 + part_number`
+  and returns a structured **`duplicate` outcome** (the matching scan's id, VIN,
+  date) — catching full↔full, full↔last-8, and last-8↔last-8.
+- **Soft, not hard.** Installer/field scan paths surface it as a blocking warning
+  (don't silently create a dup). **Admin paths** (the §1.6 bulk tool,
+  `add-completed-vin`, the admin scan view) get an **"override / log anyway"** —
+  for the rare legitimate case (two real VINs sharing a last-8, or a deliberate
+  re-log). Override is admin-gated and recorded (who/why).
+- In the §1.6 staging grid, flagged rows show the dup + the existing match, with
+  a per-row override checkbox so an admin clears them in bulk.
+
+**Plus a hard guard for *exact* dups.** Keep a **DB unique index** on the exact
+key — `CREATE UNIQUE INDEX ON scan_logs (vin, part_number) WHERE part_number IS
+NOT NULL;` (and the existing IMEI uniqueness). Identical re-inserts are always
+wrong, so that one is not overridable; it also closes the race window the
+app-level check has. The last-8 check stays *soft/overridable* (it can't be a
+unique constraint precisely because override must be possible). Net: exact dups
+are impossible by construction; near-dups (mixed VIN format) are flagged and an
+admin decides.
 
 **Keep the reversal path.** If a scan is un-matched, archived, or deleted, the PO
 must re-increment — the `increment/decrement_po_installed` RPCs (migration 004)
@@ -513,7 +533,7 @@ checked before the invoice call:
 | `billable_customer` unset / unmatched | NS "Customer not found" at invoice | shown unresolved in the Scan Log row, fix inline |
 | part not in `netsuite_parts` | "No parts matched in NetSuite" | flagged before sending |
 | no PO / wrong PO | stuck in "Waiting for PO" | PO editable inline; never silently stuck |
-| duplicate vehicle | app-level check, race-prone, skipped if no part | **DB unique index** on (vin, part_number) — no dup scan ⇒ no dup decrement/invoice (§3.2) |
+| duplicate vehicle | exact `vin+part` only (misses full-vs-last-8), race-prone | **last-8 soft flag + admin override**, plus a hard unique index on exact `(vin, part_number)` (§3.2) |
 | location unresolved | "Could not resolve a NetSuite location" | location preview from PO ship-to shown before sending |
 
 ---
@@ -555,9 +575,9 @@ Each phase is independently shippable as its own PR(s).
   credits; delete the dead root `bulk-vin-upload-code.tsx`. Last-8 or full VIN
   both accepted as-is (no reconciliation).
 - **Phase 3 — Unify billing + harden PO accounting (§3).** Keep the scan-time PO
-  decrement (it's correct); add a **DB unique index** on `scan_logs (vin,
-  part_number)` so dup scans (and thus dup decrements/invoices) are impossible by
-  construction; ensure reopen/void/archive reverses the decrement; fold invoice
+  decrement (it's correct); **dedup**: `vin_last8` generated column + last-8 soft
+  flag with admin override, plus a hard unique index on exact `(vin, part_number)`
+  (§3.2); ensure reopen/void/archive reverses the decrement; fold invoice
   bookkeeping (`invoice_number`/`date_invoiced`/`archived_at`) into
   `invoice-vehicles`; Scan Log source filter + attach-PO-inline; visible
   precondition states; optional PO auto-close. Optional sub-PR: manual
@@ -594,12 +614,15 @@ slower order is the numeric one. To be decided.
    lightweight manual "create PO" path for CNI customers who don't email
    importable POs? *Leaning: add manual create — it's a small insert and removes
    a hard dependency on the import pipeline for the CNI side.*
-### Resolved (2026-06-29) — bulk ingestion (§1.6)
+### Resolved (2026-06-29) — bulk ingestion (§1.6) + dedup (§3.2)
 - **Last-8 or full VIN both work; no reconciliation.** Billing/pay key off
   part + PO + customer + vehicle count, not the VIN string, so an 8-char VIN
-  flows through `logScan` unchanged. Caveats (non-blocking): full VIN needed only
-  to auto-decode year/make/model; cross-channel dup of the same vehicle in two
-  VIN formats isn't caught by `(vin, part_number)` dedup.
+  flows through `logScan` unchanged. (Full VIN still needed to auto-decode
+  year/make/model.)
+- **Dedup compares the VIN last-8** as a **soft flag with admin override** —
+  catches full-vs-last-8 of the same vehicle; admins can override the rare
+  legitimate collision. A hard unique index on exact `(vin, part_number)` still
+  blocks identical re-inserts race-free.
 
 ### Resolved (2026-06-29) — identity consolidation (§1.5)
 - **Every installer belongs to a company.** Solo = a one-person company,
