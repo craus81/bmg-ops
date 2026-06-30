@@ -300,62 +300,55 @@ scans:
 - Everything else — customer, PO, location, pricing — is resolved in the Scan
   Log by the same machinery field already uses. No customer/PO on the job.
 
-### 3.2 The PO **must be consumed at invoice** (the correctness fix)
+### 3.2 The PO is consumed at **scan** time — and that's correct
 
-**This is the "or the whole system is broken" requirement.** Current behavior
-(verified in code):
+Resolved (2026-06-29): **a scanned ("completed") vehicle decrements the PO**, with
+the understanding that those vehicles are invoiced later. So the current behavior
+is the intended semantics, not a bug:
 
 - `po_line_items.installed` is incremented at **match time**
-  (`src/lib/scan-match.ts:104`), i.e. when a scan first attaches to a PO — *not*
-  when you bill.
-- The scan-based invoice (`invoice-vehicles`) **never touches the PO** and has
-  **no guard against invoicing the same scans twice**.
+  (`src/lib/scan-match.ts:104`) — i.e. when the vehicle is scanned and attaches
+  to its open PO line. "Remaining" = not-yet-scanned/installed. ✓ keep.
+- Invoicing happens later from the Scan Log; the invoice does **not** need to
+  move the PO again.
 
-That decoupling produces three real defects:
-1. A scan that **matches but is never invoiced** (archived/deleted/abandoned) has
-   already decremented the PO — the PO reads consumed for work never billed.
-2. The **same scans can be invoiced twice** — double-billing the customer while
-   the PO only moved once.
-3. CNI scans that never matched a PO **never decrement it at all** — the PO sits
-   at full quantity forever (the symptom you've been seeing).
+**Why this doesn't double-bill:** the system blocks duplicate scans. `logScan`
+rejects a second scan of the same **VIN + part_number** (and the same **IMEI**)
+with a 409 (`src/lib/scan-log.ts:96-114`). One vehicle+part ⇒ one `scan_logs`
+row ⇒ one decrement ⇒ one invoice line. The no-duplicate-scan rule is what makes
+"no duplicate invoices" fall out for free — exactly as expected.
 
-**Target model — invoice is the single authoritative consumption point**
-(recommended; pending confirmation, §6 Q7):
+**One hardening to make that guarantee bulletproof.** The dedup today is an
+application-level *check-then-insert* (SELECT then INSERT), which (a) has a small
+race window under concurrent scans and (b) is skipped entirely when
+`part_number` is null. Add a **DB unique index** so the database enforces it:
+`CREATE UNIQUE INDEX ON scan_logs (vin, part_number) WHERE part_number IS NOT
+NULL;` (plus the existing IMEI uniqueness). Then duplicate decrements/invoices are
+impossible by construction, not by a racy guard.
 
-- **Match = link only.** `matchScansToOpenPos` sets `po_id` / `po_line_item_id`
-  on the scan but **stops incrementing `installed`**. Matching reserves nothing;
-  it just records which PO line this scan will bill against.
-- **Invoice = consume.** When `invoice-vehicles` creates the NetSuite invoice, it
-  **decrements the PO** (increments `installed` by the billed qty on each line),
-  inside the same transaction that marks the scans billed.
-- **Idempotent / no double-bill.** Mark each scan with its `invoice_number` /
-  `date_invoiced` on success and **refuse to invoice an already-billed scan** —
-  closing the double-invoice hole.
-- **Reversal.** Voiding/crediting an invoice re-increments remaining
-  (`decrement_po_installed` already exists, migration 004) and clears the scans'
-  invoice stamp.
-- **Auto-close.** When every line on a PO reaches `installed = quantity`, flip
-  `purchase_orders.status` to `complete`/`closed` (today manual; migration 071
-  already defines the status). "Remaining" then means **not-yet-billed**.
+**Keep the reversal path.** If a scan is un-matched, archived, or deleted, the PO
+must re-increment — the `increment/decrement_po_installed` RPCs (migration 004)
+already do this and are used in `src/app/api/vehicles/update-match/route.ts`.
+Reopening/voiding a completed CNI VIN should run the same reversal.
 
-Two reusable pieces already exist to lean on: the `increment/decrement_po_installed`
-RPCs (migration 004) and the all-lines-fulfilled check in
-`src/app/api/vehicles/update-match/route.ts:65,87`.
+**The actual CNI defect** was never the decrement timing — it was that CNI scans
+**never matched a PO at all** (no part on many jobs, separate flow), so the PO
+never moved. That's fixed by §1.2/§1.3: CNI scans now run the field path and
+match + decrement just like field scans. No PO-engine change needed.
 
-> Alternative if you track physical installs separately from billing: keep a
-> second counter — `installed` (at scan, physical progress) **and** `billed` (at
-> invoice). PO shows "X installed / Y billed of Z". More moving parts; only worth
-> it if "installed but not yet billed" is a number you report on. Decision = §6 Q7.
+**Auto-close (nice-to-have).** When every line on a PO reaches `installed =
+quantity`, flip `purchase_orders.status` to `complete`/`closed` (today manual;
+status defined in migration 071) so fully-installed POs drop out of the open set.
 
-### 3.3 Move the post-invoice bookkeeping into the endpoint
+### 3.3 Consolidate the post-invoice bookkeeping into the endpoint
 
 Today the invoice **number/date/archive** stamping lives in the Scan Log *page*
 (`src/app/(main)/admin/scans/page.tsx` `createInvoice`), while the endpoint only
-sets `exported_at`. Fold all of it — `invoice_number`, `date_invoiced`,
-`archived_at`, the new PO decrement, and the billed-guard — **into
-`invoice-vehicles`** so every caller (Scan Log, and any per-job view) gets
-correct, consistent accounting with no client-side duplication. This is the
-single highest-leverage refactor in the billing work.
+sets `exported_at`. Fold `invoice_number` / `date_invoiced` / `archived_at` **into
+`invoice-vehicles`** so every caller gets identical accounting with no client-side
+duplication. (PO consumption already happened at scan time per §3.2, so it's not
+part of this — this is purely about not splitting the invoice-stamp logic between
+the page and the endpoint.)
 
 ### 3.4 Scan Log: make CNI scans findable (small adds)
 
@@ -390,7 +383,7 @@ checked before the invoice call:
 | `billable_customer` unset / unmatched | NS "Customer not found" at invoice | shown unresolved in the Scan Log row, fix inline |
 | part not in `netsuite_parts` | "No parts matched in NetSuite" | flagged before sending |
 | no PO / wrong PO | stuck in "Waiting for PO" | PO editable inline; never silently stuck |
-| already invoiced | silently re-bills | **blocked** — billed scans can't be re-invoiced (§3.2) |
+| duplicate vehicle | app-level check, race-prone, skipped if no part | **DB unique index** on (vin, part_number) — no dup scan ⇒ no dup decrement/invoice (§3.2) |
 | location unresolved | "Could not resolve a NetSuite location" | location preview from PO ship-to shown before sending |
 
 ---
@@ -422,13 +415,14 @@ Each phase is independently shippable as its own PR(s).
   model: pick a part before scanning, held persistent until switched; log every
   scan to `scan_logs` via the shift's part (remove the `if (job.part_number)`
   gate); create `cni_job_vins` from scanning; no PO/customer/VIN on the job.
-- **Phase 3 — Fix PO accounting + unify billing (§3).** Move PO consumption to
-  **invoice time** (`invoice-vehicles` decrements `installed`, blocks re-invoice,
-  reverses on void, auto-closes the PO); stop the match-time increment in
-  `scan-match`; fold invoice bookkeeping (`invoice_number`/`date_invoiced`/
-  `archived_at` + decrement) into the endpoint; Scan Log source filter +
-  attach-PO-inline; visible precondition states. Optional sub-PR: manual
-  "create PO" path (§3.5, §6 Q5). *Gated on §6 Q7 (one counter vs two).*
+- **Phase 3 — Unify billing + harden PO accounting (§3).** Keep the scan-time PO
+  decrement (it's correct); add a **DB unique index** on `scan_logs (vin,
+  part_number)` so dup scans (and thus dup decrements/invoices) are impossible by
+  construction; ensure reopen/void/archive reverses the decrement; fold invoice
+  bookkeeping (`invoice_number`/`date_invoiced`/`archived_at`) into
+  `invoice-vehicles`; Scan Log source filter + attach-PO-inline; visible
+  precondition states; optional PO auto-close. Optional sub-PR: manual
+  "create PO" path (§3.5, §6 Q5).
 - **Phase 4 — Onboarding & vendor provisioning (§2.4).** One invite-or-create-
   company flow; staged onboarding with W-9/insurance upload (R2) + structured
   tax; secure forward-only banking step; `createVendor()` that mints the NetSuite
@@ -461,19 +455,17 @@ slower order is the numeric one. To be decided.
    lightweight manual "create PO" path for CNI customers who don't email
    importable POs? *Leaning: add manual create — it's a small insert and removes
    a hard dependency on the import pipeline for the CNI side.*
-7. **PO consumption semantics (§3.2)** — single counter consumed **at invoice**
-   (recommended: remaining = not-yet-billed), or two counters (`installed` at
-   scan + `billed` at invoice)? *Leaning: single counter at invoice — matches
-   "the invoice has to decrement the PO."*
-
 ### Resolved (2026-06-29) — CNI billing = field flow (§1.2, §3)
 - **CNI scanning IS field scanning.** Installer picks a part before scanning,
   held persistent until they switch it (field shift model). No PO/customer/VIN
   pre-loaded on the job; VINs discovered by scanning; PO/customer resolved in the
   Scan Log like field. Dropped: `cni_jobs.po_id` / `netsuite_customer_id` and the
   customer-picker-at-creation idea (old Q6).
-- **Invoice must decrement the PO.** Consumption moves to invoice time, billed
-  scans can't be re-invoiced, voids reverse, PO auto-closes when fully billed.
+- **PO is consumed at scan time** (a scanned/"completed" vehicle decrements the
+  PO; invoiced later). Kept as-is — *not* moved to invoice time. Duplicate scans
+  are blocked (VIN+part / IMEI), so duplicate invoices can't arise; harden that
+  with a DB unique index. The CNI gap was that CNI scans never matched a PO —
+  fixed by routing CNI down the field path (resolves old Q7).
 
 ### Resolved (2026-06-29) — onboarding & vendor provisioning (§2.4)
 - **Payment rail:** NetSuite Electronic Bank Payments (ACH) — bank details go to
