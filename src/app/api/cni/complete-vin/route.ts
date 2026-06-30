@@ -83,7 +83,10 @@ export async function POST(req: NextRequest) {
   // installer — with company assignment any crew member may be completing.
   const scanner = auth.user.id;
   let scanLogId: string | null = vin.scan_log_id;
-  if (job.part_number && !vin.scan_log_id) {
+  // Always log to scan_logs so a completed VIN reaches the Scan Log even when
+  // the job has no part yet (it lands flagged "needs part", instead of
+  // vanishing from billing). See docs/cni-redesign.md §1.3 / §3.6.
+  if (!vin.scan_log_id) {
     const addr = (job.address || {}) as { city?: string; state?: string };
     const locationName = [addr.city, addr.state].filter(Boolean).join(', ') || job.title || null;
     const company = await resolveScannerCompany(supabase, scanner);
