@@ -626,7 +626,13 @@ export default function InstallerJobDetailPage() {
         <div style={sectionStyle}>
           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '10px' }}>
             <div style={{ fontSize: '12px', fontWeight: 700, color: 'var(--text-muted)' }}>
-              VEHICLES ({vins.filter(v => v.status === 'completed').length}/{vins.length} complete)
+              {(() => {
+                const done = vins.filter(v => v.status === 'completed').length;
+                const target = job.target_quantity as number | null;
+                return target
+                  ? `VEHICLES (${done} of ${target} · ${Math.max(target - done, 0)} left)`
+                  : `VEHICLES (${done}/${vins.length} complete)`;
+              })()}
             </div>
             {job.status === 'in_progress' && (
               <button onClick={() => { setScanNewError(''); setScanNewOpen(true); }} style={{

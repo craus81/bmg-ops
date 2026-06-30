@@ -27,6 +27,7 @@ interface CniJob {
   site_contact_email: string | null;
   is_multi_unit: boolean;
   vin_count: number;
+  target_quantity: number | null;
   budget: number | null;
   pay_per_vehicle: number | null;
   deadline: string | null;
@@ -1073,7 +1074,13 @@ export default function CniJobDetailPage() {
       }}>
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '10px' }}>
           <div style={{ fontSize: '12px', fontWeight: 700, color: 'var(--text-muted)' }}>
-            VINS ({vins.length})
+            {(() => {
+              const done = vins.filter(v => v.status === 'completed').length;
+              const target = job.target_quantity;
+              return target
+                ? `VINS (${done} of ${target} target · ${Math.max(target - done, 0)} left)`
+                : `VINS (${vins.length})`;
+            })()}
           </div>
           <div style={{ display: 'flex', gap: '6px' }}>
             <button onClick={openImport} style={{
