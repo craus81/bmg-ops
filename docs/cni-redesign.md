@@ -213,6 +213,56 @@ assignment, bidding, and payout have no special "independent" path. The
 auto-creates one-person companies for any company-less installer (step 2 above),
 and invite always creates-or-links a company.
 
+### 1.6 A third scan channel — admin enters VINs *for* an installer
+
+Not every CNI installer will use the app. Some will email a spreadsheet, a list,
+or **photos of the VINs** (or handwritten install worksheets). Those must still
+flow into the **same `scan_logs` pipeline**, credited to the right company +
+crew, billable *and* payable exactly like an in-app scan. This is the third way a
+scan enters the system; all three converge on `logScan()` + pay credits:
+
+1. Installer scans in-app (CNI = field, §1.2)
+2. BMG field tech scans in-app
+3. **Admin bulk-enters on behalf of an installer** (this section)
+
+**What already exists (scattered — the work is unifying, not building):**
+- `/admin/import-installs` (+ `/api/admin/import-installs`) — paste/spreadsheet of
+  VINs → `logScan()` → `scan_logs`. ✅ billing rows, dedup, device IDs. ❌ but it
+  credits a **free-text company string** (`scanned_by_company`), not a real
+  `companies` row, and writes **no pay credits** (`install_credits`) — so imported
+  work is billable but the installer isn't *paid* for it.
+- `/api/scan-worksheet` — Claude already **reads photos/PDFs of install
+  worksheets** and extracts VIN-last-8 + Unit# + part + PO + customer per page.
+  ✅ the "pictures of VINs" path largely exists — but returns **VIN last-8** (see
+  wrinkle) and isn't wired to `logScan` / credits.
+- `add-completed-vin` — admin adds **one** completed VIN *with* crew + pay
+  credits. ✅ the pay-credit pattern to reuse for the bulk path.
+- `bulk-vin-upload-code.tsx` (repo root) — a ~59KB **dead/unwired** bulk-upload UI
+  on the old `scanned_vehicles` model. Salvage ideas, then delete.
+
+**Target — one "Scan for an installer" admin tool** that mirrors the field shift:
+- Pick the **company** (real `companies` row, §1.5) + **crew** (pay splits) +
+  **part** + **location** — the same inputs as starting a field/CNI shift, done by
+  an admin on the installer's behalf.
+- Feed VINs through any channel into one staging grid: typed/pasted list,
+  spreadsheet upload (today's parser), or **photos/PDF** → `scan-worksheet` AI
+  extraction (worksheets) + plain-photo VIN OCR (reuse `VinScanner`'s decode).
+- Each row → `logScan()` (shared dedup / device IDs / PO match) **and** pay
+  credits to the chosen crew at the part/job rate (reuse `add-completed-vin`).
+- Identical downstream: dedup, PO decrement (§3.2), Scan Log, invoice.
+
+**Fixes folded in:** import-installs credits a real `companies` row + writes pay
+credits; the worksheet/photo path joins the same tool; the dead root file is
+removed.
+
+**Wrinkle — full VIN vs last-8 (§6 Q9).** Worksheet photos give VIN *last-8*; to
+bill/pay cleanly we want the full VIN. Options: (a) reconcile last-8 against a
+known VIN source (a list attached to the job, prior scans, the customer's
+PO/fleet list); (b) accept last-8 + Unit# as a **draft** the admin completes
+before it bills; (c) require full VINs for typed/spreadsheet entry and treat
+worksheet last-8 as draft-only. Photos of the **full** VIN (windshield/barcode)
+sidestep it via OCR/barcode decode.
+
 ---
 
 ## 2. Target pages & navigation
@@ -494,6 +544,11 @@ Each phase is independently shippable as its own PR(s).
   model: pick a part before scanning, held persistent until switched; log every
   scan to `scan_logs` via the shift's part (remove the `if (job.part_number)`
   gate); create `cni_job_vins` from scanning; no PO/customer/VIN on the job.
+- **Phase 3a — "Scan for an installer" tool (§1.6).** Unify import-installs +
+  scan-worksheet + add-completed-vin into one admin bulk-entry tool: company +
+  crew + part + location, then VINs via paste / spreadsheet / photo-PDF, each →
+  `logScan()` + pay credits. Fix import-installs to credit a real company + write
+  credits; delete the dead root `bulk-vin-upload-code.tsx`. (§6 Q9 for last-8.)
 - **Phase 3 — Unify billing + harden PO accounting (§3).** Keep the scan-time PO
   decrement (it's correct); add a **DB unique index** on `scan_logs (vin,
   part_number)` so dup scans (and thus dup decrements/invoices) are impossible by
@@ -534,6 +589,12 @@ slower order is the numeric one. To be decided.
    lightweight manual "create PO" path for CNI customers who don't email
    importable POs? *Leaning: add manual create — it's a small insert and removes
    a hard dependency on the import pipeline for the CNI side.*
+9. **Full VIN vs worksheet last-8 (§1.6)** — for photo/worksheet ingestion that
+   yields VIN last-8, do we reconcile against a known VIN source, accept last-8 +
+   Unit# as a draft the admin completes, or require full VINs except for
+   draft-only worksheet rows? *Leaning: accept as draft, complete before it
+   bills; full-VIN photos (windshield/barcode) skip the issue.*
+
 ### Resolved (2026-06-29) — identity consolidation (§1.5)
 - **Every installer belongs to a company.** Solo = a one-person company,
   auto-created at invite; no "Independent" path. Migration auto-creates one-person
