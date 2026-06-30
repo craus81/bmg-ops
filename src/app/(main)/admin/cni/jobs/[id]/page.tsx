@@ -121,7 +121,7 @@ const NEXT_STATUSES: Record<string, string[]> = {
   scheduling_proposed: [],
   scheduled_pending_confirmation: [],
   scheduled_confirmed: ['in_progress'],
-  in_progress: [],
+  in_progress: ['completed_pending_review'],
   completed_pending_review: ['approved_closed'],
   approved_closed: [],
 };
@@ -457,9 +457,13 @@ export default function CniJobDetailPage() {
   const updateStatus = async (newStatus: string) => {
     if (!job || updating) return;
     setUpdating(true);
+    const patch: Record<string, any> = { status: newStatus, updated_by: user?.id };
+    // Stamp completion time when an admin marks the job complete (the auto-
+    // advance that used to set this was removed — completion is explicit now).
+    if (newStatus === 'completed_pending_review') patch.completed_at = new Date().toISOString();
     const { error } = await supabase
       .from('cni_jobs')
-      .update({ status: newStatus, updated_by: user?.id })
+      .update(patch)
       .eq('id', job.id);
     if (!error) {
       await loadJob();

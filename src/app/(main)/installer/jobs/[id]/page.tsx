@@ -254,6 +254,31 @@ export default function InstallerJobDetailPage() {
     }
   };
 
+  // Explicit completion: vehicles are scanned as the crew works (no fixed list
+  // to "finish"), so the installer says when the job is done. Ends any open
+  // shift, then moves the job to review. See docs/cni-redesign.md §2.5.
+  const markJobComplete = async () => {
+    if (!job) return;
+    if (!(await dialog.confirm('Mark this job complete and send it to BMG for review? You can still upload photos afterward.'))) return;
+    setUpdating(true);
+    try {
+      if (shiftInfo?.shift) {
+        await fetch('/api/shifts/end', {
+          method: 'POST', headers: await authHeaders(),
+          body: JSON.stringify({ shiftId: shiftInfo.shift.id }),
+        });
+      }
+      const { error } = await supabase.from('cni_jobs').update({
+        status: 'completed_pending_review',
+        completed_at: new Date().toISOString(),
+      }).eq('id', job.id);
+      if (error) { setActionError('Failed to mark complete: ' + error.message); return; }
+      await loadJob();
+    } finally {
+      setUpdating(false);
+    }
+  };
+
   // Your cut per vehicle on the current crew: rate × your weight / Σ weights.
   const myCut = (() => {
     if (!shiftInfo?.shift || shiftInfo.ratePerVehicle == null || !user) return null;
@@ -655,6 +680,19 @@ export default function InstallerJobDetailPage() {
           ))}
           {actionError && (
             <div style={{ marginTop: '8px', padding: '8px 12px', borderRadius: '8px', background: 'var(--error-bg)', border: '1px solid var(--error-border)', color: 'var(--error)', fontSize: '12px', fontWeight: 600 }}>{actionError}</div>
+          )}
+          {job.status === 'in_progress' && (
+            <button
+              onClick={markJobComplete}
+              disabled={updating}
+              style={{
+                marginTop: '12px', width: '100%', padding: '12px', borderRadius: '10px',
+                fontSize: '13px', fontWeight: 700,
+                background: 'var(--success)', color: '#fff', border: 'none',
+              }}
+            >
+              ✓ Mark Job Complete
+            </button>
           )}
         </div>
       )}
