@@ -86,6 +86,8 @@ const StartSchema = z.object({
   context: z.enum(['cni', 'field']),
   cniJobId: z.string().uuid().optional().nullable(),
   partNumber: z.string().trim().max(120).optional().nullable(),
+  partDescription: z.string().trim().max(300).optional().nullable(),
+  billableCustomer: z.string().trim().max(200).optional().nullable(),
   locationId: z.string().uuid().optional().nullable(),
   locationName: z.string().trim().max(200).optional().nullable(),
   members: z.array(MemberInput).max(50).default([]),
@@ -148,12 +150,16 @@ export async function POST(req: NextRequest) {
   // crew that doesn't include themselves.
   if (!isAdmin || members.size === 0) members.set(auth.user.id, members.get(auth.user.id) ?? 1);
 
+  // The part the crew picked for this shift (CNI field-shift model, §1.2): for
+  // CNI it bills every completed vehicle; for field it drives the rate lookup.
   const { data: shift, error } = await service
     .from('work_shifts')
     .insert({
       context,
       cni_job_id: context === 'cni' ? cniJobId : null,
-      part_number: context === 'field' ? (partNumber || null) : null,
+      part_number: partNumber || null,
+      part_description: context === 'cni' ? (parsed.data.partDescription || null) : null,
+      billable_customer: context === 'cni' ? (parsed.data.billableCustomer || null) : null,
       location_id: parsed.data.locationId || null,
       location_name: parsed.data.locationName || null,
       started_by: auth.user.id,

@@ -41,11 +41,15 @@ export function splitAmounts(rate: number | null, members: ShiftMember[]): Credi
   return members.map((m, i) => ({ ...m, amount: cents[i] / 100 }));
 }
 
-/** The job's open shift (most recently started, not ended), if any. */
+/**
+ * The job's open shift (most recently started, not ended), if any. Carries the
+ * part the crew picked for the shift (CNI field-shift model, §1.2) — completion
+ * bills under this part, falling back to the job's default when it's null.
+ */
 export async function getOpenCniShift(service: SupabaseClient, cniJobId: string) {
   const { data } = await service
     .from('work_shifts')
-    .select('id, started_by, started_at')
+    .select('id, started_by, started_at, part_number, part_description, billable_customer')
     .eq('cni_job_id', cniJobId)
     .is('ended_at', null)
     .order('started_at', { ascending: false })
