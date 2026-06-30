@@ -59,48 +59,8 @@ export default function CniCompanyDetailPage() {
   const [addSelect, setAddSelect] = useState('');
   const [memberBusy, setMemberBusy] = useState(false);
   const [confirmRemove, setConfirmRemove] = useState<string | null>(null);
-  // Per-person NetSuite vendor ids — needed before an employee can go on
-  // individual payouts. Keyed by user_id; only dirty drafts are kept.
-  const [vendorDrafts, setVendorDrafts] = useState<Record<string, string>>({});
-
-  const saveMemberVendorId = async (userId: string) => {
-    const draft = (vendorDrafts[userId] || '').trim();
-    setMemberBusy(true);
-    setSaveMsg(null);
-    // Save through the admin API (service role). Writing cni_profiles straight
-    // from the browser is silently dropped by RLS for multi-role admins whose
-    // scalar `role` isn't literally 'admin', which is why this used to do
-    // nothing. The API also surfaces errors instead of swallowing them.
-    try {
-      const { data: { session } } = await supabase.auth.getSession();
-      const res = await fetch('/api/cni/installers', {
-        method: 'PATCH',
-        headers: {
-          'Content-Type': 'application/json',
-          ...(session?.access_token ? { Authorization: `Bearer ${session.access_token}` } : {}),
-        },
-        body: JSON.stringify({ userId, netsuiteVendorId: draft || null }),
-      });
-      const data = await res.json();
-      if (!res.ok) {
-        setSaveMsg({ success: false, message: data.error || 'Failed to save vendor ID' });
-        setMemberBusy(false);
-        return;
-      }
-      setMembers(prev => prev.map(m =>
-        m.user_id === userId ? { ...m, netsuite_vendor_id: data.netsuite_vendor_id } : m,
-      ));
-      setVendorDrafts(prev => {
-        const next = { ...prev };
-        delete next[userId];
-        return next;
-      });
-      setSaveMsg({ success: true, message: 'Vendor ID saved' });
-    } catch {
-      setSaveMsg({ success: false, message: 'Network error saving vendor ID' });
-    }
-    setMemberBusy(false);
-  };
+  // Per-person NetSuite vendor IDs are edited in one place — the Vendor IDs
+  // page — so they're shown here read-only (no second editor that drifts).
 
   useEffect(() => {
     if (!isAdmin) { router.push('/home'); return; }
@@ -423,25 +383,9 @@ export default function CniCompanyDetailPage() {
                   </div>
                   <div style={{ display: 'flex', alignItems: 'center', gap: '4px', marginTop: '4px' }}>
                     <span style={{ fontSize: '11px', color: 'var(--text-muted)' }}>NetSuite vendor:</span>
-                    <input
-                      value={vendorDrafts[m.user_id] ?? m.netsuite_vendor_id ?? ''}
-                      onChange={e => setVendorDrafts(prev => ({ ...prev, [m.user_id]: e.target.value }))}
-                      onKeyDown={e => { if (e.key === 'Enter' && vendorDrafts[m.user_id] !== undefined) saveMemberVendorId(m.user_id); }}
-                      placeholder="—"
-                      style={{
-                        width: '110px', padding: '3px 8px', borderRadius: '6px', fontSize: '11px', fontWeight: 600,
-                        border: '1px solid var(--border)', background: 'var(--card)', color: 'var(--text-body)',
-                      }}
-                    />
-                    {vendorDrafts[m.user_id] !== undefined && vendorDrafts[m.user_id] !== (m.netsuite_vendor_id || '') && (
-                      <button
-                        onClick={() => saveMemberVendorId(m.user_id)}
-                        disabled={memberBusy}
-                        style={{ fontSize: '10px', fontWeight: 700, color: 'var(--success)', background: 'transparent', border: 'none', cursor: 'pointer', padding: '2px 4px' }}
-                      >
-                        Save
-                      </button>
-                    )}
+                    <span style={{ fontSize: '11px', fontWeight: 600, color: m.netsuite_vendor_id ? 'var(--text-body)' : 'var(--text-muted)' }}>
+                      {m.netsuite_vendor_id || 'not set'}
+                    </span>
                   </div>
                 </div>
                 {confirmRemove === m.user_id ? (
@@ -503,7 +447,7 @@ export default function CniCompanyDetailPage() {
           </select>
         )}
         <div style={{ fontSize: '11px', color: 'var(--text-muted)', marginTop: '6px' }}>
-          Only installers without a company are listed. To set NetSuite vendor IDs for everyone in one place, use the{' '}
+          Only installers without a company are listed. NetSuite vendor IDs are managed on the{' '}
           <button
             onClick={() => router.push('/admin/cni/vendor-ids')}
             style={{ color: 'var(--orange)', fontWeight: 700, background: 'none', border: 'none', cursor: 'pointer', padding: 0, fontSize: '11px' }}

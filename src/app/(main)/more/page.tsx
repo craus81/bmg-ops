@@ -101,11 +101,8 @@ export default function MorePage() {
         {F('proof_hygiene') && (
           <MenuBtn title="Proof Search" sub="Find proof artwork in Dropbox by customer or part" onClick={() => router.push('/admin/proof-search')} />
         )}
-        {F('all_jobs') && (
-          <MenuBtn title="Certified Network Installs" sub="View all CNI jobs by company" onClick={() => router.push('/admin/cni')} />
-        )}
-        {F('vendor_payments') && (
-          <MenuBtn title="Vendor Payments" sub="Manage installer invoices & payments" onClick={() => router.push('/admin/cni')} />
+        {isAdmin && (
+          <MenuBtn title="Certified Network Installers" sub="Jobs, companies, installers & vendor payments" onClick={() => router.push('/admin/cni')} />
         )}
         {F('schedule') && (
           <MenuBtn title="Schedule" sub="Assign jobs to installers" onClick={() => router.push('/admin/schedule')} />
@@ -137,9 +134,6 @@ export default function MorePage() {
             onClick={() => router.push('/admin/users')}
             badge={pendingUserCount > 0 ? pendingUserCount : undefined}
           />
-        )}
-        {F('cni_management') && !overflowPaths.has('/installer') && (
-          <MenuBtn title="CNI Management" sub="Certified Network Installer jobs & profiles" onClick={() => router.push('/admin/cni')} />
         )}
         {isAdmin && (
           <MenuBtn title="AI Instructions" sub="Steer FleetSuite AI behavior — global rules, no deploy" onClick={() => router.push('/admin/ai-instructions')} />
