@@ -8,6 +8,7 @@ import { useAuth } from '@/components/AuthProvider';
 import { useDialog } from '@/components/DialogProvider';
 import EmailProofSearch, { type EmailProofFile } from '@/components/EmailProofSearch';
 import DropboxProofSearch, { type DropboxProofFile } from '@/components/DropboxProofSearch';
+import { CreateNetsuiteItemModal } from '@/components/CreateNetsuiteItemModal';
 
 interface Part {
   id: string;
@@ -114,6 +115,9 @@ export default function PartsPage() {
   const [poRemainingByPart, setPoRemainingByPart] = useState<Record<string, number>>({});
   const [poAllByPart, setPoAllByPart] = useState<Record<string, number>>({});
   const [statsLoading, setStatsLoading] = useState(true);
+
+  // Local-only part being pushed to NetSuite via the create-item modal.
+  const [nsCreatePart, setNsCreatePart] = useState<Part | null>(null);
 
   // Billable customer editing
   const [editingCustomer, setEditingCustomer] = useState<string | null>(null);
@@ -905,6 +909,11 @@ export default function PartsPage() {
                           {part.vendor}
                         </span>
                       )}
+                      {!isRealNsPart(part) && (
+                        <span title="Exists in FleetSuite only — not yet created in NetSuite" style={{ fontSize: '8px', fontWeight: 800, padding: '1px 5px', borderRadius: '4px', background: 'rgba(251,191,36,0.10)', border: '1px solid rgba(251,191,36,0.30)', color: '#f59e0b', whiteSpace: 'nowrap', flexShrink: 0 }}>
+                          local
+                        </span>
+                      )}
                       {completed > 0 && (
                         <span title={`Completed ${RANGE_PHRASE[range]}`} style={{ fontSize: '8px', fontWeight: 800, padding: '1px 5px', borderRadius: '4px', background: 'rgba(52,211,153,0.12)', border: '1px solid rgba(52,211,153,0.3)', color: '#34d399', whiteSpace: 'nowrap', flexShrink: 0 }}>
                           ✓ {completed}
@@ -1187,6 +1196,29 @@ export default function PartsPage() {
                       )}
                     </div>
 
+                    {/* Push a local-only part to NetSuite: creates the NetSuite
+                        item and links its internal id to this catalog row. */}
+                    {isAdmin && !isRealNsPart(part) && (
+                      <div style={{
+                        marginTop: '12px', padding: '10px', borderRadius: '10px',
+                        background: 'rgba(251,191,36,0.08)', border: '1px solid rgba(251,191,36,0.25)',
+                      }}>
+                        <div style={{ fontSize: '11px', fontWeight: 700, color: '#f59e0b', marginBottom: '8px' }}>
+                          This part exists only in FleetSuite — it hasn&apos;t been created in NetSuite yet.
+                        </div>
+                        <button
+                          onClick={() => setNsCreatePart(part)}
+                          style={{
+                            width: '100%', padding: '10px', borderRadius: '10px',
+                            background: 'rgba(34,197,94,0.9)', border: 'none',
+                            color: '#fff', fontSize: '12px', fontWeight: 800, cursor: 'pointer',
+                          }}
+                        >
+                          Create in NetSuite
+                        </button>
+                      </div>
+                    )}
+
                     {/* Delete from FleetSuite (local mirror only; NetSuite untouched) */}
                     {isAdmin && (
                       <button
@@ -1217,6 +1249,26 @@ export default function PartsPage() {
         <div style={{ textAlign: 'center', padding: '10px', fontSize: '11px', color: 'var(--text-muted)' }}>
           Showing {filtered.length} of {parts.length} {catalog} parts
         </div>
+      )}
+
+      {/* Create-in-NetSuite modal for a local-only catalog part */}
+      {nsCreatePart && (
+        <CreateNetsuiteItemModal
+          initialPartNumber={nsCreatePart.item_number}
+          initialDisplayName={nsCreatePart.display_name}
+          initialDescription={nsCreatePart.description}
+          initialPrice={nsCreatePart.sales_price || null}
+          billableCustomer={nsCreatePart.billable_customer}
+          catalog={nsCreatePart.catalog}
+          existingPartId={nsCreatePart.id}
+          onCreated={(created) => {
+            setNsCreatePart(null);
+            setSyncMessage(`"${created.item_number}" created in NetSuite and linked to this catalog entry.`);
+            setTimeout(() => setSyncMessage(''), 6000);
+            loadParts();
+          }}
+          onClose={() => setNsCreatePart(null)}
+        />
       )}
     </div>
   );

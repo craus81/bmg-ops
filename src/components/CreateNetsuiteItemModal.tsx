@@ -20,26 +20,35 @@ const ITEM_TYPES: { value: string; label: string }[] = [
 
 interface Props {
   initialPartNumber: string;
+  initialDisplayName?: string | null;
   initialDescription?: string | null;
   initialPrice?: number | null;
   billableCustomer?: string | null;
   /** 'graphics' (default) or 'upfit' — which local catalog the mirror lands in */
   catalog?: 'graphics' | 'upfit';
+  /**
+   * Local netsuite_parts row this part already lives in (catalog flow). The
+   * server links the new NetSuite record to that row instead of inserting a
+   * second one.
+   */
+  existingPartId?: string | null;
   onCreated: (part: CreatedPart) => void;
   onClose: () => void;
 }
 
 export function CreateNetsuiteItemModal({
   initialPartNumber,
+  initialDisplayName,
   initialDescription,
   initialPrice,
   billableCustomer,
   catalog = 'graphics',
+  existingPartId,
   onCreated,
   onClose,
 }: Props) {
   const [partNumber, setPartNumber] = useState(initialPartNumber);
-  const [displayName, setDisplayName] = useState(initialDescription || initialPartNumber);
+  const [displayName, setDisplayName] = useState(initialDisplayName || initialDescription || initialPartNumber);
   const [description, setDescription] = useState(initialDescription || '');
   const [price, setPrice] = useState(initialPrice != null ? String(initialPrice) : '');
   const [recordType, setRecordType] = useState(ITEM_TYPES[0].value);
@@ -62,6 +71,7 @@ export function CreateNetsuiteItemModal({
           salesPrice: price.trim() ? Number(price) : null,
           catalog,
           billableCustomer: billableCustomer || null,
+          existingPartId: existingPartId || null,
         }),
       });
       const data = await res.json().catch(() => ({}));
