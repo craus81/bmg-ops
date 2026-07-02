@@ -24,7 +24,16 @@ const Schema = z.object({
   salesPrice: z.number().nonnegative().optional().nullable(),
   catalog: z.enum(['upfit', 'graphics']).optional().nullable(),
   billableCustomer: z.string().max(200).optional().nullable(),
+  // Local netsuite_parts row to link to the new NetSuite record (catalog flow:
+  // the part already exists in FleetSuite, so upgrade that row in place).
+  existingPartId: z.string().uuid().optional().nullable(),
 });
+
+// A row whose netsuite_id is a LOCAL-/bmg- placeholder was never created in
+// NetSuite — only a numeric internal id counts as a real NetSuite part.
+const isRealNsId = (id: string | null) => !!id && !/^(LOCAL-|bmg-)/i.test(id);
+
+const PART_COLS = 'id, netsuite_id, item_number, display_name, billable_customer, sales_price';
 
 export async function POST(req: NextRequest) {
   const auth = await requireAdmin(req);
@@ -32,21 +41,44 @@ export async function POST(req: NextRequest) {
 
   const parsed = await validateBody(req, Schema);
   if (parsed.error) return parsed.error;
-  const { partNumber, recordType, displayName, description, salesPrice, catalog, billableCustomer } = parsed.data;
+  const { partNumber, recordType, displayName, description, salesPrice, catalog, billableCustomer, existingPartId } = parsed.data;
 
   const supabase = createClient(
     process.env.NEXT_PUBLIC_SUPABASE_URL!,
     process.env.SUPABASE_SERVICE_ROLE_KEY!,
   );
 
-  // Don't create a duplicate if the part already exists locally
-  const { data: existing } = await supabase
-    .from('netsuite_parts')
-    .select('id, item_number, display_name, billable_customer, sales_price')
-    .eq('item_number', partNumber)
-    .maybeSingle();
-  if (existing) {
-    return NextResponse.json({ success: true, alreadyExists: true, part: existing });
+  // Figure out whether this part already exists locally, and in what form.
+  // A row with a real NetSuite id means the item is already in NetSuite — bail.
+  // A local-only row (LOCAL-/bmg- placeholder id) becomes the upgrade target:
+  // we create the NetSuite record and link it to that row instead of inserting
+  // a duplicate.
+  let upgradeTarget: { id: string; netsuite_id: string | null } | null = null;
+  if (existingPartId) {
+    const { data: row } = await supabase
+      .from('netsuite_parts')
+      .select(PART_COLS)
+      .eq('id', existingPartId)
+      .maybeSingle();
+    if (!row) {
+      return NextResponse.json({ success: false, error: 'Part not found' }, { status: 404 });
+    }
+    if (isRealNsId(row.netsuite_id)) {
+      return NextResponse.json({ success: true, alreadyExists: true, part: row });
+    }
+    upgradeTarget = row;
+  } else {
+    // Legacy data can hold several rows per item number — prefer any real
+    // NetSuite row, otherwise upgrade the first local one.
+    const { data: rows } = await supabase
+      .from('netsuite_parts')
+      .select(PART_COLS)
+      .eq('item_number', partNumber);
+    const real = (rows || []).find(r => isRealNsId(r.netsuite_id));
+    if (real) {
+      return NextResponse.json({ success: true, alreadyExists: true, part: real });
+    }
+    upgradeTarget = (rows || [])[0] || null;
   }
 
   // Create the item in NetSuite (minimal fields; surfaces NS error verbatim)
@@ -68,6 +100,45 @@ export async function POST(req: NextRequest) {
     : recordType.startsWith('inventory')
       ? 'InvtPart'
       : 'NonInvtPart';
+
+  if (upgradeTarget) {
+    // Link the NetSuite record to the existing local row. Only overwrite
+    // optional fields the caller actually supplied.
+    const { data: updated, error: updateError } = await supabase
+      .from('netsuite_parts')
+      .update({
+        netsuite_id: result.internalId || upgradeTarget.netsuite_id,
+        item_number: partNumber,
+        item_type: itemType,
+        is_active: true,
+        ...(displayName ? { display_name: displayName } : {}),
+        ...(description ? { description } : {}),
+        ...(salesPrice != null ? { sales_price: salesPrice } : {}),
+        ...(billableCustomer ? { billable_customer: billableCustomer } : {}),
+        updated_at: new Date().toISOString(),
+      })
+      .eq('id', upgradeTarget.id)
+      .select('id, item_number, display_name, billable_customer, sales_price')
+      .single();
+
+    if (updateError) {
+      return NextResponse.json({
+        success: true,
+        netsuiteUrl: result.netsuiteUrl,
+        internalId: result.internalId,
+        mirrorWarning: `Created in NetSuite but linking the local catalog entry failed: ${updateError.message}`,
+      });
+    }
+
+    return NextResponse.json({
+      success: true,
+      linkedExisting: true,
+      netsuiteUrl: result.netsuiteUrl,
+      internalId: result.internalId,
+      part: updated,
+    });
+  }
+
   const { data: inserted, error: insertError } = await supabase
     .from('netsuite_parts')
     .insert({
