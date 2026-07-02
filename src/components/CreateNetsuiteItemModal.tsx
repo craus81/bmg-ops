@@ -32,7 +32,7 @@ interface Props {
    * second one.
    */
   existingPartId?: string | null;
-  onCreated: (part: CreatedPart) => void;
+  onCreated: (part: CreatedPart, info?: { priceWarning?: string }) => void;
   onClose: () => void;
 }
 
@@ -80,8 +80,9 @@ export function CreateNetsuiteItemModal({
         setSubmitting(false);
         return;
       }
+      const info = data.priceWarning ? { priceWarning: data.priceWarning as string } : undefined;
       if (data.part) {
-        onCreated(data.part as CreatedPart);
+        onCreated(data.part as CreatedPart, info);
       } else {
         // Created in NetSuite but local mirror failed — still let the caller proceed
         onCreated({
@@ -90,7 +91,7 @@ export function CreateNetsuiteItemModal({
           display_name: displayName.trim() || null,
           billable_customer: billableCustomer || null,
           sales_price: price.trim() ? Number(price) : null,
-        });
+        }, info);
         if (data.mirrorWarning) console.warn(data.mirrorWarning);
       }
     } catch (e: any) {
@@ -140,7 +141,7 @@ export function CreateNetsuiteItemModal({
             <textarea value={description} onChange={e => setDescription(e.target.value)} rows={2} style={{ ...inputStyle, resize: 'vertical' }} />
           </div>
           <div>
-            <label style={labelStyle}>Sales Price (stored locally)</label>
+            <label style={labelStyle}>Sales Price</label>
             <input value={price} onChange={e => setPrice(e.target.value.replace(/[^0-9.]/g, ''))} inputMode="decimal" placeholder="0.00" style={inputStyle} />
           </div>
 

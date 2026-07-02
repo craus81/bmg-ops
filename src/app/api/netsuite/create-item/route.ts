@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { createItem } from '@/lib/netsuite';
+import { createItem, updateItemFields } from '@/lib/netsuite';
 import { createClient } from '@supabase/supabase-js';
 import { requireAdmin } from '@/lib/api-auth';
 import { validateBody, z } from '@/lib/validate';
@@ -93,6 +93,23 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ success: false, error: result.error }, { status: 502 });
   }
 
+  // Push the sales price to NetSuite too. Base price lives in the item's
+  // pricing matrix, which the REST record create can't set — the item RESTlet
+  // writes it (same path as the catalog's inline price edit). Non-fatal: the
+  // price is always stored locally, so a failure only means NetSuite shows $0
+  // until the part's price is edited.
+  let priceWarning: string | undefined;
+  if (salesPrice != null && salesPrice > 0) {
+    if (result.internalId) {
+      const priceRes = await updateItemFields(result.internalId, { salesPrice });
+      if (!priceRes.success) {
+        priceWarning = `Item created, but setting its NetSuite sales price failed: ${priceRes.error}`;
+      }
+    } else {
+      priceWarning = 'Item created, but NetSuite did not return its internal id, so the sales price could not be set there.';
+    }
+  }
+
   // Mirror into netsuite_parts so the new item is immediately matchable in
   // PO import, scans, estimates, etc. without waiting for the next full sync.
   const itemType = recordType.startsWith('service')
@@ -126,6 +143,7 @@ export async function POST(req: NextRequest) {
         success: true,
         netsuiteUrl: result.netsuiteUrl,
         internalId: result.internalId,
+        priceWarning,
         mirrorWarning: `Created in NetSuite but linking the local catalog entry failed: ${updateError.message}`,
       });
     }
@@ -135,6 +153,7 @@ export async function POST(req: NextRequest) {
       linkedExisting: true,
       netsuiteUrl: result.netsuiteUrl,
       internalId: result.internalId,
+      priceWarning,
       part: updated,
     });
   }
@@ -162,6 +181,7 @@ export async function POST(req: NextRequest) {
       success: true,
       netsuiteUrl: result.netsuiteUrl,
       internalId: result.internalId,
+      priceWarning,
       mirrorWarning: `Created in NetSuite but local catalog sync failed: ${insertError.message}`,
     });
   }
@@ -170,6 +190,7 @@ export async function POST(req: NextRequest) {
     success: true,
     netsuiteUrl: result.netsuiteUrl,
     internalId: result.internalId,
+    priceWarning,
     part: inserted,
   });
 }

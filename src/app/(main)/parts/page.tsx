@@ -1261,10 +1261,12 @@ export default function PartsPage() {
           billableCustomer={nsCreatePart.billable_customer}
           catalog={nsCreatePart.catalog}
           existingPartId={nsCreatePart.id}
-          onCreated={(created) => {
+          onCreated={(created, info) => {
             setNsCreatePart(null);
-            setSyncMessage(`"${created.item_number}" created in NetSuite and linked to this catalog entry.`);
-            setTimeout(() => setSyncMessage(''), 6000);
+            setSyncMessage(info?.priceWarning
+              ? `"${created.item_number}" created in NetSuite, but its price failed to set there — edit the sales price to retry. (${info.priceWarning})`
+              : `"${created.item_number}" created in NetSuite and linked to this catalog entry.`);
+            setTimeout(() => setSyncMessage(''), 8000);
             loadParts();
           }}
           onClose={() => setNsCreatePart(null)}
