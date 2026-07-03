@@ -110,6 +110,9 @@ export async function POST(req: NextRequest) {
         // Build invoice line items
         const lineItems: { itemId: string | number; quantity: number; rate: number; description: string }[] = [];
         const unmatchedParts: string[] = [];
+        // Parts that matched a NetSuite item but have no price in netsuite_parts
+        // — billing them would silently send a $0 line (docs/cni-redesign.md §3.6).
+        const unpricedParts: string[] = [];
         // Track which NetSuite item each part resolved to, so a NetSuite
         // rejection can name the part + internal ID + type rather than a bare id.
         const matchDetail: string[] = [];
@@ -120,6 +123,7 @@ export async function POST(req: NextRequest) {
             unmatchedParts.push(partNum);
             continue;
           }
+          if (!(group.price > 0)) unpricedParts.push(partNum);
           matchDetail.push(`${partNum} → NS item #${nsItem.id}${nsItem.type ? ` (${nsItem.type})` : ''}`);
           lineItems.push({
             itemId: nsItem.id,
@@ -137,6 +141,21 @@ export async function POST(req: NextRequest) {
             vehicleCount: custScans.length,
             status: 'error',
             error: `No parts matched in NetSuite: ${unmatchedParts.join(', ')}`,
+          });
+          continue;
+        }
+
+        // Refuse to bill a part at $0: without a price in netsuite_parts the
+        // line would silently invoice for nothing. Surface it so an admin sets
+        // the price and re-invoices, instead of sending a $0 line (§3.6).
+        if (unpricedParts.length > 0) {
+          results.push({
+            customer: customerName,
+            po: poNumber,
+            scanIds: custScans.map(s => s.id),
+            vehicleCount: custScans.length,
+            status: 'error',
+            error: `No NetSuite price set for: ${unpricedParts.join(', ')} — set a price in netsuite_parts, then re-invoice`,
           });
           continue;
         }
