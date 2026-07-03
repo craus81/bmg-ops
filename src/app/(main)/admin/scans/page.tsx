@@ -56,6 +56,10 @@ export default function AdminScansPage() {
   const [expandedGroups, setExpandedGroups] = useState<Set<string>>(new Set());
   // Part requires_po_match lookup
   const [poRequired, setPoRequired] = useState<Record<string, boolean>>({});
+  // scan_log_id → CNI job number, for the source column/filter (a scan is "CNI"
+  // when a cni_job_vins row points at it). See docs/cni-redesign.md §3.4.
+  const [cniByScanId, setCniByScanId] = useState<Record<string, string>>({});
+  const [sourceFilter, setSourceFilter] = useState<'all' | 'cni' | 'field'>('all');
 
   // Bulk upload state
   const [allParts, setAllParts] = useState<{ id: string; item_number: string; display_name: string | null; billable_customer: string | null }[]>([]);
@@ -111,7 +115,7 @@ export default function AdminScansPage() {
 
   const loadAll = async () => {
     setLoading(true);
-    const [scansRes, archivedRes, profilesRes, partsRes, fullPartsRes, locsRes, posRes, catalogRes] = await Promise.all([
+    const [scansRes, archivedRes, profilesRes, partsRes, fullPartsRes, locsRes, posRes, catalogRes, cniVinsRes] = await Promise.all([
       supabase.from('scan_logs').select('*').is('archived_at', null).order('scanned_at', { ascending: false }).limit(1000),
       // Paginate archived scans — Supabase caps responses at 1000 rows by default
       (async () => {
@@ -148,6 +152,25 @@ export default function AdminScansPage() {
       supabase.from('work_locations').select('id, name').eq('is_active', true).order('name'),
       supabase.from('purchase_orders').select('id, po_number, customer, line_items:po_line_items(id, part_number, quantity, installed)').in('status', ['open', 'complete']).order('po_number'),
       supabase.from('catalog').select('id, part_number, end_customer, vehicle_type, graphic_package').order('part_number'),
+      // CNI job VINs that produced a scan — maps scan_log_id → job number so the
+      // Scan Log can flag CNI work and filter to it (§3.4). Paginated like the
+      // archived scans, since this grows with every CNI vehicle completed.
+      (async () => {
+        let all: any[] = [];
+        let pg = 0;
+        let more = true;
+        while (more) {
+          const { data } = await supabase
+            .from('cni_job_vins')
+            .select('scan_log_id, cni_jobs(job_number)')
+            .not('scan_log_id', 'is', null)
+            .range(pg * 1000, (pg + 1) * 1000 - 1);
+          all = [...all, ...(data || [])];
+          more = (data || []).length === 1000;
+          pg++;
+        }
+        return { data: all };
+      })(),
     ]);
     setAllParts((fullPartsRes.data || []) as typeof allParts);
     setAllCatalog((catalogRes.data || []) as typeof allCatalog);
@@ -164,6 +187,15 @@ export default function AdminScansPage() {
     const poMap: Record<string, boolean> = {};
     (partsRes.data || []).forEach((p: any) => { poMap[p.item_number] = p.requires_po_match !== false; });
     setPoRequired(poMap);
+
+    const cniMap: Record<string, string> = {};
+    (cniVinsRes.data || []).forEach((r: any) => {
+      if (!r.scan_log_id) return;
+      // The embed is a to-one FK, but Supabase can surface it as an array.
+      const job = Array.isArray(r.cni_jobs) ? r.cni_jobs[0] : r.cni_jobs;
+      cniMap[r.scan_log_id] = job?.job_number || 'CNI';
+    });
+    setCniByScanId(cniMap);
 
     setSelectedScans(new Set());
     setLoading(false);
@@ -186,6 +218,9 @@ export default function AdminScansPage() {
   };
 
   const tabScans = getTabScans().filter(s => {
+    // Source filter: CNI scans are the ones a cni_job_vins row points at.
+    if (sourceFilter === 'cni' && !cniByScanId[s.id]) return false;
+    if (sourceFilter === 'field' && cniByScanId[s.id]) return false;
     if (!search) return true;
     const q = search.toLowerCase();
     return s.vin.toLowerCase().includes(q) ||
@@ -194,6 +229,7 @@ export default function AdminScansPage() {
       s.unit_number?.toLowerCase().includes(q) ||
       s.location_name?.toLowerCase().includes(q) ||
       s.po_number?.toLowerCase().includes(q) ||
+      (cniByScanId[s.id] || '').toLowerCase().includes(q) ||
       [s.vehicle_year, s.vehicle_make, s.vehicle_model].filter(Boolean).join(' ').toLowerCase().includes(q);
   });
 
@@ -846,8 +882,26 @@ export default function AdminScansPage() {
       </div>
 
       {/* Search */}
-      {tab !== 'bulk' && <input value={search} onChange={e => setSearch(e.target.value)} placeholder="Search VIN, part, customer, location, PO..."
+      {tab !== 'bulk' && <input value={search} onChange={e => setSearch(e.target.value)} placeholder="Search VIN, part, customer, location, PO, CNI job..."
         style={{ width: '100%', padding: '10px 14px', borderRadius: '10px', fontSize: '13px', border: `1px solid ${theme.border}`, background: theme.card, color: theme.textPrimary, fontWeight: 600, marginBottom: '10px' }} />}
+
+      {/* Source filter — CNI installs vs. field scans (§3.4) */}
+      {tab !== 'bulk' && (
+        <div style={{ display: 'flex', gap: '4px', marginBottom: '10px' }}>
+          {([
+            { id: 'all' as const, label: 'All sources' },
+            { id: 'cni' as const, label: 'CNI' },
+            { id: 'field' as const, label: 'Field' },
+          ]).map(f => (
+            <button key={f.id} onClick={() => setSourceFilter(f.id)} style={{
+              padding: '5px 12px', borderRadius: '8px', fontSize: '10px', fontWeight: 700, cursor: 'pointer',
+              background: sourceFilter === f.id ? 'var(--tab-active-bg)' : 'transparent',
+              border: sourceFilter === f.id ? '1px solid var(--tab-active-border)' : '1px solid var(--border)',
+              color: sourceFilter === f.id ? '#06b6d4' : 'var(--text-muted)',
+            }}>{f.label}</button>
+          ))}
+        </div>
+      )}
 
       {/* Actions */}
       <div style={{ display: 'flex', gap: '6px', marginBottom: '12px', flexWrap: 'wrap' }}>
@@ -1768,6 +1822,11 @@ export default function AdminScansPage() {
                                   {scan.po_number && (
                                     <span style={{ fontSize: '8px', fontWeight: 700, padding: '2px 5px', borderRadius: '4px', background: 'rgba(34,197,94,0.1)', color: '#22c55e' }}>
                                       PO #{scan.po_number}
+                                    </span>
+                                  )}
+                                  {cniByScanId[scan.id] && (
+                                    <span style={{ fontSize: '8px', fontWeight: 700, padding: '2px 5px', borderRadius: '4px', background: 'rgba(6,182,212,0.12)', color: '#06b6d4' }}>
+                                      {cniByScanId[scan.id]}
                                     </span>
                                   )}
                                   <div style={{ fontSize: '9px', color: 'var(--text-muted)', textAlign: 'right' }}>
