@@ -283,6 +283,21 @@ export default function GraphicsPage() {
   // eslint-disable-next-line react-hooks/exhaustive-deps -- load once on mount
   useEffect(() => { loadAwaitingGraphics(); }, []);
 
+  // Dismiss a queue entry when no graphics job is actually needed. Clearing
+  // needs_graphics (rather than tracking a separate "dismissed" state) also
+  // removes the vehicle's needs-graphics badge on the tracking page, and
+  // nothing re-runs the keyword scan later, so it won't reappear.
+  const dismissAwaiting = async (ci: any) => {
+    const label = ci.customer_name || [ci.vehicle_year, ci.vehicle_make, ci.vehicle_model].filter(Boolean).join(' ') || 'this vehicle';
+    if (!(await dialog.confirm(`Dismiss ${label} from the graphics queue? Use this when no graphics job is needed.`, { confirmLabel: 'Dismiss' }))) return;
+    const { error } = await supabase
+      .from('fleet_checkins')
+      .update({ needs_graphics: false })
+      .eq('id', ci.id);
+    if (error) { await dialog.alert('Failed to dismiss: ' + error.message); return; }
+    setAwaitingGraphics(prev => prev.filter(x => x.id !== ci.id));
+  };
+
   const loadJobs = async () => {
     // Exclude installed/cancelled by default — they're archived
     const { data: jobsData } = await supabase
@@ -1073,7 +1088,7 @@ export default function GraphicsPage() {
             {awaitingGraphics.map(ci => {
               const vehicleTitle = [ci.vehicle_year, ci.vehicle_make, ci.vehicle_model].filter(Boolean).join(' ') || 'Vehicle';
               return (
-                <button
+                <div
                   key={ci.id}
                   onClick={() => {
                     setShowCreate(true);
@@ -1103,7 +1118,15 @@ export default function GraphicsPage() {
                     padding: '4px 10px', borderRadius: '6px', fontSize: '10px', fontWeight: 800,
                     background: '#fb923c', color: '#fff', flexShrink: 0, marginLeft: '8px',
                   }}>+ Create</div>
-                </button>
+                  <button
+                    onClick={e => { e.stopPropagation(); dismissAwaiting(ci); }}
+                    style={{
+                      background: 'none', border: 'none', color: 'var(--text-label)',
+                      fontSize: '14px', cursor: 'pointer', padding: '4px 6px', flexShrink: 0, marginLeft: '2px',
+                    }}
+                    title="Dismiss — no graphics job needed"
+                  >✕</button>
+                </div>
               );
             })}
           </div>
