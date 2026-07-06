@@ -1,10 +1,15 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { createItem, updateItemFields } from '@/lib/netsuite';
+import { createItem, findItems, itemUrl, updateItemFields } from '@/lib/netsuite';
 import { createClient } from '@supabase/supabase-js';
 import { requireAdmin } from '@/lib/api-auth';
 import { validateBody, z } from '@/lib/validate';
 
 export const dynamic = 'force-dynamic';
+// NetSuite's REST record create plus the price RESTlet routinely take longer
+// than the default function window; without this the request 504s mid-flight —
+// often *after* NetSuite created the item but before the local mirror updated,
+// which is how parts end up existing in NetSuite while still flagged local-only.
+export const maxDuration = 60;
 
 // REST record types we allow callers to create. Keeps the path segment
 // constrained to a known set rather than free text.
@@ -64,7 +69,7 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ success: false, error: 'Part not found' }, { status: 404 });
     }
     if (isRealNsId(row.netsuite_id)) {
-      return NextResponse.json({ success: true, alreadyExists: true, part: row });
+      return NextResponse.json({ success: true, alreadyExists: true, part: row, netsuiteUrl: itemUrl(row.netsuite_id!) });
     }
     upgradeTarget = row;
   } else {
@@ -76,9 +81,69 @@ export async function POST(req: NextRequest) {
       .eq('item_number', partNumber);
     const real = (rows || []).find(r => isRealNsId(r.netsuite_id));
     if (real) {
-      return NextResponse.json({ success: true, alreadyExists: true, part: real });
+      return NextResponse.json({ success: true, alreadyExists: true, part: real, netsuiteUrl: itemUrl(real.netsuite_id!) });
     }
     upgradeTarget = (rows || [])[0] || null;
+  }
+
+  // The local mirror only knows about items FleetSuite itself created — there
+  // is no scheduled item sync — so check NetSuite directly before creating.
+  // If the item already exists there, link it to the local row instead of
+  // letting NetSuite reject the create with a duplicate-name error. This also
+  // self-heals parts wrongly flagged as local-only.
+  try {
+    const found = (await findItems([partNumber]))[partNumber.toUpperCase()];
+    if (found?.id) {
+      const nsUrl = itemUrl(found.id);
+      if (upgradeTarget) {
+        const { data: linked } = await supabase
+          .from('netsuite_parts')
+          .update({
+            netsuite_id: found.id,
+            item_type: found.type || undefined,
+            is_active: true,
+            updated_at: new Date().toISOString(),
+          })
+          .eq('id', upgradeTarget.id)
+          .select('id, item_number, display_name, billable_customer, sales_price')
+          .single();
+        return NextResponse.json({
+          success: true,
+          alreadyExists: true,
+          linkedExisting: true,
+          internalId: found.id,
+          netsuiteUrl: nsUrl,
+          part: linked || upgradeTarget,
+        });
+      }
+      const { data: mirrored } = await supabase
+        .from('netsuite_parts')
+        .insert({
+          netsuite_id: found.id,
+          item_number: found.name || partNumber,
+          display_name: found.displayName || displayName || partNumber,
+          description: found.description || description || '',
+          item_type: found.type || 'NonInvtPart',
+          catalog: catalog || 'graphics',
+          sales_price: salesPrice || 0,
+          billable_customer: billableCustomer || null,
+          is_active: true,
+          updated_at: new Date().toISOString(),
+        })
+        .select('id, item_number, display_name, billable_customer, sales_price')
+        .single();
+      return NextResponse.json({
+        success: true,
+        alreadyExists: true,
+        internalId: found.id,
+        netsuiteUrl: nsUrl,
+        part: mirrored || undefined,
+      });
+    }
+  } catch (err: any) {
+    // Lookup failure shouldn't block creation — NetSuite itself will still
+    // reject a true duplicate, and that error is surfaced verbatim below.
+    console.warn('NetSuite pre-create item lookup failed:', err?.message || err);
   }
 
   // Create the item in NetSuite (minimal fields; surfaces NS error verbatim)
