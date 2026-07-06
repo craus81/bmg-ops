@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { getAttachment, proofContentType } from '@/lib/google';
+import { getAttachment, getMessage, getPdfAttachments, proofContentType } from '@/lib/google';
 import { requireStaff } from '@/lib/api-auth';
 
 export const dynamic = 'force-dynamic';
@@ -8,18 +8,42 @@ export const maxDuration = 30;
 // Stream a single Gmail attachment's bytes so the proof picker can preview it
 // before it's attached. Loaded via <img> / pdfjs (same-origin), which can't set
 // a bearer header, so this relies on cookie auth like /api/dropbox/thumbnail.
+//
+// attachmentId is optional: callers that only know the message (e.g. the PO
+// import review panel, which stores just message_id + filename in
+// gmail_po_imports) can pass messageId alone and we resolve the PDF here —
+// matching on filename when given, otherwise preferring PO-looking names then
+// the largest file, mirroring the sort in /api/gmail/import-po.
 export async function GET(req: NextRequest) {
   const auth = await requireStaff(req);
   if (auth.error) return auth.error;
 
   const messageId = req.nextUrl.searchParams.get('messageId');
-  const attachmentId = req.nextUrl.searchParams.get('attachmentId');
-  const filename = req.nextUrl.searchParams.get('filename') || 'proof';
-  if (!messageId || !attachmentId) {
-    return NextResponse.json({ error: 'messageId and attachmentId are required' }, { status: 400 });
+  let attachmentId = req.nextUrl.searchParams.get('attachmentId');
+  let filename = req.nextUrl.searchParams.get('filename') || 'proof';
+  if (!messageId) {
+    return NextResponse.json({ error: 'messageId is required' }, { status: 400 });
   }
 
   try {
+    if (!attachmentId) {
+      const message = await getMessage(messageId);
+      const pdfs = getPdfAttachments(message);
+      if (pdfs.length === 0) {
+        return NextResponse.json({ error: 'No PDF attachments on this message' }, { status: 404 });
+      }
+      const requested = req.nextUrl.searchParams.get('filename');
+      const match = requested && pdfs.find(p => p.filename === requested);
+      const best = match || [...pdfs].sort((a, b) => {
+        const aIsPO = /\b(po|purchase.?order)\b/i.test(a.filename) ? 1 : 0;
+        const bIsPO = /\b(po|purchase.?order)\b/i.test(b.filename) ? 1 : 0;
+        if (aIsPO !== bIsPO) return bIsPO - aIsPO;
+        return b.size - a.size;
+      })[0];
+      attachmentId = best.attachmentId;
+      filename = best.filename;
+    }
+
     const base64 = await getAttachment(messageId, attachmentId);
     const buffer = Buffer.from(base64, 'base64');
     return new NextResponse(new Uint8Array(buffer), {

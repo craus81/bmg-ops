@@ -623,6 +623,9 @@ export async function POST(req: NextRequest) {
         customer: extracted.customer || 'Unknown',
         ordered_date: extracted.ordered_date || null,
         extracted,
+        // Attachment refs (best PO candidate first) so the review UI can show
+        // the source PDF next to the extracted fields
+        pdfs: sortedPdfs.map(p => ({ filename: p.filename, attachmentId: p.attachmentId, size: p.size })),
       });
     }
 

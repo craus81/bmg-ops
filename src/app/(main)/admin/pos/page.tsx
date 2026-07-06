@@ -342,9 +342,21 @@ export default function POsPage() {
   const [overwriteData, setOverwriteData] = useState<any>(null);
   const [overwriteMessageId, setOverwriteMessageId] = useState<string | null>(null);
   const [overwriting, setOverwriting] = useState(false);
-  // Email PO review/edit state
-  const [reviewingExtraction, setReviewingExtraction] = useState<{ messageId: string; extracted: any } | null>(null);
+  // Email PO review/edit state. `pdf` points at the original email attachment
+  // (served by /api/gmail/attachment) so it can be shown beside the form.
+  const [reviewingExtraction, setReviewingExtraction] = useState<{ messageId: string; extracted: any; pdf?: { url: string; name: string } } | null>(null);
+  // Whether the source-PDF pane is showing; reset per open, defaults on for wide screens
+  const [reviewPdfOpen, setReviewPdfOpen] = useState(false);
   const [reviewShipToId, setReviewShipToId] = useState<string>('');
+
+  // URL that streams a Gmail PDF for same-origin preview. Without attachmentId
+  // the API resolves the message's best PO PDF (by filename when given).
+  const gmailPdfUrl = (messageId: string, attachmentId?: string, filename?: string) => {
+    const params = new URLSearchParams({ messageId });
+    if (attachmentId) params.set('attachmentId', attachmentId);
+    if (filename) params.set('filename', filename);
+    return `/api/gmail/attachment?${params.toString()}`;
+  };
   // NetSuite item creation from a review line: holds the line being created; tracks created lines by index
   const [createNsItemLine, setCreateNsItemLine] = useState<{ idx: number; partNumber: string; description: string | null } | null>(null);
   const [createdNsLines, setCreatedNsLines] = useState<Set<number>>(new Set());
@@ -485,7 +497,14 @@ export default function POsPage() {
 
   const reviewPendingPO = (pending: any) => {
     if (pending.raw_extraction) {
-      setReviewingExtraction({ messageId: pending.message_id, extracted: pending.raw_extraction });
+      // attachment_filename is a comma-joined list, importer's best candidate first
+      const firstPdfName = (pending.attachment_filename || '').split(',')[0].trim();
+      setReviewPdfOpen(window.innerWidth >= 1000);
+      setReviewingExtraction({
+        messageId: pending.message_id,
+        extracted: pending.raw_extraction,
+        pdf: { url: gmailPdfUrl(pending.message_id, undefined, firstPdfName || undefined), name: firstPdfName || 'PO PDF' },
+      });
     }
   };
 
@@ -1285,9 +1304,17 @@ export default function POsPage() {
         return;
       }
 
-      // Extract-only mode: show review panel
+      // Extract-only mode: show review panel with the source PDF alongside
       if (data.status === 'review') {
-        setReviewingExtraction({ messageId, extracted: data.extracted });
+        const pdf = data.pdfs?.[0];
+        setReviewPdfOpen(window.innerWidth >= 1000);
+        setReviewingExtraction({
+          messageId,
+          extracted: data.extracted,
+          pdf: pdf
+            ? { url: gmailPdfUrl(messageId, pdf.attachmentId, pdf.filename), name: pdf.filename }
+            : { url: gmailPdfUrl(messageId), name: 'PO PDF' },
+        });
         setImportingEmailId(null);
         return;
       }
@@ -2244,7 +2271,9 @@ export default function POsPage() {
       {/* Email PO Review/Edit Panel */}
       {reviewingExtraction && (
         <div style={{ position: 'fixed', top: 0, left: 0, right: 0, bottom: 0, background: 'var(--overlay)', zIndex: 1000, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '16px' }}>
-          <div style={{ background: 'var(--card)', border: '1px solid rgba(59,130,246,0.3)', borderRadius: '14px', padding: '18px', maxWidth: '520px', width: '100%', maxHeight: '85vh', overflowY: 'auto' }}>
+          <div style={{ background: 'var(--card)', border: '1px solid rgba(59,130,246,0.3)', borderRadius: '14px', width: '100%', maxWidth: reviewingExtraction.pdf && reviewPdfOpen ? 'min(1280px, 96vw)' : '520px', height: reviewingExtraction.pdf && reviewPdfOpen ? '88vh' : 'auto', maxHeight: '88vh', display: 'flex', alignItems: 'stretch', overflow: 'hidden' }}>
+            {/* Form pane (scrolls independently of the PDF pane) */}
+            <div style={{ padding: '18px', overflowY: 'auto', flex: reviewingExtraction.pdf && reviewPdfOpen ? '0 1 520px' : '1 1 auto', minWidth: '300px' }}>
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '14px' }}>
               <div>
                 <div style={{ fontSize: '16px', fontWeight: 800, color: 'var(--text-body)' }}>Review PO Import</div>
@@ -2252,7 +2281,16 @@ export default function POsPage() {
                   PO #{reviewingExtraction.extracted.po_number} · {reviewingExtraction.extracted.customer || 'Unknown'} · {reviewingExtraction.extracted.lines?.length || 0} line items
                 </div>
               </div>
-              <button onClick={() => setReviewingExtraction(null)} style={{ background: 'none', border: 'none', color: 'var(--text-label)', fontSize: '18px', cursor: 'pointer', padding: '4px' }}>✕</button>
+              <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+                {reviewingExtraction.pdf && (
+                  <button
+                    onClick={() => setReviewPdfOpen(o => !o)}
+                    style={{ background: reviewPdfOpen ? 'rgba(59,130,246,0.12)' : 'none', border: '1px solid rgba(59,130,246,0.35)', color: '#60a5fa', fontSize: '10px', fontWeight: 700, cursor: 'pointer', padding: '4px 8px', borderRadius: '6px', whiteSpace: 'nowrap' }}
+                    title="Show the original PDF next to the form for comparison"
+                  >{reviewPdfOpen ? 'Hide PDF' : 'View PDF'}</button>
+                )}
+                <button onClick={() => setReviewingExtraction(null)} style={{ background: 'none', border: 'none', color: 'var(--text-label)', fontSize: '18px', cursor: 'pointer', padding: '4px' }}>✕</button>
+              </div>
             </div>
 
             {/* PO header fields */}
@@ -2449,6 +2487,18 @@ export default function POsPage() {
                 Cancel
               </button>
             </div>
+            </div>
+
+            {/* Source PDF pane — the original email attachment, side by side for comparison */}
+            {reviewingExtraction.pdf && reviewPdfOpen && (
+              <div style={{ flex: '1 1 340px', minWidth: 0, borderLeft: '1px solid var(--border)', display: 'flex', flexDirection: 'column', background: 'var(--subtle-bg)' }}>
+                <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '8px', padding: '8px 12px', borderBottom: '1px solid var(--border)' }}>
+                  <div style={{ fontSize: '11px', fontWeight: 700, color: 'var(--text-label)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{reviewingExtraction.pdf.name}</div>
+                  <a href={reviewingExtraction.pdf.url} target="_blank" rel="noreferrer" style={{ fontSize: '10px', fontWeight: 700, color: '#60a5fa', textDecoration: 'none', whiteSpace: 'nowrap' }}>Open in new tab ↗</a>
+                </div>
+                <iframe src={reviewingExtraction.pdf.url} title={reviewingExtraction.pdf.name} style={{ flex: 1, width: '100%', border: 'none' }} />
+              </div>
+            )}
           </div>
         </div>
       )}
