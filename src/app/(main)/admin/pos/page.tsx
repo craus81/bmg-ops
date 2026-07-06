@@ -357,6 +357,20 @@ export default function POsPage() {
     if (filename) params.set('filename', filename);
     return `/api/gmail/attachment?${params.toString()}`;
   };
+
+  // The extractor returns both the customer's item number (part_number) and
+  // BMG's number from the PO's "Supplier Part" row (supplier_part). Our
+  // internal part numbers always match the supplier part, and the import
+  // endpoint prefers supplier_part when saving lines — so collapse the pair
+  // into a single editable Part Number before review (supplier_part wins) and
+  // drop supplier_part, otherwise edits to the visible field wouldn't stick.
+  const collapseSupplierParts = (extracted: any) => ({
+    ...extracted,
+    lines: (extracted.lines || []).map(({ supplier_part, ...l }: any) => ({
+      ...l,
+      part_number: supplier_part || l.part_number,
+    })),
+  });
   // NetSuite item creation from a review line: holds the line being created; tracks created lines by index
   const [createNsItemLine, setCreateNsItemLine] = useState<{ idx: number; partNumber: string; description: string | null } | null>(null);
   const [createdNsLines, setCreatedNsLines] = useState<Set<number>>(new Set());
@@ -502,7 +516,7 @@ export default function POsPage() {
       setReviewPdfOpen(window.innerWidth >= 1000);
       setReviewingExtraction({
         messageId: pending.message_id,
-        extracted: pending.raw_extraction,
+        extracted: collapseSupplierParts(pending.raw_extraction),
         pdf: { url: gmailPdfUrl(pending.message_id, undefined, firstPdfName || undefined), name: firstPdfName || 'PO PDF' },
       });
     }
@@ -1310,7 +1324,7 @@ export default function POsPage() {
         setReviewPdfOpen(window.innerWidth >= 1000);
         setReviewingExtraction({
           messageId,
-          extracted: data.extracted,
+          extracted: collapseSupplierParts(data.extracted),
           pdf: pdf
             ? { url: gmailPdfUrl(messageId, pdf.attachmentId, pdf.filename), name: pdf.filename }
             : { url: gmailPdfUrl(messageId), name: 'PO PDF' },
@@ -2363,7 +2377,6 @@ export default function POsPage() {
 
             {(reviewingExtraction.extracted.lines || []).map((line: any, idx: number) => {
               const catalogMatch = catalog.find(c =>
-                c.part_number.toUpperCase() === (line.supplier_part || '').toUpperCase() ||
                 c.part_number.toUpperCase() === (line.part_number || '').toUpperCase()
               );
               return (
@@ -2379,9 +2392,9 @@ export default function POsPage() {
                       {!catalogMatch && <span style={{ fontSize: '9px', color: '#fbbf24', fontWeight: 600 }}>No catalog match</span>}
                       {createdNsLines.has(idx) ? (
                         <span style={{ fontSize: '9px', color: '#4ade80', fontWeight: 700 }}>✓ NetSuite</span>
-                      ) : (line.part_number || line.supplier_part) ? (
+                      ) : line.part_number ? (
                         <button
-                          onClick={() => setCreateNsItemLine({ idx, partNumber: (line.part_number || line.supplier_part || '').trim(), description: line.description || null })}
+                          onClick={() => setCreateNsItemLine({ idx, partNumber: line.part_number.trim(), description: line.description || null })}
                           style={{ background: 'rgba(34,197,94,0.1)', border: '1px solid rgba(34,197,94,0.3)', color: '#22c55e', fontSize: '9px', fontWeight: 700, cursor: 'pointer', padding: '2px 6px', borderRadius: '5px' }}
                           title="Create this part in NetSuite"
                         >+ NetSuite</button>
@@ -2393,23 +2406,13 @@ export default function POsPage() {
                       >✕</button>
                     </div>
                   </div>
-                  <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '6px', marginBottom: '6px' }}>
-                    <div>
-                      <div style={{ fontSize: '9px', fontWeight: 700, color: 'var(--text-label)', textTransform: 'uppercase', marginBottom: '2px' }}>Part Number</div>
-                      <input
-                        value={line.part_number || ''}
-                        onChange={e => updateReviewLine(idx, 'part_number', e.target.value)}
-                        style={{ width: '100%', padding: '5px 7px', borderRadius: '5px', border: '1px solid var(--border)', background: 'var(--input-bg)', color: 'var(--text-body)', fontSize: '12px', fontWeight: 700 }}
-                      />
-                    </div>
-                    <div>
-                      <div style={{ fontSize: '9px', fontWeight: 700, color: 'var(--text-label)', textTransform: 'uppercase', marginBottom: '2px' }}>Supplier Part</div>
-                      <input
-                        value={line.supplier_part || ''}
-                        onChange={e => updateReviewLine(idx, 'supplier_part', e.target.value)}
-                        style={{ width: '100%', padding: '5px 7px', borderRadius: '5px', border: '1px solid var(--border)', background: 'var(--input-bg)', color: 'var(--text-body)', fontSize: '12px', fontWeight: 700 }}
-                      />
-                    </div>
+                  <div style={{ marginBottom: '6px' }}>
+                    <div style={{ fontSize: '9px', fontWeight: 700, color: 'var(--text-label)', textTransform: 'uppercase', marginBottom: '2px' }}>Part Number</div>
+                    <input
+                      value={line.part_number || ''}
+                      onChange={e => updateReviewLine(idx, 'part_number', e.target.value)}
+                      style={{ width: '100%', padding: '5px 7px', borderRadius: '5px', border: '1px solid var(--border)', background: 'var(--input-bg)', color: 'var(--text-body)', fontSize: '12px', fontWeight: 700 }}
+                    />
                   </div>
                   <div style={{ marginBottom: '6px' }}>
                     <div style={{ fontSize: '9px', fontWeight: 700, color: 'var(--text-label)', textTransform: 'uppercase', marginBottom: '2px' }}>Description</div>
