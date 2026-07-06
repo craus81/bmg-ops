@@ -54,6 +54,19 @@ export function CreateNetsuiteItemModal({
   const [recordType, setRecordType] = useState(ITEM_TYPES[0].value);
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  // Success state — shown in-modal so there's explicit confirmation before the
+  // modal closes. onCreated fires when the user dismisses this screen.
+  const [done, setDone] = useState<{
+    part: CreatedPart;
+    info?: { priceWarning?: string };
+    alreadyExists?: boolean;
+    netsuiteUrl?: string;
+    mirrorWarning?: string;
+  } | null>(null);
+
+  const finish = () => {
+    if (done) onCreated(done.part, done.info);
+  };
 
   const submit = async () => {
     if (submitting || !partNumber.trim()) return;
@@ -81,19 +94,23 @@ export function CreateNetsuiteItemModal({
         return;
       }
       const info = data.priceWarning ? { priceWarning: data.priceWarning as string } : undefined;
-      if (data.part) {
-        onCreated(data.part as CreatedPart, info);
-      } else {
-        // Created in NetSuite but local mirror failed — still let the caller proceed
-        onCreated({
-          id: data.internalId || partNumber.trim(),
-          item_number: partNumber.trim(),
-          display_name: displayName.trim() || null,
-          billable_customer: billableCustomer || null,
-          sales_price: price.trim() ? Number(price) : null,
-        }, info);
-        if (data.mirrorWarning) console.warn(data.mirrorWarning);
-      }
+      // Created in NetSuite but local mirror failed — still let the caller proceed
+      const part: CreatedPart = data.part || {
+        id: data.internalId || partNumber.trim(),
+        item_number: partNumber.trim(),
+        display_name: displayName.trim() || null,
+        billable_customer: billableCustomer || null,
+        sales_price: price.trim() ? Number(price) : null,
+      };
+      if (data.mirrorWarning) console.warn(data.mirrorWarning);
+      setDone({
+        part,
+        info,
+        alreadyExists: !!data.alreadyExists,
+        netsuiteUrl: data.netsuiteUrl,
+        mirrorWarning: data.mirrorWarning,
+      });
+      setSubmitting(false);
     } catch (e: any) {
       setError(e?.message || 'Network error');
       setSubmitting(false);
@@ -102,6 +119,56 @@ export function CreateNetsuiteItemModal({
 
   const labelStyle = { fontSize: '10px', fontWeight: 700, color: 'var(--text-muted)', textTransform: 'uppercase' as const, marginBottom: '4px', display: 'block' };
   const inputStyle = { width: '100%', padding: '9px 10px', borderRadius: '8px', border: '1px solid var(--border)', background: 'var(--input-bg)', color: 'var(--text-primary)', fontSize: '13px' };
+
+  if (done) {
+    return (
+      <div onClick={finish} style={{
+        position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.6)',
+        display: 'flex', alignItems: 'flex-start', justifyContent: 'center',
+        zIndex: 1000, padding: '20px', overflowY: 'auto',
+      }}>
+        <div onClick={e => e.stopPropagation()} style={{
+          background: 'var(--card)', borderRadius: '14px', maxWidth: '460px', width: '100%',
+          border: '1px solid rgba(34,197,94,0.4)', boxShadow: '0 16px 60px rgba(0,0,0,0.3)', margin: 'auto 0',
+        }}>
+          <div style={{ padding: '20px 18px 14px', textAlign: 'center' }}>
+            <div style={{ fontSize: '34px', lineHeight: 1 }}>✅</div>
+            <div style={{ fontSize: '16px', fontWeight: 800, color: '#22c55e', marginTop: '8px' }}>
+              {done.alreadyExists ? 'Already in NetSuite' : 'Part Created in NetSuite'}
+            </div>
+            <div style={{ fontSize: '12px', color: 'var(--text-body)', marginTop: '6px' }}>
+              {done.alreadyExists
+                ? <><b>{done.part.item_number}</b> already existed in NetSuite — FleetSuite linked it to the catalog, so it won&apos;t be flagged again.</>
+                : <><b>{done.part.item_number}</b> was created in NetSuite and added to the FleetSuite catalog.</>}
+            </div>
+            {done.netsuiteUrl && (
+              <a href={done.netsuiteUrl} target="_blank" rel="noreferrer" style={{ display: 'inline-block', marginTop: '10px', fontSize: '12px', fontWeight: 700, color: '#60a5fa', textDecoration: 'none' }}>
+                View in NetSuite ↗
+              </a>
+            )}
+            {done.info?.priceWarning && (
+              <div style={{ marginTop: '12px', fontSize: '11px', color: '#fbbf24', background: 'rgba(251,191,36,0.08)', border: '1px solid rgba(251,191,36,0.3)', borderRadius: '8px', padding: '8px 10px', textAlign: 'left' }}>
+                {done.info.priceWarning}
+              </div>
+            )}
+            {done.mirrorWarning && (
+              <div style={{ marginTop: '8px', fontSize: '11px', color: '#fbbf24', background: 'rgba(251,191,36,0.08)', border: '1px solid rgba(251,191,36,0.3)', borderRadius: '8px', padding: '8px 10px', textAlign: 'left' }}>
+                {done.mirrorWarning}
+              </div>
+            )}
+          </div>
+          <div style={{ padding: '12px 18px', borderTop: '1px solid var(--border)' }}>
+            <button
+              onClick={finish}
+              style={{ width: '100%', padding: '11px', borderRadius: '10px', border: 'none', background: 'rgba(34,197,94,0.9)', color: '#fff', fontWeight: 800, fontSize: '13px', cursor: 'pointer' }}
+            >
+              Done
+            </button>
+          </div>
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div onClick={onClose} style={{
@@ -163,7 +230,7 @@ export function CreateNetsuiteItemModal({
               fontWeight: 800, fontSize: '13px', cursor: submitting || !partNumber.trim() ? 'default' : 'pointer',
             }}
           >
-            {submitting ? 'Creating…' : 'Create in NetSuite'}
+            {submitting ? 'Creating in NetSuite… (can take up to a minute)' : 'Create in NetSuite'}
           </button>
           <button onClick={onClose} style={{ flex: 1, padding: '11px', borderRadius: '10px', background: 'transparent', border: '1px solid var(--border)', color: 'var(--text-body)', fontWeight: 700, fontSize: '13px', cursor: 'pointer' }}>
             Cancel

@@ -469,6 +469,12 @@ export async function createCustomerOrLead(payload: {
  * If the account requires more (income account, tax schedule, subsidiary),
  * NetSuite's rejection message is returned verbatim so the caller can show it.
  */
+/** NetSuite UI link for an item record, given its numeric internal id. */
+export function itemUrl(internalId: string | number): string {
+  const accountForUrl = getConfig().accountId.replace(/-/g, '_').toUpperCase();
+  return `https://${accountForUrl}.app.netsuite.com/app/common/item/item.nl?id=${internalId}`;
+}
+
 export async function createItem(payload: {
   itemId: string;
   recordType: string; // e.g. 'serviceSaleItem', 'nonInventoryResaleItem', 'inventoryItem'
