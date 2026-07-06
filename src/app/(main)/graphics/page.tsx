@@ -1886,7 +1886,7 @@ export default function GraphicsPage() {
                             jobId={job.id}
                             selectedIds={jobAssignments[job.id] || []}
                             onChange={(ids) => saveJobAssignments(job.id, ids, job.title)}
-                            roles={['graphics_production', 'production', 'admin', 'field_tech', 'shop_tech', 'installer']}
+                            roles={['graphics_production', 'production', 'admin', 'field_tech', 'shop_tech']}
                             label="Assigned Team"
                             compact
                           />
@@ -2109,7 +2109,7 @@ export default function GraphicsPage() {
                               jobId={editJob!.id}
                               selectedIds={jobAssignments[editJob!.id] || []}
                               onChange={(ids) => saveJobAssignments(editJob!.id, ids, editJob!.title)}
-                              roles={['graphics_production', 'production', 'admin', 'field_tech', 'shop_tech', 'installer']}
+                              roles={['graphics_production', 'production', 'admin', 'field_tech', 'shop_tech']}
                               label="Assigned Team (select one or more)"
                             />
                           </div>
@@ -2583,7 +2583,7 @@ export default function GraphicsPage() {
                     jobType="graphics_job"
                     selectedIds={createAssignees}
                     onChange={setCreateAssignees}
-                    roles={['graphics_production', 'production', 'admin', 'field_tech', 'shop_tech', 'installer']}
+                    roles={['graphics_production', 'production', 'admin', 'field_tech', 'shop_tech']}
                     label="Assign Team Members (select one or more)"
                   />
                 </div>

@@ -177,12 +177,15 @@ export default function UpfitProjectsPage() {
     }
 
     // Load profiles for display names
-    const { data: profs } = await supabase.from('profiles').select('id, full_name').eq('status', 'approved').order('full_name');
+    const { data: profs } = await supabase.from('profiles').select('id, full_name, role, roles').eq('status', 'approved').order('full_name');
     if (profs) {
       const map: Record<string, string> = {};
       for (const p of profs) map[p.id] = p.full_name || 'Unknown';
       setProfiles(map);
-      setProfileList(profs as { id: string; full_name: string }[]);
+      // The assignee dropdowns exclude external CNI installers (the
+      // 'installer' role); the name map above keeps covering everyone so
+      // tasks already assigned to one still show a name.
+      setProfileList(profs.filter((p: any) => p.role !== 'installer' && !(p.roles || []).includes('installer')) as { id: string; full_name: string }[]);
     }
 
     setLoading(false);

@@ -55,8 +55,10 @@ export default function AssignmentPicker({
     if (roles && roles.length > 0) {
       query = query.in('role', roles);
     } else {
-      // Default: show installers, production, and admin
-      query = query.in('role', ['admin', 'installer', 'field_tech', 'shop_tech', 'graphics_production', 'production']);
+      // Default: internal staff only. The 'installer' role is the external
+      // CNI installer population — callers that really do assign installers
+      // (e.g. the tracking page's Installer Assignment) pass it explicitly.
+      query = query.in('role', ['admin', 'field_tech', 'shop_tech', 'graphics_production', 'production']);
     }
 
     const { data } = await query;
