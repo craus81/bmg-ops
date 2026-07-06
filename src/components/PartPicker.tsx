@@ -1,7 +1,6 @@
 'use client';
 
 import { useState, useEffect } from 'react';
-import { createClient } from '@/lib/supabase-browser';
 
 export interface PickedPart {
   part_number: string;
@@ -30,22 +29,23 @@ const norm = (s: string) => (s || '').toLowerCase().replace(/o/g, '0');
  * part to drive part-specific behavior (e.g. the Verizon RFID device capture).
  */
 export default function PartPicker({ value, onChange, inputStyle }: PartPickerProps) {
-  const supabase = createClient();
   const [parts, setParts] = useState<PartOption[]>([]);
   const [search, setSearch] = useState('');
+  const [loadError, setLoadError] = useState('');
 
   useEffect(() => {
     let cancelled = false;
     (async () => {
-      const byItem = new Map<string, PartOption>();
+      // /api/parts (service role) instead of a direct client read of
+      // netsuite_parts — installer/tech sessions hit RLS variance there, and a
+      // failed client read was silent, leaving the picker mysteriously empty.
+      try {
+        const res = await fetch('/api/parts');
+        const data = await res.json().catch(() => ({}));
+        if (!res.ok) throw new Error(data.error || `Failed to load parts (${res.status})`);
 
-      for (let offset = 0; ; offset += 1000) {
-        const { data } = await supabase
-          .from('netsuite_parts')
-          .select('item_number, display_name, description, billable_customer, catalog')
-          .eq('is_active', true).order('item_number').range(offset, offset + 999);
-        if (!data || data.length === 0) break;
-        for (const p of data as any[]) {
+        const byItem = new Map<string, PartOption>();
+        for (const p of (data.parts || []) as any[]) {
           byItem.set((p.item_number || '').toUpperCase(), {
             item_number: p.item_number,
             part_number: p.item_number,
@@ -54,15 +54,15 @@ export default function PartPicker({ value, onChange, inputStyle }: PartPickerPr
             graphics: p.catalog === 'graphics',
           });
         }
-        if (data.length < 1000) break;
-      }
-
-      if (!cancelled) {
-        setParts([...byItem.values()].sort((a, b) => a.item_number.localeCompare(b.item_number)));
+        if (!cancelled) {
+          setParts([...byItem.values()].sort((a, b) => a.item_number.localeCompare(b.item_number)));
+          setLoadError('');
+        }
+      } catch (err: any) {
+        if (!cancelled) setLoadError(err?.message || 'Failed to load parts');
       }
     })();
     return () => { cancelled = true; };
-  // eslint-disable-next-line react-hooks/exhaustive-deps -- load once
   }, []);
 
   const filtered = search
@@ -107,6 +107,11 @@ export default function PartPicker({ value, onChange, inputStyle }: PartPickerPr
           color: 'var(--text-body)', fontSize: '14px',
         }}
       />
+      {loadError && (
+        <div style={{ fontSize: '11px', color: '#f87171', marginTop: '6px' }}>
+          Parts failed to load: {loadError}
+        </div>
+      )}
       {filtered.length > 0 && (
         <div style={{ display: 'flex', flexDirection: 'column', gap: '4px', marginTop: '6px', maxHeight: '260px', overflowY: 'auto' }}>
           {filtered.map(p => (

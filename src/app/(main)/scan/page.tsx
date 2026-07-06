@@ -51,6 +51,9 @@ export default function ScanPage() {
 
   // Part selection
   const [parts, setParts] = useState<Part[]>([]);
+  // Non-empty when the parts catalog failed to load — shown instead of a
+  // silently empty search (which reads as "no parts exist" to a tech).
+  const [partsError, setPartsError] = useState('');
   const [partSearch, setPartSearch] = useState('');
   const [selectedParts, setSelectedParts] = useState<Part[]>([]);
   const [customJob, setCustomJob] = useState('');
@@ -328,36 +331,42 @@ export default function ScanPage() {
   // item number, preferring the NetSuite-synced row when a manual one collides
   // (it carries upstream NetSuite/PO billing context).
   const loadParts = async () => {
-    const netsuiteParts = await loadNetsuiteParts();
-    const byItem = new Map<string, Part>();
-    for (const p of netsuiteParts) {
-      const key = p.item_number.toUpperCase();
-      const existing = byItem.get(key);
-      if (!existing || (p.source === 'netsuite' && existing.source !== 'netsuite')) {
-        byItem.set(key, p);
+    try {
+      const netsuiteParts = await loadNetsuiteParts();
+      const byItem = new Map<string, Part>();
+      for (const p of netsuiteParts) {
+        const key = p.item_number.toUpperCase();
+        const existing = byItem.get(key);
+        if (!existing || (p.source === 'netsuite' && existing.source !== 'netsuite')) {
+          byItem.set(key, p);
+        }
       }
+      const all = [...byItem.values()].sort((a, b) =>
+        a.item_number.localeCompare(b.item_number)
+      );
+      setParts(all);
+      setPartsError('');
+      try { localStorage.setItem('cached_parts', JSON.stringify(all)); } catch {}
+    } catch (err: any) {
+      // Fall back to the last good list (also covers working offline), and
+      // surface the failure so it doesn't read as an empty catalog.
+      try {
+        const cached = JSON.parse(localStorage.getItem('cached_parts') || '[]');
+        if (Array.isArray(cached) && cached.length > 0) setParts(cached);
+      } catch {}
+      setPartsError(err?.message || 'Failed to load parts');
     }
-    const all = [...byItem.values()].sort((a, b) =>
-      a.item_number.localeCompare(b.item_number)
-    );
-    setParts(all);
-    try { localStorage.setItem('cached_parts', JSON.stringify(all)); } catch {}
   };
 
+  // Parts come from /api/parts (service role) rather than a direct client
+  // read of netsuite_parts: techs' and installers' sessions hit RLS variance
+  // on that table, and a client-side read failure was silent — the picker
+  // just looked empty. The API errors loudly instead.
   const loadNetsuiteParts = async (): Promise<Part[]> => {
-    const all: Part[] = [];
-    for (let offset = 0; ; offset += 1000) {
-      const { data } = await supabase
-        .from('netsuite_parts')
-        .select('id, item_number, display_name, description, billable_customer, catalog, source')
-        .eq('is_active', true)
-        .order('item_number')
-        .range(offset, offset + 999);
-      if (!data || data.length === 0) break;
-      all.push(...(data as Part[]));
-      if (data.length < 1000) break;
-    }
-    return all;
+    const res = await fetch('/api/parts');
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) throw new Error(data.error || `Failed to load parts (${res.status})`);
+    return (data.parts || []) as Part[];
   };
 
   const loadPartProofs = async (part: Part) => {
@@ -631,6 +640,22 @@ export default function ScanPage() {
           <div style={{ fontSize: '11px', fontWeight: 700, color: theme.textMuted, textTransform: 'uppercase', letterSpacing: '0.8px', marginBottom: '12px' }}>
             What are you working on?
           </div>
+
+          {partsError && (
+            <div style={{
+              display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '10px',
+              padding: '10px 12px', borderRadius: '10px', marginBottom: '10px',
+              background: 'rgba(239,68,68,0.08)', border: '1px solid rgba(239,68,68,0.3)',
+            }}>
+              <div style={{ fontSize: '12px', color: '#f87171', fontWeight: 600 }}>
+                Parts failed to load{parts.length > 0 ? ' — showing the last saved list' : ''}. ({partsError})
+              </div>
+              <button
+                onClick={loadParts}
+                style={{ flexShrink: 0, padding: '6px 12px', borderRadius: '8px', border: '1px solid rgba(239,68,68,0.4)', background: 'transparent', color: '#f87171', fontSize: '11px', fontWeight: 700, cursor: 'pointer' }}
+              >Retry</button>
+            </div>
+          )}
 
           <input
             value={partSearch}
