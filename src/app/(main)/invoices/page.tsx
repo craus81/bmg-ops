@@ -17,8 +17,8 @@
  * turning finished work into invoices and getting them to the customer.
  */
 
-import { useState, useEffect, useMemo } from 'react';
-import { useRouter } from 'next/navigation';
+import { useState, useEffect, useMemo, useRef } from 'react';
+import { useRouter, useSearchParams } from 'next/navigation';
 import { createClient } from '@/lib/supabase-browser';
 import { useAuth } from '@/components/AuthProvider';
 import { useDialog } from '@/components/DialogProvider';
@@ -77,6 +77,7 @@ interface InvoiceVehiclesResult {
 
 export default function InvoicingHubPage() {
   const router = useRouter();
+  const searchParams = useSearchParams();
   const { user, isAdmin, isSales } = useAuth();
   const dialog = useDialog();
   const supabase = createClient();
@@ -108,6 +109,34 @@ export default function InvoicingHubPage() {
 
   // ── Email flow (shared) ──
   const [emailTarget, setEmailTarget] = useState<{ customerName: string; invoices: EmailableInvoice[] } | null>(null);
+
+  // Deep link from the "Graphics shipped — create invoice?" notification:
+  // /invoices?invoiceJob=<id>. Fetches the job by id directly (never depends
+  // on the tab lists being loaded or filtered) and opens the review modal.
+  const invoicePromptHandled = useRef<Set<string>>(new Set());
+  useEffect(() => {
+    const invoiceJobId = searchParams.get('invoiceJob');
+    if (!invoiceJobId || invoicePromptHandled.current.has(invoiceJobId)) return;
+    invoicePromptHandled.current.add(invoiceJobId);
+    router.replace('/invoices', { scroll: false });
+    (async () => {
+      const { data: job } = await supabase
+        .from('graphics_jobs')
+        .select('*')
+        .eq('id', invoiceJobId)
+        .maybeSingle();
+      if (!job) {
+        await dialog.alert('Could not find that graphics job — it may have been deleted.');
+        return;
+      }
+      if ((job as GraphicsJob).netsuite_invoice_id) {
+        await dialog.alert(`This job is already invoiced as #${(job as GraphicsJob).netsuite_invoice_number || (job as GraphicsJob).netsuite_invoice_id}.`);
+        return;
+      }
+      setInvoiceJob(job as GraphicsJob);
+    })();
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- intentional: handle the param once per id
+  }, [searchParams]);
 
   const loadAll = async () => {
     setLoading(true);
