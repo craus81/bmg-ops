@@ -81,6 +81,9 @@ export default function MorePage() {
           <MenuBtn title="Reports" sub="Sales by customer detail & other custom reports" onClick={() => router.push('/admin/reports')} />
         )}
         {F('reports') && (
+          <MenuBtn title="Invoicing" sub="Create & email NetSuite invoices from graphics jobs and scans" onClick={() => router.push('/invoices')} />
+        )}
+        {F('reports') && (
           <MenuBtn title="Scan Log" sub="Review scans, match POs, export & invoice" onClick={() => router.push('/admin/scans')} />
         )}
         {F('parts_catalog') && (
