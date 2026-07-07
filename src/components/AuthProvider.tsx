@@ -63,7 +63,12 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         const u = session?.user ?? null;
         setUser(u);
         if (u) {
-          loadProfileAndOverrides(u.id).catch(() => {});
+          // Await the profile so role flags (isAdmin, isSales, …) are
+          // resolved before `loading` flips false. Fire-and-forget here left
+          // a window where pages mounted with user set but isAdmin=false,
+          // so role-gated pages bounced deep links (e.g. email links to
+          // /invoices?invoiceJob=…) to /home before roles arrived.
+          await loadProfileAndOverrides(u.id).catch(() => {});
         }
       } catch (e: any) {
         console.error('[AUTH] Init error:', e.message);
@@ -80,7 +85,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         setProfile(null);
         setFeatureOverrides([]);
       } else if (event === 'SIGNED_IN') {
-        loadProfileAndOverrides(u.id).catch(() => {});
+        await loadProfileAndOverrides(u.id).catch(() => {});
       }
       if (mountedRef.current) setLoading(false);
     });

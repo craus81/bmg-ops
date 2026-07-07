@@ -78,14 +78,16 @@ interface InvoiceVehiclesResult {
 export default function InvoicingHubPage() {
   const router = useRouter();
   const searchParams = useSearchParams();
-  const { user, isAdmin, isSales } = useAuth();
+  const { user, profile, isAdmin, isSales } = useAuth();
   const dialog = useDialog();
   const supabase = createClient();
 
   useEffect(() => {
-    if (!user) return;
+    // Wait for the profile — role flags are false until it loads, and
+    // redirecting on unresolved roles would bounce email deep links home.
+    if (!user || !profile) return;
     if (!isAdmin && !isSales) router.push('/home');
-  }, [user, isAdmin, isSales, router]);
+  }, [user, profile, isAdmin, isSales, router]);
 
   const [tab, setTab] = useState<HubTab>('graphics');
   const [loading, setLoading] = useState(true);
