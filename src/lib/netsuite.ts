@@ -465,9 +465,10 @@ export async function createCustomerOrLead(payload: {
 /**
  * Create an item record in NetSuite.
  * Uses the REST Record API: POST /services/rest/record/v1/{recordType}
- * Sends a deliberately minimal field set (itemId + names + description).
- * If the account requires more (income account, tax schedule, subsidiary),
- * NetSuite's rejection message is returned verbatim so the caller can show it.
+ * Sends a deliberately minimal field set (itemId + names + description +
+ * the BMG Fleet Installations subsidiary). If the account requires more
+ * (income account, tax schedule), NetSuite's rejection message is returned
+ * verbatim so the caller can show it.
  */
 /** NetSuite UI link for an item record, given its numeric internal id. */
 export function itemUrl(internalId: string | number): string {
@@ -498,6 +499,13 @@ export async function createItem(payload: {
   const body: any = { itemId: payload.itemId };
   if (payload.displayName) body.displayName = payload.displayName;
   if (payload.description) body.salesDescription = payload.description;
+  // Items must belong to the "Parent Company : BMG Fleet Installations"
+  // subsidiary (internal id 2) or downstream transactions reject them
+  // ("Invalid Field Value … for the following field: item" on invoices/SOs).
+  // Hardcoded like the vendor-bill flow because the integration role cannot
+  // SuiteQL the subsidiary table (see docs/cni-vendor-bills.md); override via
+  // NETSUITE_SUBSIDIARY_ID. Item subsidiary is a multi-select in REST.
+  body.subsidiary = { items: [{ id: process.env.NETSUITE_SUBSIDIARY_ID || '2' }] };
 
   try {
     const response = await fetch(url, {
