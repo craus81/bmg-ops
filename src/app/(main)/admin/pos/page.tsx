@@ -5,6 +5,7 @@ import { useRouter, useSearchParams } from 'next/navigation';
 import { createClient } from '@/lib/supabase-browser';
 import { useAuth } from '@/components/AuthProvider';
 import { parseMasterackPO, type ParsedPO, type ParsedPOLine } from '@/lib/parsePO';
+import { resolvePoCustomer } from '@/lib/customer-match';
 import { storage } from '@/lib/storage';
 import type { PurchaseOrder, POLineItem, CatalogItem, PoLocation } from '@/lib/types';
 import { PartLabel } from '@/components/PartLabel';
@@ -535,6 +536,39 @@ export default function POsPage() {
   };
   const [selectedForDelete, setSelectedForDelete] = useState<Set<string>>(new Set());
   const [deletingBatch, setDeletingBatch] = useState(false);
+  const [backfillingCustomers, setBackfillingCustomers] = useState(false);
+
+  // One-time maintenance: resolve every PO's free-text customer to a real
+  // NetSuite customer (id + canonical name) and flow it to their graphics jobs.
+  const backfillCustomers = async () => {
+    if (!(await dialog.confirm(
+      'Link all POs to real NetSuite customers? Each PO\'s customer name is matched to the NetSuite customer record (e.g. "Masterack" becomes "Masterack LLC") and its graphics jobs are updated too. Names that don\'t match exactly one customer are left unchanged.'
+    ))) return;
+    setBackfillingCustomers(true);
+    try {
+      const res = await fetch('/api/pos/backfill-customers', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({}),
+      });
+      const data = await res.json();
+      if (!res.ok) {
+        await dialog.alert(`Backfill failed: ${data.error || `HTTP ${res.status}`}`);
+      } else {
+        const unmatchedNote = data.unmatched?.length
+          ? `\n\nCouldn't match (left as-is): ${data.unmatched.map((u: any) => `${u.name} (${u.count} PO${u.count !== 1 ? 's' : ''})`).join(', ')}`
+          : '';
+        await dialog.alert(
+          `Linked ${data.matched} of ${data.scanned} PO${data.scanned !== 1 ? 's' : ''} to NetSuite customers and updated ${data.updatedGraphicsJobs} graphics job${data.updatedGraphicsJobs !== 1 ? 's' : ''}.${unmatchedNote}`
+        );
+        window.location.reload();
+        return;
+      }
+    } catch (e: any) {
+      await dialog.alert(`Backfill failed: ${e.message}`);
+    }
+    setBackfillingCustomers(false);
+  };
 
   useEffect(() => {
     if (!isAdmin) { router.push('/home'); return; }
@@ -654,7 +688,11 @@ export default function POsPage() {
     if (!showCreate) return;
     if (createShipToId) return;
     if (Object.values(createShipTo).some(v => (v || '').toString().trim())) return;
-    const lastWithShipTo = pos.find(p => p.customer === form.customer && p.ship_to);
+    // Prefix match: the form's short names ("Masterack") still find POs whose
+    // customer was canonicalized to the NetSuite name ("Masterack LLC").
+    const lastWithShipTo = pos.find(p =>
+      p.customer?.toLowerCase().startsWith(form.customer.toLowerCase()) && p.ship_to
+    );
     if (!lastWithShipTo?.ship_to) return;
     const ship = lastWithShipTo.ship_to;
     const match = locations.find(l =>
@@ -762,12 +800,19 @@ export default function POsPage() {
 
     setImporting(true);
 
+    // Resolve to a real NetSuite customer (canonical name + internal id) so
+    // it flows through to graphics jobs / sales orders / invoices.
+    const { customer, customerNetsuiteId } = await resolvePoCustomer(
+      supabase, parsedPO.customer || 'Masterack'
+    );
+
     // Create PO
     const { data: po, error } = await supabase
       .from('purchase_orders')
       .insert({
         po_number: parsedPO.po_number,
-        customer: parsedPO.customer || 'Masterack',
+        customer,
+        customer_netsuite_id: customerNetsuiteId,
         ordered_date: parsedPO.ordered_date || null,
         requested_delivery_date: parsedPO.requested_delivery_date || null,
         created_by: user.id,
@@ -854,9 +899,12 @@ export default function POsPage() {
       return;
     }
 
-    // Update PO header
+    // Update PO header (customer resolved to canonical NetSuite name + id)
+    const { customer: overwriteCustomer, customerNetsuiteId: overwriteCustomerNsId } =
+      await resolvePoCustomer(supabase, parsedPO.customer || existingPo.customer);
     await supabase.from('purchase_orders').update({
-      customer: parsedPO.customer || existingPo.customer,
+      customer: overwriteCustomer,
+      customer_netsuite_id: overwriteCustomerNsId || existingPo.customer_netsuite_id || null,
       ordered_date: parsedPO.ordered_date || existingPo.ordered_date || null,
       requested_delivery_date: parsedPO.requested_delivery_date || existingPo.requested_delivery_date || null,
     }).eq('id', existingPo.id);
@@ -944,11 +992,15 @@ export default function POsPage() {
   const handleCreate = async () => {
     if (!form.po_number || !form.customer || lineItems.length === 0 || !user) return null;
     const hasShipTo = Object.values(createShipTo).some(v => (v || '').toString().trim());
+    // Resolve the picked name ("Masterack") to the real NetSuite customer
+    // ("Masterack LLC" + internal id) before storing.
+    const { customer, customerNetsuiteId } = await resolvePoCustomer(supabase, form.customer);
     const { data: po, error } = await supabase
       .from('purchase_orders')
       .insert({
         po_number: form.po_number,
-        customer: form.customer,
+        customer,
+        customer_netsuite_id: customerNetsuiteId,
         created_by: user.id,
         ship_to: hasShipTo ? createShipTo : null,
         ordered_date: form.ordered_date || null,
@@ -1644,6 +1696,7 @@ export default function POsPage() {
           title: li.description || `Graphic - ${li.part_number}`,
           part_number: li.part_number,
           customer: po.customer || null,
+          customer_netsuite_id: po.customer_netsuite_id || null,
           quantity: li.quantity,
           status: 'received',
           job_category: 'production',
@@ -1706,6 +1759,7 @@ export default function POsPage() {
           title: `PO #${po.po_number} – ${po.customer}`,
           part_number: partNumbers,
           customer: po.customer || null,
+          customer_netsuite_id: po.customer_netsuite_id || null,
           quantity: totalQty,
           status: 'received',
           job_category: 'production',
@@ -1958,6 +2012,14 @@ export default function POsPage() {
         <div style={{ display: 'flex', gap: '6px' }}>
           {!editMode ? (
             <>
+              <button
+                onClick={backfillCustomers}
+                disabled={backfillingCustomers}
+                title="Resolve every PO's customer name to its NetSuite customer record"
+                style={{ padding: '6px 12px', borderRadius: '8px', background: 'rgba(167,139,250,0.1)', border: '1px solid rgba(167,139,250,0.25)', color: '#a78bfa', fontSize: '12px', fontWeight: 700, opacity: backfillingCustomers ? 0.6 : 1 }}
+              >
+                {backfillingCustomers ? 'Linking…' : 'Link Customers'}
+              </button>
               <button
                 onClick={() => { setEditMode(true); setSelectedForDelete(new Set()); }}
                 style={{ padding: '6px 12px', borderRadius: '8px', background: 'rgba(248,113,113,0.1)', border: '1px solid rgba(248,113,113,0.25)', color: '#f87171', fontSize: '12px', fontWeight: 700 }}

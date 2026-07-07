@@ -58,6 +58,8 @@ export interface PurchaseOrder {
   id: string;
   po_number: string;
   customer: string;
+  /** NetSuite customer internal id resolved from `customer` (null = unresolved free text). */
+  customer_netsuite_id?: string | null;
   status: 'open' | 'complete' | 'cancelled' | 'closed';
   ordered_date: string | null;
   requested_delivery_date: string | null;
