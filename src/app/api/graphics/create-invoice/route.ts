@@ -186,9 +186,11 @@ export async function POST(req: NextRequest) {
         .map((m) => ({ partNumber: m.partNumber, itemId: m.itemId, rate: m.rate }));
     }
 
-    // Build memo
+    // Build memo. The PO number goes on the invoice's dedicated PO field
+    // (otherRefNum) below, not the memo — see /api/netsuite/fix-invoice-po,
+    // which exists to clean up PO-in-memo invoices.
+    const poNumber = (job.po_number || '').trim();
     const memoParts = [`Graphics Job #${job.job_number || job.id.slice(0, 8)}`];
-    if (job.po_number) memoParts.push(`PO #${job.po_number}`);
     if (job.customer) memoParts.push(job.customer);
     const memo = memoParts.join(' — ');
 
@@ -219,6 +221,7 @@ export async function POST(req: NextRequest) {
       memo,
       lineItems,
       locationId: locationId ?? undefined,
+      ...(poNumber ? { poNumber } : {}),
     });
 
     if (!result.success) {
