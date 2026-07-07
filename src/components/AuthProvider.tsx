@@ -85,7 +85,13 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         setProfile(null);
         setFeatureOverrides([]);
       } else if (event === 'SIGNED_IN') {
-        await loadProfileAndOverrides(u.id).catch(() => {});
+        // Deliberately NOT awaited: supabase-js holds an internal auth lock
+        // while onAuthStateChange callbacks run, and any awaited query here
+        // needs that lock to attach the session token — awaiting deadlocks
+        // the whole client (infinite loading spinner). The awaited profile
+        // load that gates `loading` lives in init(), outside the callback;
+        // real sign-ins go through a full page navigation and hit init().
+        loadProfileAndOverrides(u.id).catch(() => {});
       }
       if (mountedRef.current) setLoading(false);
     });
