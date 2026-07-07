@@ -4,6 +4,7 @@ import { createClient } from '@supabase/supabase-js';
 import { notifyMany } from '@/lib/notify';
 import { requireAuth } from '@/lib/api-auth';
 import { r2Upload } from '@/lib/r2';
+import { resolvePoCustomer } from '@/lib/customer-match';
 import { validateBody, z } from '@/lib/validate';
 
 // PDF download + Claude extraction (with retry/backoff) routinely runs well
@@ -326,7 +327,11 @@ export async function POST(req: NextRequest) {
         }
         await supabase.from('po_line_items').delete().eq('po_id', existingPO.id);
 
-        const customer = extracted.customer || existingPO.customer || 'Unknown';
+        // Resolve the extracted name to a real NetSuite customer (canonical
+        // name + internal id) so it flows through to downstream transactions.
+        const { customer, customerNetsuiteId } = await resolvePoCustomer(
+          supabase, extracted.customer || existingPO.customer
+        );
         const requestedDelivery =
           normalizeDate(extracted.requested_delivery_date) ||
           earliestLineDeliveryDate(extractedLines) ||
@@ -334,6 +339,7 @@ export async function POST(req: NextRequest) {
           null;
         await supabase.from('purchase_orders').update({
           customer,
+          customer_netsuite_id: customerNetsuiteId || existingPO.customer_netsuite_id || null,
           ordered_date: normalizeDate(extracted.ordered_date) || existingPO.ordered_date || null,
           requested_delivery_date: requestedDelivery,
           notes: extracted.notes ? String(extracted.notes) : existingPO.notes,
@@ -388,11 +394,12 @@ export async function POST(req: NextRequest) {
       // Create new PO from reviewed data
       const { data: catalogData } = await supabase.from('netsuite_parts').select('id, item_number').eq('is_active', true);
       const catalogItems = (catalogData || []).map((p: any) => ({ id: p.id, part_number: p.item_number }));
-      const customer = extracted.customer || 'Unknown';
+      const { customer, customerNetsuiteId } = await resolvePoCustomer(supabase, extracted.customer);
 
       const { data: adminUser } = await supabase.from('profiles').select('id').eq('role', 'admin').limit(1).single();
       const insertPayload: any = {
         po_number: String(poNumber), customer,
+        customer_netsuite_id: customerNetsuiteId,
         ordered_date: normalizeDate(extracted.ordered_date),
         requested_delivery_date:
           normalizeDate(extracted.requested_delivery_date) ||
@@ -736,8 +743,11 @@ export async function POST(req: NextRequest) {
         return NextResponse.json({ error: `Failed to update PO: ${deleteErr.message}` }, { status: 500 });
       }
 
-      // Update PO header
-      const customer = extracted.customer || existingPO.customer || 'Unknown';
+      // Update PO header, resolving the customer to a real NetSuite customer
+      // (canonical name + internal id).
+      const { customer, customerNetsuiteId } = await resolvePoCustomer(
+        supabase, extracted.customer || existingPO.customer
+      );
       const requestedDelivery =
         normalizeDate(extracted.requested_delivery_date) ||
         earliestLineDeliveryDate(extractedLines) ||
@@ -745,6 +755,7 @@ export async function POST(req: NextRequest) {
         null;
       const { error: updateErr } = await supabase.from('purchase_orders').update({
         customer,
+        customer_netsuite_id: customerNetsuiteId || existingPO.customer_netsuite_id || null,
         ordered_date: normalizeDate(extracted.ordered_date) || existingPO.ordered_date || null,
         requested_delivery_date: requestedDelivery,
         notes: extracted.notes ? String(extracted.notes) : existingPO.notes,
@@ -817,7 +828,7 @@ export async function POST(req: NextRequest) {
         status: 'updated',
         poNumber,
         poId: existingPO.id,
-        customer: extracted.customer || existingPO.customer,
+        customer,
         lineCount: lineInserts.length,
         unmatchedParts,
         extracted,
@@ -829,7 +840,7 @@ export async function POST(req: NextRequest) {
       const { data: catalogData } = await supabase.from('netsuite_parts').select('id, item_number').eq('is_active', true);
       const catalogItems = (catalogData || []).map((p: any) => ({ id: p.id, part_number: p.item_number }));
 
-      const customer = extracted.customer || 'Unknown';
+      const { customer, customerNetsuiteId } = await resolvePoCustomer(supabase, extracted.customer);
 
       const { data: adminUser } = await supabase
         .from('profiles')
@@ -841,6 +852,7 @@ export async function POST(req: NextRequest) {
       const insertPayload: any = {
         po_number: String(poNumber),
         customer,
+        customer_netsuite_id: customerNetsuiteId,
         ordered_date: normalizeDate(extracted.ordered_date),
         requested_delivery_date:
           normalizeDate(extracted.requested_delivery_date) ||

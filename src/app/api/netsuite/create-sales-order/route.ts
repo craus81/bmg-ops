@@ -46,17 +46,23 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ error: 'PO has no line items' }, { status: 400 });
     }
 
-    // Step 1: Find the customer in NetSuite
-    const customerResult = await findCustomer(po.customer);
-    if (!customerResult.found || customerResult.customers.length === 0) {
-      return NextResponse.json({
-        error: `Customer "${po.customer}" not found in NetSuite. Please verify the customer exists.`,
-        step: 'customer_lookup',
-      }, { status: 400 });
+    // Step 1: Resolve the NetSuite customer. Prefer the internal id stored on
+    // the PO at import time; only fall back to the fuzzy name lookup (which
+    // blindly takes the first substring match) for legacy POs without one.
+    let nsCustomer: { id: string; name: string };
+    if (po.customer_netsuite_id) {
+      nsCustomer = { id: String(po.customer_netsuite_id), name: po.customer };
+    } else {
+      const customerResult = await findCustomer(po.customer);
+      if (!customerResult.found || customerResult.customers.length === 0) {
+        return NextResponse.json({
+          error: `Customer "${po.customer}" not found in NetSuite. Please verify the customer exists.`,
+          step: 'customer_lookup',
+        }, { status: 400 });
+      }
+      // Use the first matching customer
+      nsCustomer = customerResult.customers[0];
     }
-
-    // Use the first matching customer
-    const nsCustomer = customerResult.customers[0];
 
     // Step 2: Look up item IDs in NetSuite by part number
     const partNumbers = lineItems.map((li: any) => li.part_number).filter(Boolean);

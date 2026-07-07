@@ -56,9 +56,11 @@ export async function resolveCustomerNsId(
   if (job.po_id) {
     const { data: po } = await supabase
       .from('purchase_orders')
-      .select('customer')
+      .select('customer, customer_netsuite_id')
       .eq('id', job.po_id)
       .maybeSingle();
+    // Prefer the NetSuite id resolved at PO import time.
+    if (po?.customer_netsuite_id) return po.customer_netsuite_id;
     if (po?.customer) {
       const { data: customer } = await supabase
         .from('customers')
