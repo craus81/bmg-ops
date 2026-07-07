@@ -17,9 +17,9 @@ const Schema = z.object({ jobId: z.string().uuid() });
  * POST /api/graphics/notify-shipped-invoice
  *
  * Fires when a graphics_job transitions to 'shipped'. Pings the
- * billing-trusted admins with a notification that links back to
- * /graphics with ?invoiceJob=<id>, where the page surfaces a confirm
- * prompt and (on yes) opens the invoice modal. Skips if the job is
+ * billing-trusted admins with a notification that links to the
+ * Invoicing hub with ?invoiceJob=<id>, which loads the job by id and
+ * opens the invoice review modal directly. Skips if the job is
  * already invoiced.
  *
  * Body: { jobId: string }
@@ -58,7 +58,7 @@ export async function POST(req: NextRequest) {
     type: 'graphics_invoice_prompt',
     title: 'Graphics shipped — create invoice?',
     body: `${jobLabel}${job.customer ? ` for ${job.customer}` : ''} has shipped. Create invoice in FleetSuite?`,
-    url: `/graphics?invoiceJob=${job.id}`,
+    url: `/invoices?invoiceJob=${job.id}`,
   });
 
   return NextResponse.json({ notified: INVOICE_PROMPT_USER_IDS.length });

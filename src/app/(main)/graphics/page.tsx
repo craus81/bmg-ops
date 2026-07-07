@@ -215,13 +215,26 @@ export default function GraphicsPage() {
     const invoiceJobId = searchParams.get('invoiceJob');
     if (!invoiceJobId) return;
     if (invoicePromptHandled.current.has(invoiceJobId)) return;
-    const job = jobs.find(j => j.id === invoiceJobId);
     invoicePromptHandled.current.add(invoiceJobId);
     router.replace('/graphics', { scroll: false });
-    if (!job) return;
     (async () => {
-      if ((job as any).netsuite_invoice_id) {
-        await dialog.alert(`Already invoiced as #${(job as any).netsuite_invoice_number || (job as any).netsuite_invoice_id}.`);
+      // The loaded list excludes installed/cancelled jobs, so fall back to
+      // fetching by id — the prompt should never silently no-op.
+      let job = jobs.find(j => j.id === invoiceJobId) || null;
+      if (!job) {
+        const { data } = await supabase
+          .from('graphics_jobs')
+          .select('*')
+          .eq('id', invoiceJobId)
+          .maybeSingle();
+        job = (data as GraphicsJob) || null;
+      }
+      if (!job) {
+        await dialog.alert('Could not find that graphics job — it may have been deleted.');
+        return;
+      }
+      if (job.netsuite_invoice_id) {
+        await dialog.alert(`Already invoiced as #${job.netsuite_invoice_number || job.netsuite_invoice_id}.`);
         return;
       }
       const label = job.title || `Job #${job.job_number || job.id.slice(0, 8)}`;
