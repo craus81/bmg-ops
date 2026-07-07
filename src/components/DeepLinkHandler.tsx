@@ -47,9 +47,17 @@ export default function DeepLinkHandler() {
         });
         if (cancelled) handle.remove();
         else removeListener = () => handle.remove();
-      } catch {
-        // @capacitor/app unavailable or not native — web handles deep links
-        // natively via the URL itself.
+      } catch (err) {
+        // Not native (web handles deep links via the URL itself), OR the
+        // native binary was built without the @capacitor/app plugin — in the
+        // latter case link taps only foreground the app and the URL is lost,
+        // so make the failure visible instead of swallowing it.
+        try {
+          const cap = await import('@capacitor/core');
+          if (cap.Capacitor?.isNativePlatform?.()) {
+            console.error('DeepLinkHandler: @capacitor/app unavailable — universal links will not navigate. Rebuild the app with `npx cap sync`.', err);
+          }
+        } catch { /* not even capacitor core — plain web, nothing to report */ }
       }
     })();
 
