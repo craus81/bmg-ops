@@ -9,6 +9,7 @@ import { useDialog } from '@/components/DialogProvider';
 import { theme } from '@/lib/theme';
 import AssignmentPicker from '@/components/AssignmentPicker';
 import GraphicsInvoiceReviewModal from '@/components/GraphicsInvoiceReviewModal';
+import EmailInvoicesModal, { type EmailableInvoice } from '@/components/EmailInvoicesModal';
 import { PartLabel } from '@/components/PartLabel';
 import DropboxProofSearch from '@/components/DropboxProofSearch';
 import { exportPackingListPDF, packingListFromJob, type PackingListLine } from '@/lib/packing-list-pdf';
@@ -85,6 +86,7 @@ export default function GraphicsPage() {
   const [expandedJobId, setExpandedJobId] = useState<string | null>(null);
   const [editingJob, setEditingJob] = useState<GraphicsJob | null>(null);
   const [invoiceJob, setInvoiceJob] = useState<GraphicsJob | null>(null);
+  const [emailInvoiceTarget, setEmailInvoiceTarget] = useState<{ customerName: string; invoices: EmailableInvoice[] } | null>(null);
   const invoicePromptHandled = useRef<Set<string>>(new Set());
   const [statusHistory, setStatusHistory] = useState<GraphicsStatusHistory[]>([]);
 
@@ -965,6 +967,23 @@ export default function GraphicsPage() {
       setFetchingPdfJobId(null);
     }
     return null;
+  };
+
+  // Open the shared email-invoice modal for a job's NetSuite invoice. The
+  // override carries the just-created invoice id/number, which may not be on
+  // the job row in state yet.
+  const openEmailInvoice = (job: GraphicsJob, override?: { invoiceId?: string | null; invoiceNumber?: string | null }) => {
+    const invoiceId = override?.invoiceId ?? job.netsuite_invoice_id;
+    const invoiceNumber = override?.invoiceNumber ?? job.netsuite_invoice_number;
+    if (!invoiceId && !invoiceNumber) return;
+    setEmailInvoiceTarget({
+      customerName: job.customer || '',
+      invoices: [{
+        invoiceId: invoiceId || undefined,
+        invoiceNumber: invoiceNumber || String(invoiceId),
+        po: job.po_number || undefined,
+      }],
+    });
   };
 
   // Filter jobs
@@ -1950,6 +1969,12 @@ export default function GraphicsPage() {
                                     </button>
                                   )}
                                   <button
+                                    onClick={() => openEmailInvoice(job)}
+                                    style={{ padding: '6px 10px', borderRadius: '7px', fontSize: '11px', fontWeight: 700, cursor: 'pointer', background: 'rgba(251,191,36,0.1)', border: '1px solid rgba(251,191,36,0.25)', color: '#fbbf24', whiteSpace: 'nowrap' }}
+                                  >
+                                    Email Invoice
+                                  </button>
+                                  <button
                                     onClick={() => printPackingList(job)}
                                     style={{ padding: '6px 10px', borderRadius: '7px', fontSize: '11px', fontWeight: 700, cursor: 'pointer', background: 'rgba(34,197,94,0.12)', border: '1px solid rgba(34,197,94,0.3)', color: '#22c55e', whiteSpace: 'nowrap' }}
                                   >
@@ -2715,7 +2740,28 @@ export default function GraphicsPage() {
             }
             // Best-effort: pull the invoice PDF and store it on the record.
             if (job) storeInvoicePdf(job.id, true);
+            // Offer to email the fresh invoice to the customer — same flow as
+            // the Scans screen.
+            if (job) {
+              const emailNow = await dialog.confirm(
+                `Email invoice ${result.invoiceNumber || result.invoiceId || ''} to the customer now?`
+              );
+              if (emailNow) {
+                openEmailInvoice(job, {
+                  invoiceId: result.invoiceId ?? null,
+                  invoiceNumber: result.invoiceNumber ?? null,
+                });
+              }
+            }
           }}
+        />
+      )}
+
+      {emailInvoiceTarget && (
+        <EmailInvoicesModal
+          customerName={emailInvoiceTarget.customerName}
+          invoices={emailInvoiceTarget.invoices}
+          onClose={() => setEmailInvoiceTarget(null)}
         />
       )}
     </div>
