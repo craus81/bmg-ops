@@ -174,12 +174,13 @@ async function printPo(po: PurchaseOrder & { line_items: POLineItem[] }, alertFn
 // NetSuite) parts as source='manual' with a NULL netsuite_id so the NetSuite
 // sync never deactivates them.
 const PART_FIELDS =
-  'id, item_number, customer, billable_customer, vehicle_type, graphic_package, sales_price, proof_pages, is_active';
+  'id, item_number, catalog, customer, billable_customer, vehicle_type, graphic_package, sales_price, proof_pages, is_active';
 
 function partToCatalogItem(p: any): CatalogItem {
   return {
     id: p.id,
     part_number: p.item_number,
+    catalog: p.catalog === 'upfit' ? 'upfit' : 'graphics',
     customer: p.customer || '',
     end_customer: p.billable_customer || '',
     vehicle_type: p.vehicle_type || '',
@@ -3440,7 +3441,19 @@ export default function POsPage() {
                         </div>
                         {/* Action buttons: Add to Catalog / Create Graphics Job */}
                         <div style={{ display: 'flex', gap: '6px', marginTop: '6px', paddingLeft: '2px' }}>
-                          {catalogMatch || catalogAdded ? (
+                          {catalogMatch ? (
+                            <button
+                              onClick={() => router.push(`/parts?catalog=${catalogMatch.catalog || 'graphics'}&q=${encodeURIComponent(li.part_number)}`)}
+                              title="Open this part in the Parts Catalog to edit it"
+                              style={{
+                                padding: '3px 8px', borderRadius: '4px', fontSize: '9px', fontWeight: 700,
+                                background: 'rgba(34,197,94,0.08)', border: '1px solid rgba(34,197,94,0.25)',
+                                color: '#4ade80', cursor: 'pointer',
+                              }}
+                            >
+                              ✓ In catalog — edit ↗
+                            </button>
+                          ) : catalogAdded ? (
                             <span style={{ fontSize: '9px', color: '#4ade80', fontWeight: 600 }}>✓ In catalog</span>
                           ) : (
                             <button

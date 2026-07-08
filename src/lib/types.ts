@@ -31,6 +31,8 @@ export interface Profile {
 export interface CatalogItem {
   id: string;
   part_number: string;
+  /** Which Parts Catalog tab the part lives on (netsuite_parts.catalog). */
+  catalog?: 'upfit' | 'graphics';
   customer: string;
   end_customer: string;
   vehicle_type: string;
