@@ -128,10 +128,17 @@ export function exportPackingListPDF(data: PackingListData, opts?: { print?: boo
 
   let refY = margin + 40;
   doc.setFontSize(9);
+  // Size the label column off the widest label + widest value so long values
+  // (e.g. job numbers like GFX-MR99T5OU-DMQ) never draw over their label.
+  doc.setFont('helvetica', 'normal');
+  const maxValueW = Math.max(...refs.map(([, v]) => doc.getTextWidth(v)));
+  doc.setFont('helvetica', 'bold');
+  const maxLabelW = Math.max(...refs.map(([l]) => doc.getTextWidth(l)));
+  const labelX = pageW - margin - Math.max(maxValueW + maxLabelW + 10, 90);
   for (const [label, value] of refs) {
     doc.setFont('helvetica', 'bold');
     doc.setTextColor(110);
-    doc.text(label, pageW - margin - 90, refY);
+    doc.text(label, labelX, refY);
     doc.setFont('helvetica', 'normal');
     doc.setTextColor(0);
     doc.text(value, pageW - margin, refY, { align: 'right' });
