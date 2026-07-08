@@ -94,6 +94,7 @@ export default function PartsPage() {
   const [lastSync, setLastSync] = useState<SyncLog | null>(null);
   const [expandedId, setExpandedId] = useState<string | null>(null);
   const [deletingId, setDeletingId] = useState<string | null>(null);
+  const [movingId, setMovingId] = useState<string | null>(null);
   // Duplicate cleanup: groups of rows sharing a part number, the chosen survivor
   // per group, and which group is mid-merge.
   const [duplicateGroups, setDuplicateGroups] = useState<Part[][]>([]);
@@ -324,6 +325,29 @@ export default function PartsPage() {
       setSyncing(false);
       setTimeout(() => setSyncMessage(''), 5000);
     }
+  };
+
+  // Re-file a part into the other catalog. Sets catalog_override so the
+  // NetSuite parts sync keeps the manual assignment instead of re-deriving it
+  // from ns_class / item-number prefix on the next run.
+  const movePartCatalog = async (part: Part) => {
+    const target = part.catalog === 'graphics' ? 'upfit' : 'graphics';
+    if (!(await dialog.confirm(
+      `Move ${part.item_number} to the ${target} catalog? The NetSuite sync will keep it there.`
+    ))) return;
+    setMovingId(part.id);
+    const { error } = await supabase
+      .from('netsuite_parts')
+      .update({ catalog: target, catalog_override: target, updated_at: new Date().toISOString() })
+      .eq('id', part.id);
+    if (error) {
+      await dialog.alert(`Move failed: ${error.message}`);
+    } else {
+      // The list only holds the active catalog's parts — drop the moved row.
+      setParts(prev => prev.filter(p => p.id !== part.id));
+      setExpandedId(null);
+    }
+    setMovingId(null);
   };
 
   const updateLaborHours = async (partId: string) => {
@@ -1217,6 +1241,26 @@ export default function PartsPage() {
                           Create in NetSuite
                         </button>
                       </div>
+                    )}
+
+                    {/* Re-file into the other catalog (sticks across syncs) */}
+                    {isAdmin && (
+                      <button
+                        onClick={() => movePartCatalog(part)}
+                        disabled={movingId === part.id}
+                        title="Moves this part to the other catalog tab; the NetSuite sync keeps the manual assignment"
+                        style={{
+                          width: '100%', marginTop: '12px', padding: '10px', borderRadius: '10px',
+                          background: 'rgba(96,165,250,0.1)', border: '1px solid rgba(96,165,250,0.3)',
+                          color: '#60a5fa', fontSize: '12px', fontWeight: 800,
+                          cursor: movingId === part.id ? 'default' : 'pointer',
+                          opacity: movingId === part.id ? 0.6 : 1,
+                        }}
+                      >
+                        {movingId === part.id
+                          ? 'Moving…'
+                          : `⇄  Move to ${part.catalog === 'graphics' ? 'Upfit' : 'Graphics'} Catalog`}
+                      </button>
                     )}
 
                     {/* Delete from FleetSuite (local mirror only; NetSuite untouched) */}
