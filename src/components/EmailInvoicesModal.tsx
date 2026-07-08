@@ -89,14 +89,59 @@ export default function EmailInvoicesModal({ customerName, invoices: initialInvo
     await supabase.from('prospects').update({ billing_emails: merged }).eq('id', (prospect as any).id);
   };
 
-  const applyResults = (results: { invoiceNumber: string; status: 'ok' | 'error'; error?: string }[]) => {
-    const statusByNumber: Record<string, { status: 'ok' | 'error'; error?: string }> = {};
-    for (const r of results || []) statusByNumber[r.invoiceNumber] = { status: r.status, error: r.error };
+  const applyResults = (results: { invoiceNumber: string; invoiceId?: string; status: 'ok' | 'error'; error?: string }[]) => {
+    const statusByNumber: Record<string, { invoiceId?: string; status: 'ok' | 'error'; error?: string }> = {};
+    for (const r of results || []) statusByNumber[r.invoiceNumber] = { invoiceId: r.invoiceId, status: r.status, error: r.error };
     setInvoices(prev => prev.map(i => {
       if (!i.include) return { ...i, verifyStatus: undefined, verifyError: undefined };
       const s = statusByNumber[i.invoiceNumber];
-      return s ? { ...i, verifyStatus: s.status, verifyError: s.error } : i;
+      return s ? { ...i, invoiceId: i.invoiceId || s.invoiceId, verifyStatus: s.status, verifyError: s.error } : i;
     }));
+  };
+
+  // Open an invoice's PDF in a new tab so it can be eyeballed before sending.
+  // The window opens synchronously (popup blockers require a direct user
+  // gesture) and is pointed at the PDF once it arrives from NetSuite.
+  const [viewingIdx, setViewingIdx] = useState<number | null>(null);
+  const viewPdf = async (idx: number) => {
+    const inv = invoices[idx];
+    if (!inv || viewingIdx !== null) return;
+    setViewingIdx(idx);
+    const w = window.open('about:blank', '_blank');
+    try {
+      let invoiceId = inv.invoiceId;
+      if (!invoiceId) {
+        // Resolve the id from the invoice number via the verify dry run.
+        const res = await fetch('/api/netsuite/email-invoices', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            invoices: [{ invoiceNumber: inv.invoiceNumber }],
+            customerName,
+            customerEmail: [],
+            dryRun: true,
+          }),
+        });
+        const data = await res.json();
+        invoiceId = data.results?.[0]?.invoiceId;
+        if (invoiceId) {
+          setInvoices(prev => prev.map((r, i) => i === idx ? { ...r, invoiceId } : r));
+        }
+      }
+      if (!invoiceId) throw new Error(`Invoice #${inv.invoiceNumber} not found in NetSuite`);
+
+      const res = await fetch(`/api/netsuite/pdf?type=invoice&id=${encodeURIComponent(invoiceId)}`);
+      const data = await res.json();
+      if (!data.success || !data.pdfBase64) throw new Error(data.error || 'PDF fetch failed');
+      const bytes = Uint8Array.from(atob(data.pdfBase64), c => c.charCodeAt(0));
+      const url = URL.createObjectURL(new Blob([bytes], { type: 'application/pdf' }));
+      if (w) w.location.href = url;
+      else window.open(url, '_blank');
+    } catch (e: any) {
+      w?.close();
+      await dialog.alert(`Could not open the PDF: ${e.message}`);
+    }
+    setViewingIdx(null);
   };
 
   const includedInvoices = invoices.filter(i => i.include);
@@ -208,6 +253,7 @@ export default function EmailInvoicesModal({ customerName, invoices: initialInvo
               <button
                 onClick={verifyInvoices}
                 disabled={verifying || includedCount === 0}
+                title="Checks that each invoice's PDF can be generated in NetSuite — click a row's 'view' to open one"
                 style={{ padding: '2px 8px', borderRadius: '4px', fontSize: '9px', fontWeight: 700, background: 'rgba(251,191,36,0.08)', border: '1px solid rgba(251,191,36,0.25)', color: '#fbbf24', cursor: verifying || includedCount === 0 ? 'not-allowed' : 'pointer', opacity: verifying || includedCount === 0 ? 0.5 : 1 }}
               >
                 {verifying ? 'Verifying...' : 'Verify PDFs'}
@@ -235,6 +281,14 @@ export default function EmailInvoicesModal({ customerName, invoices: initialInvo
                     style={{ cursor: 'pointer', accentColor: '#22c55e' }}
                   />
                   <span style={{ flex: 1 }}>#{inv.invoiceNumber}{inv.po ? ` (PO #${inv.po})` : ''}</span>
+                  <button
+                    onClick={(e) => { e.preventDefault(); e.stopPropagation(); viewPdf(i); }}
+                    disabled={viewingIdx !== null}
+                    title="Open this invoice's PDF in a new tab"
+                    style={{ background: 'transparent', border: 'none', color: '#60a5fa', fontSize: '10px', fontWeight: 700, cursor: viewingIdx !== null ? 'wait' : 'pointer', padding: '0 4px', flexShrink: 0 }}
+                  >
+                    {viewingIdx === i ? 'opening…' : 'view'}
+                  </button>
                   {statusIcon && (
                     <span style={{ fontSize: '11px', fontWeight: 700, color: statusColor, minWidth: '14px', textAlign: 'right' }}>
                       {statusIcon}
