@@ -170,6 +170,20 @@ export async function POST(req: NextRequest) {
     const totalWithPrice = Object.values(pricingMap).filter(p => p > 0).length;
     console.log(`[parts-sync] Final pricing: ${totalWithPrice} items with non-zero prices`);
 
+    // Manual catalog re-files (Parts page "Move to … Catalog") win over the
+    // derived classification, otherwise every sync would undo the move.
+    const catalogOverrides: Record<string, 'upfit' | 'graphics'> = {};
+    const { data: overrideRows } = await supabase
+      .from('netsuite_parts')
+      .select('netsuite_id, catalog_override')
+      .not('catalog_override', 'is', null)
+      .not('netsuite_id', 'is', null);
+    for (const r of overrideRows || []) {
+      if (r.netsuite_id && (r.catalog_override === 'upfit' || r.catalog_override === 'graphics')) {
+        catalogOverrides[String(r.netsuite_id)] = r.catalog_override;
+      }
+    }
+
     // Build upsert batch
     let added = 0;
     let updated = 0;
@@ -184,7 +198,7 @@ export async function POST(req: NextRequest) {
         const nsId = item.id?.toString();
         const itemNumber = item.item_number || '';
         const className = item.class_name || '';
-        const catalog = determineCatalog(itemNumber, className);
+        const catalog = catalogOverrides[nsId] || determineCatalog(itemNumber, className);
         const pricing = pricingMap[nsId] || 0;
         const costInfo = costMap[nsId] || { purchasePrice: 0, quantityOnHand: 0, quantityAvailable: 0 };
 
