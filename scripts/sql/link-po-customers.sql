@@ -37,11 +37,10 @@ BEGIN
   END IF;
 END $$;
 
--- 3. Resolve each distinct unlinked customer name to a NetSuite customer.
+-- 3. Resolve each distinct unlinked customer name to a NetSuite customer and
+--    stamp it on the POs (id + canonical display name), all in one statement.
 --    Tiers mirror src/lib/customer-match.ts; ILIKE wildcards in the raw name
 --    are escaped so PDF noise can't become a pattern.
-DROP TABLE IF EXISTS _resolved_customers;
-CREATE TEMP TABLE _resolved_customers AS
 WITH names AS (
   SELECT DISTINCT trim(customer) AS raw_name
   FROM purchase_orders
@@ -49,10 +48,11 @@ WITH names AS (
     AND customer IS NOT NULL
     AND trim(customer) <> ''
     AND lower(trim(customer)) <> 'unknown'
-)
-SELECT n.raw_name, m.netsuite_id, m.company_name
-FROM names n
-CROSS JOIN LATERAL (
+),
+resolved AS (
+  SELECT n.raw_name, m.netsuite_id, m.company_name
+  FROM names n
+  CROSS JOIN LATERAL (
   SELECT cand.netsuite_id, cand.company_name
   FROM (
     -- Tier 1: exact company name (case-insensitive)
@@ -95,19 +95,18 @@ CROSS JOIN LATERAL (
           AND c2.company_name ILIKE '%' || replace(replace(n.raw_name, '%', '\%'), '_', '\_') || '%'
       )
   ) cand
-  ORDER BY cand.tier
-  LIMIT 1
-) m;
-
--- 4a. Stamp the id and canonicalize the display name on matched POs
+    ORDER BY cand.tier
+    LIMIT 1
+  ) m
+)
 UPDATE purchase_orders po
 SET customer_netsuite_id = r.netsuite_id,
     customer = r.company_name
-FROM _resolved_customers r
+FROM resolved r
 WHERE po.customer_netsuite_id IS NULL
   AND trim(po.customer) = r.raw_name;
 
--- 4b. Flow the resolution down to graphics jobs linked to a resolved PO
+-- 4. Flow the resolution down to graphics jobs linked to a resolved PO
 UPDATE graphics_jobs gj
 SET customer_netsuite_id = po.customer_netsuite_id,
     customer = po.customer
