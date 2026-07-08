@@ -130,7 +130,9 @@ export async function POST(req: NextRequest) {
     }
 
     const attachments: { filename: string; content: Buffer; contentType: string }[] = [];
-    const results: { invoiceNumber: string; status: 'ok' | 'error'; error?: string }[] = [];
+    // invoiceId is echoed back so the client can offer "view PDF" links for
+    // invoices it only knew by number (the verify dry run resolves them).
+    const results: { invoiceNumber: string; invoiceId?: string; status: 'ok' | 'error'; error?: string }[] = [];
 
     for (const inv of invoices) {
       const invoiceId = inv.invoiceId || tranidToId.get(inv.invoiceNumber);
@@ -147,9 +149,9 @@ export async function POST(req: NextRequest) {
           content: Buffer.from(result.pdfBase64, 'base64'),
           contentType: 'application/pdf',
         });
-        results.push({ invoiceNumber: inv.invoiceNumber, status: 'ok' });
+        results.push({ invoiceNumber: inv.invoiceNumber, invoiceId, status: 'ok' });
       } else {
-        results.push({ invoiceNumber: inv.invoiceNumber || invoiceId, status: 'error', error: result.error || 'PDF fetch failed' });
+        results.push({ invoiceNumber: inv.invoiceNumber || invoiceId, invoiceId, status: 'error', error: result.error || 'PDF fetch failed' });
       }
     }
 
