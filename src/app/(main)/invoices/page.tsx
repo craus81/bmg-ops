@@ -92,6 +92,15 @@ export default function InvoicingHubPage() {
   const [tab, setTab] = useState<HubTab>('graphics');
   const [loading, setLoading] = useState(true);
   const [search, setSearch] = useState('');
+  // Invoiced-tab date window.
+  const [sentRange, setSentRange] = useState<'30' | 'month' | 'lastmonth' | '90' | 'all'>('30');
+
+  // Deep link: /invoices?tab=sent|scans|graphics (used by the dashboard KPI).
+  useEffect(() => {
+    const t = searchParams.get('tab');
+    if (t === 'sent' || t === 'scans' || t === 'graphics') setTab(t);
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- intentional: read once on mount
+  }, []);
 
   // ── Data ──
   const [uninvoicedJobs, setUninvoicedJobs] = useState<GraphicsJob[]>([]);
@@ -232,7 +241,9 @@ export default function InvoicingHubPage() {
         source: 'Graphics' as const,
         customer: j.customer || 'Unknown',
         invoiceNumber: j.netsuite_invoice_number || String(j.netsuite_invoice_id),
-        invoiceId: j.netsuite_invoice_id || undefined,
+        // 'external' = marked invoiced outside FleetSuite; there's no NetSuite
+        // record behind it, so don't offer it as a fetchable invoice id.
+        invoiceId: j.netsuite_invoice_id === 'external' ? undefined : (j.netsuite_invoice_id || undefined),
         po: j.po_number || undefined,
         date: j.invoiced_at,
         amount: j.invoice_amount,
@@ -253,7 +264,24 @@ export default function InvoicingHubPage() {
   }, [invoicedJobs, scanInvoices]);
 
   const sentByCustomer = useMemo(() => {
+    // Date window first, then text search.
+    let rangeStart: Date | null = null;
+    let rangeEnd: Date | null = null;
+    const now = new Date();
+    if (sentRange === '30') { rangeStart = new Date(now); rangeStart.setDate(now.getDate() - 30); }
+    else if (sentRange === '90') { rangeStart = new Date(now); rangeStart.setDate(now.getDate() - 90); }
+    else if (sentRange === 'month') rangeStart = new Date(now.getFullYear(), now.getMonth(), 1);
+    else if (sentRange === 'lastmonth') {
+      rangeStart = new Date(now.getFullYear(), now.getMonth() - 1, 1);
+      rangeEnd = new Date(now.getFullYear(), now.getMonth(), 1);
+    }
     const filtered = sentInvoices.filter(r => {
+      if (rangeStart) {
+        if (!r.date) return false;
+        const dt = new Date(r.date);
+        if (dt < rangeStart) return false;
+        if (rangeEnd && dt >= rangeEnd) return false;
+      }
       if (!search) return true;
       const q = search.toLowerCase();
       return r.customer.toLowerCase().includes(q)
@@ -267,7 +295,7 @@ export default function InvoicingHubPage() {
     }
     return Object.entries(byCustomer).sort(([, a], [, b]) =>
       (b[0].date || '').localeCompare(a[0].date || ''));
-  }, [sentInvoices, search]);
+  }, [sentInvoices, search, sentRange]);
 
   // ── Actions ──
   const toggleGroup = (key: string) => {
@@ -299,6 +327,44 @@ export default function InvoicingHubPage() {
       await dialog.alert(`Invoice failed: ${e.message}`);
     }
     setInvoicing(false);
+  };
+
+  // Clear out a job that was invoiced outside FleetSuite. Optionally links it
+  // to the real NetSuite invoice when the user knows the invoice number.
+  const [markingJobId, setMarkingJobId] = useState<string | null>(null);
+  const markInvoiced = async (job: GraphicsJob) => {
+    const invoiceNumber = await dialog.prompt(
+      `Mark "${job.title || job.job_number || 'this job'}" as already invoiced?\n\nEnter the NetSuite invoice # to link it (recommended), or leave blank if it was billed entirely outside NetSuite.`,
+      ''
+    );
+    if (invoiceNumber === null) return; // cancelled
+    setMarkingJobId(job.id);
+    try {
+      const res = await fetch('/api/graphics/mark-invoiced', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ jobId: job.id, invoiceNumber: invoiceNumber.trim() || null }),
+      });
+      const data = await res.json();
+      if (!res.ok || !data.success) {
+        await dialog.alert(`Could not mark invoiced: ${data.error || `HTTP ${res.status}`}`);
+      } else {
+        const updated: GraphicsJob = {
+          ...job,
+          netsuite_invoice_id: data.invoiceId,
+          netsuite_invoice_number: data.invoiceNumber,
+          invoiced_at: new Date().toISOString(),
+        };
+        setUninvoicedJobs(prev => prev.filter(j => j.id !== job.id));
+        setInvoicedJobs(prev => [updated, ...prev]);
+        if (invoiceNumber.trim() && !data.linked) {
+          await dialog.alert(`Cleared it out — but invoice "${invoiceNumber.trim()}" wasn't found in NetSuite, so the job isn't linked to a real invoice.`);
+        }
+      }
+    } catch (e: any) {
+      await dialog.alert(`Could not mark invoiced: ${e.message}`);
+    }
+    setMarkingJobId(null);
   };
 
   const emailForJob = (job: GraphicsJob, override?: { invoiceId?: string | null; invoiceNumber?: string | null }) => {
@@ -406,10 +472,18 @@ export default function InvoicingHubPage() {
                       {job.quantity ? ` · Qty ${job.quantity}` : ''}
                     </div>
                   </div>
-                  <button
-                    onClick={() => setInvoiceJob(job)}
-                    style={smallBtn('#22c55e', 'rgba(34,197,94,0.08)', 'rgba(34,197,94,0.25)')}
-                  >Review &amp; Invoice</button>
+                  <div style={{ display: 'flex', gap: '6px', flexWrap: 'wrap' }}>
+                    <button
+                      onClick={() => markInvoiced(job)}
+                      disabled={markingJobId === job.id}
+                      title="Already billed outside FleetSuite? Clear it from this list (optionally linking the NetSuite invoice #)"
+                      style={{ ...smallBtn('var(--text-muted)', 'transparent', 'var(--border)'), opacity: markingJobId === job.id ? 0.6 : 1 }}
+                    >{markingJobId === job.id ? 'Marking…' : 'Mark invoiced'}</button>
+                    <button
+                      onClick={() => setInvoiceJob(job)}
+                      style={smallBtn('#22c55e', 'rgba(34,197,94,0.08)', 'rgba(34,197,94,0.25)')}
+                    >Review &amp; Invoice</button>
+                  </div>
                 </div>
               ))}
             </div>
@@ -517,9 +591,27 @@ export default function InvoicingHubPage() {
         </>
       ) : (
         <>
+          {/* Date window */}
+          <div style={{ display: 'flex', gap: '4px', marginBottom: '10px', flexWrap: 'wrap' }}>
+            {([
+              { id: '30' as const, label: 'Last 30 days' },
+              { id: 'month' as const, label: 'This month' },
+              { id: 'lastmonth' as const, label: 'Last month' },
+              { id: '90' as const, label: 'Last 90 days' },
+              { id: 'all' as const, label: 'All' },
+            ]).map(r => (
+              <button key={r.id} onClick={() => setSentRange(r.id)} style={{
+                padding: '5px 12px', borderRadius: '8px', fontSize: '10px', fontWeight: 700, cursor: 'pointer',
+                background: sentRange === r.id ? 'var(--tab-active-bg)' : 'transparent',
+                border: sentRange === r.id ? '1px solid var(--tab-active-border)' : '1px solid var(--border)',
+                color: sentRange === r.id ? '#60a5fa' : 'var(--text-muted)',
+              }}>{r.label}</button>
+            ))}
+          </div>
+
           {sentByCustomer.length === 0 ? (
             <div style={{ ...card, textAlign: 'center', color: 'var(--text-muted)', fontSize: '13px', padding: '28px' }}>
-              No invoices found.
+              No invoices in this date range.
             </div>
           ) : (
             <div style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
