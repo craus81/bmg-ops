@@ -32,6 +32,10 @@ export default function SettingsPage() {
   const [pushError, setPushError] = useState('');
   const [pushPermission, setPushPermission] = useState<string>('default');
 
+  // Test-push state: human-readable diagnostic lines from /api/push/test
+  const [testLoading, setTestLoading] = useState(false);
+  const [testResults, setTestResults] = useState<{ ok: boolean; text: string }[] | null>(null);
+
   useEffect(() => {
     if (!user) return;
     loadPrefs();
@@ -71,6 +75,47 @@ export default function SettingsPage() {
     }
 
     setPushLoading(false);
+  };
+
+  const handleTestPush = async () => {
+    setTestLoading(true);
+    setTestResults(null);
+    try {
+      const res = await fetch('/api/push/test', { method: 'POST' });
+      const data = await res.json();
+      if (!res.ok || !data.success) throw new Error(data.error || `Request failed (${res.status})`);
+
+      const lines: { ok: boolean; text: string }[] = [];
+      const n = data.native;
+      if (n.missingEnv?.length) {
+        lines.push({ ok: false, text: `iPhone/iPad app: server is missing ${n.missingEnv.join(', ')} — add them in Vercel and redeploy.` });
+      } else if (n.tableError) {
+        lines.push({ ok: false, text: `iPhone/iPad app: database says "${n.tableError}" — the native_push_tokens table is missing (run migration 127 in Supabase).` });
+      } else if (n.devices === 0) {
+        lines.push({ ok: false, text: 'iPhone/iPad app: no devices registered for your account. Open the app, allow notifications when asked, then try again. (If you already allowed them, force-quit and relaunch the app.)' });
+      } else if (n.sent > 0) {
+        lines.push({ ok: true, text: `iPhone/iPad app: sent to ${n.sent} of ${n.devices} device${n.devices === 1 ? '' : 's'} — check your device.` });
+      } else {
+        lines.push({ ok: false, text: `iPhone/iPad app: Apple rejected the push for all ${n.devices} device${n.devices === 1 ? '' : 's'}${n.stale ? ` (${n.stale} stale token${n.stale === 1 ? '' : 's'} removed — relaunch the app to re-register)` : ''}${n.errors ? ' — likely a bad APNs key or Team/Key ID; check the Vercel logs' : ''}.` });
+      }
+
+      const w = data.web;
+      if (!w.configured) {
+        lines.push({ ok: false, text: 'Browser push: VAPID keys are not configured on the server.' });
+      } else if (w.tableError) {
+        lines.push({ ok: false, text: `Browser push: database says "${w.tableError}".` });
+      } else if (w.subscriptions === 0) {
+        lines.push({ ok: false, text: 'Browser push: no browsers subscribed — use the Enable Push Notifications button above on each browser you want alerts in.' });
+      } else if (w.sent > 0) {
+        lines.push({ ok: true, text: `Browser push: sent to ${w.sent} of ${w.subscriptions} browser${w.subscriptions === 1 ? '' : 's'}.` });
+      } else {
+        lines.push({ ok: false, text: `Browser push: all ${w.subscriptions} subscription${w.subscriptions === 1 ? '' : 's'} failed — they may be expired; re-enable push on those browsers.` });
+      }
+      setTestResults(lines);
+    } catch (e: any) {
+      setTestResults([{ ok: false, text: e?.message || 'Test failed' }]);
+    }
+    setTestLoading(false);
   };
 
   const handleChangePassword = async (e: React.FormEvent) => {
@@ -431,6 +476,40 @@ export default function SettingsPage() {
               </div>
             )}
           </>
+        )}
+
+        {/* Test push — sends a real notification to every registered device
+            and reports which link in the chain is broken when nothing lands. */}
+        <button
+          onClick={handleTestPush}
+          disabled={testLoading}
+          style={{
+            width: '100%', padding: '12px', borderRadius: '10px', marginTop: '10px',
+            background: 'rgba(238,49,32,0.08)', border: '1px solid rgba(238,49,32,0.25)',
+            color: 'var(--orange)', fontSize: '13px', fontWeight: 700,
+            cursor: testLoading ? 'not-allowed' : 'pointer', opacity: testLoading ? 0.5 : 1,
+          }}
+        >
+          {testLoading ? 'Sending test...' : 'Send Test Push to My Devices'}
+        </button>
+        <div style={{ marginTop: '6px', fontSize: '10px', color: 'var(--text-label)' }}>
+          Sends a test notification to your iPhone/iPad app and any subscribed browsers, and reports exactly what happened.
+        </div>
+
+        {testResults && (
+          <div style={{ marginTop: '8px', display: 'flex', flexDirection: 'column', gap: '6px' }}>
+            {testResults.map((r, i) => (
+              <div key={i} style={{
+                padding: '8px 10px', borderRadius: '8px',
+                background: r.ok ? 'rgba(34,197,94,0.08)' : 'rgba(239,68,68,0.08)',
+                border: `1px solid ${r.ok ? 'rgba(34,197,94,0.25)' : 'rgba(239,68,68,0.25)'}`,
+              }}>
+                <div style={{ fontSize: '11px', color: r.ok ? '#22c55e' : '#ef4444', lineHeight: 1.45 }}>
+                  {r.ok ? '✓' : '✕'} {r.text}
+                </div>
+              </div>
+            ))}
+          </div>
         )}
       </div>
 
