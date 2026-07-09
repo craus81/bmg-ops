@@ -1,6 +1,7 @@
 'use client';
 
 import { useState, useEffect } from 'react';
+import { useSearchParams } from 'next/navigation';
 import { createClient } from '@/lib/supabase-browser';
 import { useAuth } from '@/components/AuthProvider';
 import { useDialog } from '@/components/DialogProvider';
@@ -38,7 +39,12 @@ interface ScanLog {
   requires_po?: boolean;
 }
 
-type ViewTab = 'ready' | 'waiting' | 'exported' | 'archived' | 'bulk';
+type ViewTab = 'all' | 'ready' | 'waiting' | 'exported' | 'archived' | 'bulk';
+
+// Local calendar date (YYYY-MM-DD) — scan date filters work in the user's day,
+// matching how the dashboard counts "scans today".
+const toLocalDateStr = (d: Date) =>
+  `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
 
 export default function AdminScansPage() {
   const { user } = useAuth();
@@ -61,6 +67,32 @@ export default function AdminScansPage() {
   // when a cni_job_vins row points at it). See docs/cni-redesign.md §3.4.
   const [cniByScanId, setCniByScanId] = useState<Record<string, string>>({});
   const [sourceFilter, setSourceFilter] = useState<'all' | 'cni' | 'field'>('all');
+  // Date-range filter for the All Scans tab (local YYYY-MM-DD, '' = unbounded)
+  const [dateFrom, setDateFrom] = useState('');
+  const [dateTo, setDateTo] = useState('');
+  const searchParams = useSearchParams();
+
+  // Deep links: ?tab=all&range=today|7d|30d (dashboard stats) or explicit
+  // ?from=YYYY-MM-DD&to=YYYY-MM-DD.
+  useEffect(() => {
+    const t = searchParams.get('tab');
+    if (t && ['all', 'ready', 'waiting', 'exported', 'archived', 'bulk'].includes(t)) setTab(t as ViewTab);
+    const range = searchParams.get('range');
+    if (range === 'today' || range === '7d' || range === '30d') {
+      const today = new Date();
+      const start = new Date(today);
+      if (range === '7d') start.setDate(start.getDate() - 6);
+      if (range === '30d') start.setDate(start.getDate() - 29);
+      setDateFrom(toLocalDateStr(start));
+      setDateTo(toLocalDateStr(today));
+    } else {
+      const from = searchParams.get('from');
+      const to = searchParams.get('to');
+      if (from) setDateFrom(from);
+      if (to) setDateTo(to);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- read the URL once on mount
+  }, []);
 
   // Bulk upload state
   const [allParts, setAllParts] = useState<{ id: string; item_number: string; display_name: string | null; billable_customer: string | null }[]>([]);
@@ -208,7 +240,29 @@ export default function AdminScansPage() {
   const waitingForPO = pending.filter(s => !s.po_id && needsPO(s));
   const exported = scans.filter(s => s.exported_at);
 
+  // Every scan regardless of lifecycle state — the All Scans tab is the raw
+  // scan history (ready, waiting, exported, archived, invoiced) in one list.
+  const allScans = [...scans, ...archivedScans]
+    .sort((a, b) => new Date(b.scanned_at).getTime() - new Date(a.scanned_at).getTime());
+
+  // Lifecycle chip for the All Scans tab. Invoiced wins over archived
+  // (invoicing stamps archived_at too), then archived, exported, and the
+  // PO-derived pending states.
+  const scanStatus = (s: ScanLog) => {
+    if (s.invoice_number || s.date_invoiced) {
+      const inv = s.invoice_number ? ` #${s.invoice_number}` : '';
+      return s.is_paid
+        ? { label: `Invoiced${inv} · Paid`, color: '#4ade80', bg: 'rgba(74,222,128,0.12)' }
+        : { label: `Invoiced${inv}`, color: '#fbbf24', bg: 'rgba(251,191,36,0.12)' };
+    }
+    if (s.archived_at) return { label: 'Archived', color: '#94a3b8', bg: 'rgba(148,163,184,0.12)' };
+    if (s.exported_at) return { label: 'Exported', color: '#60a5fa', bg: 'rgba(96,165,250,0.12)' };
+    if (s.po_id || !needsPO(s)) return { label: 'Ready to Export', color: '#22c55e', bg: 'rgba(34,197,94,0.12)' };
+    return { label: 'Waiting for PO', color: '#f59e0b', bg: 'rgba(245,158,11,0.12)' };
+  };
+
   const getTabScans = () => {
+    if (tab === 'all') return allScans;
     if (tab === 'ready') return readyToExport;
     if (tab === 'waiting') return waitingForPO;
     if (tab === 'exported') return exported;
@@ -220,6 +274,12 @@ export default function AdminScansPage() {
     // Source filter: CNI scans are the ones a cni_job_vins row points at.
     if (sourceFilter === 'cni' && !cniByScanId[s.id]) return false;
     if (sourceFilter === 'field' && cniByScanId[s.id]) return false;
+    // Date-range filter (All Scans tab) compares local calendar dates.
+    if (tab === 'all' && (dateFrom || dateTo)) {
+      const day = toLocalDateStr(new Date(s.scanned_at));
+      if (dateFrom && day < dateFrom) return false;
+      if (dateTo && day > dateTo) return false;
+    }
     if (!search) return true;
     const q = search.toLowerCase();
     return s.vin.toLowerCase().includes(q) ||
@@ -736,6 +796,7 @@ export default function AdminScansPage() {
           { id: 'waiting' as ViewTab, label: `Waiting for PO (${waitingForPO.length})`, color: '#f59e0b' },
           { id: 'exported' as ViewTab, label: `Exported (${exported.length})`, color: '#60a5fa' },
           { id: 'archived' as ViewTab, label: `Archived (${archivedScans.length})`, color: '#94a3b8' },
+          { id: 'all' as ViewTab, label: `All Scans (${allScans.length})`, color: '#06b6d4' },
           { id: 'bulk' as ViewTab, label: 'Bulk Upload', color: '#a78bfa' },
         ]).map(t => (
           <button key={t.id} onClick={() => { setTab(t.id); setSelectedScans(new Set()); setExpandedGroups(new Set()); }} style={{
@@ -766,6 +827,42 @@ export default function AdminScansPage() {
               color: sourceFilter === f.id ? '#06b6d4' : 'var(--text-muted)',
             }}>{f.label}</button>
           ))}
+        </div>
+      )}
+
+      {/* Date-range filter — All Scans tab only. Filters on when the scan
+          happened, ignoring what happened to it afterwards. */}
+      {tab === 'all' && (
+        <div style={{ display: 'flex', gap: '6px', marginBottom: '10px', alignItems: 'center', flexWrap: 'wrap' }}>
+          {(() => {
+            const today = new Date();
+            const daysAgo = (n: number) => { const d = new Date(today); d.setDate(d.getDate() - n); return toLocalDateStr(d); };
+            const presets = [
+              { label: 'Today', from: toLocalDateStr(today), to: toLocalDateStr(today) },
+              { label: '7 days', from: daysAgo(6), to: toLocalDateStr(today) },
+              { label: '30 days', from: daysAgo(29), to: toLocalDateStr(today) },
+              { label: 'All time', from: '', to: '' },
+            ];
+            return presets.map(p => {
+              const active = dateFrom === p.from && dateTo === p.to;
+              return (
+                <button key={p.label} onClick={() => { setDateFrom(p.from); setDateTo(p.to); }} style={{
+                  padding: '5px 12px', borderRadius: '8px', fontSize: '10px', fontWeight: 700, cursor: 'pointer',
+                  background: active ? 'var(--tab-active-bg)' : 'transparent',
+                  border: active ? '1px solid var(--tab-active-border)' : '1px solid var(--border)',
+                  color: active ? '#06b6d4' : 'var(--text-muted)',
+                }}>{p.label}</button>
+              );
+            });
+          })()}
+          <input type="date" value={dateFrom} onChange={e => setDateFrom(e.target.value)}
+            style={{ padding: '4px 8px', borderRadius: '8px', fontSize: '11px', border: '1px solid var(--border)', background: 'var(--input-bg)', color: 'var(--text-primary)' }} />
+          <span style={{ fontSize: '11px', color: 'var(--text-muted)' }}>–</span>
+          <input type="date" value={dateTo} onChange={e => setDateTo(e.target.value)}
+            style={{ padding: '4px 8px', borderRadius: '8px', fontSize: '11px', border: '1px solid var(--border)', background: 'var(--input-bg)', color: 'var(--text-primary)' }} />
+          <span style={{ fontSize: '11px', fontWeight: 700, color: 'var(--text-secondary)', marginLeft: 'auto' }}>
+            {tabScans.length} scan{tabScans.length !== 1 ? 's' : ''}{(dateFrom || dateTo) ? ' in range' : ''}
+          </span>
         </div>
       )}
 
@@ -1391,12 +1488,83 @@ export default function AdminScansPage() {
       {/* Empty state */}
       {tab !== 'bulk' && tabScans.length === 0 && (
         <div style={{ textAlign: 'center', padding: '32px 0', color: 'var(--text-muted)', fontSize: '13px', fontWeight: 600 }}>
-          {tab === 'ready' ? 'No scans ready to export' : tab === 'waiting' ? 'No scans waiting for PO — all matched!' : 'No exported scans'}
+          {tab === 'ready' ? 'No scans ready to export' : tab === 'waiting' ? 'No scans waiting for PO — all matched!' : tab === 'all' ? ((dateFrom || dateTo) ? 'No scans in this date range' : 'No scans yet') : 'No exported scans'}
         </div>
       )}
 
+      {/* All Scans tab — flat chronological list, newest first, with a
+          lifecycle chip per scan. Capped to keep huge histories responsive;
+          the date filter narrows the set. */}
+      {tab === 'all' && (() => {
+        const CAP = 500;
+        const visible = tabScans.slice(0, CAP);
+        return (
+          <div style={{ display: 'flex', flexDirection: 'column', gap: '3px' }}>
+            {visible.map(scan => {
+              const st = scanStatus(scan);
+              return (
+                <div key={scan.id} style={{
+                  display: 'flex', alignItems: 'center', gap: '8px',
+                  padding: '6px 10px', borderRadius: '6px',
+                  background: 'var(--card)', border: '1px solid var(--border)',
+                }}>
+                  <input type="checkbox" checked={selectedScans.has(scan.id)} onChange={() => toggleSelect(scan.id)} style={{ width: '14px', height: '14px', flexShrink: 0 }} />
+                  <div style={{ flex: 1, minWidth: 0 }}>
+                    <div style={{ fontSize: '11px', fontWeight: 700, color: 'var(--text-primary)' }}>
+                      {[scan.vehicle_year, scan.vehicle_make, scan.vehicle_model].filter(Boolean).join(' ') || 'Unknown'}
+                      {scan.billable_customer && <span style={{ fontWeight: 600, color: '#a78bfa', marginLeft: '6px' }}>{scan.billable_customer}</span>}
+                    </div>
+                    <div style={{ fontSize: '9px', fontFamily: 'monospace', color: 'var(--text-muted)' }}>{scan.vin}</div>
+                    {(scan.part_number || scan.location_name) && (
+                      <div style={{ fontSize: '9px', color: 'var(--text-secondary)', marginTop: '1px' }}>
+                        {scan.part_number && (
+                          <PartLabel partNumber={scan.part_number} fallbackDescription={scan.part_description} />
+                        )}
+                        {scan.location_name && <span style={{ color: 'var(--text-muted)' }}>{scan.part_number ? ' · ' : ''}{scan.location_name}</span>}
+                      </div>
+                    )}
+                  </div>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: '4px', flexShrink: 0 }}>
+                    <span style={{ fontSize: '8px', fontWeight: 700, padding: '2px 5px', borderRadius: '4px', background: st.bg, color: st.color, whiteSpace: 'nowrap' }}>
+                      {st.label}
+                    </span>
+                    {scan.unit_number && (
+                      <span style={{ fontSize: '8px', fontWeight: 700, padding: '2px 5px', borderRadius: '4px', background: 'rgba(167,139,250,0.12)', color: '#a78bfa' }}>
+                        Unit {scan.unit_number}
+                      </span>
+                    )}
+                    {scan.po_number && (
+                      <span style={{ fontSize: '8px', fontWeight: 700, padding: '2px 5px', borderRadius: '4px', background: 'rgba(34,197,94,0.1)', color: '#22c55e' }}>
+                        PO #{scan.po_number}
+                      </span>
+                    )}
+                    {cniByScanId[scan.id] && (
+                      <span style={{ fontSize: '8px', fontWeight: 700, padding: '2px 5px', borderRadius: '4px', background: 'rgba(6,182,212,0.12)', color: '#06b6d4' }}>
+                        {cniByScanId[scan.id]}
+                      </span>
+                    )}
+                    <div style={{ fontSize: '9px', color: 'var(--text-muted)', textAlign: 'right' }}>
+                      {profiles[scan.scanned_by || ''] || ''}<br />
+                      {scan.scanned_by_company && (<>{scan.scanned_by_company}<br /></>)}
+                      {new Date(scan.scanned_at).toLocaleString([], { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' })}
+                    </div>
+                    <button onClick={() => setEditingScan({ ...scan })} style={{ padding: '2px 5px', borderRadius: '4px', border: 'none', background: 'rgba(59,130,246,0.08)', color: '#60a5fa', fontSize: '9px', fontWeight: 700, cursor: 'pointer' }}>Edit</button>
+                    <button onClick={() => deleteScan(scan.id)} style={{ padding: '2px 5px', borderRadius: '4px', border: 'none', background: 'rgba(239,68,68,0.08)', color: '#ef4444', fontSize: '9px', fontWeight: 700, cursor: 'pointer' }}>✕</button>
+                  </div>
+                </div>
+              );
+            })}
+            {tabScans.length > CAP && (
+              <div style={{ textAlign: 'center', padding: '10px 0', color: 'var(--text-muted)', fontSize: '11px', fontWeight: 600 }}>
+                Showing first {CAP} of {tabScans.length} scans — narrow the date range or search to see the rest
+              </div>
+            )}
+          </div>
+        );
+      })()}
+
       {/* Grouped list */}
-      {tab !== 'bulk' && <div style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
+      {tab !== 'bulk' && tab !== 'all' && <div style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
         {customerKeys.map(customer => {
           const subGroups = grouped[customer];
           const subKeys = Object.keys(subGroups).sort((a, b) => {
