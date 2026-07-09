@@ -98,6 +98,9 @@ export default function MorePage() {
         {(isAdmin || isSales || isGraphicsProduction) && (
           <MenuBtn title="Wrap Estimator v2" sub="Upload a proof, AI sizes each graphic element" onClick={() => router.push('/admin/wrap-estimator')} />
         )}
+        {(isAdmin || isSales || isGraphicsProduction) && (
+          <MenuBtn title="Wrap Quotes" sub="Measure a vehicle template by hand & email the quote" onClick={() => router.push('/admin/wrap-quote')} />
+        )}
         {F('scan') && !overflowPaths.has('/scan') && (
           <MenuBtn title="Scan & Log" sub="Scan VINs and log work" onClick={() => router.push('/scan')} />
         )}
