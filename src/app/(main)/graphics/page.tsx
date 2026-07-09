@@ -1943,11 +1943,18 @@ export default function GraphicsPage() {
                             </div>
                           )}
 
-                          {/* Show invoice info if invoiced */}
+                          {/* Show invoice info if invoiced. id 'external' means
+                              "marked invoiced outside FleetSuite" — no NetSuite
+                              record to link to or fetch a PDF from. */}
                           {job.netsuite_invoice_id && (
                             <div style={{ padding: '8px 10px', borderRadius: '8px', background: 'rgba(34,197,94,0.06)', border: '1px solid rgba(34,197,94,0.15)', marginBottom: '6px' }}>
                               <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '8px' }}>
                                 <div>
+                                  {job.netsuite_invoice_id === 'external' ? (
+                                    <span style={{ fontSize: '11px', color: '#22c55e', fontWeight: 700 }}>
+                                      Invoiced outside FleetSuite{job.netsuite_invoice_number && job.netsuite_invoice_number !== 'External' ? ` — #${job.netsuite_invoice_number}` : ''}
+                                    </span>
+                                  ) : (
                                   <a
                                     href={`https://system.netsuite.com/app/accounting/transactions/custinvc.nl?id=${job.netsuite_invoice_id}`}
                                     target="_blank"
@@ -1956,6 +1963,7 @@ export default function GraphicsPage() {
                                   >
                                     Invoice #{job.netsuite_invoice_number || job.netsuite_invoice_id} ↗
                                   </a>
+                                  )}
                                   <div style={{ fontSize: '10px', color: 'var(--text-label)', marginTop: '2px' }}>
                                     {job.invoice_amount ? `$${job.invoice_amount.toLocaleString('en-US', { minimumFractionDigits: 2 })}` : ''}
                                     {job.invoiced_at ? ` — ${new Date(job.invoiced_at).toLocaleDateString()}` : ''}
@@ -1972,7 +1980,7 @@ export default function GraphicsPage() {
                                     >
                                       View Invoice PDF ↗
                                     </a>
-                                  ) : (
+                                  ) : job.netsuite_invoice_id !== 'external' && (
                                     <button
                                       onClick={() => storeInvoicePdf(job.id)}
                                       disabled={fetchingPdfJobId === job.id}
