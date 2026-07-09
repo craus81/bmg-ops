@@ -3,12 +3,19 @@ import { searchPOEmails, getMessage, getPdfAttachments, getHeader } from '@/lib/
 import { createClient } from '@supabase/supabase-js';
 import { requireAdmin } from '@/lib/api-auth';
 
-// This route is called by Vercel Cron every hour
+// This route is called by Vercel Cron every 20 minutes
 // It searches Gmail for new PO emails and auto-imports them
 
-// Give the function room to walk pages of Gmail results + parse PDFs +
-// kick off downstream work without Vercel's default 10s ceiling.
-export const maxDuration = 60;
+// Each email goes through a Claude PDF extraction (10–40s). The old 60s
+// ceiling meant one slow email mid-loop blew through the wall and Vercel
+// killed the whole run (504 → "auto import failed"), while the manual
+// email-button flow worked because each click got its own fresh window.
+// Give the batch real room, and cap work per run below.
+export const maxDuration = 300;
+
+// Fresh extractions per run. Anything beyond this defers to the next run —
+// the 2-day search window overlaps, so deferred emails are never lost.
+const MAX_IMPORTS_PER_RUN = 8;
 
 const SYNC_TYPE = 'gmail_auto_import';
 
@@ -86,9 +93,14 @@ export async function GET(req: NextRequest) {
     // Stop cleanly before Vercel hard-kills the function so we still return a
     // summary and write sync_state. Anything not reached this run is picked up
     // next run (the 2-day search window overlaps), instead of being silently
-    // dropped mid-loop with no record of why.
+    // dropped mid-loop with no record of why. The headroom must cover a WHOLE
+    // import (the budget is checked before each message, but the message then
+    // runs to completion) — track the slowest import so far and keep at least
+    // that much, so one slow PDF can't push the run past the wall.
     const startedAt = Date.now();
-    const TIME_BUDGET_MS = (maxDuration - 8) * 1000;
+    const totalBudgetMs = maxDuration * 1000;
+    let slowestImportMs = 45_000; // pessimistic floor until we've measured one
+    let freshImports = 0;
 
     for (const msg of messages) {
       const id = msg.id!;
@@ -100,10 +112,14 @@ export async function GET(req: NextRequest) {
         continue;
       }
 
-      if (Date.now() - startedAt > TIME_BUDGET_MS) {
+      const elapsed = Date.now() - startedAt;
+      const headroomMs = Math.max(60_000, slowestImportMs * 1.5);
+      if (elapsed > totalBudgetMs - headroomMs || freshImports >= MAX_IMPORTS_PER_RUN) {
         deferred++;
         continue;
       }
+      freshImports++;
+      const importStarted = Date.now();
 
       try {
         // Call the import-po endpoint in extractOnly mode — queue for manual review
@@ -148,6 +164,8 @@ export async function GET(req: NextRequest) {
         errors++;
         results.push({ messageId: id, status: 'error', error: err.message });
       }
+
+      slowestImportMs = Math.max(slowestImportMs, Date.now() - importStarted);
 
       // Small delay between imports to avoid rate limits
       await new Promise(r => setTimeout(r, 250));

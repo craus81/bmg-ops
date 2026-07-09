@@ -1,6 +1,7 @@
 import { createClient } from '@supabase/supabase-js';
 import { sendSMS } from '@/lib/twilio';
 import { sendEmail, buildNotificationEmail } from '@/lib/resend';
+import { apnsConfigured, sendApnsNotification } from '@/lib/apns';
 import webpush from 'web-push';
 
 const supabase = createClient(
@@ -246,9 +247,14 @@ async function sendViaSMS(payload: NotifyPayload): Promise<boolean> {
 }
 
 async function sendViaPush(payload: NotifyPayload): Promise<boolean> {
-  // Skip if VAPID keys aren't configured
+  // Two delivery paths, both under the one "push" channel: Web Push for
+  // browsers (push_subscriptions) and APNs for the native iOS/iPadOS app
+  // (native_push_tokens). Either succeeding counts as delivered.
+  const nativeSent = await sendViaApns(payload);
+
+  // Skip web push if VAPID keys aren't configured
   if (!process.env.NEXT_PUBLIC_VAPID_PUBLIC_KEY || !process.env.VAPID_PRIVATE_KEY) {
-    return false;
+    return nativeSent;
   }
 
   try {
@@ -258,7 +264,7 @@ async function sendViaPush(payload: NotifyPayload): Promise<boolean> {
       .select('id, endpoint, p256dh, auth')
       .eq('user_id', payload.userId);
 
-    if (!subscriptions?.length) return false;
+    if (!subscriptions?.length) return nativeSent;
 
     const pushPayload = JSON.stringify({
       title: payload.title,
@@ -291,9 +297,42 @@ async function sendViaPush(payload: NotifyPayload): Promise<boolean> {
       await supabase.from('push_subscriptions').delete().in('id', staleIds);
     }
 
-    return sent;
+    return sent || nativeSent;
   } catch (err) {
     console.error('sendViaPush error:', err);
+    return nativeSent;
+  }
+}
+
+/** APNs delivery to the native iOS/iPadOS app's registered devices. */
+async function sendViaApns(payload: NotifyPayload): Promise<boolean> {
+  if (!apnsConfigured()) return false;
+  try {
+    const { data: tokens } = await supabase
+      .from('native_push_tokens')
+      .select('id, token')
+      .eq('user_id', payload.userId);
+    if (!tokens?.length) return false;
+
+    let sent = false;
+    const staleIds: string[] = [];
+    await Promise.allSettled(
+      tokens.map(async (t) => {
+        const result = await sendApnsNotification(t.token, {
+          title: payload.title,
+          body: payload.body,
+          url: payload.url || undefined,
+        });
+        if (result === 'sent') sent = true;
+        if (result === 'stale') staleIds.push(t.id);
+      })
+    );
+    if (staleIds.length > 0) {
+      await supabase.from('native_push_tokens').delete().in('id', staleIds);
+    }
+    return sent;
+  } catch (err) {
+    console.error('sendViaApns error:', err);
     return false;
   }
 }
