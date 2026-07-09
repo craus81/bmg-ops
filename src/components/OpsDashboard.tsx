@@ -19,6 +19,7 @@
 import { useState, useEffect } from 'react';
 import { useRouter } from 'next/navigation';
 import { createClient } from '@/lib/supabase-browser';
+import { useAuth } from '@/components/AuthProvider';
 import type { GraphicsJobStatus } from '@/lib/types';
 
 // Stage buckets over graphics statuses (mirrors the pipeline on /graphics).
@@ -43,7 +44,7 @@ interface ScheduleItem {
   date: string;
   title: string;
   subtitle: string;
-  type: 'graphics' | 'upfit' | 'cni';
+  type: 'graphics' | 'upfit' | 'cni' | 'event';
 }
 
 interface DashData {
@@ -54,8 +55,9 @@ interface DashData {
   queue: QueueItem[];
   stages: { received: number; inProduction: number; readyShipped: number; toInvoice: number; dueThisWeek: number; rush: number };
   lanes: { gfxActive: number; gfxTop: string | null; shopActive: number; shopStuck: number; cniOpen: number; cniUnassigned: number };
+  upfit: { received: number; inProgress: number; stuck: number; complete: number; unpaid: number };
   schedule: ScheduleItem[];
-  now: { clockedIn: number; scansToday: number; inShop: number };
+  now: { scansToday: number; scansWeek: number; inShop: number };
   messages: { id: string; sender: string; body: string; ago: string }[];
   sales: {
     stages: { stage: string; label: string; count: number; value: number }[];
@@ -87,6 +89,7 @@ const OPP_STAGES: { stage: string; label: string }[] = [
 
 export default function OpsDashboard() {
   const router = useRouter();
+  const { user, isAdmin } = useAuth();
   const supabase = createClient();
   const [loading, setLoading] = useState(true);
   const [data, setData] = useState<DashData | null>(null);
@@ -111,15 +114,18 @@ export default function OpsDashboard() {
     const todayStr = new Date().toISOString().split('T')[0];
     const in7 = new Date(); in7.setDate(in7.getDate() + 7);
     const in7Str = in7.toISOString().split('T')[0];
-    const todayStart = `${todayStr}T00:00:00`;
+    // Scan counts use LOCAL midnight, not UTC — "today" means the user's day.
+    const localMidnight = new Date(); localMidnight.setHours(0, 0, 0, 0);
+    const todayStart = localMidnight.toISOString();
+    const weekStart = new Date(localMidnight); weekStart.setDate(weekStart.getDate() - 6);
     const weekAgo = new Date(); weekAgo.setDate(weekAgo.getDate() - 7);
 
     const [
       invoicedRes, gfxRes, scansRes, partsRes, poRes,
       importsRes, photosRes, unpaidRes, usersRes, cniPhotosRes, cniInvRes,
       shopRes, cniRes,
-      schedGfxRes, schedUpfitRes, schedCniRes,
-      clockRes, scansTodayRes, msgRes,
+      schedGfxRes, schedUpfitRes, schedCniRes, schedEventsRes,
+      scansTodayRes, scansWeekRes, msgRes,
       oppsRes, custRes, quotesRes, estRes,
     ] = await Promise.allSettled([
       // KPI 1 — NetSuite invoiced totals (authoritative revenue)
@@ -163,9 +169,15 @@ export default function OpsDashboard() {
         .not('deadline', 'is', null).neq('status', 'cancelled')
         .gte('deadline', todayStr).lte('deadline', in7Str)
         .order('deadline').limit(10),
+      // Manual calendar entries created on the Schedule page (admins see all,
+      // like the schedule page itself; others see their own).
+      (isAdmin
+        ? supabase.from('calendar_events').select('id, title, description, event_date')
+        : supabase.from('calendar_events').select('id, title, description, event_date').eq('user_id', user?.id || '')
+      ).is('completed_at', null).gte('event_date', todayStr).lte('event_date', in7Str).order('event_date').limit(10),
       // Right now
-      supabase.from('time_entries').select('*', { count: 'exact', head: true }).is('clock_out', null),
       supabase.from('scan_logs').select('*', { count: 'exact', head: true }).gte('scanned_at', todayStart),
+      supabase.from('scan_logs').select('*', { count: 'exact', head: true }).gte('scanned_at', weekStart.toISOString()),
       supabase.from('messages').select('id, body, sender_id, created_at').order('created_at', { ascending: false }).limit(3),
       // Sales
       supabase.from('prospect_opportunities').select('stage, value'),
@@ -303,6 +315,9 @@ export default function OpsDashboard() {
     for (const c of rows(schedCniRes)) {
       schedule.push({ id: c.id, date: c.deadline, type: 'cni', title: c.title || 'CNI job', subtitle: c.customer_name || '' });
     }
+    for (const e of rows(schedEventsRes)) {
+      schedule.push({ id: e.id, date: e.event_date, type: 'event', title: e.title || 'Calendar event', subtitle: e.description || '' });
+    }
     schedule.sort((a, b) => a.date.localeCompare(b.date));
 
     // ── Messages ──
@@ -338,8 +353,15 @@ export default function OpsDashboard() {
         cniOpen: cniRows.length,
         cniUnassigned: cniRows.filter((c: any) => c.status === 'unassigned').length,
       },
-      schedule: schedule.slice(0, 6),
-      now: { clockedIn: count(clockRes), scansToday: count(scansTodayRes), inShop: shopRows.length },
+      upfit: {
+        received: shopRows.filter((s: any) => s.status === 'received' || s.status === 'checked_in').length,
+        inProgress: shopRows.filter((s: any) => s.status === 'in_progress').length,
+        stuck: shopRows.filter((s: any) => String(s.status).startsWith('stuck')).length,
+        complete: shopRows.filter((s: any) => s.status === 'complete').length,
+        unpaid,
+      },
+      schedule: schedule.slice(0, 7),
+      now: { scansToday: count(scansTodayRes), scansWeek: count(scansWeekRes), inShop: shopRows.length },
       messages: msgRows.map((m: any) => ({
         id: m.id, sender: senderNames[m.sender_id] || 'Unknown',
         body: m.body || '', ago: timeAgo(m.created_at),
@@ -380,7 +402,7 @@ export default function OpsDashboard() {
 
   const kpis = (
     <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(210px, 1fr))', gap: '10px', marginBottom: '12px' }}>
-      <button onClick={() => router.push('/admin/reports')} style={{ ...card, textAlign: 'left', padding: '14px 16px 12px', cursor: 'pointer' }}>
+      <button onClick={() => router.push('/invoices?tab=sent')} style={{ ...card, textAlign: 'left', padding: '14px 16px 12px', cursor: 'pointer' }}>
         <div style={{ fontSize: '10px', fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.7px', color: 'var(--text-muted)' }}>
           Invoiced · {today.toLocaleDateString('en-US', { month: 'long' })}
         </div>
@@ -475,7 +497,7 @@ export default function OpsDashboard() {
   const workInMotion = (
     <div style={card}>
       <div style={cardHead}>
-        <h2 style={headTitle}>Work in motion</h2>
+        <h2 style={headTitle}>Graphics — work in motion</h2>
         <button onClick={() => router.push('/graphics')} style={headLink}>{d.lanes.gfxActive} active jobs →</button>
       </div>
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(5, 1fr)', padding: '2px 8px 12px' }}>
@@ -493,14 +515,56 @@ export default function OpsDashboard() {
       </div>
       <div style={{ borderTop: '1px solid var(--border)' }}>
         {([
-          { tag: 'GFX', tagBg: 'var(--success-bg)', tagColor: 'var(--success)', path: '/graphics',
+          { tag: 'NEXT', tagBg: 'var(--success-bg)', tagColor: 'var(--success)', path: '/graphics',
             who: d.lanes.gfxTop || `${d.lanes.gfxActive} active graphics jobs`,
             st: `${d.lanes.gfxActive} active · ${d.stages.rush} rush`,
             dot: d.stages.rush > 0 ? 'var(--warning)' : 'var(--success)' },
-          { tag: 'SHOP', tagBg: 'rgba(96,165,250,0.1)', tagColor: '#60a5fa', path: '/tracking',
-            who: `${d.lanes.shopActive} vehicle${d.lanes.shopActive !== 1 ? 's' : ''} in shop`,
-            st: d.lanes.shopStuck > 0 ? `${d.lanes.shopStuck} stuck` : 'none stuck',
-            dot: d.lanes.shopStuck > 0 ? 'var(--error)' : 'var(--success)' },
+        ]).map(lane => (
+          <button key={lane.tag} onClick={() => router.push(lane.path)} style={{
+            display: 'flex', alignItems: 'center', gap: '10px', padding: '9px 16px', width: '100%',
+            background: 'transparent', border: 'none', borderBottom: '1px solid var(--border)', cursor: 'pointer', textAlign: 'left',
+          }}>
+            <span style={{ fontSize: '9px', fontWeight: 800, letterSpacing: '0.5px', padding: '2px 7px', borderRadius: '5px', flexShrink: 0, width: '44px', textAlign: 'center', background: lane.tagBg, color: lane.tagColor }}>{lane.tag}</span>
+            <span style={{ flex: 1, fontSize: '12.5px', fontWeight: 600, color: 'var(--text-secondary)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{lane.who}</span>
+            <span style={{ fontSize: '11px', color: 'var(--text-muted)' }}>{lane.st}</span>
+            <span style={{ width: '7px', height: '7px', borderRadius: '50%', flexShrink: 0, background: lane.dot }} />
+          </button>
+        ))}
+      </div>
+    </div>
+  );
+
+  const upfitStages = [
+    { n: d.upfit.received, l: 'Received', color: '#60a5fa' },
+    { n: d.upfit.inProgress, l: 'In progress', color: 'var(--warning)' },
+    { n: d.upfit.stuck, l: 'Stuck', color: 'var(--error)' },
+    { n: d.upfit.complete, l: 'Complete', color: 'var(--success)' },
+  ];
+  const maxUpfit = Math.max(1, ...upfitStages.map(s => s.n));
+
+  const upfitGlance = (
+    <div style={card}>
+      <div style={cardHead}>
+        <h2 style={headTitle}>Upfit — at a glance</h2>
+        <button onClick={() => router.push('/tracking')} style={headLink}>{d.lanes.shopActive} in shop →</button>
+      </div>
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', padding: '2px 8px 12px' }}>
+        {upfitStages.map((s, i) => (
+          <button key={s.l} onClick={() => router.push('/tracking')} style={{ padding: '8px 10px', borderRadius: '8px', background: 'transparent', border: 'none', cursor: 'pointer', textAlign: 'left', position: 'relative' }}>
+            {i > 0 && <span style={{ position: 'absolute', left: '-4px', top: '38%', color: 'var(--text-muted)', opacity: 0.6, fontSize: '14px' }}>›</span>}
+            <div style={{ fontSize: '20px', fontWeight: 800, color: s.l === 'Stuck' && s.n > 0 ? 'var(--error)' : 'var(--text-primary)', fontVariantNumeric: 'tabular-nums' }}>{s.n}</div>
+            <div style={{ fontSize: '9px', fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.5px', color: 'var(--text-muted)', marginTop: '1px' }}>{s.l}</div>
+            <div style={{ height: '3px', borderRadius: '2px', marginTop: '7px', background: 'var(--progress-track)' }}>
+              <div style={{ height: '100%', borderRadius: '2px', width: `${Math.round((s.n / maxUpfit) * 100)}%`, background: s.color }} />
+            </div>
+          </button>
+        ))}
+      </div>
+      <div style={{ borderTop: '1px solid var(--border)' }}>
+        {([
+          { tag: 'PAY', tagBg: 'var(--warning-bg)', tagColor: 'var(--warning)', path: '/tracking',
+            who: d.upfit.unpaid > 0 ? `${d.upfit.unpaid} vehicle${d.upfit.unpaid !== 1 ? 's' : ''} invoiced, awaiting payment` : 'No vehicles awaiting payment',
+            st: '', dot: d.upfit.unpaid > 0 ? 'var(--warning)' : 'var(--success)' },
           { tag: 'CNI', tagBg: 'rgba(167,139,250,0.1)', tagColor: '#a78bfa', path: '/admin/cni',
             who: `${d.lanes.cniOpen} network install${d.lanes.cniOpen !== 1 ? 's' : ''} open`,
             st: d.lanes.cniUnassigned > 0 ? `${d.lanes.cniUnassigned} unassigned` : 'all assigned',
@@ -574,12 +638,13 @@ export default function OpsDashboard() {
 
   const schedRow = (item: ScheduleItem) => {
     const dt = new Date(item.date + 'T12:00:00');
-    const tagColors: Record<ScheduleItem['type'], string> = { graphics: 'var(--success)', upfit: '#60a5fa', cni: '#a78bfa' };
-    const tagLabels: Record<ScheduleItem['type'], string> = { graphics: 'GFX', upfit: 'SHOP', cni: 'CNI' };
+    const tagColors: Record<ScheduleItem['type'], string> = { graphics: 'var(--success)', upfit: '#60a5fa', cni: '#a78bfa', event: 'var(--warning)' };
+    const tagLabels: Record<ScheduleItem['type'], string> = { graphics: 'GFX', upfit: 'SHOP', cni: 'CNI', event: 'CAL' };
     const goTo = () => {
       if (item.type === 'graphics') router.push(`/graphics?id=${item.id}`);
       else if (item.type === 'upfit') router.push('/tracking');
-      else router.push(`/admin/cni/jobs/${item.id}`);
+      else if (item.type === 'cni') router.push(`/admin/cni/jobs/${item.id}`);
+      else router.push('/admin/schedule');
     };
     return (
       <button key={`${item.type}-${item.id}`} onClick={goTo} style={{
@@ -607,7 +672,10 @@ export default function OpsDashboard() {
       <div style={card}>
         <div style={cardHead}>
           <h2 style={headTitle}>Next 7 days</h2>
-          <button onClick={() => router.push('/admin/schedule')} style={headLink}>Schedule →</button>
+          <span style={{ display: 'flex', gap: '10px' }}>
+            <button onClick={() => router.push('/admin/schedule')} style={headLink} title="Add a calendar event on the Schedule page">+ Add</button>
+            <button onClick={() => router.push('/admin/schedule')} style={headLink}>Schedule →</button>
+          </span>
         </div>
         <div style={{ borderTop: '1px solid var(--border)' }}>
           {d.schedule.length === 0 && (
@@ -620,8 +688,8 @@ export default function OpsDashboard() {
         <div style={cardHead}><h2 style={headTitle}>Right now</h2></div>
         <div style={{ display: 'flex', gap: '10px', padding: '12px 16px', borderTop: '1px solid var(--border)' }}>
           {([
-            { n: d.now.clockedIn, l: 'Clocked in', path: '/time' },
             { n: d.now.scansToday, l: 'Scans today', path: '/admin/scans' },
+            { n: d.now.scansWeek, l: 'Scans · 7 days', path: '/admin/scans' },
             { n: d.now.inShop, l: 'In shop', path: '/tracking' },
           ]).map(p => (
             <button key={p.l} onClick={() => router.push(p.path)} style={{ flex: 1, background: 'var(--subtle-bg)', borderRadius: '9px', padding: '9px 11px', border: 'none', cursor: 'pointer', textAlign: 'left' }}>
@@ -661,8 +729,8 @@ export default function OpsDashboard() {
   );
 
   const leftColumn = preset === 'sales'
-    ? [salesBand, needsAttention, workInMotion]
-    : [needsAttention, workInMotion, salesBand];
+    ? [salesBand, needsAttention, workInMotion, upfitGlance]
+    : [needsAttention, workInMotion, upfitGlance, salesBand];
 
   return (
     <div>
