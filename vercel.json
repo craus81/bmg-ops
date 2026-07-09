@@ -2,7 +2,7 @@
   "crons": [
     {
       "path": "/api/gmail/auto-import",
-      "schedule": "0 * * * *"
+      "schedule": "*/20 * * * *"
     },
     {
       "path": "/api/cron/netsuite-sync",
