@@ -24,6 +24,7 @@ import { useAuth } from '@/components/AuthProvider';
 import { useDialog } from '@/components/DialogProvider';
 import GraphicsInvoiceReviewModal from '@/components/GraphicsInvoiceReviewModal';
 import EmailInvoicesModal, { type EmailableInvoice } from '@/components/EmailInvoicesModal';
+import { openNetSuitePdf } from '@/lib/netsuite-pdf-client';
 import type { GraphicsJob, GraphicsJobStatus } from '@/lib/types';
 import { GRAPHICS_STATUS_LABELS, GRAPHICS_STATUS_COLORS } from '@/lib/types';
 
@@ -67,6 +68,9 @@ interface SentInvoice {
   invoiceId?: string;
   po?: string;
   date: string | null;
+  dueDate?: string | null;
+  /** NetSuite payment status; null when unknown (local-only rows). */
+  status?: 'open' | 'paid' | null;
   amount?: number | null;
 }
 
@@ -97,9 +101,19 @@ export default function InvoicingHubPage() {
   // ALL NetSuite invoices for the window — so the Invoiced tab shows the same
   // universe the dashboard's "Invoiced" KPI counts, not just FleetSuite-created
   // ones. Null = not loaded (fall back to FleetSuite-only rows).
-  const [nsInvoices, setNsInvoices] = useState<{ invoiceId: string; invoiceNumber: string; date: string | null; po: string | null; customer: string; total: number }[] | null>(null);
+  const [nsInvoices, setNsInvoices] = useState<{ invoiceId: string; invoiceNumber: string; date: string | null; dueDate: string | null; status: 'open' | 'paid' | null; po: string | null; customer: string; total: number }[] | null>(null);
   const [nsLoading, setNsLoading] = useState(false);
   const [nsError, setNsError] = useState<string | null>(null);
+  // Invoice number currently being opened as a PDF (per-row spinner text).
+  const [openingPdf, setOpeningPdf] = useState<string | null>(null);
+
+  const viewInvoicePdf = async (inv: SentInvoice) => {
+    if (!inv.invoiceId || openingPdf) return;
+    setOpeningPdf(inv.invoiceNumber);
+    const result = await openNetSuitePdf('invoice', inv.invoiceId);
+    if (!result.ok) await dialog.alert(`Could not open the PDF: ${result.error}`);
+    setOpeningPdf(null);
+  };
 
   useEffect(() => {
     if (tab !== 'sent') return;
@@ -327,6 +341,8 @@ export default function InvoicingHubPage() {
         invoiceId: ns.invoiceId,
         po: ns.po || local?.po || undefined,
         date,
+        dueDate: ns.dueDate,
+        status: ns.status,
         amount: ns.total,
       };
     });
@@ -717,14 +733,36 @@ export default function InvoicingHubPage() {
                           color: r.source === 'Graphics' ? '#22c55e' : r.source === 'Scans' ? '#fbbf24' : '#60a5fa',
                         }}>{r.source}</span>
                         <span style={{ fontWeight: 700, color: 'var(--text-primary)' }}>#{r.invoiceNumber}</span>
+                        {(() => {
+                          if (r.status === 'paid') {
+                            return <span style={{ fontSize: '9px', fontWeight: 800, padding: '2px 6px', borderRadius: '5px', background: 'var(--success-bg)', color: 'var(--success)' }}>PAID</span>;
+                          }
+                          if (r.status === 'open') {
+                            const today = new Date().toISOString().slice(0, 10);
+                            if (r.dueDate && r.dueDate < today) {
+                              const days = Math.floor((Date.now() - new Date(r.dueDate + 'T12:00:00').getTime()) / 86_400_000);
+                              return <span style={{ fontSize: '9px', fontWeight: 800, padding: '2px 6px', borderRadius: '5px', background: 'var(--error-bg)', color: 'var(--error)' }}>PAST DUE · {days}d</span>;
+                            }
+                            return <span style={{ fontSize: '9px', fontWeight: 800, padding: '2px 6px', borderRadius: '5px', background: 'rgba(96,165,250,0.1)', color: '#60a5fa' }}>OPEN</span>;
+                          }
+                          return null;
+                        })()}
                         {r.po && <span style={{ color: 'var(--text-muted)' }}>PO #{r.po}</span>}
-                        {r.date && <span style={{ color: 'var(--text-muted)' }}>{new Date(r.date).toLocaleDateString()}</span>}
+                        {r.date && <span style={{ color: 'var(--text-muted)' }}>{new Date(r.date + 'T12:00:00').toLocaleDateString()}</span>}
                         {typeof r.amount === 'number' && (
                           <span style={{ color: 'var(--text-secondary)', fontWeight: 700 }}>
                             ${r.amount.toLocaleString('en-US', { minimumFractionDigits: 2 })}
                           </span>
                         )}
                         <span style={{ flex: 1 }} />
+                        {r.invoiceId && (
+                          <button
+                            onClick={() => viewInvoicePdf(r)}
+                            disabled={openingPdf !== null}
+                            title="Open this invoice's PDF in a new tab"
+                            style={{ background: 'transparent', border: 'none', color: '#60a5fa', fontSize: '11px', fontWeight: 700, cursor: openingPdf ? 'wait' : 'pointer', padding: '2px 4px' }}
+                          >{openingPdf === r.invoiceNumber ? 'Opening…' : 'PDF'}</button>
+                        )}
                         <button
                           onClick={() => setEmailTarget({
                             customerName: customer,
