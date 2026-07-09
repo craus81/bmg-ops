@@ -1,0 +1,154 @@
+// Automatic scale calibration for vehicle wrap templates.
+//
+// Vector template files carry their artboard size internally: EPS declares a
+// %%BoundingBox (PostScript points, 72 pt = 1 artboard inch) and AI/PDF files
+// declare a /MediaBox. The templates are drawn to scale (1:20 by default), so
+// artboard inches × scale factor = real-world inches. Dividing the raster
+// preview's pixel width by the real-world width gives px_per_in — the same
+// number Illustrator would show — with no manual measuring.
+//
+// The preview must be an export of the full artboard for this to hold, so
+// computeCalibration refuses to answer when the preview's aspect ratio
+// disagrees with the artboard's (cropped or padded previews); those templates
+// fall back to one-time manual calibration in the estimator.
+
+export interface ArtboardSize { widthPt: number; heightPt: number }
+export interface PixelSize { width: number; height: number }
+
+export interface CalibrationResult {
+  pxPerIn: number | null;
+  reason: 'ok' | 'no-artboard' | 'no-image-size' | 'aspect-mismatch' | 'degenerate';
+}
+
+// Maximum relative disagreement between artboard and preview aspect ratios
+// before we assume the preview isn't a straight artboard export.
+const ASPECT_TOLERANCE = 0.03;
+
+const latin1 = (bytes: Uint8Array) => new TextDecoder('latin1').decode(bytes);
+
+/** '1:20' / '1/20' → 20. Defaults to 20 (the standard template scale). */
+export function parseScaleFactor(scale: string | null | undefined): number {
+  const m = /1\s*[:/]\s*(\d+(?:\.\d+)?)/.exec(scale || '');
+  const f = m ? parseFloat(m[1]) : NaN;
+  return f > 0 ? f : 20;
+}
+
+/**
+ * Artboard size in PostScript points from an EPS, AI, or PDF file.
+ *
+ * Handles DOS-EPS binary wrappers (TIFF/WMF preview + PostScript section at
+ * an offset) and `%%BoundingBox: (atend)` by preferring the last parseable
+ * bounding-box comment in the file. AI files are PDF-compatible, so the
+ * /MediaBox path covers them.
+ */
+export function parseVectorArtboard(bytes: Uint8Array): ArtboardSize | null {
+  let ps = bytes;
+  // DOS EPS binary header: magic C5 D0 D3 C6, then LE offset + length of the
+  // PostScript section.
+  if (bytes.length >= 12 && bytes[0] === 0xc5 && bytes[1] === 0xd0 && bytes[2] === 0xd3 && bytes[3] === 0xc6) {
+    const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
+    const offset = view.getUint32(4, true);
+    const length = view.getUint32(8, true);
+    if (offset + length <= bytes.length) ps = bytes.subarray(offset, offset + length);
+  }
+  const text = latin1(ps);
+
+  // EPS: prefer HiRes; "(atend)" instances parse as non-numeric and are
+  // skipped, so the trailer values win.
+  for (const re of [
+    /%%HiResBoundingBox:\s*(-?[\d.]+)\s+(-?[\d.]+)\s+(-?[\d.]+)\s+(-?[\d.]+)/g,
+    /%%BoundingBox:\s*(-?[\d.]+)\s+(-?[\d.]+)\s+(-?[\d.]+)\s+(-?[\d.]+)/g,
+  ]) {
+    let last: ArtboardSize | null = null;
+    let m: RegExpExecArray | null;
+    while ((m = re.exec(text)) !== null) {
+      const [x0, y0, x1, y1] = [m[1], m[2], m[3], m[4]].map(parseFloat);
+      const w = x1 - x0, h = y1 - y0;
+      if (w > 0 && h > 0) last = { widthPt: w, heightPt: h };
+    }
+    if (last) return last;
+  }
+
+  // PDF / AI: first /MediaBox (page 1).
+  const mb = /\/MediaBox\s*\[\s*(-?[\d.]+)\s+(-?[\d.]+)\s+(-?[\d.]+)\s+(-?[\d.]+)\s*\]/.exec(text);
+  if (mb) {
+    const [x0, y0, x1, y1] = [mb[1], mb[2], mb[3], mb[4]].map(parseFloat);
+    const w = x1 - x0, h = y1 - y0;
+    if (w > 0 && h > 0) return { widthPt: w, heightPt: h };
+  }
+
+  return null;
+}
+
+/** Pixel dimensions from PNG or JPEG bytes (header parse, no image decode). */
+export function parseImageSize(bytes: Uint8Array): PixelSize | null {
+  // PNG: 8-byte signature, then IHDR chunk — width/height are big-endian
+  // uint32 at offsets 16 and 20.
+  if (
+    bytes.length >= 24 &&
+    bytes[0] === 0x89 && bytes[1] === 0x50 && bytes[2] === 0x4e && bytes[3] === 0x47
+  ) {
+    const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
+    const width = view.getUint32(16, false);
+    const height = view.getUint32(20, false);
+    return width > 0 && height > 0 ? { width, height } : null;
+  }
+
+  // JPEG: walk the segment list to the first SOF marker.
+  if (bytes.length >= 4 && bytes[0] === 0xff && bytes[1] === 0xd8) {
+    const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
+    let pos = 2;
+    while (pos + 4 <= bytes.length) {
+      if (bytes[pos] !== 0xff) { pos++; continue; }
+      const marker = bytes[pos + 1];
+      if (marker === 0xff) { pos++; continue; } // padding
+      // Standalone markers without a length payload
+      if (marker === 0x01 || (marker >= 0xd0 && marker <= 0xd7)) { pos += 2; continue; }
+      if (pos + 4 > bytes.length) break;
+      const segLen = view.getUint16(pos + 2, false);
+      // SOF0-SOF15 (minus DHT/JPG/DAC which share the range)
+      if (
+        marker >= 0xc0 && marker <= 0xcf &&
+        marker !== 0xc4 && marker !== 0xc8 && marker !== 0xcc
+      ) {
+        if (pos + 9 > bytes.length) break;
+        const height = view.getUint16(pos + 5, false);
+        const width = view.getUint16(pos + 7, false);
+        return width > 0 && height > 0 ? { width, height } : null;
+      }
+      pos += 2 + segLen;
+    }
+  }
+
+  return null;
+}
+
+/**
+ * px_per_in for a template given its vector source, raster preview, and
+ * scale factor (20 for 1:20). Null with a reason when the inputs don't
+ * support a trustworthy answer.
+ */
+export function computeCalibration(
+  vectorBytes: Uint8Array,
+  imageBytes: Uint8Array,
+  scaleFactor: number
+): CalibrationResult {
+  const art = parseVectorArtboard(vectorBytes);
+  if (!art) return { pxPerIn: null, reason: 'no-artboard' };
+  const img = parseImageSize(imageBytes);
+  if (!img) return { pxPerIn: null, reason: 'no-image-size' };
+  if (scaleFactor <= 0) return { pxPerIn: null, reason: 'degenerate' };
+
+  const artAspect = art.widthPt / art.heightPt;
+  const imgAspect = img.width / img.height;
+  if (Math.abs(artAspect - imgAspect) / artAspect > ASPECT_TOLERANCE) {
+    return { pxPerIn: null, reason: 'aspect-mismatch' };
+  }
+
+  const realWidthIn = (art.widthPt / 72) * scaleFactor;
+  const realHeightIn = (art.heightPt / 72) * scaleFactor;
+  // Average both axes to smooth pixel-rounding in the export.
+  const pxPerIn = (img.width / realWidthIn + img.height / realHeightIn) / 2;
+  if (!isFinite(pxPerIn) || pxPerIn <= 0) return { pxPerIn: null, reason: 'degenerate' };
+  return { pxPerIn, reason: 'ok' };
+}

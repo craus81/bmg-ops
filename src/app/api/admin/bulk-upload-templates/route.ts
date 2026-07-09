@@ -3,6 +3,7 @@ import JSZip from 'jszip';
 import { createClient } from '@supabase/supabase-js';
 import { r2Upload, r2Delete, r2PublicUrl } from '@/lib/r2';
 import { requireAdmin } from '@/lib/api-auth';
+import { computeCalibration, parseScaleFactor } from '@/lib/template-calibration';
 
 interface TemplateEntry {
   path: string;
@@ -61,12 +62,14 @@ export async function POST(req: NextRequest) {
 
         let originalFilePath: string | null = null;
         let templateImagePath: string | null = null;
+        let epsData: Uint8Array | null = null;
+        let thumbData: Uint8Array | null = null;
 
         // Upload the EPS/original file
         const epsEntry = zip.files[entry.path];
         if (epsEntry) {
           try {
-            const epsData = await epsEntry.async('uint8array');
+            epsData = await epsEntry.async('uint8array');
             const ext = entry.path.split('.').pop()?.toLowerCase() || 'eps';
             const storagePath = `originals/${entry.make}/${entry.model}/${entry.year}/${slug}.${ext}`;
             await r2Upload('vehicle-templates', storagePath, Buffer.from(epsData), 'application/postscript');
@@ -81,7 +84,7 @@ export async function POST(req: NextRequest) {
           const thumbEntry = zip.files[entry.thumbnailPath];
           if (thumbEntry) {
             try {
-              const thumbData = await thumbEntry.async('uint8array');
+              thumbData = await thumbEntry.async('uint8array');
               const thumbExt = entry.thumbnailPath.split('.').pop()?.toLowerCase() || 'jpg';
               const contentType = thumbExt === 'png' ? 'image/png' : 'image/jpeg';
               const thumbStoragePath = `previews/${entry.make}/${entry.model}/${entry.year}/${slug}.${thumbExt}`;
@@ -92,6 +95,14 @@ export async function POST(req: NextRequest) {
             }
           }
         }
+
+        // Auto-calibrate the wrap estimator scale from the vector artboard
+        // (EPS BoundingBox / AI MediaBox) and the preview's pixel size —
+        // templates are drawn 1:20. Null when the pair can't be trusted
+        // (e.g. cropped preview); those fall back to manual calibration.
+        const pxPerIn = epsData && thumbData
+          ? computeCalibration(epsData, thumbData, parseScaleFactor('1:20')).pxPerIn
+          : null;
 
         // Insert the template record
         const { error: insertError } = await supabase.from('vehicle_templates').insert({
@@ -106,6 +117,7 @@ export async function POST(req: NextRequest) {
           windows: entry.windows || null,
           template_image_path: templateImagePath,
           original_file_path: originalFilePath,
+          px_per_in: pxPerIn,
         });
 
         if (insertError) {

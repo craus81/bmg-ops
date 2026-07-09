@@ -169,6 +169,8 @@ export default function WrapQuotePage() {
   const [tplForm, setTplForm] = useState({ year: '', make: '', model: '', variant: '', code: '', length: '' });
   const [tplFile, setTplFile] = useState<File | null>(null);
   const [tplUploading, setTplUploading] = useState(false);
+  const [calibrating, setCalibrating] = useState(false);
+  const [calibStatus, setCalibStatus] = useState('');
 
   // eslint-disable-next-line react-hooks/exhaustive-deps -- load once on mount
   useEffect(() => { loadAll(); }, []);
@@ -530,6 +532,42 @@ export default function WrapQuotePage() {
   const toggleTemplate = async (t: Template) => {
     await supabase.from('vehicle_templates').update({ is_active: t.is_active === false }).eq('id', t.id);
     setTemplates(prev => prev.map(x => x.id === t.id ? { ...x, is_active: t.is_active === false } : x));
+  };
+
+  // Batch auto-calibration: the server reads each template's vector artboard
+  // size (EPS BoundingBox / AI MediaBox — the drawings are 1:20) plus the
+  // preview's pixel dimensions and computes px_per_in, so nobody has to
+  // hand-calibrate a library of thousands. Loops batch-by-batch until the
+  // server reports no more candidates.
+  const autoCalibrateAll = async () => {
+    setCalibrating(true);
+    setCalibStatus('Starting…');
+    let cursor: string | null = null;
+    let calibrated = 0, skipped = 0;
+    try {
+      do {
+        const res: Response = await fetch('/api/admin/calibrate-templates', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ cursor }),
+        });
+        const data = await res.json();
+        if (!res.ok || !data.success) {
+          setCalibStatus(`Failed: ${data.error || 'Unknown error'}`);
+          return;
+        }
+        calibrated += data.calibrated;
+        skipped += data.skipped;
+        cursor = data.nextCursor;
+        setCalibStatus(`Calibrated ${calibrated}${skipped ? ` · ${skipped} skipped` : ''}…`);
+      } while (cursor);
+      setCalibStatus(`Done — ${calibrated} calibrated automatically${skipped ? `, ${skipped} skipped (no vector file, or the preview doesn't match the artboard — calibrate those manually in the Estimator)` : ''}.`);
+      await loadAll();
+    } catch (e: any) {
+      setCalibStatus(`Failed: ${e.message}`);
+    } finally {
+      setCalibrating(false);
+    }
   };
 
   // ----- Shared styles -----
@@ -1016,10 +1054,33 @@ export default function WrapQuotePage() {
       {/* ================= TEMPLATES ================= */}
       {tab === 'templates' && (
         <div>
+          {(() => {
+            const uncalibrated = templates.filter(t => !t.px_per_in).length;
+            if (uncalibrated === 0 && !calibStatus) return null;
+            return (
+              <div style={{ background: 'var(--card)', border: '1px solid rgba(251,191,36,0.3)', borderRadius: '12px', padding: '14px', marginBottom: '12px' }}>
+                {sectionHead('Auto-Calibration')}
+                <div style={{ fontSize: '10px', color: 'var(--text-muted)', marginBottom: '10px' }}>
+                  {uncalibrated > 0
+                    ? `${uncalibrated} template${uncalibrated !== 1 ? 's' : ''} not calibrated yet. Templates imported with their vector file (EPS/AI) can be calibrated automatically — the vector artboard declares its real size, and the drawings are 1:20, so no measuring is needed.`
+                    : 'All templates are calibrated.'}
+                </div>
+                <div style={{ display: 'flex', gap: '10px', alignItems: 'center', flexWrap: 'wrap' }}>
+                  {uncalibrated > 0 && (
+                    <button onClick={autoCalibrateAll} disabled={calibrating} style={{ ...btnStyle('#fff', '#f59e0b'), border: 'none' }}>
+                      {calibrating ? 'Calibrating…' : `Auto-Calibrate ${uncalibrated} Template${uncalibrated !== 1 ? 's' : ''}`}
+                    </button>
+                  )}
+                  {calibStatus && <span style={{ fontSize: '11px', fontWeight: 700, color: 'var(--text-secondary)' }}>{calibStatus}</span>}
+                </div>
+              </div>
+            );
+          })()}
+
           <div style={{ background: 'var(--card)', border: `1px solid ${theme.border}`, borderRadius: '12px', padding: '14px', marginBottom: '12px' }}>
             {sectionHead('Add Template')}
             <div style={{ fontSize: '10px', color: 'var(--text-muted)', marginBottom: '10px' }}>
-              Upload your 1:20-scale vehicle outlines (PNG/JPG). After uploading, open the template in the Estimator and calibrate it once by drawing a line over a known dimension.
+              Add a single template image here (PNG/JPG), or use <b>Bulk Upload</b> in the More menu to import a ZIP of EPS files with preview images — bulk imports calibrate themselves from the vector artboard. Single image uploads need one manual calibration in the Estimator (draw a line over a known dimension).
             </div>
             <div style={{ display: 'flex', gap: '8px', alignItems: 'flex-end', flexWrap: 'wrap' }}>
               <div><div style={labelStyle}>Year</div><input value={tplForm.year} onChange={e => setTplForm({ ...tplForm, year: e.target.value })} style={{ ...inputStyle, width: '80px' }} /></div>
