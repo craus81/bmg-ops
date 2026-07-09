@@ -59,6 +59,7 @@ interface DashData {
   schedule: ScheduleItem[];
   now: { scansToday: number; scansWeek: number; inShop: number };
   messages: { id: string; sender: string; body: string; ago: string }[];
+  unread: { id: string; title: string; body: string; url: string | null; ago: string }[];
   sales: {
     stages: { stage: string; label: string; count: number; value: number }[];
     wonValue: number;
@@ -125,7 +126,7 @@ export default function OpsDashboard() {
       importsRes, photosRes, unpaidRes, usersRes, cniPhotosRes, cniInvRes,
       shopRes, cniRes,
       schedGfxRes, schedUpfitRes, schedCniRes, schedEventsRes,
-      scansTodayRes, scansWeekRes, msgRes,
+      scansTodayRes, scansWeekRes, msgRes, unreadRes,
       oppsRes, custRes, quotesRes, estRes,
     ] = await Promise.allSettled([
       // KPI 1 — NetSuite invoiced totals (authoritative revenue)
@@ -179,6 +180,11 @@ export default function OpsDashboard() {
       supabase.from('scan_logs').select('*', { count: 'exact', head: true }).gte('scanned_at', todayStart),
       supabase.from('scan_logs').select('*', { count: 'exact', head: true }).gte('scanned_at', weekStart.toISOString()),
       supabase.from('messages').select('id, body, sender_id, created_at').order('created_at', { ascending: false }).limit(3),
+      // Unread notifications for the "New for you" strip — same rows as the
+      // bell, but only the ones not yet read/acted on.
+      supabase.from('notifications').select('id, title, body, url, created_at')
+        .eq('user_id', user?.id || '').is('read_at', null)
+        .order('created_at', { ascending: false }).limit(5),
       // Sales
       supabase.from('prospect_opportunities').select('stage, value'),
       supabase.from('customers').select('company_name, ytd_spend').eq('active', true).gt('ytd_spend', 0).order('ytd_spend', { ascending: false }).limit(4),
@@ -366,6 +372,10 @@ export default function OpsDashboard() {
         id: m.id, sender: senderNames[m.sender_id] || 'Unknown',
         body: m.body || '', ago: timeAgo(m.created_at),
       })),
+      unread: rows(unreadRes).map((n: any) => ({
+        id: n.id, title: n.title || 'Notification', body: n.body || '',
+        url: n.url || null, ago: timeAgo(n.created_at),
+      })),
       sales: {
         stages: stageAgg, wonValue,
         topCustomers: rows(custRes).map((c: any) => ({ name: c.company_name, ytd: Number(c.ytd_spend) || 0 })),
@@ -399,6 +409,47 @@ export default function OpsDashboard() {
 
   const d = data;
   const today = new Date();
+
+  // "New for you": unread notifications act on click — open the deep link and
+  // mark read, so the strip drains itself and disappears when nothing's new.
+  const openUnread = async (n: { id: string; url: string | null }) => {
+    setData(prev => prev ? { ...prev, unread: prev.unread.filter(u => u.id !== n.id) } : prev);
+    await supabase.from('notifications').update({ read_at: new Date().toISOString() }).eq('id', n.id);
+    if (n.url) router.push(n.url);
+  };
+  const dismissAllUnread = async () => {
+    setData(prev => prev ? { ...prev, unread: [] } : prev);
+    await supabase.from('notifications')
+      .update({ read_at: new Date().toISOString() })
+      .eq('user_id', user?.id || '')
+      .is('read_at', null);
+  };
+
+  const newForYou = d.unread.length === 0 ? null : (
+    <div style={{ ...card, marginBottom: '12px', border: '1px solid rgba(238,49,32,0.25)' }}>
+      <div style={{ ...cardHead, paddingBottom: '6px' }}>
+        <h2 style={{ ...headTitle, color: 'var(--orange)' }}>New for you</h2>
+        <button onClick={dismissAllUnread} style={{ ...headLink, color: 'var(--text-muted)' }}>Dismiss all</button>
+      </div>
+      <div style={{ borderTop: '1px solid var(--border)' }}>
+        {d.unread.map(n => (
+          <button key={n.id} onClick={() => openUnread(n)} style={{
+            display: 'flex', alignItems: 'center', gap: '10px', padding: '9px 16px', width: '100%',
+            background: 'transparent', border: 'none', borderBottom: '1px solid var(--border)',
+            cursor: 'pointer', textAlign: 'left',
+          }}>
+            <span style={{ width: '7px', height: '7px', borderRadius: '50%', background: 'var(--orange)', flexShrink: 0 }} />
+            <span style={{ flex: 1, minWidth: 0 }}>
+              <span style={{ display: 'block', fontSize: '12.5px', fontWeight: 700, color: 'var(--text-primary)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{n.title}</span>
+              {n.body && <span style={{ display: 'block', fontSize: '11px', color: 'var(--text-muted)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{n.body}</span>}
+            </span>
+            <span style={{ fontSize: '10px', color: 'var(--text-muted)', flexShrink: 0 }}>{n.ago}</span>
+            <span style={{ color: 'var(--text-muted)', fontSize: '15px' }}>›</span>
+          </button>
+        ))}
+      </div>
+    </div>
+  );
 
   const kpis = (
     <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(210px, 1fr))', gap: '10px', marginBottom: '12px' }}>
@@ -757,6 +808,8 @@ export default function OpsDashboard() {
           ))}
         </div>
       </div>
+
+      {newForYou}
 
       {kpis}
 
