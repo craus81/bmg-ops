@@ -79,17 +79,26 @@ function postToApns(host: string, deviceToken: string, body: string): Promise<{ 
   });
 }
 
+export interface ApnsSendDetail {
+  result: 'sent' | 'stale' | 'error';
+  /** HTTP status from APNs, when the request got that far */
+  status?: number;
+  /** APNs reason string (e.g. InvalidProviderToken) or the local error message */
+  reason?: string;
+}
+
 /**
- * Send one alert push. Returns:
+ * Send one alert push and report what APNs said — the diagnosable variant
+ * used by /api/push/test. Results:
  *   'sent'  — delivered to APNs
  *   'stale' — APNs says this token is dead; caller should delete it
  *   'error' — transient/config failure; keep the token
  */
-export async function sendApnsNotification(
+export async function sendApnsNotificationDetailed(
   deviceToken: string,
   payload: { title: string; body: string; url?: string },
-): Promise<'sent' | 'stale' | 'error'> {
-  if (!apnsConfigured()) return 'error';
+): Promise<ApnsSendDetail> {
+  if (!apnsConfigured()) return { result: 'error', reason: 'APNs env vars not configured' };
 
   const body = JSON.stringify({
     aps: { alert: { title: payload.title, body: payload.body }, sound: 'default' },
@@ -102,12 +111,22 @@ export async function sendApnsNotification(
     if (res.status === 400 && res.reason === 'BadDeviceToken') {
       res = await postToApns('api.sandbox.push.apple.com', deviceToken, body);
     }
-    if (res.status === 200) return 'sent';
-    if (res.status === 410 || res.reason === 'BadDeviceToken' || res.reason === 'Unregistered') return 'stale';
+    if (res.status === 200) return { result: 'sent', status: 200 };
+    if (res.status === 410 || res.reason === 'BadDeviceToken' || res.reason === 'Unregistered') {
+      return { result: 'stale', status: res.status, reason: res.reason };
+    }
     console.error('APNs send failed:', res.status, res.reason);
-    return 'error';
+    return { result: 'error', status: res.status, reason: res.reason };
   } catch (err: any) {
     console.error('APNs send error:', err?.message);
-    return 'error';
+    return { result: 'error', reason: err?.message || 'request failed' };
   }
+}
+
+/** Send one alert push; see sendApnsNotificationDetailed for result meanings. */
+export async function sendApnsNotification(
+  deviceToken: string,
+  payload: { title: string; body: string; url?: string },
+): Promise<'sent' | 'stale' | 'error'> {
+  return (await sendApnsNotificationDetailed(deviceToken, payload)).result;
 }

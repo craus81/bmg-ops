@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { createClient } from '@supabase/supabase-js';
 import { requireAuth } from '@/lib/api-auth';
-import { apnsConfigured, sendApnsNotification } from '@/lib/apns';
+import { apnsConfigured, sendApnsNotificationDetailed } from '@/lib/apns';
 import webpush from 'web-push';
 
 export const dynamic = 'force-dynamic';
@@ -41,6 +41,8 @@ export async function POST(req: NextRequest) {
     sent: 0,
     stale: 0,
     errors: 0,
+    /** Distinct APNs rejection reasons, e.g. "400 TopicDisallowed" */
+    reasons: [] as string[],
     tableError: null as string | null,
   };
 
@@ -57,10 +59,14 @@ export async function POST(req: NextRequest) {
       const staleIds: string[] = [];
       await Promise.allSettled(
         tokens.map(async (t) => {
-          const result = await sendApnsNotification(t.token, payload);
-          if (result === 'sent') native.sent++;
-          else if (result === 'stale') { native.stale++; staleIds.push(t.id); }
-          else native.errors++;
+          const d = await sendApnsNotificationDetailed(t.token, payload);
+          if (d.result === 'sent') native.sent++;
+          else if (d.result === 'stale') { native.stale++; staleIds.push(t.id); }
+          else {
+            native.errors++;
+            const label = [d.status, d.reason].filter(Boolean).join(' ');
+            if (label && !native.reasons.includes(label)) native.reasons.push(label);
+          }
         })
       );
       if (staleIds.length) {
