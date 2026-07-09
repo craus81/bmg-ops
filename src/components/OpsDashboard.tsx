@@ -739,8 +739,11 @@ export default function OpsDashboard() {
         <div style={cardHead}><h2 style={headTitle}>Right now</h2></div>
         <div style={{ display: 'flex', gap: '10px', padding: '12px 16px', borderTop: '1px solid var(--border)' }}>
           {([
-            { n: d.now.scansToday, l: 'Scans today', path: '/admin/scans' },
-            { n: d.now.scansWeek, l: 'Scans · 7 days', path: '/admin/scans' },
+            // Land on the All Scans tab pre-filtered by scan date, so the list
+            // matches the count regardless of what happened to each scan since
+            // (exported, archived, invoiced, ...).
+            { n: d.now.scansToday, l: 'Scans today', path: '/admin/scans?tab=all&range=today' },
+            { n: d.now.scansWeek, l: 'Scans · 7 days', path: '/admin/scans?tab=all&range=7d' },
             { n: d.now.inShop, l: 'In shop', path: '/tracking' },
           ]).map(p => (
             <button key={p.l} onClick={() => router.push(p.path)} style={{ flex: 1, background: 'var(--subtle-bg)', borderRadius: '9px', padding: '9px 11px', border: 'none', cursor: 'pointer', textAlign: 'left' }}>
