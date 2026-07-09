@@ -61,7 +61,7 @@ interface ScanGroup {
 }
 
 interface SentInvoice {
-  source: 'Graphics' | 'Scans';
+  source: 'Graphics' | 'Scans' | 'NetSuite';
   customer: string;
   invoiceNumber: string;
   invoiceId?: string;
@@ -94,6 +94,47 @@ export default function InvoicingHubPage() {
   const [search, setSearch] = useState('');
   // Invoiced-tab date window.
   const [sentRange, setSentRange] = useState<'30' | 'month' | 'lastmonth' | '90' | 'all'>('30');
+  // ALL NetSuite invoices for the window — so the Invoiced tab shows the same
+  // universe the dashboard's "Invoiced" KPI counts, not just FleetSuite-created
+  // ones. Null = not loaded (fall back to FleetSuite-only rows).
+  const [nsInvoices, setNsInvoices] = useState<{ invoiceId: string; invoiceNumber: string; date: string | null; po: string | null; customer: string; total: number }[] | null>(null);
+  const [nsLoading, setNsLoading] = useState(false);
+  const [nsError, setNsError] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (tab !== 'sent') return;
+    const ymd = (dt: Date) => dt.toISOString().slice(0, 10);
+    const now = new Date();
+    let start: Date; let end: Date = now;
+    if (sentRange === '30') { start = new Date(now); start.setDate(now.getDate() - 30); }
+    else if (sentRange === '90') { start = new Date(now); start.setDate(now.getDate() - 90); }
+    else if (sentRange === 'month') start = new Date(now.getFullYear(), now.getMonth(), 1);
+    else if (sentRange === 'lastmonth') {
+      start = new Date(now.getFullYear(), now.getMonth() - 1, 1);
+      end = new Date(now.getFullYear(), now.getMonth(), 0);
+    } else { start = new Date(now); start.setDate(now.getDate() - 365); }
+
+    let cancelled = false;
+    setNsLoading(true);
+    setNsError(null);
+    (async () => {
+      try {
+        const res = await fetch(`/api/reports/invoices-list?start=${ymd(start)}&end=${ymd(end)}`);
+        const data = await res.json();
+        if (cancelled) return;
+        if (!res.ok || !data.success) {
+          setNsError(data.error || `NetSuite list failed (${res.status})`);
+          setNsInvoices(null);
+        } else {
+          setNsInvoices(data.invoices || []);
+        }
+      } catch (e: any) {
+        if (!cancelled) { setNsError(e.message || 'NetSuite list failed'); setNsInvoices(null); }
+      }
+      if (!cancelled) setNsLoading(false);
+    })();
+    return () => { cancelled = true; };
+  }, [tab, sentRange]);
 
   // Deep link: /invoices?tab=sent|scans|graphics (used by the dashboard KPI).
   useEffect(() => {
@@ -235,7 +276,10 @@ export default function InvoicingHubPage() {
 
   // ── Sent tab derivations ──
   const sentInvoices: SentInvoice[] = useMemo(() => {
-    const rows: SentInvoice[] = invoicedJobs
+    // Local FleetSuite rows, keyed by invoice number, used to (a) tag NetSuite
+    // rows with their origin and (b) surface rows NetSuite doesn't have
+    // (e.g. jobs marked invoiced with an unknown/external number).
+    const localRows: SentInvoice[] = invoicedJobs
       .filter(j => j.netsuite_invoice_number || j.netsuite_invoice_id)
       .map(j => ({
         source: 'Graphics' as const,
@@ -245,14 +289,14 @@ export default function InvoicingHubPage() {
         // record behind it, so don't offer it as a fetchable invoice id.
         invoiceId: j.netsuite_invoice_id === 'external' ? undefined : (j.netsuite_invoice_id || undefined),
         po: j.po_number || undefined,
-        date: j.invoiced_at,
+        date: j.invoiced_at ? j.invoiced_at.slice(0, 10) : null,
         amount: j.invoice_amount,
       }));
-    const seen = new Set<string>();
+    const seenScan = new Set<string>();
     for (const r of scanInvoices) {
-      if (seen.has(r.invoice_number)) continue;
-      seen.add(r.invoice_number);
-      rows.push({
+      if (seenScan.has(r.invoice_number)) continue;
+      seenScan.add(r.invoice_number);
+      localRows.push({
         source: 'Scans',
         customer: r.billable_customer || 'Unknown',
         invoiceNumber: r.invoice_number,
@@ -260,8 +304,38 @@ export default function InvoicingHubPage() {
         date: r.date_invoiced,
       });
     }
+
+    // No NetSuite list (still loading / failed) → FleetSuite rows only.
+    if (!nsInvoices) {
+      return localRows.sort((a, b) => (b.date || '').localeCompare(a.date || ''));
+    }
+
+    const localByNumber = new Map(localRows.map(r => [r.invoiceNumber.toUpperCase(), r]));
+    const rows: SentInvoice[] = nsInvoices.map(ns => {
+      const local = localByNumber.get(ns.invoiceNumber.toUpperCase());
+      // Normalize NetSuite's trandate (can be M/D/YYYY) to YYYY-MM-DD so the
+      // string sort below stays correct across sources.
+      let date: string | null = ns.date;
+      if (date && !/^\d{4}-\d{2}-\d{2}$/.test(date)) {
+        const parsed = new Date(date);
+        date = isNaN(parsed.getTime()) ? null : parsed.toISOString().slice(0, 10);
+      }
+      return {
+        source: local?.source || 'NetSuite',
+        customer: ns.customer,
+        invoiceNumber: ns.invoiceNumber,
+        invoiceId: ns.invoiceId,
+        po: ns.po || local?.po || undefined,
+        date,
+        amount: ns.total,
+      };
+    });
+    const nsNumbers = new Set(nsInvoices.map(n => n.invoiceNumber.toUpperCase()));
+    for (const r of localRows) {
+      if (!nsNumbers.has(r.invoiceNumber.toUpperCase())) rows.push(r);
+    }
     return rows.sort((a, b) => (b.date || '').localeCompare(a.date || ''));
-  }, [invoicedJobs, scanInvoices]);
+  }, [invoicedJobs, scanInvoices, nsInvoices]);
 
   const sentByCustomer = useMemo(() => {
     // Date window first, then text search.
@@ -598,7 +672,7 @@ export default function InvoicingHubPage() {
               { id: 'month' as const, label: 'This month' },
               { id: 'lastmonth' as const, label: 'Last month' },
               { id: '90' as const, label: 'Last 90 days' },
-              { id: 'all' as const, label: 'All' },
+              { id: 'all' as const, label: 'Last 12 months' },
             ]).map(r => (
               <button key={r.id} onClick={() => setSentRange(r.id)} style={{
                 padding: '5px 12px', borderRadius: '8px', fontSize: '10px', fontWeight: 700, cursor: 'pointer',
@@ -607,7 +681,14 @@ export default function InvoicingHubPage() {
                 color: sentRange === r.id ? '#60a5fa' : 'var(--text-muted)',
               }}>{r.label}</button>
             ))}
+            {nsLoading && <span style={{ fontSize: '10px', color: 'var(--text-muted)', alignSelf: 'center' }}>Loading NetSuite invoices…</span>}
           </div>
+
+          {nsError && (
+            <div style={{ ...card, marginBottom: '10px', padding: '10px 14px', fontSize: '12px', color: 'var(--warning, #fbbf24)', border: '1px solid rgba(251,191,36,0.3)' }}>
+              Couldn&apos;t load the full NetSuite invoice list ({nsError}) — showing FleetSuite-created invoices only.
+            </div>
+          )}
 
           {sentByCustomer.length === 0 ? (
             <div style={{ ...card, textAlign: 'center', color: 'var(--text-muted)', fontSize: '13px', padding: '28px' }}>
@@ -632,8 +713,8 @@ export default function InvoicingHubPage() {
                       <div key={`${r.invoiceNumber}-${i}`} style={{ display: 'flex', alignItems: 'center', gap: '8px', fontSize: '12px', padding: '4px 0', borderTop: i > 0 ? '1px solid var(--border)' : 'none', flexWrap: 'wrap' }}>
                         <span style={{
                           fontSize: '9px', fontWeight: 700, padding: '2px 6px', borderRadius: '5px',
-                          background: r.source === 'Graphics' ? 'rgba(34,197,94,0.12)' : 'rgba(251,191,36,0.12)',
-                          color: r.source === 'Graphics' ? '#22c55e' : '#fbbf24',
+                          background: r.source === 'Graphics' ? 'rgba(34,197,94,0.12)' : r.source === 'Scans' ? 'rgba(251,191,36,0.12)' : 'rgba(96,165,250,0.12)',
+                          color: r.source === 'Graphics' ? '#22c55e' : r.source === 'Scans' ? '#fbbf24' : '#60a5fa',
                         }}>{r.source}</span>
                         <span style={{ fontWeight: 700, color: 'var(--text-primary)' }}>#{r.invoiceNumber}</span>
                         {r.po && <span style={{ color: 'var(--text-muted)' }}>PO #{r.po}</span>}
