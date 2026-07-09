@@ -96,7 +96,17 @@ export default function SettingsPage() {
       } else if (n.sent > 0) {
         lines.push({ ok: true, text: `iPhone/iPad app: sent to ${n.sent} of ${n.devices} device${n.devices === 1 ? '' : 's'} — check your device.` });
       } else {
-        lines.push({ ok: false, text: `iPhone/iPad app: Apple rejected the push for all ${n.devices} device${n.devices === 1 ? '' : 's'}${n.stale ? ` (${n.stale} stale token${n.stale === 1 ? '' : 's'} removed — relaunch the app to re-register)` : ''}${n.errors ? ' — likely a bad APNs key or Team/Key ID; check the Vercel logs' : ''}.` });
+        // Translate Apple's rejection reason into the actual fix
+        const reason = (n.reasons || []).join(', ');
+        let hint = '';
+        if (/TopicDisallowed|MissingTopic|DeviceTokenNotForTopic/i.test(reason)) {
+          hint = ' The push key is not allowed to send to this app — in the Apple Developer portal, make sure the App ID com.bmgfleet.fleetsuite has the Push Notifications capability enabled, and that the key is Team Scoped (All Topics) or includes this topic.';
+        } else if (/InvalidProviderToken|ExpiredProviderToken/i.test(reason)) {
+          hint = ' The Team ID / Key ID / private key do not match — re-check all three APNS values in Vercel and redeploy.';
+        } else if (/PEM|DECODER|asn1|private key/i.test(reason)) {
+          hint = ' APNS_PRIVATE_KEY is not pasted correctly — re-copy the entire .p8 file including the BEGIN/END lines.';
+        }
+        lines.push({ ok: false, text: `iPhone/iPad app: Apple rejected the push for all ${n.devices} device${n.devices === 1 ? '' : 's'}${reason ? ` — Apple said: ${reason}.` : '.'}${hint}${n.stale ? ` (${n.stale} stale token${n.stale === 1 ? '' : 's'} removed — relaunch the app to re-register.)` : ''}` });
       }
 
       const w = data.web;
