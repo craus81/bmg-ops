@@ -21,6 +21,8 @@ const fetchInvoices = cached(
         t.id                AS invoice_id,
         t.tranid            AS invoice_number,
         t.trandate          AS trandate,
+        t.duedate           AS duedate,
+        t.status            AS status,
         t.otherrefnum       AS po_number,
         c.companyname       AS customer,
         SUM(-tl.netamount)  AS net_total
@@ -31,7 +33,7 @@ const fetchInvoices = cached(
         AND t.trandate BETWEEN TO_DATE('${start}', 'YYYY-MM-DD') AND TO_DATE('${end}', 'YYYY-MM-DD')
         AND tl.mainline = 'F'
         AND tl.taxline = 'F'
-      GROUP BY t.id, t.tranid, t.trandate, t.otherrefnum, c.companyname
+      GROUP BY t.id, t.tranid, t.trandate, t.duedate, t.status, t.otherrefnum, c.companyname
       ORDER BY t.trandate DESC, t.tranid DESC
     `;
     const invoices: any[] = [];
@@ -42,10 +44,26 @@ const fetchInvoices = cached(
       const result = await suiteqlQuery(query, PAGE, offset);
       const items: any[] = result?.items || [];
       for (const r of items) {
+        // NetSuite invoice status: today SuiteQL returns 'A' (Open) /
+        // 'B' (Paid In Full); some environments return the text label
+        // (and 2026.2 standardizes REST responses to letters) — accept both.
+        const raw = String(r.status || '');
+        const status: 'open' | 'paid' | null =
+          raw === 'B' || /paid/i.test(raw) ? 'paid' :
+          raw === 'A' || /open/i.test(raw) ? 'open' : null;
+        const iso = (d: any): string | null => {
+          if (!d) return null;
+          const s = String(d);
+          if (/^\d{4}-\d{2}-\d{2}$/.test(s)) return s;
+          const parsed = new Date(s);
+          return isNaN(parsed.getTime()) ? null : parsed.toISOString().slice(0, 10);
+        };
         invoices.push({
           invoiceId: String(r.invoice_id ?? ''),
           invoiceNumber: String(r.invoice_number ?? ''),
-          date: r.trandate ? String(r.trandate) : null,
+          date: iso(r.trandate),
+          dueDate: iso(r.duedate),
+          status,
           po: r.po_number || null,
           customer: r.customer || 'Unknown',
           total: parseFloat(r.net_total || '0') || 0,
