@@ -614,6 +614,8 @@ export default function GraphicsPage() {
       }
 
       setJobs(prev => prev.map(j => j.id === job.id ? { ...j, status: newStatus, updated_at: new Date().toISOString() } : j));
+      // Re-stamp my view so my own status change doesn't light the unread dot.
+      recordJobView(job.id);
       if (expandedJobId === job.id) loadHistory(job.id);
     }
   };
@@ -633,10 +635,13 @@ export default function GraphicsPage() {
     // reads as data loss to the person typing it.
     if (error) { await dialog.alert(`Note failed to save: ${error.message}`); return; }
     // Everyone assigned to the job hears about new notes (fire-and-forget).
+    // The route also bumps the job's updated_at (for unread dots), so my own
+    // view re-stamp waits until it finishes — otherwise the bump could land
+    // after the stamp and my own note would light the dot for me.
     apiFetch('/api/graphics/notify-assignees', {
       method: 'POST',
       body: JSON.stringify({ jobId, kind: 'note', note: newNote.trim() }),
-    }).catch(() => {});
+    }).catch(() => {}).finally(() => recordJobView(jobId));
     setNewNote('');
     await loadHistory(jobId);
   };
@@ -1306,6 +1311,16 @@ export default function GraphicsPage() {
                   <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: '8px' }}>
                     <div style={{ flex: 1, minWidth: 0 }}>
                       <div style={{ display: 'flex', alignItems: 'center', gap: '6px', marginBottom: '3px' }}>
+                        {(() => {
+                          // Unread dot: activity (status change, note, edit) since
+                          // this viewer last opened the job. No view row = never
+                          // opened = unread. Cleared by recordJobView on expand.
+                          const mine = (jobViews[job.id] || []).find(v => v.user_id === user?.id);
+                          const hasNew = !mine || new Date(job.updated_at).getTime() > new Date(mine.last_viewed_at).getTime();
+                          return hasNew ? (
+                            <span title="New activity since you last viewed this job" style={{ width: '8px', height: '8px', borderRadius: '50%', background: '#3b82f6', flexShrink: 0 }} />
+                          ) : null;
+                        })()}
                         {job.priority !== 'normal' && (
                           <span style={{ fontSize: '9px', fontWeight: 800, color: priorityColor(job.priority), textTransform: 'uppercase', padding: '1px 5px', borderRadius: '3px', background: `${priorityColor(job.priority)}15`, border: `1px solid ${priorityColor(job.priority)}33` }}>
                             {job.priority}

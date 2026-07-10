@@ -59,6 +59,14 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ error: 'Graphics job not found' }, { status: 404 });
     }
 
+    // Notes don't touch the graphics_jobs row, but the board's unread-dot
+    // logic compares updated_at against each viewer's last_viewed_at — bump
+    // it here (service role, so it works for roles that can't UPDATE the
+    // jobs table directly). Status changes already bump it client-side.
+    if (kind === 'note') {
+      await supabase.from('graphics_jobs').update({ updated_at: new Date().toISOString() }).eq('id', jobId);
+    }
+
     // ----- Audience 1: everyone assigned to this job (always notified) -----
     const assigneeIds = new Set<string>();
     const { data: assignments } = await supabase
