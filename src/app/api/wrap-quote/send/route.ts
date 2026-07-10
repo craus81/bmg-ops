@@ -14,7 +14,11 @@ const supabase = createClient(
 
 const SendSchema = z.object({
   quoteId: z.string().uuid(),
+  // What the email contains: the full quote with the coverage drawing,
+  // the quote document alone, or the coverage drawing alone (no pricing).
+  mode: z.enum(['full', 'quote_only', 'coverage_only']).optional().default('full'),
 });
+type SendMode = 'full' | 'quote_only' | 'coverage_only';
 
 const esc = (s: any) =>
   String(s ?? '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
@@ -23,7 +27,10 @@ const money = (n: any) =>
 
 // Light-themed printable quote document (customers print/forward these, so
 // no dark chrome like the internal notification template).
-function buildQuoteHtml(quote: any, company: any, diagramUrl: string | null, logoUrl: string | null): string {
+function buildQuoteHtml(quote: any, company: any, diagramUrl: string | null, logoUrl: string | null, mode: SendMode = 'full'): string {
+  const pricing = mode !== 'coverage_only';
+  const showDiagram = mode !== 'quote_only' && !!diagramUrl;
+  const docTitle = pricing ? 'Wrap Quote' : 'Wrap Coverage';
   const cust = quote.customer || {};
   const rows: string[] = [];
   const cell = (v: string, right = false) =>
@@ -65,7 +72,7 @@ function buildQuoteHtml(quote: any, company: any, diagramUrl: string | null, log
         <tr>
           <td style="vertical-align:top;">
             ${logoUrl ? `<img src="${esc(logoUrl)}" alt="${esc(company?.name || 'Company logo')}" height="44" style="height:44px;max-width:220px;display:block;margin-bottom:10px;">` : ''}
-            <div style="font-size:22px;font-weight:800;color:#111827;">Wrap Quote</div>
+            <div style="font-size:22px;font-weight:800;color:#111827;">${docTitle}</div>
             <div style="font-size:12px;color:#6b7280;">${esc(quote.quote_number)} · ${new Date(quote.created_at || Date.now()).toLocaleDateString('en-US', { year: 'numeric', month: 'long', day: 'numeric' })}</div>
           </td>
         </tr>
@@ -78,8 +85,8 @@ function buildQuoteHtml(quote: any, company: any, diagramUrl: string | null, log
       </table>
       ${quote.project_type ? `<div style="font-size:12px;color:#374151;margin-bottom:4px;"><b>Project Type:</b> ${esc(quote.project_type)}</div>` : ''}
       ${quote.vehicle_description ? `<div style="font-size:12px;color:#374151;margin-bottom:14px;"><b>Vehicle:</b> ${esc(quote.vehicle_description)}</div>` : ''}
-      ${diagramUrl ? `<div style="margin:0 0 14px;"><div style="font-size:11px;color:#6b7280;text-transform:uppercase;font-weight:700;margin-bottom:4px;">Coverage Areas</div><img src="${esc(diagramUrl)}" alt="Wrap coverage diagram" width="584" style="width:100%;max-width:584px;display:block;border:1px solid #e5e7eb;border-radius:8px;"></div>` : ''}
-      <table style="width:100%;border-collapse:collapse;">
+      ${showDiagram ? `<div style="margin:0 0 14px;"><div style="font-size:11px;color:#6b7280;text-transform:uppercase;font-weight:700;margin-bottom:4px;">Coverage Areas</div><img src="${esc(diagramUrl)}" alt="Wrap coverage diagram" width="584" style="width:100%;max-width:584px;display:block;border:1px solid #e5e7eb;border-radius:8px;"></div>` : ''}
+      ${pricing ? `<table style="width:100%;border-collapse:collapse;">
         <thead>
           <tr>
             <th style="text-align:left;padding:8px 10px;background:#f9fafb;border-bottom:2px solid #e5e7eb;font-size:11px;color:#6b7280;text-transform:uppercase;">Item</th>
@@ -94,7 +101,7 @@ function buildQuoteHtml(quote: any, company: any, diagramUrl: string | null, log
         <tr><td style="text-align:right;font-size:13px;color:#374151;padding:2px 10px;">Subtotal</td><td style="text-align:right;font-size:13px;color:#111827;padding:2px 10px;width:110px;">$${money(quote.subtotal)}</td></tr>
         <tr><td style="text-align:right;font-size:13px;color:#374151;padding:2px 10px;">Tax (${money(quote.tax_rate)}%)</td><td style="text-align:right;font-size:13px;color:#111827;padding:2px 10px;">$${money(quote.tax_amount)}</td></tr>
         <tr><td style="text-align:right;font-size:16px;font-weight:800;color:#111827;padding:6px 10px;">Total</td><td style="text-align:right;font-size:16px;font-weight:800;color:#059669;padding:6px 10px;">$${money(quote.total)}</td></tr>
-      </table>
+      </table>` : ''}
       ${(quote.labor?.films || []).length ? `<div style="margin-top:12px;font-size:11px;color:#6b7280;"><b style="color:#374151;">Film usage:</b> ${(quote.labor.films as any[]).map((f: any) => `${esc(f.label)} — ${money(f.sqft)} ft²`).join(' &middot; ')}</div>` : ''}
       ${quote.project_notes ? `<div style="margin-top:16px;font-size:12px;color:#374151;"><b>Project Notes:</b> ${esc(quote.project_notes)}</div>` : ''}
     </div>
@@ -117,6 +124,8 @@ export async function POST(req: NextRequest) {
   const parsed = await validateBody(req, SendSchema);
   if (parsed.error) return parsed.error;
 
+  const mode: SendMode = parsed.data.mode;
+
   const { data: quote, error: qErr } = await supabase
     .from('wrap_quotes')
     .select('*')
@@ -124,6 +133,9 @@ export async function POST(req: NextRequest) {
     .single();
   if (qErr || !quote) {
     return NextResponse.json({ error: 'Quote not found' }, { status: 404 });
+  }
+  if (mode === 'coverage_only' && !quote.diagram_path) {
+    return NextResponse.json({ error: 'This quote has no coverage drawing — save it from the estimator first.' }, { status: 400 });
   }
 
   const email = (quote.customer?.email || '').trim();
@@ -172,16 +184,21 @@ export async function POST(req: NextRequest) {
     });
   }
 
-  const subject = `Wrap Quote ${quote.quote_number}${company?.name ? ` from ${company.name}` : ''}`;
-  const ok = await sendEmail(to, subject, buildQuoteHtml(quote, company, diagramUrl, logoUrl), undefined, attachments);
+  const docWord = mode === 'coverage_only' ? 'Wrap Coverage' : 'Wrap Quote';
+  const subject = `${docWord} ${quote.quote_number}${company?.name ? ` from ${company.name}` : ''}`;
+  const ok = await sendEmail(to, subject, buildQuoteHtml(quote, company, diagramUrl, logoUrl, mode), undefined, attachments);
   if (!ok) {
     return NextResponse.json({ error: 'Email send failed (is Resend configured?)' }, { status: 502 });
   }
 
-  await supabase
-    .from('wrap_quotes')
-    .update({ status: 'sent', sent_at: new Date().toISOString(), sent_to: email, updated_at: new Date().toISOString() })
-    .eq('id', quote.id);
+  // Only a real quote send marks the quote 'sent' — mailing just the
+  // coverage drawing doesn't put pricing in front of the customer.
+  if (mode !== 'coverage_only') {
+    await supabase
+      .from('wrap_quotes')
+      .update({ status: 'sent', sent_at: new Date().toISOString(), sent_to: email, updated_at: new Date().toISOString() })
+      .eq('id', quote.id);
+  }
 
   return NextResponse.json({ success: true });
 }

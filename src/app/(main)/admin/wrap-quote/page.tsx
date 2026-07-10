@@ -112,6 +112,8 @@ interface WrapQuote {
   diagram_path: string | null;
   attachments: QuoteAttachment[] | null;
   archived_at: string | null;
+  netsuite_estimate_id: string | null;
+  netsuite_estimate_number: string | null;
   created_at: string;
 }
 
@@ -190,6 +192,8 @@ export default function WrapQuotePage() {
   const [attachments, setAttachments] = useState<QuoteAttachment[]>([]);
   const [attaching, setAttaching] = useState(false);
   const [showArchived, setShowArchived] = useState(false);
+  const [sendMode, setSendMode] = useState<'full' | 'quote_only' | 'coverage_only'>('full');
+  const [pushingNetsuite, setPushingNetsuite] = useState(false);
 
   // ----- Pricing tab state (edit copies) -----
   const [subSel, setSubSel] = useState(''); // '' = new
@@ -636,18 +640,27 @@ export default function WrapQuotePage() {
   const createAndEmail = async () => {
     if (!customer.email?.trim()) { await dialog.alert('Enter a customer email first.'); return; }
     if (measurements.length === 0) { await dialog.alert('No measurements — draw the wrap areas on the Estimator tab first.'); return; }
-    if (!(await dialog.confirm(`Email this quote ($${fmt(totals.total)}) to ${customer.email}? Make sure everything is accurate — this sends immediately.`))) return;
+    const coverageOnly = sendMode === 'coverage_only';
+    const confirmMsg = coverageOnly
+      ? `Email just the coverage picture (no pricing) to ${customer.email}?`
+      : `Email this quote ($${fmt(totals.total)})${sendMode === 'quote_only' ? ' without the coverage picture' : ''} to ${customer.email}? Make sure everything is accurate — this sends immediately.`;
+    if (!(await dialog.confirm(confirmMsg))) return;
     setSending(true);
     try {
       const id = await saveQuote();
       if (!id) return;
       const res = await apiFetch('/api/wrap-quote/send', {
         method: 'POST',
-        body: JSON.stringify({ quoteId: id }),
+        body: JSON.stringify({ quoteId: id, mode: sendMode }),
       });
       const data = await res.json();
       if (!res.ok || !data.success) {
         await dialog.alert(`Email failed: ${data.error || 'Unknown error'}`);
+      } else if (coverageOnly) {
+        // The quote itself hasn't gone out — keep everything in place so
+        // the real quote can still be sent after the customer sees coverage.
+        await dialog.alert(`Coverage picture emailed to ${customer.email}`);
+        await loadAll();
       } else {
         await dialog.alert(`Quote emailed to ${customer.email}`);
         resetAfterSend();
@@ -658,6 +671,35 @@ export default function WrapQuotePage() {
       await dialog.alert(`Email failed: ${e.message}`);
     } finally {
       setSending(false);
+    }
+  };
+
+  // Push the quote to NetSuite as an Estimate: vinyl total -> "3M Vinyl"
+  // (described as the quoted vehicle), labor total -> "Graphics Install
+  // Labor". Taxes are NetSuite's job. No email is sent.
+  const createNetsuiteQuote = async () => {
+    if (measurements.length === 0) { await dialog.alert('No measurements — draw the wrap areas on the Estimator tab first.'); return; }
+    if (!customerId) { await dialog.alert('Pick the customer from the NetSuite search first — a typed-in name has no NetSuite record to attach the quote to.'); return; }
+    if (!(await dialog.confirm(`Create a NetSuite quote for ${customer.name}? Vinyl ($${fmt(totals.materials)}) maps to "3M Vinyl", labor ($${fmt(totals.labor)}) to "Graphics Install Labor" — NetSuite adds tax.`))) return;
+    setPushingNetsuite(true);
+    try {
+      const id = await saveQuote();
+      if (!id) return;
+      const res = await apiFetch('/api/wrap-quote/netsuite', {
+        method: 'POST',
+        body: JSON.stringify({ quoteId: id }),
+      });
+      const data = await res.json();
+      if (!res.ok || !data.success) {
+        await dialog.alert(`NetSuite quote failed: ${data.error || 'Unknown error'}`);
+      } else {
+        await dialog.alert(`NetSuite quote created${data.estimateNumber ? `: ${data.estimateNumber}` : ''}.`);
+        await loadAll();
+      }
+    } catch (e: any) {
+      await dialog.alert(`NetSuite quote failed: ${e.message}`);
+    } finally {
+      setPushingNetsuite(false);
     }
   };
 
@@ -1391,11 +1433,33 @@ export default function WrapQuotePage() {
               <input type="file" multiple disabled={attaching} onChange={e => { addAttachments(e.target.files); e.target.value = ''; }} style={{ display: 'none' }} />
             </label>
             <div style={{ fontSize: '10px', color: 'var(--text-muted)', marginBottom: '12px' }}>Sent with the emailed quote — proof files, vinyl specs, or other documentation.</div>
+            <div style={{ marginBottom: '8px' }}>
+              <div style={labelStyle}>Email Content</div>
+              <select value={sendMode} onChange={e => setSendMode(e.target.value as typeof sendMode)} style={inputStyle}>
+                <option value="full">Quote + coverage picture</option>
+                <option value="quote_only">Quote only (no picture)</option>
+                <option value="coverage_only">Coverage picture only (no pricing)</option>
+              </select>
+            </div>
             <div style={{ display: 'flex', gap: '6px', flexWrap: 'wrap' }}>
               <button onClick={() => saveQuote()} style={btnStyle('#60a5fa', 'rgba(59,130,246,0.1)')}>{savedQuoteId ? 'Update Draft' : 'Save Draft'}</button>
               <button onClick={createAndEmail} disabled={sending} style={{ ...btnStyle('#fff', '#22c55e'), border: 'none' }}>
-                {sending ? 'Sending…' : 'Create & Email Quote'}
+                {sending ? 'Sending…' : sendMode === 'coverage_only' ? 'Email Coverage' : 'Email Quote'}
               </button>
+            </div>
+            <div style={{ display: 'flex', gap: '6px', flexWrap: 'wrap', alignItems: 'center', marginTop: '6px' }}>
+              {(() => {
+                const nsNumber = history.find(q => q.id === savedQuoteId)?.netsuite_estimate_number;
+                return nsNumber ? (
+                  <span style={{ fontSize: '10px', fontWeight: 700, padding: '3px 8px', borderRadius: '4px', background: 'rgba(34,197,94,0.1)', color: '#22c55e' }}>
+                    NetSuite quote {nsNumber}
+                  </span>
+                ) : (
+                  <button onClick={createNetsuiteQuote} disabled={pushingNetsuite} style={btnStyle('#a78bfa', 'rgba(167,139,250,0.08)')}>
+                    {pushingNetsuite ? 'Creating…' : 'Create Quote in NetSuite'}
+                  </button>
+                );
+              })()}
             </div>
             {measurements.length === 0 && (
               <div style={{ marginTop: '8px', fontSize: '10px', color: '#fbbf24', fontWeight: 700 }}>No measurements yet — use the Estimator tab first.</div>
@@ -1431,6 +1495,9 @@ export default function WrapQuotePage() {
                   </div>
                   <div style={{ fontSize: '10px', color: 'var(--text-muted)' }}>{q.vehicle_description || '—'}{q.project_type ? ` · ${q.project_type}` : ''}</div>
                 </div>
+                {q.netsuite_estimate_number && (
+                  <span style={{ fontSize: '9px', fontWeight: 700, padding: '2px 7px', borderRadius: '4px', background: 'rgba(167,139,250,0.12)', color: '#a78bfa' }}>NS {q.netsuite_estimate_number}</span>
+                )}
                 {q.archived_at && (
                   <span style={{ fontSize: '9px', fontWeight: 700, padding: '2px 7px', borderRadius: '4px', background: 'rgba(148,163,184,0.12)', color: '#94a3b8' }}>Archived</span>
                 )}
