@@ -639,13 +639,16 @@ export default function GraphicsPage() {
   const addNote = async (jobId: string) => {
     if (!newNote.trim()) return;
     const job = jobs.find(j => j.id === jobId);
-    await supabase.from('graphics_status_history').insert({
+    const { error } = await supabase.from('graphics_status_history').insert({
       job_id: jobId,
       from_status: job?.status || null,
       to_status: job?.status || 'received',
       changed_by: user?.id,
       note: newNote.trim(),
     });
+    // Surface failures (RLS denials included) — a silently vanishing note
+    // reads as data loss to the person typing it.
+    if (error) { await dialog.alert(`Note failed to save: ${error.message}`); return; }
     setNewNote('');
     await loadHistory(jobId);
   };
