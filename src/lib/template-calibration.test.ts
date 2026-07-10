@@ -117,10 +117,21 @@ describe('computeCalibration', () => {
     expect(r.pxPerIn).toBeCloseTo(7.2);
   });
 
-  it('rejects previews whose aspect ratio disagrees with the artboard', () => {
+  it('handles letterboxed previews via contain-fit (scale from the filled axis)', () => {
+    // Artboard 10x5in -> 200x100in real; square 1440px canvas means the
+    // artwork fills the width (1440/200 = 7.2) and the height is padded.
     const r = computeCalibration(eps, pngBytes(1440, 1440), 20);
-    expect(r.reason).toBe('aspect-mismatch');
-    expect(r.pxPerIn).toBeNull();
+    expect(r.reason).toBe('ok-letterboxed');
+    expect(r.pxPerIn).toBeCloseTo(7.2);
+  });
+
+  it('matches the real PVO preview geometry (4:3 canvas, height-filling artwork)', () => {
+    // Real template: artboard 1080x869pt -> 300x241.39in at 1:20, rendered
+    // on a 4:3 canvas (2000x1500). Height fills: 1500/241.39 = 6.214.
+    const charger = enc('%!PS\n%%BoundingBox: -1390 -150 -310 719\n');
+    const r = computeCalibration(charger, pngBytes(2000, 1500), 20);
+    expect(r.reason).toBe('ok-letterboxed');
+    expect(r.pxPerIn).toBeCloseTo(1500 / ((869 / 72) * 20), 3);
   });
 
   it('tolerates small rounding in the export', () => {
