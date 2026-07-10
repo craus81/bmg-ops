@@ -188,7 +188,7 @@ export default function OpsDashboard() {
       // Sales
       supabase.from('prospect_opportunities').select('stage, value'),
       supabase.from('customers').select('company_name, ytd_spend').eq('active', true).gt('ytd_spend', 0).order('ytd_spend', { ascending: false }).limit(4),
-      supabase.from('quotes').select('total').in('status', ['draft', 'sent', 'pending']),
+      supabase.from('wrap_quotes').select('total').in('status', ['draft', 'sent']),
       supabase.from('estimates').select('*', { count: 'exact', head: true }).gte('created_at', weekAgo.toISOString()),
     ]);
 
@@ -674,7 +674,7 @@ export default function OpsDashboard() {
         </button>
         <div style={{ padding: '12px 16px' }}>
           <div style={{ fontSize: '10px', fontWeight: 800, textTransform: 'uppercase', letterSpacing: '0.6px', color: 'var(--text-muted)', marginBottom: '8px' }}>Quotes &amp; estimates</div>
-          <button onClick={() => router.push('/admin/quotes')} style={{ display: 'flex', justifyContent: 'space-between', width: '100%', fontSize: '12px', padding: '3px 0', background: 'none', border: 'none', cursor: 'pointer', fontVariantNumeric: 'tabular-nums' }}>
+          <button onClick={() => router.push('/admin/wrap-quote')} style={{ display: 'flex', justifyContent: 'space-between', width: '100%', fontSize: '12px', padding: '3px 0', background: 'none', border: 'none', cursor: 'pointer', fontVariantNumeric: 'tabular-nums' }}>
             <span style={{ color: 'var(--text-secondary)', fontWeight: 600 }}>Open quotes</span>
             <span style={{ fontWeight: 800, color: 'var(--text-primary)' }}>{d.sales.openQuotes.count} · {fmtK(d.sales.openQuotes.value)}</span>
           </button>

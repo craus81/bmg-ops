@@ -536,6 +536,31 @@ export default function WrapQuotePage() {
     setTemplates(prev => prev.map(x => x.id === t.id ? { ...x, is_active: t.is_active === false } : x));
   };
 
+  // Force-delete one template. Unlike Delete All (which retires templates
+  // that quotes reference), this detaches those quotes and removes the row +
+  // stored files — it's the way to clean up the retired stragglers.
+  const deleteTemplate = async (t: Template) => {
+    if (!(await dialog.confirm(
+      `Permanently delete "${templateLabel(t)}"? If any quotes reference it, they keep their pricing but lose the template link. This cannot be undone.`,
+      { destructive: true, confirmLabel: 'Delete' }
+    ))) return;
+    try {
+      const res = await apiFetch('/api/admin/delete-template', {
+        method: 'POST',
+        body: JSON.stringify({ templateId: t.id }),
+      });
+      const data = await res.json();
+      if (!res.ok || !data.success) {
+        await dialog.alert(`Delete failed: ${data.error || 'Unknown error'}`);
+        return;
+      }
+      setTemplates(prev => prev.filter(x => x.id !== t.id));
+      if (templateId === t.id) setTemplateId('');
+    } catch (e: any) {
+      await dialog.alert(`Delete failed: ${e.message}`);
+    }
+  };
+
   // Wipe the template library ahead of a fresh bulk import. The server works
   // in small batches (timeout-safe for libraries of thousands), so loop until
   // it reports nothing left. Templates a quote still references are retired
@@ -1159,6 +1184,9 @@ export default function WrapQuotePage() {
                   <div style={{ display: 'flex', gap: '4px' }}>
                     <button onClick={() => { setTemplateId(t.id); setImgDim(null); resetEstimate(); setTab('estimator'); }} style={btnStyle('#06b6d4', 'rgba(6,182,212,0.08)')}>Open</button>
                     <button onClick={() => toggleTemplate(t)} style={btnStyle('#f59e0b', 'transparent')}>{t.is_active === false ? 'Reactivate' : 'Retire'}</button>
+                    {isAdmin && (
+                      <button onClick={() => deleteTemplate(t)} style={btnStyle('#ef4444', 'transparent')} title="Delete this template permanently">✕</button>
+                    )}
                   </div>
                 </div>
               </div>

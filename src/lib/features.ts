@@ -29,7 +29,6 @@ export const FEATURES = {
   vendor_payments: 'Vendor Payments',
   bulk_upload: 'Bulk Upload (Templates)',
   proof_hygiene: 'Proof Search', // legacy key — now gates the Proof Search page only
-  quoting: 'Estimating / Quoting',
   all_jobs: 'CNI Jobs',
   catalog_management: 'Part Catalog Management',
   prospects: 'Prospects / Sales CRM',
@@ -44,12 +43,12 @@ export const ROLE_DEFAULT_FEATURES: Record<string, FeatureKey[]> = {
 
   sales: [
     'home', 'fleet_checkin', 'in_shop', 'graphics', 'estimates',
-    'time', 'messages', 'customers', 'parts_catalog', 'quoting', 'schedule', 'prospects', 'upfit_projects',
+    'time', 'messages', 'customers', 'parts_catalog', 'schedule', 'prospects', 'upfit_projects',
   ],
 
   graphics_production: [
     'home', 'in_shop', 'graphics', 'estimates',
-    'time', 'messages', 'customers', 'parts_catalog', 'quoting', 'schedule',
+    'time', 'messages', 'customers', 'parts_catalog', 'schedule',
   ],
 
   shop_tech: [

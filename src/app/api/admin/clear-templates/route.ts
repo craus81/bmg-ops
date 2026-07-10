@@ -43,14 +43,11 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ success: true, deleted: 0, retired: 0, filesDeleted: 0, remaining: 0 });
   }
 
-  // Templates referenced by any quote must survive as retired rows. A failed
-  // lookup (e.g. wrap_quotes not migrated yet) contributes no references.
+  // Templates referenced by a wrap quote must survive as retired rows. A
+  // failed lookup (e.g. wrap_quotes not migrated yet) contributes none.
   const referenced = new Set<string>();
-  const [q1, q2] = await Promise.all([
-    supabase.from('quotes').select('template_id').not('template_id', 'is', null),
-    supabase.from('wrap_quotes').select('template_id').not('template_id', 'is', null),
-  ]);
-  for (const r of [...(q1.data || []), ...(q2.data || [])]) {
+  const { data: refs } = await supabase.from('wrap_quotes').select('template_id').not('template_id', 'is', null);
+  for (const r of refs || []) {
     if (r.template_id) referenced.add(r.template_id);
   }
 

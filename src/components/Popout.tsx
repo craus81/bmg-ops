@@ -54,7 +54,7 @@ export function pathFor(type: PopoutType, item: any): string {
     case 'parts': return `/parts?catalog=${item.catalog || 'upfit'}&q=${encodeURIComponent(item.part_number || '')}`;
     case 'customers': return `/admin/prospects?id=${item.id}`;
     case 'messages': return `/messages?conversation=${item.conversation_id}`;
-    case 'quotes': return `/admin/quotes?id=${item.id}`;
+    case 'quotes': return '/admin/wrap-quote';
     default: return '/';
   }
 }
@@ -96,10 +96,11 @@ async function fetchItem(
     }
     case 'quotes': {
       const { data } = await supabase
-        .from('quotes')
-        .select('id, quote_number, customer_name, vehicle_description, status, total_price')
+        .from('wrap_quotes')
+        .select('id, quote_number, customer, vehicle_description, status, total')
         .eq('id', id).maybeSingle();
-      return data;
+      if (!data) return null;
+      return { ...data, customer_name: (data as any).customer?.name || null, total_price: (data as any).total };
     }
     case 'parts': {
       const { data } = await supabase
