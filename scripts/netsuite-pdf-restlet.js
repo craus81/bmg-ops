@@ -1,12 +1,13 @@
 /**
  * NetSuite RESTlet — Transaction PDF Generator
  *
- * Renders PDF for Sales Orders and Invoices.
+ * Renders PDF for Sales Orders, Invoices, and Estimates (quotes).
  * Deploy as a RESTlet in NetSuite (SuiteScript 2.1).
  *
  * Supported query parameters:
  *   - salesOrderId: internal ID of a Sales Order
  *   - invoiceId:    internal ID of an Invoice
+ *   - estimateId:   internal ID of an Estimate (quote)
  *
  * Returns JSON: { success: true, pdfBase64: "...", filename: "..." }
  *
@@ -24,11 +25,12 @@ define(['N/render', 'N/record'], function (render, record) {
   function onGet(requestParams) {
     var salesOrderId = requestParams.salesOrderId;
     var invoiceId = requestParams.invoiceId;
+    var estimateId = requestParams.estimateId;
 
-    if (!salesOrderId && !invoiceId) {
+    if (!salesOrderId && !invoiceId && !estimateId) {
       return {
         success: false,
-        error: 'Missing parameter: provide salesOrderId or invoiceId'
+        error: 'Missing parameter: provide salesOrderId, invoiceId, or estimateId'
       };
     }
 
@@ -41,6 +43,10 @@ define(['N/render', 'N/record'], function (render, record) {
         transactionId = parseInt(invoiceId, 10);
         transactionType = record.Type.INVOICE;
         filenamePrefix = 'Invoice';
+      } else if (estimateId) {
+        transactionId = parseInt(estimateId, 10);
+        transactionType = record.Type.ESTIMATE;
+        filenamePrefix = 'Quote';
       } else {
         transactionId = parseInt(salesOrderId, 10);
         transactionType = record.Type.SALES_ORDER;

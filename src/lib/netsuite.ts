@@ -1366,10 +1366,12 @@ export async function updateInvoiceLocation(
 
 /**
  * Fetch a transaction PDF from the NetSuite RESTlet.
- * Supports: salesOrder, invoice (matches the RESTlet's query params).
+ * Supports: salesOrder, invoice, estimate (matches the RESTlet's query
+ * params — estimate requires the updated scripts/netsuite-pdf-restlet.js
+ * to be redeployed in NetSuite).
  */
 export async function getNetSuitePdf(
-  type: 'salesOrder' | 'invoice',
+  type: 'salesOrder' | 'invoice' | 'estimate',
   recordId: string
 ): Promise<{
   success: boolean;
@@ -1383,7 +1385,7 @@ export async function getNetSuitePdf(
   }
 
   try {
-    const paramKey = type === 'invoice' ? 'invoiceId' : 'salesOrderId';
+    const paramKey = type === 'invoice' ? 'invoiceId' : type === 'estimate' ? 'estimateId' : 'salesOrderId';
     const result = await callRestlet(restletUrl, 'GET', { [paramKey]: recordId });
 
     if (result?.success && result?.pdfBase64) {
@@ -1396,7 +1398,7 @@ export async function getNetSuitePdf(
         pdf64 = Buffer.from(pdf64, 'base64').toString('utf-8');
       }
 
-      const prefix = type === 'invoice' ? 'Invoice' : 'SalesOrder';
+      const prefix = type === 'invoice' ? 'Invoice' : type === 'estimate' ? 'Quote' : 'SalesOrder';
       return {
         success: true,
         pdfBase64: pdf64,

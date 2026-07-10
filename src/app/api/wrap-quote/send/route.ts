@@ -4,6 +4,7 @@ import { requireStaff } from '@/lib/api-auth';
 import { sendEmail } from '@/lib/resend';
 import { validateBody, z } from '@/lib/validate';
 import { r2Get, r2PublicUrl } from '@/lib/r2';
+import { getNetSuitePdf } from '@/lib/netsuite';
 
 export const dynamic = 'force-dynamic';
 
@@ -15,10 +16,12 @@ const supabase = createClient(
 const SendSchema = z.object({
   quoteId: z.string().uuid(),
   // What the email contains: the full quote with the coverage drawing,
-  // the quote document alone, or the coverage drawing alone (no pricing).
-  mode: z.enum(['full', 'quote_only', 'coverage_only']).optional().default('full'),
+  // the quote document alone, the coverage drawing alone (no pricing), or
+  // the NetSuite quote PDF attached (body carries no pricing — the PDF,
+  // with NetSuite's own tax math, is the document of record).
+  mode: z.enum(['full', 'quote_only', 'coverage_only', 'netsuite_pdf']).optional().default('full'),
 });
-type SendMode = 'full' | 'quote_only' | 'coverage_only';
+type SendMode = 'full' | 'quote_only' | 'coverage_only' | 'netsuite_pdf';
 
 const esc = (s: any) =>
   String(s ?? '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
@@ -28,9 +31,9 @@ const money = (n: any) =>
 // Light-themed printable quote document (customers print/forward these, so
 // no dark chrome like the internal notification template).
 function buildQuoteHtml(quote: any, company: any, diagramUrl: string | null, logoUrl: string | null, mode: SendMode = 'full'): string {
-  const pricing = mode !== 'coverage_only';
+  const pricing = mode === 'full' || mode === 'quote_only';
   const showDiagram = mode !== 'quote_only' && !!diagramUrl;
-  const docTitle = pricing ? 'Wrap Quote' : 'Wrap Coverage';
+  const docTitle = mode === 'coverage_only' ? 'Wrap Coverage' : 'Wrap Quote';
   const cust = quote.customer || {};
   const rows: string[] = [];
   const cell = (v: string, right = false) =>
@@ -86,6 +89,7 @@ function buildQuoteHtml(quote: any, company: any, diagramUrl: string | null, log
       ${quote.project_type ? `<div style="font-size:12px;color:#374151;margin-bottom:4px;"><b>Project Type:</b> ${esc(quote.project_type)}</div>` : ''}
       ${quote.vehicle_description ? `<div style="font-size:12px;color:#374151;margin-bottom:14px;"><b>Vehicle:</b> ${esc(quote.vehicle_description)}</div>` : ''}
       ${showDiagram ? `<div style="margin:0 0 14px;"><div style="font-size:11px;color:#6b7280;text-transform:uppercase;font-weight:700;margin-bottom:4px;">Coverage Areas</div><img src="${esc(diagramUrl)}" alt="Wrap coverage diagram" width="584" style="width:100%;max-width:584px;display:block;border:1px solid #e5e7eb;border-radius:8px;"></div>` : ''}
+      ${mode === 'netsuite_pdf' ? `<div style="font-size:13px;color:#374151;margin:0 0 14px;">Your quote is attached as a PDF.</div>` : ''}
       ${pricing ? `<table style="width:100%;border-collapse:collapse;">
         <thead>
           <tr>
@@ -137,6 +141,9 @@ export async function POST(req: NextRequest) {
   if (mode === 'coverage_only' && !quote.diagram_path) {
     return NextResponse.json({ error: 'This quote has no coverage drawing — save it from the estimator first.' }, { status: 400 });
   }
+  if (mode === 'netsuite_pdf' && !quote.netsuite_estimate_id) {
+    return NextResponse.json({ error: 'This quote isn\'t in NetSuite yet — use "Create Quote in NetSuite" first.' }, { status: 400 });
+  }
 
   const email = (quote.customer?.email || '').trim();
   if (!email) {
@@ -181,6 +188,23 @@ export async function POST(req: NextRequest) {
       filename: a.name || a.path.split('/').pop() || 'attachment',
       content: Buffer.concat(chunks),
       contentType: a.type || undefined,
+    });
+  }
+
+  // The NetSuite quote PDF rides along as the first attachment — it's the
+  // document of record (NetSuite's own totals and tax), so a fetch failure
+  // fails the send rather than emailing a body that promises an attachment.
+  if (mode === 'netsuite_pdf') {
+    const pdf = await getNetSuitePdf('estimate', quote.netsuite_estimate_id);
+    if (!pdf.success || !pdf.pdfBase64) {
+      return NextResponse.json({
+        error: `Could not fetch the NetSuite quote PDF: ${pdf.error || 'unknown error'}. If this says "Missing parameter", the updated PDF RESTlet (scripts/netsuite-pdf-restlet.js) needs to be redeployed in NetSuite.`,
+      }, { status: 502 });
+    }
+    attachments.unshift({
+      filename: pdf.filename || `Quote_${quote.netsuite_estimate_number || quote.netsuite_estimate_id}.pdf`,
+      content: Buffer.from(pdf.pdfBase64, 'base64'),
+      contentType: 'application/pdf',
     });
   }
 

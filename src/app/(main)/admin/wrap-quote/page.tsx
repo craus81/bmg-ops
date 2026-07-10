@@ -6,6 +6,7 @@ import { useAuth } from '@/components/AuthProvider';
 import { useDialog } from '@/components/DialogProvider';
 import { storage } from '@/lib/storage';
 import { apiFetch } from '@/lib/api-client';
+import { openNetSuitePdf } from '@/lib/netsuite-pdf-client';
 import { theme } from '@/lib/theme';
 
 // Manual wrap-quote estimator (WrapUP-style): pick a 1:20 vehicle outline
@@ -192,7 +193,15 @@ export default function WrapQuotePage() {
   const [attachments, setAttachments] = useState<QuoteAttachment[]>([]);
   const [attaching, setAttaching] = useState(false);
   const [showArchived, setShowArchived] = useState(false);
-  const [sendMode, setSendMode] = useState<'full' | 'quote_only' | 'coverage_only'>('full');
+  const [sendMode, setSendMode] = useState<'full' | 'quote_only' | 'coverage_only' | 'netsuite_pdf'>('full');
+
+  // Open the NetSuite estimate PDF in a new tab (the browser's PDF viewer
+  // covers viewing and printing).
+  const viewEstimatePdf = async (estimateId: string | null) => {
+    if (!estimateId) return;
+    const { ok, error } = await openNetSuitePdf('estimate', estimateId);
+    if (!ok) await dialog.alert(`Could not open the NetSuite PDF: ${error}`);
+  };
   const [pushingNetsuite, setPushingNetsuite] = useState(false);
 
   // ----- Pricing tab state (edit copies) -----
@@ -641,9 +650,15 @@ export default function WrapQuotePage() {
     if (!customer.email?.trim()) { await dialog.alert('Enter a customer email first.'); return; }
     if (measurements.length === 0) { await dialog.alert('No measurements — draw the wrap areas on the Estimator tab first.'); return; }
     const coverageOnly = sendMode === 'coverage_only';
+    if (sendMode === 'netsuite_pdf' && !history.find(q => q.id === savedQuoteId)?.netsuite_estimate_id) {
+      await dialog.alert('This quote isn\'t in NetSuite yet — use "Create Quote in NetSuite" first.');
+      return;
+    }
     const confirmMsg = coverageOnly
       ? `Email just the coverage picture (no pricing) to ${customer.email}?`
-      : `Email this quote ($${fmt(totals.total)})${sendMode === 'quote_only' ? ' without the coverage picture' : ''} to ${customer.email}? Make sure everything is accurate — this sends immediately.`;
+      : sendMode === 'netsuite_pdf'
+        ? `Email the NetSuite quote PDF to ${customer.email}? This sends immediately.`
+        : `Email this quote ($${fmt(totals.total)})${sendMode === 'quote_only' ? ' without the coverage picture' : ''} to ${customer.email}? Make sure everything is accurate — this sends immediately.`;
     if (!(await dialog.confirm(confirmMsg))) return;
     setSending(true);
     try {
@@ -1439,6 +1454,7 @@ export default function WrapQuotePage() {
                 <option value="full">Quote + coverage picture</option>
                 <option value="quote_only">Quote only (no picture)</option>
                 <option value="coverage_only">Coverage picture only (no pricing)</option>
+                <option value="netsuite_pdf">NetSuite quote PDF (attached)</option>
               </select>
             </div>
             <div style={{ display: 'flex', gap: '6px', flexWrap: 'wrap' }}>
@@ -1449,11 +1465,16 @@ export default function WrapQuotePage() {
             </div>
             <div style={{ display: 'flex', gap: '6px', flexWrap: 'wrap', alignItems: 'center', marginTop: '6px' }}>
               {(() => {
-                const nsNumber = history.find(q => q.id === savedQuoteId)?.netsuite_estimate_number;
-                return nsNumber ? (
-                  <span style={{ fontSize: '10px', fontWeight: 700, padding: '3px 8px', borderRadius: '4px', background: 'rgba(34,197,94,0.1)', color: '#22c55e' }}>
-                    NetSuite quote {nsNumber}
-                  </span>
+                const nsQuote = history.find(q => q.id === savedQuoteId);
+                return nsQuote?.netsuite_estimate_id ? (
+                  <>
+                    <span style={{ fontSize: '10px', fontWeight: 700, padding: '3px 8px', borderRadius: '4px', background: 'rgba(34,197,94,0.1)', color: '#22c55e' }}>
+                      NetSuite quote {nsQuote.netsuite_estimate_number || nsQuote.netsuite_estimate_id}
+                    </span>
+                    <button onClick={() => viewEstimatePdf(nsQuote.netsuite_estimate_id)} style={btnStyle('#a78bfa', 'rgba(167,139,250,0.08)')}>
+                      View PDF
+                    </button>
+                  </>
                 ) : (
                   <button onClick={createNetsuiteQuote} disabled={pushingNetsuite} style={btnStyle('#a78bfa', 'rgba(167,139,250,0.08)')}>
                     {pushingNetsuite ? 'Creating…' : 'Create Quote in NetSuite'}
@@ -1496,7 +1517,11 @@ export default function WrapQuotePage() {
                   <div style={{ fontSize: '10px', color: 'var(--text-muted)' }}>{q.vehicle_description || '—'}{q.project_type ? ` · ${q.project_type}` : ''}</div>
                 </div>
                 {q.netsuite_estimate_number && (
-                  <span style={{ fontSize: '9px', fontWeight: 700, padding: '2px 7px', borderRadius: '4px', background: 'rgba(167,139,250,0.12)', color: '#a78bfa' }}>NS {q.netsuite_estimate_number}</span>
+                  <button
+                    onClick={e => { e.stopPropagation(); viewEstimatePdf(q.netsuite_estimate_id); }}
+                    title="Open the NetSuite quote PDF"
+                    style={{ fontSize: '9px', fontWeight: 700, padding: '2px 7px', borderRadius: '4px', background: 'rgba(167,139,250,0.12)', color: '#a78bfa', border: 'none', cursor: 'pointer' }}
+                  >NS {q.netsuite_estimate_number} ⎙</button>
                 )}
                 {q.archived_at && (
                   <span style={{ fontSize: '9px', fontWeight: 700, padding: '2px 7px', borderRadius: '4px', background: 'rgba(148,163,184,0.12)', color: '#94a3b8' }}>Archived</span>
@@ -1524,7 +1549,12 @@ export default function WrapQuotePage() {
         <div style={{ position: 'fixed', inset: 0, background: 'var(--overlay)', zIndex: 200, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '16px' }} onClick={() => setViewQuote(null)}>
           <div onClick={e => e.stopPropagation()} style={{ width: '100%', maxWidth: '640px', maxHeight: '90vh', overflowY: 'auto' }}>
             {quotePreview(viewQuote)}
-            <div style={{ display: 'flex', justifyContent: 'flex-end', marginTop: '8px' }}>
+            <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '6px', marginTop: '8px' }}>
+              {viewQuote.netsuite_estimate_id && (
+                <button onClick={() => viewEstimatePdf(viewQuote.netsuite_estimate_id)} style={btnStyle('#a78bfa', 'var(--card)')}>
+                  NetSuite PDF
+                </button>
+              )}
               <button onClick={() => setViewQuote(null)} style={btnStyle('#94a3b8', 'var(--card)')}>Close</button>
             </div>
           </div>

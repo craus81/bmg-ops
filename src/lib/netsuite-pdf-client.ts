@@ -8,7 +8,7 @@
  * once the PDF arrives from /api/netsuite/pdf.
  */
 export async function openNetSuitePdf(
-  type: 'invoice' | 'salesOrder',
+  type: 'invoice' | 'salesOrder' | 'estimate',
   id: string,
 ): Promise<{ ok: boolean; error?: string }> {
   const w = window.open('about:blank', '_blank');
