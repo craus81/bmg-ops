@@ -1,4 +1,5 @@
 import { describe, it, expect } from 'vitest';
+import { deflateSync } from 'zlib';
 import { parseScaleFactor, parseVectorArtboard, parseImageSize, computeCalibration } from './template-calibration';
 
 const enc = (s: string) => new TextEncoder().encode(s);
@@ -68,6 +69,24 @@ describe('parseVectorArtboard', () => {
   it('reads a PDF/AI MediaBox', () => {
     const pdf = enc('%PDF-1.5\n1 0 obj\n<< /Type /Page /MediaBox [ 0 0 612 792 ] >>\nendobj\n');
     expect(parseVectorArtboard(pdf)).toEqual({ widthPt: 612, heightPt: 792 });
+  });
+
+  it('finds MediaBox inside Flate-compressed PDF streams (modern .ai)', () => {
+    const inner = deflateSync(Buffer.from('<< /Type /Page /MediaBox [ 0 0 1080 869 ] >>'));
+    const head = enc('%PDF-1.6\n1 0 obj\n<< /Filter /FlateDecode >>\nstream\n');
+    const tail = enc('\nendstream\nendobj\n%%EOF\n');
+    const pdf = new Uint8Array(head.length + inner.length + tail.length);
+    pdf.set(head); pdf.set(inner, head.length); pdf.set(tail, head.length + inner.length);
+    expect(parseVectorArtboard(pdf)).toEqual({ widthPt: 1080, heightPt: 869 });
+  });
+
+  it('finds AI-content bounding boxes inside compressed streams', () => {
+    const inner = deflateSync(Buffer.from('%AI12_CompressedData\n%%BoundingBox: -1390 -150 -310 719\n'));
+    const head = enc('%PDF-1.6\nstream\n');
+    const tail = enc('\nendstream\n');
+    const pdf = new Uint8Array(head.length + inner.length + tail.length);
+    pdf.set(head); pdf.set(inner, head.length); pdf.set(tail, head.length + inner.length);
+    expect(parseVectorArtboard(pdf)).toEqual({ widthPt: 1080, heightPt: 869 });
   });
 
   it('returns null when nothing parseable exists', () => {

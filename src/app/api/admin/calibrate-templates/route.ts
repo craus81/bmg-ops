@@ -92,11 +92,18 @@ export async function POST(req: NextRequest) {
 
   const nextCursor = (rows || []).length === batchSize ? rows![rows!.length - 1].id : null;
 
+  // Aggregate skip reasons so the UI can say WHY instead of guessing
+  const reasons: Record<string, number> = {};
+  for (const r of results) {
+    if (r.status === 'skipped' && r.reason) reasons[r.reason] = (reasons[r.reason] || 0) + 1;
+  }
+
   return NextResponse.json({
     success: true,
     results,
     calibrated: results.filter(r => r.status === 'calibrated').length,
     skipped: results.filter(r => r.status === 'skipped').length,
+    reasons,
     nextCursor,
   });
 }
