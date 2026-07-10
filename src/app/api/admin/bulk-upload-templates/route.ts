@@ -4,6 +4,7 @@ import { createClient } from '@supabase/supabase-js';
 import { r2Upload, r2Delete, r2PublicUrl } from '@/lib/r2';
 import { requireAdmin } from '@/lib/api-auth';
 import { computeCalibration, parseScaleFactor } from '@/lib/template-calibration';
+import { isStagedZipPath, loadStagedZip } from '@/lib/zip-source';
 
 interface TemplateEntry {
   path: string;
@@ -30,15 +31,31 @@ export async function POST(req: NextRequest) {
   if (auth.error) return auth.error;
 
   try {
-    const formData = await req.formData();
-    const zipFile = formData.get('file') as File;
-    const manifestJson = formData.get('manifest') as string;
-
-    if (!zipFile || !manifestJson) {
-      return NextResponse.json({ error: 'ZIP file and manifest required' }, { status: 400 });
+    // Preferred: staged-in-R2 ZIP referenced by key + manifest as JSON (the
+    // client sends the manifest in chunks so each call stays inside the
+    // serverless time budget). Legacy multipart kept for small files.
+    let manifest: TemplateEntry[];
+    let zipPromise: Promise<import('jszip') | null>;
+    if ((req.headers.get('content-type') || '').includes('application/json')) {
+      const body = await req.json();
+      if (!isStagedZipPath(body?.zipPath)) {
+        return NextResponse.json({ error: 'Invalid zipPath' }, { status: 400 });
+      }
+      if (!Array.isArray(body?.manifest)) {
+        return NextResponse.json({ error: 'Manifest required' }, { status: 400 });
+      }
+      manifest = body.manifest;
+      zipPromise = loadStagedZip(body.zipPath);
+    } else {
+      const formData = await req.formData();
+      const zipFile = formData.get('file') as File;
+      const manifestJson = formData.get('manifest') as string;
+      if (!zipFile || !manifestJson) {
+        return NextResponse.json({ error: 'ZIP file and manifest required' }, { status: 400 });
+      }
+      manifest = JSON.parse(manifestJson);
+      zipPromise = zipFile.arrayBuffer().then(buf => JSZip.loadAsync(buf));
     }
-
-    const manifest: TemplateEntry[] = JSON.parse(manifestJson);
     const included = manifest.filter(e => e.include);
 
     if (included.length === 0) {
@@ -50,8 +67,8 @@ export async function POST(req: NextRequest) {
       process.env.SUPABASE_SERVICE_ROLE_KEY!
     );
 
-    const arrayBuffer = await zipFile.arrayBuffer();
-    const zip = await JSZip.loadAsync(arrayBuffer);
+    const zip = await zipPromise;
+    if (!zip) return NextResponse.json({ error: 'Staged ZIP not found in storage' }, { status: 400 });
 
     const results: { name: string; status: 'success' | 'error'; error?: string }[] = [];
 

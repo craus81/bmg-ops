@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import JSZip from 'jszip';
 import { createClient } from '@supabase/supabase-js';
 import { requireAdmin } from '@/lib/api-auth';
+import { isStagedZipPath, loadStagedZip } from '@/lib/zip-source';
 
 /**
  * POST /api/admin/upload-zip
@@ -25,15 +26,26 @@ export async function POST(req: NextRequest) {
     const url = new URL(req.url);
     const type = url.searchParams.get('type') || 'templates';
 
-    const formData = await req.formData();
-    const zipFile = formData.get('file') as File;
-
-    if (!zipFile) {
-      return NextResponse.json({ error: 'No file uploaded' }, { status: 400 });
+    // Preferred path: the ZIP was staged in R2 via presigned upload (no
+    // serverless body-size limit) and referenced by key. Legacy multipart
+    // still works for small files.
+    let zip: JSZip;
+    if ((req.headers.get('content-type') || '').includes('application/json')) {
+      const body = await req.json();
+      if (!isStagedZipPath(body?.zipPath)) {
+        return NextResponse.json({ error: 'Invalid zipPath' }, { status: 400 });
+      }
+      const staged = await loadStagedZip(body.zipPath);
+      if (!staged) return NextResponse.json({ error: 'Staged ZIP not found in storage' }, { status: 400 });
+      zip = staged;
+    } else {
+      const formData = await req.formData();
+      const zipFile = formData.get('file') as File;
+      if (!zipFile) {
+        return NextResponse.json({ error: 'No file uploaded' }, { status: 400 });
+      }
+      zip = await JSZip.loadAsync(await zipFile.arrayBuffer());
     }
-
-    const arrayBuffer = await zipFile.arrayBuffer();
-    const zip = await JSZip.loadAsync(arrayBuffer);
 
     const files: {
       path: string;
@@ -67,6 +79,8 @@ export async function POST(req: NextRequest) {
       if (type === 'templates' && (ext === 'jpg' || ext === 'jpeg' || ext === 'png')) {
         continue; // We'll attach these as thumbnails to EPS entries
       }
+      // Skip the PVO downloader's bookkeeping files if they rode along
+      if (type === 'templates' && ext === 'json') continue;
 
       // For proofs, only include PDFs
       if (type === 'proofs' && ext !== 'pdf') {

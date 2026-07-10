@@ -4,6 +4,8 @@ import { useState, useRef, useEffect } from 'react';
 import { useRouter } from 'next/navigation';
 import { createClient } from '@/lib/supabase-browser';
 import { useAuth } from '@/components/AuthProvider';
+import { storage } from '@/lib/storage';
+import { apiFetch } from '@/lib/api-client';
 import type { CatalogItem } from '@/lib/types';
 
 interface ZipFileEntry {
@@ -52,8 +54,10 @@ export default function BulkUploadPage() {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
 
-  // ZIP file state
-  const [zipFile, setZipFile] = useState<File | null>(null);
+  // The selected ZIP is staged in R2 via presigned upload (no request-size
+  // limit), then referenced by key for parsing and chunked processing.
+  const [zipPath, setZipPath] = useState<string | null>(null);
+  const [uploadNote, setUploadNote] = useState('');
 
   // Template state
   const [templateRows, setTemplateRows] = useState<TemplateRow[]>([]);
@@ -103,18 +107,23 @@ export default function BulkUploadPage() {
   const handleZipSelect = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file) return;
-    setZipFile(file);
     setError('');
     setUploadResult(null);
     setLoading(true);
 
     try {
-      const formData = new FormData();
-      formData.append('file', file);
+      // Stage the ZIP in R2 first — bulk ZIPs far exceed the ~4.5MB
+      // serverless request-body limit, so it never travels through the API.
+      let safeName = file.name.replace(/[^a-zA-Z0-9._-]/g, '_');
+      if (!/\.zip$/i.test(safeName)) safeName += '.zip';
+      const stagedPath = `zips/${Date.now()}-${safeName}`.slice(0, 200);
+      const { error: upErr } = await storage.from('vehicle-templates').upload(stagedPath, file, { contentType: 'application/zip' });
+      if (upErr) throw new Error(`ZIP upload failed: ${upErr.message}`);
+      setZipPath(stagedPath);
 
-      const res = await fetch(`/api/admin/upload-zip?type=${tab}`, {
+      const res = await apiFetch(`/api/admin/upload-zip?type=${tab}`, {
         method: 'POST',
-        body: formData,
+        body: JSON.stringify({ zipPath: stagedPath }),
       });
 
       const data = await res.json();
@@ -162,71 +171,96 @@ export default function BulkUploadPage() {
     if (fileRef.current) fileRef.current.value = '';
   };
 
+  // Process in chunks so each server call stays inside the serverless time
+  // budget regardless of how many templates the ZIP holds.
+  const CHUNK = 12;
+
   const handleUploadTemplates = async () => {
-    if (!zipFile) return;
+    if (!zipPath) return;
     setUploading(true);
     setError('');
 
+    const entries = templateRows.filter(r => r.include).map(r => ({
+      path: r.path,
+      thumbnailPath: r.thumbnailPath,
+      name: r.displayName,
+      make: r.make,
+      model: r.model,
+      year: r.year,
+      variant: r.variant,
+      wheelbase: r.wheelbase,
+      doors: r.doors,
+      roofHeight: r.roofHeight,
+      windows: r.windows,
+      include: true,
+    }));
+
     try {
-      const formData = new FormData();
-      formData.append('file', zipFile);
-      formData.append('manifest', JSON.stringify(templateRows.map(r => ({
-        path: r.path,
-        thumbnailPath: r.thumbnailPath,
-        name: r.displayName,
-        make: r.make,
-        model: r.model,
-        year: r.year,
-        variant: r.variant,
-        wheelbase: r.wheelbase,
-        doors: r.doors,
-        roofHeight: r.roofHeight,
-        windows: r.windows,
-        include: r.include,
-      }))));
-
-      const res = await fetch('/api/admin/bulk-upload-templates', {
-        method: 'POST',
-        body: formData,
+      const allResults: any[] = [];
+      for (let i = 0; i < entries.length; i += CHUNK) {
+        setUploadNote(`Uploading ${Math.min(i + CHUNK, entries.length)} of ${entries.length} templates…`);
+        const res = await apiFetch('/api/admin/bulk-upload-templates', {
+          method: 'POST',
+          body: JSON.stringify({ zipPath, manifest: entries.slice(i, i + CHUNK) }),
+        });
+        const data = await res.json();
+        if (!res.ok) throw new Error(data.error);
+        allResults.push(...(data.results || []));
+      }
+      const success = allResults.filter(r => r.status === 'success').length;
+      const errors = allResults.filter(r => r.status === 'error').length;
+      setUploadResult({
+        message: `Uploaded ${success} template${success !== 1 ? 's' : ''}${errors > 0 ? `, ${errors} error${errors !== 1 ? 's' : ''}` : ''}`,
+        results: allResults,
+        summary: { total: entries.length, success, errors },
       });
-
-      const data = await res.json();
-      if (!res.ok) throw new Error(data.error);
-      setUploadResult(data);
+      // Done with the staged ZIP — clean it up (best-effort)
+      storage.from('vehicle-templates').remove([zipPath]).catch(() => {});
     } catch (err: any) {
       setError(err.message || 'Upload failed');
     }
+    setUploadNote('');
     setUploading(false);
   };
 
   const handleUploadProofs = async () => {
-    if (!zipFile) return;
+    if (!zipPath) return;
     setUploading(true);
     setError('');
 
+    const entries = proofRows.filter(r => r.include && r.catalogId).map(r => ({
+      path: r.path,
+      name: r.name,
+      catalogId: r.catalogId,
+      customer: r.customer,
+      vehicleType: r.vehicleType,
+      include: true,
+    }));
+
     try {
-      const formData = new FormData();
-      formData.append('file', zipFile);
-      formData.append('manifest', JSON.stringify(proofRows.map(r => ({
-        path: r.path,
-        name: r.name,
-        catalogId: r.catalogId,
-        customer: r.customer,
-        vehicleType: r.vehicleType,
-        include: r.include,
-      }))));
-
-      const res = await fetch('/api/admin/bulk-upload-proofs', {
-        method: 'POST',
-        body: formData,
+      const allResults: any[] = [];
+      for (let i = 0; i < entries.length; i += CHUNK) {
+        setUploadNote(`Uploading ${Math.min(i + CHUNK, entries.length)} of ${entries.length} proofs…`);
+        const res = await apiFetch('/api/admin/bulk-upload-proofs', {
+          method: 'POST',
+          body: JSON.stringify({ zipPath, manifest: entries.slice(i, i + CHUNK) }),
+        });
+        const data = await res.json();
+        if (!res.ok) throw new Error(data.error);
+        allResults.push(...(data.results || []));
+      }
+      const success = allResults.filter(r => r.status === 'success').length;
+      const errors = allResults.filter(r => r.status === 'error').length;
+      setUploadResult({
+        message: `Uploaded ${success} proof${success !== 1 ? 's' : ''}${errors > 0 ? `, ${errors} error${errors !== 1 ? 's' : ''}` : ''}`,
+        results: allResults,
+        summary: { total: entries.length, success, errors },
       });
-
-      const data = await res.json();
-      if (!res.ok) throw new Error(data.error);
-      setUploadResult(data);
+      storage.from('vehicle-templates').remove([zipPath]).catch(() => {});
     } catch (err: any) {
       setError(err.message || 'Upload failed');
     }
+    setUploadNote('');
     setUploading(false);
   };
 
@@ -322,10 +356,10 @@ export default function BulkUploadPage() {
 
       {/* Tab Bar */}
       <div style={{ display: 'flex', gap: '4px', marginBottom: '14px', background: 'var(--card)', borderRadius: '10px', padding: '3px' }}>
-        <button onClick={() => { setTab('templates'); setTemplateRows([]); setProofRows([]); setZipFile(null); setUploadResult(null); setError(''); }} style={{ flex: 1, padding: '10px', borderRadius: '8px', fontSize: '13px', fontWeight: 700, background: tab === 'templates' ? 'var(--tab-active-bg)' : 'transparent', border: 'none', color: tab === 'templates' ? 'var(--text-primary)' : 'var(--text-muted)' }}>
+        <button onClick={() => { setTab('templates'); setTemplateRows([]); setProofRows([]); setZipPath(null); setUploadResult(null); setError(''); }} style={{ flex: 1, padding: '10px', borderRadius: '8px', fontSize: '13px', fontWeight: 700, background: tab === 'templates' ? 'var(--tab-active-bg)' : 'transparent', border: 'none', color: tab === 'templates' ? 'var(--text-primary)' : 'var(--text-muted)' }}>
           Vehicle Templates
         </button>
-        <button onClick={() => { setTab('proofs'); setTemplateRows([]); setProofRows([]); setZipFile(null); setUploadResult(null); setError(''); }} style={{ flex: 1, padding: '10px', borderRadius: '8px', fontSize: '13px', fontWeight: 700, background: tab === 'proofs' ? 'var(--tab-active-bg)' : 'transparent', border: 'none', color: tab === 'proofs' ? 'var(--text-primary)' : 'var(--text-muted)' }}>
+        <button onClick={() => { setTab('proofs'); setTemplateRows([]); setProofRows([]); setZipPath(null); setUploadResult(null); setError(''); }} style={{ flex: 1, padding: '10px', borderRadius: '8px', fontSize: '13px', fontWeight: 700, background: tab === 'proofs' ? 'var(--tab-active-bg)' : 'transparent', border: 'none', color: tab === 'proofs' ? 'var(--text-primary)' : 'var(--text-muted)' }}>
           Proofs
         </button>
       </div>
@@ -505,7 +539,7 @@ export default function BulkUploadPage() {
               boxShadow: '0 4px 16px rgba(238,49,32,0.3)',
             }}
           >
-            {uploading ? 'Uploading...' : `Upload ${selectedTemplateCount} Template${selectedTemplateCount !== 1 ? 's' : ''}`}
+            {uploading ? (uploadNote || 'Uploading...') : `Upload ${selectedTemplateCount} Template${selectedTemplateCount !== 1 ? 's' : ''}`}
           </button>
         </div>
       )}
@@ -635,7 +669,7 @@ export default function BulkUploadPage() {
               boxShadow: '0 4px 16px rgba(238,49,32,0.3)',
             }}
           >
-            {uploading ? 'Uploading...' : `Upload ${selectedProofCount} Proof${selectedProofCount !== 1 ? 's' : ''}`}
+            {uploading ? (uploadNote || 'Uploading...') : `Upload ${selectedProofCount} Proof${selectedProofCount !== 1 ? 's' : ''}`}
           </button>
         </div>
       )}
@@ -644,7 +678,7 @@ export default function BulkUploadPage() {
       <div style={{ display: 'flex', gap: '8px', marginTop: '14px' }}>
         {(templateRows.length > 0 || proofRows.length > 0 || uploadResult) && (
           <button
-            onClick={() => { setTemplateRows([]); setProofRows([]); setZipFile(null); setUploadResult(null); setError(''); }}
+            onClick={() => { setTemplateRows([]); setProofRows([]); setZipPath(null); setUploadResult(null); setError(''); }}
             style={{ flex: 1, padding: '10px', borderRadius: '10px', border: '1px solid var(--border)', background: 'transparent', color: 'var(--text-secondary)', fontSize: '13px', fontWeight: 700 }}
           >
             Start Over
