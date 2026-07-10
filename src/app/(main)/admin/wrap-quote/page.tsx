@@ -5,6 +5,7 @@ import { createClient } from '@/lib/supabase-browser';
 import { useAuth } from '@/components/AuthProvider';
 import { useDialog } from '@/components/DialogProvider';
 import { storage } from '@/lib/storage';
+import { apiFetch } from '@/lib/api-client';
 import { theme } from '@/lib/theme';
 
 // Manual wrap-quote estimator (WrapUP-style): pick a 1:20 vehicle outline
@@ -172,6 +173,7 @@ export default function WrapQuotePage() {
   const [calibrating, setCalibrating] = useState(false);
   const [calibStatus, setCalibStatus] = useState('');
   const [clearing, setClearing] = useState(false);
+  const [clearStatus, setClearStatus] = useState('');
 
   // eslint-disable-next-line react-hooks/exhaustive-deps -- load once on mount
   useEffect(() => { loadAll(); }, []);
@@ -438,9 +440,8 @@ export default function WrapQuotePage() {
     try {
       const id = await saveQuote();
       if (!id) return;
-      const res = await fetch('/api/wrap-quote/send', {
+      const res = await apiFetch('/api/wrap-quote/send', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ quoteId: id }),
       });
       const data = await res.json();
@@ -535,25 +536,35 @@ export default function WrapQuotePage() {
     setTemplates(prev => prev.map(x => x.id === t.id ? { ...x, is_active: t.is_active === false } : x));
   };
 
-  // Wipe the template library ahead of a fresh bulk import. Templates that a
-  // quote still references are retired (kept for history) instead of deleted.
+  // Wipe the template library ahead of a fresh bulk import. The server works
+  // in small batches (timeout-safe for libraries of thousands), so loop until
+  // it reports nothing left. Templates a quote still references are retired
+  // (kept for history) instead of deleted.
   const clearLibrary = async () => {
     if (!(await dialog.confirm(
       `Delete the entire template library (${templates.length} template${templates.length !== 1 ? 's' : ''})? Templates used by existing quotes are kept but retired. This cannot be undone.`,
       { destructive: true, confirmLabel: 'Delete All' }
     ))) return;
     setClearing(true);
+    setClearStatus('Deleting…');
+    let deleted = 0, retired = 0;
     try {
-      const res = await fetch('/api/admin/clear-templates', { method: 'POST' });
-      const data = await res.json();
-      if (!res.ok || !data.success) {
-        await dialog.alert(`Failed: ${data.error || 'Unknown error'}`);
-      } else {
-        await dialog.alert(`Cleared — ${data.deleted} deleted${data.retired ? `, ${data.retired} retired (still referenced by quotes)` : ''}.`);
-        await loadAll();
+      for (let batch = 0; batch < 1000; batch++) {
+        const res = await apiFetch('/api/admin/clear-templates', { method: 'POST' });
+        const data = await res.json();
+        if (!res.ok || !data.success) {
+          setClearStatus(`Failed: ${data.error || 'Unknown error'}`);
+          return;
+        }
+        deleted += data.deleted;
+        retired += data.retired;
+        if (data.remaining <= 0) break;
+        setClearStatus(`Deleted ${deleted} — ${data.remaining} to go…`);
       }
+      setClearStatus(`Done — ${deleted} deleted${retired ? `, ${retired} retired (still referenced by quotes)` : ''}.`);
+      await loadAll();
     } catch (e: any) {
-      await dialog.alert(`Failed: ${e.message}`);
+      setClearStatus(`Failed: ${e.message}`);
     } finally {
       setClearing(false);
     }
@@ -571,9 +582,8 @@ export default function WrapQuotePage() {
     let calibrated = 0, skipped = 0;
     try {
       do {
-        const res: Response = await fetch('/api/admin/calibrate-templates', {
+        const res: Response = await apiFetch('/api/admin/calibrate-templates', {
           method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ cursor }),
         });
         const data = await res.json();
@@ -1127,8 +1137,8 @@ export default function WrapQuotePage() {
                 <button onClick={clearLibrary} disabled={clearing} style={btnStyle('#ef4444', 'rgba(239,68,68,0.08)')}>
                   {clearing ? 'Deleting…' : 'Delete All Templates'}
                 </button>
-                <span style={{ fontSize: '10px', color: 'var(--text-muted)' }}>
-                  Clears the library for a fresh bulk import. Templates already used on a quote are retired, not deleted.
+                <span style={{ fontSize: '10px', fontWeight: clearStatus ? 700 : 400, color: clearStatus ? 'var(--text-secondary)' : 'var(--text-muted)' }}>
+                  {clearStatus || 'Clears the library for a fresh bulk import. Templates already used on a quote are retired, not deleted.'}
                 </span>
               </div>
             )}
