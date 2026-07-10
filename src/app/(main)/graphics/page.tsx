@@ -4,6 +4,7 @@ import { useState, useEffect, useRef } from 'react';
 import { useRouter, useSearchParams } from 'next/navigation';
 import { createClient } from '@/lib/supabase-browser';
 import { storage } from '@/lib/storage';
+import { apiFetch } from '@/lib/api-client';
 import { useAuth } from '@/components/AuthProvider';
 import { useDialog } from '@/components/DialogProvider';
 import { theme } from '@/lib/theme';
@@ -590,36 +591,18 @@ export default function GraphicsPage() {
         }).catch(() => {});
       }
 
-      const { data: prefs } = await supabase
-        .from('notification_preferences')
-        .select('user_id, notify_status_change, notify_shipped, custom_statuses');
-
-      if (prefs) {
-        const statusPingUserIds = prefs
-          .filter((p: any) => {
-            if (p.user_id === user?.id) return false;
-            if (newStatus === 'shipped' && p.notify_shipped) return true;
-            if (p.notify_status_change) return true;
-            if (p.custom_statuses?.includes(newStatus)) return true;
-            return false;
-          })
-          .map((p: any) => p.user_id);
-
-        if (statusPingUserIds.length > 0) {
-          fetch('/api/notifications/send', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-              userIds: statusPingUserIds,
-              type: 'graphics_status',
-              title: `${job.title} → ${GRAPHICS_STATUS_LABELS[newStatus]}`,
-              body: `Job #${job.job_number || job.id.slice(0, 8)} status changed to ${GRAPHICS_STATUS_LABELS[newStatus]}`,
-              url: `/graphics?id=${job.id}`,
-              excludeUserId: user?.id,
-            }),
-          }).catch(() => {});
-        }
-      }
+      // Assignee + preference-gated status notifications, computed
+      // server-side (assignees always hear about their jobs; opted-in users
+      // get the generic status ping; nobody gets both).
+      apiFetch('/api/graphics/notify-assignees', {
+        method: 'POST',
+        body: JSON.stringify({
+          jobId: job.id,
+          kind: 'status',
+          newStatus,
+          statusLabel: GRAPHICS_STATUS_LABELS[newStatus],
+        }),
+      }).catch(() => {});
 
       // Sync calendar (updates status in description, or deletes if cancelled)
       if (job.scheduled_install_date || job.calendar_event_id) {
@@ -649,6 +632,11 @@ export default function GraphicsPage() {
     // Surface failures (RLS denials included) — a silently vanishing note
     // reads as data loss to the person typing it.
     if (error) { await dialog.alert(`Note failed to save: ${error.message}`); return; }
+    // Everyone assigned to the job hears about new notes (fire-and-forget).
+    apiFetch('/api/graphics/notify-assignees', {
+      method: 'POST',
+      body: JSON.stringify({ jobId, kind: 'note', note: newNote.trim() }),
+    }).catch(() => {});
     setNewNote('');
     await loadHistory(jobId);
   };
