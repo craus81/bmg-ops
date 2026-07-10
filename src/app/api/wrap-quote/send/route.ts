@@ -3,6 +3,7 @@ import { createClient } from '@supabase/supabase-js';
 import { requireStaff } from '@/lib/api-auth';
 import { sendEmail } from '@/lib/resend';
 import { validateBody, z } from '@/lib/validate';
+import { r2Get, r2PublicUrl } from '@/lib/r2';
 
 export const dynamic = 'force-dynamic';
 
@@ -139,12 +140,14 @@ export async function POST(req: NextRequest) {
     .maybeSingle();
   const company = settings?.company || {};
 
-  // Coverage diagram rendered by the estimator at save time (public bucket)
+  // Coverage diagram / logo / attachments live in R2, not Supabase storage —
+  // lib/storage (the client uploader) is an R2 shim, so URLs and reads here
+  // must go through lib/r2 with the bucket name as the key prefix.
   const diagramUrl = quote.diagram_path
-    ? supabase.storage.from('vehicle-templates').getPublicUrl(quote.diagram_path).data.publicUrl
+    ? r2PublicUrl('vehicle-templates', quote.diagram_path)
     : null;
   const logoUrl = company?.logo_path
-    ? supabase.storage.from('vehicle-templates').getPublicUrl(company.logo_path).data.publicUrl
+    ? r2PublicUrl('vehicle-templates', company.logo_path)
     : null;
 
   // Files the sender attached to this quote (proofs, vinyl specs, …).
@@ -153,13 +156,18 @@ export async function POST(req: NextRequest) {
   const attachments: { filename: string; content: Buffer; contentType?: string }[] = [];
   for (const a of Array.isArray(quote.attachments) ? quote.attachments : []) {
     if (!a?.path) continue;
-    const { data, error } = await supabase.storage.from('vehicle-templates').download(a.path);
-    if (error || !data) {
+    const result = await r2Get('vehicle-templates', a.path);
+    if (!result.success || !result.body) {
       return NextResponse.json({ error: `Attachment "${a.name || a.path}" could not be loaded — remove and re-attach it.` }, { status: 502 });
+    }
+    // r2Get returns a Node.js Readable stream from @aws-sdk/client-s3.
+    const chunks: Buffer[] = [];
+    for await (const chunk of result.body as any) {
+      chunks.push(chunk instanceof Buffer ? chunk : Buffer.from(chunk));
     }
     attachments.push({
       filename: a.name || a.path.split('/').pop() || 'attachment',
-      content: Buffer.from(await data.arrayBuffer()),
+      content: Buffer.concat(chunks),
       contentType: a.type || undefined,
     });
   }
