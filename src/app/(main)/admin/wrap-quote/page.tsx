@@ -28,13 +28,25 @@ interface Template {
   is_active: boolean | null;
 }
 
-interface Substrate {
+// "Film" is the material (a substrate is the surface being wrapped); the
+// table keeps its historical wrap_substrates name. A film may be paired with
+// an overlaminate that prices as one combined material, and carries a color
+// so mixed-film vehicles read at a glance on the canvas.
+interface Film {
   id: string;
   name: string;
   price_per_sqft: number;
   bleed_in: number;
+  laminate_name: string | null;
+  laminate_price_per_sqft: number;
+  labor_per_sqft: number;
+  color: string | null;
   is_active: boolean | null;
 }
+
+const FILM_COLORS = ['#06b6d4', '#a78bfa', '#f472b6', '#4ade80', '#fb923c', '#facc15', '#60a5fa', '#f87171'];
+const filmLabel = (f: Film) => f.laminate_name ? `${f.name} + ${f.laminate_name}` : f.name;
+const filmRate = (f: Film) => num(f.price_per_sqft) + num(f.laminate_price_per_sqft);
 
 interface LaborSection { flat: number; hourly: number; hours: number; extra: number }
 
@@ -127,7 +139,7 @@ export default function WrapQuotePage() {
   const [tab, setTab] = useState<Tab>('estimator');
   const [loading, setLoading] = useState(true);
   const [templates, setTemplates] = useState<Template[]>([]);
-  const [substrates, setSubstrates] = useState<Substrate[]>([]);
+  const [substrates, setSubstrates] = useState<Film[]>([]);
   const [settings, setSettings] = useState<Settings>({ company: {}, tax_rate: 0, design: EMPTY_LABOR, preparation: EMPTY_LABOR, installation: EMPTY_LABOR });
   const [history, setHistory] = useState<WrapQuote[]>([]);
 
@@ -163,7 +175,7 @@ export default function WrapQuotePage() {
 
   // ----- Pricing tab state (edit copies) -----
   const [subSel, setSubSel] = useState(''); // '' = new
-  const [subForm, setSubForm] = useState({ name: '', price_per_sqft: '', bleed_in: '' });
+  const [subForm, setSubForm] = useState({ name: '', price_per_sqft: '', bleed_in: '', laminate_name: '', laminate_price_per_sqft: '', labor_per_sqft: '', color: '' });
   const [savingSettings, setSavingSettings] = useState(false);
 
   // ----- Templates tab state -----
@@ -187,7 +199,7 @@ export default function WrapQuotePage() {
       supabase.from('wrap_quotes').select('*').order('created_at', { ascending: false }).limit(200),
     ]);
     setTemplates((tplRes.data || []) as Template[]);
-    setSubstrates((subRes.data || []) as Substrate[]);
+    setSubstrates((subRes.data || []) as Film[]);
     if (setRes.data) {
       setSettings({
         company: setRes.data.company || {},
@@ -238,26 +250,56 @@ export default function WrapQuotePage() {
     const bleed = sub ? num(sub.bleed_in) : 0;
     const trimArea = unitAreaSqft(m, 0);
     const billedArea = unitAreaSqft(m, bleed);
-    const unitPrice = billedArea * (sub ? num(sub.price_per_sqft) : 0);
+    const unitPrice = billedArea * (sub ? filmRate(sub) : 0);
     return { sub, trimArea, billedArea, unitPrice, lineTotal: unitPrice * Math.max(1, num(m.qty)) };
+  };
+
+  // Stable per-film color for canvas shapes; stored color wins, else palette.
+  const filmColor = (id: string | null) => {
+    const f = substrateById(id);
+    if (f?.color) return f.color;
+    const idx = Math.max(0, activeSubstrates.findIndex(x => x.id === id));
+    return FILM_COLORS[idx % FILM_COLORS.length];
+  };
+
+  // Per-quote install-labor rate overrides ($/sqft), keyed by film id.
+  // Empty string = use the film's default labor_per_sqft.
+  const [laborRates, setLaborRates] = useState<Record<string, string>>({});
+  const filmLaborRate = (f: Film) => {
+    const o = laborRates[f.id];
+    return o !== undefined && o !== '' ? num(o) : num(f.labor_per_sqft);
   };
 
   const totals = useMemo(() => {
     let area = 0, materials = 0;
+    // Billed (with-bleed) square footage per film — drives material buying
+    // and per-film install labor.
+    const byFilm = new Map<string, { film: Film; sqft: number }>();
     for (const m of measurements) {
       const p = measurementPricing(m);
-      area += p.trimArea * Math.max(1, num(m.qty));
+      const qty = Math.max(1, num(m.qty));
+      area += p.trimArea * qty;
       materials += p.lineTotal;
+      if (p.sub) {
+        const cur = byFilm.get(p.sub.id) || { film: p.sub, sqft: 0 };
+        cur.sqft += p.billedArea * qty;
+        byFilm.set(p.sub.id, cur);
+      }
     }
+    const filmTotals = [...byFilm.values()].map(({ film, sqft }) => ({
+      id: film.id, label: filmLabel(film), sqft,
+      laborRate: filmLaborRate(film), laborTotal: sqft * filmLaborRate(film),
+    }));
+    const filmLabor = filmTotals.reduce((sum, f) => sum + f.laborTotal, 0);
     const design = laborSectionTotal(settings.design);
     const prep = laborSectionTotal(settings.preparation);
     const install = laborSectionTotal(settings.installation);
-    const labor = design + prep + install;
+    const labor = design + prep + install + filmLabor;
     const subtotal = materials + labor;
     const tax = subtotal * num(settings.tax_rate) / 100;
-    return { area, materials, design, prep, install, labor, subtotal, tax, total: subtotal + tax };
+    return { area, materials, filmTotals, filmLabor, design, prep, install, labor, subtotal, tax, total: subtotal + tax };
     // eslint-disable-next-line react-hooks/exhaustive-deps -- substrates feed measurementPricing
-  }, [measurements, settings, substrates]);
+  }, [measurements, settings, substrates, laborRates]);
 
   // ----- Canvas drawing -----
   const svgPoint = (e: React.PointerEvent): { x: number; y: number } | null => {
@@ -280,13 +322,28 @@ export default function WrapQuotePage() {
   };
 
   const onPointerMove = (e: React.PointerEvent) => {
-    if (!drag) return;
     const p = svgPoint(e);
     if (!p) return;
+    if (editDrag) {
+      const dx = p.x - editDrag.grabX, dy = p.y - editDrag.grabY;
+      const ppi = num(template?.px_per_in);
+      setMeasurements(prev => prev.map(m => {
+        if (m.id !== editDrag.id || !m.rect) return m;
+        if (editDrag.kind === 'move') {
+          return { ...m, rect: { ...m.rect, x: editDrag.rect.x + dx, y: editDrag.rect.y + dy } };
+        }
+        const w = Math.max(4, editDrag.rect.w + dx);
+        const h = Math.max(4, editDrag.rect.h + dy);
+        return { ...m, rect: { ...m.rect, w, h }, dim1_in: ppi > 0 ? w / ppi : m.dim1_in, dim2_in: ppi > 0 ? h / ppi : m.dim2_in };
+      }));
+      return;
+    }
+    if (!drag) return;
     setDrag(d => d ? { ...d, x2: p.x, y2: p.y } : d);
   };
 
   const onPointerUp = () => {
+    if (editDrag) { setEditDrag(null); return; }
     if (!drag || !imgDim) { setDrag(null); return; }
     const d = drag;
     setDrag(null);
@@ -357,7 +414,31 @@ export default function WrapQuotePage() {
   };
 
   const updateMeasurement = (id: string, patch: Partial<Measurement>) => {
-    setMeasurements(prev => prev.map(m => m.id === id ? { ...m, ...patch } : m));
+    setMeasurements(prev => prev.map(m => {
+      if (m.id !== id) return m;
+      const next = { ...m, ...patch };
+      // Typing a width/height reshapes the drawn box to match (boxes only —
+      // roof/hood line pairs are numeric-first).
+      const ppi = num(template?.px_per_in);
+      if (next.type === 'box' && next.rect && ppi > 0 && ('dim1_in' in patch || 'dim2_in' in patch)) {
+        next.rect = { ...next.rect, w: Math.max(2, num(next.dim1_in) * ppi), h: Math.max(2, num(next.dim2_in) * ppi) };
+      }
+      return next;
+    }));
+  };
+
+  // Move/resize drag on already-drawn boxes (select mode). Move keeps the
+  // dimensions; dragging the corner handle resizes and rewrites the inches.
+  const [editDrag, setEditDrag] = useState<{ kind: 'move' | 'resize'; id: string; grabX: number; grabY: number; rect: { x: number; y: number; w: number; h: number } } | null>(null);
+
+  const beginEditDrag = (e: React.PointerEvent, m: Measurement, kind: 'move' | 'resize') => {
+    if (tool !== 'select' || !m.rect) return;
+    e.stopPropagation();
+    const pt = svgPoint(e);
+    if (!pt) return;
+    setSelectedId(m.id);
+    (e.target as Element).setPointerCapture?.(e.pointerId);
+    setEditDrag({ kind, id: m.id, grabX: pt.x, grabY: pt.y, rect: { ...m.rect } });
   };
 
   const removeMeasurement = (id: string) => {
@@ -385,7 +466,9 @@ export default function WrapQuotePage() {
         qty: Math.max(1, num(m.qty)),
         dim1_in: num(m.dim1_in),
         dim2_in: num(m.dim2_in),
-        substrate: p.sub ? { id: p.sub.id, name: p.sub.name, price_per_sqft: num(p.sub.price_per_sqft), bleed_in: num(p.sub.bleed_in) } : null,
+        // Snapshot stores the combined film+laminate label and effective rate
+        // so quote history, preview, and the emailed document all match.
+        substrate: p.sub ? { id: p.sub.id, name: filmLabel(p.sub), price_per_sqft: filmRate(p.sub), bleed_in: num(p.sub.bleed_in), film_name: p.sub.name, laminate_name: p.sub.laminate_name } : null,
         trim_area_sqft: p.trimArea,
         billed_area_sqft: p.billedArea,
         unit_price: p.unitPrice,
@@ -405,7 +488,9 @@ export default function WrapQuotePage() {
         design: { ...settings.design, total: totals.design },
         preparation: { ...settings.preparation, total: totals.prep },
         installation: { ...settings.installation, total: totals.install },
+        films: totals.filmTotals.map(f => ({ id: f.id, label: f.label, sqft: f.sqft, rate: f.laborRate, total: f.laborTotal })),
       },
+      film_totals: totals.filmTotals.map(f => ({ id: f.id, label: f.label, sqft: f.sqft })),
       total_area_sqft: totals.area,
       materials_total: totals.materials,
       labor_total: totals.labor,
@@ -463,21 +548,33 @@ export default function WrapQuotePage() {
   const pickSubstrate = (id: string) => {
     setSubSel(id);
     const s = substrates.find(x => x.id === id);
-    setSubForm(s ? { name: s.name, price_per_sqft: String(s.price_per_sqft), bleed_in: String(s.bleed_in) } : { name: '', price_per_sqft: '', bleed_in: '' });
+    setSubForm(s
+      ? { name: s.name, price_per_sqft: String(s.price_per_sqft), bleed_in: String(s.bleed_in), laminate_name: s.laminate_name || '', laminate_price_per_sqft: s.laminate_price_per_sqft ? String(s.laminate_price_per_sqft) : '', labor_per_sqft: s.labor_per_sqft ? String(s.labor_per_sqft) : '', color: s.color || '' }
+      : { name: '', price_per_sqft: '', bleed_in: '', laminate_name: '', laminate_price_per_sqft: '', labor_per_sqft: '', color: '' });
   };
 
   const saveSubstrate = async () => {
-    if (!subForm.name.trim()) { await dialog.alert('Substrate needs a name.'); return; }
-    const row = { name: subForm.name.trim(), price_per_sqft: num(subForm.price_per_sqft), bleed_in: num(subForm.bleed_in), updated_at: new Date().toISOString() };
+    if (!subForm.name.trim()) { await dialog.alert('Film needs a name.'); return; }
+    const row = {
+      name: subForm.name.trim(),
+      price_per_sqft: num(subForm.price_per_sqft),
+      bleed_in: num(subForm.bleed_in),
+      laminate_name: subForm.laminate_name.trim() || null,
+      laminate_price_per_sqft: num(subForm.laminate_price_per_sqft),
+      labor_per_sqft: num(subForm.labor_per_sqft),
+      // Default a palette color for new films so boxes are distinct from day one
+      color: subForm.color || FILM_COLORS[substrates.length % FILM_COLORS.length],
+      updated_at: new Date().toISOString(),
+    };
     const { error } = subSel
       ? await supabase.from('wrap_substrates').update(row).eq('id', subSel)
       : await supabase.from('wrap_substrates').insert({ ...row, is_active: true });
     if (error) { await dialog.alert(`Save failed: ${error.message}`); return; }
-    setSubSel(''); setSubForm({ name: '', price_per_sqft: '', bleed_in: '' });
+    setSubSel(''); setSubForm({ name: '', price_per_sqft: '', bleed_in: '', laminate_name: '', laminate_price_per_sqft: '', labor_per_sqft: '', color: '' });
     await loadAll();
   };
 
-  const toggleSubstrate = async (s: Substrate) => {
+  const toggleSubstrate = async (s: Film) => {
     await supabase.from('wrap_substrates').update({ is_active: s.is_active === false }).eq('id', s.id);
     await loadAll();
   };
@@ -708,6 +805,17 @@ export default function WrapQuotePage() {
               <td style={{ padding: '5px 6px', textAlign: 'right', borderBottom: `1px solid ${theme.border}` }}>{fmt(l.line_total)}</td>
             </tr>
           ))}
+          {(q.labor?.films || []).filter((f: any) => num(f.total) > 0).map((f: any) => (
+            <tr key={`labor-${f.id}`} style={{ color: 'var(--text-primary)' }}>
+              <td style={{ padding: '5px 6px', borderBottom: `1px solid ${theme.border}` }}>
+                Install — {f.label}
+                <span style={{ color: 'var(--text-muted)', marginLeft: '6px', fontSize: '9px' }}>{fmt(f.sqft)} ft² @ ${fmt(f.rate)}/ft²</span>
+              </td>
+              <td style={{ padding: '5px 6px', textAlign: 'right', borderBottom: `1px solid ${theme.border}` }}>1</td>
+              <td style={{ padding: '5px 6px', textAlign: 'right', borderBottom: `1px solid ${theme.border}` }}>{fmt(f.total)}</td>
+              <td style={{ padding: '5px 6px', textAlign: 'right', borderBottom: `1px solid ${theme.border}` }}>{fmt(f.total)}</td>
+            </tr>
+          ))}
           {(['design', 'preparation', 'installation'] as const).map(k => {
             const sec = q.labor?.[k];
             if (!sec || !num(sec.total)) return null;
@@ -723,6 +831,12 @@ export default function WrapQuotePage() {
           })}
         </tbody>
       </table>
+      {(q as any).film_totals?.length > 0 && (
+        <div style={{ marginTop: '8px', fontSize: '10px', color: 'var(--text-secondary)' }}>
+          <b style={{ color: 'var(--text-primary)' }}>Film usage:</b>{' '}
+          {(q as any).film_totals.map((f: any) => `${f.label} — ${fmt(f.sqft)} ft²`).join('  ·  ')}
+        </div>
+      )}
       <div style={{ marginTop: '10px', display: 'flex', flexDirection: 'column', alignItems: 'flex-end', gap: '3px', fontSize: '12px', color: 'var(--text-primary)' }}>
         <div>Subtotal <b style={{ marginLeft: '14px' }}>${fmt(q.subtotal)}</b></div>
         <div>Tax ({fmt(q.tax_rate)}%) <b style={{ marginLeft: '14px' }}>${fmt(q.tax_amount)}</b></div>
@@ -790,7 +904,6 @@ export default function WrapQuotePage() {
                 <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '6px', marginBottom: '10px' }}>
                   {([
                     { id: 'box' as Tool, label: 'Draw Box' },
-                    { id: 'circle' as Tool, label: 'Draw Circle' },
                     { id: 'roof' as Tool, label: 'Draw Roof' },
                     { id: 'hood' as Tool, label: 'Draw Hood' },
                   ]).map(t => (
@@ -808,6 +921,15 @@ export default function WrapQuotePage() {
                   background: tool === 'calibrate' ? 'rgba(251,191,36,0.15)' : 'transparent',
                   border: '1px solid rgba(251,191,36,0.35)', color: '#fbbf24',
                 }}>{template.px_per_in ? 'Recalibrate Scale' : 'Calibrate Scale'}</button>
+
+                {(tool === 'roof' || tool === 'hood') && !pendingPair && !drag && (
+                  <div style={{ padding: '8px', borderRadius: '8px', background: 'rgba(6,182,212,0.08)', border: '1px solid rgba(6,182,212,0.25)', fontSize: '10px', color: 'var(--text-secondary)', marginBottom: '10px', lineHeight: 1.5 }}>
+                    <b style={{ color: '#06b6d4' }}>How Draw {tool === 'roof' ? 'Roof' : 'Hood'} works</b> (for templates without a top view):<br />
+                    <b style={{ color: '#ef4444' }}>1.</b> Drag the <b style={{ color: '#ef4444' }}>red line</b> along the {tool} in the <b>side view</b> — front edge to back edge (its length).<br />
+                    <b style={{ color: '#3b82f6' }}>2.</b> Drag the <b style={{ color: '#3b82f6' }}>blue line</b> across the {tool} in the <b>front or back view</b> (its width).<br />
+                    Area = length × width. Both numbers stay editable afterward.
+                  </div>
+                )}
 
                 {pendingPair && (
                   <div style={{ padding: '8px', borderRadius: '8px', background: 'rgba(6,182,212,0.08)', border: '1px solid rgba(6,182,212,0.25)', fontSize: '10px', fontWeight: 700, color: '#06b6d4', marginBottom: '10px' }}>
@@ -835,7 +957,10 @@ export default function WrapQuotePage() {
                     background: selectedId === m.id ? 'rgba(6,182,212,0.1)' : 'var(--subtle-bg)',
                     border: selectedId === m.id ? '1px solid rgba(6,182,212,0.35)' : '1px solid var(--border)',
                   }}>
-                    <span style={{ fontSize: '11px', fontWeight: 700, color: 'var(--text-primary)' }}>{m.name}</span>
+                    <span style={{ display: 'flex', alignItems: 'center', gap: '6px', minWidth: 0 }}>
+                      <span style={{ width: '9px', height: '9px', borderRadius: '3px', background: filmColor(m.substrate_id), flexShrink: 0 }} />
+                      <span style={{ fontSize: '11px', fontWeight: 700, color: 'var(--text-primary)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{m.name}</span>
+                    </span>
                     <button onClick={e => { e.stopPropagation(); removeMeasurement(m.id); }} style={{ background: 'none', border: 'none', color: '#ef4444', fontSize: '11px', fontWeight: 700, cursor: 'pointer' }}>✕</button>
                   </div>
                 ))}
@@ -853,10 +978,10 @@ export default function WrapQuotePage() {
                       <input type="number" value={selected.dim2_in ? Number(selected.dim2_in.toFixed(2)) : ''} onChange={e => updateMeasurement(selected.id, { dim2_in: num(e.target.value) })} style={{ ...inputStyle, marginBottom: '6px' }} />
                       <div style={labelStyle}>Quantity</div>
                       <input type="number" min={1} value={selected.qty} onChange={e => updateMeasurement(selected.id, { qty: Math.max(1, Math.round(num(e.target.value))) })} style={{ ...inputStyle, marginBottom: '6px' }} />
-                      <div style={labelStyle}>Substrate</div>
+                      <div style={labelStyle}>Film</div>
                       <select value={selected.substrate_id || ''} onChange={e => updateMeasurement(selected.id, { substrate_id: e.target.value || null })} style={{ ...inputStyle, marginBottom: '6px' }}>
                         <option value="">— none —</option>
-                        {activeSubstrates.map(s => <option key={s.id} value={s.id}>{s.name} (${fmt(s.price_per_sqft)}/ft²)</option>)}
+                        {activeSubstrates.map(s => <option key={s.id} value={s.id}>{filmLabel(s)} (${fmt(filmRate(s))}/ft²)</option>)}
                       </select>
                       <div style={{ fontSize: '10px', color: 'var(--text-secondary)', fontWeight: 700 }}>
                         Area: {fmt(p.trimArea)} ft²{p.sub && num(p.sub.bleed_in) > 0 ? ` · billed ${fmt(p.billedArea)} ft² with ${p.sub.bleed_in}" bleed` : ''}
@@ -894,13 +1019,24 @@ export default function WrapQuotePage() {
                     >
                       {measurements.map(m => {
                         const sel = m.id === selectedId;
-                        const stroke = sel ? '#f59e0b' : '#06b6d4';
-                        const fill = sel ? 'rgba(245,158,11,0.18)' : 'rgba(6,182,212,0.15)';
+                        // Boxes wear their film's color so mixed-film vehicles
+                        // (print layer + reflective on top) read at a glance.
+                        const fc = filmColor(m.substrate_id);
+                        const stroke = sel ? '#f59e0b' : fc;
+                        const fill = sel ? 'rgba(245,158,11,0.18)' : fc + '26';
                         const fontSize = imgDim.w / 70;
                         return (
-                          <g key={m.id} onPointerDown={e => { if (tool === 'select') { e.stopPropagation(); setSelectedId(m.id); } }} style={{ cursor: 'pointer' }}>
+                          <g key={m.id} onPointerDown={e => { if (tool === 'select') { if (m.type === 'box' && m.rect) { beginEditDrag(e, m, 'move'); } else { e.stopPropagation(); setSelectedId(m.id); } } }} style={{ cursor: tool === 'select' ? 'move' : 'pointer' }}>
                             {m.type === 'box' && m.rect && (
                               <rect x={m.rect.x} y={m.rect.y} width={m.rect.w} height={m.rect.h} fill={fill} stroke={stroke} strokeWidth={2} vectorEffect="non-scaling-stroke" />
+                            )}
+                            {m.type === 'box' && m.rect && sel && (
+                              <circle
+                                cx={m.rect.x + m.rect.w} cy={m.rect.y + m.rect.h} r={Math.max(6, imgDim.w / 160)}
+                                fill="#f59e0b" stroke="#fff" strokeWidth={1.5} vectorEffect="non-scaling-stroke"
+                                style={{ cursor: 'nwse-resize' }}
+                                onPointerDown={e => beginEditDrag(e, m, 'resize')}
+                              />
                             )}
                             {m.type === 'circle' && m.rect && (
                               <ellipse cx={m.rect.x + m.rect.w / 2} cy={m.rect.y + m.rect.h / 2} rx={m.rect.w / 2} ry={m.rect.h / 2} fill={fill} stroke={stroke} strokeWidth={2} vectorEffect="non-scaling-stroke" />
@@ -982,6 +1118,23 @@ export default function WrapQuotePage() {
                 <input value={customer[k] || ''} onChange={e => { setCustomer({ ...customer, [k]: e.target.value }); if (k === 'name') setCustomerId(null); }} style={inputStyle} />
               </div>
             ))}
+            {totals.filmTotals.length > 0 && (<>
+              {sectionHead('Install Labor (per film)')}
+              {totals.filmTotals.map(f => (
+                <div key={f.id} style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '6px' }}>
+                  <span style={{ flex: 1, fontSize: '11px', fontWeight: 700, color: 'var(--text-primary)', minWidth: 0 }}>
+                    {f.label}
+                    <span style={{ color: 'var(--text-muted)', fontWeight: 600, marginLeft: '6px' }}>{fmt(f.sqft)} ft²</span>
+                  </span>
+                  <span style={{ fontSize: '11px', color: 'var(--text-muted)' }}>$</span>
+                  <input type="number" value={laborRates[f.id] ?? (num(substrateById(f.id)?.labor_per_sqft) || '')}
+                    onChange={e => setLaborRates(prev => ({ ...prev, [f.id]: e.target.value }))}
+                    placeholder="0" style={{ ...inputStyle, width: '70px' }} />
+                  <span style={{ fontSize: '10px', color: 'var(--text-muted)', width: '34px' }}>/ft²</span>
+                  <span style={{ fontSize: '11px', fontWeight: 700, color: '#22c55e', width: '70px', textAlign: 'right' }}>${fmt(f.laborTotal)}</span>
+                </div>
+              ))}
+            </>)}
             {sectionHead('Project')}
             <div style={{ marginBottom: '6px' }}>
               <div style={labelStyle}>Type</div>
@@ -1047,26 +1200,49 @@ export default function WrapQuotePage() {
       {/* ================= PRICING ================= */}
       {tab === 'pricing' && (
         <div style={{ background: 'var(--card)', border: `1px solid ${theme.border}`, borderRadius: '12px', padding: '16px', maxWidth: '640px' }}>
-          {sectionHead('Substrates')}
+          {sectionHead('Films')}
           <div style={{ display: 'flex', gap: '8px', alignItems: 'flex-end', flexWrap: 'wrap', marginBottom: '8px' }}>
             <div>
-              <div style={labelStyle}>Substrate</div>
+              <div style={labelStyle}>Film</div>
               <select value={subSel} onChange={e => pickSubstrate(e.target.value)} style={{ ...inputStyle, width: '170px' }}>
                 <option value="">— New —</option>
-                {substrates.map(s => <option key={s.id} value={s.id}>{s.name}{s.is_active === false ? ' (inactive)' : ''}</option>)}
+                {substrates.map(s => <option key={s.id} value={s.id}>{filmLabel(s)}{s.is_active === false ? ' (inactive)' : ''}</option>)}
               </select>
             </div>
             <div>
-              <div style={labelStyle}>Name</div>
-              <input value={subForm.name} onChange={e => setSubForm({ ...subForm, name: e.target.value })} placeholder="e.g. Cast vinyl + laminate" style={{ ...inputStyle, width: '190px' }} />
+              <div style={labelStyle}>Film Name</div>
+              <input value={subForm.name} onChange={e => setSubForm({ ...subForm, name: e.target.value })} placeholder="e.g. 3M IJ280" style={{ ...inputStyle, width: '150px' }} />
             </div>
             <div>
-              <div style={labelStyle}>Price ($/ft²)</div>
-              <input type="number" value={subForm.price_per_sqft} onChange={e => setSubForm({ ...subForm, price_per_sqft: e.target.value })} style={{ ...inputStyle, width: '90px' }} />
+              <div style={labelStyle}>Film ($/ft²)</div>
+              <input type="number" value={subForm.price_per_sqft} onChange={e => setSubForm({ ...subForm, price_per_sqft: e.target.value })} style={{ ...inputStyle, width: '85px' }} />
+            </div>
+            <div>
+              <div style={labelStyle}>Laminate</div>
+              <input value={subForm.laminate_name} onChange={e => setSubForm({ ...subForm, laminate_name: e.target.value })} placeholder="e.g. 8428" style={{ ...inputStyle, width: '100px' }} />
+            </div>
+            <div>
+              <div style={labelStyle}>Laminate ($/ft²)</div>
+              <input type="number" value={subForm.laminate_price_per_sqft} onChange={e => setSubForm({ ...subForm, laminate_price_per_sqft: e.target.value })} style={{ ...inputStyle, width: '85px' }} />
             </div>
             <div>
               <div style={labelStyle}>Bleed (in)</div>
-              <input type="number" value={subForm.bleed_in} onChange={e => setSubForm({ ...subForm, bleed_in: e.target.value })} style={{ ...inputStyle, width: '80px' }} />
+              <input type="number" value={subForm.bleed_in} onChange={e => setSubForm({ ...subForm, bleed_in: e.target.value })} style={{ ...inputStyle, width: '75px' }} />
+            </div>
+            <div>
+              <div style={labelStyle}>Labor ($/ft²)</div>
+              <input type="number" value={subForm.labor_per_sqft} onChange={e => setSubForm({ ...subForm, labor_per_sqft: e.target.value })} style={{ ...inputStyle, width: '85px' }} />
+            </div>
+            <div>
+              <div style={labelStyle}>Box Color</div>
+              <div style={{ display: 'flex', gap: '4px', alignItems: 'center', padding: '6px 0' }}>
+                {FILM_COLORS.map(c => (
+                  <button key={c} onClick={() => setSubForm({ ...subForm, color: c })} title={c} style={{
+                    width: '18px', height: '18px', borderRadius: '5px', background: c, cursor: 'pointer',
+                    border: subForm.color === c ? '2px solid var(--text-primary)' : '2px solid transparent',
+                  }} />
+                ))}
+              </div>
             </div>
             <button onClick={saveSubstrate} style={btnStyle('#22c55e', 'rgba(34,197,94,0.1)')}>Save</button>
             {subSel && (
@@ -1076,7 +1252,7 @@ export default function WrapQuotePage() {
             )}
           </div>
           <div style={{ fontSize: '10px', color: 'var(--text-muted)', marginBottom: '16px' }}>
-            The price drives quote generation; bleed is extra print margin added to each side of a measured area before pricing.
+            Film + laminate price together as one material (e.g. IJ280 + 8428) and appear as one quote line. Bleed is extra print margin added to each side of a measured area. The color is what that film's boxes look like on the vehicle, so mixing films (print layer + reflective on top) stays readable.
           </div>
 
           {sectionHead('Taxes')}

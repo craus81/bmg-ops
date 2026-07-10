@@ -32,6 +32,10 @@ function buildQuoteHtml(quote: any, company: any): string {
     const detail = `${money(l.billed_area_sqft)} ft²${l.substrate?.name ? ` · ${esc(l.substrate.name)}` : ''}`;
     rows.push(`<tr>${cell(`${esc(l.name)} <span style="color:#6b7280;font-size:11px;">${detail}</span>`)}${cell(String(l.qty || 1), true)}${cell(money(l.unit_price), true)}${cell(money(l.line_total), true)}</tr>`);
   }
+  for (const f of quote.labor?.films || []) {
+    if (!(parseFloat(f.total) || 0)) continue;
+    rows.push(`<tr>${cell(`Install — ${esc(f.label)} <span style="color:#6b7280;font-size:11px;">${money(f.sqft)} ft² @ $${money(f.rate)}/ft²</span>`)}${cell('1', true)}${cell(money(f.total), true)}${cell(money(f.total), true)}</tr>`);
+  }
   const laborLabels: Record<string, string> = { design: 'Design', preparation: 'Preparation', installation: 'Installation' };
   for (const key of Object.keys(laborLabels)) {
     const sec = quote.labor?.[key];
@@ -88,6 +92,7 @@ function buildQuoteHtml(quote: any, company: any): string {
         <tr><td style="text-align:right;font-size:13px;color:#374151;padding:2px 10px;">Tax (${money(quote.tax_rate)}%)</td><td style="text-align:right;font-size:13px;color:#111827;padding:2px 10px;">$${money(quote.tax_amount)}</td></tr>
         <tr><td style="text-align:right;font-size:16px;font-weight:800;color:#111827;padding:6px 10px;">Total</td><td style="text-align:right;font-size:16px;font-weight:800;color:#059669;padding:6px 10px;">$${money(quote.total)}</td></tr>
       </table>
+      ${(quote.film_totals || []).length ? `<div style="margin-top:12px;font-size:11px;color:#6b7280;"><b style="color:#374151;">Film usage:</b> ${(quote.film_totals as any[]).map((f: any) => `${esc(f.label)} — ${money(f.sqft)} ft²`).join(' &middot; ')}</div>` : ''}
       ${quote.project_notes ? `<div style="margin-top:16px;font-size:12px;color:#374151;"><b>Project Notes:</b> ${esc(quote.project_notes)}</div>` : ''}
     </div>
     <div style="text-align:center;padding:14px;font-size:11px;color:#9ca3af;">Sent by ${esc(company?.name || 'BMG Fleet')}</div>
