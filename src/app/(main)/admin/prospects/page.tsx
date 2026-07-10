@@ -241,12 +241,12 @@ export default function ProspectsPage() {
   // "open quote" filter doesn't need to round-trip per prospect.
   const loadOpenQuoteCustomers = async () => {
     const { data } = await supabase
-      .from('quotes')
-      .select('customer_name')
+      .from('wrap_quotes')
+      .select('customer')
       .in('status', ['draft', 'sent']);
     const names = new Set<string>();
     for (const row of data || []) {
-      const name = (row as any).customer_name;
+      const name = (row as any).customer?.name;
       if (name) names.add(String(name).toLowerCase());
     }
     setOpenQuoteCustomers(names);

@@ -82,9 +82,9 @@ export async function GET(req: NextRequest) {
 
     // Quotes — search by quote number, customer, vehicle description
     supabase
-      .from('quotes')
-      .select('id, quote_number, customer_name, vehicle_description, status, total_price, created_at')
-      .or(`quote_number.ilike.${like},customer_name.ilike.${like},vehicle_description.ilike.${like}`)
+      .from('wrap_quotes')
+      .select('id, quote_number, customer, vehicle_description, status, total, created_at')
+      .or(`quote_number.ilike.${like},customer->>name.ilike.${like},vehicle_description.ilike.${like}`)
       .order('created_at', { ascending: false })
       .limit(MAX_PER_GROUP),
   ]);
@@ -172,7 +172,14 @@ export async function GET(req: NextRequest) {
   }
   if (customers.data?.length) results.customers = customers.data;
   if (messages.data?.length) results.messages = messages.data;
-  if (quotes.data?.length) results.quotes = quotes.data;
+  if (quotes.data?.length) {
+    // Keep the legacy result shape the search UI renders
+    results.quotes = quotes.data.map((q: any) => ({
+      id: q.id, quote_number: q.quote_number, customer_name: q.customer?.name || null,
+      vehicle_description: q.vehicle_description, status: q.status, total_price: q.total,
+      created_at: q.created_at,
+    }));
+  }
 
   return NextResponse.json({ results, query: q });
 }

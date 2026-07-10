@@ -92,12 +92,6 @@ export default function MorePage() {
         {F('estimates') && !overflowPaths.has('/estimates') && (
           <MenuBtn title="Estimates" sub="Build estimates & push to NetSuite" onClick={() => router.push('/estimates')} />
         )}
-        {F('quoting') && (
-          <MenuBtn title="Estimating" sub="AI-powered vinyl wrap quoting" onClick={() => router.push('/admin/quotes')} />
-        )}
-        {(isAdmin || isSales || isGraphicsProduction) && (
-          <MenuBtn title="Wrap Estimator v2" sub="Upload a proof, AI sizes each graphic element" onClick={() => router.push('/admin/wrap-estimator')} />
-        )}
         {(isAdmin || isSales || isGraphicsProduction) && (
           <MenuBtn title="Wrap Quotes" sub="Measure a vehicle template by hand & email the quote" onClick={() => router.push('/admin/wrap-quote')} />
         )}
