@@ -52,7 +52,16 @@ interface LaborSection { flat: number; hourly: number; hours: number; extra: num
 
 interface Company {
   name?: string; address?: string; city?: string; state?: string; zip?: string;
-  phone?: string; email?: string;
+  phone?: string; email?: string; logo_path?: string;
+}
+
+// File attached to the emailed quote (proof, vinyl specs, …). Uploaded to
+// the vehicle-templates bucket under quote-attachments/ when picked.
+interface QuoteAttachment {
+  name: string;
+  path: string;
+  size: number;
+  type: string | null;
 }
 
 interface Settings {
@@ -101,6 +110,8 @@ interface WrapQuote {
   sent_at: string | null;
   sent_to: string | null;
   diagram_path: string | null;
+  attachments: QuoteAttachment[] | null;
+  archived_at: string | null;
   created_at: string;
 }
 
@@ -176,6 +187,9 @@ export default function WrapQuotePage() {
   const [quoteNumber, setQuoteNumber] = useState('');
   const [sending, setSending] = useState(false);
   const [viewQuote, setViewQuote] = useState<WrapQuote | null>(null);
+  const [attachments, setAttachments] = useState<QuoteAttachment[]>([]);
+  const [attaching, setAttaching] = useState(false);
+  const [showArchived, setShowArchived] = useState(false);
 
   // ----- Pricing tab state (edit copies) -----
   const [subSel, setSubSel] = useState(''); // '' = new
@@ -188,8 +202,6 @@ export default function WrapQuotePage() {
   const [tplUploading, setTplUploading] = useState(false);
   const [calibrating, setCalibrating] = useState(false);
   const [calibStatus, setCalibStatus] = useState('');
-  const [clearing, setClearing] = useState(false);
-  const [clearStatus, setClearStatus] = useState('');
 
   // eslint-disable-next-line react-hooks/exhaustive-deps -- load once on mount
   useEffect(() => { loadAll(); }, []);
@@ -465,6 +477,20 @@ export default function WrapQuotePage() {
   };
 
   // ----- Quote snapshot / save / email -----
+  // Quote numbers are date-based: WQ-MMDDYY for the first quote of the day,
+  // then WQ-MMDDYY-1, -2, … for additional quotes that day.
+  const wqBase = () => {
+    const d = new Date();
+    return `WQ-${String(d.getMonth() + 1).padStart(2, '0')}${String(d.getDate()).padStart(2, '0')}${String(d.getFullYear()).slice(-2)}`;
+  };
+  const nextQuoteNumber = async (): Promise<string> => {
+    const base = wqBase();
+    const { data } = await supabase.from('wrap_quotes').select('quote_number').like('quote_number', `${base}%`);
+    const taken = new Set((data || []).map((r: { quote_number: string }) => r.quote_number));
+    if (!taken.has(base)) return base;
+    for (let n = 1; ; n++) if (!taken.has(`${base}-${n}`)) return `${base}-${n}`;
+  };
+
   const buildSnapshot = () => {
     const lines = measurements.map(m => {
       const p = measurementPricing(m);
@@ -484,13 +510,14 @@ export default function WrapQuotePage() {
       };
     });
     return {
-      quote_number: quoteNumber || `WQ-${Date.now().toString(36).toUpperCase()}`,
+      quote_number: quoteNumber || wqBase(),
       template_id: template?.id || null,
       vehicle_description: template ? templateLabel(template) : null,
       customer_id: customerId,
       customer,
       project_type: projectType || null,
       project_notes: projectNotes || null,
+      attachments,
       measurements: lines,
       labor: {
         design: { ...settings.design, total: totals.design },
@@ -581,6 +608,7 @@ export default function WrapQuotePage() {
 
   const saveQuote = async (): Promise<string | null> => {
     const snap = buildSnapshot();
+    if (!savedQuoteId) snap.quote_number = await nextQuoteNumber();
     if (!quoteNumber) setQuoteNumber(snap.quote_number);
     const diagramPath = await uploadDiagram(snap.quote_number);
     const row = diagramPath ? { ...snap, diagram_path: diagramPath } : snap;
@@ -590,7 +618,15 @@ export default function WrapQuotePage() {
       await loadAll();
       return savedQuoteId;
     }
-    const { data, error } = await supabase.from('wrap_quotes').insert({ ...row, created_by: user?.id }).select('id').single();
+    let insert = await supabase.from('wrap_quotes').insert({ ...row, created_by: user?.id }).select('id').single();
+    if (insert.error?.code === '23505') {
+      // Someone grabbed today's number between our check and the insert —
+      // pick the next free suffix and try once more.
+      row.quote_number = await nextQuoteNumber();
+      setQuoteNumber(row.quote_number);
+      insert = await supabase.from('wrap_quotes').insert({ ...row, created_by: user?.id }).select('id').single();
+    }
+    const { data, error } = insert;
     if (error || !data) { await dialog.alert(`Save failed: ${error?.message || 'unknown error'}`); return null; }
     setSavedQuoteId(data.id);
     await loadAll();
@@ -614,6 +650,7 @@ export default function WrapQuotePage() {
         await dialog.alert(`Email failed: ${data.error || 'Unknown error'}`);
       } else {
         await dialog.alert(`Quote emailed to ${customer.email}`);
+        resetAfterSend();
         await loadAll();
         setTab('history');
       }
@@ -622,6 +659,76 @@ export default function WrapQuotePage() {
     } finally {
       setSending(false);
     }
+  };
+
+  // A sent quote is finished — clear the whole estimator (drawing, customer,
+  // project, attachments) so the next quote starts clean. Keeps the selected
+  // vehicle template.
+  const resetAfterSend = () => {
+    resetEstimate();
+    setCustomer({ name: '', address: '', city: '', state: '', zip: '', phone: '', email: '', email_cc: '' });
+    setCustomerId(null);
+    setCustSearch('');
+    setProjectType('');
+    setProjectNotes('');
+    setAttachments([]);
+    setLaborRates({});
+  };
+
+  // ----- Email attachments (proofs, vinyl specs, …) -----
+  const addAttachments = async (files: FileList | null) => {
+    if (!files?.length) return;
+    setAttaching(true);
+    try {
+      const added: QuoteAttachment[] = [];
+      for (const f of Array.from(files)) {
+        if (f.size > 20 * 1024 * 1024) {
+          await dialog.alert(`${f.name} is over 20 MB — too large to email. Attach a smaller file.`);
+          continue;
+        }
+        const safeName = f.name.replace(/[^a-zA-Z0-9._-]/g, '_');
+        const path = `quote-attachments/${Date.now()}-${safeName}`;
+        const { error } = await storage.from('vehicle-templates').upload(path, f, { contentType: f.type || 'application/octet-stream' });
+        if (error) {
+          await dialog.alert(`Upload failed for ${f.name}: ${error.message}`);
+          continue;
+        }
+        added.push({ name: f.name, path, size: f.size, type: f.type || null });
+      }
+      if (added.length) setAttachments(prev => [...prev, ...added]);
+    } finally {
+      setAttaching(false);
+    }
+  };
+
+  const removeAttachment = async (a: QuoteAttachment) => {
+    setAttachments(prev => prev.filter(x => x.path !== a.path));
+    await storage.from('vehicle-templates').remove([a.path]); // best-effort cleanup
+  };
+
+  // ----- History: archive / delete -----
+  const toggleArchiveQuote = async (q: WrapQuote) => {
+    const { error } = await supabase.from('wrap_quotes')
+      .update({ archived_at: q.archived_at ? null : new Date().toISOString(), updated_at: new Date().toISOString() })
+      .eq('id', q.id);
+    if (error) { await dialog.alert(`${q.archived_at ? 'Unarchive' : 'Archive'} failed: ${error.message}`); return; }
+    if (viewQuote?.id === q.id) setViewQuote(null);
+    await loadAll();
+  };
+
+  const deleteQuote = async (q: WrapQuote) => {
+    if (!(await dialog.confirm(
+      `Permanently delete quote ${q.quote_number}${q.customer?.name ? ` for ${q.customer.name}` : ''}? This cannot be undone.`,
+      { destructive: true, confirmLabel: 'Delete' }
+    ))) return;
+    const { error } = await supabase.from('wrap_quotes').delete().eq('id', q.id);
+    if (error) { await dialog.alert(`Delete failed: ${error.message}`); return; }
+    // Best-effort cleanup of stored files the quote owned
+    const paths = [q.diagram_path, ...(q.attachments || []).map(a => a.path)].filter(Boolean) as string[];
+    if (paths.length) await storage.from('vehicle-templates').remove(paths);
+    if (savedQuoteId === q.id) { setSavedQuoteId(null); setQuoteNumber(''); }
+    if (viewQuote?.id === q.id) setViewQuote(null);
+    await loadAll();
   };
 
   // ----- Pricing tab handlers -----
@@ -659,11 +766,13 @@ export default function WrapQuotePage() {
     await loadAll();
   };
 
-  const saveSettings = async () => {
+  // companyOverride lets the logo upload persist immediately without waiting
+  // for the setSettings state update to flush.
+  const saveSettings = async (companyOverride?: Company) => {
     setSavingSettings(true);
     const { error } = await supabase.from('wrap_quote_settings').upsert({
       id: 1,
-      company: settings.company,
+      company: companyOverride ?? settings.company,
       tax_rate: num(settings.tax_rate),
       design: settings.design,
       preparation: settings.preparation,
@@ -672,6 +781,26 @@ export default function WrapQuotePage() {
     });
     setSavingSettings(false);
     if (error) await dialog.alert(`Save failed: ${error.message}`);
+  };
+
+  // Company logo shown on quote documents (preview + email header).
+  const uploadLogo = async (f: File | null) => {
+    if (!f) return;
+    const ext = (f.name.split('.').pop() || 'png').toLowerCase();
+    const path = `company/logo-${Date.now()}.${ext}`;
+    const { error } = await storage.from('vehicle-templates').upload(path, f, { contentType: f.type || 'image/png' });
+    if (error) { await dialog.alert(`Logo upload failed: ${error.message}`); return; }
+    const company = { ...settings.company, logo_path: path };
+    setSettings(prev => ({ ...prev, company }));
+    await saveSettings(company);
+  };
+
+  const removeLogo = async () => {
+    const old = settings.company.logo_path;
+    const company = { ...settings.company, logo_path: undefined };
+    setSettings(prev => ({ ...prev, company }));
+    await saveSettings(company);
+    if (old) await storage.from('vehicle-templates').remove([old]); // best-effort
   };
 
   // ----- Templates tab handlers -----
@@ -742,36 +871,6 @@ export default function WrapQuotePage() {
   // in small batches (timeout-safe for libraries of thousands), so loop until
   // it reports nothing left. Templates a quote still references are retired
   // (kept for history) instead of deleted.
-  const clearLibrary = async () => {
-    if (!(await dialog.confirm(
-      `Delete the entire template library (${templates.length} template${templates.length !== 1 ? 's' : ''})? Templates used by existing quotes are kept but retired. This cannot be undone.`,
-      { destructive: true, confirmLabel: 'Delete All' }
-    ))) return;
-    setClearing(true);
-    setClearStatus('Deleting…');
-    let deleted = 0, retired = 0;
-    try {
-      for (let batch = 0; batch < 1000; batch++) {
-        const res = await apiFetch('/api/admin/clear-templates', { method: 'POST' });
-        const data = await res.json();
-        if (!res.ok || !data.success) {
-          setClearStatus(`Failed: ${data.error || 'Unknown error'}`);
-          return;
-        }
-        deleted += data.deleted;
-        retired += data.retired;
-        if (data.remaining <= 0) break;
-        setClearStatus(`Deleted ${deleted} — ${data.remaining} to go…`);
-      }
-      setClearStatus(`Done — ${deleted} deleted${retired ? `, ${retired} retired (still referenced by quotes)` : ''}.`);
-      await loadAll();
-    } catch (e: any) {
-      setClearStatus(`Failed: ${e.message}`);
-    } finally {
-      setClearing(false);
-    }
-  };
-
   // Batch auto-calibration: the server reads each template's vector artboard
   // size (EPS BoundingBox / AI MediaBox — the drawings are 1:20) plus the
   // preview's pixel dimensions and computes px_per_in, so nobody has to
@@ -877,7 +976,7 @@ export default function WrapQuotePage() {
 
   // Quote preview shared by the Quote tab and History view modal. `coverage`
   // overrides the stored diagram with a live render (Quote tab, pre-save).
-  const quotePreview = (q: { quote_number: string; vehicle_description: string | null; customer: any; project_type: string | null; project_notes: string | null; measurements: any[]; labor: any; subtotal: number; tax_rate: number; tax_amount: number; total: number; diagram_path?: string | null; created_at?: string }, coverage?: React.ReactNode) => (
+  const quotePreview = (q: { quote_number: string; vehicle_description: string | null; customer: any; project_type: string | null; project_notes: string | null; measurements: any[]; labor: any; subtotal: number; tax_rate: number; tax_amount: number; total: number; diagram_path?: string | null; attachments?: QuoteAttachment[] | null; created_at?: string }, coverage?: React.ReactNode) => (
     <div style={{ background: 'var(--card)', border: `1px solid ${theme.border}`, borderRadius: '12px', padding: '18px' }}>
       <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '12px' }}>
         <div style={{ fontSize: '17px', fontWeight: 800, color: 'var(--text-primary)' }}>Wrap Quote <span style={{ fontSize: '11px', color: 'var(--text-muted)', fontWeight: 700 }}>{q.quote_number}</span></div>
@@ -885,6 +984,12 @@ export default function WrapQuotePage() {
       </div>
       <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '12px', marginBottom: '12px', fontSize: '11px', color: 'var(--text-secondary)' }}>
         <div>
+          {settings.company.logo_path && (
+            <div style={{ background: '#fff', borderRadius: '6px', padding: '6px', display: 'inline-block', marginBottom: '6px' }}>
+              {/* eslint-disable-next-line @next/next/no-img-element -- logo dimensions are unknown; next/image needs fixed sizes */}
+              <img src={imageUrl(settings.company.logo_path)} alt={settings.company.name || 'Company logo'} style={{ maxHeight: '40px', maxWidth: '180px', display: 'block' }} />
+            </div>
+          )}
           <div style={{ fontWeight: 800, color: 'var(--text-primary)' }}>{settings.company.name || 'Your Company'}</div>
           {settings.company.address && <div>{settings.company.address}</div>}
           {(settings.company.city || settings.company.state || settings.company.zip) && <div>{[settings.company.city, settings.company.state, settings.company.zip].filter(Boolean).join(', ')}</div>}
@@ -967,6 +1072,11 @@ export default function WrapQuotePage() {
         <div style={{ fontSize: '15px', fontWeight: 800 }}>Total <span style={{ marginLeft: '14px', color: '#22c55e' }}>${fmt(q.total)}</span></div>
       </div>
       {q.project_notes && <div style={{ marginTop: '10px', fontSize: '11px', color: 'var(--text-secondary)' }}><b>Project Notes:</b> {q.project_notes}</div>}
+      {(q.attachments || []).length > 0 && (
+        <div style={{ marginTop: '8px', fontSize: '10px', color: 'var(--text-secondary)' }}>
+          <b style={{ color: 'var(--text-primary)' }}>Attachments:</b> {(q.attachments || []).map(a => a.name).join(', ')}
+        </div>
+      )}
     </div>
   );
 
@@ -980,8 +1090,8 @@ export default function WrapQuotePage() {
       <div style={{ display: 'flex', gap: '4px', marginBottom: '12px', flexWrap: 'wrap' }}>
         {([
           { id: 'estimator' as Tab, label: 'Estimator', color: '#06b6d4' },
-          { id: 'quote' as Tab, label: 'Generate Quote', color: '#22c55e' },
-          { id: 'history' as Tab, label: `Quote History (${history.length})`, color: '#a78bfa' },
+          { id: 'quote' as Tab, label: 'Quote', color: '#22c55e' },
+          { id: 'history' as Tab, label: `Quote History (${history.filter(q => !q.archived_at).length})`, color: '#a78bfa' },
           { id: 'pricing' as Tab, label: 'Pricing', color: '#f59e0b' },
           { id: 'company' as Tab, label: 'Company Info', color: '#60a5fa' },
           { id: 'templates' as Tab, label: `Templates (${templates.length})`, color: '#94a3b8' },
@@ -1203,7 +1313,7 @@ export default function WrapQuotePage() {
                     background: measurements.length === 0 ? 'var(--subtle-bg)' : '#22c55e',
                     color: measurements.length === 0 ? 'var(--text-muted)' : '#fff',
                     cursor: measurements.length === 0 ? 'default' : 'pointer',
-                  }}>Create Quote →</button>
+                  }}>Quote →</button>
                 </div>
               </div>
             </div>
@@ -1268,6 +1378,19 @@ export default function WrapQuotePage() {
               <div style={labelStyle}>Note</div>
               <textarea value={projectNotes} onChange={e => setProjectNotes(e.target.value)} rows={3} style={{ ...inputStyle, resize: 'vertical' }} />
             </div>
+            {sectionHead('Email Attachments')}
+            {attachments.map(a => (
+              <div key={a.path} style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '4px' }}>
+                <span style={{ flex: 1, minWidth: 0, fontSize: '11px', fontWeight: 700, color: 'var(--text-primary)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{a.name}</span>
+                <span style={{ fontSize: '10px', color: 'var(--text-muted)' }}>{(a.size / 1024 / 1024) >= 1 ? `${(a.size / 1024 / 1024).toFixed(1)} MB` : `${Math.max(1, Math.round(a.size / 1024))} KB`}</span>
+                <button onClick={() => removeAttachment(a)} title="Remove attachment" style={btnStyle('#ef4444', 'transparent')}>✕</button>
+              </div>
+            ))}
+            <label style={{ ...btnStyle('#a78bfa', 'rgba(167,139,250,0.08)'), display: 'inline-block', marginBottom: '4px', opacity: attaching ? 0.6 : 1 }}>
+              {attaching ? 'Uploading…' : '+ Attach File'}
+              <input type="file" multiple disabled={attaching} onChange={e => { addAttachments(e.target.files); e.target.value = ''; }} style={{ display: 'none' }} />
+            </label>
+            <div style={{ fontSize: '10px', color: 'var(--text-muted)', marginBottom: '12px' }}>Sent with the emailed quote — proof files, vinyl specs, or other documentation.</div>
             <div style={{ display: 'flex', gap: '6px', flexWrap: 'wrap' }}>
               <button onClick={() => saveQuote()} style={btnStyle('#60a5fa', 'rgba(59,130,246,0.1)')}>{savedQuoteId ? 'Update Draft' : 'Save Draft'}</button>
               <button onClick={createAndEmail} disabled={sending} style={{ ...btnStyle('#fff', '#22c55e'), border: 'none' }}>
@@ -1283,32 +1406,52 @@ export default function WrapQuotePage() {
       )}
 
       {/* ================= HISTORY ================= */}
-      {tab === 'history' && (
-        <div style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
-          {history.length === 0 && <div style={{ textAlign: 'center', padding: '32px 0', color: 'var(--text-muted)', fontSize: '13px', fontWeight: 600 }}>No quotes yet.</div>}
-          {history.map(q => (
-            <button key={q.id} onClick={() => setViewQuote(q)} style={{
-              display: 'flex', alignItems: 'center', gap: '10px', padding: '9px 12px', borderRadius: '8px', textAlign: 'left',
-              background: 'var(--card)', border: `1px solid ${theme.border}`, cursor: 'pointer',
-            }}>
-              <div style={{ flex: 1, minWidth: 0 }}>
-                <div style={{ fontSize: '12px', fontWeight: 700, color: 'var(--text-primary)' }}>
-                  {q.customer?.name || 'No customer'}
-                  <span style={{ fontSize: '10px', color: 'var(--text-muted)', marginLeft: '8px' }}>{q.quote_number}</span>
+      {tab === 'history' && (() => {
+        const archivedCount = history.filter(q => q.archived_at).length;
+        const visible = history.filter(q => showArchived || !q.archived_at);
+        return (
+          <div style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
+            {archivedCount > 0 && (
+              <label style={{ display: 'flex', alignItems: 'center', gap: '6px', alignSelf: 'flex-end', fontSize: '11px', fontWeight: 700, color: 'var(--text-secondary)', cursor: 'pointer', marginBottom: '4px' }}>
+                <input type="checkbox" checked={showArchived} onChange={e => setShowArchived(e.target.checked)} />
+                Show archived ({archivedCount})
+              </label>
+            )}
+            {visible.length === 0 && <div style={{ textAlign: 'center', padding: '32px 0', color: 'var(--text-muted)', fontSize: '13px', fontWeight: 600 }}>{history.length === 0 ? 'No quotes yet.' : 'No quotes — everything is archived.'}</div>}
+            {visible.map(q => (
+              <div key={q.id} onClick={() => setViewQuote(q)} style={{
+                display: 'flex', alignItems: 'center', gap: '10px', padding: '9px 12px', borderRadius: '8px', textAlign: 'left',
+                background: 'var(--card)', border: `1px solid ${theme.border}`, cursor: 'pointer',
+                opacity: q.archived_at ? 0.55 : 1,
+              }}>
+                <div style={{ flex: 1, minWidth: 0 }}>
+                  <div style={{ fontSize: '12px', fontWeight: 700, color: 'var(--text-primary)' }}>
+                    {q.customer?.name || 'No customer'}
+                    <span style={{ fontSize: '10px', color: 'var(--text-muted)', marginLeft: '8px' }}>{q.quote_number}</span>
+                  </div>
+                  <div style={{ fontSize: '10px', color: 'var(--text-muted)' }}>{q.vehicle_description || '—'}{q.project_type ? ` · ${q.project_type}` : ''}</div>
                 </div>
-                <div style={{ fontSize: '10px', color: 'var(--text-muted)' }}>{q.vehicle_description || '—'}{q.project_type ? ` · ${q.project_type}` : ''}</div>
+                {q.archived_at && (
+                  <span style={{ fontSize: '9px', fontWeight: 700, padding: '2px 7px', borderRadius: '4px', background: 'rgba(148,163,184,0.12)', color: '#94a3b8' }}>Archived</span>
+                )}
+                <span style={{
+                  fontSize: '9px', fontWeight: 700, padding: '2px 7px', borderRadius: '4px',
+                  background: q.status === 'sent' ? 'rgba(34,197,94,0.12)' : 'rgba(148,163,184,0.12)',
+                  color: q.status === 'sent' ? '#22c55e' : '#94a3b8',
+                }}>{q.status === 'sent' ? `Sent${q.sent_to ? ` · ${q.sent_to}` : ''}` : 'Draft'}</span>
+                <span style={{ fontSize: '12px', fontWeight: 800, color: 'var(--text-primary)' }}>${fmt(q.total)}</span>
+                <span style={{ fontSize: '10px', color: 'var(--text-muted)' }}>{new Date(q.created_at).toLocaleDateString([], { month: 'short', day: 'numeric', year: 'numeric' })}</span>
+                <button onClick={e => { e.stopPropagation(); toggleArchiveQuote(q); }} title={q.archived_at ? 'Unarchive' : 'Archive'} style={btnStyle('#f59e0b', 'transparent')}>
+                  {q.archived_at ? 'Unarchive' : 'Archive'}
+                </button>
+                {isAdmin && (
+                  <button onClick={e => { e.stopPropagation(); deleteQuote(q); }} title="Delete this quote permanently" style={btnStyle('#ef4444', 'transparent')}>✕</button>
+                )}
               </div>
-              <span style={{
-                fontSize: '9px', fontWeight: 700, padding: '2px 7px', borderRadius: '4px',
-                background: q.status === 'sent' ? 'rgba(34,197,94,0.12)' : 'rgba(148,163,184,0.12)',
-                color: q.status === 'sent' ? '#22c55e' : '#94a3b8',
-              }}>{q.status === 'sent' ? `Sent${q.sent_to ? ` · ${q.sent_to}` : ''}` : 'Draft'}</span>
-              <span style={{ fontSize: '12px', fontWeight: 800, color: 'var(--text-primary)' }}>${fmt(q.total)}</span>
-              <span style={{ fontSize: '10px', color: 'var(--text-muted)' }}>{new Date(q.created_at).toLocaleDateString([], { month: 'short', day: 'numeric', year: 'numeric' })}</span>
-            </button>
-          ))}
-        </div>
-      )}
+            ))}
+          </div>
+        );
+      })()}
 
       {viewQuote && (
         <div style={{ position: 'fixed', inset: 0, background: 'var(--overlay)', zIndex: 200, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '16px' }} onClick={() => setViewQuote(null)}>
@@ -1389,7 +1532,7 @@ export default function WrapQuotePage() {
           {laborEditor('preparation', 'Preparation')}
           {laborEditor('installation', 'Installation')}
 
-          <button onClick={saveSettings} disabled={savingSettings} style={{ ...btnStyle('#fff', '#22c55e'), border: 'none', padding: '9px 18px' }}>
+          <button onClick={() => saveSettings()} disabled={savingSettings} style={{ ...btnStyle('#fff', '#22c55e'), border: 'none', padding: '9px 18px' }}>
             {savingSettings ? 'Saving…' : 'Save Pricing Settings'}
           </button>
         </div>
@@ -1400,6 +1543,24 @@ export default function WrapQuotePage() {
         <div style={{ background: 'var(--card)', border: `1px solid ${theme.border}`, borderRadius: '12px', padding: '16px', maxWidth: '480px' }}>
           {sectionHead('Company Information')}
           <div style={{ fontSize: '10px', color: 'var(--text-muted)', marginBottom: '10px' }}>Shown in the header of every quote you send.</div>
+          <div style={{ marginBottom: '10px' }}>
+            <div style={labelStyle}>Logo</div>
+            {settings.company.logo_path && (
+              <div style={{ background: '#fff', border: `1px solid ${theme.border}`, borderRadius: '8px', padding: '10px', marginBottom: '6px', display: 'inline-block' }}>
+                {/* eslint-disable-next-line @next/next/no-img-element -- logo dimensions are unknown; next/image needs fixed sizes */}
+                <img src={imageUrl(settings.company.logo_path)} alt="Company logo" style={{ maxHeight: '56px', maxWidth: '220px', display: 'block' }} />
+              </div>
+            )}
+            <div style={{ display: 'flex', gap: '6px', alignItems: 'center' }}>
+              <label style={{ ...btnStyle('#a78bfa', 'rgba(167,139,250,0.08)'), display: 'inline-block' }}>
+                {settings.company.logo_path ? 'Replace Logo' : 'Upload Logo'}
+                <input type="file" accept="image/*" onChange={e => { uploadLogo(e.target.files?.[0] || null); e.target.value = ''; }} style={{ display: 'none' }} />
+              </label>
+              {settings.company.logo_path && (
+                <button onClick={removeLogo} style={btnStyle('#ef4444', 'transparent')}>Remove</button>
+              )}
+            </div>
+          </div>
           {([
             ['name', 'Company Name'], ['address', 'Address'], ['city', 'City'], ['state', 'State'], ['zip', 'Zip'], ['phone', 'Phone'], ['email', 'Email'],
           ] as const).map(([k, label]) => (
@@ -1408,7 +1569,7 @@ export default function WrapQuotePage() {
               <input value={(settings.company as any)[k] || ''} onChange={e => setSettings(prev => ({ ...prev, company: { ...prev.company, [k]: e.target.value } }))} style={inputStyle} />
             </div>
           ))}
-          <button onClick={saveSettings} disabled={savingSettings} style={{ ...btnStyle('#fff', '#22c55e'), border: 'none', padding: '9px 18px', marginTop: '8px' }}>
+          <button onClick={() => saveSettings()} disabled={savingSettings} style={{ ...btnStyle('#fff', '#22c55e'), border: 'none', padding: '9px 18px', marginTop: '8px' }}>
             {savingSettings ? 'Saving…' : 'Save Company Info'}
           </button>
         </div>
@@ -1460,16 +1621,6 @@ export default function WrapQuotePage() {
                 {tplUploading ? 'Uploading…' : 'Add Template'}
               </button>
             </div>
-            {isAdmin && templates.length > 0 && (
-              <div style={{ marginTop: '12px', paddingTop: '10px', borderTop: `1px solid ${theme.border}`, display: 'flex', alignItems: 'center', gap: '10px' }}>
-                <button onClick={clearLibrary} disabled={clearing} style={btnStyle('#ef4444', 'rgba(239,68,68,0.08)')}>
-                  {clearing ? 'Deleting…' : 'Delete All Templates'}
-                </button>
-                <span style={{ fontSize: '10px', fontWeight: clearStatus ? 700 : 400, color: clearStatus ? 'var(--text-secondary)' : 'var(--text-muted)' }}>
-                  {clearStatus || 'Clears the library for a fresh bulk import. Templates already used on a quote are retired, not deleted.'}
-                </span>
-              </div>
-            )}
           </div>
 
           <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(220px, 1fr))', gap: '10px' }}>
