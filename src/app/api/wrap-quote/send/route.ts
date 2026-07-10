@@ -22,7 +22,7 @@ const money = (n: any) =>
 
 // Light-themed printable quote document (customers print/forward these, so
 // no dark chrome like the internal notification template).
-function buildQuoteHtml(quote: any, company: any, diagramUrl: string | null): string {
+function buildQuoteHtml(quote: any, company: any, diagramUrl: string | null, logoUrl: string | null): string {
   const cust = quote.customer || {};
   const rows: string[] = [];
   const cell = (v: string, right = false) =>
@@ -63,6 +63,7 @@ function buildQuoteHtml(quote: any, company: any, diagramUrl: string | null): st
       <table style="width:100%;border-collapse:collapse;margin-bottom:20px;">
         <tr>
           <td style="vertical-align:top;">
+            ${logoUrl ? `<img src="${esc(logoUrl)}" alt="${esc(company?.name || 'Company logo')}" height="44" style="height:44px;max-width:220px;display:block;margin-bottom:10px;">` : ''}
             <div style="font-size:22px;font-weight:800;color:#111827;">Wrap Quote</div>
             <div style="font-size:12px;color:#6b7280;">${esc(quote.quote_number)} · ${new Date(quote.created_at || Date.now()).toLocaleDateString('en-US', { year: 'numeric', month: 'long', day: 'numeric' })}</div>
           </td>
@@ -142,9 +143,29 @@ export async function POST(req: NextRequest) {
   const diagramUrl = quote.diagram_path
     ? supabase.storage.from('vehicle-templates').getPublicUrl(quote.diagram_path).data.publicUrl
     : null;
+  const logoUrl = company?.logo_path
+    ? supabase.storage.from('vehicle-templates').getPublicUrl(company.logo_path).data.publicUrl
+    : null;
+
+  // Files the sender attached to this quote (proofs, vinyl specs, …).
+  // A missing file is a hard error — silently sending a quote without its
+  // proof is worse than asking the sender to re-attach it.
+  const attachments: { filename: string; content: Buffer; contentType?: string }[] = [];
+  for (const a of Array.isArray(quote.attachments) ? quote.attachments : []) {
+    if (!a?.path) continue;
+    const { data, error } = await supabase.storage.from('vehicle-templates').download(a.path);
+    if (error || !data) {
+      return NextResponse.json({ error: `Attachment "${a.name || a.path}" could not be loaded — remove and re-attach it.` }, { status: 502 });
+    }
+    attachments.push({
+      filename: a.name || a.path.split('/').pop() || 'attachment',
+      content: Buffer.from(await data.arrayBuffer()),
+      contentType: a.type || undefined,
+    });
+  }
 
   const subject = `Wrap Quote ${quote.quote_number}${company?.name ? ` from ${company.name}` : ''}`;
-  const ok = await sendEmail(to, subject, buildQuoteHtml(quote, company, diagramUrl));
+  const ok = await sendEmail(to, subject, buildQuoteHtml(quote, company, diagramUrl, logoUrl), undefined, attachments);
   if (!ok) {
     return NextResponse.json({ error: 'Email send failed (is Resend configured?)' }, { status: 502 });
   }
