@@ -100,6 +100,7 @@ interface WrapQuote {
   status: string;
   sent_at: string | null;
   sent_to: string | null;
+  diagram_path: string | null;
   created_at: string;
 }
 
@@ -151,6 +152,9 @@ export default function WrapQuotePage() {
   const [tool, setTool] = useState<Tool>('select');
   const [measurements, setMeasurements] = useState<Measurement[]>([]);
   const [selectedId, setSelectedId] = useState<string | null>(null);
+  // Film applied to newly drawn shapes: sticks to the last film the user
+  // picked instead of resetting to the first film in the list on every box.
+  const [lastFilmId, setLastFilmId] = useState<string | null>(null);
   // In-progress drag (image-pixel coords)
   const [drag, setDrag] = useState<{ x1: number; y1: number; x2: number; y2: number } | null>(null);
   // Roof/hood need two lines; after the first drag we hold the partial
@@ -234,6 +238,8 @@ export default function WrapQuotePage() {
   const template = templates.find(t => t.id === templateId) || null;
   const activeSubstrates = substrates.filter(s => s.is_active !== false);
   const substrateById = (id: string | null) => substrates.find(s => s.id === id) || null;
+  const defaultFilmId = () =>
+    lastFilmId && activeSubstrates.some(s => s.id === lastFilmId) ? lastFilmId : activeSubstrates[0]?.id || null;
 
   // Retired templates stay in state (the Templates tab manages them) but are
   // hidden from the estimator's vehicle pickers.
@@ -370,7 +376,7 @@ export default function WrapQuotePage() {
         dim1_in: wPx / ppi,
         dim2_in: hPx / ppi,
         qty: 1,
-        substrate_id: activeSubstrates[0]?.id || null,
+        substrate_id: defaultFilmId(),
       };
       setMeasurements(prev => [...prev, m]);
       setSelectedId(m.id);
@@ -390,7 +396,7 @@ export default function WrapQuotePage() {
         dim1_in: lenPx / ppi,
         dim2_in: 0,
         qty: 1,
-        substrate_id: activeSubstrates[0]?.id || null,
+        substrate_id: defaultFilmId(),
       };
       setPendingPair(m);
     } else {
@@ -414,6 +420,8 @@ export default function WrapQuotePage() {
   };
 
   const updateMeasurement = (id: string, patch: Partial<Measurement>) => {
+    // Remember the last film explicitly chosen so new shapes default to it.
+    if (patch.substrate_id) setLastFilmId(patch.substrate_id);
     setMeasurements(prev => prev.map(m => {
       if (m.id !== id) return m;
       const next = { ...m, ...patch };
@@ -500,16 +508,89 @@ export default function WrapQuotePage() {
     };
   };
 
+  // Rasterize the estimator canvas (template outline + drawn shapes, colored
+  // by film) to a PNG so the saved/emailed quote can show the customer which
+  // panels are covered. Draws onto an offscreen canvas at the template
+  // image's native resolution; returns null if anything prevents rendering.
+  const renderDiagramBlob = async (): Promise<Blob | null> => {
+    if (!template?.template_image_path || measurements.length === 0) return null;
+    const img = new Image();
+    img.crossOrigin = 'anonymous'; // keep the canvas untainted so toBlob works
+    img.src = imageUrl(template.template_image_path);
+    try { await img.decode(); } catch { return null; }
+    const w = img.naturalWidth, h = img.naturalHeight;
+    if (!w || !h) return null;
+    const canvas = document.createElement('canvas');
+    canvas.width = w;
+    canvas.height = h;
+    const ctx = canvas.getContext('2d');
+    if (!ctx) return null;
+    ctx.fillStyle = '#fff';
+    ctx.fillRect(0, 0, w, h);
+    ctx.drawImage(img, 0, 0);
+    const fontSize = w / 70;
+    ctx.font = `700 ${fontSize}px -apple-system, 'Segoe UI', Roboto, sans-serif`;
+    // SVG strokes are non-scaling (screen px); scale them up for the raster.
+    ctx.lineWidth = Math.max(2, w / 500);
+    for (const m of measurements) {
+      const fc = filmColor(m.substrate_id);
+      if (m.type === 'box' && m.rect) {
+        ctx.fillStyle = fc + '26';
+        ctx.strokeStyle = fc;
+        ctx.fillRect(m.rect.x, m.rect.y, m.rect.w, m.rect.h);
+        ctx.strokeRect(m.rect.x, m.rect.y, m.rect.w, m.rect.h);
+      } else if (m.type === 'circle' && m.rect) {
+        ctx.fillStyle = fc + '26';
+        ctx.strokeStyle = fc;
+        ctx.beginPath();
+        ctx.ellipse(m.rect.x + m.rect.w / 2, m.rect.y + m.rect.h / 2, m.rect.w / 2, m.rect.h / 2, 0, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.stroke();
+      } else {
+        // roof/hood line pairs keep the editor's colors (red = length, blue = width)
+        for (const [line, color] of [[m.line1, '#ef4444'], [m.line2, '#3b82f6']] as const) {
+          if (!line) continue;
+          ctx.strokeStyle = color;
+          ctx.beginPath();
+          ctx.moveTo(line.x1, line.y1);
+          ctx.lineTo(line.x2, line.y2);
+          ctx.stroke();
+        }
+      }
+      if (m.rect || m.line1) {
+        ctx.fillStyle = fc;
+        ctx.fillText(m.name, (m.rect ? m.rect.x : m.line1!.x1) + fontSize / 3, (m.rect ? m.rect.y : m.line1!.y1) - fontSize / 3);
+      }
+    }
+    return await new Promise<Blob | null>(resolve => canvas.toBlob(resolve, 'image/png'));
+  };
+
+  // Timestamped path so re-saves aren't served stale from CDN/email caches;
+  // failure is non-fatal (the quote just saves without a diagram).
+  const uploadDiagram = async (qn: string): Promise<string | null> => {
+    try {
+      const blob = await renderDiagramBlob();
+      if (!blob) return null;
+      const path = `quote-diagrams/${qn}-${Date.now()}.png`;
+      const { error } = await storage.from('vehicle-templates').upload(path, blob, { contentType: 'image/png', upsert: true });
+      return error ? null : path;
+    } catch {
+      return null;
+    }
+  };
+
   const saveQuote = async (): Promise<string | null> => {
     const snap = buildSnapshot();
     if (!quoteNumber) setQuoteNumber(snap.quote_number);
+    const diagramPath = await uploadDiagram(snap.quote_number);
+    const row = diagramPath ? { ...snap, diagram_path: diagramPath } : snap;
     if (savedQuoteId) {
-      const { error } = await supabase.from('wrap_quotes').update({ ...snap, updated_at: new Date().toISOString() }).eq('id', savedQuoteId);
+      const { error } = await supabase.from('wrap_quotes').update({ ...row, updated_at: new Date().toISOString() }).eq('id', savedQuoteId);
       if (error) { await dialog.alert(`Save failed: ${error.message}`); return null; }
       await loadAll();
       return savedQuoteId;
     }
-    const { data, error } = await supabase.from('wrap_quotes').insert({ ...snap, created_by: user?.id }).select('id').single();
+    const { data, error } = await supabase.from('wrap_quotes').insert({ ...row, created_by: user?.id }).select('id').single();
     if (error || !data) { await dialog.alert(`Save failed: ${error?.message || 'unknown error'}`); return null; }
     setSavedQuoteId(data.id);
     await loadAll();
@@ -757,8 +838,46 @@ export default function WrapQuotePage() {
     );
   };
 
-  // Quote preview shared by the Quote tab and History view modal
-  const quotePreview = (q: { quote_number: string; vehicle_description: string | null; customer: any; project_type: string | null; project_notes: string | null; measurements: any[]; labor: any; subtotal: number; tax_rate: number; tax_amount: number; total: number; created_at?: string }) => (
+  // Read-only copy of the estimator canvas for the live quote preview, so it
+  // matches the coverage diagram the customer gets in the emailed quote.
+  const liveCoverageDiagram = () => {
+    if (!template?.template_image_path || measurements.length === 0 || !imgDim) return null;
+    return (
+      <div style={{ position: 'relative', marginBottom: '10px', background: '#fff', border: `1px solid ${theme.border}`, borderRadius: '8px', overflow: 'hidden' }}>
+        {/* eslint-disable-next-line @next/next/no-img-element -- template dimensions are unknown; next/image needs fixed sizes */}
+        <img src={imageUrl(template.template_image_path)} alt="Coverage areas" style={{ width: '100%', display: 'block' }} draggable={false} />
+        <svg viewBox={`0 0 ${imgDim.w} ${imgDim.h}`} style={{ position: 'absolute', inset: 0, width: '100%', height: '100%' }}>
+          {measurements.map(m => {
+            const fc = filmColor(m.substrate_id);
+            const fontSize = imgDim.w / 70;
+            return (
+              <g key={m.id}>
+                {m.type === 'box' && m.rect && (
+                  <rect x={m.rect.x} y={m.rect.y} width={m.rect.w} height={m.rect.h} fill={fc + '26'} stroke={fc} strokeWidth={2} vectorEffect="non-scaling-stroke" />
+                )}
+                {m.type === 'circle' && m.rect && (
+                  <ellipse cx={m.rect.x + m.rect.w / 2} cy={m.rect.y + m.rect.h / 2} rx={m.rect.w / 2} ry={m.rect.h / 2} fill={fc + '26'} stroke={fc} strokeWidth={2} vectorEffect="non-scaling-stroke" />
+                )}
+                {(m.type === 'roof' || m.type === 'hood') && (
+                  <>
+                    {m.line1 && <line x1={m.line1.x1} y1={m.line1.y1} x2={m.line1.x2} y2={m.line1.y2} stroke="#ef4444" strokeWidth={3} vectorEffect="non-scaling-stroke" />}
+                    {m.line2 && <line x1={m.line2.x1} y1={m.line2.y1} x2={m.line2.x2} y2={m.line2.y2} stroke="#3b82f6" strokeWidth={3} vectorEffect="non-scaling-stroke" />}
+                  </>
+                )}
+                {(m.rect || m.line1) && (
+                  <text x={(m.rect ? m.rect.x : m.line1!.x1) + fontSize / 3} y={(m.rect ? m.rect.y : m.line1!.y1) - fontSize / 3} fontSize={fontSize} fontWeight={700} fill={fc}>{m.name}</text>
+                )}
+              </g>
+            );
+          })}
+        </svg>
+      </div>
+    );
+  };
+
+  // Quote preview shared by the Quote tab and History view modal. `coverage`
+  // overrides the stored diagram with a live render (Quote tab, pre-save).
+  const quotePreview = (q: { quote_number: string; vehicle_description: string | null; customer: any; project_type: string | null; project_notes: string | null; measurements: any[]; labor: any; subtotal: number; tax_rate: number; tax_amount: number; total: number; diagram_path?: string | null; created_at?: string }, coverage?: React.ReactNode) => (
     <div style={{ background: 'var(--card)', border: `1px solid ${theme.border}`, borderRadius: '12px', padding: '18px' }}>
       <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '12px' }}>
         <div style={{ fontSize: '17px', fontWeight: 800, color: 'var(--text-primary)' }}>Wrap Quote <span style={{ fontSize: '11px', color: 'var(--text-muted)', fontWeight: 700 }}>{q.quote_number}</span></div>
@@ -781,6 +900,12 @@ export default function WrapQuotePage() {
       </div>
       {q.project_type && <div style={{ fontSize: '11px', color: 'var(--text-secondary)', marginBottom: '6px' }}><b>Project Type:</b> {q.project_type}</div>}
       {q.vehicle_description && <div style={{ fontSize: '11px', color: 'var(--text-secondary)', marginBottom: '10px' }}><b>Vehicle:</b> {q.vehicle_description}</div>}
+      {coverage || (q.diagram_path ? (
+        <div style={{ marginBottom: '10px', background: '#fff', border: `1px solid ${theme.border}`, borderRadius: '8px', overflow: 'hidden' }}>
+          {/* eslint-disable-next-line @next/next/no-img-element -- diagram dimensions are unknown; next/image needs fixed sizes */}
+          <img src={imageUrl(q.diagram_path)} alt="Coverage areas" style={{ width: '100%', display: 'block' }} />
+        </div>
+      ) : null)}
       <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '11px' }}>
         <thead>
           <tr style={{ color: 'var(--text-muted)', textTransform: 'uppercase', fontSize: '9px' }}>
@@ -1153,7 +1278,7 @@ export default function WrapQuotePage() {
               <div style={{ marginTop: '8px', fontSize: '10px', color: '#fbbf24', fontWeight: 700 }}>No measurements yet — use the Estimator tab first.</div>
             )}
           </div>
-          {quotePreview({ ...buildSnapshot(), created_at: new Date().toISOString() } as any)}
+          {quotePreview({ ...buildSnapshot(), created_at: new Date().toISOString() } as any, liveCoverageDiagram())}
         </div>
       )}
 
