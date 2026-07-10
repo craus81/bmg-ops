@@ -22,7 +22,7 @@ const money = (n: any) =>
 
 // Light-themed printable quote document (customers print/forward these, so
 // no dark chrome like the internal notification template).
-function buildQuoteHtml(quote: any, company: any): string {
+function buildQuoteHtml(quote: any, company: any, diagramUrl: string | null): string {
   const cust = quote.customer || {};
   const rows: string[] = [];
   const cell = (v: string, right = false) =>
@@ -76,6 +76,7 @@ function buildQuoteHtml(quote: any, company: any): string {
       </table>
       ${quote.project_type ? `<div style="font-size:12px;color:#374151;margin-bottom:4px;"><b>Project Type:</b> ${esc(quote.project_type)}</div>` : ''}
       ${quote.vehicle_description ? `<div style="font-size:12px;color:#374151;margin-bottom:14px;"><b>Vehicle:</b> ${esc(quote.vehicle_description)}</div>` : ''}
+      ${diagramUrl ? `<div style="margin:0 0 14px;"><div style="font-size:11px;color:#6b7280;text-transform:uppercase;font-weight:700;margin-bottom:4px;">Coverage Areas</div><img src="${esc(diagramUrl)}" alt="Wrap coverage diagram" width="584" style="width:100%;max-width:584px;display:block;border:1px solid #e5e7eb;border-radius:8px;"></div>` : ''}
       <table style="width:100%;border-collapse:collapse;">
         <thead>
           <tr>
@@ -137,8 +138,13 @@ export async function POST(req: NextRequest) {
     .maybeSingle();
   const company = settings?.company || {};
 
+  // Coverage diagram rendered by the estimator at save time (public bucket)
+  const diagramUrl = quote.diagram_path
+    ? supabase.storage.from('vehicle-templates').getPublicUrl(quote.diagram_path).data.publicUrl
+    : null;
+
   const subject = `Wrap Quote ${quote.quote_number}${company?.name ? ` from ${company.name}` : ''}`;
-  const ok = await sendEmail(to, subject, buildQuoteHtml(quote, company));
+  const ok = await sendEmail(to, subject, buildQuoteHtml(quote, company, diagramUrl));
   if (!ok) {
     return NextResponse.json({ error: 'Email send failed (is Resend configured?)' }, { status: 502 });
   }
