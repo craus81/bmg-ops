@@ -490,7 +490,6 @@ export default function WrapQuotePage() {
         installation: { ...settings.installation, total: totals.install },
         films: totals.filmTotals.map(f => ({ id: f.id, label: f.label, sqft: f.sqft, rate: f.laborRate, total: f.laborTotal })),
       },
-      film_totals: totals.filmTotals.map(f => ({ id: f.id, label: f.label, sqft: f.sqft })),
       total_area_sqft: totals.area,
       materials_total: totals.materials,
       labor_total: totals.labor,
@@ -831,10 +830,10 @@ export default function WrapQuotePage() {
           })}
         </tbody>
       </table>
-      {(q as any).film_totals?.length > 0 && (
+      {(q.labor?.films || []).length > 0 && (
         <div style={{ marginTop: '8px', fontSize: '10px', color: 'var(--text-secondary)' }}>
           <b style={{ color: 'var(--text-primary)' }}>Film usage:</b>{' '}
-          {(q as any).film_totals.map((f: any) => `${f.label} — ${fmt(f.sqft)} ft²`).join('  ·  ')}
+          {(q.labor.films as any[]).map((f: any) => `${f.label} — ${fmt(f.sqft)} ft²`).join('  ·  ')}
         </div>
       )}
       <div style={{ marginTop: '10px', display: 'flex', flexDirection: 'column', alignItems: 'flex-end', gap: '3px', fontSize: '12px', color: 'var(--text-primary)' }}>
