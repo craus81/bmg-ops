@@ -605,6 +605,7 @@ export default function WrapQuotePage() {
     setCalibStatus('Starting…');
     let cursor: string | null = null;
     let calibrated = 0, skipped = 0;
+    const reasonTotals: Record<string, number> = {};
     try {
       do {
         const res: Response = await apiFetch('/api/admin/calibrate-templates', {
@@ -618,10 +619,12 @@ export default function WrapQuotePage() {
         }
         calibrated += data.calibrated;
         skipped += data.skipped;
+        for (const [k, v] of Object.entries(data.reasons || {})) reasonTotals[k] = (reasonTotals[k] || 0) + (v as number);
         cursor = data.nextCursor;
         setCalibStatus(`Calibrated ${calibrated}${skipped ? ` · ${skipped} skipped` : ''}…`);
       } while (cursor);
-      setCalibStatus(`Done — ${calibrated} calibrated automatically${skipped ? `, ${skipped} skipped (no vector file, or the preview doesn't match the artboard — calibrate those manually in the Estimator)` : ''}.`);
+      const reasonText = Object.entries(reasonTotals).map(([k, v]) => `${k}: ${v}`).join(', ');
+      setCalibStatus(`Done — ${calibrated} calibrated automatically${skipped ? `, ${skipped} skipped (${reasonText})` : ''}.`);
       await loadAll();
     } catch (e: any) {
       setCalibStatus(`Failed: ${e.message}`);

@@ -12,6 +12,10 @@
 // disagrees with the artboard's (cropped or padded previews); those templates
 // fall back to one-time manual calibration in the estimator.
 
+// NOTE: server/test only — the PDF path inflates compressed streams via
+// node:zlib, so don't import this from client components.
+import { inflateSync, inflateRawSync } from 'zlib';
+
 export interface ArtboardSize { widthPt: number; heightPt: number }
 export interface PixelSize { width: number; height: number }
 
@@ -70,11 +74,46 @@ export function parseVectorArtboard(bytes: Uint8Array): ArtboardSize | null {
   }
 
   // PDF / AI: first /MediaBox (page 1).
-  const mb = /\/MediaBox\s*\[\s*(-?[\d.]+)\s+(-?[\d.]+)\s+(-?[\d.]+)\s+(-?[\d.]+)\s*\]/.exec(text);
-  if (mb) {
+  const fromMediaBox = (t: string): ArtboardSize | null => {
+    const mb = /\/MediaBox\s*\[\s*(-?[\d.]+)\s+(-?[\d.]+)\s+(-?[\d.]+)\s+(-?[\d.]+)\s*\]/.exec(t);
+    if (!mb) return null;
     const [x0, y0, x1, y1] = [mb[1], mb[2], mb[3], mb[4]].map(parseFloat);
     const w = x1 - x0, h = y1 - y0;
-    if (w > 0 && h > 0) return { widthPt: w, heightPt: h };
+    return w > 0 && h > 0 ? { widthPt: w, heightPt: h } : null;
+  };
+  const plain = fromMediaBox(text);
+  if (plain) return plain;
+
+  // Modern .ai / PDF 1.5+ files often Flate-compress their object streams,
+  // so /MediaBox (or the AI content's %%BoundingBox) never appears as plain
+  // text. Inflate each stream...endstream segment and search inside.
+  if (text.startsWith('%PDF') || text.indexOf('FlateDecode') !== -1) {
+    const streamRe = /stream\r?\n/g;
+    let m: RegExpExecArray | null;
+    let scanned = 0;
+    while ((m = streamRe.exec(text)) !== null && scanned < 400) {
+      const start = m.index + m[0].length;
+      const end = text.indexOf('endstream', start);
+      if (end < 0) break;
+      scanned++;
+      const raw = ps.subarray(start, Math.min(end, start + 8_000_000));
+      let inflated: Buffer | null = null;
+      try { inflated = inflateSync(raw); }
+      catch {
+        try { inflated = inflateRawSync(raw); } catch { /* not deflate data */ }
+      }
+      if (!inflated) continue;
+      const inner = inflated.toString('latin1');
+      const viaMb = fromMediaBox(inner);
+      if (viaMb) return viaMb;
+      // AI private data inside the stream carries EPS-style bounding boxes
+      const bb = /%%(?:HiRes)?BoundingBox:\s*(-?[\d.]+)\s+(-?[\d.]+)\s+(-?[\d.]+)\s+(-?[\d.]+)/.exec(inner);
+      if (bb) {
+        const [x0, y0, x1, y1] = [bb[1], bb[2], bb[3], bb[4]].map(parseFloat);
+        const w = x1 - x0, h = y1 - y0;
+        if (w > 0 && h > 0) return { widthPt: w, heightPt: h };
+      }
+    }
   }
 
   return null;
