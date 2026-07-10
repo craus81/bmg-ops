@@ -171,6 +171,7 @@ export default function WrapQuotePage() {
   const [tplUploading, setTplUploading] = useState(false);
   const [calibrating, setCalibrating] = useState(false);
   const [calibStatus, setCalibStatus] = useState('');
+  const [clearing, setClearing] = useState(false);
 
   // eslint-disable-next-line react-hooks/exhaustive-deps -- load once on mount
   useEffect(() => { loadAll(); }, []);
@@ -532,6 +533,30 @@ export default function WrapQuotePage() {
   const toggleTemplate = async (t: Template) => {
     await supabase.from('vehicle_templates').update({ is_active: t.is_active === false }).eq('id', t.id);
     setTemplates(prev => prev.map(x => x.id === t.id ? { ...x, is_active: t.is_active === false } : x));
+  };
+
+  // Wipe the template library ahead of a fresh bulk import. Templates that a
+  // quote still references are retired (kept for history) instead of deleted.
+  const clearLibrary = async () => {
+    if (!(await dialog.confirm(
+      `Delete the entire template library (${templates.length} template${templates.length !== 1 ? 's' : ''})? Templates used by existing quotes are kept but retired. This cannot be undone.`,
+      { destructive: true, confirmLabel: 'Delete All' }
+    ))) return;
+    setClearing(true);
+    try {
+      const res = await fetch('/api/admin/clear-templates', { method: 'POST' });
+      const data = await res.json();
+      if (!res.ok || !data.success) {
+        await dialog.alert(`Failed: ${data.error || 'Unknown error'}`);
+      } else {
+        await dialog.alert(`Cleared — ${data.deleted} deleted${data.retired ? `, ${data.retired} retired (still referenced by quotes)` : ''}.`);
+        await loadAll();
+      }
+    } catch (e: any) {
+      await dialog.alert(`Failed: ${e.message}`);
+    } finally {
+      setClearing(false);
+    }
   };
 
   // Batch auto-calibration: the server reads each template's vector artboard
@@ -1097,6 +1122,16 @@ export default function WrapQuotePage() {
                 {tplUploading ? 'Uploading…' : 'Add Template'}
               </button>
             </div>
+            {isAdmin && templates.length > 0 && (
+              <div style={{ marginTop: '12px', paddingTop: '10px', borderTop: `1px solid ${theme.border}`, display: 'flex', alignItems: 'center', gap: '10px' }}>
+                <button onClick={clearLibrary} disabled={clearing} style={btnStyle('#ef4444', 'rgba(239,68,68,0.08)')}>
+                  {clearing ? 'Deleting…' : 'Delete All Templates'}
+                </button>
+                <span style={{ fontSize: '10px', color: 'var(--text-muted)' }}>
+                  Clears the library for a fresh bulk import. Templates already used on a quote are retired, not deleted.
+                </span>
+              </div>
+            )}
           </div>
 
           <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(220px, 1fr))', gap: '10px' }}>
