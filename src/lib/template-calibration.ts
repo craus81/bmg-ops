@@ -7,10 +7,13 @@
 // preview's pixel width by the real-world width gives px_per_in — the same
 // number Illustrator would show — with no manual measuring.
 //
-// The preview must be an export of the full artboard for this to hold, so
-// computeCalibration refuses to answer when the preview's aspect ratio
-// disagrees with the artboard's (cropped or padded previews); those templates
-// fall back to one-time manual calibration in the estimator.
+// Previews aren't always straight artboard exports: PVO renders them onto a
+// fixed-shape canvas, letterboxing (contain-fit) the artwork — it fills one
+// axis exactly and pads the other. Verified against a real template: 4:3
+// preview canvas vs 1.243 artboard, artwork spanning the height. Under
+// contain-fit the scale is the smaller of the two axis ratios, and padding
+// doesn't distort measurements (the mapping stays uniform across the image).
+// When the aspects DO match, both axes agree and we average them.
 
 // NOTE: server/test only — the PDF path inflates compressed streams via
 // node:zlib, so don't import this from client components.
@@ -21,11 +24,11 @@ export interface PixelSize { width: number; height: number }
 
 export interface CalibrationResult {
   pxPerIn: number | null;
-  reason: 'ok' | 'no-artboard' | 'no-image-size' | 'aspect-mismatch' | 'degenerate';
+  reason: 'ok' | 'ok-letterboxed' | 'no-artboard' | 'no-image-size' | 'degenerate';
 }
 
-// Maximum relative disagreement between artboard and preview aspect ratios
-// before we assume the preview isn't a straight artboard export.
+// Aspect agreement below this means the preview is a straight artboard
+// export (average both axes); above it, treat as letterboxed contain-fit.
 const ASPECT_TOLERANCE = 0.03;
 
 const latin1 = (bytes: Uint8Array) => new TextDecoder('latin1').decode(bytes);
@@ -180,14 +183,17 @@ export function computeCalibration(
 
   const artAspect = art.widthPt / art.heightPt;
   const imgAspect = img.width / img.height;
-  if (Math.abs(artAspect - imgAspect) / artAspect > ASPECT_TOLERANCE) {
-    return { pxPerIn: null, reason: 'aspect-mismatch' };
-  }
-
   const realWidthIn = (art.widthPt / 72) * scaleFactor;
   const realHeightIn = (art.heightPt / 72) * scaleFactor;
-  // Average both axes to smooth pixel-rounding in the export.
-  const pxPerIn = (img.width / realWidthIn + img.height / realHeightIn) / 2;
+  const wRatio = img.width / realWidthIn;
+  const hRatio = img.height / realHeightIn;
+
+  // Aspects agree → straight artboard export; average the axes to smooth
+  // pixel rounding. Aspects differ → letterboxed contain-fit render; the
+  // artwork fills the constraining axis, so the true scale is the smaller
+  // axis ratio (the larger one includes the padding).
+  const letterboxed = Math.abs(artAspect - imgAspect) / artAspect > ASPECT_TOLERANCE;
+  const pxPerIn = letterboxed ? Math.min(wRatio, hRatio) : (wRatio + hRatio) / 2;
   if (!isFinite(pxPerIn) || pxPerIn <= 0) return { pxPerIn: null, reason: 'degenerate' };
-  return { pxPerIn, reason: 'ok' };
+  return { pxPerIn, reason: letterboxed ? 'ok-letterboxed' : 'ok' };
 }
