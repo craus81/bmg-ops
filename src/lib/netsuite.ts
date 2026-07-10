@@ -929,6 +929,103 @@ export async function createDirectInvoice(payload: {
 }
 
 /**
+ * Create an Estimate (NetSuite's quote record). Same line shape as
+ * createDirectInvoice: rates are pinned to the Custom price level (-1) so
+ * NetSuite honors the amounts we send, and taxes are left entirely to
+ * NetSuite's own tax engine — no tax lines are sent.
+ */
+export async function createEstimate(payload: {
+  customerId: string | number;
+  memo?: string;
+  locationId?: string | number;
+  lineItems: {
+    itemId: string | number;
+    quantity: number;
+    rate: number;
+    description?: string;
+  }[];
+}): Promise<{
+  success: boolean;
+  estimateId?: string;
+  estimateNumber?: string;
+  error?: string;
+}> {
+  const config = getConfig();
+  const baseUrl = getBaseUrl(config.accountId);
+  const url = `${baseUrl}/services/rest/record/v1/estimate`;
+  const { oauth, token } = createOAuth(config);
+  const authHeader = getAuthHeader(oauth, token, { url, method: 'POST' });
+
+  const items = payload.lineItems.map((li) => ({
+    item: { id: li.itemId },
+    quantity: li.quantity,
+    price: { id: '-1' },
+    rate: li.rate,
+    ...(li.description ? { description: li.description } : {}),
+  }));
+
+  const locationId = payload.locationId ?? (await resolveDefaultLocationId());
+
+  const body: any = {
+    entity: { id: payload.customerId },
+    item: { items },
+    ...(locationId ? { location: { id: locationId } } : {}),
+    ...(payload.memo ? { memo: payload.memo } : {}),
+  };
+
+  try {
+    const response = await fetch(url, {
+      method: 'POST',
+      headers: {
+        'Authorization': authHeader,
+        'Content-Type': 'application/json',
+        'Prefer': 'respondAsync=false',
+      },
+      body: JSON.stringify(body),
+    });
+
+    if (!response.ok) {
+      const text = await response.text();
+      console.error('NetSuite create estimate error:', text);
+      const itemSubsidiaryError = /Invalid Field Value\s+\d+\s+for the following field:\s*item/i.test(text);
+      const hint = itemSubsidiaryError
+        ? ' — This usually means the item is not assigned to the estimate\'s subsidiary in NetSuite. Set the item\'s subsidiary and retry.'
+        : '';
+      return { success: false, error: `NetSuite error (${response.status}): ${text}${hint}` };
+    }
+
+    const location = response.headers.get('Location');
+    let estimateId = '';
+    if (location) {
+      const match = location.match(/\/(\d+)$/);
+      estimateId = match?.[1] || '';
+    }
+
+    let estimateNumber = '';
+    try {
+      const result = await response.json();
+      estimateId = estimateId || result.id?.toString() || '';
+      estimateNumber = result.tranId || result.tranid || '';
+    } catch {
+      // 204 No Content
+    }
+
+    if (estimateId && !estimateNumber) {
+      try {
+        const lookup = await suiteqlQuery(`SELECT tranid FROM transaction WHERE id = ${estimateId}`);
+        estimateNumber = lookup?.items?.[0]?.tranid || '';
+      } catch {
+        // Non-critical
+      }
+    }
+
+    return { success: true, estimateId, estimateNumber };
+  } catch (e: any) {
+    return { success: false, error: `Failed to create estimate: ${e.message}` };
+  }
+}
+
+/**
  * Resolve a GL account's NetSuite internal id from its account number and/or
  * name (e.g. number "53000" / name "Subcontractors"). The internal id is what
  * the REST Record API needs on a transaction line — the account NUMBER is not
