@@ -94,7 +94,9 @@ interface Measurement {
 interface WrapQuote {
   id: string;
   quote_number: string;
+  template_id: string | null;
   vehicle_description: string | null;
+  customer_id: string | null;
   customer: any;
   project_type: string | null;
   project_notes: string | null;
@@ -520,6 +522,9 @@ export default function WrapQuotePage() {
         billed_area_sqft: p.billedArea,
         unit_price: p.unitPrice,
         line_total: p.lineTotal,
+        // Canvas geometry (template-image pixels) so a saved quote can be
+        // reopened in the estimator with its shapes intact.
+        geometry: { rect: m.rect || null, line1: m.line1 || null, line2: m.line2 || null },
       };
     });
     return {
@@ -716,6 +721,61 @@ export default function WrapQuotePage() {
     } finally {
       setPushingNetsuite(false);
     }
+  };
+
+  // Reopen a saved quote for editing / resending: restores the template,
+  // drawn shapes, customer, project fields, attachments, and per-film labor
+  // overrides, and binds saveQuote to the same row (same quote number).
+  // From there every send option applies — email variants, NetSuite push,
+  // PDF — so a quote sent earlier can be pushed to NetSuite later, etc.
+  const loadQuoteForEdit = (q: WrapQuote) => {
+    const tpl = templates.find(t => t.id === q.template_id) || null;
+    const ppi = num(tpl?.px_per_in);
+    // Quotes saved before geometry was snapshotted have no shape coordinates.
+    // Synthesize a simple stacked layout for boxes/circles from their real
+    // dimensions so they render and stay editable; roof/hood line pairs
+    // without geometry keep their dims but can't be redrawn on the canvas.
+    let legacyY = 40;
+    const ms: Measurement[] = (q.measurements || []).map((l: any) => {
+      const m: Measurement = {
+        id: crypto.randomUUID(),
+        name: l.name || 'Area',
+        type: (l.type || 'box') as MType,
+        dim1_in: num(l.dim1_in),
+        dim2_in: num(l.dim2_in),
+        qty: Math.max(1, num(l.qty)),
+        substrate_id: l.substrate?.id || null,
+        rect: l.geometry?.rect || undefined,
+        line1: l.geometry?.line1 || undefined,
+        line2: l.geometry?.line2 || undefined,
+      };
+      if (!m.rect && !m.line1 && (m.type === 'box' || m.type === 'circle') && ppi > 0) {
+        const w = Math.max(2, m.dim1_in * ppi);
+        const h = Math.max(2, m.dim2_in * ppi);
+        m.rect = { x: 40, y: legacyY, w, h };
+        legacyY += h + 20;
+      }
+      return m;
+    });
+
+    setTemplateId(q.template_id || '');
+    setImgDim(null);
+    setMeasurements(ms);
+    setSelectedId(null);
+    setPendingPair(null);
+    setSavedQuoteId(q.id);
+    setQuoteNumber(q.quote_number);
+    setCustomer({ name: '', address: '', city: '', state: '', zip: '', phone: '', email: '', email_cc: '', ...(q.customer || {}) });
+    setCustomerId(q.customer_id);
+    setCustSearch('');
+    setProjectType(q.project_type || '');
+    setProjectNotes(q.project_notes || '');
+    setAttachments(q.attachments || []);
+    // Per-film install-labor overrides come back from the labor snapshot
+    setLaborRates(Object.fromEntries(((q.labor?.films || []) as any[]).filter((f: any) => f.id).map((f: any) => [f.id, f.rate == null ? '' : String(f.rate)])));
+    setSendMode('full');
+    setViewQuote(null);
+    setTab('quote');
   };
 
   // A sent quote is finished — clear the whole estimator (drawing, customer,
@@ -997,12 +1057,20 @@ export default function WrapQuotePage() {
   // Read-only copy of the estimator canvas for the live quote preview, so it
   // matches the coverage diagram the customer gets in the emailed quote.
   const liveCoverageDiagram = () => {
-    if (!template?.template_image_path || measurements.length === 0 || !imgDim) return null;
+    if (!template?.template_image_path || measurements.length === 0) return null;
     return (
       <div style={{ position: 'relative', marginBottom: '10px', background: '#fff', border: `1px solid ${theme.border}`, borderRadius: '8px', overflow: 'hidden' }}>
+        {/* Self-measuring so the preview works when a quote is loaded from
+            history without ever visiting the estimator tab. */}
         {/* eslint-disable-next-line @next/next/no-img-element -- template dimensions are unknown; next/image needs fixed sizes */}
-        <img src={imageUrl(template.template_image_path)} alt="Coverage areas" style={{ width: '100%', display: 'block' }} draggable={false} />
-        <svg viewBox={`0 0 ${imgDim.w} ${imgDim.h}`} style={{ position: 'absolute', inset: 0, width: '100%', height: '100%' }}>
+        <img
+          src={imageUrl(template.template_image_path)}
+          alt="Coverage areas"
+          onLoad={e => { if (!imgDim) setImgDim({ w: e.currentTarget.naturalWidth, h: e.currentTarget.naturalHeight }); }}
+          style={{ width: '100%', display: 'block' }}
+          draggable={false}
+        />
+        {imgDim && <svg viewBox={`0 0 ${imgDim.w} ${imgDim.h}`} style={{ position: 'absolute', inset: 0, width: '100%', height: '100%' }}>
           {measurements.map(m => {
             const fc = filmColor(m.substrate_id);
             const fontSize = imgDim.w / 70;
@@ -1026,7 +1094,7 @@ export default function WrapQuotePage() {
               </g>
             );
           })}
-        </svg>
+        </svg>}
       </div>
     );
   };
@@ -1533,6 +1601,9 @@ export default function WrapQuotePage() {
                 }}>{q.status === 'sent' ? `Sent${q.sent_to ? ` · ${q.sent_to}` : ''}` : 'Draft'}</span>
                 <span style={{ fontSize: '12px', fontWeight: 800, color: 'var(--text-primary)' }}>${fmt(q.total)}</span>
                 <span style={{ fontSize: '10px', color: 'var(--text-muted)' }}>{new Date(q.created_at).toLocaleDateString([], { month: 'short', day: 'numeric', year: 'numeric' })}</span>
+                <button onClick={e => { e.stopPropagation(); loadQuoteForEdit(q); }} title="Reopen this quote for editing / resending" style={btnStyle('#60a5fa', 'transparent')}>
+                  Edit
+                </button>
                 <button onClick={e => { e.stopPropagation(); toggleArchiveQuote(q); }} title={q.archived_at ? 'Unarchive' : 'Archive'} style={btnStyle('#f59e0b', 'transparent')}>
                   {q.archived_at ? 'Unarchive' : 'Archive'}
                 </button>
@@ -1550,6 +1621,7 @@ export default function WrapQuotePage() {
           <div onClick={e => e.stopPropagation()} style={{ width: '100%', maxWidth: '640px', maxHeight: '90vh', overflowY: 'auto' }}>
             {quotePreview(viewQuote)}
             <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '6px', marginTop: '8px' }}>
+              <button onClick={() => loadQuoteForEdit(viewQuote)} style={btnStyle('#60a5fa', 'var(--card)')}>Edit / Resend</button>
               {viewQuote.netsuite_estimate_id && (
                 <button onClick={() => viewEstimatePdf(viewQuote.netsuite_estimate_id)} style={btnStyle('#a78bfa', 'var(--card)')}>
                   NetSuite PDF

@@ -44,6 +44,15 @@ export async function POST(req: NextRequest) {
   if (!quote) {
     return NextResponse.json({ error: 'Quote not found' }, { status: 404 });
   }
+  // Refuse to create an estimate we can't record — otherwise the estimate
+  // exists in NetSuite but the app forgets it (no badge, no PDF, no dup
+  // guard). select('*') omits columns that don't exist, so a missing key
+  // means migration 134 hasn't been applied.
+  if (!('netsuite_estimate_id' in quote)) {
+    return NextResponse.json({
+      error: 'The wrap_quotes table is missing the NetSuite columns — run migration 134 (netsuite_estimate_id / netsuite_estimate_number) first.',
+    }, { status: 500 });
+  }
   if (quote.netsuite_estimate_id) {
     return NextResponse.json({
       error: `Already in NetSuite as estimate ${quote.netsuite_estimate_number || quote.netsuite_estimate_id}.`,
@@ -107,11 +116,18 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ error: result.error || 'NetSuite estimate creation failed' }, { status: 502 });
   }
 
-  await supabase.from('wrap_quotes').update({
+  const { error: recordErr } = await supabase.from('wrap_quotes').update({
     netsuite_estimate_id: result.estimateId || null,
     netsuite_estimate_number: result.estimateNumber || null,
     updated_at: new Date().toISOString(),
   }).eq('id', quote.id);
+  if (recordErr) {
+    // The estimate DOES exist in NetSuite at this point — surface that
+    // loudly so nobody re-pushes and creates a duplicate.
+    return NextResponse.json({
+      error: `Estimate ${result.estimateNumber || result.estimateId} was created in NetSuite but could not be recorded on the quote (${recordErr.message}). Fix the database (migration 134) — do NOT push again or you'll create a duplicate.`,
+    }, { status: 500 });
+  }
 
   return NextResponse.json({
     success: true,
