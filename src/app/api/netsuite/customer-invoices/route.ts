@@ -52,6 +52,7 @@ export async function GET(req: NextRequest) {
         t.duedate,
         t.type,
         t.foreigntotal AS total,
+        t.status AS status_key,
         BUILTIN.DF(t.status) AS status_display
       FROM transaction t
       WHERE t.entity = ${customerId}
@@ -61,6 +62,10 @@ export async function GET(req: NextRequest) {
     `;
 
     const result = await suiteqlQuery(query, limit, offset);
+    // BUILTIN.DF(t.status) comes back prefixed with the record type
+    // ("Invoice : Paid In Full"), which breaks equality checks downstream —
+    // map the raw status key for invoices and keep the display value only
+    // as a fallback for other transaction types.
     const transactions = (result?.items || []).map((t: any) => ({
       id: t.id,
       tranid: t.tranid,
@@ -68,7 +73,9 @@ export async function GET(req: NextRequest) {
       duedate: t.duedate || null,
       type: t.type,
       total: t.total ? parseFloat(t.total) : 0,
-      status: t.status_display || '',
+      status: t.status_key === 'B' ? 'Paid In Full'
+        : t.status_key === 'A' ? 'Open'
+        : (t.status_display || '').replace(/^[^:]+:\s*/, ''),
     }));
 
     // hasMore is the standard "exhaustively-paginated-or-not" probe —
