@@ -106,6 +106,7 @@ export default function AdminScansPage() {
   const [createItemFor, setCreateItemFor] = useState<string | null>(null);
   const [bulkVins, setBulkVins] = useState('');
   const [bulkProcessing, setBulkProcessing] = useState(false);
+  const [bulkProgress, setBulkProgress] = useState<string | null>(null);
   const [bulkResult, setBulkResult] = useState<{ success: number; failed: number; skipped?: number } | null>(null);
   const [scanningWorksheet, setScanningWorksheet] = useState(false);
   // Each worksheet page is reviewed independently — multi-page PDFs are a
@@ -677,31 +678,65 @@ export default function AdminScansPage() {
 
     let success = 0, failed = 0, skipped = totalDupes;
 
-    for (const { vin, part } of vinPartPairs) {
-      // Decode VIN
-      let vehicleData: any = {};
+    // Decode all unique VINs through NHTSA's batch endpoint (50 per call)
+    // instead of one request per VIN — 119 VINs used to mean 119 sequential
+    // round-trips (minutes); now it's 3. A failed batch just means those
+    // VINs upload without year/make/model.
+    const uniqueVins = [...new Set(vinPartPairs.map(p => p.vin))];
+    const decoded = new Map<string, any>();
+    for (let i = 0; i < uniqueVins.length; i += 50) {
+      const chunk = uniqueVins.slice(i, i + 50);
+      setBulkProgress(`Decoding VINs ${Math.min(i + 50, uniqueVins.length)}/${uniqueVins.length}…`);
       try {
-        const res = await fetch(`https://vpic.nhtsa.dot.gov/api/vehicles/decodevin/${vin}?format=json`);
+        const res = await fetch('https://vpic.nhtsa.dot.gov/api/vehicles/DecodeVINValuesBatch/', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+          body: `format=json&data=${encodeURIComponent(chunk.join(';'))}`,
+        });
         const json = await res.json();
-        const results = json.Results || [];
-        const get = (id: number) => results.find((r: any) => r.VariableId === id)?.Value || null;
-        vehicleData = { vehicle_year: get(29), vehicle_make: get(26), vehicle_model: get(28), vehicle_trim: get(38), body_class: get(5) };
-      } catch {}
-
-      const { error } = await supabase.from('scan_logs').insert({
-        vin,
-        ...vehicleData,
-        part_number: part?.partNumber || null,
-        part_description: part?.description || null,
-        billable_customer: locationOverrideCustomer ?? (bulkCustomer.trim() || part?.customer || null),
-        location_id: selectedLoc?.id || null,
-        location_name: selectedLoc?.name || null,
-        scanned_by: user?.id,
-      });
-
-      if (error) failed++; else success++;
+        for (const r of json.Results || []) {
+          const v = (r.VIN || '').toUpperCase();
+          if (!v) continue;
+          decoded.set(v, {
+            vehicle_year: r.ModelYear || null,
+            vehicle_make: r.Make || null,
+            vehicle_model: r.Model || null,
+            vehicle_trim: r.Trim || null,
+            body_class: r.BodyClass || null,
+          });
+        }
+      } catch {
+        // Decode is best-effort; rows still insert without vehicle data.
+      }
     }
 
+    // Insert in chunks; if a chunk fails as a whole, retry its rows one by
+    // one so a single bad row doesn't sink (or miscount) the rest.
+    const rows = vinPartPairs.map(({ vin, part }) => ({
+      vin,
+      ...(decoded.get(vin) || {}),
+      part_number: part?.partNumber || null,
+      part_description: part?.description || null,
+      billable_customer: locationOverrideCustomer ?? (bulkCustomer.trim() || part?.customer || null),
+      location_id: selectedLoc?.id || null,
+      location_name: selectedLoc?.name || null,
+      scanned_by: user?.id,
+    }));
+    for (let i = 0; i < rows.length; i += 50) {
+      const chunk = rows.slice(i, i + 50);
+      setBulkProgress(`Saving ${Math.min(i + 50, rows.length)}/${rows.length}…`);
+      const { error } = await supabase.from('scan_logs').insert(chunk);
+      if (!error) {
+        success += chunk.length;
+      } else {
+        for (const row of chunk) {
+          const { error: rowErr } = await supabase.from('scan_logs').insert(row);
+          if (rowErr) failed++; else success++;
+        }
+      }
+    }
+
+    setBulkProgress(null);
     setBulkResult({ success, failed, skipped });
     setBulkProcessing(false);
     // Clear VINs for the next batch, but keep customer/part/location sticky for the session
@@ -1454,7 +1489,7 @@ export default function AdminScansPage() {
                 opacity: bulkProcessing || !bulkVins.trim() ? 0.5 : 1,
               }}
             >
-              {bulkProcessing ? 'Processing...' : 'Upload VINs'}
+              {bulkProcessing ? (bulkProgress || 'Processing…') : 'Upload VINs'}
             </button>
           </div>
           {worksheetNotes && (
