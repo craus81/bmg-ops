@@ -1,6 +1,7 @@
 'use client';
 
 import { useState } from 'react';
+import JSZip from 'jszip';
 import { useAuth } from '@/components/AuthProvider';
 import { theme } from '@/lib/theme';
 
@@ -32,6 +33,7 @@ export default function BulkInvoiceDownloadPage() {
   const [listError, setListError] = useState<string | null>(null);
 
   const [downloading, setDownloading] = useState(false);
+  const [downloadProgress, setDownloadProgress] = useState<string | null>(null);
   const [downloadError, setDownloadError] = useState<string | null>(null);
 
   if (authLoading) return null;
@@ -59,55 +61,93 @@ export default function BulkInvoiceDownloadPage() {
     setDownloadError(null);
     setLoadingInvoices(true);
     try {
-      const res = await fetch(`/api/netsuite/customer-invoices?customerId=${c.id}&status=open`);
-      const data = await res.json();
-      if (!data.success) {
-        setListError(data.error || 'Failed to load invoices');
-        setInvoices([]);
-        setSelectedIds(new Set());
-      } else {
-        const list: OpenInvoice[] = data.transactions || [];
-        setInvoices(list);
-        // Default to every invoice selected — matches the prior all-or-
-        // nothing behavior; users can deselect what they don't want.
-        setSelectedIds(new Set(list.map(i => i.id)));
+      // Page through everything — accounts can have more open invoices than
+      // one API page, and a silent cutoff reads as "the app lost invoices".
+      let list: OpenInvoice[] = [];
+      let offset = 0;
+      for (;;) {
+        const res = await fetch(`/api/netsuite/customer-invoices?customerId=${c.id}&status=open&limit=1000&offset=${offset}`);
+        const data = await res.json();
+        if (!data.success) {
+          setListError(data.error || 'Failed to load invoices');
+          setInvoices([]);
+          setSelectedIds(new Set());
+          setLoadingInvoices(false);
+          return;
+        }
+        list = [...list, ...(data.transactions || [])];
+        if (!data.hasMore) break;
+        offset += data.limit;
       }
+      setInvoices(list);
+      // Default to every invoice selected — matches the prior all-or-
+      // nothing behavior; users can deselect what they don't want.
+      setSelectedIds(new Set(list.map(i => i.id)));
     } catch (e: any) {
       setListError(e.message || 'Failed to load invoices');
     }
     setLoadingInvoices(false);
   };
 
+  // Fetch each PDF through the quick per-invoice endpoint and assemble the
+  // ZIP in the browser. The old approach (one server request fetching every
+  // PDF and zipping) hit Vercel's 60s limit around ~50 invoices (504) and
+  // had a hard cap; this way there is no cap and no server timeout, and the
+  // button can show real progress.
   const downloadZip = async () => {
     if (!customer || selectedIds.size === 0) return;
     setDownloading(true);
     setDownloadError(null);
     try {
-      const idsParam = Array.from(selectedIds).join(',');
-      const res = await fetch(`/api/netsuite/open-invoices-zip?customerId=${customer.id}&ids=${encodeURIComponent(idsParam)}`);
-      if (!res.ok) {
-        const data = await res.json().catch(() => ({}));
-        setDownloadError(data.error || `Download failed (HTTP ${res.status})`);
-        setDownloading(false);
+      const items = invoices.filter(inv => selectedIds.has(inv.id));
+      const zip = new JSZip();
+      const queue = [...items];
+      const failed: string[] = [];
+      let done = 0;
+      // Small concurrency cap so we don't hammer NetSuite's PDF renderer.
+      await Promise.all(Array.from({ length: 4 }, async () => {
+        for (;;) {
+          const inv = queue.shift();
+          if (!inv) return;
+          try {
+            const res = await fetch(`/api/netsuite/pdf?type=invoice&id=${encodeURIComponent(inv.id)}`);
+            const data = await res.json();
+            if (!data.success || !data.pdfBase64) throw new Error(data.error || 'PDF fetch failed');
+            zip.file(`INV-${inv.tranid}.pdf`, Uint8Array.from(atob(data.pdfBase64), ch => ch.charCodeAt(0)));
+          } catch {
+            failed.push(inv.tranid);
+          }
+          done++;
+          setDownloadProgress(`Fetching PDFs ${done}/${items.length}…`);
+        }
+      }));
+
+      if (failed.length === items.length) {
+        setDownloadError('Every PDF fetch failed — check that NetSuite is reachable and try again.');
         return;
       }
-      const blob = await res.blob();
-      const dispo = res.headers.get('content-disposition') || '';
-      const filenameMatch = dispo.match(/filename="?([^";]+)"?/);
-      const filename = filenameMatch?.[1] || `${customer.company_name}-open-invoices.zip`;
 
+      setDownloadProgress('Zipping…');
+      const blob = await zip.generateAsync({ type: 'blob' });
+      const safeName = customer.company_name.replace(/[^a-zA-Z0-9._-]+/g, '_').slice(0, 80) || 'customer';
       const url = URL.createObjectURL(blob);
       const a = document.createElement('a');
       a.href = url;
-      a.download = filename;
+      a.download = `${safeName}-open-invoices.zip`;
       document.body.appendChild(a);
       a.click();
       document.body.removeChild(a);
       URL.revokeObjectURL(url);
+
+      if (failed.length > 0) {
+        setDownloadError(`Downloaded ${items.length - failed.length} of ${items.length} — failed: INV #${failed.join(', INV #')}. Retry to fetch just the rest.`);
+      }
     } catch (e: any) {
       setDownloadError(e.message || 'Download failed');
+    } finally {
+      setDownloading(false);
+      setDownloadProgress(null);
     }
-    setDownloading(false);
   };
 
   const selectedInvoices = invoices.filter(inv => selectedIds.has(inv.id));
@@ -270,7 +310,7 @@ export default function BulkInvoiceDownloadPage() {
                 }}
               >
                 {downloading
-                  ? `Building ZIP… (this can take ~${Math.max(5, Math.ceil(selectedIds.size / 5) * 3)}s)`
+                  ? (downloadProgress || 'Preparing…')
                   : `Download ${selectedIds.size} invoice${selectedIds.size === 1 ? '' : 's'} as ZIP`}
               </button>
 
