@@ -189,6 +189,24 @@ export default function GraphicsPage() {
   // eslint-disable-next-line react-hooks/exhaustive-deps -- intentional: load once on mount
   }, [user, isAdmin, isProduction]);
 
+  // Keep the board fresh so unread-activity dots appear while the page is
+  // open — without this, jobs/views load once on mount and a change made by
+  // someone else can't light a dot until a full page reload. Poll every 60s
+  // while the tab is visible and refresh on focus/return.
+  useEffect(() => {
+    if (!user) return;
+    const refresh = () => { if (document.visibilityState === 'visible') loadJobs(); };
+    const timer = setInterval(refresh, 60_000);
+    window.addEventListener('focus', refresh);
+    document.addEventListener('visibilitychange', refresh);
+    return () => {
+      clearInterval(timer);
+      window.removeEventListener('focus', refresh);
+      document.removeEventListener('visibilitychange', refresh);
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- loadJobs is stable per mount
+  }, [user]);
+
   // Auto-open a job for editing when navigated from PO page via ?editJob=<id>
   useEffect(() => {
     if (loading) return;
@@ -1318,7 +1336,7 @@ export default function GraphicsPage() {
                           const mine = (jobViews[job.id] || []).find(v => v.user_id === user?.id);
                           const hasNew = !mine || new Date(job.updated_at).getTime() > new Date(mine.last_viewed_at).getTime();
                           return hasNew ? (
-                            <span title="New activity since you last viewed this job" style={{ width: '8px', height: '8px', borderRadius: '50%', background: '#3b82f6', flexShrink: 0 }} />
+                            <span title="New activity since you last viewed this job" style={{ width: '9px', height: '9px', borderRadius: '50%', background: '#ef4444', flexShrink: 0 }} />
                           ) : null;
                         })()}
                         {job.priority !== 'normal' && (
