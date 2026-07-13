@@ -95,11 +95,10 @@ export default function AdminScansPage() {
   }, []);
 
   // Bulk upload state
-  const [allParts, setAllParts] = useState<{ id: string; item_number: string; display_name: string | null; billable_customer: string | null }[]>([]);
+  const [allParts, setAllParts] = useState<{ id: string; item_number: string; display_name: string | null; billable_customer: string | null; vehicle_type: string | null; graphic_package: string | null }[]>([]);
   const [allLocations, setAllLocations] = useState<{ id: string; name: string }[]>([]);
   const [bulkParts, setBulkParts] = useState<{ id: string; label: string; partNumber: string; description: string | null; customer: string | null }[]>([]);
   const [bulkPartSearch, setBulkPartSearch] = useState('');
-  const [allCatalog, setAllCatalog] = useState<{ id: string; part_number: string; end_customer: string | null; vehicle_type: string | null; graphic_package: string | null }[]>([]);
   const [bulkLocation, setBulkLocation] = useState<string>('');
   const [bulkCustomer, setBulkCustomer] = useState('');
   const [custMatches, setCustMatches] = useState<{ id: string; company_name: string; entity_id: string | null }[]>([]);
@@ -146,7 +145,7 @@ export default function AdminScansPage() {
 
   const loadAll = async () => {
     setLoading(true);
-    const [scansRes, archivedRes, profilesRes, partsRes, fullPartsRes, locsRes, posRes, catalogRes, cniVinsRes] = await Promise.all([
+    const [scansRes, archivedRes, profilesRes, partsRes, fullPartsRes, locsRes, posRes, cniVinsRes] = await Promise.all([
       supabase.from('scan_logs').select('*').is('archived_at', null).order('scanned_at', { ascending: false }).limit(1000),
       // Paginate archived scans — Supabase caps responses at 1000 rows by default
       (async () => {
@@ -173,7 +172,7 @@ export default function AdminScansPage() {
         let pg = 0;
         let more = true;
         while (more) {
-          const { data } = await supabase.from('netsuite_parts').select('id, item_number, display_name, billable_customer').eq('is_active', true).order('item_number').range(pg * 1000, (pg + 1) * 1000 - 1);
+          const { data } = await supabase.from('netsuite_parts').select('id, item_number, display_name, billable_customer, vehicle_type, graphic_package').eq('is_active', true).order('item_number').range(pg * 1000, (pg + 1) * 1000 - 1);
           all = [...all, ...(data || [])];
           more = (data || []).length === 1000;
           pg++;
@@ -182,7 +181,6 @@ export default function AdminScansPage() {
       })(),
       supabase.from('work_locations').select('id, name').eq('is_active', true).order('name'),
       supabase.from('purchase_orders').select('id, po_number, customer, line_items:po_line_items(id, part_number, quantity, installed)').in('status', ['open', 'complete']).order('po_number'),
-      supabase.from('catalog').select('id, part_number, end_customer, vehicle_type, graphic_package').order('part_number'),
       // CNI job VINs that produced a scan — maps scan_log_id → job number so the
       // Scan Log can flag CNI work and filter to it (§3.4). Paginated like the
       // archived scans, since this grows with every CNI vehicle completed.
@@ -204,7 +202,6 @@ export default function AdminScansPage() {
       })(),
     ]);
     setAllParts((fullPartsRes.data || []) as typeof allParts);
-    setAllCatalog((catalogRes.data || []) as typeof allCatalog);
     setAllLocations((locsRes.data || []) as typeof allLocations);
     setAllPOs((posRes.data || []) as typeof allPOs);
 
@@ -1321,9 +1318,14 @@ export default function AdminScansPage() {
                 {bulkPartSearch.length >= 2 && (() => {
                   const q = bulkPartSearch.toLowerCase();
                   const selectedIds = new Set(bulkParts.map(bp => bp.id));
-                  const partMatches = allParts
-                    .filter(p => !selectedIds.has(p.id) && (p.item_number.toLowerCase().includes(q) || p.display_name?.toLowerCase().includes(q) || p.billable_customer?.toLowerCase().includes(q)))
-                    .slice(0, 8)
+                  // Single source: netsuite_parts is the unified catalog
+                  // (migration 117 folded the legacy graphics catalog into it
+                  // — searching both showed every graphics part twice).
+                  // vehicle_type/graphic_package keep the graphics-specific
+                  // search terms the old catalog matched on.
+                  const matches = allParts
+                    .filter(p => !selectedIds.has(p.id) && (p.item_number.toLowerCase().includes(q) || p.display_name?.toLowerCase().includes(q) || p.billable_customer?.toLowerCase().includes(q) || p.vehicle_type?.toLowerCase().includes(q) || p.graphic_package?.toLowerCase().includes(q)))
+                    .slice(0, 12)
                     .map(p => ({
                       key: `part:${p.id}`,
                       id: p.id,
@@ -1333,23 +1335,6 @@ export default function AdminScansPage() {
                       tag: null as string | null,
                       add: { id: p.id, label: `${p.item_number}${p.billable_customer ? ` — ${p.billable_customer}` : ''}`, partNumber: p.item_number, description: p.display_name, customer: p.billable_customer },
                     }));
-                  // Graphics/proofs catalog (separate table from netsuite_parts)
-                  const catMatches = allCatalog
-                    .filter(c => !selectedIds.has(c.id) && (c.part_number.toLowerCase().includes(q) || c.end_customer?.toLowerCase().includes(q) || c.vehicle_type?.toLowerCase().includes(q) || c.graphic_package?.toLowerCase().includes(q)))
-                    .slice(0, 8)
-                    .map(c => {
-                      const sub = [c.vehicle_type, c.graphic_package].filter(Boolean).join(' · ') || null;
-                      return {
-                        key: `cat:${c.id}`,
-                        id: c.id,
-                        title: c.part_number,
-                        customer: c.end_customer,
-                        sub,
-                        tag: 'Graphics catalog' as string | null,
-                        add: { id: c.id, label: `${c.part_number}${c.end_customer ? ` — ${c.end_customer}` : ''}`, partNumber: c.part_number, description: sub, customer: c.end_customer },
-                      };
-                    });
-                  const matches = [...partMatches, ...catMatches].slice(0, 12);
                   return (
                     <div style={{ position: 'absolute', top: '100%', left: 0, right: 0, zIndex: 50, background: 'var(--card)', border: `1px solid ${theme.border}`, borderRadius: '8px', boxShadow: '0 4px 12px rgba(0,0,0,0.2)', maxHeight: '240px', overflowY: 'auto', marginTop: '2px' }}>
                       {matches.length === 0 && (
@@ -1919,7 +1904,7 @@ export default function AdminScansPage() {
           billableCustomer={bulkCustomer.trim() || null}
           onClose={() => setCreateItemFor(null)}
           onCreated={(part: CreatedPart) => {
-            setAllParts(prev => [{ id: part.id, item_number: part.item_number, display_name: part.display_name, billable_customer: part.billable_customer }, ...prev]);
+            setAllParts(prev => [{ id: part.id, item_number: part.item_number, display_name: part.display_name, billable_customer: part.billable_customer, vehicle_type: null, graphic_package: null }, ...prev]);
             setBulkParts(prev => [...prev, {
               id: part.id,
               label: `${part.item_number}${part.billable_customer ? ` — ${part.billable_customer}` : ''}`,
