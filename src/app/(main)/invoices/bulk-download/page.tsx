@@ -13,6 +13,23 @@ const STATUS_OPTIONS = [
 ] as const;
 type StatusFilter = typeof STATUS_OPTIONS[number]['value'];
 
+// Comparable calendar-day key (yyyymmdd) from either ISO 'YYYY-MM-DD' (our
+// date inputs) or NetSuite's 'M/D/YYYY' result format. Numeric compare
+// avoids Date-object timezone drift on plain calendar dates.
+const dateKey = (s: string | null | undefined): number | null => {
+  if (!s) return null;
+  let m = s.match(/^(\d{4})-(\d{1,2})-(\d{1,2})/);
+  if (m) return +m[1] * 10000 + +m[2] * 100 + +m[3];
+  m = s.match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})/);
+  if (m) return +m[3] * 10000 + +m[1] * 100 + +m[2];
+  const d = new Date(s);
+  return isNaN(d.getTime()) ? null : d.getFullYear() * 10000 + (d.getMonth() + 1) * 100 + d.getDate();
+};
+const todayKey = () => {
+  const d = new Date();
+  return d.getFullYear() * 10000 + (d.getMonth() + 1) * 100 + d.getDate();
+};
+
 type Customer = {
   id: string;
   company_name: string;
@@ -107,6 +124,21 @@ export default function BulkInvoiceDownloadPage() {
         list = [...list, ...(data.transactions || [])];
         if (!data.hasMore) break;
         offset += data.limit;
+      }
+      // Date range is enforced HERE, on the full fetched list, regardless of
+      // what the server-side SuiteQL clause did — this guarantees the filter
+      // applies for every status (including All Invoices) and in every
+      // NetSuite date-format configuration.
+      const fromKey = dateKey(dateFrom);
+      const toKey = dateKey(dateTo);
+      if (fromKey || toKey) {
+        list = list.filter(inv => {
+          const k = dateKey(inv.trandate);
+          if (k == null) return true; // unparseable date: keep, don't hide
+          if (fromKey && k < fromKey) return false;
+          if (toKey && k > toKey) return false;
+          return true;
+        });
       }
       setInvoices(list);
       // Default to every invoice selected — matches the prior all-or-
@@ -357,7 +389,7 @@ export default function BulkInvoiceDownloadPage() {
                         <span style={{ fontWeight: 700, color: theme.textPrimary }}>INV #{inv.tranid}</span>
                         <span style={{ color: theme.textMuted, marginLeft: '8px' }}>{inv.trandate}</span>
                         {inv.duedate && inv.status !== 'Paid In Full' && (
-                          <span style={{ marginLeft: '8px', color: new Date(inv.duedate) < new Date() ? theme.error : theme.textMuted }}>
+                          <span style={{ marginLeft: '8px', color: (dateKey(inv.duedate) ?? Infinity) < todayKey() ? theme.error : theme.textMuted }}>
                             Due {inv.duedate}
                           </span>
                         )}
