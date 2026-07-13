@@ -12,8 +12,21 @@ export async function GET(req: NextRequest) {
   try {
     const { searchParams } = new URL(req.url);
     const customerId = safeIntId(searchParams.get('customerId'), 'customerId');
-    // status=open narrows to open invoices (used by the bulk-download UI).
+    // status narrows the invoice set (used by the bulk-download UI):
+    //   open    -> unpaid invoices (status 'A')
+    //   paid    -> paid in full (status 'B')
+    //   pastdue -> unpaid AND due date already passed
+    //   all     -> every invoice regardless of status
+    // Absent -> the legacy mixed document view (invoices + SOs + estimates).
     const statusFilter = searchParams.get('status');
+    // Optional trandate range, YYYY-MM-DD (regex-validated — these are
+    // interpolated into SuiteQL).
+    const dateRe = /^\d{4}-\d{2}-\d{2}$/;
+    const dateFrom = searchParams.get('dateFrom');
+    const dateTo = searchParams.get('dateTo');
+    const dateClause =
+      (dateFrom && dateRe.test(dateFrom) ? ` AND t.trandate >= TO_DATE('${dateFrom}', 'YYYY-MM-DD')` : '') +
+      (dateTo && dateRe.test(dateTo) ? ` AND t.trandate <= TO_DATE('${dateTo}', 'YYYY-MM-DD')` : '');
     // Pagination — long-history accounts (e.g. Aerodynamics) easily
     // exceed the old hard-coded 200 cap. Clients can keep paging with
     // ?limit & ?offset.
@@ -22,10 +35,13 @@ export async function GET(req: NextRequest) {
     const rawOffset = parseInt(searchParams.get('offset') || '0', 10);
     const offset = Number.isFinite(rawOffset) ? Math.max(0, rawOffset) : 0;
 
-    // In this NetSuite install the open-invoice status key is 'A'
-    // (see /api/netsuite/invoices STATUS_MAP).
-    const statusClause = statusFilter === 'open'
-      ? `AND t.type = 'CustInvc' AND t.status = 'A'`
+    // In this NetSuite install the invoice status keys are 'A' = Open and
+    // 'B' = Paid In Full (see /api/netsuite/invoices STATUS_MAP).
+    const statusClause =
+      statusFilter === 'open' ? `AND t.type = 'CustInvc' AND t.status = 'A'`
+      : statusFilter === 'paid' ? `AND t.type = 'CustInvc' AND t.status = 'B'`
+      : statusFilter === 'pastdue' ? `AND t.type = 'CustInvc' AND t.status = 'A' AND t.duedate < TRUNC(SYSDATE)`
+      : statusFilter === 'all' ? `AND t.type = 'CustInvc'`
       : `AND t.type IN ('CustInvc', 'SalesOrd', 'Estimate')`;
 
     const query = `
@@ -33,12 +49,14 @@ export async function GET(req: NextRequest) {
         t.id,
         t.tranid,
         t.trandate,
+        t.duedate,
         t.type,
         t.foreigntotal AS total,
         BUILTIN.DF(t.status) AS status_display
       FROM transaction t
       WHERE t.entity = ${customerId}
         ${statusClause}
+        ${dateClause}
       ORDER BY t.trandate DESC
     `;
 
@@ -47,6 +65,7 @@ export async function GET(req: NextRequest) {
       id: t.id,
       tranid: t.tranid,
       trandate: t.trandate,
+      duedate: t.duedate || null,
       type: t.type,
       total: t.total ? parseFloat(t.total) : 0,
       status: t.status_display || '',

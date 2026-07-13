@@ -1,9 +1,17 @@
 'use client';
 
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import JSZip from 'jszip';
 import { useAuth } from '@/components/AuthProvider';
 import { theme } from '@/lib/theme';
+
+const STATUS_OPTIONS = [
+  { value: 'open', label: 'Open' },
+  { value: 'pastdue', label: 'Past Due' },
+  { value: 'paid', label: 'Paid' },
+  { value: 'all', label: 'All Invoices' },
+] as const;
+type StatusFilter = typeof STATUS_OPTIONS[number]['value'];
 
 type Customer = {
   id: string;
@@ -15,6 +23,7 @@ type OpenInvoice = {
   id: string;
   tranid: string;
   trandate: string;
+  duedate: string | null;
   total: number;
   status: string;
 };
@@ -36,6 +45,17 @@ export default function BulkInvoiceDownloadPage() {
   const [downloadProgress, setDownloadProgress] = useState<string | null>(null);
   const [downloadError, setDownloadError] = useState<string | null>(null);
 
+  // Filters: invoice status + trandate range (YYYY-MM-DD)
+  const [statusFilter, setStatusFilter] = useState<StatusFilter>('open');
+  const [dateFrom, setDateFrom] = useState('');
+  const [dateTo, setDateTo] = useState('');
+
+  // Reload whenever the customer or any filter changes
+  useEffect(() => {
+    if (customer) loadInvoices(customer);
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- loadInvoices reads the same state this effect watches
+  }, [customer, statusFilter, dateFrom, dateTo]);
+
   if (authLoading) return null;
 
   const searchCustomers = async () => {
@@ -52,21 +72,30 @@ export default function BulkInvoiceDownloadPage() {
     setSearching(false);
   };
 
-  const pickCustomer = async (c: Customer) => {
-    setCustomer(c);
+  const pickCustomer = (c: Customer) => {
+    setCustomer(c); // the filter effect loads the invoices
     setResults([]);
     setSearch(c.company_name);
     setInvoices([]);
     setListError(null);
     setDownloadError(null);
+  };
+
+  const loadInvoices = async (c: Customer) => {
+    setListError(null);
+    setDownloadError(null);
     setLoadingInvoices(true);
     try {
-      // Page through everything — accounts can have more open invoices than
+      const filterParams =
+        `&status=${statusFilter}` +
+        (dateFrom ? `&dateFrom=${dateFrom}` : '') +
+        (dateTo ? `&dateTo=${dateTo}` : '');
+      // Page through everything — accounts can have more invoices than
       // one API page, and a silent cutoff reads as "the app lost invoices".
       let list: OpenInvoice[] = [];
       let offset = 0;
       for (;;) {
-        const res = await fetch(`/api/netsuite/customer-invoices?customerId=${c.id}&status=open&limit=1000&offset=${offset}`);
+        const res = await fetch(`/api/netsuite/customer-invoices?customerId=${c.id}${filterParams}&limit=1000&offset=${offset}`);
         const data = await res.json();
         if (!data.success) {
           setListError(data.error || 'Failed to load invoices');
@@ -130,10 +159,11 @@ export default function BulkInvoiceDownloadPage() {
       setDownloadProgress('Zipping…');
       const blob = await zip.generateAsync({ type: 'blob' });
       const safeName = customer.company_name.replace(/[^a-zA-Z0-9._-]+/g, '_').slice(0, 80) || 'customer';
+      const statusWord = statusFilter === 'all' ? '' : `${statusFilter === 'pastdue' ? 'past-due' : statusFilter}-`;
       const url = URL.createObjectURL(blob);
       const a = document.createElement('a');
       a.href = url;
-      a.download = `${safeName}-open-invoices.zip`;
+      a.download = `${safeName}-${statusWord}invoices.zip`;
       document.body.appendChild(a);
       a.click();
       document.body.removeChild(a);
@@ -168,10 +198,10 @@ export default function BulkInvoiceDownloadPage() {
   return (
     <div style={{ maxWidth: '720px', margin: '0 auto', padding: '24px 16px' }}>
       <h1 style={{ fontSize: '22px', fontWeight: 800, margin: '0 0 6px', color: theme.textPrimary }}>
-        Download Open Invoices
+        Download Invoices
       </h1>
       <div style={{ fontSize: '13px', color: theme.textMuted, marginBottom: '20px' }}>
-        Pick a customer to fetch a single ZIP of every open invoice PDF from NetSuite.
+        Pick a customer, filter by status and date, and download the invoice PDFs from NetSuite as one ZIP.
       </div>
 
       {/* Customer search */}
@@ -229,6 +259,42 @@ export default function BulkInvoiceDownloadPage() {
         )}
       </div>
 
+      {/* Filters */}
+      {customer && (
+        <div style={{
+          background: theme.card, border: `1px solid ${theme.border}`,
+          borderRadius: '14px', padding: '16px', marginBottom: '16px',
+          display: 'flex', gap: '12px', flexWrap: 'wrap', alignItems: 'flex-end',
+        }}>
+          <div>
+            <div style={{ fontSize: '11px', fontWeight: 700, color: theme.textMuted, textTransform: 'uppercase', letterSpacing: '0.5px', marginBottom: '6px' }}>Status</div>
+            <select
+              value={statusFilter}
+              onChange={e => setStatusFilter(e.target.value as StatusFilter)}
+              style={{ padding: '9px 10px', borderRadius: '10px', border: `1px solid ${theme.border}`, background: theme.card, color: theme.textPrimary, fontSize: '13px', fontWeight: 600 }}
+            >
+              {STATUS_OPTIONS.map(o => <option key={o.value} value={o.value}>{o.label}</option>)}
+            </select>
+          </div>
+          <div>
+            <div style={{ fontSize: '11px', fontWeight: 700, color: theme.textMuted, textTransform: 'uppercase', letterSpacing: '0.5px', marginBottom: '6px' }}>From (invoice date)</div>
+            <input type="date" value={dateFrom} onChange={e => setDateFrom(e.target.value)}
+              style={{ padding: '8px 10px', borderRadius: '10px', border: `1px solid ${theme.border}`, background: theme.card, color: theme.textPrimary, fontSize: '13px' }} />
+          </div>
+          <div>
+            <div style={{ fontSize: '11px', fontWeight: 700, color: theme.textMuted, textTransform: 'uppercase', letterSpacing: '0.5px', marginBottom: '6px' }}>To</div>
+            <input type="date" value={dateTo} onChange={e => setDateTo(e.target.value)}
+              style={{ padding: '8px 10px', borderRadius: '10px', border: `1px solid ${theme.border}`, background: theme.card, color: theme.textPrimary, fontSize: '13px' }} />
+          </div>
+          {(dateFrom || dateTo) && (
+            <button onClick={() => { setDateFrom(''); setDateTo(''); }}
+              style={{ padding: '8px 12px', borderRadius: '10px', border: `1px solid ${theme.border}`, background: 'transparent', color: theme.textMuted, fontSize: '12px', fontWeight: 700, cursor: 'pointer' }}>
+              Clear dates
+            </button>
+          )}
+        </div>
+      )}
+
       {/* Invoice list */}
       {customer && (
         <div style={{
@@ -236,7 +302,7 @@ export default function BulkInvoiceDownloadPage() {
           borderRadius: '14px', padding: '16px',
         }}>
           {loadingInvoices ? (
-            <div style={{ color: theme.textMuted, fontSize: '13px' }}>Loading open invoices…</div>
+            <div style={{ color: theme.textMuted, fontSize: '13px' }}>Loading invoices…</div>
           ) : listError ? (
             <div style={{
               padding: '8px 12px', background: theme.errorBg, border: `1px solid ${theme.errorBorder}`,
@@ -244,7 +310,7 @@ export default function BulkInvoiceDownloadPage() {
             }}>{listError}</div>
           ) : invoices.length === 0 ? (
             <div style={{ color: theme.textMuted, fontSize: '13px' }}>
-              No open invoices for {customer.company_name}.
+              No {STATUS_OPTIONS.find(o => o.value === statusFilter)?.label.toLowerCase()} invoices for {customer.company_name}{dateFrom || dateTo ? ' in that date range' : ''}.
             </div>
           ) : (
             <>
@@ -290,6 +356,18 @@ export default function BulkInvoiceDownloadPage() {
                       <div style={{ flex: 1, minWidth: 0 }}>
                         <span style={{ fontWeight: 700, color: theme.textPrimary }}>INV #{inv.tranid}</span>
                         <span style={{ color: theme.textMuted, marginLeft: '8px' }}>{inv.trandate}</span>
+                        {inv.duedate && inv.status !== 'Paid In Full' && (
+                          <span style={{ marginLeft: '8px', color: new Date(inv.duedate) < new Date() ? theme.error : theme.textMuted }}>
+                            Due {inv.duedate}
+                          </span>
+                        )}
+                        {statusFilter === 'all' && inv.status && (
+                          <span style={{
+                            marginLeft: '8px', fontSize: '10px', fontWeight: 700, padding: '1px 6px', borderRadius: '4px',
+                            background: inv.status === 'Paid In Full' ? 'rgba(34,197,94,0.12)' : 'rgba(96,165,250,0.12)',
+                            color: inv.status === 'Paid In Full' ? '#22c55e' : '#60a5fa',
+                          }}>{inv.status === 'Paid In Full' ? 'PAID' : 'OPEN'}</span>
+                        )}
                       </div>
                       <div style={{ fontWeight: 700, color: theme.textPrimary }}>
                         ${(inv.total || 0).toLocaleString('en-US', { minimumFractionDigits: 2 })}
