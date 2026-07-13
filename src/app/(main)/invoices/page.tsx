@@ -493,7 +493,7 @@ export default function InvoicingHubPage() {
         <button
           onClick={() => router.push('/invoices/bulk-download')}
           style={smallBtn('#60a5fa', 'rgba(59,130,246,0.08)', 'rgba(59,130,246,0.25)')}
-        >Download Open Invoices (ZIP) →</button>
+        >Download Invoices (ZIP) →</button>
       </div>
 
       {/* Tabs */}
