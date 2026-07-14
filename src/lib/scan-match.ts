@@ -41,6 +41,41 @@ export function shipToMatchesLocation(shipTo: any, locationName: string | null |
 export interface MatchResult { matched: number; total: number; }
 
 /**
+ * Recompute open ↔ complete for the given POs: a PO is complete (fulfilled)
+ * when it has at least one line with real quantity and every line's installed
+ * count meets its quantity. Only ever flips between 'open' and 'complete' —
+ * closed/cancelled POs are never touched.
+ */
+export async function recomputePoFulfillment(service: SupabaseClient, poIds: string[]): Promise<void> {
+  const ids = [...new Set(poIds)].filter(Boolean);
+  if (ids.length === 0) return;
+
+  const { data: posRows } = await service
+    .from('purchase_orders')
+    .select('id, status')
+    .in('id', ids)
+    .in('status', ['open', 'complete']);
+  if (!posRows || posRows.length === 0) return;
+
+  const { data: lines } = await service
+    .from('po_line_items')
+    .select('po_id, quantity, installed')
+    .in('po_id', posRows.map(p => p.id));
+
+  for (const po of posRows) {
+    const poLines = (lines || []).filter(l => l.po_id === po.id);
+    const fulfilled =
+      poLines.length > 0 &&
+      poLines.reduce((sum, l) => sum + (l.quantity || 0), 0) > 0 &&
+      poLines.every(l => (l.installed || 0) >= (l.quantity || 0));
+    const next = fulfilled ? 'complete' : 'open';
+    if (next !== po.status) {
+      await service.from('purchase_orders').update({ status: next }).eq('id', po.id);
+    }
+  }
+}
+
+/**
  * Match unmatched, unexported, unarchived scans to open POs. Pass `scanIds` to
  * limit to specific scans (e.g. the one just logged); omit to sweep all
  * outstanding scans. Increments po_line_items.installed for each match.
@@ -74,6 +109,7 @@ export async function matchScansToOpenPos(
   const lines = allLines || [];
 
   let matched = 0;
+  const touchedPoIds: string[] = [];
 
   for (const scan of unmatched) {
     const scanPart = normalizePart(scan.part_number);
@@ -107,8 +143,13 @@ export async function matchScansToOpenPos(
 
     // Reflect the consumed capacity for subsequent scans in this sweep.
     chosenLine.installed = (chosenLine.installed || 0) + 1;
+    touchedPoIds.push(po.id);
     matched++;
   }
+
+  // A match may have filled a PO's last remaining unit — mark it fulfilled
+  // so it moves off the open list automatically.
+  await recomputePoFulfillment(service, touchedPoIds);
 
   return { matched, total: unmatched.length };
 }

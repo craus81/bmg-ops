@@ -7,6 +7,7 @@ import { r2Upload } from '@/lib/r2';
 import { resolvePoCustomer } from '@/lib/customer-match';
 import { validateBody, z } from '@/lib/validate';
 import { isProofLikeName } from '@/lib/pdf-classify';
+import { recomputePoFulfillment } from '@/lib/scan-match';
 
 // PDF download + Claude extraction (with retry/backoff) routinely runs well
 // past Vercel's default ~10s ceiling, which 504s the function mid-extraction
@@ -510,6 +511,10 @@ export async function POST(req: NextRequest) {
         if (lineInserts.length > 0) {
           await supabase.from('po_line_items').insert(lineInserts);
         }
+
+        // Replaced lines reset installed counts — re-derive open/complete so
+        // a previously fulfilled PO reopens when the update adds work.
+        await recomputePoFulfillment(supabase, [existingPO.id]);
 
         await savePoFilesToStorage(supabase, existingPO.id, messageId, poPdfs);
         // Part matching sees every PDF on the email — proofs are deliberately
@@ -1017,6 +1022,10 @@ export async function POST(req: NextRequest) {
           return NextResponse.json({ error: `Failed to insert updated line items: ${insertErr.message}` }, { status: 500 });
         }
       }
+
+      // Replaced lines reset installed counts — re-derive open/complete so a
+      // previously fulfilled PO reopens when the update adds work.
+      await recomputePoFulfillment(supabase, [existingPO.id]);
 
       await savePoFilesToStorage(supabase, existingPO.id, messageId, poPdfs, pdfCache);
       const proofsAttached = await attachProofPdfsToParts(supabase, messageId, lineInserts, pdfs, pdfCache);
