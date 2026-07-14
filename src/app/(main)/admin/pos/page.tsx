@@ -1375,11 +1375,14 @@ export default function POsPage() {
   useEffect(() => {
     supabase
       .from('profiles')
-      .select('id, full_name, email, role, status')
+      .select('id, full_name, email, role, roles, status')
       .eq('status', 'approved')
       .then(({ data }: { data: any[] | null }) => {
+        // Only ADMINS are taggable on PO notes — never CNI installers or
+        // other roles. (An account's roles may live in the legacy single
+        // `role` column or the `roles` array.)
         setTeamProfiles(
-          (data || []).filter(p => p.role !== 'customer' && p.role !== 'cni_installer'),
+          (data || []).filter(p => p.role === 'admin' || (Array.isArray(p.roles) && p.roles.includes('admin'))),
         );
       });
   // eslint-disable-next-line react-hooks/exhaustive-deps -- load once on mount
