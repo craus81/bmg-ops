@@ -6,6 +6,7 @@ import { requireAuth } from '@/lib/api-auth';
 import { r2Upload } from '@/lib/r2';
 import { resolvePoCustomer } from '@/lib/customer-match';
 import { validateBody, z } from '@/lib/validate';
+import { isProofLikeName } from '@/lib/pdf-classify';
 
 // PDF download + Claude extraction (with retry/backoff) routinely runs well
 // past Vercel's default ~10s ceiling, which 504s the function mid-extraction
@@ -108,9 +109,7 @@ async function attachProofPdfsToParts(
     try {
       const upperName = pdf.filename.toUpperCase();
       let targets = parts.filter(p => upperName.includes(p.part_number.toUpperCase()));
-      const proofNamed = /proof|artwork|graphics?|mock.?up|rendering/i.test(pdf.filename)
-        && !/\b(po|purchase.?order)\b/i.test(pdf.filename);
-      if (targets.length === 0 && proofNamed) {
+      if (targets.length === 0 && isProofLikeName(pdf.filename)) {
         const graphics = parts.filter(p => /^(02|RM)/i.test(p.part_number));
         if (graphics.length === 1) targets = graphics;
         else if (graphics.length === 0 && parts.length === 1) targets = parts;
@@ -665,12 +664,10 @@ export async function POST(req: NextRequest) {
       // Classify them by name (unless the name also says it IS a PO) or by
       // any size no text PO ever reaches, so they skip the AI call entirely.
       const EXTRACT_MAX_BYTES = 4 * 1024 * 1024;
-      const isProofLike = (name: string) =>
-        /proof|artwork|graphics?|mock.?up|rendering/i.test(name) && !/\b(po|purchase.?order)\b/i.test(name);
       const extractable: typeof downloaded = [];
       for (const d of downloaded) {
         const approxBytes = d.base64.length * 0.75;
-        if (isProofLike(d.pdf.filename) || approxBytes > EXTRACT_MAX_BYTES) {
+        if (isProofLikeName(d.pdf.filename) || approxBytes > EXTRACT_MAX_BYTES) {
           proofPdfs.push(d.pdf);
         } else {
           extractable.push(d);

@@ -4,6 +4,7 @@ import { requireAdmin } from '@/lib/api-auth';
 import { validateBody, z } from '@/lib/validate';
 import { getGmailClient, getMessage, getHeader, getPdfAttachments, getAttachment } from '@/lib/google';
 import { r2Upload } from '@/lib/r2';
+import { isProofLikeName } from '@/lib/pdf-classify';
 
 export const dynamic = 'force-dynamic';
 // Gmail lookups + PDF downloads + R2 uploads for a batch of POs runs well
@@ -25,7 +26,6 @@ const service = createClient(
 // the batch in flight can finish and return a real report instead of a 504.
 const TIME_BUDGET_MS = 42_000;
 
-const isProofLike = (name: string) => /proof|artwork|mock.?up|rendering/i.test(name);
 
 /**
  * POST /api/pos/backfill-pdfs — find the source PDF for POs that have no
@@ -122,7 +122,7 @@ export async function POST(req: NextRequest) {
 
         const message = await getMessage(messageId);
         const pdfs = getPdfAttachments(message).filter(
-          p => !isProofLike(p.filename) || p.filename.includes(poNumber),
+          p => !isProofLikeName(p.filename) || p.filename.includes(poNumber),
         );
         if (pdfs.length === 0) {
           noMatch.push({ poId: po.id, poNumber });
