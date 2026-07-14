@@ -24,7 +24,9 @@ const service = createClient(
 
 // Stop starting new POs when this much of the function budget is spent, so
 // the batch in flight can finish and return a real report instead of a 504.
-const TIME_BUDGET_MS = 42_000;
+// Kept well under maxDuration: a single PO can burn 10s+ on Gmail searches
+// and large downloads, and a batch that dies at the ceiling reports nothing.
+const TIME_BUDGET_MS = 35_000;
 
 
 /**

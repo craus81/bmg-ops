@@ -46,6 +46,20 @@ function formatShipTo(shipTo: PurchaseOrder['ship_to']): string | null {
   return lines.length > 0 ? lines.join('\n') : null;
 }
 
+// Short human location label for a PO row: the city ("Wentzville",
+// "Kansas City") rather than plant codes like "MFG Wentzville MO Install
+// Wentzville". Falls back to the "Install <city>" tail of a plant-style
+// name, then the raw name.
+function shipToCityLabel(shipTo: PurchaseOrder['ship_to']): string {
+  if (!shipTo) return '';
+  const city = (shipTo.city || '').trim();
+  if (city) return city;
+  const name = (shipTo.name || '').trim();
+  const install = name.match(/install\s+(.+)$/i);
+  if (install) return install[1].trim();
+  return name;
+}
+
 function buildJobContent(lines: { part_number: string; description: string | null; quantity: number }[]): string | null {
   if (!lines.length) return null;
   return lines
@@ -312,6 +326,7 @@ export default function POsPage() {
   const [catalog, setCatalog] = useState<CatalogItem[]>([]);
   const [loading, setLoading] = useState(true);
   const [poTab, setPoTab] = useState<'open' | 'fulfilled' | 'closed'>('open');
+  const [poSortField, setPoSortField] = useState<'po_number' | 'location'>('po_number');
   const [showCreate, setShowCreate] = useState(false);
   const [showImport, setShowImport] = useState(false);
   const [expandedPo, setExpandedPo] = useState<string | null>(null);
@@ -1446,8 +1461,12 @@ export default function POsPage() {
     let totalAttached = 0;
     let totalNoMatch = 0;
     let failed: string | null = null;
-    try {
-      for (let round = 0; round < 20; round++) {
+    // Each round is retried once — a single batch dying (e.g. a slow one cut
+    // off at the function ceiling) shouldn't kill the whole run, and work
+    // already attached persists server-side either way.
+    let retried = false;
+    for (let round = 0; round < 60; round++) {
+      try {
         const res = await fetch('/api/pos/backfill-pdfs', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
@@ -1455,28 +1474,74 @@ export default function POsPage() {
         });
         const data = await res.json().catch(() => ({}));
         if (!res.ok || !data.success) {
+          if (!retried) { retried = true; continue; }
           failed = data.error || `request failed (${res.status})`;
           break;
         }
+        retried = false;
         totalAttached += data.attached.length;
         totalNoMatch += data.noMatch.length;
         for (const n of data.noMatch) skipPoIds.push(n.poId);
         setBackfillProgress(`${totalAttached} attached · ${data.remaining} to go`);
         if (data.remaining <= 0 || data.processed === 0) break;
+      } catch (err: any) {
+        if (!retried) { retried = true; continue; }
+        failed = err.message || 'network error';
+        break;
       }
-    } catch (err: any) {
-      failed = err.message || 'network error';
     }
+
+    // Phase 2: fill in missing ship-to locations. Any PO with a stored PDF
+    // (including ones just attached) but no location gets the ship-to
+    // extractor run over its first PDF. Capped per run — each is an AI call.
+    let locationsFilled = 0;
+    let locationsFailed = 0;
+    try {
+      const { data: missingLoc } = await supabase
+        .from('purchase_orders')
+        .select('id, ship_to, po_files(storage_path)')
+        .is('ship_to', null);
+      const candidates = ((missingLoc || []) as any[]).filter(p => (p.po_files || []).length > 0);
+      const LOC_CAP = 25;
+      const runCount = Math.min(candidates.length, LOC_CAP);
+      for (let i = 0; i < runCount; i++) {
+        const p = candidates[i];
+        setBackfillProgress(`locations ${i + 1}/${runCount}…`);
+        try {
+          const res = await fetch('/api/pos/extract-ship-to', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ poId: p.id, storagePath: p.po_files[0].storage_path }),
+          });
+          const data = await res.json().catch(() => ({}));
+          if (res.ok && data.ship_to) {
+            locationsFilled++;
+            setPos(prev => prev.map(x => x.id === p.id ? { ...x, ship_to: data.ship_to } : x));
+          } else {
+            locationsFailed++;
+          }
+        } catch {
+          locationsFailed++;
+        }
+      }
+    } catch { /* best-effort */ }
+
     setBackfillRunning(false);
     setBackfillProgress('');
-    if (failed) {
-      await dialog.alert(`PDF backfill stopped: ${failed}${totalAttached > 0 ? ` (${totalAttached} PO${totalAttached === 1 ? '' : 's'} already got PDFs)` : ''}`);
-    } else {
-      const lines = [`Attached PDFs to ${totalAttached} PO${totalAttached === 1 ? '' : 's'}.`];
-      if (totalNoMatch > 0) lines.push(`${totalNoMatch} PO${totalNoMatch === 1 ? '' : 's'} had no matching email in Gmail.`);
-      if (totalAttached === 0 && totalNoMatch === 0) lines.push('No POs are missing a PDF.');
-      await dialog.alert(lines.join('\n'));
+    const lines = [];
+    if (failed) lines.push(`PDF search stopped early: ${failed}.`);
+    lines.push(`Attached PDFs to ${totalAttached} PO${totalAttached === 1 ? '' : 's'}.`);
+    if (totalNoMatch > 0) lines.push(`${totalNoMatch} PO${totalNoMatch === 1 ? '' : 's'} had no matching email in Gmail.`);
+    if (locationsFilled > 0 || locationsFailed > 0) {
+      lines.push(`Filled in locations on ${locationsFilled} PO${locationsFilled === 1 ? '' : 's'}${locationsFailed > 0 ? ` (${locationsFailed} couldn't be read)` : ''}.`);
     }
+    if (!failed && totalAttached === 0 && totalNoMatch === 0 && locationsFilled === 0 && locationsFailed === 0) {
+      lines.push('Nothing to do — no POs are missing a PDF or location.');
+    }
+    if (!failed && (totalNoMatch > 0 || locationsFilled > 0)) {
+      lines.push('Run again to process more if any remain.');
+    }
+    await dialog.alert(lines.join('\n'));
   };
 
   // Multi-PO emails queue one review per PO. Advance to the next one, or
@@ -2083,8 +2148,18 @@ export default function POsPage() {
       return false;
     })
     .sort((a, b) => {
-      const cmp = a.po_number.localeCompare(b.po_number, undefined, { numeric: true });
-      return poSort === 'asc' ? cmp : -cmp;
+      const byPoNumber = a.po_number.localeCompare(b.po_number, undefined, { numeric: true });
+      if (poSortField === 'location') {
+        const la = shipToCityLabel(a.ship_to);
+        const lb = shipToCityLabel(b.ship_to);
+        // POs without a location group at the end regardless of direction
+        if (!la && !lb) return poSort === 'asc' ? byPoNumber : -byPoNumber;
+        if (!la) return 1;
+        if (!lb) return -1;
+        const cmp = la.localeCompare(lb) || byPoNumber;
+        return poSort === 'asc' ? cmp : -cmp;
+      }
+      return poSort === 'asc' ? byPoNumber : -byPoNumber;
     });
 
   const closePO = async (poId: string) => {
@@ -2254,15 +2329,34 @@ export default function POsPage() {
             {poTab === 'closed' ? 'Closed' : poTab === 'fulfilled' ? 'Fulfilled' : ''} Purchase Orders ({filteredPos.length}{poSearch ? ` of ${pos.length}` : ''})
           </div>
           <button
-            onClick={() => setPoSort(s => s === 'asc' ? 'desc' : 'asc')}
-            title={`Sort PO# ${poSort === 'asc' ? 'descending' : 'ascending'}`}
+            onClick={() => {
+              if (poSortField === 'po_number') setPoSort(s => s === 'asc' ? 'desc' : 'asc');
+              else { setPoSortField('po_number'); setPoSort('asc'); }
+            }}
+            title="Sort by PO number (click again to flip direction)"
             style={{
               padding: '3px 8px', borderRadius: '6px', fontSize: '10px', fontWeight: 700,
-              background: 'var(--subtle-bg)', border: '1px solid var(--border)',
-              color: 'var(--text-body)', cursor: 'pointer',
+              background: poSortField === 'po_number' ? 'var(--tab-active-bg)' : 'var(--subtle-bg)',
+              border: poSortField === 'po_number' ? '1px solid var(--tab-active-border)' : '1px solid var(--border)',
+              color: poSortField === 'po_number' ? '#60a5fa' : 'var(--text-body)', cursor: 'pointer',
             }}
           >
-            PO# {poSort === 'asc' ? '▲' : '▼'}
+            PO# {poSortField === 'po_number' ? (poSort === 'asc' ? '▲' : '▼') : ''}
+          </button>
+          <button
+            onClick={() => {
+              if (poSortField === 'location') setPoSort(s => s === 'asc' ? 'desc' : 'asc');
+              else { setPoSortField('location'); setPoSort('asc'); }
+            }}
+            title="Sort by ship-to location (click again to flip direction; POs without a location sort last)"
+            style={{
+              padding: '3px 8px', borderRadius: '6px', fontSize: '10px', fontWeight: 700,
+              background: poSortField === 'location' ? 'var(--tab-active-bg)' : 'var(--subtle-bg)',
+              border: poSortField === 'location' ? '1px solid var(--tab-active-border)' : '1px solid var(--border)',
+              color: poSortField === 'location' ? '#22d3ee' : 'var(--text-body)', cursor: 'pointer',
+            }}
+          >
+            📍 Location {poSortField === 'location' ? (poSort === 'asc' ? '▲' : '▼') : ''}
           </button>
         </div>
         <div style={{ display: 'flex', gap: '6px' }}>
@@ -3547,11 +3641,9 @@ export default function POsPage() {
                         <div style={{ fontWeight: 800, fontSize: '15px' }}>PO #{po.po_number}</div>
                         {(() => {
                           // Ship-to location, front and center next to the PO
-                          // number: the location name, or city/state when the
-                          // extraction didn't carry a name. Full address on hover.
-                          const name = (po.ship_to?.name || '').trim();
-                          const cityState = [po.ship_to?.city, po.ship_to?.state].filter(Boolean).join(', ');
-                          const loc = name && cityState ? `${name} · ${cityState}` : name || cityState;
+                          // number — just the city ("Wentzville"), not the
+                          // plant string. Full address on hover.
+                          const loc = shipToCityLabel(po.ship_to);
                           if (!loc) return null;
                           return (
                             <span
