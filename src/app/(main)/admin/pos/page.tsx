@@ -1821,15 +1821,19 @@ export default function POsPage() {
     }
     setCreatingOpenInvoice(true);
     try {
-      const res = await fetch('/api/netsuite/create-invoice', {
+      // Direct NetSuite invoice — deliberately NOT via a sales order;
+      // FleetSuite bypasses SO creation entirely.
+      const res = await fetch('/api/pos/invoice-open', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ salesOrderIds: [(po as any).netsuite_so_id], quantities }),
+        body: JSON.stringify({ poId: po.id, quantities }),
       });
       const data = await res.json();
-      const result = data.results?.[0];
-      if (!res.ok || !result || result.status !== 'success') {
-        await dialog.alert(`Failed to create invoice: ${result?.error || data.error || `request failed (${res.status})`}`);
+      const result = res.ok && data.success
+        ? { status: 'success', invoiceId: data.invoiceId, invoiceNumber: data.invoiceNumber }
+        : null;
+      if (!result) {
+        await dialog.alert(`Failed to create invoice: ${data.error || `request failed (${res.status})`}`);
       } else {
         const totalQty = Object.values(quantities).reduce((a, b) => a + b, 0);
         setPos(prev => prev.map(p => {
@@ -3984,9 +3988,10 @@ export default function POsPage() {
                     {creatingGfxJobForPo === po.id ? 'Creating...' : `+ Create Graphics Job (${po.line_items.length} part${po.line_items.length !== 1 ? 's' : ''})`}
                   </button>
 
-                  {/* Invoice from open (uninstalled) quantities — needs a linked
-                      NetSuite SO; completed lines never enter this invoice. */}
-                  {(po as any).netsuite_so_id && po.line_items.some(li => (li.installed || 0) < li.quantity) && (
+                  {/* Invoice from open (uninstalled) quantities — created
+                      directly in NetSuite, no sales order needed; completed
+                      lines never enter this invoice. */}
+                  {po.line_items.some(li => (li.installed || 0) < li.quantity) && (
                     <button
                       onClick={(e) => { e.stopPropagation(); openInvoiceFromPo(po); }}
                       style={{
