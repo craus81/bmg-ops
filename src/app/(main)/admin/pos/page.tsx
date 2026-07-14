@@ -12,6 +12,7 @@ import { PartLabel } from '@/components/PartLabel';
 import { CreateNetsuiteItemModal } from '@/components/CreateNetsuiteItemModal';
 import { useDialog } from '@/components/DialogProvider';
 import { isProofLikeName } from '@/lib/pdf-classify';
+import { openNetSuitePdf } from '@/lib/netsuite-pdf-client';
 
 interface ImportLine extends ParsedPOLine {
   catalog_match: CatalogItem | null;
@@ -1479,6 +1480,41 @@ export default function POsPage() {
     }
   };
 
+  // Pull in invoices created directly in NetSuite (matched by the PO number
+  // on the invoice's Reference No.) so every PO's invoice list is complete
+  // regardless of which system created the invoice.
+  const [syncingInvoices, setSyncingInvoices] = useState(false);
+  const syncInvoices = async () => {
+    if (syncingInvoices) return;
+    setSyncingInvoices(true);
+    try {
+      const res = await fetch('/api/pos/sync-invoices', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: '{}',
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok || !data.success) {
+        await dialog.alert(`Invoice sync failed: ${data.error || `request failed (${res.status})`}`);
+      } else {
+        const { data: poData } = await supabase
+          .from('purchase_orders')
+          .select('*, po_line_items(*), po_invoices(*)')
+          .order('created_at', { ascending: false });
+        const notesByPo = await fetchNoteCounts();
+        const FILTERED_CUSTOMERS = ['ranger design', 'enterprise fleet management', 'bmg fleet installations'];
+        const mapped = (poData || [])
+          .filter((po: any) => !FILTERED_CUSTOMERS.some(fc => po.customer?.toLowerCase().includes(fc)))
+          .map((po: any) => ({ ...po, line_items: po.po_line_items || [], po_notes: notesByPo[po.id] || [], po_invoices: (po.po_invoices || []).sort((a: any, b: any) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime()) }));
+        setPos(mapped);
+        await dialog.alert(`Linked ${data.linked} new invoice${data.linked !== 1 ? 's' : ''} (${data.invoicesFound} found across ${data.posScanned} PO numbers).`);
+      }
+    } catch (err: any) {
+      await dialog.alert(`Invoice sync failed: ${err.message || 'network error'}`);
+    }
+    setSyncingInvoices(false);
+  };
+
   // Multi-PO emails queue one review per PO. Advance to the next one, or
   // close the panel when the queue is spent.
   const advanceReviewQueue = () => {
@@ -2296,6 +2332,14 @@ export default function POsPage() {
                 style={{ padding: '6px 12px', borderRadius: '8px', background: 'rgba(167,139,250,0.1)', border: '1px solid rgba(167,139,250,0.25)', color: '#a78bfa', fontSize: '12px', fontWeight: 700, opacity: backfillRunning ? 0.7 : 1, cursor: backfillRunning ? 'default' : 'pointer' }}
               >
                 {backfillRunning ? `Finding… ${backfillProgress}` : 'Find PDFs'}
+              </button>
+              <button
+                onClick={syncInvoices}
+                disabled={syncingInvoices}
+                title="Link every NetSuite invoice that references a PO number to its PO — including invoices created directly in NetSuite"
+                style={{ padding: '6px 12px', borderRadius: '8px', background: 'rgba(52,211,153,0.1)', border: '1px solid rgba(52,211,153,0.25)', color: '#34d399', fontSize: '12px', fontWeight: 700, opacity: syncingInvoices ? 0.7 : 1, cursor: syncingInvoices ? 'default' : 'pointer' }}
+              >
+                {syncingInvoices ? 'Syncing…' : 'Sync Invoices'}
               </button>
               <button
                 onClick={() => { setShowImport(!showImport); setShowCreate(false); setShowEmailImport(false); setParsedPO(null); setImportLines([]); setParseError(''); }}
@@ -3963,15 +4007,32 @@ export default function POsPage() {
                                 <div style={{ fontSize: '10px', color: 'var(--text-label)', marginTop: '2px' }}>{inv.memo}</div>
                               )}
                             </div>
-                            <div style={{ textAlign: 'right' }}>
-                              {inv.total_qty != null && (
-                                <div style={{ fontSize: '11px', color: 'var(--text-body)', fontWeight: 600 }}>{inv.total_qty} unit{inv.total_qty !== 1 ? 's' : ''}</div>
-                              )}
-                              {inv.created_at && (
-                                <div style={{ fontSize: '9px', color: 'var(--text-label)' }}>
-                                  {new Date(inv.created_at).toLocaleDateString([], { month: 'short', day: 'numeric' })}
-                                </div>
-                              )}
+                            <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                              <div style={{ textAlign: 'right' }}>
+                                {inv.total_qty != null && (
+                                  <div style={{ fontSize: '11px', color: 'var(--text-body)', fontWeight: 600 }}>{inv.total_qty} unit{inv.total_qty !== 1 ? 's' : ''}</div>
+                                )}
+                                {inv.created_at && (
+                                  <div style={{ fontSize: '9px', color: 'var(--text-label)' }}>
+                                    {new Date(inv.created_at).toLocaleDateString([], { month: 'short', day: 'numeric' })}
+                                  </div>
+                                )}
+                              </div>
+                              <button
+                                onClick={async (e) => {
+                                  e.stopPropagation();
+                                  const r = await openNetSuitePdf('invoice', String(inv.netsuite_invoice_id));
+                                  if (!r.ok) await dialog.alert(`Couldn't open the invoice PDF: ${r.error}`);
+                                }}
+                                title="Open the invoice PDF"
+                                style={{
+                                  padding: '4px 10px', borderRadius: '6px', fontSize: '10px', fontWeight: 700,
+                                  background: 'rgba(52,211,153,0.12)', border: '1px solid rgba(52,211,153,0.35)',
+                                  color: '#34d399', cursor: 'pointer', whiteSpace: 'nowrap',
+                                }}
+                              >
+                                📄 PDF
+                              </button>
                             </div>
                           </div>
                         ))}
