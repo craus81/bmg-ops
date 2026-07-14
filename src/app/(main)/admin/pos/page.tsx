@@ -399,8 +399,11 @@ export default function POsPage() {
     extracted: any;
     pdf?: { url: string; name: string };
     // Which source PDFs belong to this PO (multi-PO emails) — sent back on
-    // confirm so only those files attach to the created/updated PO.
+    // confirm so only those files attach to the created/updated PO. Filenames
+    // ride along because Gmail attachment ids go stale between fetches; the
+    // server matches on either.
     attachmentIds?: string[];
+    attachmentFilenames?: string[];
     queuePos?: { index: number; total: number };
   };
   const [reviewingExtraction, setReviewingExtraction] = useState<ReviewItem | null>(null);
@@ -594,6 +597,7 @@ export default function POsPage() {
           messageId: pending.message_id,
           extracted: collapseSupplierParts(extracted),
           attachmentIds: pdfs.map((f: any) => f.attachmentId),
+          attachmentFilenames: pdfs.map((f: any) => f.filename).filter(Boolean),
           queuePos: { index: i + 1, total: raw.pos.length },
           pdf: pdf
             ? { url: gmailPdfUrl(pending.message_id, pdf.attachmentId, pdf.filename), name: pdf.filename }
@@ -1725,6 +1729,7 @@ export default function POsPage() {
             messageId,
             extracted: collapseSupplierParts(r.extracted),
             attachmentIds: (r.pdfs || []).map((p: any) => p.attachmentId),
+            attachmentFilenames: (r.pdfs || []).map((p: any) => p.filename).filter(Boolean),
             queuePos,
             pdf: pdf
               ? { url: gmailPdfUrl(messageId, pdf.attachmentId, pdf.filename), name: pdf.filename }
@@ -1776,14 +1781,14 @@ export default function POsPage() {
   // Confirm import with reviewed/edited extraction data
   const confirmReviewedImport = async () => {
     if (!reviewingExtraction) return;
-    const { messageId, extracted, attachmentIds } = reviewingExtraction;
+    const { messageId, extracted, attachmentIds, attachmentFilenames } = reviewingExtraction;
     setImportingEmailId(messageId);
     const isLastInQueue = reviewQueue.length === 0;
     try {
       const res = await fetch('/api/gmail/import-po', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ messageId, preExtracted: extracted, attachmentIds }),
+        body: JSON.stringify({ messageId, preExtracted: extracted, attachmentIds, attachmentFilenames }),
       });
       const data = await res.json();
 
@@ -1796,7 +1801,7 @@ export default function POsPage() {
         advanceReviewQueue();
       } else if (data.status === 'exists') {
         // The overwrite dialog takes over; the queue resumes when it resolves.
-        setOverwriteData({ ...data, attachmentIds });
+        setOverwriteData({ ...data, attachmentIds, attachmentFilenames });
         setOverwriteMessageId(messageId);
         setShowOverwriteConfirm(true);
         setReviewingExtraction(null);
@@ -1867,6 +1872,7 @@ export default function POsPage() {
           preExtracted: overwriteData.extracted,
           forceOverwrite: true,
           attachmentIds: overwriteData.attachmentIds,
+          attachmentFilenames: overwriteData.attachmentFilenames,
         }),
       });
       const data = await res.json();
