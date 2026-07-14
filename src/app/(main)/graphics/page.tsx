@@ -1303,12 +1303,19 @@ export default function GraphicsPage() {
             const isEditing = editingJob?.id === job.id;
             const editJob = isEditing ? editingJob : job;
             const statusColor = GRAPHICS_STATUS_COLORS[job.status];
+            // Unread: activity (status change, note, edit) since this viewer
+            // last opened the job. No view row = never opened = unread.
+            // Cleared by recordJobView on expand.
+            const myView = (jobViews[job.id] || []).find(v => v.user_id === user?.id);
+            const hasNew = !myView || new Date(job.updated_at).getTime() > new Date(myView.last_viewed_at).getTime();
+            const highlightNew = hasNew && !isExpanded;
 
             return (
               <div key={job.id} style={{
                 borderRadius: '12px', overflow: 'hidden',
-                border: `1px solid ${isExpanded ? `${statusColor}44` : 'var(--border)'}`,
-                background: 'var(--subtle-bg)',
+                border: `1px solid ${isExpanded ? `${statusColor}44` : highlightNew ? '#ef444477' : 'var(--border)'}`,
+                background: highlightNew ? 'rgba(239,68,68,0.07)' : 'var(--subtle-bg)',
+                boxShadow: highlightNew ? 'inset 4px 0 0 0 #ef4444' : undefined,
               }}>
                 {/* Job card header */}
                 <div
@@ -1329,16 +1336,9 @@ export default function GraphicsPage() {
                   <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: '8px' }}>
                     <div style={{ flex: 1, minWidth: 0 }}>
                       <div style={{ display: 'flex', alignItems: 'center', gap: '6px', marginBottom: '3px' }}>
-                        {(() => {
-                          // Unread dot: activity (status change, note, edit) since
-                          // this viewer last opened the job. No view row = never
-                          // opened = unread. Cleared by recordJobView on expand.
-                          const mine = (jobViews[job.id] || []).find(v => v.user_id === user?.id);
-                          const hasNew = !mine || new Date(job.updated_at).getTime() > new Date(mine.last_viewed_at).getTime();
-                          return hasNew ? (
-                            <span title="New activity since you last viewed this job" style={{ width: '9px', height: '9px', borderRadius: '50%', background: '#ef4444', flexShrink: 0 }} />
-                          ) : null;
-                        })()}
+                        {hasNew && (
+                          <span title="New activity since you last viewed this job" style={{ width: '9px', height: '9px', borderRadius: '50%', background: '#ef4444', flexShrink: 0 }} />
+                        )}
                         {job.priority !== 'normal' && (
                           <span style={{ fontSize: '9px', fontWeight: 800, color: priorityColor(job.priority), textTransform: 'uppercase', padding: '1px 5px', borderRadius: '3px', background: `${priorityColor(job.priority)}15`, border: `1px solid ${priorityColor(job.priority)}33` }}>
                             {job.priority}
