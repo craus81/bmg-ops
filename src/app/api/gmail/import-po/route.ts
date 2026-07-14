@@ -29,6 +29,10 @@ const ImportSchema = z.object({
   // Gmail attachment ids are long base64 blobs — regularly 300-700 chars —
   // so the per-id cap must be generous or every confirm 400s.
   attachmentIds: z.array(z.string().min(1).max(4000)).max(50).optional(),
+  // Filenames of those same source PDFs. Gmail attachment ids are NOT stable
+  // across message fetches, so ids captured at extract time usually won't
+  // match the confirm-time fetch — filenames are the reliable key.
+  attachmentFilenames: z.array(z.string().min(1).max(500)).max(50).optional(),
 });
 
 // Persist a PO's source PDFs to R2 + record po_files rows. Skips a filename
@@ -412,7 +416,7 @@ export async function POST(req: NextRequest) {
 
   const parsed = await validateBody(req, ImportSchema);
   if (parsed.error) return parsed.error;
-  const { messageId, autoCreate, forceOverwrite, extractOnly, preExtracted, attachmentIds } = parsed.data;
+  const { messageId, autoCreate, forceOverwrite, extractOnly, preExtracted, attachmentIds, attachmentFilenames } = parsed.data;
 
   try {
 
@@ -439,9 +443,17 @@ export async function POST(req: NextRequest) {
       const pdfFilenames = pdfs.map((p: any) => p.filename).join(', ');
       // Only this PO's source PDFs get attached when the caller scoped them
       // (multi-PO email confirmed one PO at a time); default is all PDFs.
-      const poPdfs = attachmentIds?.length
-        ? pdfs.filter(p => attachmentIds.includes(p.attachmentId))
+      // Match by filename OR attachment id: the message was just re-fetched,
+      // and Gmail issues fresh attachment ids per fetch, so ids the client
+      // captured at extract time usually match nothing. If the scoped filter
+      // still comes up empty, attach every PDF — over-attaching beats the PO
+      // silently getting no files at all.
+      const wantIds = new Set(attachmentIds || []);
+      const wantNames = new Set((attachmentFilenames || []).map(n => n.toLowerCase()));
+      let poPdfs = (wantIds.size || wantNames.size)
+        ? pdfs.filter(p => wantIds.has(p.attachmentId) || wantNames.has(p.filename.toLowerCase()))
         : pdfs;
+      if (poPdfs.length === 0) poPdfs = pdfs;
 
       // From here, proceed to PO creation logic (same as normal flow)
       // Check if PO already exists
