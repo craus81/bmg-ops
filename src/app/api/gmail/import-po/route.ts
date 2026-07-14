@@ -108,7 +108,9 @@ async function attachProofPdfsToParts(
     try {
       const upperName = pdf.filename.toUpperCase();
       let targets = parts.filter(p => upperName.includes(p.part_number.toUpperCase()));
-      if (targets.length === 0 && /proof|artwork|mock.?up|rendering/i.test(pdf.filename)) {
+      const proofNamed = /proof|artwork|graphics?|mock.?up|rendering/i.test(pdf.filename)
+        && !/\b(po|purchase.?order)\b/i.test(pdf.filename);
+      if (targets.length === 0 && proofNamed) {
         const graphics = parts.filter(p => /^(02|RM)/i.test(p.part_number));
         if (graphics.length === 1) targets = graphics;
         else if (graphics.length === 0 && parts.length === 1) targets = parts;
@@ -511,7 +513,9 @@ export async function POST(req: NextRequest) {
         }
 
         await savePoFilesToStorage(supabase, existingPO.id, messageId, poPdfs);
-        const proofsAttached = await attachProofPdfsToParts(supabase, messageId, lineInserts, poPdfs);
+        // Part matching sees every PDF on the email — proofs are deliberately
+        // excluded from the PO's own files but still belong on their part.
+        const proofsAttached = await attachProofPdfsToParts(supabase, messageId, lineInserts, pdfs);
 
         await supabase.from('gmail_po_imports').upsert({
           message_id: messageId, thread_id: message.threadId, subject, from_email: from,
@@ -577,7 +581,7 @@ export async function POST(req: NextRequest) {
       }
 
       await savePoFilesToStorage(supabase, newPO.id, messageId, poPdfs);
-      const proofsAttached = await attachProofPdfsToParts(supabase, messageId, lineInserts, poPdfs);
+      const proofsAttached = await attachProofPdfsToParts(supabase, messageId, lineInserts, pdfs);
 
       await supabase.from('gmail_po_imports').upsert({
         message_id: messageId, thread_id: message.threadId, subject, from_email: from,
@@ -639,6 +643,9 @@ export async function POST(req: NextRequest) {
       meta: { stopReason: string | null; inputTokens: number; outputTokens: number };
     }[] = [];
     const supportingPdfs: PdfRef[] = [];
+    // Proof/artwork files live in their own bucket: they never enter the
+    // review flow or the PO's files — they only go to part matching below.
+    const proofPdfs: PdfRef[] = [];
     let firstApiFailure: { status: number; errBody: string } | null = null;
     let firstParseFailure: { raw: string } | null = null;
 
@@ -655,21 +662,22 @@ export async function POST(req: NextRequest) {
     } else {
       // Proof/artwork PDFs are image-heavy: running one through extraction is
       // slow enough to time out the whole import, and it is never the PO.
-      // Classify them (by name, or by any size no text PO ever reaches) as
-      // supporting files up front so they skip the AI call entirely.
+      // Classify them by name (unless the name also says it IS a PO) or by
+      // any size no text PO ever reaches, so they skip the AI call entirely.
       const EXTRACT_MAX_BYTES = 4 * 1024 * 1024;
-      const isProofLike = (name: string) => /proof|artwork|mock.?up|rendering/i.test(name);
+      const isProofLike = (name: string) =>
+        /proof|artwork|graphics?|mock.?up|rendering/i.test(name) && !/\b(po|purchase.?order)\b/i.test(name);
       const extractable: typeof downloaded = [];
       for (const d of downloaded) {
         const approxBytes = d.base64.length * 0.75;
         if (isProofLike(d.pdf.filename) || approxBytes > EXTRACT_MAX_BYTES) {
-          supportingPdfs.push(d.pdf);
+          proofPdfs.push(d.pdf);
         } else {
           extractable.push(d);
         }
       }
 
-      const NOT_A_PO_NOTE = `\n\nIMPORTANT: This document is ONE attachment from an email that may contain several attachments, possibly including MULTIPLE separate purchase orders. Extract ONLY this document. If this document is NOT a purchase order (e.g. a spec sheet, drawing, proof, BOL, invoice, packing list, or quote), return exactly: {"not_a_po": true}`;
+      const NOT_A_PO_NOTE = `\n\nIMPORTANT: This document is ONE attachment from an email that may contain several attachments, possibly including MULTIPLE separate purchase orders. Extract ONLY this document. If this document is NOT a purchase order, return exactly: {"not_a_po": true, "document_type": "<one of: proof, spec, drawing, bol, invoice, packing_list, quote, other>"} — a proof/artwork/graphics rendering of a vehicle or product is document_type "proof".`;
       const results = await Promise.all(
         extractable.map(d => extractFromPdfs([d.base64], NOT_A_PO_NOTE, process.env.ANTHROPIC_API_KEY!)),
       );
@@ -682,10 +690,12 @@ export async function POST(req: NextRequest) {
           return;
         }
         // Not a PO — or a PO-shaped extraction with no usable lines (proofs
-        // and quotes sometimes carry a PO reference number): supporting file.
+        // and quotes sometimes carry a PO reference number): supporting file,
+        // with proofs kept in their own bucket.
         const hasUsableLines = (r.extracted?.lines || []).some((l: any) => l.part_number);
         if (r.extracted?.not_a_po || !r.extracted?.po_number || !hasUsableLines) {
-          supportingPdfs.push(pdf);
+          if (/proof/i.test(String(r.extracted?.document_type || ''))) proofPdfs.push(pdf);
+          else supportingPdfs.push(pdf);
           return;
         }
         // Same PO number from two attachments (duplicate/split PDF): keep one
@@ -699,8 +709,9 @@ export async function POST(req: NextRequest) {
       });
     }
 
-    // Non-PO attachments (spec sheets, BOLs, drawings) ride along with every
-    // PO found, mirroring the old attach-everything behavior.
+    // Non-PO paperwork (spec sheets, BOLs, drawings) rides along with every
+    // PO found. Proofs deliberately do NOT — they'd show up in the review
+    // panel and clutter the PO's files; they go to part matching instead.
     for (const pe of poExtractions) pe.pdfs.push(...supportingPdfs);
 
     if (poExtractions.length === 0) {
@@ -1011,7 +1022,7 @@ export async function POST(req: NextRequest) {
       }
 
       await savePoFilesToStorage(supabase, existingPO.id, messageId, poPdfs, pdfCache);
-      const proofsAttached = await attachProofPdfsToParts(supabase, messageId, lineInserts, poPdfs, pdfCache);
+      const proofsAttached = await attachProofPdfsToParts(supabase, messageId, lineInserts, pdfs, pdfCache);
 
       await supabase.from('gmail_po_imports').upsert({
         message_id: messageId,
@@ -1126,7 +1137,7 @@ export async function POST(req: NextRequest) {
       }
 
       await savePoFilesToStorage(supabase, newPO.id, messageId, poPdfs, pdfCache);
-      const proofsAttached = await attachProofPdfsToParts(supabase, messageId, lineInserts, poPdfs, pdfCache);
+      const proofsAttached = await attachProofPdfsToParts(supabase, messageId, lineInserts, pdfs, pdfCache);
 
       await supabase.from('gmail_po_imports').upsert({
         message_id: messageId,
