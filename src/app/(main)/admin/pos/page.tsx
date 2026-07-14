@@ -1790,6 +1790,74 @@ export default function POsPage() {
     setCreatingInvoices(false);
   };
 
+  // Invoice from a PO's OPEN quantities: lines not yet complete, prefilled
+  // with quantity − installed, editable before the invoice is created.
+  // Completed lines never enter this invoice.
+  const [invoiceOpenPo, setInvoiceOpenPo] = useState<(PurchaseOrder & { line_items: POLineItem[] }) | null>(null);
+  const [invoiceOpenQtys, setInvoiceOpenQtys] = useState<Record<string, number>>({});
+  const [creatingOpenInvoice, setCreatingOpenInvoice] = useState(false);
+
+  const openInvoiceFromPo = (po: PurchaseOrder & { line_items: POLineItem[] }) => {
+    const qtys: Record<string, number> = {};
+    for (const li of po.line_items) {
+      const open = li.quantity - (li.installed || 0);
+      if (open > 0) qtys[li.id] = open;
+    }
+    setInvoiceOpenQtys(qtys);
+    setInvoiceOpenPo(po);
+  };
+
+  const createOpenQtyInvoice = async () => {
+    if (!invoiceOpenPo) return;
+    const po = invoiceOpenPo;
+    const quantities: Record<string, number> = {};
+    for (const li of po.line_items) {
+      const q = invoiceOpenQtys[li.id];
+      if (q && q > 0) quantities[li.part_number] = (quantities[li.part_number] || 0) + q;
+    }
+    if (Object.keys(quantities).length === 0) {
+      await dialog.alert('Every line is at 0 — nothing to invoice.');
+      return;
+    }
+    setCreatingOpenInvoice(true);
+    try {
+      const res = await fetch('/api/netsuite/create-invoice', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ salesOrderIds: [(po as any).netsuite_so_id], quantities }),
+      });
+      const data = await res.json();
+      const result = data.results?.[0];
+      if (!res.ok || !result || result.status !== 'success') {
+        await dialog.alert(`Failed to create invoice: ${result?.error || data.error || `request failed (${res.status})`}`);
+      } else {
+        const totalQty = Object.values(quantities).reduce((a, b) => a + b, 0);
+        setPos(prev => prev.map(p => {
+          if (p.id !== po.id) return p;
+          const newInvoice = {
+            netsuite_invoice_id: result.invoiceId,
+            netsuite_invoice_number: result.invoiceNumber,
+            created_at: new Date().toISOString(),
+            total_qty: totalQty,
+            line_count: Object.keys(quantities).length,
+            memo: `PO #${po.po_number} — open quantities`,
+          };
+          return {
+            ...p,
+            netsuite_invoice_id: result.invoiceId,
+            netsuite_invoice_number: result.invoiceNumber,
+            po_invoices: [newInvoice, ...((p as any).po_invoices || [])],
+          } as any;
+        }));
+        setInvoiceOpenPo(null);
+        await dialog.alert(`Invoice ${result.invoiceNumber ? `#${result.invoiceNumber} ` : ''}created for PO #${po.po_number} (${totalQty} unit${totalQty !== 1 ? 's' : ''}).`);
+      }
+    } catch (err: any) {
+      await dialog.alert(`Failed to create invoice: ${err.message || 'network error'}`);
+    }
+    setCreatingOpenInvoice(false);
+  };
+
   // Get POs that are eligible for invoicing (have SO, have installed qty, no invoice yet)
   const invoiceablePOs = pos.filter(po => {
     const hasNsSO = !!(po as any).netsuite_so_id;
@@ -2786,6 +2854,75 @@ export default function POsPage() {
       )}
 
       {/* PO Overwrite Confirmation Dialog */}
+      {/* Invoice open quantities modal */}
+      {invoiceOpenPo && (() => {
+        const openLines = invoiceOpenPo.line_items.filter(li => (li.installed || 0) < li.quantity);
+        const totalUnits = openLines.reduce((s, li) => s + (invoiceOpenQtys[li.id] || 0), 0);
+        const totalValue = openLines.reduce((s, li) => s + (invoiceOpenQtys[li.id] || 0) * li.unit_price, 0);
+        return (
+          <div style={{ position: 'fixed', top: 0, left: 0, right: 0, bottom: 0, background: 'var(--overlay)', zIndex: 1000, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '16px' }}>
+            <div style={{ background: 'var(--card)', border: '1px solid rgba(52,211,153,0.3)', borderRadius: '14px', padding: '18px', width: '100%', maxWidth: '560px', maxHeight: '85vh', overflowY: 'auto' }}>
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: '4px' }}>
+                <div style={{ fontSize: '16px', fontWeight: 800, color: 'var(--text-body)' }}>Invoice Open Quantities — PO #{invoiceOpenPo.po_number}</div>
+                <button onClick={() => setInvoiceOpenPo(null)} style={{ background: 'none', border: 'none', color: 'var(--text-label)', fontSize: '18px', cursor: 'pointer', padding: '2px' }}>✕</button>
+              </div>
+              <div style={{ fontSize: '11px', color: 'var(--text-label)', marginBottom: '12px' }}>
+                Prefilled with each line's open (not yet installed) quantity — adjust before creating. Completed lines are left off.
+              </div>
+              <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
+                {openLines.map(li => {
+                  const open = li.quantity - (li.installed || 0);
+                  return (
+                    <div key={li.id} style={{ display: 'flex', alignItems: 'center', gap: '10px', padding: '8px 10px', borderRadius: '8px', background: 'var(--subtle-bg)', border: '1px solid var(--border)' }}>
+                      <div style={{ flex: 1, minWidth: 0 }}>
+                        <div style={{ fontSize: '13px', fontWeight: 700, color: 'var(--text-body)' }}>{li.part_number}</div>
+                        <div style={{ fontSize: '11px', color: 'var(--text-label)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                          {li.description || '—'} · open {open} of {li.quantity} · ${li.unit_price.toFixed(2)}/ea
+                        </div>
+                      </div>
+                      <input
+                        type="number"
+                        min={0}
+                        max={open}
+                        value={invoiceOpenQtys[li.id] ?? 0}
+                        onChange={e => {
+                          const v = Math.max(0, Math.min(open, parseInt(e.target.value) || 0));
+                          setInvoiceOpenQtys(prev => ({ ...prev, [li.id]: v }));
+                        }}
+                        style={{ width: '76px', padding: '8px', borderRadius: '8px', border: '1px solid var(--border)', background: 'var(--input-bg)', color: 'var(--text-body)', fontSize: '14px', fontWeight: 700, textAlign: 'right' }}
+                      />
+                    </div>
+                  );
+                })}
+              </div>
+              <div style={{ marginTop: '10px', padding: '8px 10px', borderRadius: '8px', background: 'rgba(52,211,153,0.06)', border: '1px solid rgba(52,211,153,0.2)', fontSize: '12px', fontWeight: 700, color: '#34d399' }}>
+                {totalUnits} unit{totalUnits !== 1 ? 's' : ''} · ${totalValue.toFixed(2)}
+              </div>
+              <div style={{ display: 'flex', gap: '8px', marginTop: '12px' }}>
+                <button
+                  onClick={createOpenQtyInvoice}
+                  disabled={creatingOpenInvoice || totalUnits === 0}
+                  style={{
+                    flex: 1, padding: '12px', borderRadius: '10px', border: 'none',
+                    background: creatingOpenInvoice || totalUnits === 0 ? 'var(--subtle-bg)' : '#10b981',
+                    color: '#fff', fontWeight: 800, fontSize: '13px', cursor: 'pointer',
+                    opacity: creatingOpenInvoice || totalUnits === 0 ? 0.5 : 1,
+                  }}
+                >
+                  {creatingOpenInvoice ? 'Creating…' : `Create Invoice (${totalUnits} unit${totalUnits !== 1 ? 's' : ''})`}
+                </button>
+                <button
+                  onClick={() => setInvoiceOpenPo(null)}
+                  style={{ flex: 1, padding: '12px', borderRadius: '10px', background: 'transparent', border: '1px solid var(--border)', color: 'var(--text-body)', fontWeight: 700, fontSize: '13px', cursor: 'pointer' }}
+                >
+                  Cancel
+                </button>
+              </div>
+            </div>
+          </div>
+        );
+      })()}
+
       {showOverwriteConfirm && overwriteData && (
         <div style={{ position: 'fixed', top: 0, left: 0, right: 0, bottom: 0, background: 'var(--overlay)', zIndex: 1000, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '16px' }}>
           <div style={{ background: 'var(--card)', border: '1px solid rgba(251,191,36,0.3)', borderRadius: '14px', padding: '18px', maxWidth: '420px', width: '100%', maxHeight: '80vh', overflowY: 'auto' }}>
@@ -3846,6 +3983,21 @@ export default function POsPage() {
                   >
                     {creatingGfxJobForPo === po.id ? 'Creating...' : `+ Create Graphics Job (${po.line_items.length} part${po.line_items.length !== 1 ? 's' : ''})`}
                   </button>
+
+                  {/* Invoice from open (uninstalled) quantities — needs a linked
+                      NetSuite SO; completed lines never enter this invoice. */}
+                  {(po as any).netsuite_so_id && po.line_items.some(li => (li.installed || 0) < li.quantity) && (
+                    <button
+                      onClick={(e) => { e.stopPropagation(); openInvoiceFromPo(po); }}
+                      style={{
+                        width: '100%', padding: '10px', borderRadius: '8px', marginTop: '10px',
+                        background: 'rgba(52,211,153,0.08)', border: '1px solid rgba(52,211,153,0.3)',
+                        color: '#34d399', fontSize: '12px', fontWeight: 700, cursor: 'pointer',
+                      }}
+                    >
+                      Invoice Open Qty ({po.line_items.reduce((s, li) => s + Math.max(0, li.quantity - (li.installed || 0)), 0)} units)
+                    </button>
+                  )}
 
                   {/* Print / CSV export */}
                   <div style={{ display: 'flex', gap: '6px', marginTop: '10px' }}>

@@ -7,13 +7,19 @@ import { validateBody, z } from '@/lib/validate';
 
 const Schema = z.object({
   salesOrderIds: z.array(z.string().regex(/^\d{1,15}$/, 'Sales order id must be numeric')).min(1).max(200),
+  // Explicit per-part quantities to bill (part number -> qty), overriding the
+  // default installed-quantity billing. Single-SO mode only — the map is
+  // meaningless across several sales orders. Used by the PO screen's
+  // "invoice open quantities" flow.
+  quantities: z.record(z.string().min(1).max(120), z.number().int().min(1).max(100000)).optional(),
 });
 
 /**
  * POST /api/netsuite/create-invoice
- * Body: { salesOrderIds: string[] }
- * Creates invoices in NetSuite from one or more sales orders,
- * billing only the installed quantities from our PO tracking.
+ * Body: { salesOrderIds: string[], quantities?: Record<partNumber, qty> }
+ * Creates invoices in NetSuite from one or more sales orders — billing the
+ * installed quantities from our PO tracking by default, or exactly the
+ * caller-provided quantities when `quantities` is set.
  */
 export async function POST(req: NextRequest) {
   const auth = await requireAuth(req);
@@ -21,7 +27,10 @@ export async function POST(req: NextRequest) {
 
   const parsed = await validateBody(req, Schema);
   if (parsed.error) return parsed.error;
-  const { salesOrderIds } = parsed.data;
+  const { salesOrderIds, quantities } = parsed.data;
+  if (quantities && salesOrderIds.length !== 1) {
+    return NextResponse.json({ error: 'Explicit quantities require exactly one sales order' }, { status: 400 });
+  }
 
   try {
     const supabase = createClient(
@@ -64,7 +73,7 @@ export async function POST(req: NextRequest) {
       const lineItems = po.po_line_items || [];
       const hasInstalled = lineItems.some((li: any) => li.installed > 0);
 
-      if (!hasInstalled) {
+      if (!quantities && !hasInstalled) {
         results.push({
           poId: po.id,
           poNumber: po.po_number,
@@ -90,21 +99,49 @@ export async function POST(req: NextRequest) {
         const soLinesResult = await suiteqlQuery(soLinesQuery);
         const soLines = soLinesResult?.items || [];
 
-        // Build installed quantities map: SO line number -> installed qty
+        // Build quantities map: SO line number -> qty to bill. Explicit
+        // caller quantities win; the default bills installed counts.
         const installedQuantities: Record<number, number> = {};
 
-        for (const poLine of lineItems) {
-          if (poLine.installed <= 0) continue;
+        if (quantities) {
+          const unmatchedParts: string[] = [];
+          for (const [partNumber, qty] of Object.entries(quantities)) {
+            const matchingSoLine = soLines.find((sl: any) =>
+              sl.itemid?.toUpperCase() === partNumber.toUpperCase()
+            );
+            if (matchingSoLine) {
+              installedQuantities[parseInt(matchingSoLine.linesequencenumber)] = qty;
+            } else {
+              unmatchedParts.push(partNumber);
+            }
+          }
+          // Silently dropping a requested line would under-bill without
+          // anyone noticing — refuse instead.
+          if (unmatchedParts.length > 0) {
+            results.push({
+              poId: po.id,
+              poNumber: po.po_number,
+              soId,
+              soNumber: po.netsuite_so_number || '',
+              status: 'error',
+              error: `Not on the sales order: ${unmatchedParts.join(', ')}`,
+            });
+            continue;
+          }
+        } else {
+          for (const poLine of lineItems) {
+            if (poLine.installed <= 0) continue;
 
-          // Match PO line to SO line by part number
-          const matchingSoLine = soLines.find((sl: any) =>
-            sl.itemid?.toUpperCase() === poLine.part_number?.toUpperCase()
-          );
+            // Match PO line to SO line by part number
+            const matchingSoLine = soLines.find((sl: any) =>
+              sl.itemid?.toUpperCase() === poLine.part_number?.toUpperCase()
+            );
 
-          if (matchingSoLine) {
-            const lineNum = parseInt(matchingSoLine.linesequencenumber);
-            // Use the lesser of installed vs ordered quantity
-            installedQuantities[lineNum] = Math.min(poLine.installed, poLine.quantity);
+            if (matchingSoLine) {
+              const lineNum = parseInt(matchingSoLine.linesequencenumber);
+              // Use the lesser of installed vs ordered quantity
+              installedQuantities[lineNum] = Math.min(poLine.installed, poLine.quantity);
+            }
           }
         }
 
