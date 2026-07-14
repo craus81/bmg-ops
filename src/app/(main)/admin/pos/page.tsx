@@ -1400,6 +1400,52 @@ export default function POsPage() {
     setEmailEmails(prev => prev.filter(e => e.messageId !== messageId));
   };
 
+  // Backfill: find each PDF-less PO's source email in Gmail and attach its
+  // PDF(s). The server works in time-budgeted batches; loop until done,
+  // carrying forward the no-match ids so every batch makes progress.
+  const [backfillRunning, setBackfillRunning] = useState(false);
+  const [backfillProgress, setBackfillProgress] = useState('');
+  const runPdfBackfill = async () => {
+    if (backfillRunning) return;
+    setBackfillRunning(true);
+    setBackfillProgress('scanning…');
+    const skipPoIds: string[] = [];
+    let totalAttached = 0;
+    let totalNoMatch = 0;
+    let failed: string | null = null;
+    try {
+      for (let round = 0; round < 20; round++) {
+        const res = await fetch('/api/pos/backfill-pdfs', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ skipPoIds }),
+        });
+        const data = await res.json().catch(() => ({}));
+        if (!res.ok || !data.success) {
+          failed = data.error || `request failed (${res.status})`;
+          break;
+        }
+        totalAttached += data.attached.length;
+        totalNoMatch += data.noMatch.length;
+        for (const n of data.noMatch) skipPoIds.push(n.poId);
+        setBackfillProgress(`${totalAttached} attached · ${data.remaining} to go`);
+        if (data.remaining <= 0 || data.processed === 0) break;
+      }
+    } catch (err: any) {
+      failed = err.message || 'network error';
+    }
+    setBackfillRunning(false);
+    setBackfillProgress('');
+    if (failed) {
+      await dialog.alert(`PDF backfill stopped: ${failed}${totalAttached > 0 ? ` (${totalAttached} PO${totalAttached === 1 ? '' : 's'} already got PDFs)` : ''}`);
+    } else {
+      const lines = [`Attached PDFs to ${totalAttached} PO${totalAttached === 1 ? '' : 's'}.`];
+      if (totalNoMatch > 0) lines.push(`${totalNoMatch} PO${totalNoMatch === 1 ? '' : 's'} had no matching email in Gmail.`);
+      if (totalAttached === 0 && totalNoMatch === 0) lines.push('No POs are missing a PDF.');
+      await dialog.alert(lines.join('\n'));
+    }
+  };
+
   // Multi-PO emails queue one review per PO. Advance to the next one, or
   // close the panel when the queue is spent.
   const advanceReviewQueue = () => {
@@ -2122,6 +2168,14 @@ export default function POsPage() {
                 style={{ padding: '6px 12px', borderRadius: '8px', background: showEmailImport ? 'var(--subtle-bg)' : 'rgba(34,197,94,0.1)', border: '1px solid rgba(34,197,94,0.25)', color: '#4ade80', fontSize: '12px', fontWeight: 700 }}
               >
                 {showEmailImport ? 'Cancel' : 'Email'}
+              </button>
+              <button
+                onClick={runPdfBackfill}
+                disabled={backfillRunning}
+                title="Search Gmail for the source PDF of every PO that has no PDF attached and attach it"
+                style={{ padding: '6px 12px', borderRadius: '8px', background: 'rgba(167,139,250,0.1)', border: '1px solid rgba(167,139,250,0.25)', color: '#a78bfa', fontSize: '12px', fontWeight: 700, opacity: backfillRunning ? 0.7 : 1, cursor: backfillRunning ? 'default' : 'pointer' }}
+              >
+                {backfillRunning ? `Finding… ${backfillProgress}` : 'Find PDFs'}
               </button>
               <button
                 onClick={() => { setShowImport(!showImport); setShowCreate(false); setShowEmailImport(false); setParsedPO(null); setImportLines([]); setParseError(''); }}
