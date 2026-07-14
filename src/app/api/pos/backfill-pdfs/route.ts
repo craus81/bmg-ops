@@ -57,6 +57,48 @@ export async function POST(req: NextRequest) {
   const startedAt = Date.now();
 
   try {
+    // Cheap location pass FIRST: many POs imported before ship_to persistence
+    // existed already have the address sitting in their gmail import record's
+    // extraction — a DB read, no AI. Sub-budgeted so the PDF pass still runs.
+    let locationsFromRecords = 0;
+    {
+      const LOC_PASS_BUDGET_MS = 15_000;
+      const { data: noLoc } = await service
+        .from('purchase_orders')
+        .select('id, po_number')
+        .is('ship_to', null);
+      for (const po of noLoc || []) {
+        if (Date.now() - startedAt > LOC_PASS_BUDGET_MS) break;
+        const poNumber = String(po.po_number || '').trim();
+        if (!poNumber) continue;
+        try {
+          const { data: imports } = await service
+            .from('gmail_po_imports')
+            .select('po_id, po_number, raw_extraction')
+            .or(`po_id.eq.${po.id},po_number.ilike.%${poNumber}%`)
+            .limit(5);
+          let shipTo: any = null;
+          for (const rec of imports || []) {
+            const raw: any = rec.raw_extraction;
+            if (!raw) continue;
+            if (raw.multi && Array.isArray(raw.pos)) {
+              const entry = raw.pos.find((p: any) => String((p?.extracted || p)?.po_number || '') === poNumber);
+              shipTo = (entry?.extracted || entry)?.ship_to || null;
+            } else if (
+              rec.po_id === po.id ||
+              String(rec.po_number || '').split(',').map(s => s.trim()).includes(poNumber)
+            ) {
+              shipTo = raw.ship_to || null;
+            }
+            if (shipTo) break;
+          }
+          if (shipTo && typeof shipTo === 'object' && (shipTo.name || shipTo.city)) {
+            await service.from('purchase_orders').update({ ship_to: shipTo }).eq('id', po.id);
+            locationsFromRecords++;
+          }
+        } catch { /* best-effort per PO */ }
+      }
+    }
     // POs with no stored PDF, newest first (recent POs are the ones people
     // actually open).
     const { data: allPos, error: posErr } = await service
@@ -168,6 +210,7 @@ export async function POST(req: NextRequest) {
       processed,
       attached,
       noMatch,
+      locationsFromRecords,
       // POs still untouched this run (time budget) — another call continues.
       remaining: queue.length - processed,
     });

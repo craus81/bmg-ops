@@ -1562,6 +1562,7 @@ export default function POsPage() {
     const skipPoIds: string[] = [];
     let totalAttached = 0;
     let totalNoMatch = 0;
+    let totalLocRecords = 0;
     let failed: string | null = null;
     // Each round is retried once — a single batch dying (e.g. a slow one cut
     // off at the function ceiling) shouldn't kill the whole run, and work
@@ -1583,6 +1584,7 @@ export default function POsPage() {
         retried = false;
         totalAttached += data.attached.length;
         totalNoMatch += data.noMatch.length;
+        totalLocRecords += data.locationsFromRecords || 0;
         for (const n of data.noMatch) skipPoIds.push(n.poId);
         setBackfillProgress(`${totalAttached} attached · ${data.remaining} to go`);
         if (data.remaining <= 0 || data.processed === 0) break;
@@ -1634,13 +1636,16 @@ export default function POsPage() {
     if (failed) lines.push(`PDF search stopped early: ${failed}.`);
     lines.push(`Attached PDFs to ${totalAttached} PO${totalAttached === 1 ? '' : 's'}.`);
     if (totalNoMatch > 0) lines.push(`${totalNoMatch} PO${totalNoMatch === 1 ? '' : 's'} had no matching email in Gmail.`);
-    if (locationsFilled > 0 || locationsFailed > 0) {
-      lines.push(`Filled in locations on ${locationsFilled} PO${locationsFilled === 1 ? '' : 's'}${locationsFailed > 0 ? ` (${locationsFailed} couldn't be read)` : ''}.`);
+    if (totalLocRecords > 0) {
+      lines.push(`Recovered locations on ${totalLocRecords} PO${totalLocRecords === 1 ? '' : 's'} from their original import records.`);
     }
-    if (!failed && totalAttached === 0 && totalNoMatch === 0 && locationsFilled === 0 && locationsFailed === 0) {
+    if (locationsFilled > 0 || locationsFailed > 0) {
+      lines.push(`Read locations off the PDF for ${locationsFilled} more PO${locationsFilled === 1 ? '' : 's'}${locationsFailed > 0 ? ` (${locationsFailed} couldn't be read)` : ''}.`);
+    }
+    if (!failed && totalAttached === 0 && totalNoMatch === 0 && totalLocRecords === 0 && locationsFilled === 0 && locationsFailed === 0) {
       lines.push('Nothing to do — no POs are missing a PDF or location.');
     }
-    if (!failed && (totalNoMatch > 0 || locationsFilled > 0)) {
+    if (!failed && (totalNoMatch > 0 || totalLocRecords > 0 || locationsFilled > 0)) {
       lines.push('Run again to process more if any remain.');
     }
     await dialog.alert(lines.join('\n'));
