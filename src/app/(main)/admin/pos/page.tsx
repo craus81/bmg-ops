@@ -87,28 +87,11 @@ function downloadPoCsv(po: PurchaseOrder & { line_items: POLineItem[] }) {
   URL.revokeObjectURL(url);
 }
 
-async function printPo(po: PurchaseOrder & { line_items: POLineItem[] }, alertFn: (message: string) => Promise<void>) {
-  const ship = formatShipTo(po.ship_to);
-  const total = po.line_items.reduce((s, li) => s + li.quantity * li.unit_price, 0);
-  const escape = (s: string) => s.replace(/[&<>"']/g, c => (
-    { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]!
-  ));
-  const ordered = po.ordered_date ? new Date(po.ordered_date).toLocaleDateString() : '';
-  const requested = po.requested_delivery_date ? new Date(po.requested_delivery_date).toLocaleDateString() : '';
-  const linesHtml = po.line_items.map(li => `
-    <tr>
-      <td>${escape(li.part_number)}</td>
-      <td>${escape(li.description || '')}</td>
-      <td class="num">${li.quantity}</td>
-      <td class="num">$${li.unit_price.toFixed(2)}</td>
-      <td class="num">$${(li.quantity * li.unit_price).toFixed(2)}</td>
-    </tr>`).join('');
-  const html = `<!doctype html>
-<html>
-<head>
-<meta charset="utf-8">
-<title>PO #${escape(po.po_number)}</title>
-<style>
+const escapeHtml = (s: string) => s.replace(/[&<>"']/g, c => (
+  { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]!
+));
+
+const PO_PRINT_STYLE = `
   * { box-sizing: border-box; }
   body { font-family: -apple-system, Segoe UI, Helvetica, Arial, sans-serif; color: #111; margin: 32px; font-size: 12px; }
   h1 { margin: 0 0 4px 0; font-size: 22px; }
@@ -123,20 +106,37 @@ async function printPo(po: PurchaseOrder & { line_items: POLineItem[] }, alertFn
   tfoot td { font-weight: 700; border-top: 2px solid #111; border-bottom: none; padding-top: 12px; }
   .notes { margin-top: 24px; padding: 12px; border: 1px solid #ddd; border-radius: 6px; background: #fafafa; }
   .notes h3 { margin: 0 0 6px 0; font-size: 11px; text-transform: uppercase; letter-spacing: 0.5px; color: #666; }
+  .po-page { page-break-after: always; }
+  .po-page:last-child { page-break-after: auto; }
   @media print { body { margin: 16px; } @page { margin: 0.5in; } }
-</style>
-</head>
-<body>
-  <h1>Purchase Order #${escape(po.po_number)}</h1>
-  <div class="sub">${escape(po.customer)}${po.status ? ` · ${escape(po.status)}` : ''}</div>
+`;
+
+// One PO's printable body — shared by the single-PO print and the multi-PO
+// batch print (which stacks these with a page break between POs).
+function poPrintBody(po: PurchaseOrder & { line_items: POLineItem[] }): string {
+  const ship = formatShipTo(po.ship_to);
+  const total = po.line_items.reduce((s, li) => s + li.quantity * li.unit_price, 0);
+  const ordered = po.ordered_date ? new Date(po.ordered_date).toLocaleDateString() : '';
+  const requested = po.requested_delivery_date ? new Date(po.requested_delivery_date).toLocaleDateString() : '';
+  const linesHtml = po.line_items.map(li => `
+    <tr>
+      <td>${escapeHtml(li.part_number)}</td>
+      <td>${escapeHtml(li.description || '')}</td>
+      <td class="num">${li.quantity}</td>
+      <td class="num">$${li.unit_price.toFixed(2)}</td>
+      <td class="num">$${(li.quantity * li.unit_price).toFixed(2)}</td>
+    </tr>`).join('');
+  return `
+  <h1>Purchase Order #${escapeHtml(po.po_number)}</h1>
+  <div class="sub">${escapeHtml(po.customer)}${po.status ? ` · ${escapeHtml(po.status)}` : ''}</div>
   <div class="grid">
     <div class="box">
       <h3>Ship To</h3>
-      <div class="v">${ship ? escape(ship) : '<span style="color:#999">—</span>'}</div>
+      <div class="v">${ship ? escapeHtml(ship) : '<span style="color:#999">—</span>'}</div>
     </div>
     <div class="box">
       <h3>Dates</h3>
-      <div class="v">Ordered: ${escape(ordered) || '—'}${requested ? `\nRequested: ${escape(requested)}` : ''}</div>
+      <div class="v">Ordered: ${escapeHtml(ordered) || '—'}${requested ? `\nRequested: ${escapeHtml(requested)}` : ''}</div>
     </div>
   </div>
   <table>
@@ -157,8 +157,18 @@ async function printPo(po: PurchaseOrder & { line_items: POLineItem[] }, alertFn
       </tr>
     </tfoot>
   </table>
-  ${po.notes ? `<div class="notes"><h3>Notes</h3>${escape(po.notes)}</div>` : ''}
-</body>
+  ${po.notes ? `<div class="notes"><h3>Notes</h3>${escapeHtml(po.notes)}</div>` : ''}`;
+}
+
+async function openPrintWindow(title: string, bodyHtml: string, alertFn: (message: string) => Promise<void>) {
+  const html = `<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>${escapeHtml(title)}</title>
+<style>${PO_PRINT_STYLE}</style>
+</head>
+<body>${bodyHtml}</body>
 </html>`;
   const w = window.open('', '_blank');
   if (!w) { await alertFn('Pop-up blocked. Allow pop-ups to print.'); return; }
@@ -166,6 +176,18 @@ async function printPo(po: PurchaseOrder & { line_items: POLineItem[] }, alertFn
   w.document.write(html);
   w.document.close();
   w.onload = () => { w.focus(); w.print(); };
+}
+
+async function printPo(po: PurchaseOrder & { line_items: POLineItem[] }, alertFn: (message: string) => Promise<void>) {
+  await openPrintWindow(`PO #${po.po_number}`, poPrintBody(po), alertFn);
+}
+
+// Batch print: every selected PO in one document, one PO per page.
+async function printPos(posToPrint: (PurchaseOrder & { line_items: POLineItem[] })[], alertFn: (message: string) => Promise<void>) {
+  if (posToPrint.length === 0) return;
+  if (posToPrint.length === 1) return printPo(posToPrint[0], alertFn);
+  const body = posToPrint.map(po => `<div class="po-page">${poPrintBody(po)}</div>`).join('');
+  await openPrintWindow(`Purchase Orders (${posToPrint.length})`, body, alertFn);
 }
 
 // ── Unified parts catalog (phase 2) ──────────────────────────────────────
@@ -2179,9 +2201,10 @@ export default function POsPage() {
               </button>
               <button
                 onClick={() => { setEditMode(true); setSelectedForDelete(new Set()); }}
+                title="Select multiple POs to print or delete"
                 style={{ padding: '6px 12px', borderRadius: '8px', background: 'rgba(248,113,113,0.1)', border: '1px solid rgba(248,113,113,0.25)', color: '#f87171', fontSize: '12px', fontWeight: 700 }}
               >
-                Edit
+                Select
               </button>
               <button
                 onClick={() => { setShowEmailImport(!showEmailImport); setShowImport(false); setShowCreate(false); if (!showEmailImport) { searchGmailPOs(); window.scrollTo({ top: 0, behavior: 'smooth' }); } }}
@@ -2231,6 +2254,19 @@ export default function POsPage() {
               >
                 {selectedForDelete.size === filteredPos.length ? 'Deselect All' : 'Select All'}
               </button>
+              {selectedForDelete.size > 0 && (
+                <button
+                  onClick={() => printPos(
+                    pos
+                      .filter(p => selectedForDelete.has(p.id))
+                      .sort((a, b) => a.po_number.localeCompare(b.po_number, undefined, { numeric: true })),
+                    dialog.alert,
+                  )}
+                  style={{ padding: '6px 12px', borderRadius: '8px', background: '#3b82f6', color: '#fff', fontSize: '12px', fontWeight: 700, border: 'none' }}
+                >
+                  Print ({selectedForDelete.size})
+                </button>
+              )}
               {selectedForDelete.size > 0 && (
                 <button
                   onClick={handleBatchDelete}
