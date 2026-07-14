@@ -298,6 +298,20 @@ export default function GraphicsPage() {
   // eslint-disable-next-line react-hooks/exhaustive-deps -- intentional: load once on mount
   }, [loading, searchParams]);
 
+  // "Job created" confirmation toast — set after creating a job here, or via
+  // ?created=<job number> when another page (e.g. the PO page) just created
+  // one and navigated over. Auto-dismisses.
+  const [createdToast, setCreatedToast] = useState<string | null>(null);
+  useEffect(() => {
+    if (!createdToast) return;
+    const t = setTimeout(() => setCreatedToast(null), 6000);
+    return () => clearTimeout(t);
+  }, [createdToast]);
+  useEffect(() => {
+    const created = searchParams.get('created');
+    if (created) setCreatedToast(created);
+  }, [searchParams]);
+
   // Awaiting-graphics queue: vehicles whose linked SO/estimate scored
   // positive in the keyword scan but haven't yet been linked to a
   // graphics_job. Reload alongside jobs so creating one drops it off
@@ -899,6 +913,7 @@ export default function GraphicsPage() {
       }
 
       setJobs(prev => [data as GraphicsJob, ...prev]);
+      setCreatedToast(data.job_number || jobNumber);
       setShowCreate(false);
       setCreateStep('category');
       setCreateForm({
@@ -1105,6 +1120,22 @@ export default function GraphicsPage() {
 
   return (
     <div>
+      {/* "Job created" confirmation toast */}
+      {createdToast && (
+        <div
+          onClick={() => setCreatedToast(null)}
+          style={{
+            position: 'fixed', bottom: '28px', left: '50%', transform: 'translateX(-50%)',
+            zIndex: 3000, padding: '12px 20px', borderRadius: '12px', cursor: 'pointer',
+            background: '#16a34a', color: '#fff', fontSize: '14px', fontWeight: 800,
+            boxShadow: '0 6px 24px rgba(0,0,0,0.35)', display: 'flex', alignItems: 'center', gap: '8px',
+            whiteSpace: 'nowrap',
+          }}
+        >
+          <span style={{ fontSize: '16px' }}>✓</span> Job {createdToast} created
+        </div>
+      )}
+
       {/* Header */}
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '12px' }}>
         <div style={{ fontSize: '22px', fontWeight: 800 }}>Graphics Production</div>
