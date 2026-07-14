@@ -13,6 +13,15 @@ import { CreateNetsuiteItemModal } from '@/components/CreateNetsuiteItemModal';
 import { useDialog } from '@/components/DialogProvider';
 import { isProofLikeName } from '@/lib/pdf-classify';
 
+interface PoNoteRow {
+  id: string;
+  po_id: string;
+  author_id: string | null;
+  body: string;
+  mentions: string[];
+  created_at: string;
+}
+
 interface ImportLine extends ParsedPOLine {
   catalog_match: CatalogItem | null;
   use_catalog_price: boolean;
@@ -670,7 +679,7 @@ export default function POsPage() {
     const load = async () => {
       const { data: poData } = await supabase
         .from('purchase_orders')
-        .select('*, po_line_items(*), po_invoices(*)')
+        .select('*, po_line_items(*), po_invoices(*), po_notes(id)')
         .order('created_at', { ascending: false });
 
       const FILTERED_CUSTOMERS = ['ranger design', 'enterprise fleet management', 'bmg fleet installations'];
@@ -1349,6 +1358,80 @@ export default function POsPage() {
     setEditLineId(null);
     setAddLinePoId(null);
     if (opening && !poFiles[poId]) loadPoFiles(poId);
+    if (opening) loadPoNotes(poId);
+  };
+
+  // ── PO notes with @tags ──────────────────────────────────────────────────
+  // The team flags a PO that needs fixing/attention and tags whoever should
+  // look; tagged users get notified through their usual channels.
+  const [poNotes, setPoNotes] = useState<Record<string, PoNoteRow[]>>({});
+  const [noteText, setNoteText] = useState('');
+  const [noteTags, setNoteTags] = useState<Set<string>>(new Set());
+  const [postingNote, setPostingNote] = useState(false);
+  const [teamProfiles, setTeamProfiles] = useState<{ id: string; full_name: string | null; email: string }[]>([]);
+
+  useEffect(() => {
+    supabase
+      .from('profiles')
+      .select('id, full_name, email, role, status')
+      .eq('status', 'approved')
+      .then(({ data }: { data: any[] | null }) => {
+        setTeamProfiles(
+          (data || []).filter(p => p.role !== 'customer' && p.role !== 'cni_installer'),
+        );
+      });
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- load once on mount
+  }, []);
+
+  const profileName = (id: string | null): string => {
+    if (!id) return 'Someone';
+    const p = teamProfiles.find(t => t.id === id);
+    return p?.full_name || p?.email || 'Someone';
+  };
+
+  const loadPoNotes = async (poId: string) => {
+    const { data } = await supabase
+      .from('po_notes')
+      .select('*')
+      .eq('po_id', poId)
+      .order('created_at', { ascending: true });
+    setPoNotes(prev => ({ ...prev, [poId]: (data as PoNoteRow[]) || [] }));
+  };
+
+  const postNote = async (po: PurchaseOrder) => {
+    const body = noteText.trim();
+    if (!body || postingNote) return;
+    setPostingNote(true);
+    const mentions = [...noteTags];
+    const { data, error } = await supabase
+      .from('po_notes')
+      .insert({ po_id: po.id, author_id: user?.id || null, body, mentions })
+      .select()
+      .single();
+    if (error || !data) {
+      await dialog.alert(`Failed to post note: ${error?.message || 'no row returned'}`);
+    } else {
+      setPoNotes(prev => ({ ...prev, [po.id]: [...(prev[po.id] || []), data as PoNoteRow] }));
+      // Keep the row badge count in sync
+      setPos(prev => prev.map(p => p.id === po.id ? ({ ...p, po_notes: [...((p as any).po_notes || []), { id: data.id }] } as any) : p));
+      setNoteText('');
+      setNoteTags(new Set());
+      if (mentions.length > 0) {
+        fetch('/api/notifications/send', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            userIds: mentions,
+            type: 'po_note',
+            title: `${profileName(user?.id || null)} tagged you on PO #${po.po_number}`,
+            body: body.slice(0, 180),
+            url: '/admin/pos',
+            excludeUserId: user?.id,
+          }),
+        }).catch(() => {});
+      }
+    }
+    setPostingNote(false);
   };
 
   const loadPoFiles = async (poId: string) => {
@@ -1615,7 +1698,7 @@ export default function POsPage() {
         setEmailEmails(prev => prev.filter(e => e.messageId !== messageId));
         const { data: poData } = await supabase
           .from('purchase_orders')
-          .select('*, po_line_items(*), po_invoices(*)')
+          .select('*, po_line_items(*), po_invoices(*), po_notes(id)')
           .order('created_at', { ascending: false });
         const FILTERED_CUSTOMERS = ['ranger design', 'enterprise fleet management', 'bmg fleet installations'];
         const mapped = (poData || [])
@@ -1667,7 +1750,7 @@ export default function POsPage() {
           }
           const { data: poData } = await supabase
             .from('purchase_orders')
-            .select('*, po_line_items(*), po_invoices(*)')
+            .select('*, po_line_items(*), po_invoices(*), po_notes(id)')
             .order('created_at', { ascending: false });
           const FILTERED_CUSTOMERS = ['ranger design', 'enterprise fleet management', 'bmg fleet installations'];
           const mapped = (poData || [])
@@ -1739,7 +1822,7 @@ export default function POsPage() {
           }
           const { data: poData } = await supabase
             .from('purchase_orders')
-            .select('*, po_line_items(*), po_invoices(*)')
+            .select('*, po_line_items(*), po_invoices(*), po_notes(id)')
             .order('created_at', { ascending: false });
           const FILTERED_CUSTOMERS = ['ranger design', 'enterprise fleet management', 'bmg fleet installations'];
           const mapped = (poData || [])
@@ -3664,6 +3747,11 @@ export default function POsPage() {
                         {po.customer} • {po.line_items.length} item{po.line_items.length !== 1 ? 's' : ''}
                         {po.status === 'complete' && <span style={{ color: '#4ade80', marginLeft: '6px' }}>&#10003; Fulfilled</span>}
                         {(po as any).netsuite_invoice_number && <span style={{ color: '#34d399', marginLeft: '6px' }}>INV #{(po as any).netsuite_invoice_number}</span>}
+                        {((po as any).po_notes || []).length > 0 && (
+                          <span style={{ color: '#fbbf24', marginLeft: '6px', fontWeight: 700 }} title={`${(po as any).po_notes.length} note${(po as any).po_notes.length !== 1 ? 's' : ''}`}>
+                            💬 {(po as any).po_notes.length}
+                          </span>
+                        )}
                       </div>
                     </div>
                   </div>
@@ -3730,6 +3818,80 @@ export default function POsPage() {
                     ) : (
                       <div style={{ fontSize: '11px', color: 'var(--text-muted)', marginTop: '4px' }}>No attachments. Use the button above to add a PDF.</div>
                     )}
+                  </div>
+
+                  {/* Notes — flag a PO that needs attention and tag teammates */}
+                  <div style={{ marginBottom: '10px' }}>
+                    <div style={labelStyle}>Notes</div>
+                    {(poNotes[po.id] || []).length > 0 && (
+                      <div style={{ display: 'flex', flexDirection: 'column', gap: '4px', marginTop: '4px', marginBottom: '6px' }}>
+                        {(poNotes[po.id] || []).map(n => (
+                          <div key={n.id} style={{ padding: '7px 9px', borderRadius: '8px', background: 'var(--subtle-bg)', border: '1px solid var(--border)' }}>
+                            <div style={{ display: 'flex', justifyContent: 'space-between', gap: '8px', marginBottom: '2px' }}>
+                              <span style={{ fontSize: '11px', fontWeight: 700, color: '#fbbf24' }}>{profileName(n.author_id)}</span>
+                              <span style={{ fontSize: '10px', color: 'var(--text-muted)' }}>{new Date(n.created_at).toLocaleString([], { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' })}</span>
+                            </div>
+                            <div style={{ fontSize: '12px', color: 'var(--text-body)', whiteSpace: 'pre-wrap' }}>{n.body}</div>
+                            {(n.mentions || []).length > 0 && (
+                              <div style={{ display: 'flex', gap: '4px', flexWrap: 'wrap', marginTop: '4px' }}>
+                                {n.mentions.map(id => (
+                                  <span key={id} style={{ fontSize: '10px', fontWeight: 700, color: '#60a5fa', background: 'rgba(59,130,246,0.1)', border: '1px solid rgba(59,130,246,0.25)', padding: '0 6px', borderRadius: '8px' }}>
+                                    @{profileName(id)}
+                                  </span>
+                                ))}
+                              </div>
+                            )}
+                          </div>
+                        ))}
+                      </div>
+                    )}
+                    <textarea
+                      value={noteText}
+                      onChange={e => setNoteText(e.target.value)}
+                      onClick={e => e.stopPropagation()}
+                      placeholder="Add a note — e.g. what needs fixing or attention…"
+                      rows={2}
+                      style={{ width: '100%', marginTop: '4px', padding: '8px', borderRadius: '8px', border: '1px solid var(--border)', background: 'var(--input-bg)', color: 'var(--text-body)', fontSize: '12px', resize: 'vertical' }}
+                    />
+                    <div style={{ display: 'flex', gap: '4px', flexWrap: 'wrap', alignItems: 'center', marginTop: '4px' }}>
+                      <span style={{ fontSize: '10px', color: 'var(--text-muted)', fontWeight: 700 }}>Tag:</span>
+                      {teamProfiles.filter(p => p.id !== user?.id).map(p => {
+                        const tagged = noteTags.has(p.id);
+                        return (
+                          <button
+                            key={p.id}
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              setNoteTags(prev => {
+                                const next = new Set(prev);
+                                if (next.has(p.id)) next.delete(p.id); else next.add(p.id);
+                                return next;
+                              });
+                            }}
+                            style={{
+                              padding: '2px 8px', borderRadius: '10px', fontSize: '10px', fontWeight: 700, cursor: 'pointer',
+                              background: tagged ? 'rgba(59,130,246,0.18)' : 'var(--subtle-bg)',
+                              border: tagged ? '1px solid rgba(59,130,246,0.5)' : '1px solid var(--border)',
+                              color: tagged ? '#60a5fa' : 'var(--text-label)',
+                            }}
+                          >
+                            @{p.full_name || p.email}
+                          </button>
+                        );
+                      })}
+                      <button
+                        onClick={(e) => { e.stopPropagation(); postNote(po); }}
+                        disabled={postingNote || !noteText.trim()}
+                        style={{
+                          marginLeft: 'auto', padding: '5px 14px', borderRadius: '8px', fontSize: '11px', fontWeight: 800,
+                          background: postingNote || !noteText.trim() ? 'var(--subtle-bg)' : '#f59e0b',
+                          color: postingNote || !noteText.trim() ? 'var(--text-muted)' : '#111',
+                          border: 'none', cursor: postingNote || !noteText.trim() ? 'default' : 'pointer',
+                        }}
+                      >
+                        {postingNote ? 'Posting…' : 'Post'}
+                      </button>
+                    </div>
                   </div>
 
                   {isEditingPO ? (
