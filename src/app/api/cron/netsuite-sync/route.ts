@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { createClient } from '@supabase/supabase-js';
 import { suiteqlQueryAll } from '@/lib/netsuite';
 import { requireAdmin } from '@/lib/api-auth';
+import { syncPoInvoices } from '@/lib/po-invoice-sync';
 
 export const dynamic = 'force-dynamic';
 export const maxDuration = 120;
@@ -12,7 +13,9 @@ export const maxDuration = 120;
  * Automatic incremental sync from NetSuite — runs on Vercel Cron.
  * Only fetches records modified since the last successful sync.
  *
- * Syncs: customers, prospects, contacts (with phone numbers)
+ * Syncs: customers, prospects, contacts (with phone numbers), and
+ * PO-linked invoices (so invoices entered directly in NetSuite show up
+ * on the PO page without anyone clicking "Sync Invoices")
  */
 export async function GET(req: NextRequest) {
   // Allow Vercel Cron with the shared secret; anyone else needs an admin
@@ -265,6 +268,16 @@ export async function GET(req: NextRequest) {
   } catch (err: any) {
     console.error('[cron] Contact sync error:', err.message);
     results.contacts = { error: err.message };
+  }
+
+  // ═══════════ 3. PO INVOICE SWEEP ═══════════
+  // Link NetSuite-entered invoices to their POs by Reference No. so the
+  // PO page's Invoices section stays current without the manual button.
+  try {
+    results.poInvoices = await syncPoInvoices(supabase);
+  } catch (err: any) {
+    console.error('[cron] PO invoice sync error:', err.message);
+    results.poInvoices = { error: err.message };
   }
 
   return NextResponse.json({ status: 'ok', ...results });
