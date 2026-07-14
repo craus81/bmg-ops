@@ -1579,7 +1579,11 @@ export default function POsPage() {
       const data = await res.json();
 
       if (!res.ok || data.error) {
-        setEmailImportResults(prev => ({ ...prev, [messageId]: { status: 'error', error: data.error || `Request failed (${res.status})` } }));
+        const errMsg = data.error || `Request failed (${res.status})`;
+        setEmailImportResults(prev => ({ ...prev, [messageId]: { status: 'error', error: errMsg } }));
+        // Surface the failure in your face — a quietly advancing queue reads
+        // as success and the PO never lands.
+        await dialog.alert(`PO #${extracted?.po_number || ''} did NOT import: ${errMsg}`);
         advanceReviewQueue();
       } else if (data.status === 'exists') {
         // The overwrite dialog takes over; the queue resumes when it resolves.
@@ -1610,6 +1614,7 @@ export default function POsPage() {
       }
     } catch (err: any) {
       setEmailImportResults(prev => ({ ...prev, [messageId]: { status: 'error', error: err.message || 'Network error' } }));
+      await dialog.alert(`PO #${extracted?.po_number || ''} did NOT import: ${err.message || 'network error'}`);
       advanceReviewQueue();
     }
     setImportingEmailId(null);

@@ -26,7 +26,9 @@ const ImportSchema = z.object({
   // When confirming ONE PO out of a multi-PO email, which source PDF
   // attachment(s) belong to that PO — only those files get attached to it.
   // Absent = all of the email's PDFs (single-PO emails, older clients).
-  attachmentIds: z.array(z.string().min(1).max(300)).max(30).optional(),
+  // Gmail attachment ids are long base64 blobs — regularly 300-700 chars —
+  // so the per-id cap must be generous or every confirm 400s.
+  attachmentIds: z.array(z.string().min(1).max(4000)).max(50).optional(),
 });
 
 // Persist a PO's source PDFs to R2 + record po_files rows. Skips a filename
