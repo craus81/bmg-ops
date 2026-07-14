@@ -289,7 +289,7 @@ export default function POsPage() {
   const [pos, setPos] = useState<(PurchaseOrder & { line_items: POLineItem[]; po_invoices?: any[] })[]>([]);
   const [catalog, setCatalog] = useState<CatalogItem[]>([]);
   const [loading, setLoading] = useState(true);
-  const [poTab, setPoTab] = useState<'open' | 'closed'>('open');
+  const [poTab, setPoTab] = useState<'open' | 'fulfilled' | 'closed'>('open');
   const [showCreate, setShowCreate] = useState(false);
   const [showImport, setShowImport] = useState(false);
   const [expandedPo, setExpandedPo] = useState<string | null>(null);
@@ -1971,9 +1971,10 @@ export default function POsPage() {
   const fmt = (n: number) => '$' + n.toFixed(2).replace(/\B(?=(\d{3})+(?!\d))/g, ',');
 
   // Sort by PO number and filter by search
-  const openPos = pos.filter(po => po.status !== 'closed');
+  const openPos = pos.filter(po => po.status !== 'closed' && po.status !== 'complete');
+  const fulfilledPos = pos.filter(po => po.status === 'complete');
   const closedPos = pos.filter(po => po.status === 'closed');
-  const filteredPos = (poTab === 'closed' ? closedPos : openPos)
+  const filteredPos = (poTab === 'closed' ? closedPos : poTab === 'fulfilled' ? fulfilledPos : openPos)
     .filter((po) => {
       if (!poSearch.trim()) return true;
       const q = poSearch.toLowerCase();
@@ -2126,7 +2127,7 @@ export default function POsPage() {
         );
       })()}
 
-      {/* Open / Closed tabs */}
+      {/* Open / Fulfilled / Closed tabs */}
       <div style={{ display: 'flex', gap: '4px', marginBottom: '10px' }}>
         <button onClick={() => setPoTab('open')} style={{
           padding: '6px 14px', borderRadius: '8px', fontSize: '11px', fontWeight: 700, cursor: 'pointer',
@@ -2134,6 +2135,12 @@ export default function POsPage() {
           border: poTab === 'open' ? '1px solid var(--tab-active-border)' : '1px solid var(--border)',
           color: poTab === 'open' ? '#60a5fa' : 'var(--text-muted)',
         }}>Open ({openPos.length})</button>
+        <button onClick={() => setPoTab('fulfilled')} style={{
+          padding: '6px 14px', borderRadius: '8px', fontSize: '11px', fontWeight: 700, cursor: 'pointer',
+          background: poTab === 'fulfilled' ? 'var(--tab-active-bg)' : 'transparent',
+          border: poTab === 'fulfilled' ? '1px solid var(--tab-active-border)' : '1px solid var(--border)',
+          color: poTab === 'fulfilled' ? '#4ade80' : 'var(--text-muted)',
+        }}>Fulfilled ({fulfilledPos.length})</button>
         <button onClick={() => setPoTab('closed')} style={{
           padding: '6px 14px', borderRadius: '8px', fontSize: '11px', fontWeight: 700, cursor: 'pointer',
           background: poTab === 'closed' ? 'var(--tab-active-bg)' : 'transparent',
@@ -2145,7 +2152,7 @@ export default function POsPage() {
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '8px' }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
           <div style={{ fontSize: '11px', fontWeight: 700, color: 'var(--text-label)', textTransform: 'uppercase', letterSpacing: '0.5px' }}>
-            {poTab === 'closed' ? 'Closed' : ''} Purchase Orders ({filteredPos.length}{poSearch ? ` of ${pos.length}` : ''})
+            {poTab === 'closed' ? 'Closed' : poTab === 'fulfilled' ? 'Fulfilled' : ''} Purchase Orders ({filteredPos.length}{poSearch ? ` of ${pos.length}` : ''})
           </div>
           <button
             onClick={() => setPoSort(s => s === 'asc' ? 'desc' : 'asc')}
@@ -3381,7 +3388,7 @@ export default function POsPage() {
                       </div>
                       <div style={{ fontSize: '12px', color: 'var(--text-label)', marginTop: '1px' }}>
                         {po.customer} • {po.line_items.length} item{po.line_items.length !== 1 ? 's' : ''}
-                        {po.status === 'complete' && <span style={{ color: '#4ade80', marginLeft: '6px' }}>&#10003; Complete</span>}
+                        {po.status === 'complete' && <span style={{ color: '#4ade80', marginLeft: '6px' }}>&#10003; Fulfilled</span>}
                         {(po as any).netsuite_invoice_number && <span style={{ color: '#34d399', marginLeft: '6px' }}>INV #{(po as any).netsuite_invoice_number}</span>}
                       </div>
                     </div>
@@ -3468,7 +3475,7 @@ export default function POsPage() {
                       <div style={{ marginTop: '6px' }}>
                         <label style={labelStyle}>Status</label>
                         <select value={editPoForm.status} onChange={(e) => setEditPoForm({ ...editPoForm, status: e.target.value })} style={inputStyle}>
-                          <option value="open">Open</option><option value="complete">Complete</option><option value="cancelled">Cancelled</option>
+                          <option value="open">Open</option><option value="complete">Fulfilled</option><option value="cancelled">Cancelled</option>
                         </select>
                       </div>
                       <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '6px', marginTop: '6px' }}>

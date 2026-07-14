@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { createClient } from '@supabase/supabase-js';
 import { requireAdmin } from '@/lib/api-auth';
 import { validateBody, z } from '@/lib/validate';
+import { recomputePoFulfillment } from '@/lib/scan-match';
 
 export const dynamic = 'force-dynamic';
 
@@ -63,12 +64,25 @@ export async function POST(req: NextRequest) {
         }
       }
 
+      // A matched scan consumed a unit of PO capacity — grab its line refs
+      // before deleting so the counts (and PO fulfillment) can be released.
+      const { data: matchedScans } = await service
+        .from('scan_logs')
+        .select('id, po_id, po_line_item_id')
+        .in('id', deletableIds)
+        .not('po_line_item_id', 'is', null);
+
       // cni_job_vins.scan_log_id is ON DELETE SET NULL, so job links clear
       // themselves; anything else still referencing the scan surfaces here.
       const { error } = await service.from('scan_logs').delete().in('id', deletableIds);
       if (error) {
         return NextResponse.json({ error: 'Failed to delete scans: ' + error.message }, { status: 500 });
       }
+
+      for (const s of matchedScans || []) {
+        await service.rpc('decrement_po_installed', { p_line_id: s.po_line_item_id });
+      }
+      await recomputePoFulfillment(service, (matchedScans || []).map(s => s.po_id).filter(Boolean));
     }
 
     return NextResponse.json({ success: true, deleted: deletableIds.length, blocked });
