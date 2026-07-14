@@ -679,8 +679,9 @@ export default function POsPage() {
     const load = async () => {
       const { data: poData } = await supabase
         .from('purchase_orders')
-        .select('*, po_line_items(*), po_invoices(*), po_notes(id)')
+        .select('*, po_line_items(*), po_invoices(*)')
         .order('created_at', { ascending: false });
+      const notesByPo = await fetchNoteCounts();
 
       const FILTERED_CUSTOMERS = ['ranger design', 'enterprise fleet management', 'bmg fleet installations'];
       const mapped = (poData || [])
@@ -688,6 +689,7 @@ export default function POsPage() {
         .map((po: any) => ({
           ...po,
           line_items: po.po_line_items || [],
+          po_notes: notesByPo[po.id] || [],
           po_invoices: (po.po_invoices || []).sort((a: any, b: any) =>
             new Date(b.created_at).getTime() - new Date(a.created_at).getTime()
           ),
@@ -1389,6 +1391,20 @@ export default function POsPage() {
     return p?.full_name || p?.email || 'Someone';
   };
 
+  // Note counts are fetched separately and best-effort: embedding po_notes in
+  // the main PO select makes the ENTIRE list fail when the table hasn't been
+  // migrated yet — an empty page is a far worse failure than a missing badge.
+  const fetchNoteCounts = async (): Promise<Record<string, { id: string }[]>> => {
+    const byPo: Record<string, { id: string }[]> = {};
+    try {
+      const { data } = await supabase.from('po_notes').select('id, po_id');
+      for (const n of (data || []) as { id: string; po_id: string }[]) {
+        (byPo[n.po_id] = byPo[n.po_id] || []).push({ id: n.id });
+      }
+    } catch { /* table may not exist yet */ }
+    return byPo;
+  };
+
   const loadPoNotes = async (poId: string) => {
     const { data } = await supabase
       .from('po_notes')
@@ -1698,12 +1714,13 @@ export default function POsPage() {
         setEmailEmails(prev => prev.filter(e => e.messageId !== messageId));
         const { data: poData } = await supabase
           .from('purchase_orders')
-          .select('*, po_line_items(*), po_invoices(*), po_notes(id)')
+          .select('*, po_line_items(*), po_invoices(*)')
           .order('created_at', { ascending: false });
+        const notesByPo = await fetchNoteCounts();
         const FILTERED_CUSTOMERS = ['ranger design', 'enterprise fleet management', 'bmg fleet installations'];
         const mapped = (poData || [])
           .filter((po: any) => !FILTERED_CUSTOMERS.some(fc => po.customer?.toLowerCase().includes(fc)))
-          .map((po: any) => ({ ...po, line_items: po.po_line_items || [], po_invoices: (po.po_invoices || []).sort((a: any, b: any) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime()) }));
+          .map((po: any) => ({ ...po, line_items: po.po_line_items || [], po_notes: notesByPo[po.id] || [], po_invoices: (po.po_invoices || []).sort((a: any, b: any) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime()) }));
         setPos(mapped);
       }
     } catch (err: any) {
@@ -1750,12 +1767,13 @@ export default function POsPage() {
           }
           const { data: poData } = await supabase
             .from('purchase_orders')
-            .select('*, po_line_items(*), po_invoices(*), po_notes(id)')
+            .select('*, po_line_items(*), po_invoices(*)')
             .order('created_at', { ascending: false });
+          const notesByPo = await fetchNoteCounts();
           const FILTERED_CUSTOMERS = ['ranger design', 'enterprise fleet management', 'bmg fleet installations'];
           const mapped = (poData || [])
             .filter((po: any) => !FILTERED_CUSTOMERS.some(fc => po.customer?.toLowerCase().includes(fc)))
-            .map((po: any) => ({ ...po, line_items: po.po_line_items || [], po_invoices: (po.po_invoices || []).sort((a: any, b: any) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime()) }));
+            .map((po: any) => ({ ...po, line_items: po.po_line_items || [], po_notes: notesByPo[po.id] || [], po_invoices: (po.po_invoices || []).sort((a: any, b: any) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime()) }));
           setPos(mapped);
         }
         advanceReviewQueue();
@@ -1822,12 +1840,13 @@ export default function POsPage() {
           }
           const { data: poData } = await supabase
             .from('purchase_orders')
-            .select('*, po_line_items(*), po_invoices(*), po_notes(id)')
+            .select('*, po_line_items(*), po_invoices(*)')
             .order('created_at', { ascending: false });
+          const notesByPo = await fetchNoteCounts();
           const FILTERED_CUSTOMERS = ['ranger design', 'enterprise fleet management', 'bmg fleet installations'];
           const mapped = (poData || [])
             .filter((po: any) => !FILTERED_CUSTOMERS.some(fc => po.customer?.toLowerCase().includes(fc)))
-            .map((po: any) => ({ ...po, line_items: po.po_line_items || [], po_invoices: (po.po_invoices || []).sort((a: any, b: any) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime()) }));
+            .map((po: any) => ({ ...po, line_items: po.po_line_items || [], po_notes: notesByPo[po.id] || [], po_invoices: (po.po_invoices || []).sort((a: any, b: any) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime()) }));
           setPos(mapped);
         }
       }
