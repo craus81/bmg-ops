@@ -3354,7 +3354,31 @@ export default function POsPage() {
                       return null;
                     })()}
                     <div>
-                      <div style={{ fontWeight: 800, fontSize: '15px' }}>PO #{po.po_number}</div>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: '8px', flexWrap: 'wrap' }}>
+                        <div style={{ fontWeight: 800, fontSize: '15px' }}>PO #{po.po_number}</div>
+                        {(() => {
+                          // Ship-to location, front and center next to the PO
+                          // number: the location name, or city/state when the
+                          // extraction didn't carry a name. Full address on hover.
+                          const name = (po.ship_to?.name || '').trim();
+                          const cityState = [po.ship_to?.city, po.ship_to?.state].filter(Boolean).join(', ');
+                          const loc = name && cityState ? `${name} · ${cityState}` : name || cityState;
+                          if (!loc) return null;
+                          return (
+                            <span
+                              title={formatShipTo(po.ship_to) || undefined}
+                              style={{
+                                fontSize: '11px', fontWeight: 800, color: '#22d3ee',
+                                background: 'rgba(34,211,238,0.1)', border: '1px solid rgba(34,211,238,0.3)',
+                                padding: '1px 8px', borderRadius: '10px', whiteSpace: 'nowrap',
+                                maxWidth: '260px', overflow: 'hidden', textOverflow: 'ellipsis',
+                              }}
+                            >
+                              📍 {loc}
+                            </span>
+                          );
+                        })()}
+                      </div>
                       <div style={{ fontSize: '12px', color: 'var(--text-label)', marginTop: '1px' }}>
                         {po.customer} • {po.line_items.length} item{po.line_items.length !== 1 ? 's' : ''}
                         {po.status === 'complete' && <span style={{ color: '#4ade80', marginLeft: '6px' }}>&#10003; Complete</span>}
