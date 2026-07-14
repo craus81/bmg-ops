@@ -346,7 +346,18 @@ export default function POsPage() {
   const [overwriting, setOverwriting] = useState(false);
   // Email PO review/edit state. `pdf` points at the original email attachment
   // (served by /api/gmail/attachment) so it can be shown beside the form.
-  const [reviewingExtraction, setReviewingExtraction] = useState<{ messageId: string; extracted: any; pdf?: { url: string; name: string } } | null>(null);
+  type ReviewItem = {
+    messageId: string;
+    extracted: any;
+    pdf?: { url: string; name: string };
+    // Which source PDFs belong to this PO (multi-PO emails) — sent back on
+    // confirm so only those files attach to the created/updated PO.
+    attachmentIds?: string[];
+    queuePos?: { index: number; total: number };
+  };
+  const [reviewingExtraction, setReviewingExtraction] = useState<ReviewItem | null>(null);
+  // Remaining reviews for a multi-PO email, shown one at a time after the current one
+  const [reviewQueue, setReviewQueue] = useState<ReviewItem[]>([]);
   // Whether the source-PDF pane is showing; reset per open, defaults on for wide screens
   const [reviewPdfOpen, setReviewPdfOpen] = useState(false);
   const [reviewShipToId, setReviewShipToId] = useState<string>('');
@@ -1354,6 +1365,18 @@ export default function POsPage() {
     setEmailEmails(prev => prev.filter(e => e.messageId !== messageId));
   };
 
+  // Multi-PO emails queue one review per PO. Advance to the next one, or
+  // close the panel when the queue is spent.
+  const advanceReviewQueue = () => {
+    const [next, ...rest] = reviewQueue;
+    if (next) {
+      setReviewingExtraction(next);
+      setReviewQueue(rest);
+    } else {
+      setReviewingExtraction(null);
+    }
+  };
+
   const importEmailPO = async (messageId: string, skipReview = false) => {
     setImportingEmailId(messageId);
     try {
@@ -1371,17 +1394,27 @@ export default function POsPage() {
         return;
       }
 
-      // Extract-only mode: show review panel with the source PDF alongside
+      // Extract-only mode: show review panel with the source PDF alongside.
+      // A multi-PO email returns one review per PO — queue them one at a time.
       if (data.status === 'review') {
-        const pdf = data.pdfs?.[0];
+        const toItem = (r: any, queuePos?: { index: number; total: number }): ReviewItem => {
+          const pdf = r.pdfs?.[0];
+          return {
+            messageId,
+            extracted: collapseSupplierParts(r.extracted),
+            attachmentIds: (r.pdfs || []).map((p: any) => p.attachmentId),
+            queuePos,
+            pdf: pdf
+              ? { url: gmailPdfUrl(messageId, pdf.attachmentId, pdf.filename), name: pdf.filename }
+              : { url: gmailPdfUrl(messageId), name: 'PO PDF' },
+          };
+        };
+        const items: ReviewItem[] = data.multi && data.reviews?.length
+          ? data.reviews.map((r: any, i: number) => toItem(r, { index: i + 1, total: data.reviews.length }))
+          : [toItem(data)];
         setReviewPdfOpen(window.innerWidth >= 1000);
-        setReviewingExtraction({
-          messageId,
-          extracted: collapseSupplierParts(data.extracted),
-          pdf: pdf
-            ? { url: gmailPdfUrl(messageId, pdf.attachmentId, pdf.filename), name: pdf.filename }
-            : { url: gmailPdfUrl(messageId), name: 'PO PDF' },
-        });
+        setReviewingExtraction(items[0]);
+        setReviewQueue(items.slice(1));
         setImportingEmailId(null);
         return;
       }
@@ -1420,28 +1453,35 @@ export default function POsPage() {
   // Confirm import with reviewed/edited extraction data
   const confirmReviewedImport = async () => {
     if (!reviewingExtraction) return;
-    const { messageId, extracted } = reviewingExtraction;
+    const { messageId, extracted, attachmentIds } = reviewingExtraction;
     setImportingEmailId(messageId);
+    const isLastInQueue = reviewQueue.length === 0;
     try {
       const res = await fetch('/api/gmail/import-po', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ messageId, preExtracted: extracted }),
+        body: JSON.stringify({ messageId, preExtracted: extracted, attachmentIds }),
       });
       const data = await res.json();
 
       if (!res.ok || data.error) {
         setEmailImportResults(prev => ({ ...prev, [messageId]: { status: 'error', error: data.error || `Request failed (${res.status})` } }));
+        advanceReviewQueue();
       } else if (data.status === 'exists') {
-        setOverwriteData(data);
+        // The overwrite dialog takes over; the queue resumes when it resolves.
+        setOverwriteData({ ...data, attachmentIds });
         setOverwriteMessageId(messageId);
         setShowOverwriteConfirm(true);
+        setReviewingExtraction(null);
       } else {
         setEmailImportResults(prev => ({ ...prev, [messageId]: data }));
         if (data.status === 'imported' || data.status === 'updated') {
-          // Remove from pending POs list and email list
-          setPendingPOs(prev => prev.filter(p => p.message_id !== messageId));
-          setEmailEmails(prev => prev.filter(e => e.messageId !== messageId));
+          // Remove from pending/email lists only once every PO in the email
+          // has been through review
+          if (isLastInQueue) {
+            setPendingPOs(prev => prev.filter(p => p.message_id !== messageId));
+            setEmailEmails(prev => prev.filter(e => e.messageId !== messageId));
+          }
           const { data: poData } = await supabase
             .from('purchase_orders')
             .select('*, po_line_items(*), po_invoices(*)')
@@ -1452,11 +1492,12 @@ export default function POsPage() {
             .map((po: any) => ({ ...po, line_items: po.po_line_items || [], po_invoices: (po.po_invoices || []).sort((a: any, b: any) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime()) }));
           setPos(mapped);
         }
+        advanceReviewQueue();
       }
     } catch (err: any) {
       setEmailImportResults(prev => ({ ...prev, [messageId]: { status: 'error', error: err.message || 'Network error' } }));
+      advanceReviewQueue();
     }
-    setReviewingExtraction(null);
     setImportingEmailId(null);
   };
 
@@ -1482,13 +1523,22 @@ export default function POsPage() {
   };
 
   const confirmOverwrite = async () => {
-    if (!overwriteMessageId) return;
+    if (!overwriteMessageId || !overwriteData?.extracted) return;
     setOverwriting(true);
+    const isLastInQueue = reviewQueue.length === 0;
     try {
+      // Overwrite with the extraction we already have (reviewed/edited when it
+      // came through the review panel) instead of re-extracting the email —
+      // faster, cheaper, and correctly scoped to one PO of a multi-PO email.
       const res = await fetch('/api/gmail/import-po', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ messageId: overwriteMessageId, autoCreate: true, forceOverwrite: true }),
+        body: JSON.stringify({
+          messageId: overwriteMessageId,
+          preExtracted: overwriteData.extracted,
+          forceOverwrite: true,
+          attachmentIds: overwriteData.attachmentIds,
+        }),
       });
       const data = await res.json();
 
@@ -1499,8 +1549,10 @@ export default function POsPage() {
 
         // Refresh PO list and remove from pending/email lists
         if (data.status === 'updated') {
-          setPendingPOs(prev => prev.filter(p => p.message_id !== overwriteMessageId));
-          setEmailEmails(prev => prev.filter(e => e.messageId !== overwriteMessageId));
+          if (isLastInQueue) {
+            setPendingPOs(prev => prev.filter(p => p.message_id !== overwriteMessageId));
+            setEmailEmails(prev => prev.filter(e => e.messageId !== overwriteMessageId));
+          }
           const { data: poData } = await supabase
             .from('purchase_orders')
             .select('*, po_line_items(*), po_invoices(*)')
@@ -1519,12 +1571,15 @@ export default function POsPage() {
     setShowOverwriteConfirm(false);
     setOverwriteData(null);
     setOverwriteMessageId(null);
+    advanceReviewQueue();
   };
 
   const cancelOverwrite = () => {
     setShowOverwriteConfirm(false);
     setOverwriteData(null);
     setOverwriteMessageId(null);
+    // Skipping the overwrite still moves a multi-PO email on to its next PO
+    advanceReviewQueue();
   };
 
   const createNetSuiteSO = async (poId: string) => {
@@ -2353,7 +2408,14 @@ export default function POsPage() {
             <div style={{ padding: '18px', overflowY: 'auto', flex: reviewingExtraction.pdf && reviewPdfOpen ? '0 1 520px' : '1 1 auto', minWidth: '300px' }}>
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '14px' }}>
               <div>
-                <div style={{ fontSize: '16px', fontWeight: 800, color: 'var(--text-body)' }}>Review PO Import</div>
+                <div style={{ fontSize: '16px', fontWeight: 800, color: 'var(--text-body)' }}>
+                  Review PO Import
+                  {reviewingExtraction.queuePos && (
+                    <span style={{ marginLeft: '8px', fontSize: '11px', fontWeight: 700, color: '#60a5fa', background: 'rgba(59,130,246,0.12)', padding: '2px 8px', borderRadius: '10px', verticalAlign: 'middle' }}>
+                      PO {reviewingExtraction.queuePos.index} of {reviewingExtraction.queuePos.total} in this email
+                    </span>
+                  )}
+                </div>
                 <div style={{ fontSize: '11px', color: 'var(--text-label)', marginTop: '2px' }}>
                   PO #{reviewingExtraction.extracted.po_number} · {reviewingExtraction.extracted.customer || 'Unknown'} · {reviewingExtraction.extracted.lines?.length || 0} line items
                 </div>
@@ -2366,7 +2428,7 @@ export default function POsPage() {
                     title="Show the original PDF next to the form for comparison"
                   >{reviewPdfOpen ? 'Hide PDF' : 'View PDF'}</button>
                 )}
-                <button onClick={() => setReviewingExtraction(null)} style={{ background: 'none', border: 'none', color: 'var(--text-label)', fontSize: '18px', cursor: 'pointer', padding: '4px' }}>✕</button>
+                <button onClick={() => { setReviewingExtraction(null); setReviewQueue([]); }} style={{ background: 'none', border: 'none', color: 'var(--text-label)', fontSize: '18px', cursor: 'pointer', padding: '4px' }}>✕</button>
               </div>
             </div>
 
@@ -2547,7 +2609,7 @@ export default function POsPage() {
                 {importingEmailId ? 'Importing...' : `Import ${reviewingExtraction.extracted.lines?.length || 0} Lines`}
               </button>
               <button
-                onClick={() => setReviewingExtraction(null)}
+                onClick={() => { setReviewingExtraction(null); setReviewQueue([]); }}
                 style={{ flex: 1, padding: '12px', borderRadius: '10px', background: 'transparent', border: '1px solid var(--border)', color: 'var(--text-body)', fontWeight: 700, fontSize: '13px', cursor: 'pointer' }}
               >
                 Cancel
