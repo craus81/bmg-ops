@@ -461,10 +461,33 @@ export default function AdminScansPage() {
     loadAll();
   };
 
-  // Delete
+  // Delete — via the server route, which also removes the scan's unpaid pay
+  // credits (a direct scan_logs delete is refused by the credits FK, which is
+  // why deletes used to silently do nothing).
+  const deleteScans = async (ids: string[]): Promise<void> => {
+    try {
+      const res = await fetch('/api/scans/delete', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ ids }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok || !data.success) {
+        await dialog.alert(`Delete failed: ${data.error || `request failed (${res.status})`}`);
+      } else if ((data.blocked || []).length > 0) {
+        const vins = data.blocked.map((b: any) => b.vin).filter(Boolean).join(', ');
+        await dialog.alert(
+          `${data.blocked.length} scan${data.blocked.length !== 1 ? 's' : ''} not deleted — pay credits are already on a payout${vins ? ` (${vins})` : ''}. Remove them from the payout first.`,
+        );
+      }
+    } catch (err: any) {
+      await dialog.alert(`Delete failed: ${err.message || 'network error'}`);
+    }
+  };
+
   const deleteScan = async (id: string) => {
     if (!(await dialog.confirm('Delete this scan?', { destructive: true, confirmLabel: 'Delete' }))) return;
-    await supabase.from('scan_logs').delete().eq('id', id);
+    await deleteScans([id]);
     loadAll();
   };
 
@@ -472,7 +495,7 @@ export default function AdminScansPage() {
     const count = selectedScans.size;
     if (count === 0) return;
     if (!(await dialog.confirm(`Delete ${count} scan${count !== 1 ? 's' : ''}? This cannot be undone.`, { destructive: true, confirmLabel: 'Delete' }))) return;
-    await supabase.from('scan_logs').delete().in('id', [...selectedScans]);
+    await deleteScans([...selectedScans]);
     setSelectedScans(new Set());
     loadAll();
   };
