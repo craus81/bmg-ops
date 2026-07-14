@@ -21,6 +21,10 @@ const ImportSchema = z.object({
   // is intentionally loose (parser output evolves) — downstream code reads
   // specific fields with optional access. record(unknown) keeps it open.
   preExtracted: z.record(z.string(), z.any()).optional(),
+  // When confirming ONE PO out of a multi-PO email, which source PDF
+  // attachment(s) belong to that PO — only those files get attached to it.
+  // Absent = all of the email's PDFs (single-PO emails, older clients).
+  attachmentIds: z.array(z.string().min(1).max(300)).max(30).optional(),
 });
 
 // Persist a PO's source PDFs to R2 + record po_files rows. Skips a filename
@@ -63,6 +67,23 @@ async function savePoFilesToStorage(
       console.warn(`Failed to save PO file ${pdf.filename}:`, err);
     }
   }
+}
+
+// One gmail_po_imports row exists per email (message_id is unique). A
+// multi-PO email is confirmed one PO at a time, so each confirmation merges
+// its PO number into the row instead of clobbering the previously imported
+// ones.
+async function mergedPoNumbers(supabase: any, messageId: string, poNumber: string): Promise<string> {
+  const { data } = await supabase
+    .from('gmail_po_imports')
+    .select('po_number')
+    .eq('message_id', messageId)
+    .maybeSingle();
+  const nums = new Set(
+    String(data?.po_number || '').split(',').map((s: string) => s.trim()).filter(Boolean),
+  );
+  nums.add(String(poNumber));
+  return [...nums].join(', ');
 }
 
 /**
@@ -261,6 +282,58 @@ RULES:
 - If the PO has items across multiple pages, include ALL pages
 - customer: Usually "Masterack" for Masterack POs. Use the buyer/company name from the header`;
 
+type ExtractResult =
+  | { ok: true; extracted: any; stopReason: string | null; inputTokens: number; outputTokens: number }
+  | { ok: false; kind: 'api'; status: number; errBody: string }
+  | { ok: false; kind: 'parse'; raw: string };
+
+// Run one Claude extraction over one PDF (or a set treated as one document).
+// Returns the parsed JSON plus response metadata, or a typed failure so the
+// caller can distinguish API errors from unparseable output.
+async function extractFromPdfs(base64Docs: string[], promptSuffix: string, apiKey: string): Promise<ExtractResult> {
+  const res = await callAnthropicWithRetry({
+    model: 'claude-sonnet-4-6',
+    max_tokens: 8192,
+    messages: [{
+      role: 'user',
+      content: [
+        ...base64Docs.map(data => ({
+          type: 'document',
+          source: { type: 'base64', media_type: 'application/pdf', data },
+        })),
+        { type: 'text', text: PO_EXTRACTION_PROMPT + promptSuffix },
+      ],
+    }],
+  }, apiKey);
+
+  if (!res.ok) {
+    return { ok: false, kind: 'api', status: res.status, errBody: await res.text() };
+  }
+
+  const aiResult = await res.json();
+  const aiText = aiResult.content?.[0]?.text || '';
+  try {
+    // Find JSON in the response, handling potential markdown wrapping
+    let jsonStr = aiText;
+    const codeBlockMatch = aiText.match(/```(?:json)?\s*([\s\S]*?)```/);
+    if (codeBlockMatch) {
+      jsonStr = codeBlockMatch[1];
+    } else {
+      const jsonMatch = aiText.match(/\{[\s\S]*\}/);
+      if (jsonMatch) jsonStr = jsonMatch[0];
+    }
+    return {
+      ok: true,
+      extracted: JSON.parse(jsonStr),
+      stopReason: aiResult.stop_reason || null,
+      inputTokens: aiResult.usage?.input_tokens || 0,
+      outputTokens: aiResult.usage?.output_tokens || 0,
+    };
+  } catch {
+    return { ok: false, kind: 'parse', raw: aiText };
+  }
+}
+
 export async function POST(req: NextRequest) {
   // Allow internal server-to-server calls (from auto-import cron)
   const authHeader = req.headers.get('authorization');
@@ -272,7 +345,7 @@ export async function POST(req: NextRequest) {
 
   const parsed = await validateBody(req, ImportSchema);
   if (parsed.error) return parsed.error;
-  const { messageId, autoCreate, forceOverwrite, extractOnly, preExtracted } = parsed.data;
+  const { messageId, autoCreate, forceOverwrite, extractOnly, preExtracted, attachmentIds } = parsed.data;
 
   try {
 
@@ -297,6 +370,11 @@ export async function POST(req: NextRequest) {
       }
       const extractedLines = (extracted.lines || []).filter((l: any) => l.part_number);
       const pdfFilenames = pdfs.map((p: any) => p.filename).join(', ');
+      // Only this PO's source PDFs get attached when the caller scoped them
+      // (multi-PO email confirmed one PO at a time); default is all PDFs.
+      const poPdfs = attachmentIds?.length
+        ? pdfs.filter(p => attachmentIds.includes(p.attachmentId))
+        : pdfs;
 
       // From here, proceed to PO creation logic (same as normal flow)
       // Check if PO already exists
@@ -369,12 +447,12 @@ export async function POST(req: NextRequest) {
           await supabase.from('po_line_items').insert(lineInserts);
         }
 
-        await savePoFilesToStorage(supabase, existingPO.id, messageId, pdfs);
+        await savePoFilesToStorage(supabase, existingPO.id, messageId, poPdfs);
 
         await supabase.from('gmail_po_imports').upsert({
           message_id: messageId, thread_id: message.threadId, subject, from_email: from,
           received_at: date ? new Date(date).toISOString() : null,
-          po_number: String(poNumber), po_id: existingPO.id,
+          po_number: await mergedPoNumbers(supabase, messageId, String(poNumber)), po_id: existingPO.id,
           attachment_filename: pdfFilenames, status: 'imported', raw_extraction: extracted,
         }, { onConflict: 'message_id' });
 
@@ -434,12 +512,12 @@ export async function POST(req: NextRequest) {
         await supabase.from('po_line_items').insert(lineInserts);
       }
 
-      await savePoFilesToStorage(supabase, newPO.id, messageId, pdfs);
+      await savePoFilesToStorage(supabase, newPO.id, messageId, poPdfs);
 
       await supabase.from('gmail_po_imports').upsert({
         message_id: messageId, thread_id: message.threadId, subject, from_email: from,
         received_at: date ? new Date(date).toISOString() : null,
-        po_number: String(poNumber), po_id: newPO.id,
+        po_number: await mergedPoNumbers(supabase, messageId, String(poNumber)), po_id: newPO.id,
         attachment_filename: pdfFilenames, status: 'imported', raw_extraction: extracted,
       }, { onConflict: 'message_id' });
 
@@ -460,7 +538,6 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ error: 'No PDF attachment found' }, { status: 400 });
     }
 
-    // Download ALL PDF attachments so Claude can find the PO in any of them
     // Sort: filenames containing "PO" or "purchase" first, then by size descending
     const sortedPdfs = [...pdfs].sort((a, b) => {
       const aIsPO = /\b(po|purchase.?order)\b/i.test(a.filename) ? 1 : 0;
@@ -469,114 +546,167 @@ export async function POST(req: NextRequest) {
       return b.size - a.size;
     });
 
-    // Build document content blocks for all PDFs
-    const documentBlocks: any[] = [];
-    const pdfFilenames: string[] = [];
+    // Download every PDF once; base64 is reused for extraction AND the R2
+    // upload so attachments aren't fetched from Gmail twice.
+    const downloaded: { pdf: (typeof sortedPdfs)[number]; base64: string }[] = [];
     for (const pdf of sortedPdfs) {
       try {
-        const pdfBase64 = await getAttachment(messageId, pdf.attachmentId);
-        documentBlocks.push({
-          type: 'document',
-          source: {
-            type: 'base64',
-            media_type: 'application/pdf',
-            data: pdfBase64,
-          },
-        });
-        pdfFilenames.push(pdf.filename);
+        downloaded.push({ pdf, base64: await getAttachment(messageId, pdf.attachmentId) });
       } catch (err) {
         console.warn(`Failed to download attachment ${pdf.filename}:`, err);
       }
     }
 
-    if (documentBlocks.length === 0) {
+    if (downloaded.length === 0) {
       return NextResponse.json({ error: 'Failed to download any PDF attachments' }, { status: 400 });
     }
+    const pdfCache = new Map(downloaded.map(d => [d.pdf.attachmentId, d.base64] as const));
+    const pdfFilenames = downloaded.map(d => d.pdf.filename);
 
-    // Build the prompt — if multiple PDFs, tell Claude to find the PO
-    const multiPdfNote = documentBlocks.length > 1
-      ? `\n\nIMPORTANT: This email has ${documentBlocks.length} PDF attachments (${pdfFilenames.join(', ')}). One of them is the Purchase Order — find it and extract the data from it. Ignore non-PO attachments (spec sheets, drawings, BOLs, etc.).`
-      : '';
+    // Extract. A single attachment keeps the original one-call flow. With
+    // several attachments, each PDF is extracted SEPARATELY — an email often
+    // carries multiple DIFFERENT purchase orders (plus spec sheets/BOLs), and
+    // a combined call can only ever return one of them.
+    type PdfRef = { filename: string; attachmentId: string; size: number };
+    const poExtractions: {
+      extracted: any;
+      pdfs: PdfRef[];
+      meta: { stopReason: string | null; inputTokens: number; outputTokens: number };
+    }[] = [];
+    const supportingPdfs: PdfRef[] = [];
+    let firstApiFailure: { status: number; errBody: string } | null = null;
+    let firstParseFailure: { raw: string } | null = null;
 
-    // Send to Claude API for extraction using native PDF support (with retry)
-    const anthropicRes = await callAnthropicWithRetry({
-      model: 'claude-sonnet-4-6',
-      max_tokens: 8192,
-      messages: [{
-        role: 'user',
-        content: [
-          ...documentBlocks,
-          {
-            type: 'text',
-            text: PO_EXTRACTION_PROMPT + multiPdfNote,
-          },
-        ],
-      }],
-    }, process.env.ANTHROPIC_API_KEY!);
-
-    if (!anthropicRes.ok) {
-      const errBody = await anthropicRes.text();
-      console.error('Anthropic API error:', errBody);
-
-      await supabase.from('gmail_po_imports').upsert({
-        message_id: messageId,
-        thread_id: message.threadId,
-        subject,
-        from_email: from,
-        received_at: date ? new Date(date).toISOString() : null,
-        attachment_filename: pdfFilenames.join(', '),
-        status: 'error',
-        error_message: `AI extraction failed: ${anthropicRes.status}`,
-      }, { onConflict: 'message_id' });
-
-      return NextResponse.json({ error: 'AI extraction failed', details: errBody }, { status: 500 });
-    }
-
-    const aiResult = await anthropicRes.json();
-    const aiText = aiResult.content?.[0]?.text || '';
-
-    // Parse the JSON from AI response
-    let extracted;
-    try {
-      // Try to find JSON in the response, handling potential markdown wrapping
-      let jsonStr = aiText;
-      const codeBlockMatch = aiText.match(/```(?:json)?\s*([\s\S]*?)```/);
-      if (codeBlockMatch) {
-        jsonStr = codeBlockMatch[1];
+    if (downloaded.length === 1) {
+      const r = await extractFromPdfs([downloaded[0].base64], '', process.env.ANTHROPIC_API_KEY!);
+      if (!r.ok) {
+        if (r.kind === 'api') firstApiFailure = r;
+        else firstParseFailure = r;
+      } else if (!r.extracted?.po_number) {
+        return NextResponse.json({ error: 'No PO number found in PDF', extracted: r.extracted }, { status: 400 });
       } else {
-        const jsonMatch = aiText.match(/\{[\s\S]*\}/);
-        if (jsonMatch) jsonStr = jsonMatch[0];
+        poExtractions.push({ extracted: r.extracted, pdfs: [downloaded[0].pdf], meta: r });
       }
-      extracted = JSON.parse(jsonStr);
-    } catch (parseErr: any) {
+    } else {
+      const NOT_A_PO_NOTE = `\n\nIMPORTANT: This document is ONE attachment from an email that may contain several attachments, possibly including MULTIPLE separate purchase orders. Extract ONLY this document. If this document is NOT a purchase order (e.g. a spec sheet, drawing, BOL, invoice, packing list, or quote), return exactly: {"not_a_po": true}`;
+      const results = await Promise.all(
+        downloaded.map(d => extractFromPdfs([d.base64], NOT_A_PO_NOTE, process.env.ANTHROPIC_API_KEY!)),
+      );
+      results.forEach((r, i) => {
+        const pdf = downloaded[i].pdf;
+        if (!r.ok) {
+          if (r.kind === 'api') firstApiFailure = firstApiFailure || r;
+          else firstParseFailure = firstParseFailure || r;
+          console.warn(`PO extraction failed for attachment ${pdf.filename}`);
+          return;
+        }
+        if (r.extracted?.not_a_po || !r.extracted?.po_number) {
+          supportingPdfs.push(pdf);
+          return;
+        }
+        // Same PO number from two attachments (duplicate/split PDF): keep one
+        // extraction and carry both files.
+        const existing = poExtractions.find(pe => String(pe.extracted.po_number) === String(r.extracted.po_number));
+        if (existing) {
+          existing.pdfs.push(pdf);
+          return;
+        }
+        poExtractions.push({ extracted: r.extracted, pdfs: [pdf], meta: r });
+      });
+    }
+
+    // Non-PO attachments (spec sheets, BOLs, drawings) ride along with every
+    // PO found, mirroring the old attach-everything behavior.
+    for (const pe of poExtractions) pe.pdfs.push(...supportingPdfs);
+
+    if (poExtractions.length === 0) {
+      if (firstApiFailure) {
+        console.error('Anthropic API error:', firstApiFailure.errBody);
+        await supabase.from('gmail_po_imports').upsert({
+          message_id: messageId,
+          thread_id: message.threadId,
+          subject,
+          from_email: from,
+          received_at: date ? new Date(date).toISOString() : null,
+          attachment_filename: pdfFilenames.join(', '),
+          status: 'error',
+          error_message: `AI extraction failed: ${firstApiFailure.status}`,
+        }, { onConflict: 'message_id' });
+        return NextResponse.json({ error: 'AI extraction failed', details: firstApiFailure.errBody }, { status: 500 });
+      }
+      if (firstParseFailure) {
+        await supabase.from('gmail_po_imports').upsert({
+          message_id: messageId,
+          thread_id: message.threadId,
+          subject,
+          from_email: from,
+          received_at: date ? new Date(date).toISOString() : null,
+          attachment_filename: pdfFilenames.join(', '),
+          status: 'error',
+          error_message: 'Failed to parse AI extraction',
+          raw_extraction: { raw: firstParseFailure.raw },
+        }, { onConflict: 'message_id' });
+        return NextResponse.json({ error: 'Failed to parse extraction', raw: firstParseFailure.raw }, { status: 500 });
+      }
+      return NextResponse.json({ error: 'No PO number found in any PDF attachment' }, { status: 400 });
+    }
+
+    // Multiple distinct POs in one email: hand ALL of them to the review flow
+    // so each gets confirmed (and its own PDF attached) individually.
+    if (poExtractions.length > 1) {
+      const poNumbers = poExtractions.map(pe => String(pe.extracted.po_number));
+
+      if (!extractOnly) {
+        // Blind bulk-create of several POs is easy to get wrong — require the
+        // review flow (every current caller already uses it).
+        return NextResponse.json({
+          error: `This email contains ${poExtractions.length} purchase orders (${poNumbers.join(', ')}). Import it via review so each PO can be confirmed individually.`,
+          poNumbers,
+        }, { status: 422 });
+      }
+
       await supabase.from('gmail_po_imports').upsert({
         message_id: messageId,
         thread_id: message.threadId,
         subject,
         from_email: from,
         received_at: date ? new Date(date).toISOString() : null,
+        po_number: poNumbers.join(', '),
         attachment_filename: pdfFilenames.join(', '),
-        status: 'error',
-        error_message: 'Failed to parse AI extraction',
-        raw_extraction: { raw: aiText },
+        status: 'pending',
+        raw_extraction: { multi: true, pos: poExtractions.map(pe => pe.extracted) },
       }, { onConflict: 'message_id' });
 
-      return NextResponse.json({ error: 'Failed to parse extraction', raw: aiText }, { status: 500 });
+      return NextResponse.json({
+        status: 'review',
+        multi: true,
+        poNumber: poNumbers.join(', '),
+        customer: poExtractions[0].extracted.customer || 'Unknown',
+        // One review entry per PO, each with its own source PDF(s) so the
+        // client can queue them through the review panel one at a time.
+        reviews: poExtractions.map(pe => ({
+          poNumber: pe.extracted.po_number,
+          customer: pe.extracted.customer || 'Unknown',
+          ordered_date: pe.extracted.ordered_date || null,
+          extracted: pe.extracted,
+          pdfs: pe.pdfs,
+        })),
+      });
     }
 
+    // Exactly one PO — original single-PO flow from here down.
+    const { extracted, meta } = poExtractions[0];
+    const poPdfs = poExtractions[0].pdfs;
     const poNumber = extracted.po_number;
-    if (!poNumber) {
-      return NextResponse.json({ error: 'No PO number found in PDF', extracted }, { status: 400 });
-    }
 
     const extractedLines = (extracted.lines || []).filter((l: any) => l.part_number);
 
     // Validate extraction quality — catch partial/degraded extractions
     const hasLines = extractedLines.length > 0;
     const hasPricing = extractedLines.some((l: any) => parseFloat(l.unit_price) > 0);
-    const stopReason = aiResult.stop_reason;
-    const inputTokens = aiResult.usage?.input_tokens || 0;
-    const outputTokens = aiResult.usage?.output_tokens || 0;
+    const stopReason = meta.stopReason;
+    const inputTokens = meta.inputTokens;
+    const outputTokens = meta.outputTokens;
 
     console.log(`PO ${poNumber}: extracted ${extractedLines.length} lines, hasPricing=${hasPricing}, stopReason=${stopReason}, tokens=${inputTokens}/${outputTokens}`);
 
@@ -630,9 +760,9 @@ export async function POST(req: NextRequest) {
         customer: extracted.customer || 'Unknown',
         ordered_date: extracted.ordered_date || null,
         extracted,
-        // Attachment refs (best PO candidate first) so the review UI can show
+        // Attachment refs (the PO's own PDF first) so the review UI can show
         // the source PDF next to the extracted fields
-        pdfs: sortedPdfs.map(p => ({ filename: p.filename, attachmentId: p.attachmentId, size: p.size })),
+        pdfs: poPdfs.map(p => ({ filename: p.filename, attachmentId: p.attachmentId, size: p.size })),
       });
     }
 
@@ -794,7 +924,7 @@ export async function POST(req: NextRequest) {
         }
       }
 
-      await savePoFilesToStorage(supabase, existingPO.id, messageId, sortedPdfs);
+      await savePoFilesToStorage(supabase, existingPO.id, messageId, poPdfs, pdfCache);
 
       await supabase.from('gmail_po_imports').upsert({
         message_id: messageId,
@@ -907,7 +1037,7 @@ export async function POST(req: NextRequest) {
         await supabase.from('po_line_items').insert(lineInserts);
       }
 
-      await savePoFilesToStorage(supabase, newPO.id, messageId, sortedPdfs);
+      await savePoFilesToStorage(supabase, newPO.id, messageId, poPdfs, pdfCache);
 
       await supabase.from('gmail_po_imports').upsert({
         message_id: messageId,
