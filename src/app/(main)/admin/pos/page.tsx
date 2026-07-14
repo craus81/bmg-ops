@@ -11,6 +11,7 @@ import type { PurchaseOrder, POLineItem, CatalogItem, PoLocation } from '@/lib/t
 import { PartLabel } from '@/components/PartLabel';
 import { CreateNetsuiteItemModal } from '@/components/CreateNetsuiteItemModal';
 import { useDialog } from '@/components/DialogProvider';
+import { isProofLikeName } from '@/lib/pdf-classify';
 
 interface ImportLine extends ParsedPOLine {
   catalog_match: CatalogItem | null;
@@ -527,10 +528,17 @@ export default function POsPage() {
     if (!raw) return;
 
     // Multi-PO email (stored by the review-mode importer as {multi, pos}):
-    // queue one review per PO, mirroring the live import flow. Newer records
-    // carry each PO's own PDFs ({extracted, pdfs}); older ones are bare
-    // extractions and fall back to the email-level PDF.
+    // queue one review per PO, mirroring the live import flow. Records must
+    // carry each PO's own PDFs ({extracted, pdfs}); older ones can't say
+    // which PDF belongs to which PO (the viewer's fallback used to show the
+    // proof), so re-run the import fresh and let it rebuild the queue with
+    // current classification.
     if (raw.multi && Array.isArray(raw.pos) && raw.pos.length > 0) {
+      const hasPdfRefs = raw.pos.every((p: any) => Array.isArray(p?.pdfs) && p.pdfs.length > 0);
+      if (!hasPdfRefs) {
+        importEmailPO(pending.message_id);
+        return;
+      }
       const items: ReviewItem[] = raw.pos.map((p: any, i: number) => {
         const extracted = p?.extracted || p;
         const pdfs = Array.isArray(p?.pdfs) ? p.pdfs : [];
@@ -560,8 +568,11 @@ export default function POsPage() {
       return;
     }
 
-    // attachment_filename is a comma-joined list, importer's best candidate first
-    const firstPdfName = (pending.attachment_filename || '').split(',')[0].trim();
+    // attachment_filename is a comma-joined list; prefer the first name that
+    // isn't a proof/artwork file so the viewer opens the actual PO document.
+    const attachmentNames = (pending.attachment_filename || '')
+      .split(',').map((s: string) => s.trim()).filter(Boolean);
+    const firstPdfName = attachmentNames.find((n: string) => !isProofLikeName(n)) || attachmentNames[0] || '';
     setReviewPdfOpen(window.innerWidth >= 1000);
     setReviewingExtraction({
       messageId: pending.message_id,

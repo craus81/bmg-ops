@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { getAttachment, getMessage, getPdfAttachments, proofContentType } from '@/lib/google';
 import { requireStaff } from '@/lib/api-auth';
+import { isProofLikeName } from '@/lib/pdf-classify';
 
 export const dynamic = 'force-dynamic';
 export const maxDuration = 30;
@@ -34,7 +35,11 @@ export async function GET(req: NextRequest) {
       }
       const requested = req.nextUrl.searchParams.get('filename');
       const match = requested && pdfs.find(p => p.filename === requested);
-      const best = match || [...pdfs].sort((a, b) => {
+      // Never fall back to a proof/artwork file while a real document exists —
+      // proofs are usually the biggest attachment and would win the size sort.
+      const nonProof = pdfs.filter(p => !isProofLikeName(p.filename));
+      const pool = nonProof.length > 0 ? nonProof : pdfs;
+      const best = match || [...pool].sort((a, b) => {
         const aIsPO = /\b(po|purchase.?order)\b/i.test(a.filename) ? 1 : 0;
         const bIsPO = /\b(po|purchase.?order)\b/i.test(b.filename) ? 1 : 0;
         if (aIsPO !== bIsPO) return bIsPO - aIsPO;
