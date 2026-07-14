@@ -758,7 +758,9 @@ export async function POST(req: NextRequest) {
         po_number: poNumbers.join(', '),
         attachment_filename: pdfFilenames.join(', '),
         status: 'pending',
-        raw_extraction: { multi: true, pos: poExtractions.map(pe => pe.extracted) },
+        // Keep each PO's own source PDFs so a review opened later from the
+        // pending list can rebuild the same per-PO queue the live flow shows.
+        raw_extraction: { multi: true, pos: poExtractions.map(pe => ({ extracted: pe.extracted, pdfs: pe.pdfs })) },
       }, { onConflict: 'message_id' });
 
       return NextResponse.json({

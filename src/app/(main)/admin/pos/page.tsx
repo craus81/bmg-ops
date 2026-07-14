@@ -523,16 +523,51 @@ export default function POsPage() {
   }
 
   const reviewPendingPO = (pending: any) => {
-    if (pending.raw_extraction) {
-      // attachment_filename is a comma-joined list, importer's best candidate first
-      const firstPdfName = (pending.attachment_filename || '').split(',')[0].trim();
-      setReviewPdfOpen(window.innerWidth >= 1000);
-      setReviewingExtraction({
-        messageId: pending.message_id,
-        extracted: collapseSupplierParts(pending.raw_extraction),
-        pdf: { url: gmailPdfUrl(pending.message_id, undefined, firstPdfName || undefined), name: firstPdfName || 'PO PDF' },
+    const raw = pending.raw_extraction;
+    if (!raw) return;
+
+    // Multi-PO email (stored by the review-mode importer as {multi, pos}):
+    // queue one review per PO, mirroring the live import flow. Newer records
+    // carry each PO's own PDFs ({extracted, pdfs}); older ones are bare
+    // extractions and fall back to the email-level PDF.
+    if (raw.multi && Array.isArray(raw.pos) && raw.pos.length > 0) {
+      const items: ReviewItem[] = raw.pos.map((p: any, i: number) => {
+        const extracted = p?.extracted || p;
+        const pdfs = Array.isArray(p?.pdfs) ? p.pdfs : [];
+        const pdf = pdfs[0];
+        return {
+          messageId: pending.message_id,
+          extracted: collapseSupplierParts(extracted),
+          attachmentIds: pdfs.map((f: any) => f.attachmentId),
+          queuePos: { index: i + 1, total: raw.pos.length },
+          pdf: pdf
+            ? { url: gmailPdfUrl(pending.message_id, pdf.attachmentId, pdf.filename), name: pdf.filename }
+            : { url: gmailPdfUrl(pending.message_id), name: 'PO PDF' },
+        };
       });
+      setReviewPdfOpen(window.innerWidth >= 1000);
+      setReviewingExtraction(items[0]);
+      setReviewQueue(items.slice(1));
+      return;
     }
+
+    // Stale/junk record (e.g. the old importer got confused by a proof PDF
+    // and stored an extraction with no PO number or lines): re-run the import
+    // fresh instead of opening a dead review panel.
+    const hasUsableLines = (raw.lines || []).some((l: any) => l.part_number);
+    if (!raw.po_number || !hasUsableLines) {
+      importEmailPO(pending.message_id);
+      return;
+    }
+
+    // attachment_filename is a comma-joined list, importer's best candidate first
+    const firstPdfName = (pending.attachment_filename || '').split(',')[0].trim();
+    setReviewPdfOpen(window.innerWidth >= 1000);
+    setReviewingExtraction({
+      messageId: pending.message_id,
+      extracted: collapseSupplierParts(raw),
+      pdf: { url: gmailPdfUrl(pending.message_id, undefined, firstPdfName || undefined), name: firstPdfName || 'PO PDF' },
+    });
   };
 
   const dismissPendingPO = async (id: string) => {
@@ -2608,6 +2643,15 @@ export default function POsPage() {
               >
                 {importingEmailId ? 'Importing...' : `Import ${reviewingExtraction.extracted.lines?.length || 0} Lines`}
               </button>
+              {(reviewingExtraction.queuePos || reviewQueue.length > 0) && (
+                <button
+                  onClick={advanceReviewQueue}
+                  title="Skip this PO without importing and move to the next one. The email stays in the list so you can come back to it."
+                  style={{ flex: 1, padding: '12px', borderRadius: '10px', background: 'rgba(59,130,246,0.08)', border: '1px solid rgba(59,130,246,0.35)', color: '#60a5fa', fontWeight: 700, fontSize: '13px', cursor: 'pointer' }}
+                >
+                  Skip {reviewQueue.length > 0 ? '→' : ''}
+                </button>
+              )}
               <button
                 onClick={() => { setReviewingExtraction(null); setReviewQueue([]); }}
                 style={{ flex: 1, padding: '12px', borderRadius: '10px', background: 'transparent', border: '1px solid var(--border)', color: 'var(--text-body)', fontWeight: 700, fontSize: '13px', cursor: 'pointer' }}
