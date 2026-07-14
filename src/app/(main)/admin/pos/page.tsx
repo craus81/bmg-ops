@@ -1868,8 +1868,9 @@ export default function POsPage() {
       setGfxJobResults(prev => ({ ...prev, [li.id]: 'created' }));
       setCreatingGfxJob(null);
       // Take the user to the new job so success is unambiguous and they
-      // can finish editing it (spec, due date, etc.) in one motion.
-      router.push(`/graphics?editJob=${job.id}`);
+      // can finish editing it (spec, due date, etc.) in one motion. The
+      // created= param shows a "Job <number> created" toast over there.
+      router.push(`/graphics?editJob=${job.id}&created=${encodeURIComponent(jobNumber)}`);
       return;
     } catch (err: any) {
       console.error('[admin/pos] createGfxJobFromLine failed:', err);
@@ -1923,8 +1924,9 @@ export default function POsPage() {
 
       await attachPoFilesToGraphicsJob(po.id, job.id);
 
-      // Navigate to graphics page with the new job open for editing
-      router.push(`/graphics?editJob=${job.id}`);
+      // Navigate to graphics page with the new job open for editing; the
+      // created= param shows a "Job <number> created" toast over there.
+      router.push(`/graphics?editJob=${job.id}&created=${encodeURIComponent(jobNumber)}`);
     } catch (err: any) {
       console.error('[admin/pos] createGfxJobFromPO failed:', err);
       await dialog.alert(`Failed to create graphics job: ${err?.message || String(err)}`);
