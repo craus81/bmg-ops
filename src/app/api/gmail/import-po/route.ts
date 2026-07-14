@@ -86,6 +86,69 @@ async function mergedPoNumbers(supabase: any, messageId: string, poNumber: strin
   return [...nums].join(', ');
 }
 
+// Route proof/artwork PDFs from a PO email onto the catalog part they belong
+// to (a part_files row, same shape as the parts page's attach-proof), so the
+// proof shows up under the part's Files & Proofs automatically. Conservative
+// matching: a PDF attaches to a part when the part number appears in the
+// filename, or when the file is proof-named and the PO has exactly one
+// graphics line (02*/RM*) — or exactly one line — to attach to. Anything
+// unmatched simply stays on the PO's own files.
+async function attachProofPdfsToParts(
+  supabase: any,
+  messageId: string,
+  lineItems: { part_id?: string; part_number: string | null }[],
+  pdfs: { filename: string; attachmentId: string }[],
+  cache?: Map<string, string>,
+): Promise<number> {
+  const parts = lineItems.filter(l => l.part_id && l.part_number) as { part_id: string; part_number: string }[];
+  if (parts.length === 0) return 0;
+
+  let attached = 0;
+  for (const pdf of pdfs) {
+    try {
+      const upperName = pdf.filename.toUpperCase();
+      let targets = parts.filter(p => upperName.includes(p.part_number.toUpperCase()));
+      if (targets.length === 0 && /proof|artwork|mock.?up|rendering/i.test(pdf.filename)) {
+        const graphics = parts.filter(p => /^(02|RM)/i.test(p.part_number));
+        if (graphics.length === 1) targets = graphics;
+        else if (graphics.length === 0 && parts.length === 1) targets = parts;
+      }
+      if (targets.length === 0) continue;
+
+      const base64 = cache?.get(pdf.attachmentId) || (await getAttachment(messageId, pdf.attachmentId));
+      const buffer = Buffer.from(base64, 'base64');
+      for (const target of targets) {
+        const { data: existing } = await supabase
+          .from('part_files')
+          .select('id')
+          .eq('part_id', target.part_id)
+          .eq('file_name', pdf.filename)
+          .maybeSingle();
+        if (existing) continue;
+
+        const ext = (pdf.filename.split('.').pop() || 'pdf').toLowerCase();
+        const path = `part-files/${target.part_id}/${Date.now()}.${ext}`;
+        const up = await r2Upload('graphics-proofs', path, buffer, 'application/pdf');
+        if (!up.success) {
+          console.warn('R2 upload failed for proof PDF:', pdf.filename, up.error);
+          continue;
+        }
+        await supabase.from('part_files').insert({
+          part_id: target.part_id,
+          file_name: pdf.filename,
+          file_type: 'application/pdf',
+          file_size: buffer.length,
+          storage_path: path,
+        });
+        attached++;
+      }
+    } catch (err) {
+      console.warn(`Failed to attach proof ${pdf.filename} to part:`, err);
+    }
+  }
+  return attached;
+}
+
 /**
  * Check extracted PO lines for graphic parts (02* or RM*) and create flagged graphics jobs.
  * Sends notifications via in-app, SMS, and email based on each user's preferences.
@@ -448,6 +511,7 @@ export async function POST(req: NextRequest) {
         }
 
         await savePoFilesToStorage(supabase, existingPO.id, messageId, poPdfs);
+        const proofsAttached = await attachProofPdfsToParts(supabase, messageId, lineInserts, poPdfs);
 
         await supabase.from('gmail_po_imports').upsert({
           message_id: messageId, thread_id: message.threadId, subject, from_email: from,
@@ -466,7 +530,7 @@ export async function POST(req: NextRequest) {
           })
           .map((l: any) => ({ part_number: l.supplier_part || l.part_number, description: l.description || '', unit_price: parseFloat(l.unit_price) || 0 }));
 
-        return NextResponse.json({ status: 'updated', poNumber, poId: existingPO.id, customer, lineCount: lineInserts.length, unmatchedParts, extracted });
+        return NextResponse.json({ status: 'updated', poNumber, poId: existingPO.id, customer, lineCount: lineInserts.length, unmatchedParts, extracted, proofsAttached });
       }
 
       // Create new PO from reviewed data
@@ -513,6 +577,7 @@ export async function POST(req: NextRequest) {
       }
 
       await savePoFilesToStorage(supabase, newPO.id, messageId, poPdfs);
+      const proofsAttached = await attachProofPdfsToParts(supabase, messageId, lineInserts, poPdfs);
 
       await supabase.from('gmail_po_imports').upsert({
         message_id: messageId, thread_id: message.threadId, subject, from_email: from,
@@ -531,7 +596,7 @@ export async function POST(req: NextRequest) {
         })
         .map((l: any) => ({ part_number: l.supplier_part || l.part_number, description: l.description || '', unit_price: parseFloat(l.unit_price) || 0 }));
 
-      return NextResponse.json({ status: 'imported', poNumber, poId: newPO.id, customer, lineCount: lineInserts.length, unmatchedParts, extracted });
+      return NextResponse.json({ status: 'imported', poNumber, poId: newPO.id, customer, lineCount: lineInserts.length, unmatchedParts, extracted, proofsAttached });
     }
 
     if (pdfs.length === 0) {
@@ -588,19 +653,38 @@ export async function POST(req: NextRequest) {
         poExtractions.push({ extracted: r.extracted, pdfs: [downloaded[0].pdf], meta: r });
       }
     } else {
-      const NOT_A_PO_NOTE = `\n\nIMPORTANT: This document is ONE attachment from an email that may contain several attachments, possibly including MULTIPLE separate purchase orders. Extract ONLY this document. If this document is NOT a purchase order (e.g. a spec sheet, drawing, BOL, invoice, packing list, or quote), return exactly: {"not_a_po": true}`;
+      // Proof/artwork PDFs are image-heavy: running one through extraction is
+      // slow enough to time out the whole import, and it is never the PO.
+      // Classify them (by name, or by any size no text PO ever reaches) as
+      // supporting files up front so they skip the AI call entirely.
+      const EXTRACT_MAX_BYTES = 4 * 1024 * 1024;
+      const isProofLike = (name: string) => /proof|artwork|mock.?up|rendering/i.test(name);
+      const extractable: typeof downloaded = [];
+      for (const d of downloaded) {
+        const approxBytes = d.base64.length * 0.75;
+        if (isProofLike(d.pdf.filename) || approxBytes > EXTRACT_MAX_BYTES) {
+          supportingPdfs.push(d.pdf);
+        } else {
+          extractable.push(d);
+        }
+      }
+
+      const NOT_A_PO_NOTE = `\n\nIMPORTANT: This document is ONE attachment from an email that may contain several attachments, possibly including MULTIPLE separate purchase orders. Extract ONLY this document. If this document is NOT a purchase order (e.g. a spec sheet, drawing, proof, BOL, invoice, packing list, or quote), return exactly: {"not_a_po": true}`;
       const results = await Promise.all(
-        downloaded.map(d => extractFromPdfs([d.base64], NOT_A_PO_NOTE, process.env.ANTHROPIC_API_KEY!)),
+        extractable.map(d => extractFromPdfs([d.base64], NOT_A_PO_NOTE, process.env.ANTHROPIC_API_KEY!)),
       );
       results.forEach((r, i) => {
-        const pdf = downloaded[i].pdf;
+        const pdf = extractable[i].pdf;
         if (!r.ok) {
           if (r.kind === 'api') firstApiFailure = firstApiFailure || r;
           else firstParseFailure = firstParseFailure || r;
           console.warn(`PO extraction failed for attachment ${pdf.filename}`);
           return;
         }
-        if (r.extracted?.not_a_po || !r.extracted?.po_number) {
+        // Not a PO — or a PO-shaped extraction with no usable lines (proofs
+        // and quotes sometimes carry a PO reference number): supporting file.
+        const hasUsableLines = (r.extracted?.lines || []).some((l: any) => l.part_number);
+        if (r.extracted?.not_a_po || !r.extracted?.po_number || !hasUsableLines) {
           supportingPdfs.push(pdf);
           return;
         }
@@ -925,6 +1009,7 @@ export async function POST(req: NextRequest) {
       }
 
       await savePoFilesToStorage(supabase, existingPO.id, messageId, poPdfs, pdfCache);
+      const proofsAttached = await attachProofPdfsToParts(supabase, messageId, lineInserts, poPdfs, pdfCache);
 
       await supabase.from('gmail_po_imports').upsert({
         message_id: messageId,
@@ -962,6 +1047,7 @@ export async function POST(req: NextRequest) {
         lineCount: lineInserts.length,
         unmatchedParts,
         extracted,
+        proofsAttached,
       });
     }
 
@@ -1038,6 +1124,7 @@ export async function POST(req: NextRequest) {
       }
 
       await savePoFilesToStorage(supabase, newPO.id, messageId, poPdfs, pdfCache);
+      const proofsAttached = await attachProofPdfsToParts(supabase, messageId, lineInserts, poPdfs, pdfCache);
 
       await supabase.from('gmail_po_imports').upsert({
         message_id: messageId,
@@ -1075,6 +1162,7 @@ export async function POST(req: NextRequest) {
         lineCount: lineInserts.length,
         unmatchedParts,
         extracted,
+        proofsAttached,
       });
     }
 
