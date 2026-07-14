@@ -10,6 +10,7 @@ import { CreateNetsuiteItemModal, type CreatedPart } from '@/components/CreateNe
 import EmailInvoicesModal, { type EmailableInvoice } from '@/components/EmailInvoicesModal';
 import { theme } from '@/lib/theme';
 import { locationBillingOverride } from '@/lib/scan-billing';
+import { findExistingScanVins, sameVehicleVin, vinTail } from '@/lib/vin-match';
 
 interface ScanLog {
   id: string;
@@ -584,17 +585,21 @@ export default function AdminScansPage() {
           if (cleaned) unitByVin[cleaned] = r.unit_number || null;
         }
 
-        // Dedup against existing scan_logs rows on this page's parts.
+        // Dedup against existing scan_logs rows on this page's parts —
+        // matched on the VIN's last 8 so partial worksheet entries collide
+        // with full scans of the same vehicle (and with repeats on the page).
         const vinPartPairs: { vin: string; part: typeof partsToProcess[0] }[] = [];
         for (const part of partsToProcess) {
           const partNum = part?.item_number || '';
-          let q = supabase.from('scan_logs').select('vin, part_number').in('vin', vins);
-          if (partNum) q = q.eq('part_number', partNum);
-          const { data: existing } = await q;
-          const existingVins = new Set((existing || []).map((s: any) => s.vin));
+          const existingScanVins = await findExistingScanVins(supabase, vins, partNum || null);
+          const seenTails = new Set<string>();
           for (const vin of vins) {
-            if (existingVins.has(vin)) totalSkipped++;
-            else vinPartPairs.push({ vin, part });
+            if (existingScanVins.some(e => sameVehicleVin(e, vin)) || seenTails.has(vinTail(vin))) {
+              totalSkipped++;
+            } else {
+              seenTails.add(vinTail(vin));
+              vinPartPairs.push({ vin, part });
+            }
           }
         }
 
@@ -649,18 +654,23 @@ export default function AdminScansPage() {
     setBulkProcessing(true);
     setBulkResult(null);
 
-    // Check for duplicates across all selected part numbers
+    // Check for duplicates across all selected part numbers. Matching is on
+    // the VIN's last 8 (not exact string), so a last-8 entry here collides
+    // with an earlier full 17-char scan of the same vehicle and vice versa.
+    // The same rule also de-dupes repeats within the pasted list itself.
     let totalDupes = 0;
     const vinPartPairs: { vin: string; part: typeof partsToProcess[0] }[] = [];
     for (const part of partsToProcess) {
       const partNum = part?.partNumber || '';
-      let existingQuery = supabase.from('scan_logs').select('vin, part_number').in('vin', vins);
-      if (partNum) existingQuery = existingQuery.eq('part_number', partNum);
-      const { data: existingScans } = await existingQuery;
-      const existingVins = new Set((existingScans || []).map((s: any) => s.vin));
+      const existingScanVins = await findExistingScanVins(supabase, vins, partNum || null);
+      const seenTails = new Set<string>();
       for (const vin of vins) {
-        if (existingVins.has(vin)) { totalDupes++; }
-        else { vinPartPairs.push({ vin, part }); }
+        if (existingScanVins.some(e => sameVehicleVin(e, vin)) || seenTails.has(vinTail(vin))) {
+          totalDupes++;
+        } else {
+          seenTails.add(vinTail(vin));
+          vinPartPairs.push({ vin, part });
+        }
       }
     }
 

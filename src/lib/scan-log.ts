@@ -14,6 +14,7 @@
 
 import type { SupabaseClient } from '@supabase/supabase-js';
 import { isVerizonRfidPart, validateSerial, validateImei, validateIccid } from './rfid';
+import { vinMatchOrFilter } from './vin-match';
 
 export interface ScanRecordInput {
   vin: string;
@@ -93,17 +94,22 @@ export async function logScan(
     }
   }
 
-  // Duplicate guards: same VIN+part, and (for devices) same IMEI.
-  if (rec.part_number) {
+  // Duplicate guards: same vehicle+part, and (for devices) same IMEI. The
+  // vehicle match is on the VIN's last 8 (not exact string), so a full
+  // 17-char scan collides with a last-8 bulk entry of the same vehicle and
+  // vice versa — see vin-match.ts.
+  const dupFilter = vinMatchOrFilter(vin);
+  if (rec.part_number && dupFilter) {
     const { data: dup } = await service
       .from('scan_logs')
-      .select('id, scanned_at')
-      .eq('vin', vin)
+      .select('id, vin, scanned_at')
       .eq('part_number', rec.part_number)
+      .or(dupFilter)
       .limit(1);
     if (dup && dup.length > 0) {
       const when = new Date(dup[0].scanned_at).toLocaleDateString();
-      return { ok: false, status: 409, error: `Duplicate — ${vin} already scanned for ${rec.part_number} on ${when}` };
+      const loggedAs = dup[0].vin === vin ? '' : ` (logged as ${dup[0].vin})`;
+      return { ok: false, status: 409, error: `Duplicate — ${vin} already scanned for ${rec.part_number} on ${when}${loggedAs}` };
     }
   }
   if (imei) {
