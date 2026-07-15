@@ -1656,6 +1656,48 @@ export default function POsPage() {
     await dialog.alert(lines.join('\n'));
   };
 
+  // Check every PO's linked invoices against its ordered quantities and flag
+  // mismatches (over-billed, fulfilled-but-under-billed, billed parts not on
+  // the PO) as needing attention.
+  const [verifyingInvoices, setVerifyingInvoices] = useState(false);
+  const verifyInvoices = async () => {
+    if (verifyingInvoices) return;
+    setVerifyingInvoices(true);
+    try {
+      const res = await fetch('/api/pos/verify-invoices', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+      });
+      const data = await res.json();
+      if (!res.ok || data.error) {
+        await dialog.alert(`Billing check failed: ${data.error || `request failed (${res.status})`}`);
+      } else {
+        const { data: poData } = await supabase
+          .from('purchase_orders')
+          .select('*, po_line_items(*), po_invoices(*)')
+          .order('created_at', { ascending: false });
+        const notesByPo = await fetchNoteCounts();
+        const FILTERED_CUSTOMERS = ['ranger design', 'enterprise fleet management', 'bmg fleet installations'];
+        const mapped = (poData || [])
+          .filter((po: any) => !FILTERED_CUSTOMERS.some(fc => po.customer?.toLowerCase().includes(fc)))
+          .map((po: any) => ({ ...po, line_items: po.po_line_items || [], po_notes: notesByPo[po.id] || [], po_invoices: (po.po_invoices || []).sort((a: any, b: any) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime()) }));
+        setPos(mapped);
+        const flaggedList = (data.flaggedPos || [])
+          .slice(0, 12)
+          .map((f: any) => `PO #${f.poNumber}`)
+          .join(', ');
+        await dialog.alert(
+          data.flagged > 0
+            ? `Checked ${data.posChecked} PO${data.posChecked !== 1 ? 's' : ''} with invoices — ${data.flagged} need${data.flagged === 1 ? 's' : ''} attention: ${flaggedList}${(data.flaggedPos || []).length > 12 ? '…' : ''}. Look for the ⚠ badge.`
+            : `Checked ${data.posChecked} PO${data.posChecked !== 1 ? 's' : ''} with invoices — billed quantities all match.`,
+        );
+      }
+    } catch (err: any) {
+      await dialog.alert(`Billing check failed: ${err.message || 'network error'}`);
+    }
+    setVerifyingInvoices(false);
+  };
+
   // Pull in invoices created directly in NetSuite (matched by the PO number
   // on the invoice's Reference No.) so every PO's invoice list is complete
   // regardless of which system created the invoice.
@@ -2550,6 +2592,14 @@ export default function POsPage() {
                 style={{ padding: '6px 12px', borderRadius: '8px', background: 'rgba(52,211,153,0.1)', border: '1px solid rgba(52,211,153,0.25)', color: '#34d399', fontSize: '12px', fontWeight: 700, opacity: syncingInvoices ? 0.7 : 1, cursor: syncingInvoices ? 'default' : 'pointer' }}
               >
                 {syncingInvoices ? 'Syncing…' : 'Sync Invoices'}
+              </button>
+              <button
+                onClick={verifyInvoices}
+                disabled={verifyingInvoices}
+                title="Compare each PO's ordered quantities against its linked invoices' billed quantities and flag mismatches as needing attention"
+                style={{ padding: '6px 12px', borderRadius: '8px', background: 'rgba(251,191,36,0.1)', border: '1px solid rgba(251,191,36,0.25)', color: '#fbbf24', fontSize: '12px', fontWeight: 700, opacity: verifyingInvoices ? 0.7 : 1, cursor: verifyingInvoices ? 'default' : 'pointer' }}
+              >
+                {verifyingInvoices ? 'Checking…' : 'Check Billing'}
               </button>
               <button
                 onClick={() => { setShowImport(!showImport); setShowCreate(false); setShowEmailImport(false); setParsedPO(null); setImportLines([]); setParseError(''); }}
@@ -3824,6 +3874,14 @@ export default function POsPage() {
                         {po.customer} • {po.line_items.length} item{po.line_items.length !== 1 ? 's' : ''}
                         {po.status === 'complete' && <span style={{ color: '#4ade80', marginLeft: '6px' }}>&#10003; Fulfilled</span>}
                         {(po as any).netsuite_invoice_number && <span style={{ color: '#34d399', marginLeft: '6px' }}>INV #{(po as any).netsuite_invoice_number}</span>}
+                        {(po as any).invoice_check_status === 'attention' && (
+                          <span
+                            style={{ color: '#f87171', marginLeft: '6px', fontWeight: 700 }}
+                            title={(((po as any).invoice_check?.problems || []) as string[]).join('\n') || 'Billed quantities don\'t match this PO'}
+                          >
+                            ⚠ Billing
+                          </span>
+                        )}
                         {((po as any).po_notes || []).length > 0 && (
                           <span style={{ color: '#fbbf24', marginLeft: '6px', fontWeight: 700 }} title={`${(po as any).po_notes.length} note${(po as any).po_notes.length !== 1 ? 's' : ''}`}>
                             💬 {(po as any).po_notes.length}
@@ -4323,6 +4381,41 @@ export default function POsPage() {
                             </div>
                           </div>
                         ))}
+                        {(() => {
+                          // Invoiced-quantity check verdict for this PO —
+                          // list every line that doesn't add up.
+                          const check = (po as any).invoice_check;
+                          const checkStatus = (po as any).invoice_check_status;
+                          if (!checkStatus || !check) return null;
+                          if (checkStatus !== 'attention') {
+                            return (
+                              <div style={{ marginTop: '6px', fontSize: '10px', color: '#34d399', fontWeight: 600 }}>
+                                ✓ Billed quantities match this PO (checked {new Date(check.checked_at).toLocaleDateString([], { month: 'short', day: 'numeric' })})
+                              </div>
+                            );
+                          }
+                          // Same rule as the server check: under-billing only
+                          // counts against a fulfilled PO.
+                          const bad = (check.lines || []).filter((l: any) =>
+                            l.status === 'over' || l.status === 'extra' || (l.status === 'under' && po.status === 'complete'));
+                          return (
+                            <div style={{ marginTop: '8px', padding: '8px', borderRadius: '6px', background: 'rgba(248,113,113,0.06)', border: '1px solid rgba(248,113,113,0.25)' }}>
+                              <div style={{ fontSize: '10px', fontWeight: 700, color: '#f87171', textTransform: 'uppercase', letterSpacing: '0.3px', marginBottom: '4px' }}>
+                                ⚠ Billing needs attention
+                              </div>
+                              {bad.map((l: any, i: number) => (
+                                <div key={i} style={{ display: 'flex', justifyContent: 'space-between', gap: '8px', fontSize: '11px', padding: '2px 0', color: 'var(--text-body)' }}>
+                                  <span style={{ fontWeight: 700 }}>{l.part_number}</span>
+                                  <span style={{ color: l.status === 'under' ? '#fbbf24' : '#f87171', fontWeight: 600 }}>
+                                    {l.status === 'extra'
+                                      ? `invoiced ${l.invoiced} — not on this PO`
+                                      : `invoiced ${l.invoiced} of ${l.ordered} ordered${l.status === 'over' ? ' — over-billed' : ''}`}
+                                  </span>
+                                </div>
+                              ))}
+                            </div>
+                          );
+                        })()}
                       </div>
                     );
                   })()}

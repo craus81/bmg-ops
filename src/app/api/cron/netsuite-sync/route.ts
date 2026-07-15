@@ -3,6 +3,7 @@ import { createClient } from '@supabase/supabase-js';
 import { suiteqlQueryAll } from '@/lib/netsuite';
 import { requireAdmin } from '@/lib/api-auth';
 import { syncPoInvoices } from '@/lib/po-invoice-sync';
+import { verifyPoInvoiceQuantities } from '@/lib/po-invoice-verify';
 
 export const dynamic = 'force-dynamic';
 export const maxDuration = 120;
@@ -278,6 +279,18 @@ export async function GET(req: NextRequest) {
   } catch (err: any) {
     console.error('[cron] PO invoice sync error:', err.message);
     results.poInvoices = { error: err.message };
+  }
+
+  // ═══════════ 4. INVOICED-QUANTITY CHECK ═══════════
+  // Compare every PO's ordered quantities against its linked invoices' line
+  // quantities and flag mismatches, so billing problems surface on the PO
+  // page without anyone clicking "Check Billing".
+  try {
+    const check = await verifyPoInvoiceQuantities(supabase);
+    results.invoiceCheck = { posChecked: check.posChecked, flagged: check.flagged, cleared: check.cleared };
+  } catch (err: any) {
+    console.error('[cron] Invoice quantity check error:', err.message);
+    results.invoiceCheck = { error: err.message };
   }
 
   return NextResponse.json({ status: 'ok', ...results });
