@@ -7,7 +7,8 @@ import { useAuth } from '@/components/AuthProvider';
 import { parseMasterackPO, type ParsedPO, type ParsedPOLine } from '@/lib/parsePO';
 import { resolvePoCustomer } from '@/lib/customer-match';
 import { storage } from '@/lib/storage';
-import type { PurchaseOrder, POLineItem, CatalogItem, PoLocation } from '@/lib/types';
+import type { PurchaseOrder, POLineItem, CatalogItem, PoLocation, GraphicsJobStatus } from '@/lib/types';
+import { GRAPHICS_STATUS_LABELS, GRAPHICS_STATUS_COLORS } from '@/lib/types';
 import { PartLabel } from '@/components/PartLabel';
 import { CreateNetsuiteItemModal } from '@/components/CreateNetsuiteItemModal';
 import { useDialog } from '@/components/DialogProvider';
@@ -43,6 +44,16 @@ interface PoFile {
   storage_path: string;
   source: 'pdf_upload' | 'email_import' | null;
   uploaded_at: string;
+}
+
+// A graphics job linked back to a PO (whole-PO jobs have a null line item id)
+interface PoGfxJob {
+  id: string;
+  job_number: string | null;
+  title: string | null;
+  status: GraphicsJobStatus;
+  po_id: string;
+  po_line_item_id: string | null;
 }
 
 function formatShipTo(shipTo: PurchaseOrder['ship_to']): string | null {
@@ -483,6 +494,9 @@ export default function POsPage() {
   // Create graphics job from PO line item
   const [creatingGfxJob, setCreatingGfxJob] = useState<string | null>(null); // line item id
   const [gfxJobResults, setGfxJobResults] = useState<Record<string, 'created' | 'error'>>({});
+  // Graphics jobs already linked to each PO (by po_id), so the list can tag
+  // POs that have a job without anyone cross-referencing the graphics board.
+  const [gfxJobsByPo, setGfxJobsByPo] = useState<Record<string, PoGfxJob[]>>({});
   // Create multi-part graphics job from entire PO
   const [creatingGfxJobForPo, setCreatingGfxJobForPo] = useState<string | null>(null); // po id
   // Gmail PO auto-import status — surfaced in a strip above the PO list so
@@ -751,6 +765,20 @@ export default function POsPage() {
           ),
         }));
       setPos(mapped);
+
+      // Graphics jobs linked to POs — powers the "has a graphics job" tag.
+      // Cancelled jobs don't count: a PO whose only job was cancelled still
+      // needs one created.
+      const { data: gfxJobs } = await supabase
+        .from('graphics_jobs')
+        .select('id, job_number, title, status, po_id, po_line_item_id')
+        .not('po_id', 'is', null)
+        .neq('status', 'cancelled');
+      const byPo: Record<string, PoGfxJob[]> = {};
+      for (const j of (gfxJobs || []) as PoGfxJob[]) {
+        (byPo[j.po_id] ||= []).push(j);
+      }
+      setGfxJobsByPo(byPo);
 
       setCatalog(await loadUnifiedCatalog(supabase));
       setLoading(false);
@@ -3983,6 +4011,26 @@ export default function POsPage() {
                             </span>
                           );
                         })()}
+                        {(() => {
+                          // Tag POs that already have a graphics job, so nobody
+                          // has to cross-reference the graphics board. Click
+                          // jumps straight to the job.
+                          const jobs = gfxJobsByPo[po.id] || [];
+                          if (jobs.length === 0) return null;
+                          return (
+                            <span
+                              onClick={(e) => { e.stopPropagation(); router.push(`/graphics?editJob=${jobs[0].id}`); }}
+                              title={jobs.map(j => `${j.job_number || j.id.slice(0, 8)} — ${GRAPHICS_STATUS_LABELS[j.status] || j.status}`).join('\n')}
+                              style={{
+                                fontSize: '11px', fontWeight: 800, color: '#a78bfa',
+                                background: 'rgba(167,139,250,0.1)', border: '1px solid rgba(167,139,250,0.3)',
+                                padding: '1px 8px', borderRadius: '10px', whiteSpace: 'nowrap', cursor: 'pointer',
+                              }}
+                            >
+                              🎨 GFX{jobs.length > 1 ? ` ×${jobs.length}` : ''}
+                            </span>
+                          );
+                        })()}
                       </div>
                       <div style={{ fontSize: '12px', color: 'var(--text-label)', marginTop: '1px' }}>
                         {po.customer} • <span title={po.ordered_date ? 'PO date' : 'Imported date (no PO date on record)'}>{displayDate.toLocaleDateString([], { month: 'short', day: 'numeric', year: 'numeric' })}</span> • {po.line_items.length} item{po.line_items.length !== 1 ? 's' : ''}
@@ -4350,7 +4398,8 @@ export default function POsPage() {
 
                     const catalogMatch = catalog.find(c => c.part_number.toUpperCase() === li.part_number.toUpperCase());
                     const catalogAdded = catalogAddResults[li.part_number] === 'added';
-                    const gfxCreated = gfxJobResults[li.id] === 'created';
+                    const lineGfxJob = (gfxJobsByPo[po.id] || []).find(j => j.po_line_item_id === li.id) || null;
+                    const gfxCreated = !!lineGfxJob || gfxJobResults[li.id] === 'created';
 
                     return (
                       <div key={li.id} style={{ padding: '8px 0', borderBottom: '1px solid rgba(30,45,61,0.5)' }}>
@@ -4404,7 +4453,19 @@ export default function POsPage() {
                               {addingToCatalog === li.part_number ? 'Adding...' : '+ Add to Catalog'}
                             </button>
                           )}
-                          {gfxCreated ? (
+                          {lineGfxJob ? (
+                            <button
+                              onClick={() => router.push(`/graphics?editJob=${lineGfxJob.id}`)}
+                              title={`${lineGfxJob.job_number || 'Graphics job'} — ${GRAPHICS_STATUS_LABELS[lineGfxJob.status] || lineGfxJob.status}`}
+                              style={{
+                                padding: '3px 8px', borderRadius: '4px', fontSize: '9px', fontWeight: 700,
+                                background: 'rgba(167,139,250,0.08)', border: '1px solid rgba(167,139,250,0.25)',
+                                color: '#a78bfa', cursor: 'pointer',
+                              }}
+                            >
+                              ✓ Graphics job — view ↗
+                            </button>
+                          ) : gfxCreated ? (
                             <span style={{ fontSize: '9px', color: '#4ade80', fontWeight: 600 }}>✓ Graphics job created</span>
                           ) : (
                             <button
@@ -4577,6 +4638,43 @@ export default function POsPage() {
                             </div>
                           );
                         })()}
+                      </div>
+                    );
+                  })()}
+
+                  {/* Graphics jobs already created from this PO */}
+                  {(() => {
+                    const jobs = gfxJobsByPo[po.id] || [];
+                    if (jobs.length === 0) return null;
+                    return (
+                      <div style={{ marginTop: '10px', padding: '8px', borderRadius: '8px', background: 'rgba(167,139,250,0.04)', border: '1px solid rgba(167,139,250,0.15)' }}>
+                        <div style={{ fontSize: '10px', fontWeight: 700, color: '#a78bfa', textTransform: 'uppercase', letterSpacing: '0.3px', marginBottom: '6px' }}>
+                          Graphics Jobs ({jobs.length})
+                        </div>
+                        {jobs.map((j, idx) => (
+                          <div
+                            key={j.id}
+                            onClick={(e) => { e.stopPropagation(); router.push(`/graphics?editJob=${j.id}`); }}
+                            style={{
+                              display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '8px',
+                              padding: '6px 8px', borderRadius: '6px', marginBottom: idx < jobs.length - 1 ? '4px' : 0,
+                              background: 'rgba(167,139,250,0.06)', cursor: 'pointer',
+                            }}
+                          >
+                            <div style={{ minWidth: 0 }}>
+                              <div style={{ color: '#a78bfa', fontWeight: 700, fontSize: '12px' }}>{j.job_number || j.id.slice(0, 8)}</div>
+                              {j.title && (
+                                <div style={{ fontSize: '10px', color: 'var(--text-label)', marginTop: '2px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{j.title}</div>
+                              )}
+                            </div>
+                            <span style={{
+                              fontSize: '10px', fontWeight: 700, whiteSpace: 'nowrap',
+                              color: GRAPHICS_STATUS_COLORS[j.status] || 'var(--text-body)',
+                            }}>
+                              {GRAPHICS_STATUS_LABELS[j.status] || j.status}
+                            </span>
+                          </div>
+                        ))}
                       </div>
                     );
                   })()}
