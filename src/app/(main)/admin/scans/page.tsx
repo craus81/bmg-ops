@@ -68,6 +68,12 @@ export default function AdminScansPage() {
   // when a cni_job_vins row points at it). See docs/cni-redesign.md §3.4.
   const [cniByScanId, setCniByScanId] = useState<Record<string, string>>({});
   const [sourceFilter, setSourceFilter] = useState<'all' | 'cni' | 'field'>('all');
+  // Who performed the scan: the user ('' = everyone) and their company.
+  // scanned_by_company is null for internal staff, so the company filter's
+  // BMG option matches the null rows via the sentinel below.
+  const BMG_COMPANY = '__bmg_internal__';
+  const [scannerFilter, setScannerFilter] = useState('');
+  const [companyFilter, setCompanyFilter] = useState('');
   // Date-range filter for the All Scans tab (local YYYY-MM-DD, '' = unbounded)
   const [dateFrom, setDateFrom] = useState('');
   const [dateTo, setDateTo] = useState('');
@@ -269,10 +275,23 @@ export default function AdminScansPage() {
     return [];
   };
 
+  // Dropdown options: every scanner and company that appears in the loaded
+  // scans (live + archived), so the filters always offer what's actually there.
+  const allLoadedScans = [...scans, ...archivedScans];
+  const scannerOptions = [...new Set(allLoadedScans.map(s => s.scanned_by).filter(Boolean) as string[])]
+    .map(id => ({ id, name: profiles[id] || 'Unknown' }))
+    .sort((a, b) => a.name.localeCompare(b.name));
+  const companyOptions = [...new Set(allLoadedScans.map(s => s.scanned_by_company).filter(Boolean) as string[])].sort();
+
   const tabScans = getTabScans().filter(s => {
     // Source filter: CNI scans are the ones a cni_job_vins row points at.
     if (sourceFilter === 'cni' && !cniByScanId[s.id]) return false;
     if (sourceFilter === 'field' && cniByScanId[s.id]) return false;
+    // Scanner filters: by user, and by the company they work for (BMG's own
+    // staff carry no company — the BMG option matches those null rows).
+    if (scannerFilter && s.scanned_by !== scannerFilter) return false;
+    if (companyFilter === BMG_COMPANY && s.scanned_by_company) return false;
+    if (companyFilter && companyFilter !== BMG_COMPANY && s.scanned_by_company !== companyFilter) return false;
     // Date-range filter (All Scans tab) compares local calendar dates.
     if (tab === 'all' && (dateFrom || dateTo)) {
       const day = toLocalDateStr(new Date(s.scanned_at));
@@ -288,6 +307,8 @@ export default function AdminScansPage() {
       s.location_name?.toLowerCase().includes(q) ||
       s.po_number?.toLowerCase().includes(q) ||
       (cniByScanId[s.id] || '').toLowerCase().includes(q) ||
+      (profiles[s.scanned_by || ''] || '').toLowerCase().includes(q) ||
+      (s.scanned_by_company || '').toLowerCase().includes(q) ||
       [s.vehicle_year, s.vehicle_make, s.vehicle_model].filter(Boolean).join(' ').toLowerCase().includes(q);
   });
 
@@ -874,7 +895,7 @@ export default function AdminScansPage() {
       </div>
 
       {/* Search */}
-      {tab !== 'bulk' && <input value={search} onChange={e => setSearch(e.target.value)} placeholder="Search VIN, part, customer, location, PO, CNI job..."
+      {tab !== 'bulk' && <input value={search} onChange={e => setSearch(e.target.value)} placeholder="Search VIN, part, customer, location, PO, CNI job, scanner, company..."
         style={{ width: '100%', padding: '10px 14px', borderRadius: '10px', fontSize: '13px', border: `1px solid ${theme.border}`, background: theme.card, color: theme.textPrimary, fontWeight: 600, marginBottom: '10px' }} />}
 
       {/* Source filter — CNI installs vs. field scans (§3.4) */}
@@ -892,6 +913,35 @@ export default function AdminScansPage() {
               color: sourceFilter === f.id ? '#06b6d4' : 'var(--text-muted)',
             }}>{f.label}</button>
           ))}
+          {/* Filter by who scanned: the user, and the company they work for
+              (BMG (internal) = scans with no company stamped). */}
+          <select
+            value={scannerFilter}
+            onChange={e => setScannerFilter(e.target.value)}
+            style={{
+              padding: '5px 8px', borderRadius: '8px', fontSize: '10px', fontWeight: 700, cursor: 'pointer',
+              background: scannerFilter ? 'var(--tab-active-bg)' : 'transparent',
+              border: scannerFilter ? '1px solid var(--tab-active-border)' : '1px solid var(--border)',
+              color: scannerFilter ? '#06b6d4' : 'var(--text-muted)', maxWidth: '160px',
+            }}
+          >
+            <option value="">All users</option>
+            {scannerOptions.map(u => <option key={u.id} value={u.id}>{u.name}</option>)}
+          </select>
+          <select
+            value={companyFilter}
+            onChange={e => setCompanyFilter(e.target.value)}
+            style={{
+              padding: '5px 8px', borderRadius: '8px', fontSize: '10px', fontWeight: 700, cursor: 'pointer',
+              background: companyFilter ? 'var(--tab-active-bg)' : 'transparent',
+              border: companyFilter ? '1px solid var(--tab-active-border)' : '1px solid var(--border)',
+              color: companyFilter ? '#06b6d4' : 'var(--text-muted)', maxWidth: '160px',
+            }}
+          >
+            <option value="">All companies</option>
+            <option value={BMG_COMPANY}>BMG (internal)</option>
+            {companyOptions.map(c => <option key={c} value={c}>{c}</option>)}
+          </select>
         </div>
       )}
 
