@@ -23,7 +23,7 @@ export async function GET(req: NextRequest) {
   const like = `%${q}%`;
 
   // Run all searches in parallel
-  const [pos, vehicles, graphicsJobs, estimates, parts, customers, messages, quotes] = await Promise.all([
+  const [pos, vehicles, graphicsJobs, estimates, parts, customers, messages, quotes, poInvoices, jobInvoices, scanInvoices] = await Promise.all([
     // Purchase Orders — search by PO number, customer, line item part numbers
     supabase
       .from('purchase_orders')
@@ -87,6 +87,25 @@ export async function GET(req: NextRequest) {
       .or(`quote_number.ilike.${like},customer->>name.ilike.${like},vehicle_description.ilike.${like}`)
       .order('created_at', { ascending: false })
       .limit(MAX_PER_GROUP),
+
+    // Invoices live in NetSuite; the app references them from three places.
+    // Search all three by invoice number and merge below.
+    supabase
+      .from('po_invoices')
+      .select('id, netsuite_invoice_id, netsuite_invoice_number, created_at, purchase_orders(id, po_number, customer)')
+      .ilike('netsuite_invoice_number', like)
+      .order('created_at', { ascending: false })
+      .limit(MAX_PER_GROUP),
+    supabase
+      .from('graphics_jobs')
+      .select('id, title, customer, netsuite_invoice_id, netsuite_invoice_number, invoiced_at')
+      .ilike('netsuite_invoice_number', like)
+      .limit(MAX_PER_GROUP),
+    supabase
+      .from('scan_logs')
+      .select('invoice_number, billable_customer, po_number, date_invoiced')
+      .ilike('invoice_number', like)
+      .limit(MAX_PER_GROUP * 10),
   ]);
 
   // Also search PO line items by part number (separate query since we need the PO context)
@@ -141,7 +160,46 @@ export async function GET(req: NextRequest) {
 
   const allEstimates = [...(estimates.data || []), ...estimatesByCustomer].slice(0, MAX_PER_GROUP);
 
+  // Merge invoice references, deduped by invoice number. PO links carry the
+  // most context so they win; graphics jobs next; bare scan batches last.
+  const invoiceItems: any[] = [];
+  const seenInvoices = new Set<string>();
+  for (const r of (poInvoices.data || []) as any[]) {
+    const num = r.netsuite_invoice_number || String(r.netsuite_invoice_id || '');
+    if (!num || seenInvoices.has(num)) continue;
+    seenInvoices.add(num);
+    invoiceItems.push({
+      id: `poinv-${r.id}`, invoice_number: num, netsuite_invoice_id: r.netsuite_invoice_id,
+      customer: r.purchase_orders?.customer || null, source: 'po',
+      po_id: r.purchase_orders?.id || null, po_number: r.purchase_orders?.po_number || null,
+      date: r.created_at,
+    });
+  }
+  for (const j of (jobInvoices.data || []) as any[]) {
+    const num = j.netsuite_invoice_number || String(j.netsuite_invoice_id || '');
+    if (!num || seenInvoices.has(num)) continue;
+    seenInvoices.add(num);
+    invoiceItems.push({
+      id: `gfxinv-${j.id}`, invoice_number: num, netsuite_invoice_id: j.netsuite_invoice_id,
+      customer: j.customer || null, source: 'graphics',
+      job_id: j.id, job_title: j.title || null,
+      date: j.invoiced_at,
+    });
+  }
+  for (const s of (scanInvoices.data || []) as any[]) {
+    const num = s.invoice_number;
+    if (!num || seenInvoices.has(num)) continue;
+    seenInvoices.add(num);
+    invoiceItems.push({
+      id: `scaninv-${num}`, invoice_number: num,
+      customer: s.billable_customer || null, source: 'scans',
+      po_number: s.po_number || null,
+      date: s.date_invoiced,
+    });
+  }
+
   const results: Record<string, any> = {};
+  if (invoiceItems.length > 0) results.invoices = invoiceItems.slice(0, MAX_PER_GROUP);
 
   if (allPOs.length > 0) results.purchase_orders = allPOs;
   if (vehicles.data?.length) results.vehicles = vehicles.data;

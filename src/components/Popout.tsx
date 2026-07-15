@@ -21,9 +21,11 @@ export type PopoutType =
   | 'parts'
   | 'customers'
   | 'messages'
-  | 'quotes';
+  | 'quotes'
+  | 'invoices';
 
 const LABELS: Record<PopoutType, { label: string; color: string }> = {
+  invoices: { label: 'Invoice', color: '#34d399' },
   purchase_orders: { label: 'Purchase Order', color: '#60a5fa' },
   vehicles: { label: 'Vehicle', color: '#34d399' },
   graphics_jobs: { label: 'Graphics Job', color: '#a78bfa' },
@@ -55,6 +57,12 @@ export function pathFor(type: PopoutType, item: any): string {
     case 'customers': return `/admin/prospects?id=${item.id}`;
     case 'messages': return `/messages?conversation=${item.conversation_id}`;
     case 'quotes': return `/admin/wrap-quote?id=${item.id}`;
+    // Invoices live in NetSuite — deep-link to whichever record in the app
+    // references this one (PO, graphics job, or the sent-invoices list).
+    case 'invoices':
+      if (item.po_id) return `/admin/pos?id=${item.po_id}`;
+      if (item.job_id) return `/graphics?id=${item.job_id}`;
+      return '/invoices?tab=sent';
     default: return '/';
   }
 }
@@ -146,6 +154,17 @@ function detailRow(label: string, value: any) {
 
 export function renderDetail(type: PopoutType, item: any) {
   switch (type) {
+    case 'invoices':
+      return (
+        <div>
+          {detailRow('Invoice #', item.invoice_number)}
+          {detailRow('Customer', item.customer)}
+          {detailRow('PO #', item.po_number)}
+          {detailRow('Graphics Job', item.job_title)}
+          {detailRow('Source', item.source === 'po' ? 'Purchase order' : item.source === 'graphics' ? 'Graphics job' : 'Scan batch')}
+          {detailRow('Date', item.date ? formatDate(item.date) : null)}
+        </div>
+      );
     case 'purchase_orders': {
       const lines = item.po_line_items || item.line_items || [];
       const total = lines.reduce((s: number, l: any) => s + (l.quantity * l.unit_price), 0);
