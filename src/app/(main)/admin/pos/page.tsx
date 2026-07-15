@@ -507,6 +507,25 @@ export default function POsPage() {
     });
   }
 
+  // One-click location assignment straight from the PO details — pick a
+  // saved location and it lands on the PO immediately, no Edit PO round-trip.
+  // For a one-off address that isn't a saved location, Edit PO still has the
+  // full ship-to fields.
+  async function applyQuickLocation(poId: string, locId: string) {
+    const loc = locations.find(l => l.id === locId);
+    if (!loc) return;
+    const ship_to = {
+      name: loc.name,
+      address: loc.address || '',
+      city: loc.city || '',
+      state: loc.state || '',
+      zip: loc.zip || '',
+    };
+    const { error } = await supabase.from('purchase_orders').update({ ship_to }).eq('id', poId);
+    if (error) { await dialog.alert('Failed to set location: ' + error.message); return; }
+    setPos(prev => prev.map(p => p.id === poId ? { ...p, ship_to } : p));
+  }
+
   async function saveLocation() {
     if (!locationForm.name.trim()) { await dialog.alert('Location name is required'); return; }
     setLocationSaving(true);
@@ -4153,10 +4172,46 @@ export default function POsPage() {
                     </div>
                   )}
 
-                  {po.ship_to && (
-                    <div style={{ padding: '6px 8px', borderRadius: '6px', background: 'rgba(59,130,246,0.06)', border: '1px solid rgba(59,130,246,0.12)', marginBottom: '8px', fontSize: '11px', color: '#8899aa' }}>
-                      <span style={{ fontWeight: 700, color: '#60a5fa', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '0.3px' }}>Ship To: </span>
-                      {[po.ship_to.name, po.ship_to.address, po.ship_to.city && po.ship_to.state ? `${po.ship_to.city}, ${po.ship_to.state} ${po.ship_to.zip || ''}`.trim() : po.ship_to.city || po.ship_to.state].filter(Boolean).join(' · ')}
+                  {po.ship_to ? (
+                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '8px', padding: '6px 8px', borderRadius: '6px', background: 'rgba(59,130,246,0.06)', border: '1px solid rgba(59,130,246,0.12)', marginBottom: '8px', fontSize: '11px', color: '#8899aa' }}>
+                      <div>
+                        <span style={{ fontWeight: 700, color: '#60a5fa', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '0.3px' }}>Ship To: </span>
+                        {[po.ship_to.name, po.ship_to.address, po.ship_to.city && po.ship_to.state ? `${po.ship_to.city}, ${po.ship_to.state} ${po.ship_to.zip || ''}`.trim() : po.ship_to.city || po.ship_to.state].filter(Boolean).join(' · ')}
+                      </div>
+                      <button
+                        onClick={(e) => { e.stopPropagation(); startEditPO(po); }}
+                        title="Change this PO's ship-to location (opens Edit PO)"
+                        style={{ padding: '2px 8px', borderRadius: '5px', fontSize: '10px', fontWeight: 700, background: 'rgba(96,165,250,0.1)', border: '1px solid rgba(96,165,250,0.25)', color: '#60a5fa', cursor: 'pointer', flexShrink: 0 }}
+                      >
+                        Change
+                      </button>
+                    </div>
+                  ) : (
+                    // No location on this PO — set one right here: pick a
+                    // saved location for instant assignment, or Custom for
+                    // the full ship-to fields in Edit PO.
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '6px', flexWrap: 'wrap', padding: '6px 8px', borderRadius: '6px', background: 'rgba(251,191,36,0.06)', border: '1px solid rgba(251,191,36,0.2)', marginBottom: '8px' }}>
+                      <span style={{ fontWeight: 700, color: '#fbbf24', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '0.3px' }}>📍 No location</span>
+                      <select
+                        defaultValue=""
+                        onClick={(e) => e.stopPropagation()}
+                        onChange={(e) => { if (e.target.value) applyQuickLocation(po.id, e.target.value); }}
+                        style={{ ...inputStyle, flex: 1, minWidth: '160px', padding: '4px 6px', fontSize: '11px' }}
+                      >
+                        <option value="">Set a saved location…</option>
+                        {locations.map(loc => (
+                          <option key={loc.id} value={loc.id}>
+                            {loc.name}{loc.city ? ` — ${loc.city}${loc.state ? `, ${loc.state}` : ''}` : ''}
+                          </option>
+                        ))}
+                      </select>
+                      <button
+                        onClick={(e) => { e.stopPropagation(); startEditPO(po); }}
+                        title="Enter a one-off address (opens Edit PO with the full ship-to fields)"
+                        style={{ padding: '4px 8px', borderRadius: '5px', fontSize: '10px', fontWeight: 700, background: 'rgba(96,165,250,0.1)', border: '1px solid rgba(96,165,250,0.25)', color: '#60a5fa', cursor: 'pointer' }}
+                      >
+                        Custom…
+                      </button>
                     </div>
                   )}
 
