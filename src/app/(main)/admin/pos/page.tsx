@@ -401,6 +401,13 @@ export default function POsPage() {
   const [createLineForm, setCreateLineForm] = useState({ part_number: '', quantity: '1', unit_price: '' });
   const fileRef = useRef<HTMLInputElement>(null);
   const [poSearch, setPoSearch] = useState('');
+  // List filters: attribute filter (billing issues, notes, graphics jobs)
+  // and a date window on the PO date (imported date when none on record).
+  type PoFilter = 'all' | 'billing' | 'not_invoiced' | 'notes' | 'has_gfx' | 'no_gfx';
+  const [poFilter, setPoFilter] = useState<PoFilter>('all');
+  const [poDateRange, setPoDateRange] = useState<'all' | '30' | '90' | 'month' | 'lastmonth'>('all');
+  // Collapsed "⋯ More" menu for the secondary toolbar actions
+  const [showMoreMenu, setShowMoreMenu] = useState(false);
 
   // PDF Import state
   const [parsedPO, setParsedPO] = useState<ParsedPO | null>(null);
@@ -847,8 +854,10 @@ export default function POsPage() {
     if (!poId) return;
     const target = pos.find(p => p.id === poId);
     if (!target) return;
-    setPoTab(target.status === 'closed' ? 'closed' : 'open');
+    setPoTab(target.status === 'closed' ? 'closed' : target.status === 'complete' ? 'fulfilled' : 'open');
     setPoSearch('');
+    setPoFilter('all');
+    setPoDateRange('all');
     setExpandedPo(poId);
     setHighlightPo(poId);
     const clear = setTimeout(() => setHighlightPo(null), 2500);
@@ -2535,7 +2544,49 @@ export default function POsPage() {
   const openPos = pos.filter(po => po.status !== 'closed' && po.status !== 'complete');
   const fulfilledPos = pos.filter(po => po.status === 'complete');
   const closedPos = pos.filter(po => po.status === 'closed');
-  const filteredPos = (poTab === 'closed' ? closedPos : poTab === 'fulfilled' ? fulfilledPos : openPos)
+
+  const matchesPoFilter = (po: PurchaseOrder & { line_items: POLineItem[] }, filter: PoFilter): boolean => {
+    switch (filter) {
+      case 'billing': return (po as any).invoice_check_status === 'attention';
+      case 'not_invoiced': return po.status === 'complete' && (po as any).invoice_check_status === 'no_invoices';
+      case 'notes': return ((po as any).po_notes || []).length > 0;
+      case 'has_gfx': return (gfxJobsByPo[po.id] || []).length > 0;
+      case 'no_gfx': return (gfxJobsByPo[po.id] || []).length === 0;
+      default: return true;
+    }
+  };
+  const matchesPoDateRange = (po: PurchaseOrder): boolean => {
+    if (poDateRange === 'all') return true;
+    const d = new Date(po.ordered_date || po.created_at);
+    if (isNaN(d.getTime())) return false;
+    const now = new Date();
+    if (poDateRange === '30' || poDateRange === '90') {
+      const start = new Date(now);
+      start.setDate(now.getDate() - (poDateRange === '30' ? 30 : 90));
+      return d >= start;
+    }
+    if (poDateRange === 'month') {
+      return d >= new Date(now.getFullYear(), now.getMonth(), 1);
+    }
+    // lastmonth
+    return d >= new Date(now.getFullYear(), now.getMonth() - 1, 1)
+      && d < new Date(now.getFullYear(), now.getMonth(), 1);
+  };
+
+  const tabPos = poTab === 'closed' ? closedPos : poTab === 'fulfilled' ? fulfilledPos : openPos;
+  // Counts shown in the filter dropdown, computed on the current tab before
+  // the attribute/date/search narrowing so the menu reads as "what's here".
+  const poFilterCounts: Record<PoFilter, number> = {
+    all: tabPos.length,
+    billing: tabPos.filter(p => matchesPoFilter(p, 'billing')).length,
+    not_invoiced: tabPos.filter(p => matchesPoFilter(p, 'not_invoiced')).length,
+    notes: tabPos.filter(p => matchesPoFilter(p, 'notes')).length,
+    has_gfx: tabPos.filter(p => matchesPoFilter(p, 'has_gfx')).length,
+    no_gfx: tabPos.filter(p => matchesPoFilter(p, 'no_gfx')).length,
+  };
+
+  const filteredPos = tabPos
+    .filter(po => matchesPoFilter(po, poFilter) && matchesPoDateRange(po))
     .filter((po) => {
       if (!poSearch.trim()) return true;
       const q = poSearch.toLowerCase();
@@ -2729,124 +2780,97 @@ export default function POsPage() {
       </div>
 
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '8px' }}>
-        <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-          <div style={{ fontSize: '11px', fontWeight: 700, color: 'var(--text-label)', textTransform: 'uppercase', letterSpacing: '0.5px' }}>
-            {poTab === 'closed' ? 'Closed' : poTab === 'fulfilled' ? 'Fulfilled' : ''} Purchase Orders ({filteredPos.length}{poSearch ? ` of ${pos.length}` : ''})
-          </div>
-          <button
-            onClick={() => {
-              if (poSortField === 'po_number') setPoSort(s => s === 'asc' ? 'desc' : 'asc');
-              else { setPoSortField('po_number'); setPoSort('asc'); }
-            }}
-            title="Sort by PO number (click again to flip direction)"
-            style={{
-              padding: '3px 8px', borderRadius: '6px', fontSize: '10px', fontWeight: 700,
-              background: poSortField === 'po_number' ? 'var(--tab-active-bg)' : 'var(--subtle-bg)',
-              border: poSortField === 'po_number' ? '1px solid var(--tab-active-border)' : '1px solid var(--border)',
-              color: poSortField === 'po_number' ? '#60a5fa' : 'var(--text-body)', cursor: 'pointer',
-            }}
-          >
-            PO# {poSortField === 'po_number' ? (poSort === 'asc' ? '▲' : '▼') : ''}
-          </button>
-          <button
-            onClick={() => {
-              if (poSortField === 'location') setPoSort(s => s === 'asc' ? 'desc' : 'asc');
-              else { setPoSortField('location'); setPoSort('asc'); }
-            }}
-            title="Sort by ship-to location (click again to flip direction; POs without a location sort last)"
-            style={{
-              padding: '3px 8px', borderRadius: '6px', fontSize: '10px', fontWeight: 700,
-              background: poSortField === 'location' ? 'var(--tab-active-bg)' : 'var(--subtle-bg)',
-              border: poSortField === 'location' ? '1px solid var(--tab-active-border)' : '1px solid var(--border)',
-              color: poSortField === 'location' ? '#22d3ee' : 'var(--text-body)', cursor: 'pointer',
-            }}
-          >
-            📍 Location {poSortField === 'location' ? (poSort === 'asc' ? '▲' : '▼') : ''}
-          </button>
-          <button
-            onClick={() => {
-              if (poSortField === 'date') setPoSort(s => s === 'asc' ? 'desc' : 'asc');
-              // Newest first is the natural first click for a date sort
-              else { setPoSortField('date'); setPoSort('desc'); }
-            }}
-            title="Sort by PO date (click again to flip direction; POs without a date use their imported date)"
-            style={{
-              padding: '3px 8px', borderRadius: '6px', fontSize: '10px', fontWeight: 700,
-              background: poSortField === 'date' ? 'var(--tab-active-bg)' : 'var(--subtle-bg)',
-              border: poSortField === 'date' ? '1px solid var(--tab-active-border)' : '1px solid var(--border)',
-              color: poSortField === 'date' ? '#fbbf24' : 'var(--text-body)', cursor: 'pointer',
-            }}
-          >
-            📅 Date {poSortField === 'date' ? (poSort === 'asc' ? '▲' : '▼') : ''}
-          </button>
+        <div style={{ fontSize: '11px', fontWeight: 700, color: 'var(--text-label)', textTransform: 'uppercase', letterSpacing: '0.5px' }}>
+          {poTab === 'closed' ? 'Closed' : poTab === 'fulfilled' ? 'Fulfilled' : ''} Purchase Orders ({filteredPos.length}{poSearch || poFilter !== 'all' || poDateRange !== 'all' ? ` of ${tabPos.length}` : ''})
         </div>
         <div style={{ display: 'flex', gap: '6px' }}>
           {!editMode ? (
             <>
-              <button
-                onClick={backfillCustomers}
-                disabled={backfillingCustomers}
-                title="Resolve every PO's customer name to its NetSuite customer record"
-                style={{ padding: '6px 12px', borderRadius: '8px', background: 'rgba(167,139,250,0.1)', border: '1px solid rgba(167,139,250,0.25)', color: '#a78bfa', fontSize: '12px', fontWeight: 700, opacity: backfillingCustomers ? 0.6 : 1 }}
-              >
-                {backfillingCustomers ? 'Linking…' : 'Link Customers'}
-              </button>
-              <button
-                onClick={() => { setEditMode(true); setSelectedForDelete(new Set()); }}
-                title="Select multiple POs to print or delete"
-                style={{ padding: '6px 12px', borderRadius: '8px', background: 'rgba(248,113,113,0.1)', border: '1px solid rgba(248,113,113,0.25)', color: '#f87171', fontSize: '12px', fontWeight: 700 }}
-              >
-                Select
-              </button>
-              <button
-                onClick={() => { setShowEmailImport(!showEmailImport); setShowImport(false); setShowCreate(false); if (!showEmailImport) { searchGmailPOs(); window.scrollTo({ top: 0, behavior: 'smooth' }); } }}
-                style={{ padding: '6px 12px', borderRadius: '8px', background: showEmailImport ? 'var(--subtle-bg)' : 'rgba(34,197,94,0.1)', border: '1px solid rgba(34,197,94,0.25)', color: '#4ade80', fontSize: '12px', fontWeight: 700 }}
-              >
-                {showEmailImport ? 'Cancel' : 'Email'}
-              </button>
-              <button
-                onClick={runPdfBackfill}
-                disabled={backfillRunning}
-                title="Search Gmail for the source PDF of every PO that has no PDF attached and attach it"
-                style={{ padding: '6px 12px', borderRadius: '8px', background: 'rgba(167,139,250,0.1)', border: '1px solid rgba(167,139,250,0.25)', color: '#a78bfa', fontSize: '12px', fontWeight: 700, opacity: backfillRunning ? 0.7 : 1, cursor: backfillRunning ? 'default' : 'pointer' }}
-              >
-                {backfillRunning ? `Finding… ${backfillProgress}` : 'Find PDFs'}
-              </button>
-              <button
-                onClick={syncInvoices}
-                disabled={syncingInvoices}
-                title="Link every NetSuite invoice that references a PO number to its PO — including invoices created directly in NetSuite"
-                style={{ padding: '6px 12px', borderRadius: '8px', background: 'rgba(52,211,153,0.1)', border: '1px solid rgba(52,211,153,0.25)', color: '#34d399', fontSize: '12px', fontWeight: 700, opacity: syncingInvoices ? 0.7 : 1, cursor: syncingInvoices ? 'default' : 'pointer' }}
-              >
-                {syncingInvoices ? 'Syncing…' : 'Sync Invoices'}
-              </button>
-              <button
-                onClick={verifyInvoices}
-                disabled={verifyingInvoices}
-                title="Compare each PO's ordered quantities against its linked invoices' billed quantities and flag mismatches as needing attention"
-                style={{ padding: '6px 12px', borderRadius: '8px', background: 'rgba(251,191,36,0.1)', border: '1px solid rgba(251,191,36,0.25)', color: '#fbbf24', fontSize: '12px', fontWeight: 700, opacity: verifyingInvoices ? 0.7 : 1, cursor: verifyingInvoices ? 'default' : 'pointer' }}
-              >
-                {verifyingInvoices ? 'Checking…' : 'Check Billing'}
-              </button>
-              <button
-                onClick={() => { setShowImport(!showImport); setShowCreate(false); setShowEmailImport(false); setParsedPO(null); setImportLines([]); setParseError(''); }}
-                style={{ padding: '6px 12px', borderRadius: '8px', background: showImport ? 'var(--subtle-bg)' : 'rgba(59,130,246,0.1)', border: '1px solid rgba(59,130,246,0.25)', color: '#60a5fa', fontSize: '12px', fontWeight: 700 }}
-              >
-                {showImport ? 'Cancel' : 'PDF'}
-              </button>
-              <button
-                onClick={() => setShowLocations(s => !s)}
-                title="Manage saved ship-to locations"
-                style={{ padding: '6px 12px', borderRadius: '8px', background: showLocations ? 'var(--subtle-bg)' : 'rgba(148,163,184,0.1)', border: '1px solid rgba(148,163,184,0.25)', color: 'var(--text-body)', fontSize: '12px', fontWeight: 700 }}
-              >
-                Locations
-              </button>
               <button
                 onClick={() => { setShowCreate(!showCreate); setShowImport(false); setShowEmailImport(false); }}
                 style={{ padding: '6px 12px', borderRadius: '8px', background: '#3b82f6', color: '#fff', fontSize: '12px', fontWeight: 700, border: 'none' }}
               >
                 {showCreate ? 'Cancel' : '+ New'}
               </button>
+              {/* Everything secondary lives behind one menu — the toolbar was
+                  eight buttons deep and drowning the screen. */}
+              <div style={{ position: 'relative' }}>
+                <button
+                  onClick={() => setShowMoreMenu(s => !s)}
+                  title="Import, linking, and maintenance actions"
+                  style={{ padding: '6px 12px', borderRadius: '8px', background: showMoreMenu ? 'var(--tab-active-bg)' : 'var(--subtle-bg)', border: '1px solid var(--border)', color: 'var(--text-body)', fontSize: '12px', fontWeight: 700 }}
+                >
+                  ⋯ More
+                </button>
+                {showMoreMenu && (
+                  <>
+                    <div onClick={() => setShowMoreMenu(false)} style={{ position: 'fixed', inset: 0, zIndex: 90 }} />
+                    <div style={{
+                      position: 'absolute', right: 0, top: 'calc(100% + 6px)', zIndex: 91,
+                      background: 'var(--card)', border: '1px solid var(--border)', borderRadius: '10px',
+                      boxShadow: '0 12px 40px rgba(0,0,0,0.35)', minWidth: '240px', padding: '6px',
+                      display: 'flex', flexDirection: 'column', gap: '2px',
+                    }}>
+                      {([
+                        {
+                          label: showEmailImport ? 'Close Email Import' : 'Import from Email',
+                          hint: 'Pull PO PDFs out of Gmail',
+                          onClick: () => { setShowEmailImport(!showEmailImport); setShowImport(false); setShowCreate(false); if (!showEmailImport) { searchGmailPOs(); window.scrollTo({ top: 0, behavior: 'smooth' }); } },
+                        },
+                        {
+                          label: showImport ? 'Close PDF Import' : 'Import a PDF',
+                          hint: 'Upload and parse a PO PDF',
+                          onClick: () => { setShowImport(!showImport); setShowCreate(false); setShowEmailImport(false); setParsedPO(null); setImportLines([]); setParseError(''); },
+                        },
+                        {
+                          label: 'Select POs…',
+                          hint: 'Multi-select to print or delete',
+                          onClick: () => { setEditMode(true); setSelectedForDelete(new Set()); },
+                        },
+                        {
+                          label: backfillingCustomers ? 'Linking Customers…' : 'Link Customers',
+                          hint: 'Match customer names to NetSuite records',
+                          onClick: backfillCustomers, busy: backfillingCustomers,
+                        },
+                        {
+                          label: backfillRunning ? `Finding PDFs… ${backfillProgress}` : 'Find Missing PDFs',
+                          hint: 'Search Gmail for POs with no PDF attached',
+                          onClick: runPdfBackfill, busy: backfillRunning,
+                        },
+                        {
+                          label: syncingInvoices ? 'Syncing Invoices…' : 'Sync Invoices',
+                          hint: 'Link NetSuite invoices to their POs',
+                          onClick: syncInvoices, busy: syncingInvoices,
+                        },
+                        {
+                          label: verifyingInvoices ? 'Checking Billing…' : 'Check Billing',
+                          hint: 'Flag POs whose invoices don’t add up',
+                          onClick: verifyInvoices, busy: verifyingInvoices,
+                        },
+                        {
+                          label: showLocations ? 'Close Locations' : 'Locations',
+                          hint: 'Manage saved ship-to locations',
+                          onClick: () => setShowLocations(s => !s),
+                        },
+                      ] as { label: string; hint: string; onClick: () => void; busy?: boolean }[]).map(item => (
+                        <button
+                          key={item.hint}
+                          disabled={item.busy}
+                          onClick={() => { if (!item.busy) { setShowMoreMenu(false); item.onClick(); } }}
+                          style={{
+                            display: 'block', width: '100%', textAlign: 'left', padding: '8px 10px',
+                            borderRadius: '7px', background: 'transparent', border: 'none',
+                            cursor: item.busy ? 'wait' : 'pointer', opacity: item.busy ? 0.6 : 1,
+                          }}
+                        >
+                          <div style={{ fontSize: '12px', fontWeight: 700, color: 'var(--text-body)' }}>{item.label}</div>
+                          <div style={{ fontSize: '10px', color: 'var(--text-label)', marginTop: '1px' }}>{item.hint}</div>
+                        </button>
+                      ))}
+                    </div>
+                  </>
+                )}
+              </div>
             </>
           ) : (
             <>
@@ -2893,6 +2917,76 @@ export default function POsPage() {
             </>
           )}
         </div>
+      </div>
+
+      {/* Filter / date / sort controls */}
+      <div style={{ display: 'flex', gap: '6px', marginBottom: '8px', flexWrap: 'wrap', alignItems: 'center' }}>
+        {(() => {
+          const selectStyle: React.CSSProperties = {
+            padding: '6px 8px', borderRadius: '7px', fontSize: '11px', fontWeight: 700,
+            background: 'var(--subtle-bg)', border: '1px solid var(--border)',
+            color: 'var(--text-body)', cursor: 'pointer', outline: 'none',
+          };
+          return (
+            <>
+              <select
+                value={poFilter}
+                onChange={e => setPoFilter(e.target.value as PoFilter)}
+                title="Show only POs matching a condition"
+                style={{ ...selectStyle, ...(poFilter !== 'all' ? { border: '1px solid var(--tab-active-border)', color: '#60a5fa' } : {}) }}
+              >
+                <option value="all">Filter: All ({poFilterCounts.all})</option>
+                <option value="billing">⚠ Billing needs attention ({poFilterCounts.billing})</option>
+                <option value="not_invoiced">⚠ Fulfilled, not invoiced ({poFilterCounts.not_invoiced})</option>
+                <option value="notes">💬 Has notes ({poFilterCounts.notes})</option>
+                <option value="has_gfx">🎨 Has graphics job ({poFilterCounts.has_gfx})</option>
+                <option value="no_gfx">No graphics job ({poFilterCounts.no_gfx})</option>
+              </select>
+              <select
+                value={poDateRange}
+                onChange={e => setPoDateRange(e.target.value as typeof poDateRange)}
+                title="Limit to a PO-date window (imported date when the PO has no date on record)"
+                style={{ ...selectStyle, ...(poDateRange !== 'all' ? { border: '1px solid var(--tab-active-border)', color: '#fbbf24' } : {}) }}
+              >
+                <option value="all">Date: All time</option>
+                <option value="30">Last 30 days</option>
+                <option value="90">Last 90 days</option>
+                <option value="month">This month</option>
+                <option value="lastmonth">Last month</option>
+              </select>
+              <select
+                value={poSortField}
+                onChange={e => {
+                  const f = e.target.value as typeof poSortField;
+                  setPoSortField(f);
+                  // Newest first is the natural default for a date sort
+                  setPoSort(f === 'date' ? 'desc' : 'asc');
+                }}
+                title="Sort the list"
+                style={selectStyle}
+              >
+                <option value="po_number">Sort: PO #</option>
+                <option value="date">Sort: Date</option>
+                <option value="location">Sort: Location</option>
+              </select>
+              <button
+                onClick={() => setPoSort(s => s === 'asc' ? 'desc' : 'asc')}
+                title="Flip the sort direction"
+                style={{ ...selectStyle, padding: '6px 10px' }}
+              >
+                {poSort === 'asc' ? '▲' : '▼'}
+              </button>
+              {(poFilter !== 'all' || poDateRange !== 'all') && (
+                <button
+                  onClick={() => { setPoFilter('all'); setPoDateRange('all'); }}
+                  style={{ ...selectStyle, color: 'var(--text-label)' }}
+                >
+                  ✕ Clear filters
+                </button>
+              )}
+            </>
+          );
+        })()}
       </div>
 
       {/* Search bar */}
@@ -3956,9 +4050,11 @@ export default function POsPage() {
         </div>
       )}
 
-      {pos.length > 0 && filteredPos.length === 0 && poSearch && (
+      {pos.length > 0 && filteredPos.length === 0 && (poSearch || poFilter !== 'all' || poDateRange !== 'all') && (
         <div style={{ textAlign: 'center', padding: '24px 0', color: 'var(--text-label)' }}>
-          <div style={{ fontSize: '12px' }}>No POs matching &quot;{poSearch}&quot;</div>
+          <div style={{ fontSize: '12px' }}>
+            {poSearch ? <>No POs matching &quot;{poSearch}&quot;</> : 'No POs match the current filters'}
+          </div>
         </div>
       )}
 
