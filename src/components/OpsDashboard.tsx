@@ -412,9 +412,14 @@ export default function OpsDashboard() {
 
   // "New for you": unread notifications act on click — open the deep link and
   // mark read, so the strip drains itself and disappears when nothing's new.
+  // Chat notifications clear as a group: every message in a conversation
+  // notifies separately, but opening the chat reads them all, so one click
+  // drains every notification pointing at that conversation.
   const openUnread = async (n: { id: string; url: string | null }) => {
-    setData(prev => prev ? { ...prev, unread: prev.unread.filter(u => u.id !== n.id) } : prev);
-    await supabase.from('notifications').update({ read_at: new Date().toISOString() }).eq('id', n.id);
+    const isChat = !!n.url && n.url.startsWith('/messages?conversation=');
+    const ids = isChat ? d.unread.filter(u => u.url === n.url).map(u => u.id) : [n.id];
+    setData(prev => prev ? { ...prev, unread: prev.unread.filter(u => !ids.includes(u.id)) } : prev);
+    await supabase.from('notifications').update({ read_at: new Date().toISOString() }).in('id', ids);
     if (n.url) router.push(n.url);
   };
   const dismissAllUnread = async () => {

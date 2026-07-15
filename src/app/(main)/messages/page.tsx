@@ -266,6 +266,15 @@ export default function MessagesPage() {
         .neq('sender_id', user.id)
         .is('read_at', null);
 
+      // Also clear this chat's notifications ("New for you" strip / bell) —
+      // each message notifies separately, and reading the chat reads them all.
+      await supabase
+        .from('notifications')
+        .update({ read_at: new Date().toISOString() })
+        .eq('user_id', user.id)
+        .eq('url', `/messages?conversation=${convoId}`)
+        .is('read_at', null);
+
       // Update local unread count
       setConversations(prev =>
         prev.map(c => c.id === convoId ? { ...c, unreadCount: 0 } : c)
