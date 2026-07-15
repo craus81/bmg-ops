@@ -1800,6 +1800,49 @@ export default function POsPage() {
     setVerifyingInvoices(false);
   };
 
+  // Per-PO billing recheck: after fixing an invoice in NetSuite, pull the
+  // fix in right now — refresh this PO's invoice links (new invoices in,
+  // deleted ones out) and re-run the quantity check, without waiting for
+  // the cron sweep or re-checking the whole book.
+  const [recheckingPoId, setRecheckingPoId] = useState<string | null>(null);
+  const recheckPoBilling = async (po: PurchaseOrder) => {
+    if (recheckingPoId) return;
+    setRecheckingPoId(po.id);
+    try {
+      const res = await fetch('/api/pos/verify-invoices', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ poId: po.id }),
+      });
+      const data = await res.json();
+      if (!res.ok || data.error) {
+        await dialog.alert(`Recheck failed: ${data.error || `request failed (${res.status})`}`);
+      } else if (data.po) {
+        setPos(prev => prev.map(p => p.id === data.po.id ? {
+          ...p,
+          ...data.po,
+          line_items: data.po.po_line_items || [],
+          po_invoices: (data.po.po_invoices || []).sort((a: any, b: any) =>
+            new Date(b.created_at).getTime() - new Date(a.created_at).getTime()),
+        } : p));
+        const links = data.links || {};
+        const bits: string[] = [];
+        if (links.linked) bits.push(`${links.linked} new invoice${links.linked !== 1 ? 's' : ''} linked`);
+        if (links.unlinked) bits.push(`${links.unlinked} removed (no longer in NetSuite)`);
+        const status = data.po.invoice_check_status;
+        const verdict = status === 'attention'
+          ? '⚠ Billing still needs attention — see the flagged lines.'
+          : status === 'no_invoices'
+            ? 'No invoices are linked to this PO now.'
+            : '✓ Billed quantities match this PO now.';
+        await dialog.alert(`Rechecked PO #${po.po_number}. ${bits.length ? bits.join(', ') + '. ' : ''}${verdict}`);
+      }
+    } catch (err: any) {
+      await dialog.alert(`Recheck failed: ${err.message || 'network error'}`);
+    }
+    setRecheckingPoId(null);
+  };
+
   // Pull in invoices created directly in NetSuite (matched by the PO number
   // on the invoice's Reference No.) so every PO's invoice list is complete
   // regardless of which system created the invoice.
@@ -4593,8 +4636,23 @@ export default function POsPage() {
 
                     return (
                       <div style={{ marginTop: '10px', padding: '8px', borderRadius: '8px', background: 'rgba(52,211,153,0.04)', border: '1px solid rgba(52,211,153,0.15)' }}>
-                        <div style={{ fontSize: '10px', fontWeight: 700, color: '#34d399', textTransform: 'uppercase', letterSpacing: '0.3px', marginBottom: '6px' }}>
-                          Invoices ({invoiceList.length})
+                        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '6px' }}>
+                          <div style={{ fontSize: '10px', fontWeight: 700, color: '#34d399', textTransform: 'uppercase', letterSpacing: '0.3px' }}>
+                            Invoices ({invoiceList.length})
+                          </div>
+                          <button
+                            onClick={(e) => { e.stopPropagation(); recheckPoBilling(po); }}
+                            disabled={recheckingPoId !== null}
+                            title="Re-pull this PO's invoices from NetSuite and re-run the billing check — use after fixing an invoice in NetSuite"
+                            style={{
+                              padding: '3px 10px', borderRadius: '6px', fontSize: '10px', fontWeight: 700,
+                              background: 'rgba(52,211,153,0.1)', border: '1px solid rgba(52,211,153,0.3)',
+                              color: '#34d399', cursor: recheckingPoId ? 'wait' : 'pointer',
+                              opacity: recheckingPoId && recheckingPoId !== po.id ? 0.5 : 1,
+                            }}
+                          >
+                            {recheckingPoId === po.id ? 'Rechecking…' : '↻ Recheck billing'}
+                          </button>
                         </div>
                         {invoiceList.map((inv: any, idx: number) => (
                           <div key={inv.netsuite_invoice_id || idx} style={{

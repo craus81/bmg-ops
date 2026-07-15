@@ -1,6 +1,76 @@
 import type { SupabaseClient } from '@supabase/supabase-js';
 import { suiteqlQuery } from '@/lib/netsuite';
 
+/**
+ * Refresh ONE PO's invoice links against NetSuite, both directions:
+ * link any invoice now referencing this PO number that isn't linked yet
+ * (e.g. a corrected replacement), and unlink rows whose NetSuite invoice
+ * no longer exists (deleted/voided duplicates). Powers the per-PO
+ * "Recheck billing" button, where someone just fixed things in NetSuite
+ * and wants the PO to reflect it now, not at the next cron sweep.
+ */
+export async function refreshPoInvoiceLinks(
+  service: SupabaseClient,
+  poId: string,
+): Promise<{ linked: number; unlinked: number }> {
+  const { data: po } = await service
+    .from('purchase_orders')
+    .select('id, po_number')
+    .eq('id', poId)
+    .maybeSingle();
+  if (!po?.po_number) return { linked: 0, unlinked: 0 };
+
+  const { data: existing } = await service
+    .from('po_invoices')
+    .select('id, netsuite_invoice_id')
+    .eq('purchase_order_id', poId);
+  const existingByNsId = new Map((existing || []).map(r => [String(r.netsuite_invoice_id), r.id]));
+
+  // Everything NetSuite currently has for this PO number...
+  const poNumber = String(po.po_number).replace(/'/g, '');
+  const byRef = await suiteqlQuery(`
+    SELECT t.id, t.tranid, t.trandate
+    FROM transaction t
+    WHERE t.type = 'CustInvc' AND t.otherrefnum = '${poNumber}'
+  `);
+  const liveByRef = new Map<string, any>(
+    (byRef?.items || []).map((inv: any) => [String(inv.id), inv]),
+  );
+
+  // ...plus an existence check for already-linked ids whose reference no.
+  // may have been edited away — those stay linked as long as they exist.
+  const linkedIds = [...existingByNsId.keys()].filter(id => /^\d+$/.test(id) && !liveByRef.has(id));
+  const stillExists = new Set<string>();
+  if (linkedIds.length > 0) {
+    const check = await suiteqlQuery(`
+      SELECT t.id FROM transaction t
+      WHERE t.type = 'CustInvc' AND t.id IN (${linkedIds.join(', ')})
+    `);
+    for (const row of check?.items || []) stillExists.add(String(row.id));
+  }
+
+  let linked = 0;
+  for (const [nsId, inv] of liveByRef) {
+    if (existingByNsId.has(nsId)) continue;
+    const { error } = await service.from('po_invoices').insert({
+      purchase_order_id: poId,
+      netsuite_invoice_id: nsId,
+      netsuite_invoice_number: inv.tranid || null,
+      memo: `Synced from NetSuite${inv.trandate ? ` — invoiced ${String(inv.trandate).slice(0, 10)}` : ''}`,
+    });
+    if (!error) linked++;
+  }
+
+  let unlinked = 0;
+  for (const [nsId, rowId] of existingByNsId) {
+    if (liveByRef.has(nsId) || stillExists.has(nsId) || !/^\d+$/.test(nsId)) continue;
+    const { error } = await service.from('po_invoices').delete().eq('id', rowId);
+    if (!error) unlinked++;
+  }
+
+  return { linked, unlinked };
+}
+
 export interface PoInvoiceSyncResult {
   posScanned: number;
   invoicesFound: number;

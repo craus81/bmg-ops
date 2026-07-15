@@ -54,11 +54,15 @@ function normPart(s: string): string {
  * flow from re-billing units an invoice — synced or app-created — already
  * covered.
  */
-export async function verifyPoInvoiceQuantities(service: SupabaseClient): Promise<PoInvoiceVerifyResult> {
-  const { data: pos, error: posErr } = await service
+export async function verifyPoInvoiceQuantities(service: SupabaseClient, poIds?: string[]): Promise<PoInvoiceVerifyResult> {
+  let query = service
     .from('purchase_orders')
     .select('id, po_number, status, invoice_check_status, po_line_items(id, part_number, quantity, installed), po_invoices(netsuite_invoice_id)')
     .neq('status', 'cancelled');
+  // Scoped mode: recheck just these POs (the per-PO "Recheck billing"
+  // button) instead of sweeping the whole book.
+  if (poIds && poIds.length > 0) query = query.in('id', poIds);
+  const { data: pos, error: posErr } = await query;
   if (posErr) {
     throw new Error('Failed to load POs: ' + posErr.message);
   }
