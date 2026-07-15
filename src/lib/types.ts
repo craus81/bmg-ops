@@ -70,6 +70,15 @@ export interface PurchaseOrder {
   created_by: string;
   created_at: string;
   line_items?: POLineItem[];
+  /** Invoiced-quantity check verdict ('ok' | 'attention'; null = unchecked). */
+  invoice_check_status?: 'ok' | 'attention' | null;
+  /** Details behind invoice_check_status — see migrations/137. */
+  invoice_check?: {
+    checked_at: string;
+    invoice_count: number;
+    problems: string[];
+    lines: { part_number: string; ordered: number; invoiced: number; status: 'ok' | 'over' | 'under' | 'extra' }[];
+  } | null;
 }
 
 export interface POLineItem {
