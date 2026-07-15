@@ -1567,6 +1567,7 @@ export default function POsPage() {
     const skipPoIds: string[] = [];
     let totalAttached = 0;
     let totalNoMatch = 0;
+    let totalStoreFailed = 0;
     let totalLocRecords = 0;
     let failed: string | null = null;
     // Each round is retried once — a single batch dying (e.g. a slow one cut
@@ -1589,8 +1590,12 @@ export default function POsPage() {
         retried = false;
         totalAttached += data.attached.length;
         totalNoMatch += data.noMatch.length;
+        totalStoreFailed += (data.storeFailed || []).length;
         totalLocRecords += data.locationsFromRecords || 0;
         for (const n of data.noMatch) skipPoIds.push(n.poId);
+        // Store-failure POs are skipped too — retrying them this run would
+        // just fail the same way and loop forever.
+        for (const n of data.storeFailed || []) skipPoIds.push(n.poId);
         setBackfillProgress(`${totalAttached} attached · ${data.remaining} to go`);
         if (data.remaining <= 0 || data.processed === 0) break;
       } catch (err: any) {
@@ -1641,6 +1646,7 @@ export default function POsPage() {
     if (failed) lines.push(`PDF search stopped early: ${failed}.`);
     lines.push(`Attached PDFs to ${totalAttached} PO${totalAttached === 1 ? '' : 's'}.`);
     if (totalNoMatch > 0) lines.push(`${totalNoMatch} PO${totalNoMatch === 1 ? '' : 's'} had no matching email in Gmail.`);
+    if (totalStoreFailed > 0) lines.push(`${totalStoreFailed} PO${totalStoreFailed === 1 ? '' : 's'} found an email but the files couldn't be stored — check the server logs.`);
     if (totalLocRecords > 0) {
       lines.push(`Recovered locations on ${totalLocRecords} PO${totalLocRecords === 1 ? '' : 's'} from their original import records.`);
     }

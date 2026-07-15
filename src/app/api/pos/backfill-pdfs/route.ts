@@ -113,6 +113,11 @@ export async function POST(req: NextRequest) {
 
     const attached: { poId: string; poNumber: string; files: number }[] = [];
     const noMatch: { poId: string; poNumber: string }[] = [];
+    // POs whose email WAS found but whose files couldn't be stored (R2 or
+    // po_files insert failure). Reported separately, and skipped on follow-up
+    // batches like noMatch — otherwise a persistent storage failure makes the
+    // client loop re-process the same POs forever.
+    const storeFailed: { poId: string; poNumber: string }[] = [];
     let processed = 0;
 
     for (const po of queue) {
@@ -174,6 +179,7 @@ export async function POST(req: NextRequest) {
         }
 
         let files = 0;
+        let storeError = false;
         for (const pdf of pdfs) {
           const base64 = await getAttachment(messageId, pdf.attachmentId);
           const buffer = Buffer.from(base64, 'base64');
@@ -182,9 +188,15 @@ export async function POST(req: NextRequest) {
           const up = await r2Upload('graphics-proofs', path, buffer, 'application/pdf');
           if (!up.success) {
             console.warn('Backfill R2 upload failed:', pdf.filename, up.error);
+            storeError = true;
             continue;
           }
-          await service.from('po_files').insert({
+          // A failed insert means the PO still has no po_files row — it MUST
+          // NOT count as attached, or the PO stays in `missing` and every
+          // subsequent batch re-attaches it forever (the 2812-attached run:
+          // migration 097's source CHECK rejected 'email_backfill' — allowed
+          // as of migration 138 — and the error went unchecked).
+          const { error: insErr } = await service.from('po_files').insert({
             po_id: po.id,
             file_name: pdf.filename,
             file_type: 'application/pdf',
@@ -192,10 +204,16 @@ export async function POST(req: NextRequest) {
             storage_path: path,
             source: 'email_backfill',
           });
+          if (insErr) {
+            console.warn(`Backfill po_files insert failed for PO ${poNumber}:`, insErr.message);
+            storeError = true;
+            continue;
+          }
           files++;
         }
 
         if (files > 0) attached.push({ poId: po.id, poNumber, files });
+        else if (storeError) storeFailed.push({ poId: po.id, poNumber });
         else noMatch.push({ poId: po.id, poNumber });
       } catch (err: any) {
         if (err?.message === 'NO_GOOGLE_TOKEN') throw err;
@@ -210,6 +228,7 @@ export async function POST(req: NextRequest) {
       processed,
       attached,
       noMatch,
+      storeFailed,
       locationsFromRecords,
       // POs still untouched this run (time budget) — another call continues.
       remaining: queue.length - processed,
