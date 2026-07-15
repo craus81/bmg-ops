@@ -1,6 +1,7 @@
 'use client';
 
 import { useState, useEffect, useMemo, useRef } from 'react';
+import { useSearchParams } from 'next/navigation';
 import { createClient } from '@/lib/supabase-browser';
 import { useAuth } from '@/components/AuthProvider';
 import { useDialog } from '@/components/DialogProvider';
@@ -154,6 +155,7 @@ export default function WrapQuotePage() {
   const hasAccess = isAdmin || isSales || isGraphicsProduction;
 
   const [tab, setTab] = useState<Tab>('estimator');
+  const searchParams = useSearchParams();
   const [loading, setLoading] = useState(true);
   const [templates, setTemplates] = useState<Template[]>([]);
   const [substrates, setSubstrates] = useState<Film[]>([]);
@@ -196,6 +198,19 @@ export default function WrapQuotePage() {
   const [attaching, setAttaching] = useState(false);
   const [showArchived, setShowArchived] = useState(false);
   const [sendMode, setSendMode] = useState<'full' | 'quote_only' | 'coverage_only' | 'netsuite_pdf'>('full');
+
+  // Deep link from search/popout: ?id= opens that quote's detail view over
+  // the history tab once the quote list has loaded.
+  useEffect(() => {
+    const qid = searchParams.get('id');
+    if (!qid || history.length === 0) return;
+    const q = history.find(h => h.id === qid);
+    if (q) {
+      setTab('history');
+      setViewQuote(q);
+    }
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- intentional: deep-link once after load
+  }, [history, searchParams]);
 
   // Open the NetSuite estimate PDF in a new tab (the browser's PDF viewer
   // covers viewing and printing).

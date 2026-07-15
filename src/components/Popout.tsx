@@ -54,7 +54,7 @@ export function pathFor(type: PopoutType, item: any): string {
     case 'parts': return `/parts?catalog=${item.catalog || 'upfit'}&q=${encodeURIComponent(item.part_number || '')}`;
     case 'customers': return `/admin/prospects?id=${item.id}`;
     case 'messages': return `/messages?conversation=${item.conversation_id}`;
-    case 'quotes': return '/admin/wrap-quote';
+    case 'quotes': return `/admin/wrap-quote?id=${item.id}`;
     default: return '/';
   }
 }

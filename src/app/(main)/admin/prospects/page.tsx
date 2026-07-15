@@ -252,13 +252,23 @@ export default function ProspectsPage() {
     setOpenQuoteCustomers(names);
   };
 
-  // Auto-expand prospect from URL param (deep link from notifications/search)
+  // Deep link from notifications/search: reset any filter that could hide
+  // the record, expand it, and scroll it into view — without the scroll a
+  // deep link into a long A-Z list looks like it just opened the CRM.
   useEffect(() => {
     if (loading) return;
     const prospectId = searchParams.get('id');
-    if (prospectId && prospects.some(p => p.id === prospectId)) {
-      toggleExpand(prospectId);
-    }
+    if (!prospectId || !prospects.some(p => p.id === prospectId)) return;
+    setStatusFilter('all');
+    setTagFilter('');
+    setOwnerFilter('all');
+    setSpendTierFilter('all');
+    setOpenQuoteFilter(false);
+    setSearch('');
+    if (expandedId !== prospectId) toggleExpand(prospectId);
+    setTimeout(() => {
+      document.getElementById(`prospect-${prospectId}`)?.scrollIntoView({ behavior: 'smooth', block: 'center' });
+    }, 200);
   // eslint-disable-next-line react-hooks/exhaustive-deps -- intentional: load once on mount
   }, [loading, searchParams]);
 
@@ -919,7 +929,7 @@ export default function ProspectsPage() {
             const statusColor = STATUS_COLORS[prospect.status] || '#6b7280';
 
             return (
-              <div key={prospect.id} style={{ background: 'var(--card)', border: '1px solid var(--border)', borderRadius: '14px', overflow: 'hidden' }}>
+              <div key={prospect.id} id={`prospect-${prospect.id}`} style={{ background: 'var(--card)', border: '1px solid var(--border)', borderRadius: '14px', overflow: 'hidden' }}>
                 {/* Header */}
                 <div onClick={() => toggleExpand(prospect.id)} style={{ padding: '12px 14px', cursor: 'pointer' }}>
                   <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>

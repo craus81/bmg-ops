@@ -164,17 +164,25 @@ export default function TrackingPage() {
   // eslint-disable-next-line react-hooks/exhaustive-deps -- intentional: load once on mount
   }, []);
 
-  // Auto-expand vehicle from URL param (deep link from check-in page)
+  // Deep link from check-in page/search: switch to whichever tab actually
+  // shows the vehicle (shipped and archived hide from "All"), expand it,
+  // and scroll it into view.
   useEffect(() => {
     if (loading) return;
     const vehicleId = searchParams.get('vehicle');
-    if (vehicleId && vehicles.some(v => v.id === vehicleId)) {
-      setExpandedId(vehicleId);
-      loadHistory(vehicleId);
-      loadAssignments(vehicleId);
-      loadPhotos(vehicleId);
-      loadNotes(vehicleId);
-    }
+    const target = vehicleId ? vehicles.find(v => v.id === vehicleId) : null;
+    if (!vehicleId || !target) return;
+    setShowArchived(!!(target as any).archived_at);
+    setFilterStatus(target.status === 'shipped' ? 'shipped' : 'all');
+    setSearchTerm('');
+    setExpandedId(vehicleId);
+    loadHistory(vehicleId);
+    loadAssignments(vehicleId);
+    loadPhotos(vehicleId);
+    loadNotes(vehicleId);
+    setTimeout(() => {
+      document.getElementById(`vehicle-${vehicleId}`)?.scrollIntoView({ behavior: 'smooth', block: 'center' });
+    }, 200);
   // eslint-disable-next-line react-hooks/exhaustive-deps -- intentional: load once on mount
   }, [loading, searchParams]);
 
@@ -1127,7 +1135,7 @@ export default function TrackingPage() {
             const status = (vehicle.status === 'checked_in' ? 'received' : vehicle.status) as VehicleTrackingStatus;
 
             return (
-              <div key={vehicle.id} style={{
+              <div key={vehicle.id} id={`vehicle-${vehicle.id}`} style={{
                 background: 'var(--card)', border: '1px solid var(--border)', borderRadius: '14px',
                 overflow: 'hidden',
               }}>

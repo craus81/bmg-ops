@@ -264,17 +264,25 @@ export default function GraphicsPage() {
   // eslint-disable-next-line react-hooks/exhaustive-deps -- intentional: load once on mount
   }, [loading, searchParams, jobs]);
 
-  // Auto-expand job from ?id= URL param (deep link from notifications/search)
+  // Deep link from notifications/search: widen the filters if they'd hide
+  // the job (the board defaults to active jobs only), expand it, and scroll
+  // it into view.
   useEffect(() => {
     if (loading) return;
     const jobId = searchParams.get('id');
-    if (jobId && jobs.some(j => j.id === jobId)) {
-      setExpandedJobId(jobId);
-      loadHistory(jobId);
-      loadJobAssignments(jobId);
-      loadJobFiles(jobId);
-      recordJobView(jobId);
-    }
+    const target = jobId ? jobs.find(j => j.id === jobId) : null;
+    if (!jobId || !target) return;
+    if (!ACTIVE_STATUSES.includes(target.status)) setFilterStatus('all');
+    setFilterCategory('all');
+    setSearch('');
+    setExpandedJobId(jobId);
+    loadHistory(jobId);
+    loadJobAssignments(jobId);
+    loadJobFiles(jobId);
+    recordJobView(jobId);
+    setTimeout(() => {
+      document.getElementById(`gfx-job-${jobId}`)?.scrollIntoView({ behavior: 'smooth', block: 'center' });
+    }, 200);
   // eslint-disable-next-line react-hooks/exhaustive-deps -- intentional: load once on mount
   }, [loading, searchParams]);
 
@@ -1348,7 +1356,7 @@ export default function GraphicsPage() {
             const highlightNew = hasNew && !isExpanded;
 
             return (
-              <div key={job.id} style={{
+              <div key={job.id} id={`gfx-job-${job.id}`} style={{
                 borderRadius: '12px', overflow: 'hidden',
                 border: `1px solid ${isExpanded ? `${statusColor}44` : highlightNew ? '#ef444477' : 'var(--border)'}`,
                 background: highlightNew ? 'rgba(239,68,68,0.07)' : 'var(--subtle-bg)',
