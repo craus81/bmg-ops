@@ -194,6 +194,34 @@ export default function InvoicingHubPage() {
     setEmailedByNumber(latest);
   };
 
+  // One-time (re-runnable) reconstruction of the email log for sends that
+  // predate tracking — pulls from Resend's API history and the connected
+  // mailbox's Sent folder. Server-side dedupe makes repeat runs safe.
+  const [backfillingEmails, setBackfillingEmails] = useState(false);
+  const backfillEmailHistory = async () => {
+    setBackfillingEmails(true);
+    try {
+      const res = await fetch('/api/invoices/backfill-emails', { method: 'POST' });
+      const data = await res.json();
+      if (!res.ok) {
+        await dialog.alert(`Backfill failed: ${data.error || `request failed (${res.status})`}`);
+      } else {
+        const r = data.resend || {};
+        const g = data.gmail || {};
+        await dialog.alert(
+          `Backfill ${data.complete ? 'complete' : 'partial — run it again to continue'}.\n\n` +
+          `FleetSuite sends (Resend): ${r.error || `${r.inserted || 0} new record${(r.inserted || 0) === 1 ? '' : 's'} from ${r.matched || 0} invoice email${(r.matched || 0) === 1 ? '' : 's'}, ${r.scanned || 0} emails scanned${r.skippedTests ? `, ${r.skippedTests} test send${r.skippedTests === 1 ? '' : 's'} skipped` : ''}`}\n` +
+          `Mailbox Sent folder: ${g.error || `${g.inserted || 0} new record${(g.inserted || 0) === 1 ? '' : 's'} from ${g.matched || 0} email${(g.matched || 0) === 1 ? '' : 's'}, ${g.scanned || 0} scanned`}`
+        );
+        const numbers = [...new Set(sentInvoices.map(x => x.invoiceNumber).filter(Boolean))];
+        if (numbers.length > 0) await loadEmailedInvoices(numbers);
+      }
+    } catch (e: any) {
+      await dialog.alert(`Backfill failed: ${e.message || 'network error'}`);
+    }
+    setBackfillingEmails(false);
+  };
+
   // Deep link from the "Graphics shipped — create invoice?" notification:
   // /invoices?invoiceJob=<id>. Fetches the job by id directly (never depends
   // on the tab lists being loaded or filtered) and opens the review modal.
@@ -722,6 +750,19 @@ export default function InvoicingHubPage() {
               }}>{r.label}</button>
             ))}
             {nsLoading && <span style={{ fontSize: '10px', color: 'var(--text-muted)', alignSelf: 'center' }}>Loading NetSuite invoices…</span>}
+            <span style={{ flex: 1 }} />
+            <button
+              onClick={backfillEmailHistory}
+              disabled={backfillingEmails}
+              title="Reconstruct the ✉ EMAILED badges for sends that predate email tracking — pulls FleetSuite's send history from Resend and manually-emailed invoices from the connected mailbox's Sent folder"
+              style={{
+                padding: '5px 12px', borderRadius: '8px', fontSize: '10px', fontWeight: 700,
+                background: 'rgba(251,191,36,0.08)', border: '1px solid rgba(251,191,36,0.25)',
+                color: '#fbbf24', cursor: backfillingEmails ? 'wait' : 'pointer',
+              }}
+            >
+              {backfillingEmails ? 'Backfilling…' : '✉ Backfill email history'}
+            </button>
           </div>
 
           {nsError && (
