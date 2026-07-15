@@ -2842,11 +2842,6 @@ export default function POsPage() {
                           onClick: () => { setShowImport(!showImport); setShowCreate(false); setShowEmailImport(false); setParsedPO(null); setImportLines([]); setParseError(''); },
                         },
                         {
-                          label: gmailRunning ? 'Auto-Import Running…' : 'Run Auto-Import Now',
-                          hint: 'The cron runs every 20 min — this forces a pass',
-                          onClick: runGmailImportNow, busy: gmailRunning,
-                        },
-                        {
                           label: 'Select POs…',
                           hint: 'Multi-select to print or delete',
                           onClick: () => { setEditMode(true); setSelectedForDelete(new Set()); },
