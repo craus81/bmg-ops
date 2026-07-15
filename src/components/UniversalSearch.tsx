@@ -9,6 +9,7 @@ interface UniversalSearchProps {
 }
 
 const GROUP_CONFIG: Record<string, { label: string; icon: string; color: string }> = {
+  invoices: { label: 'Invoices', icon: '', color: '#34d399' },
   purchase_orders: { label: 'Purchase Orders', icon: '', color: '#60a5fa' },
   vehicles: { label: 'Vehicles', icon: '', color: '#34d399' },
   graphics_jobs: { label: 'Graphics Jobs', icon: '', color: '#a78bfa' },
@@ -43,6 +44,23 @@ function renderResult(group: string, item: any, onSelect: (group: string, item: 
   const select = () => onSelect(group, item);
 
   switch (group) {
+    case 'invoices': {
+      const sourceLabel = item.source === 'po'
+        ? `PO #${item.po_number || '?'}`
+        : item.source === 'graphics'
+          ? (item.job_title || 'Graphics job')
+          : `Scan batch${item.po_number ? ` · PO #${item.po_number}` : ''}`;
+      return (
+        <button key={item.id} onClick={select} style={resultBtnStyle}>
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'start' }}>
+            <span style={titleStyle}>INV #{item.invoice_number}</span>
+            {item.date && <span style={{ ...subtitleStyle, fontSize: '10px' }}>{formatDate(item.date)}</span>}
+          </div>
+          <div style={subtitleStyle}>{item.customer || ''}{item.customer ? ' · ' : ''}{sourceLabel}</div>
+        </button>
+      );
+    }
+
     case 'purchase_orders': {
       const totalValue = (item.po_line_items || []).reduce((s: number, l: any) => s + (l.quantity * l.unit_price), 0);
       const lineCount = (item.po_line_items || []).length;
@@ -269,7 +287,7 @@ export default function UniversalSearch({ open, onClose }: UniversalSearchProps)
             type="text"
             value={query}
             onChange={(e) => handleInput(e.target.value)}
-            placeholder="Search POs, vehicles, jobs, parts, prospects..."
+            placeholder="Search POs, invoices, vehicles, jobs, parts, prospects..."
             style={{
               flex: 1, background: 'transparent', border: 'none', outline: 'none',
               color: 'var(--text-body)', fontSize: '16px', fontWeight: 600,
@@ -307,7 +325,7 @@ export default function UniversalSearch({ open, onClose }: UniversalSearchProps)
           {!searching && query.length < 2 && (
             <div style={{ padding: '40px 20px', textAlign: 'center' }}>
               <div style={{ fontSize: '14px', fontWeight: 700, color: 'var(--text-label)' }}>Search everything</div>
-              <div style={{ fontSize: '12px', color: 'var(--text-secondary)', marginTop: '4px' }}>POs, vehicles, graphics jobs, estimates, parts, customers, messages, quotes</div>
+              <div style={{ fontSize: '12px', color: 'var(--text-secondary)', marginTop: '4px' }}>POs, invoices, vehicles, graphics jobs, estimates, parts, customers, messages, quotes</div>
             </div>
           )}
 
