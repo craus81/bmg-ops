@@ -70,6 +70,9 @@ const EmailInvoicesSchema = z.object({
     .optional(),
   customBody: z.string().max(10_000).optional(),
   dryRun: z.boolean().optional(),
+  // True when the send goes to the signed-in user as a preview — test sends
+  // are never logged to invoice_emails.
+  testSend: z.boolean().optional(),
 });
 
 /**
@@ -92,7 +95,7 @@ export async function POST(req: NextRequest) {
 
   const parsed = await validateBody(req, EmailInvoicesSchema);
   if (parsed.error) return parsed.error;
-  const { invoices, customerName, customerEmail, customBody, dryRun } = parsed.data;
+  const { invoices, customerName, customerEmail, customBody, dryRun, testSend } = parsed.data;
 
   try {
     const recipients: string[] = Array.isArray(customerEmail)
@@ -197,6 +200,29 @@ export async function POST(req: NextRequest) {
 
     if (!sent) {
       return NextResponse.json({ error: 'Failed to send email' }, { status: 500 });
+    }
+
+    // Record the send (one row per invoice) so screens can show "already
+    // emailed" next time. Test sends to the sender are skipped, and a
+    // logging failure never turns a delivered email into an error.
+    if (!testSend && process.env.NEXT_PUBLIC_SUPABASE_URL && process.env.SUPABASE_SERVICE_ROLE_KEY) {
+      try {
+        const service = createClient(
+          process.env.NEXT_PUBLIC_SUPABASE_URL,
+          process.env.SUPABASE_SERVICE_ROLE_KEY
+        );
+        await service.from('invoice_emails').insert(
+          results.filter(r => r.status === 'ok').map(r => ({
+            invoice_number: r.invoiceNumber,
+            netsuite_invoice_id: r.invoiceId || null,
+            customer_name: customerName || null,
+            recipients,
+            sent_by: auth.user?.id || null,
+          }))
+        );
+      } catch (logErr) {
+        console.error('invoice_emails log failed:', logErr);
+      }
     }
 
     return NextResponse.json({
