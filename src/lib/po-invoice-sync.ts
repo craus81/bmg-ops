@@ -1,6 +1,23 @@
 import type { SupabaseClient } from '@supabase/supabase-js';
 import { suiteqlQuery } from '@/lib/netsuite';
 
+// NetSuite invoice status: SuiteQL returns 'A' (Open) / 'B' (Paid In Full);
+// some environments return the text label — accept both.
+export function normalizeNsInvoiceStatus(raw: unknown): 'open' | 'paid' | null {
+  const s = String(raw || '');
+  if (s === 'B' || /paid/i.test(s)) return 'paid';
+  if (s === 'A' || /open/i.test(s)) return 'open';
+  return null;
+}
+
+function isoDate(d: unknown): string | null {
+  if (!d) return null;
+  const s = String(d);
+  if (/^\d{4}-\d{2}-\d{2}$/.test(s)) return s;
+  const parsed = new Date(s);
+  return isNaN(parsed.getTime()) ? null : parsed.toISOString().slice(0, 10);
+}
+
 /**
  * Refresh ONE PO's invoice links against NetSuite, both directions:
  * link any invoice now referencing this PO number that isn't linked yet
@@ -22,14 +39,14 @@ export async function refreshPoInvoiceLinks(
 
   const { data: existing } = await service
     .from('po_invoices')
-    .select('id, netsuite_invoice_id')
+    .select('id, netsuite_invoice_id, ns_status, due_date')
     .eq('purchase_order_id', poId);
-  const existingByNsId = new Map((existing || []).map(r => [String(r.netsuite_invoice_id), r.id]));
+  const existingByNsId = new Map((existing || []).map(r => [String(r.netsuite_invoice_id), r]));
 
   // Everything NetSuite currently has for this PO number...
   const poNumber = String(po.po_number).replace(/'/g, '');
   const byRef = await suiteqlQuery(`
-    SELECT t.id, t.tranid, t.trandate
+    SELECT t.id, t.tranid, t.trandate, t.status, t.duedate
     FROM transaction t
     WHERE t.type = 'CustInvc' AND t.otherrefnum = '${poNumber}'
   `);
@@ -51,20 +68,32 @@ export async function refreshPoInvoiceLinks(
 
   let linked = 0;
   for (const [nsId, inv] of liveByRef) {
-    if (existingByNsId.has(nsId)) continue;
+    const cur = existingByNsId.get(nsId);
+    const nsStatus = normalizeNsInvoiceStatus(inv.status);
+    const dueDate = isoDate(inv.duedate);
+    if (cur) {
+      // Already linked — refresh the payment status (this is how "paid"
+      // lands on the PO screen after the customer pays).
+      if (cur.ns_status !== nsStatus || cur.due_date !== dueDate) {
+        await service.from('po_invoices').update({ ns_status: nsStatus, due_date: dueDate }).eq('id', cur.id);
+      }
+      continue;
+    }
     const { error } = await service.from('po_invoices').insert({
       purchase_order_id: poId,
       netsuite_invoice_id: nsId,
       netsuite_invoice_number: inv.tranid || null,
+      ns_status: nsStatus,
+      due_date: dueDate,
       memo: `Synced from NetSuite${inv.trandate ? ` — invoiced ${String(inv.trandate).slice(0, 10)}` : ''}`,
     });
     if (!error) linked++;
   }
 
   let unlinked = 0;
-  for (const [nsId, rowId] of existingByNsId) {
+  for (const [nsId, row] of existingByNsId) {
     if (liveByRef.has(nsId) || stillExists.has(nsId) || !/^\d+$/.test(nsId)) continue;
-    const { error } = await service.from('po_invoices').delete().eq('id', rowId);
+    const { error } = await service.from('po_invoices').delete().eq('id', row.id);
     if (!error) unlinked++;
   }
 
@@ -110,8 +139,8 @@ export async function syncPoInvoices(service: SupabaseClient): Promise<PoInvoice
 
   const { data: existing } = await service
     .from('po_invoices')
-    .select('purchase_order_id, netsuite_invoice_id');
-  const linkedKeys = new Set((existing || []).map(r => `${r.purchase_order_id}|${r.netsuite_invoice_id}`));
+    .select('id, purchase_order_id, netsuite_invoice_id, ns_status, due_date');
+  const linkedByKey = new Map((existing || []).map(r => [`${r.purchase_order_id}|${r.netsuite_invoice_id}`, r]));
 
   // Sweep NetSuite for invoices referencing these PO numbers, in chunks.
   // otherrefnum is a string field; PO numbers are alphanumeric, but strip
@@ -122,7 +151,7 @@ export async function syncPoInvoices(service: SupabaseClient): Promise<PoInvoice
   for (let i = 0; i < numbers.length; i += 50) {
     const chunk = numbers.slice(i, i + 50);
     const query = `
-      SELECT t.id, t.tranid, t.trandate, t.otherrefnum
+      SELECT t.id, t.tranid, t.trandate, t.otherrefnum, t.status, t.duedate
       FROM transaction t
       WHERE t.type = 'CustInvc'
         AND t.otherrefnum IN (${chunk.map(n => `'${n}'`).join(', ')})
@@ -133,17 +162,31 @@ export async function syncPoInvoices(service: SupabaseClient): Promise<PoInvoice
       const poIds = poIdsByNumber.get(refNum) || [];
       if (poIds.length === 0) continue;
       found++;
+      const nsStatus = normalizeNsInvoiceStatus(inv.status);
+      const dueDate = isoDate(inv.duedate);
       for (const poId of poIds) {
         const key = `${poId}|${String(inv.id)}`;
-        if (linkedKeys.has(key)) continue;
+        const cur = linkedByKey.get(key);
+        if (cur) {
+          // Refresh the payment status on rows we already track, so a
+          // paid invoice reads as paid on the PO screen after each sweep.
+          if (cur.ns_status !== nsStatus || cur.due_date !== dueDate) {
+            await service.from('po_invoices').update({ ns_status: nsStatus, due_date: dueDate }).eq('id', cur.id);
+            cur.ns_status = nsStatus;
+            cur.due_date = dueDate;
+          }
+          continue;
+        }
         const { error } = await service.from('po_invoices').insert({
           purchase_order_id: poId,
           netsuite_invoice_id: String(inv.id),
           netsuite_invoice_number: inv.tranid || null,
+          ns_status: nsStatus,
+          due_date: dueDate,
           memo: `Synced from NetSuite${inv.trandate ? ` — invoiced ${String(inv.trandate).slice(0, 10)}` : ''}`,
         });
         if (!error) {
-          linkedKeys.add(key);
+          linkedByKey.set(key, { id: '', purchase_order_id: poId, netsuite_invoice_id: String(inv.id), ns_status: nsStatus, due_date: dueDate } as any);
           added++;
         }
       }
