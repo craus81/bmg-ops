@@ -2212,8 +2212,19 @@ export default function POsPage() {
             line_count: Object.keys(quantities).length,
             memo: `PO #${po.po_number} — open quantities`,
           };
+          // Mirror the server: billed units consume the open quantity, and a
+          // fully billed PO reads as fulfilled without a reload.
+          const line_items = p.line_items.map(li => {
+            const billed = invoiceOpenQtys[li.id] || 0;
+            return billed > 0
+              ? { ...li, installed: Math.min((li.installed || 0) + billed, li.quantity) }
+              : li;
+          });
+          const fulfilled = line_items.length > 0 && line_items.every(li => (li.installed || 0) >= li.quantity);
           return {
             ...p,
+            line_items,
+            status: fulfilled && p.status === 'open' ? 'complete' : p.status,
             netsuite_invoice_id: result.invoiceId,
             netsuite_invoice_number: result.invoiceNumber,
             po_invoices: [newInvoice, ...((p as any).po_invoices || [])],
