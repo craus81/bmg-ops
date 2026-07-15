@@ -287,7 +287,13 @@ export async function GET(req: NextRequest) {
   // page without anyone clicking "Check Billing".
   try {
     const check = await verifyPoInvoiceQuantities(supabase);
-    results.invoiceCheck = { posChecked: check.posChecked, flagged: check.flagged, cleared: check.cleared };
+    results.invoiceCheck = {
+      posChecked: check.posChecked,
+      flagged: check.flagged,
+      cleared: check.cleared,
+      noInvoices: check.noInvoices,
+      noInvoicesFulfilled: check.noInvoicesFulfilled,
+    };
   } catch (err: any) {
     console.error('[cron] Invoice quantity check error:', err.message);
     results.invoiceCheck = { error: err.message };

@@ -70,8 +70,8 @@ export interface PurchaseOrder {
   created_by: string;
   created_at: string;
   line_items?: POLineItem[];
-  /** Invoiced-quantity check verdict ('ok' | 'attention'; null = unchecked). */
-  invoice_check_status?: 'ok' | 'attention' | null;
+  /** Invoiced-quantity check verdict (null = unchecked). */
+  invoice_check_status?: 'ok' | 'attention' | 'no_invoices' | null;
   /** Details behind invoice_check_status — see migrations/137. */
   invoice_check?: {
     checked_at: string;
