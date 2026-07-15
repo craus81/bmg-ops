@@ -1608,12 +1608,14 @@ export default function POsPage() {
     // Phase 2: fill in missing ship-to locations. Any PO with a stored PDF
     // (including ones just attached) but no location gets the ship-to
     // extractor run over its first PDF. Capped per run — each is an AI call.
+    // Failures are collected per PO (number + why) so the summary can name
+    // them instead of just counting.
     let locationsFilled = 0;
-    let locationsFailed = 0;
+    const locationFailures: string[] = [];
     try {
       const { data: missingLoc } = await supabase
         .from('purchase_orders')
-        .select('id, ship_to, po_files(storage_path)')
+        .select('id, po_number, ship_to, po_files(storage_path)')
         .is('ship_to', null);
       const candidates = ((missingLoc || []) as any[]).filter(p => (p.po_files || []).length > 0);
       const LOC_CAP = 25;
@@ -1631,11 +1633,15 @@ export default function POsPage() {
           if (res.ok && data.ship_to) {
             locationsFilled++;
             setPos(prev => prev.map(x => x.id === p.id ? { ...x, ship_to: data.ship_to } : x));
+          } else if (res.ok) {
+            // The extractor ran fine but found no ship-to — the stored PDF is
+            // probably a proof/artwork file rather than the PO document.
+            locationFailures.push(`PO #${p.po_number}: no ship-to address found on its PDF`);
           } else {
-            locationsFailed++;
+            locationFailures.push(`PO #${p.po_number}: ${data.error || `request failed (${res.status})`}`);
           }
-        } catch {
-          locationsFailed++;
+        } catch (err: any) {
+          locationFailures.push(`PO #${p.po_number}: ${err?.message || 'network error'}`);
         }
       }
     } catch { /* best-effort */ }
@@ -1650,10 +1656,12 @@ export default function POsPage() {
     if (totalLocRecords > 0) {
       lines.push(`Recovered locations on ${totalLocRecords} PO${totalLocRecords === 1 ? '' : 's'} from their original import records.`);
     }
-    if (locationsFilled > 0 || locationsFailed > 0) {
-      lines.push(`Read locations off the PDF for ${locationsFilled} more PO${locationsFilled === 1 ? '' : 's'}${locationsFailed > 0 ? ` (${locationsFailed} couldn't be read)` : ''}.`);
+    if (locationsFilled > 0 || locationFailures.length > 0) {
+      lines.push(`Read locations off the PDF for ${locationsFilled} more PO${locationsFilled === 1 ? '' : 's'}${locationFailures.length > 0 ? ` (${locationFailures.length} couldn't be read)` : ''}.`);
+      for (const f of locationFailures.slice(0, 10)) lines.push(`• ${f}`);
+      if (locationFailures.length > 10) lines.push(`• …and ${locationFailures.length - 10} more.`);
     }
-    if (!failed && totalAttached === 0 && totalNoMatch === 0 && totalLocRecords === 0 && locationsFilled === 0 && locationsFailed === 0) {
+    if (!failed && totalAttached === 0 && totalNoMatch === 0 && totalLocRecords === 0 && locationsFilled === 0 && locationFailures.length === 0) {
       lines.push('Nothing to do — no POs are missing a PDF or location.');
     }
     if (!failed && (totalNoMatch > 0 || totalLocRecords > 0 || locationsFilled > 0)) {
