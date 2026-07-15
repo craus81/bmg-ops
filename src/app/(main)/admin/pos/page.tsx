@@ -4792,6 +4792,22 @@ export default function POsPage() {
                               >
                                 INV #{inv.netsuite_invoice_number || inv.netsuite_invoice_id}
                               </a>
+                              {(() => {
+                                // Payment status from NetSuite, refreshed by the
+                                // invoice sync sweeps and the Recheck button.
+                                if (inv.ns_status === 'paid') {
+                                  return <span style={{ marginLeft: '6px', fontSize: '9px', fontWeight: 800, padding: '2px 6px', borderRadius: '5px', background: 'rgba(74,222,128,0.12)', color: '#4ade80' }}>PAID</span>;
+                                }
+                                if (inv.ns_status === 'open') {
+                                  const today = new Date().toISOString().slice(0, 10);
+                                  if (inv.due_date && inv.due_date < today) {
+                                    const days = Math.floor((Date.now() - new Date(inv.due_date + 'T12:00:00').getTime()) / 86_400_000);
+                                    return <span style={{ marginLeft: '6px', fontSize: '9px', fontWeight: 800, padding: '2px 6px', borderRadius: '5px', background: 'rgba(248,113,113,0.12)', color: '#f87171' }}>PAST DUE · {days}d</span>;
+                                  }
+                                  return <span style={{ marginLeft: '6px', fontSize: '9px', fontWeight: 800, padding: '2px 6px', borderRadius: '5px', background: 'rgba(96,165,250,0.12)', color: '#60a5fa' }}>OPEN</span>;
+                                }
+                                return null;
+                              })()}
                               {inv.memo && (
                                 <div style={{ fontSize: '10px', color: 'var(--text-label)', marginTop: '2px' }}>{inv.memo}</div>
                               )}
