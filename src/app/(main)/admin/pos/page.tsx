@@ -70,6 +70,38 @@ function shipToCityLabel(shipTo: PurchaseOrder['ship_to']): string {
   return name;
 }
 
+// Unified heading for graphics jobs created from the PO screen:
+// "Customer - PO #123 - PART - Description - Location". The description is
+// the flex segment and gets shortened first; the part-number segment (a
+// joined list on whole-PO jobs) is capped too so it can't swallow the
+// heading. Empty segments are dropped.
+const GFX_TITLE_MAX = 100;
+
+function shortenSegment(s: string, max: number): string {
+  return s.length <= max ? s : s.slice(0, Math.max(0, max - 1)).trimEnd() + '…';
+}
+
+function buildGfxJobTitle(opts: {
+  customer: string | null | undefined;
+  poNumber: string | null | undefined;
+  partNumber: string | null | undefined;
+  description: string | null | undefined;
+  location: string;
+}): string {
+  const customer = (opts.customer || '').trim();
+  const poPart = opts.poNumber ? `PO #${String(opts.poNumber).trim()}` : '';
+  const location = (opts.location || '').trim();
+  const baseLen = [customer, poPart, location].filter(Boolean).join(' - ').length;
+  const partNumber = shortenSegment(
+    (opts.partNumber || '').trim(),
+    Math.max(24, Math.min(40, GFX_TITLE_MAX - baseLen - 3))
+  );
+  const fixedLen = [customer, poPart, partNumber, location].filter(Boolean).join(' - ').length;
+  const room = GFX_TITLE_MAX - fixedLen - 3;
+  const desc = room >= 8 ? shortenSegment((opts.description || '').trim(), room) : '';
+  return [customer, poPart, partNumber, desc, location].filter(Boolean).join(' - ') || 'Graphics Job';
+}
+
 function buildJobContent(lines: { part_number: string; description: string | null; quantity: number }[]): string | null {
   if (!lines.length) return null;
   return lines
@@ -2241,7 +2273,13 @@ export default function POsPage() {
           po_id: po.id,
           po_line_item_id: li.id,
           job_number: jobNumber,
-          title: li.description || `Graphic - ${li.part_number}`,
+          title: buildGfxJobTitle({
+            customer: po.customer,
+            poNumber: po.po_number,
+            partNumber: li.part_number,
+            description: li.description,
+            location: shipToCityLabel(po.ship_to),
+          }),
           part_number: li.part_number,
           customer: po.customer || null,
           customer_netsuite_id: po.customer_netsuite_id || null,
@@ -2299,13 +2337,23 @@ export default function POsPage() {
       const jobNumber = `GFX-${Date.now().toString(36).toUpperCase()}-${Math.random().toString(36).slice(2, 5).toUpperCase()}`;
       const partNumbers = [...new Set(po.line_items.map(li => li.part_number))].join(', ');
       const totalQty = po.line_items.reduce((sum, li) => sum + li.quantity, 0);
+      // One shared description if every line agrees, otherwise a part count
+      // stands in for it in the heading.
+      const uniqueDescs = [...new Set(po.line_items.map(li => (li.description || '').trim()).filter(Boolean))];
+      const titleDesc = uniqueDescs.length === 1 ? uniqueDescs[0] : `${po.line_items.length} parts`;
       const { data: job, error } = await supabase
         .from('graphics_jobs')
         .insert({
           po_id: po.id,
           po_line_item_id: null,
           job_number: jobNumber,
-          title: `PO #${po.po_number} – ${po.customer}`,
+          title: buildGfxJobTitle({
+            customer: po.customer,
+            poNumber: po.po_number,
+            partNumber: partNumbers,
+            description: titleDesc,
+            location: shipToCityLabel(po.ship_to),
+          }),
           part_number: partNumbers,
           customer: po.customer || null,
           customer_netsuite_id: po.customer_netsuite_id || null,
