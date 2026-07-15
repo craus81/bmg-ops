@@ -95,6 +95,7 @@ export default function OpsDashboard() {
   const [loading, setLoading] = useState(true);
   const [data, setData] = useState<DashData | null>(null);
   const [preset, setPreset] = useState<'ops' | 'sales'>('ops');
+  const [unreadExpanded, setUnreadExpanded] = useState(false);
 
   useEffect(() => {
     try {
@@ -181,10 +182,12 @@ export default function OpsDashboard() {
       supabase.from('scan_logs').select('*', { count: 'exact', head: true }).gte('scanned_at', weekStart.toISOString()),
       supabase.from('messages').select('id, body, sender_id, created_at').order('created_at', { ascending: false }).limit(3),
       // Unread notifications for the "New for you" strip — same rows as the
-      // bell, but only the ones not yet read/acted on.
+      // bell, but only the ones not yet read/acted on. Load a generous batch:
+      // the strip shows 5 with a "show all" toggle, and dismissal only ever
+      // touches loaded rows, so nothing unseen can be marked read.
       supabase.from('notifications').select('id, title, body, url, created_at')
         .eq('user_id', user?.id || '').is('read_at', null)
-        .order('created_at', { ascending: false }).limit(5),
+        .order('created_at', { ascending: false }).limit(50),
       // Sales
       supabase.from('prospect_opportunities').select('stage, value'),
       supabase.from('customers').select('company_name, ytd_spend').eq('active', true).gt('ytd_spend', 0).order('ytd_spend', { ascending: false }).limit(4),
@@ -422,22 +425,28 @@ export default function OpsDashboard() {
     await supabase.from('notifications').update({ read_at: new Date().toISOString() }).in('id', ids);
     if (n.url) router.push(n.url);
   };
-  const dismissAllUnread = async () => {
-    setData(prev => prev ? { ...prev, unread: [] } : prev);
+  // Dismiss only what's on screen — never notifications the user hasn't seen.
+  const dismissVisibleUnread = async (visible: DashData['unread']) => {
+    const ids = visible.map(u => u.id);
+    setData(prev => prev ? { ...prev, unread: prev.unread.filter(u => !ids.includes(u.id)) } : prev);
     await supabase.from('notifications')
       .update({ read_at: new Date().toISOString() })
-      .eq('user_id', user?.id || '')
-      .is('read_at', null);
+      .in('id', ids);
   };
+
+  const visibleUnread = unreadExpanded ? d.unread : d.unread.slice(0, 5);
+  const hiddenUnread = d.unread.length - visibleUnread.length;
 
   const newForYou = d.unread.length === 0 ? null : (
     <div style={{ ...card, marginBottom: '12px', border: '1px solid rgba(238,49,32,0.25)' }}>
       <div style={{ ...cardHead, paddingBottom: '6px' }}>
         <h2 style={{ ...headTitle, color: 'var(--orange)' }}>New for you</h2>
-        <button onClick={dismissAllUnread} style={{ ...headLink, color: 'var(--text-muted)' }}>Dismiss all</button>
+        <button onClick={() => dismissVisibleUnread(visibleUnread)} style={{ ...headLink, color: 'var(--text-muted)' }}>
+          {hiddenUnread > 0 ? `Dismiss these ${visibleUnread.length}` : 'Dismiss all'}
+        </button>
       </div>
       <div style={{ borderTop: '1px solid var(--border)' }}>
-        {d.unread.map(n => (
+        {visibleUnread.map(n => (
           <button key={n.id} onClick={() => openUnread(n)} style={{
             display: 'flex', alignItems: 'center', gap: '10px', padding: '9px 16px', width: '100%',
             background: 'transparent', border: 'none', borderBottom: '1px solid var(--border)',
@@ -452,6 +461,18 @@ export default function OpsDashboard() {
             <span style={{ color: 'var(--text-muted)', fontSize: '15px' }}>›</span>
           </button>
         ))}
+        {(hiddenUnread > 0 || unreadExpanded) && (
+          <button
+            onClick={() => setUnreadExpanded(v => !v)}
+            style={{
+              display: 'block', width: '100%', padding: '8px 16px', background: 'transparent',
+              border: 'none', cursor: 'pointer', textAlign: 'center',
+              fontSize: '11.5px', fontWeight: 700, color: 'var(--orange)',
+            }}
+          >
+            {unreadExpanded ? 'Show less' : `Show ${hiddenUnread} more`}
+          </button>
+        )}
       </div>
     </div>
   );
