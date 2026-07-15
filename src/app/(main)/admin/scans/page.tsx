@@ -399,22 +399,20 @@ export default function AdminScansPage() {
     setMatching(false);
   };
 
-  // Export to CSV
-  const exportCSV = async () => {
-    const toExport = tabScans.filter(s => selectedScans.has(s.id));
-    if (toExport.length === 0) return;
-    setExporting(true);
-
-    const headers = ['VIN', 'Year', 'Make', 'Model', 'Part Number', 'Description', 'Billable Customer', 'Unit #', 'Serial #', 'IMEI', 'CCID', 'Location', 'PO Number', 'Scanned By', 'Company', 'Date'];
-    const rows = toExport.map(s => [
+  // Build and download a CSV of the given scans. Shared by the workflow
+  // export (selected scans, stamps exported_at) and the plain filtered
+  // download (whatever the current filters show, stamps nothing).
+  const downloadScansCsv = (rows: ScanLog[]) => {
+    const headers = ['VIN', 'Year', 'Make', 'Model', 'Part Number', 'Description', 'Billable Customer', 'Unit #', 'Serial #', 'IMEI', 'CCID', 'Location', 'PO Number', 'CNI Job', 'Scanned By', 'Company', 'Date', 'Status'];
+    const data = rows.map(s => [
       s.vin, s.vehicle_year || '', s.vehicle_make || '', s.vehicle_model || '',
       s.part_number || '', s.part_description || '', s.billable_customer || '',
       s.unit_number || '', s.serial_number || '', s.imei || '', s.iccid || '',
-      s.location_name || '', s.po_number || '',
-      profiles[s.scanned_by || ''] || '', s.scanned_by_company || '', new Date(s.scanned_at).toLocaleString(),
+      s.location_name || '', s.po_number || '', cniByScanId[s.id] || '',
+      profiles[s.scanned_by || ''] || '', s.scanned_by_company || 'BMG', new Date(s.scanned_at).toLocaleString(),
+      scanStatus(s).label,
     ]);
-
-    const csv = [headers, ...rows].map(r => r.map(c => `"${(c || '').replace(/"/g, '""')}"`).join(',')).join('\n');
+    const csv = [headers, ...data].map(r => r.map(c => `"${(c || '').replace(/"/g, '""')}"`).join(',')).join('\n');
     const blob = new Blob([csv], { type: 'text/csv' });
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a');
@@ -422,10 +420,26 @@ export default function AdminScansPage() {
     a.download = `scans-${new Date().toISOString().slice(0, 10)}.csv`;
     a.click();
     URL.revokeObjectURL(url);
+  };
 
+  // Workflow export: download the SELECTED scans and stamp them exported so
+  // they move to the Exported tab.
+  const exportCSV = async () => {
+    const toExport = tabScans.filter(s => selectedScans.has(s.id));
+    if (toExport.length === 0) return;
+    setExporting(true);
+    downloadScansCsv(toExport);
     await supabase.from('scan_logs').update({ exported_at: new Date().toISOString(), exported_by: user?.id }).in('id', toExport.map(s => s.id));
     setExporting(false);
     loadAll();
+  };
+
+  // Plain download of everything the current tab + filters show (source,
+  // user, company, date range, search). Deliberately does NOT stamp
+  // exported_at — it's a report, not the invoicing workflow.
+  const downloadFilteredCsv = () => {
+    if (tabScans.length === 0) return;
+    downloadScansCsv(tabScans);
   };
 
   const archiveExported = async () => {
@@ -942,6 +956,18 @@ export default function AdminScansPage() {
             <option value={BMG_COMPANY}>BMG (internal)</option>
             {companyOptions.map(c => <option key={c} value={c}>{c}</option>)}
           </select>
+          <button
+            onClick={downloadFilteredCsv}
+            disabled={tabScans.length === 0}
+            title="Download a CSV of every scan the current tab and filters show — does not mark anything as exported"
+            style={{
+              marginLeft: 'auto', padding: '5px 12px', borderRadius: '8px', fontSize: '10px', fontWeight: 700,
+              background: 'rgba(34,197,94,0.1)', border: '1px solid rgba(34,197,94,0.25)', color: '#22c55e',
+              cursor: tabScans.length === 0 ? 'default' : 'pointer', opacity: tabScans.length === 0 ? 0.5 : 1,
+            }}
+          >
+            ⬇ CSV ({tabScans.length})
+          </button>
         </div>
       )}
 
