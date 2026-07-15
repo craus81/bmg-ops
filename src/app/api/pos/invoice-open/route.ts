@@ -4,6 +4,7 @@ import { requireAuth } from '@/lib/api-auth';
 import { validateBody, z } from '@/lib/validate';
 import { createDirectInvoice, findCustomer, findItems } from '@/lib/netsuite';
 import { resolveLocationWithOverride } from '@/lib/invoice-location';
+import { recomputePoFulfillment } from '@/lib/scan-match';
 
 export const dynamic = 'force-dynamic';
 export const maxDuration = 60;
@@ -46,7 +47,7 @@ export async function POST(req: NextRequest) {
     if (!po) return NextResponse.json({ error: 'PO not found' }, { status: 404 });
 
     // Validate every requested part against the PO's lines and its open cap.
-    const lines = (po.po_line_items || []) as { part_number: string; description: string | null; quantity: number; installed: number | null; unit_price: number }[];
+    const lines = (po.po_line_items || []) as { id: string; part_number: string; description: string | null; quantity: number; installed: number | null; unit_price: number }[];
     const lineByPart = new Map(lines.map(l => [String(l.part_number || '').toUpperCase(), l]));
     const problems: string[] = [];
     const toBill: { partNumber: string; quantity: number; rate: number; description: string }[] = [];
@@ -140,6 +141,19 @@ export async function POST(req: NextRequest) {
       total_qty: totalQty,
       memo: `PO #${po.po_number} — open quantities, ${totalQty} unit${totalQty !== 1 ? 's' : ''} across ${toBill.length} line${toBill.length !== 1 ? 's' : ''}`,
     });
+
+    // Billed units consume the open quantity right away — the open cap above
+    // then makes a repeat invoice for the same units impossible, without
+    // waiting for the invoice verify sweep (which does the same for invoices
+    // entered directly in NetSuite). A fully billed PO flips to 'complete'.
+    for (const l of toBill) {
+      const line = lineByPart.get(l.partNumber.toUpperCase());
+      if (!line) continue;
+      await service.from('po_line_items').update({
+        installed: Math.min((line.installed || 0) + l.quantity, line.quantity || 0),
+      }).eq('id', line.id);
+    }
+    await recomputePoFulfillment(service, [po.id]);
 
     return NextResponse.json({
       success: true,

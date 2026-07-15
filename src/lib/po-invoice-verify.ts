@@ -1,5 +1,6 @@
 import type { SupabaseClient } from '@supabase/supabase-js';
 import { suiteqlQueryAll } from '@/lib/netsuite';
+import { recomputePoFulfillment } from '@/lib/scan-match';
 
 export interface PoInvoiceLineCheck {
   part_number: string;
@@ -46,11 +47,17 @@ function normPart(s: string): string {
  * 'attention' / 'no_invoices') with per-line detail in invoice_check, so the
  * PO page can badge flagged POs. Safe to run repeatedly; a PO fixed since
  * the last run flips back to 'ok'.
+ *
+ * Billed quantities also CONSUME the PO's open quantity: each line's
+ * installed count is raised to what's been invoiced (never lowered), and a
+ * fully billed PO flips to 'complete'. That keeps the "Invoice Open Qty"
+ * flow from re-billing units an invoice — synced or app-created — already
+ * covered.
  */
 export async function verifyPoInvoiceQuantities(service: SupabaseClient): Promise<PoInvoiceVerifyResult> {
   const { data: pos, error: posErr } = await service
     .from('purchase_orders')
-    .select('id, po_number, status, invoice_check_status, po_line_items(part_number, quantity), po_invoices(netsuite_invoice_id)')
+    .select('id, po_number, status, invoice_check_status, po_line_items(id, part_number, quantity, installed), po_invoices(netsuite_invoice_id)')
     .neq('status', 'cancelled');
   if (posErr) {
     throw new Error('Failed to load POs: ' + posErr.message);
@@ -96,6 +103,7 @@ export async function verifyPoInvoiceQuantities(service: SupabaseClient): Promis
   let flagged = 0;
   let cleared = 0;
   const flaggedPos: PoInvoiceVerifyResult['flaggedPos'] = [];
+  const billedPoIds: string[] = [];
 
   for (const po of withInvoices) {
     // Ordered quantity per part (a part can appear on several lines).
@@ -142,6 +150,32 @@ export async function verifyPoInvoiceQuantities(service: SupabaseClient): Promis
       problems.push(`${key}: invoiced ${qty} but not a line on this PO`);
     }
 
+    // Billed units consume the PO's open quantity: raise each line's
+    // installed count to what's been invoiced (never lowered — scans still
+    // count physical installs past billing). A part can span several lines;
+    // billed units fill them in order, capped at each line's quantity. A
+    // fully billed PO then flips to 'complete' via the fulfillment
+    // recompute below, dropping it off the open list and hiding the
+    // "Invoice Open Qty" button.
+    const lineRows = (po.po_line_items || []) as { id: string; part_number: string; quantity: number; installed: number | null }[];
+    let linesChanged = false;
+    for (const key of ordered.keys()) {
+      const partLines = lineRows.filter(l => normPart(l.part_number) === key);
+      let remaining = Math.min(
+        invoiced.get(key) || 0,
+        partLines.reduce((s, l) => s + (l.quantity || 0), 0),
+      );
+      for (const line of partLines) {
+        const fill = Math.min(remaining, line.quantity || 0);
+        remaining -= fill;
+        if (fill > (line.installed || 0)) {
+          await service.from('po_line_items').update({ installed: fill }).eq('id', line.id);
+          linesChanged = true;
+        }
+      }
+    }
+    if (linesChanged) billedPoIds.push(po.id);
+
     const status = problems.length > 0 ? 'attention' : 'ok';
     await service.from('purchase_orders').update({
       invoice_check_status: status,
@@ -160,6 +194,10 @@ export async function verifyPoInvoiceQuantities(service: SupabaseClient): Promis
       cleared++;
     }
   }
+
+  // Billed units may have filled a PO — flip it to 'complete' with the same
+  // rule scan matching uses, so it reads as Fulfilled everywhere.
+  await recomputePoFulfillment(service, billedPoIds);
 
   // POs with zero invoices linked get their own marker. Closed POs are
   // skipped (archived — no billing expected); cancelled ones never loaded.
