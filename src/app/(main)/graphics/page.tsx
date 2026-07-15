@@ -512,7 +512,13 @@ export default function GraphicsPage() {
 
   const deleteJobFile = async (file: JobFile) => {
     if (!(await dialog.confirm(`Delete "${file.file_name}"?`, { destructive: true, confirmLabel: 'Delete' }))) return;
-    await storage.from('graphics-proofs').remove([file.storage_path]);
+    // Files linked from a PO (po-pdfs/…) or a part's catalog record
+    // (part-files/…) share their storage object with the source record —
+    // only unlink them from the job. The object itself is deleted only for
+    // the job's own uploads (graphics-files/…).
+    if (file.storage_path.startsWith('graphics-files/')) {
+      await storage.from('graphics-proofs').remove([file.storage_path]);
+    }
     await supabase.from('graphics_job_files').delete().eq('id', file.id);
     setJobFiles(prev => ({
       ...prev,

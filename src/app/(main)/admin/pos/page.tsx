@@ -2290,6 +2290,35 @@ export default function POsPage() {
     );
   };
 
+  // Link the files saved on each part's catalog record (proofs, install
+  // guides) into the new graphics job, same storage_path reuse as PO files —
+  // both tables point at the graphics-proofs bucket. Parts are matched
+  // case-insensitively against the loaded catalog, like the "In catalog"
+  // indicators; a part with no catalog record simply contributes nothing.
+  const attachPartFilesToGraphicsJob = async (partNumbers: string[], jobId: string) => {
+    const partIds = [...new Set(
+      partNumbers
+        .map(pn => catalog.find(c => c.part_number.toUpperCase() === pn.toUpperCase())?.id)
+        .filter((id): id is string => !!id)
+    )];
+    if (partIds.length === 0) return;
+    const { data: partFiles } = await supabase
+      .from('part_files')
+      .select('file_name, file_type, file_size, storage_path')
+      .in('part_id', partIds);
+    if (!partFiles || partFiles.length === 0) return;
+    await supabase.from('graphics_job_files').insert(
+      partFiles.map((f: any) => ({
+        job_id: jobId,
+        file_name: f.file_name,
+        file_type: f.file_type,
+        file_size: f.file_size,
+        storage_path: f.storage_path,
+        uploaded_by: user?.id || null,
+      }))
+    );
+  };
+
   // Create a graphics job from a PO line item
   const createGfxJobFromLine = async (po: PurchaseOrder, li: { id: string; part_number: string; description: string | null; quantity: number }) => {
     setCreatingGfxJob(li.id);
@@ -2341,6 +2370,7 @@ export default function POsPage() {
       });
 
       await attachPoFilesToGraphicsJob(po.id, job.id);
+      await attachPartFilesToGraphicsJob([li.part_number], job.id);
 
       setGfxJobResults(prev => ({ ...prev, [li.id]: 'created' }));
       setCreatingGfxJob(null);
@@ -2410,6 +2440,7 @@ export default function POsPage() {
       });
 
       await attachPoFilesToGraphicsJob(po.id, job.id);
+      await attachPartFilesToGraphicsJob(po.line_items.map(li => li.part_number), job.id);
 
       // Navigate to graphics page with the new job open for editing; the
       // created= param shows a "Job <number> created" toast over there.
