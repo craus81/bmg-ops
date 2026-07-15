@@ -44,5 +44,9 @@ export async function GET(req: NextRequest) {
     lastRunAt: stateRow?.last_synced_at || null,
     lastResult: stateRow?.last_result || null,
     recentErrors: errorRows || [],
+    // Without this env var the auto-import route rejects Vercel's cron
+    // requests before they can run or record anything — the exact
+    // signature of a silent stall, so let the UI name the cause.
+    cronSecretConfigured: !!process.env.CRON_SECRET,
   });
 }

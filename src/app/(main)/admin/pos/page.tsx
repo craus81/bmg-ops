@@ -514,6 +514,7 @@ export default function POsPage() {
     lastRunAt: string | null;
     lastResult: any | null;
     recentErrors?: any[];
+    cronSecretConfigured?: boolean;
   } | null>(null);
   const [gmailRunning, setGmailRunning] = useState(false);
   const [gmailRunMessage, setGmailRunMessage] = useState<string | null>(null);
@@ -2666,9 +2667,15 @@ export default function POsPage() {
         } else if (status === 'error') {
           summary = `Last run failed: ${r.reason || r.error || 'unknown error'}`;
         } else if (stalled) {
-          summary = minutesAgo === null
-            ? 'The auto-import cron has never recorded a run — check that CRON_SECRET is set in Vercel and the cron is enabled on the production deployment.'
-            : `The auto-import cron hasn't run in ${minutesAgo < 120 ? `${minutesAgo} minutes` : `${Math.round(minutesAgo / 60)} hours`} (it should fire every 20 minutes) — check the Vercel cron and CRON_SECRET.`;
+          const silence = minutesAgo === null
+            ? 'The auto-import cron has never recorded a run'
+            : `The auto-import cron hasn't run in ${minutesAgo < 120 ? `${minutesAgo} minutes` : `${Math.round(minutesAgo / 60)} hours`} (it should fire every 20 minutes)`;
+          // The server tells us whether CRON_SECRET exists — without it the
+          // route rejects Vercel's cron requests before anything records,
+          // which is exactly what a silent stall looks like.
+          summary = gmailStatus.cronSecretConfigured === false
+            ? `${silence} — CRON_SECRET is not set on this deployment, so the cron's requests are being rejected. Add it in Vercel → Settings → Environment Variables, then redeploy.`
+            : `${silence} — the secret is configured, so check that the cron jobs are enabled (and not paused) in Vercel → Settings → Cron Jobs, and that the account plan allows a 20-minute schedule.`;
         } else if (gmailRunning) {
           summary = 'Manual import running…';
         } else {
