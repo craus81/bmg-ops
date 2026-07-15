@@ -176,6 +176,24 @@ export default function InvoicingHubPage() {
   // ── Email flow (shared) ──
   const [emailTarget, setEmailTarget] = useState<{ customerName: string; invoices: EmailableInvoice[] } | null>(null);
 
+  // Latest customer email per invoice number, so the sent list shows which
+  // invoices have already been emailed before anyone re-sends one.
+  const [emailedByNumber, setEmailedByNumber] = useState<Record<string, { sent_at: string; recipients: string[] }>>({});
+  const loadEmailedInvoices = async (numbers: string[]) => {
+    const latest: Record<string, { sent_at: string; recipients: string[] }> = {};
+    for (let i = 0; i < numbers.length; i += 200) {
+      const { data } = await supabase
+        .from('invoice_emails')
+        .select('invoice_number, sent_at, recipients')
+        .in('invoice_number', numbers.slice(i, i + 200))
+        .order('sent_at', { ascending: false });
+      for (const row of (data || []) as any[]) {
+        if (!latest[row.invoice_number]) latest[row.invoice_number] = { sent_at: row.sent_at, recipients: row.recipients || [] };
+      }
+    }
+    setEmailedByNumber(latest);
+  };
+
   // Deep link from the "Graphics shipped — create invoice?" notification:
   // /invoices?invoiceJob=<id>. Fetches the job by id directly (never depends
   // on the tab lists being loaded or filtered) and opens the review modal.
@@ -352,6 +370,12 @@ export default function InvoicingHubPage() {
     }
     return rows.sort((a, b) => (b.date || '').localeCompare(a.date || ''));
   }, [invoicedJobs, scanInvoices, nsInvoices]);
+
+  useEffect(() => {
+    const numbers = [...new Set(sentInvoices.map(r => r.invoiceNumber).filter(Boolean))];
+    if (numbers.length > 0) loadEmailedInvoices(numbers);
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- loader is stable
+  }, [sentInvoices]);
 
   const sentByCustomer = useMemo(() => {
     // Date window first, then text search.
@@ -733,6 +757,14 @@ export default function InvoicingHubPage() {
                           color: r.source === 'Graphics' ? '#22c55e' : r.source === 'Scans' ? '#fbbf24' : '#60a5fa',
                         }}>{r.source}</span>
                         <span style={{ fontWeight: 700, color: 'var(--text-primary)' }}>#{r.invoiceNumber}</span>
+                        {emailedByNumber[r.invoiceNumber] && (
+                          <span
+                            title={`Emailed ${new Date(emailedByNumber[r.invoiceNumber].sent_at).toLocaleString()} to ${emailedByNumber[r.invoiceNumber].recipients.join(', ') || 'customer'}`}
+                            style={{ fontSize: '9px', fontWeight: 800, padding: '2px 6px', borderRadius: '5px', background: 'rgba(251,191,36,0.12)', color: '#fbbf24' }}
+                          >
+                            ✉ EMAILED {new Date(emailedByNumber[r.invoiceNumber].sent_at).toLocaleDateString([], { month: 'short', day: 'numeric' })}
+                          </span>
+                        )}
                         {(() => {
                           if (r.status === 'paid') {
                             return <span style={{ fontSize: '9px', fontWeight: 800, padding: '2px 6px', borderRadius: '5px', background: 'var(--success-bg)', color: 'var(--success)' }}>PAID</span>;
@@ -823,7 +855,12 @@ export default function InvoicingHubPage() {
         <EmailInvoicesModal
           customerName={emailTarget.customerName}
           invoices={emailTarget.invoices}
-          onClose={() => setEmailTarget(null)}
+          onClose={() => {
+            setEmailTarget(null);
+            // Refresh the ✉ EMAILED badges — a send may have just happened.
+            const numbers = [...new Set(sentInvoices.map(r => r.invoiceNumber).filter(Boolean))];
+            if (numbers.length > 0) loadEmailedInvoices(numbers);
+          }}
         />
       )}
     </div>

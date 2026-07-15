@@ -46,6 +46,31 @@ export default function EmailInvoicesModal({ customerName, invoices: initialInvo
   const [invoices, setInvoices] = useState<InvoiceRow[]>(
     initialInvoices.map(inv => ({ ...inv, include: true }))
   );
+  // Latest customer send per invoice number, so already-emailed invoices are
+  // visible (and unchecked by default) before anyone sends a duplicate.
+  const [lastSent, setLastSent] = useState<Record<string, { sent_at: string; recipients: string[] }>>({});
+
+  useEffect(() => {
+    const numbers = initialInvoices.map(i => i.invoiceNumber).filter(Boolean);
+    if (numbers.length === 0) return;
+    let cancelled = false;
+    (async () => {
+      const { data } = await supabase
+        .from('invoice_emails')
+        .select('invoice_number, sent_at, recipients')
+        .in('invoice_number', numbers)
+        .order('sent_at', { ascending: false });
+      if (cancelled || !data || data.length === 0) return;
+      const latest: Record<string, { sent_at: string; recipients: string[] }> = {};
+      for (const row of data as any[]) {
+        if (!latest[row.invoice_number]) latest[row.invoice_number] = { sent_at: row.sent_at, recipients: row.recipients || [] };
+      }
+      setLastSent(latest);
+      setInvoices(prev => prev.map(i => latest[i.invoiceNumber] ? { ...i, include: false } : i));
+    })();
+    return () => { cancelled = true; };
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- intentional: load once per invoice set
+  }, []);
   const [email, setEmail] = useState('');
   const [body, setBody] = useState(
     `Please find the attached invoice${initialInvoices.length !== 1 ? 's' : ''} for your recent services.`
@@ -189,6 +214,7 @@ export default function EmailInvoicesModal({ customerName, invoices: initialInvo
           customerName,
           customerEmail: recipients,
           customBody: body,
+          testSend: isTest,
         }),
       });
       const data = await res.json();
@@ -281,6 +307,14 @@ export default function EmailInvoicesModal({ customerName, invoices: initialInvo
                     style={{ cursor: 'pointer', accentColor: '#22c55e' }}
                   />
                   <span style={{ flex: 1 }}>#{inv.invoiceNumber}{inv.po ? ` (PO #${inv.po})` : ''}</span>
+                  {lastSent[inv.invoiceNumber] && (
+                    <span
+                      title={`Emailed ${new Date(lastSent[inv.invoiceNumber].sent_at).toLocaleString()} to ${lastSent[inv.invoiceNumber].recipients.join(', ') || 'customer'}`}
+                      style={{ fontSize: '10px', fontWeight: 700, color: '#fbbf24', flexShrink: 0 }}
+                    >
+                      ✉ Sent {new Date(lastSent[inv.invoiceNumber].sent_at).toLocaleDateString([], { month: 'short', day: 'numeric' })}
+                    </span>
+                  )}
                   <button
                     onClick={(e) => { e.preventDefault(); e.stopPropagation(); viewPdf(i); }}
                     disabled={viewingIdx !== null}
