@@ -12,6 +12,10 @@ export interface PoInvoiceVerifyResult {
   posChecked: number;
   flagged: number;
   cleared: number;
+  /** POs (open or fulfilled) with zero invoices linked. */
+  noInvoices: number;
+  /** The subset of noInvoices that are fulfilled — work done, nothing billed. */
+  noInvoicesFulfilled: number;
   flaggedPos: { poId: string; poNumber: string; problems: string[] }[];
 }
 
@@ -34,10 +38,14 @@ function normPart(s: string): string {
  *   - under — a part billed for less than ordered: flagged only once the PO
  *             is fulfilled (status 'complete') — an in-progress PO is
  *             expected to be partially invoiced.
+ * POs with NO invoices linked at all get their own 'no_invoices' marker —
+ * informational for open POs (billing just hasn't happened yet), a real gap
+ * for fulfilled ones. Closed/cancelled POs are left alone.
+ *
  * The verdict lands on purchase_orders.invoice_check_status ('ok' /
- * 'attention') with per-line detail in invoice_check, so the PO page can
- * badge flagged POs. Safe to run repeatedly; a PO fixed since the last run
- * flips back to 'ok'.
+ * 'attention' / 'no_invoices') with per-line detail in invoice_check, so the
+ * PO page can badge flagged POs. Safe to run repeatedly; a PO fixed since
+ * the last run flips back to 'ok'.
  */
 export async function verifyPoInvoiceQuantities(service: SupabaseClient): Promise<PoInvoiceVerifyResult> {
   const { data: pos, error: posErr } = await service
@@ -153,5 +161,29 @@ export async function verifyPoInvoiceQuantities(service: SupabaseClient): Promis
     }
   }
 
-  return { posChecked: withInvoices.length, flagged, cleared, flaggedPos };
+  // POs with zero invoices linked get their own marker. Closed POs are
+  // skipped (archived — no billing expected); cancelled ones never loaded.
+  // Only write rows whose marker actually changes, so the recurring cron
+  // run doesn't rewrite the whole PO book every couple hours.
+  let noInvoices = 0;
+  let noInvoicesFulfilled = 0;
+  for (const po of pos || []) {
+    if ((po.po_invoices || []).length > 0) continue;
+    if (po.status === 'closed') continue;
+    noInvoices++;
+    if (po.status === 'complete') noInvoicesFulfilled++;
+    if (po.invoice_check_status !== 'no_invoices') {
+      await service.from('purchase_orders').update({
+        invoice_check_status: 'no_invoices',
+        invoice_check: {
+          checked_at: new Date().toISOString(),
+          invoice_count: 0,
+          problems: [],
+          lines: [],
+        },
+      }).eq('id', po.id);
+    }
+  }
+
+  return { posChecked: withInvoices.length, flagged, cleared, noInvoices, noInvoicesFulfilled, flaggedPos };
 }

@@ -1719,11 +1719,20 @@ export default function POsPage() {
           .slice(0, 12)
           .map((f: any) => `PO #${f.poNumber}`)
           .join(', ');
-        await dialog.alert(
+        const lines = [
           data.flagged > 0
             ? `Checked ${data.posChecked} PO${data.posChecked !== 1 ? 's' : ''} with invoices — ${data.flagged} need${data.flagged === 1 ? 's' : ''} attention: ${flaggedList}${(data.flaggedPos || []).length > 12 ? '…' : ''}. Look for the ⚠ badge.`
             : `Checked ${data.posChecked} PO${data.posChecked !== 1 ? 's' : ''} with invoices — billed quantities all match.`,
-        );
+        ];
+        if (data.noInvoices > 0) {
+          lines.push(
+            `${data.noInvoices} PO${data.noInvoices !== 1 ? 's have' : ' has'} no invoices linked at all` +
+            (data.noInvoicesFulfilled > 0
+              ? ` — ${data.noInvoicesFulfilled} of them fulfilled (look for the ⚠ Not invoiced badge).`
+              : '.'),
+          );
+        }
+        await dialog.alert(lines.join('\n'));
       }
     } catch (err: any) {
       await dialog.alert(`Billing check failed: ${err.message || 'network error'}`);
@@ -3914,6 +3923,17 @@ export default function POsPage() {
                           >
                             ⚠ Billing
                           </span>
+                        )}
+                        {(po as any).invoice_check_status === 'no_invoices' && (
+                          po.status === 'complete' ? (
+                            <span style={{ color: '#fbbf24', marginLeft: '6px', fontWeight: 700 }} title="This PO is fulfilled but has no invoices linked — nothing has been billed">
+                              ⚠ Not invoiced
+                            </span>
+                          ) : (
+                            <span style={{ color: 'var(--text-label)', marginLeft: '6px' }} title="No invoices linked to this PO yet">
+                              No invoices
+                            </span>
+                          )
                         )}
                         {((po as any).po_notes || []).length > 0 && (
                           <span style={{ color: '#fbbf24', marginLeft: '6px', fontWeight: 700 }} title={`${(po as any).po_notes.length} note${(po as any).po_notes.length !== 1 ? 's' : ''}`}>
