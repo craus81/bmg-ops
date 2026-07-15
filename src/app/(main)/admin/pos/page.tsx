@@ -336,7 +336,7 @@ export default function POsPage() {
   const [catalog, setCatalog] = useState<CatalogItem[]>([]);
   const [loading, setLoading] = useState(true);
   const [poTab, setPoTab] = useState<'open' | 'fulfilled' | 'closed'>('open');
-  const [poSortField, setPoSortField] = useState<'po_number' | 'location'>('po_number');
+  const [poSortField, setPoSortField] = useState<'po_number' | 'location' | 'date'>('po_number');
   const [showCreate, setShowCreate] = useState(false);
   const [showImport, setShowImport] = useState(false);
   const [expandedPo, setExpandedPo] = useState<string | null>(null);
@@ -2385,6 +2385,14 @@ export default function POsPage() {
     })
     .sort((a, b) => {
       const byPoNumber = a.po_number.localeCompare(b.po_number, undefined, { numeric: true });
+      if (poSortField === 'date') {
+        // Same date the row shows: the PO's ordered date, or when it was
+        // imported for POs with no date on record.
+        const da = new Date(a.ordered_date || a.created_at).getTime() || 0;
+        const db = new Date(b.ordered_date || b.created_at).getTime() || 0;
+        const cmp = (da - db) || byPoNumber;
+        return poSort === 'asc' ? cmp : -cmp;
+      }
       if (poSortField === 'location') {
         const la = shipToCityLabel(a.ship_to);
         const lb = shipToCityLabel(b.ship_to);
@@ -2593,6 +2601,22 @@ export default function POsPage() {
             }}
           >
             📍 Location {poSortField === 'location' ? (poSort === 'asc' ? '▲' : '▼') : ''}
+          </button>
+          <button
+            onClick={() => {
+              if (poSortField === 'date') setPoSort(s => s === 'asc' ? 'desc' : 'asc');
+              // Newest first is the natural first click for a date sort
+              else { setPoSortField('date'); setPoSort('desc'); }
+            }}
+            title="Sort by PO date (click again to flip direction; POs without a date use their imported date)"
+            style={{
+              padding: '3px 8px', borderRadius: '6px', fontSize: '10px', fontWeight: 700,
+              background: poSortField === 'date' ? 'var(--tab-active-bg)' : 'var(--subtle-bg)',
+              border: poSortField === 'date' ? '1px solid var(--tab-active-border)' : '1px solid var(--border)',
+              color: poSortField === 'date' ? '#fbbf24' : 'var(--text-body)', cursor: 'pointer',
+            }}
+          >
+            📅 Date {poSortField === 'date' ? (poSort === 'asc' ? '▲' : '▼') : ''}
           </button>
         </div>
         <div style={{ display: 'flex', gap: '6px' }}>
@@ -3913,7 +3937,7 @@ export default function POsPage() {
                         })()}
                       </div>
                       <div style={{ fontSize: '12px', color: 'var(--text-label)', marginTop: '1px' }}>
-                        {po.customer} • {po.line_items.length} item{po.line_items.length !== 1 ? 's' : ''}
+                        {po.customer} • <span title={po.ordered_date ? 'PO date' : 'Imported date (no PO date on record)'}>{displayDate.toLocaleDateString([], { month: 'short', day: 'numeric', year: 'numeric' })}</span> • {po.line_items.length} item{po.line_items.length !== 1 ? 's' : ''}
                         {po.status === 'complete' && <span style={{ color: '#4ade80', marginLeft: '6px' }}>&#10003; Fulfilled</span>}
                         {(po as any).netsuite_invoice_number && <span style={{ color: '#34d399', marginLeft: '6px' }}>INV #{(po as any).netsuite_invoice_number}</span>}
                         {(po as any).invoice_check_status === 'attention' && (
