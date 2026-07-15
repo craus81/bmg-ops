@@ -2642,29 +2642,37 @@ export default function POsPage() {
         onChange={handlePoPdfUpload}
         style={{ display: 'none' }}
       />
-      {/* Gmail auto-import status strip */}
+      {/* Gmail auto-import runs on a 20-minute cron — silent when healthy.
+          This strip only appears when something needs a human: Gmail is
+          disconnected, the last run failed, the cron looks stalled, or a
+          manual run (⋯ More menu) is in flight / just reported. */}
       {gmailStatus && (() => {
         const r: any = gmailStatus.lastResult || {};
         const status = r.status as 'ok' | 'error' | undefined;
         const minutesAgo = gmailStatus.lastRunAt
           ? Math.round((Date.now() - new Date(gmailStatus.lastRunAt).getTime()) / 60000)
           : null;
-        const tone = !gmailStatus.gmailConnected || status === 'error'
+        // The cron fires every 20 minutes; treat over an hour of silence
+        // (or no recorded run at all) as stalled and say so.
+        const stalled = gmailStatus.gmailConnected && (minutesAgo === null || minutesAgo > 60);
+        const unhealthy = !gmailStatus.gmailConnected || status === 'error' || stalled;
+        if (!unhealthy && !gmailRunning && !gmailRunMessage) return null;
+        const tone = unhealthy
           ? { bg: 'rgba(239,68,68,0.08)', border: 'rgba(239,68,68,0.25)', color: '#ef4444' }
-          : status === 'ok'
-            ? { bg: 'rgba(34,197,94,0.06)', border: 'rgba(34,197,94,0.2)', color: '#22c55e' }
-            : { bg: 'var(--subtle-bg)', border: 'var(--border)', color: 'var(--text-muted)' };
+          : { bg: 'var(--subtle-bg)', border: 'var(--border)', color: 'var(--text-muted)' };
         let summary = '';
         if (!gmailStatus.gmailConnected) {
           summary = 'Gmail is not connected. Connect a mailbox to auto-import POs.';
         } else if (status === 'error') {
           summary = `Last run failed: ${r.reason || r.error || 'unknown error'}`;
-        } else if (status === 'ok') {
-          summary = `Last run: ${r.messagesFound ?? 0} email${r.messagesFound === 1 ? '' : 's'} found · ${r.imported ?? 0} imported · ${r.skipped ?? 0} skipped${(r.errors ?? 0) > 0 ? ` · ${r.errors} errors` : ''}`;
-        } else if (gmailStatus.lastRunAt) {
-          summary = 'No detail recorded for last run.';
+        } else if (stalled) {
+          summary = minutesAgo === null
+            ? 'The auto-import cron has never recorded a run — check that CRON_SECRET is set in Vercel and the cron is enabled on the production deployment.'
+            : `The auto-import cron hasn't run in ${minutesAgo < 120 ? `${minutesAgo} minutes` : `${Math.round(minutesAgo / 60)} hours`} (it should fire every 20 minutes) — check the Vercel cron and CRON_SECRET.`;
+        } else if (gmailRunning) {
+          summary = 'Manual import running…';
         } else {
-          summary = 'No run recorded yet.';
+          summary = `Last run: ${r.messagesFound ?? 0} email${r.messagesFound === 1 ? '' : 's'} found · ${r.imported ?? 0} imported · ${r.skipped ?? 0} skipped${(r.errors ?? 0) > 0 ? ` · ${r.errors} errors` : ''}`;
         }
         const errs = gmailStatus.recentErrors || [];
         return (
@@ -2720,7 +2728,18 @@ export default function POsPage() {
                     cursor: gmailRunning || !gmailStatus.gmailConnected ? 'default' : 'pointer',
                     opacity: gmailRunning || !gmailStatus.gmailConnected ? 0.5 : 1,
                   }}
-                >{gmailRunning ? 'Running…' : 'Run Now'}</button>
+                >{gmailRunning ? 'Running…' : 'Retry Now'}</button>
+                {gmailRunMessage && !gmailRunning && (
+                  <button
+                    onClick={() => setGmailRunMessage(null)}
+                    title="Dismiss"
+                    style={{
+                      padding: '6px 8px', borderRadius: '6px', fontSize: '11px', fontWeight: 700,
+                      background: 'transparent', border: '1px solid var(--border)',
+                      color: 'var(--text-muted)', cursor: 'pointer',
+                    }}
+                  >✕</button>
+                )}
               </div>
             </div>
             {gmailErrorsOpen && errs.length > 0 && (
@@ -2821,6 +2840,11 @@ export default function POsPage() {
                           label: showImport ? 'Close PDF Import' : 'Import a PDF',
                           hint: 'Upload and parse a PO PDF',
                           onClick: () => { setShowImport(!showImport); setShowCreate(false); setShowEmailImport(false); setParsedPO(null); setImportLines([]); setParseError(''); },
+                        },
+                        {
+                          label: gmailRunning ? 'Auto-Import Running…' : 'Run Auto-Import Now',
+                          hint: 'The cron runs every 20 min — this forces a pass',
+                          onClick: runGmailImportNow, busy: gmailRunning,
                         },
                         {
                           label: 'Select POs…',
