@@ -4,6 +4,7 @@ import { useState, useEffect, useRef } from 'react';
 import { useRouter, useParams } from 'next/navigation';
 import { createClient } from '@/lib/supabase-browser';
 import { useAuth } from '@/components/AuthProvider';
+import { DropZone } from '@/components/DropZone';
 
 const REQUIRED_TYPES = ['front', 'back', 'driver_side', 'passenger_side', 'vin_plate'];
 const ALL_TYPES = [...REQUIRED_TYPES, 'detail', 'other'];
@@ -219,7 +220,7 @@ export default function InstallerPhotoUploadPage() {
 
       {/* Upload Controls */}
       {(job.status === 'in_progress' || job.status === 'scheduled_confirmed') && (
-        <div style={sectionStyle}>
+        <DropZone onFiles={uploadPhotos} accept="image/*" disabled={uploading} style={sectionStyle}>
           <div style={{ fontSize: '12px', fontWeight: 700, color: 'var(--text-muted)', marginBottom: '10px' }}>UPLOAD PHOTO</div>
 
           <div style={{ marginBottom: '10px' }}>
@@ -268,7 +269,7 @@ export default function InstallerPhotoUploadPage() {
                 : 'Take / Choose Photos'}
             </button>
           </div>
-        </div>
+        </DropZone>
       )}
 
       {/* Uploaded Photos */}

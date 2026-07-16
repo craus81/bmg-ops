@@ -13,6 +13,7 @@ import GraphicsInvoiceReviewModal from '@/components/GraphicsInvoiceReviewModal'
 import EmailInvoicesModal, { type EmailableInvoice } from '@/components/EmailInvoicesModal';
 import { PartLabel } from '@/components/PartLabel';
 import DropboxProofSearch from '@/components/DropboxProofSearch';
+import { DropZone } from '@/components/DropZone';
 import { exportPackingListPDF, packingListFromJob, type PackingListLine } from '@/lib/packing-list-pdf';
 import type {
   GraphicsJob, GraphicsJobStatus, GraphicsJobCategory, GraphicsStatusHistory, GraphicsJobView, Profile,
@@ -1882,7 +1883,12 @@ export default function GraphicsPage() {
                         </div>
 
                         {/* Files */}
-                        <div style={{ marginBottom: '10px' }}>
+                        <DropZone
+                          onFiles={(files) => uploadFilesToJob(job.id, files)}
+                          multiple
+                          disabled={uploadingFiles}
+                          style={{ marginBottom: '10px' }}
+                        >
                           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '6px' }}>
                             <div style={labelStyle}>Files &amp; Attachments</div>
                             {(jobFiles[job.id] || []).length > 1 && (
@@ -1978,7 +1984,7 @@ export default function GraphicsPage() {
                               defaultQuery={job.customer || job.part_number || ''}
                             />
                           </div>
-                        </div>
+                        </DropZone>
 
                         {/* Team Assignment */}
                         <div style={{ marginBottom: '10px' }}>
@@ -2309,7 +2315,12 @@ export default function GraphicsPage() {
                           />
                         </div>
 
-                        <div style={{ marginBottom: '10px' }}>
+                        <DropZone
+                          onFiles={(files) => uploadFilesToJob(job.id, files)}
+                          multiple
+                          disabled={uploadingFiles}
+                          style={{ marginBottom: '10px' }}
+                        >
                           <div style={labelStyle}>Files &amp; Attachments</div>
                           {(jobFiles[job.id] || []).length > 0 && (
                             <div style={{ display: 'flex', flexDirection: 'column', gap: '4px', marginBottom: '6px' }}>
@@ -2348,7 +2359,7 @@ export default function GraphicsPage() {
                           >
                             {uploadingFiles ? 'Uploading...' : '+ Upload Files (proofs, logos, photos)'}
                           </button>
-                        </div>
+                        </DropZone>
 
                         <div style={{
                           position: 'sticky',
@@ -2651,7 +2662,11 @@ export default function GraphicsPage() {
                 </div>
 
                 {/* File Attachments */}
-                <div style={{ marginBottom: '12px' }}>
+                <DropZone
+                  onFiles={(files) => setCreateFiles(prev => [...prev, ...files])}
+                  multiple
+                  style={{ marginBottom: '12px' }}
+                >
                   <div style={labelStyle}>File Attachments</div>
                   {createFiles.length > 0 && (
                     <div style={{ display: 'flex', flexWrap: 'wrap', gap: '4px', marginBottom: '6px' }}>
@@ -2690,7 +2705,7 @@ export default function GraphicsPage() {
                   >
                     + Add Files (proofs, logos, photos, PDFs)
                   </button>
-                </div>
+                </DropZone>
 
                 {/* Assign Team Members */}
                 <div style={{ marginBottom: '12px' }}>

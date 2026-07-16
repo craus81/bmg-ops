@@ -4,6 +4,7 @@ import { useState, useEffect, useRef } from 'react';
 import { useRouter, useParams } from 'next/navigation';
 import { createClient } from '@/lib/supabase-browser';
 import { useAuth } from '@/components/AuthProvider';
+import { DropZone } from '@/components/DropZone';
 
 const INVOICE_STATUS_LABELS: Record<string, { label: string; color: string }> = {
   none: { label: 'Not Submitted', color: 'var(--text-muted)' },
@@ -160,7 +161,7 @@ export default function InstallerInvoicePage() {
 
       {/* Upload / Replace */}
       {canUpload && (
-        <div style={sectionStyle}>
+        <DropZone onFiles={files => uploadInvoice(files[0])} accept=".pdf,.png,.jpg,.jpeg" multiple={false} disabled={uploading} style={sectionStyle}>
           <div style={{ fontSize: '12px', fontWeight: 700, color: 'var(--text-muted)', marginBottom: '10px' }}>
             {job.invoice_file_path ? 'REPLACE INVOICE' : 'UPLOAD INVOICE'}
           </div>
@@ -186,7 +187,7 @@ export default function InstallerInvoicePage() {
           >
             {uploading ? 'Uploading...' : job.invoice_file_path ? 'Replace Invoice File' : 'Upload Invoice File'}
           </button>
-        </div>
+        </DropZone>
       )}
 
       {/* Info */}

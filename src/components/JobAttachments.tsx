@@ -3,6 +3,7 @@
 import { useRef, useState } from 'react';
 import { createClient } from '@/lib/supabase-browser';
 import { uploadJobFiles, jobFileUrl, type JobFile } from '@/lib/job-files';
+import { DropZone } from '@/components/DropZone';
 
 /**
  * Renders a CNI job's attachments (proofs / photos / docs) as download links.
@@ -28,7 +29,7 @@ export default function JobAttachments({
 
   const files: JobFile[] = Array.isArray(attachments) ? attachments : [];
 
-  const handleAdd = async (picked: FileList | null) => {
+  const handleAdd = async (picked: FileList | File[] | null) => {
     if (!picked || picked.length === 0) return;
     setBusy(true);
     setError('');
@@ -74,7 +75,7 @@ export default function JobAttachments({
   };
 
   return (
-    <div>
+    <DropZone onFiles={handleAdd} multiple disabled={!editable || busy}>
       {files.length === 0 ? (
         <div style={{ fontSize: '13px', color: 'var(--text-muted)' }}>
           {editable ? 'No files yet.' : 'No files attached.'}
@@ -134,6 +135,6 @@ export default function JobAttachments({
       {error && (
         <div style={{ marginTop: '8px', fontSize: '12px', color: 'var(--error)', fontWeight: 600 }}>{error}</div>
       )}
-    </div>
+    </DropZone>
   );
 }

@@ -15,6 +15,7 @@ import NetSuitePdf from '@/components/NetSuitePdf';
 import ProofThumbnail from '@/components/ProofThumbnail';
 import CompletionModal from '@/components/CompletionModal';
 import { useDialog } from '@/components/DialogProvider';
+import { DropZone } from '@/components/DropZone';
 
 type FilterStatus = VehicleTrackingStatus | 'all' | 'stuck';
 
@@ -367,7 +368,7 @@ export default function TrackingPage() {
     setPhotoUploading(false);
   };
 
-  const handlePhotoFiles = async (vehicleId: string, files: FileList | null) => {
+  const handlePhotoFiles = async (vehicleId: string, files: FileList | File[] | null) => {
     if (!files || files.length === 0) return;
     for (let i = 0; i < files.length; i++) {
       await uploadPhoto(vehicleId, files[i]);
@@ -1861,7 +1862,11 @@ export default function TrackingPage() {
                         Proof File
                       </div>
                       {(vehicle as any).proof_url ? (
-                        <div style={{ display: 'flex', alignItems: 'center', gap: '8px', padding: '8px 10px', borderRadius: '8px', background: 'rgba(34,197,94,0.06)', border: '1px solid rgba(34,197,94,0.2)' }}>
+                        <DropZone
+                          onFiles={(files) => uploadProofForVehicle(vehicle.id, files[0])}
+                          accept="image/*,application/pdf,.eps,.ai,.psd"
+                          multiple={false}
+                          style={{ display: 'flex', alignItems: 'center', gap: '8px', padding: '8px 10px', borderRadius: '8px', background: 'rgba(34,197,94,0.06)', border: '1px solid rgba(34,197,94,0.2)' }}>
                           <ProofThumbnail
                             pdfUrl={(vehicle as any).proof_url}
                             dropboxPath={(vehicle as any).proof_dropbox_path || undefined}
@@ -1915,7 +1920,7 @@ export default function TrackingPage() {
                               style={{ padding: '4px 8px', borderRadius: '6px', fontSize: '10px', fontWeight: 700, background: 'transparent', border: '1px solid rgba(248,113,113,0.3)', color: '#f87171', cursor: 'pointer' }}
                             >Remove</button>
                           </div>
-                        </div>
+                        </DropZone>
                       ) : dbxSearchOpen === vehicle.id ? (
                         <div style={{ padding: '12px', borderRadius: '10px', background: 'var(--subtle-bg)', border: '1px solid var(--border)' }}>
                           {dbxConnected === false ? (
@@ -1981,7 +1986,12 @@ export default function TrackingPage() {
                           )}
                         </div>
                       ) : (
-                        <div style={{ display: 'flex', gap: '6px' }}>
+                        <DropZone
+                          onFiles={(files) => uploadProofForVehicle(vehicle.id, files[0])}
+                          accept="image/*,application/pdf,.eps,.ai,.psd"
+                          multiple={false}
+                          style={{ display: 'flex', gap: '6px' }}
+                        >
                           <input
                             type="file"
                             id={`proof-add-${vehicle.id}`}
@@ -2007,12 +2017,17 @@ export default function TrackingPage() {
                             }}
                             style={{ flex: 1, padding: '10px', borderRadius: '8px', fontSize: '12px', fontWeight: 700, background: 'rgba(0,97,254,0.08)', border: '1px dashed rgba(0,97,254,0.3)', color: '#0061fe', cursor: 'pointer' }}
                           >Find in Dropbox</button>
-                        </div>
+                        </DropZone>
                       )}
                     </div>
 
                     {/* Completion Photos */}
-                    <div style={{ marginBottom: '12px' }}>
+                    <DropZone
+                      onFiles={(files) => handlePhotoFiles(vehicle.id, files)}
+                      accept="image/*"
+                      disabled={photoUploading}
+                      style={{ marginBottom: '12px' }}
+                    >
                       {/* Completion prompt banner */}
                       {showCompletionPrompt === vehicle.id && (
                         <div style={{
@@ -2198,7 +2213,7 @@ export default function TrackingPage() {
                           ))}
                         </div>
                       )}
-                    </div>
+                    </DropZone>
 
                     {/* Photo Timeline — unified check-in / during / completion / design files / proofs */}
                     <div style={{ marginBottom: '12px' }}>

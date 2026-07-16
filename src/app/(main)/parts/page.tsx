@@ -9,6 +9,7 @@ import { useDialog } from '@/components/DialogProvider';
 import EmailProofSearch, { type EmailProofFile } from '@/components/EmailProofSearch';
 import DropboxProofSearch, { type DropboxProofFile } from '@/components/DropboxProofSearch';
 import { CreateNetsuiteItemModal } from '@/components/CreateNetsuiteItemModal';
+import { DropZone } from '@/components/DropZone';
 
 interface Part {
   id: string;
@@ -1160,7 +1161,7 @@ export default function PartsPage() {
                     )}
 
                     {/* Part Files */}
-                    <div style={{ marginTop: '10px' }}>
+                    <DropZone onFiles={files => uploadPartFile(part.id, files[0])} accept="image/*,.pdf,.eps,.ai,.svg" multiple={false} disabled={!isAdmin || uploadingFile} style={{ marginTop: '10px' }}>
                       <div style={{ fontSize: '9px', fontWeight: 700, color: 'var(--text-muted)', textTransform: 'uppercase', marginBottom: '4px' }}>Files &amp; Proofs</div>
                       {(partFiles[part.id] || []).map(f => (
                         <div key={f.id} style={{ display: 'flex', alignItems: 'center', gap: '8px', padding: '4px 6px', borderRadius: '6px', background: 'var(--subtle-bg)', marginBottom: '3px' }}>
@@ -1218,7 +1219,7 @@ export default function PartsPage() {
                           )}
                         </>
                       )}
-                    </div>
+                    </DropZone>
 
                     {/* Push a local-only part to NetSuite: creates the NetSuite
                         item and links its internal id to this catalog row. */}
