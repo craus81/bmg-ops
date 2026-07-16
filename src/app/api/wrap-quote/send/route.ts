@@ -20,6 +20,15 @@ const SendSchema = z.object({
   // the NetSuite quote PDF attached (body carries no pricing — the PDF,
   // with NetSuite's own tax math, is the document of record).
   mode: z.enum(['full', 'quote_only', 'coverage_only', 'netsuite_pdf']).optional().default('full'),
+  // Personal note rendered at the top of the email body (plain text,
+  // newlines preserved).
+  message: z.string().trim().max(5000).optional(),
+  // Subset of the quote's stored attachments to send, by path. Omitted =
+  // send them all (the pre-selection behavior).
+  attachmentPaths: z.array(z.string().min(1).max(500)).max(50).optional(),
+  // Dry run: return { subject, to, html, attachments } without sending or
+  // marking the quote sent — powers the preview modal.
+  preview: z.boolean().optional().default(false),
 });
 type SendMode = 'full' | 'quote_only' | 'coverage_only' | 'netsuite_pdf';
 
@@ -30,7 +39,7 @@ const money = (n: any) =>
 
 // Light-themed printable quote document (customers print/forward these, so
 // no dark chrome like the internal notification template).
-function buildQuoteHtml(quote: any, company: any, diagramUrl: string | null, logoUrl: string | null, mode: SendMode = 'full'): string {
+function buildQuoteHtml(quote: any, company: any, diagramUrl: string | null, logoUrl: string | null, mode: SendMode = 'full', message?: string): string {
   const pricing = mode === 'full' || mode === 'quote_only';
   const showDiagram = mode !== 'quote_only' && !!diagramUrl;
   const docTitle = mode === 'coverage_only' ? 'Wrap Coverage' : 'Wrap Quote';
@@ -86,6 +95,7 @@ function buildQuoteHtml(quote: any, company: any, diagramUrl: string | null, log
           <td style="vertical-align:top;font-size:12px;color:#374151;line-height:1.5;text-align:right;"><b style="color:#111827;">Customer</b><br>${customerLines || ''}</td>
         </tr>
       </table>
+      ${message ? `<div style="font-size:13px;color:#374151;margin:0 0 16px;white-space:pre-wrap;line-height:1.5;">${esc(message)}</div>` : ''}
       ${quote.project_type ? `<div style="font-size:12px;color:#374151;margin-bottom:4px;"><b>Project Type:</b> ${esc(quote.project_type)}</div>` : ''}
       ${quote.vehicle_description ? `<div style="font-size:12px;color:#374151;margin-bottom:14px;"><b>Vehicle:</b> ${esc(quote.vehicle_description)}</div>` : ''}
       ${showDiagram ? `<div style="margin:0 0 14px;"><div style="font-size:11px;color:#6b7280;text-transform:uppercase;font-weight:700;margin-bottom:4px;">Coverage Areas</div><img src="${esc(diagramUrl)}" alt="Wrap coverage diagram" width="584" style="width:100%;max-width:584px;display:block;border:1px solid #e5e7eb;border-radius:8px;"></div>` : ''}
@@ -169,12 +179,39 @@ export async function POST(req: NextRequest) {
     ? r2PublicUrl('vehicle-templates', company.logo_path)
     : null;
 
+  const message = parsed.data.message || undefined;
+
+  // Which of the quote's stored attachments ride along: all of them unless
+  // the sender narrowed the set in the preview modal (e.g. "just the
+  // NetSuite PDF and the coverage photo").
+  const wanted = parsed.data.attachmentPaths ? new Set(parsed.data.attachmentPaths) : null;
+  const selectedMeta = (Array.isArray(quote.attachments) ? quote.attachments : [])
+    .filter((a: any) => a?.path && (!wanted || wanted.has(a.path)));
+
+  const docWord = mode === 'coverage_only' ? 'Wrap Coverage' : 'Wrap Quote';
+  const subject = `${docWord} ${quote.quote_number}${company?.name ? ` from ${company.name}` : ''}`;
+
+  // Preview: return what would go out without touching R2/NetSuite or
+  // marking anything sent.
+  if (parsed.data.preview) {
+    const names = selectedMeta.map((a: any) => a.name || a.path.split('/').pop() || 'attachment');
+    if (mode === 'netsuite_pdf') {
+      names.unshift(`Quote_${quote.netsuite_estimate_number || quote.netsuite_estimate_id}.pdf`);
+    }
+    return NextResponse.json({
+      preview: true,
+      to: cc ? [email, cc] : [email],
+      subject,
+      html: buildQuoteHtml(quote, company, diagramUrl, logoUrl, mode, message),
+      attachments: names,
+    });
+  }
+
   // Files the sender attached to this quote (proofs, vinyl specs, …).
   // A missing file is a hard error — silently sending a quote without its
   // proof is worse than asking the sender to re-attach it.
   const attachments: { filename: string; content: Buffer; contentType?: string }[] = [];
-  for (const a of Array.isArray(quote.attachments) ? quote.attachments : []) {
-    if (!a?.path) continue;
+  for (const a of selectedMeta) {
     const result = await r2Get('vehicle-templates', a.path);
     if (!result.success || !result.body) {
       return NextResponse.json({ error: `Attachment "${a.name || a.path}" could not be loaded — remove and re-attach it.` }, { status: 502 });
@@ -208,9 +245,7 @@ export async function POST(req: NextRequest) {
     });
   }
 
-  const docWord = mode === 'coverage_only' ? 'Wrap Coverage' : 'Wrap Quote';
-  const subject = `${docWord} ${quote.quote_number}${company?.name ? ` from ${company.name}` : ''}`;
-  const ok = await sendEmail(to, subject, buildQuoteHtml(quote, company, diagramUrl, logoUrl, mode), undefined, attachments);
+  const ok = await sendEmail(to, subject, buildQuoteHtml(quote, company, diagramUrl, logoUrl, mode, message), undefined, attachments);
   if (!ok) {
     return NextResponse.json({ error: 'Email send failed (is Resend configured?)' }, { status: 502 });
   }

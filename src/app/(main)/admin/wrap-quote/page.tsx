@@ -210,6 +210,15 @@ export default function WrapQuotePage() {
   const [attaching, setAttaching] = useState(false);
   const [showArchived, setShowArchived] = useState(false);
   const [sendMode, setSendMode] = useState<'full' | 'quote_only' | 'coverage_only' | 'netsuite_pdf'>('full');
+  // Email preview modal: shows exactly what will go out (rendered body,
+  // recipients, attachments) with an optional personal message and
+  // per-attachment include toggles before anything is sent.
+  const [emailModal, setEmailModal] = useState(false);
+  const [emailQuoteId, setEmailQuoteId] = useState<string | null>(null);
+  const [emailMessage, setEmailMessage] = useState('');
+  const [attachInclude, setAttachInclude] = useState<Record<string, boolean>>({});
+  const [emailPreview, setEmailPreview] = useState<{ to: string[]; subject: string; html: string; attachments: string[] } | null>(null);
+  const [previewLoading, setPreviewLoading] = useState(false);
 
   // Deep link from search/popout: ?id= opens that quote's detail view over
   // the history tab once the quote list has loaded.
@@ -232,6 +241,7 @@ export default function WrapQuotePage() {
     if (!ok) await dialog.alert(`Could not open the NetSuite PDF: ${error}`);
   };
   const [pushingNetsuite, setPushingNetsuite] = useState(false);
+  const [creatingCustomer, setCreatingCustomer] = useState(false);
 
   // ----- Pricing tab state (edit copies) -----
   const [subSel, setSubSel] = useState(''); // '' = new
@@ -699,27 +709,73 @@ export default function WrapQuotePage() {
     return data.id;
   };
 
+  // Ask the send route for a dry-run render of the email using the current
+  // message + attachment selection. Returns true when the preview loaded.
+  const fetchEmailPreview = async (id: string, msg: string, include: Record<string, boolean>) => {
+    setPreviewLoading(true);
+    try {
+      const res = await apiFetch('/api/wrap-quote/send', {
+        method: 'POST',
+        body: JSON.stringify({
+          quoteId: id,
+          mode: sendMode,
+          preview: true,
+          message: msg.trim() || undefined,
+          attachmentPaths: attachments.filter(a => include[a.path] !== false).map(a => a.path),
+        }),
+      });
+      const data = await res.json();
+      if (!res.ok || !data.preview) {
+        await dialog.alert(`Preview failed: ${data.error || 'Unknown error'}`);
+        return false;
+      }
+      setEmailPreview(data);
+      return true;
+    } catch (e: any) {
+      await dialog.alert(`Preview failed: ${e.message}`);
+      return false;
+    } finally {
+      setPreviewLoading(false);
+    }
+  };
+
+  // Opens the email preview modal (saves the draft first so the server can
+  // render the real thing). The actual send happens in sendQuoteEmail.
   const createAndEmail = async () => {
     if (!customer.email?.trim()) { await dialog.alert('Enter a customer email first.'); return; }
     if (measurements.length === 0) { await dialog.alert('No measurements — draw the wrap areas on the Estimator tab first.'); return; }
-    const coverageOnly = sendMode === 'coverage_only';
     if (sendMode === 'netsuite_pdf' && !history.find(q => q.id === savedQuoteId)?.netsuite_estimate_id) {
       await dialog.alert('This quote isn\'t in NetSuite yet — use "Create Quote in NetSuite" first.');
       return;
     }
-    const confirmMsg = coverageOnly
-      ? `Email just the coverage picture (no pricing) to ${customer.email}?`
-      : sendMode === 'netsuite_pdf'
-        ? `Email the NetSuite quote PDF to ${customer.email}? This sends immediately.`
-        : `Email this quote ($${fmt(totals.total)})${sendMode === 'quote_only' ? ' without the coverage picture' : ''} to ${customer.email}? Make sure everything is accurate — this sends immediately.`;
-    if (!(await dialog.confirm(confirmMsg))) return;
     setSending(true);
     try {
       const id = await saveQuote();
       if (!id) return;
+      setEmailQuoteId(id);
+      setEmailMessage('');
+      const include: Record<string, boolean> = {};
+      for (const a of attachments) include[a.path] = true;
+      setAttachInclude(include);
+      if (await fetchEmailPreview(id, '', include)) setEmailModal(true);
+    } finally {
+      setSending(false);
+    }
+  };
+
+  const sendQuoteEmail = async () => {
+    if (!emailQuoteId) return;
+    const coverageOnly = sendMode === 'coverage_only';
+    setSending(true);
+    try {
       const res = await apiFetch('/api/wrap-quote/send', {
         method: 'POST',
-        body: JSON.stringify({ quoteId: id, mode: sendMode }),
+        body: JSON.stringify({
+          quoteId: emailQuoteId,
+          mode: sendMode,
+          message: emailMessage.trim() || undefined,
+          attachmentPaths: attachments.filter(a => attachInclude[a.path] !== false).map(a => a.path),
+        }),
       });
       const data = await res.json();
       if (!res.ok || !data.success) {
@@ -727,9 +783,11 @@ export default function WrapQuotePage() {
       } else if (coverageOnly) {
         // The quote itself hasn't gone out — keep everything in place so
         // the real quote can still be sent after the customer sees coverage.
+        setEmailModal(false);
         await dialog.alert(`Coverage picture emailed to ${customer.email}`);
         await loadAll();
       } else {
+        setEmailModal(false);
         await dialog.alert(`Quote emailed to ${customer.email}`);
         resetAfterSend();
         await loadAll();
@@ -739,6 +797,47 @@ export default function WrapQuotePage() {
       await dialog.alert(`Email failed: ${e.message}`);
     } finally {
       setSending(false);
+    }
+  };
+
+  // Create the typed-in customer as a real NetSuite Customer and link it to
+  // this quote (fills the gap where a hand-typed name has no NetSuite record
+  // and the estimate push refuses).
+  const createNetsuiteCustomer = async () => {
+    const name = (customer.name || '').trim();
+    if (!name) { await dialog.alert('Enter the customer name first.'); return; }
+    if (!(await dialog.confirm(`Create "${name}" as a new NetSuite customer? Try the search box first so you don't create a duplicate.`))) return;
+    setCreatingCustomer(true);
+    try {
+      const res = await apiFetch('/api/wrap-quote/create-customer', {
+        method: 'POST',
+        body: JSON.stringify({
+          companyName: name,
+          email: customer.email?.trim() || undefined,
+          phone: customer.phone?.trim() || undefined,
+          address: customer.address?.trim() || undefined,
+          city: customer.city?.trim() || undefined,
+          state: customer.state?.trim() || undefined,
+          zip: customer.zip?.trim() || undefined,
+        }),
+      });
+      const data = await res.json();
+      if (res.status === 409 && data.existingCustomerId) {
+        // Same name already in NetSuite — link the existing record instead.
+        setCustomerId(data.existingCustomerId);
+        await dialog.alert(`${data.error} Linked the existing record to this quote.`);
+        return;
+      }
+      if (!res.ok || !data.success) {
+        await dialog.alert(`NetSuite customer failed: ${data.error || 'Unknown error'}`);
+        return;
+      }
+      if (data.customerId) setCustomerId(data.customerId);
+      await dialog.alert(`NetSuite customer created${data.entityId ? ` (${data.entityId})` : ''}${data.customerId ? ' and linked to this quote.' : ' — run a customer sync to link it here.'}`);
+    } catch (e: any) {
+      await dialog.alert(`NetSuite customer failed: ${e.message}`);
+    } finally {
+      setCreatingCustomer(false);
     }
   };
 
@@ -1549,6 +1648,20 @@ export default function WrapQuotePage() {
                 <input value={customer[k] || ''} onChange={e => { setCustomer({ ...customer, [k]: e.target.value }); if (k === 'name') setCustomerId(null); }} style={inputStyle} />
               </div>
             ))}
+            <div style={{ display: 'flex', alignItems: 'center', gap: '6px', flexWrap: 'wrap', marginBottom: '10px' }}>
+              {customerId ? (
+                <span style={{ fontSize: '10px', fontWeight: 700, padding: '3px 8px', borderRadius: '4px', background: 'rgba(34,197,94,0.1)', color: '#22c55e' }}>
+                  Linked to NetSuite customer
+                </span>
+              ) : (
+                <>
+                  <button onClick={createNetsuiteCustomer} disabled={creatingCustomer || !customer.name?.trim()} style={btnStyle('#a78bfa', 'rgba(167,139,250,0.08)')}>
+                    {creatingCustomer ? 'Creating…' : 'Create Customer in NetSuite'}
+                  </button>
+                  <span style={{ fontSize: '9px', color: 'var(--text-muted)' }}>Not in the search? Create them without leaving this screen.</span>
+                </>
+              )}
+            </div>
             {totals.filmTotals.length > 0 && (<>
               {sectionHead('Install Labor (per film)')}
               {totals.filmTotals.map(f => (
@@ -1600,7 +1713,7 @@ export default function WrapQuotePage() {
             <div style={{ display: 'flex', gap: '6px', flexWrap: 'wrap' }}>
               <button onClick={() => saveQuote()} style={btnStyle('#60a5fa', 'rgba(59,130,246,0.1)')}>{savedQuoteId ? 'Update Draft' : 'Save Draft'}</button>
               <button onClick={createAndEmail} disabled={sending} style={{ ...btnStyle('#fff', '#22c55e'), border: 'none' }}>
-                {sending ? 'Sending…' : sendMode === 'coverage_only' ? 'Email Coverage' : 'Email Quote'}
+                {sending ? 'Working…' : sendMode === 'coverage_only' ? 'Preview & Email Coverage' : 'Preview & Email Quote'}
               </button>
             </div>
             <div style={{ display: 'flex', gap: '6px', flexWrap: 'wrap', alignItems: 'center', marginTop: '6px' }}>
@@ -1899,6 +2012,81 @@ export default function WrapQuotePage() {
                 </div>
               </div>
             ))}
+          </div>
+        </div>
+      )}
+
+      {/* Email preview modal — shows the rendered email, recipients, and
+          attachment toggles before anything actually sends. */}
+      {emailModal && (
+        <div
+          style={{ position: 'fixed', inset: 0, background: 'var(--overlay)', zIndex: 1500, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '20px' }}
+          onClick={() => setEmailModal(false)}
+        >
+          <div onClick={e => e.stopPropagation()} style={{
+            background: 'var(--card)', borderRadius: '14px', padding: '16px',
+            width: '100%', maxWidth: '760px', maxHeight: 'calc(100vh - 40px)',
+            display: 'flex', flexDirection: 'column', gap: '10px',
+            boxShadow: '0 8px 30px rgba(0,0,0,0.3)',
+          }}>
+            <div style={{ fontSize: '14px', fontWeight: 800, color: 'var(--text-primary)' }}>Review Email Before Sending</div>
+            <div style={{ fontSize: '11px', color: 'var(--text-muted)' }}>
+              <b style={{ color: 'var(--text-secondary)' }}>To:</b> {(emailPreview?.to || []).join(', ')}
+              <span style={{ margin: '0 6px' }}>·</span>
+              <b style={{ color: 'var(--text-secondary)' }}>Subject:</b> {emailPreview?.subject}
+            </div>
+            <div>
+              <div style={labelStyle}>Personal message (shown at the top of the email)</div>
+              <textarea
+                value={emailMessage}
+                onChange={e => setEmailMessage(e.target.value)}
+                onBlur={() => { if (emailQuoteId) fetchEmailPreview(emailQuoteId, emailMessage, attachInclude); }}
+                rows={3}
+                placeholder="Optional note to the customer — added above the quote…"
+                style={{ ...inputStyle, resize: 'vertical' }}
+              />
+            </div>
+            {(attachments.length > 0 || sendMode === 'netsuite_pdf') && (
+              <div>
+                <div style={labelStyle}>Attachments</div>
+                {sendMode === 'netsuite_pdf' && (
+                  <label style={{ display: 'flex', alignItems: 'center', gap: '6px', fontSize: '11px', fontWeight: 700, color: 'var(--text-primary)', marginBottom: '3px' }}>
+                    <input type="checkbox" checked disabled />
+                    NetSuite quote PDF <span style={{ color: 'var(--text-muted)', fontWeight: 400 }}>(always included in this mode)</span>
+                  </label>
+                )}
+                {attachments.map(a => (
+                  <label key={a.path} style={{ display: 'flex', alignItems: 'center', gap: '6px', fontSize: '11px', fontWeight: 700, color: 'var(--text-primary)', marginBottom: '3px', cursor: 'pointer' }}>
+                    <input
+                      type="checkbox"
+                      checked={attachInclude[a.path] !== false}
+                      onChange={e => setAttachInclude(p => ({ ...p, [a.path]: e.target.checked }))}
+                    />
+                    <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{a.name}</span>
+                  </label>
+                ))}
+                <div style={{ fontSize: '10px', color: 'var(--text-muted)' }}>Unchecked files stay on the quote — they just don&apos;t ride along on this email.</div>
+              </div>
+            )}
+            <div style={{ flex: 1, minHeight: '220px', border: '1px solid var(--border)', borderRadius: '8px', overflow: 'hidden', background: '#f3f4f6', position: 'relative' }}>
+              {previewLoading && (
+                <div style={{ position: 'absolute', inset: 0, display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: '12px', fontWeight: 700, color: '#6b7280', background: 'rgba(243,244,246,0.7)' }}>Updating preview…</div>
+              )}
+              <iframe srcDoc={emailPreview?.html || ''} title="Email preview" sandbox="" style={{ width: '100%', height: '100%', minHeight: '220px', border: 'none', display: 'block' }} />
+            </div>
+            <div style={{ display: 'flex', gap: '8px', justifyContent: 'flex-end' }}>
+              <button onClick={() => setEmailModal(false)} style={btnStyle('var(--text-body)', 'transparent')}>Cancel</button>
+              <button
+                onClick={() => { if (emailQuoteId) fetchEmailPreview(emailQuoteId, emailMessage, attachInclude); }}
+                disabled={previewLoading}
+                style={btnStyle('#60a5fa', 'rgba(59,130,246,0.1)')}
+              >
+                Refresh Preview
+              </button>
+              <button onClick={sendQuoteEmail} disabled={sending || previewLoading} style={{ ...btnStyle('#fff', '#22c55e'), border: 'none' }}>
+                {sending ? 'Sending…' : sendMode === 'coverage_only' ? 'Send Coverage' : 'Send Quote'}
+              </button>
+            </div>
           </div>
         </div>
       )}
