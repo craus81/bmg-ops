@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { createClient } from '@supabase/supabase-js';
 import { notifyMany } from '@/lib/notify';
-import { INVOICE_PROMPT_USER_IDS } from '@/lib/graphics-invoice-notify';
+import { getBillingUserIds } from '@/lib/graphics-invoice-notify';
 import { requireAuth } from '@/lib/api-auth';
 import { validateBody, z } from '@/lib/validate';
 
@@ -48,12 +48,13 @@ export async function POST(req: NextRequest) {
 
   const jobLabel = job.title || `Job #${job.job_number}` || `Job ${job.id.slice(0, 8)}`;
 
-  await notifyMany(INVOICE_PROMPT_USER_IDS, {
+  const billingUserIds = await getBillingUserIds(supabase);
+  await notifyMany(billingUserIds, {
     type: 'graphics_invoice_prompt',
     title: 'Graphics shipped — create invoice?',
     body: `${jobLabel}${job.customer ? ` for ${job.customer}` : ''} has shipped. Create invoice in FleetSuite?`,
     url: `/invoices?invoiceJob=${job.id}`,
   });
 
-  return NextResponse.json({ notified: INVOICE_PROMPT_USER_IDS.length });
+  return NextResponse.json({ notified: billingUserIds.length });
 }
