@@ -4132,16 +4132,20 @@ export default function POsPage() {
         </div>
       )}
 
-      {/* Batch Invoice Controls */}
+      {/* Batch Invoice Controls — the SO-based billing flow: each of these
+          POs has a NetSuite Sales Order linked, units marked Done, and no
+          invoice yet. "Create" bills each PO's installed units off its SO.
+          The box lists exactly what would be sent so nobody has to guess. */}
       {invoiceablePOs.length > 0 && (
         <div style={{ background: 'var(--subtle-bg)', border: '1px solid rgba(167,139,250,0.25)', borderRadius: '10px', padding: '10px 12px', marginBottom: '10px' }}>
-          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '8px', flexWrap: 'wrap' }}>
             <div>
               <div style={{ fontSize: '12px', fontWeight: 700, color: '#a78bfa' }}>
                 Batch Invoice {selectedForInvoice.size > 0 ? `(${selectedForInvoice.size} selected)` : ''}
               </div>
               <div style={{ fontSize: '10px', color: 'var(--text-label)', marginTop: '2px' }}>
-                {invoiceablePOs.length} PO{invoiceablePOs.length !== 1 ? 's' : ''} ready to invoice (have SO + installed qty)
+                These POs have completed (installed) units that haven&apos;t been billed yet. Creating invoices bills each
+                PO&apos;s completed units through its linked NetSuite Sales Order — check the ones to bill first.
               </div>
             </div>
             <div style={{ display: 'flex', gap: '6px' }}>
@@ -4167,6 +4171,54 @@ export default function POsPage() {
                 </button>
               )}
             </div>
+          </div>
+
+          {/* Exactly what each invoice would bill */}
+          <div style={{ marginTop: '8px', display: 'flex', flexDirection: 'column', gap: '4px' }}>
+            {invoiceablePOs.map(po => {
+              const billable = po.line_items.filter(li => (li.installed || 0) > 0);
+              const qty = billable.reduce((s, li) => s + (li.installed || 0), 0);
+              const value = billable.reduce((s, li) => s + (li.installed || 0) * (li.unit_price || 0), 0);
+              const checked = selectedForInvoice.has(po.id);
+              return (
+                <label
+                  key={po.id}
+                  style={{
+                    display: 'flex', alignItems: 'center', gap: '8px', padding: '6px 8px',
+                    borderRadius: '6px', cursor: 'pointer', fontSize: '11px',
+                    background: checked ? 'rgba(167,139,250,0.08)' : 'transparent',
+                    border: `1px solid ${checked ? 'rgba(167,139,250,0.3)' : 'transparent'}`,
+                  }}
+                >
+                  <input
+                    type="checkbox"
+                    checked={checked}
+                    onChange={() => toggleInvoiceSelection(po.id)}
+                    style={{ width: '14px', height: '14px', accentColor: '#a78bfa', cursor: 'pointer', flexShrink: 0 }}
+                  />
+                  <span style={{ fontWeight: 700, color: 'var(--text-body)', whiteSpace: 'nowrap' }}>PO #{po.po_number}</span>
+                  <span style={{ color: 'var(--text-label)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', flex: 1 }}>
+                    {po.customer}
+                  </span>
+                  <span style={{ color: 'var(--text-body)', whiteSpace: 'nowrap' }}>
+                    {qty} unit{qty !== 1 ? 's' : ''} done
+                  </span>
+                  <span style={{ color: '#60a5fa', fontWeight: 700, whiteSpace: 'nowrap' }}>{fmt(value)}</span>
+                  <button
+                    onClick={(e) => {
+                      e.preventDefault(); e.stopPropagation();
+                      setPoTab(po.status === 'closed' ? 'closed' : po.status === 'complete' ? 'fulfilled' : 'open');
+                      setExpandedPo(po.id);
+                      setTimeout(() => document.getElementById(`po-row-${po.id}`)?.scrollIntoView({ behavior: 'smooth', block: 'center' }), 150);
+                    }}
+                    title="Jump to this PO to double-check its lines before billing"
+                    style={{ background: 'transparent', border: 'none', color: '#60a5fa', fontSize: '10px', fontWeight: 700, cursor: 'pointer', padding: '0 2px', flexShrink: 0 }}
+                  >
+                    view ↓
+                  </button>
+                </label>
+              );
+            })}
           </div>
 
           {invoiceResults && (
