@@ -3,6 +3,7 @@ import { createClient } from '@supabase/supabase-js';
 import { suiteqlQuery } from '@/lib/netsuite';
 import { requireAuth } from '@/lib/api-auth';
 import { safeStringLiteral, SqlSafeError } from '@/lib/sql-safe';
+import { notifyInvoiceCreated } from '@/lib/graphics-invoice-notify';
 import { validateBody, z } from '@/lib/validate';
 
 export const dynamic = 'force-dynamic';
@@ -39,7 +40,7 @@ export async function POST(req: NextRequest) {
 
     const { data: job } = await supabase
       .from('graphics_jobs')
-      .select('id, status, netsuite_invoice_id, netsuite_invoice_number')
+      .select('id, status, title, job_number, customer, netsuite_invoice_id, netsuite_invoice_number')
       .eq('id', jobId)
       .maybeSingle();
     if (!job) return NextResponse.json({ error: 'Graphics job not found' }, { status: 404 });
@@ -93,6 +94,17 @@ export async function POST(req: NextRequest) {
       note: linked
         ? `Marked as invoiced — linked to NetSuite invoice #${storedNumber}`
         : `Marked as invoiced outside FleetSuite${invoiceNumber ? ` (invoice "${invoiceNumber}" not found in NetSuite)` : ''}`,
+    });
+
+    // Resolve the "create invoice?" prompts and tell the other billing
+    // users it's handled (best-effort — never fails the request).
+    await notifyInvoiceCreated(supabase, {
+      jobId,
+      jobLabel: job.title || `Job #${job.job_number}` || `Job ${jobId.slice(0, 8)}`,
+      customer: job.customer,
+      invoiceNumber: linked ? storedNumber : null,
+      actorId: auth.user.id,
+      how: linked ? undefined : 'marked invoiced outside FleetSuite',
     });
 
     return NextResponse.json({ success: true, invoiceId, invoiceNumber: storedNumber, linked });
