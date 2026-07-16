@@ -13,13 +13,20 @@
 import type { SupabaseClient } from '@supabase/supabase-js';
 import { notifyMany } from '@/lib/notify';
 
-// Hardcoded user UUIDs for now. Survives name/email changes. Swap to a
-// `notify_invoice_prompts` boolean on profiles once the recipient list
-// needs self-serve management.
-export const INVOICE_PROMPT_USER_IDS = [
-  'f9f8a88c-1049-4bd5-95db-888787677ac9', // Craig George
-  '13c993b2-bb84-4539-8bbc-6c85395f558c', // Jessie Whittington
-];
+/**
+ * The billing users are every approved admin. Mirrors api-auth's
+ * profileRoles(): the multi-role `roles` array wins when present, else the
+ * single `role` column.
+ */
+export async function getBillingUserIds(supabase: SupabaseClient): Promise<string[]> {
+  const { data } = await supabase
+    .from('profiles')
+    .select('id, role, roles')
+    .eq('status', 'approved');
+  return (data || [])
+    .filter((p) => (Array.isArray(p.roles) && p.roles.length > 0 ? p.roles : [p.role]).includes('admin'))
+    .map((p) => p.id);
+}
 
 export async function notifyInvoiceCreated(
   supabase: SupabaseClient,
@@ -51,7 +58,7 @@ export async function notifyInvoiceCreated(
 
   // 2. Tell the other billing users it's handled.
   try {
-    const recipients = INVOICE_PROMPT_USER_IDS.filter((id) => id !== actorId);
+    const recipients = (await getBillingUserIds(supabase)).filter((id) => id !== actorId);
     if (recipients.length === 0) return;
 
     const { data: actor } = await supabase

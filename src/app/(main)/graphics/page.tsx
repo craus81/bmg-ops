@@ -65,6 +65,10 @@ function relativeTime(iso: string): string {
 // Active statuses (not terminal)
 const ACTIVE_STATUSES: GraphicsJobStatus[] = ['flagged', 'received', 'designing', 'revision', 'printing', 'outgassing', 'cutting', 'packing', 'ready', 'ready_to_pickup'];
 
+// Everything ships UPS — tracking numbers link straight to their site.
+const upsTrackingUrl = (trackingNumber: string) =>
+  `https://www.ups.com/track?tracknum=${encodeURIComponent(trackingNumber.trim())}`;
+
 export default function GraphicsPage() {
   const router = useRouter();
   const searchParams = useSearchParams();
@@ -94,8 +98,7 @@ export default function GraphicsPage() {
   // Status change with comment
   const [pendingStatus, setPendingStatus] = useState<{ job: GraphicsJob; status: GraphicsJobStatus } | null>(null);
   const [statusComment, setStatusComment] = useState('');
-  // Shipping details captured when moving to "shipped"
-  const [shipCarrier, setShipCarrier] = useState('');
+  // Tracking number captured when moving to "shipped"
   const [shipTracking, setShipTracking] = useState('');
 
   // Internal notes (comment thread)
@@ -583,16 +586,15 @@ export default function GraphicsPage() {
     if (job.status === newStatus) return;
     setPendingStatus({ job, status: newStatus });
     setStatusComment('');
-    // Shipping fields prefill from the job so a tracking number entered
-    // earlier via Edit Job isn't blanked by the ship dialog.
-    setShipCarrier(job.carrier || '');
+    // Prefill from the job so a tracking number entered earlier via Edit
+    // Job isn't blanked by the ship dialog.
     setShipTracking(job.tracking_number || '');
   };
 
   const confirmStatusChange = async () => {
     if (!pendingStatus) return;
     const ship = pendingStatus.status === 'shipped'
-      ? { carrier: shipCarrier.trim() || undefined, tracking: shipTracking.trim() || undefined }
+      ? { tracking: shipTracking.trim() || undefined }
       : undefined;
     await changeStatus(pendingStatus.job, pendingStatus.status, statusComment.trim() || undefined, ship);
     setPendingStatus(null);
@@ -604,14 +606,13 @@ export default function GraphicsPage() {
     job: GraphicsJob,
     newStatus: GraphicsJobStatus,
     note?: string,
-    ship?: { carrier?: string; tracking?: string },
+    ship?: { tracking?: string },
   ) => {
     const oldStatus = job.status;
     if (oldStatus === newStatus) return;
 
     const shipFields: Partial<GraphicsJob> = {};
     if (ship?.tracking) shipFields.tracking_number = ship.tracking;
-    if (ship?.carrier) shipFields.carrier = ship.carrier;
 
     const { error } = await supabase
       .from('graphics_jobs')
@@ -637,7 +638,7 @@ export default function GraphicsPage() {
           from_status: newStatus,
           to_status: newStatus,
           changed_by: user?.id,
-          note: `Tracking #: ${ship.tracking}${ship.carrier ? ` (${ship.carrier})` : ''}`,
+          note: `Tracking #: ${ship.tracking}`,
         });
       }
 
@@ -1459,9 +1460,16 @@ export default function GraphicsPage() {
                         )}
                         {job.netsuite_invoice_number && <span style={{ padding: '0 4px', borderRadius: '3px', background: 'rgba(34,197,94,0.1)', color: '#22c55e', fontWeight: 700 }}>INV {job.netsuite_invoice_number}</span>}
                         {job.tracking_number && (
-                          <span title={job.carrier ? `Shipped via ${job.carrier}` : 'Tracking number'} style={{ padding: '0 4px', borderRadius: '3px', background: 'rgba(96,165,250,0.1)', color: '#60a5fa', fontWeight: 700 }}>
+                          <a
+                            href={upsTrackingUrl(job.tracking_number)}
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            onClick={e => e.stopPropagation()}
+                            title="Track on ups.com"
+                            style={{ padding: '0 4px', borderRadius: '3px', background: 'rgba(96,165,250,0.1)', color: '#60a5fa', fontWeight: 700, textDecoration: 'none' }}
+                          >
                             📦 {job.tracking_number}
-                          </span>
+                          </a>
                         )}
                         {(() => {
                           const others = (jobViews[job.id] || []).filter(v => v.user_id !== user?.id);
@@ -1556,9 +1564,16 @@ export default function GraphicsPage() {
                           <span>Qty: {job.quantity}</span>
                           {job.po_number && <span style={{ color: '#a78bfa', fontWeight: 700 }}>PO #{job.po_number}</span>}
                           {job.tracking_number && (
-                            <span title={job.carrier ? `Shipped via ${job.carrier}` : 'Tracking number'} style={{ padding: '0 4px', borderRadius: '3px', background: 'rgba(96,165,250,0.1)', color: '#60a5fa', fontWeight: 700 }}>
+                            <a
+                              href={upsTrackingUrl(job.tracking_number)}
+                              target="_blank"
+                              rel="noopener noreferrer"
+                              onClick={e => e.stopPropagation()}
+                              title="Track on ups.com"
+                              style={{ padding: '0 4px', borderRadius: '3px', background: 'rgba(96,165,250,0.1)', color: '#60a5fa', fontWeight: 700, textDecoration: 'none' }}
+                            >
                               📦 {job.tracking_number}
-                            </span>
+                            </a>
                           )}
                         </div>
                       </div>
@@ -1718,13 +1733,22 @@ export default function GraphicsPage() {
                         )}
 
                         {/* Tracking */}
-                        {(job.tracking_number || job.carrier || job.ship_to) && (
+                        {(job.tracking_number || job.ship_to) && (
                           <div style={{ marginBottom: '10px' }}>
                             <div style={labelStyle}>Shipping</div>
                             <div style={{ fontSize: '11px' }}>
                               <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap' }}>
-                                {job.carrier && <span style={{ color: 'var(--text-body)' }}>{job.carrier}</span>}
-                                {job.tracking_number && <span style={{ color: '#60a5fa', fontWeight: 700 }}>{job.tracking_number}</span>}
+                                {job.tracking_number && (
+                                  <a
+                                    href={upsTrackingUrl(job.tracking_number)}
+                                    target="_blank"
+                                    rel="noopener noreferrer"
+                                    title="Track on ups.com"
+                                    style={{ color: '#60a5fa', fontWeight: 700 }}
+                                  >
+                                    {job.tracking_number}
+                                  </a>
+                                )}
                               </div>
                               {job.ship_to && (
                                 <div style={{ color: 'var(--text-label)', whiteSpace: 'pre-wrap', marginTop: '4px', padding: '4px 6px', borderRadius: '4px', background: 'var(--bg)', lineHeight: 1.4 }}>
@@ -2318,22 +2342,9 @@ export default function GraphicsPage() {
                         </div>
 
                         <div style={labelStyle}>Shipping</div>
-                        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '6px', marginBottom: '6px' }}>
-                          <div>
-                            <div style={{ ...labelStyle, fontSize: '8px' }}>Carrier</div>
-                            <select style={inputStyle} value={editJob!.carrier || ''} onChange={e => setEditingJob({ ...editJob!, carrier: e.target.value })}>
-                              <option value="">—</option>
-                              <option>UPS</option>
-                              <option>FedEx</option>
-                              <option>USPS</option>
-                              <option>LTL</option>
-                              <option>Hand Delivery</option>
-                            </select>
-                          </div>
-                          <div>
-                            <div style={{ ...labelStyle, fontSize: '8px' }}>Tracking #</div>
-                            <input style={inputStyle} value={editJob!.tracking_number || ''} onChange={e => setEditingJob({ ...editJob!, tracking_number: e.target.value })} />
-                          </div>
+                        <div style={{ marginBottom: '6px' }}>
+                          <div style={{ ...labelStyle, fontSize: '8px' }}>Tracking #</div>
+                          <input style={inputStyle} value={editJob!.tracking_number || ''} onChange={e => setEditingJob({ ...editJob!, tracking_number: e.target.value })} />
                         </div>
                         <div style={{ marginBottom: '10px' }}>
                           <div style={{ ...labelStyle, fontSize: '8px' }}>Ship To Address</div>
@@ -2803,39 +2814,18 @@ export default function GraphicsPage() {
               {pendingStatus.job.title} — <span style={{ color: GRAPHICS_STATUS_COLORS[pendingStatus.job.status] }}>{GRAPHICS_STATUS_LABELS[pendingStatus.job.status]}</span> → <span style={{ color: GRAPHICS_STATUS_COLORS[pendingStatus.status], fontWeight: 700 }}>{GRAPHICS_STATUS_LABELS[pendingStatus.status]}</span>
             </div>
             {pendingStatus.status === 'shipped' && (
-              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1.4fr', gap: '8px', marginBottom: '10px' }}>
-                <div>
-                  <div style={{ fontSize: '9px', fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.3px', color: 'var(--text-label)', marginBottom: '3px' }}>Carrier</div>
-                  <select
-                    value={shipCarrier}
-                    onChange={e => setShipCarrier(e.target.value)}
-                    style={{
-                      width: '100%', padding: '10px', borderRadius: '8px', fontSize: '12px',
-                      background: 'var(--input-bg)', border: '1px solid var(--border)',
-                      color: 'var(--text-primary)', outline: 'none',
-                    }}
-                  >
-                    <option value="">—</option>
-                    <option>UPS</option>
-                    <option>FedEx</option>
-                    <option>USPS</option>
-                    <option>LTL</option>
-                    <option>Hand Delivery</option>
-                  </select>
-                </div>
-                <div>
-                  <div style={{ fontSize: '9px', fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.3px', color: 'var(--text-label)', marginBottom: '3px' }}>Tracking #</div>
-                  <input
-                    value={shipTracking}
-                    onChange={e => setShipTracking(e.target.value)}
-                    placeholder="e.g. 1Z999AA10123456784"
-                    style={{
-                      width: '100%', padding: '10px', borderRadius: '8px', fontSize: '12px',
-                      background: 'var(--input-bg)', border: '1px solid var(--border)',
-                      color: 'var(--text-primary)', outline: 'none',
-                    }}
-                  />
-                </div>
+              <div style={{ marginBottom: '10px' }}>
+                <div style={{ fontSize: '9px', fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.3px', color: 'var(--text-label)', marginBottom: '3px' }}>Tracking #</div>
+                <input
+                  value={shipTracking}
+                  onChange={e => setShipTracking(e.target.value)}
+                  placeholder="e.g. 1Z999AA10123456784"
+                  style={{
+                    width: '100%', padding: '10px', borderRadius: '8px', fontSize: '12px',
+                    background: 'var(--input-bg)', border: '1px solid var(--border)',
+                    color: 'var(--text-primary)', outline: 'none',
+                  }}
+                />
               </div>
             )}
             <textarea
