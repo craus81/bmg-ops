@@ -73,6 +73,18 @@ export async function POST(req: NextRequest) {
     const results: { name: string; status: 'success' | 'error'; error?: string }[] = [];
 
     for (const entry of included) {
+      // Defense in depth: the manifest is client-supplied, so never ingest
+      // OS junk (.DS_Store, __MACOSX forks, Thumbs.db) even if it slipped
+      // past the upload-zip parser's filter.
+      const baseName = entry.path.split('/').pop() || '';
+      if (
+        entry.path.startsWith('__MACOSX') ||
+        entry.path.split('/').some(p => p.startsWith('.')) ||
+        baseName.toLowerCase() === 'thumbs.db'
+      ) {
+        results.push({ name: entry.name, status: 'error', error: 'Skipped hidden/system file' });
+        continue;
+      }
       try {
         const slug = `${entry.make}-${entry.model}-${entry.year}-${entry.name}`
           .toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/-+/g, '-').slice(0, 80);

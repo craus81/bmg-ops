@@ -67,11 +67,17 @@ export async function POST(req: NextRequest) {
     for (const [relativePath, entry] of Object.entries(zip.files)) {
       if (entry.dir) continue;
 
-      // Skip __MACOSX and hidden files
-      if (relativePath.startsWith('__MACOSX') || relativePath.includes('/._') || relativePath.startsWith('.')) continue;
-
       const parts = relativePath.split('/').filter(Boolean);
       const fileName = parts[parts.length - 1];
+
+      // Skip __MACOSX resource forks and hidden/OS junk at ANY depth — a
+      // nested .DS_Store (Make/Model/.DS_Store) used to slip past a
+      // root-only check and show up as a bogus template row.
+      if (
+        relativePath.startsWith('__MACOSX') ||
+        parts.some(p => p.startsWith('.')) ||
+        fileName.toLowerCase() === 'thumbs.db'
+      ) continue;
       const ext = fileName.split('.').pop()?.toLowerCase() || '';
       const folderParts = parts.slice(0, -1);
 
