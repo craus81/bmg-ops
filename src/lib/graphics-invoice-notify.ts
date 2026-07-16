@@ -14,18 +14,21 @@ import type { SupabaseClient } from '@supabase/supabase-js';
 import { notifyMany } from '@/lib/notify';
 
 /**
- * The billing users are every approved admin. Mirrors api-auth's
- * profileRoles(): the multi-role `roles` array wins when present, else the
- * single `role` column.
+ * The billing users are the approved admins who opted in to invoicing
+ * notifications in Settings (notification_preferences.notify_invoicing).
+ * Admin detection mirrors api-auth's profileRoles(): the multi-role `roles`
+ * array wins when present, else the single `role` column.
  */
 export async function getBillingUserIds(supabase: SupabaseClient): Promise<string[]> {
-  const { data } = await supabase
-    .from('profiles')
-    .select('id, role, roles')
-    .eq('status', 'approved');
-  return (data || [])
+  const [{ data: profiles }, { data: prefs }] = await Promise.all([
+    supabase.from('profiles').select('id, role, roles').eq('status', 'approved'),
+    supabase.from('notification_preferences').select('user_id').eq('notify_invoicing', true),
+  ]);
+  const optedIn = new Set((prefs || []).map((p) => p.user_id));
+  return (profiles || [])
     .filter((p) => (Array.isArray(p.roles) && p.roles.length > 0 ? p.roles : [p.role]).includes('admin'))
-    .map((p) => p.id);
+    .map((p) => p.id)
+    .filter((id) => optedIn.has(id));
 }
 
 export async function notifyInvoiceCreated(

@@ -10,7 +10,7 @@ import { isPushSupported, getPushPermission, getExistingSubscription, subscribeT
 
 export default function SettingsPage() {
   const router = useRouter();
-  const { user, profile } = useAuth();
+  const { user, profile, isAdmin } = useAuth();
   const supabase = createClient();
 
   const [prefs, setPrefs] = useState<NotificationPreferences | null>(null);
@@ -165,6 +165,7 @@ export default function SettingsPage() {
         notify_status_change: true,
         notify_ready: true,
         notify_ready_for_install: false,
+        notify_invoicing: false,
         notify_shipped: true,
         notify_new_po: false,
         notify_in_app: true,
@@ -191,6 +192,7 @@ export default function SettingsPage() {
       notify_status_change: prefs.notify_status_change,
       notify_ready: prefs.notify_ready,
       notify_ready_for_install: prefs.notify_ready_for_install ?? false,
+      notify_invoicing: prefs.notify_invoicing ?? false,
       notify_shipped: prefs.notify_shipped,
       notify_new_po: prefs.notify_new_po,
       notify_in_app: prefs.notify_in_app,
@@ -355,6 +357,20 @@ export default function SettingsPage() {
               <div style={{ fontSize: '10px', color: 'var(--text-label)' }}>Get notified when a job is shipped with tracking info</div>
             </div>
           </label>
+
+          {isAdmin && (
+            <label style={{ display: 'flex', alignItems: 'center', gap: '10px', cursor: 'pointer' }}>
+              <input
+                type="checkbox"
+                checked={prefs.notify_invoicing ?? false}
+                onChange={e => setPrefs({ ...prefs, notify_invoicing: e.target.checked })}
+              />
+              <div>
+                <div style={{ fontSize: '12px', fontWeight: 700, color: 'var(--text-body)' }}>Invoicing Alerts</div>
+                <div style={{ fontSize: '10px', color: 'var(--text-label)' }}>Get notified when a shipped job needs an invoice and when someone else creates one. Admins only.</div>
+              </div>
+            </label>
+          )}
 
           <label style={{ display: 'flex', alignItems: 'center', gap: '10px', cursor: 'pointer' }}>
             <input type="checkbox" checked={prefs.notify_new_po} onChange={e => setPrefs({ ...prefs, notify_new_po: e.target.checked })} />
