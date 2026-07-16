@@ -6,6 +6,7 @@ import { createClient } from '@/lib/supabase-browser';
 import { storage } from '@/lib/storage';
 import { useAuth } from '@/components/AuthProvider';
 import { useDialog } from '@/components/DialogProvider';
+import { DropZone } from '@/components/DropZone';
 import { theme } from '@/lib/theme';
 
 interface UpfitNote {
@@ -802,6 +803,11 @@ export default function UpfitProjectsPage() {
         )}
 
         {/* Files */}
+        <DropZone
+          onFiles={files => { if (selected) uploadFiles(selected.id, files); }}
+          multiple
+          disabled={uploadingFiles}
+        >
         <div style={{ fontSize: '11px', fontWeight: 700, color: theme.textSecondary, marginBottom: '8px', textTransform: 'uppercase', letterSpacing: '0.5px', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
           <span>Files ({files.length})</span>
           <div>
@@ -850,6 +856,7 @@ export default function UpfitProjectsPage() {
             ))}
           </div>
         )}
+        </DropZone>
 
         {/* Add note */}
         <div style={{ display: 'flex', gap: '8px', marginBottom: '12px' }}>
@@ -926,7 +933,7 @@ export default function UpfitProjectsPage() {
               placeholder="Customer name"
               style={{ padding: '8px 12px', borderRadius: '8px', border: `1px solid ${theme.border}`, background: theme.inputBg, color: theme.textPrimary, fontSize: '13px', outline: 'none' }}
             />
-            <div>
+            <DropZone onFiles={fs => setCreateFiles(prev => [...prev, ...fs])} multiple>
               {createFiles.length > 0 && (
                 <div style={{ display: 'flex', flexWrap: 'wrap', gap: '4px', marginBottom: '6px' }}>
                   {createFiles.map((f, i) => (
@@ -955,7 +962,7 @@ export default function UpfitProjectsPage() {
               >
                 + Add Files (PO PDFs, photos, specs)
               </button>
-            </div>
+            </DropZone>
             <div style={{ display: 'flex', gap: '8px', justifyContent: 'flex-end' }}>
               <button onClick={() => { setShowCreate(false); setCreateFiles([]); }} style={{ padding: '6px 12px', borderRadius: '6px', background: 'none', border: `1px solid ${theme.border}`, color: theme.textMuted, fontSize: '12px', cursor: 'pointer' }}>Cancel</button>
               <button onClick={createProject} disabled={creating || !newName.trim()} style={{ padding: '6px 14px', borderRadius: '6px', background: theme.orange, color: '#fff', border: 'none', fontSize: '12px', fontWeight: 700, cursor: 'pointer', opacity: creating || !newName.trim() ? 0.5 : 1 }}>{creating ? 'Creating...' : 'Create'}</button>

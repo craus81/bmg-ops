@@ -4,6 +4,7 @@ import { useState, useEffect } from 'react';
 import { useRouter } from 'next/navigation';
 import { createClient } from '@/lib/supabase-browser';
 import { useAuth } from '@/components/AuthProvider';
+import { DropZone } from '@/components/DropZone';
 import PartPicker, { type PickedPart } from '@/components/PartPicker';
 import { loadCompaniesWithCounts, type CompanyOption } from '@/lib/cni-companies';
 import { uploadJobFiles } from '@/lib/job-files';
@@ -268,7 +269,11 @@ export default function CreateCniJobPage() {
       </div>
 
       {/* Files & Proofs */}
-      <div style={sectionStyle}>
+      <DropZone
+        onFiles={files => setJobFiles(prev => [...prev, ...files])}
+        multiple
+        style={sectionStyle}
+      >
         <div style={sectionTitle}>Files &amp; Proofs</div>
         <div style={{ fontSize: '12px', color: 'var(--text-muted)', marginBottom: '10px' }}>
           Attach proofs, photos, or any documents that describe the job. The assigned company&apos;s installers can download these.
@@ -300,7 +305,7 @@ export default function CreateCniJobPage() {
             </div>
           </div>
         )}
-      </div>
+      </DropZone>
 
       {/* Install Location */}
       <div style={sectionStyle}>

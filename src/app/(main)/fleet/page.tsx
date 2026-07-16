@@ -5,6 +5,7 @@ import { useRouter } from 'next/navigation';
 import { usePopout } from '@/components/Popout';
 import { useAuth } from '@/components/AuthProvider';
 import { useDialog } from '@/components/DialogProvider';
+import { DropZone } from '@/components/DropZone';
 import { createClient } from '@/lib/supabase-browser';
 import { decodeVIN, isValidVIN } from '@/lib/vin-decoder';
 import VinScanner from '@/components/VinScanner';
@@ -1300,6 +1301,12 @@ export default function FleetPage() {
         {/* Upload from device + currently-selected proof. Sits above the
             Supabase/Dropbox pickers so it's the first option when none of
             the search results fit. */}
+        <DropZone
+          onFiles={(files) => uploadProofFromDevice(files[0])}
+          accept="image/*,application/pdf,.eps,.ai,.psd"
+          multiple={false}
+          disabled={uploadingProof}
+        >
         <input
           ref={uploadProofInputRef}
           type="file"
@@ -1322,6 +1329,7 @@ export default function FleetPage() {
             }}
           >{uploadingProof ? 'Uploading...' : '+ Upload Proof from Device'}</button>
         </div>
+        </DropZone>
         {(selectedProof || dbxSelected) && (
           <div style={{
             display: 'flex', alignItems: 'center', justifyContent: 'space-between',

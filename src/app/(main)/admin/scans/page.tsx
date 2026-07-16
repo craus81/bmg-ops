@@ -6,6 +6,7 @@ import { createClient } from '@/lib/supabase-browser';
 import { useAuth } from '@/components/AuthProvider';
 import { useDialog } from '@/components/DialogProvider';
 import { PartLabel } from '@/components/PartLabel';
+import { DropZone } from '@/components/DropZone';
 import { CreateNetsuiteItemModal, type CreatedPart } from '@/components/CreateNetsuiteItemModal';
 import EmailInvoicesModal, { type EmailableInvoice } from '@/components/EmailInvoicesModal';
 import { theme } from '@/lib/theme';
@@ -811,15 +812,19 @@ export default function AdminScansPage() {
     if (success > 0) { setBulkVins(''); loadAll(); }
   };
 
-  const handleFileUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0];
-    if (!file) return;
+  const importVinFile = (file: File) => {
     const reader = new FileReader();
     reader.onload = (ev) => {
       const text = ev.target?.result as string;
       setBulkVins(prev => prev ? prev + '\n' + text : text);
     };
     reader.readAsText(file);
+  };
+
+  const handleFileUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    importVinFile(file);
     e.target.value = '';
   };
 
@@ -827,6 +832,10 @@ export default function AdminScansPage() {
     const file = e.target.files?.[0];
     if (!file) return;
     e.target.value = '';
+    await scanWorksheetFile(file);
+  };
+
+  const scanWorksheetFile = async (file: File) => {
     setScanningWorksheet(true);
     setWorksheetNotes(null);
     setBulkResult(null);
@@ -1567,6 +1576,7 @@ export default function AdminScansPage() {
             }}
           />
           <div style={{ display: 'flex', gap: '8px', marginTop: '10px', alignItems: 'center', flexWrap: 'wrap' }}>
+            <DropZone accept=".csv,.txt,.tsv" multiple={false} onFiles={files => importVinFile(files[0])}>
             <label style={{
               padding: '8px 14px', borderRadius: '8px', fontSize: '12px', fontWeight: 700,
               background: 'var(--subtle-bg)', border: `1px solid ${theme.border}`,
@@ -1575,6 +1585,8 @@ export default function AdminScansPage() {
               Upload CSV
               <input type="file" accept=".csv,.txt,.tsv" onChange={handleFileUpload} style={{ display: 'none' }} />
             </label>
+            </DropZone>
+            <DropZone accept="image/*,.pdf" multiple={false} disabled={scanningWorksheet} onFiles={files => scanWorksheetFile(files[0])}>
             <label style={{
               padding: '8px 14px', borderRadius: '8px', fontSize: '12px', fontWeight: 700,
               background: scanningWorksheet ? 'rgba(167,139,250,0.15)' : 'rgba(167,139,250,0.08)',
@@ -1585,6 +1597,7 @@ export default function AdminScansPage() {
               {scanningWorksheet ? 'Scanning...' : 'Scan Worksheet (OCR)'}
               <input type="file" accept="image/*,.pdf" capture="environment" onChange={handleWorksheetScan} disabled={scanningWorksheet} style={{ display: 'none' }} />
             </label>
+            </DropZone>
             <span style={{ fontSize: '11px', color: 'var(--text-muted)', flex: 1 }}>
               {bulkVins.split(/[\n,]+/).filter(v => v.trim().length >= 5).length} VINs detected
             </span>

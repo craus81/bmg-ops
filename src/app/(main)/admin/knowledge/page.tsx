@@ -6,6 +6,7 @@ import { createClient } from '@/lib/supabase-browser';
 import { useAuth } from '@/components/AuthProvider';
 import { useDialog } from '@/components/DialogProvider';
 import { storage } from '@/lib/storage';
+import { DropZone } from '@/components/DropZone';
 
 interface KnowledgeDoc {
   id: string;
@@ -22,6 +23,8 @@ interface KnowledgeDoc {
 }
 
 const CATEGORIES = ['help', 'SOP', 'spec', 'pricing', 'process', 'policy', 'other'];
+
+const UPLOAD_ACCEPT = '.pdf,.docx,.doc,.xlsx,.xls,.csv,.tsv,.txt,.md,.json,.xml,.html,.png,.jpg,.jpeg,.gif,.webp,.svg';
 
 const FILE_ICONS: Record<string, string> = {
   'application/pdf': 'PDF',
@@ -122,11 +125,16 @@ export default function KnowledgePage() {
 
   // ─── File upload ───
 
+  const stageUploadFiles = (files: File[]) => {
+    if (files.length === 0) return;
+    setUploadFiles(files);
+    setShowUploadForm(true);
+  };
+
   const handleFileSelect = (e: React.ChangeEvent<HTMLInputElement>) => {
     const files = e.target.files;
     if (!files || files.length === 0) return;
-    setUploadFiles(Array.from(files));
-    setShowUploadForm(true);
+    stageUploadFiles(Array.from(files));
   };
 
   // Split a PDF into chunks of N pages each, returns array of File objects
@@ -562,6 +570,7 @@ export default function KnowledgePage() {
 
       {/* Action buttons */}
       <div style={{ display: 'flex', gap: '8px', marginBottom: '12px' }}>
+        <DropZone accept={UPLOAD_ACCEPT} onFiles={stageUploadFiles} style={{ flex: 1, display: 'flex' }}>
         <label
           style={{
             flex: 1, padding: '14px', borderRadius: '12px',
@@ -581,11 +590,12 @@ export default function KnowledgePage() {
             ref={fileInputRef}
             type="file"
             multiple
-            accept=".pdf,.docx,.doc,.xlsx,.xls,.csv,.tsv,.txt,.md,.json,.xml,.html,.png,.jpg,.jpeg,.gif,.webp,.svg"
+            accept={UPLOAD_ACCEPT}
             onChange={handleFileSelect}
             style={{ display: 'none' }}
           />
         </label>
+        </DropZone>
 
         <button
           onClick={() => { setEditingDoc(null); setForm({ title: '', category: 'SOP', content: '', tags: '' }); setShowForm(true); }}

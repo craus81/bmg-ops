@@ -6,6 +6,7 @@ import { createClient } from '@/lib/supabase-browser';
 import { useAuth } from '@/components/AuthProvider';
 import { storage } from '@/lib/storage';
 import { apiFetch } from '@/lib/api-client';
+import { DropZone } from '@/components/DropZone';
 import type { CatalogItem } from '@/lib/types';
 
 interface ZipFileEntry {
@@ -104,9 +105,13 @@ export default function BulkUploadPage() {
     ])
   ).sort((a, b) => a.localeCompare(b));
 
-  const handleZipSelect = async (e: React.ChangeEvent<HTMLInputElement>) => {
+  const handleZipSelect = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file) return;
+    handleZipFile(file);
+  };
+
+  const handleZipFile = async (file: File) => {
     setError('');
     setUploadResult(null);
     setLoading(true);
@@ -404,6 +409,7 @@ export default function BulkUploadPage() {
             onChange={handleZipSelect}
             style={{ display: 'none' }}
           />
+          <DropZone accept=".zip" multiple={false} onFiles={files => handleZipFile(files[0])}>
           <button
             onClick={() => fileRef.current?.click()}
             style={{
@@ -415,6 +421,7 @@ export default function BulkUploadPage() {
           >
             Select ZIP File
           </button>
+          </DropZone>
         </div>
       )}
 
