@@ -24,15 +24,30 @@ async function recordRun(
   result: Record<string, unknown>,
 ): Promise<{ ok: boolean; error?: string }> {
   try {
+    const wroteAt = new Date().toISOString();
     const { error } = await supabase.from('sync_state').upsert({
       sync_type: SYNC_TYPE,
-      last_synced_at: new Date().toISOString(),
+      last_synced_at: wroteAt,
       last_result: result,
-      updated_at: new Date().toISOString(),
+      updated_at: wroteAt,
     }, { onConflict: 'sync_type' });
     if (error) {
       console.error('[gmail-auto-import] sync_state upsert error:', error);
       return { ok: false, error: error.message || JSON.stringify(error) };
+    }
+    // Trust but verify: an upsert can report success while the row stays
+    // stale (RLS filtering the conflict-update path writes nothing and
+    // raises nothing). Read the row back — a heartbeat that didn't land
+    // is a failure, and the caller needs the evidence.
+    const { data: check } = await supabase
+      .from('sync_state')
+      .select('last_synced_at')
+      .eq('sync_type', SYNC_TYPE)
+      .maybeSingle();
+    if (!check?.last_synced_at || check.last_synced_at < wroteAt) {
+      const msg = `upsert reported success but read-back shows ${check?.last_synced_at || 'no row at all'}`;
+      console.error('[gmail-auto-import] sync_state phantom write:', msg);
+      return { ok: false, error: msg };
     }
     return { ok: true };
   } catch (err: any) {

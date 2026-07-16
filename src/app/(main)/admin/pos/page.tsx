@@ -515,6 +515,7 @@ export default function POsPage() {
     lastResult: any | null;
     recentErrors?: any[];
     cronSecretConfigured?: boolean;
+    heartbeatWriteError?: string | null;
   } | null>(null);
   const [gmailRunning, setGmailRunning] = useState(false);
   const [gmailRunMessage, setGmailRunMessage] = useState<string | null>(null);
@@ -2672,10 +2673,14 @@ export default function POsPage() {
             : `The auto-import cron hasn't run in ${minutesAgo < 120 ? `${minutesAgo} minutes` : `${Math.round(minutesAgo / 60)} hours`} (it should fire every 20 minutes)`;
           // The server tells us whether CRON_SECRET exists — without it the
           // route rejects Vercel's cron requests before anything records,
-          // which is exactly what a silent stall looks like.
-          summary = gmailStatus.cronSecretConfigured === false
-            ? `${silence} — CRON_SECRET is not set on this deployment, so the cron's requests are being rejected. Add it in Vercel → Settings → Environment Variables, then redeploy.`
-            : `${silence} — the secret is configured, so check that the cron jobs are enabled (and not paused) in Vercel → Settings → Cron Jobs, and that the account plan allows a 20-minute schedule.`;
+          // which is exactly what a silent stall looks like. And when the
+          // status endpoint's own probe write fails, the runs are likely
+          // fine and only the heartbeat record is broken — say exactly that.
+          summary = gmailStatus.heartbeatWriteError
+            ? `Heads up: imports may be running fine — the run record can't be written. Database says: "${gmailStatus.heartbeatWriteError}"`
+            : gmailStatus.cronSecretConfigured === false
+              ? `${silence} — CRON_SECRET is not set on this deployment, so the cron's requests are being rejected. Add it in Vercel → Settings → Environment Variables, then redeploy.`
+              : `${silence} — the secret is configured, so check that the cron jobs are enabled (and not paused) in Vercel → Settings → Cron Jobs, and that the account plan allows a 20-minute schedule.`;
         } else if (gmailRunning) {
           summary = 'Manual import running…';
         } else {

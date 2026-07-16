@@ -38,6 +38,24 @@ export async function GET(req: NextRequest) {
       .limit(20),
   ]);
 
+  // When the heartbeat looks stale, the runs may actually be executing
+  // fine with only the sync_state WRITE failing (observed in the wild:
+  // cron 200s on schedule, timestamp frozen). Probe a write with the same
+  // shape recordRun uses and report the database's own error verbatim, so
+  // the strip can name the real problem instead of blaming the cron.
+  let heartbeatWriteError: string | null = null;
+  const lastRun = stateRow?.last_synced_at ? new Date(stateRow.last_synced_at).getTime() : null;
+  const staleMs = lastRun === null ? Infinity : Date.now() - lastRun;
+  if (staleMs > 60 * 60 * 1000) {
+    const { error: probeErr } = await supabase.from('sync_state').upsert({
+      sync_type: 'gmail_auto_import_probe',
+      last_synced_at: new Date().toISOString(),
+      last_result: { status: 'probe' },
+      updated_at: new Date().toISOString(),
+    }, { onConflict: 'sync_type' });
+    if (probeErr) heartbeatWriteError = probeErr.message || JSON.stringify(probeErr);
+  }
+
   return NextResponse.json({
     gmailConnected: !!tokenRow,
     tokenUpdatedAt: tokenRow?.updated_at || null,
@@ -48,5 +66,6 @@ export async function GET(req: NextRequest) {
     // requests before they can run or record anything — the exact
     // signature of a silent stall, so let the UI name the cause.
     cronSecretConfigured: !!process.env.CRON_SECRET,
+    heartbeatWriteError,
   });
 }
