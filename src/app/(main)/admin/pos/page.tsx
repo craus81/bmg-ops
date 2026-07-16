@@ -503,6 +503,14 @@ export default function POsPage() {
   const [gfxJobsByPo, setGfxJobsByPo] = useState<Record<string, PoGfxJob[]>>({});
   // Create multi-part graphics job from entire PO
   const [creatingGfxJobForPo, setCreatingGfxJobForPo] = useState<string | null>(null); // po id
+  // "Graphics job created" confirmation toast — same green ✓ badge the
+  // graphics page shows after creating a job there. Auto-dismisses.
+  const [gfxCreatedToast, setGfxCreatedToast] = useState<string | null>(null);
+  useEffect(() => {
+    if (!gfxCreatedToast) return;
+    const t = setTimeout(() => setGfxCreatedToast(null), 6000);
+    return () => clearTimeout(t);
+  }, [gfxCreatedToast]);
   // Gmail PO auto-import status — surfaced in a strip above the PO list so
   // it's obvious whether the hourly cron is finding emails / connected to
   // Gmail at all, without anyone having to dig through Vercel logs.
@@ -2340,7 +2348,7 @@ export default function POsPage() {
           due_date: po.requested_delivery_date || null,
           created_by: user?.id || null,
         })
-        .select('id')
+        .select('id, job_number, title, status, po_id, po_line_item_id')
         .single();
 
       if (error) throw error;
@@ -2363,11 +2371,13 @@ export default function POsPage() {
       await attachPartFilesToGraphicsJob([li.part_number], job.id);
 
       setGfxJobResults(prev => ({ ...prev, [li.id]: 'created' }));
+      // Stay on the PO page: register the new job locally (so the line and
+      // the PO's Graphics Jobs panel update in place) and confirm with the
+      // same green ✓ toast the graphics page shows. No navigation — the job
+      // stays reachable via its "view ↗" link.
+      setGfxJobsByPo(prev => ({ ...prev, [po.id]: [...(prev[po.id] || []), job as PoGfxJob] }));
+      setGfxCreatedToast(job.job_number || jobNumber);
       setCreatingGfxJob(null);
-      // Take the user to the new job so success is unambiguous and they
-      // can finish editing it (spec, due date, etc.) in one motion. The
-      // created= param shows a "Job <number> created" toast over there.
-      router.push(`/graphics?editJob=${job.id}&created=${encodeURIComponent(jobNumber)}`);
       return;
     } catch (err: any) {
       console.error('[admin/pos] createGfxJobFromLine failed:', err);
@@ -2415,7 +2425,7 @@ export default function POsPage() {
           due_date: po.requested_delivery_date || null,
           created_by: user?.id || null,
         })
-        .select('id')
+        .select('id, job_number, title, status, po_id, po_line_item_id')
         .single();
 
       if (error) throw error;
@@ -2432,9 +2442,11 @@ export default function POsPage() {
       await attachPoFilesToGraphicsJob(po.id, job.id);
       await attachPartFilesToGraphicsJob(po.line_items.map(li => li.part_number), job.id);
 
-      // Navigate to graphics page with the new job open for editing; the
-      // created= param shows a "Job <number> created" toast over there.
-      router.push(`/graphics?editJob=${job.id}&created=${encodeURIComponent(jobNumber)}`);
+      // Stay on the PO page: register the new job locally (so the PO's
+      // Graphics Jobs panel updates in place) and confirm with the same
+      // green ✓ toast the graphics page shows.
+      setGfxJobsByPo(prev => ({ ...prev, [po.id]: [...(prev[po.id] || []), job as PoGfxJob] }));
+      setGfxCreatedToast(job.job_number || jobNumber);
     } catch (err: any) {
       console.error('[admin/pos] createGfxJobFromPO failed:', err);
       await dialog.alert(`Failed to create graphics job: ${err?.message || String(err)}`);
@@ -4983,6 +4995,23 @@ export default function POsPage() {
             setCreateNsItemLine(null);
           }}
         />
+      )}
+
+      {/* Green "Graphics job created" confirmation — same badge as the
+          graphics page's create flow. Click to dismiss. */}
+      {gfxCreatedToast && (
+        <div
+          onClick={() => setGfxCreatedToast(null)}
+          style={{
+            position: 'fixed', bottom: '28px', left: '50%', transform: 'translateX(-50%)',
+            zIndex: 3000, padding: '12px 20px', borderRadius: '12px', cursor: 'pointer',
+            background: '#16a34a', color: '#fff', fontSize: '14px', fontWeight: 800,
+            boxShadow: '0 6px 24px rgba(0,0,0,0.35)', display: 'flex', alignItems: 'center', gap: '8px',
+            whiteSpace: 'nowrap',
+          }}
+        >
+          <span style={{ fontSize: '16px' }}>✓</span> Graphics job {gfxCreatedToast} created
+        </div>
       )}
     </div>
   );
