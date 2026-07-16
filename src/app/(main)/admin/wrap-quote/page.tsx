@@ -511,6 +511,24 @@ export default function WrapQuotePage() {
     if (selectedId === id) setSelectedId(null);
   };
 
+  // Clone a measurement (same dims/film/qty) offset a little so the copy
+  // isn't hidden under the original.
+  const duplicateMeasurement = (id: string) => {
+    const src = measurements.find(m => m.id === id);
+    if (!src) return;
+    const OFFSET = 14;
+    const copy: Measurement = {
+      ...src,
+      id: crypto.randomUUID(),
+      name: `${src.name} copy`,
+      rect: src.rect ? { ...src.rect, x: src.rect.x + OFFSET, y: src.rect.y + OFFSET } : undefined,
+      line1: src.line1 ? { x1: src.line1.x1 + OFFSET, y1: src.line1.y1 + OFFSET, x2: src.line1.x2 + OFFSET, y2: src.line1.y2 + OFFSET } : undefined,
+      line2: src.line2 ? { x1: src.line2.x1 + OFFSET, y1: src.line2.y1 + OFFSET, x2: src.line2.x2 + OFFSET, y2: src.line2.y2 + OFFSET } : undefined,
+    };
+    setMeasurements(prev => [...prev, copy]);
+    setSelectedId(copy.id);
+  };
+
   const selected = measurements.find(m => m.id === selectedId) || null;
 
   const resetEstimate = () => {
@@ -1356,7 +1374,10 @@ export default function WrapQuotePage() {
                       <span style={{ width: '9px', height: '9px', borderRadius: '3px', background: filmColor(m.substrate_id), flexShrink: 0 }} />
                       <span style={{ fontSize: '11px', fontWeight: 700, color: 'var(--text-primary)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{m.name}</span>
                     </span>
-                    <button onClick={e => { e.stopPropagation(); removeMeasurement(m.id); }} style={{ background: 'none', border: 'none', color: '#ef4444', fontSize: '11px', fontWeight: 700, cursor: 'pointer' }}>✕</button>
+                    <span style={{ display: 'flex', alignItems: 'center', gap: '2px', flexShrink: 0 }}>
+                      <button onClick={e => { e.stopPropagation(); duplicateMeasurement(m.id); }} title="Duplicate" style={{ background: 'none', border: 'none', color: '#06b6d4', fontSize: '11px', fontWeight: 700, cursor: 'pointer' }}>⧉</button>
+                      <button onClick={e => { e.stopPropagation(); removeMeasurement(m.id); }} title="Delete" style={{ background: 'none', border: 'none', color: '#ef4444', fontSize: '11px', fontWeight: 700, cursor: 'pointer' }}>✕</button>
+                    </span>
                   </div>
                 ))}
 
