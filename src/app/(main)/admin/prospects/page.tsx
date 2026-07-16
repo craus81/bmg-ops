@@ -7,6 +7,7 @@ import { useAuth } from '@/components/AuthProvider';
 import { useDialog } from '@/components/DialogProvider';
 import { theme } from '@/lib/theme';
 import NetSuitePdf from '@/components/NetSuitePdf';
+import { DropZone } from '@/components/DropZone';
 import DropboxProofSearch from '@/components/DropboxProofSearch';
 import { exportProspectPDF } from '@/lib/prospect-pdf';
 import { downloadXlsx } from '@/lib/xlsx-export';
@@ -727,11 +728,13 @@ export default function ProspectsPage() {
             background: 'rgba(34,197,94,0.08)', border: '1px solid rgba(34,197,94,0.2)', color: '#22c55e', cursor: 'pointer',
             opacity: syncing ? 0.5 : 1,
           }}>{syncing ? 'Syncing...' : 'Sync NetSuite'}</button>
+          <DropZone accept="image/*" multiple={false} disabled={scanning} onFiles={files => handleScanCard(files[0])}>
           <input ref={cardInputRef} type="file" accept="image/*" capture="environment" onChange={(e) => { const f = e.target.files?.[0]; if (f) handleScanCard(f); e.target.value = ''; }} style={{ display: 'none' }} />
           <button onClick={() => cardInputRef.current?.click()} disabled={scanning} style={{
             padding: '8px 12px', borderRadius: '8px', fontSize: '11px', fontWeight: 700,
             background: 'rgba(167,139,250,0.1)', border: '1px solid rgba(167,139,250,0.25)', color: '#a78bfa', cursor: 'pointer',
           }}>{scanning ? 'Scanning...' : 'Scan Card'}</button>
+          </DropZone>
           <button onClick={() => { if (showCreate) { setShowCreate(false); setEditingProspectId(null); setForm({ company_name: '', contact_name: '', email: '', phone: '', address: '', city: '', state: '', zip: '', website: '', notes: '', location_count: 1 }); } else { setShowCreate(true); setEditingProspectId(null); } }} style={{
             padding: '8px 14px', borderRadius: '8px', fontSize: '11px', fontWeight: 700,
             background: 'var(--tab-active-bg)', border: '1px solid var(--tab-active-border)', color: 'var(--tab-active-color)', cursor: 'pointer',

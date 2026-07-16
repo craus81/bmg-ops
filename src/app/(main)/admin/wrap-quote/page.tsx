@@ -8,6 +8,7 @@ import { useDialog } from '@/components/DialogProvider';
 import { storage } from '@/lib/storage';
 import { apiFetch } from '@/lib/api-client';
 import { openNetSuitePdf } from '@/lib/netsuite-pdf-client';
+import { DropZone } from '@/components/DropZone';
 import { theme } from '@/lib/theme';
 
 // Manual wrap-quote estimator (WrapUP-style): pick a 1:20 vehicle outline
@@ -940,7 +941,7 @@ export default function WrapQuotePage() {
   };
 
   // ----- Email attachments (proofs, vinyl specs, …) -----
-  const addAttachments = async (files: FileList | null) => {
+  const addAttachments = async (files: FileList | File[] | null) => {
     if (!files?.length) return;
     setAttaching(true);
     try {
@@ -1689,6 +1690,7 @@ export default function WrapQuotePage() {
               <textarea value={projectNotes} onChange={e => setProjectNotes(e.target.value)} rows={3} style={{ ...inputStyle, resize: 'vertical' }} />
             </div>
             {sectionHead('Email Attachments')}
+            <DropZone disabled={attaching} onFiles={files => addAttachments(files)}>
             {attachments.map(a => (
               <div key={a.path} style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '4px' }}>
                 <span style={{ flex: 1, minWidth: 0, fontSize: '11px', fontWeight: 700, color: 'var(--text-primary)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{a.name}</span>
@@ -1701,6 +1703,7 @@ export default function WrapQuotePage() {
               <input type="file" multiple disabled={attaching} onChange={e => { addAttachments(e.target.files); e.target.value = ''; }} style={{ display: 'none' }} />
             </label>
             <div style={{ fontSize: '10px', color: 'var(--text-muted)', marginBottom: '12px' }}>Sent with the emailed quote — proof files, vinyl specs, or other documentation.</div>
+            </DropZone>
             <div style={{ marginBottom: '8px' }}>
               <div style={labelStyle}>Email Content</div>
               <select value={sendMode} onChange={e => setSendMode(e.target.value as typeof sendMode)} style={inputStyle}>
@@ -1897,7 +1900,7 @@ export default function WrapQuotePage() {
         <div style={{ background: 'var(--card)', border: `1px solid ${theme.border}`, borderRadius: '12px', padding: '16px', maxWidth: '480px' }}>
           {sectionHead('Company Information')}
           <div style={{ fontSize: '10px', color: 'var(--text-muted)', marginBottom: '10px' }}>Shown in the header of every quote you send.</div>
-          <div style={{ marginBottom: '10px' }}>
+          <DropZone accept="image/*" multiple={false} onFiles={files => uploadLogo(files[0])} style={{ marginBottom: '10px' }}>
             <div style={labelStyle}>Logo</div>
             {settings.company.logo_path && (
               <div style={{ background: '#fff', border: `1px solid ${theme.border}`, borderRadius: '8px', padding: '10px', marginBottom: '6px', display: 'inline-block' }}>
@@ -1914,7 +1917,7 @@ export default function WrapQuotePage() {
                 <button onClick={removeLogo} style={btnStyle('#ef4444', 'transparent')}>Remove</button>
               )}
             </div>
-          </div>
+          </DropZone>
           {([
             ['name', 'Company Name'], ['address', 'Address'], ['city', 'City'], ['state', 'State'], ['zip', 'Zip'], ['phone', 'Phone'], ['email', 'Email'],
           ] as const).map(([k, label]) => (
@@ -1967,10 +1970,12 @@ export default function WrapQuotePage() {
               <div><div style={labelStyle}>Variant</div><input value={tplForm.variant} onChange={e => setTplForm({ ...tplForm, variant: e.target.value })} placeholder="Double Cab 6ft Bed" style={{ ...inputStyle, width: '170px' }} /></div>
               <div><div style={labelStyle}>Code</div><input value={tplForm.code} onChange={e => setTplForm({ ...tplForm, code: e.target.value })} placeholder="ToyP_602" style={{ ...inputStyle, width: '100px' }} /></div>
               <div><div style={labelStyle}>Overall Length (in)</div><input type="number" value={tplForm.length} onChange={e => setTplForm({ ...tplForm, length: e.target.value })} style={{ ...inputStyle, width: '110px' }} /></div>
+              <DropZone accept="image/*" multiple={false} onFiles={files => setTplFile(files[0])}>
               <label style={{ ...btnStyle('#a78bfa', 'rgba(167,139,250,0.08)'), display: 'inline-block' }}>
                 {tplFile ? tplFile.name.slice(0, 24) : 'Choose Image'}
                 <input type="file" accept="image/*" onChange={e => setTplFile(e.target.files?.[0] || null)} style={{ display: 'none' }} />
               </label>
+              </DropZone>
               <button onClick={uploadTemplate} disabled={tplUploading} style={{ ...btnStyle('#fff', '#22c55e'), border: 'none' }}>
                 {tplUploading ? 'Uploading…' : 'Add Template'}
               </button>

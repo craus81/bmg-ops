@@ -5,6 +5,7 @@ import { useRouter, useSearchParams } from 'next/navigation';
 import { createClient } from '@/lib/supabase-browser';
 import { useAuth } from '@/components/AuthProvider';
 import { useDialog } from '@/components/DialogProvider';
+import { DropZone } from '@/components/DropZone';
 import { storage } from '@/lib/storage';
 
 interface Photo {
@@ -180,6 +181,12 @@ export default function PhotosPage() {
         </div>
       )}
 
+      <DropZone
+        onFiles={(files) => handleUpload(files[0])}
+        accept="image/*"
+        multiple={false}
+        disabled={uploading || reviewStatus === 'approved'}
+      >
       <input
         ref={fileRef}
         type="file"
@@ -243,6 +250,7 @@ export default function PhotosPage() {
           </div>
         ))}
       </div>
+      </DropZone>
 
       <div style={{ marginTop: '16px', display: 'flex', flexDirection: 'column', gap: '8px' }}>
         {/* Submit for Review button */}

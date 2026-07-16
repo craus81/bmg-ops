@@ -5,6 +5,7 @@ import { useRouter, useParams } from 'next/navigation';
 import { createClient } from '@/lib/supabase-browser';
 import { useAuth } from '@/components/AuthProvider';
 import { useDialog } from '@/components/DialogProvider';
+import { DropZone } from '@/components/DropZone';
 import VehiclePhotoTimeline from '@/components/VehiclePhotoTimeline';
 import CompletionModal from '@/components/CompletionModal';
 import { PartLabel } from '@/components/PartLabel';
@@ -269,8 +270,7 @@ export default function VehiclePickListPage() {
     }
   };
 
-  const onPhotoPick = (type: 'before' | 'completion') => async (e: React.ChangeEvent<HTMLInputElement>) => {
-    const files = Array.from(e.target.files || []);
+  const uploadPhotos = async (type: 'before' | 'completion', files: File[]) => {
     const caption = type === 'before' ? beforeCaption : completionCaption;
     for (const f of files) {
       // Only attach the caption to the first file in a multi-select.
@@ -279,6 +279,9 @@ export default function VehiclePickListPage() {
     if (type === 'before') setBeforeCaption('');
     else setCompletionCaption('');
   };
+
+  const onPhotoPick = (type: 'before' | 'completion') => (e: React.ChangeEvent<HTMLInputElement>) =>
+    uploadPhotos(type, Array.from(e.target.files || []));
 
   const fileUrl = (storagePath: string) => {
     const { data } = supabase.storage.from('graphics-proofs').getPublicUrl(storagePath);
@@ -480,7 +483,12 @@ export default function VehiclePickListPage() {
         </div>
         <div style={{ display: 'grid', gridTemplateColumns: (canComplete || isComplete) ? '1fr 1fr' : '1fr', gap: '10px' }}>
           {/* Check-in (before) */}
-          <div style={{ padding: '10px', borderRadius: '10px', background: 'var(--background, #fff)', border: '1px solid var(--border)' }}>
+          <DropZone
+            onFiles={files => uploadPhotos('before', files)}
+            accept="image/*"
+            disabled={uploadingPhotoType === 'before'}
+            style={{ padding: '10px', borderRadius: '10px', background: 'var(--background, #fff)', border: '1px solid var(--border)' }}
+          >
             <div style={{ fontSize: '11px', fontWeight: 700, color: 'var(--text-secondary, #475569)', marginBottom: '6px' }}>Check-in (optional)</div>
             <input
               type="text"
@@ -511,15 +519,20 @@ export default function VehiclePickListPage() {
               onChange={onPhotoPick('before')}
               style={{ display: 'none' }}
             />
-          </div>
+          </DropZone>
 
           {/* Completion (only while in_progress/complete) */}
           {(canComplete || isComplete) && (
-            <div style={{
-              padding: '10px', borderRadius: '10px',
-              background: canComplete && !hasCompletionPhoto ? 'color-mix(in srgb, var(--warning, #f59e0b) 5%, var(--background, #fff))' : 'var(--background, #fff)',
-              border: `1px solid ${canComplete && !hasCompletionPhoto ? 'var(--warning, #f59e0b)' : 'var(--border)'}`,
-            }}>
+            <DropZone
+              onFiles={files => uploadPhotos('completion', files)}
+              accept="image/*"
+              disabled={uploadingPhotoType === 'completion' || !canComplete}
+              style={{
+                padding: '10px', borderRadius: '10px',
+                background: canComplete && !hasCompletionPhoto ? 'color-mix(in srgb, var(--warning, #f59e0b) 5%, var(--background, #fff))' : 'var(--background, #fff)',
+                border: `1px solid ${canComplete && !hasCompletionPhoto ? 'var(--warning, #f59e0b)' : 'var(--border)'}`,
+              }}
+            >
               <div style={{ fontSize: '11px', fontWeight: 700, color: canComplete && !hasCompletionPhoto ? 'var(--warning, #f59e0b)' : 'var(--text-secondary, #475569)', marginBottom: '6px' }}>
                 Completion {canComplete && !hasCompletionPhoto && '· required'}
               </div>
@@ -554,7 +567,7 @@ export default function VehiclePickListPage() {
                 onChange={onPhotoPick('completion')}
                 style={{ display: 'none' }}
               />
-            </div>
+            </DropZone>
           )}
         </div>
       </div>

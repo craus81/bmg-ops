@@ -6,6 +6,7 @@ import { storage } from '@/lib/storage';
 import { useAuth } from '@/components/AuthProvider';
 import { useDialog } from '@/components/DialogProvider';
 import ProofThumbnail from '@/components/ProofThumbnail';
+import { DropZone } from '@/components/DropZone';
 
 interface Task {
   id: string;
@@ -153,9 +154,8 @@ export default function CompletionModal({
 
   const photoUrl = (path: string) => storage.from(PHOTO_BUCKET).getPublicUrl(path).data.publicUrl;
 
-  const onPhotoPick = async (e: React.ChangeEvent<HTMLInputElement>) => {
-    const files = Array.from(e.target.files || []);
-    if (!files.length || !user) return;
+  const uploadPhotos = async (files: File[]) => {
+    if (!files.length || !user) return false;
     setUploading(true);
     let uploadedAny = false;
     try {
@@ -180,6 +180,11 @@ export default function CompletionModal({
     } finally {
       setUploading(false);
     }
+    return uploadedAny;
+  };
+
+  const onPhotoPick = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const uploadedAny = await uploadPhotos(Array.from(e.target.files || []));
     // Auto re-open the camera after a successful shot so the installer
     // keeps capturing without re-tapping. Cancelling the camera UI returns
     // no files and never fires onChange, which breaks the loop naturally.
@@ -263,6 +268,7 @@ export default function CompletionModal({
 
         <div style={{ padding: '14px 18px', display: 'flex', flexDirection: 'column', gap: '12px' }}>
           {/* Photo block */}
+          <DropZone onFiles={uploadPhotos} accept="image/*" multiple disabled={uploading}>
           <div style={{
             padding: '12px', borderRadius: '10px',
             border: `1px solid ${hasCompletionPhoto ? '#4ade80' : 'var(--warning, #f59e0b)'}`,
@@ -299,6 +305,7 @@ export default function CompletionModal({
             >{uploading ? 'Uploading…' : '+ Take / upload completion photo'}</button>
             <input ref={fileRef} type="file" accept="image/*" capture="environment" multiple onChange={onPhotoPick} style={{ display: 'none' }} />
           </div>
+          </DropZone>
 
           {/* Tasks */}
           {tasks.length === 0 ? (

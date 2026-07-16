@@ -10,6 +10,7 @@ import { storage } from '@/lib/storage';
 import type { PurchaseOrder, POLineItem, CatalogItem, PoLocation, GraphicsJobStatus } from '@/lib/types';
 import { GRAPHICS_STATUS_LABELS, GRAPHICS_STATUS_COLORS } from '@/lib/types';
 import { PartLabel } from '@/components/PartLabel';
+import { DropZone } from '@/components/DropZone';
 import { CreateNetsuiteItemModal } from '@/components/CreateNetsuiteItemModal';
 import { useDialog } from '@/components/DialogProvider';
 import { isProofLikeName } from '@/lib/pdf-classify';
@@ -927,6 +928,11 @@ export default function POsPage() {
   const handlePDFUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file) return;
+    await importPoPdf(file);
+  };
+
+  // Shared core for the file input and drag-and-drop onto the import panel.
+  const importPoPdf = async (file: File) => {
     setParseError('');
     setParsedPO(null);
     setImportLines([]);
@@ -1575,6 +1581,14 @@ export default function POsPage() {
       setUploadingPoId(null);
       return;
     }
+    await uploadPoPdfs(poId, files);
+  };
+
+  // Shared core for the hidden-input picker and drag-and-drop onto a PO's
+  // attachments area — both routes end up here.
+  const uploadPoPdfs = async (poId: string, files: File[]) => {
+    if (files.length === 0 || !user) return;
+    setUploadingPoId(poId);
     setUploadingPoPdf(true);
     let lastUpload: { path: string; name: string } | null = null;
     for (const file of files) {
@@ -3667,6 +3681,7 @@ export default function POsPage() {
 
       {/* PDF Import Panel */}
       {showImport && !parsedPO && (
+        <DropZone accept=".pdf" multiple={false} onFiles={files => importPoPdf(files[0])}>
         <div style={{ background: 'var(--subtle-bg)', border: '1px solid var(--border)', borderRadius: '10px', padding: '14px', marginBottom: '12px' }}>
           <div style={{ fontSize: '13px', fontWeight: 700, color: 'var(--text-body)', marginBottom: '6px' }}>Import Masterack PO from PDF</div>
           <div style={{ fontSize: '11px', color: 'var(--text-label)', marginBottom: '10px' }}>
@@ -3685,6 +3700,7 @@ export default function POsPage() {
             </div>
           )}
         </div>
+        </DropZone>
       )}
 
       {/* Review imported PO before saving */}
@@ -4194,7 +4210,12 @@ export default function POsPage() {
               {isExpanded && (
                 <div style={{ borderTop: '1px solid var(--border)', padding: '10px 12px' }}>
                   {/* PDF Attachments */}
-                  <div style={{ marginBottom: '10px' }}>
+                  <DropZone
+                    accept=".pdf,application/pdf"
+                    disabled={uploadingPoPdf}
+                    onFiles={files => uploadPoPdfs(po.id, files)}
+                    style={{ marginBottom: '10px' }}
+                  >
                     <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
                       <div style={labelStyle}>PDF Attachments</div>
                       <button
@@ -4238,7 +4259,7 @@ export default function POsPage() {
                     ) : (
                       <div style={{ fontSize: '11px', color: 'var(--text-muted)', marginTop: '4px' }}>No attachments. Use the button above to add a PDF.</div>
                     )}
-                  </div>
+                  </DropZone>
 
                   {/* Notes — flag a PO that needs attention and tag teammates */}
                   <div style={{ marginBottom: '10px' }}>
