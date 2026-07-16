@@ -3,6 +3,7 @@ import { createClient } from '@supabase/supabase-js';
 import { requireAuth } from '@/lib/api-auth';
 import { createDirectInvoice, findItems, getItemBasePrices } from '@/lib/netsuite';
 import { resolveCustomerNsId } from '@/lib/graphics-invoice';
+import { notifyInvoiceCreated } from '@/lib/graphics-invoice-notify';
 import { resolveLocationWithOverride } from '@/lib/invoice-location';
 import { validateBody, z } from '@/lib/validate';
 
@@ -249,6 +250,16 @@ export async function POST(req: NextRequest) {
       to_status: job.status,
       changed_by: userId || auth.user.id,
       note: `Invoice created: ${result.invoiceNumber || result.invoiceId}${job.po_number ? ` (PO #${job.po_number})` : ''}`,
+    });
+
+    // Resolve the "create invoice?" prompts and tell the other billing
+    // users it's done (best-effort — never fails the invoice).
+    await notifyInvoiceCreated(supabase, {
+      jobId,
+      jobLabel: job.title || `Job #${job.job_number}` || `Job ${jobId.slice(0, 8)}`,
+      customer: job.customer,
+      invoiceNumber: result.invoiceNumber || result.invoiceId,
+      actorId: userId || auth.user.id,
     });
 
     // Backfill prices into the catalog — only where a price is missing, so we

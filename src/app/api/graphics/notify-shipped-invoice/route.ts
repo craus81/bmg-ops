@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { createClient } from '@supabase/supabase-js';
 import { notifyMany } from '@/lib/notify';
+import { INVOICE_PROMPT_USER_IDS } from '@/lib/graphics-invoice-notify';
 import { requireAuth } from '@/lib/api-auth';
 import { validateBody, z } from '@/lib/validate';
 
@@ -25,13 +26,6 @@ const Schema = z.object({ jobId: z.string().uuid() });
  * Body: { jobId: string }
  */
 
-// Hardcoded user UUIDs for now. Survives name/email changes. Swap to a
-// `notify_invoice_prompts` boolean on profiles once the recipient list
-// needs self-serve management.
-const INVOICE_PROMPT_USER_IDS = [
-  'f9f8a88c-1049-4bd5-95db-888787677ac9', // Craig George
-  '13c993b2-bb84-4539-8bbc-6c85395f558c', // Jessie Whittington
-];
 
 export async function POST(req: NextRequest) {
   const auth = await requireAuth(req);
