@@ -2775,11 +2775,54 @@ export default function POsPage() {
                     <div style={{ fontSize: '10px', color: '#ef4444', marginTop: '2px', wordBreak: 'break-word' }}>
                       {e.error_message || '(no error message recorded)'}
                     </div>
-                    {(e.received_at || e.created_at) && (
-                      <div style={{ fontSize: '9px', color: 'var(--text-muted)', marginTop: '2px' }}>
-                        {new Date(e.received_at || e.created_at).toLocaleString([], { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' })}
+                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginTop: '4px', gap: '8px' }}>
+                      <div style={{ fontSize: '9px', color: 'var(--text-muted)' }}>
+                        {(e.received_at || e.created_at)
+                          ? new Date(e.received_at || e.created_at).toLocaleString([], { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' })
+                          : ''}
                       </div>
-                    )}
+                      <div style={{ display: 'flex', gap: '6px' }}>
+                        {/* Re-run through today's import — older failures often
+                            predate fixes (e.g. $0.00 pricing is accepted now)
+                            and just need another pass into the review queue. */}
+                        <button
+                          onClick={() => importEmailPO(e.message_id)}
+                          disabled={importingEmailId !== null}
+                          style={{
+                            padding: '2px 8px', borderRadius: '5px', fontSize: '9px', fontWeight: 700,
+                            background: 'rgba(96,165,250,0.1)', border: '1px solid rgba(96,165,250,0.3)',
+                            color: '#60a5fa', cursor: importingEmailId ? 'wait' : 'pointer',
+                          }}
+                        >
+                          {importingEmailId === e.message_id ? 'Retrying…' : 'Retry import'}
+                        </button>
+                        <button
+                          onClick={async () => {
+                            await fetch('/api/gmail/dismiss-po', {
+                              method: 'POST',
+                              headers: { 'Content-Type': 'application/json' },
+                              body: JSON.stringify({
+                                messageId: e.message_id,
+                                subject: e.subject || null,
+                                fromEmail: e.from_email || null,
+                              }),
+                            }).catch(() => {});
+                            setGmailStatus(prev => prev ? {
+                              ...prev,
+                              recentErrors: (prev.recentErrors || []).filter((r: any) => r.message_id !== e.message_id),
+                            } : prev);
+                          }}
+                          title="Mark this email handled — it stops showing here and won't be re-imported"
+                          style={{
+                            padding: '2px 8px', borderRadius: '5px', fontSize: '9px', fontWeight: 700,
+                            background: 'transparent', border: '1px solid var(--border)',
+                            color: 'var(--text-muted)', cursor: 'pointer',
+                          }}
+                        >
+                          Dismiss
+                        </button>
+                      </div>
+                    </div>
                   </div>
                 ))}
               </div>
