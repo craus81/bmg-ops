@@ -813,7 +813,7 @@ export default function POsPage() {
 
   const refreshGmailStatus = async () => {
     try {
-      const res = await fetch('/api/gmail/auto-import-status');
+      const res = await fetch('/api/gmail/auto-import-status', { cache: 'no-store' });
       if (res.ok) setGmailStatus(await res.json());
     } catch {}
   };

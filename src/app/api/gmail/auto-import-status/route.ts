@@ -3,6 +3,7 @@ import { createClient } from '@supabase/supabase-js';
 import { requireAuth } from '@/lib/api-auth';
 
 export const dynamic = 'force-dynamic';
+export const revalidate = 0;
 
 // Reports whether Gmail is connected and the last result of the
 // gmail_auto_import cron, so /admin/pos can show why POs aren't (or are)
@@ -11,9 +12,16 @@ export async function GET(req: NextRequest) {
   const auth = await requireAuth(req);
   if (auth.error) return auth.error;
 
+  // Field evidence: this route's reads served a sync_state timestamp that
+  // stayed frozen for days while writes verifiably landed (the auto-import
+  // route's own read-back saw fresh data). Next patches global fetch with
+  // its Data Cache, and a cached PostgREST GET makes this status endpoint
+  // lie forever — so force every Supabase call from this route to skip
+  // caching entirely.
   const supabase = createClient(
     process.env.NEXT_PUBLIC_SUPABASE_URL!,
-    process.env.SUPABASE_SERVICE_ROLE_KEY!
+    process.env.SUPABASE_SERVICE_ROLE_KEY!,
+    { global: { fetch: (input: any, init?: any) => fetch(input, { ...init, cache: 'no-store' }) } }
   );
 
   const [{ data: tokenRow }, { data: stateRow }, { data: errorRows }] = await Promise.all([
