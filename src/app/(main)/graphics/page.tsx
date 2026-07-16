@@ -94,6 +94,9 @@ export default function GraphicsPage() {
   // Status change with comment
   const [pendingStatus, setPendingStatus] = useState<{ job: GraphicsJob; status: GraphicsJobStatus } | null>(null);
   const [statusComment, setStatusComment] = useState('');
+  // Shipping details captured when moving to "shipped"
+  const [shipCarrier, setShipCarrier] = useState('');
+  const [shipTracking, setShipTracking] = useState('');
 
   // Internal notes (comment thread)
   const [newNote, setNewNote] = useState('');
@@ -580,23 +583,39 @@ export default function GraphicsPage() {
     if (job.status === newStatus) return;
     setPendingStatus({ job, status: newStatus });
     setStatusComment('');
+    // Shipping fields prefill from the job so a tracking number entered
+    // earlier via Edit Job isn't blanked by the ship dialog.
+    setShipCarrier(job.carrier || '');
+    setShipTracking(job.tracking_number || '');
   };
 
   const confirmStatusChange = async () => {
     if (!pendingStatus) return;
-    await changeStatus(pendingStatus.job, pendingStatus.status, statusComment.trim() || undefined);
+    const ship = pendingStatus.status === 'shipped'
+      ? { carrier: shipCarrier.trim() || undefined, tracking: shipTracking.trim() || undefined }
+      : undefined;
+    await changeStatus(pendingStatus.job, pendingStatus.status, statusComment.trim() || undefined, ship);
     setPendingStatus(null);
     setStatusComment('');
   };
 
   // Change job status
-  const changeStatus = async (job: GraphicsJob, newStatus: GraphicsJobStatus, note?: string) => {
+  const changeStatus = async (
+    job: GraphicsJob,
+    newStatus: GraphicsJobStatus,
+    note?: string,
+    ship?: { carrier?: string; tracking?: string },
+  ) => {
     const oldStatus = job.status;
     if (oldStatus === newStatus) return;
 
+    const shipFields: Partial<GraphicsJob> = {};
+    if (ship?.tracking) shipFields.tracking_number = ship.tracking;
+    if (ship?.carrier) shipFields.carrier = ship.carrier;
+
     const { error } = await supabase
       .from('graphics_jobs')
-      .update({ status: newStatus, updated_at: new Date().toISOString() })
+      .update({ status: newStatus, updated_at: new Date().toISOString(), ...shipFields })
       .eq('id', job.id);
 
     if (!error) {
@@ -608,6 +627,19 @@ export default function GraphicsPage() {
         changed_by: user?.id,
         note: note || null,
       });
+
+      // Tracking number gets its own entry in the job file (rendered as a
+      // note row) so it's findable in the history independent of the
+      // status-change comment.
+      if (ship?.tracking && ship.tracking !== job.tracking_number) {
+        await supabase.from('graphics_status_history').insert({
+          job_id: job.id,
+          from_status: newStatus,
+          to_status: newStatus,
+          changed_by: user?.id,
+          note: `Tracking #: ${ship.tracking}${ship.carrier ? ` (${ship.carrier})` : ''}`,
+        });
+      }
 
       // Notifications split by target audience:
       //   - newStatus === 'ready': install-readiness event. Fire to a narrow
@@ -659,7 +691,7 @@ export default function GraphicsPage() {
         }).catch(() => {});
       }
 
-      setJobs(prev => prev.map(j => j.id === job.id ? { ...j, status: newStatus, updated_at: new Date().toISOString() } : j));
+      setJobs(prev => prev.map(j => j.id === job.id ? { ...j, status: newStatus, updated_at: new Date().toISOString(), ...shipFields } : j));
       // Re-stamp my view so my own status change doesn't light the unread dot.
       recordJobView(job.id);
       if (expandedJobId === job.id) loadHistory(job.id);
@@ -1426,6 +1458,11 @@ export default function GraphicsPage() {
                           </span>
                         )}
                         {job.netsuite_invoice_number && <span style={{ padding: '0 4px', borderRadius: '3px', background: 'rgba(34,197,94,0.1)', color: '#22c55e', fontWeight: 700 }}>INV {job.netsuite_invoice_number}</span>}
+                        {job.tracking_number && (
+                          <span title={job.carrier ? `Shipped via ${job.carrier}` : 'Tracking number'} style={{ padding: '0 4px', borderRadius: '3px', background: 'rgba(96,165,250,0.1)', color: '#60a5fa', fontWeight: 700 }}>
+                            📦 {job.tracking_number}
+                          </span>
+                        )}
                         {(() => {
                           const others = (jobViews[job.id] || []).filter(v => v.user_id !== user?.id);
                           if (others.length === 0) return null;
@@ -1518,6 +1555,11 @@ export default function GraphicsPage() {
                           {job.customer && <span>{job.customer}</span>}
                           <span>Qty: {job.quantity}</span>
                           {job.po_number && <span style={{ color: '#a78bfa', fontWeight: 700 }}>PO #{job.po_number}</span>}
+                          {job.tracking_number && (
+                            <span title={job.carrier ? `Shipped via ${job.carrier}` : 'Tracking number'} style={{ padding: '0 4px', borderRadius: '3px', background: 'rgba(96,165,250,0.1)', color: '#60a5fa', fontWeight: 700 }}>
+                              📦 {job.tracking_number}
+                            </span>
+                          )}
                         </div>
                       </div>
                       <div style={{ display: 'flex', alignItems: 'center', gap: '8px', flexShrink: 0 }}>
@@ -2760,11 +2802,47 @@ export default function GraphicsPage() {
             <div style={{ fontSize: '12px', color: 'var(--text-muted)', marginBottom: '14px' }}>
               {pendingStatus.job.title} — <span style={{ color: GRAPHICS_STATUS_COLORS[pendingStatus.job.status] }}>{GRAPHICS_STATUS_LABELS[pendingStatus.job.status]}</span> → <span style={{ color: GRAPHICS_STATUS_COLORS[pendingStatus.status], fontWeight: 700 }}>{GRAPHICS_STATUS_LABELS[pendingStatus.status]}</span>
             </div>
+            {pendingStatus.status === 'shipped' && (
+              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1.4fr', gap: '8px', marginBottom: '10px' }}>
+                <div>
+                  <div style={{ fontSize: '9px', fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.3px', color: 'var(--text-label)', marginBottom: '3px' }}>Carrier</div>
+                  <select
+                    value={shipCarrier}
+                    onChange={e => setShipCarrier(e.target.value)}
+                    style={{
+                      width: '100%', padding: '10px', borderRadius: '8px', fontSize: '12px',
+                      background: 'var(--input-bg)', border: '1px solid var(--border)',
+                      color: 'var(--text-primary)', outline: 'none',
+                    }}
+                  >
+                    <option value="">—</option>
+                    <option>UPS</option>
+                    <option>FedEx</option>
+                    <option>USPS</option>
+                    <option>LTL</option>
+                    <option>Hand Delivery</option>
+                  </select>
+                </div>
+                <div>
+                  <div style={{ fontSize: '9px', fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.3px', color: 'var(--text-label)', marginBottom: '3px' }}>Tracking #</div>
+                  <input
+                    value={shipTracking}
+                    onChange={e => setShipTracking(e.target.value)}
+                    placeholder="e.g. 1Z999AA10123456784"
+                    style={{
+                      width: '100%', padding: '10px', borderRadius: '8px', fontSize: '12px',
+                      background: 'var(--input-bg)', border: '1px solid var(--border)',
+                      color: 'var(--text-primary)', outline: 'none',
+                    }}
+                  />
+                </div>
+              </div>
+            )}
             <textarea
               autoFocus
               value={statusComment}
               onChange={e => setStatusComment(e.target.value)}
-              placeholder="Add a comment (optional)..."
+              placeholder={pendingStatus.status === 'shipped' ? 'Shipping notes (optional)...' : 'Add a comment (optional)...'}
               style={{
                 width: '100%', padding: '10px', borderRadius: '8px', fontSize: '12px',
                 background: 'var(--input-bg)', border: '1px solid var(--border)',
