@@ -142,6 +142,16 @@ const unitAreaSqft = (m: Measurement, bleedIn: number) => {
 const templateLabel = (t: Template) =>
   [t.year, t.make, t.model, t.variant].filter(Boolean).join(' ');
 
+// Free-text template search: every space-separated term must match somewhere
+// in the label, name, or code ("transit 2023 high" finds 2023 High Roof
+// Transits regardless of word order).
+const matchesTemplateSearch = (t: Template, query: string) => {
+  const q = query.trim().toLowerCase();
+  if (!q) return true;
+  const hay = `${templateLabel(t)} ${t.name || ''} ${t.template_code || ''}`.toLowerCase();
+  return q.split(/\s+/).every(term => hay.includes(term));
+};
+
 const imageUrl = (path: string | null) => {
   if (!path) return '';
   if (path.startsWith('http')) return path;
@@ -165,6 +175,8 @@ export default function WrapQuotePage() {
   // ----- Estimator state -----
   const [yearFilter, setYearFilter] = useState('');
   const [makeFilter, setMakeFilter] = useState('');
+  const [tplSearch, setTplSearch] = useState('');
+  const [tplGridSearch, setTplGridSearch] = useState('');
   const [templateId, setTemplateId] = useState('');
   const [imgDim, setImgDim] = useState<{ w: number; h: number } | null>(null);
   const [tool, setTool] = useState<Tool>('select');
@@ -289,8 +301,11 @@ export default function WrapQuotePage() {
   const years = useMemo(() => [...new Set(activeTemplates.map(t => t.year).filter(Boolean) as string[])].sort().reverse(), [activeTemplates]);
   const makes = useMemo(() => [...new Set(activeTemplates.filter(t => !yearFilter || t.year === yearFilter).map(t => t.make))].sort(), [activeTemplates, yearFilter]);
   const templateOptions = useMemo(() =>
-    activeTemplates.filter(t => (!yearFilter || t.year === yearFilter) && (!makeFilter || t.make === makeFilter)),
-    [activeTemplates, yearFilter, makeFilter]);
+    activeTemplates.filter(t =>
+      (!yearFilter || t.year === yearFilter) &&
+      (!makeFilter || t.make === makeFilter) &&
+      matchesTemplateSearch(t, tplSearch)),
+    [activeTemplates, yearFilter, makeFilter, tplSearch]);
 
   // ----- Pricing math -----
   const measurementPricing = (m: Measurement) => {
@@ -1258,8 +1273,14 @@ export default function WrapQuotePage() {
               <option value="">All makes</option>
               {makes.map(m => <option key={m} value={m}>{m}</option>)}
             </select>
+            <input
+              value={tplSearch}
+              onChange={e => { setTplSearch(e.target.value); setTemplateId(''); }}
+              placeholder="Search templates…"
+              style={{ ...inputStyle, width: '180px' }}
+            />
             <select value={templateId} onChange={e => { setTemplateId(e.target.value); setImgDim(null); resetEstimate(); }} style={{ ...inputStyle, flex: 1, minWidth: '220px' }}>
-              <option value="">— Select vehicle template —</option>
+              <option value="">{templateOptions.length === 0 ? '— No templates match —' : '— Select vehicle template —'}</option>
               {templateOptions.map(t => <option key={t.id} value={t.id}>{templateLabel(t)}{t.template_code ? ` (${t.template_code})` : ''}</option>)}
             </select>
           </div>
@@ -1807,8 +1828,21 @@ export default function WrapQuotePage() {
             </div>
           </div>
 
+          <div style={{ display: 'flex', gap: '8px', alignItems: 'center', marginBottom: '10px' }}>
+            <input
+              value={tplGridSearch}
+              onChange={e => setTplGridSearch(e.target.value)}
+              placeholder="Search templates by year, make, model, or code…"
+              style={{ ...inputStyle, flex: 1, maxWidth: '360px' }}
+            />
+            {tplGridSearch.trim() && (
+              <span style={{ fontSize: '10px', color: 'var(--text-muted)', fontWeight: 600 }}>
+                {templates.filter(t => matchesTemplateSearch(t, tplGridSearch)).length} of {templates.length}
+              </span>
+            )}
+          </div>
           <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(220px, 1fr))', gap: '10px' }}>
-            {templates.map(t => (
+            {templates.filter(t => matchesTemplateSearch(t, tplGridSearch)).map(t => (
               <div key={t.id} style={{ background: 'var(--card)', border: `1px solid ${theme.border}`, borderRadius: '10px', overflow: 'hidden' }}>
                 <div style={{ background: '#fff', height: '110px', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
                   {/* eslint-disable-next-line @next/next/no-img-element -- R2-hosted, dimensions unknown */}
