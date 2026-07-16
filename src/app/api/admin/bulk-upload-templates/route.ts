@@ -86,6 +86,25 @@ export async function POST(req: NextRequest) {
         continue;
       }
       try {
+        // No duplicate templates: re-importing a ZIP must not double the
+        // library. Identity matches the unique index from migration 142 —
+        // (make, model, year, variant, name), case-insensitive. Checked here
+        // before the R2 uploads happen; the index still wins any race.
+        const esc = (s: string) => s.replace(/[\\%_]/g, '\\$&');
+        const norm = (v: string | null | undefined) => (v || '').trim().toLowerCase();
+        const { data: candidates } = await supabase
+          .from('vehicle_templates')
+          .select('id, year, variant')
+          .ilike('name', esc(entry.name))
+          .ilike('make', esc(entry.make))
+          .ilike('model', esc(entry.model));
+        const isDupe = (candidates || []).some(c =>
+          norm(c.year) === norm(entry.year) && norm(c.variant) === norm(entry.variant));
+        if (isDupe) {
+          results.push({ name: entry.name, status: 'error', error: 'Skipped — template already exists' });
+          continue;
+        }
+
         const slug = `${entry.make}-${entry.model}-${entry.year}-${entry.name}`
           .toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/-+/g, '-').slice(0, 80);
 
@@ -150,7 +169,11 @@ export async function POST(req: NextRequest) {
         });
 
         if (insertError) {
-          results.push({ name: entry.name, status: 'error', error: insertError.message });
+          results.push({
+            name: entry.name,
+            status: 'error',
+            error: insertError.code === '23505' ? 'Skipped — template already exists' : insertError.message,
+          });
         } else {
           results.push({ name: entry.name, status: 'success' });
         }

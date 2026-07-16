@@ -974,6 +974,18 @@ export default function WrapQuotePage() {
       await dialog.alert('Template needs at least an image, make, and model.');
       return;
     }
+    // No duplicate templates — same identity the DB unique index enforces
+    // (make, model, year, variant, name), case-insensitive.
+    const newName = [tplForm.make.trim(), tplForm.model.trim(), tplForm.variant.trim()].filter(Boolean).join(' ');
+    const norm = (v?: string | null) => (v || '').trim().toLowerCase();
+    const dupe = templates.find(t =>
+      norm(t.name) === norm(newName) && norm(t.make) === norm(tplForm.make) &&
+      norm(t.model) === norm(tplForm.model) && norm(t.year) === norm(tplForm.year) &&
+      norm(t.variant) === norm(tplForm.variant));
+    if (dupe) {
+      await dialog.alert(`A template for ${templateLabel(dupe) || newName} already exists${dupe.is_active === false ? ' (retired — reactivate it in the grid below)' : ''}.`);
+      return;
+    }
     setTplUploading(true);
     try {
       const safeName = tplFile.name.replace(/[^a-zA-Z0-9.-]/g, '_');
@@ -981,7 +993,7 @@ export default function WrapQuotePage() {
       const { error: upErr } = await storage.from('vehicle-templates').upload(path, tplFile, { contentType: tplFile.type || 'image/png' });
       if (upErr) { await dialog.alert(`Upload failed: ${upErr.message}`); return; }
       const { error } = await supabase.from('vehicle_templates').insert({
-        name: [tplForm.make.trim(), tplForm.model.trim(), tplForm.variant.trim()].filter(Boolean).join(' '),
+        name: newName,
         make: tplForm.make.trim(),
         model: tplForm.model.trim(),
         year: tplForm.year.trim() || null,
@@ -993,7 +1005,10 @@ export default function WrapQuotePage() {
         is_active: true,
         created_by: user?.id,
       });
-      if (error) { await dialog.alert(`Save failed: ${error.message}`); return; }
+      if (error) {
+        await dialog.alert(error.code === '23505' ? 'A template with this year/make/model/variant already exists.' : `Save failed: ${error.message}`);
+        return;
+      }
       setTplForm({ year: '', make: '', model: '', variant: '', code: '', length: '' });
       setTplFile(null);
       await loadAll();
