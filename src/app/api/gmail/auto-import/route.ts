@@ -38,13 +38,18 @@ async function recordRun(
     // Trust but verify: an upsert can report success while the row stays
     // stale (RLS filtering the conflict-update path writes nothing and
     // raises nothing). Read the row back — a heartbeat that didn't land
-    // is a failure, and the caller needs the evidence.
+    // is a failure, and the caller needs the evidence. Compare as epoch
+    // times, NOT strings: Postgres renders the same instant as
+    // "…51.11+00:00" while JS wrote "…51.110Z", and a string compare
+    // wrongly flags a landed write. A minute of tolerance absorbs clock
+    // skew between this function and the database.
     const { data: check } = await supabase
       .from('sync_state')
       .select('last_synced_at')
       .eq('sync_type', SYNC_TYPE)
       .maybeSingle();
-    if (!check?.last_synced_at || check.last_synced_at < wroteAt) {
+    const landedAt = check?.last_synced_at ? new Date(check.last_synced_at).getTime() : NaN;
+    if (!(landedAt >= new Date(wroteAt).getTime() - 60_000)) {
       const msg = `upsert reported success but read-back shows ${check?.last_synced_at || 'no row at all'}`;
       console.error('[gmail-auto-import] sync_state phantom write:', msg);
       return { ok: false, error: msg };
