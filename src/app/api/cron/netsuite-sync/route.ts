@@ -14,9 +14,11 @@ export const maxDuration = 120;
  * Automatic incremental sync from NetSuite — runs on Vercel Cron.
  * Only fetches records modified since the last successful sync.
  *
- * Syncs: customers, prospects, contacts (with phone numbers), and
- * PO-linked invoices (so invoices entered directly in NetSuite show up
- * on the PO page without anyone clicking "Sync Invoices")
+ * Syncs: customers, prospects, spend numbers for any customer with
+ * recent invoice/cash-sale activity (their record alone may not have
+ * moved), contacts (with phone numbers), and PO-linked invoices (so
+ * invoices entered directly in NetSuite show up on the PO page without
+ * anyone clicking "Sync Invoices")
  */
 export async function GET(req: NextRequest) {
   // Allow Vercel Cron with the shared secret; anyone else needs an admin
@@ -178,6 +180,90 @@ export async function GET(req: NextRequest) {
   } catch (err: any) {
     console.error('[cron] Customer sync error:', err.message);
     results.customers = { error: err.message };
+  }
+
+  // ═══════════ 1b. SPEND REFRESH BY TRANSACTION ACTIVITY ═══════════
+  // Phase 1 only sees customers whose RECORD changed in NetSuite. A new
+  // invoice (or a payment touching an old one) doesn't necessarily modify
+  // the customer record, so spend tiles could lag indefinitely. Key on
+  // transaction activity instead: every customer with an invoice/cash-sale
+  // modified since the last run gets their spend numbers recomputed,
+  // whether or not their customer record moved.
+  try {
+    const { data: spendState } = await supabase
+      .from('sync_state')
+      .select('last_synced_at')
+      .eq('sync_type', 'netsuite_spend_refresh')
+      .maybeSingle();
+    const lastSpendSync = new Date(spendState?.last_synced_at || '2020-01-01T00:00:00Z');
+    const sinceStr = `${lastSpendSync.getMonth() + 1}/${lastSpendSync.getDate()}/${lastSpendSync.getFullYear()}`;
+
+    const activeRows = await suiteqlQueryAll(`
+      SELECT DISTINCT t.entity AS cid
+      FROM transaction t
+      WHERE t.type IN ('CustInvc', 'CashSale')
+        AND t.lastmodifieddate >= TO_DATE('${sinceStr}', 'MM/DD/YYYY')
+    `);
+    const activeIds = [...new Set(
+      activeRows.map((r: any) => String(r.cid ?? '')).filter((id: string) => /^\d+$/.test(id)),
+    )];
+
+    const currentYear = new Date().getFullYear();
+    const lastYear = currentYear - 1;
+    let spendRefreshed = 0;
+
+    for (let i = 0; i < activeIds.length; i += 200) {
+      const chunk = activeIds.slice(i, i + 200);
+      const custIds = chunk.join(',');
+      const [allTime, ytd, ly] = await Promise.all([
+        suiteqlQueryAll(`SELECT t.entity AS cid, COUNT(t.id) AS cnt, SUM(t.foreigntotal) AS spend, MAX(t.trandate) AS lastdate FROM transaction t WHERE t.type IN ('CustInvc', 'CashSale') AND t.entity IN (${custIds}) GROUP BY t.entity`),
+        suiteqlQueryAll(`SELECT t.entity AS cid, COUNT(t.id) AS cnt, SUM(t.foreigntotal) AS spend FROM transaction t WHERE t.type IN ('CustInvc', 'CashSale') AND t.entity IN (${custIds}) AND EXTRACT(YEAR FROM t.trandate)=${currentYear} GROUP BY t.entity`),
+        suiteqlQueryAll(`SELECT t.entity AS cid, COUNT(t.id) AS cnt, SUM(t.foreigntotal) AS spend FROM transaction t WHERE t.type IN ('CustInvc', 'CashSale') AND t.entity IN (${custIds}) AND EXTRACT(YEAR FROM t.trandate)=${lastYear} GROUP BY t.entity`),
+      ]);
+      const atMap: Record<string, any> = {};
+      const ytMap: Record<string, any> = {};
+      const lyMap: Record<string, any> = {};
+      allTime.forEach((r: any) => { atMap[r.cid?.toString()] = r; });
+      ytd.forEach((r: any) => { ytMap[r.cid?.toString()] = r; });
+      ly.forEach((r: any) => { lyMap[r.cid?.toString()] = r; });
+
+      for (const cid of chunk) {
+        const at = atMap[cid] || {};
+        const yt = ytMap[cid] || {};
+        const lyr = lyMap[cid] || {};
+        const orderCount = parseInt(at.cnt) || 0;
+        const totalSpend = parseFloat(at.spend) || 0;
+        // Update spend fields only — phase 1 owns record creation, so a
+        // customer that's never been synced simply isn't touched here.
+        const { data: updated } = await supabase
+          .from('customers')
+          .update({
+            total_orders: orderCount,
+            total_spend: totalSpend,
+            avg_order_value: orderCount > 0 ? Math.round((totalSpend / orderCount) * 100) / 100 : 0,
+            ytd_spend: parseFloat(yt.spend) || 0,
+            ytd_orders: parseInt(yt.cnt) || 0,
+            last_year_spend: parseFloat(lyr.spend) || 0,
+            last_year_orders: parseInt(lyr.cnt) || 0,
+            last_order_date: at.lastdate || null,
+          })
+          .eq('netsuite_id', cid)
+          .select('id');
+        spendRefreshed += (updated || []).length;
+      }
+    }
+
+    await supabase.from('sync_state').upsert({
+      sync_type: 'netsuite_spend_refresh',
+      last_synced_at: new Date().toISOString(),
+      last_result: { customersWithActivity: activeIds.length, spendRefreshed },
+      updated_at: new Date().toISOString(),
+    }, { onConflict: 'sync_type' });
+
+    results.spendRefresh = { customersWithActivity: activeIds.length, spendRefreshed };
+  } catch (err: any) {
+    console.error('[cron] Spend refresh error:', err.message);
+    results.spendRefresh = { error: err.message };
   }
 
   // ═══════════ 2. INCREMENTAL CONTACT SYNC ═══════════
