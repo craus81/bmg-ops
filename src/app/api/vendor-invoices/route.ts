@@ -200,6 +200,13 @@ export async function POST(req: NextRequest) {
       scan: pickScanForLine(existingScans, line.vin, line.partNumber),
     }));
 
+    // A line with no part number inherits the matched scan's — the system
+    // already knows what was installed on that vehicle, so the line feeds the
+    // part's running average and the report without anyone retyping it.
+    for (const m of matched) {
+      if (!m.line.partNumber && m.scan?.part_number) m.line.partNumber = m.scan.part_number;
+    }
+
     // requires_po_match must cover the MATCHED scans' parts too, not just the
     // invoice's — otherwise their reported state defaults to "Waiting for PO".
     const scanPartNumbers = [...new Set(
