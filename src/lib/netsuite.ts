@@ -569,7 +569,12 @@ export async function findVendors(name: string): Promise<{
     return { found: vendors.length > 0, vendors };
   } catch (e: any) {
     console.error('NetSuite vendor search failed:', e?.message);
-    return { found: false, vendors: [], error: e?.message || 'Vendor search failed' };
+    // Keep the message short enough for inline UI display — the usual cause
+    // is the integration role lacking vendor-table access.
+    let detail = String(e?.message || 'Vendor search failed');
+    const m = detail.match(/"detail"\s*:\s*"([^"]+)"/);
+    if (m) detail = m[1];
+    return { found: false, vendors: [], error: detail.slice(0, 160) };
   }
 }
 
