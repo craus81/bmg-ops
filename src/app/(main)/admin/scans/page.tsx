@@ -2163,8 +2163,12 @@ function VendorInvoicesTab({ allParts, allLocations, poRequired, onCommitted }: 
   const [defaultPartSearch, setDefaultPartSearch] = useState('');
   const [addVendorName, setAddVendorName] = useState('');
   // Live NetSuite vendor search results — existing NetSuite vendors get
-  // LINKED to a company here instead of a duplicate being created.
+  // LINKED to a company here instead of a duplicate being created. The
+  // search state is surfaced in the dropdown so "not in NetSuite" and
+  // "NetSuite search unavailable" are distinguishable at a glance.
   const [nsVendors, setNsVendors] = useState<{ id: string; entityId: string; companyName: string }[]>([]);
+  const [nsSearchState, setNsSearchState] = useState<'idle' | 'searching' | 'done' | 'error'>('idle');
+  const [nsError, setNsError] = useState<string | null>(null);
   const [linkingVendor, setLinkingVendor] = useState(false);
   // The selected vendor's remembered per-part rates (newest priced invoice
   // line per part) — auto-fills empty amounts.
@@ -2205,13 +2209,26 @@ function VendorInvoicesTab({ allParts, allLocations, poRequired, onCommitted }: 
   // Debounced NetSuite vendor search while typing in the picker.
   const vendorQuery = review && !selectedCompany ? review.vendorName.trim() : '';
   useEffect(() => {
-    if (vendorQuery.length < 2) { setNsVendors([]); return; }
+    if (vendorQuery.length < 2) { setNsVendors([]); setNsSearchState('idle'); setNsError(null); return; }
+    setNsSearchState('searching');
     const t = setTimeout(async () => {
       try {
         const res = await fetch(`/api/cni/search-vendors?q=${encodeURIComponent(vendorQuery)}`);
-        const data = await res.json();
-        if (res.ok) setNsVendors(data.vendors || []);
-      } catch { /* NetSuite search is best-effort; local companies still work */ }
+        const data = await res.json().catch(() => ({}));
+        if (res.ok && !data.error) {
+          setNsVendors(data.vendors || []);
+          setNsError(null);
+          setNsSearchState('done');
+        } else {
+          setNsVendors([]);
+          setNsError(data.error || `search failed (${res.status})`);
+          setNsSearchState('error');
+        }
+      } catch (err: any) {
+        setNsVendors([]);
+        setNsError(err.message || 'network error');
+        setNsSearchState('error');
+      }
     }, 350);
     return () => clearTimeout(t);
   }, [vendorQuery]);
@@ -2675,7 +2692,11 @@ function VendorInvoicesTab({ allParts, allLocations, poRequired, onCommitted }: 
                         style={{ display: 'block', width: '100%', padding: '7px 9px', textAlign: 'left', border: 'none', borderBottom: `1px solid ${theme.border}`, background: 'transparent', cursor: 'pointer', fontSize: '11px', color: 'var(--text-primary)' }}
                       >
                         <span style={{ fontWeight: 700 }}>{c.name}</span>
-                        {c.netsuite_vendor_id && <span style={{ fontSize: '9px', color: 'var(--text-muted)', marginLeft: '6px' }}>NS #{c.netsuite_vendor_id}</span>}
+                        {c.netsuite_vendor_id ? (
+                          <span style={{ fontSize: '9px', fontWeight: 700, color: '#22c55e', background: 'rgba(34,197,94,0.12)', borderRadius: '4px', padding: '1px 5px', marginLeft: '6px' }}>✓ NetSuite #{c.netsuite_vendor_id}</span>
+                        ) : (
+                          <span style={{ fontSize: '9px', fontWeight: 700, color: '#fbbf24', background: 'rgba(251,191,36,0.1)', borderRadius: '4px', padding: '1px 5px', marginLeft: '6px' }}>not linked to NetSuite</span>
+                        )}
                       </button>
                     ))}
                     {nsMatches.map(v => (
@@ -2691,6 +2712,23 @@ function VendorInvoicesTab({ allParts, allLocations, poRequired, onCommitted }: 
                         <div style={{ fontSize: '9px', color: 'var(--text-muted)' }}>{linkingVendor ? 'Linking…' : 'Already a NetSuite vendor — click to link'}</div>
                       </button>
                     ))}
+                    {/* NetSuite search status — so "not in NetSuite" and
+                        "search unavailable" are visibly different answers. */}
+                    {nsSearchState === 'searching' && (
+                      <div style={{ padding: '6px 9px', fontSize: '10px', color: 'var(--text-muted)', borderBottom: `1px solid ${theme.border}` }}>
+                        Searching NetSuite vendors…
+                      </div>
+                    )}
+                    {nsSearchState === 'done' && nsMatches.length === 0 && (
+                      <div style={{ padding: '6px 9px', fontSize: '10px', color: 'var(--text-muted)', borderBottom: `1px solid ${theme.border}` }}>
+                        No NetSuite vendor matches &quot;{review.vendorName.trim()}&quot;
+                      </div>
+                    )}
+                    {nsSearchState === 'error' && (
+                      <div style={{ padding: '6px 9px', fontSize: '10px', fontWeight: 600, color: '#fbbf24', background: 'rgba(251,191,36,0.06)', borderBottom: `1px solid ${theme.border}` }}>
+                        ⚠ NetSuite vendor search unavailable — {nsError}. Showing FleetSuite installers only.
+                      </div>
+                    )}
                     <button
                       onMouseDown={e => e.preventDefault()}
                       onClick={() => { setAddVendorName(review.vendorName.trim()); setAddVendorOpen(true); setShowVendorDropdown(false); }}
