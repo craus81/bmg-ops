@@ -546,6 +546,33 @@ export async function createItem(payload: {
   }
 }
 
+/**
+ * Search NetSuite vendors by name/entity id. Note: unlike customer/item,
+ * vendor-table SuiteQL access is not guaranteed for the integration role —
+ * failures return an error string instead of throwing so callers can fall
+ * back to local data.
+ */
+export async function findVendors(name: string): Promise<{
+  found: boolean;
+  vendors: { id: string; entityId: string; companyName: string }[];
+  error?: string;
+}> {
+  try {
+    const term = name.replace(/'/g, "''").slice(0, 80);
+    const q = `SELECT id, entityid, companyname FROM vendor WHERE isinactive = 'F' AND (UPPER(companyname) LIKE UPPER('%${term}%') OR UPPER(entityid) LIKE UPPER('%${term}%')) FETCH FIRST 10 ROWS ONLY`;
+    const result = await suiteqlQuery(q);
+    const vendors = (result?.items || []).map((v: any) => ({
+      id: String(v.id),
+      entityId: v.entityid || '',
+      companyName: v.companyname || v.entityid || '',
+    }));
+    return { found: vendors.length > 0, vendors };
+  } catch (e: any) {
+    console.error('NetSuite vendor search failed:', e?.message);
+    return { found: false, vendors: [], error: e?.message || 'Vendor search failed' };
+  }
+}
+
 /** NetSuite UI link for a vendor record, given its numeric internal id. */
 export function vendorUrl(internalId: string | number): string {
   const accountForUrl = getConfig().accountId.replace(/-/g, '_').toUpperCase();
