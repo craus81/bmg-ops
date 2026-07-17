@@ -15,6 +15,7 @@ import { CreateNetsuiteItemModal } from '@/components/CreateNetsuiteItemModal';
 import { useDialog } from '@/components/DialogProvider';
 import { isProofLikeName } from '@/lib/pdf-classify';
 import { openNetSuitePdf } from '@/lib/netsuite-pdf-client';
+import { formatShipTo, shipToCityLabel } from '@/lib/graphics-job-from-po';
 
 interface PoNoteRow {
   id: string;
@@ -55,74 +56,6 @@ interface PoGfxJob {
   status: GraphicsJobStatus;
   po_id: string;
   po_line_item_id: string | null;
-}
-
-function formatShipTo(shipTo: PurchaseOrder['ship_to']): string | null {
-  if (!shipTo) return null;
-  const lines = [
-    shipTo.name,
-    shipTo.address,
-    [shipTo.city, shipTo.state].filter(Boolean).join(', '),
-    shipTo.zip,
-  ].map(s => (s || '').trim()).filter(Boolean);
-  return lines.length > 0 ? lines.join('\n') : null;
-}
-
-// Short human location label for a PO row: the city ("Wentzville",
-// "Kansas City") rather than plant codes like "MFG Wentzville MO Install
-// Wentzville". Falls back to the "Install <city>" tail of a plant-style
-// name, then the raw name.
-function shipToCityLabel(shipTo: PurchaseOrder['ship_to']): string {
-  if (!shipTo) return '';
-  const city = (shipTo.city || '').trim();
-  if (city) return city;
-  const name = (shipTo.name || '').trim();
-  const install = name.match(/install\s+(.+)$/i);
-  if (install) return install[1].trim();
-  return name;
-}
-
-// Unified heading for graphics jobs created from the PO screen:
-// "Customer - PO #123 - PART - Description - Location". The description is
-// the flex segment and gets shortened first; the part-number segment (a
-// joined list on whole-PO jobs) is capped too so it can't swallow the
-// heading. Empty segments are dropped.
-const GFX_TITLE_MAX = 100;
-
-function shortenSegment(s: string, max: number): string {
-  return s.length <= max ? s : s.slice(0, Math.max(0, max - 1)).trimEnd() + '…';
-}
-
-function buildGfxJobTitle(opts: {
-  customer: string | null | undefined;
-  poNumber: string | null | undefined;
-  partNumber: string | null | undefined;
-  description: string | null | undefined;
-  location: string;
-}): string {
-  const customer = (opts.customer || '').trim();
-  const poPart = opts.poNumber ? `PO #${String(opts.poNumber).trim()}` : '';
-  const location = (opts.location || '').trim();
-  const baseLen = [customer, poPart, location].filter(Boolean).join(' - ').length;
-  const partNumber = shortenSegment(
-    (opts.partNumber || '').trim(),
-    Math.max(24, Math.min(40, GFX_TITLE_MAX - baseLen - 3))
-  );
-  const fixedLen = [customer, poPart, partNumber, location].filter(Boolean).join(' - ').length;
-  const room = GFX_TITLE_MAX - fixedLen - 3;
-  const desc = room >= 8 ? shortenSegment((opts.description || '').trim(), room) : '';
-  return [customer, poPart, partNumber, desc, location].filter(Boolean).join(' - ') || 'Graphics Job';
-}
-
-function buildJobContent(lines: { part_number: string; description: string | null; quantity: number }[]): string | null {
-  if (!lines.length) return null;
-  return lines
-    .map(li => {
-      const desc = (li.description || '').trim();
-      const head = desc ? `${li.part_number} — ${desc}` : li.part_number;
-      return `${head} (Qty: ${li.quantity})`;
-    })
-    .join('\n');
 }
 
 function csvEscape(value: string | number | null | undefined): string {
@@ -496,22 +429,9 @@ export default function POsPage() {
   // Catalog add state for unmatched parts
   const [addingToCatalog, setAddingToCatalog] = useState<string | null>(null); // part_number being added
   const [catalogAddResults, setCatalogAddResults] = useState<Record<string, 'added' | 'error'>>({});
-  // Create graphics job from PO line item
-  const [creatingGfxJob, setCreatingGfxJob] = useState<string | null>(null); // line item id
-  const [gfxJobResults, setGfxJobResults] = useState<Record<string, 'created' | 'error'>>({});
   // Graphics jobs already linked to each PO (by po_id), so the list can tag
   // POs that have a job without anyone cross-referencing the graphics board.
   const [gfxJobsByPo, setGfxJobsByPo] = useState<Record<string, PoGfxJob[]>>({});
-  // Create multi-part graphics job from entire PO
-  const [creatingGfxJobForPo, setCreatingGfxJobForPo] = useState<string | null>(null); // po id
-  // "Graphics job created" confirmation toast — same green ✓ badge the
-  // graphics page shows after creating a job there. Auto-dismisses.
-  const [gfxCreatedToast, setGfxCreatedToast] = useState<string | null>(null);
-  useEffect(() => {
-    if (!gfxCreatedToast) return;
-    const t = setTimeout(() => setGfxCreatedToast(null), 6000);
-    return () => clearTimeout(t);
-  }, [gfxCreatedToast]);
   // Gmail PO auto-import status — surfaced in a strip above the PO list so
   // it's obvious whether the hourly cron is finding emails / connected to
   // Gmail at all, without anyone having to dig through Vercel logs.
@@ -2310,188 +2230,14 @@ export default function POsPage() {
 
   // Link any PDFs already saved on the PO into the new graphics job's files.
   // Reuses the same R2 storage_path so the PO and job point at one object.
-  const attachPoFilesToGraphicsJob = async (poId: string, jobId: string) => {
-    const { data: poFiles } = await supabase
-      .from('po_files')
-      .select('file_name, file_type, file_size, storage_path')
-      .eq('po_id', poId);
-    if (!poFiles || poFiles.length === 0) return;
-    await supabase.from('graphics_job_files').insert(
-      poFiles.map((f: any) => ({
-        job_id: jobId,
-        file_name: f.file_name,
-        file_type: f.file_type,
-        file_size: f.file_size,
-        storage_path: f.storage_path,
-        uploaded_by: user?.id || null,
-      }))
-    );
-  };
-
-  // Link the files saved on each part's catalog record (proofs, install
-  // guides) into the new graphics job, same storage_path reuse as PO files —
-  // both tables point at the graphics-proofs bucket. Parts are matched
-  // case-insensitively against the loaded catalog, like the "In catalog"
-  // indicators; a part with no catalog record simply contributes nothing.
-  const attachPartFilesToGraphicsJob = async (partNumbers: string[], jobId: string) => {
-    const partIds = [...new Set(
-      partNumbers
-        .map(pn => catalog.find(c => c.part_number.toUpperCase() === pn.toUpperCase())?.id)
-        .filter((id): id is string => !!id)
-    )];
-    if (partIds.length === 0) return;
-    const { data: partFiles } = await supabase
-      .from('part_files')
-      .select('file_name, file_type, file_size, storage_path')
-      .in('part_id', partIds);
-    if (!partFiles || partFiles.length === 0) return;
-    await supabase.from('graphics_job_files').insert(
-      partFiles.map((f: any) => ({
-        job_id: jobId,
-        file_name: f.file_name,
-        file_type: f.file_type,
-        file_size: f.file_size,
-        storage_path: f.storage_path,
-        uploaded_by: user?.id || null,
-      }))
-    );
-  };
-
-  // Create a graphics job from a PO line item
-  const createGfxJobFromLine = async (po: PurchaseOrder, li: { id: string; part_number: string; description: string | null; quantity: number }) => {
-    setCreatingGfxJob(li.id);
-    try {
-      const jobNumber = `GFX-${Date.now().toString(36).toUpperCase()}-${Math.random().toString(36).slice(2, 5).toUpperCase()}`;
-      const { data: job, error } = await supabase
-        .from('graphics_jobs')
-        .insert({
-          po_id: po.id,
-          po_line_item_id: li.id,
-          job_number: jobNumber,
-          title: buildGfxJobTitle({
-            customer: po.customer,
-            poNumber: po.po_number,
-            partNumber: li.part_number,
-            description: li.description,
-            location: shipToCityLabel(po.ship_to),
-          }),
-          part_number: li.part_number,
-          customer: po.customer || null,
-          customer_netsuite_id: po.customer_netsuite_id || null,
-          quantity: li.quantity,
-          status: 'received',
-          job_category: 'production',
-          priority: 'normal',
-          po_number: po.po_number || null,
-          ship_to: formatShipTo(po.ship_to),
-          content: buildJobContent([li]),
-          due_date: po.requested_delivery_date || null,
-          created_by: user?.id || null,
-        })
-        .select('id, job_number, title, status, po_id, po_line_item_id')
-        .single();
-
-      if (error) throw error;
-      // RLS or any other quirk could let INSERT through but block the
-      // RETURNING SELECT, leaving us with a null `job`. Catch that
-      // explicitly — otherwise the success path runs and we falsely
-      // mark the line "✓ Graphics job created" with no row in the DB.
-      if (!job?.id) throw new Error('Graphics job insert returned no row (possible RLS read denial).');
-
-      // Log status history
-      await supabase.from('graphics_status_history').insert({
-        job_id: job.id,
-        from_status: null,
-        to_status: 'received',
-        changed_by: user?.id || null,
-        note: `Created from PO #${po.po_number}`,
-      });
-
-      await attachPoFilesToGraphicsJob(po.id, job.id);
-      await attachPartFilesToGraphicsJob([li.part_number], job.id);
-
-      setGfxJobResults(prev => ({ ...prev, [li.id]: 'created' }));
-      // Stay on the PO page: register the new job locally (so the line and
-      // the PO's Graphics Jobs panel update in place) and confirm with the
-      // same green ✓ toast the graphics page shows. No navigation — the job
-      // stays reachable via its "view ↗" link.
-      setGfxJobsByPo(prev => ({ ...prev, [po.id]: [...(prev[po.id] || []), job as PoGfxJob] }));
-      setGfxCreatedToast(job.job_number || jobNumber);
-      setCreatingGfxJob(null);
-      return;
-    } catch (err: any) {
-      console.error('[admin/pos] createGfxJobFromLine failed:', err);
-      setGfxJobResults(prev => ({ ...prev, [li.id]: 'error' }));
-      await dialog.alert(`Failed to create graphics job: ${err?.message || String(err)}`);
-    }
-    setCreatingGfxJob(null);
-  };
-
-  // Create a single graphics job from ALL line items in a PO
-  const createGfxJobFromPO = async (po: PurchaseOrder & { line_items: POLineItem[] }) => {
-    if (!po.line_items.length) return;
-    setCreatingGfxJobForPo(po.id);
-    try {
-      const jobNumber = `GFX-${Date.now().toString(36).toUpperCase()}-${Math.random().toString(36).slice(2, 5).toUpperCase()}`;
-      const partNumbers = [...new Set(po.line_items.map(li => li.part_number))].join(', ');
-      const totalQty = po.line_items.reduce((sum, li) => sum + li.quantity, 0);
-      // One shared description if every line agrees, otherwise a part count
-      // stands in for it in the heading.
-      const uniqueDescs = [...new Set(po.line_items.map(li => (li.description || '').trim()).filter(Boolean))];
-      const titleDesc = uniqueDescs.length === 1 ? uniqueDescs[0] : `${po.line_items.length} parts`;
-      const { data: job, error } = await supabase
-        .from('graphics_jobs')
-        .insert({
-          po_id: po.id,
-          po_line_item_id: null,
-          job_number: jobNumber,
-          title: buildGfxJobTitle({
-            customer: po.customer,
-            poNumber: po.po_number,
-            partNumber: partNumbers,
-            description: titleDesc,
-            location: shipToCityLabel(po.ship_to),
-          }),
-          part_number: partNumbers,
-          customer: po.customer || null,
-          customer_netsuite_id: po.customer_netsuite_id || null,
-          quantity: totalQty,
-          status: 'received',
-          job_category: 'production',
-          priority: 'normal',
-          po_number: po.po_number || null,
-          ship_to: formatShipTo(po.ship_to),
-          content: buildJobContent(po.line_items),
-          due_date: po.requested_delivery_date || null,
-          created_by: user?.id || null,
-        })
-        .select('id, job_number, title, status, po_id, po_line_item_id')
-        .single();
-
-      if (error) throw error;
-      if (!job?.id) throw new Error('Graphics job insert returned no row (possible RLS read denial).');
-
-      await supabase.from('graphics_status_history').insert({
-        job_id: job.id,
-        from_status: null,
-        to_status: 'received',
-        changed_by: user?.id || null,
-        note: `Created from PO #${po.po_number} with ${po.line_items.length} part(s)`,
-      });
-
-      await attachPoFilesToGraphicsJob(po.id, job.id);
-      await attachPartFilesToGraphicsJob(po.line_items.map(li => li.part_number), job.id);
-
-      // Stay on the PO page: register the new job locally (so the PO's
-      // Graphics Jobs panel updates in place) and confirm with the same
-      // green ✓ toast the graphics page shows.
-      setGfxJobsByPo(prev => ({ ...prev, [po.id]: [...(prev[po.id] || []), job as PoGfxJob] }));
-      setGfxCreatedToast(job.job_number || jobNumber);
-    } catch (err: any) {
-      console.error('[admin/pos] createGfxJobFromPO failed:', err);
-      await dialog.alert(`Failed to create graphics job: ${err?.message || String(err)}`);
-    }
-    setCreatingGfxJobForPo(null);
+  // Creating a graphics job from a PO opens the graphics page's create
+  // wizard prefilled from the PO (?new=1&fromPo=...&poLine=...) — the SAME
+  // form and submit as creating from the graphics screen, so the user
+  // reviews and edits every field before anything is created. The wizard's
+  // submit writes po_id / po_line_item_id and attaches the PO's PDFs and
+  // the parts' catalog files.
+  const openCreateGfxJob = (po: PurchaseOrder, lineItemId?: string) => {
+    router.push(`/graphics?new=1&fromPo=${po.id}${lineItemId ? `&poLine=${lineItemId}` : ''}`);
   };
 
   const addPartToCatalog = async (part: { part_number: string; description: string; unit_price: number }, customer: string) => {
@@ -4572,7 +4318,6 @@ export default function POsPage() {
                     const catalogMatch = catalog.find(c => c.part_number.toUpperCase() === li.part_number.toUpperCase());
                     const catalogAdded = catalogAddResults[li.part_number] === 'added';
                     const lineGfxJob = (gfxJobsByPo[po.id] || []).find(j => j.po_line_item_id === li.id) || null;
-                    const gfxCreated = !!lineGfxJob || gfxJobResults[li.id] === 'created';
 
                     return (
                       <div key={li.id} style={{ padding: '8px 0', borderBottom: '1px solid rgba(30,45,61,0.5)' }}>
@@ -4638,19 +4383,17 @@ export default function POsPage() {
                             >
                               ✓ Graphics job — view ↗
                             </button>
-                          ) : gfxCreated ? (
-                            <span style={{ fontSize: '9px', color: '#4ade80', fontWeight: 600 }}>✓ Graphics job created</span>
                           ) : (
                             <button
-                              onClick={() => createGfxJobFromLine(po, li)}
-                              disabled={creatingGfxJob === li.id}
+                              onClick={() => openCreateGfxJob(po, li.id)}
+                              title="Opens the graphics job form prefilled from this line — review and submit to create"
                               style={{
                                 padding: '3px 8px', borderRadius: '4px', fontSize: '9px', fontWeight: 700,
                                 background: 'rgba(167,139,250,0.1)', border: '1px solid rgba(167,139,250,0.3)',
                                 color: '#a78bfa', cursor: 'pointer',
                               }}
                             >
-                              {creatingGfxJob === li.id ? 'Creating...' : '+ Graphics Job'}
+                              + Graphics Job
                             </button>
                           )}
                         </div>
@@ -4883,10 +4626,10 @@ export default function POsPage() {
                     );
                   })()}
 
-                  {/* Create Graphics Job for entire PO */}
+                  {/* Create Graphics Job for entire PO — opens the prefilled wizard */}
                   <button
-                    onClick={(e) => { e.stopPropagation(); createGfxJobFromPO(po); }}
-                    disabled={creatingGfxJobForPo === po.id}
+                    onClick={(e) => { e.stopPropagation(); openCreateGfxJob(po); }}
+                    title="Opens the graphics job form prefilled from this PO — review and submit to create"
                     style={{
                       width: '100%', padding: '10px', borderRadius: '8px', marginTop: '10px',
                       background: 'rgba(167,139,250,0.08)', border: '1px solid rgba(167,139,250,0.25)',
@@ -4894,7 +4637,7 @@ export default function POsPage() {
                       display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '6px',
                     }}
                   >
-                    {creatingGfxJobForPo === po.id ? 'Creating...' : `+ Create Graphics Job (${po.line_items.length} part${po.line_items.length !== 1 ? 's' : ''})`}
+                    + Create Graphics Job ({po.line_items.length} part{po.line_items.length !== 1 ? 's' : ''})
                   </button>
 
                   {/* Invoice from open (uninstalled) quantities — created
@@ -5058,22 +4801,6 @@ export default function POsPage() {
         />
       )}
 
-      {/* Green "Graphics job created" confirmation — same badge as the
-          graphics page's create flow. Click to dismiss. */}
-      {gfxCreatedToast && (
-        <div
-          onClick={() => setGfxCreatedToast(null)}
-          style={{
-            position: 'fixed', bottom: '28px', left: '50%', transform: 'translateX(-50%)',
-            zIndex: 3000, padding: '12px 20px', borderRadius: '12px', cursor: 'pointer',
-            background: '#16a34a', color: '#fff', fontSize: '14px', fontWeight: 800,
-            boxShadow: '0 6px 24px rgba(0,0,0,0.35)', display: 'flex', alignItems: 'center', gap: '8px',
-            whiteSpace: 'nowrap',
-          }}
-        >
-          <span style={{ fontSize: '16px' }}>✓</span> Graphics job {gfxCreatedToast} created
-        </div>
-      )}
     </div>
   );
 }

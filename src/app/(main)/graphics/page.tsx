@@ -14,6 +14,7 @@ import EmailInvoicesModal, { type EmailableInvoice } from '@/components/EmailInv
 import { PartLabel } from '@/components/PartLabel';
 import DropboxProofSearch from '@/components/DropboxProofSearch';
 import { DropZone } from '@/components/DropZone';
+import { buildGraphicsJobPrefillFromPo, attachPartFilesToGraphicsJob } from '@/lib/graphics-job-from-po';
 import { exportPackingListPDF, packingListFromJob, type PackingListLine } from '@/lib/packing-list-pdf';
 import type {
   GraphicsJob, GraphicsJobStatus, GraphicsJobCategory, GraphicsStatusHistory, GraphicsJobView, Profile,
@@ -109,6 +110,13 @@ export default function GraphicsPage() {
   // create modal; we re-link the resulting graphics_job to the source
   // check-in so the "Needs Graphics" chip clears automatically.
   const [prefillCheckinId, setPrefillCheckinId] = useState<string | null>(null);
+  // Set when another screen (the PO page today) deep-links the create modal
+  // prefilled from a purchase order (?new=1&fromPo=<id>[&poLine=<id>]). The
+  // submit uses it to write po_id / po_line_item_id and attach the parts'
+  // catalog files — nothing is created until the user submits the wizard.
+  const [prefillPoLink, setPrefillPoLink] = useState<{
+    poId: string; poLineItemId: string | null; customerNetsuiteId: string | null; partNumbers: string[];
+  } | null>(null);
   const [awaitingGraphics, setAwaitingGraphics] = useState<any[]>([]);
   const [createForm, setCreateForm] = useState({
     job_category: '' as GraphicsJobCategory | '',
@@ -306,6 +314,21 @@ export default function GraphicsPage() {
         setCustomerSearch(customer);
       }
       if (checkinId) setPrefillCheckinId(checkinId);
+      // From a purchase order (the PO page's "+ Graphics Job" buttons):
+      // prefill the whole wizard from the PO and jump to the details step —
+      // the user reviews/edits and submits; only then is the job created.
+      const fromPo = searchParams.get('fromPo');
+      if (fromPo) {
+        const poLine = searchParams.get('poLine');
+        (async () => {
+          const prefill = await buildGraphicsJobPrefillFromPo(supabase, fromPo, poLine);
+          if (!prefill) return;
+          setCreateForm(f => ({ ...f, job_category: 'production', partInput: '', ...prefill.form }));
+          setCustomerSearch(prefill.form.customer);
+          setCreateStep('details');
+          setPrefillPoLink(prefill.link);
+        })();
+      }
     }
   // eslint-disable-next-line react-hooks/exhaustive-deps -- intentional: load once on mount
   }, [loading, searchParams]);
@@ -846,6 +869,13 @@ export default function GraphicsPage() {
         po_number: createForm.po_number || null,
         status: initialStatus,
         created_by: user?.id,
+        // Link back to the source PO / line item when the wizard was opened
+        // from one, so the PO screen's job panels and dedupe logic see it.
+        ...(prefillPoLink ? {
+          po_id: prefillPoLink.poId,
+          po_line_item_id: prefillPoLink.poLineItemId,
+          customer_netsuite_id: prefillPoLink.customerNetsuiteId,
+        } : {}),
       })
       .select()
       .single();
@@ -874,7 +904,7 @@ export default function GraphicsPage() {
         from_status: null,
         to_status: initialStatus,
         changed_by: user?.id,
-        note: `${GRAPHICS_CATEGORY_LABELS[cat]} job created`,
+        note: `${GRAPHICS_CATEGORY_LABELS[cat]} job created${prefillPoLink && createForm.po_number ? ` from PO #${createForm.po_number}` : ''}`,
       });
 
       // Sync install date to Google Calendar if set
@@ -959,6 +989,12 @@ export default function GraphicsPage() {
         }
       }
 
+      // Jobs created from a PO also carry the parts' catalog files (proofs,
+      // install guides), same as the PO PDFs above.
+      if (prefillPoLink) {
+        await attachPartFilesToGraphicsJob(supabase, prefillPoLink.partNumbers, data.id, user?.id);
+      }
+
       setJobs(prev => [data as GraphicsJob, ...prev]);
       setCreatedToast(data.job_number || jobNumber);
       setShowCreate(false);
@@ -971,6 +1007,7 @@ export default function GraphicsPage() {
       });
       setCreateAssignees([]);
       setCreateFiles([]);
+      setPrefillPoLink(null);
     }
     setCreating(false);
   };
@@ -2446,7 +2483,7 @@ export default function GraphicsPage() {
       {/* ═══════════ CREATE JOB MODAL ═══════════ */}
       {showCreate && (
         <div style={{ position: 'fixed', top: 0, left: 0, right: 0, bottom: 0, background: 'rgba(0,0,0,0.7)', zIndex: 1000, display: 'flex', alignItems: 'flex-end', justifyContent: 'center', padding: '0' }}
-          onClick={(e) => { if (e.target === e.currentTarget) { setShowCreate(false); setCreateStep('category'); } }}
+          onClick={(e) => { if (e.target === e.currentTarget) { setShowCreate(false); setCreateStep('category'); setPrefillPoLink(null); } }}
         >
           <div style={{ background: 'var(--card)', border: '1px solid rgba(59,130,246,0.3)', borderRadius: '14px 14px 0 0', padding: '18px', paddingBottom: 'calc(18px + env(safe-area-inset-bottom, 0px))', maxWidth: '500px', width: '100%', maxHeight: '90vh', overflowY: 'auto', WebkitOverflowScrolling: 'touch' }}>
 
@@ -2486,7 +2523,7 @@ export default function GraphicsPage() {
                 </div>
 
                 <button
-                  onClick={() => { setShowCreate(false); setCreateStep('category'); }}
+                  onClick={() => { setShowCreate(false); setCreateStep('category'); setPrefillPoLink(null); }}
                   style={{ width: '100%', padding: '10px', borderRadius: '10px', background: 'transparent', border: '1px solid var(--border)', color: 'var(--text-body)', fontWeight: 700, fontSize: '13px', cursor: 'pointer' }}
                 >
                   Cancel
@@ -2786,7 +2823,7 @@ export default function GraphicsPage() {
                     {creating ? 'Creating...' : !createForm.title.trim() ? 'Enter a title to continue' : `Create ${GRAPHICS_CATEGORY_LABELS[createForm.job_category as GraphicsJobCategory]} Job`}
                   </button>
                   <button
-                    onClick={() => { setShowCreate(false); setCreateStep('category'); }}
+                    onClick={() => { setShowCreate(false); setCreateStep('category'); setPrefillPoLink(null); }}
                     style={{ width: '100%', padding: '12px', borderRadius: '10px', background: 'transparent', border: '1px solid var(--border)', color: 'var(--text-body)', fontWeight: 700, fontSize: '13px', cursor: 'pointer' }}
                   >
                     Cancel
