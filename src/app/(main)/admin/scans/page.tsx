@@ -2156,6 +2156,10 @@ function VendorInvoicesTab({ allParts, allLocations, poRequired, onCommitted }: 
   const [vLocation, setVLocation] = useState('');
   const [partSearchKey, setPartSearchKey] = useState<number | null>(null);
   const lineKeyRef = useRef(0);
+  // Bulk-upload style default part: fills every line that doesn't carry its
+  // own part number (per-line entries and scan-matched parts win).
+  const [defaultPart, setDefaultPart] = useState<{ item_number: string; display_name: string | null } | null>(null);
+  const [defaultPartSearch, setDefaultPartSearch] = useState('');
 
   const [committing, setCommitting] = useState(false);
   const [commitResult, setCommitResult] = useState<{
@@ -2202,11 +2206,17 @@ function VendorInvoicesTab({ allParts, allLocations, poRequired, onCommitted }: 
     );
     return lines.map(line => {
       const match = pickScanForLine(scans, line.vin, line.partNumber.trim() || null);
-      return { ...line, existing: match ? stateLabelFor(match) : null };
+      return {
+        ...line,
+        // The matched scan already knows what was installed — adopt its part
+        // when the line doesn't have one, so the invoice imports like a scan.
+        partNumber: line.partNumber.trim() || match?.part_number || line.partNumber,
+        existing: match ? stateLabelFor(match) : null,
+      };
     });
   };
 
-  const blankLine = (): VendorLine => ({ key: ++lineKeyRef.current, vin: '', partNumber: '', amount: '', existing: null });
+  const blankLine = (): VendorLine => ({ key: ++lineKeyRef.current, vin: '', partNumber: defaultPart?.item_number || '', amount: '', existing: null });
 
   // One definition of "this line has a usable VIN" — the commit filter, the
   // button count, and the recheck all share it.
@@ -2622,6 +2632,62 @@ function VendorInvoicesTab({ allParts, allLocations, poRequired, onCommitted }: 
               </div>
             </div>
           )}
+
+          {/* Default part — turns the invoice into a bulk upload: one pick
+              fills every line that doesn't carry its own part number. */}
+          <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '8px', flexWrap: 'wrap' }}>
+            <div style={{ ...labelStyle, marginBottom: 0 }}>Default Part</div>
+            {defaultPart ? (
+              <div style={{ display: 'flex', alignItems: 'center', gap: '4px', padding: '4px 8px', borderRadius: '6px', background: 'rgba(34,197,94,0.08)', border: '1px solid rgba(34,197,94,0.2)', fontSize: '11px', fontWeight: 700, color: 'var(--text-primary)' }}>
+                {defaultPart.item_number}
+                <button onClick={() => setDefaultPart(null)} style={{ background: 'none', border: 'none', color: '#f87171', fontSize: '12px', cursor: 'pointer', padding: '0 2px' }}>✕</button>
+              </div>
+            ) : (
+              <div style={{ position: 'relative', minWidth: '220px' }}>
+                <input
+                  value={defaultPartSearch}
+                  onChange={e => setDefaultPartSearch(e.target.value)}
+                  placeholder="Search part to apply to all lines…"
+                  style={{ ...inputStyle, fontSize: '11px', padding: '6px 8px' }}
+                />
+                {defaultPartSearch.length >= 2 && (() => {
+                  const q = defaultPartSearch.toLowerCase();
+                  const matches = allParts.filter(p =>
+                    p.item_number.toLowerCase().includes(q) ||
+                    p.display_name?.toLowerCase().includes(q) ||
+                    p.billable_customer?.toLowerCase().includes(q)
+                  ).slice(0, 8);
+                  if (matches.length === 0) return null;
+                  return (
+                    <div style={{ position: 'absolute', top: '100%', left: 0, right: 0, zIndex: 50, background: 'var(--card)', border: `1px solid ${theme.border}`, borderRadius: '6px', boxShadow: '0 4px 12px rgba(0,0,0,0.2)', maxHeight: '200px', overflowY: 'auto', marginTop: '2px' }}>
+                      {matches.map(p => (
+                        <button
+                          key={p.id}
+                          onMouseDown={e => e.preventDefault()}
+                          onClick={() => {
+                            setDefaultPart({ item_number: p.item_number, display_name: p.display_name });
+                            setDefaultPartSearch('');
+                            setReview(prev => prev ? {
+                              ...prev,
+                              lines: prev.lines.map(l => l.partNumber.trim() ? l : { ...l, partNumber: p.item_number }),
+                            } : prev);
+                          }}
+                          style={{ display: 'block', width: '100%', padding: '7px 9px', textAlign: 'left', border: 'none', borderBottom: `1px solid ${theme.border}`, background: 'transparent', cursor: 'pointer', fontSize: '11px', color: 'var(--text-primary)' }}
+                        >
+                          <span style={{ fontWeight: 700 }}>{p.item_number}</span>
+                          {p.billable_customer && <span style={{ color: '#a78bfa', marginLeft: '6px' }}>{p.billable_customer}</span>}
+                          {p.display_name && <div style={{ fontSize: '9px', color: 'var(--text-muted)' }}>{p.display_name}</div>}
+                        </button>
+                      ))}
+                    </div>
+                  );
+                })()}
+              </div>
+            )}
+            <span style={{ fontSize: '10px', color: 'var(--text-muted)' }}>
+              Fills lines without a part — per-line parts and matched scans win.
+            </span>
+          </div>
 
           {/* Lines */}
           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '6px' }}>
