@@ -590,6 +590,7 @@ export interface NotificationPreferences {
   notify_status_change: boolean;
   notify_ready: boolean;
   notify_ready_for_install?: boolean;
+  notify_invoicing?: boolean;
   notify_shipped: boolean;
   notify_new_po: boolean;
   notify_in_app: boolean;
