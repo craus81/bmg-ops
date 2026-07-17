@@ -314,9 +314,13 @@ export default function WrapQuotePage() {
   const templateOptions = useMemo(() =>
     activeTemplates.filter(t =>
       (!yearFilter || t.year === yearFilter) &&
-      (!makeFilter || t.make === makeFilter) &&
-      matchesTemplateSearch(t, tplSearch)),
-    [activeTemplates, yearFilter, makeFilter, tplSearch]);
+      (!makeFilter || t.make === makeFilter)),
+    [activeTemplates, yearFilter, makeFilter]);
+  // Live type-ahead results for the template search box (independent of the
+  // browse dropdown — results show under the box as you type, click to load).
+  const templateSearchMatches = useMemo(() =>
+    tplSearch.trim().length < 2 ? [] : templateOptions.filter(t => matchesTemplateSearch(t, tplSearch)).slice(0, 20),
+    [templateOptions, tplSearch]);
 
   // ----- Pricing math -----
   const measurementPricing = (m: Measurement) => {
@@ -1406,14 +1410,33 @@ export default function WrapQuotePage() {
               <option value="">All makes</option>
               {makes.map(m => <option key={m} value={m}>{m}</option>)}
             </select>
-            <input
-              value={tplSearch}
-              onChange={e => { setTplSearch(e.target.value); setTemplateId(''); }}
-              placeholder="Search templates…"
-              style={{ ...inputStyle, width: '180px' }}
-            />
+            <div style={{ position: 'relative', width: '220px' }}>
+              <input
+                value={tplSearch}
+                onChange={e => setTplSearch(e.target.value)}
+                placeholder="Type to search templates…"
+                style={{ ...inputStyle, width: '100%' }}
+              />
+              {tplSearch.trim().length >= 2 && (
+                <div style={{ position: 'absolute', top: '100%', left: 0, minWidth: '100%', width: 'max-content', maxWidth: '420px', zIndex: 50, background: 'var(--card)', border: `1px solid ${theme.border}`, borderRadius: '6px', boxShadow: '0 4px 12px rgba(0,0,0,0.2)', maxHeight: '260px', overflowY: 'auto', marginTop: '2px' }}>
+                  {templateSearchMatches.length === 0 ? (
+                    <div style={{ padding: '8px 10px', fontSize: '11px', color: 'var(--text-muted)' }}>No templates match</div>
+                  ) : templateSearchMatches.map(t => (
+                    <button key={t.id} onMouseDown={e => e.preventDefault()} onClick={() => {
+                      setTemplateId(t.id);
+                      setImgDim(null);
+                      resetEstimate();
+                      setTplSearch('');
+                    }} style={{ display: 'block', width: '100%', padding: '8px 10px', textAlign: 'left', border: 'none', borderBottom: `1px solid ${theme.border}`, background: 'transparent', cursor: 'pointer', fontSize: '12px', color: 'var(--text-primary)' }}>
+                      <span style={{ fontWeight: 700 }}>{templateLabel(t)}</span>
+                      {t.template_code && <span style={{ color: 'var(--text-muted)', marginLeft: '6px', fontSize: '10px' }}>{t.template_code}</span>}
+                    </button>
+                  ))}
+                </div>
+              )}
+            </div>
             <select value={templateId} onChange={e => { setTemplateId(e.target.value); setImgDim(null); resetEstimate(); }} style={{ ...inputStyle, flex: 1, minWidth: '220px' }}>
-              <option value="">{templateOptions.length === 0 ? '— No templates match —' : '— Select vehicle template —'}</option>
+              <option value="">— Select vehicle template —</option>
               {templateOptions.map(t => <option key={t.id} value={t.id}>{templateLabel(t)}{t.template_code ? ` (${t.template_code})` : ''}</option>)}
             </select>
           </div>
@@ -1514,6 +1537,10 @@ export default function WrapQuotePage() {
                         <option value="">— none —</option>
                         {activeSubstrates.map(s => <option key={s.id} value={s.id}>{filmLabel(s)} (${fmt(filmRate(s))}/ft²)</option>)}
                       </select>
+                      <div style={{ display: 'flex', gap: '6px', margin: '2px 0 8px' }}>
+                        <button onClick={() => duplicateMeasurement(selected.id)} style={btnStyle('#06b6d4', 'rgba(6,182,212,0.08)')}>⧉ Duplicate</button>
+                        <button onClick={() => removeMeasurement(selected.id)} style={btnStyle('#ef4444', 'transparent')}>Delete</button>
+                      </div>
                       <div style={{ fontSize: '10px', color: 'var(--text-secondary)', fontWeight: 700 }}>
                         Area: {fmt(p.trimArea)} ft²{p.sub && num(p.sub.bleed_in) > 0 ? ` · billed ${fmt(p.billedArea)} ft² with ${p.sub.bleed_in}" bleed` : ''}
                       </div>
