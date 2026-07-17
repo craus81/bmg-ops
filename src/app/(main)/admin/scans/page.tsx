@@ -2102,6 +2102,7 @@ interface VendorLine {
   amount: string;
   existing: string | null; // lifecycle label when the VIN is already a scan
   lastChecked?: string; // vin|part key of the last existing-scan lookup, to skip redundant queries
+  selected?: boolean; // multi-select for applying a part to many lines at once
 }
 
 interface VendorReview {
@@ -2160,6 +2161,17 @@ function VendorInvoicesTab({ allParts, allLocations, poRequired, onCommitted }: 
   // own part number (per-line entries and scan-matched parts win).
   const [defaultPart, setDefaultPart] = useState<{ item_number: string; display_name: string | null } | null>(null);
   const [defaultPartSearch, setDefaultPartSearch] = useState('');
+  const [addVendorName, setAddVendorName] = useState('');
+  // Live NetSuite vendor search results — existing NetSuite vendors get
+  // LINKED to a company here instead of a duplicate being created.
+  const [nsVendors, setNsVendors] = useState<{ id: string; entityId: string; companyName: string }[]>([]);
+  const [linkingVendor, setLinkingVendor] = useState(false);
+  // The selected vendor's remembered per-part rates (newest priced invoice
+  // line per part) — auto-fills empty amounts.
+  const [vendorRates, setVendorRates] = useState<Record<string, { amount: number; invoiceNumber: string | null; date: string | null }>>({});
+  // "Apply part to selected lines" bar
+  const [applyPartSearch, setApplyPartSearch] = useState('');
+  const [showApplyPartDropdown, setShowApplyPartDropdown] = useState(false);
 
   const [committing, setCommitting] = useState(false);
   const [commitResult, setCommitResult] = useState<{
@@ -2188,6 +2200,83 @@ function VendorInvoicesTab({ allParts, allLocations, poRequired, onCommitted }: 
       const data = await res.json();
       if (res.ok) setHistory(data.invoices || []);
     } catch { /* history is non-critical */ }
+  };
+
+  // Debounced NetSuite vendor search while typing in the picker.
+  const vendorQuery = review && !selectedCompany ? review.vendorName.trim() : '';
+  useEffect(() => {
+    if (vendorQuery.length < 2) { setNsVendors([]); return; }
+    const t = setTimeout(async () => {
+      try {
+        const res = await fetch(`/api/cni/search-vendors?q=${encodeURIComponent(vendorQuery)}`);
+        const data = await res.json();
+        if (res.ok) setNsVendors(data.vendors || []);
+      } catch { /* NetSuite search is best-effort; local companies still work */ }
+    }, 350);
+    return () => clearTimeout(t);
+  }, [vendorQuery]);
+
+  // Pull the vendor's remembered per-part rates and fill any empty amounts —
+  // "this installer charges $145 for 06T895" carries forward automatically.
+  const applyRememberedRates = async (vendor: { companyId?: string; vendorName?: string }) => {
+    if (!vendor.companyId && !vendor.vendorName?.trim()) return;
+    try {
+      const params = vendor.companyId
+        ? `companyId=${vendor.companyId}`
+        : `vendorName=${encodeURIComponent(vendor.vendorName!.trim())}`;
+      const res = await fetch(`/api/vendor-invoices/rates?${params}`);
+      const data = await res.json();
+      if (!res.ok) return;
+      const rates: Record<string, { amount: number; invoiceNumber: string | null; date: string | null }> = data.rates || {};
+      setVendorRates(rates);
+      setReview(prev => prev ? {
+        ...prev,
+        lines: prev.lines.map(l => {
+          const rate = l.partNumber.trim() ? rates[l.partNumber.trim().toUpperCase()] : undefined;
+          return !l.amount.trim() && rate ? { ...l, amount: String(rate.amount) } : l;
+        }),
+      } : prev);
+    } catch { /* best-effort */ }
+  };
+
+  // Link an existing NetSuite vendor to a FleetSuite company (creating the
+  // company row if needed) — never mints a duplicate NetSuite vendor.
+  const linkNsVendor = async (v: { id: string; entityId: string; companyName: string }) => {
+    setLinkingVendor(true);
+    try {
+      const res = await fetch('/api/cni/create-vendor', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ name: v.companyName || v.entityId, netsuiteVendorId: v.id }),
+      });
+      const data = await res.json();
+      if (!res.ok || !data.success) {
+        await dialog.alert(`Failed to link NetSuite vendor: ${data.error || 'unknown error'}`);
+      } else {
+        const company: VendorCompany = { id: data.companyId, name: data.companyName, netsuite_vendor_id: data.netsuiteVendorId || null };
+        setCompanies(prev => prev.some(c => c.id === company.id) ? prev.map(c => c.id === company.id ? company : c) : [...prev, company].sort((a, b) => a.name.localeCompare(b.name)));
+        setSelectedCompany(company);
+        setReview(prev => prev ? { ...prev, vendorName: company.name } : prev);
+        setShowVendorDropdown(false);
+        if (data.vendorError) setNotice(data.vendorError);
+        applyRememberedRates({ companyId: company.id });
+      }
+    } catch (err: any) {
+      await dialog.alert(`Failed to link NetSuite vendor: ${err.message}`);
+    }
+    setLinkingVendor(false);
+  };
+
+  const applyPartToSelected = (partNumber: string) => {
+    if (!partNumber.trim() || !review) return;
+    setReview(prev => prev ? {
+      ...prev,
+      lines: prev.lines.map(l => l.selected ? { ...l, partNumber: partNumber.trim(), selected: false } : l),
+    } : prev);
+    setApplyPartSearch('');
+    setShowApplyPartDropdown(false);
+    // The newly assigned part may have a remembered rate for this vendor.
+    applyRememberedRates(selectedCompany ? { companyId: selectedCompany.id } : { vendorName: review.vendorName });
   };
 
   // Same lifecycle labels the scan tabs derive (shared scanLifecycle), for
@@ -2225,6 +2314,8 @@ function VendorInvoicesTab({ allParts, allLocations, poRequired, onCommitted }: 
   const startManualEntry = () => {
     setNotice(null);
     setCommitResult(null);
+    setVendorRates({});
+    setNsVendors([]);
     setReview({ vendorName: '', invoiceNumber: '', invoiceDate: '', totalAmount: '', notes: '', lines: [blankLine()] });
   };
 
@@ -2294,6 +2385,7 @@ function VendorInvoicesTab({ allParts, allLocations, poRequired, onCommitted }: 
           ? companies.find(c => c.name.toLowerCase() === d.vendor_name.toLowerCase()) || null
           : null;
         setSelectedCompany(matchedCompany);
+        setVendorRates({});
         setReview({
           vendorName: matchedCompany?.name || d.vendor_name || '',
           invoiceNumber: d.invoice_number || '',
@@ -2302,6 +2394,8 @@ function VendorInvoicesTab({ allParts, allLocations, poRequired, onCommitted }: 
           notes: d.notes || '',
           lines,
         });
+        // Remembered rates fill any amounts the invoice didn't spell out.
+        applyRememberedRates(matchedCompany ? { companyId: matchedCompany.id } : { vendorName: d.vendor_name || '' });
       }
     } catch (err: any) {
       setNotice(`Upload failed: ${err.message}`);
@@ -2347,14 +2441,14 @@ function VendorInvoicesTab({ allParts, allLocations, poRequired, onCommitted }: 
   const totalMismatch = review && statedTotal > 0 && Math.abs(linesSum - statedTotal) > 0.01;
 
   const handleAddVendor = async () => {
-    if (!review?.vendorName.trim()) return;
+    if (!addVendorName.trim()) return;
     setAddingVendor(true);
     try {
       const res = await fetch('/api/cni/create-vendor', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          name: review.vendorName.trim(),
+          name: addVendorName.trim(),
           email: addVendorEmail.trim() || undefined,
           phone: addVendorPhone.trim() || undefined,
         }),
@@ -2540,17 +2634,27 @@ function VendorInvoicesTab({ allParts, allLocations, poRequired, onCommitted }: 
           </div>
 
           <div style={{ display: 'grid', gridTemplateColumns: '2fr 1fr 1fr', gap: '8px', marginBottom: '8px' }}>
-            {/* Vendor picker with add-new */}
+            {/* Vendor picker: local companies + live NetSuite vendor search
+                (existing NetSuite vendors get linked, never re-created). */}
             <div style={{ position: 'relative' }}>
               <div style={labelStyle}>CNI Installer / Vendor</div>
-              <input
-                value={review.vendorName}
-                onChange={e => { setReview({ ...review, vendorName: e.target.value }); setSelectedCompany(null); setShowVendorDropdown(true); }}
-                onFocus={() => setShowVendorDropdown(true)}
-                onBlur={() => setTimeout(() => setShowVendorDropdown(false), 150)}
-                placeholder="Search installers…"
-                style={{ ...inputStyle, borderColor: selectedCompany ? 'rgba(34,197,94,0.4)' : theme.border }}
-              />
+              <div style={{ display: 'flex', gap: '6px' }}>
+                <input
+                  value={review.vendorName}
+                  onChange={e => { setReview({ ...review, vendorName: e.target.value }); setSelectedCompany(null); setShowVendorDropdown(true); }}
+                  onFocus={() => setShowVendorDropdown(true)}
+                  onBlur={() => setTimeout(() => setShowVendorDropdown(false), 150)}
+                  placeholder="Search installers + NetSuite vendors…"
+                  style={{ ...inputStyle, flex: 1, borderColor: selectedCompany ? 'rgba(34,197,94,0.4)' : theme.border }}
+                />
+                <button
+                  onClick={() => { setAddVendorName(review.vendorName.trim()); setAddVendorOpen(true); setShowVendorDropdown(false); }}
+                  title="Add a new installer — creates the FleetSuite company and the NetSuite vendor"
+                  style={{ padding: '8px 12px', borderRadius: '6px', fontSize: '11px', fontWeight: 800, background: '#22c55e', color: '#fff', border: 'none', cursor: 'pointer', whiteSpace: 'nowrap', flexShrink: 0 }}
+                >
+                  + New Installer
+                </button>
+              </div>
               {selectedCompany && (
                 <div style={{ fontSize: '9px', color: '#22c55e', marginTop: '2px', fontWeight: 700 }}>
                   ✓ In system{selectedCompany.netsuite_vendor_id ? ` · NetSuite vendor #${selectedCompany.netsuite_vendor_id}` : ' · no NetSuite vendor yet'}
@@ -2559,22 +2663,37 @@ function VendorInvoicesTab({ allParts, allLocations, poRequired, onCommitted }: 
               {showVendorDropdown && review.vendorName.trim().length >= 1 && !selectedCompany && (() => {
                 const q = review.vendorName.trim().toLowerCase();
                 const matches = companies.filter(c => c.name.toLowerCase().includes(q)).slice(0, 8);
+                const linkedNsIds = new Set(companies.map(c => c.netsuite_vendor_id).filter(Boolean));
+                const nsMatches = nsVendors.filter(v => !linkedNsIds.has(v.id)).slice(0, 6);
                 return (
-                  <div style={{ position: 'absolute', top: '100%', left: 0, right: 0, zIndex: 50, background: 'var(--card)', border: `1px solid ${theme.border}`, borderRadius: '6px', boxShadow: '0 4px 12px rgba(0,0,0,0.2)', maxHeight: '220px', overflowY: 'auto', marginTop: '2px' }}>
+                  <div style={{ position: 'absolute', top: '100%', left: 0, right: 0, zIndex: 50, background: 'var(--card)', border: `1px solid ${theme.border}`, borderRadius: '6px', boxShadow: '0 4px 12px rgba(0,0,0,0.2)', maxHeight: '260px', overflowY: 'auto', marginTop: '2px' }}>
                     {matches.map(c => (
                       <button
                         key={c.id}
                         onMouseDown={e => e.preventDefault()}
-                        onClick={() => { setSelectedCompany(c); setReview(prev => prev ? { ...prev, vendorName: c.name } : prev); setShowVendorDropdown(false); }}
+                        onClick={() => { setSelectedCompany(c); setReview(prev => prev ? { ...prev, vendorName: c.name } : prev); setShowVendorDropdown(false); applyRememberedRates({ companyId: c.id }); }}
                         style={{ display: 'block', width: '100%', padding: '7px 9px', textAlign: 'left', border: 'none', borderBottom: `1px solid ${theme.border}`, background: 'transparent', cursor: 'pointer', fontSize: '11px', color: 'var(--text-primary)' }}
                       >
                         <span style={{ fontWeight: 700 }}>{c.name}</span>
                         {c.netsuite_vendor_id && <span style={{ fontSize: '9px', color: 'var(--text-muted)', marginLeft: '6px' }}>NS #{c.netsuite_vendor_id}</span>}
                       </button>
                     ))}
+                    {nsMatches.map(v => (
+                      <button
+                        key={`ns-${v.id}`}
+                        onMouseDown={e => e.preventDefault()}
+                        onClick={() => linkNsVendor(v)}
+                        disabled={linkingVendor}
+                        style={{ display: 'block', width: '100%', padding: '7px 9px', textAlign: 'left', border: 'none', borderBottom: `1px solid ${theme.border}`, background: 'rgba(96,165,250,0.04)', cursor: 'pointer', fontSize: '11px', color: 'var(--text-primary)', opacity: linkingVendor ? 0.6 : 1 }}
+                      >
+                        <span style={{ fontWeight: 700 }}>{v.companyName || v.entityId}</span>
+                        <span style={{ fontSize: '9px', fontWeight: 700, color: '#60a5fa', background: 'rgba(96,165,250,0.12)', borderRadius: '4px', padding: '1px 5px', marginLeft: '6px' }}>NetSuite #{v.id}</span>
+                        <div style={{ fontSize: '9px', color: 'var(--text-muted)' }}>{linkingVendor ? 'Linking…' : 'Already a NetSuite vendor — click to link'}</div>
+                      </button>
+                    ))}
                     <button
                       onMouseDown={e => e.preventDefault()}
-                      onClick={() => { setAddVendorOpen(true); setShowVendorDropdown(false); }}
+                      onClick={() => { setAddVendorName(review.vendorName.trim()); setAddVendorOpen(true); setShowVendorDropdown(false); }}
                       style={{ display: 'block', width: '100%', padding: '7px 9px', textAlign: 'left', border: 'none', background: 'rgba(34,197,94,0.06)', cursor: 'pointer', fontSize: '11px', fontWeight: 700, color: '#22c55e' }}
                     >
                       + Add &quot;{review.vendorName.trim()}&quot; as new installer (FleetSuite + NetSuite vendor)
@@ -2612,9 +2731,13 @@ function VendorInvoicesTab({ allParts, allLocations, poRequired, onCommitted }: 
           {addVendorOpen && (
             <div style={{ padding: '10px 12px', borderRadius: '10px', marginBottom: '10px', background: 'rgba(34,197,94,0.05)', border: '1px solid rgba(34,197,94,0.25)' }}>
               <div style={{ fontSize: '11px', fontWeight: 700, color: '#22c55e', marginBottom: '8px' }}>
-                Add &quot;{review.vendorName.trim()}&quot; — creates the installer company in FleetSuite and a matching NetSuite vendor (subsidiary BMG Fleet Installations).
+                Add a new installer — creates the company in FleetSuite and a matching NetSuite vendor (subsidiary BMG Fleet Installations). If they might already be a NetSuite vendor, search them in the field above first and link instead.
               </div>
-              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr auto auto', gap: '6px', alignItems: 'end' }}>
+              <div style={{ display: 'grid', gridTemplateColumns: '1.4fr 1fr 1fr auto auto', gap: '6px', alignItems: 'end' }}>
+                <div>
+                  <div style={labelStyle}>Installer / Company Name</div>
+                  <input value={addVendorName} onChange={e => setAddVendorName(e.target.value)} style={inputStyle} />
+                </div>
                 <div>
                   <div style={labelStyle}>Email (optional)</div>
                   <input value={addVendorEmail} onChange={e => setAddVendorEmail(e.target.value)} style={inputStyle} />
@@ -2623,7 +2746,7 @@ function VendorInvoicesTab({ allParts, allLocations, poRequired, onCommitted }: 
                   <div style={labelStyle}>Phone (optional)</div>
                   <input value={addVendorPhone} onChange={e => setAddVendorPhone(e.target.value)} style={inputStyle} />
                 </div>
-                <button onClick={handleAddVendor} disabled={addingVendor || !review.vendorName.trim()} style={{ padding: '8px 14px', borderRadius: '6px', fontSize: '11px', fontWeight: 700, background: '#22c55e', color: '#fff', border: 'none', cursor: 'pointer', opacity: addingVendor ? 0.6 : 1 }}>
+                <button onClick={handleAddVendor} disabled={addingVendor || !addVendorName.trim()} style={{ padding: '8px 14px', borderRadius: '6px', fontSize: '11px', fontWeight: 700, background: '#22c55e', color: '#fff', border: 'none', cursor: 'pointer', opacity: addingVendor || !addVendorName.trim() ? 0.6 : 1 }}>
                   {addingVendor ? 'Adding…' : 'Add Installer'}
                 </button>
                 <button onClick={() => setAddVendorOpen(false)} style={{ padding: '8px 12px', borderRadius: '6px', fontSize: '11px', fontWeight: 700, background: 'transparent', border: `1px solid ${theme.border}`, color: 'var(--text-muted)', cursor: 'pointer' }}>
@@ -2671,6 +2794,7 @@ function VendorInvoicesTab({ allParts, allLocations, poRequired, onCommitted }: 
                               ...prev,
                               lines: prev.lines.map(l => l.partNumber.trim() ? l : { ...l, partNumber: p.item_number }),
                             } : prev);
+                            applyRememberedRates(selectedCompany ? { companyId: selectedCompany.id } : { vendorName: review.vendorName });
                           }}
                           style={{ display: 'block', width: '100%', padding: '7px 9px', textAlign: 'left', border: 'none', borderBottom: `1px solid ${theme.border}`, background: 'transparent', cursor: 'pointer', fontSize: '11px', color: 'var(--text-primary)' }}
                         >
@@ -2691,9 +2815,18 @@ function VendorInvoicesTab({ allParts, allLocations, poRequired, onCommitted }: 
 
           {/* Lines */}
           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '6px' }}>
-            <div style={{ fontSize: '10px', fontWeight: 700, color: 'var(--text-muted)', textTransform: 'uppercase' }}>
-              VINs on this invoice ({review.lines.length})
-            </div>
+            <label style={{ display: 'flex', alignItems: 'center', gap: '6px', cursor: 'pointer' }}>
+              <input
+                type="checkbox"
+                checked={review.lines.length > 0 && review.lines.every(l => l.selected)}
+                onChange={e => setReview({ ...review, lines: review.lines.map(l => ({ ...l, selected: e.target.checked })) })}
+                title="Select all lines"
+                style={{ width: '13px', height: '13px', accentColor: '#f472b6' }}
+              />
+              <span style={{ fontSize: '10px', fontWeight: 700, color: 'var(--text-muted)', textTransform: 'uppercase' }}>
+                VINs on this invoice ({review.lines.length})
+              </span>
+            </label>
             <div style={{ display: 'flex', gap: '6px' }}>
               <button onClick={splitTotalEvenly} disabled={!statedTotal} title="Divide the invoice total evenly across all VIN lines" style={{ padding: '4px 10px', borderRadius: '6px', fontSize: '10px', fontWeight: 700, background: 'rgba(96,165,250,0.1)', border: '1px solid rgba(96,165,250,0.25)', color: '#60a5fa', cursor: 'pointer', opacity: statedTotal ? 1 : 0.4 }}>
                 Split total evenly
@@ -2704,8 +2837,65 @@ function VendorInvoicesTab({ allParts, allLocations, poRequired, onCommitted }: 
             </div>
           </div>
 
+          {/* Apply a part to all selected lines in one go */}
+          {(() => {
+            const selectedCount = review.lines.filter(l => l.selected).length;
+            if (selectedCount === 0) return null;
+            return (
+              <div style={{ display: 'flex', alignItems: 'center', gap: '6px', padding: '6px 8px', marginBottom: '6px', borderRadius: '8px', background: 'rgba(244,114,182,0.06)', border: '1px solid rgba(244,114,182,0.25)', flexWrap: 'wrap' }}>
+                <span style={{ fontSize: '11px', fontWeight: 700, color: '#f472b6' }}>{selectedCount} selected</span>
+                <div style={{ position: 'relative', minWidth: '220px' }}>
+                  <input
+                    value={applyPartSearch}
+                    onChange={e => { setApplyPartSearch(e.target.value); setShowApplyPartDropdown(true); }}
+                    onFocus={() => setShowApplyPartDropdown(true)}
+                    onBlur={() => setTimeout(() => setShowApplyPartDropdown(false), 150)}
+                    placeholder="Part # for selected lines…"
+                    style={{ ...inputStyle, fontSize: '11px', padding: '6px 8px' }}
+                  />
+                  {showApplyPartDropdown && applyPartSearch.length >= 2 && (() => {
+                    const q = applyPartSearch.toLowerCase();
+                    const matches = allParts.filter(p =>
+                      p.item_number.toLowerCase().includes(q) ||
+                      p.display_name?.toLowerCase().includes(q) ||
+                      p.billable_customer?.toLowerCase().includes(q)
+                    ).slice(0, 8);
+                    if (matches.length === 0) return null;
+                    return (
+                      <div style={{ position: 'absolute', top: '100%', left: 0, right: 0, zIndex: 50, background: 'var(--card)', border: `1px solid ${theme.border}`, borderRadius: '6px', boxShadow: '0 4px 12px rgba(0,0,0,0.2)', maxHeight: '180px', overflowY: 'auto', marginTop: '2px' }}>
+                        {matches.map(p => (
+                          <button
+                            key={p.id}
+                            onMouseDown={e => e.preventDefault()}
+                            onClick={() => applyPartToSelected(p.item_number)}
+                            style={{ display: 'block', width: '100%', padding: '6px 8px', textAlign: 'left', border: 'none', borderBottom: `1px solid ${theme.border}`, background: 'transparent', cursor: 'pointer', fontSize: '11px', color: 'var(--text-primary)' }}
+                          >
+                            <span style={{ fontWeight: 700 }}>{p.item_number}</span>
+                            {p.billable_customer && <span style={{ color: '#a78bfa', marginLeft: '6px' }}>{p.billable_customer}</span>}
+                          </button>
+                        ))}
+                      </div>
+                    );
+                  })()}
+                </div>
+                <button onClick={() => applyPartToSelected(applyPartSearch)} disabled={!applyPartSearch.trim()} style={{ padding: '6px 12px', borderRadius: '6px', fontSize: '11px', fontWeight: 700, background: '#f472b6', color: '#fff', border: 'none', cursor: 'pointer', opacity: applyPartSearch.trim() ? 1 : 0.4 }}>
+                  Apply to {selectedCount}
+                </button>
+                <button onClick={() => setReview({ ...review, lines: review.lines.map(l => ({ ...l, selected: false })) })} style={{ padding: '6px 10px', borderRadius: '6px', fontSize: '11px', fontWeight: 700, background: 'transparent', border: `1px solid ${theme.border}`, color: 'var(--text-muted)', cursor: 'pointer' }}>
+                  Clear
+                </button>
+              </div>
+            );
+          })()}
+
           {review.lines.map(line => (
-            <div key={line.key} style={{ display: 'flex', alignItems: 'center', gap: '6px', padding: '5px 7px', marginBottom: '3px', borderRadius: '6px', background: 'var(--subtle-bg)', border: `1px solid ${line.existing ? 'rgba(251,191,36,0.35)' : 'var(--border)'}` }}>
+            <div key={line.key} style={{ display: 'flex', alignItems: 'center', gap: '6px', padding: '5px 7px', marginBottom: '3px', borderRadius: '6px', background: line.selected ? 'rgba(244,114,182,0.05)' : 'var(--subtle-bg)', border: `1px solid ${line.selected ? 'rgba(244,114,182,0.35)' : line.existing ? 'rgba(251,191,36,0.35)' : 'var(--border)'}` }}>
+              <input
+                type="checkbox"
+                checked={!!line.selected}
+                onChange={e => updateLine(line.key, { selected: e.target.checked })}
+                style={{ width: '13px', height: '13px', flexShrink: 0, accentColor: '#f472b6' }}
+              />
               <input
                 value={line.vin}
                 onChange={e => updateLine(line.key, { vin: e.target.value.toUpperCase() })}
@@ -2753,7 +2943,14 @@ function VendorInvoicesTab({ allParts, allLocations, poRequired, onCommitted }: 
                 type="number" step="0.01" min="0"
                 value={line.amount}
                 onChange={e => updateLine(line.key, { amount: e.target.value })}
-                placeholder="$"
+                placeholder={(() => {
+                  const r = line.partNumber.trim() ? vendorRates[line.partNumber.trim().toUpperCase()] : undefined;
+                  return r ? r.amount.toFixed(2) : '$';
+                })()}
+                title={(() => {
+                  const r = line.partNumber.trim() ? vendorRates[line.partNumber.trim().toUpperCase()] : undefined;
+                  return r ? `This vendor last billed $${r.amount.toFixed(2)} for ${line.partNumber.trim()}${r.invoiceNumber ? ` (Inv #${r.invoiceNumber}` : ''}${r.invoiceNumber && r.date ? `, ${r.date})` : r.invoiceNumber ? ')' : r.date ? ` on ${r.date}` : ''}` : '';
+                })()}
                 style={{ width: '90px', padding: '6px 8px', borderRadius: '5px', border: '1px solid var(--border)', background: 'var(--input-bg)', color: 'var(--text-primary)', fontSize: '12px', flexShrink: 0 }}
               />
               {line.existing && (

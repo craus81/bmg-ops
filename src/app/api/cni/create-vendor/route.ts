@@ -21,6 +21,9 @@ const Schema = z.object({
   name: z.string().trim().min(1).max(120).optional(),
   email: z.string().trim().email().max(160).optional().or(z.literal('')),
   phone: z.string().trim().max(40).optional().or(z.literal('')),
+  // Link an EXISTING NetSuite vendor (numeric Internal ID from vendor
+  // search) instead of creating a new one.
+  netsuiteVendorId: z.string().regex(/^\d+$/).optional(),
 }).refine(b => b.companyId || b.name, { message: 'companyId or name is required' });
 
 // ilike patterns treat % and _ as wildcards — escape them so a typed name
@@ -101,6 +104,28 @@ export async function POST(req: NextRequest) {
         netsuiteVendorId: company.netsuite_vendor_id,
         netsuiteUrl: safeVendorUrl(company.netsuite_vendor_id),
         alreadyExists: true,
+        ...(body.netsuiteVendorId && body.netsuiteVendorId !== company.netsuite_vendor_id
+          ? { vendorError: `Company is already linked to NetSuite vendor #${company.netsuite_vendor_id} — not changed to #${body.netsuiteVendorId}.` }
+          : {}),
+      });
+    }
+
+    // Linking a vendor that already exists in NetSuite — no create needed.
+    if (body.netsuiteVendorId) {
+      const { error: linkErr } = await service
+        .from('companies')
+        .update({ netsuite_vendor_id: body.netsuiteVendorId })
+        .eq('id', company.id);
+      if (linkErr) {
+        return NextResponse.json({ error: `Failed to link vendor: ${linkErr.message}` }, { status: 500 });
+      }
+      return NextResponse.json({
+        success: true,
+        companyId: company.id,
+        companyName: company.name,
+        netsuiteVendorId: body.netsuiteVendorId,
+        netsuiteUrl: safeVendorUrl(body.netsuiteVendorId),
+        linked: true,
       });
     }
 
