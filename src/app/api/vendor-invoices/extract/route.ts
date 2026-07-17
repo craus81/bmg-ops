@@ -1,13 +1,19 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { requireAdmin } from '@/lib/api-auth';
 import { validateBody, z } from '@/lib/validate';
+import { callAnthropicWithRetry } from '@/lib/anthropic';
 
 export const maxDuration = 60;
 
 const ANTHROPIC_API_KEY = process.env.ANTHROPIC_API_KEY;
 
+// Vercel serverless rejects request bodies over ~4.5MB, so the practical
+// ceiling for base64 file content is well under that. The client pre-gates
+// on file size; this cap is the backstop.
+const MAX_FILE_BYTES = 3.5 * 1024 * 1024;
+
 const Schema = z.object({
-  fileBase64: z.string().min(1).max(15_000_000),
+  fileBase64: z.string().min(1).max(6_000_000),
   mediaType: z.string().max(100).optional(),
 });
 
@@ -48,6 +54,13 @@ export async function POST(request: NextRequest) {
   if (parsed.error) return parsed.error;
   const { fileBase64, mediaType } = parsed.data;
 
+  if (fileBase64.length * 0.75 > MAX_FILE_BYTES) {
+    return NextResponse.json(
+      { error: 'File is too large for AI extraction (~3.5MB limit). The file still attaches to the record — enter the invoice details manually.' },
+      { status: 422 },
+    );
+  }
+
   const isPDF = mediaType === 'application/pdf';
   const fileContent = isPDF
     ? {
@@ -60,15 +73,8 @@ export async function POST(request: NextRequest) {
       };
 
   try {
-    const response = await fetch('https://api.anthropic.com/v1/messages', {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'x-api-key': ANTHROPIC_API_KEY,
-        'anthropic-version': '2023-06-01',
-        ...(isPDF ? { 'anthropic-beta': 'pdfs-2024-09-25' } : {}),
-      },
-      body: JSON.stringify({
+    const response = await callAnthropicWithRetry(
+      {
         model: 'claude-sonnet-4-6',
         max_tokens: 8192,
         messages: [
@@ -81,8 +87,10 @@ export async function POST(request: NextRequest) {
             ],
           },
         ],
-      }),
-    });
+      },
+      ANTHROPIC_API_KEY,
+      { extraHeaders: isPDF ? { 'anthropic-beta': 'pdfs-2024-09-25' } : {} },
+    );
 
     if (!response.ok) {
       const errorBody = await response.text();

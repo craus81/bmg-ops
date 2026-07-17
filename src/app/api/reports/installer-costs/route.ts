@@ -30,10 +30,13 @@ interface ReportLine {
 }
 
 function rollup(lines: ReportLine[], keyOf: (l: ReportLine) => string) {
+  // Group case-insensitively (part numbers especially can arrive in mixed
+  // case) but display the first-seen spelling.
   const map = new Map<string, { key: string; vins: number; paid: number; invoiced: number; unpriced: number }>();
   for (const l of lines) {
-    const key = keyOf(l);
-    const row = map.get(key) || { key, vins: 0, paid: 0, invoiced: 0, unpriced: 0 };
+    const display = keyOf(l);
+    const key = display.toUpperCase();
+    const row = map.get(key) || { key: display, vins: 0, paid: 0, invoiced: 0, unpriced: 0 };
     row.vins += 1;
     if (l.paid != null) row.paid += l.paid; else row.unpriced += 1;
     if (l.invoiced != null) row.invoiced += l.invoiced;
@@ -60,7 +63,14 @@ export async function GET(req: NextRequest) {
   const { start, end } = parsed.data;
 
   try {
-    // Invoices in range: by invoice_date when present, else by recorded date.
+    // Invoices in range: by invoice_date when present, else by recorded
+    // timestamp. The fallback compares whole days in UTC (a timestamptz has
+    // no user timezone here) — set invoice_date for exact month cutoffs.
+    const endNext = (() => {
+      const d = new Date(`${end}T00:00:00Z`);
+      d.setUTCDate(d.getUTCDate() + 1);
+      return d.toISOString().slice(0, 10);
+    })();
     const [byDate, byCreated] = await Promise.all([
       service.from('vendor_invoices')
         .select('id, invoice_number, invoice_date, vendor_name, location_name, created_at')
@@ -68,7 +78,7 @@ export async function GET(req: NextRequest) {
       service.from('vendor_invoices')
         .select('id, invoice_number, invoice_date, vendor_name, location_name, created_at')
         .is('invoice_date', null)
-        .gte('created_at', `${start}T00:00:00`).lte('created_at', `${end}T23:59:59`),
+        .gte('created_at', `${start}T00:00:00Z`).lt('created_at', `${endNext}T00:00:00Z`),
     ]);
     const invoices = [...(byDate.data || []), ...(byCreated.data || [])];
     if (invoices.length === 0) {
@@ -76,16 +86,25 @@ export async function GET(req: NextRequest) {
     }
     const invoiceById = new Map(invoices.map(i => [i.id, i]));
 
-    // Lines, in chunks.
+    // Lines, in chunks of invoices, each paginated — PostgREST caps a single
+    // response at 1000 rows, and silently truncating a financial report is
+    // worse than an extra round trip.
     const invoiceIds = invoices.map(i => i.id);
     const rawLines: any[] = [];
     for (let i = 0; i < invoiceIds.length; i += 100) {
-      const { data } = await service
-        .from('vendor_invoice_lines')
-        .select('vendor_invoice_id, scan_log_id, vin, part_number, amount')
-        .in('vendor_invoice_id', invoiceIds.slice(i, i + 100))
-        .limit(5000);
-      rawLines.push(...(data || []));
+      let pg = 0;
+      let more = true;
+      while (more) {
+        const { data } = await service
+          .from('vendor_invoice_lines')
+          .select('vendor_invoice_id, scan_log_id, vin, part_number, amount')
+          .in('vendor_invoice_id', invoiceIds.slice(i, i + 100))
+          .order('id')
+          .range(pg * 1000, (pg + 1) * 1000 - 1);
+        rawLines.push(...(data || []));
+        more = (data || []).length === 1000;
+        pg++;
+      }
     }
 
     // Revenue estimate inputs: the scan's PO line price, else catalog price.
@@ -105,18 +124,18 @@ export async function GET(req: NextRequest) {
         .from('po_line_items').select('id, unit_price').in('id', poLineIds.slice(i, i + 200));
       for (const l of data || []) if (l.unit_price != null) poLinePrice.set(l.id, Number(l.unit_price));
     }
+    // Catalog prices for just the parts this report touches.
+    const neededParts = [...new Set([
+      ...rawLines.map(l => l.part_number).filter(Boolean),
+      ...[...scanById.values()].map(s => s.part_number).filter(Boolean),
+    ])] as string[];
     const partPrice = new Map<string, number>();
-    {
-      let pg = 0; let more = true;
-      while (more) {
-        const { data } = await service
-          .from('netsuite_parts').select('item_number, sales_price')
-          .range(pg * 1000, (pg + 1) * 1000 - 1);
-        for (const p of data || []) {
-          if (p.sales_price != null && Number(p.sales_price) > 0) partPrice.set(p.item_number.toUpperCase(), Number(p.sales_price));
-        }
-        more = (data || []).length === 1000;
-        pg++;
+    for (let i = 0; i < neededParts.length; i += 200) {
+      const { data } = await service
+        .from('netsuite_parts').select('item_number, sales_price')
+        .in('item_number', neededParts.slice(i, i + 200));
+      for (const p of data || []) {
+        if (p.sales_price != null && Number(p.sales_price) > 0) partPrice.set(p.item_number.toUpperCase(), Number(p.sales_price));
       }
     }
 

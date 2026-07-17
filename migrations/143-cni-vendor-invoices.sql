@@ -73,6 +73,27 @@ BEGIN
 END;
 $$ LANGUAGE plpgsql SECURITY DEFINER SET search_path = '';
 
+-- Keep the average current on every line mutation — including out-of-band
+-- edits (console fixes, future edit endpoints) that app code would miss.
+CREATE OR REPLACE FUNCTION public.vendor_invoice_lines_recompute_avg()
+RETURNS TRIGGER AS $$
+BEGIN
+  IF TG_OP IN ('INSERT', 'UPDATE') AND NEW.part_number IS NOT NULL THEN
+    PERFORM public.recompute_part_install_cost(NEW.part_number);
+  END IF;
+  IF TG_OP IN ('UPDATE', 'DELETE') AND OLD.part_number IS NOT NULL
+     AND (TG_OP = 'DELETE' OR NEW.part_number IS DISTINCT FROM OLD.part_number) THEN
+    PERFORM public.recompute_part_install_cost(OLD.part_number);
+  END IF;
+  RETURN NULL;
+END;
+$$ LANGUAGE plpgsql SECURITY DEFINER SET search_path = '';
+
+DROP TRIGGER IF EXISTS trg_vendor_invoice_lines_recompute ON vendor_invoice_lines;
+CREATE TRIGGER trg_vendor_invoice_lines_recompute
+  AFTER INSERT OR UPDATE OR DELETE ON vendor_invoice_lines
+  FOR EACH ROW EXECUTE FUNCTION public.vendor_invoice_lines_recompute_avg();
+
 ALTER TABLE vendor_invoices ENABLE ROW LEVEL SECURITY;
 ALTER TABLE vendor_invoice_lines ENABLE ROW LEVEL SECURITY;
 

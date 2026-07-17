@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { r2Upload, r2Delete, r2PublicUrl } from '@/lib/r2';
+import { r2Upload, r2Delete, r2Get, r2PublicUrl } from '@/lib/r2';
 import { requireAuth } from '@/lib/api-auth';
 import { validateBody, z } from '@/lib/validate';
 
@@ -9,6 +9,36 @@ const DeleteSchema = z.object({
   bucket: z.string().trim().min(1).max(80),
   path: z.string().trim().min(1).max(1000),
 });
+
+// GET — stream a file from R2. This is the URL storage.getPublicUrl() falls
+// back to when NEXT_PUBLIC_R2_PUBLIC_URL isn't configured, so without it
+// those links 405'd.
+export async function GET(req: NextRequest) {
+  const auth = await requireAuth(req);
+  if (auth.error) return auth.error;
+
+  const bucket = req.nextUrl.searchParams.get('bucket')?.trim() || '';
+  const path = req.nextUrl.searchParams.get('path')?.trim() || '';
+  if (!bucket || !path || bucket.length > 80 || path.length > 1000) {
+    return NextResponse.json({ error: 'Missing bucket or path' }, { status: 400 });
+  }
+
+  try {
+    const result = await r2Get(bucket, path);
+    if (!result.success || !result.body) {
+      return NextResponse.json({ error: 'File not found' }, { status: 404 });
+    }
+    return new NextResponse(result.body as any, {
+      headers: {
+        'Content-Type': result.contentType || 'application/octet-stream',
+        'Cache-Control': 'private, max-age=300',
+      },
+    });
+  } catch (err: any) {
+    console.error('Storage read error:', err);
+    return NextResponse.json({ error: err.message }, { status: 500 });
+  }
+}
 
 // POST — upload a file to R2
 export async function POST(req: NextRequest) {

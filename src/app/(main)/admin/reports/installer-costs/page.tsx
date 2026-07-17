@@ -3,6 +3,7 @@
 import { useEffect, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { useAuth } from '@/components/AuthProvider';
+import { downloadCsv } from '@/lib/csv';
 
 interface ReportLine {
   invoiceId: string;
@@ -64,21 +65,16 @@ export default function InstallerCostsReportPage() {
 
   const exportCsv = () => {
     if (!data) return;
-    const headers = ['Date', 'Installer', 'Invoice #', 'Location', 'VIN', 'Part', 'Paid', 'Est. Invoiced', 'Est. Margin', 'Revenue Source'];
-    const rows = data.lines.map(l => [
-      l.date, l.vendor, l.invoiceNumber || '', l.location, l.vin, l.partNumber || '',
-      l.paid != null ? l.paid.toFixed(2) : '', l.invoiced != null ? l.invoiced.toFixed(2) : '',
-      l.paid != null && l.invoiced != null ? (l.invoiced - l.paid).toFixed(2) : '',
-      l.invoicedSource === 'po_price' ? 'PO unit price' : l.invoicedSource === 'catalog_price' ? 'Catalog price' : '',
-    ]);
-    const csv = [headers, ...rows].map(r => r.map(c => `"${String(c).replace(/"/g, '""')}"`).join(',')).join('\n');
-    const blob = new Blob([csv], { type: 'text/csv' });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement('a');
-    a.href = url;
-    a.download = `installer-costs-${start}-to-${end}.csv`;
-    a.click();
-    URL.revokeObjectURL(url);
+    downloadCsv(
+      `installer-costs-${start}-to-${end}.csv`,
+      ['Date', 'Installer', 'Invoice #', 'Location', 'VIN', 'Part', 'Paid', 'Est. Invoiced', 'Est. Margin', 'Revenue Source'],
+      data.lines.map(l => [
+        l.date, l.vendor, l.invoiceNumber || '', l.location, l.vin, l.partNumber || '',
+        l.paid != null ? l.paid.toFixed(2) : '', l.invoiced != null ? l.invoiced.toFixed(2) : '',
+        l.paid != null && l.invoiced != null ? (l.invoiced - l.paid).toFixed(2) : '',
+        l.invoicedSource === 'po_price' ? 'PO unit price' : l.invoicedSource === 'catalog_price' ? 'Catalog price' : '',
+      ]),
+    );
   };
 
   const rollupTable = (title: string, rows: Rollup[]) => (

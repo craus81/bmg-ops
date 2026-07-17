@@ -71,3 +71,49 @@ export async function findExistingScanVins(
   }
   return out;
 }
+
+/**
+ * Fetch full scan_logs rows matching any of the given vehicles (same
+ * chunked same-vehicle query as findExistingScanVins, but returning the
+ * columns the caller asks for), newest scan first.
+ */
+export async function fetchScansMatchingVins<T extends { vin: string }>(
+  client: Pick<SupabaseClient, 'from'>,
+  vins: string[],
+  columns: string,
+): Promise<T[]> {
+  const filters = [...new Set(vins.map(vinMatchOrFilter).filter(Boolean))];
+  const out: T[] = [];
+  for (let i = 0; i < filters.length; i += 25) {
+    const { data } = await client
+      .from('scan_logs')
+      .select(columns)
+      .or(filters.slice(i, i + 25).join(','))
+      .order('scanned_at', { ascending: false });
+    out.push(...((data || []) as unknown as T[]));
+  }
+  return out;
+}
+
+/**
+ * Which existing scan (if any) a vendor-invoice line for (vin, partNumber)
+ * belongs to. Same-vehicle candidates only; a line WITH a part number
+ * attaches to a scan carrying that part, or one with no part yet — never a
+ * scan for a DIFFERENT part, because that's a separate install on the same
+ * vehicle and deserves its own scan row. A line with no part attaches to
+ * the newest same-vehicle scan. Candidates must be sorted newest first.
+ */
+export function pickScanForLine<T extends { vin: string; part_number: string | null }>(
+  candidates: T[],
+  vin: string,
+  partNumber: string | null,
+): T | null {
+  const sameVehicle = candidates.filter(s => sameVehicleVin(s.vin, vin));
+  if (!partNumber) return sameVehicle[0] || null;
+  const upper = partNumber.toUpperCase();
+  return (
+    sameVehicle.find(s => (s.part_number || '').toUpperCase() === upper) ||
+    sameVehicle.find(s => !s.part_number) ||
+    null
+  );
+}

@@ -568,12 +568,6 @@ export async function createVendor(payload: {
   netsuiteUrl?: string;
   error?: string;
 }> {
-  const config = getConfig();
-  const baseUrl = getBaseUrl(config.accountId);
-  const url = `${baseUrl}/services/rest/record/v1/vendor`;
-  const { oauth, token } = createOAuth(config);
-  const authHeader = getAuthHeader(oauth, token, { url, method: 'POST' });
-
   const body: any = {
     companyName: payload.companyName,
     isPerson: false,
@@ -586,6 +580,14 @@ export async function createVendor(payload: {
   if (payload.phone) body.phone = payload.phone;
 
   try {
+    // Inside the try so missing NETSUITE_* env vars surface as
+    // { success: false } per this function's contract, not a throw.
+    const config = getConfig();
+    const baseUrl = getBaseUrl(config.accountId);
+    const url = `${baseUrl}/services/rest/record/v1/vendor`;
+    const { oauth, token } = createOAuth(config);
+    const authHeader = getAuthHeader(oauth, token, { url, method: 'POST' });
+
     const response = await fetch(url, {
       method: 'POST',
       headers: {
