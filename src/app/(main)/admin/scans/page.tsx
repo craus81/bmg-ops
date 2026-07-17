@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import { useSearchParams } from 'next/navigation';
 import { createClient } from '@/lib/supabase-browser';
 import { useAuth } from '@/components/AuthProvider';
@@ -11,7 +11,10 @@ import { CreateNetsuiteItemModal, type CreatedPart } from '@/components/CreateNe
 import EmailInvoicesModal, { type EmailableInvoice } from '@/components/EmailInvoicesModal';
 import { theme } from '@/lib/theme';
 import { locationBillingOverride } from '@/lib/scan-billing';
-import { findExistingScanVins, sameVehicleVin, vinTail } from '@/lib/vin-match';
+import { findExistingScanVins, sameVehicleVin, vinTail, fetchScansMatchingVins, pickScanForLine } from '@/lib/vin-match';
+import { scanLifecycle } from '@/lib/scan-state';
+import { decodeVinsBatch } from '@/lib/vin-decoder';
+import { storage } from '@/lib/storage';
 
 interface ScanLog {
   id: string;
@@ -39,9 +42,12 @@ interface ScanLog {
   date_invoiced?: string | null;
   is_paid?: boolean;
   requires_po?: boolean;
+  install_cost?: number | null;
+  installer_name?: string | null;
+  vendor_invoice_id?: string | null;
 }
 
-type ViewTab = 'all' | 'ready' | 'waiting' | 'exported' | 'archived' | 'bulk';
+type ViewTab = 'all' | 'ready' | 'waiting' | 'exported' | 'archived' | 'bulk' | 'vendor';
 
 // Local calendar date (YYYY-MM-DD) — scan date filters work in the user's day,
 // matching how the dashboard counts "scans today".
@@ -84,7 +90,7 @@ export default function AdminScansPage() {
   // ?from=YYYY-MM-DD&to=YYYY-MM-DD.
   useEffect(() => {
     const t = searchParams.get('tab');
-    if (t && ['all', 'ready', 'waiting', 'exported', 'archived', 'bulk'].includes(t)) setTab(t as ViewTab);
+    if (t && ['all', 'ready', 'waiting', 'exported', 'archived', 'bulk', 'vendor'].includes(t)) setTab(t as ViewTab);
     const range = searchParams.get('range');
     if (range === 'today' || range === '7d' || range === '30d') {
       const today = new Date();
@@ -251,20 +257,22 @@ export default function AdminScansPage() {
   const allScans = [...scans, ...archivedScans]
     .sort((a, b) => new Date(b.scanned_at).getTime() - new Date(a.scanned_at).getTime());
 
-  // Lifecycle chip for the All Scans tab. Invoiced wins over archived
-  // (invoicing stamps archived_at too), then archived, exported, and the
-  // PO-derived pending states.
+  // Lifecycle chip for the All Scans tab — labels come from the shared
+  // scanLifecycle derivation; this only adds colors.
   const scanStatus = (s: ScanLog) => {
-    if (s.invoice_number || s.date_invoiced) {
-      const inv = s.invoice_number ? ` #${s.invoice_number}` : '';
+    const { state, label } = scanLifecycle(s, part => poRequired[part || ''] !== false);
+    if (state === 'invoiced') {
       return s.is_paid
-        ? { label: `Invoiced${inv} · Paid`, color: '#4ade80', bg: 'rgba(74,222,128,0.12)' }
-        : { label: `Invoiced${inv}`, color: '#fbbf24', bg: 'rgba(251,191,36,0.12)' };
+        ? { label, color: '#4ade80', bg: 'rgba(74,222,128,0.12)' }
+        : { label, color: '#fbbf24', bg: 'rgba(251,191,36,0.12)' };
     }
-    if (s.archived_at) return { label: 'Archived', color: '#94a3b8', bg: 'rgba(148,163,184,0.12)' };
-    if (s.exported_at) return { label: 'Exported', color: '#60a5fa', bg: 'rgba(96,165,250,0.12)' };
-    if (s.po_id || !needsPO(s)) return { label: 'Ready to Export', color: '#22c55e', bg: 'rgba(34,197,94,0.12)' };
-    return { label: 'Waiting for PO', color: '#f59e0b', bg: 'rgba(245,158,11,0.12)' };
+    const styles = {
+      archived: { color: '#94a3b8', bg: 'rgba(148,163,184,0.12)' },
+      exported: { color: '#60a5fa', bg: 'rgba(96,165,250,0.12)' },
+      ready: { color: '#22c55e', bg: 'rgba(34,197,94,0.12)' },
+      waiting: { color: '#f59e0b', bg: 'rgba(245,158,11,0.12)' },
+    } as const;
+    return { label, ...styles[state] };
   };
 
   const getTabScans = () => {
@@ -275,6 +283,10 @@ export default function AdminScansPage() {
     if (tab === 'archived') return archivedScans;
     return [];
   };
+
+  // The scan-list chrome (search, filters, empty state, grouped list) applies
+  // to every tab except the two self-contained upload tabs.
+  const isScanListTab = tab !== 'bulk' && tab !== 'vendor';
 
   // Dropdown options: every scanner and company that appears in the loaded
   // scans (live + archived), so the filters always offer what's actually there.
@@ -752,32 +764,8 @@ export default function AdminScansPage() {
     // round-trips (minutes); now it's 3. A failed batch just means those
     // VINs upload without year/make/model.
     const uniqueVins = [...new Set(vinPartPairs.map(p => p.vin))];
-    const decoded = new Map<string, any>();
-    for (let i = 0; i < uniqueVins.length; i += 50) {
-      const chunk = uniqueVins.slice(i, i + 50);
-      setBulkProgress(`Decoding VINs ${Math.min(i + 50, uniqueVins.length)}/${uniqueVins.length}…`);
-      try {
-        const res = await fetch('https://vpic.nhtsa.dot.gov/api/vehicles/DecodeVINValuesBatch/', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-          body: `format=json&data=${encodeURIComponent(chunk.join(';'))}`,
-        });
-        const json = await res.json();
-        for (const r of json.Results || []) {
-          const v = (r.VIN || '').toUpperCase();
-          if (!v) continue;
-          decoded.set(v, {
-            vehicle_year: r.ModelYear || null,
-            vehicle_make: r.Make || null,
-            vehicle_model: r.Model || null,
-            vehicle_trim: r.Trim || null,
-            body_class: r.BodyClass || null,
-          });
-        }
-      } catch {
-        // Decode is best-effort; rows still insert without vehicle data.
-      }
-    }
+    const decoded = await decodeVinsBatch(uniqueVins, (done, total) =>
+      setBulkProgress(`Decoding VINs ${done}/${total}…`));
 
     // Insert in chunks; if a chunk fails as a whole, retry its rows one by
     // one so a single bad row doesn't sink (or miscount) the rest.
@@ -907,6 +895,7 @@ export default function AdminScansPage() {
           { id: 'archived' as ViewTab, label: `Archived (${archivedScans.length})`, color: '#94a3b8' },
           { id: 'all' as ViewTab, label: `All Scans (${allScans.length})`, color: '#06b6d4' },
           { id: 'bulk' as ViewTab, label: 'Bulk Upload', color: '#a78bfa' },
+          { id: 'vendor' as ViewTab, label: 'Vendor Invoices', color: '#f472b6' },
         ]).map(t => (
           <button key={t.id} onClick={() => { setTab(t.id); setSelectedScans(new Set()); setExpandedGroups(new Set()); }} style={{
             padding: '6px 12px', borderRadius: '8px', fontSize: '11px', fontWeight: 700,
@@ -918,11 +907,11 @@ export default function AdminScansPage() {
       </div>
 
       {/* Search */}
-      {tab !== 'bulk' && <input value={search} onChange={e => setSearch(e.target.value)} placeholder="Search VIN, part, customer, location, PO, CNI job, scanner, company..."
+      {isScanListTab && <input value={search} onChange={e => setSearch(e.target.value)} placeholder="Search VIN, part, customer, location, PO, CNI job, scanner, company..."
         style={{ width: '100%', padding: '10px 14px', borderRadius: '10px', fontSize: '13px', border: `1px solid ${theme.border}`, background: theme.card, color: theme.textPrimary, fontWeight: 600, marginBottom: '10px' }} />}
 
       {/* Source filter — CNI installs vs. field scans (§3.4) */}
-      {tab !== 'bulk' && (
+      {isScanListTab && (
         <div style={{ display: 'flex', gap: '4px', marginBottom: '10px' }}>
           {([
             { id: 'all' as const, label: 'All sources' },
@@ -1017,7 +1006,7 @@ export default function AdminScansPage() {
       )}
 
       {/* Actions */}
-      <div style={{ display: 'flex', gap: '6px', marginBottom: '12px', flexWrap: 'wrap' }}>
+      {tab !== 'vendor' && <div style={{ display: 'flex', gap: '6px', marginBottom: '12px', flexWrap: 'wrap' }}>
         <button onClick={selectAllVisible} style={{ padding: '6px 10px', borderRadius: '6px', fontSize: '10px', fontWeight: 700, background: 'var(--subtle-bg)', border: '1px solid var(--border)', color: 'var(--text-secondary)', cursor: 'pointer' }}>
           {selectedScans.size === tabScans.length && tabScans.length > 0 ? 'Deselect All' : `Select All (${tabScans.length})`}
         </button>
@@ -1064,7 +1053,7 @@ export default function AdminScansPage() {
             </button>
           </>
         )}
-      </div>
+      </div>}
 
       {/* Invoice result banner */}
       {invoiceResult && (
@@ -1627,8 +1616,18 @@ export default function AdminScansPage() {
         </div>
       )}
 
+      {/* Vendor Invoices tab — record what a CNI installer billed us per VIN */}
+      {tab === 'vendor' && (
+        <VendorInvoicesTab
+          allParts={allParts}
+          allLocations={allLocations}
+          poRequired={poRequired}
+          onCommitted={loadAll}
+        />
+      )}
+
       {/* Empty state */}
-      {tab !== 'bulk' && tabScans.length === 0 && (
+      {isScanListTab && tabScans.length === 0 && (
         <div style={{ textAlign: 'center', padding: '32px 0', color: 'var(--text-muted)', fontSize: '13px', fontWeight: 600 }}>
           {tab === 'ready' ? 'No scans ready to export' : tab === 'waiting' ? 'No scans waiting for PO — all matched!' : tab === 'all' ? ((dateFrom || dateTo) ? 'No scans in this date range' : 'No scans yet') : 'No exported scans'}
         </div>
@@ -1685,6 +1684,11 @@ export default function AdminScansPage() {
                         {cniByScanId[scan.id]}
                       </span>
                     )}
+                    {scan.install_cost != null && (
+                      <span title={scan.installer_name ? `Paid to ${scan.installer_name}` : 'Installer cost'} style={{ fontSize: '8px', fontWeight: 700, padding: '2px 5px', borderRadius: '4px', background: 'rgba(244,114,182,0.12)', color: '#f472b6' }}>
+                        ${Number(scan.install_cost).toFixed(2)}
+                      </span>
+                    )}
                     <div style={{ fontSize: '9px', color: 'var(--text-muted)', textAlign: 'right' }}>
                       {profiles[scan.scanned_by || ''] || ''}<br />
                       {scan.scanned_by_company && (<>{scan.scanned_by_company}<br /></>)}
@@ -1706,7 +1710,7 @@ export default function AdminScansPage() {
       })()}
 
       {/* Grouped list */}
-      {tab !== 'bulk' && tab !== 'all' && <div style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
+      {isScanListTab && tab !== 'all' && <div style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
         {customerKeys.map(customer => {
           const subGroups = grouped[customer];
           const subKeys = Object.keys(subGroups).sort((a, b) => {
@@ -1901,6 +1905,11 @@ export default function AdminScansPage() {
                                       {cniByScanId[scan.id]}
                                     </span>
                                   )}
+                                  {scan.install_cost != null && (
+                                    <span title={scan.installer_name ? `Paid to ${scan.installer_name}` : 'Installer cost'} style={{ fontSize: '8px', fontWeight: 700, padding: '2px 5px', borderRadius: '4px', background: 'rgba(244,114,182,0.12)', color: '#f472b6' }}>
+                                      ${Number(scan.install_cost).toFixed(2)}
+                                    </span>
+                                  )}
                                   <div style={{ fontSize: '9px', color: 'var(--text-muted)', textAlign: 'right' }}>
                                     {profiles[scan.scanned_by || ''] || ''}<br />
                                     {scan.scanned_by_company && (<>{scan.scanned_by_company}<br /></>)}
@@ -2074,6 +2083,694 @@ export default function AdminScansPage() {
           }}
         />
       )}
+    </div>
+  );
+}
+
+// ---------- Vendor Invoices tab ----------
+// Upload (or hand-enter) a CNI installer's invoice: AI pulls the vendor,
+// invoice number, total, and per-VIN amounts; everything is editable before
+// committing. VINs already in the system get the cost stamped on their
+// existing scan without touching its lifecycle state; new VINs become fresh
+// scan_logs rows. Installers not in the system yet can be added inline
+// (creates the company + the NetSuite vendor).
+
+interface VendorLine {
+  key: number; // stable identity — index-based updates misfire when rows are removed mid-flight
+  vin: string;
+  partNumber: string;
+  amount: string;
+  existing: string | null; // lifecycle label when the VIN is already a scan
+  lastChecked?: string; // vin|part key of the last existing-scan lookup, to skip redundant queries
+}
+
+interface VendorReview {
+  vendorName: string;
+  invoiceNumber: string;
+  invoiceDate: string;
+  totalAmount: string;
+  notes: string;
+  lines: VendorLine[];
+}
+
+interface VendorCompany { id: string; name: string; netsuite_vendor_id: string | null }
+
+interface VendorInvoiceRecord {
+  id: string;
+  invoice_number: string | null;
+  invoice_date: string | null;
+  vendor_name: string;
+  total_amount: number | null;
+  location_name: string | null;
+  file_name: string | null;
+  storage_path: string | null;
+  notes: string | null;
+  created_at: string;
+  company: VendorCompany | null;
+  lines: { id: string; vin: string; part_number: string | null; amount: number | null; was_existing_scan: boolean; scan_log_id: string | null }[];
+}
+
+function VendorInvoicesTab({ allParts, allLocations, poRequired, onCommitted }: {
+  allParts: { id: string; item_number: string; display_name: string | null; billable_customer: string | null; vehicle_type: string | null; graphic_package: string | null }[];
+  allLocations: { id: string; name: string }[];
+  poRequired: Record<string, boolean>;
+  onCommitted: () => void;
+}) {
+  const dialog = useDialog();
+  const supabase = createClient();
+
+  const [extracting, setExtracting] = useState(false);
+  const [notice, setNotice] = useState<string | null>(null);
+  const [review, setReview] = useState<VendorReview | null>(null);
+  const [stagedFile, setStagedFile] = useState<{ storagePath: string; fileName: string } | null>(null);
+
+  // Vendor picker
+  const [companies, setCompanies] = useState<VendorCompany[]>([]);
+  const [selectedCompany, setSelectedCompany] = useState<VendorCompany | null>(null);
+  const [showVendorDropdown, setShowVendorDropdown] = useState(false);
+  const [addVendorOpen, setAddVendorOpen] = useState(false);
+  const [addVendorEmail, setAddVendorEmail] = useState('');
+  const [addVendorPhone, setAddVendorPhone] = useState('');
+  const [addingVendor, setAddingVendor] = useState(false);
+
+  const [vLocation, setVLocation] = useState('');
+  const [partSearchKey, setPartSearchKey] = useState<number | null>(null);
+  const lineKeyRef = useRef(0);
+
+  const [committing, setCommitting] = useState(false);
+  const [commitResult, setCommitResult] = useState<{
+    updated: { vin: string; state: string }[];
+    created: { vin: string; state: string }[];
+    failed: { vin: string; error: string }[];
+  } | null>(null);
+
+  const [history, setHistory] = useState<VendorInvoiceRecord[]>([]);
+  const [expandedInvoices, setExpandedInvoices] = useState<Set<string>>(new Set());
+  const [deletingInvoice, setDeletingInvoice] = useState<string | null>(null);
+
+  useEffect(() => {
+    const load = async () => {
+      const { data } = await supabase.from('companies').select('id, name, netsuite_vendor_id').order('name');
+      setCompanies((data || []) as VendorCompany[]);
+    };
+    load();
+    loadHistory();
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- load once on mount
+  }, []);
+
+  const loadHistory = async () => {
+    try {
+      const res = await fetch('/api/vendor-invoices');
+      const data = await res.json();
+      if (res.ok) setHistory(data.invoices || []);
+    } catch { /* history is non-critical */ }
+  };
+
+  // Same lifecycle labels the scan tabs derive (shared scanLifecycle), for
+  // the "already in system" badges shown before committing.
+  const stateLabelFor = (s: { part_number: string | null; po_id: string | null; exported_at: string | null; archived_at: string | null; invoice_number?: string | null; date_invoiced?: string | null; is_paid?: boolean | null }): string =>
+    scanLifecycle(s, part => poRequired[part || ''] !== false).label;
+
+  // Look up which of the review VINs are already scans and tag each line
+  // with the state its record is in — the same matching rule the commit
+  // endpoint applies (same-vehicle last-8; part-aware attachment).
+  const checkExistingVins = async (lines: VendorLine[]): Promise<VendorLine[]> => {
+    const scans = await fetchScansMatchingVins<{ vin: string; part_number: string | null; po_id: string | null; exported_at: string | null; archived_at: string | null; invoice_number: string | null; date_invoiced: string | null; is_paid: boolean | null }>(
+      supabase,
+      lines.map(l => l.vin),
+      'vin, part_number, po_id, exported_at, archived_at, invoice_number, date_invoiced, is_paid, scanned_at',
+    );
+    return lines.map(line => {
+      const match = pickScanForLine(scans, line.vin, line.partNumber.trim() || null);
+      return { ...line, existing: match ? stateLabelFor(match) : null };
+    });
+  };
+
+  const blankLine = (): VendorLine => ({ key: ++lineKeyRef.current, vin: '', partNumber: '', amount: '', existing: null });
+
+  // One definition of "this line has a usable VIN" — the commit filter, the
+  // button count, and the recheck all share it.
+  const vinOk = (l: VendorLine) => l.vin.trim().replace(/[^A-Za-z0-9]/g, '').length >= 5;
+
+  const startManualEntry = () => {
+    setNotice(null);
+    setCommitResult(null);
+    setReview({ vendorName: '', invoiceNumber: '', invoiceDate: '', totalAmount: '', notes: '', lines: [blankLine()] });
+  };
+
+  // Files beyond Vercel's ~4.5MB request-body ceiling can't reach the
+  // extract endpoint at all — skip the call instead of letting it fail.
+  const MAX_EXTRACT_BYTES = 3.5 * 1024 * 1024;
+
+  const handleInvoiceFile = async (file: File) => {
+    setNotice(null);
+    setCommitResult(null);
+    setExtracting(true);
+    try {
+      const mediaType = file.type || (file.name.toLowerCase().endsWith('.pdf') ? 'application/pdf' : 'image/jpeg');
+
+      // Stage the original invoice in R2 so the record keeps its source doc —
+      // kicked off first and always awaited, whatever extraction does.
+      const safeName = file.name.replace(/[^a-zA-Z0-9._-]/g, '_').slice(0, 120);
+      const storagePath = `vendor-invoices/${Date.now()}-${safeName}`;
+      const uploadPromise = storage.from('invoices').upload(storagePath, file, { contentType: mediaType });
+
+      let extracted: any = null;
+      let extractError: string | null = null;
+      if (file.size > MAX_EXTRACT_BYTES) {
+        extractError = `This file is too large for AI extraction (${(file.size / 1048576).toFixed(1)}MB, limit ~3.5MB). It still attaches to the record — enter the details manually below.`;
+      } else {
+        try {
+          const base64 = await new Promise<string>((resolve, reject) => {
+            const reader = new FileReader();
+            reader.onload = () => resolve((reader.result as string).split(',')[1]);
+            reader.onerror = () => reject(new Error('Failed to read file'));
+            reader.readAsDataURL(file);
+          });
+          const res = await fetch('/api/vendor-invoices/extract', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ fileBase64: base64, mediaType }),
+          });
+          // Oversized/platform errors come back as non-JSON — don't throw past the upload await.
+          const result = await res.json().catch(() => ({}));
+          if (!res.ok || !result.data) extractError = result.error || `AI extraction failed (${res.status})`;
+          else extracted = result.data;
+        } catch (err: any) {
+          extractError = err.message || 'AI extraction failed';
+        }
+      }
+
+      const { error: upErr } = await uploadPromise;
+      setStagedFile(upErr ? null : { storagePath, fileName: file.name });
+      if (upErr) setNotice(`Invoice file could not be attached (${upErr.message}) — the record will save without the file.`);
+
+      if (!extracted) {
+        // Extraction failing never blocks the flow — fall back to manual entry.
+        setNotice(prev => [prev, `AI couldn't read this invoice: ${extractError}`].filter(Boolean).join('\n'));
+        setReview({ vendorName: '', invoiceNumber: '', invoiceDate: '', totalAmount: '', notes: '', lines: [blankLine()] });
+      } else {
+        const d = extracted;
+        let lines: VendorLine[] = (d.lines || []).map((l: any) => ({
+          key: ++lineKeyRef.current,
+          vin: l.vin || '',
+          partNumber: l.part_number || '',
+          amount: l.amount != null ? String(l.amount) : '',
+          existing: null,
+        }));
+        if (lines.length === 0) lines = [blankLine()];
+        lines = await checkExistingVins(lines);
+        const matchedCompany = d.vendor_name
+          ? companies.find(c => c.name.toLowerCase() === d.vendor_name.toLowerCase()) || null
+          : null;
+        setSelectedCompany(matchedCompany);
+        setReview({
+          vendorName: matchedCompany?.name || d.vendor_name || '',
+          invoiceNumber: d.invoice_number || '',
+          invoiceDate: d.invoice_date || '',
+          totalAmount: d.total_amount != null ? String(d.total_amount) : '',
+          notes: d.notes || '',
+          lines,
+        });
+      }
+    } catch (err: any) {
+      setNotice(`Upload failed: ${err.message}`);
+    }
+    setExtracting(false);
+  };
+
+  const updateLine = (key: number, patch: Partial<VendorLine>) => {
+    setReview(prev => prev ? { ...prev, lines: prev.lines.map(l => l.key === key ? { ...l, ...patch } : l) } : prev);
+  };
+
+  // Re-check "already in system" for one line. Takes the line VALUE (not an
+  // index — rows can be removed while the query is in flight) and skips the
+  // query when nothing changed since the last check.
+  const recheckLine = async (line: VendorLine) => {
+    const cleaned = line.vin.trim().replace(/[^A-Za-z0-9]/g, '');
+    const checkKey = `${cleaned}|${line.partNumber.trim().toUpperCase()}`;
+    if (line.lastChecked === checkKey) return;
+    if (cleaned.length < 5) { updateLine(line.key, { existing: null, lastChecked: checkKey }); return; }
+    const [checked] = await checkExistingVins([line]);
+    updateLine(line.key, { existing: checked.existing, lastChecked: checkKey });
+  };
+
+  const splitTotalEvenly = () => {
+    if (!review) return;
+    const total = parseFloat(review.totalAmount);
+    const n = review.lines.length;
+    if (!total || total <= 0 || n === 0) return;
+    // Integer-cent split; remainder cents go to the first lines.
+    const totalCents = Math.round(total * 100);
+    const base = Math.floor(totalCents / n);
+    const remainder = totalCents - base * n;
+    setReview(prev => prev ? {
+      ...prev,
+      lines: prev.lines.map((l, i) => ({ ...l, amount: ((base + (i < remainder ? 1 : 0)) / 100).toFixed(2) })),
+    } : prev);
+  };
+
+  const linesSum = review
+    ? review.lines.reduce((sum, l) => sum + (parseFloat(l.amount) || 0), 0)
+    : 0;
+  const statedTotal = review ? parseFloat(review.totalAmount) || 0 : 0;
+  const totalMismatch = review && statedTotal > 0 && Math.abs(linesSum - statedTotal) > 0.01;
+
+  const handleAddVendor = async () => {
+    if (!review?.vendorName.trim()) return;
+    setAddingVendor(true);
+    try {
+      const res = await fetch('/api/cni/create-vendor', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          name: review.vendorName.trim(),
+          email: addVendorEmail.trim() || undefined,
+          phone: addVendorPhone.trim() || undefined,
+        }),
+      });
+      const data = await res.json();
+      if (!res.ok || !data.success) {
+        await dialog.alert(`Failed to add installer: ${data.error || 'unknown error'}`);
+      } else {
+        const company: VendorCompany = { id: data.companyId, name: data.companyName, netsuite_vendor_id: data.netsuiteVendorId || null };
+        setCompanies(prev => prev.some(c => c.id === company.id) ? prev.map(c => c.id === company.id ? company : c) : [...prev, company].sort((a, b) => a.name.localeCompare(b.name)));
+        setSelectedCompany(company);
+        setReview(prev => prev ? { ...prev, vendorName: company.name } : prev);
+        setAddVendorOpen(false);
+        setAddVendorEmail('');
+        setAddVendorPhone('');
+        if (data.vendorError) {
+          await dialog.alert(`${company.name} was added to FleetSuite, but the NetSuite vendor could not be created: ${data.vendorError}\n\nYou can add the vendor ID later on the company page.`);
+        } else if (data.netsuiteVendorId) {
+          setNotice(`${company.name} added — NetSuite vendor #${data.netsuiteVendorId}${data.alreadyExists ? ' (already existed)' : ' created'}.`);
+        }
+      }
+    } catch (err: any) {
+      await dialog.alert(`Failed to add installer: ${err.message}`);
+    }
+    setAddingVendor(false);
+  };
+
+  const handleCommit = async () => {
+    if (!review) return;
+    const validLines = review.lines.filter(vinOk);
+    if (!review.vendorName.trim()) { await dialog.alert('Pick or enter the CNI installer this invoice is from.'); return; }
+    if (validLines.length === 0) { await dialog.alert('Add at least one VIN (5+ characters).'); return; }
+    const skipped = review.lines.length - validLines.length;
+    if (skipped > 0 && !(await dialog.confirm(`${skipped} line${skipped !== 1 ? 's' : ''} with a missing/short VIN will be skipped. Continue?`))) return;
+
+    setCommitting(true);
+    try {
+      const res = await fetch('/api/vendor-invoices', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          vendorName: review.vendorName.trim(),
+          companyId: selectedCompany?.id || null,
+          invoiceNumber: review.invoiceNumber.trim() || null,
+          invoiceDate: /^\d{4}-\d{2}-\d{2}$/.test(review.invoiceDate) ? review.invoiceDate : null,
+          totalAmount: parseFloat(review.totalAmount) >= 0 ? parseFloat(review.totalAmount) : null,
+          locationId: vLocation || null,
+          notes: review.notes.trim() || null,
+          file: stagedFile,
+          lines: validLines.map(l => ({
+            vin: l.vin.trim(),
+            partNumber: l.partNumber.trim() || null,
+            amount: parseFloat(l.amount) >= 0 ? parseFloat(l.amount) : null,
+          })),
+        }),
+      });
+      const data = await res.json();
+      if (!res.ok || !data.success) {
+        await dialog.alert(`Failed to record invoice: ${data.error || 'unknown error'}`);
+      } else {
+        setCommitResult({ updated: data.updated || [], created: data.created || [], failed: data.failed || [] });
+        setReview(null);
+        setStagedFile(null);
+        setSelectedCompany(null);
+        setNotice(null);
+        loadHistory();
+        onCommitted();
+        if ((data.updated || []).length > 0) {
+          await dialog.alert(
+            `${data.updated.length} VIN${data.updated.length !== 1 ? 's were' : ' was'} already in the system — the records were updated with the installer cost and left in their current state. ${data.created.length} new scan${data.created.length !== 1 ? 's' : ''} added.`,
+            { title: 'VINs already scanned' },
+          );
+        }
+      }
+    } catch (err: any) {
+      await dialog.alert(`Failed to record invoice: ${err.message}`);
+    }
+    setCommitting(false);
+  };
+
+  const deleteInvoice = async (inv: VendorInvoiceRecord) => {
+    if (!(await dialog.confirm(`Delete the ${inv.vendor_name} invoice${inv.invoice_number ? ` #${inv.invoice_number}` : ''}? Installer costs stamped on its scans will be cleared (the scans themselves stay).`, { destructive: true, confirmLabel: 'Delete' }))) return;
+    setDeletingInvoice(inv.id);
+    try {
+      const res = await fetch('/api/vendor-invoices', {
+        method: 'DELETE',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ id: inv.id }),
+      });
+      const data = await res.json();
+      if (!res.ok || !data.success) await dialog.alert(`Delete failed: ${data.error || 'unknown error'}`);
+      else { loadHistory(); onCommitted(); }
+    } catch (err: any) {
+      await dialog.alert(`Delete failed: ${err.message}`);
+    }
+    setDeletingInvoice(null);
+  };
+
+  const inputStyle: React.CSSProperties = {
+    width: '100%', padding: '8px', borderRadius: '6px', border: `1px solid ${theme.border}`,
+    background: 'var(--input-bg)', color: 'var(--text-primary)', fontSize: '12px',
+  };
+  const labelStyle: React.CSSProperties = {
+    fontSize: '9px', fontWeight: 700, color: 'var(--text-muted)', textTransform: 'uppercase', marginBottom: '3px',
+  };
+  const fmtMoney = (n: number) => `$${n.toFixed(2)}`;
+
+  return (
+    <div>
+      {/* Commit result — the "these VINs were already scanned" alert lives here */}
+      {commitResult && (
+        <div style={{ padding: '12px 14px', borderRadius: '10px', marginBottom: '12px', background: 'var(--card)', border: `1px solid ${commitResult.failed.length > 0 ? 'rgba(239,68,68,0.3)' : 'rgba(34,197,94,0.3)'}` }}>
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '8px' }}>
+            <div style={{ fontSize: '12px', fontWeight: 700, color: 'var(--text-primary)' }}>
+              Vendor invoice recorded — {commitResult.updated.length} existing record{commitResult.updated.length !== 1 ? 's' : ''} updated · {commitResult.created.length} new scan{commitResult.created.length !== 1 ? 's' : ''} added{commitResult.failed.length > 0 ? ` · ${commitResult.failed.length} failed` : ''}
+            </div>
+            <button onClick={() => setCommitResult(null)} style={{ background: 'none', border: 'none', color: 'var(--text-muted)', fontSize: '14px', cursor: 'pointer' }}>✕</button>
+          </div>
+          {commitResult.updated.length > 0 && (
+            <div style={{ marginBottom: '6px' }}>
+              <div style={{ fontSize: '10px', fontWeight: 700, color: '#fbbf24', marginBottom: '3px' }}>
+                ⚠ Already in the system — updated with installer cost, state unchanged:
+              </div>
+              {commitResult.updated.map((u, i) => (
+                <div key={i} style={{ fontSize: '11px', color: 'var(--text-secondary)', fontFamily: 'monospace' }}>
+                  {u.vin} <span style={{ fontFamily: 'inherit', color: 'var(--text-muted)' }}>— {u.state}</span>
+                </div>
+              ))}
+            </div>
+          )}
+          {commitResult.created.length > 0 && (
+            <div style={{ fontSize: '11px', color: '#22c55e' }}>
+              New scans: {commitResult.created.map(c => c.vin).join(', ')}
+            </div>
+          )}
+          {commitResult.failed.map((f, i) => (
+            <div key={i} style={{ fontSize: '11px', color: '#ef4444' }}>{f.vin}: {f.error}</div>
+          ))}
+        </div>
+      )}
+
+      {notice && (
+        <div style={{ padding: '10px 14px', borderRadius: '8px', marginBottom: '12px', background: 'rgba(244,114,182,0.06)', border: '1px solid rgba(244,114,182,0.2)', color: '#f472b6', fontSize: '12px', fontWeight: 600, whiteSpace: 'pre-wrap' }}>
+          {notice}
+        </div>
+      )}
+
+      {/* Upload / manual entry */}
+      {!review && (
+        <div style={{ background: 'var(--card)', border: `1px solid ${theme.border}`, borderRadius: '14px', padding: '16px', marginBottom: '14px' }}>
+          <div style={{ fontSize: '12px', color: 'var(--text-muted)', marginBottom: '12px' }}>
+            Upload an invoice from a CNI installer (PDF or photo). AI pulls the installer, invoice number, VINs, and prices — everything is editable before saving. VINs already in the system are updated with the cost and stay in whatever state they&apos;re in.
+          </div>
+          <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap' }}>
+            <DropZone accept="application/pdf,image/*" multiple={false} disabled={extracting} onFiles={files => handleInvoiceFile(files[0])}>
+              <label style={{
+                display: 'block', padding: '28px 40px', borderRadius: '12px', textAlign: 'center',
+                border: '2px dashed rgba(244,114,182,0.4)', background: extracting ? 'rgba(244,114,182,0.1)' : 'rgba(244,114,182,0.04)',
+                color: '#f472b6', fontSize: '13px', fontWeight: 700, cursor: extracting ? 'default' : 'pointer',
+              }}>
+                {extracting ? 'Reading invoice…' : '📄 Upload Vendor Invoice (AI extract)'}
+                <input type="file" accept="application/pdf,image/*" disabled={extracting} onChange={e => { const f = e.target.files?.[0]; e.target.value = ''; if (f) handleInvoiceFile(f); }} style={{ display: 'none' }} />
+              </label>
+            </DropZone>
+            <button onClick={startManualEntry} disabled={extracting} style={{
+              padding: '28px 24px', borderRadius: '12px', border: `1px solid ${theme.border}`,
+              background: 'var(--subtle-bg)', color: 'var(--text-secondary)', fontSize: '13px', fontWeight: 700, cursor: 'pointer',
+            }}>
+              ✎ Enter Manually
+            </button>
+          </div>
+        </div>
+      )}
+
+      {/* Review + edit */}
+      {review && (
+        <div style={{ background: 'var(--card)', border: '1px solid rgba(244,114,182,0.3)', borderRadius: '14px', padding: '16px', marginBottom: '14px' }}>
+          <div style={{ fontSize: '13px', fontWeight: 800, color: 'var(--text-primary)', marginBottom: '12px' }}>
+            Review Vendor Invoice{stagedFile ? <span style={{ fontSize: '10px', fontWeight: 600, color: 'var(--text-muted)', marginLeft: '8px' }}>📎 {stagedFile.fileName}</span> : null}
+          </div>
+
+          <div style={{ display: 'grid', gridTemplateColumns: '2fr 1fr 1fr', gap: '8px', marginBottom: '8px' }}>
+            {/* Vendor picker with add-new */}
+            <div style={{ position: 'relative' }}>
+              <div style={labelStyle}>CNI Installer / Vendor</div>
+              <input
+                value={review.vendorName}
+                onChange={e => { setReview({ ...review, vendorName: e.target.value }); setSelectedCompany(null); setShowVendorDropdown(true); }}
+                onFocus={() => setShowVendorDropdown(true)}
+                onBlur={() => setTimeout(() => setShowVendorDropdown(false), 150)}
+                placeholder="Search installers…"
+                style={{ ...inputStyle, borderColor: selectedCompany ? 'rgba(34,197,94,0.4)' : theme.border }}
+              />
+              {selectedCompany && (
+                <div style={{ fontSize: '9px', color: '#22c55e', marginTop: '2px', fontWeight: 700 }}>
+                  ✓ In system{selectedCompany.netsuite_vendor_id ? ` · NetSuite vendor #${selectedCompany.netsuite_vendor_id}` : ' · no NetSuite vendor yet'}
+                </div>
+              )}
+              {showVendorDropdown && review.vendorName.trim().length >= 1 && !selectedCompany && (() => {
+                const q = review.vendorName.trim().toLowerCase();
+                const matches = companies.filter(c => c.name.toLowerCase().includes(q)).slice(0, 8);
+                return (
+                  <div style={{ position: 'absolute', top: '100%', left: 0, right: 0, zIndex: 50, background: 'var(--card)', border: `1px solid ${theme.border}`, borderRadius: '6px', boxShadow: '0 4px 12px rgba(0,0,0,0.2)', maxHeight: '220px', overflowY: 'auto', marginTop: '2px' }}>
+                    {matches.map(c => (
+                      <button
+                        key={c.id}
+                        onMouseDown={e => e.preventDefault()}
+                        onClick={() => { setSelectedCompany(c); setReview(prev => prev ? { ...prev, vendorName: c.name } : prev); setShowVendorDropdown(false); }}
+                        style={{ display: 'block', width: '100%', padding: '7px 9px', textAlign: 'left', border: 'none', borderBottom: `1px solid ${theme.border}`, background: 'transparent', cursor: 'pointer', fontSize: '11px', color: 'var(--text-primary)' }}
+                      >
+                        <span style={{ fontWeight: 700 }}>{c.name}</span>
+                        {c.netsuite_vendor_id && <span style={{ fontSize: '9px', color: 'var(--text-muted)', marginLeft: '6px' }}>NS #{c.netsuite_vendor_id}</span>}
+                      </button>
+                    ))}
+                    <button
+                      onMouseDown={e => e.preventDefault()}
+                      onClick={() => { setAddVendorOpen(true); setShowVendorDropdown(false); }}
+                      style={{ display: 'block', width: '100%', padding: '7px 9px', textAlign: 'left', border: 'none', background: 'rgba(34,197,94,0.06)', cursor: 'pointer', fontSize: '11px', fontWeight: 700, color: '#22c55e' }}
+                    >
+                      + Add &quot;{review.vendorName.trim()}&quot; as new installer (FleetSuite + NetSuite vendor)
+                    </button>
+                  </div>
+                );
+              })()}
+            </div>
+            <div>
+              <div style={labelStyle}>Invoice #</div>
+              <input value={review.invoiceNumber} onChange={e => setReview({ ...review, invoiceNumber: e.target.value })} style={inputStyle} />
+            </div>
+            <div>
+              <div style={labelStyle}>Invoice Date</div>
+              <input type="date" value={review.invoiceDate} onChange={e => setReview({ ...review, invoiceDate: e.target.value })} style={inputStyle} />
+            </div>
+            <div>
+              <div style={labelStyle}>Invoice Total ($)</div>
+              <input type="number" step="0.01" min="0" value={review.totalAmount} onChange={e => setReview({ ...review, totalAmount: e.target.value })} placeholder="0.00" style={inputStyle} />
+            </div>
+            <div>
+              <div style={labelStyle}>Location</div>
+              <select value={vLocation} onChange={e => setVLocation(e.target.value)} style={inputStyle}>
+                <option value="">— Select Location —</option>
+                {allLocations.map(l => <option key={l.id} value={l.id}>{l.name}</option>)}
+              </select>
+            </div>
+            <div>
+              <div style={labelStyle}>Notes</div>
+              <input value={review.notes} onChange={e => setReview({ ...review, notes: e.target.value })} placeholder="Optional" style={inputStyle} />
+            </div>
+          </div>
+
+          {/* Inline add-installer form */}
+          {addVendorOpen && (
+            <div style={{ padding: '10px 12px', borderRadius: '10px', marginBottom: '10px', background: 'rgba(34,197,94,0.05)', border: '1px solid rgba(34,197,94,0.25)' }}>
+              <div style={{ fontSize: '11px', fontWeight: 700, color: '#22c55e', marginBottom: '8px' }}>
+                Add &quot;{review.vendorName.trim()}&quot; — creates the installer company in FleetSuite and a matching NetSuite vendor (subsidiary BMG Fleet Installations).
+              </div>
+              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr auto auto', gap: '6px', alignItems: 'end' }}>
+                <div>
+                  <div style={labelStyle}>Email (optional)</div>
+                  <input value={addVendorEmail} onChange={e => setAddVendorEmail(e.target.value)} style={inputStyle} />
+                </div>
+                <div>
+                  <div style={labelStyle}>Phone (optional)</div>
+                  <input value={addVendorPhone} onChange={e => setAddVendorPhone(e.target.value)} style={inputStyle} />
+                </div>
+                <button onClick={handleAddVendor} disabled={addingVendor || !review.vendorName.trim()} style={{ padding: '8px 14px', borderRadius: '6px', fontSize: '11px', fontWeight: 700, background: '#22c55e', color: '#fff', border: 'none', cursor: 'pointer', opacity: addingVendor ? 0.6 : 1 }}>
+                  {addingVendor ? 'Adding…' : 'Add Installer'}
+                </button>
+                <button onClick={() => setAddVendorOpen(false)} style={{ padding: '8px 12px', borderRadius: '6px', fontSize: '11px', fontWeight: 700, background: 'transparent', border: `1px solid ${theme.border}`, color: 'var(--text-muted)', cursor: 'pointer' }}>
+                  Cancel
+                </button>
+              </div>
+            </div>
+          )}
+
+          {/* Lines */}
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '6px' }}>
+            <div style={{ fontSize: '10px', fontWeight: 700, color: 'var(--text-muted)', textTransform: 'uppercase' }}>
+              VINs on this invoice ({review.lines.length})
+            </div>
+            <div style={{ display: 'flex', gap: '6px' }}>
+              <button onClick={splitTotalEvenly} disabled={!statedTotal} title="Divide the invoice total evenly across all VIN lines" style={{ padding: '4px 10px', borderRadius: '6px', fontSize: '10px', fontWeight: 700, background: 'rgba(96,165,250,0.1)', border: '1px solid rgba(96,165,250,0.25)', color: '#60a5fa', cursor: 'pointer', opacity: statedTotal ? 1 : 0.4 }}>
+                Split total evenly
+              </button>
+              <button onClick={() => setReview({ ...review, lines: [...review.lines, blankLine()] })} style={{ padding: '4px 10px', borderRadius: '6px', fontSize: '10px', fontWeight: 700, background: 'rgba(34,197,94,0.1)', border: '1px solid rgba(34,197,94,0.25)', color: '#22c55e', cursor: 'pointer' }}>
+                + Add VIN
+              </button>
+            </div>
+          </div>
+
+          {review.lines.map(line => (
+            <div key={line.key} style={{ display: 'flex', alignItems: 'center', gap: '6px', padding: '5px 7px', marginBottom: '3px', borderRadius: '6px', background: 'var(--subtle-bg)', border: `1px solid ${line.existing ? 'rgba(251,191,36,0.35)' : 'var(--border)'}` }}>
+              <input
+                value={line.vin}
+                onChange={e => updateLine(line.key, { vin: e.target.value.toUpperCase() })}
+                onBlur={e => recheckLine({ ...line, vin: e.target.value.toUpperCase() })}
+                placeholder="VIN (full or last 8)"
+                style={{ flex: 2, padding: '6px 8px', borderRadius: '5px', border: '1px solid var(--border)', background: 'var(--input-bg)', color: 'var(--text-primary)', fontSize: '12px', fontWeight: 700, fontFamily: 'monospace', minWidth: 0 }}
+              />
+              <div style={{ position: 'relative', flex: 2, minWidth: 0 }}>
+                <input
+                  value={line.partNumber}
+                  onChange={e => { updateLine(line.key, { partNumber: e.target.value }); setPartSearchKey(line.key); }}
+                  onFocus={() => setPartSearchKey(line.key)}
+                  onBlur={() => setTimeout(() => setPartSearchKey(prev => prev === line.key ? null : prev), 150)}
+                  placeholder="Part # (optional)"
+                  style={{ width: '100%', padding: '6px 8px', borderRadius: '5px', border: '1px solid var(--border)', background: 'var(--input-bg)', color: 'var(--text-primary)', fontSize: '11px' }}
+                />
+                {partSearchKey === line.key && line.partNumber.length >= 2 && (() => {
+                  const q = line.partNumber.toLowerCase();
+                  const matches = allParts.filter(p =>
+                    p.item_number.toLowerCase() !== q && (
+                      p.item_number.toLowerCase().includes(q) ||
+                      p.display_name?.toLowerCase().includes(q) ||
+                      p.billable_customer?.toLowerCase().includes(q)
+                    )
+                  ).slice(0, 8);
+                  if (matches.length === 0) return null;
+                  return (
+                    <div style={{ position: 'absolute', top: '100%', left: 0, right: 0, zIndex: 50, background: 'var(--card)', border: `1px solid ${theme.border}`, borderRadius: '6px', boxShadow: '0 4px 12px rgba(0,0,0,0.2)', maxHeight: '180px', overflowY: 'auto', marginTop: '2px' }}>
+                      {matches.map(p => (
+                        <button
+                          key={p.id}
+                          onMouseDown={e => e.preventDefault()}
+                          onClick={() => { updateLine(line.key, { partNumber: p.item_number }); setPartSearchKey(null); recheckLine({ ...line, partNumber: p.item_number }); }}
+                          style={{ display: 'block', width: '100%', padding: '6px 8px', textAlign: 'left', border: 'none', borderBottom: `1px solid ${theme.border}`, background: 'transparent', cursor: 'pointer', fontSize: '11px', color: 'var(--text-primary)' }}
+                        >
+                          <span style={{ fontWeight: 700 }}>{p.item_number}</span>
+                          {p.billable_customer && <span style={{ color: '#a78bfa', marginLeft: '6px' }}>{p.billable_customer}</span>}
+                        </button>
+                      ))}
+                    </div>
+                  );
+                })()}
+              </div>
+              <input
+                type="number" step="0.01" min="0"
+                value={line.amount}
+                onChange={e => updateLine(line.key, { amount: e.target.value })}
+                placeholder="$"
+                style={{ width: '90px', padding: '6px 8px', borderRadius: '5px', border: '1px solid var(--border)', background: 'var(--input-bg)', color: 'var(--text-primary)', fontSize: '12px', flexShrink: 0 }}
+              />
+              {line.existing && (
+                <span title="This VIN is already in the system — its record will be updated with the cost and keep this state" style={{ fontSize: '8px', fontWeight: 700, padding: '2px 5px', borderRadius: '4px', background: 'rgba(251,191,36,0.12)', color: '#fbbf24', whiteSpace: 'nowrap', flexShrink: 0 }}>
+                  ↻ {line.existing}
+                </span>
+              )}
+              <button onClick={() => setReview({ ...review, lines: review.lines.filter(l => l.key !== line.key) })} style={{ padding: '2px 6px', borderRadius: '4px', border: 'none', background: 'rgba(239,68,68,0.08)', color: '#ef4444', fontSize: '11px', fontWeight: 700, cursor: 'pointer', flexShrink: 0 }}>✕</button>
+            </div>
+          ))}
+
+          {/* Totals + actions */}
+          <div style={{ display: 'flex', alignItems: 'center', gap: '10px', marginTop: '10px', flexWrap: 'wrap' }}>
+            <span style={{ fontSize: '11px', fontWeight: 700, color: totalMismatch ? '#fbbf24' : 'var(--text-secondary)' }}>
+              Lines total: {fmtMoney(linesSum)}{statedTotal > 0 ? ` / invoice ${fmtMoney(statedTotal)}` : ''}
+              {totalMismatch ? ' — doesn’t match the invoice total' : ''}
+            </span>
+            <span style={{ flex: 1 }} />
+            <button onClick={() => { setReview(null); setStagedFile(null); setSelectedCompany(null); setAddVendorOpen(false); }} style={{ padding: '10px 16px', borderRadius: '8px', fontSize: '12px', fontWeight: 700, background: 'transparent', border: `1px solid ${theme.border}`, color: 'var(--text-muted)', cursor: 'pointer' }}>
+              Cancel
+            </button>
+            <button onClick={handleCommit} disabled={committing} style={{ padding: '10px 20px', borderRadius: '8px', fontSize: '13px', fontWeight: 800, background: committing ? theme.border : '#f472b6', color: '#fff', border: 'none', cursor: committing ? 'default' : 'pointer' }}>
+              {committing ? 'Recording…' : `Record Invoice (${review.lines.filter(vinOk).length} VINs)`}
+            </button>
+          </div>
+        </div>
+      )}
+
+      {/* History */}
+      <div style={{ fontSize: '11px', fontWeight: 700, color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.8px', marginBottom: '8px' }}>
+        Recorded Vendor Invoices ({history.length})
+      </div>
+      {history.length === 0 && (
+        <div style={{ textAlign: 'center', padding: '20px 0', color: 'var(--text-muted)', fontSize: '12px', fontWeight: 600 }}>
+          No vendor invoices recorded yet
+        </div>
+      )}
+      <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
+        {history.map(inv => {
+          const isExpanded = expandedInvoices.has(inv.id);
+          const updatedCount = inv.lines.filter(l => l.was_existing_scan).length;
+          return (
+            <div key={inv.id} style={{ background: 'var(--card)', border: `1px solid ${theme.border}`, borderRadius: '10px', overflow: 'hidden' }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: '8px', padding: '10px 12px' }}>
+                <div onClick={() => setExpandedInvoices(prev => { const n = new Set(prev); if (n.has(inv.id)) n.delete(inv.id); else n.add(inv.id); return n; })} style={{ flex: 1, minWidth: 0, cursor: 'pointer' }}>
+                  <div style={{ fontSize: '12px', fontWeight: 700, color: 'var(--text-primary)' }}>
+                    {inv.vendor_name}{inv.invoice_number ? ` · #${inv.invoice_number}` : ''}
+                    {inv.total_amount != null && <span style={{ color: '#f472b6', marginLeft: '8px' }}>{fmtMoney(Number(inv.total_amount))}</span>}
+                  </div>
+                  <div style={{ fontSize: '10px', color: 'var(--text-muted)', marginTop: '1px' }}>
+                    {inv.lines.length} VIN{inv.lines.length !== 1 ? 's' : ''}{updatedCount > 0 ? ` (${updatedCount} pre-existing)` : ''}
+                    {inv.location_name ? ` · ${inv.location_name}` : ''}
+                    {inv.invoice_date ? ` · ${inv.invoice_date}` : ''} · recorded {new Date(inv.created_at).toLocaleDateString([], { month: 'short', day: 'numeric' })}
+                  </div>
+                </div>
+                {inv.storage_path && (
+                  <a
+                    href={storage.from('invoices').getPublicUrl(inv.storage_path).data.publicUrl}
+                    target="_blank" rel="noreferrer"
+                    style={{ padding: '3px 8px', borderRadius: '5px', fontSize: '10px', fontWeight: 700, background: 'rgba(96,165,250,0.1)', border: '1px solid rgba(96,165,250,0.25)', color: '#60a5fa', textDecoration: 'none', flexShrink: 0 }}
+                  >
+                    📄 File
+                  </a>
+                )}
+                <button onClick={() => deleteInvoice(inv)} disabled={deletingInvoice === inv.id} style={{ padding: '3px 8px', borderRadius: '5px', fontSize: '10px', fontWeight: 700, background: 'rgba(239,68,68,0.08)', border: '1px solid rgba(239,68,68,0.2)', color: '#ef4444', cursor: 'pointer', flexShrink: 0 }}>
+                  {deletingInvoice === inv.id ? '…' : '✕'}
+                </button>
+              </div>
+              {isExpanded && (
+                <div style={{ borderTop: `1px solid ${theme.border}`, padding: '8px 12px' }}>
+                  {inv.notes && <div style={{ fontSize: '10px', color: 'var(--text-muted)', marginBottom: '6px' }}>{inv.notes}</div>}
+                  {inv.lines.map(l => (
+                    <div key={l.id} style={{ display: 'flex', gap: '8px', fontSize: '11px', padding: '2px 0', color: 'var(--text-secondary)' }}>
+                      <span style={{ fontFamily: 'monospace', fontWeight: 700 }}>{l.vin}</span>
+                      {l.part_number && <span style={{ color: 'var(--text-muted)' }}>{l.part_number}</span>}
+                      <span style={{ flex: 1 }} />
+                      {l.was_existing_scan && <span style={{ fontSize: '9px', color: '#fbbf24' }}>pre-existing</span>}
+                      <span style={{ fontWeight: 700, color: '#f472b6' }}>{l.amount != null ? fmtMoney(Number(l.amount)) : '—'}</span>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+          );
+        })}
+      </div>
     </div>
   );
 }

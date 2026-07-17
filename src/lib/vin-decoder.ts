@@ -87,3 +87,52 @@ function offlineDecode(vin: string): VehicleData {
 export function isValidVIN(v: string): boolean {
   return !!v && v.length === 17 && /^[A-HJ-NPR-Z0-9]{17}$/i.test(v);
 }
+
+/** Decoded fields in scan_logs column naming, for direct row spreads. */
+export interface DecodedVinFields {
+  vehicle_year: string | null;
+  vehicle_make: string | null;
+  vehicle_model: string | null;
+  vehicle_trim: string | null;
+  body_class: string | null;
+}
+
+/**
+ * Batch-decode VINs through NHTSA's DecodeVINValuesBatch endpoint, 50 per
+ * call. Only full 17-character VINs are sent — the batch endpoint returns
+ * nothing useful for partials. Best-effort: a failed batch just means those
+ * VINs come back undecoded. Client- and server-safe.
+ */
+export async function decodeVinsBatch(
+  vins: string[],
+  onProgress?: (done: number, total: number) => void,
+): Promise<Map<string, DecodedVinFields>> {
+  const decoded = new Map<string, DecodedVinFields>();
+  const fullVins = [...new Set(vins.filter(v => v.length === 17))];
+  for (let i = 0; i < fullVins.length; i += 50) {
+    const chunk = fullVins.slice(i, i + 50);
+    onProgress?.(Math.min(i + 50, fullVins.length), fullVins.length);
+    try {
+      const res = await fetch('https://vpic.nhtsa.dot.gov/api/vehicles/DecodeVINValuesBatch/', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+        body: `format=json&data=${encodeURIComponent(chunk.join(';'))}`,
+      });
+      const json = await res.json();
+      for (const r of json.Results || []) {
+        const v = (r.VIN || '').toUpperCase();
+        if (!v) continue;
+        decoded.set(v, {
+          vehicle_year: r.ModelYear || null,
+          vehicle_make: r.Make || null,
+          vehicle_model: r.Model || null,
+          vehicle_trim: r.Trim || null,
+          body_class: r.BodyClass || null,
+        });
+      }
+    } catch {
+      // Best-effort; rows still insert without vehicle data.
+    }
+  }
+  return decoded;
+}

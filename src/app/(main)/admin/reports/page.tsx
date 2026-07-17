@@ -24,6 +24,12 @@ const REPORTS: ReportLink[] = [
     href: '/invoices/bulk-download',
     source: 'NetSuite',
   },
+  {
+    title: 'Installer Cost vs Invoiced',
+    blurb: 'What we paid CNI installers per VIN (from recorded vendor invoices) vs. estimated customer billing, rolled up by location, installer, and part number.',
+    href: '/admin/reports/installer-costs',
+    source: 'FleetSuite',
+  },
 ];
 
 export default function ReportsIndexPage() {
