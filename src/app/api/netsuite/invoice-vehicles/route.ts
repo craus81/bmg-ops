@@ -117,6 +117,10 @@ export async function POST(req: NextRequest) {
         // rejection can name the part + internal ID + type rather than a bare id.
         const matchDetail: string[] = [];
 
+        // The rate each part actually bills at — stamped per scan below so
+        // profitability reporting has real revenue, not an estimate.
+        const billedRates: Record<string, number> = {};
+
         for (const [partNum, group] of Object.entries(partGroups)) {
           const nsItem = nsItems[partNum.toUpperCase()];
           if (!nsItem) {
@@ -125,6 +129,7 @@ export async function POST(req: NextRequest) {
           }
           if (!(group.price > 0)) unpricedParts.push(partNum);
           matchDetail.push(`${partNum} → NS item #${nsItem.id}${nsItem.type ? ` (${nsItem.type})` : ''}`);
+          billedRates[partNum] = group.price;
           lineItems.push({
             itemId: nsItem.id,
             quantity: group.count,
@@ -221,6 +226,17 @@ export async function POST(req: NextRequest) {
                 archived_at: nowIso,
               })
               .in('id', custScans.map(s => s.id));
+
+            // Stamp each scan's billed rate — its exact share of the invoice,
+            // since a part's line quantity is the VIN count. Parts that didn't
+            // land on the invoice (no NetSuite match) get no stamp.
+            await Promise.all(Object.entries(billedRates).map(([partNum, rate]) => {
+              const ids = custScans
+                .filter(s => (s.part_number || 'UNKNOWN') === partNum)
+                .map(s => s.id);
+              if (ids.length === 0) return Promise.resolve(null);
+              return supabase.from('scan_logs').update({ invoiced_amount: rate }).in('id', ids);
+            }));
           }
 
           // Mark scans as exported if not already (preserve any earlier export time).

@@ -44,6 +44,7 @@ interface ScanRow {
   vin: string;
   part_number: string | null;
   po_id: string | null;
+  location_id: string | null;
   exported_at: string | null;
   archived_at: string | null;
   invoice_number: string | null;
@@ -53,7 +54,7 @@ interface ScanRow {
 }
 
 const SCAN_MATCH_COLUMNS =
-  'id, vin, part_number, po_id, exported_at, archived_at, invoice_number, date_invoiced, is_paid, scanned_at';
+  'id, vin, part_number, po_id, location_id, exported_at, archived_at, invoice_number, date_invoiced, is_paid, scanned_at';
 
 const cleanVin = (v: string) => v.trim().toUpperCase().replace(/[^A-Z0-9]/g, '');
 
@@ -314,6 +315,21 @@ export async function POST(req: NextRequest) {
     // never touching lifecycle fields, so each record stays exactly in the
     // state it was in (ready, archived, invoiced, waiting for PO, …).
     await restampScans(entryScanIds.filter((id): id is string => !!id));
+
+    // Matched scans with no location yet inherit the invoice's — new info on
+    // the record (profitability reports group by location), still no state
+    // change. Scans that already have a location keep it.
+    if (body.locationId && locationName) {
+      const fillIds = [...new Set(
+        matched.filter(m => m.scan && !m.scan.location_id).map(m => m.scan!.id),
+      )];
+      if (fillIds.length > 0) {
+        await service
+          .from('scan_logs')
+          .update({ location_id: body.locationId, location_name: locationName })
+          .in('id', fillIds);
+      }
+    }
 
     // Newly created scans can still auto-match open POs (best-effort).
     const newScanIds = toCreateIdx.map(i => entryScanIds[i]).filter((id): id is string => !!id);

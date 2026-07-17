@@ -2379,6 +2379,9 @@ function VendorInvoicesTab({ allParts, allLocations, poRequired, onCommitted }: 
     if (validLines.length === 0) { await dialog.alert('Add at least one VIN (5+ characters).'); return; }
     const skipped = review.lines.length - validLines.length;
     if (skipped > 0 && !(await dialog.confirm(`${skipped} line${skipped !== 1 ? 's' : ''} with a missing/short VIN will be skipped. Continue?`))) return;
+    // Location and invoice date drive the profitability report — nudge, don't block.
+    if (!vLocation && !(await dialog.confirm('No location selected — profitability reporting groups by location. Record without one?'))) return;
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(review.invoiceDate) && !(await dialog.confirm("No invoice date — reports will fall back to today's recorded date. Continue without one?"))) return;
 
     setCommitting(true);
     try {
