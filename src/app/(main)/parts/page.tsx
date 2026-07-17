@@ -36,6 +36,10 @@ interface Part {
   graphic_package: string | null;
   customer: string | null;
   proof_pages: number | null;
+  // Running average of what CNI installers billed us per unit (from
+  // vendor_invoice_lines, maintained by recompute_part_install_cost)
+  avg_install_cost: number | null;
+  install_cost_count: number | null;
 }
 
 interface SyncLog {
@@ -993,6 +997,13 @@ export default function PartsPage() {
                       <DetailField label="On All POs" value={statsLoading ? '…' : formatQty(poAllByPart[key] || 0)} color="var(--text-secondary)" />
                       {margin && (
                         <DetailField label="Margin" value={`${margin}%`} color={parseFloat(margin) > 30 ? '#34d399' : '#f59e0b'} />
+                      )}
+                      {part.avg_install_cost != null && (
+                        <DetailField
+                          label={`Avg Installer Cost (${part.install_cost_count || 0} VIN${(part.install_cost_count || 0) !== 1 ? 's' : ''})`}
+                          value={formatCurrency(part.avg_install_cost)}
+                          color="#f472b6"
+                        />
                       )}
                       <div>
                         <div style={{ fontSize: '9px', fontWeight: 700, color: 'var(--text-muted)', textTransform: 'uppercase', marginBottom: '2px' }}>

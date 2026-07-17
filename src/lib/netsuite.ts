@@ -546,6 +546,82 @@ export async function createItem(payload: {
   }
 }
 
+/** NetSuite UI link for a vendor record, given its numeric internal id. */
+export function vendorUrl(internalId: string | number): string {
+  const accountForUrl = getConfig().accountId.replace(/-/g, '_').toUpperCase();
+  return `https://${accountForUrl}.app.netsuite.com/app/common/entity/vendor.nl?id=${internalId}`;
+}
+
+/**
+ * Create a vendor record in NetSuite (for CNI installer payouts / bills).
+ * The returned internalId is the numeric Internal ID that vendor-bill
+ * creation needs in `entity.id` — store THAT, never the Entity ID/name
+ * (see docs/cni-vendor-bills.md).
+ */
+export async function createVendor(payload: {
+  companyName: string;
+  email?: string;
+  phone?: string;
+}): Promise<{
+  success: boolean;
+  internalId?: string;
+  netsuiteUrl?: string;
+  error?: string;
+}> {
+  const config = getConfig();
+  const baseUrl = getBaseUrl(config.accountId);
+  const url = `${baseUrl}/services/rest/record/v1/vendor`;
+  const { oauth, token } = createOAuth(config);
+  const authHeader = getAuthHeader(oauth, token, { url, method: 'POST' });
+
+  const body: any = {
+    companyName: payload.companyName,
+    isPerson: false,
+    // Subsidiary is required and hardcoded like the vendor-bill flow — the
+    // integration role cannot SuiteQL the subsidiary table. Single-select
+    // shape (like vendorBill), not the item record's multi-select.
+    subsidiary: { id: process.env.NETSUITE_SUBSIDIARY_ID || '2' },
+  };
+  if (payload.email) body.email = payload.email;
+  if (payload.phone) body.phone = payload.phone;
+
+  try {
+    const response = await fetch(url, {
+      method: 'POST',
+      headers: {
+        'Authorization': authHeader,
+        'Content-Type': 'application/json',
+        'Prefer': 'respondAsync=false',
+      },
+      body: JSON.stringify(body),
+    });
+
+    if (!response.ok) {
+      const text = await response.text();
+      console.error('NetSuite create vendor error:', response.status, text);
+      let detail = text.slice(0, 400);
+      try {
+        const parsed = JSON.parse(text);
+        detail = parsed?.['o:errorDetails']?.[0]?.detail || parsed?.title || detail;
+      } catch { /* keep raw text */ }
+      return { success: false, error: `NetSuite ${response.status}: ${detail}` };
+    }
+
+    const location = response.headers.get('location') || '';
+    const idMatch = location.match(/\/vendor\/(\d+)/) || location.match(/\/(\d+)(?:\?|$)/);
+    const internalId = idMatch ? idMatch[1] : undefined;
+
+    return {
+      success: true,
+      internalId,
+      netsuiteUrl: internalId ? vendorUrl(internalId) : undefined,
+    };
+  } catch (error: any) {
+    console.error('NetSuite create vendor exception:', error);
+    return { success: false, error: error?.message || 'Unknown error' };
+  }
+}
+
 export async function createSalesOrder(payload: {
   customerId: string | number;
   poNumber: string;
