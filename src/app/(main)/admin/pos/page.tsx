@@ -2609,10 +2609,17 @@ export default function POsPage() {
         // (or no recorded run at all) as stalled and say so.
         const stalled = gmailStatus.gmailConnected && (minutesAgo === null || minutesAgo > 60);
         const unhealthy = !gmailStatus.gmailConnected || status === 'error' || stalled;
-        if (!unhealthy && !gmailRunning && !gmailRunMessage) return null;
+        // Runs can be "healthy" while every individual email errors out —
+        // status ok, strip hidden, and the failed POs invisible. Per-message
+        // failures need a human, so they surface the strip too (amber).
+        const errs = gmailStatus.recentErrors || [];
+        const needsAttention = !unhealthy && (errs.length > 0 || (r.errors ?? 0) > 0);
+        if (!unhealthy && !needsAttention && !gmailRunning && !gmailRunMessage) return null;
         const tone = unhealthy
           ? { bg: 'rgba(239,68,68,0.08)', border: 'rgba(239,68,68,0.25)', color: '#ef4444' }
-          : { bg: 'var(--subtle-bg)', border: 'var(--border)', color: 'var(--text-muted)' };
+          : needsAttention
+            ? { bg: 'rgba(251,191,36,0.08)', border: 'rgba(251,191,36,0.3)', color: '#f59e0b' }
+            : { bg: 'var(--subtle-bg)', border: 'var(--border)', color: 'var(--text-muted)' };
         let summary = '';
         if (!gmailStatus.gmailConnected) {
           summary = 'Gmail is not connected. Connect a mailbox to auto-import POs.';
@@ -2634,10 +2641,11 @@ export default function POsPage() {
               : `${silence} — the secret is configured, so check that the cron jobs are enabled (and not paused) in Vercel → Settings → Cron Jobs, and that the account plan allows a 20-minute schedule.`;
         } else if (gmailRunning) {
           summary = 'Manual import running…';
+        } else if (errs.length > 0) {
+          summary = `The cron is running, but ${errs.length} recent email${errs.length === 1 ? '' : 's'} failed to import — those POs never landed. Open the error list below for the details.`;
         } else {
           summary = `Last run: ${r.messagesFound ?? 0} email${r.messagesFound === 1 ? '' : 's'} found · ${r.imported ?? 0} imported · ${r.skipped ?? 0} skipped${(r.errors ?? 0) > 0 ? ` · ${r.errors} errors` : ''}`;
         }
-        const errs = gmailStatus.recentErrors || [];
         return (
           <div style={{
             padding: '8px 12px', borderRadius: '10px', marginBottom: '10px',
@@ -2846,6 +2854,12 @@ export default function POsPage() {
                           label: showImport ? 'Close PDF Import' : 'Import a PDF',
                           hint: 'Upload and parse a PO PDF',
                           onClick: () => { setShowImport(!showImport); setShowCreate(false); setShowEmailImport(false); setParsedPO(null); setImportLines([]); setParseError(''); },
+                        },
+                        {
+                          label: gmailRunning ? 'Running Auto-Import…' : 'Run Auto-Import',
+                          hint: 'Fetch new PO emails from Gmail now',
+                          onClick: () => { runGmailImportNow(); window.scrollTo({ top: 0, behavior: 'smooth' }); },
+                          busy: gmailRunning,
                         },
                         {
                           label: 'Select POs…',
