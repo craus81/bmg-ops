@@ -5,17 +5,20 @@ import { useRouter } from 'next/navigation';
 import { useAuth } from '@/components/AuthProvider';
 import { downloadCsv } from '@/lib/csv';
 
+type InvoicedSource = 'actual' | 'netsuite' | 'po_price' | 'catalog_price';
+
 interface ReportLine {
-  invoiceId: string;
+  invoiceId: string | null;
   invoiceNumber: string | null;
   date: string;
   vendor: string;
+  inHouse: boolean;
   location: string;
   vin: string;
   partNumber: string | null;
   paid: number | null;
   invoiced: number | null;
-  invoicedSource: 'po_price' | 'catalog_price' | null;
+  invoicedSource: InvoicedSource | null;
 }
 
 interface Rollup { key: string; vins: number; paid: number; invoiced: number; unpriced: number; margin: number }
@@ -27,7 +30,22 @@ interface ReportData {
   perLocation: Rollup[];
   perPart: Rollup[];
   totals: { vins: number; paid: number; invoiced: number; margin: number; unpriced: number };
+  meta?: {
+    internalIncluded: boolean;
+    internalLines: number;
+    internalSkippedUnlinked: number;
+    netsuiteLookups: number;
+    netsuiteCapped?: boolean;
+    netsuiteError?: string;
+  };
 }
+
+const SOURCE_LABELS: Record<InvoicedSource, string> = {
+  actual: 'Billed (stamped)',
+  netsuite: 'NetSuite invoice line',
+  po_price: 'PO unit price (est.)',
+  catalog_price: 'Catalog price (est.)',
+};
 
 const toDateStr = (d: Date) =>
   `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
@@ -40,6 +58,7 @@ export default function InstallerCostsReportPage() {
 
   const [start, setStart] = useState(() => { const d = new Date(); d.setDate(d.getDate() - 89); return toDateStr(d); });
   const [end, setEnd] = useState(() => toDateStr(new Date()));
+  const [includeInternal, setIncludeInternal] = useState(false);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
   const [data, setData] = useState<ReportData | null>(null);
@@ -53,7 +72,7 @@ export default function InstallerCostsReportPage() {
     setLoading(true);
     setError('');
     try {
-      const res = await fetch(`/api/reports/installer-costs?start=${start}&end=${end}`);
+      const res = await fetch(`/api/reports/installer-costs?start=${start}&end=${end}&internal=${includeInternal ? '1' : '0'}`);
       const json = await res.json();
       if (!res.ok) throw new Error(json.error || `Request failed (${res.status})`);
       setData(json);
@@ -72,7 +91,7 @@ export default function InstallerCostsReportPage() {
         l.date, l.vendor, l.invoiceNumber || '', l.location, l.vin, l.partNumber || '',
         l.paid != null ? l.paid.toFixed(2) : '', l.invoiced != null ? l.invoiced.toFixed(2) : '',
         l.paid != null && l.invoiced != null ? (l.invoiced - l.paid).toFixed(2) : '',
-        l.invoicedSource === 'po_price' ? 'PO unit price' : l.invoicedSource === 'catalog_price' ? 'Catalog price' : '',
+        l.invoicedSource ? SOURCE_LABELS[l.invoicedSource] : '',
       ]),
     );
   };
@@ -110,7 +129,7 @@ export default function InstallerCostsReportPage() {
       <div style={{ marginBottom: '14px' }}>
         <div style={{ fontSize: '20px', fontWeight: 800 }}>Installer Cost vs Invoiced</div>
         <div style={{ fontSize: '12px', color: 'var(--text-muted)' }}>
-          What we paid CNI installers per VIN (from recorded vendor invoices) against what we invoice the customer. Revenue is an estimate — the PO line&apos;s unit price when the scan is PO-matched, otherwise the part&apos;s catalog sales price.
+          What we paid per VIN (CNI vendor invoices, plus in-house pay credits when toggled on) against what the customer was billed. Revenue prefers the actual billed rate (stamped at invoicing, or pulled from the NetSuite invoice line), falling back to the PO unit price and then the catalog price — the source column tells you which.
         </div>
       </div>
 
@@ -124,6 +143,10 @@ export default function InstallerCostsReportPage() {
           <div style={{ fontSize: '9px', fontWeight: 700, color: 'var(--text-muted)', textTransform: 'uppercase', marginBottom: '3px' }}>To</div>
           <input type="date" value={end} onChange={e => setEnd(e.target.value)} style={{ padding: '8px', borderRadius: '8px', border: '1px solid var(--border)', background: 'var(--input-bg)', color: 'var(--text-primary)', fontSize: '12px' }} />
         </div>
+        <label style={{ display: 'flex', alignItems: 'center', gap: '6px', fontSize: '12px', fontWeight: 700, color: 'var(--text-secondary)', cursor: 'pointer', paddingBottom: '8px' }}>
+          <input type="checkbox" checked={includeInternal} onChange={e => setIncludeInternal(e.target.checked)} style={{ width: '14px', height: '14px', accentColor: '#f472b6' }} />
+          Include in-house install pay
+        </label>
         <button onClick={run} disabled={loading} style={{ padding: '9px 18px', borderRadius: '8px', fontSize: '12px', fontWeight: 800, background: '#f472b6', color: '#fff', border: 'none', cursor: 'pointer', opacity: loading ? 0.6 : 1 }}>
           {loading ? 'Running…' : 'Run report'}
         </button>
@@ -158,7 +181,22 @@ export default function InstallerCostsReportPage() {
           </div>
           {data.totals.unpriced > 0 && (
             <div style={{ padding: '8px 12px', borderRadius: '8px', marginBottom: '12px', background: 'rgba(251,191,36,0.06)', border: '1px solid rgba(251,191,36,0.25)', color: '#fbbf24', fontSize: '11px', fontWeight: 600 }}>
-              {data.totals.unpriced} VIN{data.totals.unpriced !== 1 ? 's have' : ' has'} no per-VIN price on the vendor invoice — they count toward VINs but not toward Paid.
+              {data.totals.unpriced} line{data.totals.unpriced !== 1 ? 's have' : ' has'} no price yet — they count toward VINs but not toward Paid.
+            </div>
+          )}
+          {data.meta?.netsuiteError && (
+            <div style={{ padding: '8px 12px', borderRadius: '8px', marginBottom: '12px', background: 'rgba(239,68,68,0.06)', border: '1px solid rgba(239,68,68,0.25)', color: '#ef4444', fontSize: '11px', fontWeight: 600 }}>
+              NetSuite lookup for historical invoice amounts failed ({data.meta.netsuiteError}) — those lines fall back to PO/catalog estimates.
+            </div>
+          )}
+          {data.meta?.netsuiteCapped && (
+            <div style={{ padding: '8px 12px', borderRadius: '8px', marginBottom: '12px', background: 'rgba(251,191,36,0.06)', border: '1px solid rgba(251,191,36,0.25)', color: '#fbbf24', fontSize: '11px', fontWeight: 600 }}>
+              More than {data.meta.netsuiteLookups} historical invoices in range — some revenue figures use estimates. Narrow the date range for full NetSuite accuracy.
+            </div>
+          )}
+          {data.meta && data.meta.internalIncluded && data.meta.internalSkippedUnlinked > 0 && (
+            <div style={{ padding: '8px 12px', borderRadius: '8px', marginBottom: '12px', background: 'rgba(148,163,184,0.06)', border: '1px solid rgba(148,163,184,0.25)', color: '#94a3b8', fontSize: '11px', fontWeight: 600 }}>
+              {data.meta.internalSkippedUnlinked} in-house pay credit{data.meta.internalSkippedUnlinked !== 1 ? 's' : ''} without a linked scan couldn&apos;t be shown per VIN.
             </div>
           )}
 
@@ -192,8 +230,8 @@ export default function InstallerCostsReportPage() {
                       <td style={{ padding: '4px 6px', color: 'var(--text-secondary)' }}>{l.location}</td>
                       <td style={{ padding: '4px 6px', fontFamily: 'monospace', color: 'var(--text-secondary)' }}>{l.vin}</td>
                       <td style={{ padding: '4px 6px', color: 'var(--text-secondary)' }}>{l.partNumber || '—'}</td>
-                      <td style={{ padding: '4px 6px', textAlign: 'right', fontWeight: 700, color: '#f472b6' }}>{l.paid != null ? fmtMoney(l.paid) : '—'}</td>
-                      <td title={l.invoicedSource === 'po_price' ? 'PO unit price' : l.invoicedSource === 'catalog_price' ? 'Catalog sales price' : ''} style={{ padding: '4px 6px', textAlign: 'right', color: 'var(--text-secondary)' }}>
+                      <td style={{ padding: '4px 6px', textAlign: 'right', fontWeight: 700, color: l.inHouse ? '#60a5fa' : '#f472b6' }}>{l.paid != null ? fmtMoney(l.paid) : '—'}</td>
+                      <td title={l.invoicedSource ? SOURCE_LABELS[l.invoicedSource] : ''} style={{ padding: '4px 6px', textAlign: 'right', color: l.invoicedSource === 'actual' || l.invoicedSource === 'netsuite' ? 'var(--text-primary)' : 'var(--text-secondary)', fontWeight: l.invoicedSource === 'actual' || l.invoicedSource === 'netsuite' ? 700 : 400 }}>
                         {l.invoiced != null ? fmtMoney(l.invoiced) : '—'}
                       </td>
                     </tr>
