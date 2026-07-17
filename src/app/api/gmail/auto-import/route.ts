@@ -125,9 +125,13 @@ export async function GET(req: NextRequest) {
     for (const msg of messages) {
       const id = msg.id!;
 
-      // Skip already processed
+      // Skip already processed. 'pending' counts too: the email is already
+      // extracted and sitting in the review queue — re-extracting it every
+      // 20 minutes burns a 10-40s AI call per run, can defer genuinely new
+      // emails behind it, and re-fires the "new PO" notification each time.
+      // ('error' rows still retry: their failures may be transient.)
       const existingStatus = processedMap.get(id);
-      if (existingStatus === 'imported' || existingStatus === 'skipped') {
+      if (existingStatus === 'imported' || existingStatus === 'skipped' || existingStatus === 'pending') {
         skipped++;
         continue;
       }

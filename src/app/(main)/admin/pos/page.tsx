@@ -799,12 +799,7 @@ export default function POsPage() {
       setLoading(false);
 
       // Load pending PO queue
-      const { data: pending } = await supabase
-        .from('gmail_po_imports')
-        .select('*')
-        .eq('status', 'pending')
-        .order('created_at', { ascending: false });
-      setPendingPOs(pending || []);
+      await refreshPendingPOs();
 
       const { data: locs } = await supabase
         .from('po_locations')
@@ -824,9 +819,38 @@ export default function POsPage() {
     } catch {}
   };
 
+  const refreshPendingPOs = async () => {
+    const { data } = await supabase
+      .from('gmail_po_imports')
+      .select('*')
+      .eq('status', 'pending')
+      .order('created_at', { ascending: false });
+    setPendingPOs(data || []);
+  };
+
   useEffect(() => {
     if (!isAdmin) return;
     refreshGmailStatus();
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- intentional
+  }, [isAdmin]);
+
+  // The PO screen stays open all day. Without a refresh loop, POs the
+  // background cron queues for review never appear until a full page
+  // reload — which reads as "the cron is broken" (field report). Keep the
+  // pending queue and the status strip fresh on a timer and whenever the
+  // tab regains focus.
+  useEffect(() => {
+    if (!isAdmin) return;
+    const tick = () => { refreshPendingPOs(); refreshGmailStatus(); };
+    const onVisible = () => { if (document.visibilityState === 'visible') tick(); };
+    const timer = setInterval(tick, 3 * 60 * 1000);
+    window.addEventListener('focus', onVisible);
+    document.addEventListener('visibilitychange', onVisible);
+    return () => {
+      clearInterval(timer);
+      window.removeEventListener('focus', onVisible);
+      document.removeEventListener('visibilitychange', onVisible);
+    };
   // eslint-disable-next-line react-hooks/exhaustive-deps -- intentional
   }, [isAdmin]);
 
@@ -849,7 +873,9 @@ export default function POsPage() {
     } catch (err: any) {
       setGmailRunMessage(`Request failed: ${err?.message || 'unknown'}`);
     }
-    await refreshGmailStatus();
+    // Freshly imported POs land in the review queue — pull it now so the
+    // pending box appears without a page reload.
+    await Promise.all([refreshGmailStatus(), refreshPendingPOs()]);
     setGmailRunning(false);
   };
 
@@ -2642,7 +2668,7 @@ export default function POsPage() {
         } else if (gmailRunning) {
           summary = 'Manual import running…';
         } else if (errs.length > 0) {
-          summary = `The cron is running, but ${errs.length} recent email${errs.length === 1 ? '' : 's'} failed to import — those POs never landed. Open the error list below for the details.`;
+          summary = `The cron is running (last run: ${r.messagesFound ?? 0} found · ${r.imported ?? 0} imported · ${r.skipped ?? 0} skipped), but ${errs.length} recent email${errs.length === 1 ? '' : 's'} failed to import — those POs never landed. Open the error list below for the details.`;
         } else {
           summary = `Last run: ${r.messagesFound ?? 0} email${r.messagesFound === 1 ? '' : 's'} found · ${r.imported ?? 0} imported · ${r.skipped ?? 0} skipped${(r.errors ?? 0) > 0 ? ` · ${r.errors} errors` : ''}`;
         }
