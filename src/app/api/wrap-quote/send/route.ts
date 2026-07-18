@@ -5,6 +5,7 @@ import { sendEmail } from '@/lib/resend';
 import { validateBody, z } from '@/lib/validate';
 import { r2Get, r2PublicUrl } from '@/lib/r2';
 import { getNetSuitePdf } from '@/lib/netsuite';
+import { generateToken, validateExpiry } from '@/lib/magic-link-approval';
 
 export const dynamic = 'force-dynamic';
 
@@ -39,7 +40,7 @@ const money = (n: any) =>
 
 // Light-themed printable quote document (customers print/forward these, so
 // no dark chrome like the internal notification template).
-function buildQuoteHtml(quote: any, company: any, diagramUrl: string | null, logoUrl: string | null, mode: SendMode = 'full', message?: string): string {
+function buildQuoteHtml(quote: any, company: any, diagramUrl: string | null, logoUrl: string | null, mode: SendMode = 'full', message?: string, approveUrl?: string | null): string {
   const pricing = mode === 'full' || mode === 'quote_only';
   const showDiagram = mode !== 'quote_only' && !!diagramUrl;
   const docTitle = mode === 'coverage_only' ? 'Wrap Coverage' : 'Wrap Quote';
@@ -118,6 +119,11 @@ function buildQuoteHtml(quote: any, company: any, diagramUrl: string | null, log
       </table>` : ''}
       ${(quote.labor?.films || []).length ? `<div style="margin-top:12px;font-size:11px;color:#6b7280;"><b style="color:#374151;">Film usage:</b> ${(quote.labor.films as any[]).map((f: any) => `${esc(f.label)} — ${money(f.sqft)} ft²`).join(' &middot; ')}</div>` : ''}
       ${quote.project_notes ? `<div style="margin-top:16px;font-size:12px;color:#374151;"><b>Project Notes:</b> ${esc(quote.project_notes)}</div>` : ''}
+      ${approveUrl ? `
+      <div style="margin-top:22px;padding:18px;background:#f0fdf4;border:1px solid #bbf7d0;border-radius:10px;text-align:center;">
+        <a href="${esc(approveUrl)}" style="display:inline-block;background:#16a34a;color:#ffffff;font-size:15px;font-weight:700;padding:13px 28px;border-radius:10px;text-decoration:none;">Review &amp; Accept This Quote</a>
+        <div style="font-size:12px;color:#374151;margin-top:10px;line-height:1.5;">Accept online with a dated, legally binding signature — or use the same link to request changes.<br>No account needed. The link expires in 30 days.</div>
+      </div>` : ''}
     </div>
     <div style="text-align:center;padding:14px;font-size:11px;color:#9ca3af;">Sent by ${esc(company?.name || 'BMG Fleet')}</div>
   </div>
@@ -162,6 +168,27 @@ export async function POST(req: NextRequest) {
   const cc = (quote.customer?.email_cc || '').trim();
   const to = cc ? [email, cc] : email;
 
+  // Tokenized "Review & Accept" link — same magic-link machinery as estimate
+  // approval. Coverage-only sends carry no pricing, so nothing to accept.
+  // A mint failure (e.g. migration not applied yet) degrades to a quote
+  // email without the button rather than blocking the send.
+  let approveUrl: string | null = null;
+  if (mode !== 'coverage_only') {
+    let token: string | null = quote.approval_token || null;
+    if (!token || !validateExpiry(quote.approval_token_expires_at).ok) {
+      const minted = generateToken();
+      const { error: tokErr } = await supabase
+        .from('wrap_quotes')
+        .update({ approval_token: minted.token, approval_token_expires_at: minted.expiresAt })
+        .eq('id', quote.id);
+      token = tokErr ? null : minted.token;
+    }
+    if (token) {
+      const appUrl = process.env.NEXT_PUBLIC_APP_URL || 'https://bmg-ops.vercel.app';
+      approveUrl = `${appUrl}/approve/quote/${token}?via=email&to=${encodeURIComponent(email)}`;
+    }
+  }
+
   const { data: settings } = await supabase
     .from('wrap_quote_settings')
     .select('company')
@@ -202,7 +229,7 @@ export async function POST(req: NextRequest) {
       preview: true,
       to: cc ? [email, cc] : [email],
       subject,
-      html: buildQuoteHtml(quote, company, diagramUrl, logoUrl, mode, message),
+      html: buildQuoteHtml(quote, company, diagramUrl, logoUrl, mode, message, approveUrl),
       attachments: names,
     });
   }
@@ -245,7 +272,7 @@ export async function POST(req: NextRequest) {
     });
   }
 
-  const ok = await sendEmail(to, subject, buildQuoteHtml(quote, company, diagramUrl, logoUrl, mode, message), undefined, attachments);
+  const ok = await sendEmail(to, subject, buildQuoteHtml(quote, company, diagramUrl, logoUrl, mode, message, approveUrl), undefined, attachments);
   if (!ok) {
     return NextResponse.json({ error: 'Email send failed (is Resend configured?)' }, { status: 502 });
   }
