@@ -3,6 +3,7 @@ import { createClient } from '@supabase/supabase-js';
 import { requireAdmin, requireStaff } from '@/lib/api-auth';
 import { validateBody, z } from '@/lib/validate';
 import { priceUnpricedCredits } from '@/lib/pay-credits';
+import { logAudit } from '@/lib/audit';
 
 export const dynamic = 'force-dynamic';
 
@@ -59,18 +60,48 @@ export async function POST(req: NextRequest) {
   if (parsed.error) return parsed.error;
   const { partNumber, ratePerVehicle } = parsed.data;
 
-  const { error } = await service
+  // Read the current rate first: the audit log records the change, and an
+  // update must not clobber the original created_by.
+  const { data: existing } = await service
     .from('install_pay_rates')
-    .upsert({
-      part_number: partNumber,
-      rate_per_vehicle: ratePerVehicle,
-      active: parsed.data.active ?? true,
-      created_by: auth.user.id,
-      updated_at: new Date().toISOString(),
-    }, { onConflict: 'part_number' });
+    .select('id, rate_per_vehicle, active')
+    .eq('part_number', partNumber)
+    .maybeSingle();
+
+  const { error } = existing
+    ? await service
+        .from('install_pay_rates')
+        .update({
+          rate_per_vehicle: ratePerVehicle,
+          active: parsed.data.active ?? true,
+          updated_at: new Date().toISOString(),
+        })
+        .eq('id', existing.id)
+    : await service
+        .from('install_pay_rates')
+        .insert({
+          part_number: partNumber,
+          rate_per_vehicle: ratePerVehicle,
+          active: parsed.data.active ?? true,
+          created_by: auth.user.id,
+          updated_at: new Date().toISOString(),
+        });
   if (error) return NextResponse.json({ error: 'Failed to save rate: ' + error.message }, { status: 500 });
 
   const priced = await priceUnpricedCredits(service, partNumber, ratePerVehicle);
+
+  await logAudit(service, {
+    actorId: auth.user.id,
+    table: 'install_pay_rates',
+    recordId: partNumber,
+    action: existing ? 'rate_change' : 'rate_create',
+    detail: {
+      before: existing ? { rate_per_vehicle: Number(existing.rate_per_vehicle), active: existing.active } : null,
+      after: { rate_per_vehicle: ratePerVehicle, active: parsed.data.active ?? true },
+      pricedCredits: priced.ok ? priced.priced : 0,
+    },
+  });
+
   if (!priced.ok) {
     return NextResponse.json({ error: priced.error, pricedCredits: priced.priced }, { status: 500 });
   }

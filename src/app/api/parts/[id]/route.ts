@@ -3,6 +3,7 @@ import { createClient, SupabaseClient } from '@supabase/supabase-js';
 import { requireAdmin } from '@/lib/api-auth';
 import { validateBody, z } from '@/lib/validate';
 import { updateItemFields } from '@/lib/netsuite';
+import { logAudit } from '@/lib/audit';
 
 // Writing back to NetSuite (RESTlet round-trip) can exceed the default ceiling.
 export const maxDuration = 60;
@@ -109,7 +110,7 @@ export async function PATCH(req: NextRequest, { params }: { params: { id: string
 
     const { data: part } = await supabase
       .from('netsuite_parts')
-      .select('id, netsuite_id, item_number')
+      .select('id, netsuite_id, item_number, display_name, description, sales_price, purchase_price')
       .eq('id', partId)
       .maybeSingle();
     if (!part) return NextResponse.json({ error: 'Part not found' }, { status: 404 });
@@ -187,6 +188,19 @@ export async function PATCH(req: NextRequest, { params }: { params: { id: string
       }
     }
 
+    await logAudit(supabase, {
+      actorId: auth.user.id,
+      table: 'netsuite_parts',
+      recordId: partId,
+      action: 'update',
+      detail: {
+        item_number: part.item_number,
+        before: Object.fromEntries(Object.keys(patch).map(k => [k, (part as any)[k] ?? null])),
+        after: patch,
+        syncedToNetsuite: isRealNetsuiteId(part.netsuite_id),
+      },
+    });
+
     return NextResponse.json({
       success: true,
       ...patch,
@@ -245,6 +259,14 @@ export async function DELETE(req: NextRequest, { params }: { params: { id: strin
 
     const { error } = await supabase.from('netsuite_parts').delete().eq('id', partId);
     if (error) return NextResponse.json({ error: error.message }, { status: 500 });
+
+    await logAudit(supabase, {
+      actorId: auth.user.id,
+      table: 'netsuite_parts',
+      recordId: partId,
+      action: 'delete',
+      detail: { item_number: part.item_number, filesRemoved: paths.length },
+    });
 
     return NextResponse.json({ success: true, deleted: part.item_number });
   } catch (err: any) {

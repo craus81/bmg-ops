@@ -3,6 +3,7 @@ import { createClient } from '@supabase/supabase-js';
 import { requireAdmin } from '@/lib/api-auth';
 import { validateBody, validateSearchParams, z } from '@/lib/validate';
 import { findLocation, createVendorBill } from '@/lib/netsuite';
+import { logAudit } from '@/lib/audit';
 
 // NetSuite internal ids are used directly: this integration's role can't
 // query the `account` / `subsidiary` tables via SuiteQL ("Record 'account'
@@ -186,6 +187,13 @@ export async function POST(req: NextRequest) {
       }
       created++;
     }
+    await logAudit(service, {
+      actorId: auth.user.id,
+      table: 'payouts',
+      recordId: null,
+      action: 'generate',
+      detail: { cni_job_id: body.cniJobId, payouts_created: created, credits_linked: credits.length },
+    });
     return NextResponse.json({ success: true, created });
   }
 
@@ -252,9 +260,16 @@ export async function POST(req: NextRequest) {
 
       const { error } = await service
         .from('payouts')
-        .update({ status: 'billed', netsuite_bill_id: billRef })
+        .update({ status: 'billed', netsuite_bill_id: billRef, billed_by: auth.user.id, billed_at: new Date().toISOString() })
         .eq('id', payout.id);
       if (error) return NextResponse.json({ error: 'Bill created in NetSuite but failed to update payout: ' + error.message }, { status: 500 });
+      await logAudit(service, {
+        actorId: auth.user.id,
+        table: 'payouts',
+        recordId: payout.id,
+        action: 'create_bill',
+        detail: { netsuite_bill_id: billRef, amount, location: body.location, profile_id: payout.profile_id },
+      });
       return NextResponse.json({ success: true, netsuiteBillId: billRef });
     } catch (e: any) {
       console.error('create_bill error:', e);
@@ -266,16 +281,25 @@ export async function POST(req: NextRequest) {
     if (payout.status !== 'draft') {
       return NextResponse.json({ error: 'Only draft payouts can be deleted' }, { status: 400 });
     }
-    await service.from('install_credits').update({ payout_id: null }).eq('payout_id', payout.id);
+    const { data: unlinked } = await service
+      .from('install_credits').update({ payout_id: null }).eq('payout_id', payout.id).select('id');
     const { error } = await service.from('payouts').delete().eq('id', payout.id);
     if (error) return NextResponse.json({ error: 'Failed to delete payout: ' + error.message }, { status: 500 });
+    await logAudit(service, {
+      actorId: auth.user.id,
+      table: 'payouts',
+      recordId: payout.id,
+      action: 'delete_draft',
+      detail: { profile_id: payout.profile_id, cni_job_id: payout.cni_job_id, total_amount: payout.total_amount, credits_unlinked: unlinked?.length || 0 },
+    });
     return NextResponse.json({ success: true });
   }
 
+  const now = new Date().toISOString();
   const transitions: Record<string, { from: string; to: string; extra?: Record<string, unknown> }> = {
-    approve: { from: 'draft', to: 'approved', extra: { approved_by: auth.user.id, approved_at: new Date().toISOString() } },
-    record_bill: { from: 'approved', to: 'billed', extra: { netsuite_bill_id: (body as { netsuiteBillId?: string }).netsuiteBillId } },
-    mark_paid: { from: 'billed', to: 'paid' },
+    approve: { from: 'draft', to: 'approved', extra: { approved_by: auth.user.id, approved_at: now } },
+    record_bill: { from: 'approved', to: 'billed', extra: { netsuite_bill_id: (body as { netsuiteBillId?: string }).netsuiteBillId, billed_by: auth.user.id, billed_at: now } },
+    mark_paid: { from: 'billed', to: 'paid', extra: { paid_by: auth.user.id, paid_at: now } },
   };
   const t = transitions[body.action];
   if (payout.status !== t.from) {
@@ -286,5 +310,17 @@ export async function POST(req: NextRequest) {
     .update({ status: t.to, ...(t.extra || {}) })
     .eq('id', payout.id);
   if (error) return NextResponse.json({ error: 'Failed to update payout: ' + error.message }, { status: 500 });
+  await logAudit(service, {
+    actorId: auth.user.id,
+    table: 'payouts',
+    recordId: payout.id,
+    action: body.action,
+    detail: {
+      from: t.from,
+      to: t.to,
+      total_amount: payout.total_amount,
+      ...(body.action === 'record_bill' ? { netsuite_bill_id: (body as { netsuiteBillId?: string }).netsuiteBillId } : {}),
+    },
+  });
   return NextResponse.json({ success: true });
 }

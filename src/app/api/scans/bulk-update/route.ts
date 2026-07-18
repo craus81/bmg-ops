@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { createClient } from '@supabase/supabase-js';
 import { requireAdmin } from '@/lib/api-auth';
 import { validateBody, z } from '@/lib/validate';
+import { logAudit } from '@/lib/audit';
 
 const supabase = createClient(
   process.env.NEXT_PUBLIC_SUPABASE_URL!,
@@ -44,6 +45,14 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ error: 'No valid fields to update' }, { status: 400 });
     }
 
+    // Capture the values being overwritten (only the touched fields) so the
+    // audit log can answer "what did this scan say before?".
+    const touchedCols = Object.keys(safeUpdates).join(', ');
+    const { data: beforeRows } = await supabase
+      .from('scan_logs')
+      .select(`id, vin, ${touchedCols}`)
+      .in('id', scanIds);
+
     const { data, error } = await supabase
       .from('scan_logs')
       .update(safeUpdates)
@@ -53,6 +62,14 @@ export async function POST(req: NextRequest) {
     if (error) {
       return NextResponse.json({ error: error.message }, { status: 500 });
     }
+
+    await logAudit(supabase, {
+      actorId: auth.user.id,
+      table: 'scan_logs',
+      recordId: null,
+      action: 'bulk_update',
+      detail: { updated: data?.length || 0, updates: safeUpdates, before: beforeRows || [] },
+    });
 
     return NextResponse.json({ success: true, updated: data?.length || 0 });
   } catch (err: any) {

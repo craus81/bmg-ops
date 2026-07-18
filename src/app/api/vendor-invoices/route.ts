@@ -8,6 +8,7 @@ import { decodeVinsBatch } from '@/lib/vin-decoder';
 import { locationBillingOverride } from '@/lib/scan-billing';
 import { matchScansToOpenPos } from '@/lib/scan-match';
 import { findOrMirrorPart } from '@/lib/parts-mirror';
+import { logAudit } from '@/lib/audit';
 
 export const dynamic = 'force-dynamic';
 export const maxDuration = 120;
@@ -381,6 +382,21 @@ export async function POST(req: NextRequest) {
       }
     }
 
+    await logAudit(service, {
+      actorId: auth.user!.id,
+      table: 'vendor_invoices',
+      recordId: invoice.id,
+      action: 'create',
+      detail: {
+        vendor_name: body.vendorName,
+        invoice_number: body.invoiceNumber || null,
+        total_amount: body.totalAmount ?? null,
+        lines: matched.length,
+        scans_updated: updated.length,
+        scans_created: created.length,
+      },
+    });
+
     return NextResponse.json({ success: true, invoiceId: invoice.id, updated, created, failed });
   } catch (e: any) {
     return NextResponse.json({ error: e.message || 'Failed to record vendor invoice' }, { status: 500 });
@@ -396,19 +412,29 @@ export async function DELETE(req: NextRequest) {
   const { id } = parsed.data;
 
   try {
-    // Every scan this invoice touches, captured before the lines cascade away.
-    const [{ data: lineScans }, { data: stampedScans }] = await Promise.all([
-      service.from('vendor_invoice_lines').select('scan_log_id').eq('vendor_invoice_id', id),
-      service.from('scan_logs').select('id').eq('vendor_invoice_id', id),
+    // Snapshot the whole record before the hard delete — this audit entry is
+    // the only durable trace of a deleted invoice.
+    const [{ data: header }, { data: fullLines }] = await Promise.all([
+      service.from('vendor_invoices').select('*').eq('id', id).maybeSingle(),
+      service.from('vendor_invoice_lines').select('scan_log_id, vin, part_number, amount, was_existing_scan').eq('vendor_invoice_id', id),
     ]);
+    const { data: stampedScans } = await service.from('scan_logs').select('id').eq('vendor_invoice_id', id);
     const affected = [...new Set([
-      ...((lineScans || []).map(l => l.scan_log_id).filter(Boolean) as string[]),
+      ...((fullLines || []).map(l => l.scan_log_id).filter(Boolean) as string[]),
       ...((stampedScans || []).map(s => s.id) as string[]),
     ])];
 
     // Cascade removes the lines; the trigger recomputes the part averages.
     const { error } = await service.from('vendor_invoices').delete().eq('id', id);
     if (error) return NextResponse.json({ error: error.message }, { status: 500 });
+
+    await logAudit(service, {
+      actorId: auth.user!.id,
+      table: 'vendor_invoices',
+      recordId: id,
+      action: 'delete',
+      detail: { invoice: header || null, lines: fullLines || [] },
+    });
 
     // Re-derive scan stamps from whatever other invoices still cover them —
     // scans this invoice created stay (they're real vehicle records now).
