@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { createClient } from '@supabase/supabase-js';
 import { getNetSuitePdf, suiteqlQuery } from '@/lib/netsuite';
-import { sendEmail, buildInvoiceEmail } from '@/lib/resend';
+import { sendEmailDetailed, buildInvoiceEmail } from '@/lib/resend';
 import { requireRole } from '@/lib/api-auth';
 import { safeStringLiteral, SqlSafeError } from '@/lib/sql-safe';
 import { validateBody, z } from '@/lib/validate';
@@ -196,15 +196,17 @@ export async function POST(req: NextRequest) {
       });
     }
 
-    const sent = await sendEmail(recipients, subject, html, undefined, attachments);
+    const { ok: sent, id: resendId } = await sendEmailDetailed(recipients, subject, html, undefined, attachments);
 
     if (!sent) {
       return NextResponse.json({ error: 'Failed to send email' }, { status: 500 });
     }
 
     // Record the send (one row per invoice) so screens can show "already
-    // emailed" next time. Test sends to the sender are skipped, and a
-    // logging failure never turns a delivered email into an error.
+    // emailed" next time. The Resend message id keys delivery webhooks
+    // (delivered/bounced) back to these rows. Test sends to the sender are
+    // skipped, and a logging failure never turns a delivered email into an
+    // error.
     if (!testSend && process.env.NEXT_PUBLIC_SUPABASE_URL && process.env.SUPABASE_SERVICE_ROLE_KEY) {
       try {
         const service = createClient(
@@ -218,6 +220,7 @@ export async function POST(req: NextRequest) {
             customer_name: customerName || null,
             recipients,
             sent_by: auth.user?.id || null,
+            source_id: resendId,
           }))
         );
       } catch (logErr) {

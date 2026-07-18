@@ -44,6 +44,53 @@ function enqueueSend<T>(task: () => Promise<T>): Promise<T> {
 }
 
 /**
+ * Send an email via Resend, returning success + the Resend message id.
+ * The id is what delivery webhooks key on — callers that track delivery
+ * (invoice emails) store it; everyone else can use sendEmail below.
+ */
+export async function sendEmailDetailed(
+  to: string | string[],
+  subject: string,
+  htmlBody: string,
+  textBody?: string,
+  attachments?: Attachment[]
+): Promise<{ ok: boolean; id: string | null }> {
+  if (!resend) {
+    console.warn('Resend not configured — skipping email send');
+    return { ok: false, id: null };
+  }
+
+  try {
+    return await enqueueSend(async () => {
+      for (let attempt = 0; ; attempt++) {
+        const { data, error } = await resend!.emails.send({
+          from: `${fromName} <${fromEmail}>`,
+          to,
+          subject,
+          html: htmlBody,
+          text: textBody || htmlBody.replace(/<[^>]*>/g, ''),
+          ...(attachments && attachments.length > 0 ? { attachments } : {}),
+        });
+        lastSendAt = Date.now();
+
+        if (!error) return { ok: true, id: data?.id || null };
+
+        if (isRateLimitError(error) && attempt < MAX_RATE_LIMIT_RETRIES) {
+          await sleep(MIN_SEND_INTERVAL_MS * 2 ** attempt);
+          continue;
+        }
+
+        console.error('Resend email send failed:', error);
+        return { ok: false, id: null };
+      }
+    });
+  } catch (err) {
+    console.error('Resend email send failed:', err);
+    return { ok: false, id: null };
+  }
+}
+
+/**
  * Send an email via Resend
  * Returns true if successful, false if Resend is not configured or failed
  */
@@ -54,39 +101,8 @@ export async function sendEmail(
   textBody?: string,
   attachments?: Attachment[]
 ): Promise<boolean> {
-  if (!resend) {
-    console.warn('Resend not configured — skipping email send');
-    return false;
-  }
-
-  try {
-    return await enqueueSend(async () => {
-      for (let attempt = 0; ; attempt++) {
-        const { error } = await resend!.emails.send({
-          from: `${fromName} <${fromEmail}>`,
-          to,
-          subject,
-          html: htmlBody,
-          text: textBody || htmlBody.replace(/<[^>]*>/g, ''),
-          ...(attachments && attachments.length > 0 ? { attachments } : {}),
-        });
-        lastSendAt = Date.now();
-
-        if (!error) return true;
-
-        if (isRateLimitError(error) && attempt < MAX_RATE_LIMIT_RETRIES) {
-          await sleep(MIN_SEND_INTERVAL_MS * 2 ** attempt);
-          continue;
-        }
-
-        console.error('Resend email send failed:', error);
-        return false;
-      }
-    });
-  } catch (err) {
-    console.error('Resend email send failed:', err);
-    return false;
-  }
+  const { ok } = await sendEmailDetailed(to, subject, htmlBody, textBody, attachments);
+  return ok;
 }
 
 /**
