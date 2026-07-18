@@ -81,7 +81,7 @@ function extractAccessToken(req: NextRequest): string | null {
 
 // Roles that belong to internal BMG staff. Excludes 'customer' accounts and
 // external CNI 'installer' accounts, which must never see company-wide data.
-const INTERNAL_STAFF_ROLES = ['admin', 'sales', 'graphics_production', 'shop_tech', 'field_tech'];
+const INTERNAL_STAFF_ROLES = ['admin', 'sales', 'graphics_production', 'shop_tech', 'field_tech', 'finance'];
 
 function profileRoles(profile: any): string[] {
   return profile?.roles?.length > 0 ? profile.roles : [profile?.role];

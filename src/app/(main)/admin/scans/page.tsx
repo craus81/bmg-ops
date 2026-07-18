@@ -2153,9 +2153,22 @@ interface VendorInvoiceRecord {
   storage_path: string | null;
   notes: string | null;
   created_at: string;
+  status: string;
+  rejection_reason: string | null;
+  netsuite_bill_id: string | null;
   company: VendorCompany | null;
   lines: { id: string; vin: string; part_number: string | null; amount: number | null; was_existing_scan: boolean; scan_log_id: string | null }[];
 }
+
+// Payment-pipeline chip per vendor_invoices.status (see /admin/ap for the queue).
+const INVOICE_STATUS_CHIP: Record<string, { label: string; color: string; bg: string }> = {
+  recorded: { label: 'Not Submitted', color: 'var(--text-muted)', bg: 'rgba(148,163,184,0.12)' },
+  submitted: { label: 'Awaiting Approval', color: '#fbbf24', bg: 'rgba(251,191,36,0.12)' },
+  approved: { label: 'Approved', color: '#60a5fa', bg: 'rgba(96,165,250,0.12)' },
+  rejected: { label: 'Rejected', color: '#ef4444', bg: 'rgba(239,68,68,0.12)' },
+  billed: { label: 'Billed', color: '#a78bfa', bg: 'rgba(167,139,250,0.12)' },
+  paid: { label: 'Paid', color: '#34d399', bg: 'rgba(52,211,153,0.12)' },
+};
 
 function VendorInvoicesTab({ allParts, allLocations, poRequired, onCommitted, onPartAdded }: {
   allParts: { id: string; item_number: string; display_name: string | null; billable_customer: string | null; vehicle_type: string | null; graphic_package: string | null }[];
@@ -2214,6 +2227,7 @@ function VendorInvoicesTab({ allParts, allLocations, poRequired, onCommitted, on
   const [history, setHistory] = useState<VendorInvoiceRecord[]>([]);
   const [expandedInvoices, setExpandedInvoices] = useState<Set<string>>(new Set());
   const [deletingInvoice, setDeletingInvoice] = useState<string | null>(null);
+  const [submittingInvoice, setSubmittingInvoice] = useState<string | null>(null);
 
   useEffect(() => {
     const load = async () => {
@@ -2638,6 +2652,23 @@ function VendorInvoicesTab({ allParts, allLocations, poRequired, onCommitted, on
       await dialog.alert(`Delete failed: ${err.message}`);
     }
     setDeletingInvoice(null);
+  };
+
+  const submitInvoice = async (inv: VendorInvoiceRecord) => {
+    setSubmittingInvoice(inv.id);
+    try {
+      const res = await fetch('/api/vendor-invoices/workflow', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ action: 'submit', id: inv.id }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok || !data.success) await dialog.alert(`Submit failed: ${data.error || 'unknown error'}`);
+      else loadHistory();
+    } catch (err: any) {
+      await dialog.alert(`Submit failed: ${err.message}`);
+    }
+    setSubmittingInvoice(null);
   };
 
   const inputStyle: React.CSSProperties = {
@@ -3161,6 +3192,11 @@ function VendorInvoicesTab({ allParts, allLocations, poRequired, onCommitted, on
         {history.map(inv => {
           const isExpanded = expandedInvoices.has(inv.id);
           const updatedCount = inv.lines.filter(l => l.was_existing_scan).length;
+          const chip = INVOICE_STATUS_CHIP[inv.status] || INVOICE_STATUS_CHIP.recorded;
+          const canSubmit = inv.status === 'recorded' || inv.status === 'rejected';
+          // Once an invoice enters the payment pipeline, deleting it here would
+          // pull it out from under finance — manage it from /admin/ap instead.
+          const canDelete = inv.status === 'recorded' || inv.status === 'rejected';
           return (
             <div key={inv.id} style={{ background: 'var(--card)', border: `1px solid ${theme.border}`, borderRadius: '10px', overflow: 'hidden' }}>
               <div style={{ display: 'flex', alignItems: 'center', gap: '8px', padding: '10px 12px' }}>
@@ -3173,8 +3209,21 @@ function VendorInvoicesTab({ allParts, allLocations, poRequired, onCommitted, on
                     {inv.lines.length} VIN{inv.lines.length !== 1 ? 's' : ''}{updatedCount > 0 ? ` (${updatedCount} pre-existing)` : ''}
                     {inv.location_name ? ` · ${inv.location_name}` : ''}
                     {inv.invoice_date ? ` · ${inv.invoice_date}` : ''} · recorded {new Date(inv.created_at).toLocaleDateString([], { month: 'short', day: 'numeric' })}
+                    {inv.netsuite_bill_id ? ` · NS bill ${inv.netsuite_bill_id}` : ''}
                   </div>
                 </div>
+                <span style={{ padding: '3px 8px', borderRadius: '5px', fontSize: '9px', fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.4px', color: chip.color, background: chip.bg, flexShrink: 0 }}>
+                  {chip.label}
+                </span>
+                {canSubmit && (
+                  <button
+                    onClick={() => submitInvoice(inv)}
+                    disabled={submittingInvoice === inv.id}
+                    style={{ padding: '3px 8px', borderRadius: '5px', fontSize: '10px', fontWeight: 700, background: 'rgba(52,211,153,0.1)', border: '1px solid rgba(52,211,153,0.3)', color: '#34d399', cursor: 'pointer', flexShrink: 0 }}
+                  >
+                    {submittingInvoice === inv.id ? '…' : inv.status === 'rejected' ? 'Resubmit' : 'Submit for Payment'}
+                  </button>
+                )}
                 {inv.storage_path && (
                   <a
                     href={storage.from('invoices').getPublicUrl(inv.storage_path).data.publicUrl}
@@ -3184,10 +3233,17 @@ function VendorInvoicesTab({ allParts, allLocations, poRequired, onCommitted, on
                     📄 File
                   </a>
                 )}
-                <button onClick={() => deleteInvoice(inv)} disabled={deletingInvoice === inv.id} style={{ padding: '3px 8px', borderRadius: '5px', fontSize: '10px', fontWeight: 700, background: 'rgba(239,68,68,0.08)', border: '1px solid rgba(239,68,68,0.2)', color: '#ef4444', cursor: 'pointer', flexShrink: 0 }}>
-                  {deletingInvoice === inv.id ? '…' : '✕'}
-                </button>
+                {canDelete && (
+                  <button onClick={() => deleteInvoice(inv)} disabled={deletingInvoice === inv.id} style={{ padding: '3px 8px', borderRadius: '5px', fontSize: '10px', fontWeight: 700, background: 'rgba(239,68,68,0.08)', border: '1px solid rgba(239,68,68,0.2)', color: '#ef4444', cursor: 'pointer', flexShrink: 0 }}>
+                    {deletingInvoice === inv.id ? '…' : '✕'}
+                  </button>
+                )}
               </div>
+              {inv.status === 'rejected' && inv.rejection_reason && (
+                <div style={{ padding: '6px 12px', borderTop: '1px solid rgba(239,68,68,0.2)', background: 'rgba(239,68,68,0.05)', fontSize: '10px', color: '#ef4444', fontWeight: 600 }}>
+                  Rejected: {inv.rejection_reason}
+                </div>
+              )}
               {isExpanded && (
                 <div style={{ borderTop: `1px solid ${theme.border}`, padding: '8px 12px' }}>
                   {inv.notes && <div style={{ fontSize: '10px', color: 'var(--text-muted)', marginBottom: '6px' }}>{inv.notes}</div>}
