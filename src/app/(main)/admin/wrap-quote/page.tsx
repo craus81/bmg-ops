@@ -45,11 +45,17 @@ interface Film {
   labor_per_sqft: number;
   color: string | null;
   is_active: boolean | null;
+  // What the material actually costs us per ft² (price_per_sqft is what we
+  // charge) — drives the internal margin readout.
+  cost_per_sqft: number | null;
+  laminate_cost_per_sqft: number | null;
 }
 
 const FILM_COLORS = ['#06b6d4', '#a78bfa', '#f472b6', '#4ade80', '#fb923c', '#facc15', '#60a5fa', '#f87171'];
 const filmLabel = (f: Film) => f.laminate_name ? `${f.name} + ${f.laminate_name}` : f.name;
 const filmRate = (f: Film) => num(f.price_per_sqft) + num(f.laminate_price_per_sqft);
+const filmCost = (f: Film) => num(f.cost_per_sqft) + num(f.laminate_cost_per_sqft);
+const filmHasCost = (f: Film) => f.cost_per_sqft != null || f.laminate_cost_per_sqft != null;
 
 interface LaborSection { flat: number; hourly: number; hours: number; extra: number }
 
@@ -246,8 +252,10 @@ export default function WrapQuotePage() {
 
   // ----- Pricing tab state (edit copies) -----
   const [subSel, setSubSel] = useState(''); // '' = new
-  const [subForm, setSubForm] = useState({ name: '', price_per_sqft: '', bleed_in: '', laminate_name: '', laminate_price_per_sqft: '', labor_per_sqft: '', color: '' });
+  const [subForm, setSubForm] = useState({ name: '', price_per_sqft: '', bleed_in: '', laminate_name: '', laminate_price_per_sqft: '', labor_per_sqft: '', color: '', cost_per_sqft: '', laminate_cost_per_sqft: '' });
   const [savingSettings, setSavingSettings] = useState(false);
+  // Margin floor (%) shared with the estimate builder (quote_settings singleton).
+  const [marginFloor, setMarginFloor] = useState(30);
 
   // ----- Templates tab state -----
   const [tplForm, setTplForm] = useState({ year: '', make: '', model: '', variant: '', code: '', length: '' });
@@ -261,12 +269,14 @@ export default function WrapQuotePage() {
 
   const loadAll = async () => {
     setLoading(true);
-    const [tplRes, subRes, setRes, histRes] = await Promise.all([
+    const [tplRes, subRes, setRes, histRes, floorRes] = await Promise.all([
       supabase.from('vehicle_templates').select('id, name, make, model, year, variant, scale, template_code, template_image_path, px_per_in, overall_length_in, is_active').not('template_image_path', 'is', null).order('make').order('model'),
       supabase.from('wrap_substrates').select('*').order('name'),
       supabase.from('wrap_quote_settings').select('*').eq('id', 1).maybeSingle(),
       supabase.from('wrap_quotes').select('*').order('created_at', { ascending: false }).limit(200),
+      supabase.from('quote_settings').select('margin_floor_pct').eq('id', 1).maybeSingle(),
     ]);
+    if (floorRes.data?.margin_floor_pct != null) setMarginFloor(Number(floorRes.data.margin_floor_pct));
     setTemplates((tplRes.data || []) as Template[]);
     setSubstrates((subRes.data || []) as Film[]);
     if (setRes.data) {
@@ -375,7 +385,18 @@ export default function WrapQuotePage() {
     const labor = design + prep + install + filmLabor;
     const subtotal = materials + labor;
     const tax = subtotal * num(settings.tax_rate) / 100;
-    return { area, materials, filmTotals, filmLabor, design, prep, install, labor, subtotal, tax, total: subtotal + tax };
+    // Internal margin readout: what the billed film actually costs us. Films
+    // with no cost on the Pricing tab are listed so the gap is visible.
+    let materialCost = 0;
+    const uncostedFilms = new Set<string>();
+    for (const { film, sqft } of byFilm.values()) {
+      if (filmHasCost(film)) materialCost += sqft * filmCost(film);
+      else uncostedFilms.add(filmLabel(film));
+    }
+    return {
+      area, materials, filmTotals, filmLabor, design, prep, install, labor, subtotal, tax, total: subtotal + tax,
+      materialCost, uncostedFilms: [...uncostedFilms],
+    };
     // eslint-disable-next-line react-hooks/exhaustive-deps -- substrates feed measurementPricing
   }, [measurements, settings, substrates, laborRates]);
 
@@ -1005,8 +1026,8 @@ export default function WrapQuotePage() {
     setSubSel(id);
     const s = substrates.find(x => x.id === id);
     setSubForm(s
-      ? { name: s.name, price_per_sqft: String(s.price_per_sqft), bleed_in: String(s.bleed_in), laminate_name: s.laminate_name || '', laminate_price_per_sqft: s.laminate_price_per_sqft ? String(s.laminate_price_per_sqft) : '', labor_per_sqft: s.labor_per_sqft ? String(s.labor_per_sqft) : '', color: s.color || '' }
-      : { name: '', price_per_sqft: '', bleed_in: '', laminate_name: '', laminate_price_per_sqft: '', labor_per_sqft: '', color: '' });
+      ? { name: s.name, price_per_sqft: String(s.price_per_sqft), bleed_in: String(s.bleed_in), laminate_name: s.laminate_name || '', laminate_price_per_sqft: s.laminate_price_per_sqft ? String(s.laminate_price_per_sqft) : '', labor_per_sqft: s.labor_per_sqft ? String(s.labor_per_sqft) : '', color: s.color || '', cost_per_sqft: s.cost_per_sqft != null ? String(s.cost_per_sqft) : '', laminate_cost_per_sqft: s.laminate_cost_per_sqft != null ? String(s.laminate_cost_per_sqft) : '' }
+      : { name: '', price_per_sqft: '', bleed_in: '', laminate_name: '', laminate_price_per_sqft: '', labor_per_sqft: '', color: '', cost_per_sqft: '', laminate_cost_per_sqft: '' });
   };
 
   const saveSubstrate = async () => {
@@ -1018,6 +1039,9 @@ export default function WrapQuotePage() {
       laminate_name: subForm.laminate_name.trim() || null,
       laminate_price_per_sqft: num(subForm.laminate_price_per_sqft),
       labor_per_sqft: num(subForm.labor_per_sqft),
+      // Empty = cost unknown (margin readout says so) rather than $0.
+      cost_per_sqft: subForm.cost_per_sqft.trim() === '' ? null : num(subForm.cost_per_sqft),
+      laminate_cost_per_sqft: subForm.laminate_cost_per_sqft.trim() === '' ? null : num(subForm.laminate_cost_per_sqft),
       // Default a palette color for new films so boxes are distinct from day one
       color: subForm.color || FILM_COLORS[substrates.length % FILM_COLORS.length],
       updated_at: new Date().toISOString(),
@@ -1026,7 +1050,7 @@ export default function WrapQuotePage() {
       ? await supabase.from('wrap_substrates').update(row).eq('id', subSel)
       : await supabase.from('wrap_substrates').insert({ ...row, is_active: true });
     if (error) { await dialog.alert(`Save failed: ${error.message}`); return; }
-    setSubSel(''); setSubForm({ name: '', price_per_sqft: '', bleed_in: '', laminate_name: '', laminate_price_per_sqft: '', labor_per_sqft: '', color: '' });
+    setSubSel(''); setSubForm({ name: '', price_per_sqft: '', bleed_in: '', laminate_name: '', laminate_price_per_sqft: '', labor_per_sqft: '', color: '', cost_per_sqft: '', laminate_cost_per_sqft: '' });
     await loadAll();
   };
 
@@ -1632,6 +1656,21 @@ export default function WrapQuotePage() {
                   </div>
                   <div style={{ marginLeft: 'auto', fontSize: '12px', fontWeight: 800, color: 'var(--text-primary)' }}>Total Area: {fmt(totals.area)} ft²</div>
                   <div style={{ fontSize: '12px', fontWeight: 800, color: '#22c55e' }}>Estimated Cost: ${fmt(totals.total)}</div>
+                  {/* Internal materials margin — never appears on the emailed quote */}
+                  {totals.materials > 0 && (totals.materialCost > 0 || totals.uncostedFilms.length > 0) && (() => {
+                    const pct = totals.materialCost > 0 ? ((totals.materials - totals.materialCost) / totals.materials) * 100 : null;
+                    const color = pct == null ? 'var(--text-muted)' : pct < 0 ? '#ef4444' : pct < marginFloor ? '#fbbf24' : '#22c55e';
+                    return (
+                      <div
+                        title={totals.uncostedFilms.length > 0 ? `No cost set for: ${totals.uncostedFilms.join(', ')} — add film costs on the Pricing tab` : `Material cost $${fmt(totals.materialCost)} vs billed $${fmt(totals.materials)} · floor ${marginFloor}%`}
+                        style={{ fontSize: '12px', fontWeight: 800, color }}
+                      >
+                        {pct != null
+                          ? `Material Margin: ${pct.toFixed(0)}%${pct < marginFloor ? ' ⚠' : ''}${totals.uncostedFilms.length > 0 ? ' (partial)' : ''}`
+                          : 'Margin: set film costs on Pricing tab'}
+                      </div>
+                    );
+                  })()}
                   <button onClick={() => setTab('quote')} disabled={measurements.length === 0} style={{
                     padding: '8px 16px', borderRadius: '8px', fontSize: '12px', fontWeight: 800, border: 'none',
                     background: measurements.length === 0 ? 'var(--subtle-bg)' : '#22c55e',
@@ -1877,6 +1916,14 @@ export default function WrapQuotePage() {
               <input type="number" value={subForm.laminate_price_per_sqft} onChange={e => setSubForm({ ...subForm, laminate_price_per_sqft: e.target.value })} style={{ ...inputStyle, width: '85px' }} />
             </div>
             <div>
+              <div style={{ ...labelStyle, color: '#f472b6' }}>Film Cost ($/ft²)</div>
+              <input type="number" value={subForm.cost_per_sqft} onChange={e => setSubForm({ ...subForm, cost_per_sqft: e.target.value })} placeholder="our cost" style={{ ...inputStyle, width: '85px' }} />
+            </div>
+            <div>
+              <div style={{ ...labelStyle, color: '#f472b6' }}>Lam. Cost ($/ft²)</div>
+              <input type="number" value={subForm.laminate_cost_per_sqft} onChange={e => setSubForm({ ...subForm, laminate_cost_per_sqft: e.target.value })} placeholder="our cost" style={{ ...inputStyle, width: '85px' }} />
+            </div>
+            <div>
               <div style={labelStyle}>Bleed (in)</div>
               <input type="number" value={subForm.bleed_in} onChange={e => setSubForm({ ...subForm, bleed_in: e.target.value })} style={{ ...inputStyle, width: '75px' }} />
             </div>
@@ -1903,8 +1950,32 @@ export default function WrapQuotePage() {
             )}
           </div>
           <div style={{ fontSize: '10px', color: 'var(--text-muted)', marginBottom: '16px' }}>
-            Film + laminate price together as one material (e.g. IJ280 + 8428) and appear as one quote line. Bleed is extra print margin added to each side of a measured area. The color is what that film's boxes look like on the vehicle, so mixing films (print layer + reflective on top) stays readable.
+            Film + laminate price together as one material (e.g. IJ280 + 8428) and appear as one quote line. Bleed is extra print margin added to each side of a measured area. The color is what that film's boxes look like on the vehicle, so mixing films (print layer + reflective on top) stays readable. The pink cost fields are what the material costs <b>us</b> — they never appear on a quote, they only power the internal margin readout on the estimator.
           </div>
+
+          {isAdmin && (
+            <>
+              {sectionHead('Margin Floor')}
+              <div style={{ display: 'flex', gap: '8px', alignItems: 'flex-end', marginBottom: '4px' }}>
+                <div>
+                  <div style={labelStyle}>Floor (%)</div>
+                  <input
+                    type="number"
+                    value={marginFloor}
+                    onChange={e => setMarginFloor(num(e.target.value))}
+                    onBlur={async e => {
+                      const v = num(e.target.value);
+                      await supabase.from('quote_settings').upsert({ id: 1, margin_floor_pct: v, updated_at: new Date().toISOString(), updated_by: user?.id || null });
+                    }}
+                    style={{ ...inputStyle, width: '90px' }}
+                  />
+                </div>
+              </div>
+              <div style={{ fontSize: '10px', color: 'var(--text-muted)', marginBottom: '16px' }}>
+                Quotes with a margin under this get flagged in both the estimate builder and here. Saves on blur; shared across both builders.
+              </div>
+            </>
+          )}
 
           {sectionHead('Taxes')}
           <div style={{ marginBottom: '16px' }}>
