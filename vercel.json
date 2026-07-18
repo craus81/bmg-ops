@@ -23,6 +23,14 @@
     {
       "path": "/api/cron/proof-reminder-check",
       "schedule": "45 13 * * *"
+    },
+    {
+      "path": "/api/cron/stuck-vehicle-check",
+      "schedule": "15 14 * * *"
+    },
+    {
+      "path": "/api/cron/weekly-customer-digest",
+      "schedule": "0 14 * * 1"
     }
   ],
   "headers": [
