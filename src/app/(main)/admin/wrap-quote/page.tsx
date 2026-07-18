@@ -1850,9 +1850,9 @@ export default function WrapQuotePage() {
                 )}
                 <span style={{
                   fontSize: '9px', fontWeight: 700, padding: '2px 7px', borderRadius: '4px',
-                  background: q.status === 'sent' ? 'rgba(34,197,94,0.12)' : 'rgba(148,163,184,0.12)',
-                  color: q.status === 'sent' ? '#22c55e' : '#94a3b8',
-                }}>{q.status === 'sent' ? `Sent${q.sent_to ? ` · ${q.sent_to}` : ''}` : 'Draft'}</span>
+                  background: q.status === 'accepted' ? 'rgba(34,197,94,0.12)' : q.status === 'rejected' ? 'rgba(239,68,68,0.12)' : q.status === 'sent' ? 'rgba(96,165,250,0.12)' : 'rgba(148,163,184,0.12)',
+                  color: q.status === 'accepted' ? '#22c55e' : q.status === 'rejected' ? '#ef4444' : q.status === 'sent' ? '#60a5fa' : '#94a3b8',
+                }}>{q.status === 'accepted' ? 'Accepted ✓' : q.status === 'rejected' ? 'Lost' : q.status === 'sent' ? `Sent${q.sent_to ? ` · ${q.sent_to}` : ''}` : 'Draft'}</span>
                 <span style={{ fontSize: '12px', fontWeight: 800, color: 'var(--text-primary)' }}>${fmt(q.total)}</span>
                 <span style={{ fontSize: '10px', color: 'var(--text-muted)' }}>{new Date(q.created_at).toLocaleDateString([], { month: 'short', day: 'numeric', year: 'numeric' })}</span>
                 <button onClick={e => { e.stopPropagation(); loadQuoteForEdit(q); }} title="Reopen this quote for editing / resending" style={btnStyle('#60a5fa', 'transparent')}>

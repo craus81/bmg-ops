@@ -95,6 +95,9 @@ export default function MorePage() {
         {(isAdmin || isSales || isGraphicsProduction) && (
           <MenuBtn title="Wrap Quotes" sub="Measure a vehicle template by hand & email the quote" onClick={() => router.push('/admin/wrap-quote')} />
         )}
+        {(isAdmin || isSales) && (
+          <MenuBtn title="Quote Follow-Ups" sub="Sent quotes aging without an answer — chase, mark won or lost" onClick={() => router.push('/admin/quote-followups')} />
+        )}
         {F('scan') && !overflowPaths.has('/scan') && (
           <MenuBtn title="Scan & Log" sub="Scan VINs and log work" onClick={() => router.push('/scan')} />
         )}
