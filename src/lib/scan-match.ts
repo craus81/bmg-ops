@@ -76,9 +76,14 @@ export async function recomputePoFulfillment(service: SupabaseClient, poIds: str
 }
 
 /**
- * Match unmatched, unexported, unarchived scans to open POs. Pass `scanIds` to
- * limit to specific scans (e.g. the one just logged); omit to sweep all
- * outstanding scans. Increments po_line_items.installed for each match.
+ * Match unmatched, unarchived scans to open POs. Exported scans ARE included
+ * — a VIN exported before its PO arrived still deserves the link (billing
+ * reports key on it), and lifecycle state is derived stamp-first so setting
+ * po_id never changes an exported scan's displayed state. Archived/invoiced
+ * scans stay excluded: that history is settled and shouldn't consume open PO
+ * capacity. Pass `scanIds` to limit to specific scans (e.g. the one just
+ * logged); omit to sweep all outstanding scans. Increments
+ * po_line_items.installed for each match.
  */
 export async function matchScansToOpenPos(
   service: SupabaseClient,
@@ -86,14 +91,17 @@ export async function matchScansToOpenPos(
 ): Promise<MatchResult> {
   let query = service
     .from('scan_logs')
-    .select('id, part_number, location_name')
+    .select('id, part_number, location_name, exported_at')
     .is('po_id', null)
-    .is('exported_at', null)
     .is('archived_at', null);
   if (scanIds && scanIds.length > 0) query = query.in('id', scanIds);
 
   const { data: unmatched } = await query;
   if (!unmatched || unmatched.length === 0) return { matched: 0, total: 0 };
+
+  // When PO capacity is scarce, active (unexported) scans claim lines first —
+  // they need the match to reach "Ready"; for exported scans it's enrichment.
+  unmatched.sort((a, b) => (a.exported_at ? 1 : 0) - (b.exported_at ? 1 : 0));
 
   const { data: pos } = await service
     .from('purchase_orders')
