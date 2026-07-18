@@ -7,6 +7,7 @@ import { scanLifecycle } from '@/lib/scan-state';
 import { decodeVinsBatch } from '@/lib/vin-decoder';
 import { locationBillingOverride } from '@/lib/scan-billing';
 import { matchScansToOpenPos } from '@/lib/scan-match';
+import { findOrMirrorPart } from '@/lib/parts-mirror';
 
 export const dynamic = 'force-dynamic';
 export const maxDuration = 120;
@@ -65,17 +66,17 @@ interface PartInfo {
   requires_po_match: boolean | null;
 }
 
-/** Case-insensitive exact netsuite_parts lookups, parallelized per part. */
+/**
+ * Case-insensitive part lookups, parallelized per part. A part missing from
+ * the local catalog is checked against NetSuite and mirrored in when it
+ * exists there — so a NetSuite-known part is resolved (and stays resolved)
+ * instead of being flagged unknown on every invoice.
+ */
 async function lookupParts(partNumbers: string[]): Promise<Map<string, PartInfo>> {
   const map = new Map<string, PartInfo>();
   await Promise.all(partNumbers.map(async pn => {
-    const { data: candidates } = await service
-      .from('netsuite_parts')
-      .select('item_number, display_name, billable_customer, requires_po_match')
-      .ilike('item_number', pn.replace(/[\\%_]/g, ch => `\\${ch}`))
-      .limit(2);
-    const exact = (candidates || []).find(c => c.item_number.toUpperCase() === pn.toUpperCase());
-    if (exact) map.set(pn.toUpperCase(), exact);
+    const { part } = await findOrMirrorPart(service, pn);
+    if (part) map.set(pn.toUpperCase(), part);
   }));
   return map;
 }

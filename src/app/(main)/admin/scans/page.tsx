@@ -1317,10 +1317,35 @@ export default function AdminScansPage() {
                           {!r.match && (
                             <button
                               onClick={async () => {
-                                // Guard against duplicates: the part may already
-                                // exist (a manual row, or one not in the loaded
-                                // set). ilike is a case-insensitive superset —
-                                // confirm an exact match before inserting.
+                                // The item may already exist in NetSuite — mirror
+                                // it into the catalog instead of creating a
+                                // manual duplicate that gets re-flagged forever.
+                                try {
+                                  const res = await fetch('/api/parts/mirror', {
+                                    method: 'POST',
+                                    headers: { 'Content-Type': 'application/json' },
+                                    body: JSON.stringify({ partNumber: r.partNumber }),
+                                  });
+                                  const data = await res.json().catch(() => ({}));
+                                  if (res.ok && data.found && data.part) {
+                                    let all: any[] = [];
+                                    let p3 = 0;
+                                    let more3 = true;
+                                    while (more3) {
+                                      const { data: pageData } = await supabase.from('netsuite_parts').select('id, item_number, display_name, billable_customer, vehicle_type, graphic_package').eq('is_active', true).order('item_number').range(p3 * 1000, (p3 + 1) * 1000 - 1);
+                                      all = [...all, ...(pageData || [])];
+                                      more3 = (pageData || []).length === 1000;
+                                      p3++;
+                                    }
+                                    setAllParts(all as typeof allParts);
+                                    return;
+                                  }
+                                } catch { /* fall through to manual add */ }
+
+                                // Not in NetSuite — guard against duplicates: the
+                                // part may already exist (a manual row, or one not
+                                // in the loaded set). ilike is a case-insensitive
+                                // superset — confirm an exact match before inserting.
                                 const { data: candidates } = await supabase
                                   .from('netsuite_parts')
                                   .select('id, item_number')
@@ -1623,6 +1648,7 @@ export default function AdminScansPage() {
           allLocations={allLocations}
           poRequired={poRequired}
           onCommitted={loadAll}
+          onPartAdded={p => setAllParts(prev => prev.some(x => x.id === p.id) ? prev.map(x => x.id === p.id ? p : x) : [p, ...prev])}
         />
       )}
 
@@ -2131,11 +2157,12 @@ interface VendorInvoiceRecord {
   lines: { id: string; vin: string; part_number: string | null; amount: number | null; was_existing_scan: boolean; scan_log_id: string | null }[];
 }
 
-function VendorInvoicesTab({ allParts, allLocations, poRequired, onCommitted }: {
+function VendorInvoicesTab({ allParts, allLocations, poRequired, onCommitted, onPartAdded }: {
   allParts: { id: string; item_number: string; display_name: string | null; billable_customer: string | null; vehicle_type: string | null; graphic_package: string | null }[];
   allLocations: { id: string; name: string }[];
   poRequired: Record<string, boolean>;
   onCommitted: () => void;
+  onPartAdded: (p: { id: string; item_number: string; display_name: string | null; billable_customer: string | null; vehicle_type: string | null; graphic_package: string | null }) => void;
 }) {
   const dialog = useDialog();
   const supabase = createClient();
@@ -2282,6 +2309,42 @@ function VendorInvoicesTab({ allParts, allLocations, poRequired, onCommitted }: 
       await dialog.alert(`Failed to link NetSuite vendor: ${err.message}`);
     }
     setLinkingVendor(false);
+  };
+
+  // A part the local catalog doesn't know may still exist in NetSuite —
+  // check there and mirror it in, so it's found now and forever after.
+  const [mirroringPart, setMirroringPart] = useState(false);
+  const mirrorPartFromNetsuite = async (query: string): Promise<{ item_number: string } | null> => {
+    const pn = query.trim();
+    if (pn.length < 2) return null;
+    setMirroringPart(true);
+    try {
+      const res = await fetch('/api/parts/mirror', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ partNumber: pn }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (res.ok && data.found && data.part) {
+        onPartAdded({
+          id: data.part.id,
+          item_number: data.part.item_number,
+          display_name: data.part.display_name,
+          billable_customer: data.part.billable_customer,
+          vehicle_type: data.part.vehicle_type ?? null,
+          graphic_package: data.part.graphic_package ?? null,
+        });
+        if (data.mirrored) setNotice(`${data.part.item_number} found in NetSuite — added to the catalog. It won't be flagged again.`);
+        return data.part;
+      }
+      setNotice(`"${pn}" isn't in NetSuite items either — check the number, or create it with "+ Create in NetSuite" on the Bulk Upload tab.`);
+      return null;
+    } catch (err: any) {
+      setNotice(`NetSuite item check failed: ${err.message}`);
+      return null;
+    } finally {
+      setMirroringPart(false);
+    }
   };
 
   const applyPartToSelected = (partNumber: string) => {
@@ -2818,7 +2881,31 @@ function VendorInvoicesTab({ allParts, allLocations, poRequired, onCommitted }: 
                     p.display_name?.toLowerCase().includes(q) ||
                     p.billable_customer?.toLowerCase().includes(q)
                   ).slice(0, 8);
-                  if (matches.length === 0) return null;
+                  if (matches.length === 0) {
+                    return (
+                      <div style={{ position: 'absolute', top: '100%', left: 0, right: 0, zIndex: 50, background: 'var(--card)', border: `1px solid ${theme.border}`, borderRadius: '6px', boxShadow: '0 4px 12px rgba(0,0,0,0.2)', marginTop: '2px' }}>
+                        <button
+                          onMouseDown={e => e.preventDefault()}
+                          onClick={async () => {
+                            const p = await mirrorPartFromNetsuite(defaultPartSearch);
+                            if (p) {
+                              setDefaultPart({ item_number: p.item_number, display_name: (p as any).display_name ?? null });
+                              setDefaultPartSearch('');
+                              setReview(prev => prev ? {
+                                ...prev,
+                                lines: prev.lines.map(l => l.partNumber.trim() ? l : { ...l, partNumber: p.item_number }),
+                              } : prev);
+                              applyRememberedRates(selectedCompany ? { companyId: selectedCompany.id } : { vendorName: review.vendorName });
+                            }
+                          }}
+                          disabled={mirroringPart}
+                          style={{ display: 'block', width: '100%', padding: '7px 9px', textAlign: 'left', border: 'none', background: 'rgba(96,165,250,0.06)', cursor: 'pointer', fontSize: '11px', fontWeight: 700, color: '#60a5fa', opacity: mirroringPart ? 0.6 : 1 }}
+                        >
+                          {mirroringPart ? 'Checking NetSuite…' : `🔍 Not in catalog — check NetSuite for "${defaultPartSearch.trim()}"`}
+                        </button>
+                      </div>
+                    );
+                  }
                   return (
                     <div style={{ position: 'absolute', top: '100%', left: 0, right: 0, zIndex: 50, background: 'var(--card)', border: `1px solid ${theme.border}`, borderRadius: '6px', boxShadow: '0 4px 12px rgba(0,0,0,0.2)', maxHeight: '200px', overflowY: 'auto', marginTop: '2px' }}>
                       {matches.map(p => (
@@ -2898,7 +2985,6 @@ function VendorInvoicesTab({ allParts, allLocations, poRequired, onCommitted }: 
                       p.display_name?.toLowerCase().includes(q) ||
                       p.billable_customer?.toLowerCase().includes(q)
                     ).slice(0, 8);
-                    if (matches.length === 0) return null;
                     return (
                       <div style={{ position: 'absolute', top: '100%', left: 0, right: 0, zIndex: 50, background: 'var(--card)', border: `1px solid ${theme.border}`, borderRadius: '6px', boxShadow: '0 4px 12px rgba(0,0,0,0.2)', maxHeight: '180px', overflowY: 'auto', marginTop: '2px' }}>
                         {matches.map(p => (
@@ -2912,6 +2998,19 @@ function VendorInvoicesTab({ allParts, allLocations, poRequired, onCommitted }: 
                             {p.billable_customer && <span style={{ color: '#a78bfa', marginLeft: '6px' }}>{p.billable_customer}</span>}
                           </button>
                         ))}
+                        {matches.length === 0 && (
+                          <button
+                            onMouseDown={e => e.preventDefault()}
+                            onClick={async () => {
+                              const p = await mirrorPartFromNetsuite(applyPartSearch);
+                              if (p) applyPartToSelected(p.item_number);
+                            }}
+                            disabled={mirroringPart}
+                            style={{ display: 'block', width: '100%', padding: '7px 9px', textAlign: 'left', border: 'none', background: 'rgba(96,165,250,0.06)', cursor: 'pointer', fontSize: '11px', fontWeight: 700, color: '#60a5fa', opacity: mirroringPart ? 0.6 : 1 }}
+                          >
+                            {mirroringPart ? 'Checking NetSuite…' : `🔍 Not in catalog — check NetSuite for "${applyPartSearch.trim()}"`}
+                          </button>
+                        )}
                       </div>
                     );
                   })()}
@@ -2959,7 +3058,7 @@ function VendorInvoicesTab({ allParts, allLocations, poRequired, onCommitted }: 
                       p.billable_customer?.toLowerCase().includes(q)
                     )
                   ).slice(0, 8);
-                  if (matches.length === 0) return null;
+                  const exactLocal = allParts.some(p => p.item_number.toLowerCase() === q);
                   return (
                     <div style={{ position: 'absolute', top: '100%', left: 0, right: 0, zIndex: 50, background: 'var(--card)', border: `1px solid ${theme.border}`, borderRadius: '6px', boxShadow: '0 4px 12px rgba(0,0,0,0.2)', maxHeight: '180px', overflowY: 'auto', marginTop: '2px' }}>
                       {matches.map(p => (
@@ -2973,6 +3072,20 @@ function VendorInvoicesTab({ allParts, allLocations, poRequired, onCommitted }: 
                           {p.billable_customer && <span style={{ color: '#a78bfa', marginLeft: '6px' }}>{p.billable_customer}</span>}
                         </button>
                       ))}
+                      {matches.length === 0 && !exactLocal && (
+                        <button
+                          onMouseDown={e => e.preventDefault()}
+                          onClick={async () => {
+                            const p = await mirrorPartFromNetsuite(line.partNumber);
+                            setPartSearchKey(null);
+                            if (p) { updateLine(line.key, { partNumber: p.item_number }); recheckLine({ ...line, partNumber: p.item_number }); }
+                          }}
+                          disabled={mirroringPart}
+                          style={{ display: 'block', width: '100%', padding: '7px 9px', textAlign: 'left', border: 'none', background: 'rgba(96,165,250,0.06)', cursor: 'pointer', fontSize: '11px', fontWeight: 700, color: '#60a5fa', opacity: mirroringPart ? 0.6 : 1 }}
+                        >
+                          {mirroringPart ? 'Checking NetSuite…' : `🔍 Not in catalog — check NetSuite for "${line.partNumber.trim()}"`}
+                        </button>
+                      )}
                     </div>
                   );
                 })()}
