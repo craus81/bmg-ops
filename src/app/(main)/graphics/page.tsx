@@ -1546,6 +1546,26 @@ export default function GraphicsPage() {
                         })()}
                       </div>
                     </div>
+                    {/* Proof aging: waiting on the customer 3+ days shows on the board */}
+                    {(() => {
+                      const j = job as any;
+                      if (j.customer_approved || j.customer_rejected_at || !j.sent_for_approval_at) return null;
+                      const waitDays = Math.floor((Date.now() - new Date(j.sent_for_approval_at).getTime()) / 86_400_000);
+                      if (waitDays < 3) return null;
+                      const c = waitDays >= 7 ? '#ef4444' : '#fbbf24';
+                      return (
+                        <div
+                          title={`Proof sent ${new Date(j.sent_for_approval_at).toLocaleDateString()}${j.approval_reminder_count ? ` · ${j.approval_reminder_count} auto-reminder${j.approval_reminder_count !== 1 ? 's' : ''}` : ''}${j.approval_escalated_at ? ' · escalated' : ''}`}
+                          style={{
+                            padding: '4px 8px', borderRadius: '6px', fontSize: '10px', fontWeight: 700,
+                            background: `${c}18`, border: `1px solid ${c}44`, color: c,
+                            whiteSpace: 'nowrap', flexShrink: 0,
+                          }}
+                        >
+                          ⏱ proof {waitDays}d
+                        </div>
+                      );
+                    })()}
                     <div style={{
                       padding: '4px 10px', borderRadius: '6px', fontSize: '10px', fontWeight: 700,
                       background: `${statusColor}18`, border: `1px solid ${statusColor}44`,
@@ -1922,11 +1942,21 @@ export default function GraphicsPage() {
                             </div>
                           ) : (
                             <div>
-                              {(job as any).sent_for_approval_at && (
-                                <div style={{ fontSize: '11px', color: 'var(--text-muted)', marginBottom: '4px' }}>
-                                  Sent for approval {new Date((job as any).sent_for_approval_at).toLocaleString()}
-                                </div>
-                              )}
+                              {(job as any).sent_for_approval_at && (() => {
+                                const waitDays = Math.floor((Date.now() - new Date((job as any).sent_for_approval_at).getTime()) / 86_400_000);
+                                const waitColor = waitDays >= 7 ? '#ef4444' : waitDays >= 3 ? '#fbbf24' : 'var(--text-muted)';
+                                const reminders = (job as any).approval_reminder_count || 0;
+                                return (
+                                  <div style={{ fontSize: '11px', color: 'var(--text-muted)', marginBottom: '4px' }}>
+                                    <span style={{ fontWeight: 700, color: waitColor }}>
+                                      ⏱ Awaiting approval — {waitDays}d
+                                    </span>
+                                    {' · sent '}{new Date((job as any).sent_for_approval_at).toLocaleDateString([], { month: 'short', day: 'numeric' })}
+                                    {reminders > 0 && ` · ${reminders} auto-reminder${reminders !== 1 ? 's' : ''}`}
+                                    {(job as any).approval_escalated_at && <span style={{ color: '#ef4444', fontWeight: 700 }}> · escalated</span>}
+                                  </div>
+                                );
+                              })()}
                               {approvalPickerJobId !== job.id && (
                                 <button
                                   onClick={() => openApprovalPicker(job.id)}
