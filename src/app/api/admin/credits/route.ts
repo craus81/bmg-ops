@@ -4,6 +4,7 @@ import { requireAdmin } from '@/lib/api-auth';
 import { validateBody, validateSearchParams, z } from '@/lib/validate';
 import { rewriteVehicleCredits, recomputeShiftCredits, backfillJobCredits, assignVehicleCredits } from '@/lib/pay-credits';
 import { memberViews } from '@/lib/shifts';
+import { logAudit } from '@/lib/audit';
 
 export const dynamic = 'force-dynamic';
 
@@ -124,6 +125,13 @@ export async function POST(req: NextRequest) {
       editedBy: auth.user.id,
     });
     if (!r.ok) return NextResponse.json({ error: r.error }, { status: 400 });
+    await logAudit(service, {
+      actorId: auth.user.id,
+      table: 'install_credits',
+      recordId: parsed.data.scanLogId || parsed.data.cniJobVinId || null,
+      action: 'rewrite_vehicle',
+      detail: { entries: parsed.data.entries },
+    });
     return NextResponse.json({ success: true });
   }
 
@@ -134,6 +142,13 @@ export async function POST(req: NextRequest) {
       createdBy: auth.user.id,
     });
     if (!r.ok) return NextResponse.json({ error: r.error }, { status: 400 });
+    await logAudit(service, {
+      actorId: auth.user.id,
+      table: 'install_credits',
+      recordId: parsed.data.cniJobId,
+      action: 'backfill_job',
+      detail: { entries: parsed.data.entries, created: r.created, skipped: r.skipped },
+    });
     return NextResponse.json({ success: true, created: r.created, skipped: r.skipped });
   }
 
@@ -144,10 +159,24 @@ export async function POST(req: NextRequest) {
       assignedBy: auth.user.id,
     });
     if (!r.ok) return NextResponse.json({ error: r.error }, { status: 400 });
+    await logAudit(service, {
+      actorId: auth.user.id,
+      table: 'install_credits',
+      recordId: parsed.data.cniJobVinId,
+      action: 'assign_vehicle',
+      detail: { entries: parsed.data.entries },
+    });
     return NextResponse.json({ success: true });
   }
 
   const r = await recomputeShiftCredits(service, parsed.data.shiftId, auth.user.id);
   if (!r.ok) return NextResponse.json({ error: r.error, rewritten: r.rewritten }, { status: 400 });
+  await logAudit(service, {
+    actorId: auth.user.id,
+    table: 'install_credits',
+    recordId: parsed.data.shiftId,
+    action: 'recompute_shift',
+    detail: { rewritten: r.rewritten, lockedSkipped: r.lockedSkipped },
+  });
   return NextResponse.json({ success: true, rewritten: r.rewritten, lockedSkipped: r.lockedSkipped });
 }
