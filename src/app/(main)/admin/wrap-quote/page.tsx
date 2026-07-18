@@ -120,6 +120,9 @@ interface WrapQuote {
   status: string;
   sent_at: string | null;
   sent_to: string | null;
+  approval_token: string | null;
+  accepted_at: string | null;
+  customer_rejection_reason: string | null;
   diagram_path: string | null;
   attachments: QuoteAttachment[] | null;
   archived_at: string | null;
@@ -1848,13 +1851,29 @@ export default function WrapQuotePage() {
                 {q.archived_at && (
                   <span style={{ fontSize: '9px', fontWeight: 700, padding: '2px 7px', borderRadius: '4px', background: 'rgba(148,163,184,0.12)', color: '#94a3b8' }}>Archived</span>
                 )}
-                <span style={{
-                  fontSize: '9px', fontWeight: 700, padding: '2px 7px', borderRadius: '4px',
-                  background: q.status === 'accepted' ? 'rgba(34,197,94,0.12)' : q.status === 'rejected' ? 'rgba(239,68,68,0.12)' : q.status === 'sent' ? 'rgba(96,165,250,0.12)' : 'rgba(148,163,184,0.12)',
-                  color: q.status === 'accepted' ? '#22c55e' : q.status === 'rejected' ? '#ef4444' : q.status === 'sent' ? '#60a5fa' : '#94a3b8',
-                }}>{q.status === 'accepted' ? 'Accepted ✓' : q.status === 'rejected' ? 'Lost' : q.status === 'sent' ? `Sent${q.sent_to ? ` · ${q.sent_to}` : ''}` : 'Draft'}</span>
+                <span
+                  title={q.status === 'rejected' ? (q.customer_rejection_reason ? `Customer requested changes: ${q.customer_rejection_reason}` : 'Marked lost') : q.status === 'accepted' && q.accepted_at ? `Accepted ${new Date(q.accepted_at).toLocaleString()}` : undefined}
+                  style={{
+                    fontSize: '9px', fontWeight: 700, padding: '2px 7px', borderRadius: '4px',
+                    background: q.status === 'accepted' ? 'rgba(34,197,94,0.12)' : q.status === 'rejected' ? 'rgba(239,68,68,0.12)' : q.status === 'sent' ? 'rgba(96,165,250,0.12)' : 'rgba(148,163,184,0.12)',
+                    color: q.status === 'accepted' ? '#22c55e' : q.status === 'rejected' ? '#ef4444' : q.status === 'sent' ? '#60a5fa' : '#94a3b8',
+                  }}>{q.status === 'accepted' ? 'Accepted ✓' : q.status === 'rejected' ? 'Lost / Changes' : q.status === 'sent' ? `Sent${q.sent_to ? ` · ${q.sent_to}` : ''}` : 'Draft'}</span>
                 <span style={{ fontSize: '12px', fontWeight: 800, color: 'var(--text-primary)' }}>${fmt(q.total)}</span>
                 <span style={{ fontSize: '10px', color: 'var(--text-muted)' }}>{new Date(q.created_at).toLocaleDateString([], { month: 'short', day: 'numeric', year: 'numeric' })}</span>
+                {q.status === 'sent' && q.approval_token && (
+                  <button
+                    onClick={async e => {
+                      e.stopPropagation();
+                      const url = `${window.location.origin}/approve/quote/${q.approval_token}`;
+                      try { await navigator.clipboard.writeText(url); await dialog.alert('Accept link copied — paste it into a text or email.'); }
+                      catch { await dialog.alert(url); }
+                    }}
+                    title="Copy the customer's Review & Accept link"
+                    style={btnStyle('#22c55e', 'transparent')}
+                  >
+                    ⧉ Accept Link
+                  </button>
+                )}
                 <button onClick={e => { e.stopPropagation(); loadQuoteForEdit(q); }} title="Reopen this quote for editing / resending" style={btnStyle('#60a5fa', 'transparent')}>
                   Edit
                 </button>
