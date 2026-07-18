@@ -30,6 +30,12 @@ const REPORTS: ReportLink[] = [
     href: '/admin/reports/installer-costs',
     source: 'FleetSuite',
   },
+  {
+    title: 'At-Risk Accounts',
+    blurb: 'Customers who spent real money last year and have gone quiet — behind pace, no recent orders. A daily check alerts admins and the account owner when a new one appears.',
+    href: '/admin/reports/at-risk',
+    source: 'FleetSuite',
+  },
 ];
 
 export default function ReportsIndexPage() {

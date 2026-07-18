@@ -31,6 +31,7 @@ export const HEALTH_MONITORS: HealthMonitor[] = [
   { syncType: 'netsuite_spend_refresh', label: 'NetSuite spend refresh', intervalMinutes: 120 },
   { syncType: 'netsuite_contacts', label: 'NetSuite contact sync', intervalMinutes: 120 },
   { syncType: 'health_check', label: 'Health monitor itself', intervalMinutes: 30 },
+  { syncType: 'at_risk_check', label: 'At-risk account sweep', intervalMinutes: 1440 },
 ];
 
 /** A run is stale once it's overdue by more than a full interval (2× spacing), plus grace for slow runs. */
