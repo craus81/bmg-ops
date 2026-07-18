@@ -341,6 +341,17 @@ export default function InstallerPortalPage() {
           <div style={{ fontSize: '12px', fontWeight: 700, color: 'var(--text-primary)' }}>My Earnings</div>
           <div style={{ fontSize: '11px', color: 'var(--text-muted)' }}>per-vehicle pay</div>
         </button>
+        <button
+          onClick={() => router.push('/installer/invoices')}
+          style={{
+            padding: '14px 12px', borderRadius: '12px', textAlign: 'left',
+            background: 'var(--card)', border: '1px solid var(--border)',
+          }}
+        >
+          <div style={{ fontSize: '12px', fontWeight: 700, color: 'var(--text-muted)', marginBottom: '6px' }}>Billing</div>
+          <div style={{ fontSize: '12px', fontWeight: 700, color: 'var(--text-primary)' }}>My Invoices</div>
+          <div style={{ fontSize: '11px', color: 'var(--text-muted)' }}>submit &amp; track payment</div>
+        </button>
       </div>
 
       {/* Active Jobs */}

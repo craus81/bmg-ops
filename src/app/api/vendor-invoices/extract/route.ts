@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { requireAdmin } from '@/lib/api-auth';
+import { requireRole } from '@/lib/api-auth';
 import { validateBody, z } from '@/lib/validate';
 import { callAnthropicWithRetry } from '@/lib/anthropic';
 
@@ -43,7 +43,10 @@ Return ONLY valid JSON, no markdown, no backticks, no explanation, in this exact
 }`;
 
 export async function POST(request: NextRequest) {
-  const auth = await requireAdmin(request);
+  // Installers use extraction too when self-submitting from the CNI portal
+  // (the submit route pins everything to their own company); finance may
+  // re-run it from the AP queue. Admin passes requireRole.
+  const auth = await requireRole(request, ['finance', 'installer']);
   if (auth.error) return auth.error;
 
   if (!ANTHROPIC_API_KEY) {

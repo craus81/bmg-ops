@@ -5,6 +5,7 @@ import { validateBody, z } from '@/lib/validate';
 import { createVendorBill, findLocation } from '@/lib/netsuite';
 import { logAudit } from '@/lib/audit';
 import { notifyMany } from '@/lib/notify';
+import { financeUserIds } from '@/lib/ap';
 
 export const dynamic = 'force-dynamic';
 // NetSuite bill creation is slow.
@@ -30,17 +31,15 @@ const PostSchema = z.union([
   z.object({ action: z.literal('mark_paid'), id: z.string().uuid() }),
 ]);
 
-/** Everyone who should see AP notifications: finance users, falling back to admins. */
-async function financeUserIds(excludeId?: string): Promise<string[]> {
+/**
+ * Where a decision notification should send the submitter: installers (who
+ * submit from the CNI portal) can't open admin pages.
+ */
+async function submitterUrl(submitterId: string): Promise<string> {
   const { data } = await service
-    .from('profiles')
-    .select('id, role, roles')
-    .or('role.eq.finance,roles.cs.{finance},role.eq.admin,roles.cs.{admin}')
-    .eq('status', 'approved');
-  const all = (data || []);
-  const finance = all.filter(p => p.role === 'finance' || (p.roles || []).includes('finance'));
-  const pool = finance.length > 0 ? finance : all;
-  return pool.map(p => p.id).filter(id => id !== excludeId);
+    .from('profiles').select('role, roles').eq('id', submitterId).maybeSingle();
+  const roles: string[] = data?.roles?.length ? data.roles : [data?.role];
+  return roles.includes('installer') ? '/installer/invoices' : '/admin/ap';
 }
 
 /**
@@ -89,7 +88,7 @@ export async function POST(req: NextRequest) {
         rejected_by: null, rejected_at: null, rejection_reason: null,
       });
       if (t.error) return t.error;
-      const recipients = await financeUserIds(actorId);
+      const recipients = await financeUserIds(service, actorId);
       if (recipients.length > 0) {
         await notifyMany(recipients, {
           type: 'ap_submitted',
@@ -112,7 +111,7 @@ export async function POST(req: NextRequest) {
           type: 'ap_decision',
           title: `Approved: ${label}`,
           body: `Payment of $${amount.toFixed(2)} was approved.`,
-          url: '/admin/ap',
+          url: await submitterUrl(invoice.submitted_by),
           channels: ['in_app', 'push'],
           forceChannels: true,
         });
@@ -131,7 +130,7 @@ export async function POST(req: NextRequest) {
           type: 'ap_decision',
           title: `Rejected: ${label}`,
           body: body.reason,
-          url: '/admin/scans?tab=vendor',
+          url: await submitterUrl(invoice.submitted_by),
           channels: ['in_app', 'push'],
           forceChannels: true,
         });
@@ -195,6 +194,17 @@ export async function POST(req: NextRequest) {
     // mark_paid
     const t = await transition(['billed'], { status: 'paid', paid_by: actorId, paid_at: now });
     if (t.error) return t.error;
+    // The submitter (often the installer themselves) cares most about this one.
+    if (invoice.submitted_by && invoice.submitted_by !== actorId) {
+      await notifyMany([invoice.submitted_by], {
+        type: 'ap_decision',
+        title: `Paid: ${label}`,
+        body: `Payment of $${amount.toFixed(2)} has been sent.`,
+        url: await submitterUrl(invoice.submitted_by),
+        channels: ['in_app', 'push'],
+        forceChannels: true,
+      });
+    }
     await logAudit(service, { actorId, table: 'vendor_invoices', recordId: invoice.id, action: 'mark_paid', detail: { vendor: invoice.vendor_name, amount, netsuite_bill_id: invoice.netsuite_bill_id } });
     return NextResponse.json({ success: true });
   } catch (e: any) {
