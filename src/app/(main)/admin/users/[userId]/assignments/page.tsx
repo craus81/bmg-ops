@@ -36,6 +36,52 @@ export default function AssignmentsPage() {
   const [search, setSearch] = useState('');
   const [addingType, setAddingType] = useState<'scanned_vehicle' | 'graphics_job'>('scanned_vehicle');
 
+  // NetSuite customer link — the portal's automatic scoping. One link here
+  // replaces per-vehicle manual assignment below.
+  const [linkedCustomer, setLinkedCustomer] = useState<{ netsuiteId: string; name: string } | null>(null);
+  const [custSearch, setCustSearch] = useState('');
+  const [custMatches, setCustMatches] = useState<{ netsuite_id: string; company_name: string; entity_id: string | null }[]>([]);
+  const [linking, setLinking] = useState(false);
+
+  useEffect(() => {
+    const q = custSearch.trim();
+    if (q.length < 2) { setCustMatches([]); return; }
+    const t = setTimeout(async () => {
+      const escaped = q.replace(/[%,()]/g, ' ');
+      const { data } = await supabase
+        .from('customers')
+        .select('netsuite_id, company_name, entity_id')
+        .or(`company_name.ilike.%${escaped}%,entity_id.ilike.%${escaped}%`)
+        .eq('active', true)
+        .order('company_name')
+        .limit(8);
+      setCustMatches((data as any[]) || []);
+    }, 300);
+    return () => clearTimeout(t);
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- supabase client is a stable singleton
+  }, [custSearch]);
+
+  const setCustomerLink = async (netsuiteId: string | null) => {
+    setLinking(true);
+    try {
+      const res = await fetch('/api/admin/link-customer', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ userId, customerNetsuiteId: netsuiteId }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok || !data.success) await dialog.alert(data.error || 'Link failed');
+      else {
+        setLinkedCustomer(netsuiteId ? { netsuiteId, name: data.companyName || netsuiteId } : null);
+        setCustSearch('');
+        setCustMatches([]);
+      }
+    } catch (e: any) {
+      await dialog.alert(e.message || 'Link failed');
+    }
+    setLinking(false);
+  };
+
   useEffect(() => {
     if (!isAdmin) { router.push('/home'); return; }
     loadData();
@@ -46,10 +92,20 @@ export default function AssignmentsPage() {
     // Load customer user info
     const { data: profile } = await supabase
       .from('profiles')
-      .select('full_name, email, role')
+      .select('full_name, email, role, customer_netsuite_id')
       .eq('id', userId)
       .single();
     setCustomerName(profile?.full_name || 'Unknown User');
+    if (profile?.customer_netsuite_id) {
+      const { data: cust } = await supabase
+        .from('customers')
+        .select('netsuite_id, company_name')
+        .eq('netsuite_id', profile.customer_netsuite_id)
+        .maybeSingle();
+      setLinkedCustomer({ netsuiteId: profile.customer_netsuite_id, name: cust?.company_name || profile.customer_netsuite_id });
+    } else {
+      setLinkedCustomer(null);
+    }
 
     // Load existing assignments
     const { data: assigns } = await supabase
@@ -146,9 +202,64 @@ export default function AssignmentsPage() {
         </div>
       </div>
 
+      {/* NetSuite customer link — the modern path. One link scopes the whole
+          portal; the manual per-job assignment below is the legacy fallback. */}
+      <div style={{
+        padding: '14px 16px', borderRadius: '12px', marginBottom: '16px',
+        background: linkedCustomer ? 'rgba(34,197,94,0.06)' : 'rgba(251,191,36,0.06)',
+        border: `1px solid ${linkedCustomer ? 'rgba(34,197,94,0.3)' : 'rgba(251,191,36,0.35)'}`,
+      }}>
+        <div style={{ fontSize: '11px', fontWeight: 700, color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.5px', marginBottom: '6px' }}>
+          NetSuite Customer Link
+        </div>
+        {linkedCustomer ? (
+          <div style={{ display: 'flex', alignItems: 'center', gap: '10px', flexWrap: 'wrap' }}>
+            <span style={{ fontSize: '13px', fontWeight: 700, color: '#22c55e' }}>✓ {linkedCustomer.name}</span>
+            <span style={{ fontSize: '11px', color: 'var(--text-muted)' }}>
+              The portal shows all of this company&apos;s vehicles and graphics orders automatically.
+            </span>
+            <button
+              onClick={() => setCustomerLink(null)}
+              disabled={linking}
+              style={{ padding: '4px 10px', borderRadius: '6px', fontSize: '11px', fontWeight: 700, background: 'rgba(239,68,68,0.08)', border: '1px solid rgba(239,68,68,0.25)', color: '#ef4444', cursor: 'pointer' }}
+            >Unlink</button>
+          </div>
+        ) : (
+          <div>
+            <div style={{ fontSize: '11px', color: 'var(--text-muted)', marginBottom: '8px' }}>
+              Not linked — this login sees nothing current. Link it to its NetSuite customer and the portal scopes itself (no per-vehicle assignment needed).
+            </div>
+            <div style={{ position: 'relative', maxWidth: '360px' }}>
+              <input
+                style={inputStyle}
+                value={custSearch}
+                onChange={e => setCustSearch(e.target.value)}
+                placeholder="Search NetSuite customers…"
+              />
+              {custMatches.length > 0 && custSearch.trim().length >= 2 && (
+                <div style={{ position: 'absolute', top: '100%', left: 0, right: 0, zIndex: 40, background: 'var(--card)', border: '1px solid var(--border)', borderRadius: '8px', boxShadow: '0 4px 12px rgba(0,0,0,0.2)', maxHeight: '220px', overflowY: 'auto', marginTop: '2px' }}>
+                  {custMatches.map(c => (
+                    <button
+                      key={c.netsuite_id}
+                      onMouseDown={e => e.preventDefault()}
+                      onClick={() => setCustomerLink(c.netsuite_id)}
+                      disabled={linking}
+                      style={{ display: 'block', width: '100%', textAlign: 'left', padding: '8px 10px', fontSize: '12px', color: 'var(--text-primary)', background: 'transparent', border: 'none', borderBottom: '1px solid var(--border)', cursor: 'pointer' }}
+                    >
+                      <span style={{ fontWeight: 700 }}>{c.company_name}</span>
+                      {c.entity_id && <span style={{ color: 'var(--text-muted)', marginLeft: '6px', fontSize: '10px' }}>{c.entity_id}</span>}
+                    </button>
+                  ))}
+                </div>
+              )}
+            </div>
+          </div>
+        )}
+      </div>
+
       {/* Current assignments */}
       <div style={{ fontSize: '11px', fontWeight: 700, color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.5px', marginBottom: '8px' }}>
-        Assigned Jobs ({assignments.length})
+        Legacy Assigned Jobs ({assignments.length})
       </div>
 
       {assignments.length === 0 ? (
