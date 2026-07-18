@@ -61,6 +61,16 @@ const STATUS_CHIP: Record<ApInvoice['status'], { label: string; color: string; b
 const fmtMoney = (n: number) => `$${n.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
 const fmtDate = (d: string | null) => d ? new Date(d).toLocaleDateString([], { month: 'short', day: 'numeric' }) : '—';
 
+const daysSince = (d: string | null): number | null =>
+  d ? Math.floor((Date.now() - new Date(d).getTime()) / 86_400_000) : null;
+
+// Aging: how long an invoice has been waiting since submission, unpaid.
+// The number an installer would quote when they call asking about a check.
+const UNPAID_STATUSES: ApInvoice['status'][] = ['submitted', 'approved', 'billed'];
+const invoiceAge = (inv: ApInvoice): number | null =>
+  UNPAID_STATUSES.includes(inv.status) ? daysSince(inv.submitted_at || inv.created_at) : null;
+const ageColor = (days: number) => days >= 14 ? '#ef4444' : days >= 7 ? '#fbbf24' : 'var(--text-muted)';
+
 export default function ApQueuePage() {
   const router = useRouter();
   const { isAdmin, hasRole, loading: authLoading } = useAuth();
@@ -151,9 +161,32 @@ export default function ApQueuePage() {
       <div style={{ marginBottom: '14px' }}>
         <div style={{ fontSize: '20px', fontWeight: 800 }}>Payments — CNI Vendor Invoices</div>
         <div style={{ fontSize: '12px', color: 'var(--text-muted)' }}>
-          Approve installer invoices, create the NetSuite vendor bill in one click, and track through paid. Invoices are recorded on Scan Log → Vendor Invoices and submitted here.
+          Approve installer invoices, create the NetSuite vendor bill in one click, and track through paid. Invoices arrive from Scan Log → Vendor Invoices or straight from installers via their portal.
         </div>
       </div>
+
+      {/* Aging strip: what's owed and how long the oldest has been waiting */}
+      {(() => {
+        const unpaid = invoices.filter(i => UNPAID_STATUSES.includes(i.status));
+        if (unpaid.length === 0) return null;
+        const total = unpaid.reduce((s, i) => s + (i.total_amount != null
+          ? Number(i.total_amount)
+          : i.lines.reduce((ls, l) => ls + (l.amount != null ? Number(l.amount) : 0), 0)), 0);
+        const oldest = Math.max(...unpaid.map(i => invoiceAge(i) ?? 0));
+        const stale = unpaid.filter(i => (invoiceAge(i) ?? 0) >= 7).length;
+        return (
+          <div style={{
+            display: 'flex', gap: '14px', flexWrap: 'wrap', alignItems: 'baseline',
+            padding: '10px 14px', borderRadius: '10px', marginBottom: '14px',
+            background: 'var(--card)', border: `1px solid ${oldest >= 14 ? 'rgba(239,68,68,0.35)' : oldest >= 7 ? 'rgba(251,191,36,0.35)' : 'var(--border)'}`,
+            fontSize: '12px', color: 'var(--text-muted)',
+          }}>
+            <span><strong style={{ color: 'var(--text-primary)' }}>{unpaid.length}</strong> unpaid · <strong style={{ color: '#f472b6' }}>{fmtMoney(total)}</strong> owed</span>
+            <span>oldest waiting <strong style={{ color: ageColor(oldest) }}>{oldest} day{oldest !== 1 ? 's' : ''}</strong></span>
+            {stale > 0 && <span style={{ color: '#fbbf24', fontWeight: 700 }}>{stale} over a week old</span>}
+          </div>
+        );
+      })()}
 
       <div style={{ display: 'flex', gap: '4px', marginBottom: '14px', flexWrap: 'wrap' }}>
         {tabDefs.map(t => (
@@ -191,6 +224,15 @@ export default function ApQueuePage() {
                       {inv.vendor_name}{inv.invoice_number ? ` · #${inv.invoice_number}` : ''}
                     </span>
                     <span style={{ fontSize: '10px', fontWeight: 700, padding: '2px 8px', borderRadius: '6px', background: chip.bg, color: chip.color }}>{chip.label}</span>
+                    {(() => {
+                      const age = invoiceAge(inv);
+                      if (age == null || age < 1) return null;
+                      return (
+                        <span style={{ fontSize: '10px', fontWeight: 700, padding: '2px 8px', borderRadius: '6px', background: 'var(--subtle-bg, rgba(148,163,184,0.08))', color: ageColor(age) }}>
+                          ⏱ waiting {age}d
+                        </span>
+                      );
+                    })()}
                   </div>
                   <div style={{ fontSize: '12px', color: 'var(--text-muted)', marginTop: '3px' }}>
                     <span style={{ fontWeight: 800, color: '#f472b6' }}>{fmtMoney(amount)}</span>
