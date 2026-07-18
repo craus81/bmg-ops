@@ -36,6 +36,7 @@ interface FoundSend {
   recipients: string[];
   customer_name: string | null;
   sent_at: string;
+  delivery_status?: string;
 }
 
 async function insertFound(found: FoundSend[]): Promise<number> {
@@ -48,6 +49,7 @@ async function insertFound(found: FoundSend[]): Promise<number> {
       sent_at: f.sent_at,
       source: f.source,
       source_id: f.source_id,
+      ...(f.delivery_status ? { delivery_status: f.delivery_status } : {}),
     }));
     // upsert + ignoreDuplicates makes re-runs a no-op for already-seen sends
     const { data, error } = await service
@@ -109,10 +111,17 @@ async function backfillFromResend(deadline: number) {
       if (invoiceNumbers.length === 0) continue;
 
       matched++;
+      // Resend's last_event tells us delivery outcome for history too —
+      // opened/clicked imply delivered.
+      const deliveryStatus = ['delivered', 'opened', 'clicked'].includes(em.last_event)
+        ? 'delivered'
+        : em.last_event === 'delivery_delayed' ? 'delivery_delayed'
+          : em.last_event === 'complained' ? 'complained' : undefined;
       inserted += await insertFound([{
         source: 'resend', source_id: em.id,
         invoice_numbers: invoiceNumbers, recipients,
         customer_name: customer, sent_at: em.created_at,
+        delivery_status: deliveryStatus,
       }]);
     }
 
