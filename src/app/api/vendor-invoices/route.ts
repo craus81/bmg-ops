@@ -172,6 +172,33 @@ export async function POST(req: NextRequest) {
   }
 
   try {
+    // Duplicate guard: the same installer + invoice number was already
+    // recorded (matched by company link OR vendor name, so a name-only
+    // record still collides with a linked one). Recording it twice would
+    // double-count installer cost and skew the per-part averages. Unique
+    // indexes (migration 146) are the hard backstop.
+    if (body.invoiceNumber) {
+      const numberEsc = body.invoiceNumber.replace(/[\\%_]/g, ch => `\\${ch}`);
+      // Quoted so commas/parens in names don't break the or-filter syntax.
+      const nameQuoted = `"${body.vendorName.replace(/["\\%_]/g, ch => (ch === '"' ? '' : `\\${ch}`))}"`;
+      const orFilter = body.companyId
+        ? `company_id.eq.${body.companyId},vendor_name.ilike.${nameQuoted}`
+        : `vendor_name.ilike.${nameQuoted}`;
+      const { data: dupes } = await service
+        .from('vendor_invoices')
+        .select('id, vendor_name, invoice_number, invoice_date, total_amount, created_at')
+        .ilike('invoice_number', numberEsc)
+        .or(orFilter)
+        .limit(1);
+      if (dupes && dupes.length > 0) {
+        const d = dupes[0];
+        return NextResponse.json({
+          error: `Invoice #${d.invoice_number} from ${d.vendor_name} was already recorded on ${String(d.created_at).slice(0, 10)}${d.total_amount != null ? ` for $${Number(d.total_amount).toFixed(2)}` : ''}. If this is a corrected re-issue, give it a distinct number (e.g. "${body.invoiceNumber}-A") or delete the earlier record first.`,
+          duplicate: d,
+        }, { status: 409 });
+      }
+    }
+
     // Location snapshot
     let locationName: string | null = null;
     if (body.locationId) {
@@ -239,6 +266,13 @@ export async function POST(req: NextRequest) {
       .select('id')
       .single();
     if (invErr || !invoice) {
+      // Unique-index race: someone else recorded the same invoice between
+      // the pre-check and this insert.
+      if (invErr?.code === '23505') {
+        return NextResponse.json({
+          error: `Invoice #${body.invoiceNumber} from ${body.vendorName} was just recorded by someone else — check the history list below.`,
+        }, { status: 409 });
+      }
       return NextResponse.json({ error: `Failed to save invoice: ${invErr?.message}` }, { status: 500 });
     }
 
