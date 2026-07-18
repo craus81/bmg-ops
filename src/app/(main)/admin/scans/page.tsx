@@ -2514,6 +2514,16 @@ function VendorInvoicesTab({ allParts, allLocations, poRequired, onCommitted, on
     } : prev);
   };
 
+  // Early duplicate warning against the loaded history (the commit endpoint
+  // + DB unique indexes are the authoritative guard).
+  const duplicateOf = review && review.invoiceNumber.trim()
+    ? history.find(h =>
+        (h.invoice_number || '').toLowerCase() === review.invoiceNumber.trim().toLowerCase() &&
+        (selectedCompany
+          ? h.company?.id === selectedCompany.id
+          : h.vendor_name.toLowerCase() === review.vendorName.trim().toLowerCase())) || null
+    : null;
+
   const linesSum = review
     ? review.lines.reduce((sum, l) => sum + (parseFloat(l.amount) || 0), 0)
     : 0;
@@ -2854,6 +2864,14 @@ function VendorInvoicesTab({ allParts, allLocations, poRequired, onCommitted, on
                   Cancel
                 </button>
               </div>
+            </div>
+          )}
+
+          {/* Duplicate warning — this vendor + invoice number already exists */}
+          {duplicateOf && (
+            <div style={{ padding: '10px 12px', borderRadius: '10px', marginBottom: '10px', background: 'rgba(251,191,36,0.08)', border: '1px solid rgba(251,191,36,0.35)', fontSize: '12px', fontWeight: 600, color: '#fbbf24' }}>
+              ⚠ Possible duplicate: invoice #{duplicateOf.invoice_number} from {duplicateOf.vendor_name} was already recorded on {new Date(duplicateOf.created_at).toLocaleDateString([], { month: 'short', day: 'numeric' })}
+              {duplicateOf.total_amount != null ? ` for $${Number(duplicateOf.total_amount).toFixed(2)}` : ''} — see the history below. Recording it again is blocked; a corrected re-issue needs a distinct number (e.g. &quot;{review.invoiceNumber.trim()}-A&quot;).
             </div>
           )}
 
