@@ -159,6 +159,14 @@ export async function POST(request: Request) {
       });
     }
 
+    // On → shipped, tell the customer their vehicle left the shop —
+    // "where is my vehicle?" answered before it's asked.
+    if (newStatus === 'shipped') {
+      notifyShipped(vehicle).catch((err) => {
+        console.error('notifyShipped error:', err);
+      });
+    }
+
     return NextResponse.json({
       success: true,
       vehicleId,
@@ -245,121 +253,40 @@ async function notifyCompletion(vehicle: any, actorName: string) {
     });
   }
 
-  // Customer: look up by matching customer_name in the synced customers table.
-  // Email now (SMS lands when T1.5 provider goes live).
+  // Customer: shared resolver (customers-by-name → primary contact →
+  // thread → email + SMS), honoring the customer's status-email opt-out.
   if (!vehicle.customer_name) return;
-  const { data: customer } = await serviceSupabase
-    .from('customers')
-    .select('id, email, phone')
-    .ilike('company_name', vehicle.customer_name)
-    .maybeSingle();
+  const { notifyCustomerByName } = await import('@/lib/customer-notify');
+  const { buildNotificationEmail } = await import('@/lib/resend');
+  const appUrl = process.env.NEXT_PUBLIC_APP_URL || 'https://bmg-ops.vercel.app';
+  const jobCardUrl = `${appUrl}/vehicles/${vehicle.vin}/pick-list`;
+  const emailBody = `The install for your ${vehicleLabel} (VIN ending ${vehicle.vin?.slice(-8)}) is complete. Please contact us to arrange pickup.`;
+  await notifyCustomerByName(serviceSupabase, vehicle.customer_name, {
+    contextEntityType: 'fleet_checkin',
+    contextEntityId: vehicle.id,
+    threadSubject: `${vehicleLabel} ready for pickup`,
+    emailSubject: `[BMG Fleet] Your vehicle is ready — ${vehicleLabel}`,
+    emailHtml: buildNotificationEmail(`Your vehicle is ready — ${vehicleLabel}`, emailBody, jobCardUrl, 'Open job card'),
+    messageBody: emailBody,
+    smsBody: `[BMG Fleet] Your ${vehicleLabel} is ready for pickup. VIN ending ${vehicle.vin?.slice(-8)}.`,
+  });
+}
 
-  if (!customer) return;
-
-  // Open or reuse a thread tied to this vehicle so the customer's reply (or
-  // future shop outreach) lands with the right entity context. Requires a
-  // primary external_contact; auto-create one if the customer row has
-  // email/phone but no contact yet.
-  let contactId: string | null = null;
-  const { data: existingContact } = await serviceSupabase
-    .from('external_contacts')
-    .select('id')
-    .eq('customer_id', customer.id)
-    .eq('is_primary', true)
-    .maybeSingle();
-  if (existingContact) {
-    contactId = existingContact.id;
-  } else if (customer.email || customer.phone) {
-    const { data: created } = await serviceSupabase
-      .from('external_contacts')
-      .insert({
-        customer_id: customer.id,
-        name: vehicle.customer_name,
-        email: customer.email || null,
-        phone: customer.phone || null,
-        is_primary: true,
-      })
-      .select('id')
-      .single();
-    contactId = created?.id || null;
-  }
-
-  let threadId: string | null = null;
-  if (contactId) {
-    const { data: openThread } = await serviceSupabase
-      .from('customer_threads')
-      .select('id')
-      .eq('external_contact_id', contactId)
-      .eq('context_entity_type', 'fleet_checkin')
-      .eq('context_entity_id', vehicle.id)
-      .eq('status', 'open')
-      .maybeSingle();
-    if (openThread) {
-      threadId = openThread.id;
-    } else {
-      const { data: createdThread } = await serviceSupabase
-        .from('customer_threads')
-        .insert({
-          external_contact_id: contactId,
-          customer_id: customer.id,
-          context_entity_type: 'fleet_checkin',
-          context_entity_id: vehicle.id,
-          subject: `${vehicleLabel} ready for pickup`,
-        })
-        .select('id')
-        .single();
-      threadId = createdThread?.id || null;
-    }
-  }
-
-  // Email path — always attempted when customer has email
-  if (customer.email) {
-    try {
-      const { sendEmail, buildNotificationEmail } = await import('@/lib/resend');
-      const appUrl = process.env.NEXT_PUBLIC_APP_URL || 'https://bmg-ops.vercel.app';
-      const jobCardUrl = `${appUrl}/vehicles/${vehicle.vin}/pick-list`;
-      const emailBody = `The install for your ${vehicleLabel} (VIN ending ${vehicle.vin?.slice(-8)}) is complete. Please contact us to arrange pickup.`;
-      const html = buildNotificationEmail(
-        `Your vehicle is ready — ${vehicleLabel}`,
-        emailBody,
-        jobCardUrl,
-        'Open job card'
-      );
-      const sent = await sendEmail(customer.email, `[BMG Fleet] Your vehicle is ready — ${vehicleLabel}`, html);
-      if (threadId) {
-        await serviceSupabase.from('customer_messages').insert({
-          thread_id: threadId,
-          direction: 'outbound',
-          channel: 'email',
-          body: emailBody,
-          provider_name: 'resend',
-          delivery_status: sent ? 'sent' : 'failed',
-        });
-      }
-    } catch (err) {
-      console.error('customer completion email failed:', err);
-    }
-  }
-
-  // SMS path — provider-agnostic, feature-flagged via SMS_PROVIDER_ENABLED
-  if (customer.phone) {
-    try {
-      const { sendSMS } = await import('@/lib/sms-provider');
-      const smsBody = `[BMG Fleet] Your ${vehicleLabel} is ready for pickup. VIN ending ${vehicle.vin?.slice(-8)}.`;
-      const result = await sendSMS(customer.phone, smsBody);
-      if (threadId) {
-        await serviceSupabase.from('customer_messages').insert({
-          thread_id: threadId,
-          direction: 'outbound',
-          channel: 'sms',
-          body: smsBody,
-          provider_name: result.providerName,
-          external_provider_sid: result.sid || null,
-          delivery_status: result.ok ? 'sent' : (result.skipped ? 'pending' : 'failed'),
-        });
-      }
-    } catch (err) {
-      console.error('customer completion SMS failed:', err);
-    }
-  }
+/** Customer email when their vehicle leaves the shop. */
+async function notifyShipped(vehicle: any) {
+  if (!vehicle.customer_name) return;
+  const vehicleLabel = [vehicle.vehicle_year, vehicle.vehicle_make, vehicle.vehicle_model]
+    .filter(Boolean)
+    .join(' ') || `VIN ${vehicle.vin?.slice(-8) || ''}`;
+  const { notifyCustomerByName } = await import('@/lib/customer-notify');
+  const { buildNotificationEmail } = await import('@/lib/resend');
+  const emailBody = `Your ${vehicleLabel} (VIN ending ${vehicle.vin?.slice(-8)}) has left our facility. Reply to this email with any questions.`;
+  await notifyCustomerByName(serviceSupabase, vehicle.customer_name, {
+    contextEntityType: 'fleet_checkin',
+    contextEntityId: vehicle.id,
+    threadSubject: `${vehicleLabel} shipped`,
+    emailSubject: `[BMG Fleet] Your vehicle has shipped — ${vehicleLabel}`,
+    emailHtml: buildNotificationEmail(`On its way — ${vehicleLabel}`, emailBody),
+    messageBody: emailBody,
+  });
 }

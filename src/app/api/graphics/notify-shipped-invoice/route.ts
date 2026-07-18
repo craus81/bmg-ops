@@ -37,16 +37,38 @@ export async function POST(req: NextRequest) {
 
   const { data: job } = await supabase
     .from('graphics_jobs')
-    .select('id, title, job_number, customer, netsuite_invoice_id')
+    .select('id, title, job_number, customer, netsuite_invoice_id, tracking_number, carrier')
     .eq('id', jobId)
     .single();
   if (!job) return NextResponse.json({ error: 'Job not found' }, { status: 404 });
 
+  const jobLabel = job.title || `Job #${job.job_number}` || `Job ${job.id.slice(0, 8)}`;
+
+  // Customer shipped email (with tracking when we have it) fires whether or
+  // not the job is invoiced — the customer cares about the package, not our
+  // billing state. Best-effort; never blocks the billing prompt.
+  try {
+    const { notifyCustomerByName } = await import('@/lib/customer-notify');
+    const { buildNotificationEmail } = await import('@/lib/resend');
+    const trackingLine = job.tracking_number
+      ? ` Tracking${job.carrier ? ` (${job.carrier})` : ''}: ${job.tracking_number}.`
+      : '';
+    const emailBody = `Your graphics order — ${jobLabel} — has shipped.${trackingLine} Reply to this email with any questions.`;
+    await notifyCustomerByName(supabase, job.customer, {
+      contextEntityType: 'graphics_job',
+      contextEntityId: job.id,
+      threadSubject: `${jobLabel} shipped`,
+      emailSubject: `[BMG Fleet] Your graphics have shipped — ${jobLabel}`,
+      emailHtml: buildNotificationEmail(`On the way — ${jobLabel}`, emailBody),
+      messageBody: emailBody,
+    });
+  } catch (err) {
+    console.error('customer graphics-shipped email failed:', err);
+  }
+
   if (job.netsuite_invoice_id) {
     return NextResponse.json({ skipped: 'already_invoiced' });
   }
-
-  const jobLabel = job.title || `Job #${job.job_number}` || `Job ${job.id.slice(0, 8)}`;
 
   const billingUserIds = await getBillingUserIds(supabase);
   await notifyMany(billingUserIds, {

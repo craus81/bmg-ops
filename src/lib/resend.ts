@@ -140,6 +140,48 @@ export function buildNotificationEmail(title: string, body: string, ctaUrl?: str
 }
 
 /**
+ * Weekly customer digest: multi-section summary of the customer's vehicles
+ * (in progress / completed / invoiced). Light theme — customers print and
+ * forward these.
+ */
+export function buildCustomerDigestEmail(
+  customerName: string,
+  sections: { title: string; rows: string[] }[],
+  footerNote?: string,
+): string {
+  const sectionHtml = sections
+    .filter(s => s.rows.length > 0)
+    .map(s => `
+      <div style="margin-top:18px;">
+        <div style="font-size:11px;font-weight:800;color:#6b7280;text-transform:uppercase;letter-spacing:1px;margin-bottom:6px;">${escapeHtml(s.title)}</div>
+        ${s.rows.map(r => `<div style="font-size:13px;color:#111827;padding:6px 10px;background:#f9fafb;border:1px solid #e5e7eb;border-radius:8px;margin-bottom:4px;">${escapeHtml(r)}</div>`).join('')}
+      </div>`)
+    .join('');
+
+  return `
+<!DOCTYPE html>
+<html>
+<head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"></head>
+<body style="margin:0;padding:0;background:#f3f4f6;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;">
+  <div style="max-width:560px;margin:0 auto;padding:24px;">
+    <div style="background:#ffffff;border:1px solid #e5e7eb;border-radius:12px;padding:28px;">
+      <div style="font-size:11px;font-weight:800;color:#ee3120;letter-spacing:1.5px;text-transform:uppercase;margin-bottom:6px;">BMG Fleet</div>
+      <div style="font-size:19px;font-weight:800;color:#111827;">Your weekly vehicle update</div>
+      <div style="font-size:13px;color:#6b7280;margin-top:2px;">${escapeHtml(customerName)} · ${new Date().toLocaleDateString('en-US', { month: 'long', day: 'numeric', year: 'numeric' })}</div>
+      ${sectionHtml}
+      <div style="margin-top:20px;font-size:12px;color:#6b7280;line-height:1.5;">
+        Questions about any vehicle? Just reply to this email.
+      </div>
+    </div>
+    <div style="text-align:center;padding:14px;font-size:11px;color:#9ca3af;">
+      ${escapeHtml(footerNote || "Don't want these weekly summaries? Reply and we'll turn them off.")}
+    </div>
+  </div>
+</body>
+</html>`;
+}
+
+/**
  * Build a styled HTML email for sending invoices to customers
  */
 export function buildInvoiceEmail(customerName: string, invoiceNumbers: string[], poNumbers: string[], customBody?: string): string {
