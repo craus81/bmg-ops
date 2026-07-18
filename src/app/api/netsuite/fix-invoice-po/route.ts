@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { suiteqlQuery } from '@/lib/netsuite';
-import { requireAuth } from '@/lib/api-auth';
+import { requireRole } from '@/lib/api-auth';
 import OAuth from 'oauth-1.0a';
 import CryptoJS from 'crypto-js';
 import { validateBody, z } from '@/lib/validate';
@@ -53,7 +53,7 @@ function patchInvoice(invoiceId: string, fields: Record<string, any>) {
  * Body: { dryRun?: boolean }
  */
 export async function POST(req: NextRequest) {
-  const auth = await requireAuth(req);
+  const auth = await requireRole(req, ['sales']);
   if (auth.error) return auth.error;
 
   const parsed = await validateBody(req, Schema);

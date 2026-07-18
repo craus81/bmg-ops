@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { createClient } from '@supabase/supabase-js';
 import { getNetSuitePdf, suiteqlQuery } from '@/lib/netsuite';
 import { sendEmail, buildInvoiceEmail } from '@/lib/resend';
-import { requireAuth } from '@/lib/api-auth';
+import { requireRole } from '@/lib/api-auth';
 import { safeStringLiteral, SqlSafeError } from '@/lib/sql-safe';
 import { validateBody, z } from '@/lib/validate';
 
@@ -90,7 +90,7 @@ const EmailInvoicesSchema = z.object({
  * receive partial invoice packets.
  */
 export async function POST(req: NextRequest) {
-  const auth = await requireAuth(req);
+  const auth = await requireRole(req, ['sales']);
   if (auth.error) return auth.error;
 
   const parsed = await validateBody(req, EmailInvoicesSchema);

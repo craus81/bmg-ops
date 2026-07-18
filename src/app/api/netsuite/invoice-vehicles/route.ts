@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { createClient } from '@supabase/supabase-js';
 import { createDirectInvoice, findCustomer, findItems } from '@/lib/netsuite';
 import { resolveLocationWithOverride } from '@/lib/invoice-location';
-import { requireAuth } from '@/lib/api-auth';
+import { requireRole } from '@/lib/api-auth';
 import { validateBody, z } from '@/lib/validate';
 
 const Schema = z.object({
@@ -17,7 +17,7 @@ const Schema = z.object({
  * with multiple part number line items.
  */
 export async function POST(req: NextRequest) {
-  const auth = await requireAuth(req);
+  const auth = await requireRole(req, ['sales']);
   if (auth.error) return auth.error;
 
   const parsed = await validateBody(req, Schema);

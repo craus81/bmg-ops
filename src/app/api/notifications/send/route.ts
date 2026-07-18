@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { createClient } from '@supabase/supabase-js';
 import { notify, notifyMany } from '@/lib/notify';
-import { requireAuth } from '@/lib/api-auth';
+import { requireStaff } from '@/lib/api-auth';
 import { validateBody, z } from '@/lib/validate';
 
 const supabase = createClient(
@@ -37,7 +37,7 @@ export async function POST(req: NextRequest) {
   const authHeader = req.headers.get('authorization');
   const isInternalCall = authHeader === `Bearer ${process.env.SUPABASE_SERVICE_ROLE_KEY}`;
   if (!isInternalCall) {
-    const auth = await requireAuth(req);
+    const auth = await requireStaff(req);
     if (auth.error) return auth.error;
   }
 

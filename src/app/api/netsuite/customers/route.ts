@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { suiteqlQuery, suiteqlQueryAll } from '@/lib/netsuite';
 import { createClient } from '@supabase/supabase-js';
-import { requireAuth } from '@/lib/api-auth';
+import { requireStaff } from '@/lib/api-auth';
 
 // Import OAuth helpers for REST Record API
 import OAuth from 'oauth-1.0a';
@@ -10,7 +10,7 @@ import CryptoJS from 'crypto-js';
 export const dynamic = 'force-dynamic';
 
 export async function GET(req: NextRequest) {
-  const auth = await requireAuth(req);
+  const auth = await requireStaff(req);
   if (auth.error) return auth.error;
 
   try {

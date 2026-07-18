@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { suiteqlQuery } from '@/lib/netsuite';
-import { requireAuth } from '@/lib/api-auth';
+import { requireStaff } from '@/lib/api-auth';
 import { safeStringLiteral, SqlSafeError } from '@/lib/sql-safe';
 
 /**
@@ -10,7 +10,7 @@ import { safeStringLiteral, SqlSafeError } from '@/lib/sql-safe';
  * Returns id, tranid, type, customer, total — enough to link to an upfit project.
  */
 export async function GET(req: NextRequest) {
-  const auth = await requireAuth(req);
+  const auth = await requireStaff(req);
   if (auth.error) return auth.error;
 
   const tranid = req.nextUrl.searchParams.get('tranid')?.trim();
