@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { createClient } from '@supabase/supabase-js';
-import { requireAuth } from '@/lib/api-auth';
+import { requireAdmin } from '@/lib/api-auth';
 import { validateBody, z } from '@/lib/validate';
 import { createDirectInvoice, findCustomer, findItems } from '@/lib/netsuite';
 import { resolveLocationWithOverride } from '@/lib/invoice-location';
@@ -31,7 +31,7 @@ const service = createClient(
  * that don't resolve to a NetSuite item instead of silently dropping lines.
  */
 export async function POST(req: NextRequest) {
-  const auth = await requireAuth(req);
+  const auth = await requireAdmin(req);
   if (auth.error) return auth.error;
 
   const parsed = await validateBody(req, Schema);

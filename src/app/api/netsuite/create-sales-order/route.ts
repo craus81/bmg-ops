@@ -1,13 +1,13 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { createSalesOrder, findCustomer, findItems, findLocation } from '@/lib/netsuite';
 import { createClient } from '@supabase/supabase-js';
-import { requireAuth } from '@/lib/api-auth';
+import { requireAdmin } from '@/lib/api-auth';
 import { validateBody, z } from '@/lib/validate';
 
 const Schema = z.object({ poId: z.string().uuid() });
 
 export async function POST(req: NextRequest) {
-  const auth = await requireAuth(req);
+  const auth = await requireAdmin(req);
   if (auth.error) return auth.error;
 
   const parsed = await validateBody(req, Schema);

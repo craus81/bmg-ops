@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { suiteqlQuery } from '@/lib/netsuite';
-import { requireAuth } from '@/lib/api-auth';
+import { requireStaff } from '@/lib/api-auth';
 import { safeLikeTerm, SqlSafeError } from '@/lib/sql-safe';
 
 export const dynamic = 'force-dynamic';
@@ -10,7 +10,7 @@ export const dynamic = 'force-dynamic';
  * Usage: GET /api/netsuite/customers/search?q=acme
  */
 export async function GET(req: NextRequest) {
-  const auth = await requireAuth(req);
+  const auth = await requireStaff(req);
   if (auth.error) return auth.error;
 
   try {

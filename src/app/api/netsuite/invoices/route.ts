@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { suiteqlQuery } from '@/lib/netsuite';
-import { requireAuth } from '@/lib/api-auth';
+import { requireStaff } from '@/lib/api-auth';
 import { safeIntId, safeLikeTerm, SqlSafeError } from '@/lib/sql-safe';
 import { validateSearchParams, z } from '@/lib/validate';
 import { cached, CACHE_TTL } from '@/lib/cache';
@@ -47,7 +47,7 @@ const fetchInvoicesForCustomer = cached(
 );
 
 export async function GET(req: NextRequest) {
-  const auth = await requireAuth(req);
+  const auth = await requireStaff(req);
   if (auth.error) return auth.error;
 
   const parsed = validateSearchParams(req, QuerySchema);

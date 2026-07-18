@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { createClient } from '@supabase/supabase-js';
 import { createDirectInvoice } from '@/lib/netsuite';
-import { requireAuth } from '@/lib/api-auth';
+import { requireAdmin } from '@/lib/api-auth';
 import { validateBody, z } from '@/lib/validate';
 
 const NumericId = z.union([z.string().regex(/^\d{1,15}$/), z.number().int().nonnegative()]);
@@ -38,7 +38,7 @@ const Schema = z.object({
  * prompts.
  */
 export async function POST(req: NextRequest) {
-  const auth = await requireAuth(req);
+  const auth = await requireAdmin(req);
   if (auth.error) return auth.error;
 
   const parsed = await validateBody(req, Schema);

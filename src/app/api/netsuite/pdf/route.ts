@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { getNetSuitePdf } from '@/lib/netsuite';
-import { requireAuth } from '@/lib/api-auth';
+import { requireStaff } from '@/lib/api-auth';
 
 export const maxDuration = 60;
 
@@ -9,7 +9,7 @@ export const maxDuration = 60;
  * Generic PDF endpoint for any supported NetSuite transaction type.
  */
 export async function GET(request: NextRequest) {
-  const auth = await requireAuth(request);
+  const auth = await requireStaff(request);
   if (auth.error) return auth.error;
 
   const { searchParams } = new URL(request.url);

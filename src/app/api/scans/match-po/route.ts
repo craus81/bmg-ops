@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { createClient } from '@supabase/supabase-js';
-import { requireAuth } from '@/lib/api-auth';
+import { requireStaff } from '@/lib/api-auth';
 import { matchScansToOpenPos } from '@/lib/scan-match';
 
 export const dynamic = 'force-dynamic';
@@ -22,7 +22,7 @@ export async function POST(req: NextRequest) {
   const authHeader = req.headers.get('authorization');
   const isInternal = authHeader === `Bearer ${process.env.SUPABASE_SERVICE_ROLE_KEY}`;
   if (!isInternal) {
-    const auth = await requireAuth(req);
+    const auth = await requireStaff(req);
     if (auth.error) return auth.error;
   }
 

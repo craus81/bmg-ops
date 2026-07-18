@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { createClient } from '@supabase/supabase-js';
 import { createInvoiceFromSO, suiteqlQuery } from '@/lib/netsuite';
 import { resolveLocationWithOverride } from '@/lib/invoice-location';
-import { requireAuth } from '@/lib/api-auth';
+import { requireAdmin } from '@/lib/api-auth';
 import { validateBody, z } from '@/lib/validate';
 
 const Schema = z.object({
@@ -22,7 +22,7 @@ const Schema = z.object({
  * caller-provided quantities when `quantities` is set.
  */
 export async function POST(req: NextRequest) {
-  const auth = await requireAuth(req);
+  const auth = await requireAdmin(req);
   if (auth.error) return auth.error;
 
   const parsed = await validateBody(req, Schema);
