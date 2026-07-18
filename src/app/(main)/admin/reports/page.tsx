@@ -31,6 +31,12 @@ const REPORTS: ReportLink[] = [
     source: 'FleetSuite',
   },
   {
+    title: 'Graphics Costs — Revenue vs Material',
+    blurb: 'Invoiced revenue minus logged vinyl/laminate cost per graphics job, plus a per-material usage rollup for buying decisions.',
+    href: '/admin/reports/graphics-costs',
+    source: 'FleetSuite',
+  },
+  {
     title: 'Sales Performance',
     blurb: 'Win rate, time-to-close, and quoted-vs-won by rep — from estimates and wrap quotes sent in a date range, with per-quote detail and CSV export.',
     href: '/admin/reports/sales-performance',
