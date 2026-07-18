@@ -13,6 +13,7 @@ import GraphicsInvoiceReviewModal from '@/components/GraphicsInvoiceReviewModal'
 import EmailInvoicesModal, { type EmailableInvoice } from '@/components/EmailInvoicesModal';
 import { PartLabel } from '@/components/PartLabel';
 import DropboxProofSearch from '@/components/DropboxProofSearch';
+import GraphicsMaterialsCard from '@/components/GraphicsMaterialsCard';
 import { DropZone } from '@/components/DropZone';
 import { buildGraphicsJobPrefillFromPo, attachPartFilesToGraphicsJob } from '@/lib/graphics-job-from-po';
 import { exportPackingListPDF, packingListFromJob, type PackingListLine } from '@/lib/packing-list-pdf';
@@ -100,6 +101,10 @@ export default function GraphicsPage() {
   // Status change with comment
   const [pendingStatus, setPendingStatus] = useState<{ job: GraphicsJob; status: GraphicsJobStatus } | null>(null);
   const [statusComment, setStatusComment] = useState('');
+  // Job whose materials modal should auto-open — set when a job moves past
+  // printing with nothing logged, so material usage gets captured while
+  // it's fresh.
+  const [materialPromptJobId, setMaterialPromptJobId] = useState<string | null>(null);
   // Tracking number captured when moving to "shipped"
   const [shipTracking, setShipTracking] = useState('');
 
@@ -720,6 +725,17 @@ export default function GraphicsPage() {
       // Re-stamp my view so my own status change doesn't light the unread dot.
       recordJobView(job.id);
       if (expandedJobId === job.id) loadHistory(job.id);
+
+      // Leaving printing with nothing logged: prompt for material usage now,
+      // while the roll is still on the table. Skippable — the job card keeps
+      // a "+ Log Material" button either way.
+      if (oldStatus === 'printing' && !['cancelled', 'flagged', 'received', 'designing', 'revision'].includes(newStatus)) {
+        const { count } = await supabase
+          .from('graphics_job_materials')
+          .select('*', { count: 'exact', head: true })
+          .eq('graphics_job_id', job.id);
+        if (!count) setMaterialPromptJobId(job.id);
+      }
     }
   };
 
@@ -1769,6 +1785,13 @@ export default function GraphicsPage() {
                             </div>
                           </div>
                         )}
+
+                        {/* Material usage log — feeds the Graphics Costs report */}
+                        <GraphicsMaterialsCard
+                          job={job}
+                          autoPrompt={materialPromptJobId === job.id}
+                          onAutoPromptHandled={() => setMaterialPromptJobId(null)}
+                        />
 
                         {/* Tracking */}
                         {(job.tracking_number || job.ship_to) && (
