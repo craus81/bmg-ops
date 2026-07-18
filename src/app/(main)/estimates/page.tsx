@@ -18,6 +18,8 @@ interface Part {
   sales_price: number;
   labor_hours: number;
   catalog: string;
+  purchase_price: number | null;
+  avg_install_cost: number | null;
 }
 
 interface LineItem {
@@ -32,6 +34,10 @@ interface LineItem {
   is_custom: boolean;
   notes?: string;
   catalog?: string; // 'upfit' | 'graphics' — drives the graphics-job prompt
+  // True-cost inputs for the margin strip: NetSuite part cost + the running
+  // average of what installers actually charge us for this part.
+  purchase_price?: number | null;
+  avg_install_cost?: number | null;
 }
 
 interface LinkedGraphicsJob {
@@ -144,6 +150,9 @@ export default function EstimatesPage() {
   const [laborRate, setLaborRate] = useState(DEFAULT_LABOR_RATE);
   const [laborOverride, setLaborOverride] = useState<number | null>(null);
   const [lines, setLines] = useState<LineItem[]>([]);
+  // Margin floor (%) below which a quote gets flagged — admin-set, shared
+  // with the wrap-quote builder via the quote_settings singleton.
+  const [marginFloor, setMarginFloor] = useState(30);
   // T1.6 install context
   const [installInstructions, setInstallInstructions] = useState('');
   const [onSiteContactName, setOnSiteContactName] = useState('');
@@ -243,13 +252,26 @@ export default function EstimatesPage() {
   // eslint-disable-next-line react-hooks/exhaustive-deps -- intentional: load once on mount
   }, [custSearch]);
 
+  useEffect(() => {
+    supabase.from('quote_settings').select('margin_floor_pct').eq('id', 1).maybeSingle()
+      .then(({ data }: any) => { if (data?.margin_floor_pct != null) setMarginFloor(Number(data.margin_floor_pct)); });
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- load once on mount
+  }, []);
+
+  const saveMarginFloor = async (v: number) => {
+    setMarginFloor(v);
+    await supabase.from('quote_settings').upsert({
+      id: 1, margin_floor_pct: v, updated_at: new Date().toISOString(), updated_by: user?.id || null,
+    });
+  };
+
   // ── Part search ──
   const searchParts = useCallback(async (q: string) => {
     if (q.length < 2) { setPartResults([]); return; }
     setPartSearching(true);
     const { data } = await supabase
       .from('netsuite_parts')
-      .select('id, netsuite_id, item_number, display_name, description, sales_price, labor_hours, catalog')
+      .select('id, netsuite_id, item_number, display_name, description, sales_price, labor_hours, catalog, purchase_price, avg_install_cost')
       .eq('is_active', true)
       .or(`item_number.ilike.%${q}%,display_name.ilike.%${q}%,description.ilike.%${q}%`)
       .limit(10);
@@ -277,6 +299,8 @@ export default function EstimatesPage() {
       labor_hours: part.labor_hours || 0,
       is_custom: false,
       catalog: part.catalog,
+      purchase_price: part.purchase_price,
+      avg_install_cost: part.avg_install_cost,
     };
     setLines(prev => [...prev, line]);
     setPartSearch('');
@@ -316,6 +340,22 @@ export default function EstimatesPage() {
   const taxableAmount = subtotal; // Tax on parts/materials only, not labor
   const taxAmount = taxExempt ? 0 : taxableAmount * taxRate;
   const grandTotal = subtotal + laborTotal + taxAmount;
+
+  // ── Margin (internal only — never on the customer-facing quote) ──
+  // True cost per line = NetSuite part cost + avg installer cost. Lines with
+  // neither (custom lines, parts NetSuite has no cost for) are excluded and
+  // counted so the strip says what it's missing instead of lying.
+  const lineTrueCost = (l: LineItem) => (l.purchase_price ?? 0) + (l.avg_install_cost ?? 0);
+  const lineHasCost = (l: LineItem) => l.purchase_price != null || l.avg_install_cost != null;
+  const lineMarginPct = (l: LineItem): number | null =>
+    lineHasCost(l) && l.unit_price > 0 ? ((l.unit_price - lineTrueCost(l)) / l.unit_price) * 100 : null;
+  const costedLines = lines.filter(lineHasCost);
+  const trueCostTotal = costedLines.reduce((s, l) => s + l.quantity * lineTrueCost(l), 0);
+  const costedRevenue = costedLines.reduce((s, l) => s + l.quantity * l.unit_price, 0);
+  const marginDollars = costedRevenue - trueCostTotal;
+  const marginPct = costedRevenue > 0 ? (marginDollars / costedRevenue) * 100 : null;
+  const uncostedCount = lines.length - costedLines.length;
+  const marginColor = (pct: number) => pct < 0 ? '#ef4444' : pct < marginFloor ? '#fbbf24' : '#22c55e';
 
   // ── Save estimate ──
   const saveEstimate = async (status: string = 'draft') => {
@@ -532,18 +572,18 @@ export default function EstimatesPage() {
     setDeliveryPreferences(fullEst?.delivery_preferences || '');
     setInternalNotes(fullEst?.internal_notes || '');
 
-    // Look up catalog for any line items backed by a real part so the
-    // graphics-job prompt can detect graphics lines after a reload.
+    // Look up catalog + cost data for any line items backed by a real part —
+    // catalog drives the graphics-job prompt, costs drive the margin strip.
     const partIds = (lineData || [])
       .map((l: any) => l.part_id)
       .filter((id: string | null): id is string => !!id);
-    let catalogByPart: Record<string, string> = {};
+    let infoByPart: Record<string, { catalog: string; purchase_price: number | null; avg_install_cost: number | null }> = {};
     if (partIds.length > 0) {
       const { data: parts } = await supabase
         .from('netsuite_parts')
-        .select('id, catalog')
+        .select('id, catalog, purchase_price, avg_install_cost')
         .in('id', partIds);
-      catalogByPart = Object.fromEntries((parts || []).map((p: any) => [p.id, p.catalog]));
+      infoByPart = Object.fromEntries((parts || []).map((p: any) => [p.id, p]));
     }
 
     setLines((lineData || []).map((l: any) => ({
@@ -557,7 +597,9 @@ export default function EstimatesPage() {
       labor_hours: l.labor_hours || 0,
       is_custom: l.is_custom || false,
       notes: l.notes || '',
-      catalog: l.part_id ? catalogByPart[l.part_id] : undefined,
+      catalog: l.part_id ? infoByPart[l.part_id]?.catalog : undefined,
+      purchase_price: l.part_id ? infoByPart[l.part_id]?.purchase_price ?? null : null,
+      avg_install_cost: l.part_id ? infoByPart[l.part_id]?.avg_install_cost ?? null : null,
     })));
 
     if (est.customer_id) loadCustomerDefaults(est.customer_id);
@@ -1173,6 +1215,16 @@ export default function EstimatesPage() {
 
                 <div style={{ fontSize: '11px', fontWeight: 700, color: 'var(--text-body)', textAlign: 'right' }}>
                   {fmt(line.quantity * line.unit_price)}
+                  {(() => {
+                    const pct = lineMarginPct(line);
+                    if (pct == null) return null;
+                    return (
+                      <div title={`True cost ${fmt(lineTrueCost(line))}/ea (part ${fmt(line.purchase_price ?? 0)} + install ${fmt(line.avg_install_cost ?? 0)})`}
+                        style={{ fontSize: '9px', fontWeight: 700, color: marginColor(pct) }}>
+                        {pct.toFixed(0)}% m
+                      </div>
+                    );
+                  })()}
                 </div>
 
                 <div style={{ fontSize: '10px', color: line.labor_hours > 0 ? '#fbbf24' : 'var(--text-label)', textAlign: 'center' }}>
@@ -1400,6 +1452,52 @@ export default function EstimatesPage() {
             <span>Parts Subtotal</span>
             <span>{fmt(subtotal)}</span>
           </div>
+          {/* Margin strip — internal readout, never on the customer quote */}
+          {costedLines.length > 0 && marginPct != null && (
+            <div style={{
+              padding: '8px 10px', borderRadius: '8px', margin: '2px 0 6px',
+              background: 'var(--card)',
+              border: `1px solid ${marginPct < 0 ? 'rgba(239,68,68,0.4)' : marginPct < marginFloor ? 'rgba(251,191,36,0.4)' : 'rgba(34,197,94,0.25)'}`,
+            }}>
+              <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '11px', color: 'var(--text-label)', marginBottom: '2px' }}>
+                <span>True Parts Cost (cost + avg install)</span>
+                <span>−{fmt(trueCostTotal)}</span>
+              </div>
+              <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '12px', fontWeight: 800, color: marginColor(marginPct) }}>
+                <span>
+                  Parts Margin
+                  {marginPct < marginFloor && (
+                    <span style={{ marginLeft: '6px' }}>
+                      {marginPct < 0 ? '⚠ BELOW COST' : `⚠ below ${marginFloor.toFixed(0)}% floor`}
+                    </span>
+                  )}
+                </span>
+                <span>{fmt(marginDollars)} ({marginPct.toFixed(1)}%)</span>
+              </div>
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', fontSize: '10px', color: 'var(--text-label)', marginTop: '3px' }}>
+                <span>
+                  {uncostedCount > 0
+                    ? `${uncostedCount} line${uncostedCount !== 1 ? 's' : ''} without cost data excluded`
+                    : 'All lines have cost data'}
+                </span>
+                {isAdmin ? (
+                  <span style={{ display: 'flex', alignItems: 'center', gap: '4px' }}>
+                    floor
+                    <input
+                      type="number"
+                      defaultValue={marginFloor}
+                      key={`floor-${marginFloor}`}
+                      onBlur={e => { const v = parseFloat(e.target.value); if (!isNaN(v) && v !== marginFloor) saveMarginFloor(v); }}
+                      style={{ ...inputStyle, width: '52px', padding: '2px 4px', fontSize: '10px', textAlign: 'right' }}
+                      step={1}
+                    />%
+                  </span>
+                ) : (
+                  <span>floor {marginFloor.toFixed(0)}%</span>
+                )}
+              </div>
+            </div>
+          )}
           <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '12px', color: '#fbbf24', marginBottom: '4px' }}>
             <span>Labor ({effectiveLaborHours.toFixed(1)}h × {fmt(laborRate)}/hr)</span>
             <span>{fmt(laborTotal)}</span>
