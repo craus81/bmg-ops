@@ -1,398 +1,241 @@
 'use client';
 
-import { useState, useEffect } from 'react';
-import { useRouter } from 'next/navigation';
-import { createClient } from '@/lib/supabase-browser';
+/**
+ * The customer portal, rebuilt on live data. Reads /api/customer/portal —
+ * scoped server-side by the login's NetSuite customer link — instead of
+ * the retired scanned_vehicles table and hand-maintained per-vehicle
+ * assignments. Shows every vehicle in the shop with plain-language status,
+ * finished work with completion photos, and graphics orders with tracking.
+ */
+
+import { useState, useEffect, useCallback } from 'react';
 import { useAuth } from '@/components/AuthProvider';
-import { useDialog } from '@/components/DialogProvider';
 
-interface AssignedJob {
-  id: string;
-  job_type: 'scanned_vehicle' | 'graphics_job' | 'purchase_order';
-  job_id: string;
-  assigned_at: string;
-}
-
-interface VehicleJob {
+interface PortalVehicle {
   id: string;
   vin: string;
-  year: string | null;
-  make: string | null;
-  model: string | null;
-  color: string | null;
+  label: string;
   status: string;
-  customer: string | null;
-  po_number: string | null;
-  customer_approved: boolean;
-  customer_approved_at: string | null;
-  created_at: string;
+  statusLabel: string;
+  statusColor: string;
+  checkedInAt: string;
+  updatedAt: string;
+  completedAt: string | null;
+  photos: { url: string; takenAt: string | null }[];
 }
 
-interface GraphicsJob {
+interface PortalGraphics {
   id: string;
   title: string;
+  jobNumber: string | null;
   status: string;
-  priority: string | null;
-  vehicle_info: string | null;
-  scheduled_install_date: string | null;
-  customer_name: string | null;
-  customer_approved: boolean;
-  customer_approved_at: string | null;
-  created_at: string;
+  statusLabel: string;
+  trackingNumber: string | null;
+  carrier: string | null;
+  scheduledInstallDate: string | null;
+  updatedAt: string;
 }
 
-const VEHICLE_STATUS_MAP: Record<string, { label: string; color: string; bg: string }> = {
-  checked_in: { label: 'Checked In', color: '#60a5fa', bg: 'rgba(96,165,250,0.1)' },
-  in_progress: { label: 'In Progress', color: '#f59e0b', bg: 'rgba(245,158,11,0.1)' },
-  stuck_parts: { label: 'Waiting on Parts', color: '#ef4444', bg: 'rgba(239,68,68,0.1)' },
-  stuck_graphics: { label: 'Waiting on Graphics', color: '#c084fc', bg: 'rgba(192,132,252,0.1)' },
-  completed: { label: 'Completed', color: '#34d399', bg: 'rgba(16,185,129,0.1)' },
-  delivered: { label: 'Delivered', color: 'var(--text-body)', bg: 'rgba(107,122,141,0.1)' },
-};
+interface PortalData {
+  linked: boolean;
+  companyName?: string;
+  vehicles: { active: PortalVehicle[]; recent: PortalVehicle[]; history: PortalVehicle[] };
+  graphics: { active: PortalGraphics[]; recent: PortalGraphics[] };
+}
 
-const GRAPHICS_STATUS_MAP: Record<string, { label: string; color: string; bg: string }> = {
-  pending: { label: 'Pending', color: 'var(--text-body)', bg: 'rgba(107,122,141,0.1)' },
-  in_design: { label: 'In Design', color: '#60a5fa', bg: 'rgba(96,165,250,0.1)' },
-  proof_sent: { label: 'Proof Sent', color: '#c084fc', bg: 'rgba(192,132,252,0.1)' },
-  approved: { label: 'Approved', color: '#34d399', bg: 'rgba(16,185,129,0.1)' },
-  in_production: { label: 'In Production', color: '#f59e0b', bg: 'rgba(245,158,11,0.1)' },
-  ready_to_install: { label: 'Ready to Install', color: '#fb923c', bg: 'rgba(251,146,60,0.1)' },
-  installing: { label: 'Installing', color: '#f59e0b', bg: 'rgba(245,158,11,0.1)' },
-  completed: { label: 'Completed', color: '#34d399', bg: 'rgba(16,185,129,0.1)' },
-};
+const fmtDate = (d: string | null) => d ? new Date(d).toLocaleDateString([], { month: 'short', day: 'numeric' }) : '';
 
-export default function CustomerDashboard() {
-  const router = useRouter();
+const upsTracking = (carrier: string | null, tracking: string) =>
+  (carrier || '').toLowerCase().includes('ups') || /^1Z/i.test(tracking)
+    ? `https://www.ups.com/track?tracknum=${encodeURIComponent(tracking)}`
+    : null;
+
+export default function CustomerDashboardPage() {
   const { user, profile } = useAuth();
-  const supabase = createClient();
-  const dialog = useDialog();
-
-  const [vehicleJobs, setVehicleJobs] = useState<VehicleJob[]>([]);
-  const [graphicsJobs, setGraphicsJobs] = useState<GraphicsJob[]>([]);
+  const [data, setData] = useState<PortalData | null>(null);
   const [loading, setLoading] = useState(true);
-  const [tab, setTab] = useState<'all' | 'upfit' | 'graphics'>('all');
-  const [expandedId, setExpandedId] = useState<string | null>(null);
+  const [showHistory, setShowHistory] = useState(false);
+  const [lightbox, setLightbox] = useState<string | null>(null);
+
+  const load = useCallback(async () => {
+    setLoading(true);
+    try {
+      const res = await fetch('/api/customer/portal');
+      const body = await res.json();
+      if (res.ok) setData(body);
+    } catch { /* empty state covers it */ }
+    setLoading(false);
+  }, []);
 
   useEffect(() => {
     if (!user) return;
-    if (profile && profile.role !== 'customer') {
-      router.push('/home');
-      return;
-    }
-    loadJobs();
-  // eslint-disable-next-line react-hooks/exhaustive-deps -- intentional: load once on mount
-  }, [user, profile]);
+    load();
+  }, [user, load]);
 
-  const loadJobs = async () => {
-    if (!user) return;
-
-    // Get assignments for this customer user
-    const { data: assignments } = await supabase
-      .from('customer_job_assignments')
-      .select('*')
-      .eq('customer_user_id', user.id);
-
-    if (!assignments || assignments.length === 0) {
-      setLoading(false);
-      return;
-    }
-
-    // Separate by type
-    const vehicleIds = assignments.filter((a: any) => a.job_type === 'scanned_vehicle').map((a: any) => a.job_id);
-    const graphicsIds = assignments.filter((a: any) => a.job_type === 'graphics_job').map((a: any) => a.job_id);
-
-    // Load vehicle jobs
-    if (vehicleIds.length > 0) {
-      const { data } = await supabase
-        .from('scanned_vehicles')
-        .select('id, vin, year, make, model, color, status, customer, po_number, customer_approved, customer_approved_at, created_at')
-        .in('id', vehicleIds)
-        .order('created_at', { ascending: false });
-      setVehicleJobs((data as VehicleJob[]) || []);
-    }
-
-    // Load graphics jobs
-    if (graphicsIds.length > 0) {
-      const { data } = await supabase
-        .from('graphics_jobs')
-        .select('id, title, status, priority, vehicle_info, scheduled_install_date, customer_name, customer_approved, customer_approved_at, created_at')
-        .in('id', graphicsIds)
-        .order('created_at', { ascending: false });
-      setGraphicsJobs((data as GraphicsJob[]) || []);
-    }
-
-    setLoading(false);
+  const card: React.CSSProperties = {
+    background: 'var(--card)', border: '1px solid var(--border)', borderRadius: '14px',
+    padding: '14px 16px', marginBottom: '10px',
   };
-
-  const handleApprove = async (type: 'vehicle' | 'graphics', jobId: string) => {
-    if (!(await dialog.confirm('Approve this completed work?'))) return;
-
-    const table = type === 'vehicle' ? 'scanned_vehicles' : 'graphics_jobs';
-    const { error } = await supabase
-      .from(table)
-      .update({
-        customer_approved: true,
-        customer_approved_at: new Date().toISOString(),
-        customer_approved_by: user?.id,
-      })
-      .eq('id', jobId);
-
-    if (!error) {
-      if (type === 'vehicle') {
-        setVehicleJobs(prev => prev.map(j => j.id === jobId ? { ...j, customer_approved: true, customer_approved_at: new Date().toISOString() } : j));
-      } else {
-        setGraphicsJobs(prev => prev.map(j => j.id === jobId ? { ...j, customer_approved: true, customer_approved_at: new Date().toISOString() } : j));
-      }
-    }
+  const sectionLabel: React.CSSProperties = {
+    fontSize: '11px', fontWeight: 700, color: 'var(--text-muted)', textTransform: 'uppercase',
+    letterSpacing: '0.8px', margin: '18px 0 8px',
   };
-
-  const totalJobs = vehicleJobs.length + graphicsJobs.length;
-  const activeJobs = vehicleJobs.filter(j => !['completed', 'delivered'].includes(j.status)).length +
-    graphicsJobs.filter(j => j.status !== 'completed').length;
-  const completedJobs = totalJobs - activeJobs;
 
   if (loading) {
-    return <div style={{ textAlign: 'center', padding: '40px', color: 'var(--text-muted)' }}>Loading your jobs...</div>;
+    return <div style={{ padding: '30px', textAlign: 'center', color: 'var(--text-muted)' }}>Loading your vehicles…</div>;
   }
 
-  return (
-    <div>
-      {/* Header */}
-      <div style={{ marginBottom: '16px' }}>
-        <div style={{ fontSize: '22px', fontWeight: 800, color: 'var(--text-primary)' }}>My Jobs</div>
-        <div style={{ fontSize: '11px', color: 'var(--text-muted)', marginTop: '2px' }}>
-          {profile?.full_name} — {totalJobs} total jobs
-        </div>
-      </div>
-
-      {/* Summary cards */}
-      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: '8px', marginBottom: '14px' }}>
-        <div style={{ padding: '12px', borderRadius: '12px', background: 'var(--card)', border: '1px solid var(--border)', textAlign: 'center' }}>
-          <div style={{ fontSize: '22px', fontWeight: 800, color: 'var(--text-primary)' }}>{totalJobs}</div>
-          <div style={{ fontSize: '9px', color: 'var(--text-muted)', fontWeight: 700, textTransform: 'uppercase' }}>Total</div>
-        </div>
-        <div style={{ padding: '12px', borderRadius: '12px', background: 'rgba(245,158,11,0.05)', border: '1px solid rgba(245,158,11,0.15)', textAlign: 'center' }}>
-          <div style={{ fontSize: '22px', fontWeight: 800, color: '#f59e0b' }}>{activeJobs}</div>
-          <div style={{ fontSize: '9px', color: '#f59e0b', fontWeight: 700, textTransform: 'uppercase' }}>Active</div>
-        </div>
-        <div style={{ padding: '12px', borderRadius: '12px', background: 'rgba(16,185,129,0.05)', border: '1px solid rgba(16,185,129,0.15)', textAlign: 'center' }}>
-          <div style={{ fontSize: '22px', fontWeight: 800, color: '#34d399' }}>{completedJobs}</div>
-          <div style={{ fontSize: '9px', color: '#34d399', fontWeight: 700, textTransform: 'uppercase' }}>Complete</div>
-        </div>
-      </div>
-
-      {/* Tabs */}
-      <div style={{
-        display: 'flex', gap: '4px', padding: '4px',
-        background: 'var(--card)', border: '1px solid var(--border)',
-        borderRadius: '12px', marginBottom: '10px',
-      }}>
-        {([
-          { id: 'all' as const, label: 'All Jobs', count: totalJobs },
-          { id: 'upfit' as const, label: 'Upfit', count: vehicleJobs.length },
-          { id: 'graphics' as const, label: 'Graphics', count: graphicsJobs.length },
-        ]).map(t => (
-          <button
-            key={t.id}
-            onClick={() => setTab(t.id)}
-            style={{
-              flex: 1, padding: '8px', borderRadius: '10px',
-              fontSize: '12px', fontWeight: 700, textAlign: 'center',
-              background: tab === t.id ? 'var(--tab-active-bg)' : 'transparent',
-              border: tab === t.id ? '1px solid var(--tab-active-border)' : '1px solid transparent',
-              color: tab === t.id ? 'var(--text-primary)' : 'var(--text-muted)',
-            }}
-          >
-            {t.label} ({t.count})
-          </button>
-        ))}
-      </div>
-
-      {/* Empty state */}
-      {totalJobs === 0 && (
-        <div style={{ textAlign: 'center', padding: '60px 20px', color: 'var(--text-muted)' }}>
-          <div style={{ fontSize: '15px', fontWeight: 700, color: 'var(--text-muted)', marginBottom: '12px' }}>--</div>
-          <div style={{ fontSize: '15px', fontWeight: 700, color: 'var(--text-primary)' }}>No jobs assigned yet</div>
-          <div style={{ fontSize: '12px', marginTop: '6px' }}>Your BMG Fleet team will assign jobs here as they come in.</div>
-        </div>
-      )}
-
-      {/* Vehicle / Upfit Jobs */}
-      {(tab === 'all' || tab === 'upfit') && vehicleJobs.length > 0 && (
-        <div style={{ marginBottom: '16px' }}>
-          {tab === 'all' && (
-            <div style={{ fontSize: '11px', fontWeight: 700, color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.5px', marginBottom: '8px' }}>
-              Upfit / Parts Install ({vehicleJobs.length})
-            </div>
-          )}
-          <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
-            {vehicleJobs.map(job => {
-              const status = VEHICLE_STATUS_MAP[job.status] || { label: job.status, color: 'var(--text-body)', bg: 'rgba(107,122,141,0.1)' };
-              const isExpanded = expandedId === `v-${job.id}`;
-              const isComplete = ['completed', 'delivered'].includes(job.status);
-
-              return (
-                <div key={job.id} style={{
-                  borderRadius: '12px', background: 'var(--card)', border: '1px solid var(--border)', overflow: 'hidden',
-                }}>
-                  <div
-                    onClick={() => setExpandedId(isExpanded ? null : `v-${job.id}`)}
-                    style={{ padding: '12px', cursor: 'pointer' }}
-                  >
-                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                      <div>
-                        <div style={{ fontSize: '14px', fontWeight: 700, color: 'var(--text-primary)' }}>
-                          {[job.year, job.make, job.model].filter(Boolean).join(' ') || job.vin}
-                        </div>
-                        <div style={{ fontSize: '10px', color: 'var(--text-muted)', marginTop: '2px' }}>
-                          VIN: {job.vin} {job.po_number && `· PO: ${job.po_number}`}
-                        </div>
-                      </div>
-                      <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
-                        {job.customer_approved && (
-                          <span style={{ fontSize: '12px', fontWeight: 700, color: 'var(--success)' }} title="Customer Approved">Approved</span>
-                        )}
-                        <span style={{
-                          padding: '3px 8px', borderRadius: '6px', fontSize: '10px', fontWeight: 700,
-                          background: status.bg, color: status.color,
-                        }}>
-                          {status.label}
-                        </span>
-                      </div>
-                    </div>
-                  </div>
-
-                  {isExpanded && (
-                    <div style={{ padding: '0 12px 12px', borderTop: '1px solid var(--border)' }}>
-                      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '8px', marginTop: '10px' }}>
-                        {job.color && <DetailItem label="Color" value={job.color} />}
-                        <DetailItem label="Status" value={status.label} />
-                        <DetailItem label="Added" value={new Date(job.created_at).toLocaleDateString()} />
-                      </div>
-
-                      {isComplete && !job.customer_approved && (
-                        <button
-                          onClick={() => handleApprove('vehicle', job.id)}
-                          style={{
-                            width: '100%', padding: '12px', borderRadius: '10px', marginTop: '12px',
-                            background: '#34d399', color: '#fff', fontWeight: 800, fontSize: '13px',
-                            border: 'none', cursor: 'pointer',
-                          }}
-                        >
-                          ✓ Approve Completed Work
-                        </button>
-                      )}
-                      {job.customer_approved && (
-                        <div style={{
-                          padding: '8px', borderRadius: '8px', marginTop: '10px', textAlign: 'center',
-                          background: 'rgba(16,185,129,0.05)', border: '1px solid rgba(16,185,129,0.15)',
-                          fontSize: '11px', color: '#34d399', fontWeight: 700,
-                        }}>
-                          Approved {job.customer_approved_at ? `on ${new Date(job.customer_approved_at).toLocaleDateString()}` : ''}
-                        </div>
-                      )}
-                    </div>
-                  )}
-                </div>
-              );
-            })}
+  if (!data?.linked) {
+    return (
+      <div>
+        <div style={{ fontSize: '20px', fontWeight: 800, color: 'var(--text-primary)', marginBottom: '4px' }}>My Vehicles</div>
+        <div style={{ ...card, marginTop: '14px', background: 'var(--warning-bg)', border: '1px solid var(--warning-border)' }}>
+          <div style={{ fontSize: '14px', fontWeight: 700, color: 'var(--warning)' }}>Account not linked yet</div>
+          <div style={{ fontSize: '12px', color: 'var(--text-muted)', marginTop: '6px', lineHeight: 1.5 }}>
+            Your login isn&apos;t connected to your company&apos;s account yet, so there&apos;s nothing to show.
+            Contact BMG Fleet Installations and we&apos;ll connect it — after that, every vehicle you have with us appears here automatically.
           </div>
         </div>
-      )}
+      </div>
+    );
+  }
 
-      {/* Graphics Jobs */}
-      {(tab === 'all' || tab === 'graphics') && graphicsJobs.length > 0 && (
-        <div>
-          {tab === 'all' && (
-            <div style={{ fontSize: '11px', fontWeight: 700, color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.5px', marginBottom: '8px' }}>
-              Graphics Install ({graphicsJobs.length})
-            </div>
-          )}
-          <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
-            {graphicsJobs.map(job => {
-              const status = GRAPHICS_STATUS_MAP[job.status] || { label: job.status, color: 'var(--text-body)', bg: 'rgba(107,122,141,0.1)' };
-              const isExpanded = expandedId === `g-${job.id}`;
-              const isComplete = job.status === 'completed';
-
-              return (
-                <div key={job.id} style={{
-                  borderRadius: '12px', background: 'var(--card)', border: '1px solid var(--border)', overflow: 'hidden',
-                }}>
-                  <div
-                    onClick={() => setExpandedId(isExpanded ? null : `g-${job.id}`)}
-                    style={{ padding: '12px', cursor: 'pointer' }}
-                  >
-                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                      <div>
-                        <div style={{ fontSize: '14px', fontWeight: 700, color: 'var(--text-primary)' }}>
-                          {job.title}
-                        </div>
-                        <div style={{ fontSize: '10px', color: 'var(--text-muted)', marginTop: '2px' }}>
-                          {job.vehicle_info || 'Graphics job'}
-                          {job.scheduled_install_date && ` · Install: ${new Date(job.scheduled_install_date + 'T00:00:00').toLocaleDateString()}`}
-                        </div>
-                      </div>
-                      <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
-                        {job.customer_approved && (
-                          <span style={{ fontSize: '12px', fontWeight: 700, color: 'var(--success)' }} title="Customer Approved">Approved</span>
-                        )}
-                        <span style={{
-                          padding: '3px 8px', borderRadius: '6px', fontSize: '10px', fontWeight: 700,
-                          background: status.bg, color: status.color,
-                        }}>
-                          {status.label}
-                        </span>
-                      </div>
-                    </div>
-                  </div>
-
-                  {isExpanded && (
-                    <div style={{ padding: '0 12px 12px', borderTop: '1px solid var(--border)' }}>
-                      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '8px', marginTop: '10px' }}>
-                        <DetailItem label="Status" value={status.label} />
-                        {job.priority && <DetailItem label="Priority" value={job.priority} />}
-                        {job.scheduled_install_date && <DetailItem label="Install Date" value={new Date(job.scheduled_install_date + 'T00:00:00').toLocaleDateString()} />}
-                        <DetailItem label="Created" value={new Date(job.created_at).toLocaleDateString()} />
-                      </div>
-
-                      {isComplete && !job.customer_approved && (
-                        <button
-                          onClick={() => handleApprove('graphics', job.id)}
-                          style={{
-                            width: '100%', padding: '12px', borderRadius: '10px', marginTop: '12px',
-                            background: '#34d399', color: '#fff', fontWeight: 800, fontSize: '13px',
-                            border: 'none', cursor: 'pointer',
-                          }}
-                        >
-                          ✓ Approve Completed Work
-                        </button>
-                      )}
-                      {job.customer_approved && (
-                        <div style={{
-                          padding: '8px', borderRadius: '8px', marginTop: '10px', textAlign: 'center',
-                          background: 'rgba(16,185,129,0.05)', border: '1px solid rgba(16,185,129,0.15)',
-                          fontSize: '11px', color: '#34d399', fontWeight: 700,
-                        }}>
-                          Approved {job.customer_approved_at ? `on ${new Date(job.customer_approved_at).toLocaleDateString()}` : ''}
-                        </div>
-                      )}
-                    </div>
-                  )}
-                </div>
-              );
-            })}
+  const { vehicles, graphics } = data;
+  const vehicleCard = (v: PortalVehicle, showPhotos: boolean) => (
+    <div key={v.id} style={card}>
+      <div style={{ display: 'flex', alignItems: 'center', gap: '10px', flexWrap: 'wrap' }}>
+        <div style={{ flex: 1, minWidth: '180px' }}>
+          <div style={{ fontSize: '14px', fontWeight: 800, color: 'var(--text-primary)' }}>{v.label}</div>
+          <div style={{ fontSize: '11px', color: 'var(--text-muted)', marginTop: '2px', fontFamily: 'monospace' }}>
+            VIN {v.vin}
           </div>
+        </div>
+        <span style={{
+          fontSize: '11px', fontWeight: 800, padding: '4px 12px', borderRadius: '8px',
+          background: `${v.statusColor}1a`, border: `1px solid ${v.statusColor}44`, color: v.statusColor,
+        }}>
+          {v.statusLabel}
+        </span>
+      </div>
+      <div style={{ fontSize: '11px', color: 'var(--text-muted)', marginTop: '6px' }}>
+        Checked in {fmtDate(v.checkedInAt)}
+        {v.completedAt && ` · completed ${fmtDate(v.completedAt)}`}
+      </div>
+      {showPhotos && v.photos.length > 0 && (
+        <div style={{ display: 'flex', gap: '6px', marginTop: '10px', flexWrap: 'wrap' }}>
+          {v.photos.map((p, i) => (
+            /* eslint-disable-next-line @next/next/no-img-element -- external storage URL, unknown dimensions */
+            <img
+              key={i}
+              src={p.url}
+              alt={`${v.label} completed work`}
+              onClick={() => setLightbox(p.url)}
+              style={{ width: '84px', height: '84px', objectFit: 'cover', borderRadius: '8px', border: '1px solid var(--border)', cursor: 'pointer' }}
+            />
+          ))}
         </div>
       )}
     </div>
   );
-}
 
-function DetailItem({ label, value }: { label: string; value: string }) {
   return (
     <div>
-      <div style={{ fontSize: '9px', fontWeight: 700, color: 'var(--text-muted)', textTransform: 'uppercase' }}>{label}</div>
-      <div style={{ fontSize: '13px', fontWeight: 600, color: 'var(--text-primary)', marginTop: '1px' }}>{value}</div>
+      <div style={{ fontSize: '20px', fontWeight: 800, color: 'var(--text-primary)' }}>My Vehicles</div>
+      <div style={{ fontSize: '12px', color: 'var(--text-muted)', marginBottom: '4px' }}>{data.companyName}</div>
+
+      {/* Summary strip */}
+      <div style={{ display: 'flex', gap: '8px', margin: '12px 0 4px', flexWrap: 'wrap' }}>
+        {[
+          { label: 'In our shop', value: vehicles.active.length, color: '#60a5fa' },
+          { label: 'Finished (30d)', value: vehicles.recent.length, color: '#22c55e' },
+          { label: 'Graphics orders', value: graphics.active.length, color: '#a78bfa' },
+        ].map(t => (
+          <div key={t.label} style={{ flex: 1, minWidth: '90px', padding: '10px 12px', borderRadius: '12px', background: 'var(--card)', border: '1px solid var(--border)', textAlign: 'center' }}>
+            <div style={{ fontSize: '20px', fontWeight: 800, color: t.color }}>{t.value}</div>
+            <div style={{ fontSize: '10px', fontWeight: 700, color: 'var(--text-muted)', textTransform: 'uppercase' }}>{t.label}</div>
+          </div>
+        ))}
+      </div>
+
+      {/* Active vehicles */}
+      <div style={sectionLabel}>In Our Shop ({vehicles.active.length})</div>
+      {vehicles.active.length === 0 ? (
+        <div style={{ ...card, textAlign: 'center', color: 'var(--text-muted)', fontSize: '12px' }}>
+          No vehicles in our shop right now
+        </div>
+      ) : vehicles.active.map(v => vehicleCard(v, true))}
+
+      {/* Recently finished with photos */}
+      {vehicles.recent.length > 0 && (
+        <>
+          <div style={sectionLabel}>Recently Finished ({vehicles.recent.length})</div>
+          {vehicles.recent.map(v => vehicleCard(v, true))}
+        </>
+      )}
+
+      {/* Graphics orders */}
+      {(graphics.active.length > 0 || graphics.recent.length > 0) && (
+        <>
+          <div style={sectionLabel}>Graphics Orders</div>
+          {[...graphics.active, ...graphics.recent].map(g => (
+            <div key={g.id} style={card}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: '10px', flexWrap: 'wrap' }}>
+                <div style={{ flex: 1, minWidth: '160px' }}>
+                  <div style={{ fontSize: '13px', fontWeight: 800, color: 'var(--text-primary)' }}>{g.title}</div>
+                  {g.jobNumber && <div style={{ fontSize: '10px', color: 'var(--text-muted)' }}>{g.jobNumber}</div>}
+                </div>
+                <span style={{ fontSize: '11px', fontWeight: 700, padding: '3px 10px', borderRadius: '7px', background: 'rgba(167,139,250,0.12)', color: '#a78bfa' }}>
+                  {g.statusLabel}
+                </span>
+              </div>
+              {(g.trackingNumber || g.scheduledInstallDate) && (
+                <div style={{ fontSize: '11px', color: 'var(--text-muted)', marginTop: '6px' }}>
+                  {g.trackingNumber && (() => {
+                    const url = upsTracking(g.carrier, g.trackingNumber);
+                    return url
+                      ? <a href={url} target="_blank" rel="noreferrer" style={{ color: '#60a5fa', fontWeight: 700 }}>Track shipment: {g.trackingNumber}</a>
+                      : <span>Tracking{g.carrier ? ` (${g.carrier})` : ''}: {g.trackingNumber}</span>;
+                  })()}
+                  {g.trackingNumber && g.scheduledInstallDate && ' · '}
+                  {g.scheduledInstallDate && `Install scheduled ${fmtDate(g.scheduledInstallDate)}`}
+                </div>
+              )}
+            </div>
+          ))}
+        </>
+      )}
+
+      {/* History */}
+      {vehicles.history.length > 0 && (
+        <>
+          <div style={sectionLabel}>
+            <button
+              onClick={() => setShowHistory(s => !s)}
+              style={{ background: 'none', border: 'none', color: 'var(--text-muted)', fontSize: '11px', fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.8px', cursor: 'pointer', padding: 0 }}
+            >
+              {showHistory ? '▾' : '▸'} History ({vehicles.history.length})
+            </button>
+          </div>
+          {showHistory && vehicles.history.map(v => vehicleCard(v, false))}
+        </>
+      )}
+
+      <div style={{ ...card, marginTop: '18px', background: 'var(--subtle-bg)' }}>
+        <div style={{ fontSize: '11px', color: 'var(--text-muted)', lineHeight: 1.5 }}>
+          Questions about a vehicle? Reply to any of our status emails, or contact your BMG rep — this page updates live as work progresses.
+        </div>
+      </div>
+
+      {lightbox && (
+        <div
+          onClick={() => setLightbox(null)}
+          style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.85)', zIndex: 300, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '16px', cursor: 'zoom-out' }}
+        >
+          {/* eslint-disable-next-line @next/next/no-img-element -- external storage URL */}
+          <img src={lightbox} alt="Completed work" style={{ maxWidth: '100%', maxHeight: '90vh', borderRadius: '10px' }} />
+        </div>
+      )}
+      <div style={{ height: '80px' }} />
     </div>
   );
 }
