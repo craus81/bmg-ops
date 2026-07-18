@@ -4,6 +4,7 @@ import { useState, useEffect } from 'react';
 import { useRouter, useParams } from 'next/navigation';
 import { createClient } from '@/lib/supabase-browser';
 import { useAuth } from '@/components/AuthProvider';
+import { storage } from '@/lib/storage';
 
 interface CniCompany {
   id: string;
@@ -30,6 +31,22 @@ interface UnassignedProfile {
   full_name: string;
 }
 
+// The exact invoice documents this installer has sent us, recorded on the
+// Scan Log → Vendor Invoices tab (file stored in R2, metadata + per-VIN
+// lines in vendor_invoices).
+interface CompanyVendorInvoice {
+  id: string;
+  invoice_number: string | null;
+  invoice_date: string | null;
+  vendor_name: string;
+  total_amount: number | null;
+  location_name: string | null;
+  file_name: string | null;
+  storage_path: string | null;
+  created_at: string;
+  lines: { id: string }[];
+}
+
 // Profiles that carry an installer role can belong to a CNI company.
 const INSTALLER_FILTER = 'role.eq.installer,roles.cs.{installer}';
 
@@ -45,6 +62,7 @@ export default function CniCompanyDetailPage() {
   const [members, setMembers] = useState<Member[]>([]);
   const [unassigned, setUnassigned] = useState<UnassignedProfile[]>([]);
   const [metrics, setMetrics] = useState({ total: 0, active: 0, completed: 0, onTime: 0 });
+  const [invoices, setInvoices] = useState<CompanyVendorInvoice[]>([]);
 
   // Editable fields
   const [name, setName] = useState('');
@@ -126,6 +144,33 @@ export default function CniCompanyDetailPage() {
       user_id: p.id,
       full_name: p.full_name || 'Unknown',
     })));
+
+    // Vendor invoices on file for this installer — linked by company, plus
+    // records that only carried the name (recorded before linking).
+    if (companyData) {
+      const invoiceCols = 'id, invoice_number, invoice_date, vendor_name, total_amount, location_name, file_name, storage_path, created_at, lines:vendor_invoice_lines(id)';
+      const escapedName = (companyData.name || '').replace(/[\\%_]/g, (ch: string) => `\\${ch}`);
+      const [linked, byName] = await Promise.all([
+        supabase.from('vendor_invoices')
+          .select(invoiceCols)
+          .eq('company_id', companyId)
+          .order('created_at', { ascending: false })
+          .limit(50),
+        escapedName
+          ? supabase.from('vendor_invoices')
+              .select(invoiceCols)
+              .is('company_id', null)
+              .ilike('vendor_name', escapedName)
+              .order('created_at', { ascending: false })
+              .limit(50)
+          : Promise.resolve({ data: [] as any[] }),
+      ]);
+      const seen = new Set<string>();
+      const merged = ([...(linked.data || []), ...(byName.data || [])] as any[])
+        .filter(i => (seen.has(i.id) ? false : (seen.add(i.id), true)))
+        .sort((a, b) => (b.invoice_date || b.created_at.slice(0, 10)).localeCompare(a.invoice_date || a.created_at.slice(0, 10)));
+      setInvoices(merged as CompanyVendorInvoice[]);
+    }
 
     // Job metric rollups for this company
     const { data: companyJobs } = await supabase
@@ -455,6 +500,64 @@ export default function CniCompanyDetailPage() {
             Vendor IDs
           </button>{' '}
           page.
+        </div>
+      </div>
+
+      {/* Vendor invoices on file — the exact documents this installer sent us */}
+      <div style={{
+        padding: '16px', borderRadius: '14px', marginBottom: '14px',
+        background: 'var(--card)', border: '1px solid var(--border)', boxShadow: 'var(--shadow-sm)',
+      }}>
+        <div style={{ fontSize: '11px', fontWeight: 700, color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.5px', marginBottom: '12px' }}>
+          Vendor Invoices on File ({invoices.length})
+        </div>
+        {invoices.length === 0 ? (
+          <div style={{ fontSize: '12px', color: 'var(--text-muted)' }}>
+            None recorded yet. Invoices uploaded on Scan Log → Vendor Invoices are kept here automatically.
+          </div>
+        ) : (
+          <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
+            {invoices.map(inv => (
+              <div key={inv.id} style={{
+                display: 'flex', alignItems: 'center', gap: '8px',
+                padding: '10px 12px', borderRadius: '10px',
+                background: 'var(--subtle-bg)', border: '1px solid var(--border)',
+              }}>
+                <div style={{ flex: 1, minWidth: 0 }}>
+                  <div style={{ fontSize: '13px', fontWeight: 700, color: 'var(--text-primary)' }}>
+                    {inv.invoice_number ? `Invoice #${inv.invoice_number}` : 'Invoice (no number)'}
+                    {inv.total_amount != null && <span style={{ color: '#f472b6', marginLeft: '8px' }}>${Number(inv.total_amount).toFixed(2)}</span>}
+                  </div>
+                  <div style={{ fontSize: '11px', color: 'var(--text-muted)', marginTop: '2px' }}>
+                    {inv.invoice_date || inv.created_at.slice(0, 10)} · {inv.lines.length} VIN{inv.lines.length !== 1 ? 's' : ''}
+                    {inv.location_name ? ` · ${inv.location_name}` : ''}
+                    {inv.file_name ? ` · ${inv.file_name}` : ''}
+                  </div>
+                </div>
+                {inv.storage_path ? (
+                  <a
+                    href={storage.from('invoices').getPublicUrl(inv.storage_path).data.publicUrl}
+                    target="_blank" rel="noreferrer"
+                    style={{ padding: '6px 10px', borderRadius: '8px', fontSize: '11px', fontWeight: 700, background: 'rgba(96,165,250,0.1)', border: '1px solid rgba(96,165,250,0.25)', color: '#60a5fa', textDecoration: 'none', flexShrink: 0, whiteSpace: 'nowrap' }}
+                  >
+                    📄 View File
+                  </a>
+                ) : (
+                  <span style={{ fontSize: '10px', color: 'var(--text-muted)', flexShrink: 0 }}>no file attached</span>
+                )}
+              </div>
+            ))}
+          </div>
+        )}
+        <div style={{ fontSize: '11px', color: 'var(--text-muted)', marginTop: '10px' }}>
+          Recorded from{' '}
+          <button
+            onClick={() => router.push('/admin/scans?tab=vendor')}
+            style={{ color: 'var(--orange)', fontWeight: 700, background: 'none', border: 'none', cursor: 'pointer', padding: 0, fontSize: '11px' }}
+          >
+            Scan Log → Vendor Invoices
+          </button>
+          . The original uploaded document stays attached to each record.
         </div>
       </div>
 

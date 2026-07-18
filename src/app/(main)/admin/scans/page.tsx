@@ -2669,7 +2669,7 @@ function VendorInvoicesTab({ allParts, allLocations, poRequired, onCommitted }: 
                   title="Add a new installer — creates the FleetSuite company and the NetSuite vendor"
                   style={{ padding: '8px 12px', borderRadius: '6px', fontSize: '11px', fontWeight: 800, background: '#22c55e', color: '#fff', border: 'none', cursor: 'pointer', whiteSpace: 'nowrap', flexShrink: 0 }}
                 >
-                  + New Installer
+                  + Add Installer
                 </button>
               </div>
               {selectedCompany && (
