@@ -64,6 +64,12 @@ export const ROLE_DEFAULT_FEATURES: Record<string, FeatureKey[]> = {
     'home', 'scan', 'time', 'messages', 'cni_management',
   ],
 
+  // AP/bookkeeping: the payment queue plus enough context to verify what's
+  // being paid — without admin's user management or data tools.
+  finance: [
+    'home', 'messages', 'time', 'reports', 'vendor_payments', 'customers',
+  ],
+
   customer: ['home'],
 };
 

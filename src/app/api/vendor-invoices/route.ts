@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { createClient } from '@supabase/supabase-js';
-import { requireAdmin } from '@/lib/api-auth';
+import { requireAdmin, requireRole } from '@/lib/api-auth';
 import { validateBody, z } from '@/lib/validate';
 import { fetchScansMatchingVins, pickScanForLine } from '@/lib/vin-match';
 import { scanLifecycle } from '@/lib/scan-state';
@@ -142,14 +142,18 @@ async function restampScans(scanIds: string[]): Promise<void> {
 }
 
 export async function GET(req: NextRequest) {
-  const auth = await requireAdmin(req);
+  // Finance (Jessie's AP queue) reads this too — admin passes requireRole.
+  const auth = await requireRole(req, ['finance']);
   if (auth.error) return auth.error;
 
-  const { data, error } = await service
+  const status = req.nextUrl.searchParams.get('status')?.trim() || '';
+  let q = service
     .from('vendor_invoices')
     .select('*, company:companies(id, name, netsuite_vendor_id), lines:vendor_invoice_lines(id, vin, part_number, amount, was_existing_scan, scan_log_id)')
     .order('created_at', { ascending: false })
-    .limit(50);
+    .limit(200);
+  if (status) q = q.eq('status', status);
+  const { data, error } = await q;
   if (error) return NextResponse.json({ error: error.message }, { status: 500 });
   return NextResponse.json({ invoices: data || [] });
 }
@@ -418,6 +422,13 @@ export async function DELETE(req: NextRequest) {
       service.from('vendor_invoices').select('*').eq('id', id).maybeSingle(),
       service.from('vendor_invoice_lines').select('scan_log_id, vin, part_number, amount, was_existing_scan').eq('vendor_invoice_id', id),
     ]);
+    if (!header) return NextResponse.json({ error: 'Invoice not found' }, { status: 404 });
+    // In-pipeline invoices belong to finance — reject or unwind them from
+    // /admin/ap first so a delete can't yank a bill out from under AP.
+    if (!['recorded', 'rejected'].includes(header.status)) {
+      return NextResponse.json({ error: `Invoice is ${header.status} — only recorded or rejected invoices can be deleted` }, { status: 409 });
+    }
+
     const { data: stampedScans } = await service.from('scan_logs').select('id').eq('vendor_invoice_id', id);
     const affected = [...new Set([
       ...((fullLines || []).map(l => l.scan_log_id).filter(Boolean) as string[]),

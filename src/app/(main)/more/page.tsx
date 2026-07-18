@@ -135,6 +135,9 @@ export default function MorePage() {
             badge={pendingUserCount > 0 ? pendingUserCount : undefined}
           />
         )}
+        {(isAdmin || hasRole('finance')) && (
+          <MenuBtn title="Payments (AP)" sub="Approve CNI vendor invoices & push bills to NetSuite" onClick={() => router.push('/admin/ap')} />
+        )}
         {isAdmin && (
           <MenuBtn title="Audit Log" sub="Who changed what — money edits, payouts, rates & invoices" onClick={() => router.push('/admin/audit')} />
         )}
@@ -203,6 +206,7 @@ export default function MorePage() {
               graphics_production: 'Graphics / Production',
               production: 'Graphics / Production',
               installer: 'CNI Installer',
+              finance: 'Finance / AP',
               customer: 'Customer',
             };
             return roles.map((r: any) => labelMap[r] || r).join(', ') || 'Installer';
