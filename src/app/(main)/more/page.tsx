@@ -139,6 +139,9 @@ export default function MorePage() {
           <MenuBtn title="Audit Log" sub="Who changed what — money edits, payouts, rates & invoices" onClick={() => router.push('/admin/audit')} />
         )}
         {isAdmin && (
+          <MenuBtn title="System Health" sub="Background syncs & crons — with alerts when one dies" onClick={() => router.push('/admin/system-health')} />
+        )}
+        {isAdmin && (
           <MenuBtn title="AI Instructions" sub="Steer FleetSuite AI behavior — global rules, no deploy" onClick={() => router.push('/admin/ai-instructions')} />
         )}
         {F('knowledge_base') && (
