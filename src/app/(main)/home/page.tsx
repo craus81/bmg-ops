@@ -5,6 +5,7 @@ import { useRouter } from 'next/navigation';
 import { useAuth } from '@/components/AuthProvider';
 import { createClient } from '@/lib/supabase-browser';
 import { theme } from '@/lib/theme';
+import MentionsInbox from '@/components/MentionsInbox';
 
 const OpsDashboard = lazy(() => import('@/components/OpsDashboard'));
 
@@ -14,6 +15,7 @@ function AdminDashboard() {
 
   return (
     <div>
+      <MentionsInbox />
       <div style={{ display: 'flex', gap: '4px', marginBottom: '14px', background: 'var(--card)', borderRadius: '10px', padding: '3px' }}>
         <button onClick={() => setDashTab('dashboard')} style={{
           flex: 1, padding: '10px', borderRadius: '8px', fontSize: '13px', fontWeight: 700,
@@ -600,7 +602,7 @@ export default function HomePage() {
     if (role === 'customer') { router.replace('/customer/dashboard'); return; }
     if (isOnlyRole('graphics_production')) { router.replace('/graphics'); return; }
     if (isOnlyRole('field_tech') || isOnlyRole('installer')) { router.replace('/scan'); return; }
-    if (isOnlyRole('shop_tech')) { router.replace('/fleet'); return; }
+    if (isOnlyRole('shop_tech')) { router.replace('/tracking?checkin=1'); return; }
   // eslint-disable-next-line react-hooks/exhaustive-deps -- intentional: load once on mount
   }, [role, roles]);
 

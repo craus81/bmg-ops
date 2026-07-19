@@ -7,6 +7,7 @@ import { storage } from '@/lib/storage';
 import { useAuth } from '@/components/AuthProvider';
 import { useDialog } from '@/components/DialogProvider';
 import { DropZone } from '@/components/DropZone';
+import MentionTextArea, { reportMentions } from '@/components/MentionTextArea';
 import { theme } from '@/lib/theme';
 
 interface UpfitNote {
@@ -456,6 +457,13 @@ export default function UpfitProjectsPage() {
       body: JSON.stringify({ project_id: selected.id, content: newNote.trim() }),
     });
     if (res.ok) {
+      reportMentions({
+        text: newNote.trim(),
+        sourceType: 'upfit_note',
+        sourceId: selected.id,
+        contextLabel: `${selected.project_name}${selected.customer_name ? ` — ${selected.customer_name}` : ''}`,
+        contextUrl: '/upfit',
+      });
       setNewNote('');
       loadNotes(selected.id);
     }
@@ -860,11 +868,11 @@ export default function UpfitProjectsPage() {
 
         {/* Add note */}
         <div style={{ display: 'flex', gap: '8px', marginBottom: '12px' }}>
-          <input
+          <MentionTextArea
             value={newNote}
-            onChange={e => setNewNote(e.target.value)}
-            onKeyDown={e => e.key === 'Enter' && !e.shiftKey && addNote()}
-            placeholder="Add a note..."
+            onChange={setNewNote}
+            onKeyDown={e => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); addNote(); } }}
+            placeholder="Add a note... @name to tag a teammate"
             style={{ flex: 1, padding: '8px 12px', borderRadius: '8px', border: `1px solid ${theme.border}`, background: theme.inputBg, color: theme.textPrimary, fontSize: '13px', outline: 'none' }}
           />
           <button
