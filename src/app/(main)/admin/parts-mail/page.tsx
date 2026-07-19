@@ -40,11 +40,31 @@ const CLASS_STYLES: Record<MailRow['classification'], { label: string; color: st
 
 const fmt = (d: string | null) => d ? new Date(d).toLocaleDateString([], { month: 'short', day: 'numeric' }) : '—';
 
+interface InvoiceRow {
+  id: string;
+  email_id: string | null;
+  file_name: string;
+  storage_path: string;
+  vendor_name: string | null;
+  invoice_number: string | null;
+  invoice_date: string | null;
+  total: number | null;
+  matched_po_id: string | null;
+  status: 'captured' | 'billed' | 'dismissed';
+  netsuite_bill_number: string | null;
+  netsuite_bill_id: string | null;
+  created_at: string;
+  po?: { tranid: string | null; vendor_name: string | null } | null;
+}
+
 export default function PartsMailPage() {
   const supabase = createClient();
-  const { isAdmin } = useAuth();
+  const { isAdmin, hasFeature } = useAuth();
   const dialog = useDialog();
+  const canBill = isAdmin || hasFeature('vendor_payments');
 
+  const [invoices, setInvoices] = useState<InvoiceRow[]>([]);
+  const [invLinkInputs, setInvLinkInputs] = useState<Record<string, string>>({});
   const [rows, setRows] = useState<MailRow[]>([]);
   const [filter, setFilter] = useState<'all' | MailRow['classification']>('all');
   const [loading, setLoading] = useState(true);
@@ -59,12 +79,16 @@ export default function PartsMailPage() {
   const [savingSettings, setSavingSettings] = useState(false);
 
   const load = useCallback(async () => {
-    const { data } = await supabase
-      .from('vendor_shipment_emails')
-      .select('*')
-      .order('created_at', { ascending: false })
-      .limit(150);
-    setRows((data as MailRow[]) || []);
+    const [emailsRes, invRes] = await Promise.all([
+      supabase.from('vendor_shipment_emails').select('*').order('created_at', { ascending: false }).limit(150),
+      supabase.from('vendor_parts_invoices')
+        .select('*, po:matched_po_id (tranid, vendor_name)')
+        .neq('status', 'dismissed')
+        .order('created_at', { ascending: false })
+        .limit(60),
+    ]);
+    setRows((emailsRes.data as MailRow[]) || []);
+    setInvoices((invRes.data as InvoiceRow[]) || []);
     setLoading(false);
   // eslint-disable-next-line react-hooks/exhaustive-deps -- supabase client is a stable singleton
   }, []);
@@ -125,6 +149,38 @@ export default function PartsMailPage() {
     setSavingSettings(false);
   };
 
+  const resolveInvoice = async (inv: InvoiceRow, poNumber: string | null) => {
+    setBusy(inv.id);
+    const res = await fetch('/api/parts-mail/link', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ invoiceId: inv.id, poNumber }),
+    });
+    const data = await res.json();
+    if (!res.ok) await dialog.alert(data.error || 'Failed');
+    else load();
+    setBusy(null);
+  };
+
+  const createBill = async (inv: InvoiceRow) => {
+    const label = `${inv.vendor_name || 'vendor'} invoice ${inv.invoice_number || inv.file_name}${inv.total ? ` for $${Number(inv.total).toLocaleString()}` : ''}`;
+    const ok = await dialog.confirm(`Create a NetSuite vendor bill from PO ${inv.po?.tranid || ''} for ${label}? This posts a real bill in NetSuite.`);
+    if (!ok) return;
+    setBusy(inv.id);
+    const res = await fetch('/api/parts-mail/create-bill', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ invoiceId: inv.id }),
+    });
+    const data = await res.json();
+    if (!res.ok) await dialog.alert(data.error || 'Bill creation failed');
+    else {
+      await dialog.alert(`Bill created${data.billNumber ? `: ${data.billNumber}` : ''} from PO ${data.po || ''}.`);
+      load();
+    }
+    setBusy(null);
+  };
+
   const visible = filter === 'all' ? rows : rows.filter(r => r.classification === filter);
   const reviewCount = rows.filter(r => r.classification === 'review').length;
 
@@ -166,6 +222,72 @@ export default function PartsMailPage() {
             <button onClick={saveSettings} disabled={savingSettings} style={{ padding: '7px 14px', borderRadius: '8px', background: '#3b82f6', border: 'none', color: '#fff', fontSize: '11px', fontWeight: 700, cursor: 'pointer', opacity: savingSettings ? 0.6 : 1 }}>
               {savingSettings ? 'Saving…' : 'Save'}
             </button>
+          </div>
+        </div>
+      )}
+
+      {/* Captured vendor invoices → NetSuite bills */}
+      {invoices.length > 0 && (
+        <div style={card}>
+          <div style={{ fontSize: '11px', fontWeight: 800, color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.5px', marginBottom: '8px' }}>
+            Vendor Invoices ({invoices.filter(i => i.status === 'captured').length} to bill)
+          </div>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
+            {invoices.map(inv => (
+              <div key={inv.id} style={{ padding: '10px 12px', borderRadius: '10px', background: 'var(--input-bg)', border: `1px solid ${inv.status === 'billed' ? 'rgba(34,197,94,0.35)' : 'var(--border)'}` }}>
+                <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '8px', flexWrap: 'wrap' }}>
+                  <a
+                    href={`/api/storage?bucket=parts-invoices&path=${encodeURIComponent(inv.storage_path)}`}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    style={{ fontSize: '12px', fontWeight: 700, color: '#60a5fa', textDecoration: 'none' }}
+                  >
+                    📄 {inv.file_name}
+                  </a>
+                  <span style={{ fontSize: '9px', fontWeight: 800, padding: '2px 8px', borderRadius: '6px', background: inv.status === 'billed' ? 'rgba(34,197,94,0.2)' : 'rgba(96,165,250,0.2)', color: inv.status === 'billed' ? '#22c55e' : '#60a5fa' }}>
+                    {inv.status === 'billed' ? `BILLED${inv.netsuite_bill_number ? ` · ${inv.netsuite_bill_number}` : ''}` : 'CAPTURED'}
+                  </span>
+                </div>
+                <div style={{ display: 'flex', gap: '10px', flexWrap: 'wrap', marginTop: '4px', fontSize: '10px', color: 'var(--text-muted)' }}>
+                  {inv.vendor_name && <span>{inv.vendor_name}</span>}
+                  {inv.invoice_number && <span>Inv #<b style={{ color: 'var(--text-secondary)' }}>{inv.invoice_number}</b></span>}
+                  {inv.invoice_date && <span>{fmt(inv.invoice_date)}</span>}
+                  {inv.total != null && <span><b style={{ color: 'var(--text-secondary)' }}>${Number(inv.total).toLocaleString()}</b></span>}
+                  {inv.po?.tranid ? <span>PO <b style={{ color: 'var(--text-secondary)' }}>{inv.po.tranid}</b></span> : <span style={{ color: '#fbbf24' }}>No PO linked</span>}
+                </div>
+                {inv.status === 'captured' && (
+                  <div style={{ display: 'flex', gap: '6px', marginTop: '8px', flexWrap: 'wrap' }}>
+                    {inv.matched_po_id ? (
+                      canBill && (
+                        <button onClick={() => createBill(inv)} disabled={busy === inv.id} style={{ padding: '7px 12px', borderRadius: '8px', background: 'rgba(34,197,94,0.15)', border: '1px solid rgba(34,197,94,0.4)', color: '#22c55e', fontSize: '11px', fontWeight: 700, cursor: 'pointer', opacity: busy === inv.id ? 0.5 : 1 }}>
+                          Create NetSuite Bill
+                        </button>
+                      )
+                    ) : (
+                      <>
+                        <input
+                          style={{ ...inputStyle, flex: 1, minWidth: '130px' }}
+                          placeholder="PO number to link"
+                          value={invLinkInputs[inv.id] || ''}
+                          onChange={e => setInvLinkInputs(prev => ({ ...prev, [inv.id]: e.target.value }))}
+                          onKeyDown={e => e.key === 'Enter' && (invLinkInputs[inv.id] || '').trim() && resolveInvoice(inv, invLinkInputs[inv.id].trim())}
+                        />
+                        <button
+                          onClick={() => resolveInvoice(inv, (invLinkInputs[inv.id] || '').trim() || null)}
+                          disabled={busy === inv.id || !(invLinkInputs[inv.id] || '').trim()}
+                          style={{ padding: '7px 12px', borderRadius: '8px', background: 'rgba(96,165,250,0.15)', border: '1px solid rgba(96,165,250,0.4)', color: '#60a5fa', fontSize: '11px', fontWeight: 700, cursor: 'pointer', opacity: busy === inv.id || !(invLinkInputs[inv.id] || '').trim() ? 0.5 : 1 }}
+                        >
+                          Link PO
+                        </button>
+                      </>
+                    )}
+                    <button onClick={() => resolveInvoice(inv, null)} disabled={busy === inv.id} style={{ padding: '7px 12px', borderRadius: '8px', background: 'none', border: '1px solid var(--border)', color: 'var(--text-muted)', fontSize: '11px', fontWeight: 700, cursor: 'pointer' }}>
+                      Dismiss
+                    </button>
+                  </div>
+                )}
+              </div>
+            ))}
           </div>
         </div>
       )}
