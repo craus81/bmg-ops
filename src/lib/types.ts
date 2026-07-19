@@ -346,6 +346,8 @@ export interface FleetCheckin {
   checked_in_by: string;
   company_id?: string;
   scheduled_upfit_date?: string | null;
+  /** When the customer needs the vehicle back — drives In-Shop due-risk chips. */
+  promised_back_date?: string | null;
   matched_graphics_job_id?: string | null;
   calendar_event_id?: string | null;
   invoice_number?: string | null;
