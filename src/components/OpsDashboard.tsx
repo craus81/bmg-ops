@@ -129,6 +129,7 @@ export default function OpsDashboard() {
       schedGfxRes, schedUpfitRes, schedCniRes, schedEventsRes,
       scansTodayRes, scansWeekRes, msgRes, unreadRes,
       oppsRes, custRes, quotesRes, estRes, unpricedRes,
+      apSubmittedRes, sentEstRes, sentWrapRes, staleProofRes, healthRes, atRiskRes,
     ] = await Promise.allSettled([
       // KPI 1 — NetSuite invoiced totals (authoritative revenue)
       fetch('/api/reports/invoiced-summary').then(r => r.json()),
@@ -196,6 +197,18 @@ export default function OpsDashboard() {
       // Unpriced pay — credits with no dollar amount. Accumulating unseen is
       // how someone works for weeks before anyone notices they're unpaid.
       supabase.from('install_credits').select('*', { count: 'exact', head: true }).is('amount', null).is('voided_at', null),
+      // Remaining needs-attention queues — payments, quiet quotes, stalled
+      // proofs, plus admin-only API checks (at-risk, system health).
+      supabase.from('vendor_invoices').select('*', { count: 'exact', head: true }).eq('status', 'submitted'),
+      supabase.from('estimates').select('id, sent_for_approval_at, updated_at, last_followup_at').eq('status', 'sent').limit(500),
+      supabase.from('wrap_quotes').select('id, sent_at, last_followup_at').eq('status', 'sent').is('archived_at', null).limit(500),
+      supabase.from('graphics_jobs').select('*', { count: 'exact', head: true })
+        .eq('customer_approved', false).is('customer_rejected_at', null)
+        .not('sent_for_approval_at', 'is', null)
+        .lte('sent_for_approval_at', new Date(Date.now() - 3 * 86_400_000).toISOString())
+        .not('status', 'in', '("cancelled","shipped","picked_up","installed")'),
+      isAdmin ? fetch('/api/system-health').then(r => r.ok ? r.json() : null) : Promise.resolve(null),
+      isAdmin ? fetch('/api/reports/at-risk').then(r => r.ok ? r.json() : null) : Promise.resolve(null),
     ]);
 
     const val = <T,>(r: PromiseSettledResult<T>): T | null => (r.status === 'fulfilled' ? r.value : null);
@@ -307,6 +320,49 @@ export default function OpsDashboard() {
       key: 'unpriced', count: unpricedPay, tone: 'warn', path: '/admin/pay-rates',
       title: 'Pay credits without a dollar amount',
       detail: 'Someone worked; nobody priced it yet',
+    });
+    const apSubmitted = count(apSubmittedRes);
+    if (apSubmitted > 0) queue.push({
+      key: 'ap', count: apSubmitted, tone: 'warn', path: '/admin/ap',
+      title: 'Vendor payments awaiting approval', detail: 'CNI invoices submitted for payment',
+    });
+    // Quotes quiet 5+ days since the last touch (send or logged follow-up).
+    const quietCutoff = Date.now() - 5 * 86_400_000;
+    const quoteQuiet = (sentAt: string | null, followUp: string | null) => {
+      const ref = Math.max(sentAt ? new Date(sentAt).getTime() : 0, followUp ? new Date(followUp).getTime() : 0);
+      return ref > 0 && ref < quietCutoff;
+    };
+    const quietQuotes =
+      rows(sentEstRes).filter(e => quoteQuiet(e.sent_for_approval_at || e.updated_at, e.last_followup_at)).length +
+      rows(sentWrapRes).filter(w => quoteQuiet(w.sent_at, w.last_followup_at)).length;
+    if (quietQuotes > 0) queue.push({
+      key: 'quotes', count: quietQuotes, tone: 'warn', path: '/admin/quote-followups',
+      title: 'Quotes needing a follow-up', detail: 'Sent 5+ days ago with no answer',
+    });
+    const staleProofs = count(staleProofRes);
+    if (staleProofs > 0) queue.push({
+      key: 'proofs', count: staleProofs, tone: 'warn', path: '/graphics',
+      title: 'Proofs stuck with customers 3+ days', detail: 'Production blocked on approval',
+    });
+    // Scans stuck waiting on a PO (part requires one, none matched yet).
+    const waitingPo = rows(scansRes).filter(s =>
+      !s.po_id && !s.exported_at && poRequired[s.part_number || ''] !== false
+    ).length;
+    if (waitingPo > 0) queue.push({
+      key: 'waitingpo', count: waitingPo, tone: 'blue', path: '/admin/scans',
+      title: 'Scans waiting on a PO', detail: 'Auto-matcher retries as POs import',
+    });
+    const health = val(healthRes) as any;
+    const badJobs = (health?.checks || []).filter((c: any) => c.status === 'error' || c.status === 'stale').length;
+    if (badJobs > 0) queue.push({
+      key: 'health', count: badJobs, tone: 'err', path: '/admin/system-health',
+      title: 'Background jobs down', detail: 'Syncs or crons stale/erroring',
+    });
+    const atRisk = val(atRiskRes) as any;
+    const atRiskCount = (atRisk?.flagged || []).length;
+    if (atRiskCount > 0) queue.push({
+      key: 'atrisk', count: atRiskCount, tone: 'warn', path: '/admin/reports/at-risk',
+      title: 'At-risk accounts gone quiet', detail: 'Big spenders behind pace — worth a call',
     });
 
     // ── Lanes ──
