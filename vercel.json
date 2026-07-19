@@ -9,6 +9,10 @@
       "schedule": "0 */2 * * *"
     },
     {
+      "path": "/api/cron/parts-email-scan",
+      "schedule": "0 * * * *"
+    },
+    {
       "path": "/api/cron/health-check",
       "schedule": "*/30 * * * *"
     },

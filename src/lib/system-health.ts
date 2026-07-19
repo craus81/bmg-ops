@@ -31,6 +31,7 @@ export const HEALTH_MONITORS: HealthMonitor[] = [
   { syncType: 'netsuite_spend_refresh', label: 'NetSuite spend refresh', intervalMinutes: 120 },
   { syncType: 'netsuite_contacts', label: 'NetSuite contact sync', intervalMinutes: 120 },
   { syncType: 'netsuite_vendor_pos', label: 'NetSuite vendor PO sync', intervalMinutes: 120 },
+  { syncType: 'parts_email_scan', label: 'Parts email ETA scan', intervalMinutes: 60 },
   { syncType: 'health_check', label: 'Health monitor itself', intervalMinutes: 30 },
   { syncType: 'at_risk_check', label: 'At-risk account sweep', intervalMinutes: 1440 },
   { syncType: 'quote_followup_check', label: 'Quote follow-up nudges', intervalMinutes: 1440 },

@@ -787,7 +787,7 @@ export default function UpfitProjectsPage() {
                                 <div style={{ display: 'flex', gap: '4px', flexWrap: 'wrap', marginTop: '3px' }}>
                                   {p.pos.map((po: any, i: number) => (
                                     <span key={i} style={{ fontSize: '9px', fontWeight: 700, padding: '1px 6px', borderRadius: '5px', background: '#60a5fa15', color: '#60a5fa', border: '1px solid #60a5fa30' }}>
-                                      {po.tranid || 'PO'}{po.vendor_name ? ` · ${po.vendor_name}` : ''}{po.trandate ? ` · ${fmt(po.trandate)}` : ''} · {po.remaining} coming
+                                      {po.tranid || 'PO'}{po.vendor_name ? ` · ${po.vendor_name}` : ''}{po.trandate ? ` · ${fmt(po.trandate)}` : ''} · {po.remaining} coming{po.eta_date ? ` · ETA ${fmt(po.eta_date)}` : ''}
                                     </span>
                                   ))}
                                 </div>
