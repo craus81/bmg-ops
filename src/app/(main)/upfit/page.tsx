@@ -166,6 +166,10 @@ export default function UpfitProjectsPage() {
   // Linked graphics jobs (one upfit project can have multiple graphics jobs)
   const [linkedGraphics, setLinkedGraphics] = useState<LinkedGraphicsJob[]>([]);
 
+  // Parts readiness — needed vs on hand vs on order for the project's SO
+  const [readiness, setReadiness] = useState<any | null>(null);
+  const [readinessLoading, setReadinessLoading] = useState(false);
+
   // New project form
   const [showCreate, setShowCreate] = useState(false);
   const [newName, setNewName] = useState('');
@@ -365,6 +369,7 @@ export default function UpfitProjectsPage() {
         setSelected(project);
         setNsLookupNumber('');
         load();
+        if (project?.netsuite_so_id) loadReadiness(project.id, true);
       } else {
         setNsLookupError('Failed to save link');
       }
@@ -443,6 +448,17 @@ export default function UpfitProjectsPage() {
     setLinkedGraphics(enriched);
   };
 
+  const loadReadiness = async (projectId: string, hasSo: boolean) => {
+    if (!hasSo) { setReadiness(null); return; }
+    setReadinessLoading(true);
+    setReadiness(null);
+    try {
+      const res = await fetch(`/api/upfit-projects/parts-readiness?id=${projectId}`);
+      if (res.ok) setReadiness(await res.json());
+    } catch { /* card just stays hidden */ }
+    setReadinessLoading(false);
+  };
+
   const openProject = (p: UpfitProject) => {
     setSelected(p);
     loadNotes(p.id);
@@ -450,6 +466,7 @@ export default function UpfitProjectsPage() {
     loadFiles(p.id);
     loadLinkedCheckin(p.fleet_checkin_id);
     loadLinkedGraphics(p.id);
+    loadReadiness(p.id, !!p.netsuite_so_id);
   };
 
   const addNote = async () => {
@@ -701,6 +718,97 @@ export default function UpfitProjectsPage() {
             </div>
           )}
         </div>
+
+        {/* Parts readiness — per part on the SO: needed vs on hand (live
+            NetSuite) vs on order (synced vendor POs, matched by part
+            number since vendor POs aren't linked to the SO). */}
+        {selected.netsuite_so_id && (
+          <div style={{ background: theme.card, border: `1px solid ${theme.border}`, borderRadius: '10px', padding: '12px', marginBottom: '16px' }}>
+            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '8px' }}>
+              <div style={{ fontSize: '11px', fontWeight: 700, color: theme.textSecondary, textTransform: 'uppercase', letterSpacing: '0.5px' }}>
+                Parts Readiness{readiness?.soNumber ? ` · ${readiness.soNumber}` : ''}
+              </div>
+              <button
+                onClick={() => loadReadiness(selected.id, true)}
+                disabled={readinessLoading}
+                style={{ fontSize: '10px', fontWeight: 700, color: theme.textMuted, background: 'none', border: 'none', cursor: 'pointer' }}
+              >
+                {readinessLoading ? 'Checking…' : 'Refresh'}
+              </button>
+            </div>
+            {readinessLoading && !readiness && (
+              <div style={{ fontSize: '11px', color: theme.textMuted }}>Checking NetSuite…</div>
+            )}
+            {readiness && !readiness.available && (
+              <div style={{ fontSize: '11px', color: theme.textMuted }}>
+                {readiness.reason === 'no_sales_order' ? 'Link a sales order to check parts.' : `NetSuite lookup failed${readiness.error ? `: ${readiness.error}` : ''}`}
+              </div>
+            )}
+            {readiness?.available && readiness.parts.length === 0 && (
+              <div style={{ fontSize: '11px', color: theme.textMuted }}>No item lines on the sales order.</div>
+            )}
+            {readiness?.available && readiness.parts.length > 0 && (
+              <>
+                <div style={{ display: 'flex', gap: '6px', marginBottom: '8px', flexWrap: 'wrap' }}>
+                  {readiness.summary.short > 0 && (
+                    <span style={{ fontSize: '10px', fontWeight: 700, padding: '2px 8px', borderRadius: '6px', background: '#ef444420', color: '#ef4444' }}>{readiness.summary.short} short</span>
+                  )}
+                  {readiness.summary.onOrder > 0 && (
+                    <span style={{ fontSize: '10px', fontWeight: 700, padding: '2px 8px', borderRadius: '6px', background: '#60a5fa20', color: '#60a5fa' }}>{readiness.summary.onOrder} on order</span>
+                  )}
+                  {readiness.summary.covered > 0 && (
+                    <span style={{ fontSize: '10px', fontWeight: 700, padding: '2px 8px', borderRadius: '6px', background: '#22c55e20', color: '#22c55e' }}>{readiness.summary.covered} covered</span>
+                  )}
+                </div>
+                <div style={{ overflowX: 'auto' }}>
+                  <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '11px' }}>
+                    <thead>
+                      <tr style={{ color: theme.textMuted, textAlign: 'left' }}>
+                        <th style={{ padding: '4px 6px', fontWeight: 700 }}>Part</th>
+                        <th style={{ padding: '4px 6px', fontWeight: 700, textAlign: 'right' }}>Need</th>
+                        <th style={{ padding: '4px 6px', fontWeight: 700, textAlign: 'right' }}>On Hand</th>
+                        <th style={{ padding: '4px 6px', fontWeight: 700, textAlign: 'right' }}>On Order</th>
+                        <th style={{ padding: '4px 6px', fontWeight: 700 }}>Status</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {readiness.parts.map((p: any) => {
+                        const state = p.short > 0
+                          ? { label: `Short ${p.short}`, color: '#ef4444' }
+                          : p.needed <= p.on_hand
+                            ? { label: 'Covered', color: '#22c55e' }
+                            : { label: 'On order', color: '#60a5fa' };
+                        return (
+                          <tr key={p.item_number} style={{ borderTop: `1px solid ${theme.border}` }}>
+                            <td style={{ padding: '5px 6px' }}>
+                              <div style={{ fontWeight: 700, color: theme.textPrimary }}>{p.item_number}</div>
+                              {p.description && <div style={{ color: theme.textMuted, fontSize: '10px' }}>{p.description}</div>}
+                              {p.pos.length > 0 && (
+                                <div style={{ display: 'flex', gap: '4px', flexWrap: 'wrap', marginTop: '3px' }}>
+                                  {p.pos.map((po: any, i: number) => (
+                                    <span key={i} style={{ fontSize: '9px', fontWeight: 700, padding: '1px 6px', borderRadius: '5px', background: '#60a5fa15', color: '#60a5fa', border: '1px solid #60a5fa30' }}>
+                                      {po.tranid || 'PO'}{po.vendor_name ? ` · ${po.vendor_name}` : ''}{po.trandate ? ` · ${fmt(po.trandate)}` : ''} · {po.remaining} coming
+                                    </span>
+                                  ))}
+                                </div>
+                              )}
+                            </td>
+                            <td style={{ padding: '5px 6px', textAlign: 'right', color: theme.textPrimary, fontWeight: 700 }}>{p.needed}</td>
+                            <td style={{ padding: '5px 6px', textAlign: 'right', color: theme.textSecondary }}>{p.on_hand}</td>
+                            <td style={{ padding: '5px 6px', textAlign: 'right', color: theme.textSecondary }}>{p.on_order}</td>
+                            <td style={{ padding: '5px 6px' }}>
+                              <span style={{ fontSize: '10px', fontWeight: 700, padding: '2px 8px', borderRadius: '6px', background: `${state.color}20`, color: state.color, whiteSpace: 'nowrap' }}>{state.label}</span>
+                            </td>
+                          </tr>
+                        );
+                      })}
+                    </tbody>
+                  </table>
+                </div>
+              </>
+            )}
+          </div>
+        )}
 
         {/* Graphics — linked graphics jobs (from migrations/084-graphics-upfit-project-link.sql).
             Read-only summary of each linked job's production status, designer,

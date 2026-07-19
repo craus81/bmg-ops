@@ -4,6 +4,7 @@ import { suiteqlQueryAll } from '@/lib/netsuite';
 import { requireAdmin } from '@/lib/api-auth';
 import { syncPoInvoices } from '@/lib/po-invoice-sync';
 import { verifyPoInvoiceQuantities } from '@/lib/po-invoice-verify';
+import { syncVendorPos } from '@/lib/vendor-po-sync';
 
 export const dynamic = 'force-dynamic';
 export const maxDuration = 120;
@@ -365,6 +366,17 @@ export async function GET(req: NextRequest) {
   } catch (err: any) {
     console.error('[cron] PO invoice sync error:', err.message);
     results.poInvoices = { error: err.message };
+  }
+
+  // ═══════════ 3b. VENDOR PO SYNC ═══════════
+  // BMG's purchase orders to parts vendors (Ranger, Masterack, Legend, ...)
+  // land in netsuite_vendor_pos so the upfit parts-readiness check can see
+  // what's on order per part number.
+  try {
+    results.vendorPos = await syncVendorPos(supabase);
+  } catch (err: any) {
+    console.error('[cron] Vendor PO sync error:', err.message);
+    results.vendorPos = { error: err.message };
   }
 
   // ═══════════ 4. INVOICED-QUANTITY CHECK ═══════════
