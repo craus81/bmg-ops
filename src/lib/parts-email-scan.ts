@@ -1,6 +1,8 @@
 import type { SupabaseClient } from '@supabase/supabase-js';
 import { dwdConfigured, getDelegatedGmail, getMessagePlainText, getHeader } from '@/lib/google-dwd';
 import { callAnthropicWithRetry } from '@/lib/anthropic';
+import { getPdfAttachments } from '@/lib/google';
+import { r2Upload } from '@/lib/r2';
 
 /**
  * Parts-ETA email scan: read watched BMG mailboxes (domain-wide delegation,
@@ -14,7 +16,10 @@ import { callAnthropicWithRetry } from '@/lib/anthropic';
 // Subject-level prefilter — the AI classifier makes the real call, this just
 // keeps the candidate pool (and token spend) small.
 const SEARCH_QUERY =
-  'newer_than:7d (subject:"order confirmation" OR subject:"order acknowledgement" OR subject:"order acknowledgment" OR subject:"shipping confirmation" OR subject:"shipment" OR subject:"shipped" OR subject:"tracking" OR subject:"ship notice" OR subject:"backorder" OR subject:"back order" OR subject:"eta")';
+  'newer_than:7d (subject:"order confirmation" OR subject:"order acknowledgement" OR subject:"order acknowledgment" OR subject:"shipping confirmation" OR subject:"shipment" OR subject:"shipped" OR subject:"tracking" OR subject:"ship notice" OR subject:"backorder" OR subject:"back order" OR subject:"eta" OR subject:"invoice")';
+
+const MAX_ATTACHMENTS_PER_EMAIL = 3;
+const MAX_ATTACHMENT_BYTES = 10 * 1024 * 1024;
 
 const MAX_MESSAGES_PER_MAILBOX = 25;
 const MAX_AI_CALLS_PER_RUN = 20;
@@ -39,6 +44,10 @@ interface ExtractedEmail {
   eta_date: string | null;
   tracking_number: string | null;
   carrier: string | null;
+  is_invoice?: boolean;
+  invoice_number?: string | null;
+  invoice_date?: string | null;
+  invoice_total?: number | null;
 }
 
 /** Find a synced vendor PO by its NetSuite PO number (exact tranid first, then digits-only). */
@@ -123,7 +132,7 @@ async function classifyEmail(
 
   const prompt = `You are reading an email from a company mailbox at BMG Fleet, a vehicle upfitting shop that buys parts from vendors (Ranger Design, Masterack, Legend Fleet, Meyer Distributing, Buyers Products, and others).
 
-Decide whether this email is a PARTS ORDER UPDATE from a vendor — an order confirmation / acknowledgement, shipping confirmation, ship notice, tracking notification, backorder notice, or ETA update for parts BMG ordered. Marketing emails, customer emails, internal mail, invoices for services, and anything else are NOT parts order updates.
+Decide whether this email is a PARTS ORDER UPDATE from a vendor — an order confirmation / acknowledgement, shipping confirmation, ship notice, tracking notification, backorder notice, ETA update, or an INVOICE for parts BMG ordered. Marketing emails, customer emails, internal mail, and invoices for services (not parts) are NOT parts order updates.
 
 Recent BMG purchase order numbers for reference (match po_number to one of these when the email references it, keeping the exact format shown here): ${poContext || '(none synced yet)'}
 
@@ -141,6 +150,10 @@ Reply with ONLY a JSON object, no other text:
   "eta_date": "YYYY-MM-DD or null — expected delivery/arrival date; if only a ship date and transit estimate are given, compute the arrival date; null if truly unknown",
   "tracking_number": "tracking number or null",
   "carrier": "carrier name (UPS, FedEx, freight line...) or null",
+  "is_invoice": true/false — is this email delivering a vendor INVOICE (a bill BMG must pay)?,
+  "invoice_number": "the vendor's invoice number, or null",
+  "invoice_date": "YYYY-MM-DD or null",
+  "invoice_total": invoice total as a plain number, or null,
   "summary": "one short sentence: what this email says (or why it's not a parts update)"
 }`;
 
@@ -167,8 +180,64 @@ Reply with ONLY a JSON object, no other text:
     eta_date: dateOk(data.eta_date),
     tracking_number: data.tracking_number ? String(data.tracking_number) : null,
     carrier: data.carrier || null,
+    is_invoice: !!data.is_invoice,
+    invoice_number: data.invoice_number ? String(data.invoice_number) : null,
+    invoice_date: dateOk(data.invoice_date),
+    invoice_total: typeof data.invoice_total === 'number' ? data.invoice_total : null,
     summary: data.summary || null,
   };
+}
+
+/**
+ * Pull an invoice email's PDF attachments into R2 and record them in
+ * vendor_parts_invoices, ready for one-click bill creation. Best-effort —
+ * a failed attachment never fails the email.
+ */
+async function captureInvoiceAttachments(
+  service: SupabaseClient,
+  gmail: ReturnType<typeof getDelegatedGmail>,
+  message: any,
+  emailRowId: string,
+  mailbox: string,
+  extracted: ExtractedEmail,
+  matchedPoId: string | null,
+): Promise<number> {
+  const pdfs = getPdfAttachments(message).slice(0, MAX_ATTACHMENTS_PER_EMAIL);
+  let captured = 0;
+  for (const pdf of pdfs) {
+    try {
+      if (pdf.size > MAX_ATTACHMENT_BYTES) continue;
+      const att = await gmail.users.messages.attachments.get({
+        userId: 'me',
+        messageId: message.id,
+        id: pdf.attachmentId,
+      });
+      const b64 = (att.data.data || '').replace(/-/g, '+').replace(/_/g, '/');
+      if (!b64) continue;
+      const buffer = Buffer.from(b64, 'base64');
+      const safeName = pdf.filename.replace(/[^A-Za-z0-9._-]/g, '_').slice(0, 120);
+      const path = `${emailRowId}/${safeName}`;
+      const upload = await r2Upload('parts-invoices', path, buffer, 'application/pdf');
+      if (!upload.success) continue;
+      await service.from('vendor_parts_invoices').insert({
+        email_id: emailRowId,
+        mailbox,
+        file_name: pdf.filename.slice(0, 200),
+        storage_path: path,
+        content_type: 'application/pdf',
+        file_size: buffer.length,
+        vendor_name: extracted.vendor_name,
+        invoice_number: extracted.invoice_number || null,
+        invoice_date: extracted.invoice_date || null,
+        total: extracted.invoice_total ?? null,
+        matched_po_id: matchedPoId,
+      });
+      captured++;
+    } catch (e: any) {
+      console.error(`[parts-email] attachment capture failed (${pdf.filename}):`, e?.message);
+    }
+  }
+  return captured;
 }
 
 async function heartbeat(service: SupabaseClient, result: PartsEmailScanResult) {
@@ -286,13 +355,26 @@ export async function scanPartsEmails(service: SupabaseClient): Promise<PartsEma
         }
 
         const po = extracted.po_number ? await findPoByNumber(service, extracted.po_number) : null;
+        let insertedId: string | null = null;
         if (po) {
           const outcome = await applyEmailToPo(service, extracted, po, subject.slice(0, 120));
-          await service.from('vendor_shipment_emails').insert({ ...row, classification: outcome, matched_po_id: po.id });
+          const { data: inserted } = await service.from('vendor_shipment_emails')
+            .insert({ ...row, classification: outcome, matched_po_id: po.id })
+            .select('id').single();
+          insertedId = inserted?.id || null;
           if (outcome === 'applied') result.applied++;
         } else {
-          await service.from('vendor_shipment_emails').insert({ ...row, classification: 'review' });
+          const { data: inserted } = await service.from('vendor_shipment_emails')
+            .insert({ ...row, classification: 'review' })
+            .select('id').single();
+          insertedId = inserted?.id || null;
           result.review++;
+        }
+
+        // Invoice emails: pull the PDF(s) into R2 so a bill can be created
+        // from the matched PO with one click.
+        if (extracted.is_invoice && insertedId) {
+          await captureInvoiceAttachments(service, gmail, msg.data, insertedId, mailbox, extracted, po?.id || null);
         }
         result.processed++;
       } catch (e: any) {

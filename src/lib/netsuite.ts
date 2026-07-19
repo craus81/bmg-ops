@@ -1276,6 +1276,74 @@ export async function createVendorBill(payload: {
 }
 
 /**
+ * Create a Vendor Bill in NetSuite from a Purchase Order.
+ * Uses: POST /services/rest/record/v1/vendorBill?init=purchaseOrder&id={poId}
+ * (same init pattern as createInvoiceFromSO) so the bill carries the PO's
+ * vendor, items, and amounts — nothing is re-keyed. referenceNo becomes the
+ * bill's tranId (the vendor's invoice number).
+ */
+export async function createBillFromPo(payload: {
+  purchaseOrderId: string | number;
+  referenceNo?: string;
+  memo?: string;
+}): Promise<{ success: boolean; billId?: string; billNumber?: string; error?: string }> {
+  const config = getConfig();
+  const baseUrl = getBaseUrl(config.accountId);
+  const url = `${baseUrl}/services/rest/record/v1/vendorBill?init=purchaseOrder&id=${payload.purchaseOrderId}`;
+  const { oauth, token } = createOAuth(config);
+  const authHeader = getAuthHeader(oauth, token, { url, method: 'POST' });
+
+  const body: any = {
+    ...(payload.referenceNo ? { tranId: payload.referenceNo } : {}),
+    ...(payload.memo ? { memo: payload.memo } : {}),
+  };
+
+  try {
+    const response = await fetch(url, {
+      method: 'POST',
+      headers: {
+        'Authorization': authHeader,
+        'Content-Type': 'application/json',
+        'Prefer': 'respondAsync=false',
+      },
+      body: JSON.stringify(body),
+    });
+
+    if (!response.ok) {
+      const text = await response.text();
+      console.error('NetSuite bill-from-PO error:', text, '\nrequest body:', JSON.stringify(body));
+      return { success: false, error: `NetSuite error (${response.status}): ${text} | sent: ${JSON.stringify(body)}` };
+    }
+
+    const location = response.headers.get('Location');
+    let billId = '';
+    if (location) {
+      const match = location.match(/\/(\d+)$/);
+      billId = match?.[1] || '';
+    }
+    let billNumber = '';
+    try {
+      const result = await response.json();
+      billId = billId || result.id?.toString() || '';
+      billNumber = result.tranId || result.tranid || '';
+    } catch {
+      // 204 No Content
+    }
+    if (billId && !billNumber) {
+      try {
+        const lookup = await suiteqlQuery(`SELECT tranid FROM transaction WHERE id = ${billId}`);
+        billNumber = lookup?.items?.[0]?.tranid || '';
+      } catch {
+        // Non-critical — the internal id is enough to record the bill.
+      }
+    }
+    return { success: true, billId, billNumber };
+  } catch (e: any) {
+    return { success: false, error: `Failed to create bill from PO: ${e.message}` };
+  }
+}
+
+/**
  * Create an Invoice in NetSuite by transforming a Sales Order
  * Uses: POST /services/rest/record/v1/invoice
  * The transform endpoint creates an invoice from an existing SO
