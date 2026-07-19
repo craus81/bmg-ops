@@ -31,6 +31,12 @@ const REPORTS: ReportLink[] = [
     source: 'FleetSuite',
   },
   {
+    title: 'Monthly Accounting Package',
+    blurb: 'One ZIP per month for your accountant: vendor invoices with the original documents, payouts paid, and per-VIN pay credits — all with NetSuite references.',
+    href: '/admin/reports/accounting-package',
+    source: 'FleetSuite',
+  },
+  {
     title: 'Graphics Costs — Revenue vs Material',
     blurb: 'Invoiced revenue minus logged vinyl/laminate cost per graphics job, plus a per-material usage rollup for buying decisions.',
     href: '/admin/reports/graphics-costs',
