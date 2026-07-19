@@ -7,7 +7,7 @@ import type { FeatureKey } from '@/lib/features';
 import {
   Home, Palette, ClipboardCheck, Warehouse, Users,
   CalendarDays, ScanLine, Clock, FileText, Briefcase,
-  LayoutGrid, Settings, MoreHorizontal, Wrench, Receipt,
+  LayoutGrid, Settings, MoreHorizontal, Wrench, Receipt, Truck,
 } from 'lucide-react';
 
 interface BottomNavProps {
@@ -29,6 +29,7 @@ export const allTabs: Tab[] = [
   { id: 'upfit', path: '/upfit', label: 'Upfit', feature: 'upfit_projects', priority: 0.5 },
   { id: 'graphics', path: '/graphics', label: 'Graphics', feature: 'graphics', priority: 1 },
   { id: 'tracking', path: '/tracking', label: 'In-Shop', feature: 'in_shop', priority: 3 },
+  { id: 'shop-board', path: '/shop-board', label: 'Shop Board', feature: 'in_shop', priority: 3.1 },
   // POs and Scans go after In-Shop so they slot in on the right of the
   // existing visible tabs without displacing anything.
   { id: 'pos', path: '/admin/pos', label: 'POs', feature: 'purchase_orders', priority: 3.2 },
@@ -48,6 +49,7 @@ const TAB_ICONS: Record<string, React.ElementType> = {
   graphics: Palette,
   fleet: ClipboardCheck,
   tracking: Warehouse,
+  'shop-board': Truck,
   prospects: Users,
   schedule: CalendarDays,
   scan: ScanLine,
@@ -77,6 +79,8 @@ export default function BottomNav({ clockStatus }: BottomNavProps) {
     // Check-In merged into In-Shop: either feature grants the In-Shop tab
     // (a user with only fleet_checkin still needs a way to the panel).
     if (tab.id === 'tracking') return hasFeature('in_shop') || hasFeature('fleet_checkin');
+    // Shop Board rides the same access — everyone who works shop vehicles.
+    if (tab.id === 'shop-board') return hasFeature('in_shop') || hasFeature('fleet_checkin');
     return hasFeature(tab.feature);
   });
 
