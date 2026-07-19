@@ -14,7 +14,7 @@ Sales order (NetSuite)
                  ├─► ETAs arrive from vendor emails (hourly scan)
                  └─► Reserve parts to the job (allocation)
                         └─► Verdict: READY → set drop-off date
-                               └─► Shop Board → vehicle arrives → Check-In
+                               └─► In-Shop arrival schedule → vehicle arrives → Check-In
                                       └─► Job completed → parts consumed
 Invoice email from vendor ──► PDF captured ──► one-click NetSuite bill
 ```
@@ -26,7 +26,7 @@ Invoice email from vendor ──► PDF captured ──► one-click NetSuite bi
 | **Upfit** (tab) | One project per job. Key dates, linked SO, Parts Readiness card, notes. |
 | **More → Inventory** | Every part at a glance: on hand · allocated · free · on order. |
 | **More → Parts Mail** | What the email scanner found: ETAs applied, invoices captured, review queue. |
-| **Shop Board** (tab) | Arrival schedule: what's coming, what's here, what goes back when. |
+| **In-Shop** (tab) | Arrival schedule + calendar up top, Check-In, and every vehicle in the shop. |
 | **More → System Health** | Confirms the background syncs are alive. |
 
 ---
@@ -39,7 +39,7 @@ Invoice email from vendor ──► PDF captured ──► one-click NetSuite bi
    readiness card.
 3. Fill in **Key Dates** as you learn them. Whoever talks to the customer
    sets **Customer Drop-off** and **Needs It Back** — those two dates put
-   the vehicle on the Shop Board schedule automatically.
+   the vehicle on the In-Shop arrival schedule automatically.
 
 ## Step 2 — Read the Parts Readiness card
 
@@ -109,10 +109,10 @@ the same shelf stock.
 1. Wait for the verdict to reach ✅ (or ⏳ with an ETA you trust).
 2. Agree on a date with the customer and set **Customer Drop-off** (and
    **Needs It Back**) on the project.
-3. The vehicle appears on the **Shop Board** — arriving list and
-   calendar — automatically. Graphics-install jobs marked
+3. The vehicle appears in the **Arriving** section at the top of
+   In-Shop — list and calendar views — automatically. Graphics-install jobs marked
    **O'Fallon Shop** show up the same way.
-4. When it rolls in: **Arrived ✓** on the Shop Board, then run the
+4. When it rolls in: **Arrived ✓** in the Arriving list, then run the
    normal **Check-In** (photos, condition, the works — every vehicle goes
    through it).
 
@@ -146,7 +146,7 @@ Use the search box and the **Allocated** / **On Order** filters.
 |---|---|
 | **Salesperson / whoever owns the customer** | Link the SO on the project; set drop-off + need-back dates. |
 | **Whoever orders parts** | Watch for 🔴 Short parts; place the vendor PO in NetSuite as usual — it syncs in. |
-| **Shop lead** | Reserve parts when a job is real; work from the Shop Board and readiness verdicts. |
+| **Shop lead** | Reserve parts when a job is real; run the day from In-Shop's arrival schedule and readiness verdicts. |
 | **Everyone** | Glance at Parts Mail's review queue every day or two. |
 | **Finance / admin** | Create bills from captured invoices; keep an eye on System Health. |
 

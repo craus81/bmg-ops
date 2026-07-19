@@ -23,6 +23,7 @@ import { useDialog } from '@/components/DialogProvider';
 import { DropZone } from '@/components/DropZone';
 import MentionTextArea, { reportMentions } from '@/components/MentionTextArea';
 import MentionsInbox from '@/components/MentionsInbox';
+import ShopArrivals from '@/components/ShopArrivals';
 
 type FilterStatus = VehicleTrackingStatus | 'all' | 'stuck';
 
@@ -1036,6 +1037,9 @@ export default function TrackingPage() {
       </div>
 
       <MentionsInbox />
+
+      {/* Arrival schedule — merged from the old Shop Board tab */}
+      <ShopArrivals />
 
       {/* Check In Vehicle — merged from the old /fleet page */}
       {(isAdmin || hasFeature('fleet_checkin')) && (
