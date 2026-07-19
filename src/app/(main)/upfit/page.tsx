@@ -459,6 +459,35 @@ export default function UpfitProjectsPage() {
     setReadinessLoading(false);
   };
 
+  // Reserve/release stock for this project. The API returns recomputed
+  // readiness, so the card refreshes in the same round trip.
+  const allocate = async (body: Record<string, unknown>) => {
+    if (!selected) return;
+    setReadinessLoading(true);
+    try {
+      const res = await fetch('/api/upfit-projects/allocations', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ projectId: selected.id, ...body }),
+      });
+      const data = await res.json();
+      if (!res.ok) await dialog.alert(data.error || 'Allocation failed');
+      else setReadiness(data);
+    } catch { /* leave the card as-is */ }
+    setReadinessLoading(false);
+  };
+
+  const editAllocation = async (p: any) => {
+    const answer = await dialog.prompt(
+      `Reserve how many ${p.item_number} for this job? (0 releases; ${p.allocated + p.free} max)`,
+      String(p.allocated > 0 ? p.allocated : Math.min(p.needed, p.allocated + p.free)),
+    );
+    if (answer === null) return;
+    const qty = parseFloat(answer);
+    if (isNaN(qty) || qty < 0) return;
+    allocate({ action: 'set', itemNumber: p.item_number, quantity: qty });
+  };
+
   const openProject = (p: UpfitProject) => {
     setSelected(p);
     loadNotes(p.id);
@@ -728,13 +757,33 @@ export default function UpfitProjectsPage() {
               <div style={{ fontSize: '11px', fontWeight: 700, color: theme.textSecondary, textTransform: 'uppercase', letterSpacing: '0.5px' }}>
                 Parts Readiness{readiness?.soNumber ? ` · ${readiness.soNumber}` : ''}
               </div>
-              <button
-                onClick={() => loadReadiness(selected.id, true)}
-                disabled={readinessLoading}
-                style={{ fontSize: '10px', fontWeight: 700, color: theme.textMuted, background: 'none', border: 'none', cursor: 'pointer' }}
-              >
-                {readinessLoading ? 'Checking…' : 'Refresh'}
-              </button>
+              <span style={{ display: 'flex', gap: '10px', alignItems: 'center' }}>
+                {readiness?.available && (readiness.parts || []).some((p: any) => p.allocatable > 0) && (
+                  <button
+                    onClick={() => allocate({ action: 'allocate_all' })}
+                    disabled={readinessLoading}
+                    style={{ fontSize: '10px', fontWeight: 700, color: '#22c55e', background: 'none', border: 'none', cursor: 'pointer' }}
+                  >
+                    Reserve available
+                  </button>
+                )}
+                {readiness?.available && (readiness.parts || []).some((p: any) => p.allocated > 0) && (
+                  <button
+                    onClick={async () => { if (await dialog.confirm('Release every part reserved for this job back to the pool?')) allocate({ action: 'release_all' }); }}
+                    disabled={readinessLoading}
+                    style={{ fontSize: '10px', fontWeight: 700, color: theme.textMuted, background: 'none', border: 'none', cursor: 'pointer' }}
+                  >
+                    Release all
+                  </button>
+                )}
+                <button
+                  onClick={() => loadReadiness(selected.id, true)}
+                  disabled={readinessLoading}
+                  style={{ fontSize: '10px', fontWeight: 700, color: theme.textMuted, background: 'none', border: 'none', cursor: 'pointer' }}
+                >
+                  {readinessLoading ? 'Checking…' : 'Refresh'}
+                </button>
+              </span>
             </div>
             {readinessLoading && !readiness && (
               <div style={{ fontSize: '11px', color: theme.textMuted }}>Checking NetSuite…</div>
@@ -749,18 +798,21 @@ export default function UpfitProjectsPage() {
             )}
             {readiness?.available && readiness.parts.length > 0 && (
               <>
-                {readiness.summary.verdict && (
-                  <div style={{
-                    fontSize: '11px', fontWeight: 800, padding: '7px 10px', borderRadius: '8px', marginBottom: '8px',
-                    background: readiness.summary.verdict === 'ready' ? 'rgba(34,197,94,0.12)' : readiness.summary.verdict === 'waiting' ? 'rgba(96,165,250,0.12)' : 'rgba(239,68,68,0.12)',
-                    color: readiness.summary.verdict === 'ready' ? '#22c55e' : readiness.summary.verdict === 'waiting' ? '#60a5fa' : '#ef4444',
-                    border: `1px solid ${readiness.summary.verdict === 'ready' ? 'rgba(34,197,94,0.35)' : readiness.summary.verdict === 'waiting' ? 'rgba(96,165,250,0.35)' : 'rgba(239,68,68,0.35)'}`,
-                  }}>
-                    {readiness.summary.verdict === 'ready' && '✓ All parts available — ready to schedule'}
-                    {readiness.summary.verdict === 'waiting' && `⏳ Waiting on parts already on order${readiness.summary.lastEta ? ` — last ETA ${fmt(readiness.summary.lastEta)}` : ''}`}
-                    {readiness.summary.verdict === 'short' && `✗ ${readiness.summary.short} part${readiness.summary.short !== 1 ? 's' : ''} not in stock or on order — don't schedule yet`}
-                  </div>
-                )}
+                {readiness.summary.verdict && (() => {
+                  const v = readiness.summary.verdict;
+                  const color = v === 'reserved' || v === 'ready' ? '#22c55e' : v === 'waiting' ? '#60a5fa' : '#ef4444';
+                  return (
+                    <div style={{
+                      fontSize: '11px', fontWeight: 800, padding: '7px 10px', borderRadius: '8px', marginBottom: '8px',
+                      background: `${color}1f`, color, border: `1px solid ${color}59`,
+                    }}>
+                      {v === 'reserved' && '✓ All parts reserved for this job — ready to schedule'}
+                      {v === 'ready' && '✓ All parts available — reserve them so another job can\'t claim them'}
+                      {v === 'waiting' && `⏳ Waiting on parts already on order${readiness.summary.lastEta ? ` — last ETA ${fmt(readiness.summary.lastEta)}` : ''}`}
+                      {v === 'short' && `✗ ${readiness.summary.short} part${readiness.summary.short !== 1 ? 's' : ''} not in stock or on order — don't schedule yet`}
+                    </div>
+                  );
+                })()}
                 <div style={{ display: 'flex', gap: '6px', marginBottom: '8px', flexWrap: 'wrap' }}>
                   {readiness.summary.short > 0 && (
                     <span style={{ fontSize: '10px', fontWeight: 700, padding: '2px 8px', borderRadius: '6px', background: '#ef444420', color: '#ef4444' }}>{readiness.summary.short} short</span>
@@ -778,18 +830,23 @@ export default function UpfitProjectsPage() {
                       <tr style={{ color: theme.textMuted, textAlign: 'left' }}>
                         <th style={{ padding: '4px 6px', fontWeight: 700 }}>Part</th>
                         <th style={{ padding: '4px 6px', fontWeight: 700, textAlign: 'right' }}>Need</th>
-                        <th style={{ padding: '4px 6px', fontWeight: 700, textAlign: 'right' }} title="On hand minus committed to other orders">Avail</th>
+                        <th style={{ padding: '4px 6px', fontWeight: 700, textAlign: 'right' }} title="Reserved for this job — click a value to change it">Res.</th>
+                        <th style={{ padding: '4px 6px', fontWeight: 700, textAlign: 'right' }} title="Free stock after every job's reservations">Free</th>
                         <th style={{ padding: '4px 6px', fontWeight: 700, textAlign: 'right' }}>On Order</th>
                         <th style={{ padding: '4px 6px', fontWeight: 700 }}>Status</th>
                       </tr>
                     </thead>
                     <tbody>
                       {readiness.parts.map((p: any) => {
-                        const state = p.short > 0
-                          ? { label: `Short ${p.short}`, color: '#ef4444' }
-                          : p.needed <= p.on_hand
-                            ? { label: 'Covered', color: '#22c55e' }
-                            : { label: 'On order', color: '#60a5fa' };
+                        const state = p.state === 'reserved'
+                          ? { label: 'Reserved', color: '#22c55e' }
+                          : p.state === 'available'
+                            ? { label: 'Available', color: '#4ade80' }
+                            : p.state === 'waiting' || (p.state == null && p.short === 0 && p.needed > p.on_hand)
+                              ? { label: 'On order', color: '#60a5fa' }
+                              : p.short > 0
+                                ? { label: `Short ${p.short}`, color: '#ef4444' }
+                                : { label: 'Covered', color: '#22c55e' };
                         return (
                           <tr key={p.item_number} style={{ borderTop: `1px solid ${theme.border}` }}>
                             <td style={{ padding: '5px 6px' }}>
@@ -806,7 +863,16 @@ export default function UpfitProjectsPage() {
                               )}
                             </td>
                             <td style={{ padding: '5px 6px', textAlign: 'right', color: theme.textPrimary, fontWeight: 700 }}>{p.needed}</td>
-                            <td style={{ padding: '5px 6px', textAlign: 'right', color: theme.textSecondary }}>{p.on_hand}</td>
+                            <td style={{ padding: '5px 6px', textAlign: 'right' }}>
+                              <button
+                                onClick={() => editAllocation(p)}
+                                title="Change how many are reserved for this job"
+                                style={{ background: 'none', border: 'none', cursor: 'pointer', fontSize: '11px', fontWeight: 800, color: (p.allocated || 0) > 0 ? '#22c55e' : theme.textMuted, textDecoration: 'underline dotted', padding: 0 }}
+                              >
+                                {p.allocated ?? 0}
+                              </button>
+                            </td>
+                            <td style={{ padding: '5px 6px', textAlign: 'right', color: theme.textSecondary }}>{p.free ?? p.on_hand}</td>
                             <td style={{ padding: '5px 6px', textAlign: 'right', color: theme.textSecondary }}>{p.on_order}</td>
                             <td style={{ padding: '5px 6px' }}>
                               <span style={{ fontSize: '10px', fontWeight: 700, padding: '2px 8px', borderRadius: '6px', background: `${state.color}20`, color: state.color, whiteSpace: 'nowrap' }}>{state.label}</span>

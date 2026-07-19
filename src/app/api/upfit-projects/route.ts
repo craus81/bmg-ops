@@ -145,6 +145,19 @@ export async function PUT(req: NextRequest) {
         content: `Status changed from ${existing.status} to ${fields.status}`,
         created_by: auth.user.id,
       });
+
+      // Reservations follow the project: completed jobs consumed their
+      // parts; cancelled jobs free them back to the pool.
+      if (fields.status === 'completed' || fields.status === 'cancelled') {
+        await supabase.from('part_allocations')
+          .update({
+            status: fields.status === 'completed' ? 'consumed' : 'released',
+            released_at: new Date().toISOString(),
+            updated_at: new Date().toISOString(),
+          })
+          .eq('project_id', id)
+          .eq('status', 'reserved');
+      }
     }
   }
 
