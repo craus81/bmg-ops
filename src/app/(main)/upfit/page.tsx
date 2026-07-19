@@ -749,6 +749,18 @@ export default function UpfitProjectsPage() {
             )}
             {readiness?.available && readiness.parts.length > 0 && (
               <>
+                {readiness.summary.verdict && (
+                  <div style={{
+                    fontSize: '11px', fontWeight: 800, padding: '7px 10px', borderRadius: '8px', marginBottom: '8px',
+                    background: readiness.summary.verdict === 'ready' ? 'rgba(34,197,94,0.12)' : readiness.summary.verdict === 'waiting' ? 'rgba(96,165,250,0.12)' : 'rgba(239,68,68,0.12)',
+                    color: readiness.summary.verdict === 'ready' ? '#22c55e' : readiness.summary.verdict === 'waiting' ? '#60a5fa' : '#ef4444',
+                    border: `1px solid ${readiness.summary.verdict === 'ready' ? 'rgba(34,197,94,0.35)' : readiness.summary.verdict === 'waiting' ? 'rgba(96,165,250,0.35)' : 'rgba(239,68,68,0.35)'}`,
+                  }}>
+                    {readiness.summary.verdict === 'ready' && '✓ All parts available — ready to schedule'}
+                    {readiness.summary.verdict === 'waiting' && `⏳ Waiting on parts already on order${readiness.summary.lastEta ? ` — last ETA ${fmt(readiness.summary.lastEta)}` : ''}`}
+                    {readiness.summary.verdict === 'short' && `✗ ${readiness.summary.short} part${readiness.summary.short !== 1 ? 's' : ''} not in stock or on order — don't schedule yet`}
+                  </div>
+                )}
                 <div style={{ display: 'flex', gap: '6px', marginBottom: '8px', flexWrap: 'wrap' }}>
                   {readiness.summary.short > 0 && (
                     <span style={{ fontSize: '10px', fontWeight: 700, padding: '2px 8px', borderRadius: '6px', background: '#ef444420', color: '#ef4444' }}>{readiness.summary.short} short</span>
@@ -766,7 +778,7 @@ export default function UpfitProjectsPage() {
                       <tr style={{ color: theme.textMuted, textAlign: 'left' }}>
                         <th style={{ padding: '4px 6px', fontWeight: 700 }}>Part</th>
                         <th style={{ padding: '4px 6px', fontWeight: 700, textAlign: 'right' }}>Need</th>
-                        <th style={{ padding: '4px 6px', fontWeight: 700, textAlign: 'right' }}>On Hand</th>
+                        <th style={{ padding: '4px 6px', fontWeight: 700, textAlign: 'right' }} title="On hand minus committed to other orders">Avail</th>
                         <th style={{ padding: '4px 6px', fontWeight: 700, textAlign: 'right' }}>On Order</th>
                         <th style={{ padding: '4px 6px', fontWeight: 700 }}>Status</th>
                       </tr>

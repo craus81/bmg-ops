@@ -91,17 +91,31 @@ export async function GET(req: NextRequest) {
     return NextResponse.json({ available: true, soNumber: project.netsuite_so_number, parts: [], summary: { covered: 0, onOrder: 0, short: 0 } });
   }
 
-  // ── On hand (live — netsuite_parts sync can lag) ──
+  // ── On hand (live — netsuite_parts sync can lag). Prefer "available"
+  //    (on hand minus committed) — the honest schedulable number — with a
+  //    fallback when the account doesn't expose it. ──
   const allItemIds = [...new Set([...parts.values()].flatMap(p => [...p.itemIds]))];
   try {
-    const invRows = await suiteqlQueryAll(`
-      SELECT i.id, i.itemid AS item_number, i.totalquantityonhand AS qty
-      FROM item i
-      WHERE i.id IN (${allItemIds.join(', ')})
-    `);
+    let invRows: any[];
+    try {
+      invRows = await suiteqlQueryAll(`
+        SELECT i.id, i.itemid AS item_number, i.totalquantityonhand AS qty, i.totalquantityavailable AS avail
+        FROM item i
+        WHERE i.id IN (${allItemIds.join(', ')})
+      `);
+    } catch {
+      invRows = await suiteqlQueryAll(`
+        SELECT i.id, i.itemid AS item_number, i.totalquantityonhand AS qty
+        FROM item i
+        WHERE i.id IN (${allItemIds.join(', ')})
+      `);
+    }
     for (const inv of invRows) {
       const row = parts.get(normalizeItemNumber(inv.item_number));
-      if (row) row.on_hand = Math.max(0, parseFloat(inv.qty || '0') || 0);
+      if (!row) continue;
+      const onHand = Math.max(0, parseFloat(inv.qty || '0') || 0);
+      const avail = inv.avail != null ? Math.max(0, parseFloat(inv.avail || '0') || 0) : onHand;
+      row.on_hand = avail;
     }
   } catch { /* non-inventory items have no on-hand — leave 0 */ }
 
@@ -140,6 +154,12 @@ export async function GET(req: NextRequest) {
     covered: rows.filter(r => r.short === 0 && r.needed <= r.on_hand).length,
     onOrder: rows.filter(r => r.short === 0 && r.needed > r.on_hand).length,
     short: rows.filter(r => r.short > 0).length,
+    // ready: every part in stock now · waiting: covered once POs land ·
+    // short: something isn't even on order yet
+    verdict: rows.some(r => r.short > 0) ? 'short' : rows.some(r => r.needed > r.on_hand) ? 'waiting' : 'ready',
+    // Latest ETA across the POs still owed parts — the earliest realistic
+    // schedule date when waiting.
+    lastEta: rows.filter(r => r.needed > r.on_hand).flatMap(r => r.pos.map(p => p.eta_date)).filter(Boolean).sort().pop() || null,
   };
 
   return NextResponse.json({ available: true, soNumber: project.netsuite_so_number, parts: rows, summary });

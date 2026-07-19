@@ -5,6 +5,7 @@ import { requireAdmin } from '@/lib/api-auth';
 import { syncPoInvoices } from '@/lib/po-invoice-sync';
 import { verifyPoInvoiceQuantities } from '@/lib/po-invoice-verify';
 import { syncVendorPos } from '@/lib/vendor-po-sync';
+import { syncInventoryQuantities } from '@/lib/inventory-sync';
 
 export const dynamic = 'force-dynamic';
 export const maxDuration = 120;
@@ -377,6 +378,17 @@ export async function GET(req: NextRequest) {
   } catch (err: any) {
     console.error('[cron] Vendor PO sync error:', err.message);
     results.vendorPos = { error: err.message };
+  }
+
+  // ═══════════ 3c. INVENTORY QUANTITY SWEEP ═══════════
+  // Item quantities move without bumping lastmodifieddate, so the parts
+  // catalog snapshot (and everything reading on-hand/available from it)
+  // gets a light quantities-only refresh here.
+  try {
+    results.inventory = await syncInventoryQuantities(supabase);
+  } catch (err: any) {
+    console.error('[cron] Inventory sweep error:', err.message);
+    results.inventory = { error: err.message };
   }
 
   // ═══════════ 4. INVOICED-QUANTITY CHECK ═══════════
