@@ -20,6 +20,17 @@ interface EarningRow {
   payoutStatus: string; // pending | draft | approved | billed | paid
 }
 
+interface PayoutRow {
+  id: string;
+  kind: 'cni_job' | 'payroll_period';
+  label: string;
+  amount: number | null;
+  status: string; // draft | approved | billed | paid
+  createdAt: string;
+  paidAt: string | null;
+  billedAt: string | null;
+}
+
 const STATUS_STYLE: Record<string, { label: string; color: string }> = {
   pending: { label: 'Pending', color: 'var(--text-muted)' },
   draft: { label: 'Pending', color: 'var(--text-muted)' },
@@ -40,8 +51,10 @@ export default function MyEarningsPage() {
   const [preview] = useState(() => getInstallerPreview());
   const supabase = createClient();
   const [rows, setRows] = useState<EarningRow[]>([]);
+  const [payouts, setPayouts] = useState<PayoutRow[]>([]);
   const [loading, setLoading] = useState(true);
   const [openGroups, setOpenGroups] = useState<Set<string>>(new Set());
+  const [showAllPayouts, setShowAllPayouts] = useState(false);
 
   useEffect(() => {
     if (!user) return;
@@ -51,7 +64,11 @@ export default function MyEarningsPage() {
       const res = await fetch(`/api/my/earnings${previewParam}`, {
         headers: session?.access_token ? { Authorization: `Bearer ${session.access_token}` } : {},
       });
-      if (res.ok) setRows((await res.json()).credits || []);
+      if (res.ok) {
+        const body = await res.json();
+        setRows(body.credits || []);
+        setPayouts(body.payouts || []);
+      }
       setLoading(false);
     })();
   // eslint-disable-next-line react-hooks/exhaustive-deps -- intentional: load once on mount
@@ -107,6 +124,44 @@ export default function MyEarningsPage() {
       {unpriced > 0 && (
         <div style={{ padding: '10px 14px', borderRadius: '10px', marginBottom: '12px', background: 'var(--warning-bg)', border: '1px solid var(--warning-border)', color: 'var(--warning)', fontSize: '12px', fontWeight: 600 }}>
           {unpriced} vehicle{unpriced === 1 ? '' : 's'} awaiting a pay rate — the amount will appear once it&apos;s set.
+        </div>
+      )}
+
+      {/* Payout history — when was I paid, and for which period/job */}
+      {payouts.length > 0 && (
+        <div style={{ borderRadius: '12px', marginBottom: '16px', background: 'var(--card)', border: '1px solid var(--border)', overflow: 'hidden' }}>
+          <div style={{ padding: '12px 16px', fontSize: '11px', fontWeight: 700, color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.6px', borderBottom: '1px solid var(--border)' }}>
+            Payout History
+          </div>
+          {(showAllPayouts ? payouts : payouts.slice(0, 5)).map(p => {
+            const st = STATUS_STYLE[p.status] || STATUS_STYLE.pending;
+            return (
+              <div key={p.id} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '10px 16px', borderBottom: '1px solid var(--border)' }}>
+                <div>
+                  <div style={{ fontSize: '12px', fontWeight: 700, color: 'var(--text-primary)' }}>{p.label}</div>
+                  <div style={{ fontSize: '10px', color: 'var(--text-muted)' }}>
+                    {p.status === 'paid' && p.paidAt
+                      ? `Paid ${new Date(p.paidAt).toLocaleDateString([], { month: 'short', day: 'numeric', year: 'numeric' })}`
+                      : `Created ${new Date(p.createdAt).toLocaleDateString([], { month: 'short', day: 'numeric', year: 'numeric' })}`}
+                  </div>
+                </div>
+                <div style={{ textAlign: 'right' }}>
+                  <div style={{ fontSize: '13px', fontWeight: 800, color: 'var(--text-primary)' }}>
+                    {p.amount != null ? `$${p.amount.toFixed(2)}` : '—'}
+                  </div>
+                  <div style={{ fontSize: '9px', fontWeight: 700, color: st.color, textTransform: 'uppercase', letterSpacing: '0.5px' }}>{st.label}</div>
+                </div>
+              </div>
+            );
+          })}
+          {payouts.length > 5 && (
+            <button
+              onClick={() => setShowAllPayouts(s => !s)}
+              style={{ width: '100%', padding: '10px', background: 'transparent', border: 'none', color: 'var(--text-muted)', fontSize: '11px', fontWeight: 700, cursor: 'pointer' }}
+            >
+              {showAllPayouts ? 'Show fewer' : `Show all ${payouts.length} payouts`}
+            </button>
+          )}
         </div>
       )}
 
