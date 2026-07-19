@@ -90,6 +90,24 @@ export default function GraphicsPage() {
   const [filterCategory, setFilterCategory] = useState<FilterCategory>('all');
   // When each job entered its current stage (latest real status transition).
   const [stageSince, setStageSince] = useState<Record<string, string>>({});
+  // "My jobs" filter: printers/cutters see only what's assigned to them.
+  const [myJobsOnly, setMyJobsOnly] = useState(false);
+  const [myAssignedIds, setMyAssignedIds] = useState<Set<string>>(new Set());
+
+  useEffect(() => {
+    if (!user?.id) return;
+    (async () => {
+      const { data } = await supabase
+        .from('job_assignments')
+        .select('job_id')
+        .eq('job_type', 'graphics_job')
+        .eq('user_id', user.id);
+      setMyAssignedIds(new Set((data || []).map((a: any) => a.job_id)));
+    })();
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- supabase client is a stable singleton
+  }, [user?.id]);
+
+  const isMine = (j: GraphicsJob) => j.assigned_to === user?.id || myAssignedIds.has(j.id);
   const [search, setSearch] = useState('');
   const [sortBy, setSortBy] = useState<'due_date' | 'created_at' | 'status'>('due_date');
   const [sortDir, setSortDir] = useState<'asc' | 'desc'>('asc');
@@ -1195,6 +1213,8 @@ export default function GraphicsPage() {
   const filteredJobs = jobs.filter(j => {
     // Flagged jobs only visible to admins
     if (j.status === 'flagged' && !isAdmin) return false;
+    // My-jobs filter: assigned directly or via the assignment picker
+    if (myJobsOnly && !isMine(j)) return false;
     // Category filter
     if (filterCategory !== 'all' && (j.job_category || 'production') !== filterCategory) return false;
     // Status filter
@@ -1374,7 +1394,25 @@ export default function GraphicsPage() {
       )}
 
       {/* Category Filter */}
-      <div style={{ display: 'flex', gap: '4px', marginBottom: '8px' }}>
+      <div style={{ display: 'flex', gap: '4px', marginBottom: '8px', flexWrap: 'wrap' }}>
+        {(() => {
+          const mineCount = jobs.filter(j => (isAdmin || j.status !== 'flagged') && isMine(j)).length;
+          return (
+            <button
+              onClick={() => setMyJobsOnly(v => !v)}
+              title="Only jobs assigned to you"
+              style={{
+                padding: '5px 10px', borderRadius: '6px', fontSize: '10px', fontWeight: 700,
+                background: myJobsOnly ? 'rgba(34,197,94,0.18)' : 'var(--subtle-bg)',
+                border: `1px solid ${myJobsOnly ? 'rgba(34,197,94,0.5)' : 'var(--border)'}`,
+                color: myJobsOnly ? '#22c55e' : 'var(--text-label)',
+                cursor: 'pointer', whiteSpace: 'nowrap',
+              }}
+            >
+              ★ My Jobs ({mineCount})
+            </button>
+          );
+        })()}
         {([
           { id: 'all' as const, label: 'All', color: '#60a5fa' },
           { id: 'production' as const, label: 'Production', color: GRAPHICS_CATEGORY_COLORS.production },
