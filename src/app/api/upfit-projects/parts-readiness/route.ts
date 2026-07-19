@@ -17,6 +17,7 @@ interface PoRef {
   vendor_name: string | null;
   trandate: string | null;
   status_label: string | null;
+  eta_date: string | null;
   remaining: number;
 }
 
@@ -107,7 +108,7 @@ export async function GET(req: NextRequest) {
   // ── On order across all open vendor POs (synced, matched on part number) ──
   const { data: poLines } = await service
     .from('netsuite_vendor_po_lines')
-    .select('item_number, quantity, quantity_received, netsuite_vendor_pos!inner(tranid, vendor_name, trandate, status, status_label)')
+    .select('item_number, quantity, quantity_received, netsuite_vendor_pos!inner(tranid, vendor_name, trandate, status, status_label, eta_date)')
     .in('item_number', [...parts.keys()]);
 
   for (const l of poLines || []) {
@@ -123,6 +124,7 @@ export async function GET(req: NextRequest) {
       vendor_name: po?.vendor_name || null,
       trandate: po?.trandate || null,
       status_label: po?.status_label || po?.status || null,
+      eta_date: po?.eta_date || null,
       remaining,
     });
   }
