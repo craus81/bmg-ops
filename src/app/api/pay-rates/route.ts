@@ -27,18 +27,52 @@ export async function GET(req: NextRequest) {
 
   const { data: unpriced } = await service
     .from('install_credits')
-    .select('part_number')
+    .select('part_number, source, vin, cni_job_vin_id')
     .is('amount', null)
     .is('voided_at', null);
+
+  // Field credits price from install_pay_rates — that's this screen's queue.
+  // CNI credits price from their job's pay_per_vehicle, and credits with no
+  // part number can't match a rate at all; both used to vanish from this
+  // response entirely and accumulate unseen.
   const counts = new Map<string, number>();
+  const noPart: { vin: string | null; source: string }[] = [];
+  const cniVinIds: string[] = [];
+  let cniCount = 0;
   for (const c of unpriced || []) {
-    if (!c.part_number) continue;
+    if (c.source === 'cni') {
+      cniCount++;
+      if (c.cni_job_vin_id) cniVinIds.push(c.cni_job_vin_id);
+      continue;
+    }
+    if (!c.part_number) {
+      noPart.push({ vin: c.vin || null, source: c.source });
+      continue;
+    }
     counts.set(c.part_number, (counts.get(c.part_number) || 0) + 1);
+  }
+
+  // Which CNI jobs are the unpriced credits sitting on? (Fixed by setting
+  // pay-per-vehicle on the job, not by a rate here.)
+  const cniJobs = new Map<string, string>();
+  if (cniVinIds.length > 0) {
+    for (let i = 0; i < cniVinIds.length; i += 200) {
+      const { data: vins } = await service
+        .from('cni_job_vins')
+        .select('id, job:cni_jobs(id, job_number, title)')
+        .in('id', cniVinIds.slice(i, i + 200));
+      for (const v of vins || []) {
+        const job = Array.isArray(v.job) ? v.job[0] : v.job;
+        if (job) cniJobs.set(job.id, job.title || job.job_number || job.id.slice(0, 8));
+      }
+    }
   }
 
   return NextResponse.json({
     rates: rates || [],
     needsPricing: [...counts.entries()].map(([part_number, credits]) => ({ part_number, credits })),
+    noPartCredits: { count: noPart.length, vins: noPart.slice(0, 20).map(n => n.vin).filter(Boolean) },
+    cniUnpriced: { count: cniCount, jobs: [...cniJobs.entries()].map(([id, label]) => ({ id, label })) },
   });
 }
 

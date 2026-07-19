@@ -26,6 +26,8 @@ export default function PayRatesPage() {
   const [loading, setLoading] = useState(true);
   const [rates, setRates] = useState<PayRate[]>([]);
   const [needsPricing, setNeedsPricing] = useState<NeedsPricing[]>([]);
+  const [noPartCredits, setNoPartCredits] = useState<{ count: number; vins: string[] }>({ count: 0, vins: [] });
+  const [cniUnpriced, setCniUnpriced] = useState<{ count: number; jobs: { id: string; label: string }[] }>({ count: 0, jobs: [] });
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
 
@@ -65,6 +67,8 @@ export default function PayRatesPage() {
       } else {
         setRates(json.rates || []);
         setNeedsPricing(json.needsPricing || []);
+        setNoPartCredits(json.noPartCredits || { count: 0, vins: [] });
+        setCniUnpriced(json.cniUnpriced || { count: 0, jobs: [] });
         const initial: Record<string, { rate: string; active: boolean }> = {};
         (json.rates || []).forEach((r: PayRate) => {
           initial[r.part_number] = { rate: Number(r.rate_per_vehicle).toFixed(2), active: r.active };
@@ -246,6 +250,46 @@ export default function PayRatesPage() {
                 </button>
               </div>
             ))}
+          </div>
+        </div>
+      )}
+
+      {/* Unpriced pay this screen can't fix — but must not hide */}
+      {noPartCredits.count > 0 && (
+        <div style={{
+          padding: '12px 16px', borderRadius: '12px', marginBottom: '14px',
+          background: 'rgba(239,68,68,0.05)', border: '1px solid rgba(239,68,68,0.3)',
+        }}>
+          <div style={{ fontSize: '11px', fontWeight: 700, color: '#ef4444', textTransform: 'uppercase', letterSpacing: '0.5px', marginBottom: '4px' }}>
+            {noPartCredits.count} credit{noPartCredits.count !== 1 ? 's' : ''} with no part number
+          </div>
+          <div style={{ fontSize: '12px', color: 'var(--text-muted)' }}>
+            These can&apos;t match a rate, so they&apos;d never get priced from here. Fix the part number on the scan (or edit the credit from the job&apos;s Crew &amp; Pay page).
+            {noPartCredits.vins.length > 0 && (
+              <span style={{ fontFamily: 'monospace', display: 'block', marginTop: '4px' }}>
+                VINs: {noPartCredits.vins.join(', ')}{noPartCredits.count > noPartCredits.vins.length ? ` +${noPartCredits.count - noPartCredits.vins.length} more` : ''}
+              </span>
+            )}
+          </div>
+        </div>
+      )}
+      {cniUnpriced.count > 0 && (
+        <div style={{
+          padding: '12px 16px', borderRadius: '12px', marginBottom: '14px',
+          background: 'rgba(167,139,250,0.05)', border: '1px solid rgba(167,139,250,0.3)',
+        }}>
+          <div style={{ fontSize: '11px', fontWeight: 700, color: '#a78bfa', textTransform: 'uppercase', letterSpacing: '0.5px', marginBottom: '4px' }}>
+            {cniUnpriced.count} unpriced CNI credit{cniUnpriced.count !== 1 ? 's' : ''}
+          </div>
+          <div style={{ fontSize: '12px', color: 'var(--text-muted)' }}>
+            CNI credits price from the job&apos;s pay-per-vehicle, not these rates — set it on the job:
+            <span style={{ display: 'flex', gap: '6px', flexWrap: 'wrap', marginTop: '6px' }}>
+              {cniUnpriced.jobs.map(j => (
+                <a key={j.id} href={`/admin/cni/jobs/${j.id}`} style={{ fontSize: '11px', fontWeight: 700, padding: '3px 10px', borderRadius: '6px', background: 'rgba(167,139,250,0.12)', color: '#a78bfa', textDecoration: 'none' }}>
+                  {j.label} →
+                </a>
+              ))}
+            </span>
           </div>
         </div>
       )}

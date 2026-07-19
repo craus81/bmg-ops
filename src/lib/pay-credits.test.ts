@@ -1,5 +1,5 @@
-import { describe, it, expect } from 'vitest';
-import { splitAmounts } from './pay-credits';
+import { describe, it, expect, vi } from 'vitest';
+import { splitAmounts, priceUnpricedCredits } from './pay-credits';
 
 const m = (profile_id: string, share_weight = 1) => ({ profile_id, share_weight });
 
@@ -38,5 +38,28 @@ describe('splitAmounts', () => {
 
   it('empty crew yields no rows', () => {
     expect(splitAmounts(100, [])).toEqual([]);
+  });
+});
+
+describe('priceUnpricedCredits', () => {
+  it('only prices FIELD credits — a field rate must never touch CNI credits for the same part', async () => {
+    // Regression: without .eq('source','field'), setting a field pay rate
+    // silently priced unpriced CNI credits (which price from their job's
+    // pay-per-vehicle) at the field rate.
+    const filters: Record<string, unknown> = {};
+    const query: any = {
+      select: vi.fn(() => query),
+      eq: vi.fn((col: string, val: unknown) => { filters[col] = val; return query; }),
+      is: vi.fn((col: string, val: unknown) => { filters[`is:${col}`] = val; return query; }),
+      then: (resolve: (v: { data: any[] }) => void) => resolve({ data: [] }),
+    };
+    const service: any = { from: vi.fn(() => query) };
+
+    const result = await priceUnpricedCredits(service, '06T895', 145);
+    expect(result).toEqual({ ok: true, priced: 0 });
+    expect(filters['part_number']).toBe('06T895');
+    expect(filters['source']).toBe('field');
+    expect(filters['is:amount']).toBe(null);
+    expect(filters['is:voided_at']).toBe(null);
   });
 });

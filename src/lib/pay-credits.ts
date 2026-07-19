@@ -496,6 +496,10 @@ export async function repriceJobCredits(
 /**
  * Fill in field credits that were captured before their part had a rate.
  * Groups by vehicle so each group splits the new rate by its stored weights.
+ * FIELD credits only: CNI credits price from their job's pay_per_vehicle
+ * (repriceJobCredits) — without the source filter, setting a field rate for
+ * a part silently priced unpriced CNI credits for the same part at the
+ * field rate.
  */
 export async function priceUnpricedCredits(
   service: SupabaseClient,
@@ -506,6 +510,7 @@ export async function priceUnpricedCredits(
     .from('install_credits')
     .select('id, scan_log_id, cni_job_vin_id, profile_id, share_weight, total_weight')
     .eq('part_number', partNumber)
+    .eq('source', 'field')
     .is('amount', null)
     .is('voided_at', null);
   if (!rows || rows.length === 0) return { ok: true, priced: 0 };
