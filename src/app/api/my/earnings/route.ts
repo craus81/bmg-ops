@@ -35,6 +35,36 @@ export async function GET(req: NextRequest) {
     target = q.data.profileId;
   }
 
+  // Payout history: every payout ever issued to this worker — "when was I
+  // paid, and for which period/job" — independent of the credit list below
+  // (which is capped and per-VIN).
+  const { data: payoutRows } = await service
+    .from('payouts')
+    .select('id, kind, cni_job_id, period_start, period_end, total_amount, status, netsuite_bill_id, created_at, approved_at, billed_at, paid_at')
+    .eq('profile_id', target)
+    .order('created_at', { ascending: false })
+    .limit(200);
+
+  const payoutJobIds = [...new Set((payoutRows || []).map(p => p.cni_job_id).filter(Boolean))] as string[];
+  const payoutJobLabels = new Map<string, string>();
+  if (payoutJobIds.length > 0) {
+    const { data: jobs } = await service
+      .from('cni_jobs').select('id, job_number, title').in('id', payoutJobIds);
+    for (const j of jobs || []) payoutJobLabels.set(j.id, j.title || j.job_number || '');
+  }
+  const payouts = (payoutRows || []).map(p => ({
+    id: p.id,
+    kind: p.kind,
+    label: p.kind === 'payroll_period'
+      ? `Pay period ${p.period_start || '?'} – ${p.period_end || '?'}`
+      : (p.cni_job_id && payoutJobLabels.get(p.cni_job_id)) || 'CNI job payout',
+    amount: p.total_amount != null ? Number(p.total_amount) : null,
+    status: p.status,
+    createdAt: p.created_at,
+    paidAt: p.paid_at,
+    billedAt: p.billed_at,
+  }));
+
   const { data: credits } = await service
     .from('install_credits')
     .select('id, vin, part_number, source, rate_per_vehicle, share_weight, crew_size, total_weight, amount, payout_id, cni_job_vin_id, created_at')
@@ -42,7 +72,7 @@ export async function GET(req: NextRequest) {
     .is('voided_at', null)
     .order('created_at', { ascending: false })
     .limit(1000);
-  if (!credits || credits.length === 0) return NextResponse.json({ credits: [] });
+  if (!credits || credits.length === 0) return NextResponse.json({ credits: [], payouts });
 
   // Resolve CNI credits to their job for grouping.
   const vinIds = [...new Set(credits.map(c => c.cni_job_vin_id).filter(Boolean))] as string[];
@@ -69,6 +99,7 @@ export async function GET(req: NextRequest) {
   }
 
   return NextResponse.json({
+    payouts,
     credits: credits.map(c => {
       const jobId = c.cni_job_vin_id ? vinToJob.get(c.cni_job_vin_id) : undefined;
       return {
