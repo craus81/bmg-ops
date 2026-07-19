@@ -88,6 +88,8 @@ export default function GraphicsPage() {
   const [viewMode, setViewMode] = useState<ViewMode>('pipeline');
   const [filterStatus, setFilterStatus] = useState<FilterStatus>('active');
   const [filterCategory, setFilterCategory] = useState<FilterCategory>('all');
+  // When each job entered its current stage (latest real status transition).
+  const [stageSince, setStageSince] = useState<Record<string, string>>({});
   const [search, setSearch] = useState('');
   const [sortBy, setSortBy] = useState<'due_date' | 'created_at' | 'status'>('due_date');
   const [sortDir, setSortDir] = useState<'asc' | 'desc'>('asc');
@@ -398,6 +400,27 @@ export default function GraphicsPage() {
       .order('created_at', { ascending: false });
     setJobs((jobsData as GraphicsJob[]) || []);
     setLoading(false);
+
+    // Time-in-stage: latest real status TRANSITION per job (note rows write
+    // from_status === to_status and must not reset the clock). Best-effort —
+    // metrics degrade to created_at if history can't load.
+    try {
+      const ids = ((jobsData as GraphicsJob[]) || []).map(j => j.id);
+      const since: Record<string, string> = {};
+      for (let i = 0; i < ids.length; i += 200) {
+        const { data: hist } = await supabase
+          .from('graphics_status_history')
+          .select('job_id, from_status, to_status, created_at')
+          .in('job_id', ids.slice(i, i + 200))
+          .order('created_at', { ascending: false })
+          .limit(3000);
+        for (const h of hist || []) {
+          if (h.from_status === h.to_status) continue;
+          if (!since[h.job_id]) since[h.job_id] = h.created_at;
+        }
+      }
+      setStageSince(since);
+    } catch { /* chips just fall back to created_at */ }
 
     // Views are best-effort — if the graphics_job_views table or RPC
     // hasn't been migrated yet, the page should still render the jobs.
@@ -1129,6 +1152,45 @@ export default function GraphicsPage() {
     });
   };
 
+  // ── Production metrics (time-in-stage + due risk) ──
+  const PRODUCTION_STAGES: GraphicsJobStatus[] = ['received', 'designing', 'revision', 'printing', 'outgassing', 'cutting', 'packing'];
+  const EARLY_STAGES: GraphicsJobStatus[] = ['flagged', 'received', 'designing', 'revision'];
+  const stageDays = (j: GraphicsJob): number => {
+    const since = stageSince[j.id] || j.created_at;
+    return Math.floor((Date.now() - new Date(since).getTime()) / 86_400_000);
+  };
+  const dueRisk = (j: GraphicsJob): { label: string; color: string } | null => {
+    // Once produced (ready onward), the due date did its job.
+    if (!j.due_date || !PRODUCTION_STAGES.includes(j.status) && j.status !== 'flagged') return null;
+    const todayStr2 = new Date().toISOString().slice(0, 10);
+    const due = j.due_date.slice(0, 10);
+    if (due < todayStr2) {
+      const days = Math.floor((Date.now() - new Date(due + 'T12:00:00').getTime()) / 86_400_000);
+      return { label: `overdue ${days}d`, color: '#ef4444' };
+    }
+    const daysUntil = Math.floor((new Date(due + 'T12:00:00').getTime() - Date.now()) / 86_400_000);
+    if (daysUntil > 3) return null;
+    const weekday = new Date(due + 'T12:00:00').toLocaleDateString([], { weekday: 'short' });
+    return EARLY_STAGES.includes(j.status)
+      ? { label: `due ${weekday} — still in ${GRAPHICS_STATUS_LABELS[j.status].toLowerCase()}`, color: '#ef4444' }
+      : { label: `due ${weekday}`, color: '#fbbf24' };
+  };
+  const metricJobs = jobs.filter(j => PRODUCTION_STAGES.includes(j.status));
+  const metrics = {
+    overdue: jobs.filter(j => (PRODUCTION_STAGES.includes(j.status) || j.status === 'flagged') && j.due_date && j.due_date.slice(0, 10) < new Date().toISOString().slice(0, 10)).length,
+    dueWeek: jobs.filter(j => {
+      if (!(PRODUCTION_STAGES.includes(j.status) || j.status === 'flagged') || !j.due_date) return false;
+      const due = j.due_date.slice(0, 10);
+      const today2 = new Date().toISOString().slice(0, 10);
+      const week = new Date(Date.now() + 7 * 86_400_000).toISOString().slice(0, 10);
+      return due >= today2 && due <= week;
+    }).length,
+    stuck: metricJobs.filter(j => stageDays(j) >= 5).length,
+    avgStageDays: metricJobs.length > 0
+      ? metricJobs.reduce((s, j) => s + stageDays(j), 0) / metricJobs.length
+      : 0,
+  };
+
   // Filter jobs
   const filteredJobs = jobs.filter(j => {
     // Flagged jobs only visible to admins
@@ -1339,6 +1401,23 @@ export default function GraphicsPage() {
         })}
       </div>
 
+      {/* Production metrics strip — bottleneck + due-date risk at a glance */}
+      {metricJobs.length > 0 && (
+        <div style={{ display: 'flex', gap: '8px', marginBottom: '12px', overflowX: 'auto', WebkitOverflowScrolling: 'touch' }}>
+          {[
+            { label: 'Overdue', value: String(metrics.overdue), color: metrics.overdue > 0 ? '#ef4444' : '#22c55e' },
+            { label: 'Due in 7 days', value: String(metrics.dueWeek), color: metrics.dueWeek > 0 ? '#fbbf24' : 'var(--text-muted)' },
+            { label: 'Stuck 5+ days in stage', value: String(metrics.stuck), color: metrics.stuck > 0 ? '#fbbf24' : '#22c55e' },
+            { label: 'Avg days in stage', value: metrics.avgStageDays.toFixed(1), color: 'var(--text-primary)' },
+          ].map(t => (
+            <div key={t.label} style={{ flex: '1 0 110px', padding: '8px 12px', borderRadius: '10px', background: 'var(--card)', border: '1px solid var(--border)', textAlign: 'center' }}>
+              <div style={{ fontSize: '16px', fontWeight: 800, color: t.color }}>{t.value}</div>
+              <div style={{ fontSize: '9px', fontWeight: 700, color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.4px', whiteSpace: 'nowrap' }}>{t.label}</div>
+            </div>
+          ))}
+        </div>
+      )}
+
       {/* Status Pipeline Summary */}
       <div style={{
         display: 'flex', gap: '3px', marginBottom: '12px', overflowX: 'auto',
@@ -1546,6 +1625,38 @@ export default function GraphicsPage() {
                         })()}
                       </div>
                     </div>
+                    {/* Due-date risk + time-in-stage — the bottleneck, per job */}
+                    {(() => {
+                      const risk = dueRisk(job);
+                      if (!risk) return null;
+                      return (
+                        <div style={{
+                          padding: '4px 8px', borderRadius: '6px', fontSize: '10px', fontWeight: 700,
+                          background: `${risk.color}18`, border: `1px solid ${risk.color}44`, color: risk.color,
+                          whiteSpace: 'nowrap', flexShrink: 0,
+                        }}>
+                          ⚠ {risk.label}
+                        </div>
+                      );
+                    })()}
+                    {(() => {
+                      if (!PRODUCTION_STAGES.includes(job.status)) return null;
+                      const d = stageDays(job);
+                      if (d < 4) return null;
+                      const c = d >= 7 ? '#ef4444' : '#fbbf24';
+                      return (
+                        <div
+                          title={`In ${GRAPHICS_STATUS_LABELS[job.status]} since ${new Date(stageSince[job.id] || job.created_at).toLocaleDateString()}`}
+                          style={{
+                            padding: '4px 8px', borderRadius: '6px', fontSize: '10px', fontWeight: 700,
+                            background: `${c}18`, border: `1px solid ${c}44`, color: c,
+                            whiteSpace: 'nowrap', flexShrink: 0,
+                          }}
+                        >
+                          ⏱ in {GRAPHICS_STATUS_LABELS[job.status].toLowerCase()} {d}d
+                        </div>
+                      );
+                    })()}
                     {/* Proof aging: waiting on the customer 3+ days shows on the board */}
                     {(() => {
                       const j = job as any;
