@@ -79,6 +79,10 @@ interface UpfitProject {
   netsuite_vendor_po_number: string | null;
   scheduled_date: string | null;
   scheduled_end_date: string | null;
+  parts_ordered_date: string | null;
+  parts_eta: string | null;
+  customer_dropoff_date: string | null;
+  need_back_date: string | null;
   fleet_checkin_id: string | null;
   estimated_total: number | null;
   so_total: number | null;
@@ -485,6 +489,21 @@ export default function UpfitProjectsPage() {
     }
   };
 
+  // The four dates that make a project trackable, saved as they're set.
+  // Drop-off / need-back also feed the shop arrival schedule (shop_inbound,
+  // synced server-side by the PUT route).
+  const saveDate = async (field: string, value: string) => {
+    if (!selected) return;
+    const v = value || null;
+    setSelected({ ...selected, [field]: v });
+    setProjects(prev => prev.map(p => p.id === selected.id ? { ...p, [field]: v } : p));
+    await fetch('/api/upfit-projects', {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ id: selected.id, [field]: v }),
+    });
+  };
+
   const createProject = async () => {
     if (!newName.trim()) return;
     setCreating(true);
@@ -651,6 +670,36 @@ export default function UpfitProjectsPage() {
               <div style={{ fontSize: '11px', color: '#ef4444', marginTop: '6px' }}>{nsLookupError}</div>
             )}
           </div>
+        </div>
+
+        {/* Key dates — parts + customer schedule. Anyone who talks to the
+            customer fills in drop-off / need-back; those two drive the shop
+            arrival schedule. */}
+        <div style={{ background: theme.card, border: `1px solid ${theme.border}`, borderRadius: '10px', padding: '12px', marginBottom: '16px' }}>
+          <div style={{ fontSize: '11px', fontWeight: 700, color: theme.textSecondary, marginBottom: '8px', textTransform: 'uppercase', letterSpacing: '0.5px' }}>Key Dates</div>
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(140px, 1fr))', gap: '10px' }}>
+            {([
+              ['parts_ordered_date', 'Parts Ordered'],
+              ['parts_eta', 'Parts ETA'],
+              ['customer_dropoff_date', 'Customer Drop-off'],
+              ['need_back_date', 'Needs It Back'],
+            ] as const).map(([field, label]) => (
+              <div key={field}>
+                <div style={{ fontSize: '10px', fontWeight: 700, color: theme.textMuted, marginBottom: '4px', textTransform: 'uppercase', letterSpacing: '0.5px' }}>{label}</div>
+                <input
+                  type="date"
+                  value={(selected[field] || '').slice(0, 10)}
+                  onChange={e => saveDate(field, e.target.value)}
+                  style={{ width: '100%', boxSizing: 'border-box', padding: '6px 8px', borderRadius: '6px', border: `1px solid ${theme.border}`, background: theme.inputBg, color: theme.textPrimary, fontSize: '12px', outline: 'none' }}
+                />
+              </div>
+            ))}
+          </div>
+          {selected.customer_dropoff_date && (
+            <div style={{ fontSize: '10px', color: theme.textMuted, marginTop: '8px' }}>
+              On the shop arrival schedule for {fmt(selected.customer_dropoff_date)}.
+            </div>
+          )}
         </div>
 
         {/* Graphics — linked graphics jobs (from migrations/084-graphics-upfit-project-link.sql).
@@ -1052,6 +1101,9 @@ export default function UpfitProjectsPage() {
                   {p.estimate_number && <span>Est: {p.estimate_number}</span>}
                   {p.netsuite_so_number && <span>SO: {p.netsuite_so_number}</span>}
                   {p.scheduled_date && <span>Sched: {fmt(p.scheduled_date)}</span>}
+                  {p.parts_eta && <span style={{ color: '#60a5fa' }}>Parts ETA: {fmt(p.parts_eta)}</span>}
+                  {p.customer_dropoff_date && <span style={{ color: '#38bdf8' }}>Drop-off: {fmt(p.customer_dropoff_date)}</span>}
+                  {p.need_back_date && <span style={{ color: '#fbbf24' }}>Back by: {fmt(p.need_back_date)}</span>}
                   {totalTasks > 0 && (
                     <span style={{ color: openTasks > 0 ? '#fbbf24' : '#22c55e' }}>
                       {openTasks > 0 ? `${openTasks}/${totalTasks} tasks open` : `${totalTasks} task${totalTasks !== 1 ? 's' : ''} done`}

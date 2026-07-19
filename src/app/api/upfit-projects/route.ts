@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { createClient } from '@supabase/supabase-js';
 import { requireAuth } from '@/lib/api-auth';
 import { validateBody, z } from '@/lib/validate';
+import { syncShopInboundForUpfitProject } from '@/lib/shop-inbound';
 
 const supabase = createClient(
   process.env.NEXT_PUBLIC_SUPABASE_URL!,
@@ -20,6 +21,10 @@ const ProjectFields = {
   netsuite_so_number: z.string().max(60).optional().nullable(),
   scheduled_date: z.string().max(40).optional().nullable(),
   scheduled_end_date: z.string().max(40).optional().nullable(),
+  parts_ordered_date: z.string().max(40).optional().nullable(),
+  parts_eta: z.string().max(40).optional().nullable(),
+  customer_dropoff_date: z.string().max(40).optional().nullable(),
+  need_back_date: z.string().max(40).optional().nullable(),
   estimated_total: z.number().optional().nullable(),
   assigned_to: z.string().uuid().optional().nullable(),
 } as const;
@@ -39,6 +44,10 @@ const UpdateSchema = z
     netsuite_so_number: ProjectFields.netsuite_so_number,
     scheduled_date: ProjectFields.scheduled_date,
     scheduled_end_date: ProjectFields.scheduled_end_date,
+    parts_ordered_date: ProjectFields.parts_ordered_date,
+    parts_eta: ProjectFields.parts_eta,
+    customer_dropoff_date: ProjectFields.customer_dropoff_date,
+    need_back_date: ProjectFields.need_back_date,
     estimated_total: ProjectFields.estimated_total,
     assigned_to: ProjectFields.assigned_to,
   })
@@ -149,6 +158,10 @@ export async function PUT(req: NextRequest) {
     .single();
 
   if (error) return NextResponse.json({ error: error.message }, { status: 500 });
+
+  // Keep the shop arrival schedule in step with drop-off dates / status.
+  try { await syncShopInboundForUpfitProject(supabase, id); } catch { /* best-effort */ }
+
   return NextResponse.json({ success: true, project: data });
 }
 
