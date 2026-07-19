@@ -128,7 +128,7 @@ export default function OpsDashboard() {
       shopRes, cniRes,
       schedGfxRes, schedUpfitRes, schedCniRes, schedEventsRes,
       scansTodayRes, scansWeekRes, msgRes, unreadRes,
-      oppsRes, custRes, quotesRes, estRes,
+      oppsRes, custRes, quotesRes, estRes, unpricedRes,
     ] = await Promise.allSettled([
       // KPI 1 — NetSuite invoiced totals (authoritative revenue)
       fetch('/api/reports/invoiced-summary').then(r => r.json()),
@@ -193,6 +193,9 @@ export default function OpsDashboard() {
       supabase.from('customers').select('company_name, ytd_spend').eq('active', true).gt('ytd_spend', 0).order('ytd_spend', { ascending: false }).limit(4),
       supabase.from('wrap_quotes').select('total').in('status', ['draft', 'sent']),
       supabase.from('estimates').select('*', { count: 'exact', head: true }).gte('created_at', weekAgo.toISOString()),
+      // Unpriced pay — credits with no dollar amount. Accumulating unseen is
+      // how someone works for weeks before anyone notices they're unpaid.
+      supabase.from('install_credits').select('*', { count: 'exact', head: true }).is('amount', null).is('voided_at', null),
     ]);
 
     const val = <T,>(r: PromiseSettledResult<T>): T | null => (r.status === 'fulfilled' ? r.value : null);
@@ -298,6 +301,12 @@ export default function OpsDashboard() {
     if (pendingUsers > 0) queue.push({
       key: 'users', count: pendingUsers, tone: 'blue', path: '/admin/users',
       title: `User${pendingUsers !== 1 ? 's' : ''} waiting for approval`, detail: 'New account requests',
+    });
+    const unpricedPay = count(unpricedRes);
+    if (unpricedPay > 0) queue.push({
+      key: 'unpriced', count: unpricedPay, tone: 'warn', path: '/admin/pay-rates',
+      title: 'Pay credits without a dollar amount',
+      detail: 'Someone worked; nobody priced it yet',
     });
 
     // ── Lanes ──
