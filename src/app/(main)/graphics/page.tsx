@@ -18,6 +18,7 @@ import MentionTextArea, { reportMentions } from '@/components/MentionTextArea';
 import MentionsInbox from '@/components/MentionsInbox';
 import { DropZone } from '@/components/DropZone';
 import { buildGraphicsJobPrefillFromPo, attachPartFilesToGraphicsJob } from '@/lib/graphics-job-from-po';
+import { INSTALL_LOCATIONS, SHOP_INSTALL_LOCATION } from '@/lib/shop-inbound';
 import { exportPackingListPDF, packingListFromJob, type PackingListLine } from '@/lib/packing-list-pdf';
 import type {
   GraphicsJob, GraphicsJobStatus, GraphicsJobCategory, GraphicsStatusHistory, GraphicsJobView, Profile,
@@ -156,6 +157,7 @@ export default function GraphicsPage() {
     priority: 'normal' as 'low' | 'normal' | 'high' | 'rush',
     due_date: '',
     scheduled_install_date: '',
+    install_location: '',
     ship_to: '',
     supplier: '',
     po_number: '',
@@ -755,6 +757,16 @@ export default function GraphicsPage() {
         }),
       }).catch(() => {});
 
+      // Shop-install jobs: keep the arrival schedule current (the inbound
+      // entry cancels once the job ships / is picked up / installed).
+      if (job.install_location === SHOP_INSTALL_LOCATION) {
+        fetch('/api/shop-inbound', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ sourceType: 'graphics_job', sourceId: job.id }),
+        }).catch(() => {});
+      }
+
       // Sync calendar (updates status in description, or deletes if cancelled)
       if (job.scheduled_install_date || job.calendar_event_id) {
         fetch('/api/calendar/sync-graphics', {
@@ -900,6 +912,14 @@ export default function GraphicsPage() {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ jobId: id }),
       }).catch(() => {});
+
+      // Re-derive the shop arrival entry (idempotent — also cancels it when
+      // the install location moves away from our shop).
+      fetch('/api/shop-inbound', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ sourceType: 'graphics_job', sourceId: id }),
+      }).catch(() => {});
     }
     setSaving(false);
   };
@@ -931,6 +951,7 @@ export default function GraphicsPage() {
         priority: createForm.priority,
         due_date: createForm.due_date && createForm.due_date !== 'N/A' ? createForm.due_date : null,
         scheduled_install_date: cat !== 'internal' && createForm.scheduled_install_date && createForm.scheduled_install_date !== 'N/A' ? createForm.scheduled_install_date : null,
+        install_location: cat !== 'internal' ? (createForm.install_location || null) : null,
         ship_to: (cat === 'production' || cat === 'customer_supplied') ? (createForm.ship_to || null) : null,
         supplier: cat === 'customer_supplied' ? (createForm.supplier || null) : null,
         po_number: createForm.po_number || null,
@@ -980,6 +1001,15 @@ export default function GraphicsPage() {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ jobId: data.id }),
+        }).catch(() => {});
+      }
+
+      // Installing at our shop → put the vehicle on the shop arrival schedule
+      if (createForm.install_location === SHOP_INSTALL_LOCATION) {
+        fetch('/api/shop-inbound', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ sourceType: 'graphics_job', sourceId: data.id }),
         }).catch(() => {});
       }
 
@@ -1070,7 +1100,7 @@ export default function GraphicsPage() {
         job_category: '', title: '', part_number: '', part_numbers: [], partInput: '', customer: '', quantity: 1,
         content: '', notes: '',
         vinyl_type: '', vinyl_color: '', laminate: '', print_method: '', cut_method: '', premask: '',
-        priority: 'normal', due_date: '', scheduled_install_date: '', ship_to: '', supplier: '', po_number: '',
+        priority: 'normal', due_date: '', scheduled_install_date: '', install_location: '', ship_to: '', supplier: '', po_number: '',
       });
       setCreateAssignees([]);
       setCreateFiles([]);
@@ -1633,6 +1663,7 @@ export default function GraphicsPage() {
                         <span>Qty: {job.quantity}</span>
                         {job.due_date && <span style={{ color: (parseLocalDate(job.due_date) || new Date()) < new Date() ? '#ef4444' : '#fbbf24' }}>Due: {displayDate(job.due_date)}</span>}
                         {job.scheduled_install_date && <span style={{ color: job.scheduled_install_date === 'N/A' ? 'var(--text-muted)' : '#22d3ee' }}>Install: {job.scheduled_install_date === 'N/A' ? 'N/A' : displayDate(job.scheduled_install_date)}</span>}
+                        {job.install_location === SHOP_INSTALL_LOCATION && <span style={{ color: '#38bdf8' }}>Shop install</span>}
                         {job.po_number && <span style={{ color: '#a78bfa', fontWeight: 700 }}>PO #{job.po_number}</span>}
                         {job.estimate_id && <span style={{ padding: '0 4px', borderRadius: '3px', background: 'rgba(96,165,250,0.1)', color: '#60a5fa', fontWeight: 700 }}>Estimate</span>}
                         {job.upfit_project_id && upfitProjects[job.upfit_project_id] && (
@@ -2012,6 +2043,7 @@ export default function GraphicsPage() {
                           <span>Created: {new Date(job.created_at).toLocaleDateString()}</span>
                           {job.due_date && <span style={{ color: (parseLocalDate(job.due_date) || new Date()) < new Date() ? '#ef4444' : '#fbbf24' }}>Due: {displayDate(job.due_date)}</span>}
                           {job.scheduled_install_date && <span style={{ color: job.scheduled_install_date === 'N/A' ? 'var(--text-muted)' : '#22d3ee' }}>Install: {job.scheduled_install_date === 'N/A' ? 'N/A' : displayDate(job.scheduled_install_date)}{job.calendar_event_id ? '' : ''}</span>}
+                          {job.install_location === SHOP_INSTALL_LOCATION && <span style={{ color: '#38bdf8' }}>Shop install</span>}
                           {getProfileName(job.assigned_to) && <span>Assigned: {getProfileName(job.assigned_to)}</span>}
                           {getProfileName(job.created_by) && <span>By: {getProfileName(job.created_by)}</span>}
                           {job.job_number && <span style={{ color: 'var(--text-muted)' }}>#{job.job_number}</span>}
@@ -2540,6 +2572,16 @@ export default function GraphicsPage() {
                             )}
                             {editJob!.calendar_event_id && <div style={{ fontSize: '9px', color: '#22d3ee', marginTop: '2px' }}>Synced to Google Calendar</div>}
                           </div>
+                          <div>
+                            <div style={labelStyle}>Install Location</div>
+                            <select style={inputStyle} value={editJob!.install_location || ''} onChange={e => setEditingJob({ ...editJob!, install_location: e.target.value || null })}>
+                              <option value="">Not set</option>
+                              {INSTALL_LOCATIONS.map(loc => <option key={loc} value={loc}>{loc}</option>)}
+                            </select>
+                            {editJob!.install_location === SHOP_INSTALL_LOCATION && (
+                              <div style={{ fontSize: '9px', color: '#38bdf8', marginTop: '2px' }}>On the shop arrival schedule</div>
+                            )}
+                          </div>
                           <div style={{ gridColumn: '1 / -1' }}>
                             <AssignmentPicker
                               jobType="graphics_job"
@@ -2858,6 +2900,20 @@ export default function GraphicsPage() {
                           <input type="date" style={{ ...inputStyle, flex: 1 }} value={createForm.scheduled_install_date} onChange={e => setCreateForm({ ...createForm, scheduled_install_date: e.target.value })} />
                           <button type="button" onClick={() => setCreateForm({ ...createForm, scheduled_install_date: 'N/A' })} style={{ fontSize: '10px', fontWeight: 700, color: 'var(--text-muted)', background: 'none', border: 'none', cursor: 'pointer', whiteSpace: 'nowrap' }}>N/A</button>
                         </div>
+                      )}
+                    </div>
+                  )}
+                  {/* Where the graphics get installed — O'Fallon Shop routes
+                      the vehicle onto the shop arrival schedule */}
+                  {createForm.job_category !== 'internal' && (
+                    <div>
+                      <div style={labelStyle}>Install Location</div>
+                      <select style={inputStyle} value={createForm.install_location} onChange={e => setCreateForm({ ...createForm, install_location: e.target.value })}>
+                        <option value="">Not set</option>
+                        {INSTALL_LOCATIONS.map(loc => <option key={loc} value={loc}>{loc}</option>)}
+                      </select>
+                      {createForm.install_location === SHOP_INSTALL_LOCATION && (
+                        <div style={{ fontSize: '9px', color: '#38bdf8', marginTop: '2px' }}>Vehicle will appear on the shop arrival schedule</div>
                       )}
                     </div>
                   )}

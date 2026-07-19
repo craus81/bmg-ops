@@ -546,6 +546,8 @@ export interface GraphicsJob {
   priority: 'low' | 'normal' | 'high' | 'rush';
   due_date: string | null;
   scheduled_install_date: string | null;
+  /** Where the graphics get installed — "O'Fallon Shop" routes the job onto the shop arrival schedule. */
+  install_location: string | null;
   calendar_event_id: string | null;
   supplier: string | null;
   proof_url: string | null;
