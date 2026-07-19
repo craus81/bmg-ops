@@ -89,6 +89,9 @@ export default function MorePage() {
         {F('parts_catalog') && (
           <MenuBtn title="Parts Catalog" sub="Upfit & graphic parts from NetSuite" onClick={() => router.push('/parts')} />
         )}
+        {F('parts_catalog') && (
+          <MenuBtn title="Inventory" sub="On hand · allocated to jobs · free · on order, at a glance" onClick={() => router.push('/admin/inventory')} />
+        )}
         {F('estimates') && !overflowPaths.has('/estimates') && (
           <MenuBtn title="Estimates" sub="Build estimates & push to NetSuite" onClick={() => router.push('/estimates')} />
         )}
