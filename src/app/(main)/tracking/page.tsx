@@ -1,7 +1,11 @@
 'use client';
 
-import { useState, useEffect, useCallback, useRef } from 'react';
+import { useState, useEffect, useCallback, useRef, lazy, Suspense } from 'react';
 import { useRouter, useSearchParams } from 'next/navigation';
+
+// Check-In lives at the top of this page now (the old /fleet page
+// redirects here). Lazy so the board renders before the wizard loads.
+const VehicleCheckIn = lazy(() => import('@/components/VehicleCheckIn'));
 import { createClient } from '@/lib/supabase-browser';
 import { useAuth } from '@/components/AuthProvider';
 import { storage } from '@/lib/storage';
@@ -23,11 +27,16 @@ type FilterStatus = VehicleTrackingStatus | 'all' | 'stuck';
 export default function TrackingPage() {
   const router = useRouter();
   const searchParams = useSearchParams();
-  const { isAdmin, user, profile } = useAuth();
+  const { isAdmin, user, profile, hasFeature } = useAuth();
   const dialog = useDialog();
   const supabase = createClient();
 
   const [vehicles, setVehicles] = useState<FleetCheckin[]>([]);
+  // Check-in panel (merged from the old /fleet page); ?checkin=1 auto-opens.
+  const [showCheckIn, setShowCheckIn] = useState(() => searchParams?.get('checkin') === '1');
+  // When each vehicle entered its current status (latest transition).
+  const [stageSince, setStageSince] = useState<Record<string, string>>({});
+  const stageFetchedRef = useRef<Set<string>>(new Set());
   const [loading, setLoading] = useState(true);
   const [loadingMore, setLoadingMore] = useState(false);
   const [hasMore, setHasMore] = useState(true);
@@ -212,6 +221,29 @@ export default function TrackingPage() {
       window.removeEventListener('keydown', onKey);
     };
   }, [expandedId]);
+
+  // Stage-entry times for loaded vehicles (latest status transition each).
+  useEffect(() => {
+    const missing = vehicles.map(v => v.id).filter(id => !stageFetchedRef.current.has(id));
+    if (missing.length === 0) return;
+    for (const id of missing) stageFetchedRef.current.add(id);
+    (async () => {
+      const since: Record<string, string> = {};
+      for (let i = 0; i < missing.length; i += 200) {
+        const { data } = await supabase
+          .from('vehicle_status_history')
+          .select('vehicle_id, created_at')
+          .in('vehicle_id', missing.slice(i, i + 200))
+          .order('created_at', { ascending: false })
+          .limit(3000);
+        for (const h of data || []) {
+          if (!since[h.vehicle_id]) since[h.vehicle_id] = h.created_at;
+        }
+      }
+      setStageSince(prev => ({ ...prev, ...since }));
+    })();
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- supabase client is a stable singleton
+  }, [vehicles]);
 
   const loadVehicles = async (append = false) => {
     if (append) setLoadingMore(true); else setLoading(true);
@@ -955,6 +987,35 @@ export default function TrackingPage() {
     );
   }
 
+  // ── Board metrics (graphics-board treatment) ──
+  const IN_SHOP_STATUSES = ['received', 'checked_in', 'in_progress', 'stuck_parts', 'stuck_graphics'];
+  const vStageDays = (v: FleetCheckin): number => {
+    const since = stageSince[v.id] || v.created_at;
+    return Math.floor((Date.now() - new Date(since).getTime()) / 86_400_000);
+  };
+  const todayISO = new Date().toISOString().slice(0, 10);
+  const weekISO = new Date(Date.now() + 7 * 86_400_000).toISOString().slice(0, 10);
+  const onGround = activeVehicles.filter(v => IN_SHOP_STATUSES.includes(v.status));
+  const overdueBack = onGround.filter(v => (v as any).promised_back_date && (v as any).promised_back_date < todayISO).length;
+  const dueBackWeek = onGround.filter(v => {
+    const d = (v as any).promised_back_date;
+    return d && d >= todayISO && d <= weekISO;
+  }).length;
+  const stuckInStage = onGround.filter(v => vStageDays(v) >= 3).length;
+
+  const backRisk = (v: FleetCheckin): { label: string; color: string } | null => {
+    const d = (v as any).promised_back_date;
+    if (!d || !IN_SHOP_STATUSES.includes(v.status)) return null;
+    if (d < todayISO) {
+      const days = Math.floor((Date.now() - new Date(d + 'T12:00:00').getTime()) / 86_400_000);
+      return { label: `needed back ${days}d ago`, color: '#ef4444' };
+    }
+    const daysUntil = Math.floor((new Date(d + 'T12:00:00').getTime() - Date.now()) / 86_400_000);
+    if (daysUntil > 2) return null;
+    const weekday = new Date(d + 'T12:00:00').toLocaleDateString([], { weekday: 'short' });
+    return { label: `back by ${weekday}`, color: daysUntil <= 0 ? '#ef4444' : '#fbbf24' };
+  };
+
   return (
     <div>
       {/* Page Header */}
@@ -964,8 +1025,33 @@ export default function TrackingPage() {
         </div>
       </div>
 
-      {/* Summary Cards */}
-      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: '8px', marginBottom: '14px' }}>
+      {/* Check In Vehicle — merged from the old /fleet page */}
+      {(isAdmin || hasFeature('fleet_checkin')) && (
+        <div style={{ background: 'var(--card)', border: `1px solid ${showCheckIn ? 'var(--orange)' : 'var(--border)'}`, borderRadius: '14px', marginBottom: '14px', overflow: 'hidden' }}>
+          <button
+            onClick={() => setShowCheckIn(s => !s)}
+            style={{
+              display: 'flex', alignItems: 'center', justifyContent: 'space-between', width: '100%',
+              padding: '13px 16px', background: 'transparent', border: 'none', cursor: 'pointer',
+            }}
+          >
+            <span style={{ fontSize: '14px', fontWeight: 800, color: showCheckIn ? 'var(--orange)' : 'var(--text-primary)' }}>
+              ➕ Check In Vehicle
+            </span>
+            <span style={{ fontSize: '12px', color: 'var(--text-muted)' }}>{showCheckIn ? '▾ close' : '▸'}</span>
+          </button>
+          {showCheckIn && (
+            <div style={{ padding: '0 14px 14px' }}>
+              <Suspense fallback={<div style={{ padding: '20px', textAlign: 'center', color: 'var(--text-muted)', fontSize: '12px' }}>Loading check-in…</div>}>
+                <VehicleCheckIn onCheckedIn={() => loadVehicles(false)} />
+              </Suspense>
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* Summary / metrics strip */}
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(96px, 1fr))', gap: '8px', marginBottom: '14px' }}>
         <div style={{
           background: 'var(--card)', border: '1px solid var(--border)', borderRadius: '12px', padding: '12px', textAlign: 'center',
         }}>
@@ -986,6 +1072,26 @@ export default function TrackingPage() {
           <div style={{ fontSize: '10px', fontWeight: 700, color: stuckCount > 0 ? 'var(--warning)' : 'var(--text-muted)', textTransform: 'uppercase' }}>
             Stuck
           </div>
+        </div>
+        <div style={{
+          background: overdueBack > 0 ? 'var(--error-bg)' : 'var(--card)',
+          border: `1px solid ${overdueBack > 0 ? 'var(--error-border)' : 'var(--border)'}`,
+          borderRadius: '12px', padding: '12px', textAlign: 'center',
+        }}>
+          <div style={{ fontSize: '24px', fontWeight: 800, color: overdueBack > 0 ? 'var(--error)' : 'var(--text-primary)' }}>{overdueBack}</div>
+          <div style={{ fontSize: '10px', fontWeight: 700, color: overdueBack > 0 ? 'var(--error)' : 'var(--text-muted)', textTransform: 'uppercase' }}>Overdue Back</div>
+        </div>
+        <div style={{
+          background: 'var(--card)', border: '1px solid var(--border)', borderRadius: '12px', padding: '12px', textAlign: 'center',
+        }}>
+          <div style={{ fontSize: '24px', fontWeight: 800, color: dueBackWeek > 0 ? '#fbbf24' : 'var(--text-primary)' }}>{dueBackWeek}</div>
+          <div style={{ fontSize: '10px', fontWeight: 700, color: 'var(--text-muted)', textTransform: 'uppercase' }}>Back This Wk</div>
+        </div>
+        <div style={{
+          background: 'var(--card)', border: '1px solid var(--border)', borderRadius: '12px', padding: '12px', textAlign: 'center',
+        }}>
+          <div style={{ fontSize: '24px', fontWeight: 800, color: stuckInStage > 0 ? '#fbbf24' : 'var(--text-primary)' }}>{stuckInStage}</div>
+          <div style={{ fontSize: '10px', fontWeight: 700, color: 'var(--text-muted)', textTransform: 'uppercase' }}>3d+ In Stage</div>
         </div>
         <div style={{
           background: 'var(--success-bg)', border: '1px solid var(--success-border)', borderRadius: '12px', padding: '12px', textAlign: 'center',
@@ -1172,6 +1278,31 @@ export default function TrackingPage() {
                       {(vehicle as any).scheduled_upfit_date && (
                         <div style={{ fontSize: '11px', color: '#3b82f6', fontWeight: 600, marginTop: '1px' }}>Upfit: {new Date((vehicle as any).scheduled_upfit_date + 'T12:00:00').toLocaleDateString()}</div>
                       )}
+                      {/* Graphics-board-style chips: due-back risk + time in stage */}
+                      {(() => {
+                        const risk = backRisk(vehicle);
+                        const days = IN_SHOP_STATUSES.includes(vehicle.status) ? vStageDays(vehicle) : 0;
+                        const showStage = days >= 3;
+                        if (!risk && !showStage) return null;
+                        const stageColor = days >= 6 ? '#ef4444' : '#fbbf24';
+                        return (
+                          <div style={{ display: 'flex', gap: '4px', marginTop: '4px', flexWrap: 'wrap' }}>
+                            {risk && (
+                              <span style={{ fontSize: '10px', fontWeight: 700, padding: '2px 8px', borderRadius: '6px', background: `${risk.color}18`, border: `1px solid ${risk.color}44`, color: risk.color }}>
+                                ⚠ {risk.label}
+                              </span>
+                            )}
+                            {showStage && (
+                              <span
+                                title={`In ${VEHICLE_STATUS_LABELS[status] || vehicle.status} since ${new Date(stageSince[vehicle.id] || vehicle.created_at).toLocaleDateString()}`}
+                                style={{ fontSize: '10px', fontWeight: 700, padding: '2px 8px', borderRadius: '6px', background: `${stageColor}18`, border: `1px solid ${stageColor}44`, color: stageColor }}
+                              >
+                                ⏱ in {(VEHICLE_STATUS_LABELS[status] || vehicle.status).toLowerCase()} {days}d
+                              </span>
+                            )}
+                          </div>
+                        );
+                      })()}
                       {(vehicle as any).needs_graphics && !(vehicle as any).matched_graphics_job_id && (
                         <div
                           onClick={(e) => {
@@ -1723,32 +1854,52 @@ export default function TrackingPage() {
                       </div>
                     )}
 
-                    {/* Scheduled Upfit Date */}
-                    <div style={{ marginBottom: '12px' }}>
-                      <div style={{ fontSize: '9px', fontWeight: 700, color: 'var(--text-muted)', textTransform: 'uppercase', marginBottom: '4px' }}>Scheduled Upfit Date</div>
-                      <input
-                        type="date"
-                        value={(vehicle as any).scheduled_upfit_date || ''}
-                        onClick={(e) => e.stopPropagation()}
-                        onChange={async (e) => {
-                          const newDate = e.target.value || null;
-                          await supabase.from('fleet_checkins').update({ scheduled_upfit_date: newDate, updated_at: new Date().toISOString() }).eq('id', vehicle.id);
-                          setVehicles(prev => prev.map(v => v.id === vehicle.id ? { ...v, scheduled_upfit_date: newDate } as any : v));
-                          // Sync to Google Calendar
-                          if (newDate) {
-                            fetch('/api/calendar/sync-upfit', {
-                              method: 'POST',
-                              headers: { 'Content-Type': 'application/json' },
-                              body: JSON.stringify({ checkinId: vehicle.id }),
-                            }).catch(() => {});
-                          }
-                        }}
-                        style={{
-                          width: '100%', padding: '8px 10px', borderRadius: '8px',
-                          border: '1px solid var(--border)', background: 'var(--input-bg)',
-                          color: 'var(--text-primary)', fontSize: '12px',
-                        }}
-                      />
+                    {/* Scheduled Upfit Date + Promised Back */}
+                    <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '8px', marginBottom: '12px' }}>
+                      <div>
+                        <div style={{ fontSize: '9px', fontWeight: 700, color: 'var(--text-muted)', textTransform: 'uppercase', marginBottom: '4px' }}>Scheduled Upfit Date</div>
+                        <input
+                          type="date"
+                          value={(vehicle as any).scheduled_upfit_date || ''}
+                          onClick={(e) => e.stopPropagation()}
+                          onChange={async (e) => {
+                            const newDate = e.target.value || null;
+                            await supabase.from('fleet_checkins').update({ scheduled_upfit_date: newDate, updated_at: new Date().toISOString() }).eq('id', vehicle.id);
+                            setVehicles(prev => prev.map(v => v.id === vehicle.id ? { ...v, scheduled_upfit_date: newDate } as any : v));
+                            // Sync to Google Calendar
+                            if (newDate) {
+                              fetch('/api/calendar/sync-upfit', {
+                                method: 'POST',
+                                headers: { 'Content-Type': 'application/json' },
+                                body: JSON.stringify({ checkinId: vehicle.id }),
+                              }).catch(() => {});
+                            }
+                          }}
+                          style={{
+                            width: '100%', padding: '8px 10px', borderRadius: '8px',
+                            border: '1px solid var(--border)', background: 'var(--input-bg)',
+                            color: 'var(--text-primary)', fontSize: '12px', boxSizing: 'border-box',
+                          }}
+                        />
+                      </div>
+                      <div>
+                        <div style={{ fontSize: '9px', fontWeight: 700, color: 'var(--text-muted)', textTransform: 'uppercase', marginBottom: '4px' }}>Customer Needs It Back</div>
+                        <input
+                          type="date"
+                          value={(vehicle as any).promised_back_date || ''}
+                          onClick={(e) => e.stopPropagation()}
+                          onChange={async (e) => {
+                            const newDate = e.target.value || null;
+                            await supabase.from('fleet_checkins').update({ promised_back_date: newDate, updated_at: new Date().toISOString() }).eq('id', vehicle.id);
+                            setVehicles(prev => prev.map(v => v.id === vehicle.id ? { ...v, promised_back_date: newDate } as any : v));
+                          }}
+                          style={{
+                            width: '100%', padding: '8px 10px', borderRadius: '8px',
+                            border: '1px solid var(--border)', background: 'var(--input-bg)',
+                            color: 'var(--text-primary)', fontSize: '12px', boxSizing: 'border-box',
+                          }}
+                        />
+                      </div>
                     </div>
 
                     {/* Sales Orders — a vehicle may be linked to more than

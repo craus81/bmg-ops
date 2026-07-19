@@ -28,7 +28,6 @@ export const allTabs: Tab[] = [
   { id: 'home', path: '/home', label: 'Home', feature: 'home', priority: 0 },
   { id: 'upfit', path: '/upfit', label: 'Upfit', feature: 'upfit_projects', priority: 0.5 },
   { id: 'graphics', path: '/graphics', label: 'Graphics', feature: 'graphics', priority: 1 },
-  { id: 'fleet', path: '/fleet', label: 'Check In', feature: 'fleet_checkin', priority: 2 },
   { id: 'tracking', path: '/tracking', label: 'In-Shop', feature: 'in_shop', priority: 3 },
   // POs and Scans go after In-Shop so they slot in on the right of the
   // existing visible tabs without displacing anything.
@@ -75,6 +74,9 @@ export default function BottomNav({ clockStatus }: BottomNavProps) {
     if (!tab.feature) return true;
     if (tab.id === 'customer-dashboard') return isCustomer;
     if (isCustomer && tab.id !== 'customer-dashboard') return false;
+    // Check-In merged into In-Shop: either feature grants the In-Shop tab
+    // (a user with only fleet_checkin still needs a way to the panel).
+    if (tab.id === 'tracking') return hasFeature('in_shop') || hasFeature('fleet_checkin');
     return hasFeature(tab.feature);
   });
 
