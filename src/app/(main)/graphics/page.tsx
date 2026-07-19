@@ -14,6 +14,8 @@ import EmailInvoicesModal, { type EmailableInvoice } from '@/components/EmailInv
 import { PartLabel } from '@/components/PartLabel';
 import DropboxProofSearch from '@/components/DropboxProofSearch';
 import GraphicsMaterialsCard from '@/components/GraphicsMaterialsCard';
+import MentionTextArea, { reportMentions } from '@/components/MentionTextArea';
+import MentionsInbox from '@/components/MentionsInbox';
 import { DropZone } from '@/components/DropZone';
 import { buildGraphicsJobPrefillFromPo, attachPartFilesToGraphicsJob } from '@/lib/graphics-job-from-po';
 import { exportPackingListPDF, packingListFromJob, type PackingListLine } from '@/lib/packing-list-pdf';
@@ -802,6 +804,13 @@ export default function GraphicsPage() {
       method: 'POST',
       body: JSON.stringify({ jobId, kind: 'note', note: newNote.trim() }),
     }).catch(() => {}).finally(() => recordJobView(jobId));
+    reportMentions({
+      text: newNote.trim(),
+      sourceType: 'graphics_note',
+      sourceId: jobId,
+      contextLabel: job ? (job.title || job.job_number || 'Graphics job') : 'Graphics job',
+      contextUrl: '/graphics',
+    });
     setNewNote('');
     await loadHistory(jobId);
   };
@@ -1392,6 +1401,8 @@ export default function GraphicsPage() {
           </div>
         </div>
       )}
+
+      <MentionsInbox />
 
       {/* Category Filter */}
       <div style={{ display: 'flex', gap: '4px', marginBottom: '8px', flexWrap: 'wrap' }}>
@@ -2035,13 +2046,13 @@ export default function GraphicsPage() {
                               })}
                             </div>
                           )}
-                          {/* Add note */}
+                          {/* Add note — @mention a teammate to ping them */}
                           <div style={{ display: 'flex', gap: '4px', marginTop: '6px' }}>
-                            <input
+                            <MentionTextArea
                               value={newNote}
-                              onChange={e => setNewNote(e.target.value)}
-                              onKeyDown={e => { if (e.key === 'Enter' && newNote.trim()) addNote(job.id); }}
-                              placeholder="Add a note..."
+                              onChange={setNewNote}
+                              onKeyDown={e => { if (e.key === 'Enter' && !e.shiftKey && newNote.trim()) { e.preventDefault(); addNote(job.id); } }}
+                              placeholder="Add a note... @name to tag"
                               style={{
                                 flex: 1, padding: '6px 10px', borderRadius: '6px', fontSize: '11px',
                                 background: 'var(--input-bg)', border: '1px solid var(--border)',

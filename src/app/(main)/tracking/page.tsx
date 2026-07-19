@@ -21,6 +21,8 @@ import ProofThumbnail from '@/components/ProofThumbnail';
 import CompletionModal from '@/components/CompletionModal';
 import { useDialog } from '@/components/DialogProvider';
 import { DropZone } from '@/components/DropZone';
+import MentionTextArea, { reportMentions } from '@/components/MentionTextArea';
+import MentionsInbox from '@/components/MentionsInbox';
 
 type FilterStatus = VehicleTrackingStatus | 'all' | 'stuck';
 
@@ -449,6 +451,14 @@ export default function TrackingPage() {
       });
       setNoteInput(prev => ({ ...prev, [vehicleId]: '' }));
       await loadNotes(vehicleId);
+      const v = vehicles.find(x => x.id === vehicleId);
+      reportMentions({
+        text,
+        sourceType: 'vehicle_note',
+        sourceId: vehicleId,
+        contextLabel: v ? `${vehicleTitle(v)} — ${v.customer_name || 'vehicle'}` : 'In-Shop vehicle',
+        contextUrl: '/tracking',
+      });
     } catch (err) {
       console.error('Note save error:', err);
     }
@@ -1024,6 +1034,8 @@ export default function TrackingPage() {
           In-Shop
         </div>
       </div>
+
+      <MentionsInbox />
 
       {/* Check In Vehicle — merged from the old /fleet page */}
       {(isAdmin || hasFeature('fleet_checkin')) && (
@@ -2412,19 +2424,17 @@ export default function TrackingPage() {
                         Install Notes {(vehicleNotes[vehicle.id]?.length || 0) > 0 ? `(${vehicleNotes[vehicle.id].length})` : ''}
                       </div>
 
-                      {/* Add note input */}
-                      <div style={{ display: 'flex', gap: '6px', marginBottom: '8px' }}>
-                        <input
-                          type="text"
+                      {/* Add note input — @mention a teammate to ping them */}
+                      <div style={{ display: 'flex', gap: '6px', marginBottom: '8px' }} onClick={(e) => e.stopPropagation()}>
+                        <MentionTextArea
                           value={noteInput[vehicle.id] || ''}
-                          onChange={(e) => setNoteInput(prev => ({ ...prev, [vehicle.id]: e.target.value }))}
-                          onClick={(e) => e.stopPropagation()}
-                          onKeyDown={(e) => { if (e.key === 'Enter' && !noteSaving) addNote(vehicle.id); }}
-                          placeholder="Add a note... (measurements, brackets, techniques, etc.)"
+                          onChange={(v) => setNoteInput(prev => ({ ...prev, [vehicle.id]: v }))}
+                          onKeyDown={(e) => { if (e.key === 'Enter' && !e.shiftKey && !noteSaving) { e.preventDefault(); addNote(vehicle.id); } }}
+                          placeholder="Add a note... @name to tag a teammate"
                           style={{
                             flex: 1, padding: '8px 10px', borderRadius: '8px',
                             border: '1px solid var(--border)', background: 'var(--input-bg)',
-                            color: 'var(--text-primary)', fontSize: '12px', boxSizing: 'border-box',
+                            color: 'var(--text-primary)', fontSize: '12px',
                           }}
                         />
                         <button

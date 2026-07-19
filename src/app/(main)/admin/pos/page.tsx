@@ -11,6 +11,7 @@ import type { PurchaseOrder, POLineItem, CatalogItem, PoLocation, GraphicsJobSta
 import { GRAPHICS_STATUS_LABELS, GRAPHICS_STATUS_COLORS } from '@/lib/types';
 import { PartLabel } from '@/components/PartLabel';
 import { DropZone } from '@/components/DropZone';
+import { reportMentions } from '@/components/MentionTextArea';
 import { CreateNetsuiteItemModal } from '@/components/CreateNetsuiteItemModal';
 import { useDialog } from '@/components/DialogProvider';
 import { isProofLikeName } from '@/lib/pdf-classify';
@@ -1487,20 +1488,16 @@ export default function POsPage() {
       setPos(prev => prev.map(p => p.id === po.id ? ({ ...p, po_notes: [...((p as any).po_notes || []), { id: data.id }] } as any) : p));
       setNoteText('');
       setNoteTags(new Set());
-      if (mentions.length > 0) {
-        fetch('/api/notifications/send', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            userIds: mentions,
-            type: 'po_note',
-            title: `${profileName(user?.id || null)} tagged you on PO #${po.po_number}`,
-            body: body.slice(0, 180),
-            url: '/admin/pos',
-            excludeUserId: user?.id,
-          }),
-        }).catch(() => {});
-      }
+      // Tag chips + any @names in the text both go through the mentions
+      // pipeline: push/in-app notification plus a Mentions-inbox entry.
+      reportMentions({
+        text: body,
+        sourceType: 'po_note',
+        sourceId: po.id,
+        contextLabel: `PO #${po.po_number}`,
+        contextUrl: '/admin/pos',
+        userIds: mentions,
+      });
     }
     setPostingNote(false);
   };
