@@ -362,7 +362,7 @@ export default function WrapQuotePage() {
   };
 
   const totals = useMemo(() => {
-    let area = 0, materials = 0;
+    let area = 0, billedArea = 0, materials = 0;
     // Billed (with-bleed) square footage per film — drives material buying
     // and per-film install labor.
     const byFilm = new Map<string, { film: Film; sqft: number }>();
@@ -370,6 +370,7 @@ export default function WrapQuotePage() {
       const p = measurementPricing(m);
       const qty = Math.max(1, num(m.qty));
       area += p.trimArea * qty;
+      billedArea += p.billedArea * qty;
       materials += p.lineTotal;
       if (p.sub) {
         const cur = byFilm.get(p.sub.id) || { film: p.sub, sqft: 0 };
@@ -397,7 +398,7 @@ export default function WrapQuotePage() {
       else uncostedFilms.add(filmLabel(film));
     }
     return {
-      area, materials, filmTotals, filmLabor, design, prep, install, labor, subtotal, tax, total: subtotal + tax,
+      area, billedArea, materials, filmTotals, filmLabor, design, prep, install, labor, subtotal, tax, total: subtotal + tax,
       materialCost, uncostedFilms: [...uncostedFilms],
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps -- substrates feed measurementPricing
@@ -1657,7 +1658,16 @@ export default function WrapQuotePage() {
                   <div style={{ fontSize: '11px', fontWeight: 700, color: 'var(--text-secondary)' }}>
                     {template.template_code ? `${template.template_code} · ` : ''}{templateLabel(template)} · {template.scale || '1:20'} scale
                   </div>
-                  <div style={{ marginLeft: 'auto', fontSize: '12px', fontWeight: 800, color: 'var(--text-primary)' }}>Total Area: {fmt(totals.area)} ft²</div>
+                  {/* Coverage = drawn (trim) area; billed film adds each film's
+                      bleed per side, which is what the quote's lines, install
+                      labor, and film usage are priced on. Showing both keeps
+                      this footer consistent with the quote totals. */}
+                  <div style={{ marginLeft: 'auto', fontSize: '12px', fontWeight: 800, color: 'var(--text-primary)' }}>Coverage: {fmt(totals.area)} ft²</div>
+                  {totals.billedArea - totals.area > 0.005 && (
+                    <div title="Print area billed on the quote — each panel plus its film&#39;s bleed on every side. Set bleed per film on the Pricing tab." style={{ fontSize: '12px', fontWeight: 800, color: 'var(--text-secondary)' }}>
+                      Billed film: {fmt(totals.billedArea)} ft²
+                    </div>
+                  )}
                   <div style={{ fontSize: '12px', fontWeight: 800, color: '#22c55e' }}>Estimated Cost: ${fmt(totals.total)}</div>
                   {/* Internal materials margin — never appears on the emailed quote */}
                   {totals.materials > 0 && (totals.materialCost > 0 || totals.uncostedFilms.length > 0) && (() => {
