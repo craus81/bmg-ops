@@ -19,6 +19,7 @@ export async function GET(req: NextRequest) {
   return NextResponse.json({
     checks,
     cronSecretConfigured: !!process.env.CRON_SECRET,
+    externalPingConfigured: !!process.env.HEALTH_PING_URL,
     generatedAt: new Date().toISOString(),
   });
 }

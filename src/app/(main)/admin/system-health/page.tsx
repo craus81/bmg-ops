@@ -34,6 +34,7 @@ export default function SystemHealthPage() {
 
   const [checks, setChecks] = useState<HealthCheck[]>([]);
   const [cronSecretConfigured, setCronSecretConfigured] = useState(true);
+  const [externalPingConfigured, setExternalPingConfigured] = useState(true);
   const [generatedAt, setGeneratedAt] = useState('');
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
@@ -47,6 +48,7 @@ export default function SystemHealthPage() {
       if (!res.ok) throw new Error(data.error || `Request failed (${res.status})`);
       setChecks(data.checks || []);
       setCronSecretConfigured(data.cronSecretConfigured);
+      setExternalPingConfigured(!!data.externalPingConfigured);
       setGeneratedAt(data.generatedAt);
     } catch (e: any) {
       setError(e.message);
@@ -68,6 +70,9 @@ export default function SystemHealthPage() {
           <div style={{ fontSize: '20px', fontWeight: 800 }}>System Health</div>
           <div style={{ fontSize: '12px', color: 'var(--text-muted)' }}>
             Background jobs and syncs. A watcher runs every 30 minutes and pushes an alert to admins when anything here goes stale or errors.
+            {externalPingConfigured && (
+              <span style={{ color: '#22c55e', fontWeight: 600 }}> External dead-man&apos;s switch armed — if the scheduler itself dies, the outside monitor emails admins.</span>
+            )}
           </div>
         </div>
         <button onClick={load} disabled={loading} style={{ padding: '8px 14px', borderRadius: '8px', fontSize: '12px', fontWeight: 700, background: 'var(--card)', border: '1px solid var(--border)', color: 'var(--text-secondary)', cursor: 'pointer' }}>
@@ -78,6 +83,11 @@ export default function SystemHealthPage() {
       {!cronSecretConfigured && (
         <div style={{ padding: '10px 14px', borderRadius: '8px', marginBottom: '12px', background: 'rgba(239,68,68,0.06)', border: '1px solid rgba(239,68,68,0.25)', color: '#ef4444', fontSize: '12px', fontWeight: 600 }}>
           CRON_SECRET is not configured — scheduled runs can&apos;t authenticate, so every cron on this page is effectively off.
+        </div>
+      )}
+      {!externalPingConfigured && !loading && !error && (
+        <div style={{ padding: '10px 14px', borderRadius: '8px', marginBottom: '12px', background: 'rgba(251,191,36,0.06)', border: '1px solid rgba(251,191,36,0.3)', color: '#fbbf24', fontSize: '12px', fontWeight: 600 }}>
+          No external dead-man&apos;s switch: if the cron scheduler itself stops (like a Vercel outage), the watcher stops with it and nobody is alerted. Create a free check at healthchecks.io (period 30 min, grace 15 min), then set its ping URL as HEALTH_PING_URL in Vercel and redeploy — the watcher will ping it on every run and the outside service emails admins when pings stop.
         </div>
       )}
       {error && (
