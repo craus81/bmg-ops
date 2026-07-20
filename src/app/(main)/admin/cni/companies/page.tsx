@@ -10,6 +10,10 @@ interface CniCompany {
   id: string;
   name: string;
   netsuite_vendor_id: string | null;
+  w9_file_path: string | null;
+  insurance_cert_path: string | null;
+  insurance_expiry: string | null;
+  direct_deposit_file_path: string | null;
   primary_contact_profile_id: string | null;
 
   member_count: number;
@@ -37,7 +41,7 @@ export default function CniCompaniesPage() {
   const loadCompanies = async () => {
     const { data: companiesData } = await supabase
       .from('companies')
-      .select('id, name, netsuite_vendor_id, primary_contact_profile_id')
+      .select('id, name, netsuite_vendor_id, primary_contact_profile_id, w9_file_path, insurance_cert_path, insurance_expiry, direct_deposit_file_path')
       .order('name');
 
     // Installer counts come from profiles assigned to each company.
@@ -179,8 +183,22 @@ export default function CniCompaniesPage() {
                   {c.member_count} member{c.member_count !== 1 ? 's' : ''}
                 </span>
               </div>
-              <div style={{ display: 'flex', gap: '12px', marginTop: '6px', fontSize: '11px', color: 'var(--text-muted)' }}>
+              <div style={{ display: 'flex', gap: '12px', marginTop: '6px', fontSize: '11px', color: 'var(--text-muted)', alignItems: 'center', flexWrap: 'wrap' }}>
                 <span>NetSuite vendor: {c.netsuite_vendor_id || '—'}</span>
+                {([
+                  ['W9', !!c.w9_file_path],
+                  // Insurance only counts when the cert is on file and not expired.
+                  ['INS', !!c.insurance_cert_path && !(c.insurance_expiry && c.insurance_expiry < new Date().toISOString().slice(0, 10))],
+                  ['DD', !!c.direct_deposit_file_path],
+                ] as [string, boolean][]).map(([label, ok]) => (
+                  <span key={label} style={{
+                    fontSize: '9px', fontWeight: 700, padding: '2px 6px', borderRadius: '4px',
+                    background: ok ? 'var(--success-bg)' : 'var(--error-bg)',
+                    color: ok ? 'var(--success)' : 'var(--error)',
+                  }}>
+                    {label} {ok ? '✓' : '✕'}
+                  </span>
+                ))}
               </div>
             </button>
           ))}

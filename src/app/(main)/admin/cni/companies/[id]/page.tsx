@@ -13,8 +13,25 @@ interface CniCompany {
   email: string | null;
   netsuite_vendor_id: string | null;
   primary_contact_profile_id: string | null;
-
+  w9_file_path: string | null;
+  insurance_cert_path: string | null;
+  insurance_expiry: string | null;
+  direct_deposit_file_path: string | null;
 }
+
+// Company-level compliance documents (per-person docs stay on cni_profiles).
+// Files live in R2 under the cni-docs prefix; only the path is stored on the
+// company row — no structured financial data in the app.
+const COMPANY_DOCS = [
+  { column: 'w9_file_path', label: 'W-9' },
+  { column: 'insurance_cert_path', label: 'Insurance Certificate' },
+  { column: 'direct_deposit_file_path', label: 'Direct Deposit Form' },
+] as const;
+type DocColumn = typeof COMPANY_DOCS[number]['column'];
+
+// Storage paths embed the original filename after `<column>-<timestamp>-`.
+const docFileName = (path: string) =>
+  (path.split('/').pop() || path).replace(/^[a-z0-9_]+-\d+-/i, '');
 
 // Membership lives on profiles.company_id (the shared companies table), so a
 // member is keyed by their profile id (user_id). The per-person NetSuite
@@ -77,6 +94,12 @@ export default function CniCompanyDetailPage() {
   const [addSelect, setAddSelect] = useState('');
   const [memberBusy, setMemberBusy] = useState(false);
   const [confirmRemove, setConfirmRemove] = useState<string | null>(null);
+
+  // Compliance documents
+  const [docBusy, setDocBusy] = useState<DocColumn | null>(null);
+  const [docMsg, setDocMsg] = useState<{ success: boolean; message: string } | null>(null);
+  const [confirmDocRemove, setConfirmDocRemove] = useState<DocColumn | null>(null);
+  const [insuranceExpiry, setInsuranceExpiry] = useState('');
   // Per-person NetSuite vendor IDs are edited in one place — the Vendor IDs
   // page — so they're shown here read-only (no second editor that drifts).
 
@@ -89,7 +112,7 @@ export default function CniCompanyDetailPage() {
   const loadData = async () => {
     const { data: companyData } = await supabase
       .from('companies')
-      .select('id, name, phone, email, netsuite_vendor_id, primary_contact_profile_id')
+      .select('id, name, phone, email, netsuite_vendor_id, primary_contact_profile_id, w9_file_path, insurance_cert_path, insurance_expiry, direct_deposit_file_path')
       .eq('id', companyId)
       .single();
 
@@ -100,6 +123,7 @@ export default function CniCompanyDetailPage() {
       setEmail(companyData.email || '');
       setVendorId(companyData.netsuite_vendor_id || '');
       setPrimaryContact(companyData.primary_contact_profile_id || '');
+      setInsuranceExpiry(companyData.insurance_expiry || '');
     }
 
     // Members = installer profiles assigned to this company (profiles.company_id).
@@ -252,6 +276,65 @@ export default function CniCompanyDetailPage() {
     }
   };
 
+  const handleDocUpload = async (column: DocColumn, label: string, file: File) => {
+    setDocBusy(column);
+    setDocMsg(null);
+    const safeName = file.name.replace(/[^A-Za-z0-9._-]/g, '_');
+    const path = `${companyId}/${column}-${Date.now()}-${safeName}`;
+    const { error: upErr } = await storage.from('cni-docs').upload(path, file, {
+      contentType: file.type || 'application/octet-stream',
+    });
+    if (upErr) {
+      setDocBusy(null);
+      setDocMsg({ success: false, message: `Upload failed: ${upErr.message}` });
+      return;
+    }
+    const oldPath = company?.[column] || null;
+    const { error: saveErr } = await supabase
+      .from('companies')
+      .update({ [column]: path })
+      .eq('id', companyId);
+    setDocBusy(null);
+    if (saveErr) {
+      setDocMsg({ success: false, message: `Uploaded but failed to save: ${saveErr.message}` });
+      return;
+    }
+    // Replaced file is no longer referenced — clean it up best-effort.
+    if (oldPath) storage.from('cni-docs').remove([oldPath]);
+    setDocMsg({ success: true, message: `${label} uploaded` });
+    loadData();
+  };
+
+  const handleDocRemove = async (column: DocColumn, label: string) => {
+    const oldPath = company?.[column];
+    if (!oldPath) return;
+    setDocBusy(column);
+    setDocMsg(null);
+    setConfirmDocRemove(null);
+    const { error } = await supabase
+      .from('companies')
+      .update(column === 'insurance_cert_path' ? { [column]: null, insurance_expiry: null } : { [column]: null })
+      .eq('id', companyId);
+    setDocBusy(null);
+    if (error) {
+      setDocMsg({ success: false, message: `Failed to remove: ${error.message}` });
+      return;
+    }
+    storage.from('cni-docs').remove([oldPath]);
+    if (column === 'insurance_cert_path') setInsuranceExpiry('');
+    setDocMsg({ success: true, message: `${label} removed` });
+    loadData();
+  };
+
+  const handleInsuranceExpiry = async (value: string) => {
+    setInsuranceExpiry(value);
+    const { error } = await supabase
+      .from('companies')
+      .update({ insurance_expiry: value || null })
+      .eq('id', companyId);
+    if (error) setDocMsg({ success: false, message: `Failed to save expiry: ${error.message}` });
+  };
+
   const inputStyle: React.CSSProperties = {
     width: '100%', padding: '10px 14px', borderRadius: '10px', fontSize: '14px',
     border: '1px solid var(--border)', background: 'var(--input-bg)', color: 'var(--text-body)',
@@ -387,6 +470,135 @@ export default function CniCompanyDetailPage() {
         >
           {saving ? 'Saving...' : 'Save Changes'}
         </button>
+      </div>
+
+      {/* Compliance documents card — W9 / insurance / direct deposit on file */}
+      <div style={{
+        padding: '16px', borderRadius: '14px', marginBottom: '14px',
+        background: 'var(--card)', border: '1px solid var(--border)', boxShadow: 'var(--shadow-sm)',
+      }}>
+        <div style={{ fontSize: '11px', fontWeight: 700, color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.5px', marginBottom: '12px' }}>
+          Compliance Documents
+        </div>
+
+        {docMsg && (
+          <div style={{
+            padding: '10px 14px', borderRadius: '8px', marginBottom: '12px', fontSize: '12px', fontWeight: 600,
+            background: docMsg.success ? 'var(--success-bg)' : 'var(--error-bg)',
+            border: `1px solid ${docMsg.success ? 'var(--success-border)' : 'var(--error-border)'}`,
+            color: docMsg.success ? 'var(--success)' : 'var(--error)',
+          }}>
+            {docMsg.message}
+          </div>
+        )}
+
+        <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
+          {COMPANY_DOCS.map(doc => {
+            const path = company[doc.column];
+            const busy = docBusy === doc.column;
+            const isInsurance = doc.column === 'insurance_cert_path';
+            const expired = isInsurance && insuranceExpiry && insuranceExpiry < new Date().toISOString().slice(0, 10);
+            return (
+              <div key={doc.column} style={{
+                padding: '10px 12px', borderRadius: '10px',
+                background: 'var(--subtle-bg)', border: '1px solid var(--border)',
+              }}>
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '8px', flexWrap: 'wrap' }}>
+                  <div style={{ minWidth: 0 }}>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+                      <span style={{ fontSize: '13px', fontWeight: 700, color: 'var(--text-primary)' }}>{doc.label}</span>
+                      <span style={{
+                        fontSize: '9px', fontWeight: 700, padding: '2px 6px', borderRadius: '4px',
+                        background: path ? 'var(--success-bg)' : 'var(--error-bg)',
+                        color: path ? 'var(--success)' : 'var(--error)',
+                      }}>
+                        {path ? 'ON FILE' : 'MISSING'}
+                      </span>
+                      {expired && (
+                        <span style={{ fontSize: '9px', fontWeight: 700, padding: '2px 6px', borderRadius: '4px', background: 'var(--error-bg)', color: 'var(--error)' }}>
+                          EXPIRED
+                        </span>
+                      )}
+                    </div>
+                    {path && (
+                      <div style={{ fontSize: '11px', color: 'var(--text-muted)', marginTop: '2px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                        {docFileName(path)}
+                      </div>
+                    )}
+                  </div>
+                  <div style={{ display: 'flex', gap: '6px', alignItems: 'center', flexShrink: 0 }}>
+                    {path && (
+                      <a
+                        href={storage.from('cni-docs').getPublicUrl(path).data.publicUrl}
+                        target="_blank" rel="noreferrer"
+                        style={{ padding: '5px 10px', borderRadius: '6px', fontSize: '11px', fontWeight: 700, background: 'rgba(96,165,250,0.1)', border: '1px solid rgba(96,165,250,0.25)', color: '#60a5fa', textDecoration: 'none', whiteSpace: 'nowrap' }}
+                      >
+                        📄 View
+                      </a>
+                    )}
+                    <label style={{
+                      padding: '5px 10px', borderRadius: '6px', fontSize: '11px', fontWeight: 700,
+                      background: busy ? 'var(--text-muted)' : 'var(--orange)', color: '#fff',
+                      cursor: busy ? 'default' : 'pointer', whiteSpace: 'nowrap',
+                    }}>
+                      {busy ? 'Uploading…' : path ? 'Replace' : 'Upload'}
+                      <input
+                        type="file"
+                        accept=".pdf,.png,.jpg,.jpeg,.webp,.heic"
+                        disabled={busy}
+                        style={{ display: 'none' }}
+                        onChange={e => {
+                          const file = e.target.files?.[0];
+                          e.target.value = '';
+                          if (file) handleDocUpload(doc.column, doc.label, file);
+                        }}
+                      />
+                    </label>
+                    {path && (confirmDocRemove === doc.column ? (
+                      <>
+                        <span style={{ fontSize: '11px', color: 'var(--text-muted)', fontWeight: 600 }}>Remove?</span>
+                        <button
+                          onClick={() => handleDocRemove(doc.column, doc.label)}
+                          disabled={busy}
+                          style={{ padding: '5px 10px', borderRadius: '6px', fontSize: '11px', fontWeight: 700, background: 'var(--error)', color: '#fff', border: 'none', cursor: 'pointer' }}
+                        >
+                          Yes
+                        </button>
+                        <button
+                          onClick={() => setConfirmDocRemove(null)}
+                          style={{ padding: '5px 10px', borderRadius: '6px', fontSize: '11px', fontWeight: 700, background: 'var(--card)', color: 'var(--text-muted)', border: '1px solid var(--border)', cursor: 'pointer' }}
+                        >
+                          No
+                        </button>
+                      </>
+                    ) : (
+                      <button
+                        onClick={() => setConfirmDocRemove(doc.column)}
+                        style={{ padding: '5px 10px', borderRadius: '6px', fontSize: '11px', fontWeight: 700, background: 'var(--card)', color: 'var(--error)', border: '1px solid var(--error-border)', cursor: 'pointer' }}
+                      >
+                        Remove
+                      </button>
+                    ))}
+                  </div>
+                </div>
+                {isInsurance && (
+                  <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginTop: '8px' }}>
+                    <span style={{ fontSize: '11px', fontWeight: 700, color: 'var(--text-label)', whiteSpace: 'nowrap' }}>Expires</span>
+                    <input
+                      type="date"
+                      value={insuranceExpiry}
+                      onChange={e => handleInsuranceExpiry(e.target.value)}
+                      style={{ ...inputStyle, width: 'auto', padding: '6px 10px', fontSize: '12px' }}
+                    />
+                  </div>
+                )}
+              </div>
+            );
+          })}
+        </div>
+        <div style={{ fontSize: '11px', color: 'var(--text-muted)', marginTop: '10px' }}>
+          Direct deposit is kept as an uploaded document (authorization form or voided check) — bank details are never stored in FleetSuite. Per-person docs for CNI members live on their installer profile.
+        </div>
       </div>
 
       {/* Members card */}
