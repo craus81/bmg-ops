@@ -4,6 +4,20 @@ import { useState, useEffect } from 'react';
 import { useRouter } from 'next/navigation';
 import { createClient } from '@/lib/supabase-browser';
 import { useAuth } from '@/components/AuthProvider';
+import { storage } from '@/lib/storage';
+
+// Compliance docs are saved through /api/cni/my-docs so the server can
+// notify admins the moment the full set is on file.
+const DOC_TYPES = [
+  { column: 'w9_file_path', label: 'W-9', hint: 'Signed IRS form W-9' },
+  { column: 'insurance_cert_path', label: 'Insurance Certificate', hint: 'Certificate of insurance (COI)' },
+  { column: 'direct_deposit_file_path', label: 'Direct Deposit Form', hint: 'Authorization form or voided check' },
+] as const;
+type DocColumn = typeof DOC_TYPES[number]['column'];
+
+// Storage paths look like `<userId>/<column>-<uuid>-<original name>`.
+const docFileName = (path: string) =>
+  (path.split('/').pop() || path).replace(/^[a-z0-9_]+-[0-9a-f-]{36}-/i, '');
 
 const SERVICE_TYPE_OPTIONS = [
   { id: 'graphics_install', label: 'Graphics Installation' },
@@ -43,6 +57,14 @@ export default function InstallerProfilePage() {
   const [availabilityStatus, setAvailabilityStatus] = useState('available');
   const [availabilityNotes, setAvailabilityNotes] = useState('');
 
+  // Compliance documents
+  const [docPaths, setDocPaths] = useState<Record<DocColumn, string | null>>({
+    w9_file_path: null, insurance_cert_path: null, direct_deposit_file_path: null,
+  });
+  const [insuranceExpiry, setInsuranceExpiry] = useState('');
+  const [docBusy, setDocBusy] = useState<DocColumn | null>(null);
+  const [docMsg, setDocMsg] = useState<{ success: boolean; message: string } | null>(null);
+
   useEffect(() => {
     if (!user) return;
     if (!isInstaller && !isAdmin) { router.push('/home'); return; }
@@ -73,8 +95,71 @@ export default function InstallerProfilePage() {
       setEquipmentCapabilities(data.equipment_capabilities || []);
       setAvailabilityStatus(data.availability_status || 'available');
       setAvailabilityNotes(data.availability_notes || '');
+      setDocPaths({
+        w9_file_path: data.w9_file_path || null,
+        insurance_cert_path: data.insurance_cert_path || null,
+        direct_deposit_file_path: data.direct_deposit_file_path || null,
+      });
+      setInsuranceExpiry(data.insurance_expiry || '');
     }
     setLoading(false);
+  };
+
+  const handleDocUpload = async (column: DocColumn, label: string, file: File) => {
+    if (!user) return;
+    setDocBusy(column);
+    setDocMsg(null);
+    const safeName = file.name.replace(/[^A-Za-z0-9._-]/g, '_');
+    const path = `${user.id}/${column}-${crypto.randomUUID()}-${safeName}`;
+    const { error: upErr } = await storage.from('cni-docs').upload(path, file, {
+      contentType: file.type || 'application/octet-stream',
+    });
+    if (upErr) {
+      setDocBusy(null);
+      setDocMsg({ success: false, message: `Upload failed: ${upErr.message}` });
+      return;
+    }
+    try {
+      const { data: { session } } = await supabase.auth.getSession();
+      const res = await fetch('/api/cni/my-docs', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          ...(session?.access_token ? { Authorization: `Bearer ${session.access_token}` } : {}),
+        },
+        body: JSON.stringify({
+          column,
+          path,
+          ...(column === 'insurance_cert_path' && insuranceExpiry ? { insuranceExpiry } : {}),
+        }),
+      });
+      const data = await res.json();
+      if (!res.ok || !data.success) {
+        setDocMsg({ success: false, message: `Failed to save ${label}: ${data.error || 'unknown error'}` });
+      } else {
+        setDocPaths(prev => ({ ...prev, [column]: path }));
+        setDocMsg({
+          success: true,
+          message: data.complete
+            ? `${label} uploaded — all compliance documents are now on file. BMG has been notified. ✓`
+            : `${label} uploaded`,
+        });
+      }
+    } catch (err: any) {
+      setDocMsg({ success: false, message: `Failed to save ${label}: ${err.message}` });
+    }
+    setDocBusy(null);
+  };
+
+  // Expiry typed after the cert is already on file — save it directly
+  // (RLS allows updating your own cni_profiles row).
+  const handleInsuranceExpiry = async (value: string) => {
+    setInsuranceExpiry(value);
+    if (!user || !hasProfile) return;
+    await supabase
+      .from('cni_profiles')
+      .update({ insurance_expiry: value || null })
+      .eq('user_id', user.id);
   };
 
   const toggleItem = (list: string[], setList: (v: string[]) => void, item: string) => {
@@ -252,6 +337,106 @@ export default function InstallerProfilePage() {
           onChange={e => setAvailabilityNotes(e.target.value)}
           placeholder='e.g. "Booked next 2 weeks", "Only evenings"'
         />
+      </div>
+
+      {/* Compliance documents */}
+      <div style={sectionStyle}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '6px' }}>
+          <div style={{ fontSize: '14px', fontWeight: 700, color: 'var(--text-primary)' }}>
+            Compliance Documents
+          </div>
+          {DOC_TYPES.every(d => docPaths[d.column]) && (
+            <span style={{ fontSize: '9px', fontWeight: 700, padding: '2px 6px', borderRadius: '4px', background: 'var(--success-bg)', color: 'var(--success)' }}>
+              ALL ON FILE ✓
+            </span>
+          )}
+        </div>
+        <div style={{ fontSize: '12px', color: 'var(--text-muted)', marginBottom: '14px', lineHeight: 1.5 }}>
+          Required before payouts can be processed. Direct deposit is an uploaded document (authorization form or voided check) — bank details are never typed into the app.
+        </div>
+
+        {docMsg && (
+          <div style={{
+            padding: '10px 14px', borderRadius: '8px', marginBottom: '12px', fontSize: '12px', fontWeight: 600,
+            background: docMsg.success ? 'var(--success-bg)' : 'var(--error-bg)',
+            border: `1px solid ${docMsg.success ? 'var(--success-border)' : 'var(--error-border)'}`,
+            color: docMsg.success ? 'var(--success)' : 'var(--error)',
+          }}>
+            {docMsg.message}
+          </div>
+        )}
+
+        <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
+          {DOC_TYPES.map(doc => {
+            const path = docPaths[doc.column];
+            const busy = docBusy === doc.column;
+            const isInsurance = doc.column === 'insurance_cert_path';
+            return (
+              <div key={doc.column} style={{
+                padding: '10px 12px', borderRadius: '10px',
+                background: 'var(--subtle-bg)', border: '1px solid var(--border)',
+              }}>
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '8px', flexWrap: 'wrap' }}>
+                  <div style={{ minWidth: 0 }}>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+                      <span style={{ fontSize: '13px', fontWeight: 700, color: 'var(--text-primary)' }}>{doc.label}</span>
+                      <span style={{
+                        fontSize: '9px', fontWeight: 700, padding: '2px 6px', borderRadius: '4px',
+                        background: path ? 'var(--success-bg)' : 'var(--error-bg)',
+                        color: path ? 'var(--success)' : 'var(--error)',
+                      }}>
+                        {path ? 'ON FILE' : 'MISSING'}
+                      </span>
+                    </div>
+                    <div style={{ fontSize: '11px', color: 'var(--text-muted)', marginTop: '2px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                      {path ? docFileName(path) : doc.hint}
+                    </div>
+                  </div>
+                  <div style={{ display: 'flex', gap: '6px', alignItems: 'center', flexShrink: 0 }}>
+                    {path && (
+                      <a
+                        href={storage.from('cni-docs').getPublicUrl(path).data.publicUrl}
+                        target="_blank" rel="noreferrer"
+                        style={{ padding: '5px 10px', borderRadius: '6px', fontSize: '11px', fontWeight: 700, background: 'rgba(96,165,250,0.1)', border: '1px solid rgba(96,165,250,0.25)', color: '#60a5fa', textDecoration: 'none', whiteSpace: 'nowrap' }}
+                      >
+                        📄 View
+                      </a>
+                    )}
+                    <label style={{
+                      padding: '5px 10px', borderRadius: '6px', fontSize: '11px', fontWeight: 700,
+                      background: busy ? 'var(--text-muted)' : 'var(--orange)', color: '#fff',
+                      cursor: busy ? 'default' : 'pointer', whiteSpace: 'nowrap',
+                    }}>
+                      {busy ? 'Uploading…' : path ? 'Replace' : 'Upload'}
+                      <input
+                        type="file"
+                        accept=".pdf,.png,.jpg,.jpeg,.webp,.heic"
+                        disabled={busy}
+                        style={{ display: 'none' }}
+                        onChange={e => {
+                          const file = e.target.files?.[0];
+                          e.target.value = '';
+                          if (file) handleDocUpload(doc.column, doc.label, file);
+                        }}
+                      />
+                    </label>
+                  </div>
+                </div>
+                {isInsurance && (
+                  <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginTop: '8px' }}>
+                    <span style={{ fontSize: '11px', fontWeight: 700, color: 'var(--text-label)', whiteSpace: 'nowrap' }}>Expires</span>
+                    <input
+                      type="date"
+                      value={insuranceExpiry}
+                      onChange={e => handleInsuranceExpiry(e.target.value)}
+                      style={{ ...inputStyle, width: 'auto', padding: '6px 10px', fontSize: '12px' }}
+                    />
+                  </div>
+                )}
+              </div>
+            );
+          })}
+        </div>
       </div>
 
       {/* Save */}
