@@ -43,11 +43,14 @@ export async function getStoredTokens(): Promise<DropboxTokens | null> {
 
 export async function storeTokens(tokens: DropboxTokens): Promise<void> {
   const sb = getSupabaseAdmin();
-  await sb.from('app_settings').upsert({
+  const { error } = await sb.from('app_settings').upsert({
     key: 'dropbox_tokens',
     value: tokens,
     updated_at: new Date().toISOString(),
   }, { onConflict: 'key' });
+  if (error) {
+    throw new Error(`Failed to store Dropbox tokens: ${error.message}`);
+  }
 }
 
 // ── OAuth Token Refresh ──
@@ -67,6 +70,10 @@ async function refreshAccessToken(refreshToken: string): Promise<DropboxTokens> 
 
   if (!res.ok) {
     const err = await res.text();
+    // A revoked/invalid refresh token can't be recovered — the user must reconnect.
+    if (err.includes('invalid_grant')) {
+      throw new Error('Dropbox not connected. Please authorize via Settings.');
+    }
     throw new Error(`Dropbox token refresh failed: ${err}`);
   }
 
@@ -80,21 +87,52 @@ async function refreshAccessToken(refreshToken: string): Promise<DropboxTokens> 
 
 // ── Get Valid Access Token ──
 
-export async function getAccessToken(): Promise<string> {
+export async function getAccessToken(forceRefresh = false): Promise<string> {
   const tokens = await getStoredTokens();
   if (!tokens) {
     throw new Error('Dropbox not connected. Please authorize via Settings.');
   }
+  if (!tokens.refresh_token) {
+    // Legacy/manually-seeded token with no refresh capability
+    throw new Error('Dropbox not connected. Please authorize via Settings.');
+  }
 
   // If token is still valid, return it
-  if (tokens.expires_at > Date.now()) {
+  if (!forceRefresh && tokens.expires_at > Date.now()) {
     return tokens.access_token;
   }
 
   // Refresh the token
   const refreshed = await refreshAccessToken(tokens.refresh_token);
-  await storeTokens(refreshed);
+  try {
+    await storeTokens(refreshed);
+  } catch (err) {
+    // The refreshed token is still usable for this request even if persisting failed
+    console.error('Failed to persist refreshed Dropbox tokens:', err);
+  }
   return refreshed.access_token;
+}
+
+// ── Authenticated fetch with expired-token retry ──
+
+/**
+ * Dropbox can reject an access token before our stored `expires_at`
+ * (clock skew, tokens invalidated server-side, stale stored state).
+ * On a 401, force a refresh via the refresh token and retry once.
+ */
+async function dropboxFetch(
+  url: string,
+  buildInit: (token: string) => RequestInit
+): Promise<Response> {
+  let token = await getAccessToken();
+  let res = await fetch(url, buildInit(token));
+
+  if (res.status === 401) {
+    token = await getAccessToken(true);
+    res = await fetch(url, buildInit(token));
+  }
+
+  return res;
 }
 
 // ── Exchange auth code for tokens (initial setup) ──
@@ -141,8 +179,6 @@ export interface DropboxSearchResult {
 }
 
 export async function searchFiles(query: string, fileExtensions?: string[]): Promise<DropboxSearchResult[]> {
-  const token = await getAccessToken();
-
   const options: any = {
     path: '',
     max_results: 30,
@@ -153,7 +189,7 @@ export async function searchFiles(query: string, fileExtensions?: string[]): Pro
     options.file_categories = [{ '.tag': 'pdf' }];
   }
 
-  const res = await fetch('https://api.dropboxapi.com/2/files/search_v2', {
+  const res = await dropboxFetch('https://api.dropboxapi.com/2/files/search_v2', (token) => ({
     method: 'POST',
     headers: {
       'Authorization': `Bearer ${token}`,
@@ -163,7 +199,7 @@ export async function searchFiles(query: string, fileExtensions?: string[]): Pro
       query,
       options,
     }),
-  });
+  }));
 
   if (!res.ok) {
     const err = await res.text();
@@ -192,15 +228,13 @@ export async function searchFiles(query: string, fileExtensions?: string[]): Pro
 // ── Download File Content ──
 
 export async function downloadFile(path: string): Promise<{ buffer: Buffer; name: string; contentType: string }> {
-  const token = await getAccessToken();
-
-  const res = await fetch('https://content.dropboxapi.com/2/files/download', {
+  const res = await dropboxFetch('https://content.dropboxapi.com/2/files/download', (token) => ({
     method: 'POST',
     headers: {
       'Authorization': `Bearer ${token}`,
       'Dropbox-API-Arg': JSON.stringify({ path }),
     },
-  });
+  }));
 
   if (!res.ok) {
     const err = await res.text();
@@ -224,9 +258,7 @@ export async function getThumbnail(
   path: string,
   size: 'w32h32' | 'w64h64' | 'w128h128' | 'w256h256' | 'w480h320' | 'w640h480' = 'w256h256'
 ): Promise<{ buffer: Buffer; contentType: string }> {
-  const token = await getAccessToken();
-
-  const res = await fetch('https://content.dropboxapi.com/2/files/get_thumbnail_v2', {
+  const res = await dropboxFetch('https://content.dropboxapi.com/2/files/get_thumbnail_v2', (token) => ({
     method: 'POST',
     headers: {
       'Authorization': `Bearer ${token}`,
@@ -237,7 +269,7 @@ export async function getThumbnail(
         mode: { '.tag': 'bestfit' },
       }),
     },
-  });
+  }));
 
   if (!res.ok) {
     const err = await res.text();
@@ -252,15 +284,14 @@ export async function getThumbnail(
 
 export async function isConnected(): Promise<boolean> {
   try {
-    const token = await getAccessToken();
-    const res = await fetch('https://api.dropboxapi.com/2/check/user', {
+    const res = await dropboxFetch('https://api.dropboxapi.com/2/check/user', (token) => ({
       method: 'POST',
       headers: {
         'Authorization': `Bearer ${token}`,
         'Content-Type': 'application/json',
       },
       body: JSON.stringify({ query: 'fleetsuite' }),
-    });
+    }));
     return res.ok;
   } catch {
     return false;
