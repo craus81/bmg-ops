@@ -1,0 +1,97 @@
+# Fallback scheduler for the app's background jobs.
+#
+# Vercel Cron silently deregistered this project's jobs on 2026-07-20 (the
+# Cron Jobs section vanished from project settings with no config change —
+# vercel.json untouched since #312). This workflow mirrors every schedule in
+# vercel.json and invokes the same endpoints with the shared CRON_SECRET, so
+# the jobs keep running no matter what Vercel's scheduler does.
+#
+# Minutes are offset from the vercel.json schedules on purpose: if Vercel's
+# crons come back, the two schedulers never fire in the same minute. Every
+# job is idempotent / dedupe-guarded (sync_state heartbeats, nudged_at
+# stamps, alert dedupe), so double coverage is harmless — but once Vercel is
+# confirmed fixed, this workflow can be disabled from the Actions tab.
+#
+# Setup: add the repository secret CRON_SECRET (same value as the Vercel env
+# var). If the production URL ever moves off bmg-ops.vercel.app, set the
+# repository variable APP_URL.
+
+name: cron-fallback
+
+on:
+  schedule:
+    - cron: '7,27,47 * * * *'  # Gmail PO auto-import (vercel: */20)
+    - cron: '7,37 * * * *'     # health check (vercel: */30)
+    - cron: '10 * * * *'       # parts email ETA scan (vercel: hourly)
+    - cron: '12 */2 * * *'     # NetSuite syncs (vercel: 0 */2)
+    - cron: '7 13 * * *'       # at-risk account sweep (vercel: 13:00)
+    - cron: '37 13 * * *'      # quote follow-up nudges (vercel: 13:30)
+    - cron: '52 13 * * *'      # proof-approval reminders (vercel: 13:45)
+    - cron: '22 14 * * *'      # stuck-vehicle check (vercel: 14:15)
+    - cron: '7 14 * * 1'       # weekly customer digest (vercel: Mon 14:00)
+  workflow_dispatch:
+    inputs:
+      endpoint:
+        description: 'Cron endpoint to invoke'
+        required: true
+        type: choice
+        options:
+          - /api/gmail/auto-import
+          - /api/cron/netsuite-sync
+          - /api/cron/parts-email-scan
+          - /api/cron/health-check
+          - /api/cron/at-risk-check
+          - /api/cron/quote-followup-check
+          - /api/cron/proof-reminder-check
+          - /api/cron/stuck-vehicle-check
+          - /api/cron/weekly-customer-digest
+
+concurrency:
+  group: cron-fallback-${{ github.event.schedule || inputs.endpoint }}
+  cancel-in-progress: false
+
+jobs:
+  invoke:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Resolve endpoints for this schedule
+        id: resolve
+        run: |
+          case "${{ github.event.schedule }}" in
+            '7,27,47 * * * *') endpoints='/api/gmail/auto-import' ;;
+            '7,37 * * * *')    endpoints='/api/cron/health-check' ;;
+            '10 * * * *')      endpoints='/api/cron/parts-email-scan' ;;
+            '12 */2 * * *')    endpoints='/api/cron/netsuite-sync' ;;
+            '7 13 * * *')      endpoints='/api/cron/at-risk-check' ;;
+            '37 13 * * *')     endpoints='/api/cron/quote-followup-check' ;;
+            '52 13 * * *')     endpoints='/api/cron/proof-reminder-check' ;;
+            '22 14 * * *')     endpoints='/api/cron/stuck-vehicle-check' ;;
+            '7 14 * * 1')      endpoints='/api/cron/weekly-customer-digest' ;;
+            '')                endpoints='${{ inputs.endpoint }}' ;;  # manual run
+            *) echo "Unknown schedule '${{ github.event.schedule }}'" >&2; exit 1 ;;
+          esac
+          echo "endpoints=$endpoints" >> "$GITHUB_OUTPUT"
+
+      - name: Invoke
+        env:
+          CRON_SECRET: ${{ secrets.CRON_SECRET }}
+          APP_URL: ${{ vars.APP_URL || 'https://bmg-ops.vercel.app' }}
+        run: |
+          if [ -z "$CRON_SECRET" ]; then
+            echo "::error::Repository secret CRON_SECRET is not set — add it (same value as the Vercel env var) or every invocation will 401." >&2
+            exit 1
+          fi
+          status=0
+          for path in ${{ steps.resolve.outputs.endpoints }}; do
+            echo "→ GET $APP_URL$path"
+            # Retry once on transient failure; cap at 120s (routes cap at 60s).
+            if ! curl -fsS --retry 1 --retry-delay 5 --max-time 120 \
+                 -H "Authorization: Bearer $CRON_SECRET" \
+                 "$APP_URL$path" | head -c 2000; then
+              echo "::error::$path failed" >&2
+              status=1
+            fi
+            echo
+          done
+          exit $status
