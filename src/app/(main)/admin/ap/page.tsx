@@ -13,6 +13,7 @@ interface ApInvoice {
   vendor_name: string;
   invoice_number: string | null;
   invoice_date: string | null;
+  due_date: string | null;
   total_amount: number | null;
   location_name: string | null;
   file_name: string | null;
@@ -239,6 +240,14 @@ export default function ApQueuePage() {
                     {' · '}{inv.lines.length} VIN{inv.lines.length !== 1 ? 's' : ''}
                     {inv.location_name ? ` · ${inv.location_name}` : ''}
                     {' · invoice date '}{fmtDate(inv.invoice_date || inv.created_at)}
+                    {inv.due_date && (() => {
+                      const overdue = inv.due_date < new Date().toISOString().slice(0, 10) && inv.status !== 'paid';
+                      return (
+                        <span style={{ fontWeight: 700, color: overdue ? '#ef4444' : 'var(--text-muted)' }}>
+                          {' · due '}{fmtDate(inv.due_date)}{overdue ? ' — overdue' : ''}
+                        </span>
+                      );
+                    })()}
                   </div>
                   <div style={{ fontSize: '10px', color: 'var(--text-muted)', marginTop: '4px', display: 'flex', gap: '10px', flexWrap: 'wrap' }}>
                     {stamp(inv.submitted_by, inv.submitted_at) && <span>Submitted: {stamp(inv.submitted_by, inv.submitted_at)}</span>}

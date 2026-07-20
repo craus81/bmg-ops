@@ -24,6 +24,7 @@ const PostSchema = z.object({
   companyId: z.string().uuid().nullable().optional(),
   invoiceNumber: z.string().trim().max(60).nullable().optional(),
   invoiceDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).nullable().optional(),
+  dueDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).nullable().optional(),
   totalAmount: z.number().nonnegative().nullable().optional(),
   locationId: z.string().uuid().nullable().optional(),
   notes: z.string().trim().max(2000).nullable().optional(),
@@ -32,6 +33,9 @@ const PostSchema = z.object({
     fileName: z.string().max(200),
   }).nullable().optional(),
   lines: z.array(LineSchema).min(1).max(500),
+  // Retroactive upload of an invoice that was already processed and paid
+  // outside the app — record it as paid, skipping the approval pipeline.
+  alreadyPaid: z.boolean().optional(),
 });
 
 const DeleteSchema = z.object({ id: z.string().uuid() });
@@ -67,6 +71,7 @@ export async function POST(req: NextRequest) {
       companyId: body.companyId || null,
       invoiceNumber: body.invoiceNumber || null,
       invoiceDate: body.invoiceDate || null,
+      dueDate: body.dueDate || null,
       totalAmount: body.totalAmount ?? null,
       locationId: body.locationId || null,
       notes: body.notes || null,
@@ -77,6 +82,7 @@ export async function POST(req: NextRequest) {
         amount: l.amount ?? null,
       })),
       actorId: auth.user!.id,
+      ...(body.alreadyPaid ? { initialStatus: 'paid' as const, auditDetail: { alreadyPaid: true } } : {}),
     });
     if (!result.ok) {
       return NextResponse.json(
@@ -114,8 +120,12 @@ export async function DELETE(req: NextRequest) {
     if (!header) return NextResponse.json({ error: 'Invoice not found' }, { status: 404 });
     // In-pipeline invoices belong to finance — reject or unwind them from
     // /admin/ap first so a delete can't yank a bill out from under AP.
-    if (!['recorded', 'rejected'].includes(header.status)) {
-      return NextResponse.json({ error: `Invoice is ${header.status} — only recorded or rejected invoices can be deleted` }, { status: 409 });
+    // Paid-with-no-bill = marked paid outside the pipeline (retroactive
+    // upload); nothing downstream references it, so it stays deletable.
+    const deletable = ['recorded', 'rejected'].includes(header.status)
+      || (header.status === 'paid' && !header.netsuite_bill_id);
+    if (!deletable) {
+      return NextResponse.json({ error: `Invoice is ${header.status} — only recorded, rejected, or paid-outside-the-pipeline invoices can be deleted` }, { status: 409 });
     }
 
     const { data: stampedScans } = await service.from('scan_logs').select('id').eq('vendor_invoice_id', id);

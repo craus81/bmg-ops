@@ -26,6 +26,7 @@ IMPORTANT RULES:
 - Part numbers typically start with "06" and are 6+ characters; use null if none is shown for a line.
 - vendor_name = the installer/company who SENT the invoice (the payee), not our company (BMG).
 - invoice_date in YYYY-MM-DD format; null if not shown.
+- due_date = the payment due date in YYYY-MM-DD format; null if not shown. If the invoice states payment terms (e.g. "Net 30") with no explicit date, compute it from the invoice date; if that's not possible, leave null.
 - total_amount = the invoice grand total as a number, null if not shown.
 - If the document is not an installer invoice at all, return {"not_an_invoice": true, "document_type": "<what it looks like>"}.
 
@@ -35,6 +36,7 @@ Return ONLY valid JSON, no markdown, no backticks, no explanation, in this exact
   "vendor_name": "Precision Installs LLC",
   "invoice_number": "1042",
   "invoice_date": "2026-07-01",
+  "due_date": "2026-07-31",
   "total_amount": 1250.00,
   "lines": [
     { "vin": "1FTBW2CM5HKA12345", "part_number": "06N5TR", "description": "Graphics install", "amount": 125.00 }
@@ -130,6 +132,7 @@ export async function POST(request: NextRequest) {
         vendor_name: data.vendor_name || null,
         invoice_number: data.invoice_number != null ? String(data.invoice_number) : null,
         invoice_date: data.invoice_date || null,
+        due_date: data.due_date || null,
         total_amount: typeof data.total_amount === 'number' ? data.total_amount : null,
         lines: (Array.isArray(data.lines) ? data.lines : [])
           .filter((l: any) => l && l.vin)

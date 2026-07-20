@@ -191,8 +191,9 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ success: true });
     }
 
-    // mark_paid
-    const t = await transition(['billed'], { status: 'paid', paid_by: actorId, paid_at: now });
+    // mark_paid — from billed (normal pipeline end) or straight from
+    // recorded/rejected for invoices that were already paid outside the app.
+    const t = await transition(['billed', 'recorded', 'rejected'], { status: 'paid', paid_by: actorId, paid_at: now });
     if (t.error) return t.error;
     // The submitter (often the installer themselves) cares most about this one.
     if (invoice.submitted_by && invoice.submitted_by !== actorId) {

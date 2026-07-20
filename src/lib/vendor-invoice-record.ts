@@ -132,6 +132,7 @@ export interface RecordVendorInvoiceInput {
   companyId: string | null;
   invoiceNumber: string | null;
   invoiceDate: string | null;
+  dueDate?: string | null;
   totalAmount: number | null;
   locationId: string | null;
   notes: string | null;
@@ -139,8 +140,12 @@ export interface RecordVendorInvoiceInput {
   lines: VendorInvoiceLineInput[];
   /** created_by on the invoice and scanned_by on any scans created. */
   actorId: string;
-  /** 'submitted' = installer self-submission: lands straight in the AP queue. */
-  initialStatus?: 'recorded' | 'submitted';
+  /**
+   * 'submitted' = installer self-submission: lands straight in the AP queue.
+   * 'paid' = the invoice was already processed and paid outside the app
+   * (retroactive upload): recorded as paid, skipping the approval pipeline.
+   */
+  initialStatus?: 'recorded' | 'submitted' | 'paid';
   /** Extra keys merged into the audit-log detail (e.g. source). */
   auditDetail?: Record<string, unknown>;
 }
@@ -248,11 +253,13 @@ export async function recordVendorInvoice(
 
   // Record the invoice itself.
   const submitted = input.initialStatus === 'submitted';
+  const alreadyPaid = input.initialStatus === 'paid';
   const { data: invoice, error: invErr } = await service
     .from('vendor_invoices')
     .insert({
       invoice_number: input.invoiceNumber || null,
       invoice_date: input.invoiceDate || null,
+      due_date: input.dueDate || null,
       company_id: input.companyId || null,
       vendor_name: input.vendorName,
       total_amount: input.totalAmount ?? null,
@@ -266,6 +273,11 @@ export async function recordVendorInvoice(
         status: 'submitted',
         submitted_by: input.actorId,
         submitted_at: new Date().toISOString(),
+      } : {}),
+      ...(alreadyPaid ? {
+        status: 'paid',
+        paid_by: input.actorId,
+        paid_at: new Date().toISOString(),
       } : {}),
     })
     .select('id')
