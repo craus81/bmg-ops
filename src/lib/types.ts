@@ -557,6 +557,8 @@ export interface GraphicsJob {
   updated_at: string;
   // Estimate & Invoice linkage
   estimate_id: string | null;
+  // Source wrap quote (null unless spawned from / linked to one)
+  wrap_quote_id: string | null;
   po_number: string | null;
   customer_netsuite_id: string | null;
   netsuite_invoice_id: string | null;

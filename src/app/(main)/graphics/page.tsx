@@ -2366,6 +2366,22 @@ export default function GraphicsPage() {
                             </div>
                           )}
 
+                          {/* Show source wrap quote — opens that quote's detail
+                              view on the wrap quote screen */}
+                          {job.wrap_quote_id && (
+                            <div style={{ padding: '8px 10px', borderRadius: '8px', background: 'rgba(167,139,250,0.06)', border: '1px solid rgba(167,139,250,0.15)', marginBottom: '6px' }}>
+                              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                                <div style={{ fontSize: '11px', color: '#a78bfa', fontWeight: 700 }}>Wrap Quote Linked</div>
+                                <button
+                                  onClick={() => router.push(`/admin/wrap-quote?id=${job.wrap_quote_id}`)}
+                                  style={{ fontSize: '10px', fontWeight: 700, color: '#a78bfa', background: 'rgba(167,139,250,0.1)', border: '1px solid rgba(167,139,250,0.2)', borderRadius: '5px', padding: '3px 8px', cursor: 'pointer' }}
+                                >
+                                  Open Wrap Quote
+                                </button>
+                              </div>
+                            </div>
+                          )}
+
                           {/* Show invoice info if invoiced. id 'external' means
                               "marked invoiced outside FleetSuite" — no NetSuite
                               record to link to or fetch a PDF from. */}
