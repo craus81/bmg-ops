@@ -7,6 +7,7 @@ import { useAuth } from '@/components/AuthProvider';
 import { useDialog } from '@/components/DialogProvider';
 import { theme } from '@/lib/theme';
 import { loadCompaniesWithCounts, type CompanyOption } from '@/lib/cni-companies';
+import { storage } from '@/lib/storage';
 
 const RISK_TAG_OPTIONS = [
   { id: 'preferred', label: 'Preferred', color: 'var(--success)' },
@@ -651,18 +652,27 @@ export default function CniInstallerDetailPage() {
       <div style={sectionStyle}>
         <div style={{ fontSize: '12px', fontWeight: 700, color: 'var(--text-muted)', marginBottom: '10px' }}>COMPLIANCE</div>
         <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '10px' }}>
-          <div>
-            <div style={{ fontSize: '11px', color: 'var(--text-muted)', fontWeight: 600 }}>W9</div>
-            <div style={{ fontSize: '13px', color: profile.w9_file_path ? 'var(--success)' : 'var(--error)' }}>
-              {profile.w9_file_path ? '✓ Uploaded' : '✕ Missing'}
+          {([
+            ['W9', profile.w9_file_path],
+            ['Insurance', profile.insurance_cert_path],
+            ['Direct Deposit', profile.direct_deposit_file_path],
+          ] as [string, string | null][]).map(([label, path]) => (
+            <div key={label}>
+              <div style={{ fontSize: '11px', color: 'var(--text-muted)', fontWeight: 600 }}>{label}</div>
+              <div style={{ fontSize: '13px', color: path ? 'var(--success)' : 'var(--error)' }}>
+                {path ? '✓ Uploaded' : '✕ Missing'}
+                {path && (
+                  <a
+                    href={storage.from('cni-docs').getPublicUrl(path).data.publicUrl}
+                    target="_blank" rel="noreferrer"
+                    style={{ marginLeft: '8px', fontSize: '11px', fontWeight: 700, color: '#60a5fa', textDecoration: 'none' }}
+                  >
+                    📄 View
+                  </a>
+                )}
+              </div>
             </div>
-          </div>
-          <div>
-            <div style={{ fontSize: '11px', color: 'var(--text-muted)', fontWeight: 600 }}>Insurance</div>
-            <div style={{ fontSize: '13px', color: profile.insurance_cert_path ? 'var(--success)' : 'var(--error)' }}>
-              {profile.insurance_cert_path ? '✓ Uploaded' : '✕ Missing'}
-            </div>
-          </div>
+          ))}
           <div>
             <div style={{ fontSize: '11px', color: 'var(--text-muted)', fontWeight: 600 }}>Terms Accepted</div>
             <div style={{ fontSize: '13px', color: profile.terms_accepted_at ? 'var(--success)' : 'var(--text-muted)' }}>
