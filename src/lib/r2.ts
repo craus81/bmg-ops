@@ -1,4 +1,4 @@
-import { S3Client, PutObjectCommand, DeleteObjectCommand, GetObjectCommand } from '@aws-sdk/client-s3';
+import { S3Client, PutObjectCommand, DeleteObjectCommand, GetObjectCommand, GetBucketCorsCommand, PutBucketCorsCommand } from '@aws-sdk/client-s3';
 import { getSignedUrl } from '@aws-sdk/s3-request-presigner';
 
 // ── R2 Configuration ──
@@ -29,8 +29,74 @@ export function getR2Client(): S3Client {
       accessKeyId: config.accessKeyId,
       secretAccessKey: config.secretAccessKey,
     },
+    // AWS SDK ≥3.729 defaults to embedding a CRC32 checksum in every request
+    // — including presigned PUT URLs, where it signs the checksum of an
+    // EMPTY body (x-amz-checksum-crc32=AAAAAA==). R2 then rejects the real
+    // browser upload as a checksum mismatch. WHEN_REQUIRED restores the old
+    // behavior: only send checksums when the operation demands one.
+    requestChecksumCalculation: 'WHEN_REQUIRED',
+    responseChecksumValidation: 'WHEN_REQUIRED',
   });
   return _client;
+}
+
+// ── Bucket CORS for browser direct uploads ──
+// Presigned PUTs come straight from the browser, so the bucket must answer
+// CORS preflights. Without this config R2 403s every OPTIONS request and
+// Safari surfaces it as an opaque "Load failed". The rules are permissive on
+// purpose: writes are still gated by the short-lived presigned signature and
+// the bucket is already publicly readable — CORS is not the security
+// boundary here, it just has to stop blocking our own app (prod, Vercel
+// previews, localhost dev, and the Capacitor iOS/Android shells, which use
+// capacitor://localhost origins no fixed allowlist can anticipate).
+const R2_CORS_RULES = [
+  {
+    AllowedOrigins: ['*'],
+    AllowedMethods: ['GET', 'PUT', 'HEAD'],
+    AllowedHeaders: ['*'],
+    ExposeHeaders: ['etag'],
+    MaxAgeSeconds: 3600,
+  },
+];
+
+let _corsEnsured: Promise<void> | null = null;
+
+// Apply the CORS rules once per server instance, before handing out presigned
+// URLs. Failures are logged but never fatal — if the R2 API key only has
+// object-level permissions, run `node scripts/setup-r2-cors.mjs` with an
+// admin-scoped key instead.
+export function ensureR2Cors(): Promise<void> {
+  if (_corsEnsured) return _corsEnsured;
+  _corsEnsured = (async () => {
+    const config = getR2Config();
+    const client = getR2Client();
+    try {
+      const current = await client.send(new GetBucketCorsCommand({ Bucket: config.bucket }))
+        .catch((err: any) => {
+          // NoSuchCORSConfiguration means "not set yet" — anything else
+          // (e.g. AccessDenied) should fall through to the PUT attempt.
+          if (err?.name === 'NoSuchCORSConfiguration' || err?.Code === 'NoSuchCORSConfiguration') return null;
+          throw err;
+        });
+      const hasWildcard = current?.CORSRules?.some(r =>
+        r.AllowedOrigins?.includes('*') && r.AllowedMethods?.includes('PUT'));
+      if (hasWildcard) return;
+      await client.send(new PutBucketCorsCommand({
+        Bucket: config.bucket,
+        CORSConfiguration: { CORSRules: R2_CORS_RULES },
+      }));
+      console.log('R2 bucket CORS rules applied');
+    } catch (err: any) {
+      // Let a later request retry rather than caching the failure forever.
+      _corsEnsured = null;
+      console.error(
+        'Could not apply R2 bucket CORS rules (browser uploads will fail preflight until this is fixed).',
+        'If this is AccessDenied, the R2 API key lacks bucket-config permission — run scripts/setup-r2-cors.mjs with an Admin Read & Write key.',
+        err?.message || err,
+      );
+    }
+  })();
+  return _corsEnsured;
 }
 
 // ── Upload a file to R2 ──

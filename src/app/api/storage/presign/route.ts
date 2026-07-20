@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { r2PresignPut } from '@/lib/r2';
+import { r2PresignPut, ensureR2Cors } from '@/lib/r2';
 import { requireAuth } from '@/lib/api-auth';
 import { validateBody, z } from '@/lib/validate';
 
@@ -22,6 +22,9 @@ export async function POST(req: NextRequest) {
   const { bucket, path, contentType } = parsed.data;
 
   try {
+    // The presigned PUT is a cross-origin browser request — make sure the
+    // bucket will answer its CORS preflight before handing out the URL.
+    await ensureR2Cors();
 
     const result = await r2PresignPut(
       bucket,
