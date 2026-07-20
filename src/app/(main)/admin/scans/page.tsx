@@ -2135,6 +2135,7 @@ interface VendorReview {
   vendorName: string;
   invoiceNumber: string;
   invoiceDate: string;
+  dueDate: string;
   totalAmount: string;
   notes: string;
   lines: VendorLine[];
@@ -2146,6 +2147,7 @@ interface VendorInvoiceRecord {
   id: string;
   invoice_number: string | null;
   invoice_date: string | null;
+  due_date: string | null;
   vendor_name: string;
   total_amount: number | null;
   location_name: string | null;
@@ -2216,6 +2218,15 @@ function VendorInvoicesTab({ allParts, allLocations, poRequired, onCommitted, on
   // "Apply part to selected lines" bar
   const [applyPartSearch, setApplyPartSearch] = useState('');
   const [showApplyPartDropdown, setShowApplyPartDropdown] = useState(false);
+
+  // Retroactive upload: the invoice was already processed and paid outside
+  // the app — record it as paid, skipping the approval pipeline.
+  const [alreadyPaid, setAlreadyPaid] = useState(false);
+  // Bulk add: paste VIN / part / amount rows straight from a spreadsheet.
+  const [bulkOpen, setBulkOpen] = useState(false);
+  const [bulkText, setBulkText] = useState('');
+  const [bulkBusy, setBulkBusy] = useState(false);
+  const [markingPaid, setMarkingPaid] = useState<string | null>(null);
 
   const [committing, setCommitting] = useState(false);
   const [commitResult, setCommitResult] = useState<{
@@ -2410,7 +2421,7 @@ function VendorInvoicesTab({ allParts, allLocations, poRequired, onCommitted, on
     setCommitResult(null);
     setVendorRates({});
     setNsVendors([]);
-    setReview({ vendorName: '', invoiceNumber: '', invoiceDate: '', totalAmount: '', notes: '', lines: [blankLine()] });
+    setReview({ vendorName: '', invoiceNumber: '', invoiceDate: '', dueDate: '', totalAmount: '', notes: '', lines: [blankLine()] });
   };
 
   // Files beyond Vercel's ~4.5MB request-body ceiling can't reach the
@@ -2463,7 +2474,7 @@ function VendorInvoicesTab({ allParts, allLocations, poRequired, onCommitted, on
       if (!extracted) {
         // Extraction failing never blocks the flow — fall back to manual entry.
         setNotice(prev => [prev, `AI couldn't read this invoice: ${extractError}`].filter(Boolean).join('\n'));
-        setReview({ vendorName: '', invoiceNumber: '', invoiceDate: '', totalAmount: '', notes: '', lines: [blankLine()] });
+        setReview({ vendorName: '', invoiceNumber: '', invoiceDate: '', dueDate: '', totalAmount: '', notes: '', lines: [blankLine()] });
       } else {
         const d = extracted;
         let lines: VendorLine[] = (d.lines || []).map((l: any) => ({
@@ -2484,6 +2495,7 @@ function VendorInvoicesTab({ allParts, allLocations, poRequired, onCommitted, on
           vendorName: matchedCompany?.name || d.vendor_name || '',
           invoiceNumber: d.invoice_number || '',
           invoiceDate: d.invoice_date || '',
+          dueDate: d.due_date || '',
           totalAmount: d.total_amount != null ? String(d.total_amount) : '',
           notes: d.notes || '',
           lines,
@@ -2580,6 +2592,66 @@ function VendorInvoicesTab({ allParts, allLocations, poRequired, onCommitted, on
     setAddingVendor(false);
   };
 
+  // Parse pasted VIN rows (one per line, straight from a spreadsheet or the
+  // bulk-upload sheet format): VIN alone, or VIN / part / amount separated by
+  // tabs (spreadsheet paste) or commas. Header rows and junk lines fall out
+  // because their first cell doesn't clean to a 5+ character VIN.
+  const bulkAddLines = async () => {
+    if (!review) return;
+    setBulkBusy(true);
+    const parsed: VendorLine[] = [];
+    for (const row of bulkText.split(/\r?\n/)) {
+      const cols = (row.includes('\t') ? row.split('\t') : row.split(/[,;]/)).map(c => c.trim());
+      const vin = (cols[0] || '').toUpperCase().replace(/[^A-Z0-9]/g, '');
+      if (vin.length < 5) continue;
+      const part = cols[1] || '';
+      const amtRaw = (cols[2] || '').replace(/[$,\s]/g, '');
+      const amount = amtRaw !== '' && !isNaN(parseFloat(amtRaw)) ? parseFloat(amtRaw) : null;
+      parsed.push({
+        key: ++lineKeyRef.current,
+        vin,
+        partNumber: part || defaultPart?.item_number || '',
+        amount: amount != null ? String(amount) : '',
+        existing: null,
+      });
+    }
+    if (parsed.length === 0) {
+      setBulkBusy(false);
+      await dialog.alert('No VINs found — paste one row per vehicle: VIN, or VIN / part / amount separated by tabs or commas.');
+      return;
+    }
+    const checked = await checkExistingVins(parsed);
+    setReview(prev => prev ? {
+      ...prev,
+      // Fully-empty placeholder rows give way to the pasted ones.
+      lines: [...prev.lines.filter(l => l.vin.trim() || l.partNumber.trim() || l.amount.trim()), ...checked],
+    } : prev);
+    setBulkText('');
+    setBulkOpen(false);
+    setBulkBusy(false);
+    applyRememberedRates(selectedCompany ? { companyId: selectedCompany.id } : { vendorName: review.vendorName });
+  };
+
+  // Straight recorded/rejected → paid for invoices settled outside the app.
+  const markPaidInvoice = async (inv: VendorInvoiceRecord) => {
+    const label = `${inv.vendor_name} invoice${inv.invoice_number ? ` #${inv.invoice_number}` : ''}`;
+    if (!(await dialog.confirm(`Mark the ${label} as paid WITHOUT sending it through approval? Use this only for invoices that were already processed and paid outside FleetSuite.`, { confirmLabel: 'Mark Paid' }))) return;
+    setMarkingPaid(inv.id);
+    try {
+      const res = await fetch('/api/vendor-invoices/workflow', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ action: 'mark_paid', id: inv.id }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok || !data.success) await dialog.alert(`Mark paid failed: ${data.error || 'unknown error'}`);
+      else loadHistory();
+    } catch (err: any) {
+      await dialog.alert(`Mark paid failed: ${err.message}`);
+    }
+    setMarkingPaid(null);
+  };
+
   const handleCommit = async () => {
     if (!review) return;
     const validLines = review.lines.filter(vinOk);
@@ -2601,6 +2673,7 @@ function VendorInvoicesTab({ allParts, allLocations, poRequired, onCommitted, on
           companyId: selectedCompany?.id || null,
           invoiceNumber: review.invoiceNumber.trim() || null,
           invoiceDate: /^\d{4}-\d{2}-\d{2}$/.test(review.invoiceDate) ? review.invoiceDate : null,
+          dueDate: /^\d{4}-\d{2}-\d{2}$/.test(review.dueDate) ? review.dueDate : null,
           totalAmount: parseFloat(review.totalAmount) >= 0 ? parseFloat(review.totalAmount) : null,
           locationId: vLocation || null,
           notes: review.notes.trim() || null,
@@ -2610,6 +2683,7 @@ function VendorInvoicesTab({ allParts, allLocations, poRequired, onCommitted, on
             partNumber: l.partNumber.trim() || null,
             amount: parseFloat(l.amount) >= 0 ? parseFloat(l.amount) : null,
           })),
+          ...(alreadyPaid ? { alreadyPaid: true } : {}),
         }),
       });
       const data = await res.json();
@@ -2620,6 +2694,9 @@ function VendorInvoicesTab({ allParts, allLocations, poRequired, onCommitted, on
         setReview(null);
         setStagedFile(null);
         setSelectedCompany(null);
+        setAlreadyPaid(false);
+        setBulkOpen(false);
+        setBulkText('');
         setNotice(null);
         loadHistory();
         onCommitted();
@@ -2853,6 +2930,10 @@ function VendorInvoicesTab({ allParts, allLocations, poRequired, onCommitted, on
               <input type="date" value={review.invoiceDate} onChange={e => setReview({ ...review, invoiceDate: e.target.value })} style={inputStyle} />
             </div>
             <div>
+              <div style={labelStyle}>Due Date</div>
+              <input type="date" value={review.dueDate} onChange={e => setReview({ ...review, dueDate: e.target.value })} style={inputStyle} />
+            </div>
+            <div>
               <div style={labelStyle}>Invoice Total ($)</div>
               <input type="number" step="0.01" min="0" value={review.totalAmount} onChange={e => setReview({ ...review, totalAmount: e.target.value })} placeholder="0.00" style={inputStyle} />
             </div>
@@ -3005,11 +3086,42 @@ function VendorInvoicesTab({ allParts, allLocations, poRequired, onCommitted, on
               <button onClick={splitTotalEvenly} disabled={!statedTotal} title="Divide the invoice total evenly across all VIN lines" style={{ padding: '4px 10px', borderRadius: '6px', fontSize: '10px', fontWeight: 700, background: 'rgba(96,165,250,0.1)', border: '1px solid rgba(96,165,250,0.25)', color: '#60a5fa', cursor: 'pointer', opacity: statedTotal ? 1 : 0.4 }}>
                 Split total evenly
               </button>
+              <button onClick={() => setBulkOpen(o => !o)} style={{ padding: '4px 10px', borderRadius: '6px', fontSize: '10px', fontWeight: 700, background: bulkOpen ? 'var(--subtle-bg)' : 'rgba(167,139,250,0.1)', border: `1px solid ${bulkOpen ? theme.border : 'rgba(167,139,250,0.25)'}`, color: bulkOpen ? 'var(--text-muted)' : '#a78bfa', cursor: 'pointer' }}>
+                {bulkOpen ? 'Close bulk add' : '⇪ Bulk Add VINs'}
+              </button>
               <button onClick={() => setReview({ ...review, lines: [...review.lines, blankLine()] })} style={{ padding: '4px 10px', borderRadius: '6px', fontSize: '10px', fontWeight: 700, background: 'rgba(34,197,94,0.1)', border: '1px solid rgba(34,197,94,0.25)', color: '#22c55e', cursor: 'pointer' }}>
                 + Add VIN
               </button>
             </div>
           </div>
+
+          {/* Bulk paste panel — spreadsheet-style VIN entry */}
+          {bulkOpen && (
+            <div style={{ padding: '10px 12px', borderRadius: '10px', marginBottom: '8px', background: 'rgba(167,139,250,0.05)', border: '1px solid rgba(167,139,250,0.25)' }}>
+              <div style={{ fontSize: '11px', fontWeight: 700, color: '#a78bfa', marginBottom: '6px' }}>
+                Paste VINs — one per line, straight from a spreadsheet. Optional columns after the VIN: part number, amount (tab or comma separated). Lines whose first cell isn&apos;t a VIN (like headers) are skipped; the Default Part fills any line without its own part.
+              </div>
+              <textarea
+                value={bulkText}
+                onChange={e => setBulkText(e.target.value)}
+                placeholder={'1FTBW2CM5HKA12345\n1FTBW2CM5HKA12346\t06N5TR\t125.00\nKA12347, 06N5TR, 125.00'}
+                autoFocus
+                style={{ ...inputStyle, minHeight: '110px', resize: 'vertical', fontFamily: 'monospace', fontSize: '11px', marginBottom: '6px' }}
+              />
+              <div style={{ display: 'flex', gap: '6px', alignItems: 'center' }}>
+                <button
+                  onClick={bulkAddLines}
+                  disabled={bulkBusy || !bulkText.trim()}
+                  style={{ padding: '6px 14px', borderRadius: '6px', fontSize: '11px', fontWeight: 700, background: bulkBusy || !bulkText.trim() ? theme.border : '#a78bfa', color: '#fff', border: 'none', cursor: bulkBusy ? 'default' : 'pointer' }}
+                >
+                  {bulkBusy ? 'Adding…' : 'Add to Invoice'}
+                </button>
+                <span style={{ fontSize: '10px', color: 'var(--text-muted)' }}>
+                  Pasted VINs are checked against existing scans, and this vendor&apos;s remembered rates fill empty amounts.
+                </span>
+              </div>
+            </div>
+          )}
 
           {/* Apply a part to all selected lines in one go */}
           {(() => {
@@ -3169,11 +3281,18 @@ function VendorInvoicesTab({ allParts, allLocations, poRequired, onCommitted, on
               {totalMismatch ? ' — doesn’t match the invoice total' : ''}
             </span>
             <span style={{ flex: 1 }} />
-            <button onClick={() => { setReview(null); setStagedFile(null); setSelectedCompany(null); setAddVendorOpen(false); }} style={{ padding: '10px 16px', borderRadius: '8px', fontSize: '12px', fontWeight: 700, background: 'transparent', border: `1px solid ${theme.border}`, color: 'var(--text-muted)', cursor: 'pointer' }}>
+            <label
+              title="For invoices that were already processed and paid outside FleetSuite — records them as Paid, skipping the approval and payment pipeline"
+              style={{ display: 'flex', alignItems: 'center', gap: '6px', cursor: 'pointer', padding: '6px 10px', borderRadius: '8px', background: alreadyPaid ? 'rgba(52,211,153,0.1)' : 'transparent', border: `1px solid ${alreadyPaid ? 'rgba(52,211,153,0.35)' : theme.border}` }}
+            >
+              <input type="checkbox" checked={alreadyPaid} onChange={e => setAlreadyPaid(e.target.checked)} style={{ width: '13px', height: '13px', accentColor: '#34d399' }} />
+              <span style={{ fontSize: '11px', fontWeight: 700, color: alreadyPaid ? '#34d399' : 'var(--text-muted)' }}>Already paid — record only</span>
+            </label>
+            <button onClick={() => { setReview(null); setStagedFile(null); setSelectedCompany(null); setAddVendorOpen(false); setAlreadyPaid(false); setBulkOpen(false); setBulkText(''); }} style={{ padding: '10px 16px', borderRadius: '8px', fontSize: '12px', fontWeight: 700, background: 'transparent', border: `1px solid ${theme.border}`, color: 'var(--text-muted)', cursor: 'pointer' }}>
               Cancel
             </button>
-            <button onClick={handleCommit} disabled={committing} style={{ padding: '10px 20px', borderRadius: '8px', fontSize: '13px', fontWeight: 800, background: committing ? theme.border : '#f472b6', color: '#fff', border: 'none', cursor: committing ? 'default' : 'pointer' }}>
-              {committing ? 'Recording…' : `Record Invoice (${review.lines.filter(vinOk).length} VINs)`}
+            <button onClick={handleCommit} disabled={committing} style={{ padding: '10px 20px', borderRadius: '8px', fontSize: '13px', fontWeight: 800, background: committing ? theme.border : alreadyPaid ? '#34d399' : '#f472b6', color: '#fff', border: 'none', cursor: committing ? 'default' : 'pointer' }}>
+              {committing ? 'Recording…' : `${alreadyPaid ? 'Record as Paid' : 'Record Invoice'} (${review.lines.filter(vinOk).length} VINs)`}
             </button>
           </div>
         </div>
@@ -3196,7 +3315,9 @@ function VendorInvoicesTab({ allParts, allLocations, poRequired, onCommitted, on
           const canSubmit = inv.status === 'recorded' || inv.status === 'rejected';
           // Once an invoice enters the payment pipeline, deleting it here would
           // pull it out from under finance — manage it from /admin/ap instead.
-          const canDelete = inv.status === 'recorded' || inv.status === 'rejected';
+          // Paid-with-no-bill = marked paid outside the pipeline; still ours.
+          const canDelete = inv.status === 'recorded' || inv.status === 'rejected'
+            || (inv.status === 'paid' && !inv.netsuite_bill_id);
           return (
             <div key={inv.id} style={{ background: 'var(--card)', border: `1px solid ${theme.border}`, borderRadius: '10px', overflow: 'hidden' }}>
               <div style={{ display: 'flex', alignItems: 'center', gap: '8px', padding: '10px 12px' }}>
@@ -3208,7 +3329,8 @@ function VendorInvoicesTab({ allParts, allLocations, poRequired, onCommitted, on
                   <div style={{ fontSize: '10px', color: 'var(--text-muted)', marginTop: '1px' }}>
                     {inv.lines.length} VIN{inv.lines.length !== 1 ? 's' : ''}{updatedCount > 0 ? ` (${updatedCount} pre-existing)` : ''}
                     {inv.location_name ? ` · ${inv.location_name}` : ''}
-                    {inv.invoice_date ? ` · ${inv.invoice_date}` : ''} · recorded {new Date(inv.created_at).toLocaleDateString([], { month: 'short', day: 'numeric' })}
+                    {inv.invoice_date ? ` · ${inv.invoice_date}` : ''}
+                    {inv.due_date ? ` · due ${inv.due_date}` : ''} · recorded {new Date(inv.created_at).toLocaleDateString([], { month: 'short', day: 'numeric' })}
                     {inv.netsuite_bill_id ? ` · NS bill ${inv.netsuite_bill_id}` : ''}
                   </div>
                 </div>
@@ -3222,6 +3344,16 @@ function VendorInvoicesTab({ allParts, allLocations, poRequired, onCommitted, on
                     style={{ padding: '3px 8px', borderRadius: '5px', fontSize: '10px', fontWeight: 700, background: 'rgba(52,211,153,0.1)', border: '1px solid rgba(52,211,153,0.3)', color: '#34d399', cursor: 'pointer', flexShrink: 0 }}
                   >
                     {submittingInvoice === inv.id ? '…' : inv.status === 'rejected' ? 'Resubmit' : 'Submit for Payment'}
+                  </button>
+                )}
+                {canSubmit && (
+                  <button
+                    onClick={() => markPaidInvoice(inv)}
+                    disabled={markingPaid === inv.id}
+                    title="Record this invoice as already paid outside FleetSuite — skips the approval and payment pipeline"
+                    style={{ padding: '3px 8px', borderRadius: '5px', fontSize: '10px', fontWeight: 700, background: 'rgba(96,165,250,0.1)', border: '1px solid rgba(96,165,250,0.25)', color: '#60a5fa', cursor: 'pointer', flexShrink: 0 }}
+                  >
+                    {markingPaid === inv.id ? '…' : '✓ Mark Paid'}
                   </button>
                 )}
                 {inv.storage_path && (
