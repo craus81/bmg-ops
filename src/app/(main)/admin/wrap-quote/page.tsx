@@ -252,6 +252,10 @@ export default function WrapQuotePage() {
   };
   const [pushingNetsuite, setPushingNetsuite] = useState(false);
   const [creatingCustomer, setCreatingCustomer] = useState(false);
+  // Graphics jobs spawned from wrap quotes, keyed by wrap_quote_id — powers
+  // the job badge in history and stops duplicate creates.
+  const [jobsByQuote, setJobsByQuote] = useState<Record<string, { id: string; job_number: string | null }>>({});
+  const [creatingJobFor, setCreatingJobFor] = useState<string | null>(null);
 
   // ----- Pricing tab state (edit copies) -----
   const [subSel, setSubSel] = useState(''); // '' = new
@@ -272,13 +276,19 @@ export default function WrapQuotePage() {
 
   const loadAll = async () => {
     setLoading(true);
-    const [tplRes, subRes, setRes, histRes, floorRes] = await Promise.all([
+    const [tplRes, subRes, setRes, histRes, floorRes, jobsRes] = await Promise.all([
       supabase.from('vehicle_templates').select('id, name, make, model, year, variant, scale, template_code, template_image_path, px_per_in, overall_length_in, is_active').not('template_image_path', 'is', null).order('make').order('model'),
       supabase.from('wrap_substrates').select('*').order('name'),
       supabase.from('wrap_quote_settings').select('*').eq('id', 1).maybeSingle(),
       supabase.from('wrap_quotes').select('*').order('created_at', { ascending: false }).limit(200),
       supabase.from('quote_settings').select('margin_floor_pct').eq('id', 1).maybeSingle(),
+      supabase.from('graphics_jobs').select('id, job_number, wrap_quote_id').not('wrap_quote_id', 'is', null).neq('status', 'cancelled').order('created_at', { ascending: true }),
     ]);
+    const jobMap: Record<string, { id: string; job_number: string | null }> = {};
+    for (const j of jobsRes.data || []) {
+      if (j.wrap_quote_id) jobMap[j.wrap_quote_id] = { id: j.id, job_number: j.job_number };
+    }
+    setJobsByQuote(jobMap);
     if (floorRes.data?.margin_floor_pct != null) setMarginFloor(Number(floorRes.data.margin_floor_pct));
     setTemplates((tplRes.data || []) as Template[]);
     setSubstrates((subRes.data || []) as Film[]);
@@ -897,6 +907,41 @@ export default function WrapQuotePage() {
       await dialog.alert(`NetSuite quote failed: ${e.message}`);
     } finally {
       setPushingNetsuite(false);
+    }
+  };
+
+  // Spawn a graphics production job from a saved quote. The job lands on the
+  // Graphics board as "Received" with the vehicle, customer, films, and
+  // coverage areas pre-filled — no retyping. One job per quote; if one
+  // already exists the badge/button opens it instead.
+  const createGraphicsJob = async (q: WrapQuote) => {
+    if (jobsByQuote[q.id]) { window.open(`/graphics?editJob=${jobsByQuote[q.id].id}`, '_blank'); return; }
+    if (!(await dialog.confirm(`Create a graphics job from ${q.quote_number}? It lands on the Graphics board as "Received" with the vehicle, films, and coverage areas filled in.`))) return;
+    setCreatingJobFor(q.id);
+    try {
+      const res = await apiFetch('/api/graphics/from-wrap-quote', {
+        method: 'POST',
+        body: JSON.stringify({ quoteId: q.id, mode: 'create' }),
+      });
+      const data = await res.json();
+      if (res.status === 409 && data.graphicsJobId) {
+        // Someone beat us to it — remember the link and offer to open it.
+        setJobsByQuote(prev => ({ ...prev, [q.id]: { id: data.graphicsJobId, job_number: data.jobNumber || null } }));
+        if (await dialog.confirm(`${data.error}. Open it?`)) window.open(`/graphics?editJob=${data.graphicsJobId}`, '_blank');
+        return;
+      }
+      if (!res.ok || !data.success) {
+        await dialog.alert(`Graphics job failed: ${data.error || 'Unknown error'}`);
+        return;
+      }
+      setJobsByQuote(prev => ({ ...prev, [q.id]: { id: data.graphicsJobId, job_number: data.jobNumber || null } }));
+      if (await dialog.confirm(`Graphics job ${data.jobNumber} created. Open it on the Graphics board?`)) {
+        window.open(`/graphics?editJob=${data.graphicsJobId}`, '_blank');
+      }
+    } catch (e: any) {
+      await dialog.alert(`Graphics job failed: ${e.message}`);
+    } finally {
+      setCreatingJobFor(null);
     }
   };
 
@@ -1858,6 +1903,13 @@ export default function WrapQuotePage() {
                     style={{ fontSize: '9px', fontWeight: 700, padding: '2px 7px', borderRadius: '4px', background: 'rgba(167,139,250,0.12)', color: '#a78bfa', border: 'none', cursor: 'pointer' }}
                   >NS {q.netsuite_estimate_number} ⎙</button>
                 )}
+                {jobsByQuote[q.id] && (
+                  <button
+                    onClick={e => { e.stopPropagation(); window.open(`/graphics?editJob=${jobsByQuote[q.id].id}`, '_blank'); }}
+                    title="Open this quote's graphics job on the Graphics board"
+                    style={{ fontSize: '9px', fontWeight: 700, padding: '2px 7px', borderRadius: '4px', background: 'rgba(34,197,94,0.12)', color: '#22c55e', border: 'none', cursor: 'pointer' }}
+                  >{jobsByQuote[q.id].job_number || 'Job'} ↗</button>
+                )}
                 {q.archived_at && (
                   <span style={{ fontSize: '9px', fontWeight: 700, padding: '2px 7px', borderRadius: '4px', background: 'rgba(148,163,184,0.12)', color: '#94a3b8' }}>Archived</span>
                 )}
@@ -1905,6 +1957,14 @@ export default function WrapQuotePage() {
             {quotePreview(viewQuote)}
             <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '6px', marginTop: '8px' }}>
               <button onClick={() => loadQuoteForEdit(viewQuote)} style={btnStyle('#60a5fa', 'var(--card)')}>Edit / Resend</button>
+              <button
+                onClick={() => createGraphicsJob(viewQuote)}
+                disabled={creatingJobFor === viewQuote.id}
+                title={jobsByQuote[viewQuote.id] ? "Open this quote's graphics job on the Graphics board" : 'Create a graphics job pre-filled from this quote'}
+                style={btnStyle('#22c55e', 'var(--card)')}
+              >
+                {creatingJobFor === viewQuote.id ? 'Creating…' : jobsByQuote[viewQuote.id] ? `Job ${jobsByQuote[viewQuote.id].job_number || ''} ↗` : 'Create Graphics Job'}
+              </button>
               {viewQuote.netsuite_estimate_id && (
                 <button onClick={() => viewEstimatePdf(viewQuote.netsuite_estimate_id)} style={btnStyle('#a78bfa', 'var(--card)')}>
                   NetSuite PDF
