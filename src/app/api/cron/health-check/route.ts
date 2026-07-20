@@ -19,10 +19,33 @@ const REALERT_HOURS = 6;
 /**
  * Watches the other background jobs and pushes an alert to admins when one
  * goes stale or records an error — a dead NetSuite sync used to be able to
- * hide for weeks. Runs every 30 min via Vercel Cron. (If THIS cron dies,
- * its own heartbeat goes stale on the System Health page — but no push
- * fires; truly independent monitoring needs an external pinger.)
+ * hide for weeks. Runs every 30 min via Vercel Cron.
+ *
+ * Dead-man's switch: every run also pings HEALTH_PING_URL (a
+ * healthchecks.io-style check URL). If the Vercel cron scheduler itself
+ * dies — the one failure this route can't alert on, since it stops running
+ * too — the pings stop arriving and the external service emails/pages the
+ * admins. Bad checks ping the /fail variant so the external service also
+ * mirrors job-level problems.
  */
+const pingExternalMonitor = async (ok: boolean, summary: string) => {
+  const base = process.env.HEALTH_PING_URL;
+  if (!base) return;
+  try {
+    // healthchecks.io convention: <url> = success, <url>/fail = failure.
+    // The body shows up in the check's event log for context.
+    await fetch(ok ? base : `${base.replace(/\/$/, '')}/fail`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'text/plain' },
+      body: summary.slice(0, 1000),
+      signal: AbortSignal.timeout(10_000),
+    });
+  } catch (err) {
+    // Never let the dead-man's switch break the watcher itself.
+    console.error('HEALTH_PING_URL ping failed:', err);
+  }
+};
+
 export async function GET(req: NextRequest) {
   // Allow Vercel Cron with the shared secret; anyone else needs an admin
   // session (manual trigger). Fails closed if CRON_SECRET is not configured.
@@ -90,6 +113,13 @@ export async function GET(req: NextRequest) {
       updated_at: new Date().toISOString(),
     }, { onConflict: 'sync_type' });
 
+    await pingExternalMonitor(
+      bad.length === 0,
+      bad.length === 0
+        ? `all ${checks.length} jobs ok`
+        : bad.map(c => `${c.label}: ${c.problem}`).join(' · '),
+    );
+
     return NextResponse.json({
       status: 'ok',
       checks: checks.map(c => ({ syncType: c.syncType, status: c.status })),
@@ -98,6 +128,9 @@ export async function GET(req: NextRequest) {
     });
   } catch (e: any) {
     console.error('health-check failed:', e);
+    // The watcher ran but crashed — still a failure signal worth surfacing
+    // externally (a success ping here would mask the crash).
+    await pingExternalMonitor(false, `health-check crashed: ${e.message || 'unknown error'}`);
     return NextResponse.json({ error: e.message || 'health check failed' }, { status: 500 });
   }
 }
