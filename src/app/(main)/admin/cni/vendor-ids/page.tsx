@@ -4,6 +4,7 @@ import { useState, useEffect, useMemo } from 'react';
 import { useRouter } from 'next/navigation';
 import { createClient } from '@/lib/supabase-browser';
 import { useAuth } from '@/components/AuthProvider';
+import NetsuiteVendorSearch from '@/components/NetsuiteVendorSearch';
 
 interface Installer {
   user_id: string;
@@ -36,6 +37,8 @@ export default function CniVendorIdsPage() {
   // Per-row edit drafts + save state, keyed by user_id.
   const [drafts, setDrafts] = useState<Record<string, string>>({});
   const [rowState, setRowState] = useState<Record<string, RowState>>({});
+  // Which row has the NetSuite search open (one at a time).
+  const [searchOpen, setSearchOpen] = useState<string | null>(null);
 
   useEffect(() => {
     if (!isAdmin) { router.push('/home'); return; }
@@ -270,6 +273,18 @@ export default function CniVendorIdsPage() {
                       background: 'var(--input-bg)', color: 'var(--text-body)',
                     }}
                   />
+                  <button
+                    onClick={() => setSearchOpen(o => o === inst.user_id ? null : inst.user_id)}
+                    title="Search existing NetSuite vendors and pick one"
+                    style={{
+                      padding: '8px 12px', borderRadius: '8px', fontSize: '12px', fontWeight: 700,
+                      background: searchOpen === inst.user_id ? 'var(--subtle-bg)' : 'var(--input-bg)',
+                      color: searchOpen === inst.user_id ? 'var(--text-muted)' : 'var(--text-body)',
+                      border: '1px solid var(--border)', cursor: 'pointer', whiteSpace: 'nowrap',
+                    }}
+                  >
+                    🔍
+                  </button>
                   {dirty && (
                     <button
                       onClick={() => saveVendorId(inst.user_id)}
@@ -287,6 +302,17 @@ export default function CniVendorIdsPage() {
                     <span style={{ fontSize: '12px', fontWeight: 700, color: 'var(--success)', whiteSpace: 'nowrap' }}>✓ Saved</span>
                   )}
                 </div>
+                {searchOpen === inst.user_id && (
+                  <div style={{ marginTop: '8px' }}>
+                    <NetsuiteVendorSearch
+                      onSelect={v => {
+                        setDrafts(d => ({ ...d, [inst.user_id]: v.id }));
+                        setSearchOpen(null);
+                      }}
+                      autoFocus
+                    />
+                  </div>
+                )}
                 {rs.error && (
                   <div style={{ fontSize: '11px', fontWeight: 600, color: 'var(--error)', marginTop: '6px' }}>{rs.error}</div>
                 )}

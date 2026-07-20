@@ -5,6 +5,7 @@ import { useRouter } from 'next/navigation';
 import { createClient } from '@/lib/supabase-browser';
 import { useAuth } from '@/components/AuthProvider';
 import { installerCountsByCompany } from '@/lib/cni-companies';
+import NetsuiteVendorSearch, { type NsVendor } from '@/components/NetsuiteVendorSearch';
 
 interface CniCompany {
   id: string;
@@ -31,6 +32,12 @@ export default function CniCompaniesPage() {
   const [newName, setNewName] = useState('');
   const [creating, setCreating] = useState(false);
   const [createError, setCreateError] = useState<string | null>(null);
+
+  // Add-from-NetSuite panel: pick an existing NetSuite vendor and create/link
+  // the matching FleetSuite company so it exists in both places.
+  const [showNs, setShowNs] = useState(false);
+  const [nsBusy, setNsBusy] = useState(false);
+  const [nsMsg, setNsMsg] = useState<{ text: string; companyId?: string } | null>(null);
 
   useEffect(() => {
     if (!isAdmin) { router.push('/home'); return; }
@@ -78,6 +85,34 @@ export default function CniCompaniesPage() {
     }
   };
 
+  // Never mints a NetSuite vendor — create-vendor with netsuiteVendorId only
+  // links the picked existing one (find-or-creating the local company row).
+  const handleNsSelect = async (v: NsVendor) => {
+    setNsBusy(true);
+    setNsMsg(null);
+    try {
+      const res = await fetch('/api/cni/create-vendor', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ name: v.companyName || v.entityId, netsuiteVendorId: v.id }),
+      });
+      const data = await res.json();
+      if (!res.ok || !data.success) {
+        setNsMsg({ text: data.error || 'Failed to link NetSuite vendor' });
+      } else if (data.vendorError) {
+        // e.g. the local company is already linked to a DIFFERENT vendor id —
+        // surface it and let the admin decide on the company page.
+        setNsMsg({ text: data.vendorError, companyId: data.companyId });
+        loadCompanies();
+      } else {
+        router.push(`/admin/cni/companies/${data.companyId}`);
+      }
+    } catch (err: any) {
+      setNsMsg({ text: err.message || 'Network error' });
+    }
+    setNsBusy(false);
+  };
+
   if (loading) {
     return <div style={{ padding: '20px', textAlign: 'center', color: 'var(--text-muted)' }}>Loading...</div>;
   }
@@ -95,18 +130,64 @@ export default function CniCompaniesPage() {
             <div style={{ fontSize: '12px', color: 'var(--text-muted)' }}>{companies.length} compan{companies.length === 1 ? 'y' : 'ies'}</div>
           </div>
         </div>
-        <button
-          onClick={() => { setShowNew(s => !s); setCreateError(null); }}
-          style={{
-            padding: '8px 16px', borderRadius: '10px', fontSize: '13px', fontWeight: 700,
-            background: showNew ? 'var(--subtle-bg)' : 'var(--orange)',
-            color: showNew ? 'var(--text-muted)' : '#fff',
-            border: showNew ? '1px solid var(--border)' : 'none', cursor: 'pointer',
-          }}
-        >
-          {showNew ? 'Cancel' : '+ New Company'}
-        </button>
+        <div style={{ display: 'flex', gap: '6px' }}>
+          <button
+            onClick={() => { setShowNs(s => !s); setShowNew(false); setNsMsg(null); }}
+            style={{
+              padding: '8px 12px', borderRadius: '10px', fontSize: '13px', fontWeight: 700,
+              background: showNs ? 'var(--subtle-bg)' : 'var(--input-bg)',
+              color: showNs ? 'var(--text-muted)' : 'var(--text-body)',
+              border: '1px solid var(--border)', cursor: 'pointer', whiteSpace: 'nowrap',
+            }}
+          >
+            {showNs ? 'Cancel' : '⇄ From NetSuite'}
+          </button>
+          <button
+            onClick={() => { setShowNew(s => !s); setShowNs(false); setCreateError(null); }}
+            style={{
+              padding: '8px 16px', borderRadius: '10px', fontSize: '13px', fontWeight: 700,
+              background: showNew ? 'var(--subtle-bg)' : 'var(--orange)',
+              color: showNew ? 'var(--text-muted)' : '#fff',
+              border: showNew ? '1px solid var(--border)' : 'none', cursor: 'pointer', whiteSpace: 'nowrap',
+            }}
+          >
+            {showNew ? 'Cancel' : '+ New Company'}
+          </button>
+        </div>
       </div>
+
+      {/* Add-from-NetSuite panel */}
+      {showNs && (
+        <div style={{
+          padding: '14px 16px', borderRadius: '12px', marginBottom: '14px',
+          background: 'var(--card)', border: '1px solid var(--border)', boxShadow: 'var(--shadow-sm)',
+        }}>
+          <label style={{ fontSize: '12px', fontWeight: 700, color: 'var(--text-label)', marginBottom: '4px', display: 'block' }}>
+            Add an Existing NetSuite Vendor
+          </label>
+          <div style={{ fontSize: '11px', color: 'var(--text-muted)', marginBottom: '8px', lineHeight: 1.5 }}>
+            Search vendors already in NetSuite and pick one — the matching CNI company is created (or linked if the name already exists) with the vendor&apos;s numeric Internal ID, so it lives in both places. Nothing is created in NetSuite.
+          </div>
+          {nsBusy ? (
+            <div style={{ fontSize: '12px', color: 'var(--text-muted)', fontWeight: 600 }}>Linking…</div>
+          ) : (
+            <NetsuiteVendorSearch onSelect={handleNsSelect} autoFocus />
+          )}
+          {nsMsg && (
+            <div style={{ fontSize: '12px', color: 'var(--warning)', fontWeight: 600, marginTop: '8px' }}>
+              {nsMsg.text}
+              {nsMsg.companyId && (
+                <button
+                  onClick={() => router.push(`/admin/cni/companies/${nsMsg.companyId}`)}
+                  style={{ color: 'var(--orange)', fontWeight: 700, background: 'none', border: 'none', cursor: 'pointer', padding: 0, fontSize: '12px', marginLeft: '6px' }}
+                >
+                  Open company →
+                </button>
+              )}
+            </div>
+          )}
+        </div>
+      )}
 
       {/* New company inline form */}
       {showNew && (

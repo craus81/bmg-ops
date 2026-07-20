@@ -5,6 +5,7 @@ import { useRouter, useParams } from 'next/navigation';
 import { createClient } from '@/lib/supabase-browser';
 import { useAuth } from '@/components/AuthProvider';
 import { storage } from '@/lib/storage';
+import NetsuiteVendorSearch, { type NsVendor } from '@/components/NetsuiteVendorSearch';
 
 interface CniCompany {
   id: string;
@@ -86,6 +87,8 @@ export default function CniCompanyDetailPage() {
   const [phone, setPhone] = useState('');
   const [email, setEmail] = useState('');
   const [vendorId, setVendorId] = useState('');
+  const [showVendorSearch, setShowVendorSearch] = useState(false);
+  const [pickedVendor, setPickedVendor] = useState<NsVendor | null>(null);
   const [primaryContact, setPrimaryContact] = useState('');
   const [saving, setSaving] = useState(false);
   const [saveMsg, setSaveMsg] = useState<{ success: boolean; message: string } | null>(null);
@@ -439,12 +442,33 @@ export default function CniCompanyDetailPage() {
           </div>
         </div>
         <div style={{ marginBottom: '10px' }}>
-          <label style={labelStyle}>NetSuite Vendor ID</label>
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline' }}>
+            <label style={labelStyle}>NetSuite Vendor ID</label>
+            <button
+              onClick={() => { setShowVendorSearch(s => !s); setPickedVendor(null); }}
+              style={{ fontSize: '11px', fontWeight: 700, color: 'var(--orange)', background: 'none', border: 'none', cursor: 'pointer', padding: 0 }}
+            >
+              {showVendorSearch ? 'Close search' : '🔍 Search NetSuite'}
+            </button>
+          </div>
           <input
-            value={vendorId} onChange={e => setVendorId(e.target.value)}
+            value={vendorId} onChange={e => { setVendorId(e.target.value); setPickedVendor(null); }}
             placeholder="Company-level vendor (lump-sum payouts)"
             style={inputStyle}
           />
+          {pickedVendor && (
+            <div style={{ fontSize: '11px', fontWeight: 600, color: 'var(--success)', marginTop: '4px' }}>
+              Selected: {pickedVendor.companyName || pickedVendor.entityId} (#{pickedVendor.id}) — hit Save Changes to link.
+            </div>
+          )}
+          {showVendorSearch && (
+            <div style={{ marginTop: '8px' }}>
+              <NetsuiteVendorSearch
+                onSelect={v => { setVendorId(v.id); setPickedVendor(v); setShowVendorSearch(false); }}
+                autoFocus
+              />
+            </div>
+          )}
         </div>
         <div style={{ marginBottom: '14px' }}>
           <label style={labelStyle}>Primary Contact</label>
