@@ -415,16 +415,49 @@ export default function AdminScansPage() {
   // Build and download a CSV of the given scans. Shared by the workflow
   // export (selected scans, stamps exported_at) and the plain filtered
   // download (whatever the current filters show, stamps nothing).
-  const downloadScansCsv = (rows: ScanLog[]) => {
-    const headers = ['VIN', 'Year', 'Make', 'Model', 'Part Number', 'Description', 'Billable Customer', 'Unit #', 'Serial #', 'IMEI', 'CCID', 'Location', 'PO Number', 'CNI Job', 'Scanned By', 'Company', 'Date', 'Status'];
-    const data = rows.map(s => [
-      s.vin, s.vehicle_year || '', s.vehicle_make || '', s.vehicle_model || '',
-      s.part_number || '', s.part_description || '', s.billable_customer || '',
-      s.unit_number || '', s.serial_number || '', s.imei || '', s.iccid || '',
-      s.location_name || '', s.po_number || '', cniByScanId[s.id] || '',
-      profiles[s.scanned_by || ''] || '', s.scanned_by_company || 'BMG', new Date(s.scanned_at).toLocaleString(),
-      scanStatus(s).label,
-    ]);
+  const downloadScansCsv = async (rows: ScanLog[]) => {
+    // Vendor cost + invoice columns: the priced line for each scan
+    // (vendor_invoice_lines.amount) and its invoice's vendor/number —
+    // fetched here for just the rows being exported.
+    const scanIds = rows.map(s => s.id);
+    const lineByScan = new Map<string, { amount: number | null; vendor_invoice_id: string | null }>();
+    const invById = new Map<string, { vendor_name: string | null; invoice_number: string | null }>();
+    try {
+      const { data: lines } = await supabase
+        .from('vendor_invoice_lines')
+        .select('scan_log_id, amount, vendor_invoice_id')
+        .in('scan_log_id', scanIds);
+      for (const l of lines || []) {
+        if (l.scan_log_id) lineByScan.set(l.scan_log_id, { amount: l.amount, vendor_invoice_id: l.vendor_invoice_id });
+      }
+      const invoiceIds = new Set<string>();
+      for (const s of rows) if (s.vendor_invoice_id) invoiceIds.add(s.vendor_invoice_id);
+      for (const l of lineByScan.values()) if (l.vendor_invoice_id) invoiceIds.add(l.vendor_invoice_id);
+      if (invoiceIds.size > 0) {
+        const { data: invs } = await supabase
+          .from('vendor_invoices')
+          .select('id, vendor_name, invoice_number')
+          .in('id', [...invoiceIds]);
+        for (const inv of invs || []) invById.set(inv.id, { vendor_name: inv.vendor_name, invoice_number: inv.invoice_number });
+      }
+    } catch { /* vendor columns are best-effort — the export still works */ }
+
+    const headers = ['VIN', 'Year', 'Make', 'Model', 'Part Number', 'Description', 'Billable Customer', 'Unit #', 'Serial #', 'IMEI', 'CCID', 'Location', 'PO Number', 'Vendor', 'Vendor Invoice #', 'Vendor Cost', 'CNI Job', 'Scanned By', 'Company', 'Date', 'Status'];
+    const data = rows.map(s => {
+      const line = lineByScan.get(s.id);
+      const inv = invById.get(line?.vendor_invoice_id || s.vendor_invoice_id || '');
+      return [
+        s.vin, s.vehicle_year || '', s.vehicle_make || '', s.vehicle_model || '',
+        s.part_number || '', s.part_description || '', s.billable_customer || '',
+        s.unit_number || '', s.serial_number || '', s.imei || '', s.iccid || '',
+        s.location_name || '', s.po_number || '',
+        inv?.vendor_name || '', inv?.invoice_number || '',
+        line?.amount != null ? String(line.amount) : '',
+        cniByScanId[s.id] || '',
+        profiles[s.scanned_by || ''] || '', s.scanned_by_company || 'BMG', new Date(s.scanned_at).toLocaleString(),
+        scanStatus(s).label,
+      ];
+    });
     const csv = [headers, ...data].map(r => r.map(c => `"${(c || '').replace(/"/g, '""')}"`).join(',')).join('\n');
     const blob = new Blob([csv], { type: 'text/csv' });
     const url = URL.createObjectURL(blob);
@@ -441,7 +474,7 @@ export default function AdminScansPage() {
     const toExport = tabScans.filter(s => selectedScans.has(s.id));
     if (toExport.length === 0) return;
     setExporting(true);
-    downloadScansCsv(toExport);
+    await downloadScansCsv(toExport);
     await supabase.from('scan_logs').update({ exported_at: new Date().toISOString(), exported_by: user?.id }).in('id', toExport.map(s => s.id));
     setExporting(false);
     loadAll();
@@ -450,9 +483,9 @@ export default function AdminScansPage() {
   // Plain download of everything the current tab + filters show (source,
   // user, company, date range, search). Deliberately does NOT stamp
   // exported_at — it's a report, not the invoicing workflow.
-  const downloadFilteredCsv = () => {
+  const downloadFilteredCsv = async () => {
     if (tabScans.length === 0) return;
-    downloadScansCsv(tabScans);
+    await downloadScansCsv(tabScans);
   };
 
   const archiveExported = async () => {
