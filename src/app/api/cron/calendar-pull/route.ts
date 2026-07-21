@@ -58,6 +58,9 @@ async function run(req: NextRequest) {
   }
 
   const supabase = service();
+  // ?full=1 ignores the stored cursor and re-sweeps the whole window —
+  // the recovery lever after a misconfigured run consumed the syncToken.
+  const forceFull = req.nextUrl.searchParams.get('full') === '1';
 
   try {
     const { data: state } = await supabase
@@ -65,12 +68,15 @@ async function run(req: NextRequest) {
       .select('last_result')
       .eq('sync_type', SYNC_TYPE)
       .maybeSingle();
-    const storedToken: string | null = state?.last_result?.syncToken || null;
+    const storedToken: string | null = forceFull ? null : (state?.last_result?.syncToken || null);
 
     let pull = await listCalendarChanges(storedToken);
     if (pull.fullResyncNeeded) pull = await listCalendarChanges(null);
 
     const stats = { processed: pull.events.length, jobsUpdated: 0, checkinsUpdated: 0, imported: 0, importsUpdated: 0, removed: 0 };
+    // DB write failures must surface — a silent failure here would advance
+    // the sync cursor past events that never landed.
+    const writeErrors: string[] = [];
 
     if (pull.events.length > 0) {
       const ids = pull.events.map(ev => ev.id).filter(Boolean);
@@ -117,8 +123,9 @@ async function run(req: NextRequest) {
             stats.checkinsUpdated++;
           }
           if (manual) {
-            await supabase.from('calendar_events').delete().eq('id', manual.id);
-            stats.removed++;
+            const { error } = await supabase.from('calendar_events').delete().eq('id', manual.id);
+            if (error) writeErrors.push(`delete ${ev.id}: ${error.message}`);
+            else stats.removed++;
           }
           continue;
         }
@@ -147,14 +154,15 @@ async function run(req: NextRequest) {
         } else if (manual) {
           const title = ev.summary || 'Untitled event';
           if (manual.event_date?.slice(0, 10) !== date || manual.title !== title || (manual.description || '') !== (ev.description || '')) {
-            await supabase.from('calendar_events')
+            const { error } = await supabase.from('calendar_events')
               .update({ title, description: ev.description || null, event_date: date })
               .eq('id', manual.id);
-            stats.importsUpdated++;
+            if (error) writeErrors.push(`update ${ev.id}: ${error.message}`);
+            else stats.importsUpdated++;
           }
         } else {
           // Created directly on Google — surface it on the FleetSuite schedule.
-          await supabase.from('calendar_events').upsert({
+          const { error } = await supabase.from('calendar_events').upsert({
             title: ev.summary || 'Untitled event',
             description: ev.description || null,
             event_date: date,
@@ -164,19 +172,40 @@ async function run(req: NextRequest) {
             source: 'google',
             google_event_id: ev.id,
           }, { onConflict: 'google_event_id' });
-          stats.imported++;
+          if (error) writeErrors.push(`import ${ev.id}: ${error.message}`);
+          else stats.imported++;
         }
       }
     }
 
+    // Keep the OLD cursor when any write failed, so the next run (after the
+    // schema/config problem is fixed) re-pulls the same events instead of
+    // skipping past them forever.
     await supabase.from('sync_state').upsert({
       sync_type: SYNC_TYPE,
       last_synced_at: new Date().toISOString(),
-      last_result: { syncToken: pull.nextSyncToken, ...stats },
+      last_result: {
+        syncToken: writeErrors.length > 0 ? storedToken : pull.nextSyncToken,
+        ...stats,
+        writeErrors: writeErrors.slice(0, 10),
+      },
       updated_at: new Date().toISOString(),
     });
 
-    return NextResponse.json({ success: true, ...stats });
+    // Surface what actually happened — an "empty success" almost always
+    // means the env points at the wrong calendar or the migration is
+    // missing, so say which calendar was polled.
+    const diagnostics = {
+      calendarId: process.env.GOOGLE_CALENDAR_ID || 'primary (GOOGLE_CALENDAR_ID not set!)',
+      incremental: !!storedToken,
+    };
+    if (writeErrors.length > 0) {
+      return NextResponse.json(
+        { success: false, ...stats, ...diagnostics, writeErrors: writeErrors.slice(0, 10), hint: 'DB writes failed — has migration 170 been applied (npm run migrate)? Cursor not advanced; rerun after fixing.' },
+        { status: 500 },
+      );
+    }
+    return NextResponse.json({ success: true, ...stats, ...diagnostics });
   } catch (err: any) {
     if (err?.message === 'NO_GOOGLE_TOKEN') {
       return NextResponse.json({ success: false, error: 'Google account not connected — visit the Google auth flow first.' }, { status: 200 });
