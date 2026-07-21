@@ -556,8 +556,8 @@ export interface VendorAddress { street: string; city: string; state: string; zi
 
 export interface VendorAddressLookup {
   map: Record<string, VendorAddress>;
-  /** Which query produced the addresses (null = none did). */
-  strategy: 'addressbook' | 'default_billing' | 'formatted' | null;
+  /** Which queries produced addresses, '+'-joined in run order (null = none did). */
+  strategy: string | null;
   /** Short per-strategy failure notes, for surfacing to the admin UI. */
   errors: string[];
 }
@@ -571,86 +571,115 @@ const shortSuiteqlError = (e: any): string => {
 
 /**
  * Addresses for a set of vendor ids, one per vendor. NetSuite exposes
- * vendor addresses three different ways depending on account config and
- * role permissions, so try each until one returns rows:
- *   1. the vendor address book (any entry),
- *   2. the vendor's defaultbillingaddress subrecord,
+ * vendor addresses several ways depending on account config and role
+ * permissions, so strategies run in authority order and each only fills
+ * vendors the previous ones missed (no short-circuiting):
+ *   1. the vendor's defaultbillingaddress subrecord — THE billing address,
+ *   2. the address book, preferring entries flagged default-billing
+ *      (retried without the flag column if the account rejects it),
  *   3. BUILTIN.DF(defaultbillingaddress) — a formatted one-line string
- *      (lands in `street` unsplit).
- * Never throws; the diagnostics say which strategy won and what failed.
+ *      (lands in `street` unsplit; customer-sync's fallback trick).
+ * Never throws; diagnostics say which strategies contributed and what
+ * failed. Vendor bills mail to these addresses, so billing-authority
+ * order matters more than raw coverage.
  */
 export async function getVendorAddresses(ids: string[]): Promise<VendorAddressLookup> {
   const clean = ids.filter(id => /^\d+$/.test(id));
   const out: VendorAddressLookup = { map: {}, strategy: null, errors: [] };
   if (clean.length === 0) return out;
-  const idList = clean.join(',');
 
-  // 1. Address book join — no defaultbilling column dependence; first
-  //    entry per vendor wins.
-  try {
-    const res = await suiteqlQuery(`
-      SELECT va.entity AS vendor_id, ea.addr1, ea.addr2, ea.city, ea.state, ea.zip
-      FROM vendorAddressbook va
-      JOIN entityAddress ea ON ea.nkey = va.addressbookaddress
-      WHERE va.entity IN (${idList})`);
-    for (const a of res?.items || []) {
+  const used: string[] = [];
+  const missing = () => clean.filter(id => !out.map[id]);
+  const toAddress = (a: any): VendorAddress => ({
+    street: [a.addr1, a.addr2].filter(Boolean).join(', '),
+    city: a.city || '',
+    state: a.state || '',
+    zip: a.zip || '',
+  });
+  const absorb = (items: any[], strategyName: string) => {
+    let added = false;
+    for (const a of items) {
       const vid = a.vendor_id?.toString();
       if (!vid || out.map[vid]) continue;
-      out.map[vid] = {
-        street: [a.addr1, a.addr2].filter(Boolean).join(', '),
-        city: a.city || '',
-        state: a.state || '',
-        zip: a.zip || '',
-      };
+      out.map[vid] = toAddress(a);
+      added = true;
     }
-    if (Object.keys(out.map).length > 0) { out.strategy = 'addressbook'; return out; }
-    out.errors.push('addressbook: no rows');
-  } catch (e: any) {
-    out.errors.push(`addressbook: ${shortSuiteqlError(e)}`);
-  }
+    if (added) used.push(strategyName);
+    else out.errors.push(`${strategyName}: no rows`);
+  };
 
-  // 2. The vendor row's default billing address subrecord.
+  // 1. The vendor row's default billing address subrecord — authoritative.
   try {
     const res = await suiteqlQuery(`
       SELECT v.id AS vendor_id, ea.addr1, ea.addr2, ea.city, ea.state, ea.zip
       FROM vendor v
       JOIN entityAddress ea ON ea.nkey = v.defaultbillingaddress
-      WHERE v.id IN (${idList})`);
-    for (const a of res?.items || []) {
-      const vid = a.vendor_id?.toString();
-      if (!vid || out.map[vid]) continue;
-      out.map[vid] = {
-        street: [a.addr1, a.addr2].filter(Boolean).join(', '),
-        city: a.city || '',
-        state: a.state || '',
-        zip: a.zip || '',
-      };
-    }
-    if (Object.keys(out.map).length > 0) { out.strategy = 'default_billing'; return out; }
-    out.errors.push('default_billing: no rows');
+      WHERE v.id IN (${clean.join(',')})`);
+    absorb(res?.items || [], 'default_billing');
   } catch (e: any) {
     out.errors.push(`default_billing: ${shortSuiteqlError(e)}`);
   }
 
-  // 3. Formatted-string fallback (same trick as the customer sync) — the
-  //    whole address lands in `street` as one line.
-  try {
-    const res = await suiteqlQuery(`
-      SELECT v.id AS vendor_id, BUILTIN.DF(v.defaultbillingaddress) AS addr
-      FROM vendor v
-      WHERE v.id IN (${idList}) AND v.defaultbillingaddress IS NOT NULL`);
-    for (const a of res?.items || []) {
-      const vid = a.vendor_id?.toString();
-      if (!vid || out.map[vid] || !a.addr || /^\d+$/.test(a.addr)) continue;
-      out.map[vid] = { street: a.addr, city: '', state: '', zip: '' };
+  // 2. Address book for whoever's still missing — prefer the entry flagged
+  //    default-billing; fall back to a flag-less query if the column errors.
+  if (missing().length > 0) {
+    const idList = missing().join(',');
+    const pickPerVendor = (items: any[]): any[] => {
+      const best = new Map<string, any>();
+      for (const a of items) {
+        const vid = a.vendor_id?.toString();
+        if (!vid) continue;
+        if (!best.has(vid) || (a.defaultbilling === 'T' && best.get(vid).defaultbilling !== 'T')) best.set(vid, a);
+      }
+      return [...best.values()];
+    };
+    try {
+      const res = await suiteqlQuery(`
+        SELECT va.entity AS vendor_id, va.defaultbilling, ea.addr1, ea.addr2, ea.city, ea.state, ea.zip
+        FROM vendorAddressbook va
+        JOIN entityAddress ea ON ea.nkey = va.addressbookaddress
+        WHERE va.entity IN (${idList})`);
+      absorb(pickPerVendor(res?.items || []), 'addressbook');
+    } catch (e: any) {
+      out.errors.push(`addressbook: ${shortSuiteqlError(e)}`);
+      try {
+        const res = await suiteqlQuery(`
+          SELECT va.entity AS vendor_id, ea.addr1, ea.addr2, ea.city, ea.state, ea.zip
+          FROM vendorAddressbook va
+          JOIN entityAddress ea ON ea.nkey = va.addressbookaddress
+          WHERE va.entity IN (${idList})`);
+        absorb(pickPerVendor(res?.items || []), 'addressbook_any');
+      } catch (e2: any) {
+        out.errors.push(`addressbook_any: ${shortSuiteqlError(e2)}`);
+      }
     }
-    if (Object.keys(out.map).length > 0) { out.strategy = 'formatted'; return out; }
-    out.errors.push('formatted: no rows');
-  } catch (e: any) {
-    out.errors.push(`formatted: ${shortSuiteqlError(e)}`);
   }
 
-  console.warn('NetSuite vendor address lookup found nothing:', out.errors.join(' | '));
+  // 3. Formatted-string fallback for the stragglers.
+  if (missing().length > 0) {
+    try {
+      const res = await suiteqlQuery(`
+        SELECT v.id AS vendor_id, BUILTIN.DF(v.defaultbillingaddress) AS addr
+        FROM vendor v
+        WHERE v.id IN (${missing().join(',')}) AND v.defaultbillingaddress IS NOT NULL`);
+      let added = false;
+      for (const a of res?.items || []) {
+        const vid = a.vendor_id?.toString();
+        if (!vid || out.map[vid] || !a.addr || /^\d+$/.test(a.addr)) continue;
+        out.map[vid] = { street: a.addr, city: '', state: '', zip: '' };
+        added = true;
+      }
+      if (added) used.push('formatted');
+      else out.errors.push('formatted: no rows');
+    } catch (e: any) {
+      out.errors.push(`formatted: ${shortSuiteqlError(e)}`);
+    }
+  }
+
+  out.strategy = used.length > 0 ? used.join('+') : null;
+  if (!out.strategy) {
+    console.warn('NetSuite vendor address lookup found nothing:', out.errors.join(' | '));
+  }
   return out;
 }
 
