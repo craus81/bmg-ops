@@ -465,7 +465,15 @@ export default function CniCompanyDetailPage() {
           {showVendorSearch && (
             <div style={{ marginTop: '8px' }}>
               <NetsuiteVendorSearch
-                onSelect={v => { setVendorId(v.id); setPickedVendor(v); setShowVendorSearch(false); }}
+                onSelect={v => {
+                  setVendorId(v.id);
+                  setPickedVendor(v);
+                  setShowVendorSearch(false);
+                  // Prefill blank contact fields from the NetSuite record —
+                  // never clobber values already on the company.
+                  if (v.email && !email.trim()) setEmail(v.email);
+                  if (v.phone && !phone.trim()) setPhone(v.phone);
+                }}
                 autoFocus
               />
             </div>

@@ -95,6 +95,22 @@ export async function POST(req: NextRequest) {
       }
     }
 
+    // Backfill contact info from the NetSuite record onto an existing
+    // company — fills blanks only, never overwrites something typed here.
+    if (body.email || body.phone) {
+      const { data: current } = await service
+        .from('companies')
+        .select('email, phone')
+        .eq('id', company.id)
+        .maybeSingle();
+      const backfill: Record<string, string> = {};
+      if (body.email && !current?.email) backfill.email = body.email;
+      if (body.phone && !current?.phone) backfill.phone = body.phone;
+      if (Object.keys(backfill).length > 0) {
+        await service.from('companies').update(backfill).eq('id', company.id);
+      }
+    }
+
     // Already linked to a NetSuite vendor — nothing to create.
     if (company.netsuite_vendor_id) {
       return NextResponse.json({

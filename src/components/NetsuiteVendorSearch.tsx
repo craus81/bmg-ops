@@ -6,6 +6,8 @@ export interface NsVendor {
   id: string;         // numeric Internal ID — the one bills need
   entityId: string;
   companyName: string;
+  email: string | null;
+  phone: string | null;
 }
 
 /**
@@ -95,6 +97,11 @@ export default function NetsuiteVendorSearch({
                 </span>
                 {v.entityId && v.entityId !== v.companyName && (
                   <span style={{ fontSize: '11px', color: 'var(--text-muted)', marginLeft: '6px' }}>{v.entityId}</span>
+                )}
+                {(v.email || v.phone) && (
+                  <span style={{ display: 'block', fontSize: '10px', color: 'var(--text-muted)' }}>
+                    {[v.email, v.phone].filter(Boolean).join(' · ')}
+                  </span>
                 )}
               </span>
               <span style={{ fontSize: '11px', fontWeight: 700, color: 'var(--orange)', whiteSpace: 'nowrap' }}>
