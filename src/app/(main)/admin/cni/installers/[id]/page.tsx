@@ -8,6 +8,7 @@ import { useDialog } from '@/components/DialogProvider';
 import { theme } from '@/lib/theme';
 import { loadCompaniesWithCounts, type CompanyOption } from '@/lib/cni-companies';
 import { storage } from '@/lib/storage';
+import MentionTextArea, { reportMentions } from '@/components/MentionTextArea';
 
 const RISK_TAG_OPTIONS = [
   { id: 'preferred', label: 'Preferred', color: 'var(--success)' },
@@ -153,6 +154,28 @@ export default function CniInstallerDetailPage() {
 
   const toggleTag = (tag: string) => {
     setRiskTags(riskTags.includes(tag) ? riskTags.filter(t => t !== tag) : [...riskTags, tag]);
+  };
+
+  const addInternalNote = async () => {
+    const content = newNote.trim();
+    if (!content) return;
+    const { error } = await supabase.from('cni_internal_notes').insert({
+      installer_id: userId,
+      note_type: newNoteType,
+      content,
+      created_by: user?.id,
+    });
+    if (!error) {
+      reportMentions({
+        text: content,
+        sourceType: 'cni_internal_note',
+        sourceId: userId,
+        contextLabel: `Installer — ${userProfile?.full_name || 'CNI installer'}`,
+        contextUrl: `/admin/cni/installers/${userId}`,
+      });
+    }
+    setNewNote('');
+    await loadData();
   };
 
   const saveInternalFields = async () => {
@@ -866,40 +889,24 @@ export default function CniInstallerDetailPage() {
               <option value="issue">Issue</option>
               <option value="qc">QC</option>
             </select>
-            <input
-              type="text"
-              placeholder="Add internal note..."
+            <MentionTextArea
+              placeholder="Add internal note... (@ tags a teammate)"
               value={newNote}
-              onChange={e => setNewNote(e.target.value)}
+              onChange={setNewNote}
+              rows={1}
               style={{
-                flex: 1, padding: '8px 12px', borderRadius: '8px', fontSize: '12px',
+                flex: 1, padding: '8px 12px', borderRadius: '8px', fontSize: '12px', resize: 'none',
                 border: '1px solid var(--border)', background: 'var(--input-bg)', color: 'var(--text-body)',
               }}
-              onKeyDown={async (e) => {
-                if (e.key === 'Enter' && newNote.trim()) {
-                  await supabase.from('cni_internal_notes').insert({
-                    installer_id: userId,
-                    note_type: newNoteType,
-                    content: newNote.trim(),
-                    created_by: user?.id,
-                  });
-                  setNewNote('');
-                  await loadData();
+              onKeyDown={(e) => {
+                if (e.key === 'Enter' && !e.shiftKey) {
+                  e.preventDefault();
+                  addInternalNote();
                 }
               }}
             />
             <button
-              onClick={async () => {
-                if (!newNote.trim()) return;
-                await supabase.from('cni_internal_notes').insert({
-                  installer_id: userId,
-                  note_type: newNoteType,
-                  content: newNote.trim(),
-                  created_by: user?.id,
-                });
-                setNewNote('');
-                await loadData();
-              }}
+              onClick={addInternalNote}
               style={{
                 padding: '8px 14px', borderRadius: '8px', fontSize: '12px', fontWeight: 700,
                 background: 'var(--orange)', color: '#fff', border: 'none', cursor: 'pointer',

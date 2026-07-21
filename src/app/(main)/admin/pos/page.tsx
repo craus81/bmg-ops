@@ -11,7 +11,7 @@ import type { PurchaseOrder, POLineItem, CatalogItem, PoLocation, GraphicsJobSta
 import { GRAPHICS_STATUS_LABELS, GRAPHICS_STATUS_COLORS } from '@/lib/types';
 import { PartLabel } from '@/components/PartLabel';
 import { DropZone } from '@/components/DropZone';
-import { reportMentions } from '@/components/MentionTextArea';
+import MentionTextArea, { reportMentions } from '@/components/MentionTextArea';
 import { CreateNetsuiteItemModal } from '@/components/CreateNetsuiteItemModal';
 import { useDialog } from '@/components/DialogProvider';
 import { isProofLikeName } from '@/lib/pdf-classify';
@@ -4070,14 +4070,15 @@ export default function POsPage() {
                         ))}
                       </div>
                     )}
-                    <textarea
-                      value={noteText}
-                      onChange={e => setNoteText(e.target.value)}
-                      onClick={e => e.stopPropagation()}
-                      placeholder="Add a note — e.g. what needs fixing or attention…"
-                      rows={2}
-                      style={{ width: '100%', marginTop: '4px', padding: '8px', borderRadius: '8px', border: '1px solid var(--border)', background: 'var(--input-bg)', color: 'var(--text-body)', fontSize: '12px', resize: 'vertical' }}
-                    />
+                    <div onClick={e => e.stopPropagation()} style={{ marginTop: '4px' }}>
+                      <MentionTextArea
+                        value={noteText}
+                        onChange={setNoteText}
+                        placeholder="Add a note — @ tags a teammate, e.g. what needs fixing or attention…"
+                        rows={2}
+                        style={{ width: '100%', padding: '8px', borderRadius: '8px', border: '1px solid var(--border)', background: 'var(--input-bg)', color: 'var(--text-body)', fontSize: '12px', resize: 'vertical' }}
+                      />
+                    </div>
                     <div style={{ display: 'flex', gap: '4px', flexWrap: 'wrap', alignItems: 'center', marginTop: '4px' }}>
                       <span style={{ fontSize: '10px', color: 'var(--text-muted)', fontWeight: 700 }}>Tag:</span>
                       {teamProfiles.filter(p => p.id !== user?.id).map(p => {

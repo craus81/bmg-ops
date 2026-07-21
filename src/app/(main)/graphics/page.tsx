@@ -911,6 +911,19 @@ export default function GraphicsPage() {
       .eq('id', id);
 
     if (!error) {
+      // Notify teammates newly @mentioned in the notes field this save.
+      const prevNotes = jobs.find(j => j.id === id)?.notes || '';
+      if ((editingJob.notes || '') !== prevNotes) {
+        reportMentions({
+          text: editingJob.notes || '',
+          previousText: prevNotes,
+          sourceType: 'graphics_note',
+          sourceId: id,
+          contextLabel: editingJob.title || editingJob.job_number || 'Graphics job',
+          contextUrl: `/graphics?editJob=${id}`,
+        });
+      }
+
       setJobs(prev => prev.map(j => j.id === id ? editingJob : j));
       setEditingJob(null);
 
@@ -983,6 +996,17 @@ export default function GraphicsPage() {
     }
 
     if (data) {
+      // Notify teammates @mentioned in the new job's notes.
+      if (createForm.notes) {
+        reportMentions({
+          text: createForm.notes,
+          sourceType: 'graphics_note',
+          sourceId: data.id,
+          contextLabel: createForm.title || jobNumber,
+          contextUrl: `/graphics?editJob=${data.id}`,
+        });
+      }
+
       // Back-link to the source fleet check-in when this job was created
       // from the "Needs Graphics" prompt/chip. Clears the queue entry.
       if (prefillCheckinId) {
@@ -2710,10 +2734,11 @@ export default function GraphicsPage() {
 
                         <div style={{ marginBottom: '10px' }}>
                           <div style={labelStyle}>Internal Notes</div>
-                          <textarea
+                          <MentionTextArea
                             style={{ ...inputStyle, minHeight: '40px', resize: 'vertical' }}
                             value={editJob!.notes || ''}
-                            onChange={e => setEditingJob({ ...editJob!, notes: e.target.value })}
+                            onChange={v => setEditingJob({ ...editJob!, notes: v })}
+                            placeholder="@ tags a teammate"
                           />
                         </div>
 
@@ -3074,7 +3099,7 @@ export default function GraphicsPage() {
 
                 <div style={{ marginBottom: '12px' }}>
                   <div style={labelStyle}>Internal Notes</div>
-                  <textarea style={{ ...inputStyle, minHeight: '40px', resize: 'vertical' }} value={createForm.notes} onChange={e => setCreateForm({ ...createForm, notes: e.target.value })} />
+                  <MentionTextArea style={{ ...inputStyle, minHeight: '40px', resize: 'vertical' }} value={createForm.notes} onChange={v => setCreateForm({ ...createForm, notes: v })} placeholder="@ tags a teammate" />
                 </div>
 
                 {/* File Attachments */}
