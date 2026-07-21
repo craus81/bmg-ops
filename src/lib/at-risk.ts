@@ -14,6 +14,7 @@ import type { SupabaseClient } from '@supabase/supabase-js';
  */
 
 export interface AtRiskCustomer {
+  id: string;
   netsuite_id: string;
   company_name: string;
   entity_id: string | null;
@@ -26,14 +27,19 @@ export interface AtRiskCustomer {
   pace: number;
   severity: 'critical' | 'watch';
   account_owner_id: string | null;
+  internal_notes: string | null;
+  at_risk_dismissed_at: string | null;
 }
 
 export interface AtRiskOptions {
   minLastYearSpend?: number;
   quietDays?: number;
+  /** Include manually dismissed accounts (the report page's toggle);
+   *  the cron and dashboard use the default and never see them. */
+  includeDismissed?: boolean;
 }
 
-export const AT_RISK_DEFAULTS = { minLastYearSpend: 10_000, quietDays: 60 };
+export const AT_RISK_DEFAULTS = { minLastYearSpend: 10_000, quietDays: 60, includeDismissed: false };
 
 export async function evaluateAtRiskCustomers(
   service: SupabaseClient<any, any, any>,
@@ -42,7 +48,7 @@ export async function evaluateAtRiskCustomers(
   const options = { ...AT_RISK_DEFAULTS, ...opts };
   const { data: rows } = await service
     .from('customers')
-    .select('netsuite_id, company_name, entity_id, last_year_spend, ytd_spend, total_spend, last_order_date, account_owner_id')
+    .select('id, netsuite_id, company_name, entity_id, last_year_spend, ytd_spend, total_spend, last_order_date, account_owner_id, internal_notes, at_risk_dismissed_at')
     .gte('last_year_spend', options.minLastYearSpend)
     .eq('active', true);
 
@@ -54,6 +60,7 @@ export async function evaluateAtRiskCustomers(
 
   const flagged: AtRiskCustomer[] = [];
   for (const c of rows || []) {
+    if (!options.includeDismissed && c.at_risk_dismissed_at) continue;
     const lastYear = Number(c.last_year_spend) || 0;
     const ytd = Number(c.ytd_spend) || 0;
     const daysQuiet = c.last_order_date
@@ -64,6 +71,7 @@ export async function evaluateAtRiskCustomers(
     const pace = expected > 0 ? ytd / expected : 1;
     if (quiet && pace < 0.5) {
       flagged.push({
+        id: c.id,
         netsuite_id: c.netsuite_id,
         company_name: c.company_name,
         entity_id: c.entity_id ?? null,
@@ -75,6 +83,8 @@ export async function evaluateAtRiskCustomers(
         pace,
         severity: ytd === 0 || pace < 0.2 ? 'critical' : 'watch',
         account_owner_id: c.account_owner_id ?? null,
+        internal_notes: c.internal_notes ?? null,
+        at_risk_dismissed_at: c.at_risk_dismissed_at ?? null,
       });
     }
   }
