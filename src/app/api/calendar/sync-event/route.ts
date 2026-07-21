@@ -59,7 +59,9 @@ export async function POST(req: NextRequest) {
       title: row.title,
       date: row.event_date,
       description: row.description || '',
-      colorId: '3', // grape — distinct from graphics (6) and upfit (9)
+      // App-created events get grape (distinct from graphics 6 / upfit 9);
+      // events a human made on Google keep whatever color they chose.
+      colorId: row.source === 'google' ? null : '3',
     });
     if (googleId && googleId !== row.google_event_id) {
       await supabase.from('calendar_events').update({ google_event_id: googleId }).eq('id', row.id);

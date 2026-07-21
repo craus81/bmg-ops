@@ -257,6 +257,10 @@ export default function SchedulePage() {
   const [cardNoteDraft, setCardNoteDraft] = useState('');
   const [cardBusy, setCardBusy] = useState(false);
 
+  // Inline edit of the event itself (title/date/time/description) — saved
+  // edits push back to Google when the event lives there too.
+  const [cardEdit, setCardEdit] = useState<{ title: string; event_date: string; event_time: string; description: string } | null>(null);
+
   const openCard = async (cardId: string) => {
     const [{ data: ev }, { data: notes }, { data: files }] = await Promise.all([
       supabase.from('calendar_events').select('*').eq('id', cardId).maybeSingle(),
@@ -268,6 +272,33 @@ export default function SchedulePage() {
     setCardNotes(notes || []);
     setCardFiles(files || []);
     setCardNoteDraft('');
+    setCardEdit(null);
+  };
+
+  const saveCardEdit = async () => {
+    if (!cardEvent || !cardEdit || !cardEdit.title.trim() || !cardEdit.event_date) return;
+    setCardBusy(true);
+    try {
+      const updates = {
+        title: cardEdit.title.trim(),
+        event_date: cardEdit.event_date,
+        event_time: cardEdit.event_time || null,
+        description: cardEdit.description.trim() || null,
+      };
+      const { error } = await supabase.from('calendar_events').update(updates).eq('id', cardEvent.id);
+      if (error) { await dialog.alert(`Save failed: ${error.message}`); return; }
+      // Mirror the edit to Google (updates the existing event in place;
+      // creates one for app events that never synced).
+      apiFetch('/api/calendar/sync-event', {
+        method: 'POST',
+        body: JSON.stringify({ eventId: cardEvent.id }),
+      }).catch(() => {});
+      setCardEvent({ ...cardEvent, ...updates });
+      setCardEdit(null);
+      loadEvents();
+    } finally {
+      setCardBusy(false);
+    }
   };
 
   const addCardNote = async () => {
@@ -531,21 +562,70 @@ export default function SchedulePage() {
         <div style={{ position: 'fixed', inset: 0, background: 'var(--overlay)', zIndex: 200, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '20px' }} onClick={() => setCardEvent(null)}>
           <div onClick={e => e.stopPropagation()} style={{ background: 'var(--card)', borderRadius: '14px', padding: '20px', width: '100%', maxWidth: '480px', maxHeight: '88vh', overflowY: 'auto', boxShadow: '0 8px 30px rgba(0,0,0,0.3)' }}>
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: '10px', marginBottom: '4px' }}>
-              <div style={{ fontSize: '16px', fontWeight: 800, color: 'var(--text-primary)' }}>{cardEvent.title}</div>
+              {cardEdit ? (
+                <input
+                  value={cardEdit.title}
+                  onChange={e => setCardEdit({ ...cardEdit, title: e.target.value })}
+                  style={{ flex: 1, padding: '8px 10px', borderRadius: '8px', fontSize: '15px', fontWeight: 800, border: `1px solid ${theme.border}`, background: 'var(--input-bg)', color: 'var(--text-primary)' }}
+                />
+              ) : (
+                <div style={{ fontSize: '16px', fontWeight: 800, color: 'var(--text-primary)' }}>{cardEvent.title}</div>
+              )}
               <span style={{
                 fontSize: '9px', fontWeight: 700, padding: '2px 7px', borderRadius: '4px', whiteSpace: 'nowrap',
                 background: `${cardEvent.source === 'google' ? TYPE_COLORS.google : TYPE_COLORS.manual}18`,
                 color: cardEvent.source === 'google' ? TYPE_COLORS.google : TYPE_COLORS.manual,
               }}>{cardEvent.source === 'google' ? 'From Google Calendar' : 'FleetSuite event'}</span>
             </div>
-            <div style={{ fontSize: '11px', color: 'var(--text-muted)', marginBottom: '8px' }}>
-              {new Date(cardEvent.event_date + 'T12:00:00').toLocaleDateString([], { weekday: 'long', month: 'long', day: 'numeric', year: 'numeric' })}
-              {cardEvent.event_time ? ` · ${cardEvent.event_time.slice(0, 5)}` : ''}
-            </div>
-            {cardEvent.description && (
-              <div style={{ fontSize: '12px', color: 'var(--text-body)', whiteSpace: 'pre-wrap', background: 'var(--subtle-bg)', border: `1px solid ${theme.border}`, borderRadius: '8px', padding: '8px 10px', marginBottom: '12px' }}>
-                {cardEvent.description}
+            {cardEdit ? (
+              <div style={{ marginBottom: '12px' }}>
+                <div style={{ display: 'flex', gap: '8px', margin: '8px 0' }}>
+                  <input
+                    type="date"
+                    value={cardEdit.event_date}
+                    onChange={e => setCardEdit({ ...cardEdit, event_date: e.target.value })}
+                    style={{ padding: '8px 10px', borderRadius: '8px', fontSize: '12px', border: `1px solid ${theme.border}`, background: 'var(--input-bg)', color: 'var(--text-body)' }}
+                  />
+                  <input
+                    type="time"
+                    value={cardEdit.event_time}
+                    onChange={e => setCardEdit({ ...cardEdit, event_time: e.target.value })}
+                    style={{ padding: '8px 10px', borderRadius: '8px', fontSize: '12px', border: `1px solid ${theme.border}`, background: 'var(--input-bg)', color: 'var(--text-body)' }}
+                  />
+                </div>
+                <textarea
+                  value={cardEdit.description}
+                  onChange={e => setCardEdit({ ...cardEdit, description: e.target.value })}
+                  placeholder="Description"
+                  rows={3}
+                  style={{ width: '100%', boxSizing: 'border-box', padding: '8px 10px', borderRadius: '8px', fontSize: '12px', border: `1px solid ${theme.border}`, background: 'var(--input-bg)', color: 'var(--text-body)', resize: 'vertical', fontFamily: 'inherit', marginBottom: '8px' }}
+                />
+                <div style={{ display: 'flex', gap: '6px' }}>
+                  <button onClick={saveCardEdit} disabled={cardBusy || !cardEdit.title.trim() || !cardEdit.event_date} style={{
+                    padding: '7px 14px', borderRadius: '8px', fontSize: '12px', fontWeight: 800,
+                    background: 'var(--orange)', color: '#fff', border: 'none', cursor: 'pointer',
+                  }}>{cardBusy ? 'Saving…' : `Save${cardEvent.google_event_id || cardEvent.source === 'google' ? ' & update Google' : ''}`}</button>
+                  <button onClick={() => setCardEdit(null)} style={{ padding: '7px 12px', borderRadius: '8px', fontSize: '12px', fontWeight: 700, background: 'var(--subtle-bg)', color: 'var(--text-muted)', border: `1px solid ${theme.border}`, cursor: 'pointer' }}>Cancel</button>
+                </div>
               </div>
+            ) : (
+              <>
+                <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '8px' }}>
+                  <span style={{ fontSize: '11px', color: 'var(--text-muted)' }}>
+                    {new Date(cardEvent.event_date + 'T12:00:00').toLocaleDateString([], { weekday: 'long', month: 'long', day: 'numeric', year: 'numeric' })}
+                    {cardEvent.event_time ? ` · ${cardEvent.event_time.slice(0, 5)}` : ''}
+                  </span>
+                  <button
+                    onClick={() => setCardEdit({ title: cardEvent.title || '', event_date: cardEvent.event_date || '', event_time: cardEvent.event_time ? cardEvent.event_time.slice(0, 5) : '', description: cardEvent.description || '' })}
+                    style={{ fontSize: '10px', fontWeight: 700, padding: '2px 8px', borderRadius: '5px', background: 'var(--subtle-bg)', color: '#60a5fa', border: `1px solid ${theme.border}`, cursor: 'pointer' }}
+                  >✎ Edit</button>
+                </div>
+                {cardEvent.description && (
+                  <div style={{ fontSize: '12px', color: 'var(--text-body)', whiteSpace: 'pre-wrap', background: 'var(--subtle-bg)', border: `1px solid ${theme.border}`, borderRadius: '8px', padding: '8px 10px', marginBottom: '12px' }}>
+                    {cardEvent.description}
+                  </div>
+                )}
+              </>
             )}
 
             {/* Notes */}

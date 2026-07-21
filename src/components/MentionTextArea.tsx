@@ -53,6 +53,18 @@ export default function MentionTextArea({
   const [dropdown, setDropdown] = useState<StaffOption[]>([]);
   const areaRef = useRef<HTMLTextAreaElement>(null);
 
+  // Auto-grow with content (capped, then scrolls) so notes never live in a
+  // cramped one-line box with scrollbars.
+  const MAX_H = 180;
+  useEffect(() => {
+    const el = areaRef.current;
+    if (!el) return;
+    el.style.height = 'auto';
+    const next = Math.min(el.scrollHeight, MAX_H);
+    el.style.height = `${next}px`;
+    el.style.overflowY = el.scrollHeight > MAX_H ? 'auto' : 'hidden';
+  }, [value]);
+
   useEffect(() => {
     if (staffCache) return;
     (async () => {
@@ -120,7 +132,7 @@ export default function MentionTextArea({
         onBlur={() => setTimeout(() => setDropdown([]), 200)}
         placeholder={placeholder}
         rows={rows}
-        style={{ resize: 'vertical', fontFamily: 'inherit', width: '100%', boxSizing: 'border-box', ...style, flex: undefined }}
+        style={{ fontFamily: 'inherit', width: '100%', boxSizing: 'border-box', overflowX: 'hidden', ...style, flex: undefined, resize: 'none' }}
       />
       {dropdown.length > 0 && (
         <div style={{
