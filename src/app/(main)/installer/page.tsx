@@ -21,7 +21,7 @@ const STATUS_LABELS: Record<string, string> = {
 
 export default function InstallerPortalPage() {
   const router = useRouter();
-  const { user, isInstaller, isAdmin } = useAuth();
+  const { user, isInstaller, isAdmin, loading: authLoading } = useAuth();
   const supabase = createClient();
   const [jobs, setJobs] = useState<any[]>([]);
   const [hasProfile, setHasProfile] = useState(false);
@@ -38,13 +38,14 @@ export default function InstallerPortalPage() {
 
   useEffect(() => {
     if (!user) return;
+    if (authLoading) return; // role flags aren't resolved until auth finishes loading
     if (!isInstaller && !isAdmin) { router.push('/home'); return; }
     const p = isAdmin ? getInstallerPreview() : null;
     setPreview(p);
     loadData(p);
     if (isAdmin) loadPreviewOptions();
   // eslint-disable-next-line react-hooks/exhaustive-deps -- intentional: load once on mount
-  }, [user, isInstaller, isAdmin]);
+  }, [authLoading, user, isInstaller, isAdmin]);
 
   const loadPreviewOptions = async () => {
     // Installer profiles + their company (profiles.company_id → companies).

@@ -12,7 +12,7 @@ import { isVerizonRfidPart } from '@/lib/rfid';
 
 export default function CreateCniJobPage() {
   const router = useRouter();
-  const { isAdmin, user } = useAuth();
+  const { isAdmin, user, loading: authLoading } = useAuth();
   const supabase = createClient();
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState('');
@@ -63,10 +63,11 @@ export default function CreateCniJobPage() {
   const [selectedCompanyId, setSelectedCompanyId] = useState('');
 
   useEffect(() => {
+    if (authLoading) return; // role flags aren't resolved until auth finishes loading
     if (!isAdmin) { router.push('/home'); return; }
     loadCompanies();
   // eslint-disable-next-line react-hooks/exhaustive-deps -- intentional: load once on mount
-  }, [isAdmin]);
+  }, [authLoading, isAdmin]);
 
   const loadCompanies = async () => {
     setCompanies(await loadCompaniesWithCounts(supabase));

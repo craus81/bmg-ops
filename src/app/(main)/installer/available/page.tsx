@@ -33,7 +33,7 @@ interface AvailableJob {
 
 export default function AvailableJobsPage() {
   const router = useRouter();
-  const { user, isInstaller, isAdmin } = useAuth();
+  const { user, isInstaller, isAdmin, loading: authLoading } = useAuth();
   const supabase = createClient();
 
   const [jobs, setJobs] = useState<AvailableJob[]>([]);
@@ -45,10 +45,11 @@ export default function AvailableJobsPage() {
 
   useEffect(() => {
     if (!user) return;
+    if (authLoading) return; // role flags aren't resolved until auth finishes loading
     if (!isInstaller && !isAdmin) { router.push('/home'); return; }
     loadJobs();
   // eslint-disable-next-line react-hooks/exhaustive-deps -- intentional: load once on mount
-  }, [user, isInstaller, isAdmin]);
+  }, [authLoading, user, isInstaller, isAdmin]);
 
   const loadJobs = async () => {
     if (!user) return;

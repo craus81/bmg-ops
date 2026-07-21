@@ -36,7 +36,7 @@ function getUserRoles(user: Profile): AppRole[] {
 
 export default function UsersPage() {
   const router = useRouter();
-  const { isAdmin } = useAuth();
+  const { isAdmin, loading: authLoading } = useAuth();
   const supabase = createClient();
   const dialog = useDialog();
   const [users, setUsers] = useState<(Profile & { company_id?: string; company_name?: string })[]>([]);
@@ -65,10 +65,11 @@ export default function UsersPage() {
   const [saving, setSaving] = useState(false);
 
   useEffect(() => {
+    if (authLoading) return; // role flags aren't resolved until auth finishes loading
     if (!isAdmin) { router.push('/home'); return; }
     loadData();
   // eslint-disable-next-line react-hooks/exhaustive-deps -- intentional: load once on mount
-  }, [isAdmin]);
+  }, [authLoading, isAdmin]);
 
   const loadData = async () => {
     const { data: companyData } = await supabase

@@ -43,7 +43,7 @@ const STATUS_COLORS: Record<string, string> = {
 
 export default function CniDashboardPage() {
   const router = useRouter();
-  const { isAdmin, user } = useAuth();
+  const { isAdmin, user, loading: authLoading } = useAuth();
   const supabase = createClient();
   const [jobs, setJobs] = useState<CniJobSummary[]>([]);
   const [installerCount, setInstallerCount] = useState(0);
@@ -56,10 +56,11 @@ export default function CniDashboardPage() {
   const [sortByInstaller, setSortByInstaller] = useState(false);
 
   useEffect(() => {
+    if (authLoading) return; // role flags aren't resolved until auth finishes loading
     if (!isAdmin) { router.push('/home'); return; }
     loadData();
   // eslint-disable-next-line react-hooks/exhaustive-deps -- intentional: load once on mount
-  }, [isAdmin]);
+  }, [authLoading, isAdmin]);
 
   const loadData = async () => {
     // Load jobs with installer names

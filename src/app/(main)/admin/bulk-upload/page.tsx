@@ -47,7 +47,7 @@ const STICKY_CUSTOMER_KEY = 'bulk_upload_sticky_customer';
 
 export default function BulkUploadPage() {
   const router = useRouter();
-  const { isAdmin, user } = useAuth();
+  const { isAdmin, user, loading: authLoading } = useAuth();
   const supabase = createClient();
   const fileRef = useRef<HTMLInputElement>(null);
 
@@ -73,6 +73,7 @@ export default function BulkUploadPage() {
   const [uploadResult, setUploadResult] = useState<any>(null);
 
   useEffect(() => {
+    if (authLoading) return; // role flags aren't resolved until auth finishes loading
     if (!isAdmin) { router.push('/home'); return; }
     // Load catalog for proof matching
     const loadCatalog = async () => {
@@ -86,7 +87,7 @@ export default function BulkUploadPage() {
       if (saved) setStickyCustomer(saved);
     } catch {}
   // eslint-disable-next-line react-hooks/exhaustive-deps -- intentional: load once on mount
-  }, [isAdmin]);
+  }, [authLoading, isAdmin]);
 
   // Persist sticky customer
   useEffect(() => {

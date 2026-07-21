@@ -101,7 +101,7 @@ const labelStyle: React.CSSProperties = {
 export default function ProspectsPage() {
   const router = useRouter();
   const searchParams = useSearchParams();
-  const { user, isAdmin, isSales, hasFeature } = useAuth();
+  const { user, isAdmin, isSales, hasFeature, loading: authLoading } = useAuth();
   const supabase = createClient();
   const dialog = useDialog();
 
@@ -231,12 +231,13 @@ export default function ProspectsPage() {
   const cardInputRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
+    if (authLoading) return; // role flags aren't resolved until auth finishes loading
     if (!hasFeature('prospects') && !isAdmin) { router.push('/home'); return; }
     loadProspects();
     loadProfiles();
     loadOpenQuoteCustomers();
   // eslint-disable-next-line react-hooks/exhaustive-deps -- intentional: load once on mount
-  }, []);
+  }, [authLoading]);
 
   // Preload customer names with at least one open quote so the
   // "open quote" filter doesn't need to round-trip per prospect.

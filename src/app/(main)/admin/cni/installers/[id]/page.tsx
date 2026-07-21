@@ -35,7 +35,7 @@ export default function CniInstallerDetailPage() {
   const router = useRouter();
   const params = useParams();
   const userId = params.id as string;
-  const { isAdmin, user } = useAuth();
+  const { isAdmin, user, loading: authLoading } = useAuth();
   const supabase = createClient();
   const dialog = useDialog();
 
@@ -75,10 +75,11 @@ export default function CniInstallerDetailPage() {
   const [deleting, setDeleting] = useState(false);
 
   useEffect(() => {
+    if (authLoading) return; // role flags aren't resolved until auth finishes loading
     if (!isAdmin) { router.push('/home'); return; }
     loadData();
   // eslint-disable-next-line react-hooks/exhaustive-deps -- intentional: load once on mount
-  }, [isAdmin, userId]);
+  }, [authLoading, isAdmin, userId]);
 
   const showMessage = (msg: string, type: 'success' | 'error' = 'success') => {
     setMessage(msg);

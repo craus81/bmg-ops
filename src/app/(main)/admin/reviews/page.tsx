@@ -27,7 +27,7 @@ interface ReviewVehicle {
 
 export default function ReviewsPage() {
   const router = useRouter();
-  const { isAdmin, user } = useAuth();
+  const { isAdmin, user, loading: authLoading } = useAuth();
   const supabase = createClient();
   const [vehicles, setVehicles] = useState<ReviewVehicle[]>([]);
   const [loading, setLoading] = useState(true);
@@ -39,10 +39,11 @@ export default function ReviewsPage() {
   const [clearing, setClearing] = useState(false);
 
   useEffect(() => {
+    if (authLoading) return; // role flags aren't resolved until auth finishes loading
     if (!isAdmin) { router.push('/home'); return; }
     loadVehicles();
   // eslint-disable-next-line react-hooks/exhaustive-deps -- intentional: load once on mount
-  }, [isAdmin]);
+  }, [authLoading, isAdmin]);
 
   const loadVehicles = async () => {
     const { data } = await supabase

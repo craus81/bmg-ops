@@ -131,7 +131,7 @@ export default function CniJobDetailPage() {
   const router = useRouter();
   const params = useParams();
   const jobId = params.id as string;
-  const { isAdmin, user } = useAuth();
+  const { isAdmin, user, loading: authLoading } = useAuth();
   const supabase = createClient();
 
   const [job, setJob] = useState<CniJob | null>(null);
@@ -348,10 +348,11 @@ export default function CniJobDetailPage() {
   const [payoutSort, setPayoutSort] = useState<'total' | 'name' | 'vehicles'>('total');
 
   useEffect(() => {
+    if (authLoading) return; // role flags aren't resolved until auth finishes loading
     if (!isAdmin) { router.push('/home'); return; }
     loadJob();
   // eslint-disable-next-line react-hooks/exhaustive-deps -- intentional: load once on mount
-  }, [isAdmin, jobId]);
+  }, [authLoading, isAdmin, jobId]);
 
   const saveDeviceCapture = async (on: boolean) => {
     if (!job) return;

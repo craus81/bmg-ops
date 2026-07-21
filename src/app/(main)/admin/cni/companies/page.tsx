@@ -22,7 +22,7 @@ interface CniCompany {
 
 export default function CniCompaniesPage() {
   const router = useRouter();
-  const { isAdmin } = useAuth();
+  const { isAdmin, loading: authLoading } = useAuth();
   const supabase = createClient();
   const [companies, setCompanies] = useState<CniCompany[]>([]);
   const [loading, setLoading] = useState(true);
@@ -40,10 +40,11 @@ export default function CniCompaniesPage() {
   const [nsMsg, setNsMsg] = useState<{ text: string; companyId?: string } | null>(null);
 
   useEffect(() => {
+    if (authLoading) return; // role flags aren't resolved until auth finishes loading
     if (!isAdmin) { router.push('/home'); return; }
     loadCompanies();
   // eslint-disable-next-line react-hooks/exhaustive-deps -- intentional: load once on mount
-  }, [isAdmin]);
+  }, [authLoading, isAdmin]);
 
   const loadCompanies = async () => {
     const { data: companiesData } = await supabase

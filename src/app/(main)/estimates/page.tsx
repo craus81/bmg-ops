@@ -129,7 +129,7 @@ export default function EstimatesPage() {
   const router = useRouter();
   const { open: openPopout } = usePopout();
   const searchParams = useSearchParams();
-  const { user, isAdmin, isSales, isGraphicsProduction, profile } = useAuth();
+  const { user, isAdmin, isSales, isGraphicsProduction, profile, loading: authLoading } = useAuth();
   const dialog = useDialog();
   const supabase = createClient();
 
@@ -208,10 +208,11 @@ export default function EstimatesPage() {
 
   useEffect(() => {
     if (!user) return;
+    if (authLoading) return; // role flags aren't resolved until auth finishes loading
     if (!isAdmin && !isSales && !isGraphicsProduction) { router.push('/home'); return; }
     loadEstimates();
   // eslint-disable-next-line react-hooks/exhaustive-deps -- intentional: load once on mount
-  }, [user, isAdmin, isSales, isGraphicsProduction]);
+  }, [authLoading, user, isAdmin, isSales, isGraphicsProduction]);
 
   // Auto-open estimate from URL param (deep link from notifications/search)
   useEffect(() => {

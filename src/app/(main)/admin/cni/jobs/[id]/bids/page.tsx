@@ -41,7 +41,7 @@ export default function BidReviewPage() {
   const router = useRouter();
   const params = useParams();
   const jobId = params.id as string;
-  const { isAdmin } = useAuth();
+  const { isAdmin, loading: authLoading } = useAuth();
   const supabase = createClient();
 
   const [job, setJob] = useState<any>(null);
@@ -51,10 +51,11 @@ export default function BidReviewPage() {
   const [tab, setTab] = useState<'interested' | 'declined'>('interested');
 
   useEffect(() => {
+    if (authLoading) return; // role flags aren't resolved until auth finishes loading
     if (!isAdmin) { router.push('/home'); return; }
     loadData();
   // eslint-disable-next-line react-hooks/exhaustive-deps -- intentional: load once on mount
-  }, [isAdmin, jobId]);
+  }, [authLoading, isAdmin, jobId]);
 
   const loadData = async () => {
     // Load job
