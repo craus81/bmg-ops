@@ -28,6 +28,9 @@ export interface SendProofOptions {
 export interface SendProofResult {
   ok: boolean;
   status?: number;
+  /** True when the send was intentionally not made (e.g. customer not
+   *  subscribed to automatic reminders) — not a failure. */
+  skipped?: boolean;
   error?: string;
   token?: string;
   expiresAt?: string;
@@ -69,9 +72,15 @@ export async function sendProofApproval(
   if ((!email || !phone) && job.customer) {
     const { data: customer } = await service
       .from('customers')
-      .select('id, email, phone')
+      .select('id, email, phone, notify_status_emails')
       .ilike('company_name', job.customer)
       .maybeSingle();
+    // Automatic reminders are opt-in per customer (migration 171): the
+    // original staff-clicked send always goes out, but the cron's quiet-
+    // period nudges only reach customers subscribed to automatic emails.
+    if (reminder && customer && customer.notify_status_emails !== true) {
+      return { ok: false, skipped: true, status: 200, error: 'Customer not subscribed to automatic reminders' };
+    }
     if (customer) {
       const { data: primary } = await service
         .from('external_contacts')

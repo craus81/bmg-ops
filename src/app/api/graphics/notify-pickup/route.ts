@@ -13,18 +13,25 @@ const supabase = createClient(
   process.env.SUPABASE_SERVICE_ROLE_KEY!
 );
 
-const Schema = z.object({ jobId: z.string().uuid() });
+const Schema = z.object({
+  jobId: z.string().uuid(),
+  // preview: resolve and return the customer contact without sending —
+  // powers the staff confirm dialog's prefilled email.
+  preview: z.boolean().optional(),
+  // Staff-edited recipient for this one send (from the confirm dialog).
+  email: z.string().email().optional().nullable(),
+});
 
 /**
  * POST /api/graphics/notify-pickup
  *
- * Fires when a graphics_job transitions to 'ready_to_pickup'. Tells the
- * customer their graphics are ready to collect (email + SMS when the
- * provider flag is on) and pings the internal graphics/admin team so they
- * know the customer was contacted. Also threads the outbound messages
- * into customer_threads so the inbox carries the full conversation.
+ * On-demand "your graphics are ready for pickup" notification. Staff
+ * confirms (and can edit the email) in a dialog when a job hits
+ * 'ready_to_pickup' — nothing sends automatically. Emails + SMSes the
+ * customer, pings the internal graphics/admin team that the customer was
+ * contacted, and threads the outbound messages into customer_threads.
  *
- * Body: { jobId: string }
+ * Body: { jobId: string, preview?: boolean, email?: string }
  */
 export async function POST(req: NextRequest) {
   const auth = await requireAuth(req);
@@ -32,7 +39,7 @@ export async function POST(req: NextRequest) {
 
   const parsed = await validateBody(req, Schema);
   if (parsed.error) return parsed.error;
-  const { jobId } = parsed.data;
+  const { jobId, preview, email: emailOverride } = parsed.data;
 
   try {
 
@@ -45,40 +52,21 @@ export async function POST(req: NextRequest) {
 
     const jobLabel = job.title || job.part_number || `Job #${job.job_number}` || `Job ${job.id.slice(0, 8)}`;
 
-    // ── Internal awareness: admins + graphics team + creator + assignee ──
-    const internalTargets = new Set<string>();
-    if (job.created_by) internalTargets.add(job.created_by);
-    if (job.assigned_to) internalTargets.add(job.assigned_to);
-    const { data: internalStaff } = await supabase
-      .from('profiles')
-      .select('id, role, roles')
-      .or('role.in.(admin,graphics_production,production,sales),roles.cs.{admin},roles.cs.{graphics_production},roles.cs.{sales}');
-    for (const p of internalStaff || []) internalTargets.add(p.id);
-
-    if (internalTargets.size > 0) {
-      await notifyMany(Array.from(internalTargets), {
-        type: 'graphics_ready_for_pickup',
-        title: `Ready for pickup: ${jobLabel}`,
-        body: `${job.customer || 'Customer'} has been notified that ${jobLabel} is ready for pickup.`,
-        url: '/graphics',
-      });
-    }
-
     // ── Customer-facing: email (+ flag-gated SMS) ──
     const dispatch: Record<string, any> = { email: null, sms: null, threadId: null };
-    if (!job.customer) {
+    if (!job.customer && !emailOverride) {
       return NextResponse.json({
-        internalNotified: internalTargets.size,
+        internalNotified: 0,
         dispatch,
         warning: 'No customer on graphics_job — skipping customer notification.',
       });
     }
 
-    const { data: customerRow } = await supabase
+    const { data: customerRow } = job.customer ? await supabase
       .from('customers')
       .select('id, email, phone, company_name')
       .ilike('company_name', job.customer)
-      .maybeSingle();
+      .maybeSingle() : { data: null };
 
     // Resolve the primary external contact (falls back to the synced
     // customers row when no external_contacts exist).
@@ -117,9 +105,22 @@ export async function POST(req: NextRequest) {
       }
     }
 
+    // The staff dialog asks before anything sends: return the resolved
+    // contact so it can prefill the (editable) email.
+    if (preview) {
+      return NextResponse.json({
+        preview: true,
+        customer: job.customer || null,
+        email: contactEmail,
+        phone: contactPhone,
+      });
+    }
+
+    if (emailOverride) contactEmail = emailOverride;
+
     if (!contactEmail && !contactPhone) {
       return NextResponse.json({
-        internalNotified: internalTargets.size,
+        internalNotified: 0,
         dispatch,
         warning: 'No customer email/phone on file — skipping customer notification.',
       });
@@ -219,6 +220,26 @@ export async function POST(req: NextRequest) {
       } catch (err: any) {
         dispatch.sms = { target: contactPhone, ok: false, error: err?.message };
       }
+    }
+
+    // ── Internal awareness: admins + graphics team + creator + assignee.
+    // Only after the customer was actually contacted — the message says so.
+    const internalTargets = new Set<string>();
+    if (job.created_by) internalTargets.add(job.created_by);
+    if (job.assigned_to) internalTargets.add(job.assigned_to);
+    const { data: internalStaff } = await supabase
+      .from('profiles')
+      .select('id, role, roles')
+      .or('role.in.(admin,graphics_production,production,sales),roles.cs.{admin},roles.cs.{graphics_production},roles.cs.{sales}');
+    for (const p of internalStaff || []) internalTargets.add(p.id);
+
+    if (internalTargets.size > 0 && (dispatch.email?.ok || dispatch.sms?.ok)) {
+      await notifyMany(Array.from(internalTargets), {
+        type: 'graphics_ready_for_pickup',
+        title: `Ready for pickup: ${jobLabel}`,
+        body: `${job.customer || 'Customer'} has been notified that ${jobLabel} is ready for pickup.`,
+        url: '/graphics',
+      });
     }
 
     console.log('[notify-pickup] dispatch', {

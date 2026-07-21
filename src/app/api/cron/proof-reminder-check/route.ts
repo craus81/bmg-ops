@@ -70,7 +70,7 @@ export async function GET(req: NextRequest) {
       if (quietDays >= REMIND_AFTER_DAYS && (job.approval_reminder_count || 0) < MAX_REMINDERS) {
         const result = await sendProofApproval(service, job.id, { reminder: true });
         if (result.ok) reminded++;
-        else failures.push(`${label}: ${result.error}`);
+        else if (!result.skipped) failures.push(`${label}: ${result.error}`);
       }
 
       // Escalation: waiting 7+ days total → tell the humans, re-escalate
