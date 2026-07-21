@@ -12,6 +12,7 @@ import VinScanner from '@/components/VinScanner';
 import { theme } from '@/lib/theme';
 import { storage } from '@/lib/storage';
 import { firstGraphicsMatch } from '@/lib/graphics-detection';
+import MentionTextArea, { reportMentions } from '@/components/MentionTextArea';
 import type { NetsuiteSalesOrder, GraphicsProof, FleetCheckin, VehicleTrackingStatus } from '@/lib/types';
 import { VEHICLE_STATUS_PIPELINE, VEHICLE_STATUS_LABELS, VEHICLE_STATUS_COLORS } from '@/lib/types';
 import NetSuitePdf from '@/components/NetSuitePdf';
@@ -477,6 +478,18 @@ export default function VehicleCheckIn({ onCheckedIn }: { onCheckedIn?: () => vo
       setSaveError(`Failed to save check-in: ${error.message || 'Unknown error'}${error.code ? ` (${error.code})` : ''}`);
       setSaving(false);
       return;
+    }
+
+    // Notify teammates @mentioned in the check-in notes.
+    if (data?.id && notes.includes('@')) {
+      const vehicleDesc = [vehicleData.vehicle.year, vehicleData.vehicle.make, vehicleData.vehicle.model].filter(Boolean).join(' ') || 'Vehicle';
+      reportMentions({
+        text: notes.trim(),
+        sourceType: 'checkin_note',
+        sourceId: data.id,
+        contextLabel: `Check-in — ${vehicleDesc}${selectedOrder?.customer_name ? ` (${selectedOrder.customer_name})` : ''}`,
+        contextUrl: '/tracking',
+      });
     }
 
     // Persist every selected SO into the join table so multi-SO check-ins
@@ -1566,10 +1579,10 @@ export default function VehicleCheckIn({ onCheckedIn }: { onCheckedIn?: () => vo
           <label style={{ display: 'block', fontSize: '10px', fontWeight: 700, color: theme.textMuted, textTransform: 'uppercase', letterSpacing: '0.5px', marginBottom: '6px' }}>
             Notes / Comments
           </label>
-          <textarea
+          <MentionTextArea
             value={notes}
-            onChange={(e) => setNotes(e.target.value)}
-            placeholder="Any notes about this check-in..."
+            onChange={setNotes}
+            placeholder="Any notes about this check-in... (@ tags a teammate)"
             rows={2}
             style={{
               width: '100%', padding: '10px', borderRadius: '10px',

@@ -24,6 +24,9 @@ export async function reportMentions(input: {
   contextUrl: string;
   /** Explicit tag-picker IDs (e.g. PO note chips) — skips @text parsing. */
   userIds?: string[];
+  /** For edited single-column notes: people already @mentioned in this
+   *  previous version were notified last save and are skipped. */
+  previousText?: string;
 }): Promise<void> {
   if (!input.text.includes('@') && !input.userIds?.length) return;
   try {

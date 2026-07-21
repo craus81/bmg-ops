@@ -20,6 +20,10 @@ const PostSchema = z.object({
   // Surfaces with their own tag pickers (e.g. PO notes) pass explicit IDs
   // instead of relying on @text parsing.
   userIds: z.array(z.string().uuid()).max(30).optional(),
+  // Single-column notes (estimate internal notes, graphics job notes) send
+  // the note's previous value on edit: anyone already @mentioned there was
+  // notified last time and is skipped, so re-saving doesn't re-ping them.
+  previousText: z.string().max(5000).optional(),
 });
 
 /**
@@ -34,7 +38,7 @@ export async function POST(req: NextRequest) {
 
   const parsed = await validateBody(req, PostSchema);
   if (parsed.error) return parsed.error;
-  const { text, sourceType, sourceId, contextLabel, contextUrl, userIds } = parsed.data;
+  const { text, sourceType, sourceId, contextLabel, contextUrl, userIds, previousText } = parsed.data;
 
   if (!text.includes('@') && !userIds?.length) return NextResponse.json({ mentioned: 0 });
 
@@ -47,20 +51,30 @@ export async function POST(req: NextRequest) {
     return !roles.includes('customer');
   });
 
-  // Tokens like "@Jessie" or "@Jessie Smith" (up to two words).
-  const tokens = [...text.matchAll(/@([A-Za-z][A-Za-z'.-]*(?: [A-Za-z][A-Za-z'.-]*)?)/g)].map(m => m[1]);
-  const mentionedIds = new Set<string>();
-  for (const token of tokens) {
-    const t = token.toLowerCase();
-    // Exact full-name match first (two-word tokens), then unique first-name.
-    const full = staff.filter(p => (p.full_name || '').toLowerCase() === t);
-    if (full.length === 1) { mentionedIds.add(full[0].id); continue; }
-    const firstWord = t.split(' ')[0];
-    const firsts = staff.filter(p => (p.full_name || '').toLowerCase().split(' ')[0] === firstWord);
-    if (firsts.length === 1) mentionedIds.add(firsts[0].id);
-  }
+  // Resolve "@Jessie" / "@Jessie Smith" tokens (up to two words) to profile
+  // ids: exact full-name match first, then unique first-name.
+  const resolveMentions = (body: string): Set<string> => {
+    const tokens = [...body.matchAll(/@([A-Za-z][A-Za-z'.-]*(?: [A-Za-z][A-Za-z'.-]*)?)/g)].map(m => m[1]);
+    const ids = new Set<string>();
+    for (const token of tokens) {
+      const t = token.toLowerCase();
+      const full = staff.filter(p => (p.full_name || '').toLowerCase() === t);
+      if (full.length === 1) { ids.add(full[0].id); continue; }
+      const firstWord = t.split(' ')[0];
+      const firsts = staff.filter(p => (p.full_name || '').toLowerCase().split(' ')[0] === firstWord);
+      if (firsts.length === 1) ids.add(firsts[0].id);
+    }
+    return ids;
+  };
+
+  const mentionedIds = resolveMentions(text);
   for (const id of userIds || []) {
     if (staff.some(p => p.id === id)) mentionedIds.add(id);
+  }
+  // Edited single-column note: whoever was mentioned in the previous version
+  // already got notified — only ping people added this save.
+  if (previousText) {
+    for (const id of resolveMentions(previousText)) mentionedIds.delete(id);
   }
   mentionedIds.delete(auth.user!.id); // tagging yourself is just a note
 

@@ -2,6 +2,7 @@
 
 import { useState, useEffect, useRef } from 'react';
 import { createClient } from '@/lib/supabase-browser';
+import MentionTextArea, { reportMentions } from '@/components/MentionTextArea';
 
 interface Message {
   id: string;
@@ -77,11 +78,22 @@ export default function CniJobChat({ jobId, userId, backPath, jobNumber, jobTitl
     if (!newMsg.trim() || sending) return;
     setSending(true);
 
-    await supabase.from('cni_job_messages').insert({
+    const body = newMsg.trim();
+    const { error } = await supabase.from('cni_job_messages').insert({
       job_id: jobId,
       sender_id: userId,
-      body: newMsg.trim(),
+      body,
     });
+
+    if (!error) {
+      reportMentions({
+        text: body,
+        sourceType: 'cni_job_message',
+        sourceId: jobId,
+        contextLabel: `${jobNumber} — ${jobTitle}`,
+        contextUrl: window.location.pathname,
+      });
+    }
 
     setNewMsg('');
     await loadMessages();
@@ -164,11 +176,11 @@ export default function CniJobChat({ jobId, userId, backPath, jobNumber, jobTitl
         display: 'flex', gap: '8px', padding: '12px 0',
         borderTop: '1px solid var(--border)',
       }}>
-        <textarea
+        <MentionTextArea
           value={newMsg}
-          onChange={e => setNewMsg(e.target.value)}
+          onChange={setNewMsg}
           onKeyDown={handleKeyDown}
-          placeholder="Type a message..."
+          placeholder="Type a message... (@ tags a teammate)"
           rows={1}
           style={{
             flex: 1, padding: '10px 14px', borderRadius: '12px',

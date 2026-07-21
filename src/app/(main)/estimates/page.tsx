@@ -8,6 +8,7 @@ import { useAuth } from '@/components/AuthProvider';
 import { useDialog } from '@/components/DialogProvider';
 import { theme } from '@/lib/theme';
 import CustomerDefaultsEditor from '@/components/CustomerDefaultsEditor';
+import MentionTextArea, { reportMentions } from '@/components/MentionTextArea';
 
 interface Part {
   id: string;
@@ -159,6 +160,9 @@ export default function EstimatesPage() {
   const [onSiteContactPhone, setOnSiteContactPhone] = useState('');
   const [deliveryPreferences, setDeliveryPreferences] = useState('');
   const [internalNotes, setInternalNotes] = useState('');
+  // The internal notes as last loaded/saved — lets the mention report skip
+  // teammates who were already @mentioned before this edit.
+  const savedInternalNotesRef = useRef('');
   const [customerDefaults, setCustomerDefaults] = useState<{
     delivery_instructions: string | null;
     billing_contact_name: string | null;
@@ -400,6 +404,18 @@ export default function EstimatesPage() {
       const data = await res.json();
       if (data.success) {
         if (!editingId) setEditingId(data.id);
+        // Notify teammates newly @mentioned in the internal notes this save.
+        if (internalNotes !== savedInternalNotesRef.current) {
+          reportMentions({
+            text: internalNotes,
+            previousText: savedInternalNotesRef.current,
+            sourceType: 'estimate_note',
+            sourceId: editingId || data.id,
+            contextLabel: `Estimate — ${title || customerName || 'untitled'}`,
+            contextUrl: `/estimates?id=${editingId || data.id}`,
+          });
+          savedInternalNotesRef.current = internalNotes;
+        }
         await loadEstimates();
       } else {
         await dialog.alert('Save failed: ' + (data.error || 'Unknown error'));
@@ -572,6 +588,7 @@ export default function EstimatesPage() {
     setOnSiteContactPhone(fullEst?.on_site_contact_phone || '');
     setDeliveryPreferences(fullEst?.delivery_preferences || '');
     setInternalNotes(fullEst?.internal_notes || '');
+    savedInternalNotesRef.current = fullEst?.internal_notes || '';
 
     // Look up catalog + cost data for any line items backed by a real part —
     // catalog drives the graphics-job prompt, costs drive the margin strip.
@@ -705,6 +722,7 @@ export default function EstimatesPage() {
     setOnSiteContactPhone('');
     setDeliveryPreferences('');
     setInternalNotes('');
+    savedInternalNotesRef.current = '';
     setCustomerDefaults(null);
     setLinkedGraphicsJobs([]);
     setShowGraphicsPicker(false);
@@ -1054,11 +1072,11 @@ export default function EstimatesPage() {
           </div>
           <div>
             <div style={labelStyle}>Internal Notes (ops-only)</div>
-            <textarea
+            <MentionTextArea
               style={{ ...inputStyle, minHeight: '40px', resize: 'vertical', fontFamily: 'inherit' }}
               value={internalNotes}
-              onChange={e => setInternalNotes(e.target.value)}
-              placeholder="Not shown to the customer"
+              onChange={setInternalNotes}
+              placeholder="Not shown to the customer — @ tags a teammate"
             />
           </div>
           {customerId && (
