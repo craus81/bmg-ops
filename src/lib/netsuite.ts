@@ -554,6 +554,75 @@ export async function createItem(payload: {
  */
 export interface VendorAddress { street: string; city: string; state: string; zip: string }
 
+/**
+ * Addresses for a set of vendor ids, one per vendor: prefers the address
+ * flagged default-billing, falls back to any address on the record (many
+ * vendors never have the default flag set). Best-effort — returns {} if
+ * the integration role can't read the address tables.
+ */
+export async function getVendorAddresses(ids: string[]): Promise<Record<string, VendorAddress>> {
+  const map: Record<string, VendorAddress> = {};
+  const clean = ids.filter(id => /^\d+$/.test(id));
+  if (clean.length === 0) return map;
+  try {
+    const q = `
+      SELECT va.entity AS vendor_id, va.defaultbilling, ea.addr1, ea.addr2, ea.city, ea.state, ea.zip
+      FROM vendorAddressbook va
+      JOIN entityAddress ea ON ea.nkey = va.addressbookaddress
+      WHERE va.entity IN (${clean.join(',')})`;
+    const res = await suiteqlQuery(q);
+    const preferred = new Set<string>();
+    for (const a of res?.items || []) {
+      const vid = a.vendor_id?.toString();
+      if (!vid) continue;
+      const isDefault = a.defaultbilling === 'T';
+      // First address wins unless a default-billing one comes along.
+      if (map[vid] && (preferred.has(vid) || !isDefault)) continue;
+      map[vid] = {
+        street: [a.addr1, a.addr2].filter(Boolean).join(', '),
+        city: a.city || '',
+        state: a.state || '',
+        zip: a.zip || '',
+      };
+      if (isDefault) preferred.add(vid);
+    }
+  } catch (err: any) {
+    console.warn('NetSuite vendor address lookup failed:', err?.message?.slice(0, 160));
+  }
+  return map;
+}
+
+/** Current contact info for one vendor — powers "Refresh from NetSuite". */
+export async function getVendorContact(id: string): Promise<{
+  found: boolean;
+  companyName?: string;
+  email?: string | null;
+  phone?: string | null;
+  address?: VendorAddress | null;
+  error?: string;
+}> {
+  if (!/^\d+$/.test(id)) return { found: false, error: 'Invalid vendor id' };
+  try {
+    const q = `SELECT id, entityid, companyname, email, phone FROM vendor WHERE id = ${id}`;
+    const result = await suiteqlQuery(q);
+    const v = result?.items?.[0];
+    if (!v) return { found: false, error: 'Vendor not found in NetSuite' };
+    const addresses = await getVendorAddresses([id]);
+    return {
+      found: true,
+      companyName: v.companyname || v.entityid || '',
+      email: v.email || null,
+      phone: v.phone || null,
+      address: addresses[id] || null,
+    };
+  } catch (e: any) {
+    let detail = String(e?.message || 'Vendor lookup failed');
+    const m = detail.match(/"detail"\s*:\s*"([^"]+)"/);
+    if (m) detail = m[1];
+    return { found: false, error: detail.slice(0, 160) };
+  }
+}
+
 export async function findVendors(name: string): Promise<{
   found: boolean;
   vendors: { id: string; entityId: string; companyName: string; email: string | null; phone: string | null; address: VendorAddress | null }[];
@@ -565,33 +634,11 @@ export async function findVendors(name: string): Promise<{
     const result = await suiteqlQuery(q);
     const rows = result?.items || [];
 
-    // Default billing addresses live in the vendor address book — one extra
-    // query for the matched ids (same pattern as the customer sync).
-    // Best-effort: a role without address-table access still gets vendors.
-    const addressMap: Record<string, VendorAddress> = {};
-    if (rows.length > 0) {
-      try {
-        const ids = rows.map((v: any) => String(v.id)).filter((id: string) => /^\d+$/.test(id));
-        const addrQ = `
-          SELECT va.entity AS vendor_id, ea.addr1, ea.addr2, ea.city, ea.state, ea.zip
-          FROM vendorAddressbook va
-          JOIN entityAddress ea ON ea.nkey = va.addressbookaddress
-          WHERE va.entity IN (${ids.join(',')}) AND va.defaultbilling = 'T'`;
-        const addrRes = await suiteqlQuery(addrQ);
-        for (const a of addrRes?.items || []) {
-          const vid = a.vendor_id?.toString();
-          if (!vid) continue;
-          addressMap[vid] = {
-            street: [a.addr1, a.addr2].filter(Boolean).join(', '),
-            city: a.city || '',
-            state: a.state || '',
-            zip: a.zip || '',
-          };
-        }
-      } catch (addrErr: any) {
-        console.warn('NetSuite vendor address lookup failed:', addrErr?.message?.slice(0, 160));
-      }
-    }
+    // Addresses live in the vendor address book — one extra query for the
+    // matched ids (prefers default-billing, falls back to any address).
+    const addressMap = rows.length > 0
+      ? await getVendorAddresses(rows.map((v: any) => String(v.id)))
+      : {};
 
     const vendors = rows.map((v: any) => ({
       id: String(v.id),
