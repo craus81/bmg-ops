@@ -4,6 +4,7 @@ import { useState, useEffect } from 'react';
 import { useRouter, useParams } from 'next/navigation';
 import { createClient } from '@/lib/supabase-browser';
 import { useAuth } from '@/components/AuthProvider';
+import { useDialog } from '@/components/DialogProvider';
 import { storage } from '@/lib/storage';
 import NetsuiteVendorSearch, { type NsVendor } from '@/components/NetsuiteVendorSearch';
 
@@ -70,6 +71,7 @@ const INSTALLER_FILTER = 'role.eq.installer,roles.cs.{installer}';
 
 export default function CniCompanyDetailPage() {
   const router = useRouter();
+  const dialog = useDialog();
   const params = useParams();
   const companyId = params.id as string;
   const { isAdmin, loading: authLoading } = useAuth();
@@ -96,6 +98,7 @@ export default function CniCompanyDetailPage() {
   const [pickedVendor, setPickedVendor] = useState<NsVendor | null>(null);
   const [primaryContact, setPrimaryContact] = useState('');
   const [saving, setSaving] = useState(false);
+  const [refreshing, setRefreshing] = useState(false);
   const [saveMsg, setSaveMsg] = useState<{ success: boolean; message: string } | null>(null);
 
   // Members
@@ -227,6 +230,33 @@ export default function CniCompanyDetailPage() {
     });
 
     setLoading(false);
+  };
+
+  // Explicit re-sync: overwrite email/phone/address with the NetSuite
+  // vendor's current values (the add-time import only fills blanks).
+  const refreshFromNetsuite = async () => {
+    if (refreshing) return;
+    if (!(await dialog.confirm('Pull the current email, phone & mailing address from NetSuite? This overwrites those fields on this company.', { confirmLabel: 'Refresh' }))) return;
+    setRefreshing(true);
+    setSaveMsg(null);
+    try {
+      const res = await fetch('/api/cni/refresh-vendor', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ companyId }),
+      });
+      const data = await res.json();
+      if (!res.ok || !data.success) {
+        setSaveMsg({ success: false, message: data.error || 'Refresh failed' });
+      } else {
+        setSaveMsg({ success: true, message: `Refreshed from NetSuite vendor ${data.vendorName || ''}`.trim() });
+        await loadData();
+      }
+    } catch (e: any) {
+      setSaveMsg({ success: false, message: e.message || 'Refresh failed' });
+    } finally {
+      setRefreshing(false);
+    }
   };
 
   const handleSave = async () => {
@@ -465,12 +495,24 @@ export default function CniCompanyDetailPage() {
         <div style={{ marginBottom: '10px' }}>
           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline' }}>
             <label style={labelStyle}>NetSuite Vendor ID</label>
-            <button
-              onClick={() => { setShowVendorSearch(s => !s); setPickedVendor(null); }}
-              style={{ fontSize: '11px', fontWeight: 700, color: 'var(--orange)', background: 'none', border: 'none', cursor: 'pointer', padding: 0 }}
-            >
-              {showVendorSearch ? 'Close search' : '🔍 Search NetSuite'}
-            </button>
+            <span style={{ display: 'flex', gap: '12px' }}>
+              {company?.netsuite_vendor_id && (
+                <button
+                  onClick={refreshFromNetsuite}
+                  disabled={refreshing}
+                  title="Re-pull email, phone & mailing address from the NetSuite vendor record (overwrites the fields here)"
+                  style={{ fontSize: '11px', fontWeight: 700, color: '#60a5fa', background: 'none', border: 'none', cursor: 'pointer', padding: 0 }}
+                >
+                  {refreshing ? 'Refreshing…' : '↻ Refresh from NetSuite'}
+                </button>
+              )}
+              <button
+                onClick={() => { setShowVendorSearch(s => !s); setPickedVendor(null); }}
+                style={{ fontSize: '11px', fontWeight: 700, color: 'var(--orange)', background: 'none', border: 'none', cursor: 'pointer', padding: 0 }}
+              >
+                {showVendorSearch ? 'Close search' : '🔍 Search NetSuite'}
+              </button>
+            </span>
           </div>
           <input
             value={vendorId} onChange={e => { setVendorId(e.target.value); setPickedVendor(null); }}
