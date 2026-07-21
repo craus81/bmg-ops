@@ -21,9 +21,10 @@ export async function GET(req: NextRequest) {
     ? minSpendRaw : AT_RISK_DEFAULTS.minLastYearSpend;
   const quietDays = Number.isFinite(quietDaysRaw) && quietDaysRaw >= 0
     ? quietDaysRaw : AT_RISK_DEFAULTS.quietDays;
+  const includeDismissed = req.nextUrl.searchParams.get('includeDismissed') === '1';
 
   try {
-    const result = await evaluateAtRiskCustomers(service, { minLastYearSpend, quietDays });
+    const result = await evaluateAtRiskCustomers(service, { minLastYearSpend, quietDays, includeDismissed });
 
     // Resolve account-owner names for the table.
     const ownerIds = [...new Set(result.flagged.map(c => c.account_owner_id).filter(Boolean))] as string[];
