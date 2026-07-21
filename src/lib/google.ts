@@ -361,6 +361,10 @@ export async function listCalendarChanges(syncToken: string | null): Promise<{
         calendarId: CALENDAR_ID,
         maxResults: 250,
         showDeleted: true,
+        // Expand recurring series into concrete dated instances — without
+        // this a weekly install block arrives as one master record and
+        // every other occurrence is invisible to the sync.
+        singleEvents: true,
         pageToken,
       };
       if (syncToken) {
