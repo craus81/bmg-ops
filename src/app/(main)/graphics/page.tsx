@@ -1527,19 +1527,20 @@ export default function GraphicsPage() {
       {metricJobs.length > 0 && (
         <div style={{ display: 'flex', gap: '8px', marginBottom: '12px', overflowX: 'auto', WebkitOverflowScrolling: 'touch' }}>
           {[
-            { id: 'overdue' as MetricFilter, label: 'Overdue', value: String(metrics.overdue), color: metrics.overdue > 0 ? '#ef4444' : '#22c55e' },
-            { id: 'dueWeek' as MetricFilter, label: 'Due in 7 days', value: String(metrics.dueWeek), color: metrics.dueWeek > 0 ? '#fbbf24' : 'var(--text-muted)' },
-            { id: 'stuck' as MetricFilter, label: 'Stuck 5+ days in stage', value: String(metrics.stuck), color: metrics.stuck > 0 ? '#fbbf24' : '#22c55e' },
+            { id: 'all' as const, label: 'All jobs', value: String(visibleJobs.filter(j => ACTIVE_STATUSES.includes(j.status)).length), color: '#60a5fa' },
+            { id: 'overdue' as const, label: 'Overdue', value: String(metrics.overdue), color: metrics.overdue > 0 ? '#ef4444' : '#22c55e' },
+            { id: 'dueWeek' as const, label: 'Due in 7 days', value: String(metrics.dueWeek), color: metrics.dueWeek > 0 ? '#fbbf24' : 'var(--text-muted)' },
+            { id: 'stuck' as const, label: 'Stuck 5+ days in stage', value: String(metrics.stuck), color: metrics.stuck > 0 ? '#fbbf24' : '#22c55e' },
             { id: null, label: 'Avg days in stage', value: metrics.avgStageDays.toFixed(1), color: 'var(--text-primary)' },
           ].map(t => {
-            const active = t.id !== null && metricFilter === t.id;
+            const active = t.id === 'all' ? metricFilter === null : (t.id !== null && metricFilter === t.id);
             return (
               <button
                 key={t.label}
                 disabled={t.id === null}
-                title={t.id === null ? undefined : active ? 'Show all jobs again' : `Show only these jobs`}
+                title={t.id === null ? undefined : t.id === 'all' ? 'Show every job' : active ? 'Show all jobs again' : 'Show only these jobs'}
                 onClick={t.id === null ? undefined : () => {
-                  const next = metricFilter === t.id ? null : t.id;
+                  const next = t.id === 'all' || metricFilter === t.id ? null : t.id;
                   setMetricFilter(next);
                   // Tiles span several statuses — widen a narrowed status
                   // filter so every matching job is actually visible.
@@ -1554,7 +1555,7 @@ export default function GraphicsPage() {
               >
                 <div style={{ fontSize: '16px', fontWeight: 800, color: t.color }}>{t.value}</div>
                 <div style={{ fontSize: '9px', fontWeight: 700, color: active ? t.color : 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.4px', whiteSpace: 'nowrap' }}>
-                  {t.label}{active ? ' ✕' : ''}
+                  {t.label}
                 </div>
               </button>
             );
