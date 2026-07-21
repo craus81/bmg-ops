@@ -46,7 +46,7 @@ function fmtDate(s: string): string {
 
 export default function SalesByCustomerDetailReportPage() {
   const router = useRouter();
-  const { user, isAdmin, isSales } = useAuth();
+  const { user, isAdmin, isSales, loading: authLoading } = useAuth();
 
   const [start, setStart] = useState(DEFAULT_START);
   const [end, setEnd] = useState(DEFAULT_END);
@@ -80,9 +80,10 @@ export default function SalesByCustomerDetailReportPage() {
 
   useEffect(() => {
     if (!user) return;
+    if (authLoading) return; // role flags aren't resolved until auth finishes loading
     if (!isAdmin && !isSales) { router.push('/home'); return; }
     run();
-  }, [user, isAdmin, isSales, router, run]);
+  }, [authLoading, user, isAdmin, isSales, router, run]);
 
   const filteredSortedLines = useMemo(() => {
     if (!data) return [];

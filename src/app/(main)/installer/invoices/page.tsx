@@ -57,7 +57,7 @@ const MAX_EXTRACT_BYTES = 3.5 * 1024 * 1024;
 
 export default function InstallerInvoicesPage() {
   const router = useRouter();
-  const { user, isInstaller, isAdmin } = useAuth();
+  const { user, isInstaller, isAdmin, loading: authLoading } = useAuth();
   const dialog = useDialog();
   const fileInputRef = useRef<HTMLInputElement>(null);
   const lineKeyRef = useRef(0);
@@ -97,9 +97,10 @@ export default function InstallerInvoicesPage() {
 
   useEffect(() => {
     if (!user) return;
+    if (authLoading) return; // role flags aren't resolved until auth finishes loading
     if (!isInstaller && !isAdmin) { router.push('/home'); return; }
     load();
-  }, [user, isInstaller, isAdmin, router, load]);
+  }, [authLoading, user, isInstaller, isAdmin, router, load]);
 
   const blankLine = (): DraftLine => ({ key: ++lineKeyRef.current, vin: '', partNumber: '', amount: '' });
   const vinOk = (l: DraftLine) => l.vin.trim().replace(/[^A-Za-z0-9]/g, '').length >= 5;

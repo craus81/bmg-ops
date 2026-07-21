@@ -306,7 +306,7 @@ async function persistPoPdf(
 export default function POsPage() {
   const router = useRouter();
   const searchParams = useSearchParams();
-  const { isAdmin, user } = useAuth();
+  const { isAdmin, user, loading: authLoading } = useAuth();
   const dialog = useDialog();
   const supabase = createClient();
 
@@ -681,6 +681,7 @@ export default function POsPage() {
   };
 
   useEffect(() => {
+    if (authLoading) return; // role flags aren't resolved until auth finishes loading
     if (!isAdmin) { router.push('/home'); return; }
     const load = async () => {
       const { data: poData } = await supabase
@@ -731,7 +732,7 @@ export default function POsPage() {
     };
     load();
   // eslint-disable-next-line react-hooks/exhaustive-deps -- intentional: load once on mount
-  }, [isAdmin]);
+  }, [authLoading, isAdmin]);
 
   const refreshGmailStatus = async () => {
     try {

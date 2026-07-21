@@ -50,7 +50,7 @@ const CONTEXT_LABELS: Record<string, string> = {
 export default function AdminInboxPage() {
   const router = useRouter();
   const searchParams = useSearchParams();
-  const { user, isAdmin, isSales } = useAuth();
+  const { user, isAdmin, isSales, loading: authLoading } = useAuth();
   const dialog = useDialog();
 
   const [filter, setFilter] = useState<ThreadFilter>('all');
@@ -99,9 +99,10 @@ export default function AdminInboxPage() {
 
   useEffect(() => {
     if (!user) return;
+    if (authLoading) return; // role flags aren't resolved until auth finishes loading
     if (!isAdmin && !isSales) { router.push('/home'); return; }
     loadThreads();
-  }, [user, isAdmin, isSales, router, loadThreads]);
+  }, [authLoading, user, isAdmin, isSales, router, loadThreads]);
 
   // Deep-link ?thread=id auto-selects that thread
   useEffect(() => {

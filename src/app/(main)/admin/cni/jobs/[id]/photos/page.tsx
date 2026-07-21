@@ -33,7 +33,7 @@ export default function PhotoReviewPage() {
   const router = useRouter();
   const params = useParams();
   const jobId = params.id as string;
-  const { isAdmin, user } = useAuth();
+  const { isAdmin, user, loading: authLoading } = useAuth();
   const supabase = createClient();
 
   const [job, setJob] = useState<any>(null);
@@ -45,10 +45,11 @@ export default function PhotoReviewPage() {
   const [reviewNotes, setReviewNotes] = useState<Record<string, string>>({});
 
   useEffect(() => {
+    if (authLoading) return; // role flags aren't resolved until auth finishes loading
     if (!isAdmin) { router.push('/home'); return; }
     loadData();
   // eslint-disable-next-line react-hooks/exhaustive-deps -- intentional: load once on mount
-  }, [isAdmin, jobId]);
+  }, [authLoading, isAdmin, jobId]);
 
   const loadData = async () => {
     const { data: jobData } = await supabase

@@ -49,7 +49,7 @@ export default function CniJobShiftsPage() {
   const router = useRouter();
   const params = useParams();
   const jobId = params.id as string;
-  const { isAdmin } = useAuth();
+  const { isAdmin, loading: authLoading } = useAuth();
   const supabase = createClient();
 
   const [shifts, setShifts] = useState<Shift[]>([]);
@@ -134,10 +134,11 @@ export default function CniJobShiftsPage() {
   }, [jobId]);
 
   useEffect(() => {
+    if (authLoading) return; // role flags aren't resolved until auth finishes loading
     if (!isAdmin) { router.push('/home'); return; }
     load();
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [isAdmin, jobId]);
+  }, [authLoading, isAdmin, jobId]);
 
   const flash = (msg: string) => { setNotice(msg); setTimeout(() => setNotice(''), 4000); };
 

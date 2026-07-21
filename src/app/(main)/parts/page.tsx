@@ -86,7 +86,7 @@ const bestKeeperId = (g: Part[]) => [...g].sort((a, b) => partScore(b) - partSco
 
 export default function PartsPage() {
   const router = useRouter();
-  const { user, isAdmin, isSales } = useAuth();
+  const { user, isAdmin, isSales, loading: authLoading } = useAuth();
   const dialog = useDialog();
   const supabase = createClient();
 
@@ -156,13 +156,14 @@ export default function PartsPage() {
   const loadReqRef = useRef(0);
 
   useEffect(() => {
+    if (authLoading) return; // role flags aren't resolved until auth finishes loading
     if (!isAdmin && !isSales) { router.push('/home'); return; }
     // loadParts() is driven by the [catalog] effect below (fires on mount too),
     // so we don't call it here — a second call just races the first.
     loadLastSync();
     loadStats();
   // eslint-disable-next-line react-hooks/exhaustive-deps -- intentional: load once on mount
-  }, [isAdmin, isSales]);
+  }, [authLoading, isAdmin, isSales]);
 
   useEffect(() => {
     loadParts();

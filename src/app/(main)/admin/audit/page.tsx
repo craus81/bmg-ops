@@ -26,7 +26,7 @@ const TABLE_LABELS: Record<string, string> = {
 
 export default function AuditLogPage() {
   const router = useRouter();
-  const { isAdmin } = useAuth();
+  const { isAdmin, loading: authLoading } = useAuth();
   const supabase = createClient();
 
   const [rows, setRows] = useState<AuditRow[]>([]);
@@ -37,6 +37,7 @@ export default function AuditLogPage() {
   const [expanded, setExpanded] = useState<Set<string>>(new Set());
 
   useEffect(() => {
+    if (authLoading) return; // role flags aren't resolved until auth finishes loading
     if (!isAdmin) { router.push('/home'); return; }
     const load = async () => {
       setLoading(true);
@@ -61,7 +62,7 @@ export default function AuditLogPage() {
     };
     load();
   // eslint-disable-next-line react-hooks/exhaustive-deps -- supabase client is a stable singleton
-  }, [isAdmin, tableFilter]);
+  }, [authLoading, isAdmin, tableFilter]);
 
   const visible = rows.filter(r => {
     if (!search.trim()) return true;

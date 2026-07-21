@@ -22,7 +22,7 @@ type RowState = { saving?: boolean; saved?: boolean; error?: string };
 
 export default function CniVendorIdsPage() {
   const router = useRouter();
-  const { isAdmin } = useAuth();
+  const { isAdmin, loading: authLoading } = useAuth();
   const supabase = createClient();
 
   const [installers, setInstallers] = useState<Installer[]>([]);
@@ -41,10 +41,11 @@ export default function CniVendorIdsPage() {
   const [searchOpen, setSearchOpen] = useState<string | null>(null);
 
   useEffect(() => {
+    if (authLoading) return; // role flags aren't resolved until auth finishes loading
     if (!isAdmin) { router.push('/home'); return; }
     loadInstallers();
   // eslint-disable-next-line react-hooks/exhaustive-deps -- intentional: load once on mount
-  }, [isAdmin]);
+  }, [authLoading, isAdmin]);
 
   const loadInstallers = async () => {
     setLoadError(null);

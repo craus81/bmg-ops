@@ -10,17 +10,18 @@ export default function InstallerJobMessagesPage() {
   const router = useRouter();
   const params = useParams();
   const jobId = params.id as string;
-  const { user, isInstaller, isAdmin } = useAuth();
+  const { user, isInstaller, isAdmin, loading: authLoading } = useAuth();
   const supabase = createClient();
   const [job, setJob] = useState<any>(null);
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
     if (!user) return;
+    if (authLoading) return; // role flags aren't resolved until auth finishes loading
     if (!isInstaller && !isAdmin) { router.push('/home'); return; }
     loadJob();
   // eslint-disable-next-line react-hooks/exhaustive-deps -- intentional: load once on mount
-  }, [user, isInstaller, isAdmin, jobId]);
+  }, [authLoading, user, isInstaller, isAdmin, jobId]);
 
   const loadJob = async () => {
     const { data } = await supabase

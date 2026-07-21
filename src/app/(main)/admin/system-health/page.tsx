@@ -30,7 +30,7 @@ const fmtAge = (min: number | null) => {
 
 export default function SystemHealthPage() {
   const router = useRouter();
-  const { isAdmin } = useAuth();
+  const { isAdmin, loading: authLoading } = useAuth();
 
   const [checks, setChecks] = useState<HealthCheck[]>([]);
   const [cronSecretConfigured, setCronSecretConfigured] = useState(true);
@@ -57,9 +57,10 @@ export default function SystemHealthPage() {
   }, []);
 
   useEffect(() => {
+    if (authLoading) return; // role flags aren't resolved until auth finishes loading
     if (!isAdmin) { router.push('/home'); return; }
     load();
-  }, [isAdmin, router, load]);
+  }, [authLoading, isAdmin, router, load]);
 
   const badCount = checks.filter(c => c.status !== 'ok').length;
 

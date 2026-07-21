@@ -36,7 +36,7 @@ const EQUIPMENT_OPTIONS = [
 
 export default function InstallerProfilePage() {
   const router = useRouter();
-  const { user, isInstaller, isAdmin } = useAuth();
+  const { user, isInstaller, isAdmin, loading: authLoading } = useAuth();
   const supabase = createClient();
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
@@ -67,10 +67,11 @@ export default function InstallerProfilePage() {
 
   useEffect(() => {
     if (!user) return;
+    if (authLoading) return; // role flags aren't resolved until auth finishes loading
     if (!isInstaller && !isAdmin) { router.push('/home'); return; }
     loadProfile();
   // eslint-disable-next-line react-hooks/exhaustive-deps -- intentional: load once on mount
-  }, [user, isInstaller, isAdmin]);
+  }, [authLoading, user, isInstaller, isAdmin]);
 
   const loadProfile = async () => {
     if (!user) return;

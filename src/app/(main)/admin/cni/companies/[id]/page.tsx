@@ -72,7 +72,7 @@ export default function CniCompanyDetailPage() {
   const router = useRouter();
   const params = useParams();
   const companyId = params.id as string;
-  const { isAdmin } = useAuth();
+  const { isAdmin, loading: authLoading } = useAuth();
   const supabase = createClient();
 
   const [loading, setLoading] = useState(true);
@@ -107,10 +107,11 @@ export default function CniCompanyDetailPage() {
   // page — so they're shown here read-only (no second editor that drifts).
 
   useEffect(() => {
+    if (authLoading) return; // role flags aren't resolved until auth finishes loading
     if (!isAdmin) { router.push('/home'); return; }
     loadData();
   // eslint-disable-next-line react-hooks/exhaustive-deps -- intentional: load once on mount
-  }, [isAdmin, companyId]);
+  }, [authLoading, isAdmin, companyId]);
 
   const loadData = async () => {
     const { data: companyData } = await supabase
