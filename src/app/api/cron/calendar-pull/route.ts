@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { createClient } from '@supabase/supabase-js';
 import { requireAdmin } from '@/lib/api-auth';
 import { listCalendarChanges } from '@/lib/google';
+import { pushGraphicsJobToCalendar } from '@/lib/graphics-calendar';
 import { syncShopInboundForGraphicsJob } from '@/lib/shop-inbound';
 
 export const dynamic = 'force-dynamic';
@@ -188,6 +189,28 @@ async function run(req: NextRequest) {
         }
       }
     }
+
+    // ── Push reconciliation ──
+    // A job whose original push failed (Calendar API down, env missing at
+    // the time) has an install date but no calendar_event_id, and nothing
+    // retries until someone re-saves it. Sweep those here every cycle so
+    // both directions self-heal. Recent-or-future dates only — no point
+    // spraying long-finished installs onto the calendar.
+    let pushed = 0;
+    const weekAgo = new Date(Date.now() - 7 * 86_400_000).toISOString().slice(0, 10);
+    const { data: unsynced } = await supabase
+      .from('graphics_jobs')
+      .select('id')
+      .not('scheduled_install_date', 'is', null)
+      .is('calendar_event_id', null)
+      .neq('status', 'cancelled')
+      .gte('scheduled_install_date', weekAgo)
+      .limit(25);
+    for (const j of unsynced || []) {
+      const r = await pushGraphicsJobToCalendar(supabase, j.id);
+      if (r.synced) pushed++;
+    }
+    (stats as any).pushed = pushed;
 
     // Keep the OLD cursor when any write failed, so the next run (after the
     // schema/config problem is fixed) re-pulls the same events instead of

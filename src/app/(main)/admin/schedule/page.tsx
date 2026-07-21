@@ -191,7 +191,19 @@ export default function SchedulePage() {
       // entries — everyone with the schedule sees them, not just their
       // creator.
       if (!isAdmin) manQuery = manQuery.or(`user_id.eq.${user?.id},source.eq.google`);
-      const { data: manual } = await manQuery;
+      let { data: manual, error: manErr } = await manQuery;
+      if (manErr) {
+        // Migration 172 not applied yet (card tables/column missing) —
+        // degrade to the plain query rather than blanking the board.
+        let fallback = supabase
+          .from('calendar_events')
+          .select('*')
+          .is('completed_at', null)
+          .gte('event_date', startDate)
+          .lte('event_date', endDate);
+        if (!isAdmin) fallback = fallback.or(`user_id.eq.${user?.id},source.eq.google`);
+        manual = (await fallback).data;
+      }
       (manual || []).forEach((m: any) => allEvents.push({
         id: `man-${m.id}`, title: m.title, subtitle: m.description,
         date: m.event_date, time: m.event_time,
