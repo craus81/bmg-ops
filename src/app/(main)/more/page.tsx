@@ -1,28 +1,18 @@
 'use client';
 
-import { useState, useEffect, useMemo } from 'react';
+import { useState, useEffect } from 'react';
 import { useRouter } from 'next/navigation';
 import { useAuth } from '@/components/AuthProvider';
 import { useTheme } from '@/components/ThemeProvider';
 import { createClient } from '@/lib/supabase-browser';
-import { allTabs, MAX_TABS } from '@/components/BottomNav';
 
 export default function MorePage() {
   const router = useRouter();
-  const { isAdmin, isSales, isGraphicsProduction, isFieldTech, isShopTech, hasRole, hasFeature, profile, signOut } = useAuth();
+  const { isAdmin, isSales, isGraphicsProduction, hasRole, hasFeature, profile, signOut } = useAuth();
   const { mode, setMode, resolvedTheme } = useTheme();
   const supabase = createClient();
   const [pendingUserCount, setPendingUserCount] = useState(0);
   const [pendingReviewCount, setPendingReviewCount] = useState(0);
-  const [companyName, setCompanyName] = useState('');
-
-  useEffect(() => {
-    if (!profile?.company_id) return;
-    supabase.from('companies').select('name').eq('id', profile.company_id).single().then(({ data }: any) => {
-      if (data) setCompanyName(data.name);
-    });
-  // eslint-disable-next-line react-hooks/exhaustive-deps -- intentional: load once on mount
-  }, [profile?.company_id]);
 
   useEffect(() => {
     if (!hasFeature('user_management') && !hasFeature('photo_reviews')) return;
@@ -49,121 +39,91 @@ export default function MorePage() {
 
   const F = hasFeature; // shorthand
 
-  // Tabs that didn't fit in the bottom nav
-  const overflowTabs = useMemo(() => {
-    const visible = allTabs
-      .filter(tab => {
-        if (!tab.feature) return true;
-        if (tab.id === 'customer-dashboard') return false;
-        return hasFeature(tab.feature);
-      })
-      .sort((a, b) => a.priority - b.priority);
-    return visible.slice(MAX_TABS);
-  }, [hasFeature]);
-  const overflowPaths = new Set(overflowTabs.map(t => t.path));
+  // One curated, grouped list. Bottom-nav tabs that don't fit the 7-slot
+  // bar are NOT repeated as naked cards up top anymore — every page has
+  // exactly one entry here, with a subtitle, in a sensible group.
+  interface Item { title: string; sub: string; path: string; show: boolean; badge?: number }
+  const groups: { header: string; items: Item[] }[] = [
+    {
+      header: 'Sales & Quoting',
+      items: [
+        { title: 'CRM', sub: 'Prospects, customers & sales pipeline', path: '/admin/prospects', show: F('prospects') },
+        { title: 'Estimates', sub: 'Build estimates & push to NetSuite', path: '/estimates', show: F('estimates') },
+        { title: 'Wrap Quotes', sub: 'Measure a vehicle template by hand & email the quote', path: '/admin/wrap-quote', show: isAdmin || isSales || isGraphicsProduction },
+        { title: 'Quote Follow-Ups', sub: 'Sent quotes aging without an answer — chase, mark won or lost', path: '/admin/quote-followups', show: isAdmin || isSales },
+        { title: 'Reports', sub: 'Sales by customer detail & other custom reports', path: '/admin/reports', show: F('reports') },
+        { title: 'Invoicing', sub: 'Create & email NetSuite invoices from graphics jobs and scans', path: '/invoices', show: F('reports') },
+      ],
+    },
+    {
+      header: 'Shop & Production',
+      items: [
+        { title: 'Schedule', sub: 'Installs, upfits & events — two-way synced with Google Calendar', path: '/admin/schedule', show: F('schedule') },
+        { title: 'Upfit Projects', sub: 'Track upfit jobs from estimate to completion', path: '/upfit', show: F('upfit_projects') },
+        { title: 'Scan & Log', sub: 'Scan VINs and log work', path: '/scan', show: F('scan') },
+        { title: 'Time Tracking', sub: 'Clock in/out & timesheets', path: '/time', show: F('time') },
+        { title: 'Proof Search', sub: 'Find proof artwork in Dropbox by customer or part', path: '/admin/proof-search', show: F('proof_hygiene') },
+        { title: 'Photo Reviews', sub: pendingReviewCount > 0 ? `${pendingReviewCount} waiting for approval` : 'Review completion photos', path: '/admin/reviews', show: F('photo_reviews'), badge: pendingReviewCount > 0 ? pendingReviewCount : undefined },
+      ],
+    },
+    {
+      header: 'Parts & Purchasing',
+      items: [
+        { title: 'Purchase Orders', sub: 'Manage POs', path: '/admin/pos', show: F('purchase_orders') },
+        { title: 'Scan Log', sub: 'Review scans, match POs, export & invoice', path: '/admin/scans', show: F('reports') },
+        { title: 'Parts Catalog', sub: 'Upfit & graphic parts from NetSuite', path: '/parts', show: F('parts_catalog') },
+        { title: 'Inventory', sub: 'On hand · allocated to jobs · free · on order, at a glance', path: '/admin/inventory', show: F('parts_catalog') },
+        { title: 'Parts Mail', sub: 'Vendor order confirmations → parts ETAs, with a review queue', path: '/admin/parts-mail', show: F('upfit_projects') },
+        { title: 'Invoice Locations', sub: 'Backfill NetSuite invoice locations from the PO', path: '/admin/invoice-locations', show: isAdmin },
+      ],
+    },
+    {
+      header: 'CNI Network',
+      items: [
+        { title: 'Certified Network Installers', sub: 'Jobs, companies, installers & vendor payments', path: '/admin/cni', show: isAdmin },
+        { title: 'Installer Portal', sub: 'The CNI installer view — available jobs, bids & invoices', path: '/installer', show: F('cni_management') },
+        { title: 'Import Installs', sub: 'Bulk-import installs from a spreadsheet, credited to a CNI installer', path: '/admin/import-installs', show: isAdmin },
+        { title: 'Payments (AP)', sub: 'Approve CNI vendor invoices & push bills to NetSuite', path: '/admin/ap', show: isAdmin || hasRole('finance') },
+      ],
+    },
+    {
+      header: 'Admin',
+      items: [
+        { title: 'User Management', sub: pendingUserCount > 0 ? `${pendingUserCount} pending approval` : 'Manage team access', path: '/admin/users', show: F('user_management'), badge: pendingUserCount > 0 ? pendingUserCount : undefined },
+        { title: 'Customer Notifications', sub: 'Who gets automatic emails — everything else is on-demand', path: '/admin/customer-notifications', show: F('customers') },
+        { title: 'Bulk Upload', sub: 'Import templates & proofs from ZIP', path: '/admin/bulk-upload', show: F('bulk_upload') },
+        { title: 'Audit Log', sub: 'Who changed what — money edits, payouts, rates & invoices', path: '/admin/audit', show: F('audit_log') },
+        { title: 'System Health', sub: 'Background syncs & crons — with alerts when one dies', path: '/admin/system-health', show: F('system_health') },
+        { title: 'AI Instructions', sub: 'Steer FleetSuite AI behavior — global rules, no deploy', path: '/admin/ai-instructions', show: F('ai_instructions') },
+        { title: 'Knowledge Base', sub: 'SOPs and docs for AI agent', path: '/admin/knowledge', show: F('knowledge_base') },
+      ],
+    },
+    {
+      header: 'Account',
+      items: [
+        { title: 'Settings', sub: 'Password, alerts & notification preferences', path: '/settings', show: true },
+      ],
+    },
+  ];
 
   return (
     <div>
-      <div style={{ fontSize: '11px', fontWeight: 700, color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.8px', marginBottom: '12px' }}>
-        More
-      </div>
-      <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
-        {overflowTabs.map(tab => (
-          <MenuBtn key={tab.id} title={tab.label} sub="" onClick={() => router.push(tab.path)} />
-        ))}
-        {F('prospects') && (
-          <MenuBtn title="CRM" sub="Prospects, customers & sales pipeline" onClick={() => router.push('/admin/prospects')} />
-        )}
-        {F('upfit_projects') && (
-          <MenuBtn title="Upfit Projects" sub="Track upfit jobs from estimate to completion" onClick={() => router.push('/upfit')} />
-        )}
-        {F('reports') && (
-          <MenuBtn title="Reports" sub="Sales by customer detail & other custom reports" onClick={() => router.push('/admin/reports')} />
-        )}
-        {F('reports') && (
-          <MenuBtn title="Invoicing" sub="Create & email NetSuite invoices from graphics jobs and scans" onClick={() => router.push('/invoices')} />
-        )}
-        {F('reports') && (
-          <MenuBtn title="Scan Log" sub="Review scans, match POs, export & invoice" onClick={() => router.push('/admin/scans')} />
-        )}
-        {F('parts_catalog') && (
-          <MenuBtn title="Parts Catalog" sub="Upfit & graphic parts from NetSuite" onClick={() => router.push('/parts')} />
-        )}
-        {F('parts_catalog') && (
-          <MenuBtn title="Inventory" sub="On hand · allocated to jobs · free · on order, at a glance" onClick={() => router.push('/admin/inventory')} />
-        )}
-        {F('estimates') && !overflowPaths.has('/estimates') && (
-          <MenuBtn title="Estimates" sub="Build estimates & push to NetSuite" onClick={() => router.push('/estimates')} />
-        )}
-        {(isAdmin || isSales || isGraphicsProduction) && (
-          <MenuBtn title="Wrap Quotes" sub="Measure a vehicle template by hand & email the quote" onClick={() => router.push('/admin/wrap-quote')} />
-        )}
-        {(isAdmin || isSales) && (
-          <MenuBtn title="Quote Follow-Ups" sub="Sent quotes aging without an answer — chase, mark won or lost" onClick={() => router.push('/admin/quote-followups')} />
-        )}
-        {F('scan') && !overflowPaths.has('/scan') && (
-          <MenuBtn title="Scan & Log" sub="Scan VINs and log work" onClick={() => router.push('/scan')} />
-        )}
-        {F('proof_hygiene') && (
-          <MenuBtn title="Proof Search" sub="Find proof artwork in Dropbox by customer or part" onClick={() => router.push('/admin/proof-search')} />
-        )}
-        {isAdmin && (
-          <MenuBtn title="Certified Network Installers" sub="Jobs, companies, installers & vendor payments" onClick={() => router.push('/admin/cni')} />
-        )}
-        {F('schedule') && (
-          <MenuBtn title="Schedule" sub="Assign jobs to installers" onClick={() => router.push('/admin/schedule')} />
-        )}
-        {F('bulk_upload') && (
-          <MenuBtn title="Bulk Upload" sub="Import templates & proofs from ZIP" onClick={() => router.push('/admin/bulk-upload')} />
-        )}
-        {F('purchase_orders') && (
-          <MenuBtn title="Purchase Orders" sub="Manage POs" onClick={() => router.push('/admin/pos')} />
-        )}
-        {F('upfit_projects') && (
-          <MenuBtn title="Parts Mail" sub="Vendor order confirmations → parts ETAs, with a review queue" onClick={() => router.push('/admin/parts-mail')} />
-        )}
-        {isAdmin && (
-          <MenuBtn title="Invoice Locations" sub="Backfill NetSuite invoice locations from the PO" onClick={() => router.push('/admin/invoice-locations')} />
-        )}
-        {isAdmin && (
-          <MenuBtn title="Import Installs" sub="Bulk-import installs from a spreadsheet, credited to a CNI installer" onClick={() => router.push('/admin/import-installs')} />
-        )}
-        {F('photo_reviews') && (
-          <MenuBtn
-            title="Photo Reviews"
-            sub={pendingReviewCount > 0 ? `${pendingReviewCount} waiting for approval` : 'Review completion photos'}
-            onClick={() => router.push('/admin/reviews')}
-            badge={pendingReviewCount > 0 ? pendingReviewCount : undefined}
-          />
-        )}
-        {F('user_management') && (
-          <MenuBtn
-            title="User Management"
-            sub={pendingUserCount > 0 ? `${pendingUserCount} pending approval` : 'Manage team access'}
-            onClick={() => router.push('/admin/users')}
-            badge={pendingUserCount > 0 ? pendingUserCount : undefined}
-          />
-        )}
-        {(isAdmin || hasRole('finance')) && (
-          <MenuBtn title="Payments (AP)" sub="Approve CNI vendor invoices & push bills to NetSuite" onClick={() => router.push('/admin/ap')} />
-        )}
-        {F('customers') && (
-          <MenuBtn title="Customer Notifications" sub="Who gets automatic emails — everything else is on-demand" onClick={() => router.push('/admin/customer-notifications')} />
-        )}
-        {F('audit_log') && (
-          <MenuBtn title="Audit Log" sub="Who changed what — money edits, payouts, rates & invoices" onClick={() => router.push('/admin/audit')} />
-        )}
-        {F('system_health') && (
-          <MenuBtn title="System Health" sub="Background syncs & crons — with alerts when one dies" onClick={() => router.push('/admin/system-health')} />
-        )}
-        {F('ai_instructions') && (
-          <MenuBtn title="AI Instructions" sub="Steer FleetSuite AI behavior — global rules, no deploy" onClick={() => router.push('/admin/ai-instructions')} />
-        )}
-        {F('knowledge_base') && (
-          <MenuBtn title="Knowledge Base" sub="SOPs and docs for AI agent" onClick={() => router.push('/admin/knowledge')} />
-        )}
-        <MenuBtn title="Settings" sub="Password, alerts & notification preferences" onClick={() => router.push('/settings')} />
-      </div>
+      {groups.map(group => {
+        const items = group.items.filter(i => i.show);
+        if (items.length === 0) return null;
+        return (
+          <div key={group.header} style={{ marginBottom: '20px' }}>
+            <div style={{ fontSize: '11px', fontWeight: 700, color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.8px', marginBottom: '8px' }}>
+              {group.header}
+            </div>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
+              {items.map(item => (
+                <MenuBtn key={item.path + item.title} title={item.title} sub={item.sub} onClick={() => router.push(item.path)} badge={item.badge} />
+              ))}
+            </div>
+          </div>
+        );
+      })}
 
       {/* Theme Toggle */}
       <div style={{ marginTop: '24px' }}>
@@ -238,14 +198,14 @@ function MenuBtn({ title, sub, onClick, badge }: { icon?: string; title: string;
   return (
     <button onClick={onClick} style={{
       display: 'flex', alignItems: 'center', gap: '14px', width: '100%',
-      padding: '14px 16px', borderRadius: '14px', textAlign: 'left',
+      padding: '12px 16px', borderRadius: '14px', textAlign: 'left',
       border: '1px solid var(--border)', background: 'var(--card)',
       boxShadow: 'var(--shadow-sm)', transition: 'all 0.15s',
       position: 'relative',
     }}>
       <div style={{ flex: 1 }}>
-        <div style={{ fontWeight: 700, fontSize: '15px', color: 'var(--text-primary)', letterSpacing: '-0.2px' }}>{title}</div>
-        <div style={{ fontSize: '12px', color: badge ? 'var(--warning)' : 'var(--text-muted)', marginTop: '2px', fontWeight: badge ? 600 : 400 }}>{sub}</div>
+        <div style={{ fontWeight: 700, fontSize: '14px', color: 'var(--text-primary)', letterSpacing: '-0.2px' }}>{title}</div>
+        <div style={{ fontSize: '11px', color: badge ? 'var(--warning)' : 'var(--text-muted)', marginTop: '2px', fontWeight: badge ? 600 : 400 }}>{sub}</div>
       </div>
       {badge && (
         <div style={{
