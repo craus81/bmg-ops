@@ -3217,6 +3217,7 @@ function VendorInvoicesTab({ allParts, allLocations, poRequired, onCommitted, on
                           >
                             <span style={{ fontWeight: 700 }}>{p.item_number}</span>
                             {p.billable_customer && <span style={{ color: '#a78bfa', marginLeft: '6px' }}>{p.billable_customer}</span>}
+                            {p.display_name && <div style={{ fontSize: '9px', color: 'var(--text-muted)' }}>{p.display_name}</div>}
                           </button>
                         ))}
                         {matches.length === 0 && (
@@ -3295,6 +3296,7 @@ function VendorInvoicesTab({ allParts, allLocations, poRequired, onCommitted, on
                         >
                           <span style={{ fontWeight: 700 }}>{p.item_number}</span>
                           {p.billable_customer && <span style={{ color: '#a78bfa', marginLeft: '6px' }}>{p.billable_customer}</span>}
+                          {p.display_name && <div style={{ fontSize: '9px', color: 'var(--text-muted)' }}>{p.display_name}</div>}
                         </button>
                       ))}
                       {matches.length === 0 && !exactLocal && (
