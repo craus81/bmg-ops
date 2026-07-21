@@ -58,5 +58,8 @@ export async function POST(req: NextRequest) {
     success: true,
     vendorName: vendor.companyName,
     ...updates,
+    // Which query found the address — or exactly why none did, so the UI
+    // can show the real cause instead of a silent blank.
+    addressLookup: vendor.addressLookup || null,
   });
 }

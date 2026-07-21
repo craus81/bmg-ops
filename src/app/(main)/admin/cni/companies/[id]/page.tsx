@@ -249,7 +249,11 @@ export default function CniCompanyDetailPage() {
       if (!res.ok || !data.success) {
         setSaveMsg({ success: false, message: data.error || 'Refresh failed' });
       } else {
-        setSaveMsg({ success: true, message: `Refreshed from NetSuite vendor ${data.vendorName || ''}`.trim() });
+        const gotAddress = data.address && Object.values(data.address).some(Boolean);
+        const addressNote = gotAddress
+          ? ''
+          : ` — no address found in NetSuite${data.addressLookup?.errors?.length ? ` (${data.addressLookup.errors.join('; ')})` : ''}`;
+        setSaveMsg({ success: true, message: `Refreshed from NetSuite vendor ${data.vendorName || ''}${addressNote}`.trim() });
         await loadData();
       }
     } catch (e: any) {
