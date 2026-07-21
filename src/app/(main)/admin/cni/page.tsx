@@ -98,13 +98,15 @@ export default function CniDashboardPage() {
       .or('role.eq.installer,roles.cs.{installer}');
     setInstallerCount(count || 0);
 
-    // Pending photo reviews — keep the job ids so the attention line can
-    // filter the list to exactly the jobs with photos waiting.
-    const { data: photoRows } = await supabase
-      .from('cni_job_photos')
-      .select('job_id')
-      .eq('review_status', 'pending');
-    setPendingPhotos((photoRows || []).length);
+    // Pending photo reviews — exact count via head query (row fetches cap at
+    // 1000 and would under-report a backlog), plus the job ids so the
+    // attention line can filter the list to exactly the jobs with photos
+    // waiting.
+    const [{ count: photoCount }, { data: photoRows }] = await Promise.all([
+      supabase.from('cni_job_photos').select('*', { count: 'exact', head: true }).eq('review_status', 'pending'),
+      supabase.from('cni_job_photos').select('job_id').eq('review_status', 'pending').limit(5000),
+    ]);
+    setPendingPhotos(photoCount || 0);
     setPhotoJobIds(new Set((photoRows || []).map((p: any) => p.job_id).filter(Boolean)));
 
     setLoading(false);
@@ -121,9 +123,15 @@ export default function CniDashboardPage() {
     return j.status === statusFilter;
   });
 
-  // '~' sorts after any letter, so unassigned jobs fall to the bottom.
+  // Explicit unassigned-last comparator — the old '~~~' sentinel actually
+  // sorted FIRST under localeCompare (punctuation collates before letters).
   const displayJobs = sortByInstaller
-    ? [...filteredJobs].sort((a, b) => (a.installer_name || '~~~').localeCompare(b.installer_name || '~~~'))
+    ? [...filteredJobs].sort((a, b) => {
+        if (!a.installer_name && !b.installer_name) return 0;
+        if (!a.installer_name) return 1;
+        if (!b.installer_name) return -1;
+        return a.installer_name.localeCompare(b.installer_name);
+      })
     : filteredJobs;
 
   const statusCounts = jobs.reduce((acc, j) => {
