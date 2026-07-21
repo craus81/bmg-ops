@@ -38,9 +38,9 @@ const capped = (rows: string[]) =>
  * Monday-morning per-customer digest: every vehicle we're holding for them
  * (with its plain-language status), what finished or shipped last week,
  * and what was invoiced — the "where are my vehicles?" call, pre-answered.
- * Sends only to customers with something to say, honors weekly_digest
- * opt-out, and uses the same primary-contact resolution as every other
- * customer touchpoint.
+ * Sends only to customers with something to say, only to those subscribed
+ * to the digest (opt-in per customer since migration 171), and uses the
+ * same primary-contact resolution as every other customer touchpoint.
  */
 export async function GET(req: NextRequest) {
   const authHeader = req.headers.get('authorization');
@@ -112,7 +112,8 @@ export async function GET(req: NextRequest) {
 
       const { customer, email } = await resolveCustomerContact(service, customerName);
       if (!customer || !email) { skippedNoEmail++; continue; }
-      if (customer.weekly_digest === false) { skippedOptOut++; continue; }
+      // Opt-IN since migration 171: only subscribed customers get the digest.
+      if (customer.weekly_digest !== true) { skippedOptOut++; continue; }
 
       const html = buildCustomerDigestEmail(customerName, [
         {

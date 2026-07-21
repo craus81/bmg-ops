@@ -12,18 +12,28 @@ const supabase = createClient(
   process.env.SUPABASE_SERVICE_ROLE_KEY!
 );
 
-const Schema = z.object({ jobId: z.string().uuid() });
+const Schema = z.object({
+  jobId: z.string().uuid(),
+  // preview: resolve and return the customer contact without sending —
+  // powers the staff confirm dialog's prefilled email.
+  preview: z.boolean().optional(),
+  // Send the customer shipped email? Only when staff confirmed the dialog.
+  notifyCustomer: z.boolean().optional(),
+  // Staff-edited recipient for this one send.
+  customerEmail: z.string().email().optional().nullable(),
+});
 
 /**
  * POST /api/graphics/notify-shipped-invoice
  *
- * Fires when a graphics_job transitions to 'shipped'. Pings the
- * billing-trusted admins with a notification that links to the
- * Invoicing hub with ?invoiceJob=<id>, which loads the job by id and
- * opens the invoice review modal directly. Skips if the job is
- * already invoiced.
+ * Fires when a graphics_job transitions to 'shipped'. Always pings the
+ * billing-trusted admins with a notification that links to the Invoicing
+ * hub with ?invoiceJob=<id> (skipped if already invoiced). The customer
+ * shipped email is on-demand only: it goes out when the staffer confirms
+ * the dialog (notifyCustomer: true), to the (editable) address they
+ * approved.
  *
- * Body: { jobId: string }
+ * Body: { jobId: string, preview?: boolean, notifyCustomer?: boolean, customerEmail?: string }
  */
 
 
@@ -33,7 +43,7 @@ export async function POST(req: NextRequest) {
 
   const parsed = await validateBody(req, Schema);
   if (parsed.error) return parsed.error;
-  const { jobId } = parsed.data;
+  const { jobId, preview, notifyCustomer, customerEmail } = parsed.data;
 
   const { data: job } = await supabase
     .from('graphics_jobs')
@@ -44,26 +54,43 @@ export async function POST(req: NextRequest) {
 
   const jobLabel = job.title || `Job #${job.job_number}` || `Job ${job.id.slice(0, 8)}`;
 
-  // Customer shipped email (with tracking when we have it) fires whether or
-  // not the job is invoiced — the customer cares about the package, not our
-  // billing state. Best-effort; never blocks the billing prompt.
-  try {
-    const { notifyCustomerByName } = await import('@/lib/customer-notify');
-    const { buildNotificationEmail } = await import('@/lib/resend');
-    const trackingLine = job.tracking_number
-      ? ` Tracking${job.carrier ? ` (${job.carrier})` : ''}: ${job.tracking_number}.`
-      : '';
-    const emailBody = `Your graphics order — ${jobLabel} — has shipped.${trackingLine} Reply to this email with any questions.`;
-    await notifyCustomerByName(supabase, job.customer, {
-      contextEntityType: 'graphics_job',
-      contextEntityId: job.id,
-      threadSubject: `${jobLabel} shipped`,
-      emailSubject: `[BMG Fleet] Your graphics have shipped — ${jobLabel}`,
-      emailHtml: buildNotificationEmail(`On the way — ${jobLabel}`, emailBody),
-      messageBody: emailBody,
+  if (preview) {
+    const { resolveCustomerContact } = await import('@/lib/customer-notify');
+    const resolved = job.customer
+      ? await resolveCustomerContact(supabase, job.customer)
+      : { email: null, phone: null };
+    return NextResponse.json({
+      preview: true,
+      customer: job.customer || null,
+      email: resolved.email,
+      phone: resolved.phone,
     });
-  } catch (err) {
-    console.error('customer graphics-shipped email failed:', err);
+  }
+
+  // Customer shipped email (with tracking when we have it) — on-demand
+  // only, to the address the staffer confirmed. Best-effort; never blocks
+  // the billing prompt.
+  if (notifyCustomer) {
+    try {
+      const { notifyCustomerByName } = await import('@/lib/customer-notify');
+      const { buildNotificationEmail } = await import('@/lib/resend');
+      const trackingLine = job.tracking_number
+        ? ` Tracking${job.carrier ? ` (${job.carrier})` : ''}: ${job.tracking_number}.`
+        : '';
+      const emailBody = `Your graphics order — ${jobLabel} — has shipped.${trackingLine} Reply to this email with any questions.`;
+      await notifyCustomerByName(supabase, job.customer, {
+        contextEntityType: 'graphics_job',
+        contextEntityId: job.id,
+        threadSubject: `${jobLabel} shipped`,
+        emailSubject: `[BMG Fleet] Your graphics have shipped — ${jobLabel}`,
+        emailHtml: buildNotificationEmail(`On the way — ${jobLabel}`, emailBody),
+        messageBody: emailBody,
+        respectOptOut: false,
+        overrideEmail: customerEmail || null,
+      });
+    } catch (err) {
+      console.error('customer graphics-shipped email failed:', err);
+    }
   }
 
   if (job.netsuite_invoice_id) {

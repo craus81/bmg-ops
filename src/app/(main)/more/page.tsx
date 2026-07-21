@@ -147,6 +147,9 @@ export default function MorePage() {
         {(isAdmin || hasRole('finance')) && (
           <MenuBtn title="Payments (AP)" sub="Approve CNI vendor invoices & push bills to NetSuite" onClick={() => router.push('/admin/ap')} />
         )}
+        {F('customers') && (
+          <MenuBtn title="Customer Notifications" sub="Who gets automatic emails — everything else is on-demand" onClick={() => router.push('/admin/customer-notifications')} />
+        )}
         {F('audit_log') && (
           <MenuBtn title="Audit Log" sub="Who changed what — money edits, payouts, rates & invoices" onClick={() => router.push('/admin/audit')} />
         )}

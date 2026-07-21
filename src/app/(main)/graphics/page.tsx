@@ -739,17 +739,10 @@ export default function GraphicsPage() {
           body: JSON.stringify({ jobId: job.id }),
         }).catch(() => {});
       } else if (newStatus === 'ready_to_pickup') {
-        fetch('/api/graphics/notify-pickup', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ jobId: job.id }),
-        }).catch(() => {});
+        // Customer notifications are on-demand: ask, with an editable email.
+        promptPickupNotify(job);
       } else if (newStatus === 'shipped') {
-        fetch('/api/graphics/notify-shipped-invoice', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ jobId: job.id }),
-        }).catch(() => {});
+        promptShippedNotify(job);
       }
 
       // Assignee + preference-gated status notifications, computed
@@ -891,6 +884,68 @@ export default function GraphicsPage() {
   };
 
   // Save job edits
+  // ── On-demand customer notifications ──
+  // Nothing emails the customer automatically anymore: when a job hits
+  // ready_to_pickup / shipped, staff get a dialog with the customer's email
+  // prefilled (editable per send) and Cancel sends nothing. Subscriptions to
+  // automatic emails are per customer on the Customer Notifications page.
+  const jobShortLabel = (job: GraphicsJob) => job.title || job.job_number || 'this job';
+
+  const promptPickupNotify = async (job: GraphicsJob) => {
+    try {
+      const res = await apiFetch('/api/graphics/notify-pickup', {
+        method: 'POST',
+        body: JSON.stringify({ jobId: job.id, preview: true }),
+      });
+      const info = await res.json();
+      const entry = await dialog.prompt(
+        `Tell ${job.customer || 'the customer'} that ${jobShortLabel(job)} is ready for pickup? Confirm or edit the email below — Cancel sends nothing.`,
+        info?.email || '',
+        { title: 'Notify customer?', confirmLabel: 'Send', placeholder: 'customer@company.com' },
+      );
+      if (entry === null) return; // staff chose not to notify
+      const email = entry.trim();
+      if (!email) { await dialog.alert('No email address — nothing was sent.'); return; }
+      const sendRes = await apiFetch('/api/graphics/notify-pickup', {
+        method: 'POST',
+        body: JSON.stringify({ jobId: job.id, email }),
+      });
+      const sent = await sendRes.json();
+      if (!sendRes.ok || (!sent?.dispatch?.email?.ok && !sent?.dispatch?.sms?.ok)) {
+        await dialog.alert(`Pickup notification failed${sent?.warning ? `: ${sent.warning}` : ' — check the email address.'}`);
+      }
+    } catch {
+      await dialog.alert('Pickup notification failed — network error.');
+    }
+  };
+
+  const promptShippedNotify = async (job: GraphicsJob) => {
+    // The billing prompt must fire regardless of the customer choice, so
+    // every path below still POSTs — only notifyCustomer varies.
+    let notifyCustomer = false;
+    let customerEmail: string | null = null;
+    try {
+      const res = await apiFetch('/api/graphics/notify-shipped-invoice', {
+        method: 'POST',
+        body: JSON.stringify({ jobId: job.id, preview: true }),
+      });
+      const info = await res.json();
+      const entry = await dialog.prompt(
+        `Email ${job.customer || 'the customer'} that ${jobShortLabel(job)} shipped${job.tracking_number ? ' (includes tracking)' : ''}? Confirm or edit the email below — Cancel sends nothing to the customer.`,
+        info?.email || '',
+        { title: 'Notify customer?', confirmLabel: 'Send', placeholder: 'customer@company.com' },
+      );
+      if (entry !== null && entry.trim()) {
+        notifyCustomer = true;
+        customerEmail = entry.trim();
+      }
+    } catch { /* fall through — still fire the billing prompt */ }
+    apiFetch('/api/graphics/notify-shipped-invoice', {
+      method: 'POST',
+      body: JSON.stringify({ jobId: job.id, notifyCustomer, customerEmail }),
+    }).catch(() => {});
+  };
+
   const saveJob = async () => {
     if (!editingJob) return;
     setSaving(true);

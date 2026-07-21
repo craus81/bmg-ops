@@ -5,7 +5,8 @@
  * customer name to the synced customers row, use the primary external
  * contact (auto-seeded from the customer row), thread the message into
  * customer_threads/customer_messages, and respect the customer's
- * notify_status_emails opt-out.
+ * notify_status_emails subscription — automatic sends are opt-IN per
+ * customer (migration 171); only on-demand sends bypass the flag.
  */
 
 import type { SupabaseClient } from '@supabase/supabase-js';
@@ -23,8 +24,12 @@ export interface CustomerNotifyInput {
   /** Plain-text summary threaded into customer_messages. */
   messageBody: string;
   smsBody?: string;
-  /** Skip when the customer has opted out of status emails (default true). */
+  /** Skip when the customer has opted out of status emails (default true).
+   *  On-demand sends (staff confirmed the send) pass false. */
   respectOptOut?: boolean;
+  /** Staff-edited recipient for this one send — replaces the resolved
+   *  primary-contact email without touching the contact record. */
+  overrideEmail?: string | null;
 }
 
 export interface CustomerNotifyResult {
@@ -116,9 +121,12 @@ export async function notifyCustomerByName(
   const none: CustomerNotifyResult = { emailed: false, smsSent: false, skipped: null };
   if (!customerName) return { ...none, skipped: 'no_customer' };
 
-  const { customer, contactId, email, phone } = await resolveCustomerContact(service, customerName);
+  const resolved = await resolveCustomerContact(service, customerName);
+  const { customer, contactId } = resolved;
+  const email = input.overrideEmail || resolved.email;
+  const phone = resolved.phone;
   if (!customer) return { ...none, skipped: 'no_customer' };
-  if ((input.respectOptOut ?? true) && customer.notify_status_emails === false) {
+  if ((input.respectOptOut ?? true) && customer.notify_status_emails !== true) {
     return { ...none, skipped: 'opted_out' };
   }
   if (!email && !phone) return { ...none, skipped: 'no_channel' };
