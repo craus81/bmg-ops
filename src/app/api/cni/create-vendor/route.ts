@@ -21,6 +21,14 @@ const Schema = z.object({
   name: z.string().trim().min(1).max(120).optional(),
   email: z.string().trim().email().max(160).optional().or(z.literal('')),
   phone: z.string().trim().max(40).optional().or(z.literal('')),
+  // Mailing address from the NetSuite vendor record ({street, city, state,
+  // zip} — the shape companies.address already uses).
+  address: z.object({
+    street: z.string().trim().max(200).optional().default(''),
+    city: z.string().trim().max(80).optional().default(''),
+    state: z.string().trim().max(40).optional().default(''),
+    zip: z.string().trim().max(20).optional().default(''),
+  }).optional().nullable(),
   // Link an EXISTING NetSuite vendor (numeric Internal ID from vendor
   // search) instead of creating a new one.
   netsuiteVendorId: z.string().regex(/^\d+$/).optional(),
@@ -85,6 +93,7 @@ export async function POST(req: NextRequest) {
             name,
             email: body.email || null,
             phone: body.phone || null,
+            address: body.address || {},
           })
           .select('id, name, netsuite_vendor_id')
           .single();
@@ -97,15 +106,17 @@ export async function POST(req: NextRequest) {
 
     // Backfill contact info from the NetSuite record onto an existing
     // company — fills blanks only, never overwrites something typed here.
-    if (body.email || body.phone) {
+    if (body.email || body.phone || body.address) {
       const { data: current } = await service
         .from('companies')
-        .select('email, phone')
+        .select('email, phone, address')
         .eq('id', company.id)
         .maybeSingle();
-      const backfill: Record<string, string> = {};
+      const backfill: Record<string, unknown> = {};
       if (body.email && !current?.email) backfill.email = body.email;
       if (body.phone && !current?.phone) backfill.phone = body.phone;
+      const hasAddress = current?.address && Object.values(current.address).some(v => !!v);
+      if (body.address && !hasAddress) backfill.address = body.address;
       if (Object.keys(backfill).length > 0) {
         await service.from('companies').update(backfill).eq('id', company.id);
       }

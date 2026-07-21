@@ -86,6 +86,11 @@ export default function CniCompanyDetailPage() {
   const [name, setName] = useState('');
   const [phone, setPhone] = useState('');
   const [email, setEmail] = useState('');
+  // Mailing address (companies.address JSONB: {street, city, state, zip})
+  const [street, setStreet] = useState('');
+  const [city, setCity] = useState('');
+  const [addrState, setAddrState] = useState('');
+  const [zip, setZip] = useState('');
   const [vendorId, setVendorId] = useState('');
   const [showVendorSearch, setShowVendorSearch] = useState(false);
   const [pickedVendor, setPickedVendor] = useState<NsVendor | null>(null);
@@ -116,7 +121,7 @@ export default function CniCompanyDetailPage() {
   const loadData = async () => {
     const { data: companyData } = await supabase
       .from('companies')
-      .select('id, name, phone, email, netsuite_vendor_id, primary_contact_profile_id, w9_file_path, insurance_cert_path, insurance_expiry, direct_deposit_file_path')
+      .select('id, name, phone, email, address, netsuite_vendor_id, primary_contact_profile_id, w9_file_path, insurance_cert_path, insurance_expiry, direct_deposit_file_path')
       .eq('id', companyId)
       .single();
 
@@ -125,6 +130,11 @@ export default function CniCompanyDetailPage() {
       setName(companyData.name || '');
       setPhone(companyData.phone || '');
       setEmail(companyData.email || '');
+      const addr = (companyData as any).address || {};
+      setStreet(addr.street || '');
+      setCity(addr.city || '');
+      setAddrState(addr.state || '');
+      setZip(addr.zip || '');
       setVendorId(companyData.netsuite_vendor_id || '');
       setPrimaryContact(companyData.primary_contact_profile_id || '');
       setInsuranceExpiry(companyData.insurance_expiry || '');
@@ -232,6 +242,7 @@ export default function CniCompanyDetailPage() {
         name: name.trim(),
         phone: phone.trim() || null,
         email: email.trim() || null,
+        address: { street: street.trim(), city: city.trim(), state: addrState.trim(), zip: zip.trim() },
         netsuite_vendor_id: vendorId.trim() || null,
         primary_contact_profile_id: primaryContact || null,
       })
@@ -443,6 +454,15 @@ export default function CniCompanyDetailPage() {
           </div>
         </div>
         <div style={{ marginBottom: '10px' }}>
+          <label style={labelStyle}>Mailing Address</label>
+          <input value={street} onChange={e => setStreet(e.target.value)} placeholder="Street" style={{ ...inputStyle, marginBottom: '6px' }} />
+          <div style={{ display: 'grid', gridTemplateColumns: '2fr 1fr 1fr', gap: '8px' }}>
+            <input value={city} onChange={e => setCity(e.target.value)} placeholder="City" style={inputStyle} />
+            <input value={addrState} onChange={e => setAddrState(e.target.value)} placeholder="State" style={inputStyle} />
+            <input value={zip} onChange={e => setZip(e.target.value)} placeholder="ZIP" style={inputStyle} />
+          </div>
+        </div>
+        <div style={{ marginBottom: '10px' }}>
           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline' }}>
             <label style={labelStyle}>NetSuite Vendor ID</label>
             <button
@@ -473,6 +493,12 @@ export default function CniCompanyDetailPage() {
                   // never clobber values already on the company.
                   if (v.email && !email.trim()) setEmail(v.email);
                   if (v.phone && !phone.trim()) setPhone(v.phone);
+                  if (v.address && !street.trim() && !city.trim()) {
+                    setStreet(v.address.street);
+                    setCity(v.address.city);
+                    setAddrState(v.address.state);
+                    setZip(v.address.zip);
+                  }
                 }}
                 autoFocus
               />
