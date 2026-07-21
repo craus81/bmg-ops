@@ -293,7 +293,10 @@ export async function syncCalendarEvent(params: {
   date: string; // YYYY-MM-DD
   description?: string;
   location?: string;
-  colorId?: string; // Google Calendar color: 6=orange(graphics), 9=blue(upfit), 10=green(CNI)
+  /** Google Calendar color: 6=orange(graphics), 9=blue(upfit), 10=green(CNI).
+   *  Pass null to leave the event's color untouched (e.g. editing an event
+   *  a human created on Google). */
+  colorId?: string | null;
 }): Promise<string | null> {
   try {
     const calendar = await getCalendarClient();
@@ -303,7 +306,7 @@ export async function syncCalendarEvent(params: {
     endDate.setDate(endDate.getDate() + 1);
     const endDateStr = endDate.toISOString().split('T')[0];
 
-    const eventBody = {
+    const eventBody: any = {
       summary: params.title,
       description: params.description || '',
       location: params.location || '',
@@ -313,12 +316,14 @@ export async function syncCalendarEvent(params: {
       end: {
         date: endDateStr, // Exclusive end date (next day)
       },
-      colorId: params.colorId || '6',
     };
+    if (params.colorId !== null) eventBody.colorId = params.colorId || '6';
 
     if (params.eventId) {
-      // Update existing event
-      const res = await calendar.events.update({
+      // Patch (not update) — partial write that preserves fields we don't
+      // manage, like attendees, reminders, and the color of human-created
+      // events.
+      const res = await calendar.events.patch({
         calendarId: CALENDAR_ID,
         eventId: params.eventId,
         requestBody: eventBody,
