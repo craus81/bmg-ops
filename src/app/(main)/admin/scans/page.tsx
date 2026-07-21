@@ -116,6 +116,10 @@ export default function AdminScansPage() {
   const [bulkPartSearch, setBulkPartSearch] = useState('');
   const [bulkLocation, setBulkLocation] = useState<string>('');
   const [bulkCustomer, setBulkCustomer] = useState('');
+  // Vendor (CNI company) doing the installs — stamps installer_name on the
+  // bulk-created scans so costs and reports attribute correctly.
+  const [bulkVendor, setBulkVendor] = useState('');
+  const [vendorCompanies, setVendorCompanies] = useState<{ id: string; name: string }[]>([]);
   const [custMatches, setCustMatches] = useState<{ id: string; company_name: string; entity_id: string | null }[]>([]);
   const [showCustDropdown, setShowCustDropdown] = useState(false);
   const [createItemFor, setCreateItemFor] = useState<string | null>(null);
@@ -161,7 +165,7 @@ export default function AdminScansPage() {
 
   const loadAll = async () => {
     setLoading(true);
-    const [scansRes, archivedRes, profilesRes, partsRes, fullPartsRes, locsRes, posRes, cniVinsRes] = await Promise.all([
+    const [scansRes, archivedRes, profilesRes, partsRes, fullPartsRes, locsRes, posRes, cniVinsRes, companiesRes] = await Promise.all([
       supabase.from('scan_logs').select('*').is('archived_at', null).order('scanned_at', { ascending: false }).limit(1000),
       // Paginate archived scans — Supabase caps responses at 1000 rows by default
       (async () => {
@@ -216,10 +220,14 @@ export default function AdminScansPage() {
         }
         return { data: all };
       })(),
+      // Vendor companies for the bulk tab's vendor picker (same list the
+      // vendor-invoice flow uses).
+      supabase.from('companies').select('id, name').order('name'),
     ]);
     setAllParts((fullPartsRes.data || []) as typeof allParts);
     setAllLocations((locsRes.data || []) as typeof allLocations);
     setAllPOs((posRes.data || []) as typeof allPOs);
+    setVendorCompanies((companiesRes.data || []) as { id: string; name: string }[]);
 
     setScans((scansRes.data || []) as ScanLog[]);
     setArchivedScans((archivedRes.data || []) as ScanLog[]);
@@ -723,6 +731,7 @@ export default function AdminScansPage() {
             unit_number: unitByVin[vin] || null,
             location_id: selectedLoc?.id || null,
             location_name: selectedLoc?.name || null,
+            installer_name: vendorCompanies.find(c => c.id === bulkVendor)?.name || null,
             scanned_by: user?.id,
           });
           if (error) totalFailed++; else totalInserted++;
@@ -807,6 +816,7 @@ export default function AdminScansPage() {
       billable_customer: locationOverrideCustomer ?? (bulkCustomer.trim() || part?.customer || null),
       location_id: selectedLoc?.id || null,
       location_name: selectedLoc?.name || null,
+      installer_name: vendorCompanies.find(c => c.id === bulkVendor)?.name || null,
       scanned_by: user?.id,
     }));
     for (let i = 0; i < rows.length; i += 50) {
@@ -1578,6 +1588,13 @@ export default function AdminScansPage() {
               <select value={bulkLocation} onChange={e => setBulkLocation(e.target.value)} style={{ width: '100%', padding: '10px', borderRadius: '8px', border: `1px solid ${theme.border}`, background: 'var(--input-bg)', color: 'var(--text-primary)', fontSize: '13px' }}>
                 <option value="">— Select Location —</option>
                 {allLocations.map(l => <option key={l.id} value={l.id}>{l.name}</option>)}
+              </select>
+            </div>
+            <div>
+              <div style={{ fontSize: '10px', fontWeight: 700, color: 'var(--text-muted)', textTransform: 'uppercase', marginBottom: '4px' }}>Vendor / Installer</div>
+              <select value={bulkVendor} onChange={e => setBulkVendor(e.target.value)} title="Who performed the installs — stamps the vendor on every scan in this batch" style={{ width: '100%', padding: '10px', borderRadius: '8px', border: `1px solid ${theme.border}`, background: 'var(--input-bg)', color: 'var(--text-primary)', fontSize: '13px' }}>
+                <option value="">— No vendor —</option>
+                {vendorCompanies.map(c => <option key={c.id} value={c.id}>{c.name}</option>)}
               </select>
             </div>
             <div style={{ position: 'relative' }}>
