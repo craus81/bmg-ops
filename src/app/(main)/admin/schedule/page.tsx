@@ -4,8 +4,12 @@ import { useState, useEffect } from 'react';
 import { useRouter } from 'next/navigation';
 import { createClient } from '@/lib/supabase-browser';
 import { useAuth } from '@/components/AuthProvider';
+import { useDialog } from '@/components/DialogProvider';
 import { apiFetch } from '@/lib/api-client';
 import { theme } from '@/lib/theme';
+import { storage } from '@/lib/storage';
+import { DropZone } from '@/components/DropZone';
+import MentionTextArea, { reportMentions } from '@/components/MentionTextArea';
 
 interface CalendarEvent {
   id: string;
@@ -17,6 +21,10 @@ interface CalendarEvent {
   color: string;
   status?: string;
   linkTo?: string;
+  /** Raw calendar_events id — set for manual/google rows, opens the card. */
+  cardId?: string;
+  noteCount?: number;
+  fileCount?: number;
 }
 
 const TYPE_COLORS: Record<string, string> = {
@@ -40,6 +48,7 @@ const TYPE_LABELS: Record<string, string> = {
 export default function SchedulePage() {
   const router = useRouter();
   const { user, isAdmin, isSales, profile } = useAuth();
+  const dialog = useDialog();
   const supabase = createClient();
 
   const [view, setView] = useState<'week' | 'month'>('week');
@@ -171,8 +180,11 @@ export default function SchedulePage() {
     {
       let manQuery = supabase
         .from('calendar_events')
-        .select('*')
+        .select('*, calendar_event_notes(count), calendar_event_files(count)')
         .is('completed_at', null)
+        // Converted cards live on as graphics jobs — the job entry replaces
+        // the raw event on this board.
+        .is('linked_graphics_job_id', null)
         .gte('event_date', startDate)
         .lte('event_date', endDate);
       // Google-imported events (source 'google') are shared calendar
@@ -185,6 +197,9 @@ export default function SchedulePage() {
         date: m.event_date, time: m.event_time,
         type: m.source === 'google' ? 'google' : 'manual',
         color: m.source === 'google' ? TYPE_COLORS.google : TYPE_COLORS.manual,
+        cardId: m.id,
+        noteCount: m.calendar_event_notes?.[0]?.count || 0,
+        fileCount: m.calendar_event_files?.[0]?.count || 0,
       }));
     }
 
@@ -221,6 +236,146 @@ export default function SchedulePage() {
     setShowCreate(false);
     setCreating(false);
     loadEvents();
+  };
+
+  // ── Event card: notes + files + convert-to-job for manual/Google events ──
+  const [cardEvent, setCardEvent] = useState<any | null>(null);
+  const [cardNotes, setCardNotes] = useState<any[]>([]);
+  const [cardFiles, setCardFiles] = useState<any[]>([]);
+  const [cardNoteDraft, setCardNoteDraft] = useState('');
+  const [cardBusy, setCardBusy] = useState(false);
+
+  const openCard = async (cardId: string) => {
+    const [{ data: ev }, { data: notes }, { data: files }] = await Promise.all([
+      supabase.from('calendar_events').select('*').eq('id', cardId).maybeSingle(),
+      supabase.from('calendar_event_notes').select('*').eq('event_id', cardId).order('created_at', { ascending: true }),
+      supabase.from('calendar_event_files').select('*').eq('event_id', cardId).order('created_at', { ascending: true }),
+    ]);
+    if (!ev) return;
+    setCardEvent(ev);
+    setCardNotes(notes || []);
+    setCardFiles(files || []);
+    setCardNoteDraft('');
+  };
+
+  const addCardNote = async () => {
+    const text = cardNoteDraft.trim();
+    if (!text || !cardEvent) return;
+    const { error } = await supabase.from('calendar_event_notes').insert({
+      event_id: cardEvent.id,
+      note: text,
+      created_by: user?.id || null,
+      created_by_name: profile?.full_name || null,
+    });
+    if (!error) {
+      reportMentions({
+        text,
+        sourceType: 'calendar_event_note',
+        sourceId: cardEvent.id,
+        contextLabel: `Schedule — ${cardEvent.title}`,
+        contextUrl: '/admin/schedule',
+      });
+      setCardNoteDraft('');
+      const { data: notes } = await supabase.from('calendar_event_notes').select('*').eq('event_id', cardEvent.id).order('created_at', { ascending: true });
+      setCardNotes(notes || []);
+      loadEvents();
+    }
+  };
+
+  const uploadCardFiles = async (files: File[]) => {
+    if (!cardEvent || files.length === 0) return;
+    setCardBusy(true);
+    for (const file of files) {
+      const path = `calendar-events/${cardEvent.id}/${Date.now()}-${file.name.replace(/[^\w.\-]+/g, '_')}`;
+      const { error: upErr } = await storage.from('graphics-proofs').upload(path, file, { contentType: file.type });
+      if (!upErr) {
+        await supabase.from('calendar_event_files').insert({
+          event_id: cardEvent.id,
+          file_name: file.name,
+          file_type: file.type || null,
+          file_size: file.size,
+          storage_path: path,
+          uploaded_by: user?.id || null,
+        });
+      }
+    }
+    const { data: rows } = await supabase.from('calendar_event_files').select('*').eq('event_id', cardEvent.id).order('created_at', { ascending: true });
+    setCardFiles(rows || []);
+    setCardBusy(false);
+    loadEvents();
+  };
+
+  const deleteCardFile = async (f: any) => {
+    if (!(await dialog.confirm(`Delete ${f.file_name}?`, { destructive: true }))) return;
+    await storage.from('graphics-proofs').remove([f.storage_path]).catch(() => {});
+    await supabase.from('calendar_event_files').delete().eq('id', f.id);
+    setCardFiles(prev => prev.filter(x => x.id !== f.id));
+    loadEvents();
+  };
+
+  const fileUrl = (path: string) => storage.from('graphics-proofs').getPublicUrl(path).data.publicUrl;
+
+  // Turn the card into a real graphics job: the job inherits the title,
+  // install date, description, notes, and files, and takes over the Google
+  // event (calendar_event_id) so drags on Google keep moving the job. The
+  // raw event disappears from this board — the job entry replaces it.
+  const convertCardToJob = async () => {
+    if (!cardEvent || cardBusy) return;
+    if (!(await dialog.confirm(`Create a graphics job from "${cardEvent.title}"? Its notes and files carry over, and the calendar entry stays linked.`, { confirmLabel: 'Create job' }))) return;
+    setCardBusy(true);
+    try {
+      const { data: job, error } = await supabase.from('graphics_jobs').insert({
+        job_number: `GFX-${Date.now().toString(36).toUpperCase()}`,
+        job_category: 'production',
+        title: cardEvent.title,
+        notes: cardEvent.description || null,
+        quantity: 1,
+        priority: 'normal',
+        status: 'received',
+        scheduled_install_date: cardEvent.event_date,
+        calendar_event_id: cardEvent.google_event_id || null,
+        created_by: user?.id || null,
+      }).select('id, job_number').single();
+      if (error || !job) {
+        await dialog.alert(`Could not create the job: ${error?.message || 'unknown error'}`);
+        return;
+      }
+
+      await supabase.from('graphics_status_history').insert({
+        job_id: job.id,
+        from_status: null,
+        to_status: 'received',
+        changed_by: user?.id || null,
+        note: `Created from schedule event "${cardEvent.title}"`,
+      });
+      // Carry the card's notes and files onto the job so nothing is lost.
+      for (const n of cardNotes) {
+        await supabase.from('graphics_status_history').insert({
+          job_id: job.id, from_status: 'received', to_status: 'received',
+          changed_by: n.created_by || null,
+          note: n.note,
+        });
+      }
+      if (cardFiles.length > 0) {
+        await supabase.from('graphics_job_files').insert(cardFiles.map(f => ({
+          job_id: job.id,
+          file_name: f.file_name,
+          file_type: f.file_type,
+          file_size: f.file_size,
+          storage_path: f.storage_path,
+          uploaded_by: f.uploaded_by,
+        })));
+      }
+      await supabase.from('calendar_events').update({ linked_graphics_job_id: job.id }).eq('id', cardEvent.id);
+
+      setCardEvent(null);
+      loadEvents();
+      if (await dialog.confirm(`Graphics job ${job.job_number} created. Open it on the Graphics board?`)) {
+        router.push(`/graphics?editJob=${job.id}`);
+      }
+    } finally {
+      setCardBusy(false);
+    }
   };
 
   const headerLabel = view === 'week'
@@ -300,8 +455,8 @@ export default function SchedulePage() {
                 ) : (
                   <div style={{ display: 'flex', flexDirection: 'column', gap: '3px' }}>
                     {dayEvents.map(ev => (
-                      <div key={ev.id} onClick={() => ev.linkTo && router.push(ev.linkTo)} style={{
-                        padding: '6px 8px', borderRadius: '6px', cursor: ev.linkTo ? 'pointer' : 'default',
+                      <div key={ev.id} onClick={() => ev.cardId ? openCard(ev.cardId) : ev.linkTo && router.push(ev.linkTo)} style={{
+                        padding: '6px 8px', borderRadius: '6px', cursor: (ev.cardId || ev.linkTo) ? 'pointer' : 'default',
                         background: `${ev.color}10`, borderLeft: `3px solid ${ev.color}`,
                       }}>
                         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
@@ -309,7 +464,11 @@ export default function SchedulePage() {
                           <span style={{ fontSize: '8px', fontWeight: 700, padding: '1px 5px', borderRadius: '3px', background: `${ev.color}18`, color: ev.color }}>{TYPE_LABELS[ev.type]}</span>
                         </div>
                         {ev.subtitle && <div style={{ fontSize: '10px', color: 'var(--text-muted)', marginTop: '1px' }}>{ev.subtitle}</div>}
-                        {ev.time && <div style={{ fontSize: '9px', color: 'var(--text-muted)' }}>{ev.time}</div>}
+                        <div style={{ display: 'flex', gap: '6px', alignItems: 'center' }}>
+                          {ev.time && <span style={{ fontSize: '9px', color: 'var(--text-muted)' }}>{ev.time}</span>}
+                          {(ev.noteCount || 0) > 0 && <span style={{ fontSize: '9px', color: 'var(--text-muted)' }}>💬 {ev.noteCount}</span>}
+                          {(ev.fileCount || 0) > 0 && <span style={{ fontSize: '9px', color: 'var(--text-muted)' }}>📎 {ev.fileCount}</span>}
+                        </div>
                       </div>
                     ))}
                   </div>
@@ -340,11 +499,11 @@ export default function SchedulePage() {
                 }}>
                   <div style={{ fontSize: '10px', fontWeight: 700, color: today ? '#3b82f6' : 'var(--text-muted)', marginBottom: '2px' }}>{day.getDate()}</div>
                   {dayEvents.slice(0, 3).map(ev => (
-                    <div key={ev.id} onClick={() => ev.linkTo && router.push(ev.linkTo)} style={{
-                      padding: '1px 3px', borderRadius: '3px', marginBottom: '1px', cursor: ev.linkTo ? 'pointer' : 'default',
+                    <div key={ev.id} onClick={() => ev.cardId ? openCard(ev.cardId) : ev.linkTo && router.push(ev.linkTo)} style={{
+                      padding: '1px 3px', borderRadius: '3px', marginBottom: '1px', cursor: (ev.cardId || ev.linkTo) ? 'pointer' : 'default',
                       background: `${ev.color}18`, fontSize: '8px', fontWeight: 700, color: ev.color,
                       overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
-                    }}>{ev.title}</div>
+                    }}>{((ev.noteCount || 0) > 0 || (ev.fileCount || 0) > 0) ? '• ' : ''}{ev.title}</div>
                   ))}
                   {dayEvents.length > 3 && <div style={{ fontSize: '8px', color: 'var(--text-muted)', textAlign: 'center' }}>+{dayEvents.length - 3}</div>}
                 </div>
@@ -355,6 +514,99 @@ export default function SchedulePage() {
       )}
 
       {/* Create event modal */}
+      {/* ═══ Event card: notes, files, convert to job ═══ */}
+      {cardEvent && (
+        <div style={{ position: 'fixed', inset: 0, background: 'var(--overlay)', zIndex: 200, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '20px' }} onClick={() => setCardEvent(null)}>
+          <div onClick={e => e.stopPropagation()} style={{ background: 'var(--card)', borderRadius: '14px', padding: '20px', width: '100%', maxWidth: '480px', maxHeight: '88vh', overflowY: 'auto', boxShadow: '0 8px 30px rgba(0,0,0,0.3)' }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: '10px', marginBottom: '4px' }}>
+              <div style={{ fontSize: '16px', fontWeight: 800, color: 'var(--text-primary)' }}>{cardEvent.title}</div>
+              <span style={{
+                fontSize: '9px', fontWeight: 700, padding: '2px 7px', borderRadius: '4px', whiteSpace: 'nowrap',
+                background: `${cardEvent.source === 'google' ? TYPE_COLORS.google : TYPE_COLORS.manual}18`,
+                color: cardEvent.source === 'google' ? TYPE_COLORS.google : TYPE_COLORS.manual,
+              }}>{cardEvent.source === 'google' ? 'From Google Calendar' : 'FleetSuite event'}</span>
+            </div>
+            <div style={{ fontSize: '11px', color: 'var(--text-muted)', marginBottom: '8px' }}>
+              {new Date(cardEvent.event_date + 'T12:00:00').toLocaleDateString([], { weekday: 'long', month: 'long', day: 'numeric', year: 'numeric' })}
+              {cardEvent.event_time ? ` · ${cardEvent.event_time.slice(0, 5)}` : ''}
+            </div>
+            {cardEvent.description && (
+              <div style={{ fontSize: '12px', color: 'var(--text-body)', whiteSpace: 'pre-wrap', background: 'var(--subtle-bg)', border: `1px solid ${theme.border}`, borderRadius: '8px', padding: '8px 10px', marginBottom: '12px' }}>
+                {cardEvent.description}
+              </div>
+            )}
+
+            {/* Notes */}
+            <div style={{ fontSize: '10px', fontWeight: 700, color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.4px', marginBottom: '6px' }}>Notes</div>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: '6px', marginBottom: '8px' }}>
+              {cardNotes.length === 0 && <div style={{ fontSize: '11px', color: 'var(--text-muted)', fontStyle: 'italic' }}>No notes yet.</div>}
+              {cardNotes.map(n => (
+                <div key={n.id} style={{ background: 'var(--subtle-bg)', border: `1px solid ${theme.border}`, borderRadius: '8px', padding: '7px 10px' }}>
+                  <div style={{ fontSize: '9px', fontWeight: 700, color: 'var(--text-muted)', marginBottom: '2px' }}>
+                    {n.created_by_name || 'Someone'} · {new Date(n.created_at).toLocaleString([], { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' })}
+                  </div>
+                  <div style={{ fontSize: '12px', color: 'var(--text-body)', whiteSpace: 'pre-wrap' }}>{n.note}</div>
+                </div>
+              ))}
+            </div>
+            <div style={{ display: 'flex', gap: '6px', marginBottom: '14px' }}>
+              <MentionTextArea
+                value={cardNoteDraft}
+                onChange={setCardNoteDraft}
+                placeholder="Add a note — @ tags a teammate"
+                rows={1}
+                onKeyDown={e => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); addCardNote(); } }}
+                style={{ flex: 1, padding: '8px 10px', borderRadius: '8px', fontSize: '12px', border: `1px solid ${theme.border}`, background: 'var(--input-bg)', color: 'var(--text-body)', resize: 'none' }}
+              />
+              <button onClick={addCardNote} disabled={!cardNoteDraft.trim()} style={{
+                padding: '8px 14px', borderRadius: '8px', fontSize: '12px', fontWeight: 700, alignSelf: 'flex-end',
+                background: cardNoteDraft.trim() ? 'var(--orange)' : 'var(--subtle-bg)', color: cardNoteDraft.trim() ? '#fff' : 'var(--text-muted)', border: 'none', cursor: 'pointer',
+              }}>Add</button>
+            </div>
+
+            {/* Files */}
+            <div style={{ fontSize: '10px', fontWeight: 700, color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.4px', marginBottom: '6px' }}>Files</div>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: '4px', marginBottom: '8px' }}>
+              {cardFiles.length === 0 && <div style={{ fontSize: '11px', color: 'var(--text-muted)', fontStyle: 'italic' }}>No files yet.</div>}
+              {cardFiles.map(f => (
+                <div key={f.id} style={{ display: 'flex', alignItems: 'center', gap: '8px', background: 'var(--subtle-bg)', border: `1px solid ${theme.border}`, borderRadius: '8px', padding: '6px 10px' }}>
+                  <a href={fileUrl(f.storage_path)} target="_blank" rel="noopener noreferrer" style={{ flex: 1, fontSize: '12px', fontWeight: 600, color: '#60a5fa', textDecoration: 'none', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                    📎 {f.file_name}
+                  </a>
+                  <button onClick={() => deleteCardFile(f)} title="Delete file" style={{ background: 'transparent', border: 'none', color: '#ef4444', cursor: 'pointer', fontSize: '12px', fontWeight: 700 }}>✕</button>
+                </div>
+              ))}
+            </div>
+            <DropZone onFiles={uploadCardFiles} multiple>
+              <label style={{ display: 'block', border: `1px dashed ${theme.border}`, borderRadius: '8px', padding: '12px', textAlign: 'center', fontSize: '11px', color: 'var(--text-muted)', cursor: 'pointer', marginBottom: '14px' }}>
+                {cardBusy ? 'Uploading…' : 'Drop proof files here or tap to browse'}
+                <input
+                  type="file"
+                  multiple
+                  style={{ display: 'none' }}
+                  onChange={e => {
+                    const files = Array.from(e.target.files || []);
+                    if (files.length > 0) uploadCardFiles(files);
+                    e.target.value = '';
+                  }}
+                />
+              </label>
+            </DropZone>
+
+            {/* Actions */}
+            <div style={{ display: 'flex', justifyContent: 'space-between', gap: '8px' }}>
+              <button onClick={convertCardToJob} disabled={cardBusy} style={{
+                padding: '9px 14px', borderRadius: '8px', fontSize: '12px', fontWeight: 800,
+                background: 'rgba(34,197,94,0.12)', color: '#22c55e', border: '1px solid rgba(34,197,94,0.35)', cursor: 'pointer',
+              }}>
+                {cardBusy ? 'Working…' : '→ Create Graphics Job'}
+              </button>
+              <button onClick={() => setCardEvent(null)} style={{ padding: '9px 14px', borderRadius: '8px', fontSize: '12px', fontWeight: 700, background: 'var(--subtle-bg)', color: 'var(--text-muted)', border: `1px solid ${theme.border}`, cursor: 'pointer' }}>Close</button>
+            </div>
+          </div>
+        </div>
+      )}
+
       {showCreate && (
         <div style={{ position: 'fixed', inset: 0, background: 'var(--overlay)', zIndex: 200, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '20px' }} onClick={() => setShowCreate(false)}>
           <div onClick={e => e.stopPropagation()} style={{ background: 'var(--card)', borderRadius: '14px', padding: '20px', width: '100%', maxWidth: '400px', boxShadow: '0 8px 30px rgba(0,0,0,0.3)' }}>
