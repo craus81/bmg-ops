@@ -95,7 +95,14 @@ export default function CniCompaniesPage() {
       const res = await fetch('/api/cni/create-vendor', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ name: v.companyName || v.entityId, netsuiteVendorId: v.id }),
+        // Email/phone ride along from the NetSuite vendor record so the
+        // company arrives with its contact info filled in.
+        body: JSON.stringify({
+          name: v.companyName || v.entityId,
+          netsuiteVendorId: v.id,
+          email: v.email || '',
+          phone: v.phone || '',
+        }),
       });
       const data = await res.json();
       if (!res.ok || !data.success) {

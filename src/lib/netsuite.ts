@@ -554,17 +554,19 @@ export async function createItem(payload: {
  */
 export async function findVendors(name: string): Promise<{
   found: boolean;
-  vendors: { id: string; entityId: string; companyName: string }[];
+  vendors: { id: string; entityId: string; companyName: string; email: string | null; phone: string | null }[];
   error?: string;
 }> {
   try {
     const term = name.replace(/'/g, "''").slice(0, 80);
-    const q = `SELECT id, entityid, companyname FROM vendor WHERE isinactive = 'F' AND (UPPER(companyname) LIKE UPPER('%${term}%') OR UPPER(entityid) LIKE UPPER('%${term}%')) FETCH FIRST 10 ROWS ONLY`;
+    const q = `SELECT id, entityid, companyname, email, phone FROM vendor WHERE isinactive = 'F' AND (UPPER(companyname) LIKE UPPER('%${term}%') OR UPPER(entityid) LIKE UPPER('%${term}%')) FETCH FIRST 10 ROWS ONLY`;
     const result = await suiteqlQuery(q);
     const vendors = (result?.items || []).map((v: any) => ({
       id: String(v.id),
       entityId: v.entityid || '',
       companyName: v.companyname || v.entityid || '',
+      email: v.email || null,
+      phone: v.phone || null,
     }));
     return { found: vendors.length > 0, vendors };
   } catch (e: any) {
