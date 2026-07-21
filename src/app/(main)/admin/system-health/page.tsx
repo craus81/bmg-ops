@@ -30,7 +30,7 @@ const fmtAge = (min: number | null) => {
 
 export default function SystemHealthPage() {
   const router = useRouter();
-  const { isAdmin, loading: authLoading } = useAuth();
+  const { isAdmin, hasFeature, loading: authLoading } = useAuth();
 
   const [checks, setChecks] = useState<HealthCheck[]>([]);
   const [cronSecretConfigured, setCronSecretConfigured] = useState(true);
@@ -58,8 +58,9 @@ export default function SystemHealthPage() {
 
   useEffect(() => {
     if (authLoading) return; // role flags aren't resolved until auth finishes loading
-    if (!isAdmin) { router.push('/home'); return; }
+    if (!isAdmin || !hasFeature('system_health')) { router.push('/home'); return; }
     load();
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- hasFeature identity changes per render; auth state deps cover it
   }, [authLoading, isAdmin, router, load]);
 
   const badCount = checks.filter(c => c.status !== 'ok').length;

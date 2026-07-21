@@ -74,12 +74,24 @@ export async function GET(req: NextRequest) {
 
     let notified = 0;
     if (toAlert.length > 0) {
-      const { data: admins } = await service
-        .from('profiles')
-        .select('id')
-        .or('role.eq.admin,roles.cs.{admin}')
-        .eq('status', 'approved');
-      const adminIds = (admins || []).map(a => a.id);
+      // System Health is a super-admin page — alert the people who can open
+      // it (plus anyone granted the feature individually).
+      const [{ data: admins }, { data: shOverrides }] = await Promise.all([
+        service
+          .from('profiles')
+          .select('id, roles')
+          .or('role.eq.admin,roles.cs.{admin}')
+          .eq('status', 'approved'),
+        service
+          .from('user_feature_overrides')
+          .select('user_id')
+          .eq('feature', 'system_health')
+          .eq('granted', true),
+      ]);
+      const granted = new Set((shOverrides || []).map((o: any) => o.user_id));
+      const adminIds = (admins || [])
+        .filter((a: any) => (a.roles || []).includes('super_admin') || granted.has(a.id))
+        .map((a: any) => a.id);
       if (adminIds.length > 0) {
         const lines = toAlert.map(c => `${c.label}: ${c.problem}`).join(' · ');
         await notifyMany(adminIds, {

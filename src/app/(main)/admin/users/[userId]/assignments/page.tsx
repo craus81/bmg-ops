@@ -24,7 +24,7 @@ export default function AssignmentsPage() {
   const router = useRouter();
   const params = useParams();
   const userId = params.userId as string;
-  const { isAdmin, loading: authLoading } = useAuth();
+  const { isAdmin, hasFeature, loading: authLoading } = useAuth();
   const supabase = createClient();
   const dialog = useDialog();
 
@@ -84,7 +84,7 @@ export default function AssignmentsPage() {
 
   useEffect(() => {
     if (authLoading) return; // role flags aren't resolved until auth finishes loading
-    if (!isAdmin) { router.push('/home'); return; }
+    if (!isAdmin || !hasFeature('user_management')) { router.push('/home'); return; }
     loadData();
   // eslint-disable-next-line react-hooks/exhaustive-deps -- intentional: load once on mount
   }, [authLoading, isAdmin, userId]);

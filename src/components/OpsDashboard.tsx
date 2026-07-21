@@ -90,7 +90,7 @@ const OPP_STAGES: { stage: string; label: string }[] = [
 
 export default function OpsDashboard() {
   const router = useRouter();
-  const { user, isAdmin } = useAuth();
+  const { user, isAdmin, hasFeature } = useAuth();
   const supabase = createClient();
   const [loading, setLoading] = useState(true);
   const [data, setData] = useState<DashData | null>(null);
@@ -311,7 +311,7 @@ export default function OpsDashboard() {
       title: 'CNI invoices submitted', detail: 'Waiting on coordinator approval',
     });
     const pendingUsers = count(usersRes);
-    if (pendingUsers > 0) queue.push({
+    if (pendingUsers > 0 && hasFeature('user_management')) queue.push({
       key: 'users', count: pendingUsers, tone: 'blue', path: '/admin/users',
       title: `User${pendingUsers !== 1 ? 's' : ''} waiting for approval`, detail: 'New account requests',
     });
@@ -354,7 +354,7 @@ export default function OpsDashboard() {
     });
     const health = val(healthRes) as any;
     const badJobs = (health?.checks || []).filter((c: any) => c.status === 'error' || c.status === 'stale').length;
-    if (badJobs > 0) queue.push({
+    if (badJobs > 0 && hasFeature('system_health')) queue.push({
       key: 'health', count: badJobs, tone: 'err', path: '/admin/system-health',
       title: 'Background jobs down', detail: 'Syncs or crons stale/erroring',
     });

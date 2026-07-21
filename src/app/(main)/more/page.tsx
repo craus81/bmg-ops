@@ -147,13 +147,13 @@ export default function MorePage() {
         {(isAdmin || hasRole('finance')) && (
           <MenuBtn title="Payments (AP)" sub="Approve CNI vendor invoices & push bills to NetSuite" onClick={() => router.push('/admin/ap')} />
         )}
-        {isAdmin && (
+        {F('audit_log') && (
           <MenuBtn title="Audit Log" sub="Who changed what — money edits, payouts, rates & invoices" onClick={() => router.push('/admin/audit')} />
         )}
-        {isAdmin && (
+        {F('system_health') && (
           <MenuBtn title="System Health" sub="Background syncs & crons — with alerts when one dies" onClick={() => router.push('/admin/system-health')} />
         )}
-        {isAdmin && (
+        {F('ai_instructions') && (
           <MenuBtn title="AI Instructions" sub="Steer FleetSuite AI behavior — global rules, no deploy" onClick={() => router.push('/admin/ai-instructions')} />
         )}
         {F('knowledge_base') && (

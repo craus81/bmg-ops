@@ -50,13 +50,25 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ error: 'Failed to create profile: ' + error.message }, { status: 500 });
     }
 
-    // Notify admins about the new access request
+    // Notify the people who can actually approve the request: super admins,
+    // plus any admin individually granted the user_management feature.
     try {
-      const { data: admins } = await supabase
-        .from('profiles')
-        .select('id')
-        .eq('role', 'admin')
-        .eq('status', 'approved');
+      const [{ data: adminRows }, { data: umOverrides }] = await Promise.all([
+        supabase
+          .from('profiles')
+          .select('id, roles')
+          .eq('role', 'admin')
+          .eq('status', 'approved'),
+        supabase
+          .from('user_feature_overrides')
+          .select('user_id')
+          .eq('feature', 'user_management')
+          .eq('granted', true),
+      ]);
+      const granted = new Set((umOverrides || []).map((o: any) => o.user_id));
+      const admins = (adminRows || []).filter(
+        (a: any) => (a.roles || []).includes('super_admin') || granted.has(a.id)
+      );
 
       if (admins && admins.length > 0) {
         const { notifyMany } = await import('@/lib/notify');
