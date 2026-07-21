@@ -77,6 +77,13 @@ async function run(req: NextRequest) {
     // DB write failures must surface — a silent failure here would advance
     // the sync cursor past events that never landed.
     const writeErrors: string[] = [];
+    // Per-event outcomes so a manual run can explain "why only N imported":
+    // events already linked to a FleetSuite job aren't imports, they're the
+    // push side working.
+    const sample: { title: string; date: string | null; outcome: string }[] = [];
+    const note = (ev: any, date: string | null, outcome: string) => {
+      if (sample.length < 50) sample.push({ title: ev.summary || '(untitled)', date, outcome });
+    };
 
     if (pull.events.length > 0) {
       const ids = pull.events.map(ev => ev.id).filter(Boolean);
@@ -127,12 +134,14 @@ async function run(req: NextRequest) {
             if (error) writeErrors.push(`delete ${ev.id}: ${error.message}`);
             else stats.removed++;
           }
+          note(ev, date, 'deleted on Google');
           continue;
         }
 
-        if (!date) continue; // nothing usable without a start date
+        if (!date) { note(ev, null, 'skipped — no start date'); continue; }
 
         if (job) {
+          note(ev, date, 'already linked to a FleetSuite graphics job');
           if (job.scheduled_install_date?.slice(0, 10) !== date) {
             await supabase.from('graphics_jobs')
               .update({ scheduled_install_date: date, updated_at: new Date().toISOString() })
@@ -145,6 +154,7 @@ async function run(req: NextRequest) {
             stats.jobsUpdated++;
           }
         } else if (checkin) {
+          note(ev, date, 'already linked to a fleet check-in');
           if (checkin.scheduled_upfit_date?.slice(0, 10) !== date) {
             await supabase.from('fleet_checkins')
               .update({ scheduled_upfit_date: date })
@@ -152,6 +162,7 @@ async function run(req: NextRequest) {
             stats.checkinsUpdated++;
           }
         } else if (manual) {
+          note(ev, date, 'already imported earlier');
           const title = ev.summary || 'Untitled event';
           if (manual.event_date?.slice(0, 10) !== date || manual.title !== title || (manual.description || '') !== (ev.description || '')) {
             const { error } = await supabase.from('calendar_events')
@@ -173,7 +184,7 @@ async function run(req: NextRequest) {
             google_event_id: ev.id,
           }, { onConflict: 'google_event_id' });
           if (error) writeErrors.push(`import ${ev.id}: ${error.message}`);
-          else stats.imported++;
+          else { stats.imported++; note(ev, date, 'imported to FleetSuite schedule'); }
         }
       }
     }
@@ -205,7 +216,9 @@ async function run(req: NextRequest) {
         { status: 500 },
       );
     }
-    return NextResponse.json({ success: true, ...stats, ...diagnostics });
+    // Manual (admin-session) runs get the per-event breakdown; scheduled
+    // cron runs keep the response lean.
+    return NextResponse.json({ success: true, ...stats, ...diagnostics, ...(isCron ? {} : { events: sample }) });
   } catch (err: any) {
     if (err?.message === 'NO_GOOGLE_TOKEN') {
       return NextResponse.json({ success: false, error: 'Google account not connected — visit the Google auth flow first.' }, { status: 200 });
