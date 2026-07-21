@@ -53,7 +53,7 @@ function formatFileSize(bytes: number | null): string {
 
 export default function KnowledgePage() {
   const router = useRouter();
-  const { user, isAdmin, loading: authLoading } = useAuth();
+  const { user, isAdmin, hasFeature, loading: authLoading } = useAuth();
   const supabase = createClient();
   const dialog = useDialog();
   const fileInputRef = useRef<HTMLInputElement>(null);
@@ -82,7 +82,7 @@ export default function KnowledgePage() {
 
   useEffect(() => {
     if (authLoading) return; // role flags aren't resolved until auth finishes loading
-    if (!isAdmin) { router.push('/home'); return; }
+    if (!isAdmin || !hasFeature('knowledge_base')) { router.push('/home'); return; }
     loadDocs();
   // eslint-disable-next-line react-hooks/exhaustive-deps -- intentional: load once on mount
   }, [authLoading, isAdmin]);

@@ -26,7 +26,7 @@ interface Instruction {
 
 export default function AiInstructionsPage() {
   const router = useRouter();
-  const { isAdmin, user } = useAuth();
+  const { isAdmin, hasFeature, user, loading: authLoading } = useAuth();
   const supabase = createClient();
   const dialog = useDialog();
 
@@ -39,9 +39,10 @@ export default function AiInstructionsPage() {
   const [editingDraft, setEditingDraft] = useState('');
 
   useEffect(() => {
-    if (!user) return;
-    if (!isAdmin) router.push('/home');
-  }, [user, isAdmin, router]);
+    if (authLoading || !user) return; // role flags aren't resolved until auth finishes loading
+    if (!isAdmin || !hasFeature('ai_instructions')) router.push('/home');
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- hasFeature is stable per auth state
+  }, [authLoading, user, isAdmin, router]);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -130,7 +131,7 @@ export default function AiInstructionsPage() {
   };
 
   if (!user) return null;
-  if (!isAdmin) return null;
+  if (!isAdmin || !hasFeature('ai_instructions')) return null;
 
   return (
     <div>

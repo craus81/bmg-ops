@@ -26,7 +26,7 @@ const TABLE_LABELS: Record<string, string> = {
 
 export default function AuditLogPage() {
   const router = useRouter();
-  const { isAdmin, loading: authLoading } = useAuth();
+  const { isAdmin, hasFeature, loading: authLoading } = useAuth();
   const supabase = createClient();
 
   const [rows, setRows] = useState<AuditRow[]>([]);
@@ -38,7 +38,7 @@ export default function AuditLogPage() {
 
   useEffect(() => {
     if (authLoading) return; // role flags aren't resolved until auth finishes loading
-    if (!isAdmin) { router.push('/home'); return; }
+    if (!isAdmin || !hasFeature('audit_log')) { router.push('/home'); return; }
     const load = async () => {
       setLoading(true);
       let q = supabase

@@ -33,13 +33,25 @@ export const FEATURES = {
   catalog_management: 'Part Catalog Management',
   prospects: 'Prospects / Sales CRM',
   upfit_projects: 'Upfit Projects',
+  audit_log: 'Audit Log',
+  system_health: 'System Health',
+  ai_instructions: 'AI Instructions',
 } as const;
 
 export type FeatureKey = keyof typeof FEATURES;
 
+// Owner-level pages: super admins only by default. Regular admins don't see
+// these, but can be granted individual ones via per-user feature overrides.
+export const SUPER_ADMIN_FEATURES: FeatureKey[] = [
+  'user_management', 'audit_log', 'system_health', 'ai_instructions', 'knowledge_base',
+];
+
 // Default features per role — what each role can access out of the box
 export const ROLE_DEFAULT_FEATURES: Record<string, FeatureKey[]> = {
-  admin: Object.keys(FEATURES) as FeatureKey[], // everything
+  super_admin: Object.keys(FEATURES) as FeatureKey[], // everything, no exceptions
+
+  // Everything except the owner-level pages above
+  admin: (Object.keys(FEATURES) as FeatureKey[]).filter(f => !SUPER_ADMIN_FEATURES.includes(f)),
 
   sales: [
     'home', 'fleet_checkin', 'in_shop', 'graphics', 'estimates',
@@ -89,8 +101,15 @@ export function resolveFeatures(
     for (const f of defaults) features.add(f);
   }
 
-  // Admin gets everything
+  // Admin gets everything except the super-admin-only pages (so features
+  // added later default on for admins without a role-list edit); super
+  // admin gets everything, no exceptions.
   if (roles.includes('admin')) {
+    for (const key of Object.keys(FEATURES) as FeatureKey[]) {
+      if (!SUPER_ADMIN_FEATURES.includes(key)) features.add(key);
+    }
+  }
+  if (roles.includes('super_admin')) {
     for (const key of Object.keys(FEATURES) as FeatureKey[]) {
       features.add(key);
     }

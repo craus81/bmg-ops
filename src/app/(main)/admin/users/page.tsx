@@ -14,6 +14,7 @@ interface Company {
 }
 
 const ROLES: { value: AppRole; label: string; color: string }[] = [
+  { value: 'super_admin', label: 'Super Admin', color: '#f472b6' },
   { value: 'admin', label: 'Admin', color: 'var(--orange)' },
   { value: 'sales', label: 'Sales', color: '#60a5fa' },
   { value: 'graphics_production', label: 'Graphics / Production', color: '#c084fc' },
@@ -36,7 +37,7 @@ function getUserRoles(user: Profile): AppRole[] {
 
 export default function UsersPage() {
   const router = useRouter();
-  const { isAdmin, loading: authLoading } = useAuth();
+  const { isAdmin, hasFeature, loading: authLoading } = useAuth();
   const supabase = createClient();
   const dialog = useDialog();
   const [users, setUsers] = useState<(Profile & { company_id?: string; company_name?: string })[]>([]);
@@ -66,7 +67,7 @@ export default function UsersPage() {
 
   useEffect(() => {
     if (authLoading) return; // role flags aren't resolved until auth finishes loading
-    if (!isAdmin) { router.push('/home'); return; }
+    if (!isAdmin || !hasFeature('user_management')) { router.push('/home'); return; }
     loadData();
   // eslint-disable-next-line react-hooks/exhaustive-deps -- intentional: load once on mount
   }, [authLoading, isAdmin]);
@@ -262,7 +263,9 @@ export default function UsersPage() {
   };
 
   const handleUpdateRoles = async (userId: string, roles: AppRole[]) => {
-    const primaryRole = roles.includes('admin') ? 'admin' : roles[0];
+    // super_admin always rides alongside admin in the roles array — the
+    // scalar role stays 'admin' so every RLS policy keyed on it still passes.
+    const primaryRole = roles.includes('admin') || roles.includes('super_admin') ? 'admin' : roles[0];
     const { error } = await supabase
       .from('profiles')
       .update({ role: primaryRole, roles })
@@ -360,7 +363,7 @@ export default function UsersPage() {
     if (!editUser) return;
     setSaving(true);
 
-    const primaryRole = editForm.roles.includes('admin') ? 'admin' : editForm.roles[0];
+    const primaryRole = editForm.roles.includes('admin') || editForm.roles.includes('super_admin') ? 'admin' : editForm.roles[0];
 
     const { error } = await supabase
       .from('profiles')
