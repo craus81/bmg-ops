@@ -80,6 +80,7 @@ export default function AdminScansPage() {
   // BMG option matches the null rows via the sentinel below.
   const BMG_COMPANY = '__bmg_internal__';
   const [scannerFilter, setScannerFilter] = useState('');
+  const [locationFilter, setLocationFilter] = useState('');
   const [companyFilter, setCompanyFilter] = useState('');
   // Date-range filter for the All Scans tab (local YYYY-MM-DD, '' = unbounded)
   const [dateFrom, setDateFrom] = useState('');
@@ -295,6 +296,8 @@ export default function AdminScansPage() {
     .map(id => ({ id, name: profiles[id] || 'Unknown' }))
     .sort((a, b) => a.name.localeCompare(b.name));
   const companyOptions = [...new Set(allLoadedScans.map(s => s.scanned_by_company).filter(Boolean) as string[])].sort();
+  const NO_LOCATION = '__none__';
+  const locationOptions = [...new Set(allLoadedScans.map(s => s.location_name).filter(Boolean) as string[])].sort();
 
   const tabScans = getTabScans().filter(s => {
     // Source filter: CNI scans are the ones a cni_job_vins row points at.
@@ -305,6 +308,9 @@ export default function AdminScansPage() {
     if (scannerFilter && s.scanned_by !== scannerFilter) return false;
     if (companyFilter === BMG_COMPANY && s.scanned_by_company) return false;
     if (companyFilter && companyFilter !== BMG_COMPANY && s.scanned_by_company !== companyFilter) return false;
+    // Location filter ("No location" matches scans with none recorded).
+    if (locationFilter === NO_LOCATION && s.location_name) return false;
+    if (locationFilter && locationFilter !== NO_LOCATION && s.location_name !== locationFilter) return false;
     // Date-range filter (All Scans tab) compares local calendar dates.
     if (tab === 'all' && (dateFrom || dateTo)) {
       const day = toLocalDateStr(new Date(s.scanned_at));
@@ -977,6 +983,20 @@ export default function AdminScansPage() {
             <option value="">All companies</option>
             <option value={BMG_COMPANY}>BMG (internal)</option>
             {companyOptions.map(c => <option key={c} value={c}>{c}</option>)}
+          </select>
+          <select
+            value={locationFilter}
+            onChange={e => setLocationFilter(e.target.value)}
+            style={{
+              padding: '5px 8px', borderRadius: '8px', fontSize: '10px', fontWeight: 700, cursor: 'pointer',
+              background: locationFilter ? 'var(--tab-active-bg)' : 'transparent',
+              border: locationFilter ? '1px solid var(--tab-active-border)' : '1px solid var(--border)',
+              color: locationFilter ? '#06b6d4' : 'var(--text-muted)', maxWidth: '160px',
+            }}
+          >
+            <option value="">All locations</option>
+            <option value={NO_LOCATION}>No location</option>
+            {locationOptions.map(l => <option key={l} value={l}>{l}</option>)}
           </select>
           <button
             onClick={downloadFilteredCsv}
@@ -2549,6 +2569,22 @@ function VendorInvoicesTab({ allParts, allLocations, poRequired, onCommitted, on
     updateLine(line.key, { existing: checked.existing, lastChecked: checkKey });
   };
 
+  // Live version of the check while the VIN is being typed — debounced so a
+  // 17-character VIN doesn't fire 17 queries. Answers "new scan or update?"
+  // before the user ever leaves the field.
+  const vinCheckTimers = useRef<Record<number, ReturnType<typeof setTimeout>>>({});
+  const scheduleRecheck = (line: VendorLine) => {
+    clearTimeout(vinCheckTimers.current[line.key]);
+    vinCheckTimers.current[line.key] = setTimeout(() => recheckLine(line), 400);
+  };
+
+  // Tri-state for the line badge: has the current vin|part combination
+  // actually been looked up yet?
+  const lineChecked = (line: VendorLine) => {
+    const cleaned = line.vin.trim().replace(/[^A-Za-z0-9]/g, '');
+    return cleaned.length >= 5 && line.lastChecked === `${cleaned}|${line.partNumber.trim().toUpperCase()}`;
+  };
+
   const splitTotalEvenly = () => {
     if (!review) return;
     const total = parseFloat(review.totalAmount);
@@ -3220,7 +3256,11 @@ function VendorInvoicesTab({ allParts, allLocations, poRequired, onCommitted, on
               />
               <input
                 value={line.vin}
-                onChange={e => updateLine(line.key, { vin: e.target.value.toUpperCase() })}
+                onChange={e => {
+                  const vin = e.target.value.toUpperCase();
+                  updateLine(line.key, { vin });
+                  scheduleRecheck({ ...line, vin });
+                }}
                 onBlur={e => recheckLine({ ...line, vin: e.target.value.toUpperCase() })}
                 placeholder="VIN (full or last 8)"
                 style={{ flex: 2, padding: '6px 8px', borderRadius: '5px', border: '1px solid var(--border)', background: 'var(--input-bg)', color: 'var(--text-primary)', fontSize: '12px', fontWeight: 700, fontFamily: 'monospace', minWidth: 0 }}
@@ -3289,11 +3329,15 @@ function VendorInvoicesTab({ allParts, allLocations, poRequired, onCommitted, on
                 })()}
                 style={{ width: '90px', padding: '6px 8px', borderRadius: '5px', border: '1px solid var(--border)', background: 'var(--input-bg)', color: 'var(--text-primary)', fontSize: '12px', flexShrink: 0 }}
               />
-              {line.existing && (
+              {line.existing ? (
                 <span title="This VIN is already in the system — its record will be updated with the cost and keep this state" style={{ fontSize: '8px', fontWeight: 700, padding: '2px 5px', borderRadius: '4px', background: 'rgba(251,191,36,0.12)', color: '#fbbf24', whiteSpace: 'nowrap', flexShrink: 0 }}>
                   ↻ {line.existing}
                 </span>
-              )}
+              ) : lineChecked(line) ? (
+                <span title="No scan on file for this VIN — committing creates a fresh scan record" style={{ fontSize: '8px', fontWeight: 700, padding: '2px 5px', borderRadius: '4px', background: 'rgba(34,197,94,0.12)', color: '#22c55e', whiteSpace: 'nowrap', flexShrink: 0 }}>
+                  ＋ New scan
+                </span>
+              ) : null}
               <button onClick={() => setReview({ ...review, lines: review.lines.filter(l => l.key !== line.key) })} style={{ padding: '2px 6px', borderRadius: '4px', border: 'none', background: 'rgba(239,68,68,0.08)', color: '#ef4444', fontSize: '11px', fontWeight: 700, cursor: 'pointer', flexShrink: 0 }}>✕</button>
             </div>
           ))}
