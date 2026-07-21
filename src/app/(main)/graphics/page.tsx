@@ -78,7 +78,7 @@ const upsTrackingUrl = (trackingNumber: string) =>
 export default function GraphicsPage() {
   const router = useRouter();
   const searchParams = useSearchParams();
-  const { user, isAdmin, isProduction, isSales, profile } = useAuth();
+  const { user, isAdmin, isProduction, isSales, profile, loading: authLoading } = useAuth();
   const dialog = useDialog();
   const supabase = createClient();
 
@@ -225,13 +225,17 @@ export default function GraphicsPage() {
   const [fetchingPdfJobId, setFetchingPdfJobId] = useState<string | null>(null);
 
   useEffect(() => {
-    if (!user) return;
+    // Wait for auth to finish before role-gating: on a fresh tab (deep links
+    // like /graphics?editJob=…) `user` is set a render before the profile
+    // loads, so the role flags are all false for a moment — bailing then
+    // bounced legitimate users to /home.
+    if (authLoading || !user) return;
     if (!isProduction && !isAdmin && !isSales) { router.push('/home'); return; }
     loadJobs();
     loadProfiles();
     loadUpfitProjects();
   // eslint-disable-next-line react-hooks/exhaustive-deps -- intentional: load once on mount
-  }, [user, isAdmin, isProduction]);
+  }, [user, isAdmin, isProduction, authLoading]);
 
   // Keep the board fresh so unread-activity dots appear while the page is
   // open — without this, jobs/views load once on mount and a change made by
