@@ -31,6 +31,7 @@ import {
 type ViewMode = 'pipeline' | 'list';
 type FilterStatus = GraphicsJobStatus | 'all' | 'active';
 type FilterCategory = GraphicsJobCategory | 'all';
+type MetricFilter = 'overdue' | 'dueWeek' | 'stuck';
 
 // Parse a date string as local date (avoids UTC timezone shift)
 function parseLocalDate(dateStr: string | null | undefined): Date | null {
@@ -91,6 +92,9 @@ export default function GraphicsPage() {
   const [viewMode, setViewMode] = useState<ViewMode>('pipeline');
   const [filterStatus, setFilterStatus] = useState<FilterStatus>('active');
   const [filterCategory, setFilterCategory] = useState<FilterCategory>('all');
+  // Metric-tile filter: clicking Overdue / Due in 7 days / Stuck narrows the
+  // board to just those jobs; clicking the active tile again clears it.
+  const [metricFilter, setMetricFilter] = useState<MetricFilter | null>(null);
   // When each job entered its current stage (latest real status transition).
   const [stageSince, setStageSince] = useState<Record<string, string>>({});
   // "My jobs" filter: printers/cutters see only what's assigned to them.
@@ -1237,16 +1241,25 @@ export default function GraphicsPage() {
       : { label: `due ${weekday}`, color: '#fbbf24' };
   };
   const metricJobs = jobs.filter(j => PRODUCTION_STAGES.includes(j.status));
+  // Shared predicates so the metric tiles and the tile-click filter always
+  // agree on which jobs they're counting.
+  const metricToday = new Date().toISOString().slice(0, 10);
+  const isOverdue = (j: GraphicsJob) =>
+    (PRODUCTION_STAGES.includes(j.status) || j.status === 'flagged') && !!j.due_date && j.due_date.slice(0, 10) < metricToday;
+  const isDueWeek = (j: GraphicsJob) => {
+    if (!(PRODUCTION_STAGES.includes(j.status) || j.status === 'flagged') || !j.due_date) return false;
+    const due = j.due_date.slice(0, 10);
+    const week = new Date(Date.now() + 7 * 86_400_000).toISOString().slice(0, 10);
+    return due >= metricToday && due <= week;
+  };
+  const isStuck = (j: GraphicsJob) => PRODUCTION_STAGES.includes(j.status) && stageDays(j) >= 5;
+  const metricPredicates: Record<MetricFilter, (j: GraphicsJob) => boolean> = {
+    overdue: isOverdue, dueWeek: isDueWeek, stuck: isStuck,
+  };
   const metrics = {
-    overdue: jobs.filter(j => (PRODUCTION_STAGES.includes(j.status) || j.status === 'flagged') && j.due_date && j.due_date.slice(0, 10) < new Date().toISOString().slice(0, 10)).length,
-    dueWeek: jobs.filter(j => {
-      if (!(PRODUCTION_STAGES.includes(j.status) || j.status === 'flagged') || !j.due_date) return false;
-      const due = j.due_date.slice(0, 10);
-      const today2 = new Date().toISOString().slice(0, 10);
-      const week = new Date(Date.now() + 7 * 86_400_000).toISOString().slice(0, 10);
-      return due >= today2 && due <= week;
-    }).length,
-    stuck: metricJobs.filter(j => stageDays(j) >= 5).length,
+    overdue: jobs.filter(isOverdue).length,
+    dueWeek: jobs.filter(isDueWeek).length,
+    stuck: jobs.filter(isStuck).length,
     avgStageDays: metricJobs.length > 0
       ? metricJobs.reduce((s, j) => s + stageDays(j), 0) / metricJobs.length
       : 0,
@@ -1260,6 +1273,8 @@ export default function GraphicsPage() {
     if (myJobsOnly && !isMine(j)) return false;
     // Category filter
     if (filterCategory !== 'all' && (j.job_category || 'production') !== filterCategory) return false;
+    // Metric tile filter (overdue / due this week / stuck)
+    if (metricFilter && !metricPredicates[metricFilter](j)) return false;
     // Status filter
     if (filterStatus === 'active') {
       if (!ACTIVE_STATUSES.includes(j.status)) return false;
@@ -1488,16 +1503,38 @@ export default function GraphicsPage() {
       {metricJobs.length > 0 && (
         <div style={{ display: 'flex', gap: '8px', marginBottom: '12px', overflowX: 'auto', WebkitOverflowScrolling: 'touch' }}>
           {[
-            { label: 'Overdue', value: String(metrics.overdue), color: metrics.overdue > 0 ? '#ef4444' : '#22c55e' },
-            { label: 'Due in 7 days', value: String(metrics.dueWeek), color: metrics.dueWeek > 0 ? '#fbbf24' : 'var(--text-muted)' },
-            { label: 'Stuck 5+ days in stage', value: String(metrics.stuck), color: metrics.stuck > 0 ? '#fbbf24' : '#22c55e' },
-            { label: 'Avg days in stage', value: metrics.avgStageDays.toFixed(1), color: 'var(--text-primary)' },
-          ].map(t => (
-            <div key={t.label} style={{ flex: '1 0 110px', padding: '8px 12px', borderRadius: '10px', background: 'var(--card)', border: '1px solid var(--border)', textAlign: 'center' }}>
-              <div style={{ fontSize: '16px', fontWeight: 800, color: t.color }}>{t.value}</div>
-              <div style={{ fontSize: '9px', fontWeight: 700, color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.4px', whiteSpace: 'nowrap' }}>{t.label}</div>
-            </div>
-          ))}
+            { id: 'overdue' as MetricFilter, label: 'Overdue', value: String(metrics.overdue), color: metrics.overdue > 0 ? '#ef4444' : '#22c55e' },
+            { id: 'dueWeek' as MetricFilter, label: 'Due in 7 days', value: String(metrics.dueWeek), color: metrics.dueWeek > 0 ? '#fbbf24' : 'var(--text-muted)' },
+            { id: 'stuck' as MetricFilter, label: 'Stuck 5+ days in stage', value: String(metrics.stuck), color: metrics.stuck > 0 ? '#fbbf24' : '#22c55e' },
+            { id: null, label: 'Avg days in stage', value: metrics.avgStageDays.toFixed(1), color: 'var(--text-primary)' },
+          ].map(t => {
+            const active = t.id !== null && metricFilter === t.id;
+            return (
+              <button
+                key={t.label}
+                disabled={t.id === null}
+                title={t.id === null ? undefined : active ? 'Show all jobs again' : `Show only these jobs`}
+                onClick={t.id === null ? undefined : () => {
+                  const next = metricFilter === t.id ? null : t.id;
+                  setMetricFilter(next);
+                  // Tiles span several statuses — widen a narrowed status
+                  // filter so every matching job is actually visible.
+                  if (next && filterStatus !== 'all') setFilterStatus('active');
+                }}
+                style={{
+                  flex: '1 0 110px', padding: '8px 12px', borderRadius: '10px', textAlign: 'center',
+                  background: active ? `${t.color}18` : 'var(--card)',
+                  border: `1px solid ${active ? t.color : 'var(--border)'}`,
+                  cursor: t.id === null ? 'default' : 'pointer',
+                }}
+              >
+                <div style={{ fontSize: '16px', fontWeight: 800, color: t.color }}>{t.value}</div>
+                <div style={{ fontSize: '9px', fontWeight: 700, color: active ? t.color : 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.4px', whiteSpace: 'nowrap' }}>
+                  {t.label}{active ? ' ✕' : ''}
+                </div>
+              </button>
+            );
+          })}
         </div>
       )}
 
@@ -1507,7 +1544,7 @@ export default function GraphicsPage() {
         padding: '2px 0', WebkitOverflowScrolling: 'touch',
       }}>
         <button
-          onClick={() => setFilterStatus('active')}
+          onClick={() => { setFilterStatus('active'); setMetricFilter(null); }}
           style={{
             padding: '6px 10px', borderRadius: '6px', fontSize: '10px', fontWeight: 700,
             background: filterStatus === 'active' ? 'rgba(59,130,246,0.2)' : 'var(--subtle-bg)',
@@ -1521,7 +1558,7 @@ export default function GraphicsPage() {
         {GRAPHICS_STATUS_ORDER.filter(s => (statusCounts[s] > 0 || s === 'received') && (s !== 'flagged' || isAdmin)).map(s => (
           <button
             key={s}
-            onClick={() => setFilterStatus(filterStatus === s ? 'active' : s)}
+            onClick={() => { setFilterStatus(filterStatus === s ? 'active' : s); setMetricFilter(null); }}
             style={{
               padding: '6px 10px', borderRadius: '6px', fontSize: '10px', fontWeight: 700,
               background: filterStatus === s ? `${GRAPHICS_STATUS_COLORS[s]}22` : 'var(--subtle-bg)',
