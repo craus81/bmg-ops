@@ -102,6 +102,7 @@ export default function CniCompaniesPage() {
           netsuiteVendorId: v.id,
           email: v.email || '',
           phone: v.phone || '',
+          address: v.address || null,
         }),
       });
       const data = await res.json();

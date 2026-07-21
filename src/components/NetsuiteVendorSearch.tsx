@@ -8,6 +8,7 @@ export interface NsVendor {
   companyName: string;
   email: string | null;
   phone: string | null;
+  address: { street: string; city: string; state: string; zip: string } | null;
 }
 
 /**
@@ -98,9 +99,9 @@ export default function NetsuiteVendorSearch({
                 {v.entityId && v.entityId !== v.companyName && (
                   <span style={{ fontSize: '11px', color: 'var(--text-muted)', marginLeft: '6px' }}>{v.entityId}</span>
                 )}
-                {(v.email || v.phone) && (
+                {(v.email || v.phone || v.address) && (
                   <span style={{ display: 'block', fontSize: '10px', color: 'var(--text-muted)' }}>
-                    {[v.email, v.phone].filter(Boolean).join(' · ')}
+                    {[v.email, v.phone, v.address ? [v.address.city, v.address.state].filter(Boolean).join(', ') : null].filter(Boolean).join(' · ')}
                   </span>
                 )}
               </span>
