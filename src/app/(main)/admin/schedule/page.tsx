@@ -4,6 +4,7 @@ import { useState, useEffect } from 'react';
 import { useRouter } from 'next/navigation';
 import { createClient } from '@/lib/supabase-browser';
 import { useAuth } from '@/components/AuthProvider';
+import { apiFetch } from '@/lib/api-client';
 import { theme } from '@/lib/theme';
 
 interface CalendarEvent {
@@ -12,7 +13,7 @@ interface CalendarEvent {
   subtitle?: string;
   date: string; // YYYY-MM-DD
   time?: string;
-  type: 'graphics' | 'upfit' | 'cni' | 'reminder' | 'manual';
+  type: 'graphics' | 'upfit' | 'cni' | 'reminder' | 'manual' | 'google';
   color: string;
   status?: string;
   linkTo?: string;
@@ -24,6 +25,7 @@ const TYPE_COLORS: Record<string, string> = {
   cni: '#4ade80',
   reminder: '#fbbf24',
   manual: '#f472b6',
+  google: '#2dd4bf',
 };
 
 const TYPE_LABELS: Record<string, string> = {
@@ -32,6 +34,7 @@ const TYPE_LABELS: Record<string, string> = {
   cni: 'CNI',
   reminder: 'Sales',
   manual: 'Event',
+  google: 'Google',
 };
 
 export default function SchedulePage() {
@@ -172,12 +175,16 @@ export default function SchedulePage() {
         .is('completed_at', null)
         .gte('event_date', startDate)
         .lte('event_date', endDate);
-      if (!isAdmin) manQuery = manQuery.eq('user_id', user?.id);
+      // Google-imported events (source 'google') are shared calendar
+      // entries — everyone with the schedule sees them, not just their
+      // creator.
+      if (!isAdmin) manQuery = manQuery.or(`user_id.eq.${user?.id},source.eq.google`);
       const { data: manual } = await manQuery;
       (manual || []).forEach((m: any) => allEvents.push({
         id: `man-${m.id}`, title: m.title, subtitle: m.description,
         date: m.event_date, time: m.event_time,
-        type: 'manual', color: TYPE_COLORS.manual,
+        type: m.source === 'google' ? 'google' : 'manual',
+        color: m.source === 'google' ? TYPE_COLORS.google : TYPE_COLORS.manual,
       }));
     }
 
@@ -193,7 +200,7 @@ export default function SchedulePage() {
   const createEvent = async () => {
     if (!createForm.title.trim() || !createForm.event_date) return;
     setCreating(true);
-    await supabase.from('calendar_events').insert({
+    const { data: created } = await supabase.from('calendar_events').insert({
       title: createForm.title.trim(),
       description: createForm.description.trim() || null,
       event_date: createForm.event_date,
@@ -201,7 +208,15 @@ export default function SchedulePage() {
       event_type: createForm.event_type,
       prospect_id: createForm.prospect_id || null,
       user_id: user?.id,
-    });
+    }).select('id').single();
+    // Mirror onto the shared Google calendar (best-effort — the event is
+    // already saved here either way).
+    if (created?.id) {
+      apiFetch('/api/calendar/sync-event', {
+        method: 'POST',
+        body: JSON.stringify({ eventId: created.id }),
+      }).catch(() => {});
+    }
     setCreateForm({ title: '', description: '', event_date: '', event_time: '', event_type: 'meeting', prospect_id: '' });
     setShowCreate(false);
     setCreating(false);
@@ -253,7 +268,7 @@ export default function SchedulePage() {
 
       {/* Type filter */}
       <div style={{ display: 'flex', gap: '4px', marginBottom: '12px', flexWrap: 'wrap' }}>
-        {['all', 'graphics', 'upfit', 'cni', 'reminder', 'manual'].map(t => (
+        {['all', 'graphics', 'upfit', 'cni', 'reminder', 'manual', 'google'].map(t => (
           <button key={t} onClick={() => setShowTypeFilter(t)} style={{
             padding: '4px 8px', borderRadius: '5px', fontSize: '9px', fontWeight: 700,
             background: showTypeFilter === t ? (t === 'all' ? 'var(--tab-active-bg)' : `${TYPE_COLORS[t]}18`) : 'transparent',

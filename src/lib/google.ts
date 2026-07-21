@@ -339,6 +339,51 @@ export async function syncCalendarEvent(params: {
 }
 
 /**
+ * Incremental pull from the shared calendar. Pass the syncToken from the
+ * previous run to get only what changed since (including deletions);
+ * pass null for a bootstrap sweep of the last ~60 days onward. When
+ * Google expires a token (HTTP 410) the caller gets fullResyncNeeded and
+ * should retry with null.
+ */
+export async function listCalendarChanges(syncToken: string | null): Promise<{
+  events: any[];
+  nextSyncToken: string | null;
+  fullResyncNeeded: boolean;
+}> {
+  const calendar = await getCalendarClient();
+  const events: any[] = [];
+  let pageToken: string | undefined;
+  let nextSyncToken: string | null = null;
+
+  try {
+    do {
+      const params: any = {
+        calendarId: CALENDAR_ID,
+        maxResults: 250,
+        showDeleted: true,
+        pageToken,
+      };
+      if (syncToken) {
+        params.syncToken = syncToken;
+      } else {
+        // Bootstrap: recent past + everything scheduled ahead.
+        params.timeMin = new Date(Date.now() - 60 * 86_400_000).toISOString();
+      }
+      const res = await calendar.events.list(params);
+      events.push(...(res.data.items || []));
+      pageToken = res.data.nextPageToken || undefined;
+      if (res.data.nextSyncToken) nextSyncToken = res.data.nextSyncToken;
+    } while (pageToken);
+    return { events, nextSyncToken, fullResyncNeeded: false };
+  } catch (err: any) {
+    if (err?.code === 410 || err?.response?.status === 410) {
+      return { events: [], nextSyncToken: null, fullResyncNeeded: true };
+    }
+    throw err;
+  }
+}
+
+/**
  * Delete a Google Calendar event.
  */
 export async function deleteCalendarEvent(eventId: string): Promise<boolean> {

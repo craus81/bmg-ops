@@ -17,6 +17,10 @@
       "schedule": "*/30 * * * *"
     },
     {
+      "path": "/api/cron/calendar-pull",
+      "schedule": "*/15 * * * *"
+    },
+    {
       "path": "/api/cron/at-risk-check",
       "schedule": "0 13 * * *"
     },
