@@ -1353,6 +1353,40 @@ export default function TrackingPage() {
                           {profiles[vehicle.assigned_to]}
                         </div>
                       )}
+                      {/* Quick archive/restore — clear an old job off the board
+                          without drilling into the detail modal (admin-only). */}
+                      {isAdmin && (
+                        (vehicle as any).archived_at ? (
+                          <button
+                            onClick={(e) => { e.stopPropagation(); archiveVehicle(vehicle.id, true); }}
+                            disabled={archivingId === vehicle.id}
+                            title="Restore to the active board"
+                            style={{
+                              marginTop: '6px', padding: '3px 9px', borderRadius: '6px', fontSize: '10px', fontWeight: 700,
+                              background: 'rgba(167,139,250,0.08)', border: '1px solid rgba(167,139,250,0.25)', color: '#a78bfa', cursor: 'pointer',
+                            }}
+                          >
+                            {archivingId === vehicle.id ? 'Restoring…' : 'Restore'}
+                          </button>
+                        ) : (
+                          <button
+                            onClick={async (e) => {
+                              e.stopPropagation();
+                              if (await dialog.confirm(`Archive ${vehicleTitle(vehicle)} (${vehicle.vin}) off the In-Shop board? You can restore it later.`, { confirmLabel: 'Archive' })) {
+                                archiveVehicle(vehicle.id);
+                              }
+                            }}
+                            disabled={archivingId === vehicle.id}
+                            title="Archive off the In-Shop board"
+                            style={{
+                              marginTop: '6px', padding: '3px 9px', borderRadius: '6px', fontSize: '10px', fontWeight: 700,
+                              background: 'rgba(167,139,250,0.08)', border: '1px solid rgba(167,139,250,0.25)', color: '#a78bfa', cursor: 'pointer',
+                            }}
+                          >
+                            {archivingId === vehicle.id ? 'Archiving…' : 'Archive'}
+                          </button>
+                        )
+                      )}
                     </div>
                   </div>
                 </div>
