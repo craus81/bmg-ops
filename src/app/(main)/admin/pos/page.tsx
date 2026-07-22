@@ -220,12 +220,23 @@ function partToCatalogItem(p: any): CatalogItem {
 async function loadUnifiedCatalog(
   supabase: ReturnType<typeof createClient>,
 ): Promise<CatalogItem[]> {
-  const { data } = await supabase
-    .from('netsuite_parts')
-    .select(PART_FIELDS)
-    .eq('is_active', true)
-    .order('item_number');
-  return ((data as any[]) || []).map(partToCatalogItem);
+  // Paginate past PostgREST's 1000-row response cap — a silently truncated
+  // catalog reads as "not in catalog" for every part sorting after the cut.
+  const all: any[] = [];
+  let pg = 0;
+  let more = true;
+  while (more) {
+    const { data } = await supabase
+      .from('netsuite_parts')
+      .select(PART_FIELDS)
+      .eq('is_active', true)
+      .order('item_number')
+      .range(pg * 1000, (pg + 1) * 1000 - 1);
+    all.push(...((data as any[]) || []));
+    more = ((data as any[]) || []).length === 1000;
+    pg++;
+  }
+  return all.map(partToCatalogItem);
 }
 
 // Find a part by item number (case-insensitive), creating a manual row if it
@@ -759,12 +770,18 @@ export default function POsPage() {
 
   // The PO screen stays open all day. Without a refresh loop, POs the
   // background cron queues for review never appear until a full page
-  // reload — which reads as "the cron is broken" (field report). Keep the
-  // pending queue and the status strip fresh on a timer and whenever the
+  // reload — which reads as "the cron is broken" (field report). Same for
+  // the parts catalog: parts added on the Parts page (or synced from
+  // NetSuite) while this screen sits open otherwise stay "not in catalog"
+  // here (field report). Keep all of it fresh on a timer and whenever the
   // tab regains focus.
   useEffect(() => {
     if (!isAdmin) return;
-    const tick = () => { refreshPendingPOs(); refreshGmailStatus(); };
+    const tick = () => {
+      refreshPendingPOs();
+      refreshGmailStatus();
+      loadUnifiedCatalog(supabase).then(setCatalog);
+    };
     const onVisible = () => { if (document.visibilityState === 'visible') tick(); };
     const timer = setInterval(tick, 3 * 60 * 1000);
     window.addEventListener('focus', onVisible);
@@ -905,9 +922,13 @@ export default function POsPage() {
         setPdfOverwriteExisting(null);
       }
 
-      // Match lines to catalog
+      // Match lines against a freshly loaded catalog — the in-memory copy
+      // can predate parts added on the Parts page since this screen mounted,
+      // and matching against it marks those lines "new to catalog".
+      const freshCatalog = await loadUnifiedCatalog(supabase);
+      setCatalog(freshCatalog);
       const lines: ImportLine[] = parsed.lines.map((line) => {
-        const match = catalog.find((c) =>
+        const match = freshCatalog.find((c) =>
           c.part_number.toUpperCase() === line.part_number.toUpperCase()
         );
         const poPrice = line.unit_price;
