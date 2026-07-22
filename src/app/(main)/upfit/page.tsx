@@ -9,6 +9,7 @@ import { useDialog } from '@/components/DialogProvider';
 import { DropZone } from '@/components/DropZone';
 import MentionTextArea, { reportMentions } from '@/components/MentionTextArea';
 import { theme } from '@/lib/theme';
+import { flashNote } from '@/lib/focus-note';
 
 interface UpfitNote {
   id: string;
@@ -210,16 +211,23 @@ export default function UpfitProjectsPage() {
     if (loading) return;
     const projectId = searchParams.get('id');
     if (!projectId || selected?.id === projectId) return;
+    // A mention deep link (&note=<id>) scroll-flashes that note once the
+    // project's Activity timeline loads.
+    const noteId = searchParams.get('note');
     const inList = projects.find(p => p.id === projectId);
     if (inList) {
       openProject(inList);
+      if (noteId) flashNote(`upnote-${noteId}`);
       return;
     }
     // Project may be archived/cancelled and filtered out of the active
     // list — fall back to fetching it directly.
     (async () => {
       const { data } = await supabase.from('upfit_projects').select('*').eq('id', projectId).maybeSingle();
-      if (data) openProject(data as UpfitProject);
+      if (data) {
+        openProject(data as UpfitProject);
+        if (noteId) flashNote(`upnote-${noteId}`);
+      }
     })();
   // eslint-disable-next-line react-hooks/exhaustive-deps -- intentional: load once on mount
   }, [loading, searchParams, projects]);
@@ -507,12 +515,14 @@ export default function UpfitProjectsPage() {
       body: JSON.stringify({ project_id: selected.id, content: newNote.trim() }),
     });
     if (res.ok) {
+      // Carry the new note's id so a mention deep link scrolls straight to it.
+      const { note } = await res.json().catch(() => ({ note: null }));
       reportMentions({
         text: newNote.trim(),
         sourceType: 'upfit_note',
         sourceId: selected.id,
         contextLabel: `${selected.project_name}${selected.customer_name ? ` — ${selected.customer_name}` : ''}`,
-        contextUrl: `/upfit?id=${selected.id}`,
+        contextUrl: `/upfit?id=${selected.id}${note?.id ? `&note=${note.id}` : ''}`,
       });
       setNewNote('');
       loadNotes(selected.id);
@@ -1128,7 +1138,7 @@ export default function UpfitProjectsPage() {
         ) : (
           <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
             {notes.map(n => (
-              <div key={n.id} style={{ background: theme.card, border: `1px solid ${theme.border}`, borderRadius: '8px', padding: '10px 12px' }}>
+              <div key={n.id} id={`upnote-${n.id}`} style={{ background: theme.card, border: `1px solid ${theme.border}`, borderRadius: '8px', padding: '10px 12px' }}>
                 <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '4px' }}>
                   <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
                     <span>{NOTE_ICONS[n.note_type] || '📝'}</span>

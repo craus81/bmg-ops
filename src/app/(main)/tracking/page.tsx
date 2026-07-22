@@ -22,6 +22,7 @@ import CompletionModal from '@/components/CompletionModal';
 import { useDialog } from '@/components/DialogProvider';
 import { DropZone } from '@/components/DropZone';
 import MentionTextArea, { reportMentions } from '@/components/MentionTextArea';
+import { flashNote } from '@/lib/focus-note';
 import MentionsInbox from '@/components/MentionsInbox';
 import ShopArrivals from '@/components/ShopArrivals';
 
@@ -204,9 +205,16 @@ export default function TrackingPage() {
     loadAssignments(vehicleId);
     loadPhotos(vehicleId);
     loadNotes(vehicleId);
-    setTimeout(() => {
-      document.getElementById(`vehicle-${vehicleId}`)?.scrollIntoView({ behavior: 'smooth', block: 'center' });
-    }, 200);
+    // A mention deep link (&note=<id>) scroll-flashes that note inside the
+    // detail modal once it loads; otherwise center the vehicle card.
+    const noteId = searchParams.get('note');
+    if (noteId) {
+      flashNote(`vnote-${noteId}`);
+    } else {
+      setTimeout(() => {
+        document.getElementById(`vehicle-${vehicleId}`)?.scrollIntoView({ behavior: 'smooth', block: 'center' });
+      }, 200);
+    }
   // eslint-disable-next-line react-hooks/exhaustive-deps -- intentional: load once on mount
   }, [loading, searchParams]);
 
@@ -444,21 +452,22 @@ export default function TrackingPage() {
     if (!text) return;
     setNoteSaving(true);
     try {
-      await supabase.from('vehicle_notes').insert({
+      const { data: inserted } = await supabase.from('vehicle_notes').insert({
         vehicle_id: vehicleId,
         note: text,
         created_by: user?.id,
         created_by_name: profile?.full_name || 'Unknown',
-      });
+      }).select('id').single();
       setNoteInput(prev => ({ ...prev, [vehicleId]: '' }));
       await loadNotes(vehicleId);
       const v = vehicles.find(x => x.id === vehicleId);
+      // Carry the note id so a mention deep link can scroll straight to it.
       reportMentions({
         text,
         sourceType: 'vehicle_note',
         sourceId: vehicleId,
         contextLabel: v ? `${vehicleTitle(v)} — ${v.customer_name || 'vehicle'}` : 'In-Shop vehicle',
-        contextUrl: `/tracking?vehicle=${vehicleId}`,
+        contextUrl: `/tracking?vehicle=${vehicleId}${inserted?.id ? `&note=${inserted.id}` : ''}`,
       });
     } catch (err) {
       console.error('Note save error:', err);
@@ -2504,7 +2513,7 @@ export default function TrackingPage() {
                       ) : (
                         <div style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
                           {vehicleNotes[vehicle.id].map(n => (
-                            <div key={n.id} style={{
+                            <div key={n.id} id={`vnote-${n.id}`} style={{
                               padding: '8px 10px', borderRadius: '8px',
                               background: 'var(--subtle-bg)', border: '1px solid var(--border)',
                             }}>

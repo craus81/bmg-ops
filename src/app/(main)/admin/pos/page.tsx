@@ -18,6 +18,7 @@ import { useDialog } from '@/components/DialogProvider';
 import { isProofLikeName } from '@/lib/pdf-classify';
 import { openNetSuitePdf } from '@/lib/netsuite-pdf-client';
 import { formatShipTo, shipToCityLabel } from '@/lib/graphics-job-from-po';
+import { flashNote } from '@/lib/focus-note';
 
 interface PoNoteRow {
   id: string;
@@ -873,12 +874,21 @@ export default function POsPage() {
     setPoFilter('all');
     setPoDateRange('all');
     setExpandedPo(poId);
+    // Expanding via setExpandedPo (not toggleExpand) skips the note fetch, so
+    // a mention deep link would land on an empty Notes list — load them here.
+    loadPoNotes(poId);
     setHighlightPo(poId);
     const clear = setTimeout(() => setHighlightPo(null), 2500);
-    // Defer the scroll so the right tab/expanded row is in the DOM first.
-    setTimeout(() => {
-      document.getElementById(`po-row-${poId}`)?.scrollIntoView({ behavior: 'smooth', block: 'center' });
-    }, 200);
+    // A mention deep link (&note=<id>) scroll-flashes that exact note once it
+    // renders; otherwise fall back to centering the PO row.
+    const noteId = searchParams.get('note');
+    if (noteId) {
+      flashNote(`po-note-${noteId}`);
+    } else {
+      setTimeout(() => {
+        document.getElementById(`po-row-${poId}`)?.scrollIntoView({ behavior: 'smooth', block: 'center' });
+      }, 200);
+    }
     return () => clearTimeout(clear);
   // eslint-disable-next-line react-hooks/exhaustive-deps -- intentional: deep-link once after load
   }, [loading, searchParams]);
@@ -1561,7 +1571,7 @@ export default function POsPage() {
         sourceType: 'po_note',
         sourceId: po.id,
         contextLabel: `PO #${po.po_number}`,
-        contextUrl: `/admin/pos?id=${po.id}`,
+        contextUrl: `/admin/pos?id=${po.id}&note=${data.id}`,
         userIds: mentions,
       });
     }
@@ -4157,7 +4167,7 @@ export default function POsPage() {
                     {(poNotes[po.id] || []).length > 0 && (
                       <div style={{ display: 'flex', flexDirection: 'column', gap: '4px', marginTop: '4px', marginBottom: '6px' }}>
                         {(poNotes[po.id] || []).map(n => (
-                          <div key={n.id} style={{ padding: '7px 9px', borderRadius: '8px', background: 'var(--subtle-bg)', border: '1px solid var(--border)' }}>
+                          <div key={n.id} id={`po-note-${n.id}`} style={{ padding: '7px 9px', borderRadius: '8px', background: 'var(--subtle-bg)', border: '1px solid var(--border)' }}>
                             <div style={{ display: 'flex', justifyContent: 'space-between', gap: '8px', marginBottom: '2px' }}>
                               <span style={{ fontSize: '11px', fontWeight: 700, color: '#fbbf24' }}>{profileName(n.author_id)}</span>
                               <span style={{ fontSize: '10px', color: 'var(--text-muted)' }}>{new Date(n.created_at).toLocaleString([], { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' })}</span>
