@@ -37,6 +37,10 @@ export async function pushGraphicsJobToCalendar(
     return { synced: false, reason: job.scheduled_install_date ? 'cancelled' : 'no_install_date' };
   }
 
+  // Deep link to the FleetSuite job card — /graphics?id= opens the card
+  // directly, so anyone reading the calendar entry has a one-tap path to
+  // the full job (proofs, notes, status history).
+  const appUrl = (process.env.NEXT_PUBLIC_APP_URL || 'https://bmg-ops.vercel.app').replace(/\/$/, '');
   const descLines = [
     `Job: ${job.job_number || job.id.slice(0, 8)}`,
     job.customer ? `Customer: ${job.customer}` : '',
@@ -45,6 +49,7 @@ export async function pushGraphicsJobToCalendar(
     job.content ? `\nContent:\n${job.content}` : '',
     job.notes ? `\nNotes:\n${job.notes}` : '',
     `\nStatus: ${job.status}`,
+    `\nOpen in FleetSuite:\n${appUrl}/graphics?id=${job.id}`,
   ].filter(Boolean).join('\n');
 
   const eventId = await syncCalendarEvent({
