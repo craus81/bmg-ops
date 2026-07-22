@@ -362,3 +362,17 @@ button {
   transition-duration: 100ms;
   z-index: 2;
 }
+
+/* Mention → note focus: when a Mentions-inbox deep link lands on a record,
+   the target surface scroll-flashes the exact note it references (see
+   src/lib/focus-note.ts). The class is toggled imperatively via classList,
+   so it survives React re-renders that only touch inline `style`. */
+@keyframes noteFlash {
+  0%   { box-shadow: 0 0 0 0 rgba(96, 165, 250, 0); }
+  12%  { box-shadow: 0 0 0 3px rgba(96, 165, 250, 0.85), 0 0 16px rgba(96, 165, 250, 0.5); }
+  100% { box-shadow: 0 0 0 0 rgba(96, 165, 250, 0); }
+}
+.note-flash {
+  animation: noteFlash 2s ease-out 1;
+  scroll-margin: 20px;
+}

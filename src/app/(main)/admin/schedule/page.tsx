@@ -10,6 +10,7 @@ import { theme } from '@/lib/theme';
 import { storage } from '@/lib/storage';
 import { DropZone } from '@/components/DropZone';
 import MentionTextArea, { reportMentions } from '@/components/MentionTextArea';
+import { flashNote } from '@/lib/focus-note';
 import UploadProgressBar, { type UploadProgress } from '@/components/UploadProgressBar';
 
 interface CalendarEvent {
@@ -119,6 +120,10 @@ export default function SchedulePage() {
   useEffect(() => {
     const cardId = searchParams.get('card');
     if (cardId) openCard(cardId);
+    // A mention deep link (&note=<id>) scroll-flashes that note once the
+    // card modal's notes load.
+    const noteId = searchParams.get('note');
+    if (noteId) flashNote(`cev-note-${noteId}`);
   // eslint-disable-next-line react-hooks/exhaustive-deps -- intentional: open once on mount
   }, []);
 
@@ -323,19 +328,20 @@ export default function SchedulePage() {
   const addCardNote = async () => {
     const text = cardNoteDraft.trim();
     if (!text || !cardEvent) return;
-    const { error } = await supabase.from('calendar_event_notes').insert({
+    const { data: inserted, error } = await supabase.from('calendar_event_notes').insert({
       event_id: cardEvent.id,
       note: text,
       created_by: user?.id || null,
       created_by_name: profile?.full_name || null,
-    });
+    }).select('id').single();
     if (!error) {
+      // Carry the note id so a mention deep link scrolls straight to it.
       reportMentions({
         text,
         sourceType: 'calendar_event_note',
         sourceId: cardEvent.id,
         contextLabel: `Schedule — ${cardEvent.title}`,
-        contextUrl: `/admin/schedule?card=${cardEvent.id}`,
+        contextUrl: `/admin/schedule?card=${cardEvent.id}${inserted?.id ? `&note=${inserted.id}` : ''}`,
       });
       setCardNoteDraft('');
       const { data: notes } = await supabase.from('calendar_event_notes').select('*').eq('event_id', cardEvent.id).order('created_at', { ascending: true });
@@ -657,7 +663,7 @@ export default function SchedulePage() {
             <div style={{ display: 'flex', flexDirection: 'column', gap: '6px', marginBottom: '8px' }}>
               {cardNotes.length === 0 && <div style={{ fontSize: '11px', color: 'var(--text-muted)', fontStyle: 'italic' }}>No notes yet.</div>}
               {cardNotes.map(n => (
-                <div key={n.id} style={{ background: 'var(--subtle-bg)', border: `1px solid ${theme.border}`, borderRadius: '8px', padding: '7px 10px' }}>
+                <div key={n.id} id={`cev-note-${n.id}`} style={{ background: 'var(--subtle-bg)', border: `1px solid ${theme.border}`, borderRadius: '8px', padding: '7px 10px' }}>
                   <div style={{ fontSize: '9px', fontWeight: 700, color: 'var(--text-muted)', marginBottom: '2px' }}>
                     {n.created_by_name || 'Someone'} · {new Date(n.created_at).toLocaleString([], { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' })}
                   </div>

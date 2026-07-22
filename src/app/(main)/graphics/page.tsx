@@ -15,6 +15,7 @@ import { PartLabel } from '@/components/PartLabel';
 import DropboxProofSearch from '@/components/DropboxProofSearch';
 import GraphicsMaterialsCard from '@/components/GraphicsMaterialsCard';
 import MentionTextArea, { reportMentions } from '@/components/MentionTextArea';
+import { flashNote } from '@/lib/focus-note';
 import MentionsInbox from '@/components/MentionsInbox';
 import { DropZone } from '@/components/DropZone';
 import UploadProgressBar, { type UploadProgress } from '@/components/UploadProgressBar';
@@ -266,6 +267,8 @@ export default function GraphicsPage() {
     if (loading) return;
     const editJobId = searchParams.get('editJob');
     if (!editJobId) return;
+    // Read before router.replace strips the query string below.
+    const focusNotes = searchParams.get('note') === 'field';
     const job = jobs.find(j => j.id === editJobId);
     if (job) {
       setExpandedJobId(job.id);
@@ -275,6 +278,9 @@ export default function GraphicsPage() {
       loadJobAssignments(job.id);
       loadJobFiles(job.id);
       recordJobView(job.id);
+      // A mention on the job's Internal Notes field scroll-flashes it once
+      // the edit form renders.
+      if (focusNotes) flashNote('gfx-notes-field');
     }
     router.replace('/graphics', { scroll: false });
   // eslint-disable-next-line react-hooks/exhaustive-deps -- intentional: load once on mount
@@ -982,7 +988,7 @@ export default function GraphicsPage() {
           sourceType: 'graphics_note',
           sourceId: id,
           contextLabel: editingJob.title || editingJob.job_number || 'Graphics job',
-          contextUrl: `/graphics?editJob=${id}`,
+          contextUrl: `/graphics?editJob=${id}&note=field`,
         });
       }
 
@@ -1065,7 +1071,7 @@ export default function GraphicsPage() {
           sourceType: 'graphics_note',
           sourceId: data.id,
           contextLabel: createForm.title || jobNumber,
-          contextUrl: `/graphics?editJob=${data.id}`,
+          contextUrl: `/graphics?editJob=${data.id}&note=field`,
         });
       }
 
@@ -2795,7 +2801,7 @@ export default function GraphicsPage() {
                           />
                         </div>
 
-                        <div style={{ marginBottom: '10px' }}>
+                        <div id="gfx-notes-field" style={{ marginBottom: '10px' }}>
                           <div style={labelStyle}>Internal Notes</div>
                           <MentionTextArea
                             style={{ ...inputStyle, minHeight: '40px', resize: 'vertical' }}

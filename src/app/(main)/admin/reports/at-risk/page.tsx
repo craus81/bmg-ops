@@ -7,6 +7,7 @@ import { useDialog } from '@/components/DialogProvider';
 import { createClient } from '@/lib/supabase-browser';
 import { downloadCsv } from '@/lib/csv';
 import MentionTextArea, { reportMentions } from '@/components/MentionTextArea';
+import { flashNote } from '@/lib/focus-note';
 
 interface AtRiskRow {
   id: string;
@@ -66,7 +67,7 @@ export default function AtRiskReportPage() {
     setNoteOpenId(row.id);
     setNoteDraft(row.internal_notes || '');
     setNoteSavedValue(row.internal_notes || '');
-    setTimeout(() => document.getElementById(`atrisk-${id}`)?.scrollIntoView({ behavior: 'smooth', block: 'center' }), 200);
+    flashNote(`atrisk-${id}`);
   // eslint-disable-next-line react-hooks/exhaustive-deps -- intentional: fire once after first load
   }, [loading]);
 
