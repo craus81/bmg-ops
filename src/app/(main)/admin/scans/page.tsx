@@ -74,14 +74,32 @@ export default function AdminScansPage() {
   // scan_log_id → CNI job number, for the source column/filter (a scan is "CNI"
   // when a cni_job_vins row points at it). See docs/cni-redesign.md §3.4.
   const [cniByScanId, setCniByScanId] = useState<Record<string, string>>({});
+  // Attribution context for CNI scans: the job's assigned company name and who
+  // completed the VIN — inputs to the installer derivation below.
+  const [cniCompanyByScanId, setCniCompanyByScanId] = useState<Record<string, string>>({});
+  const [cniCompletedByScanId, setCniCompletedByScanId] = useState<Record<string, string>>({});
+  // scan_log_id → crew credited for the install (live install_credits rows) —
+  // the authoritative "who did the work" record (docs/pay-splits-design.md),
+  // which survives admin re-tagging of the crew.
+  const [crewByScanId, setCrewByScanId] = useState<Record<string, string[]>>({});
+  // profile id → their company + whether they're an installer-type account
+  // (CNI installer / field installer) rather than office staff. Drives the
+  // scanner fallback: a self-scanning installer counts as the installer, an
+  // admin logging on a crew's behalf never does.
+  const [profileMeta, setProfileMeta] = useState<Record<string, { companyId: string | null; installer: boolean }>>({});
   const [sourceFilter, setSourceFilter] = useState<'all' | 'cni' | 'field'>('all');
-  // Who performed the scan: the user ('' = everyone) and their company.
-  // scanned_by_company is null for internal staff, so the company filter's
-  // BMG option matches the null rows via the sentinel below.
+  // Filters work off the ATTRIBUTED installer/company (credits crew, CNI job
+  // company, vendor stamp — see installerIdsOf/installerCompanyOf), not the
+  // account that logged the scan; scannerFilter covers the latter separately.
+  // Internal BMG work carries no company — matched via the sentinel below.
   const BMG_COMPANY = '__bmg_internal__';
   const [scannerFilter, setScannerFilter] = useState('');
+  const [installerFilter, setInstallerFilter] = useState('');
   const [locationFilter, setLocationFilter] = useState('');
   const [companyFilter, setCompanyFilter] = useState('');
+  // All Scans tab ordering: newest first, or grouped A→Z by installer company
+  // or installer (ties fall back to newest first).
+  const [sortBy, setSortBy] = useState<'date' | 'company' | 'installer'>('date');
   // Date-range filter for the All Scans tab (local YYYY-MM-DD, '' = unbounded)
   const [dateFrom, setDateFrom] = useState('');
   const [dateTo, setDateTo] = useState('');
@@ -165,7 +183,7 @@ export default function AdminScansPage() {
 
   const loadAll = async () => {
     setLoading(true);
-    const [scansRes, archivedRes, profilesRes, partsRes, fullPartsRes, locsRes, posRes, cniVinsRes, companiesRes] = await Promise.all([
+    const [scansRes, archivedRes, profilesRes, partsRes, fullPartsRes, locsRes, posRes, cniVinsRes, companiesRes, creditsRes] = await Promise.all([
       supabase.from('scan_logs').select('*').is('archived_at', null).order('scanned_at', { ascending: false }).limit(1000),
       // Paginate archived scans — Supabase caps responses at 1000 rows by default
       (async () => {
@@ -184,7 +202,7 @@ export default function AdminScansPage() {
         }
         return { data: all };
       })(),
-      supabase.from('profiles').select('id, full_name'),
+      supabase.from('profiles').select('id, full_name, role, roles, is_field_installer, company_id'),
       supabase.from('netsuite_parts').select('item_number, requires_po_match'),
       // All active parts — paginate to get all
       (async () => {
@@ -211,7 +229,7 @@ export default function AdminScansPage() {
         while (more) {
           const { data } = await supabase
             .from('cni_job_vins')
-            .select('scan_log_id, cni_jobs(job_number)')
+            .select('id, scan_log_id, completed_by, cni_jobs(job_number, assigned_company_id)')
             .not('scan_log_id', 'is', null)
             .range(pg * 1000, (pg + 1) * 1000 - 1);
           all = [...all, ...(data || [])];
@@ -223,6 +241,26 @@ export default function AdminScansPage() {
       // Vendor companies for the bulk tab's vendor picker (same list the
       // vendor-invoice flow uses).
       supabase.from('companies').select('id, name').order('name'),
+      // Live pay credits — who was actually credited for each scanned vehicle.
+      // Ordered so the pagination is stable; paginated like the other
+      // per-vehicle tables since this grows with every completed install.
+      (async () => {
+        let all: any[] = [];
+        let pg = 0;
+        let more = true;
+        while (more) {
+          const { data } = await supabase
+            .from('install_credits')
+            .select('scan_log_id, cni_job_vin_id, profile_id')
+            .is('voided_at', null)
+            .order('created_at', { ascending: true })
+            .range(pg * 1000, (pg + 1) * 1000 - 1);
+          all = [...all, ...(data || [])];
+          more = (data || []).length === 1000;
+          pg++;
+        }
+        return { data: all };
+      })(),
     ]);
     setAllParts((fullPartsRes.data || []) as typeof allParts);
     setAllLocations((locsRes.data || []) as typeof allLocations);
@@ -233,21 +271,51 @@ export default function AdminScansPage() {
     setArchivedScans((archivedRes.data || []) as ScanLog[]);
 
     const pMap: Record<string, string> = {};
-    (profilesRes.data || []).forEach((p: any) => { pMap[p.id] = p.full_name; });
+    const metaMap: Record<string, { companyId: string | null; installer: boolean }> = {};
+    (profilesRes.data || []).forEach((p: any) => {
+      pMap[p.id] = p.full_name;
+      const roles: string[] = p.roles?.length ? p.roles : (p.role ? [p.role] : []);
+      metaMap[p.id] = {
+        companyId: p.company_id || null,
+        installer: roles.includes('installer') || roles.includes('field_tech') || !!p.is_field_installer,
+      };
+    });
     setProfiles(pMap);
+    setProfileMeta(metaMap);
 
     const poMap: Record<string, boolean> = {};
     (partsRes.data || []).forEach((p: any) => { poMap[p.item_number] = p.requires_po_match !== false; });
     setPoRequired(poMap);
 
+    const companyName = new Map<string, string>((companiesRes.data || []).map((c: any) => [c.id, c.name]));
     const cniMap: Record<string, string> = {};
+    const cniCompanyMap: Record<string, string> = {};
+    const cniCompletedMap: Record<string, string> = {};
+    // cni_job_vins row id → scan_log_id, to attach credits keyed only on the
+    // VIN row (pre-scan-linkage history) to their scan.
+    const scanIdByVinRowId: Record<string, string> = {};
     (cniVinsRes.data || []).forEach((r: any) => {
       if (!r.scan_log_id) return;
       // The embed is a to-one FK, but Supabase can surface it as an array.
       const job = Array.isArray(r.cni_jobs) ? r.cni_jobs[0] : r.cni_jobs;
       cniMap[r.scan_log_id] = job?.job_number || 'CNI';
+      const assignedCompany = job?.assigned_company_id ? companyName.get(job.assigned_company_id) : null;
+      if (assignedCompany) cniCompanyMap[r.scan_log_id] = assignedCompany;
+      if (r.completed_by) cniCompletedMap[r.scan_log_id] = r.completed_by;
+      if (r.id) scanIdByVinRowId[r.id] = r.scan_log_id;
     });
     setCniByScanId(cniMap);
+    setCniCompanyByScanId(cniCompanyMap);
+    setCniCompletedByScanId(cniCompletedMap);
+
+    const crewMap: Record<string, string[]> = {};
+    (creditsRes.data || []).forEach((c: any) => {
+      const scanId = c.scan_log_id || scanIdByVinRowId[c.cni_job_vin_id || ''];
+      if (!scanId || !c.profile_id) return;
+      const arr = crewMap[scanId] || (crewMap[scanId] = []);
+      if (!arr.includes(c.profile_id)) arr.push(c.profile_id);
+    });
+    setCrewByScanId(crewMap);
 
     setSelectedScans(new Set());
     setLoading(false);
@@ -297,13 +365,57 @@ export default function AdminScansPage() {
   // to every tab except the two self-contained upload tabs.
   const isScanListTab = tab !== 'bulk' && tab !== 'vendor';
 
-  // Dropdown options: every scanner and company that appears in the loaded
-  // scans (live + archived), so the filters always offer what's actually there.
+  // ── Installer attribution ─────────────────────────────────────────────
+  // A scan's "installer" is whoever was CREDITED for the install (the live
+  // install_credits crew), not whoever happened to log it — an admin
+  // scanning or bulk-uploading on a crew's behalf stays on record as the
+  // scanner but is never presented as the installer. Fallbacks when no
+  // credits exist: the CNI VIN's completed_by, then the scanner themselves
+  // but only if they're an installer-type account.
+  const companyNameById: Record<string, string> = Object.fromEntries(vendorCompanies.map(c => [c.id, c.name]));
+  const installerIdsOf = (s: ScanLog): string[] => {
+    const crew = crewByScanId[s.id];
+    if (crew && crew.length > 0) return crew;
+    const completedBy = cniCompletedByScanId[s.id];
+    if (completedBy) return [completedBy];
+    if (s.scanned_by && profileMeta[s.scanned_by]?.installer) return [s.scanned_by];
+    return [];
+  };
+  const installerNamesOf = (s: ScanLog): string[] =>
+    installerIdsOf(s).map(id => profiles[id]).filter(Boolean);
+  // The company that did the install: the CNI job's assigned company, the
+  // vendor stamped by bulk upload / vendor invoices, the scanner's own
+  // company (installer self-scans), then the credited crew's company.
+  // Null = BMG's own (internal) work.
+  const installerCompanyOf = (s: ScanLog): string | null => {
+    if (cniCompanyByScanId[s.id]) return cniCompanyByScanId[s.id];
+    if (s.installer_name) return s.installer_name;
+    if (s.scanned_by_company) return s.scanned_by_company;
+    for (const id of installerIdsOf(s)) {
+      const companyId = profileMeta[id]?.companyId;
+      if (companyId && companyNameById[companyId]) return companyNameById[companyId];
+    }
+    return null;
+  };
+
+  // Dropdown options: every installer, company, and scanner that appears in
+  // the loaded scans (live + archived), so the filters always offer what's
+  // actually there.
   const allLoadedScans = [...scans, ...archivedScans];
+  const installerOptions = (() => {
+    const ids = new Set<string>();
+    for (const s of allLoadedScans) for (const id of installerIdsOf(s)) ids.add(id);
+    return [...ids]
+      .map(id => {
+        const companyId = profileMeta[id]?.companyId;
+        return { id, name: profiles[id] || 'Unknown', company: (companyId && companyNameById[companyId]) || null };
+      })
+      .sort((a, b) => a.name.localeCompare(b.name));
+  })();
   const scannerOptions = [...new Set(allLoadedScans.map(s => s.scanned_by).filter(Boolean) as string[])]
     .map(id => ({ id, name: profiles[id] || 'Unknown' }))
     .sort((a, b) => a.name.localeCompare(b.name));
-  const companyOptions = [...new Set(allLoadedScans.map(s => s.scanned_by_company).filter(Boolean) as string[])].sort();
+  const companyOptions = [...new Set(allLoadedScans.map(installerCompanyOf).filter(Boolean) as string[])].sort();
   const NO_LOCATION = '__none__';
   const locationOptions = [...new Set(allLoadedScans.map(s => s.location_name).filter(Boolean) as string[])].sort();
 
@@ -311,11 +423,14 @@ export default function AdminScansPage() {
     // Source filter: CNI scans are the ones a cni_job_vins row points at.
     if (sourceFilter === 'cni' && !cniByScanId[s.id]) return false;
     if (sourceFilter === 'field' && cniByScanId[s.id]) return false;
-    // Scanner filters: by user, and by the company they work for (BMG's own
-    // staff carry no company — the BMG option matches those null rows).
+    // Who did the work (attributed installer + their company) and, separately,
+    // who logged the scan. BMG's own installs carry no company — the BMG
+    // option matches those rows.
+    if (installerFilter && !installerIdsOf(s).includes(installerFilter)) return false;
     if (scannerFilter && s.scanned_by !== scannerFilter) return false;
-    if (companyFilter === BMG_COMPANY && s.scanned_by_company) return false;
-    if (companyFilter && companyFilter !== BMG_COMPANY && s.scanned_by_company !== companyFilter) return false;
+    const installerCompany = installerCompanyOf(s);
+    if (companyFilter === BMG_COMPANY && installerCompany) return false;
+    if (companyFilter && companyFilter !== BMG_COMPANY && installerCompany !== companyFilter) return false;
     // Location filter ("No location" matches scans with none recorded).
     if (locationFilter === NO_LOCATION && s.location_name) return false;
     if (locationFilter && locationFilter !== NO_LOCATION && s.location_name !== locationFilter) return false;
@@ -334,10 +449,30 @@ export default function AdminScansPage() {
       s.location_name?.toLowerCase().includes(q) ||
       s.po_number?.toLowerCase().includes(q) ||
       (cniByScanId[s.id] || '').toLowerCase().includes(q) ||
+      installerNamesOf(s).join(' ').toLowerCase().includes(q) ||
+      (installerCompanyOf(s) || '').toLowerCase().includes(q) ||
       (profiles[s.scanned_by || ''] || '').toLowerCase().includes(q) ||
       (s.scanned_by_company || '').toLowerCase().includes(q) ||
       [s.vehicle_year, s.vehicle_make, s.vehicle_model].filter(Boolean).join(' ').toLowerCase().includes(q);
   });
+
+  // Sort — All Scans tab only (the other tabs group by customer/part).
+  // Company/installer sorts run A→Z with newest-first inside equal keys;
+  // unattributed rows sink to the bottom.
+  if (tab === 'all' && sortBy !== 'date') {
+    const keyOf = (s: ScanLog) =>
+      sortBy === 'company' ? (installerCompanyOf(s) || '') : (installerNamesOf(s)[0] || '');
+    tabScans.sort((a, b) => {
+      const ka = keyOf(a);
+      const kb = keyOf(b);
+      if (ka !== kb) {
+        if (!ka) return 1;
+        if (!kb) return -1;
+        return ka.localeCompare(kb);
+      }
+      return new Date(b.scanned_at).getTime() - new Date(a.scanned_at).getTime();
+    });
+  }
 
   // Group by billable customer → PO (ready tab) or part + location (other tabs)
   const grouped = tabScans.reduce((acc: Record<string, Record<string, ScanLog[]>>, s) => {
@@ -447,7 +582,7 @@ export default function AdminScansPage() {
       }
     } catch { /* vendor columns are best-effort — the export still works */ }
 
-    const headers = ['VIN', 'Year', 'Make', 'Model', 'Part Number', 'Description', 'Billable Customer', 'Unit #', 'Serial #', 'IMEI', 'CCID', 'Location', 'PO Number', 'Vendor', 'Vendor Invoice #', 'Vendor Cost', 'Vendor Invoice Total', 'CNI Job', 'Scanned By', 'Company', 'Date', 'Status'];
+    const headers = ['VIN', 'Year', 'Make', 'Model', 'Part Number', 'Description', 'Billable Customer', 'Unit #', 'Serial #', 'IMEI', 'CCID', 'Location', 'PO Number', 'Vendor', 'Vendor Invoice #', 'Vendor Cost', 'Vendor Invoice Total', 'CNI Job', 'Installer(s)', 'Installer Company', 'Scanned By', 'Scanner Company', 'Date', 'Status'];
     const data = rows.map(s => {
       const inv = invById.get(s.vendor_invoice_id || '');
       return [
@@ -459,6 +594,7 @@ export default function AdminScansPage() {
         s.install_cost != null ? Number(s.install_cost).toFixed(2) : '',
         inv?.total_amount != null ? Number(inv.total_amount).toFixed(2) : '',
         cniByScanId[s.id] || '',
+        installerNamesOf(s).join('; '), installerCompanyOf(s) || 'BMG',
         profiles[s.scanned_by || ''] || '', s.scanned_by_company || 'BMG', new Date(s.scanned_at).toLocaleString(),
         scanStatus(s).label,
       ];
@@ -947,12 +1083,12 @@ export default function AdminScansPage() {
       </div>
 
       {/* Search */}
-      {isScanListTab && <input value={search} onChange={e => setSearch(e.target.value)} placeholder="Search VIN, part, customer, location, PO, CNI job, scanner, company..."
+      {isScanListTab && <input value={search} onChange={e => setSearch(e.target.value)} placeholder="Search VIN, part, customer, location, PO, CNI job, installer, company..."
         style={{ width: '100%', padding: '10px 14px', borderRadius: '10px', fontSize: '13px', border: `1px solid ${theme.border}`, background: theme.card, color: theme.textPrimary, fontWeight: 600, marginBottom: '10px' }} />}
 
       {/* Source filter — CNI installs vs. field scans (§3.4) */}
       {isScanListTab && (
-        <div style={{ display: 'flex', gap: '4px', marginBottom: '10px' }}>
+        <div style={{ display: 'flex', gap: '4px', marginBottom: '10px', flexWrap: 'wrap' }}>
           {([
             { id: 'all' as const, label: 'All sources' },
             { id: 'cni' as const, label: 'CNI' },
@@ -965,24 +1101,26 @@ export default function AdminScansPage() {
               color: sourceFilter === f.id ? '#06b6d4' : 'var(--text-muted)',
             }}>{f.label}</button>
           ))}
-          {/* Filter by who scanned: the user, and the company they work for
-              (BMG (internal) = scans with no company stamped). */}
+          {/* Filter by who DID the install (credited crew / CNI installer /
+              field installer) and by the installing company. */}
           <select
-            value={scannerFilter}
-            onChange={e => setScannerFilter(e.target.value)}
+            value={installerFilter}
+            onChange={e => setInstallerFilter(e.target.value)}
+            title="Filter by the installer credited with the work"
             style={{
               padding: '5px 8px', borderRadius: '8px', fontSize: '10px', fontWeight: 700, cursor: 'pointer',
-              background: scannerFilter ? 'var(--tab-active-bg)' : 'transparent',
-              border: scannerFilter ? '1px solid var(--tab-active-border)' : '1px solid var(--border)',
-              color: scannerFilter ? '#06b6d4' : 'var(--text-muted)', maxWidth: '160px',
+              background: installerFilter ? 'var(--tab-active-bg)' : 'transparent',
+              border: installerFilter ? '1px solid var(--tab-active-border)' : '1px solid var(--border)',
+              color: installerFilter ? '#06b6d4' : 'var(--text-muted)', maxWidth: '160px',
             }}
           >
-            <option value="">All users</option>
-            {scannerOptions.map(u => <option key={u.id} value={u.id}>{u.name}</option>)}
+            <option value="">All installers</option>
+            {installerOptions.map(u => <option key={u.id} value={u.id}>{u.name}{u.company ? ` — ${u.company}` : ''}</option>)}
           </select>
           <select
             value={companyFilter}
             onChange={e => setCompanyFilter(e.target.value)}
+            title="Filter by the company that did the install — BMG (internal) covers BMG's own work"
             style={{
               padding: '5px 8px', borderRadius: '8px', fontSize: '10px', fontWeight: 700, cursor: 'pointer',
               background: companyFilter ? 'var(--tab-active-bg)' : 'transparent',
@@ -993,6 +1131,22 @@ export default function AdminScansPage() {
             <option value="">All companies</option>
             <option value={BMG_COMPANY}>BMG (internal)</option>
             {companyOptions.map(c => <option key={c} value={c}>{c}</option>)}
+          </select>
+          {/* Separate from the installer filters: who LOGGED the scan (admins
+              included) — the audit-side view of the same rows. */}
+          <select
+            value={scannerFilter}
+            onChange={e => setScannerFilter(e.target.value)}
+            title="Filter by who logged the scan (the account that recorded it, not necessarily the installer)"
+            style={{
+              padding: '5px 8px', borderRadius: '8px', fontSize: '10px', fontWeight: 700, cursor: 'pointer',
+              background: scannerFilter ? 'var(--tab-active-bg)' : 'transparent',
+              border: scannerFilter ? '1px solid var(--tab-active-border)' : '1px solid var(--border)',
+              color: scannerFilter ? '#06b6d4' : 'var(--text-muted)', maxWidth: '160px',
+            }}
+          >
+            <option value="">Scanned by: anyone</option>
+            {scannerOptions.map(u => <option key={u.id} value={u.id}>{u.name}</option>)}
           </select>
           <select
             value={locationFilter}
@@ -1053,6 +1207,20 @@ export default function AdminScansPage() {
           <span style={{ fontSize: '11px', color: 'var(--text-muted)' }}>–</span>
           <input type="date" value={dateTo} onChange={e => setDateTo(e.target.value)}
             style={{ padding: '4px 8px', borderRadius: '8px', fontSize: '11px', border: '1px solid var(--border)', background: 'var(--input-bg)', color: 'var(--text-primary)' }} />
+          <select
+            value={sortBy}
+            onChange={e => setSortBy(e.target.value as typeof sortBy)}
+            style={{
+              padding: '5px 8px', borderRadius: '8px', fontSize: '10px', fontWeight: 700, cursor: 'pointer',
+              background: sortBy !== 'date' ? 'var(--tab-active-bg)' : 'transparent',
+              border: sortBy !== 'date' ? '1px solid var(--tab-active-border)' : '1px solid var(--border)',
+              color: sortBy !== 'date' ? '#06b6d4' : 'var(--text-muted)',
+            }}
+          >
+            <option value="date">Sort: newest first</option>
+            <option value="company">Sort: installer company</option>
+            <option value="installer">Sort: installer</option>
+          </select>
           <span style={{ fontSize: '11px', fontWeight: 700, color: 'var(--text-secondary)', marginLeft: 'auto' }}>
             {tabScans.length} scan{tabScans.length !== 1 ? 's' : ''}{(dateFrom || dateTo) ? ' in range' : ''}
           </span>
@@ -1776,9 +1944,14 @@ export default function AdminScansPage() {
                         ${Number(scan.install_cost).toFixed(2)}
                       </span>
                     )}
-                    <div style={{ fontSize: '9px', color: 'var(--text-muted)', textAlign: 'right' }}>
-                      {profiles[scan.scanned_by || ''] || ''}<br />
-                      {scan.scanned_by_company && (<>{scan.scanned_by_company}<br /></>)}
+                    {/* Who did the install (person + company) — the scanning
+                        account stays on the tooltip and in the Edit modal. */}
+                    <div
+                      title={profiles[scan.scanned_by || ''] ? `Scanned by ${profiles[scan.scanned_by || '']}` : undefined}
+                      style={{ fontSize: '9px', color: 'var(--text-muted)', textAlign: 'right' }}
+                    >
+                      {installerNamesOf(scan).length > 0 && (<>{installerNamesOf(scan).join(', ')}<br /></>)}
+                      {installerCompanyOf(scan) && (<>{installerCompanyOf(scan)}<br /></>)}
                       {new Date(scan.scanned_at).toLocaleString([], { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' })}
                     </div>
                     <button onClick={() => setEditingScan({ ...scan })} style={{ padding: '2px 5px', borderRadius: '4px', border: 'none', background: 'rgba(59,130,246,0.08)', color: '#60a5fa', fontSize: '9px', fontWeight: 700, cursor: 'pointer' }}>Edit</button>
@@ -1997,9 +2170,13 @@ export default function AdminScansPage() {
                                       ${Number(scan.install_cost).toFixed(2)}
                                     </span>
                                   )}
-                                  <div style={{ fontSize: '9px', color: 'var(--text-muted)', textAlign: 'right' }}>
-                                    {profiles[scan.scanned_by || ''] || ''}<br />
-                                    {scan.scanned_by_company && (<>{scan.scanned_by_company}<br /></>)}
+                                  {/* Who did the install — scanner on the tooltip. */}
+                                  <div
+                                    title={profiles[scan.scanned_by || ''] ? `Scanned by ${profiles[scan.scanned_by || '']}` : undefined}
+                                    style={{ fontSize: '9px', color: 'var(--text-muted)', textAlign: 'right' }}
+                                  >
+                                    {installerNamesOf(scan).length > 0 && (<>{installerNamesOf(scan).join(', ')}<br /></>)}
+                                    {installerCompanyOf(scan) && (<>{installerCompanyOf(scan)}<br /></>)}
                                     {new Date(scan.scanned_at).toLocaleDateString([], { month: 'short', day: 'numeric' })}
                                   </div>
                                   <button onClick={() => setEditingScan({ ...scan })} style={{ padding: '2px 5px', borderRadius: '4px', border: 'none', background: 'rgba(59,130,246,0.08)', color: '#60a5fa', fontSize: '9px', fontWeight: 700, cursor: 'pointer' }}>Edit</button>
@@ -2143,6 +2320,23 @@ export default function AdminScansPage() {
                 </div>
               </div>
             )}
+            {/* Attribution record — read-only. The installer is whoever the
+                work is credited to; the scanner is the account that logged
+                the row (kept for the audit trail even when it's an admin). */}
+            {(() => {
+              const names = installerNamesOf(editingScan);
+              const company = installerCompanyOf(editingScan);
+              return (
+                <div style={{ fontSize: '10px', color: 'var(--text-muted)', marginBottom: '12px', lineHeight: 1.6 }}>
+                  <span style={{ fontWeight: 700 }}>Installer:</span>{' '}
+                  {names.length > 0 ? names.join(', ') : (company || '—')}
+                  {names.length > 0 && company ? ` · ${company}` : ''}
+                  <br />
+                  <span style={{ fontWeight: 700 }}>Scanned by:</span>{' '}
+                  {profiles[editingScan.scanned_by || ''] || '—'} · {new Date(editingScan.scanned_at).toLocaleString()}
+                </div>
+              );
+            })()}
             <div style={{ display: 'flex', gap: '8px' }}>
               <button onClick={() => setEditingScan(null)} style={{ flex: 1, padding: '10px', borderRadius: '8px', fontSize: '12px', fontWeight: 700, background: 'transparent', border: `1px solid ${theme.border}`, color: 'var(--text-body)', cursor: 'pointer' }}>Cancel</button>
               <button onClick={saveEditScan} style={{ flex: 1, padding: '10px', borderRadius: '8px', fontSize: '12px', fontWeight: 700, background: '#22c55e', color: '#fff', border: 'none', cursor: 'pointer' }}>Save</button>
