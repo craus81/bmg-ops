@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { createClient } from '@supabase/supabase-js';
 import { requireAdmin } from '@/lib/api-auth';
 import { notifyMany } from '@/lib/notify';
+import { recordHeartbeat } from '@/lib/system-health';
 import { evaluateAtRiskCustomers } from '@/lib/at-risk';
 
 export const dynamic = 'force-dynamic';
@@ -76,29 +77,19 @@ export async function GET(req: NextRequest) {
       }
     }
 
-    await service.from('sync_state').upsert({
-      sync_type: 'at_risk_check',
-      last_synced_at: new Date().toISOString(),
-      last_result: {
-        status: 'ok',
-        scanned,
-        flagged: flagged.length,
-        new: fresh.length,
-        flagged_ids: flagged.map(c => c.netsuite_id),
-      },
-      updated_at: new Date().toISOString(),
-    }, { onConflict: 'sync_type' });
+    const syncStateWrite = await recordHeartbeat(service, 'at_risk_check', {
+      status: 'ok',
+      scanned,
+      flagged: flagged.length,
+      new: fresh.length,
+      flagged_ids: flagged.map(c => c.netsuite_id),
+    });
 
-    return NextResponse.json({ status: 'ok', scanned, flagged: flagged.length, new: fresh.length, notified });
+    return NextResponse.json({ status: 'ok', scanned, flagged: flagged.length, new: fresh.length, notified, syncStateWrite });
   } catch (e: any) {
     console.error('at-risk-check failed:', e);
     // Record the failure so System Health surfaces it.
-    await service.from('sync_state').upsert({
-      sync_type: 'at_risk_check',
-      last_synced_at: new Date().toISOString(),
-      last_result: { error: e.message || 'at-risk check failed' },
-      updated_at: new Date().toISOString(),
-    }, { onConflict: 'sync_type' }).then(() => {}, () => {});
+    await recordHeartbeat(service, 'at_risk_check', { error: e.message || 'at-risk check failed' }); // never throws; failure already logged
     return NextResponse.json({ error: e.message || 'at-risk check failed' }, { status: 500 });
   }
 }

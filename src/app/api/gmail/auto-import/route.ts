@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { searchPOEmails, getMessage, getPdfAttachments, getHeader } from '@/lib/google';
 import { createClient } from '@supabase/supabase-js';
 import { requireAdmin } from '@/lib/api-auth';
+import { recordHeartbeat } from '@/lib/system-health';
 
 // This route is called by Vercel Cron every 20 minutes
 // It searches Gmail for new PO emails and auto-imports them
@@ -19,47 +20,10 @@ const MAX_IMPORTS_PER_RUN = 8;
 
 const SYNC_TYPE = 'gmail_auto_import';
 
-async function recordRun(
-  supabase: any,
-  result: Record<string, unknown>,
-): Promise<{ ok: boolean; error?: string }> {
-  try {
-    const wroteAt = new Date().toISOString();
-    const { error } = await supabase.from('sync_state').upsert({
-      sync_type: SYNC_TYPE,
-      last_synced_at: wroteAt,
-      last_result: result,
-      updated_at: wroteAt,
-    }, { onConflict: 'sync_type' });
-    if (error) {
-      console.error('[gmail-auto-import] sync_state upsert error:', error);
-      return { ok: false, error: error.message || JSON.stringify(error) };
-    }
-    // Trust but verify: an upsert can report success while the row stays
-    // stale (RLS filtering the conflict-update path writes nothing and
-    // raises nothing). Read the row back — a heartbeat that didn't land
-    // is a failure, and the caller needs the evidence. Compare as epoch
-    // times, NOT strings: Postgres renders the same instant as
-    // "…51.11+00:00" while JS wrote "…51.110Z", and a string compare
-    // wrongly flags a landed write. A minute of tolerance absorbs clock
-    // skew between this function and the database.
-    const { data: check } = await supabase
-      .from('sync_state')
-      .select('last_synced_at')
-      .eq('sync_type', SYNC_TYPE)
-      .maybeSingle();
-    const landedAt = check?.last_synced_at ? new Date(check.last_synced_at).getTime() : NaN;
-    if (!(landedAt >= new Date(wroteAt).getTime() - 60_000)) {
-      const msg = `upsert reported success but read-back shows ${check?.last_synced_at || 'no row at all'}`;
-      console.error('[gmail-auto-import] sync_state phantom write:', msg);
-      return { ok: false, error: msg };
-    }
-    return { ok: true };
-  } catch (err: any) {
-    console.error('[gmail-auto-import] failed to persist sync_state:', err?.message);
-    return { ok: false, error: err?.message || 'unknown sync_state write failure' };
-  }
-}
+// The write-check + read-back verification this route pioneered now lives in
+// recordHeartbeat, shared by every background job.
+const recordRun = (supabase: any, result: Record<string, unknown>) =>
+  recordHeartbeat(supabase, SYNC_TYPE, result);
 
 export async function GET(req: NextRequest) {
   // Allow Vercel Cron with the shared secret; anyone else needs an admin

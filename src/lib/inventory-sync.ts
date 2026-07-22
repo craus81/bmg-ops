@@ -1,5 +1,6 @@
 import type { SupabaseClient } from '@supabase/supabase-js';
 import { suiteqlQueryAll } from '@/lib/netsuite';
+import { recordHeartbeat, type HeartbeatResult } from '@/lib/system-health';
 
 /**
  * Keep netsuite_parts inventory quantities fresh. The full parts sync is a
@@ -12,6 +13,8 @@ export interface InventorySyncResult {
   items: number;
   updated: number;
   hasAvailable: boolean;
+  /** Outcome of the sync_state heartbeat write — not persisted, only reported. */
+  syncStateWrite?: HeartbeatResult;
 }
 
 export async function syncInventoryQuantities(service: SupabaseClient): Promise<InventorySyncResult> {
@@ -55,11 +58,5 @@ export async function syncInventoryQuantities(service: SupabaseClient): Promise<
   }
 
   const result = { items: rows.length, updated, hasAvailable };
-  await service.from('sync_state').upsert({
-    sync_type: 'netsuite_inventory',
-    last_synced_at: new Date().toISOString(),
-    last_result: result,
-    updated_at: new Date().toISOString(),
-  });
-  return result;
+  return { ...result, syncStateWrite: await recordHeartbeat(service, 'netsuite_inventory', result) };
 }

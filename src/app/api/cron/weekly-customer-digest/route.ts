@@ -3,6 +3,7 @@ import { createClient } from '@supabase/supabase-js';
 import { requireAdmin } from '@/lib/api-auth';
 import { sendEmail, buildCustomerDigestEmail } from '@/lib/resend';
 import { resolveCustomerContact } from '@/lib/customer-notify';
+import { recordHeartbeat } from '@/lib/system-health';
 
 export const dynamic = 'force-dynamic';
 export const maxDuration = 300;
@@ -141,22 +142,14 @@ export async function GET(req: NextRequest) {
       if (ok) sent++;
     }
 
-    await service.from('sync_state').upsert({
-      sync_type: 'weekly_customer_digest',
-      last_synced_at: new Date().toISOString(),
-      last_result: { status: 'ok', customers: byCustomer.size, sent, skippedNoEmail, skippedOptOut, skippedEmpty },
-      updated_at: new Date().toISOString(),
-    }, { onConflict: 'sync_type' });
+    const syncStateWrite = await recordHeartbeat(
+      service, 'weekly_customer_digest', { status: 'ok', customers: byCustomer.size, sent, skippedNoEmail, skippedOptOut, skippedEmpty },
+    );
 
-    return NextResponse.json({ status: 'ok', customers: byCustomer.size, sent, skippedNoEmail, skippedOptOut });
+    return NextResponse.json({ status: 'ok', customers: byCustomer.size, sent, skippedNoEmail, skippedOptOut, syncStateWrite });
   } catch (e: any) {
     console.error('weekly-customer-digest failed:', e);
-    await service.from('sync_state').upsert({
-      sync_type: 'weekly_customer_digest',
-      last_synced_at: new Date().toISOString(),
-      last_result: { error: e.message || 'digest failed' },
-      updated_at: new Date().toISOString(),
-    }, { onConflict: 'sync_type' }).then(() => {}, () => {});
+    await recordHeartbeat(service, 'weekly_customer_digest', { error: e.message || 'digest failed' }); // never throws; failure already logged
     return NextResponse.json({ error: e.message || 'digest failed' }, { status: 500 });
   }
 }

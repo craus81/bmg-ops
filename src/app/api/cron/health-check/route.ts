@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { createClient } from '@supabase/supabase-js';
 import { requireAdmin } from '@/lib/api-auth';
 import { notifyMany } from '@/lib/notify';
-import { evaluateSystemHealth } from '@/lib/system-health';
+import { evaluateSystemHealth, recordHeartbeat } from '@/lib/system-health';
 
 export const dynamic = 'force-dynamic';
 export const maxDuration = 60;
@@ -112,31 +112,29 @@ export async function GET(req: NextRequest) {
     for (const c of checks) {
       if (c.status === 'ok' && lastAlerts[c.syncType]) delete lastAlerts[c.syncType];
     }
-    await service.from('sync_state').upsert({
-      sync_type: 'health_alerts',
-      last_synced_at: new Date().toISOString(),
-      last_result: lastAlerts,
-      updated_at: new Date().toISOString(),
-    }, { onConflict: 'sync_type' });
-    await service.from('sync_state').upsert({
-      sync_type: 'health_check',
-      last_synced_at: new Date().toISOString(),
-      last_result: { status: 'ok', bad: bad.length, alerted: toAlert.length },
-      updated_at: new Date().toISOString(),
-    }, { onConflict: 'sync_type' });
+    const alertsWrite = await recordHeartbeat(service, 'health_alerts', lastAlerts);
+    const selfWrite = await recordHeartbeat(service, 'health_check', { status: 'ok', bad: bad.length, alerted: toAlert.length });
 
-    await pingExternalMonitor(
-      bad.length === 0,
-      bad.length === 0
-        ? `all ${checks.length} jobs ok`
-        : bad.map(c => `${c.label}: ${c.problem}`).join(' · '),
-    );
+    // A watcher that can't persist its own heartbeat is itself broken — the
+    // dashboard freezes at the last landed write while everything keeps
+    // returning 200. Treat it as a failure and put the actual DB error in
+    // the ping body so the external monitor's event log names the cause.
+    const writeErrors = [
+      ...(alertsWrite.ok ? [] : [`health_alerts heartbeat write failed: ${alertsWrite.error}`]),
+      ...(selfWrite.ok ? [] : [`health_check heartbeat write failed: ${selfWrite.error}`]),
+    ];
+    const summaryParts = [
+      ...(bad.length === 0 ? [`all ${checks.length} jobs ok`] : bad.map(c => `${c.label}: ${c.problem}`)),
+      ...writeErrors,
+    ];
+    await pingExternalMonitor(bad.length === 0 && writeErrors.length === 0, summaryParts.join(' · '));
 
     return NextResponse.json({
       status: 'ok',
       checks: checks.map(c => ({ syncType: c.syncType, status: c.status })),
       alerted: toAlert.map(c => c.syncType),
       notified,
+      syncStateWrites: { health_alerts: alertsWrite, health_check: selfWrite },
     });
   } catch (e: any) {
     console.error('health-check failed:', e);

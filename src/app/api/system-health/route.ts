@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { createClient } from '@supabase/supabase-js';
 import { requireAdmin } from '@/lib/api-auth';
-import { evaluateSystemHealth } from '@/lib/system-health';
+import { evaluateSystemHealth, recordHeartbeat } from '@/lib/system-health';
 
 export const dynamic = 'force-dynamic';
 
@@ -16,8 +16,14 @@ export async function GET(req: NextRequest) {
   if (auth.error) return auth.error;
 
   const checks = await evaluateSystemHealth(service);
+  // Live write probe: if heartbeat writes are silently failing, every age on
+  // this page is frozen at its last landed write and can't be trusted — say
+  // so instead of letting the wall of "Stale" tell a false story. The probe
+  // row isn't in HEALTH_MONITORS, so it never shows up as a job itself.
+  const writeProbe = await recordHeartbeat(service, 'health_probe', { probe: true });
   return NextResponse.json({
     checks,
+    writeProbe,
     cronSecretConfigured: !!process.env.CRON_SECRET,
     externalPingConfigured: !!process.env.HEALTH_PING_URL,
     generatedAt: new Date().toISOString(),

@@ -4,6 +4,7 @@ import { requireAdmin } from '@/lib/api-auth';
 import { listCalendarChanges } from '@/lib/google';
 import { pushGraphicsJobToCalendar } from '@/lib/graphics-calendar';
 import { syncShopInboundForGraphicsJob } from '@/lib/shop-inbound';
+import { recordHeartbeat } from '@/lib/system-health';
 
 export const dynamic = 'force-dynamic';
 export const maxDuration = 120;
@@ -215,16 +216,12 @@ async function run(req: NextRequest) {
     // Keep the OLD cursor when any write failed, so the next run (after the
     // schema/config problem is fixed) re-pulls the same events instead of
     // skipping past them forever.
-    await supabase.from('sync_state').upsert({
-      sync_type: SYNC_TYPE,
-      last_synced_at: new Date().toISOString(),
-      last_result: {
-        syncToken: writeErrors.length > 0 ? storedToken : pull.nextSyncToken,
-        ...stats,
-        writeErrors: writeErrors.slice(0, 10),
-      },
-      updated_at: new Date().toISOString(),
+    const syncStateWrite = await recordHeartbeat(supabase, SYNC_TYPE, {
+      syncToken: writeErrors.length > 0 ? storedToken : pull.nextSyncToken,
+      ...stats,
+      writeErrors: writeErrors.slice(0, 10),
     });
+    (stats as any).syncStateWrite = syncStateWrite;
 
     // Surface what actually happened — an "empty success" almost always
     // means the env points at the wrong calendar or the migration is
@@ -247,11 +244,8 @@ async function run(req: NextRequest) {
       return NextResponse.json({ success: false, error: 'Google account not connected — visit the Google auth flow first.' }, { status: 200 });
     }
     console.error('calendar-pull error:', err);
-    await supabase.from('sync_state').upsert({
-      sync_type: SYNC_TYPE,
-      last_result: { error: err.message || 'unknown' },
-      updated_at: new Date().toISOString(),
-    });
+    // Keep last_synced_at (the pull cursor) untouched on a failed run.
+    await recordHeartbeat(supabase, SYNC_TYPE, { error: err.message || 'unknown' }, { touchLastSyncedAt: false });
     return NextResponse.json({ success: false, error: err.message || 'Calendar pull failed' }, { status: 500 });
   }
 }

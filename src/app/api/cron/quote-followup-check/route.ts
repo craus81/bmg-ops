@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { createClient } from '@supabase/supabase-js';
 import { requireAdmin } from '@/lib/api-auth';
 import { notifyMany } from '@/lib/notify';
+import { recordHeartbeat } from '@/lib/system-health';
 
 export const dynamic = 'force-dynamic';
 export const maxDuration = 60;
@@ -116,22 +117,14 @@ export async function GET(req: NextRequest) {
       if (wrapIds.length > 0) await service.from('wrap_quotes').update({ followup_nudged_at: nudgeStamp }).in('id', wrapIds);
     }
 
-    await service.from('sync_state').upsert({
-      sync_type: 'quote_followup_check',
-      last_synced_at: new Date().toISOString(),
-      last_result: { status: 'ok', quiet: quiet.length, notified },
-      updated_at: new Date().toISOString(),
-    }, { onConflict: 'sync_type' });
+    const syncStateWrite = await recordHeartbeat(
+      service, 'quote_followup_check', { status: 'ok', quiet: quiet.length, notified },
+    );
 
-    return NextResponse.json({ status: 'ok', quiet: quiet.length, notified });
+    return NextResponse.json({ status: 'ok', quiet: quiet.length, notified, syncStateWrite });
   } catch (e: any) {
     console.error('quote-followup-check failed:', e);
-    await service.from('sync_state').upsert({
-      sync_type: 'quote_followup_check',
-      last_synced_at: new Date().toISOString(),
-      last_result: { error: e.message || 'quote follow-up check failed' },
-      updated_at: new Date().toISOString(),
-    }, { onConflict: 'sync_type' }).then(() => {}, () => {});
+    await recordHeartbeat(service, 'quote_followup_check', { error: e.message || 'quote follow-up check failed' }); // never throws; failure already logged
     return NextResponse.json({ error: e.message || 'quote follow-up check failed' }, { status: 500 });
   }
 }

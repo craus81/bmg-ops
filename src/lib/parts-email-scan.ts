@@ -1,5 +1,6 @@
 import type { SupabaseClient } from '@supabase/supabase-js';
 import { dwdConfigured, getDelegatedGmail, getMessagePlainText, getHeader } from '@/lib/google-dwd';
+import { recordHeartbeat, type HeartbeatResult } from '@/lib/system-health';
 import { callAnthropicWithRetry } from '@/lib/anthropic';
 import { getPdfAttachments } from '@/lib/google';
 import { r2Upload } from '@/lib/r2';
@@ -35,6 +36,8 @@ export interface PartsEmailScanResult {
   applied: number;
   review: number;
   errors: number;
+  /** Outcome of the sync_state heartbeat write — not persisted, only reported. */
+  syncStateWrite?: HeartbeatResult;
 }
 
 interface ExtractedEmail {
@@ -240,13 +243,9 @@ async function captureInvoiceAttachments(
   return captured;
 }
 
-async function heartbeat(service: SupabaseClient, result: PartsEmailScanResult) {
-  await service.from('sync_state').upsert({
-    sync_type: 'parts_email_scan',
-    last_synced_at: new Date().toISOString(),
-    last_result: { ...result },
-    updated_at: new Date().toISOString(),
-  });
+async function heartbeat(service: SupabaseClient, result: PartsEmailScanResult): Promise<HeartbeatResult> {
+  const { syncStateWrite: _omit, ...payload } = result;
+  return recordHeartbeat(service, 'parts_email_scan', payload);
 }
 
 export async function scanPartsEmails(service: SupabaseClient): Promise<PartsEmailScanResult> {
@@ -255,8 +254,7 @@ export async function scanPartsEmails(service: SupabaseClient): Promise<PartsEma
   // Intentional skips still heartbeat — a disabled scan isn't a down scan.
   if (!dwdConfigured()) {
     const skipped = { ...result, skipped: 'GOOGLE_DWD_* env vars not set' };
-    await heartbeat(service, skipped);
-    return skipped;
+    return { ...skipped, syncStateWrite: await heartbeat(service, skipped) };
   }
 
   const { data: settings } = await service
@@ -266,14 +264,12 @@ export async function scanPartsEmails(service: SupabaseClient): Promise<PartsEma
     .maybeSingle();
   if (!settings?.enabled) {
     const skipped = { ...result, skipped: 'disabled in settings' };
-    await heartbeat(service, skipped);
-    return skipped;
+    return { ...skipped, syncStateWrite: await heartbeat(service, skipped) };
   }
   const mailboxes: string[] = settings.mailboxes || [];
   if (mailboxes.length === 0) {
     const skipped = { ...result, skipped: 'no mailboxes configured' };
-    await heartbeat(service, skipped);
-    return skipped;
+    return { ...skipped, syncStateWrite: await heartbeat(service, skipped) };
   }
 
   // PO-number context for the classifier and matcher.
@@ -387,6 +383,5 @@ export async function scanPartsEmails(service: SupabaseClient): Promise<PartsEma
     }
   }
 
-  await heartbeat(service, result);
-  return result;
+  return { ...result, syncStateWrite: await heartbeat(service, result) };
 }

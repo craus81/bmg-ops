@@ -6,6 +6,7 @@ import { syncPoInvoices } from '@/lib/po-invoice-sync';
 import { verifyPoInvoiceQuantities } from '@/lib/po-invoice-verify';
 import { syncVendorPos } from '@/lib/vendor-po-sync';
 import { syncInventoryQuantities } from '@/lib/inventory-sync';
+import { recordHeartbeat } from '@/lib/system-health';
 
 export const dynamic = 'force-dynamic';
 export const maxDuration = 120;
@@ -171,14 +172,11 @@ export async function GET(req: NextRequest) {
     }
 
     // Update sync timestamp
-    await supabase.from('sync_state').upsert({
-      sync_type: 'netsuite_customers',
-      last_synced_at: new Date().toISOString(),
-      last_result: { customersSynced, prospectsSynced, total: nsCustomers.length },
-      updated_at: new Date().toISOString(),
-    });
+    const customersWrite = await recordHeartbeat(
+      supabase, 'netsuite_customers', { customersSynced, prospectsSynced, total: nsCustomers.length },
+    );
 
-    results.customers = { modified: nsCustomers.length, customersSynced, prospectsSynced };
+    results.customers = { modified: nsCustomers.length, customersSynced, prospectsSynced, syncStateWrite: customersWrite };
   } catch (err: any) {
     console.error('[cron] Customer sync error:', err.message);
     results.customers = { error: err.message };
@@ -255,14 +253,11 @@ export async function GET(req: NextRequest) {
       }
     }
 
-    await supabase.from('sync_state').upsert({
-      sync_type: 'netsuite_spend_refresh',
-      last_synced_at: new Date().toISOString(),
-      last_result: { customersWithActivity: activeIds.length, spendRefreshed },
-      updated_at: new Date().toISOString(),
-    }, { onConflict: 'sync_type' });
+    const spendWrite = await recordHeartbeat(
+      supabase, 'netsuite_spend_refresh', { customersWithActivity: activeIds.length, spendRefreshed },
+    );
 
-    results.spendRefresh = { customersWithActivity: activeIds.length, spendRefreshed };
+    results.spendRefresh = { customersWithActivity: activeIds.length, spendRefreshed, syncStateWrite: spendWrite };
   } catch (err: any) {
     console.error('[cron] Spend refresh error:', err.message);
     results.spendRefresh = { error: err.message };
@@ -346,14 +341,11 @@ export async function GET(req: NextRequest) {
       if (!error) contactsSynced++;
     }
 
-    await supabase.from('sync_state').upsert({
-      sync_type: 'netsuite_contacts',
-      last_synced_at: new Date().toISOString(),
-      last_result: { contactsSynced, total: contactRows.length, phonesFound },
-      updated_at: new Date().toISOString(),
-    });
+    const contactsWrite = await recordHeartbeat(
+      supabase, 'netsuite_contacts', { contactsSynced, total: contactRows.length, phonesFound },
+    );
 
-    results.contacts = { modified: contactRows.length, contactsSynced, phonesFound };
+    results.contacts = { modified: contactRows.length, contactsSynced, phonesFound, syncStateWrite: contactsWrite };
   } catch (err: any) {
     console.error('[cron] Contact sync error:', err.message);
     results.contacts = { error: err.message };
