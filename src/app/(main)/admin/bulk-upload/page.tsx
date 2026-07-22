@@ -7,6 +7,7 @@ import { useAuth } from '@/components/AuthProvider';
 import { storage } from '@/lib/storage';
 import { apiFetch } from '@/lib/api-client';
 import { DropZone } from '@/components/DropZone';
+import UploadProgressBar, { type UploadProgress } from '@/components/UploadProgressBar';
 import type { CatalogItem } from '@/lib/types';
 
 interface ZipFileEntry {
@@ -53,6 +54,7 @@ export default function BulkUploadPage() {
 
   const [tab, setTab] = useState<Tab>('templates');
   const [loading, setLoading] = useState(false);
+  const [uploadProgress, setUploadProgress] = useState<UploadProgress | null>(null);
   const [error, setError] = useState('');
 
   // The selected ZIP is staged in R2 via presigned upload (no request-size
@@ -123,7 +125,12 @@ export default function BulkUploadPage() {
       let safeName = file.name.replace(/[^a-zA-Z0-9._-]/g, '_');
       if (!/\.zip$/i.test(safeName)) safeName += '.zip';
       const stagedPath = `zips/${Date.now()}-${safeName}`.slice(0, 200);
-      const { error: upErr } = await storage.from('vehicle-templates').upload(stagedPath, file, { contentType: 'application/zip' });
+      setUploadProgress({ fileName: file.name, fileIndex: 1, fileCount: 1, loaded: 0, total: file.size });
+      const { error: upErr } = await storage.from('vehicle-templates').upload(stagedPath, file, {
+        contentType: 'application/zip',
+        onProgress: (loaded, total) => setUploadProgress({ fileName: file.name, fileIndex: 1, fileCount: 1, loaded, total }),
+      });
+      setUploadProgress(null);
       if (upErr) throw new Error(`ZIP upload failed: ${upErr.message}`);
       setZipPath(stagedPath);
 
@@ -351,7 +358,10 @@ export default function BulkUploadPage() {
     return (
       <div style={{ textAlign: 'center', padding: '40px 0' }}>
         <div style={{ width: '36px', height: '36px', border: '3px solid var(--border)', borderTopColor: 'var(--orange)', borderRadius: '50%', margin: '0 auto', animation: 'spin 1s linear infinite' }} />
-        <div style={{ color: 'var(--text-muted)', marginTop: '12px', fontSize: '13px', fontWeight: 600 }}>Processing ZIP file...</div>
+        <div style={{ color: 'var(--text-muted)', marginTop: '12px', fontSize: '13px', fontWeight: 600 }}>
+          {uploadProgress ? 'Uploading ZIP…' : 'Processing ZIP file...'}
+        </div>
+        <UploadProgressBar progress={uploadProgress} />
       </div>
     );
   }
