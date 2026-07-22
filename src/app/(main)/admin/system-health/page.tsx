@@ -25,7 +25,9 @@ const fmtAge = (min: number | null) => {
   if (min == null) return '—';
   if (min < 60) return `${min} min ago`;
   if (min < 48 * 60) return `${Math.round(min / 60)}h ago`;
-  return `${Math.round(min / 1440)}d ago`;
+  // Floor, not round: 61h shown as "3d ago" next to "no run in 61h" reads
+  // like the math is broken.
+  return `${Math.floor(min / 1440)}d ago`;
 };
 
 export default function SystemHealthPage() {
@@ -33,6 +35,7 @@ export default function SystemHealthPage() {
   const { isAdmin, hasFeature, loading: authLoading } = useAuth();
 
   const [checks, setChecks] = useState<HealthCheck[]>([]);
+  const [writeProbe, setWriteProbe] = useState<{ ok: boolean; error?: string } | null>(null);
   const [cronSecretConfigured, setCronSecretConfigured] = useState(true);
   const [externalPingConfigured, setExternalPingConfigured] = useState(true);
   const [generatedAt, setGeneratedAt] = useState('');
@@ -47,6 +50,7 @@ export default function SystemHealthPage() {
       const data = await res.json();
       if (!res.ok) throw new Error(data.error || `Request failed (${res.status})`);
       setChecks(data.checks || []);
+      setWriteProbe(data.writeProbe || null);
       setCronSecretConfigured(data.cronSecretConfigured);
       setExternalPingConfigured(!!data.externalPingConfigured);
       setGeneratedAt(data.generatedAt);
@@ -82,6 +86,11 @@ export default function SystemHealthPage() {
         </button>
       </div>
 
+      {writeProbe && !writeProbe.ok && (
+        <div style={{ padding: '10px 14px', borderRadius: '8px', marginBottom: '12px', background: 'rgba(239,68,68,0.06)', border: '1px solid rgba(239,68,68,0.25)', color: '#ef4444', fontSize: '12px', fontWeight: 600 }}>
+          Heartbeat writes to the database are failing — the jobs may be running fine, but every &quot;last run&quot; below is frozen at its last landed write, so the statuses can&apos;t be trusted until this is fixed. Error: {writeProbe.error || 'unknown'}
+        </div>
+      )}
       {!cronSecretConfigured && (
         <div style={{ padding: '10px 14px', borderRadius: '8px', marginBottom: '12px', background: 'rgba(239,68,68,0.06)', border: '1px solid rgba(239,68,68,0.25)', color: '#ef4444', fontSize: '12px', fontWeight: 600 }}>
           CRON_SECRET is not configured — scheduled runs can&apos;t authenticate, so every cron on this page is effectively off.

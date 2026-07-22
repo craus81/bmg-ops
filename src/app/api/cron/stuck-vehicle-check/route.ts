@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { createClient } from '@supabase/supabase-js';
 import { requireAdmin } from '@/lib/api-auth';
 import { notifyMany } from '@/lib/notify';
+import { recordHeartbeat } from '@/lib/system-health';
 
 export const dynamic = 'force-dynamic';
 export const maxDuration = 60;
@@ -101,22 +102,14 @@ export async function GET(req: NextRequest) {
       if (!activeIds.has(id)) delete lastAlerts[id];
     }
 
-    await service.from('sync_state').upsert({
-      sync_type: 'stuck_vehicle_check',
-      last_synced_at: new Date().toISOString(),
-      last_result: { status: 'ok', stuck: (stuck || []).length, alerted, alerts: lastAlerts },
-      updated_at: new Date().toISOString(),
-    }, { onConflict: 'sync_type' });
+    const syncStateWrite = await recordHeartbeat(
+      service, 'stuck_vehicle_check', { status: 'ok', stuck: (stuck || []).length, alerted, alerts: lastAlerts },
+    );
 
-    return NextResponse.json({ status: 'ok', stuck: (stuck || []).length, alerted });
+    return NextResponse.json({ status: 'ok', stuck: (stuck || []).length, alerted, syncStateWrite });
   } catch (e: any) {
     console.error('stuck-vehicle-check failed:', e);
-    await service.from('sync_state').upsert({
-      sync_type: 'stuck_vehicle_check',
-      last_synced_at: new Date().toISOString(),
-      last_result: { error: e.message || 'stuck vehicle check failed' },
-      updated_at: new Date().toISOString(),
-    }, { onConflict: 'sync_type' }).then(() => {}, () => {});
+    await recordHeartbeat(service, 'stuck_vehicle_check', { error: e.message || 'stuck vehicle check failed' }); // never throws; failure already logged
     return NextResponse.json({ error: e.message || 'stuck vehicle check failed' }, { status: 500 });
   }
 }

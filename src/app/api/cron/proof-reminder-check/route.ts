@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { createClient } from '@supabase/supabase-js';
 import { requireAdmin } from '@/lib/api-auth';
 import { notifyMany } from '@/lib/notify';
+import { recordHeartbeat } from '@/lib/system-health';
 import { sendProofApproval } from '@/lib/proof-approval-send';
 
 export const dynamic = 'force-dynamic';
@@ -105,22 +106,14 @@ export async function GET(req: NextRequest) {
       }
     }
 
-    await service.from('sync_state').upsert({
-      sync_type: 'proof_reminder_check',
-      last_synced_at: new Date().toISOString(),
-      last_result: { status: 'ok', waiting: waiting.length, reminded, escalated, failures: failures.slice(0, 10) },
-      updated_at: new Date().toISOString(),
-    }, { onConflict: 'sync_type' });
+    const syncStateWrite = await recordHeartbeat(
+      service, 'proof_reminder_check', { status: 'ok', waiting: waiting.length, reminded, escalated, failures: failures.slice(0, 10) },
+    );
 
-    return NextResponse.json({ status: 'ok', waiting: waiting.length, reminded, escalated, failures });
+    return NextResponse.json({ status: 'ok', waiting: waiting.length, reminded, escalated, failures, syncStateWrite });
   } catch (e: any) {
     console.error('proof-reminder-check failed:', e);
-    await service.from('sync_state').upsert({
-      sync_type: 'proof_reminder_check',
-      last_synced_at: new Date().toISOString(),
-      last_result: { error: e.message || 'proof reminder check failed' },
-      updated_at: new Date().toISOString(),
-    }, { onConflict: 'sync_type' }).then(() => {}, () => {});
+    await recordHeartbeat(service, 'proof_reminder_check', { error: e.message || 'proof reminder check failed' }); // never throws; failure already logged
     return NextResponse.json({ error: e.message || 'proof reminder check failed' }, { status: 500 });
   }
 }

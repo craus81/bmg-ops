@@ -44,6 +44,75 @@ export const HEALTH_MONITORS: HealthMonitor[] = [
 /** A run is stale once it's overdue by more than a full interval (2× spacing), plus grace for slow runs. */
 const staleThresholdMinutes = (m: HealthMonitor) => m.intervalMinutes * 2 + 15;
 
+export interface HeartbeatResult {
+  ok: boolean;
+  error?: string;
+}
+
+/**
+ * Write a job's sync_state heartbeat and VERIFY it landed.
+ *
+ * supabase-js never throws on a failed write — it returns { error } — and an
+ * upsert can even report success while the row stays stale (RLS filtering the
+ * conflict-update path writes nothing and raises nothing). The gmail
+ * auto-import learned this the hard way and got a read-back check; the July
+ * 2026 incident (every job running fine while its heartbeat silently stopped
+ * landing, so System Health showed the whole board stale) is the same failure
+ * hitting every job that didn't. All heartbeats go through here now: check
+ * the write result, read the row back, and hand the caller an outcome it can
+ * surface in its response.
+ *
+ * `touchLastSyncedAt: false` writes only last_result/updated_at — for jobs
+ * whose last_synced_at is a data cursor that must not advance on a failed run
+ * (e.g. the calendar pull).
+ */
+export async function recordHeartbeat(
+  service: SupabaseClient,
+  syncType: string,
+  lastResult: unknown,
+  opts?: { touchLastSyncedAt?: boolean },
+): Promise<HeartbeatResult> {
+  const wroteAt = new Date().toISOString();
+  try {
+    const row: Record<string, unknown> = {
+      sync_type: syncType,
+      last_result: lastResult,
+      updated_at: wroteAt,
+    };
+    if (opts?.touchLastSyncedAt !== false) row.last_synced_at = wroteAt;
+    const { error } = await service
+      .from('sync_state')
+      .upsert(row, { onConflict: 'sync_type' });
+    if (error) {
+      console.error(`[heartbeat] ${syncType} upsert error:`, error);
+      return { ok: false, error: error.message || JSON.stringify(error) };
+    }
+    // Trust but verify: read the row back. Compare as epoch times, not
+    // strings — Postgres renders the same instant as "…+00:00" while JS
+    // wrote "…Z". updated_at moves in every write path (last_synced_at may
+    // deliberately stay put), so recency is checked on updated_at.
+    const { data: check, error: readErr } = await service
+      .from('sync_state')
+      .select('updated_at')
+      .eq('sync_type', syncType)
+      .maybeSingle();
+    if (readErr) {
+      console.error(`[heartbeat] ${syncType} read-back error:`, readErr);
+      return { ok: false, error: `read-back failed: ${readErr.message}` };
+    }
+    const landedAt = check?.updated_at ? new Date(check.updated_at).getTime() : NaN;
+    if (!(landedAt >= new Date(wroteAt).getTime() - 60_000)) {
+      const msg = `upsert reported success but read-back shows ${check?.updated_at || 'no row at all'}`;
+      console.error(`[heartbeat] ${syncType} phantom write:`, msg);
+      return { ok: false, error: msg };
+    }
+    return { ok: true };
+  } catch (err: any) {
+    console.error(`[heartbeat] ${syncType} failed:`, err?.message);
+    return { ok: false, error: err?.message || 'unknown sync_state write failure' };
+  }
+}
+
 const errorOf = (lastResult: any): string | null => {
   if (!lastResult || typeof lastResult !== 'object') return null;
   if (typeof lastResult.error === 'string' && lastResult.error) return lastResult.error;

@@ -1,5 +1,6 @@
 import type { SupabaseClient } from '@supabase/supabase-js';
 import { suiteqlQueryAll } from '@/lib/netsuite';
+import { recordHeartbeat, type HeartbeatResult } from '@/lib/system-health';
 
 /**
  * Incremental sync of vendor purchase orders (BMG buying parts from Ranger
@@ -27,6 +28,8 @@ export interface VendorPoSyncResult {
   synced: number;
   lines: number;
   error?: string;
+  /** Outcome of the sync_state heartbeat write — not persisted, only reported. */
+  syncStateWrite?: HeartbeatResult;
 }
 
 export async function syncVendorPos(service: SupabaseClient): Promise<VendorPoSyncResult> {
@@ -149,12 +152,8 @@ export async function syncVendorPos(service: SupabaseClient): Promise<VendorPoSy
     synced++;
   }
 
-  await service.from('sync_state').upsert({
-    sync_type: 'netsuite_vendor_pos',
-    last_synced_at: new Date().toISOString(),
-    last_result: { modified: pos.length, synced, lines: lineCount },
-    updated_at: new Date().toISOString(),
-  });
-
-  return { modified: pos.length, synced, lines: lineCount };
+  const syncStateWrite = await recordHeartbeat(
+    service, 'netsuite_vendor_pos', { modified: pos.length, synced, lines: lineCount },
+  );
+  return { modified: pos.length, synced, lines: lineCount, syncStateWrite };
 }
