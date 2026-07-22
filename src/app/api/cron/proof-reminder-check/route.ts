@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { createClient } from '@supabase/supabase-js';
+import { createServiceClient } from '@/lib/supabase-service';
 import { requireAdmin } from '@/lib/api-auth';
 import { notifyMany } from '@/lib/notify';
 import { recordHeartbeat } from '@/lib/system-health';
@@ -8,10 +8,7 @@ import { sendProofApproval } from '@/lib/proof-approval-send';
 export const dynamic = 'force-dynamic';
 export const maxDuration = 120;
 
-const service = createClient(
-  process.env.NEXT_PUBLIC_SUPABASE_URL!,
-  process.env.SUPABASE_SERVICE_ROLE_KEY!,
-);
+const service = createServiceClient();
 
 // Auto-resend the proof link after this many quiet days (and again every
 // interval), up to the cap; escalate internally at the threshold.
