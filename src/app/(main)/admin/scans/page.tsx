@@ -2470,8 +2470,9 @@ function VendorInvoicesTab({ allParts, allLocations, poRequired, onCommitted, on
   // The selected vendor's remembered per-part rates (newest priced invoice
   // line per part) — auto-fills empty amounts.
   const [vendorRates, setVendorRates] = useState<Record<string, { amount: number; invoiceNumber: string | null; date: string | null }>>({});
-  // "Apply part to selected lines" bar
+  // "Apply part/price to selected lines" bar
   const [applyPartSearch, setApplyPartSearch] = useState('');
+  const [applyAmount, setApplyAmount] = useState('');
   const [showApplyPartDropdown, setShowApplyPartDropdown] = useState(false);
 
   // Retroactive upload: the invoice was already processed and paid outside
@@ -2628,15 +2629,23 @@ function VendorInvoicesTab({ allParts, allLocations, poRequired, onCommitted, on
   };
 
   const applyPartToSelected = (partNumber: string) => {
-    if (!partNumber.trim() || !review) return;
+    const part = partNumber.trim();
+    const amount = applyAmount.trim();
+    if ((!part && !amount) || !review) return;
     setReview(prev => prev ? {
       ...prev,
-      lines: prev.lines.map(l => l.selected ? { ...l, partNumber: partNumber.trim(), selected: false } : l),
+      lines: prev.lines.map(l => l.selected ? {
+        ...l,
+        ...(part ? { partNumber: part } : {}),
+        ...(amount ? { amount } : {}),
+        selected: false,
+      } : l),
     } : prev);
     setApplyPartSearch('');
+    setApplyAmount('');
     setShowApplyPartDropdown(false);
     // The newly assigned part may have a remembered rate for this vendor.
-    applyRememberedRates(selectedCompany ? { companyId: selectedCompany.id } : { vendorName: review.vendorName });
+    if (part) applyRememberedRates(selectedCompany ? { companyId: selectedCompany.id } : { vendorName: review.vendorName });
   };
 
   // Same lifecycle labels the scan tabs derive (shared scanLifecycle), for
@@ -3394,7 +3403,7 @@ function VendorInvoicesTab({ allParts, allLocations, poRequired, onCommitted, on
             </div>
           )}
 
-          {/* Apply a part to all selected lines in one go */}
+          {/* Apply a part and/or price to all selected lines in one go */}
           {(() => {
             const selectedCount = review.lines.filter(l => l.selected).length;
             if (selectedCount === 0) return null;
@@ -3448,7 +3457,15 @@ function VendorInvoicesTab({ allParts, allLocations, poRequired, onCommitted, on
                     );
                   })()}
                 </div>
-                <button onClick={() => applyPartToSelected(applyPartSearch)} disabled={!applyPartSearch.trim()} style={{ padding: '6px 12px', borderRadius: '6px', fontSize: '11px', fontWeight: 700, background: '#f472b6', color: '#fff', border: 'none', cursor: 'pointer', opacity: applyPartSearch.trim() ? 1 : 0.4 }}>
+                <input
+                  type="number" step="0.01" min="0"
+                  value={applyAmount}
+                  onChange={e => setApplyAmount(e.target.value)}
+                  placeholder="$ / VIN"
+                  title="Price to set on every selected line — works with or without a part number"
+                  style={{ ...inputStyle, fontSize: '11px', padding: '6px 8px', width: '90px' }}
+                />
+                <button onClick={() => applyPartToSelected(applyPartSearch)} disabled={!applyPartSearch.trim() && !applyAmount.trim()} style={{ padding: '6px 12px', borderRadius: '6px', fontSize: '11px', fontWeight: 700, background: '#f472b6', color: '#fff', border: 'none', cursor: 'pointer', opacity: applyPartSearch.trim() || applyAmount.trim() ? 1 : 0.4 }}>
                   Apply to {selectedCount}
                 </button>
                 <button onClick={() => setReview({ ...review, lines: review.lines.map(l => ({ ...l, selected: false })) })} style={{ padding: '6px 10px', borderRadius: '6px', fontSize: '11px', fontWeight: 700, background: 'transparent', border: `1px solid ${theme.border}`, color: 'var(--text-muted)', cursor: 'pointer' }}>

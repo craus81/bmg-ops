@@ -30,6 +30,7 @@ interface ReportLine {
   location: string;
   vin: string;
   partNumber: string | null;
+  poNumber: string | null;
   paid: number | null;
   invoiced: number | null;
   invoicedSource: InvoicedSource | null;
@@ -39,6 +40,7 @@ interface ScanInfo {
   id: string;
   vin: string;
   po_line_item_id: string | null;
+  po_number: string | null;
   part_number: string | null;
   location_name: string | null;
   invoiced_amount: number | null;
@@ -192,7 +194,7 @@ export async function GET(req: NextRequest) {
 
     if (rawLines.length === 0 && credits.length === 0) {
       return NextResponse.json({
-        range: { start, end }, lines: [], perVendor: [], perLocation: [], perPart: [],
+        range: { start, end }, lines: [], perVendor: [], perLocation: [], perPart: [], perPO: [],
         totals: { vins: 0, paid: 0, invoiced: 0, margin: 0, unpriced: 0 },
         meta: { internalIncluded: includeInternal, internalLines: 0, internalSkippedUnlinked, netsuiteLookups: 0 },
       });
@@ -207,7 +209,7 @@ export async function GET(req: NextRequest) {
     for (let i = 0; i < scanIds.length; i += 200) {
       const { data } = await service
         .from('scan_logs')
-        .select('id, vin, po_line_item_id, part_number, location_name, invoiced_amount, invoice_number')
+        .select('id, vin, po_line_item_id, po_number, part_number, location_name, invoiced_amount, invoice_number')
         .in('id', scanIds.slice(i, i + 200));
       for (const s of data || []) scanById.set(s.id, s as ScanInfo);
     }
@@ -298,6 +300,7 @@ export async function GET(req: NextRequest) {
         location: inv.location_name || scan?.location_name || 'No Location',
         vin: l.vin,
         partNumber,
+        poNumber: scan?.po_number || null,
         paid: l.amount != null ? Number(l.amount) : null,
         ...claimRevenue(scan, partNumber),
       };
@@ -316,6 +319,7 @@ export async function GET(req: NextRequest) {
         location: scan.location_name || 'No Location',
         vin: c.vin || scan.vin,
         partNumber,
+        poNumber: scan.po_number || null,
         paid: c.amount != null ? Number(c.amount) : null,
         ...claimRevenue(scan, partNumber),
       });
@@ -338,6 +342,7 @@ export async function GET(req: NextRequest) {
       perVendor: rollup(lines, l => l.vendor),
       perLocation: rollup(lines, l => l.location),
       perPart: rollup(lines, l => l.partNumber || 'No Part'),
+      perPO: rollup(lines, l => l.poNumber || 'No PO'),
       totals,
       meta: {
         internalIncluded: includeInternal,
