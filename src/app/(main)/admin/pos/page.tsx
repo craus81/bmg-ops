@@ -219,19 +219,25 @@ function partToCatalogItem(p: any): CatalogItem {
 
 async function loadUnifiedCatalog(
   supabase: ReturnType<typeof createClient>,
-): Promise<CatalogItem[]> {
+): Promise<CatalogItem[] | null> {
   // Paginate past PostgREST's 1000-row response cap — a silently truncated
   // catalog reads as "not in catalog" for every part sorting after the cut.
+  // The id tiebreaker keeps page boundaries stable when item numbers repeat
+  // (manual + NetSuite rows can share one). Returns null when any page
+  // fails, so callers keep their last good copy instead of adopting an
+  // empty or truncated list.
   const all: any[] = [];
   let pg = 0;
   let more = true;
   while (more) {
-    const { data } = await supabase
+    const { data, error } = await supabase
       .from('netsuite_parts')
       .select(PART_FIELDS)
       .eq('is_active', true)
       .order('item_number')
+      .order('id')
       .range(pg * 1000, (pg + 1) * 1000 - 1);
+    if (error) return null;
     all.push(...((data as any[]) || []));
     more = ((data as any[]) || []).length === 1000;
     pg++;
@@ -324,6 +330,17 @@ export default function POsPage() {
 
   const [pos, setPos] = useState<(PurchaseOrder & { line_items: POLineItem[]; po_invoices?: any[] })[]>([]);
   const [catalog, setCatalog] = useState<CatalogItem[]>([]);
+  // Monotonic guard for async catalog reloads: a reload only lands if
+  // nothing newer wrote the catalog while it was in flight (manual part
+  // adds bump the seq), and a failed load (null) never replaces a good
+  // copy with an empty one.
+  const catalogSeq = useRef(0);
+  const refreshCatalog = async (): Promise<CatalogItem[] | null> => {
+    const seq = ++catalogSeq.current;
+    const fresh = await loadUnifiedCatalog(supabase);
+    if (fresh && catalogSeq.current === seq) setCatalog(fresh);
+    return fresh;
+  };
   const [loading, setLoading] = useState(true);
   const [poTab, setPoTab] = useState<'open' | 'fulfilled' | 'closed'>('open');
   const [poSortField, setPoSortField] = useState<'po_number' | 'location' | 'date'>('po_number');
@@ -729,7 +746,7 @@ export default function POsPage() {
       }
       setGfxJobsByPo(byPo);
 
-      setCatalog(await loadUnifiedCatalog(supabase));
+      await refreshCatalog();
       setLoading(false);
 
       // Load pending PO queue
@@ -780,7 +797,7 @@ export default function POsPage() {
     const tick = () => {
       refreshPendingPOs();
       refreshGmailStatus();
-      loadUnifiedCatalog(supabase).then(setCatalog);
+      refreshCatalog();
     };
     const onVisible = () => { if (document.visibilityState === 'visible') tick(); };
     const timer = setInterval(tick, 3 * 60 * 1000);
@@ -924,9 +941,10 @@ export default function POsPage() {
 
       // Match lines against a freshly loaded catalog — the in-memory copy
       // can predate parts added on the Parts page since this screen mounted,
-      // and matching against it marks those lines "new to catalog".
-      const freshCatalog = await loadUnifiedCatalog(supabase);
-      setCatalog(freshCatalog);
+      // and matching against it marks those lines "new to catalog". A failed
+      // reload falls back to the in-memory copy rather than treating every
+      // line as unmatched.
+      const freshCatalog = (await refreshCatalog()) || catalog;
       const lines: ImportLine[] = parsed.lines.map((line) => {
         const match = freshCatalog.find((c) =>
           c.part_number.toUpperCase() === line.part_number.toUpperCase()
@@ -1023,6 +1041,7 @@ export default function POsPage() {
         if (created) {
           l.catalog_match = created;
           // Update local catalog list
+          catalogSeq.current++; // manual write — invalidate in-flight reloads
           setCatalog((prev) => [...prev, created]);
         }
       }
@@ -1105,6 +1124,7 @@ export default function POsPage() {
         });
         if (created) {
           l.catalog_match = created;
+          catalogSeq.current++; // manual write — invalidate in-flight reloads
           setCatalog((prev) => [...prev, created]);
         }
       }
@@ -2256,7 +2276,7 @@ export default function POsPage() {
         setCatalogAddResults(prev => ({ ...prev, [li.part_number]: 'error' }));
       } else {
         setCatalogAddResults(prev => ({ ...prev, [li.part_number]: 'added' }));
-        setCatalog(await loadUnifiedCatalog(supabase));
+        await refreshCatalog();
       }
     } catch {
       setCatalogAddResults(prev => ({ ...prev, [li.part_number]: 'error' }));
@@ -2291,7 +2311,7 @@ export default function POsPage() {
       } else {
         setCatalogAddResults(prev => ({ ...prev, [part.part_number]: 'added' }));
         // Refresh catalog list
-        setCatalog(await loadUnifiedCatalog(supabase));
+        await refreshCatalog();
       }
     } catch (err) {
       setCatalogAddResults(prev => ({ ...prev, [part.part_number]: 'error' }));
