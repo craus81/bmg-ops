@@ -19,6 +19,27 @@ function isoDate(d: unknown): string | null {
 }
 
 /**
+ * Read a whole table through Supabase's 1000-row select cap. The sweep
+ * builds its already-linked dedup map from a full table read; anything the
+ * cap (or a failed read) hides from that map looks "not linked yet" and
+ * gets re-inserted on every run — so page explicitly and treat a page
+ * error as fatal rather than proceeding with a partial map.
+ */
+export async function fetchAllRows<T>(
+  fetchPage: (from: number, to: number) => PromiseLike<{ data: T[] | null; error: { message: string } | null }>,
+  label: string,
+  pageSize = 1000,
+): Promise<T[]> {
+  const rows: T[] = [];
+  for (let page = 0; ; page++) {
+    const { data, error } = await fetchPage(page * pageSize, (page + 1) * pageSize - 1);
+    if (error) throw new Error(`Failed to load ${label}: ${error.message}`);
+    rows.push(...(data || []));
+    if ((data || []).length < pageSize) return rows;
+  }
+}
+
+/**
  * Refresh ONE PO's invoice links against NetSuite, both directions:
  * link any invoice now referencing this PO number that isn't linked yet
  * (e.g. a corrected replacement), and unlink rows whose NetSuite invoice
@@ -79,15 +100,18 @@ export async function refreshPoInvoiceLinks(
       }
       continue;
     }
-    const { error } = await service.from('po_invoices').insert({
+    // Upsert with DO NOTHING so a race with the cron sweep can't create a
+    // duplicate link — the unique index on (purchase_order_id,
+    // netsuite_invoice_id) absorbs the conflict.
+    const { data: inserted, error } = await service.from('po_invoices').upsert({
       purchase_order_id: poId,
       netsuite_invoice_id: nsId,
       netsuite_invoice_number: inv.tranid || null,
       ns_status: nsStatus,
       due_date: dueDate,
       memo: `Synced from NetSuite${inv.trandate ? ` — invoiced ${String(inv.trandate).slice(0, 10)}` : ''}`,
-    });
-    if (!error) linked++;
+    }, { onConflict: 'purchase_order_id,netsuite_invoice_id', ignoreDuplicates: true }).select('id');
+    if (!error && (inserted?.length ?? 0) > 0) linked++;
   }
 
   let unlinked = 0;
@@ -120,16 +144,14 @@ export interface PoInvoiceSyncResult {
  * netsuite-sync cron, so invoices show up on POs without user action.
  */
 export async function syncPoInvoices(service: SupabaseClient): Promise<PoInvoiceSyncResult> {
-  const { data: pos, error: posErr } = await service
-    .from('purchase_orders')
-    .select('id, po_number');
-  if (posErr) {
-    throw new Error('Failed to load POs: ' + posErr.message);
-  }
+  const pos = await fetchAllRows<{ id: string; po_number: string | null }>(
+    (from, to) => service.from('purchase_orders').select('id, po_number').order('id').range(from, to),
+    'POs',
+  );
 
   // PO number -> PO ids (numbers are unique in practice; tolerate dupes)
   const poIdsByNumber = new Map<string, string[]>();
-  for (const po of pos || []) {
+  for (const po of pos) {
     const num = String(po.po_number || '').trim();
     if (!num) continue;
     const list = poIdsByNumber.get(num) || [];
@@ -137,10 +159,15 @@ export async function syncPoInvoices(service: SupabaseClient): Promise<PoInvoice
     poIdsByNumber.set(num, list);
   }
 
-  const { data: existing } = await service
-    .from('po_invoices')
-    .select('id, purchase_order_id, netsuite_invoice_id, ns_status, due_date');
-  const linkedByKey = new Map((existing || []).map(r => [`${r.purchase_order_id}|${r.netsuite_invoice_id}`, r]));
+  const existing = await fetchAllRows<{ id: string; purchase_order_id: string; netsuite_invoice_id: string; ns_status: string | null; due_date: string | null }>(
+    (from, to) => service
+      .from('po_invoices')
+      .select('id, purchase_order_id, netsuite_invoice_id, ns_status, due_date')
+      .order('id')
+      .range(from, to),
+    'existing invoice links',
+  );
+  const linkedByKey = new Map(existing.map(r => [`${r.purchase_order_id}|${r.netsuite_invoice_id}`, r]));
 
   // Sweep NetSuite for invoices referencing these PO numbers, in chunks.
   // otherrefnum is a string field; PO numbers are alphanumeric, but strip
@@ -177,17 +204,20 @@ export async function syncPoInvoices(service: SupabaseClient): Promise<PoInvoice
           }
           continue;
         }
-        const { error } = await service.from('po_invoices').insert({
+        // Upsert with DO NOTHING (not plain insert): the unique index on
+        // (purchase_order_id, netsuite_invoice_id) is the backstop against
+        // duplicate links when a concurrent run raced past the dedup map.
+        const { data: inserted, error } = await service.from('po_invoices').upsert({
           purchase_order_id: poId,
           netsuite_invoice_id: String(inv.id),
           netsuite_invoice_number: inv.tranid || null,
           ns_status: nsStatus,
           due_date: dueDate,
           memo: `Synced from NetSuite${inv.trandate ? ` — invoiced ${String(inv.trandate).slice(0, 10)}` : ''}`,
-        });
+        }, { onConflict: 'purchase_order_id,netsuite_invoice_id', ignoreDuplicates: true }).select('id');
         if (!error) {
           linkedByKey.set(key, { id: '', purchase_order_id: poId, netsuite_invoice_id: String(inv.id), ns_status: nsStatus, due_date: dueDate } as any);
-          added++;
+          if ((inserted?.length ?? 0) > 0) added++;
         }
       }
     }
