@@ -673,6 +673,29 @@ export default function POsPage() {
     }
     setPendingPOs(prev => prev.filter(p => p.id !== id));
   };
+
+  // Per-pending-PO review note ("why I haven't imported this yet"). Draft is
+  // held locally so typing is smooth; saved on blur when it differs from the
+  // stored value, then written back to the list so a refresh keeps it.
+  const [pendingNoteDraft, setPendingNoteDraft] = useState<Record<string, string>>({});
+  const [pendingNoteSaving, setPendingNoteSaving] = useState<string | null>(null);
+  const savePendingNote = async (id: string) => {
+    const draft = pendingNoteDraft[id] ?? '';
+    const current = pendingPOs.find(p => p.id === id)?.review_note ?? '';
+    if (draft === current) return;
+    setPendingNoteSaving(id);
+    try {
+      const res = await fetch('/api/gmail/pending-po-note', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ id, note: draft }),
+      });
+      if (res.ok) {
+        setPendingPOs(prev => prev.map(p => p.id === id ? { ...p, review_note: draft.trim() || null } : p));
+      }
+    } catch { /* left in the draft for a retry on next blur */ }
+    setPendingNoteSaving(null);
+  };
   const [selectedForDelete, setSelectedForDelete] = useState<Set<string>>(new Set());
   const [deletingBatch, setDeletingBatch] = useState(false);
   const [backfillingCustomers, setBackfillingCustomers] = useState(false);
@@ -2887,38 +2910,54 @@ export default function POsPage() {
               return (
                 <div key={p.id} style={{
                   padding: '10px 12px', borderRadius: '8px', background: 'var(--bg)', border: '1px solid var(--border)',
-                  display: 'flex', justifyContent: 'space-between', alignItems: 'center',
                 }}>
-                  <div style={{ flex: 1, minWidth: 0 }}>
-                    <div style={{ fontSize: '13px', fontWeight: 700, color: 'var(--text-body)' }}>
-                      PO #{poNum}
+                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '8px' }}>
+                    <div style={{ flex: 1, minWidth: 0 }}>
+                      <div style={{ fontSize: '13px', fontWeight: 700, color: 'var(--text-body)' }}>
+                        PO #{poNum}
+                      </div>
+                      <div style={{ fontSize: '11px', color: 'var(--text-label)', marginTop: '2px' }}>
+                        {customer}{lineCount > 0 ? ` · ${lineCount} line${lineCount !== 1 ? 's' : ''}` : ''}
+                        {p.subject ? ` · ${p.subject}` : ''}
+                      </div>
+                      <div style={{ fontSize: '10px', color: 'var(--text-muted)', marginTop: '2px' }}>
+                        {new Date(p.created_at).toLocaleString()}
+                      </div>
                     </div>
-                    <div style={{ fontSize: '11px', color: 'var(--text-label)', marginTop: '2px' }}>
-                      {customer}{lineCount > 0 ? ` · ${lineCount} line${lineCount !== 1 ? 's' : ''}` : ''}
-                      {p.subject ? ` · ${p.subject}` : ''}
-                    </div>
-                    <div style={{ fontSize: '10px', color: 'var(--text-muted)', marginTop: '2px' }}>
-                      {new Date(p.created_at).toLocaleString()}
+                    <div style={{ display: 'flex', gap: '6px', flexShrink: 0 }}>
+                      <button
+                        onClick={() => reviewPendingPO(p)}
+                        style={{
+                          padding: '6px 12px', borderRadius: '6px', fontSize: '11px', fontWeight: 700,
+                          background: 'rgba(59,130,246,0.12)', border: '1px solid rgba(59,130,246,0.3)',
+                          color: '#60a5fa', cursor: 'pointer',
+                        }}
+                      >Review</button>
+                      <button
+                        onClick={() => dismissPendingPO(p.id)}
+                        style={{
+                          padding: '6px 10px', borderRadius: '6px', fontSize: '11px', fontWeight: 700,
+                          background: 'rgba(248,113,113,0.08)', border: '1px solid rgba(248,113,113,0.2)',
+                          color: '#f87171', cursor: 'pointer',
+                        }}
+                      >Dismiss</button>
                     </div>
                   </div>
-                  <div style={{ display: 'flex', gap: '6px', flexShrink: 0 }}>
-                    <button
-                      onClick={() => reviewPendingPO(p)}
-                      style={{
-                        padding: '6px 12px', borderRadius: '6px', fontSize: '11px', fontWeight: 700,
-                        background: 'rgba(59,130,246,0.12)', border: '1px solid rgba(59,130,246,0.3)',
-                        color: '#60a5fa', cursor: 'pointer',
-                      }}
-                    >Review</button>
-                    <button
-                      onClick={() => dismissPendingPO(p.id)}
-                      style={{
-                        padding: '6px 10px', borderRadius: '6px', fontSize: '11px', fontWeight: 700,
-                        background: 'rgba(248,113,113,0.08)', border: '1px solid rgba(248,113,113,0.2)',
-                        color: '#f87171', cursor: 'pointer',
-                      }}
-                    >Dismiss</button>
-                  </div>
+                  {/* Reviewer note — why this hasn't been imported yet. Saved on blur. */}
+                  <input
+                    value={pendingNoteDraft[p.id] ?? p.review_note ?? ''}
+                    onChange={e => setPendingNoteDraft(prev => ({ ...prev, [p.id]: e.target.value }))}
+                    onBlur={() => savePendingNote(p.id)}
+                    placeholder="Note — why not imported yet (waiting on revised PDF, pricing question…)"
+                    style={{
+                      width: '100%', marginTop: '8px', padding: '6px 8px', borderRadius: '6px',
+                      border: '1px solid var(--border)', background: 'var(--subtle-bg)',
+                      color: 'var(--text-body)', fontSize: '11px',
+                    }}
+                  />
+                  {pendingNoteSaving === p.id && (
+                    <div style={{ fontSize: '9px', color: 'var(--text-muted)', marginTop: '2px' }}>Saving…</div>
+                  )}
                 </div>
               );
             })}
