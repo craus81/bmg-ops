@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { createClient } from '@supabase/supabase-js';
+import { createServiceClient } from '@/lib/supabase-service';
 import { requireAuth } from '@/lib/api-auth';
 
 export const dynamic = 'force-dynamic';
@@ -18,11 +18,7 @@ export async function GET(req: NextRequest) {
   // its Data Cache, and a cached PostgREST GET makes this status endpoint
   // lie forever — so force every Supabase call from this route to skip
   // caching entirely.
-  const supabase = createClient(
-    process.env.NEXT_PUBLIC_SUPABASE_URL!,
-    process.env.SUPABASE_SERVICE_ROLE_KEY!,
-    { global: { fetch: (input: any, init?: any) => fetch(input, { ...init, cache: 'no-store' }) } }
-  );
+  const supabase = createServiceClient();
 
   const [{ data: tokenRow }, { data: stateRow }, { data: errorRows }] = await Promise.all([
     supabase

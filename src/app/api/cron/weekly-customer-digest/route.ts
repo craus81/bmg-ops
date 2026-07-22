@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { createClient } from '@supabase/supabase-js';
+import { createServiceClient } from '@/lib/supabase-service';
 import { requireAdmin } from '@/lib/api-auth';
 import { sendEmail, buildCustomerDigestEmail } from '@/lib/resend';
 import { resolveCustomerContact } from '@/lib/customer-notify';
@@ -8,10 +8,7 @@ import { recordHeartbeat } from '@/lib/system-health';
 export const dynamic = 'force-dynamic';
 export const maxDuration = 300;
 
-const service = createClient(
-  process.env.NEXT_PUBLIC_SUPABASE_URL!,
-  process.env.SUPABASE_SERVICE_ROLE_KEY!,
-);
+const service = createServiceClient();
 
 const ACTIVE_STATUSES = ['received', 'in_progress', 'stuck_parts', 'stuck_graphics'];
 const STATUS_LABELS: Record<string, string> = {

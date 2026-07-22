@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { createClient } from '@supabase/supabase-js';
+import { createServiceClient } from '@/lib/supabase-service';
 import { requireAdmin } from '@/lib/api-auth';
 import { listCalendarChanges } from '@/lib/google';
 import { pushGraphicsJobToCalendar } from '@/lib/graphics-calendar';
@@ -12,10 +12,7 @@ export const maxDuration = 120;
 const SYNC_TYPE = 'google_calendar_pull';
 
 function service() {
-  return createClient(
-    process.env.NEXT_PUBLIC_SUPABASE_URL!,
-    process.env.SUPABASE_SERVICE_ROLE_KEY!,
-  );
+  return createServiceClient();
 }
 
 /** All-day events carry start.date; timed events carry start.dateTime. */
