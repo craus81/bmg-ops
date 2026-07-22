@@ -36,6 +36,14 @@ const TYPE_COLORS: Record<string, string> = {
   google: '#2dd4bf',
 };
 
+/** "14:30" / "14:30:00" → "2:30 PM". Passes through anything unparseable. */
+const fmt12h = (t: string) => {
+  const [h, m] = t.split(':');
+  const hour = parseInt(h, 10);
+  if (isNaN(hour) || m == null) return t;
+  return `${hour % 12 || 12}:${m} ${hour >= 12 ? 'PM' : 'AM'}`;
+};
+
 const TYPE_LABELS: Record<string, string> = {
   graphics: 'Graphics',
   upfit: 'Upfit',
@@ -508,7 +516,7 @@ export default function SchedulePage() {
                         </div>
                         {ev.subtitle && <div style={{ fontSize: '10px', color: 'var(--text-muted)', marginTop: '1px' }}>{ev.subtitle}</div>}
                         <div style={{ display: 'flex', gap: '6px', alignItems: 'center' }}>
-                          {ev.time && <span style={{ fontSize: '9px', color: 'var(--text-muted)' }}>{ev.time}</span>}
+                          {ev.time && <span style={{ fontSize: '9px', color: 'var(--text-muted)' }}>{fmt12h(ev.time)}</span>}
                           {(ev.noteCount || 0) > 0 && <span style={{ fontSize: '9px', color: 'var(--text-muted)' }}>💬 {ev.noteCount}</span>}
                           {(ev.fileCount || 0) > 0 && <span style={{ fontSize: '9px', color: 'var(--text-muted)' }}>📎 {ev.fileCount}</span>}
                         </div>
@@ -613,7 +621,7 @@ export default function SchedulePage() {
                 <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '8px' }}>
                   <span style={{ fontSize: '11px', color: 'var(--text-muted)' }}>
                     {new Date(cardEvent.event_date + 'T12:00:00').toLocaleDateString([], { weekday: 'long', month: 'long', day: 'numeric', year: 'numeric' })}
-                    {cardEvent.event_time ? ` · ${cardEvent.event_time.slice(0, 5)}` : ''}
+                    {cardEvent.event_time ? ` · ${fmt12h(cardEvent.event_time)}` : ''}
                   </span>
                   <button
                     onClick={() => setCardEdit({ title: cardEvent.title || '', event_date: cardEvent.event_date || '', event_time: cardEvent.event_time ? cardEvent.event_time.slice(0, 5) : '', description: cardEvent.description || '' })}
