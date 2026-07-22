@@ -488,7 +488,7 @@ export default function VehicleCheckIn({ onCheckedIn }: { onCheckedIn?: () => vo
         sourceType: 'checkin_note',
         sourceId: data.id,
         contextLabel: `Check-in — ${vehicleDesc}${selectedOrder?.customer_name ? ` (${selectedOrder.customer_name})` : ''}`,
-        contextUrl: '/tracking',
+        contextUrl: `/tracking?vehicle=${data.id}`,
       });
     }
 

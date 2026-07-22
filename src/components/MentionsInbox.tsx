@@ -16,11 +16,30 @@ interface Mention {
   id: string;
   mentioned_by: string | null;
   source_type: string;
+  source_id: string | null;
   context_label: string | null;
   context_url: string | null;
   note_excerpt: string | null;
   read_at: string | null;
   created_at: string;
+}
+
+// Mentions recorded before deep links carried bare page URLs (e.g. just
+// "/tracking"), which land on the page but not the record. Rebuild the deep
+// link from source_type + source_id for those; anything already carrying a
+// query string is trusted as-is.
+function mentionUrl(m: Mention): string | null {
+  if (!m.context_url || m.context_url.includes('?') || !m.source_id) return m.context_url;
+  const deep: Record<string, string> = {
+    checkin_note: `/tracking?vehicle=${m.source_id}`,
+    vehicle_note: `/tracking?vehicle=${m.source_id}`,
+    po_note: `/admin/pos?id=${m.source_id}`,
+    graphics_note: `/graphics?editJob=${m.source_id}`,
+    upfit_note: `/upfit?id=${m.source_id}`,
+    calendar_event_note: `/admin/schedule?card=${m.source_id}`,
+    customer_note: `/admin/reports/at-risk?id=${m.source_id}`,
+  };
+  return deep[m.source_type] || m.context_url;
 }
 
 export default function MentionsInbox({ showWhenEmpty = false }: { showWhenEmpty?: boolean }) {
@@ -35,7 +54,7 @@ export default function MentionsInbox({ showWhenEmpty = false }: { showWhenEmpty
     if (!user?.id) return;
     const { data } = await supabase
       .from('note_mentions')
-      .select('id, mentioned_by, source_type, context_label, context_url, note_excerpt, read_at, created_at')
+      .select('id, mentioned_by, source_type, source_id, context_label, context_url, note_excerpt, read_at, created_at')
       .eq('mentioned_user_id', user.id)
       .order('created_at', { ascending: false })
       .limit(50);
@@ -95,7 +114,7 @@ export default function MentionsInbox({ showWhenEmpty = false }: { showWhenEmpty
       {visible.map(m => (
         <div
           key={m.id}
-          onClick={() => { markRead(m); if (m.context_url) router.push(m.context_url); }}
+          onClick={() => { markRead(m); const url = mentionUrl(m); if (url) router.push(url); }}
           style={{ padding: '10px 14px', borderBottom: '1px solid var(--border)', cursor: 'pointer', opacity: m.read_at ? 0.6 : 1 }}
         >
           <div style={{ fontSize: '12px', fontWeight: 700, color: 'var(--text-primary)' }}>

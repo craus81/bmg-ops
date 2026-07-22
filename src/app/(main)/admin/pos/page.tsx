@@ -1538,7 +1538,7 @@ export default function POsPage() {
         sourceType: 'po_note',
         sourceId: po.id,
         contextLabel: `PO #${po.po_number}`,
-        contextUrl: '/admin/pos',
+        contextUrl: `/admin/pos?id=${po.id}`,
         userIds: mentions,
       });
     }

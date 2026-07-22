@@ -1,7 +1,7 @@
 'use client';
 
 import { useState, useEffect } from 'react';
-import { useRouter } from 'next/navigation';
+import { useRouter, useSearchParams } from 'next/navigation';
 import { createClient } from '@/lib/supabase-browser';
 import { useAuth } from '@/components/AuthProvider';
 import { useDialog } from '@/components/DialogProvider';
@@ -56,6 +56,7 @@ const TYPE_LABELS: Record<string, string> = {
 
 export default function SchedulePage() {
   const router = useRouter();
+  const searchParams = useSearchParams();
   const { user, isAdmin, isSales, profile } = useAuth();
   const dialog = useDialog();
   const supabase = createClient();
@@ -112,6 +113,14 @@ export default function SchedulePage() {
 
   // eslint-disable-next-line react-hooks/exhaustive-deps -- intentional: load once on mount
   useEffect(() => { loadEvents(); }, [currentDate, view]);
+
+  // Deep link (mentions inbox): ?card=<calendar_events id> opens that event's
+  // card directly — openCard fetches by id, so it works whatever week is shown.
+  useEffect(() => {
+    const cardId = searchParams.get('card');
+    if (cardId) openCard(cardId);
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- intentional: open once on mount
+  }, []);
 
   const loadEvents = async () => {
     setLoading(true);
@@ -326,7 +335,7 @@ export default function SchedulePage() {
         sourceType: 'calendar_event_note',
         sourceId: cardEvent.id,
         contextLabel: `Schedule — ${cardEvent.title}`,
-        contextUrl: '/admin/schedule',
+        contextUrl: `/admin/schedule?card=${cardEvent.id}`,
       });
       setCardNoteDraft('');
       const { data: notes } = await supabase.from('calendar_event_notes').select('*').eq('event_id', cardEvent.id).order('created_at', { ascending: true });
