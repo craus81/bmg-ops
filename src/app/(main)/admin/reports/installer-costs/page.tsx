@@ -16,6 +16,7 @@ interface ReportLine {
   location: string;
   vin: string;
   partNumber: string | null;
+  poNumber: string | null;
   paid: number | null;
   invoiced: number | null;
   invoicedSource: InvoicedSource | null;
@@ -29,6 +30,7 @@ interface ReportData {
   perVendor: Rollup[];
   perLocation: Rollup[];
   perPart: Rollup[];
+  perPO: Rollup[];
   totals: { vins: number; paid: number; invoiced: number; margin: number; unpriced: number };
   meta?: {
     internalIncluded: boolean;
@@ -86,9 +88,9 @@ export default function InstallerCostsReportPage() {
     if (!data) return;
     downloadCsv(
       `installer-costs-${start}-to-${end}.csv`,
-      ['Date', 'Installer', 'Invoice #', 'Location', 'VIN', 'Part', 'Paid', 'Est. Invoiced', 'Est. Margin', 'Revenue Source'],
+      ['Date', 'Installer', 'Invoice #', 'Location', 'VIN', 'Part', 'PO', 'Paid', 'Est. Invoiced', 'Est. Margin', 'Revenue Source'],
       data.lines.map(l => [
-        l.date, l.vendor, l.invoiceNumber || '', l.location, l.vin, l.partNumber || '',
+        l.date, l.vendor, l.invoiceNumber || '', l.location, l.vin, l.partNumber || '', l.poNumber || '',
         l.paid != null ? l.paid.toFixed(2) : '', l.invoiced != null ? l.invoiced.toFixed(2) : '',
         l.paid != null && l.invoiced != null ? (l.invoiced - l.paid).toFixed(2) : '',
         l.invoicedSource ? SOURCE_LABELS[l.invoicedSource] : '',
@@ -205,8 +207,9 @@ export default function InstallerCostsReportPage() {
             {rollupTable('By Location', data.perLocation)}
             {rollupTable('By Installer', data.perVendor)}
           </div>
-          <div style={{ marginBottom: '14px' }}>
+          <div style={{ display: 'flex', gap: '10px', marginBottom: '14px', flexWrap: 'wrap' }}>
             {rollupTable('By Part Number', data.perPart)}
+            {rollupTable('By PO', data.perPO || [])}
           </div>
 
           {/* Detail lines */}
@@ -216,7 +219,7 @@ export default function InstallerCostsReportPage() {
               <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '11px' }}>
                 <thead>
                   <tr>
-                    {['Date', 'Installer', 'Inv #', 'Location', 'VIN', 'Part', 'Paid', 'Est. Invoiced'].map(h => (
+                    {['Date', 'Installer', 'Inv #', 'Location', 'VIN', 'Part', 'PO', 'Paid', 'Est. Invoiced'].map(h => (
                       <th key={h} style={{ textAlign: ['Paid', 'Est. Invoiced'].includes(h) ? 'right' : 'left', padding: '4px 6px', fontSize: '9px', fontWeight: 700, textTransform: 'uppercase', color: 'var(--text-muted)', borderBottom: '1px solid var(--border)', whiteSpace: 'nowrap' }}>{h}</th>
                     ))}
                   </tr>
@@ -230,6 +233,7 @@ export default function InstallerCostsReportPage() {
                       <td style={{ padding: '4px 6px', color: 'var(--text-secondary)' }}>{l.location}</td>
                       <td style={{ padding: '4px 6px', fontFamily: 'monospace', color: 'var(--text-secondary)' }}>{l.vin}</td>
                       <td style={{ padding: '4px 6px', color: 'var(--text-secondary)' }}>{l.partNumber || '—'}</td>
+                      <td style={{ padding: '4px 6px', color: 'var(--text-secondary)', whiteSpace: 'nowrap' }}>{l.poNumber || '—'}</td>
                       <td style={{ padding: '4px 6px', textAlign: 'right', fontWeight: 700, color: l.inHouse ? '#60a5fa' : '#f472b6' }}>{l.paid != null ? fmtMoney(l.paid) : '—'}</td>
                       <td title={l.invoicedSource ? SOURCE_LABELS[l.invoicedSource] : ''} style={{ padding: '4px 6px', textAlign: 'right', color: l.invoicedSource === 'actual' || l.invoicedSource === 'netsuite' ? 'var(--text-primary)' : 'var(--text-secondary)', fontWeight: l.invoicedSource === 'actual' || l.invoicedSource === 'netsuite' ? 700 : 400 }}>
                         {l.invoiced != null ? fmtMoney(l.invoiced) : '—'}
