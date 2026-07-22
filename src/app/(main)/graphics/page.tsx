@@ -829,7 +829,7 @@ export default function GraphicsPage() {
       sourceType: 'graphics_note',
       sourceId: jobId,
       contextLabel: job ? (job.title || job.job_number || 'Graphics job') : 'Graphics job',
-      contextUrl: '/graphics',
+      contextUrl: `/graphics?editJob=${jobId}`,
     });
     setNewNote('');
     await loadHistory(jobId);

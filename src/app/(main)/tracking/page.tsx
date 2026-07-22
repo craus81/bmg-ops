@@ -458,7 +458,7 @@ export default function TrackingPage() {
         sourceType: 'vehicle_note',
         sourceId: vehicleId,
         contextLabel: v ? `${vehicleTitle(v)} — ${v.customer_name || 'vehicle'}` : 'In-Shop vehicle',
-        contextUrl: '/tracking',
+        contextUrl: `/tracking?vehicle=${vehicleId}`,
       });
     } catch (err) {
       console.error('Note save error:', err);

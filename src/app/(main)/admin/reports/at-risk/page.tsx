@@ -1,7 +1,7 @@
 'use client';
 
-import React, { useState, useEffect, useCallback } from 'react';
-import { useRouter } from 'next/navigation';
+import React, { useState, useEffect, useCallback, useRef } from 'react';
+import { useRouter, useSearchParams } from 'next/navigation';
 import { useAuth } from '@/components/AuthProvider';
 import { useDialog } from '@/components/DialogProvider';
 import { createClient } from '@/lib/supabase-browser';
@@ -30,6 +30,7 @@ const fmtMoney = (n: number) => `$${n.toLocaleString(undefined, { maximumFractio
 
 export default function AtRiskReportPage() {
   const router = useRouter();
+  const searchParams = useSearchParams();
   const { user, isAdmin, isSales, loading: authLoading } = useAuth();
   const dialog = useDialog();
   const supabase = createClient();
@@ -50,6 +51,24 @@ export default function AtRiskReportPage() {
   const [noteDraft, setNoteDraft] = useState('');
   const [noteSavedValue, setNoteSavedValue] = useState('');
   const [noteSaving, setNoteSaving] = useState(false);
+
+  // Deep link (mentions inbox): ?id=<customer id> opens that row's note and
+  // scrolls to it once the report has loaded. One-shot — re-runs of the
+  // report (filter changes) don't re-trigger it.
+  const deepLinked = useRef(false);
+  useEffect(() => {
+    if (loading || deepLinked.current) return;
+    const id = searchParams.get('id');
+    if (!id) return;
+    deepLinked.current = true;
+    const row = rows.find(r => r.id === id);
+    if (!row) return; // e.g. dismissed rows aren't in the default view
+    setNoteOpenId(row.id);
+    setNoteDraft(row.internal_notes || '');
+    setNoteSavedValue(row.internal_notes || '');
+    setTimeout(() => document.getElementById(`atrisk-${id}`)?.scrollIntoView({ behavior: 'smooth', block: 'center' }), 200);
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- intentional: fire once after first load
+  }, [loading]);
 
   const run = useCallback(async (ms: string, qd: string, incDismissed: boolean) => {
     setLoading(true);
@@ -119,7 +138,7 @@ export default function AtRiskReportPage() {
         sourceType: 'customer_note',
         sourceId: row.id,
         contextLabel: `At-risk account — ${row.company_name}`,
-        contextUrl: '/admin/reports/at-risk',
+        contextUrl: `/admin/reports/at-risk?id=${row.id}`,
       });
     }
     setRows(prev => prev.map(r => r.id === row.id ? { ...r, internal_notes: value } : r));
@@ -248,7 +267,7 @@ export default function AtRiskReportPage() {
             <tbody>
               {rows.map(r => (
                 <React.Fragment key={r.id}>
-                <tr style={{ opacity: r.at_risk_dismissed_at ? 0.5 : 1 }}>
+                <tr id={`atrisk-${r.id}`} style={{ opacity: r.at_risk_dismissed_at ? 0.5 : 1 }}>
                   <td style={{ ...cell, fontWeight: 700, color: 'var(--text-primary)' }}>
                     {r.company_name}
                     {r.entity_id && <span style={{ color: 'var(--text-muted)', fontWeight: 400, marginLeft: '6px', fontSize: '10px' }}>{r.entity_id}</span>}

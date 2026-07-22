@@ -512,7 +512,7 @@ export default function UpfitProjectsPage() {
         sourceType: 'upfit_note',
         sourceId: selected.id,
         contextLabel: `${selected.project_name}${selected.customer_name ? ` — ${selected.customer_name}` : ''}`,
-        contextUrl: '/upfit',
+        contextUrl: `/upfit?id=${selected.id}`,
       });
       setNewNote('');
       loadNotes(selected.id);
