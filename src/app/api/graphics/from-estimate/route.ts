@@ -41,6 +41,20 @@ function generateJobNumber(): string {
  *     existingJobId?: string,    // required for mode='link'
  *     userId?: string }
  */
+
+/**
+ * An estimate that turned into (or got linked to) a graphics job is won —
+ * mark it accepted (same status convert-to-so uses) so it drops out of the
+ * follow-up nudge queue, which only watches status='sent'.
+ */
+async function markEstimateWon(supabase: any, estimateId: string) {
+  await supabase
+    .from('estimates')
+    .update({ status: 'accepted' })
+    .eq('id', estimateId)
+    .neq('status', 'accepted');
+}
+
 export async function POST(req: NextRequest) {
   const auth = await requireAuth(req);
   if (auth.error) return auth.error;
@@ -94,6 +108,8 @@ export async function POST(req: NextRequest) {
         changed_by: userId || auth.user.id,
         note: `Linked to estimate ${estimate.estimate_number}`,
       });
+
+      await markEstimateWon(supabase, estimateId);
 
       return NextResponse.json({
         success: true,
@@ -178,6 +194,8 @@ export async function POST(req: NextRequest) {
       changed_by: userId || auth.user.id,
       note: `Spawned from estimate ${estimate.estimate_number}`,
     });
+
+    await markEstimateWon(supabase, estimateId);
 
     return NextResponse.json({
       success: true,

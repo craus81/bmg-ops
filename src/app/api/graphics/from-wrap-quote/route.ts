@@ -29,6 +29,20 @@ function generateJobNumber(): string {
 }
 
 /**
+ * A quote that turned into (or got linked to) a graphics job is won — mark
+ * it accepted so it drops out of the follow-up nudge queue, which only
+ * watches status='sent'. The neq guard keeps the original accepted_at when
+ * the customer already approved through the token link.
+ */
+async function markQuoteWon(supabase: ReturnType<typeof getSupabase>, quoteId: string) {
+  await supabase
+    .from('wrap_quotes')
+    .update({ status: 'accepted', accepted_at: new Date().toISOString() })
+    .eq('id', quoteId)
+    .neq('status', 'accepted');
+}
+
+/**
  * POST /api/graphics/from-wrap-quote
  *
  * Spawn a new graphics job from a wrap quote (mode='create') OR link an
@@ -95,6 +109,8 @@ export async function POST(req: NextRequest) {
         changed_by: userId || auth.user.id,
         note: `Linked to wrap quote ${quote.quote_number}`,
       });
+
+      await markQuoteWon(supabase, quoteId);
 
       return NextResponse.json({
         success: true,
@@ -201,6 +217,8 @@ export async function POST(req: NextRequest) {
       changed_by: userId || auth.user.id,
       note: `Spawned from wrap quote ${quote.quote_number}`,
     });
+
+    await markQuoteWon(supabase, quoteId);
 
     return NextResponse.json({
       success: true,
