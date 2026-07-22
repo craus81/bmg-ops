@@ -3,6 +3,7 @@ import { suiteqlQueryAll } from '@/lib/netsuite';
 import { createClient } from '@supabase/supabase-js';
 import { requireAdmin } from '@/lib/api-auth';
 import { validateBody, z } from '@/lib/validate';
+import { fetchAllRows } from '@/lib/fetch-all';
 
 const Schema = z.object({
   userId: z.string().uuid().optional().nullable(),
@@ -173,11 +174,14 @@ export async function POST(req: NextRequest) {
     // Manual catalog re-files (Parts page "Move to … Catalog") win over the
     // derived classification, otherwise every sync would undo the move.
     const catalogOverrides: Record<string, 'upfit' | 'graphics'> = {};
-    const { data: overrideRows } = await supabase
-      .from('netsuite_parts')
-      .select('netsuite_id, catalog_override')
-      .not('catalog_override', 'is', null)
-      .not('netsuite_id', 'is', null);
+    const { data: overrideRows } = await fetchAllRows<any>((from, to) =>
+      supabase
+        .from('netsuite_parts')
+        .select('netsuite_id, catalog_override')
+        .not('catalog_override', 'is', null)
+        .not('netsuite_id', 'is', null)
+        .order('id')
+        .range(from, to));
     for (const r of overrideRows || []) {
       if (r.netsuite_id && (r.catalog_override === 'upfit' || r.catalog_override === 'graphics')) {
         catalogOverrides[String(r.netsuite_id)] = r.catalog_override;
@@ -264,10 +268,13 @@ export async function POST(req: NextRequest) {
       const syncedLower = new Set(
         nsItems.map((it: any) => (it.item_number || '').toLowerCase()).filter(Boolean)
       );
-      const { data: manualRows } = await supabase
-        .from('netsuite_parts')
-        .select('id, item_number, vehicle_type, graphic_package, customer, proof_pages, billable_customer')
-        .eq('source', 'manual');
+      const { data: manualRows } = await fetchAllRows<any>((from, to) =>
+        supabase
+          .from('netsuite_parts')
+          .select('id, item_number, vehicle_type, graphic_package, customer, proof_pages, billable_customer')
+          .eq('source', 'manual')
+          .order('id')
+          .range(from, to));
 
       const colliding = (manualRows || []).filter(
         (m: any) => m.item_number && syncedLower.has(m.item_number.toLowerCase())

@@ -8,6 +8,7 @@ import { storage } from '@/lib/storage';
 import { apiFetch } from '@/lib/api-client';
 import { DropZone } from '@/components/DropZone';
 import UploadProgressBar, { type UploadProgress } from '@/components/UploadProgressBar';
+import { fetchAllRows } from '@/lib/fetch-all';
 import type { CatalogItem } from '@/lib/types';
 
 interface ZipFileEntry {
@@ -77,10 +78,11 @@ export default function BulkUploadPage() {
   useEffect(() => {
     if (authLoading) return; // role flags aren't resolved until auth finishes loading
     if (!isAdmin) { router.push('/home'); return; }
-    // Load catalog for proof matching
+    // Load catalog for proof matching — paginated past the 1000-row cap.
     const loadCatalog = async () => {
-      const { data } = await supabase.from('catalog').select('*').order('part_number');
-      setCatalog((data as CatalogItem[]) || []);
+      const { data } = await fetchAllRows<CatalogItem>((from, to) =>
+        supabase.from('catalog').select('*').order('part_number').order('id').range(from, to));
+      setCatalog(data);
     };
     loadCatalog();
     // Restore sticky customer from previous session

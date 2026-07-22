@@ -58,6 +58,15 @@ they tell you to go back to auto-shipping.
 
 ## Domain notes
 
+- **Supabase reads silently cap at 1000 rows** (PostgREST default —
+  `.limit(N > 1000)` does NOT raise it). Any read of a table that can
+  grow unboundedly (netsuite_parts, scan_logs, po/invoice line items,
+  credits, emails, …) must paginate: use `fetchAllRows` from
+  `src/lib/fetch-all.ts`, and give the query a deterministic order with
+  a unique tiebreaker (e.g. `.order('item_number').order('id')`). This
+  has caused repeated field bugs ("part not in catalog", stale
+  inventory, inflated waiting-on-PO counts).
+
 - **CNI installer payouts → NetSuite vendor bills:** see
   `docs/cni-vendor-bills.md`. Key trap: an installer's
   `cni_profiles.netsuite_vendor_id` must be the vendor's numeric NetSuite

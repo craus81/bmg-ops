@@ -1,5 +1,6 @@
 import type { SupabaseClient } from '@supabase/supabase-js';
 import { suiteqlQueryAll } from '@/lib/netsuite';
+import { fetchAllRows } from '@/lib/fetch-all';
 import { recordHeartbeat, type HeartbeatResult } from '@/lib/system-health';
 
 /**
@@ -37,10 +38,18 @@ export async function syncInventoryQuantities(service: SupabaseClient): Promise<
     `);
   }
 
-  const { data: existing } = await service
-    .from('netsuite_parts')
-    .select('netsuite_id, quantity_on_hand, quantity_available');
-  const byId = new Map((existing || []).map(p => [String(p.netsuite_id), p]));
+  // Paginated: the parts table is well past PostgREST's 1000-row cap, and a
+  // truncated read here silently skips quantity updates for every part
+  // outside the first page.
+  const { data: existing, error: existingErr } = await fetchAllRows<{ netsuite_id: string | number | null; quantity_on_hand: number | null; quantity_available: number | null }>((from, to) =>
+    service
+      .from('netsuite_parts')
+      .select('netsuite_id, quantity_on_hand, quantity_available')
+      .order('id')
+      .range(from, to),
+  );
+  if (existingErr) throw new Error(`netsuite_parts read failed: ${existingErr.message}`);
+  const byId = new Map(existing.map(p => [String(p.netsuite_id), p]));
 
   let updated = 0;
   for (const row of rows) {

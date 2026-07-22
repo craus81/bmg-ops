@@ -8,6 +8,17 @@ import { resolvePoCustomer } from '@/lib/customer-match';
 import { validateBody, z } from '@/lib/validate';
 import { isProofLikeName } from '@/lib/pdf-classify';
 import { recomputePoFulfillment } from '@/lib/scan-match';
+import { fetchAllRows } from '@/lib/fetch-all';
+
+// Full active catalog for part matching — paginated past PostgREST's
+// 1000-row cap. A truncated read here marks real parts "not in catalog"
+// on imported PO lines (part_id null, excluded from proof attachment).
+async function loadCatalogItems(supabase: any): Promise<{ id: string; part_number: string }[]> {
+  const { data } = await fetchAllRows<{ id: string; item_number: string }>((from, to) =>
+    supabase.from('netsuite_parts').select('id, item_number').eq('is_active', true).order('id').range(from, to),
+  );
+  return data.map((p) => ({ id: p.id, part_number: p.item_number }));
+}
 
 // PDF download + Claude extraction (with retry/backoff) routinely runs well
 // past Vercel's default ~10s ceiling, which 504s the function mid-extraction
@@ -503,8 +514,7 @@ export async function POST(req: NextRequest) {
           ship_to: extracted.ship_to || existingPO.ship_to || null,
         }).eq('id', existingPO.id);
 
-        const { data: catalogData } = await supabase.from('netsuite_parts').select('id, item_number').eq('is_active', true);
-        const catalogItems = (catalogData || []).map((p: any) => ({ id: p.id, part_number: p.item_number }));
+        const catalogItems = await loadCatalogItems(supabase);
 
         const lineInserts = extractedLines.map((l: any) => {
           const partNum = l.supplier_part || l.part_number;
@@ -556,8 +566,7 @@ export async function POST(req: NextRequest) {
       }
 
       // Create new PO from reviewed data
-      const { data: catalogData } = await supabase.from('netsuite_parts').select('id, item_number').eq('is_active', true);
-      const catalogItems = (catalogData || []).map((p: any) => ({ id: p.id, part_number: p.item_number }));
+      const catalogItems = await loadCatalogItems(supabase);
       const { customer, customerNetsuiteId } = await resolvePoCustomer(supabase, extracted.customer);
 
       const { data: adminUser } = await supabase.from('profiles').select('id').eq('role', 'admin').limit(1).single();
@@ -1009,8 +1018,7 @@ export async function POST(req: NextRequest) {
       }
 
       // Get catalog for part matching
-      const { data: catalogData } = await supabase.from('netsuite_parts').select('id, item_number').eq('is_active', true);
-      const catalogItems = (catalogData || []).map((p: any) => ({ id: p.id, part_number: p.item_number }));
+      const catalogItems = await loadCatalogItems(supabase);
 
       // Insert new line items
       const lineInserts = extractedLines.map((l: any) => {
@@ -1086,8 +1094,7 @@ export async function POST(req: NextRequest) {
 
     // Create new PO
     if (autoCreate !== false) {
-      const { data: catalogData } = await supabase.from('netsuite_parts').select('id, item_number').eq('is_active', true);
-      const catalogItems = (catalogData || []).map((p: any) => ({ id: p.id, part_number: p.item_number }));
+      const catalogItems = await loadCatalogItems(supabase);
 
       const { customer, customerNetsuiteId } = await resolvePoCustomer(supabase, extracted.customer);
 
