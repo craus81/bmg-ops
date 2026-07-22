@@ -10,6 +10,7 @@
 
 import { useState, useEffect, useCallback } from 'react';
 import { createClient } from '@/lib/supabase-browser';
+import { fetchAllRows } from '@/lib/fetch-all';
 
 // Mirrors normalizeItemNumber in vendor-po-sync (server-only import there):
 // NetSuite sub-items are "PARENT : CHILD" — compare on the last segment.
@@ -46,13 +47,20 @@ export default function InventoryPage() {
       supabase.from('part_allocations')
         .select('item_number, quantity, upfit_projects(project_name)')
         .eq('status', 'reserved'),
-      supabase.from('netsuite_vendor_po_lines')
-        .select('item_number, quantity, quantity_received, netsuite_vendor_pos!inner(tranid, vendor_name, status, eta_date)'),
-      supabase.from('netsuite_parts')
-        .select('item_number, display_name, quantity_on_hand, quantity_available')
-        .eq('is_active', true)
-        .gt('quantity_on_hand', 0)
-        .limit(3000),
+      // Both paginated: PostgREST caps every response at 1000 rows no matter
+      // the .limit(), silently dropping stocked parts / on-order lines.
+      fetchAllRows<any>((from, to) =>
+        supabase.from('netsuite_vendor_po_lines')
+          .select('item_number, quantity, quantity_received, netsuite_vendor_pos!inner(tranid, vendor_name, status, eta_date)')
+          .order('id')
+          .range(from, to)),
+      fetchAllRows<any>((from, to) =>
+        supabase.from('netsuite_parts')
+          .select('item_number, display_name, quantity_on_hand, quantity_available')
+          .eq('is_active', true)
+          .gt('quantity_on_hand', 0)
+          .order('id')
+          .range(from, to)),
     ]);
 
     const map = new Map<string, InvRow>();

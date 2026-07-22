@@ -15,6 +15,7 @@ import { findExistingScanVins, sameVehicleVin, vinTail, fetchScansMatchingVins, 
 import { scanLifecycle } from '@/lib/scan-state';
 import { decodeVinsBatch } from '@/lib/vin-decoder';
 import { storage } from '@/lib/storage';
+import { fetchAllRows } from '@/lib/fetch-all';
 
 interface ScanLog {
   id: string;
@@ -203,7 +204,10 @@ export default function AdminScansPage() {
         return { data: all };
       })(),
       supabase.from('profiles').select('id, full_name, role, roles, is_field_installer, company_id'),
-      supabase.from('netsuite_parts').select('item_number, requires_po_match'),
+      // Paginated: a truncated map shows "Waiting on PO" for scans whose
+      // no-PO part sorts past the 1000-row cap.
+      fetchAllRows<{ item_number: string; requires_po_match: boolean | null }>((from, to) =>
+        supabase.from('netsuite_parts').select('item_number, requires_po_match').order('id').range(from, to)),
       // All active parts — paginate to get all
       (async () => {
         let all: any[] = [];

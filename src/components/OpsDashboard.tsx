@@ -21,6 +21,7 @@ import { useRouter } from 'next/navigation';
 import { createClient } from '@/lib/supabase-browser';
 import { useAuth } from '@/components/AuthProvider';
 import type { GraphicsJobStatus } from '@/lib/types';
+import { fetchAllRows } from '@/lib/fetch-all';
 
 // Stage buckets over graphics statuses (mirrors the pipeline on /graphics).
 const RECEIVED: GraphicsJobStatus[] = ['received', 'designing', 'revision'];
@@ -143,7 +144,10 @@ export default function OpsDashboard() {
       supabase.from('scan_logs')
         .select('id, billable_customer, po_id, po_number, part_number, exported_at')
         .is('archived_at', null).is('invoice_number', null).limit(1000),
-      supabase.from('netsuite_parts').select('item_number, requires_po_match'),
+      // Paginated: a truncated map counts no-PO parts past the 1000-row cap
+      // as "waiting on a PO" and skews the queue/batch numbers.
+      fetchAllRows<{ item_number: string; requires_po_match: boolean | null }>((from, to) =>
+        supabase.from('netsuite_parts').select('item_number, requires_po_match').order('id').range(from, to)),
       // KPI 3 — open PO backlog
       supabase.from('purchase_orders').select('id, po_line_items(quantity, installed, unit_price)').eq('status', 'open'),
       // Queue rows — same queries as each destination screen

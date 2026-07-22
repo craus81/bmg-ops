@@ -27,6 +27,7 @@ import EmailInvoicesModal, { type EmailableInvoice } from '@/components/EmailInv
 import { openNetSuitePdf } from '@/lib/netsuite-pdf-client';
 import type { GraphicsJob, GraphicsJobStatus } from '@/lib/types';
 import { GRAPHICS_STATUS_LABELS, GRAPHICS_STATUS_COLORS } from '@/lib/types';
+import { fetchAllRows } from '@/lib/fetch-all';
 
 type HubTab = 'graphics' | 'scans' | 'sent';
 
@@ -289,7 +290,10 @@ export default function InvoicingHubPage() {
         .is('invoice_number', null)
         .order('scanned_at', { ascending: false })
         .limit(1000),
-      supabase.from('netsuite_parts').select('item_number, requires_po_match'),
+      // Paginated: truncating this map makes parts past the 1000-row cap
+      // default to "requires a PO", dropping their scans from Ready-to-invoice.
+      fetchAllRows<{ item_number: string; requires_po_match: boolean | null }>((from, to) =>
+        supabase.from('netsuite_parts').select('item_number, requires_po_match').order('id').range(from, to)),
       supabase.from('scan_logs')
         .select('billable_customer, invoice_number, po_number, date_invoiced')
         .not('invoice_number', 'is', null)
