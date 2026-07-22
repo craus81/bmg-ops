@@ -53,8 +53,11 @@ interface UnassignedProfile {
 // The exact invoice documents this installer has sent us, recorded on the
 // Scan Log → Vendor Invoices tab (file stored in R2, metadata + per-VIN
 // lines in vendor_invoices).
+type VendorInvoiceStatus = 'recorded' | 'submitted' | 'approved' | 'rejected' | 'billed' | 'paid';
+
 interface CompanyVendorInvoice {
   id: string;
+  status: VendorInvoiceStatus;
   invoice_number: string | null;
   invoice_date: string | null;
   vendor_name: string;
@@ -65,6 +68,18 @@ interface CompanyVendorInvoice {
   created_at: string;
   lines: { id: string }[];
 }
+
+// Matches the AP queue's chips + the next action each status invites, so the
+// CNI page reads the same as /admin/ap. Clicking through lands there focused
+// on the invoice, where the actual submit/approve/bill/pay buttons live.
+const VI_STATUS: Record<VendorInvoiceStatus, { label: string; color: string; bg: string; cta: string }> = {
+  recorded: { label: 'Not Submitted', color: '#94a3b8', bg: 'rgba(148,163,184,0.12)', cta: 'Submit →' },
+  submitted: { label: 'Awaiting Approval', color: '#fbbf24', bg: 'rgba(251,191,36,0.12)', cta: 'Approve →' },
+  approved: { label: 'Approved', color: '#22c55e', bg: 'rgba(34,197,94,0.12)', cta: 'Bill →' },
+  rejected: { label: 'Rejected', color: '#ef4444', bg: 'rgba(239,68,68,0.12)', cta: 'Review →' },
+  billed: { label: 'Billed', color: '#60a5fa', bg: 'rgba(96,165,250,0.12)', cta: 'Mark Paid →' },
+  paid: { label: 'Paid', color: '#4ade80', bg: 'rgba(74,222,128,0.12)', cta: 'View →' },
+};
 
 // Profiles that carry an installer role can belong to a CNI company.
 const INSTALLER_FILTER = 'role.eq.installer,roles.cs.{installer}';
@@ -88,11 +103,13 @@ export default function CniCompanyDetailPage() {
   const [name, setName] = useState('');
   const [phone, setPhone] = useState('');
   const [email, setEmail] = useState('');
-  // Mailing address (companies.address JSONB: {street, city, state, zip})
-  const [street, setStreet] = useState('');
-  const [city, setCity] = useState('');
-  const [addrState, setAddrState] = useState('');
-  const [zip, setZip] = useState('');
+  // Mailing address as a single free-text field. Stored in the existing
+  // companies.address JSONB under `street` (city/state/zip kept blank) so no
+  // migration is needed — the bill mails to the NetSuite vendor's own address,
+  // not this copy, and everywhere this is read it's just concatenated. The
+  // NetSuite formatted-address fallback already lands whole in `street`, which
+  // is what made the old split fields collapse into one anyway.
+  const [address, setAddress] = useState('');
   const [vendorId, setVendorId] = useState('');
   const [showVendorSearch, setShowVendorSearch] = useState(false);
   const [pickedVendor, setPickedVendor] = useState<NsVendor | null>(null);
@@ -134,10 +151,7 @@ export default function CniCompanyDetailPage() {
       setPhone(companyData.phone || '');
       setEmail(companyData.email || '');
       const addr = (companyData as any).address || {};
-      setStreet(addr.street || '');
-      setCity(addr.city || '');
-      setAddrState(addr.state || '');
-      setZip(addr.zip || '');
+      setAddress([addr.street, addr.city, addr.state, addr.zip].filter(Boolean).join(', '));
       setVendorId(companyData.netsuite_vendor_id || '');
       setPrimaryContact(companyData.primary_contact_profile_id || '');
       setInsuranceExpiry(companyData.insurance_expiry || '');
@@ -189,7 +203,7 @@ export default function CniCompanyDetailPage() {
     // Vendor invoices on file for this installer — linked by company, plus
     // records that only carried the name (recorded before linking).
     if (companyData) {
-      const invoiceCols = 'id, invoice_number, invoice_date, vendor_name, total_amount, location_name, file_name, storage_path, created_at, lines:vendor_invoice_lines(id)';
+      const invoiceCols = 'id, status, invoice_number, invoice_date, vendor_name, total_amount, location_name, file_name, storage_path, created_at, lines:vendor_invoice_lines(id)';
       const escapedName = (companyData.name || '').replace(/[\\%_]/g, (ch: string) => `\\${ch}`);
       const [linked, byName] = await Promise.all([
         supabase.from('vendor_invoices')
@@ -276,7 +290,7 @@ export default function CniCompanyDetailPage() {
         name: name.trim(),
         phone: phone.trim() || null,
         email: email.trim() || null,
-        address: { street: street.trim(), city: city.trim(), state: addrState.trim(), zip: zip.trim() },
+        address: { street: address.trim(), city: '', state: '', zip: '' },
         netsuite_vendor_id: vendorId.trim() || null,
         primary_contact_profile_id: primaryContact || null,
       })
@@ -489,12 +503,13 @@ export default function CniCompanyDetailPage() {
         </div>
         <div style={{ marginBottom: '10px' }}>
           <label style={labelStyle}>Mailing Address</label>
-          <input value={street} onChange={e => setStreet(e.target.value)} placeholder="Street" style={{ ...inputStyle, marginBottom: '6px' }} />
-          <div style={{ display: 'grid', gridTemplateColumns: '2fr 1fr 1fr', gap: '8px' }}>
-            <input value={city} onChange={e => setCity(e.target.value)} placeholder="City" style={inputStyle} />
-            <input value={addrState} onChange={e => setAddrState(e.target.value)} placeholder="State" style={inputStyle} />
-            <input value={zip} onChange={e => setZip(e.target.value)} placeholder="ZIP" style={inputStyle} />
-          </div>
+          <textarea
+            value={address}
+            onChange={e => setAddress(e.target.value)}
+            placeholder="Street, City, State ZIP"
+            rows={2}
+            style={{ ...inputStyle, resize: 'vertical' }}
+          />
         </div>
         <div style={{ marginBottom: '10px' }}>
           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline' }}>
@@ -539,11 +554,8 @@ export default function CniCompanyDetailPage() {
                   // never clobber values already on the company.
                   if (v.email && !email.trim()) setEmail(v.email);
                   if (v.phone && !phone.trim()) setPhone(v.phone);
-                  if (v.address && !street.trim() && !city.trim()) {
-                    setStreet(v.address.street);
-                    setCity(v.address.city);
-                    setAddrState(v.address.state);
-                    setZip(v.address.zip);
+                  if (v.address && !address.trim()) {
+                    setAddress([v.address.street, v.address.city, v.address.state, v.address.zip].filter(Boolean).join(', '));
                   }
                 }}
                 autoFocus
@@ -841,9 +853,15 @@ export default function CniCompanyDetailPage() {
                 background: 'var(--subtle-bg)', border: '1px solid var(--border)',
               }}>
                 <div style={{ flex: 1, minWidth: 0 }}>
-                  <div style={{ fontSize: '13px', fontWeight: 700, color: 'var(--text-primary)' }}>
-                    {inv.invoice_number ? `Invoice #${inv.invoice_number}` : 'Invoice (no number)'}
-                    {inv.total_amount != null && <span style={{ color: '#f472b6', marginLeft: '8px' }}>${Number(inv.total_amount).toFixed(2)}</span>}
+                  <div style={{ fontSize: '13px', fontWeight: 700, color: 'var(--text-primary)', display: 'flex', alignItems: 'center', gap: '8px', flexWrap: 'wrap' }}>
+                    <span>
+                      {inv.invoice_number ? `Invoice #${inv.invoice_number}` : 'Invoice (no number)'}
+                      {inv.total_amount != null && <span style={{ color: '#f472b6', marginLeft: '8px' }}>${Number(inv.total_amount).toFixed(2)}</span>}
+                    </span>
+                    {(() => {
+                      const s = VI_STATUS[inv.status] || VI_STATUS.recorded;
+                      return <span style={{ fontSize: '9px', fontWeight: 700, padding: '2px 7px', borderRadius: '6px', background: s.bg, color: s.color, whiteSpace: 'nowrap' }}>{s.label}</span>;
+                    })()}
                   </div>
                   <div style={{ fontSize: '11px', color: 'var(--text-muted)', marginTop: '2px' }}>
                     {inv.invoice_date || inv.created_at.slice(0, 10)} · {inv.lines.length} VIN{inv.lines.length !== 1 ? 's' : ''}
@@ -851,17 +869,28 @@ export default function CniCompanyDetailPage() {
                     {inv.file_name ? ` · ${inv.file_name}` : ''}
                   </div>
                 </div>
-                {inv.storage_path ? (
-                  <a
-                    href={storage.from('invoices').getPublicUrl(inv.storage_path).data.publicUrl}
-                    target="_blank" rel="noreferrer"
-                    style={{ padding: '6px 10px', borderRadius: '8px', fontSize: '11px', fontWeight: 700, background: 'rgba(96,165,250,0.1)', border: '1px solid rgba(96,165,250,0.25)', color: '#60a5fa', textDecoration: 'none', flexShrink: 0, whiteSpace: 'nowrap' }}
+                <div style={{ display: 'flex', alignItems: 'center', gap: '6px', flexShrink: 0 }}>
+                  {inv.storage_path ? (
+                    <a
+                      href={storage.from('invoices').getPublicUrl(inv.storage_path).data.publicUrl}
+                      target="_blank" rel="noreferrer"
+                      style={{ padding: '6px 10px', borderRadius: '8px', fontSize: '11px', fontWeight: 700, background: 'rgba(96,165,250,0.1)', border: '1px solid rgba(96,165,250,0.25)', color: '#60a5fa', textDecoration: 'none', whiteSpace: 'nowrap' }}
+                    >
+                      📄 View File
+                    </a>
+                  ) : (
+                    <span style={{ fontSize: '10px', color: 'var(--text-muted)' }}>no file</span>
+                  )}
+                  {/* Click through to the AP queue focused on this invoice, where
+                      the submit/approve/bill/pay actions live. */}
+                  <button
+                    onClick={() => router.push(`/admin/ap?invoice=${inv.id}`)}
+                    title="Open in Payments to submit, approve, bill, or mark paid"
+                    style={{ padding: '6px 10px', borderRadius: '8px', fontSize: '11px', fontWeight: 700, background: 'var(--orange)', color: '#fff', border: 'none', cursor: 'pointer', whiteSpace: 'nowrap' }}
                   >
-                    📄 View File
-                  </a>
-                ) : (
-                  <span style={{ fontSize: '10px', color: 'var(--text-muted)', flexShrink: 0 }}>no file attached</span>
-                )}
+                    {(VI_STATUS[inv.status] || VI_STATUS.recorded).cta}
+                  </button>
+                </div>
               </div>
             ))}
           </div>

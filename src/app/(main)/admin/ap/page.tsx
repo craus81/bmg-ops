@@ -1,7 +1,7 @@
 'use client';
 
-import { useState, useEffect, useCallback } from 'react';
-import { useRouter } from 'next/navigation';
+import { useState, useEffect, useCallback, useRef } from 'react';
+import { useRouter, useSearchParams } from 'next/navigation';
 import { createClient } from '@/lib/supabase-browser';
 import { useAuth } from '@/components/AuthProvider';
 import { useDialog } from '@/components/DialogProvider';
@@ -74,6 +74,7 @@ const ageColor = (days: number) => days >= 14 ? '#ef4444' : days >= 7 ? '#fbbf24
 
 export default function ApQueuePage() {
   const router = useRouter();
+  const searchParams = useSearchParams();
   const { isAdmin, hasRole, loading: authLoading } = useAuth();
   const dialog = useDialog();
   const supabase = createClient();
@@ -85,6 +86,10 @@ export default function ApQueuePage() {
   const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState<string | null>(null);
   const [billLocation, setBillLocation] = useState<Record<string, string>>({});
+  // Deep link (e.g. from a CNI company page): focus one invoice — switch to
+  // its status tab, then scroll to + briefly highlight its card.
+  const [highlightId, setHighlightId] = useState<string | null>(null);
+  const focusedDeepLink = useRef(false);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -112,6 +117,24 @@ export default function ApQueuePage() {
     if (!canAct) { router.push('/home'); return; }
     load();
   }, [authLoading, canAct, router, load]);
+
+  // Once invoices are loaded, honor ?invoice=<id>: jump to the right tab and
+  // spotlight the card. One-shot so acting on it (which reloads) doesn't yank
+  // the tab back.
+  useEffect(() => {
+    if (loading || focusedDeepLink.current) return;
+    const id = searchParams.get('invoice');
+    if (!id) return;
+    const target = invoices.find(i => i.id === id);
+    if (!target) return;
+    focusedDeepLink.current = true;
+    setTab(target.status);
+    setHighlightId(id);
+    setTimeout(() => document.getElementById(`ap-invoice-${id}`)?.scrollIntoView({ behavior: 'smooth', block: 'center' }), 150);
+    const clear = setTimeout(() => setHighlightId(null), 2600);
+    return () => clearTimeout(clear);
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- fire once after first load
+  }, [loading]);
 
   const act = async (invoiceId: string, payload: Record<string, unknown>, confirmMsg?: string) => {
     if (confirmMsg && !(await dialog.confirm(confirmMsg))) return;
@@ -216,8 +239,9 @@ export default function ApQueuePage() {
           const vendorLinked = !!inv.company?.netsuite_vendor_id;
           const loc = billLocation[inv.id] || guessBillLocation(inv.location_name);
           const isBusy = busy === inv.id;
+          const highlighted = highlightId === inv.id;
           return (
-            <div key={inv.id} style={{ background: 'var(--card)', border: `1px solid ${inv.status === 'submitted' ? chip.color + '55' : 'var(--border)'}`, borderRadius: '12px', padding: '14px' }}>
+            <div key={inv.id} id={`ap-invoice-${inv.id}`} style={{ background: 'var(--card)', border: `1px solid ${highlighted ? 'var(--orange)' : inv.status === 'submitted' ? chip.color + '55' : 'var(--border)'}`, borderRadius: '12px', padding: '14px', boxShadow: highlighted ? '0 0 0 2px var(--orange)' : undefined, transition: 'box-shadow 0.3s, border-color 0.3s' }}>
               <div style={{ display: 'flex', alignItems: 'flex-start', gap: '10px', flexWrap: 'wrap' }}>
                 <div style={{ flex: 1, minWidth: '220px' }}>
                   <div style={{ display: 'flex', alignItems: 'center', gap: '8px', flexWrap: 'wrap' }}>
