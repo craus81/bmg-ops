@@ -13,6 +13,7 @@ import { PartLabel } from '@/components/PartLabel';
 import { DropZone } from '@/components/DropZone';
 import MentionTextArea, { reportMentions } from '@/components/MentionTextArea';
 import { CreateNetsuiteItemModal } from '@/components/CreateNetsuiteItemModal';
+import EmailInvoicesModal, { type EmailableInvoice } from '@/components/EmailInvoicesModal';
 import { useDialog } from '@/components/DialogProvider';
 import { isProofLikeName } from '@/lib/pdf-classify';
 import { openNetSuitePdf } from '@/lib/netsuite-pdf-client';
@@ -2114,6 +2115,9 @@ export default function POsPage() {
   const [invoiceOpenPo, setInvoiceOpenPo] = useState<(PurchaseOrder & { line_items: POLineItem[] }) | null>(null);
   const [invoiceOpenQtys, setInvoiceOpenQtys] = useState<Record<string, number>>({});
   const [creatingOpenInvoice, setCreatingOpenInvoice] = useState(false);
+  // Fresh invoice → straight into the shared email screen (same modal the
+  // Invoicing hub and Scans page use).
+  const [emailTarget, setEmailTarget] = useState<{ customerName: string; invoices: EmailableInvoice[] } | null>(null);
 
   const openInvoiceFromPo = (po: PurchaseOrder & { line_items: POLineItem[] }) => {
     const qtys: Record<string, number> = {};
@@ -2183,7 +2187,20 @@ export default function POsPage() {
           } as any;
         }));
         setInvoiceOpenPo(null);
-        await dialog.alert(`Invoice ${result.invoiceNumber ? `#${result.invoiceNumber} ` : ''}created for PO #${po.po_number} (${totalQty} unit${totalQty !== 1 ? 's' : ''}).`);
+        if (result.invoiceNumber) {
+          setEmailTarget({
+            customerName: po.customer,
+            invoices: [{
+              invoiceId: result.invoiceId != null ? String(result.invoiceId) : undefined,
+              invoiceNumber: result.invoiceNumber,
+              po: po.po_number,
+            }],
+          });
+        } else {
+          // No invoice number back from NetSuite — nothing to attach, so the
+          // email screen can't help; fall back to the plain confirmation.
+          await dialog.alert(`Invoice created for PO #${po.po_number} (${totalQty} unit${totalQty !== 1 ? 's' : ''}).`);
+        }
       }
     } catch (err: any) {
       await dialog.alert(`Failed to create invoice: ${err.message || 'network error'}`);
@@ -3365,6 +3382,15 @@ export default function POsPage() {
           </div>
         );
       })()}
+
+      {/* Email the freshly created invoice (shared component) */}
+      {emailTarget && (
+        <EmailInvoicesModal
+          customerName={emailTarget.customerName}
+          invoices={emailTarget.invoices}
+          onClose={() => setEmailTarget(null)}
+        />
+      )}
 
       {showOverwriteConfirm && overwriteData && (
         <div style={{ position: 'fixed', top: 0, left: 0, right: 0, bottom: 0, background: 'var(--overlay)', zIndex: 1000, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '16px' }}>
