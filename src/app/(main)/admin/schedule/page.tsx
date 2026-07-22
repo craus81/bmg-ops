@@ -10,6 +10,7 @@ import { theme } from '@/lib/theme';
 import { storage } from '@/lib/storage';
 import { DropZone } from '@/components/DropZone';
 import MentionTextArea, { reportMentions } from '@/components/MentionTextArea';
+import UploadProgressBar, { type UploadProgress } from '@/components/UploadProgressBar';
 
 interface CalendarEvent {
   id: string;
@@ -264,6 +265,7 @@ export default function SchedulePage() {
   const [cardFiles, setCardFiles] = useState<any[]>([]);
   const [cardNoteDraft, setCardNoteDraft] = useState('');
   const [cardBusy, setCardBusy] = useState(false);
+  const [uploadProgress, setUploadProgress] = useState<UploadProgress | null>(null);
 
   // Inline edit of the event itself (title/date/time/description) — saved
   // edits push back to Google when the event lives there too.
@@ -336,9 +338,13 @@ export default function SchedulePage() {
   const uploadCardFiles = async (files: File[]) => {
     if (!cardEvent || files.length === 0) return;
     setCardBusy(true);
-    for (const file of files) {
+    for (const [i, file] of files.entries()) {
       const path = `calendar-events/${cardEvent.id}/${Date.now()}-${file.name.replace(/[^\w.\-]+/g, '_')}`;
-      const { error: upErr } = await storage.from('graphics-proofs').upload(path, file, { contentType: file.type });
+      setUploadProgress({ fileName: file.name, fileIndex: i + 1, fileCount: files.length, loaded: 0, total: file.size });
+      const { error: upErr } = await storage.from('graphics-proofs').upload(path, file, {
+        contentType: file.type,
+        onProgress: (loaded, total) => setUploadProgress({ fileName: file.name, fileIndex: i + 1, fileCount: files.length, loaded, total }),
+      });
       if (!upErr) {
         await supabase.from('calendar_event_files').insert({
           event_id: cardEvent.id,
@@ -350,6 +356,7 @@ export default function SchedulePage() {
         });
       }
     }
+    setUploadProgress(null);
     const { data: rows } = await supabase.from('calendar_event_files').select('*').eq('event_id', cardEvent.id).order('created_at', { ascending: true });
     setCardFiles(rows || []);
     setCardBusy(false);
@@ -767,6 +774,8 @@ export default function SchedulePage() {
           </div>
         </div>
       )}
+
+      <UploadProgressBar progress={uploadProgress} />
     </div>
   );
 }

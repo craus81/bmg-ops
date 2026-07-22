@@ -17,6 +17,7 @@ import GraphicsMaterialsCard from '@/components/GraphicsMaterialsCard';
 import MentionTextArea, { reportMentions } from '@/components/MentionTextArea';
 import MentionsInbox from '@/components/MentionsInbox';
 import { DropZone } from '@/components/DropZone';
+import UploadProgressBar, { type UploadProgress } from '@/components/UploadProgressBar';
 import { buildGraphicsJobPrefillFromPo, attachPartFilesToGraphicsJob } from '@/lib/graphics-job-from-po';
 import { INSTALL_LOCATIONS, SHOP_INSTALL_LOCATION } from '@/lib/shop-inbound';
 import { exportPackingListPDF, packingListFromJob, type PackingListLine } from '@/lib/packing-list-pdf';
@@ -208,6 +209,7 @@ export default function GraphicsPage() {
   const [jobPoFiles, setJobPoFiles] = useState<Record<string, PoFile[]>>({});
   const [createFiles, setCreateFiles] = useState<File[]>([]);
   const [uploadingFiles, setUploadingFiles] = useState(false);
+  const [uploadProgress, setUploadProgress] = useState<UploadProgress | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const createFileInputRef = useRef<HTMLInputElement>(null);
 
@@ -572,10 +574,14 @@ export default function GraphicsPage() {
     setUploadingFiles(true);
     const errors: string[] = [];
     let uploaded = 0;
-    for (const file of files) {
+    for (const [i, file] of files.entries()) {
       const ext = file.name.split('.').pop() || 'bin';
       const path = `graphics-files/${jobId}/${Date.now()}-${Math.random().toString(36).slice(2, 6)}.${ext}`;
-      const { error: upErr } = await storage.from('graphics-proofs').upload(path, file, { contentType: file.type });
+      setUploadProgress({ fileName: file.name, fileIndex: i + 1, fileCount: files.length, loaded: 0, total: file.size });
+      const { error: upErr } = await storage.from('graphics-proofs').upload(path, file, {
+        contentType: file.type,
+        onProgress: (loaded, total) => setUploadProgress({ fileName: file.name, fileIndex: i + 1, fileCount: files.length, loaded, total }),
+      });
       if (upErr) {
         console.error('File upload error:', upErr);
         errors.push(`${file.name}: ${upErr.message || 'storage upload failed'}`);
@@ -599,6 +605,7 @@ export default function GraphicsPage() {
       }
       uploaded++;
     }
+    setUploadProgress(null);
     setUploadingFiles(false);
     await loadJobFiles(jobId);
     if (errors.length > 0) {
@@ -3381,6 +3388,8 @@ export default function GraphicsPage() {
           onClose={() => setEmailInvoiceTarget(null)}
         />
       )}
+
+      <UploadProgressBar progress={uploadProgress} />
     </div>
   );
 }

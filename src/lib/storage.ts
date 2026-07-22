@@ -24,12 +24,39 @@ async function authHeader(): Promise<Record<string, string>> {
 // the same-origin /api/storage upload route.
 const SERVER_UPLOAD_LIMIT = 4 * 1024 * 1024;
 
+// PUT via XHR instead of fetch: fetch has no request-body progress events,
+// so a 200MB .psd upload looks frozen until it finishes. Rejects with a
+// TypeError on network failure, matching fetch, so callers' fallback logic
+// treats both transports the same.
+function xhrPut(
+  url: string,
+  body: File | Blob | ArrayBuffer,
+  contentType: string,
+  onProgress?: (loaded: number, total: number) => void,
+): Promise<{ ok: boolean; status: number; text: string }> {
+  return new Promise((resolve, reject) => {
+    const xhr = new XMLHttpRequest();
+    xhr.open('PUT', url);
+    xhr.setRequestHeader('Content-Type', contentType);
+    if (onProgress) {
+      xhr.upload.onprogress = (e) => {
+        if (e.lengthComputable) onProgress(e.loaded, e.total);
+      };
+    }
+    xhr.onload = () => resolve({ ok: xhr.status >= 200 && xhr.status < 300, status: xhr.status, text: xhr.responseText || '' });
+    xhr.onerror = () => reject(new TypeError('Load failed'));
+    xhr.ontimeout = () => reject(new TypeError('Load failed'));
+    xhr.send(body);
+  });
+}
+
 export const storage = {
   from(bucket: string) {
     return {
       // Upload a file directly to R2 via a presigned PUT URL.
-      // Avoids the Vercel ~4.5MB API body limit.
-      async upload(path: string, file: File | Blob, options?: { contentType?: string; upsert?: boolean }) {
+      // Avoids the Vercel ~4.5MB API body limit. Pass onProgress to get
+      // upload progress for the direct PUT (bytes sent, total bytes).
+      async upload(path: string, file: File | Blob, options?: { contentType?: string; upsert?: boolean; onProgress?: (loaded: number, total: number) => void }) {
         const contentType =
           options?.contentType ||
           (file instanceof File ? file.type : '') ||
@@ -75,13 +102,9 @@ export const storage = {
           return { data: null, error: { message: presign.error || 'Failed to get upload URL' } };
         }
 
-        let putRes: Response;
+        let putRes: { ok: boolean; status: number; text: string };
         try {
-          putRes = await fetch(presign.url, {
-            method: 'PUT',
-            headers: { 'Content-Type': contentType },
-            body: file,
-          });
+          putRes = await xhrPut(presign.url, file, contentType, options?.onProgress);
         } catch {
           // WebKit reports every failed cross-origin PUT as a bare TypeError
           // ("Load failed") — a CORS-blocked origin, a dropped connection,
@@ -104,11 +127,7 @@ export const storage = {
           // Too big for the server route — retry the direct PUT with the
           // in-memory body, which sidesteps WebKit's File-streaming flakes.
           try {
-            putRes = await fetch(presign.url, {
-              method: 'PUT',
-              headers: { 'Content-Type': contentType },
-              body: buf,
-            });
+            putRes = await xhrPut(presign.url, buf, contentType, options?.onProgress);
           } catch (err2: any) {
             const mb = (buf.byteLength / (1024 * 1024)).toFixed(1);
             return {
@@ -119,8 +138,7 @@ export const storage = {
         }
 
         if (!putRes.ok) {
-          const text = await putRes.text().catch(() => '');
-          return { data: null, error: { message: `Upload failed (${putRes.status}): ${text.slice(0, 200)}` } };
+          return { data: null, error: { message: `Upload failed (${putRes.status}): ${putRes.text.slice(0, 200)}` } };
         }
 
         return { data: { key: presign.key, publicUrl: presign.publicUrl }, error: null };
