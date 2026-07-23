@@ -11,6 +11,7 @@ import { useState, useEffect, useCallback } from 'react';
 import { createClient } from '@/lib/supabase-browser';
 import { useAuth } from '@/components/AuthProvider';
 import { useDialog } from '@/components/DialogProvider';
+import IncomingParts from '@/components/IncomingParts';
 
 interface MailRow {
   id: string;
@@ -71,6 +72,9 @@ export default function PartsMailPage() {
   const [linkInputs, setLinkInputs] = useState<Record<string, string>>({});
   const [busy, setBusy] = useState<string | null>(null);
   const [scanning, setScanning] = useState(false);
+  // Bumped after a successful scan so the Incoming Parts list picks up the
+  // freshly-written ETAs without a page reload.
+  const [scanKey, setScanKey] = useState(0);
 
   // Settings (admin)
   const [mailboxText, setMailboxText] = useState('');
@@ -134,6 +138,7 @@ export default function PartsMailPage() {
     } else {
       await dialog.alert(`Scanned ${data.mailboxes} mailboxes · ${data.processed} new emails · ${data.applied} ETAs applied · ${data.review} for review${data.errors ? ` · ${data.errors} errors` : ''}`);
       load();
+      setScanKey(k => k + 1);
     }
   };
 
@@ -202,6 +207,9 @@ export default function PartsMailPage() {
           </button>
         )}
       </div>
+
+      {/* What's on order and when — checked against stock and job reservations */}
+      <IncomingParts refreshKey={scanKey} />
 
       {/* Admin settings */}
       {isAdmin && settingsLoaded && (

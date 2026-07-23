@@ -25,7 +25,7 @@ Invoice email from vendor ──► PDF captured ──► one-click NetSuite bi
 |---|---|
 | **Upfit** (tab) | One project per job. Key dates, linked SO, Parts Readiness card, notes. |
 | **More → Inventory** | Every part at a glance: on hand · allocated · free · on order. |
-| **More → Parts Mail** | What the email scanner found: ETAs applied, invoices captured, review queue. |
+| **More → Parts Mail** | **Incoming Parts** up top — what's on order and when it lands (from vendor email ETAs), checked against on-hand stock and what's reserved to jobs, with shortfalls flagged. Below it: the email scan's review queue and captured invoices. |
 | **In-Shop** (tab) | Arrival schedule + calendar up top, Check-In, and every vehicle in the shop. |
 | **More → System Health** | Confirms the background syncs are alive. |
 
@@ -98,6 +98,12 @@ the same shelf stock.
   watched mailboxes for order confirmations and ship notices, extracts
   the PO number + dates + tracking, and writes the ETA onto the PO — and
   onto any project that references that PO number.
+- **More → Parts Mail leads with Incoming Parts** — every part still on
+  order (open vendor POs), laid out as an arrival timeline using the ETAs
+  the scan writes onto each PO, and cross-referenced against on-hand stock
+  and what's reserved to jobs. Parts where stock **plus** what's coming
+  still won't cover job reservations are flagged 🔴 **short** and rolled up
+  in the summary and a **Needs attention** filter.
 - **Someone should glance at More → Parts Mail every day or two.** Emails
   the scanner couldn't match land in **Needs Review** — type the PO
   number and hit **Link & Apply**, or **Dismiss**. Admins can edit the
