@@ -4,24 +4,25 @@
  * Home → Financials tab (super_admin + executive only). A/R aging, A/P,
  * cash, and net position, sourced from NetSuite via /api/reports/financials.
  * Net position = Cash + A/R − A/P; it reads green when positive, red when
- * negative. Cash and the credit-card balance show an "unmapped" hint until
- * their NetSuite account IDs are configured (see the API route).
+ * negative. Balances come straight off the GL accounts (cash from Bank
+ * accounts, A/P from the payables control account, card from Credit Card
+ * accounts), so nothing needs to be mapped by hand.
  */
 
 import { useEffect, useState } from 'react';
 import { apiFetch } from '@/lib/api-client';
 
 interface Overdue { customer: string; amount: number; days: number }
+interface CardLine { id: string; name: string; owed: number }
 interface FinancialsData {
   ar: {
     total: number; pastDue: number; openCount: number;
     buckets: { current: number; d1_30: number; d31_60: number; d61_90: number; d90plus: number };
     topOverdue: Overdue[];
   };
-  ap: { vendorBills: number; cardOwed: number | null; total: number; openCount: number; dueThisWeek: number; overdue: number };
-  cash: number | null;
+  ap: { vendorBills: number; cardOwed: number; total: number; cards: CardLine[] };
+  cash: number;
   net: number;
-  config: { cashMapped: boolean; cardMapped: boolean };
 }
 
 const AGE = {
@@ -47,6 +48,15 @@ function Tile({ swatch, label, value, sub, valueColor }: { swatch: string; label
       </div>
       <div style={{ ...bigNum, color: valueColor || 'var(--text-primary)' }}>{value}</div>
       {sub && <div style={{ fontSize: '12px', color: 'var(--text-secondary)' }}>{sub}</div>}
+    </div>
+  );
+}
+
+function Row({ label, value, valueColor }: { label: string; value: string; valueColor?: string }) {
+  return (
+    <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '10px', padding: '8px 0', borderTop: '1px solid var(--border)', fontSize: '12.5px' }}>
+      <span style={{ color: 'var(--text-muted)' }}>{label}</span>
+      {value && <span style={{ fontVariantNumeric: 'tabular-nums', fontWeight: valueColor ? 700 : 600, color: valueColor || 'var(--text-secondary)' }}>{value}</span>}
     </div>
   );
 }
@@ -104,15 +114,13 @@ export default function FinancialsDashboard() {
 
       {/* Hero */}
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(150px, 1fr))', gap: '12px' }}>
-        <Tile swatch="var(--navy, #4d8ba6)" label="Cash on hand"
-          value={cash === null ? '—' : usd(cash)}
-          sub={cash === null ? <span style={{ color: 'var(--warning)' }}>Map a bank account</span> : 'Reconciled in NetSuite'} />
+        <Tile swatch="var(--navy, #4d8ba6)" label="Cash on hand" value={usd(cash)} sub="Bank accounts · reconciled in NetSuite" />
         <Tile swatch="var(--success)" label="Owed to us · A/R" value={usd(ar.total)}
           sub={<>{ar.openCount} open · <span style={{ color: 'var(--error)', fontWeight: 700 }}>{usd(ar.pastDue)} past due</span></>} />
         <Tile swatch="var(--error)" label="We owe · A/P" value={usd(ap.total)}
-          sub={<>Bills {usd(ap.vendorBills)}{ap.cardOwed !== null ? <> · Card {usd(ap.cardOwed)}</> : ''}</>} />
+          sub={<>Bills {usd(ap.vendorBills)} · Card {usd(ap.cardOwed)}</>} />
         <Tile swatch={netColor} label="Net position" value={`${net >= 0 ? '+' : '−'}${usd(Math.abs(net))}`} valueColor={netColor}
-          sub={<>Cash + A/R − A/P{!data.config.cashMapped && <span style={{ color: 'var(--warning)' }}> · excl. cash</span>}</>} />
+          sub="Cash + A/R − A/P" />
       </div>
 
       {/* A/R aging */}
@@ -170,43 +178,25 @@ export default function FinancialsDashboard() {
         <div style={{ ...eyebrow, margin: '2px 2px 10px' }}>Accounts payable — what we owe</div>
         <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))', gap: '12px' }}>
           <div style={card}>
-            <div style={eyebrow}>Open vendor bills</div>
+            <div style={eyebrow}>Vendor bills</div>
             <div style={{ ...bigNum, fontSize: '25px' }}>{usd(ap.vendorBills)}</div>
-            <Row label={`${ap.openCount} open bills`} value="" />
-            <Row label="Due this week" value={usd(ap.dueThisWeek)} valueColor="var(--warning)" />
-            <Row label="Overdue to vendors" value={usd(ap.overdue)} />
+            <Row label="Unpaid vendor bills" value="A/P control" />
           </div>
           <div style={card}>
             <div style={eyebrow}>Credit card balance</div>
-            {ap.cardOwed === null ? (
-              <>
-                <div style={{ ...bigNum, fontSize: '25px', color: 'var(--text-muted)' }}>—</div>
-                <div style={{ fontSize: '12px', color: 'var(--warning)' }}>Map the card’s NetSuite account to show its balance.</div>
-              </>
-            ) : (
-              <>
-                <div style={{ ...bigNum, fontSize: '25px' }}>{usd(ap.cardOwed)}</div>
-                <Row label="Reconciled in NetSuite" value="" />
-              </>
-            )}
+            <div style={{ ...bigNum, fontSize: '25px' }}>{usd(ap.cardOwed)}</div>
+            {ap.cards.length > 0
+              ? ap.cards.map(c => <Row key={c.id} label={c.name} value={usd(c.owed)} />)
+              : <Row label="No card balances owed" value="" />}
           </div>
         </div>
       </div>
 
       <div style={{ fontSize: '11.5px', color: 'var(--text-muted)', lineHeight: 1.6, borderTop: '1px solid var(--border)', paddingTop: '12px' }}>
-        Live from NetSuite · A/R from open customer invoices (due date + balance), A/P from open vendor bills, cash and card from their reconciled register accounts. Net position = Cash + A/R − A/P.
+        Live from NetSuite · Cash from bank accounts, A/P from the payables control account + credit cards, A/R aged from open customer invoices. Net position = Cash + A/R − A/P.
       </div>
 
       <style>{`@media (max-width:760px){ .fin-ar{ grid-template-columns:1fr !important; } }`}</style>
-    </div>
-  );
-}
-
-function Row({ label, value, valueColor }: { label: string; value: string; valueColor?: string }) {
-  return (
-    <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '8px 0', borderTop: '1px solid var(--border)', fontSize: '12.5px' }}>
-      <span style={{ color: 'var(--text-muted)' }}>{label}</span>
-      {value && <span style={{ fontVariantNumeric: 'tabular-nums', fontWeight: valueColor ? 700 : 400, color: valueColor || 'var(--text-secondary)' }}>{value}</span>}
     </div>
   );
 }
