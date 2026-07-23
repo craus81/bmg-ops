@@ -154,13 +154,20 @@ export default function PartsMailPage() {
     setSyncingPos(false);
     if (!res.ok || data.ok === false) {
       await dialog.alert(`Vendor PO sync failed: ${data.error || 'unknown error'}`);
-    } else {
-      const base = `Synced ${data.synced} vendor PO(s) this run · ${data.lines} line(s). ${data.totalPos} PO(s) total on file.`;
-      await dialog.alert(data.totalPos === 0
-        ? `${base}\n\nNothing on file — the sync isn't pulling POs from NetSuite. This is a sync problem, not the PO number. Check More → System Health.`
-        : base);
-      setScanKey(k => k + 1);
+      return;
     }
+    const modified = data.modified ?? 0;   // POs NetSuite returned
+    const totalPos = data.totalPos ?? 0;   // POs now saved in FleetSuite
+    let msg: string;
+    if (totalPos > 0) {
+      msg = `NetSuite returned ${modified} PO(s) · ${data.synced ?? 0} saved · ${data.lines ?? 0} line(s). ${totalPos} PO(s) on file now.`;
+    } else if (modified === 0) {
+      msg = `NetSuite returned 0 purchase orders across all history.\n\nCustomer/sales data syncs fine, so the NetSuite integration role most likely can't see Purchase Orders. Fix in NetSuite: grant that role "Purchase Order → View". This is a NetSuite permission, not a FleetSuite bug.`;
+    } else {
+      msg = `NetSuite returned ${modified} PO(s) but none saved to FleetSuite — that's a FleetSuite-side issue. Screenshot this and send it to me.`;
+    }
+    await dialog.alert(msg);
+    if (totalPos > 0) setScanKey(k => k + 1);
   };
 
   const saveSettings = async () => {
