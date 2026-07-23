@@ -116,8 +116,12 @@ export default function FinancialsDashboard() {
 
       {!config.balancesOk && (
         <div style={{ ...card, padding: '11px 14px', fontSize: '12px', color: 'var(--text-secondary)', borderColor: 'color-mix(in srgb, var(--warning) 35%, var(--border))' }}>
-          <span style={{ color: 'var(--warning)', fontWeight: 700 }}>Cash, cards & A/P need the balances RESTlet.</span>{' '}
-          The integration role can’t read GL balances via SuiteQL. Deploy <code>scripts/netsuite-financials-restlet.js</code> and set <code>NETSUITE_FINANCIALS_RESTLET_URL</code>. A/R is live below either way.
+          <span style={{ color: 'var(--warning)', fontWeight: 700 }}>Cash, cards & A/P unavailable.</span>{' '}
+          {config.balancesError
+            ? <>NetSuite said: <code style={{ color: 'var(--text-primary)' }}>{config.balancesError}</code>{' '}
+                {/permission|account/i.test(config.balancesError) && <>— the RESTlet runs under the integration role, so grant it <code>Lists &gt; Accounts: View</code>.</>}</>
+            : <>Deploy <code>scripts/netsuite-financials-restlet.js</code> and set <code>NETSUITE_FINANCIALS_RESTLET_URL</code>.</>}
+          {' '}A/R is live below either way.
         </div>
       )}
 
