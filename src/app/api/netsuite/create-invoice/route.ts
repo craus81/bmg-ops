@@ -4,13 +4,15 @@ import { createInvoiceFromSO, suiteqlQuery } from '@/lib/netsuite';
 import { resolveLocationWithOverride } from '@/lib/invoice-location';
 import { requireAdmin } from '@/lib/api-auth';
 import { validateBody, z } from '@/lib/validate';
+import { normPart } from '@/lib/po-invoice-verify';
 
 const Schema = z.object({
   salesOrderIds: z.array(z.string().regex(/^\d{1,15}$/, 'Sales order id must be numeric')).min(1).max(200),
   // Explicit per-part quantities to bill (part number -> qty), overriding the
   // default installed-quantity billing. Single-SO mode only — the map is
-  // meaningless across several sales orders. Used by the PO screen's
-  // "invoice open quantities" flow.
+  // meaningless across several sales orders. (The PO screen's "invoice open
+  // quantities" flow moved to /api/pos/invoice-open, which invoices NetSuite
+  // directly; this SO-transform path is the batch-from-sales-order route.)
   quantities: z.record(z.string().min(1).max(120), z.number().int().min(1).max(100000)).optional(),
 });
 
@@ -99,48 +101,89 @@ export async function POST(req: NextRequest) {
         const soLinesResult = await suiteqlQuery(soLinesQuery);
         const soLines = soLinesResult?.items || [];
 
-        // Build quantities map: SO line number -> qty to bill. Explicit
-        // caller quantities win; the default bills installed counts.
-        const installedQuantities: Record<number, number> = {};
+        // A part can appear on several SO lines (and several PO lines), and
+        // there's no stored line-to-line linkage — only the part number. Group
+        // the SO's lines by part, preserving sequence order, so a part's billed
+        // quantity can be spread across ALL its lines. The old code matched each
+        // PO line to the FIRST SO line of that part, so a part split over
+        // multiple lines collapsed onto one (last write wins), silently
+        // under-billing the rest.
+        const soLinesByPart = new Map<string, any[]>();
+        for (const sl of soLines) {
+          const key = normPart(sl.itemid || '');
+          if (!key) continue;
+          const arr = soLinesByPart.get(key);
+          if (arr) arr.push(sl);
+          else soLinesByPart.set(key, [sl]);
+        }
+
+        // Quantity to bill per part. Explicit caller quantities win; the
+        // default bills the installed counts from our PO tracking, summed
+        // across all of a part's PO lines.
+        const billByPart = new Map<string, number>();
 
         if (quantities) {
           const unmatchedParts: string[] = [];
+          const overCapacityParts: string[] = [];
           for (const [partNumber, qty] of Object.entries(quantities)) {
-            const matchingSoLine = soLines.find((sl: any) =>
-              sl.itemid?.toUpperCase() === partNumber.toUpperCase()
-            );
-            if (matchingSoLine) {
-              installedQuantities[parseInt(matchingSoLine.linesequencenumber)] = qty;
-            } else {
+            const key = normPart(partNumber);
+            const sls = soLinesByPart.get(key);
+            if (!sls || sls.length === 0) {
               unmatchedParts.push(partNumber);
+              continue;
             }
+            // A part's billable capacity is the sum of its SO lines' quantities;
+            // asking for more can't be transformed from this SO.
+            const capacity = sls.reduce((s, sl) => s + (Math.abs(parseFloat(sl.quantity)) || 0), 0);
+            if (qty > capacity) {
+              overCapacityParts.push(`${partNumber} (${qty} > ${capacity})`);
+              continue;
+            }
+            billByPart.set(key, (billByPart.get(key) || 0) + qty);
           }
-          // Silently dropping a requested line would under-bill without
-          // anyone noticing — refuse instead.
-          if (unmatchedParts.length > 0) {
+          // Silently dropping (or over-billing) a requested line would skew the
+          // invoice without anyone noticing — refuse instead.
+          if (unmatchedParts.length > 0 || overCapacityParts.length > 0) {
+            const detail = [
+              unmatchedParts.length > 0 ? `not on the sales order: ${unmatchedParts.join(', ')}` : '',
+              overCapacityParts.length > 0 ? `exceeds the SO's open quantity: ${overCapacityParts.join(', ')}` : '',
+            ].filter(Boolean).join('; ');
             results.push({
               poId: po.id,
               poNumber: po.po_number,
               soId,
               soNumber: po.netsuite_so_number || '',
               status: 'error',
-              error: `Not on the sales order: ${unmatchedParts.join(', ')}`,
+              error: detail,
             });
             continue;
           }
         } else {
           for (const poLine of lineItems) {
             if (poLine.installed <= 0) continue;
+            const key = normPart(poLine.part_number || '');
+            if (!key) continue;
+            // Aggregate installed across all of this part's PO lines, each
+            // capped at its own ordered quantity.
+            billByPart.set(key, (billByPart.get(key) || 0) + Math.min(poLine.installed, poLine.quantity));
+          }
+        }
 
-            // Match PO line to SO line by part number
-            const matchingSoLine = soLines.find((sl: any) =>
-              sl.itemid?.toUpperCase() === poLine.part_number?.toUpperCase()
-            );
-
-            if (matchingSoLine) {
-              const lineNum = parseInt(matchingSoLine.linesequencenumber);
-              // Use the lesser of installed vs ordered quantity
-              installedQuantities[lineNum] = Math.min(poLine.installed, poLine.quantity);
+        // Distribute each part's billed quantity across its SO lines in
+        // sequence order, filling each up to its quantity — so a part that
+        // spans several lines bills the full total instead of collapsing onto
+        // one, and no single SO line is billed past its open quantity.
+        const installedQuantities: Record<number, number> = {};
+        for (const [key, total] of billByPart) {
+          let remaining = total;
+          for (const sl of soLinesByPart.get(key) || []) {
+            if (remaining <= 0) break;
+            const cap = Math.abs(parseFloat(sl.quantity)) || 0;
+            const fill = Math.min(remaining, cap);
+            if (fill > 0) {
+              const seq = parseInt(sl.linesequencenumber);
+              installedQuantities[seq] = (installedQuantities[seq] || 0) + fill;
+              remaining -= fill;
             }
           }
         }
