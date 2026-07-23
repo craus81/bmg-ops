@@ -72,6 +72,7 @@ export default function PartsMailPage() {
   const [linkInputs, setLinkInputs] = useState<Record<string, string>>({});
   const [busy, setBusy] = useState<string | null>(null);
   const [scanning, setScanning] = useState(false);
+  const [syncingPos, setSyncingPos] = useState(false);
   // Bumped after a successful scan so the Incoming Parts list picks up the
   // freshly-written ETAs without a page reload.
   const [scanKey, setScanKey] = useState(0);
@@ -146,6 +147,22 @@ export default function PartsMailPage() {
     }
   };
 
+  const syncPosNow = async () => {
+    setSyncingPos(true);
+    const res = await fetch('/api/parts-mail/sync-pos', { method: 'POST' });
+    const data = await res.json().catch(() => ({}));
+    setSyncingPos(false);
+    if (!res.ok || data.ok === false) {
+      await dialog.alert(`Vendor PO sync failed: ${data.error || 'unknown error'}`);
+    } else {
+      const base = `Synced ${data.synced} vendor PO(s) this run · ${data.lines} line(s). ${data.totalPos} PO(s) total on file.`;
+      await dialog.alert(data.totalPos === 0
+        ? `${base}\n\nNothing on file — the sync isn't pulling POs from NetSuite. This is a sync problem, not the PO number. Check More → System Health.`
+        : base);
+      setScanKey(k => k + 1);
+    }
+  };
+
   const saveSettings = async () => {
     setSavingSettings(true);
     const mailboxes = mailboxText.split(/[\n,;]+/).map(s => s.trim().toLowerCase()).filter(s => s.includes('@'));
@@ -206,9 +223,14 @@ export default function PartsMailPage() {
           </div>
         </div>
         {isAdmin && (
-          <button onClick={scanNow} disabled={scanning} style={{ padding: '7px 12px', borderRadius: '8px', background: 'rgba(59,130,246,0.15)', border: '1px solid rgba(59,130,246,0.4)', color: '#60a5fa', fontSize: '11px', fontWeight: 700, cursor: 'pointer', opacity: scanning ? 0.6 : 1 }}>
-            {scanning ? 'Scanning…' : 'Scan Now'}
-          </button>
+          <div style={{ display: 'flex', gap: '8px' }}>
+            <button onClick={syncPosNow} disabled={syncingPos} style={{ padding: '7px 12px', borderRadius: '8px', background: 'rgba(34,197,94,0.15)', border: '1px solid rgba(34,197,94,0.4)', color: '#22c55e', fontSize: '11px', fontWeight: 700, cursor: 'pointer', opacity: syncingPos ? 0.6 : 1 }}>
+              {syncingPos ? 'Syncing POs…' : 'Sync POs'}
+            </button>
+            <button onClick={scanNow} disabled={scanning} style={{ padding: '7px 12px', borderRadius: '8px', background: 'rgba(59,130,246,0.15)', border: '1px solid rgba(59,130,246,0.4)', color: '#60a5fa', fontSize: '11px', fontWeight: 700, cursor: 'pointer', opacity: scanning ? 0.6 : 1 }}>
+              {scanning ? 'Scanning…' : 'Scan Now'}
+            </button>
+          </div>
         )}
       </div>
 
