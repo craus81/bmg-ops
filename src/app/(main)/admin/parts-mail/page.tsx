@@ -75,6 +75,10 @@ export default function PartsMailPage() {
   // Bumped after a successful scan so the Incoming Parts list picks up the
   // freshly-written ETAs without a page reload.
   const [scanKey, setScanKey] = useState(0);
+  // In-app invoice PDF viewer. Opening the raw file in a new tab traps mobile
+  // users on a chrome-less page with no back button, so we render it in an
+  // overlay with an explicit Close instead.
+  const [viewingInvoice, setViewingInvoice] = useState<{ url: string; name: string } | null>(null);
 
   // Settings (admin)
   const [mailboxText, setMailboxText] = useState('');
@@ -244,14 +248,12 @@ export default function PartsMailPage() {
             {invoices.map(inv => (
               <div key={inv.id} style={{ padding: '10px 12px', borderRadius: '10px', background: 'var(--input-bg)', border: `1px solid ${inv.status === 'billed' ? 'rgba(34,197,94,0.35)' : 'var(--border)'}` }}>
                 <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '8px', flexWrap: 'wrap' }}>
-                  <a
-                    href={`/api/storage?bucket=parts-invoices&path=${encodeURIComponent(inv.storage_path)}`}
-                    target="_blank"
-                    rel="noopener noreferrer"
-                    style={{ fontSize: '12px', fontWeight: 700, color: '#60a5fa', textDecoration: 'none' }}
+                  <button
+                    onClick={() => setViewingInvoice({ url: `/api/storage?bucket=parts-invoices&path=${encodeURIComponent(inv.storage_path)}`, name: inv.file_name })}
+                    style={{ fontSize: '12px', fontWeight: 700, color: '#60a5fa', background: 'none', border: 'none', padding: 0, cursor: 'pointer', textAlign: 'left' }}
                   >
                     📄 {inv.file_name}
-                  </a>
+                  </button>
                   <span style={{ fontSize: '9px', fontWeight: 800, padding: '2px 8px', borderRadius: '6px', background: inv.status === 'billed' ? 'rgba(34,197,94,0.2)' : 'rgba(96,165,250,0.2)', color: inv.status === 'billed' ? '#22c55e' : '#60a5fa' }}>
                     {inv.status === 'billed' ? `BILLED${inv.netsuite_bill_number ? ` · ${inv.netsuite_bill_number}` : ''}` : 'CAPTURED'}
                   </span>
@@ -378,6 +380,28 @@ export default function PartsMailPage() {
           );
         })}
       </div>
+
+      {/* In-app invoice viewer — always exits via Close, even on mobile */}
+      {viewingInvoice && (
+        <div
+          onClick={() => setViewingInvoice(null)}
+          style={{ position: 'fixed', inset: 0, zIndex: 200, background: 'rgba(0,0,0,0.9)', display: 'flex', flexDirection: 'column', padding: '12px' }}
+        >
+          <div onClick={e => e.stopPropagation()} style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '10px', marginBottom: '10px' }}>
+            <span style={{ color: '#fff', fontSize: '12px', fontWeight: 700, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>📄 {viewingInvoice.name}</span>
+            <div style={{ display: 'flex', gap: '8px', flexShrink: 0 }}>
+              <a href={viewingInvoice.url} target="_blank" rel="noopener noreferrer" style={{ padding: '8px 12px', borderRadius: '10px', background: 'rgba(255,255,255,0.1)', border: '1px solid rgba(255,255,255,0.15)', color: '#fff', fontSize: '12px', fontWeight: 700, textDecoration: 'none' }}>Open ↗</a>
+              <button onClick={() => setViewingInvoice(null)} style={{ padding: '8px 14px', borderRadius: '10px', background: 'rgba(255,255,255,0.15)', border: '1px solid rgba(255,255,255,0.2)', color: '#fff', fontSize: '12px', fontWeight: 700, cursor: 'pointer' }}>✕ Close</button>
+            </div>
+          </div>
+          <iframe
+            src={viewingInvoice.url}
+            title={viewingInvoice.name}
+            onClick={e => e.stopPropagation()}
+            style={{ flex: 1, width: '100%', border: 'none', borderRadius: '8px', background: '#fff' }}
+          />
+        </div>
+      )}
     </div>
   );
 }

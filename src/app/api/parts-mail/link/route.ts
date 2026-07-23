@@ -11,6 +11,25 @@ const service = createClient(
   process.env.SUPABASE_SERVICE_ROLE_KEY!,
 );
 
+/**
+ * 404 for an unmatched PO number — but say *why*. If zero vendor POs are
+ * synced, the problem is the NetSuite sync, not the number the user typed;
+ * surfacing the synced count turns "no match" into an actionable message.
+ */
+async function noPoMatch(poNumber: string) {
+  const { count } = await service
+    .from('netsuite_vendor_pos')
+    .select('*', { count: 'exact', head: true });
+  const synced = count ?? 0;
+  const detail = synced === 0
+    ? ' — no vendor POs are synced from NetSuite yet. Check that the vendor-PO sync is running (More → System Health).'
+    : ` (searched all ${synced} synced vendor POs). Enter it exactly as it appears in NetSuite.`;
+  return NextResponse.json(
+    { error: `No synced vendor PO matches "${poNumber}"${detail}`, syncedPoCount: synced },
+    { status: 404 },
+  );
+}
+
 const LinkSchema = z.object({
   emailId: z.string().uuid().optional(),
   // Captured-invoice rows can be linked/dismissed independently of their email.
@@ -43,7 +62,7 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ status: 'dismissed' });
     }
     const po = await findPoByNumber(service, poNumber);
-    if (!po) return NextResponse.json({ error: `No synced vendor PO matches "${poNumber}"` }, { status: 404 });
+    if (!po) return noPoMatch(poNumber);
     await service.from('vendor_parts_invoices').update({ matched_po_id: po.id }).eq('id', invoiceId);
     return NextResponse.json({ status: 'linked', po: { tranid: po.tranid, vendor_name: po.vendor_name } });
   }
@@ -64,7 +83,7 @@ export async function POST(req: NextRequest) {
   }
 
   const po = await findPoByNumber(service, poNumber);
-  if (!po) return NextResponse.json({ error: `No synced vendor PO matches "${poNumber}"` }, { status: 404 });
+  if (!po) return noPoMatch(poNumber);
 
   const outcome = await applyEmailToPo(
     service,

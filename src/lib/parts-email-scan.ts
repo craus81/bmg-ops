@@ -4,6 +4,7 @@ import { recordHeartbeat, type HeartbeatResult } from '@/lib/system-health';
 import { callAnthropicWithRetry } from '@/lib/anthropic';
 import { getPdfAttachments } from '@/lib/google';
 import { r2Upload } from '@/lib/r2';
+import { fetchAllRows } from '@/lib/fetch-all';
 
 /**
  * Parts-ETA email scan: read watched BMG mailboxes (domain-wide delegation,
@@ -27,6 +28,11 @@ const MAX_AI_CALLS_PER_RUN = 20;
 const BODY_CHAR_LIMIT = 6000;
 
 const digitsOnly = (s: string | null | undefined) => String(s || '').replace(/\D/g, '');
+/** Case-fold and strip everything but letters/digits so "PO-376" ≡ "po376". */
+const alnumOnly = (s: string | null | undefined) => String(s || '').toUpperCase().replace(/[^A-Z0-9]/g, '');
+
+const PO_SELECT = 'id, tranid, vendor_name, eta_date, tracking_number';
+type MatchedPo = { id: string; tranid: string | null; vendor_name: string | null; eta_date: string | null; tracking_number: string | null };
 
 export interface PartsEmailScanResult {
   skipped?: string;
@@ -53,24 +59,50 @@ interface ExtractedEmail {
   invoice_total?: number | null;
 }
 
-/** Find a synced vendor PO by its NetSuite PO number (exact tranid first, then digits-only). */
-export async function findPoByNumber(service: SupabaseClient, poNumber: string) {
+/**
+ * Find a synced vendor PO by its NetSuite PO number. Exact tranid first, then
+ * a digit-string match so "PO376" ↔ "376" ↔ "PO-376" all resolve.
+ *
+ * The digit match runs over the FULL PO history (paginated past PostgREST's
+ * 1000-row cap) — the old `.limit(500)` silently hid any PO outside the 500
+ * most-recent, so linking to an older PO always failed with "no match".
+ */
+export async function findPoByNumber(service: SupabaseClient, poNumber: string): Promise<MatchedPo | null> {
+  const target = poNumber.trim();
+  if (!target) return null;
+
+  // 1. Exact tranid (case-insensitive), no wildcards.
   const { data: exact } = await service
     .from('netsuite_vendor_pos')
-    .select('id, tranid, vendor_name, eta_date, tracking_number')
-    .ilike('tranid', poNumber.trim())
+    .select(PO_SELECT)
+    .ilike('tranid', target)
     .limit(1)
     .maybeSingle();
-  if (exact) return exact;
+  if (exact) return exact as MatchedPo;
 
-  const digits = digitsOnly(poNumber);
-  if (!digits) return null;
-  const { data: candidates } = await service
-    .from('netsuite_vendor_pos')
-    .select('id, tranid, vendor_name, eta_date, tracking_number')
-    .order('trandate', { ascending: false })
-    .limit(500);
-  return (candidates || []).find(p => digitsOnly(p.tranid) === digits) || null;
+  const digits = digitsOnly(target);
+  if (digits) {
+    // 2. Narrow to tranids containing those digits (a specific number is a
+    //    tiny result set), then require exact digit-string equality so "376"
+    //    never matches "1376". Paginated so no PO age is out of reach.
+    const { data: byDigits } = await fetchAllRows<MatchedPo>((from, to) =>
+      service
+        .from('netsuite_vendor_pos')
+        .select(PO_SELECT)
+        .ilike('tranid', `%${digits}%`)
+        .order('id')
+        .range(from, to),
+    );
+    return byDigits.find(p => digitsOnly(p.tranid) === digits) || null;
+  }
+
+  // 3. Alpha-only reference (no digits at all): normalized full compare.
+  const targetAlnum = alnumOnly(target);
+  if (!targetAlnum) return null;
+  const { data: all } = await fetchAllRows<MatchedPo>((from, to) =>
+    service.from('netsuite_vendor_pos').select(PO_SELECT).order('id').range(from, to),
+  );
+  return all.find(p => alnumOnly(p.tranid) === targetAlnum) || null;
 }
 
 /**
