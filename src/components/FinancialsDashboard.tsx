@@ -3,26 +3,25 @@
 /**
  * Home → Financials tab (super_admin + executive only). A/R aging, A/P,
  * cash, and net position, sourced from NetSuite via /api/reports/financials.
- * Net position = Cash + A/R − A/P; it reads green when positive, red when
- * negative. Balances come straight off the GL accounts (cash from Bank
- * accounts, A/P from the payables control account, card from Credit Card
- * accounts), so nothing needs to be mapped by hand.
+ * Net position = Cash + A/R − A/P; green when positive, red when negative.
+ * Cash / card / A/P are GL account balances keyed by internal ID in env; a
+ * tile shows a "configure" hint until its account IDs are set.
  */
 
 import { useEffect, useState } from 'react';
 import { apiFetch } from '@/lib/api-client';
 
 interface Overdue { customer: string; amount: number; days: number }
-interface CardLine { id: string; name: string; owed: number }
 interface FinancialsData {
   ar: {
     total: number; pastDue: number; openCount: number;
     buckets: { current: number; d1_30: number; d31_60: number; d61_90: number; d90plus: number };
     topOverdue: Overdue[];
   };
-  ap: { vendorBills: number; cardOwed: number; total: number; cards: CardLine[] };
+  ap: { vendorBills: number; cardOwed: number; total: number };
   cash: number;
   net: number;
+  config: { balancesOk: boolean; bankConfigured: boolean; cardConfigured: boolean; apConfigured: boolean };
 }
 
 const AGE = {
@@ -39,6 +38,7 @@ const pct = (part: number, whole: number) => (whole > 0 ? Math.round((part / who
 const card: React.CSSProperties = { background: 'var(--card)', border: '1px solid var(--border)', borderRadius: '14px', padding: '15px 16px' };
 const eyebrow: React.CSSProperties = { fontSize: '11px', fontWeight: 800, letterSpacing: '.8px', textTransform: 'uppercase', color: 'var(--text-muted)' };
 const bigNum: React.CSSProperties = { fontSize: '30px', fontWeight: 800, letterSpacing: '-1px', lineHeight: 1, margin: '9px 0 3px', fontVariantNumeric: 'tabular-nums' };
+const hint: React.CSSProperties = { color: 'var(--warning)' };
 
 function Tile({ swatch, label, value, sub, valueColor }: { swatch: string; label: string; value: string; sub?: React.ReactNode; valueColor?: string }) {
   return (
@@ -52,7 +52,7 @@ function Tile({ swatch, label, value, sub, valueColor }: { swatch: string; label
   );
 }
 
-function Row({ label, value, valueColor }: { label: string; value: string; valueColor?: string }) {
+function Row({ label, value, valueColor }: { label: string; value: React.ReactNode; valueColor?: string }) {
   return (
     <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '10px', padding: '8px 0', borderTop: '1px solid var(--border)', fontSize: '12.5px' }}>
       <span style={{ color: 'var(--text-muted)' }}>{label}</span>
@@ -98,7 +98,7 @@ export default function FinancialsDashboard() {
     );
   }
 
-  const { ar, ap, cash, net } = data;
+  const { ar, ap, cash, net, config } = data;
   const b = ar.buckets;
   const bucketRows: { key: keyof typeof AGE; label: string; amt: number }[] = [
     { key: 'current', label: 'Current — not yet due', amt: b.current },
@@ -112,9 +112,17 @@ export default function FinancialsDashboard() {
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: '18px' }}>
 
+      {!config.balancesOk && (
+        <div style={{ ...card, padding: '10px 14px', fontSize: '12px', color: 'var(--warning)' }}>
+          Couldn’t read GL account balances from NetSuite — Cash, Card, and A/P may be incomplete. A/R is unaffected.
+        </div>
+      )}
+
       {/* Hero */}
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(150px, 1fr))', gap: '12px' }}>
-        <Tile swatch="var(--navy, #4d8ba6)" label="Cash on hand" value={usd(cash)} sub="Bank accounts · reconciled in NetSuite" />
+        <Tile swatch="var(--navy, #4d8ba6)" label="Cash on hand"
+          value={config.bankConfigured ? usd(cash) : '—'}
+          sub={config.bankConfigured ? 'Reconciled in NetSuite' : <span style={hint}>Set bank account ID(s)</span>} />
         <Tile swatch="var(--success)" label="Owed to us · A/R" value={usd(ar.total)}
           sub={<>{ar.openCount} open · <span style={{ color: 'var(--error)', fontWeight: 700 }}>{usd(ar.pastDue)} past due</span></>} />
         <Tile swatch="var(--error)" label="We owe · A/P" value={usd(ap.total)}
@@ -179,15 +187,13 @@ export default function FinancialsDashboard() {
         <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))', gap: '12px' }}>
           <div style={card}>
             <div style={eyebrow}>Vendor bills</div>
-            <div style={{ ...bigNum, fontSize: '25px' }}>{usd(ap.vendorBills)}</div>
-            <Row label="Unpaid vendor bills" value="A/P control" />
+            <div style={{ ...bigNum, fontSize: '25px' }}>{config.apConfigured ? usd(ap.vendorBills) : '—'}</div>
+            <Row label="Unpaid vendor bills" value={config.apConfigured ? 'A/P control' : <span style={hint}>Set A/P account ID</span>} />
           </div>
           <div style={card}>
             <div style={eyebrow}>Credit card balance</div>
-            <div style={{ ...bigNum, fontSize: '25px' }}>{usd(ap.cardOwed)}</div>
-            {ap.cards.length > 0
-              ? ap.cards.map(c => <Row key={c.id} label={c.name} value={usd(c.owed)} />)
-              : <Row label="No card balances owed" value="" />}
+            <div style={{ ...bigNum, fontSize: '25px' }}>{config.cardConfigured ? usd(ap.cardOwed) : '—'}</div>
+            <Row label="Balances owed on cards" value={config.cardConfigured ? 'From NetSuite' : <span style={hint}>Set card account ID(s)</span>} />
           </div>
         </div>
       </div>
