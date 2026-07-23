@@ -13,15 +13,45 @@
 import type { SupabaseClient } from '@supabase/supabase-js';
 import { findItems, getItemBasePrices } from '@/lib/netsuite';
 
+// The two NetSuite items a wrap quote maps onto — kept identical to the
+// estimate push (/api/wrap-quote/netsuite): all material pricing collapses
+// onto the first line, all labor onto the second, so the estimate and the
+// eventual invoice carry the same two totals.
+export const WRAP_VINYL_ITEM = '3M Vinyl';
+export const WRAP_LABOR_ITEM = 'Graphics Install Labor';
+
 export interface ProposedInvoiceLine {
   partNumber: string;
-  itemId: string | null;       // NetSuite internal id (null = not found in NS)
+  itemId: string | null;          // NetSuite internal id (null = not found in NS)
   displayName: string;
   quantity: number;
   rate: number;
-  found: boolean;              // matched a NetSuite item
-  priced: boolean;            // rate resolved to > 0
-  qtySource: 'po' | 'job';    // where the suggested quantity came from
+  found: boolean;                 // matched a NetSuite item
+  priced: boolean;                // rate resolved to > 0
+  qtySource: 'po' | 'job' | 'quote'; // where the suggested quantity came from
+}
+
+/** Prefill for the "add NetSuite customer" form, taken from the wrap quote's
+ *  customer snapshot when the job has no NetSuite customer yet. */
+export interface WrapQuoteCustomerPrefill {
+  companyName: string;
+  email: string;
+  phone: string;
+  address: string;
+  city: string;
+  state: string;
+  zip: string;
+}
+
+export interface WrapQuoteInvoiceInfo {
+  quoteId: string;
+  quoteNumber: string | null;
+  materialsTotal: number;
+  laborTotal: number;
+  total: number;
+  vehicleDescription: string | null;
+  lines: ProposedInvoiceLine[];
+  customerPrefill: WrapQuoteCustomerPrefill | null;
 }
 
 /** Split a job's comma-separated part_number into clean part numbers. */
@@ -152,4 +182,85 @@ export async function deriveProposedLines(
   }
 
   return { lines, skippedParts };
+}
+
+/**
+ * Build the proposed invoice lines from the wrap quote a job was spawned
+ * from — the missing link that lets a wrap quote's totals carry all the way
+ * to the invoice. Mirrors the estimate push: materials_total → "3M Vinyl"
+ * (described with the vehicle) and labor_total → "Graphics Install Labor",
+ * each qty 1. Returns null when the job isn't linked to a wrap quote so
+ * callers can fall back to the part-derived lines.
+ */
+export async function deriveWrapQuoteLines(
+  supabase: SupabaseClient,
+  job: any,
+): Promise<WrapQuoteInvoiceInfo | null> {
+  if (!job.wrap_quote_id) return null;
+
+  const { data: quote } = await supabase
+    .from('wrap_quotes')
+    .select('id, quote_number, vehicle_description, materials_total, labor_total, total, customer')
+    .eq('id', job.wrap_quote_id)
+    .maybeSingle();
+  if (!quote) return null;
+
+  const materials = Math.round((Number(quote.materials_total) || 0) * 100) / 100;
+  const labor = Math.round((Number(quote.labor_total) || 0) * 100) / 100;
+
+  // Resolve the two NetSuite items once; a missing item leaves itemId null so
+  // the reviewer is prompted to pick one (the totals still show).
+  const items = await findItems([WRAP_VINYL_ITEM, WRAP_LABOR_ITEM]);
+  const vinyl = items[WRAP_VINYL_ITEM.toUpperCase()];
+  const laborItem = items[WRAP_LABOR_ITEM.toUpperCase()];
+
+  const lines: ProposedInvoiceLine[] = [];
+  if (materials > 0) {
+    lines.push({
+      partNumber: WRAP_VINYL_ITEM,
+      itemId: vinyl?.id || null,
+      displayName: quote.vehicle_description || vinyl?.displayName || WRAP_VINYL_ITEM,
+      quantity: 1,
+      rate: materials,
+      found: !!vinyl,
+      priced: true,
+      qtySource: 'quote',
+    });
+  }
+  if (labor > 0) {
+    lines.push({
+      partNumber: WRAP_LABOR_ITEM,
+      itemId: laborItem?.id || null,
+      displayName: laborItem?.displayName || WRAP_LABOR_ITEM,
+      quantity: 1,
+      rate: labor,
+      found: !!laborItem,
+      priced: true,
+      qtySource: 'quote',
+    });
+  }
+
+  const c = (quote.customer && typeof quote.customer === 'object') ? quote.customer : {};
+  const customerPrefill: WrapQuoteCustomerPrefill | null = c.name
+    ? {
+        companyName: c.name || '',
+        email: c.email || '',
+        phone: c.phone || '',
+        address: c.address || '',
+        city: c.city || '',
+        state: c.state || '',
+        zip: c.zip || '',
+      }
+    : null;
+
+  return {
+    quoteId: quote.id,
+    quoteNumber: quote.quote_number || null,
+    materialsTotal: materials,
+    laborTotal: labor,
+    total: Math.round((Number(quote.total) || materials + labor) * 100) / 100,
+    vehicleDescription: quote.vehicle_description || null,
+    lines,
+    customerPrefill,
+  };
 }
