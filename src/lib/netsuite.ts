@@ -392,6 +392,14 @@ export async function createCustomerOrLead(payload: {
     companyName: payload.companyName,
     stage: stageMap[payload.type] || 'LEAD',
     isPerson: false,
+    // Subsidiary is required on every customer-entity record in this OneWorld
+    // account — NetSuite does NOT derive it, so a create without it fails with
+    // "Please enter value(s) for: Subsid." Hardcoded internal id 2 (BMG Fleet
+    // Installations) like the vendor / vendor-bill flows; the integration role
+    // can't SuiteQL the subsidiary table. Single-select shape (same as
+    // createVendor), not the item record's multi-select. Override via
+    // NETSUITE_SUBSIDIARY_ID. See docs/cni-vendor-bills.md.
+    subsidiary: { id: process.env.NETSUITE_SUBSIDIARY_ID || '2' },
   };
 
   if (payload.email) body.email = payload.email;
