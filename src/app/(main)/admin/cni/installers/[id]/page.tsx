@@ -1,7 +1,7 @@
 'use client';
 
 import { useState, useEffect } from 'react';
-import { useRouter, useParams } from 'next/navigation';
+import { useRouter, useParams, useSearchParams } from 'next/navigation';
 import { createClient } from '@/lib/supabase-browser';
 import { useAuth } from '@/components/AuthProvider';
 import { useDialog } from '@/components/DialogProvider';
@@ -9,6 +9,7 @@ import { theme } from '@/lib/theme';
 import { loadCompaniesWithCounts, type CompanyOption } from '@/lib/cni-companies';
 import { storage } from '@/lib/storage';
 import MentionTextArea, { reportMentions } from '@/components/MentionTextArea';
+import { flashNote } from '@/lib/focus-note';
 
 const RISK_TAG_OPTIONS = [
   { id: 'preferred', label: 'Preferred', color: 'var(--success)' },
@@ -35,6 +36,7 @@ const EQUIPMENT_OPTIONS = [
 export default function CniInstallerDetailPage() {
   const router = useRouter();
   const params = useParams();
+  const searchParams = useSearchParams();
   const userId = params.id as string;
   const { isAdmin, user, loading: authLoading } = useAuth();
   const supabase = createClient();
@@ -79,6 +81,10 @@ export default function CniInstallerDetailPage() {
     if (authLoading) return; // role flags aren't resolved until auth finishes loading
     if (!isAdmin) { router.push('/home'); return; }
     loadData();
+    // A mention deep link (?note=<id>) scroll-flashes that note once the
+    // notes list renders.
+    const noteId = searchParams.get('note');
+    if (noteId) flashNote(`cni-note-${noteId}`);
   // eslint-disable-next-line react-hooks/exhaustive-deps -- intentional: load once on mount
   }, [authLoading, isAdmin, userId]);
 
@@ -159,19 +165,20 @@ export default function CniInstallerDetailPage() {
   const addInternalNote = async () => {
     const content = newNote.trim();
     if (!content) return;
-    const { error } = await supabase.from('cni_internal_notes').insert({
+    const { data: inserted, error } = await supabase.from('cni_internal_notes').insert({
       installer_id: userId,
       note_type: newNoteType,
       content,
       created_by: user?.id,
-    });
+    }).select('id').single();
     if (!error) {
+      // Carry the note id so a mention deep link scrolls straight to it.
       reportMentions({
         text: content,
         sourceType: 'cni_internal_note',
         sourceId: userId,
         contextLabel: `Installer — ${userProfile?.full_name || 'CNI installer'}`,
-        contextUrl: `/admin/cni/installers/${userId}`,
+        contextUrl: `/admin/cni/installers/${userId}${inserted?.id ? `?note=${inserted.id}` : ''}`,
       });
     }
     setNewNote('');
@@ -923,7 +930,7 @@ export default function CniInstallerDetailPage() {
         ) : (
           <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
             {internalNotes.map(n => (
-              <div key={n.id} style={{
+              <div key={n.id} id={`cni-note-${n.id}`} style={{
                 padding: '8px 10px', borderRadius: '8px',
                 background: 'var(--input-bg)', border: '1px solid var(--border)',
               }}>
