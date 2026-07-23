@@ -4,6 +4,7 @@ import {
   suiteqlQueryAll,
   createSalesOrder,
   createDirectInvoice,
+  createCustomerOrLead,
   getItemBasePrices,
 } from './netsuite';
 
@@ -253,6 +254,48 @@ describe('createDirectInvoice', () => {
     expect(result.success).toBe(false);
     expect(result.error).toContain('not assigned to the invoice\'s subsidiary');
     consoleSpy.mockRestore();
+  });
+});
+
+describe('createCustomerOrLead', () => {
+  it('sends the required subsidiary (BMG Fleet Installations = id 2) on the customer record', async () => {
+    fetchMock
+      // record POST — new customer, id returned in the Location header
+      .mockResolvedValueOnce(new Response(null, {
+        status: 204,
+        headers: { Location: 'https://x/customer/4242' },
+      }))
+      // entityid lookup
+      .mockResolvedValueOnce(jsonResponse({ items: [{ entityid: 'ACME' }] }));
+
+    const result = await createCustomerOrLead({ companyName: 'Acme Co', type: 'customer' });
+
+    const [url, init] = fetchMock.mock.calls[0];
+    expect(url).toContain('/services/rest/record/v1/customer');
+    const body = JSON.parse(init.body);
+    // The fix: without this the account rejects the create with
+    // "Please enter value(s) for: Subsid."
+    expect(body.subsidiary).toEqual({ id: '2' });
+    expect(body).toMatchObject({ companyName: 'Acme Co', stage: 'CUSTOMER', isPerson: false });
+    expect(result).toEqual({
+      success: true,
+      customerId: '4242',
+      entityId: 'ACME',
+      netsuiteUrl: expect.stringContaining('id=4242'),
+    });
+  });
+
+  it('honors the NETSUITE_SUBSIDIARY_ID override', async () => {
+    vi.stubEnv('NETSUITE_SUBSIDIARY_ID', '5');
+    fetchMock
+      .mockResolvedValueOnce(new Response(null, { status: 204, headers: { Location: 'https://x/customer/1' } }))
+      .mockResolvedValueOnce(jsonResponse({ items: [] }));
+
+    await createCustomerOrLead({ companyName: 'Beta', type: 'lead' });
+
+    const body = JSON.parse(fetchMock.mock.calls[0][1].body);
+    expect(body.subsidiary).toEqual({ id: '5' });
+    expect(body.stage).toBe('LEAD');
   });
 });
 
