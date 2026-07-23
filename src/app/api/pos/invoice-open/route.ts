@@ -5,6 +5,7 @@ import { validateBody, z } from '@/lib/validate';
 import { createDirectInvoice, findCustomer, findItems } from '@/lib/netsuite';
 import { resolveLocationWithOverride } from '@/lib/invoice-location';
 import { recomputePoFulfillment } from '@/lib/scan-match';
+import { normPart, distributeInstalled } from '@/lib/po-invoice-verify';
 
 export const dynamic = 'force-dynamic';
 export const maxDuration = 60;
@@ -166,14 +167,35 @@ export async function POST(req: NextRequest) {
 
     // Billed units consume the open quantity right away — the open cap above
     // then makes a repeat invoice for the same units impossible, without
-    // waiting for the invoice verify sweep (which does the same for invoices
-    // entered directly in NetSuite). A fully billed PO flips to 'complete'.
+    // waiting for the invoice verify sweep.
+    //
+    // A part can span several PO lines, and this is a DIRECT NetSuite invoice
+    // that carries no PO-line identity — so the verify sweep can only take a
+    // part's invoiced TOTAL and redistribute it across the part's lines in
+    // order, only ever RAISING installed. We must consume identically here or
+    // the two writes diverge and stack: if we marked the exact line the user
+    // billed, the sweep would later raise a DIFFERENT line for the same units,
+    // pushing installed above what was billed — which prematurely completes the
+    // PO and strands genuinely-open units. So aggregate the billed units per
+    // part and front-fill that part's lines in the same deterministic (id)
+    // order the sweep uses, to the part's new consumed total. installed is only
+    // raised (physical scans past billing are preserved).
+    const billedByPart = new Map<string, number>();
     for (const l of toBill) {
-      const line = lineById.get(l.lineId);
-      if (!line) continue;
-      await service.from('po_line_items').update({
-        installed: Math.min((line.installed || 0) + l.quantity, line.quantity || 0),
-      }).eq('id', line.id);
+      const key = normPart(l.partNumber);
+      billedByPart.set(key, (billedByPart.get(key) || 0) + l.quantity);
+    }
+    for (const [key, billed] of billedByPart) {
+      const partLines = lines.filter(l => normPart(l.part_number) === key);
+      // Target = what's already installed on this part's lines + the units just
+      // billed. distributeInstalled front-fills to that target and only raises,
+      // so a later verify sweep (which targets the part's cumulative invoiced
+      // total the same way) reproduces the exact same per-line installed instead
+      // of stacking on top of it.
+      const alreadyInstalled = partLines.reduce((s, l) => s + (l.installed || 0), 0);
+      for (const u of distributeInstalled(partLines, alreadyInstalled + billed)) {
+        await service.from('po_line_items').update({ installed: u.installed }).eq('id', u.id);
+      }
     }
     await recomputePoFulfillment(service, [po.id]);
 
