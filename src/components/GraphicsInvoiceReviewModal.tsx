@@ -42,8 +42,22 @@ interface ReviewLine {
   description: string;
   quantity: number;
   rate: number;
-  qtySource: 'po' | 'job' | 'manual';
+  qtySource: 'po' | 'job' | 'manual' | 'quote';
 }
+
+interface CustomerPrefill {
+  companyName: string;
+  email: string;
+  phone: string;
+  address: string;
+  city: string;
+  state: string;
+  zip: string;
+}
+
+const EMPTY_NEW_CUSTOMER: CustomerPrefill = {
+  companyName: '', email: '', phone: '', address: '', city: '', state: '', zip: '',
+};
 
 interface Props {
   job: GraphicsJob;
@@ -73,8 +87,18 @@ export default function GraphicsInvoiceReviewModal({ job, onClose, onComplete }:
   const [custResults, setCustResults] = useState<CustomerRow[]>([]);
   const [custSearching, setCustSearching] = useState(false);
 
+  // ── Add a brand-new NetSuite customer (used when the graphics job has no
+  // NetSuite customer — common for wrap-quote jobs where the customer was
+  // typed in, not picked from the synced list) ──
+  const [creatingCustomer, setCreatingCustomer] = useState(false);
+  const [newCust, setNewCust] = useState<CustomerPrefill>(EMPTY_NEW_CUSTOMER);
+  const [customerPrefill, setCustomerPrefill] = useState<CustomerPrefill | null>(null);
+  const [savingCustomer, setSavingCustomer] = useState(false);
+  const [custError, setCustError] = useState<string | null>(null);
+
   const [poNumber, setPoNumber] = useState<string | null>(null);
   const [lines, setLines] = useState<ReviewLine[]>([]);
+  const [wrapQuote, setWrapQuote] = useState<{ quoteNumber: string | null; total: number; applied: boolean } | null>(null);
 
   // ── Per-row NetSuite item picker ──
   const [activePartRow, setActivePartRow] = useState<string | null>(null);
@@ -104,6 +128,8 @@ export default function GraphicsInvoiceReviewModal({ job, onClose, onComplete }:
         } else {
           setCustomer(data.customer || { netsuiteId: null, name: null });
           setPoNumber(data.poNumber || null);
+          setWrapQuote(data.wrapQuote || null);
+          if (data.customerPrefill) setCustomerPrefill(data.customerPrefill);
           setLines((data.lines || []).map((l: any) => ({
             key: genKey(),
             partNumber: l.partNumber,
@@ -193,6 +219,59 @@ export default function GraphicsInvoiceReviewModal({ job, onClose, onComplete }:
     setPartSearch('');
     setPartResults([]);
   }, [updateLine]);
+
+  const openCreateCustomer = useCallback(() => {
+    setCreatingCustomer(true);
+    setEditingCustomer(false);
+    setCustError(null);
+    // Prefill from the wrap quote's customer snapshot (or whatever was typed
+    // into the search), so the NetSuite record isn't retyped from scratch.
+    setNewCust({
+      ...EMPTY_NEW_CUSTOMER,
+      ...(customerPrefill || {}),
+      companyName: (customerPrefill?.companyName || custSearch || customer.name || '').trim(),
+    });
+  }, [customerPrefill, custSearch, customer.name]);
+
+  const createCustomer = useCallback(async () => {
+    const companyName = newCust.companyName.trim();
+    if (!companyName) { setCustError('Company name is required.'); return; }
+    setSavingCustomer(true);
+    setCustError(null);
+    try {
+      const res = await fetch('/api/wrap-quote/create-customer', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          companyName,
+          email: newCust.email.trim() || undefined,
+          phone: newCust.phone.trim() || undefined,
+          address: newCust.address.trim() || undefined,
+          city: newCust.city.trim() || undefined,
+          state: newCust.state.trim() || undefined,
+          zip: newCust.zip.trim() || undefined,
+        }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok || !data.success) {
+        setCustError(data.error || `Failed to create customer (${res.status})`);
+        setSavingCustomer(false);
+        return;
+      }
+      // Use the freshly-created NetSuite customer as the invoice customer.
+      setCustomerOverride({
+        id: data.customerId || `ns-${data.netsuiteId}`,
+        netsuite_id: String(data.netsuiteId),
+        company_name: companyName,
+        entity_id: data.entityId || null,
+      });
+      setCreatingCustomer(false);
+      setNewCust(EMPTY_NEW_CUSTOMER);
+    } catch (e: any) {
+      setCustError(e?.message || 'Network error creating customer');
+    }
+    setSavingCustomer(false);
+  }, [newCust]);
 
   const effectiveCustomer = customerOverride
     ? { netsuiteId: customerOverride.netsuite_id, name: customerOverride.company_name || customerOverride.entity_id }
@@ -304,7 +383,31 @@ export default function GraphicsInvoiceReviewModal({ job, onClose, onComplete }:
               {/* Customer */}
               <div>
                 <div style={{ fontSize: '11px', color: 'var(--text-muted)', marginBottom: '4px', fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.5px' }}>Customer</div>
-                {editingCustomer ? (
+                {creatingCustomer ? (
+                  <div style={{ borderRadius: '8px', border: '1px solid var(--border)', background: 'var(--card)', padding: '12px' }}>
+                    <div style={{ fontSize: '12px', fontWeight: 700, color: 'var(--text-primary)', marginBottom: '8px' }}>New NetSuite customer</div>
+                    <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '8px' }}>
+                      <input value={newCust.companyName} onChange={e => setNewCust(v => ({ ...v, companyName: e.target.value }))} placeholder="Company name *" autoFocus style={{ ...searchInput, gridColumn: '1 / -1' }} />
+                      <input value={newCust.email} onChange={e => setNewCust(v => ({ ...v, email: e.target.value }))} placeholder="Email" style={searchInput} />
+                      <input value={newCust.phone} onChange={e => setNewCust(v => ({ ...v, phone: e.target.value }))} placeholder="Phone" style={searchInput} />
+                      <input value={newCust.address} onChange={e => setNewCust(v => ({ ...v, address: e.target.value }))} placeholder="Address" style={{ ...searchInput, gridColumn: '1 / -1' }} />
+                      <input value={newCust.city} onChange={e => setNewCust(v => ({ ...v, city: e.target.value }))} placeholder="City" style={searchInput} />
+                      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '8px' }}>
+                        <input value={newCust.state} onChange={e => setNewCust(v => ({ ...v, state: e.target.value }))} placeholder="State" style={searchInput} />
+                        <input value={newCust.zip} onChange={e => setNewCust(v => ({ ...v, zip: e.target.value }))} placeholder="ZIP" style={searchInput} />
+                      </div>
+                    </div>
+                    {custError && <div style={{ fontSize: '11px', color: 'var(--danger, #ef4444)', marginTop: '8px' }}>{custError}</div>}
+                    <div style={{ display: 'flex', gap: '8px', marginTop: '10px' }}>
+                      <button
+                        onClick={createCustomer}
+                        disabled={savingCustomer || !newCust.companyName.trim()}
+                        style={{ padding: '7px 14px', borderRadius: '7px', border: 'none', background: '#22c55e', color: '#fff', fontSize: '12px', fontWeight: 700, cursor: savingCustomer || !newCust.companyName.trim() ? 'not-allowed' : 'pointer', opacity: savingCustomer || !newCust.companyName.trim() ? 0.5 : 1 }}
+                      >{savingCustomer ? 'Creating…' : 'Create in NetSuite'}</button>
+                      <button onClick={() => { setCreatingCustomer(false); setCustError(null); }} style={{ padding: '7px 12px', borderRadius: '7px', border: '1px solid var(--border)', background: 'transparent', color: 'var(--text-muted)', fontSize: '12px', fontWeight: 700, cursor: 'pointer' }}>Cancel</button>
+                    </div>
+                  </div>
+                ) : editingCustomer ? (
                   <div>
                     <input
                       type="text" autoFocus value={custSearch}
@@ -333,7 +436,10 @@ export default function GraphicsInvoiceReviewModal({ job, onClose, onComplete }:
                         ))}
                       </div>
                     )}
-                    <button onClick={() => { setEditingCustomer(false); setCustSearch(''); setCustResults([]); }} style={{ marginTop: '6px', padding: '4px 10px', borderRadius: '6px', border: '1px solid var(--border)', background: 'transparent', color: 'var(--text-muted)', fontSize: '11px', fontWeight: 700, cursor: 'pointer' }}>Cancel</button>
+                    <div style={{ display: 'flex', gap: '8px', marginTop: '6px', alignItems: 'center' }}>
+                      <button onClick={() => { setEditingCustomer(false); setCustSearch(''); setCustResults([]); }} style={{ padding: '4px 10px', borderRadius: '6px', border: '1px solid var(--border)', background: 'transparent', color: 'var(--text-muted)', fontSize: '11px', fontWeight: 700, cursor: 'pointer' }}>Cancel</button>
+                      <button onClick={openCreateCustomer} style={{ padding: '4px 10px', borderRadius: '6px', border: 'none', background: 'transparent', color: '#60a5fa', fontSize: '11px', fontWeight: 700, cursor: 'pointer' }}>+ Add new NetSuite customer</button>
+                    </div>
                   </div>
                 ) : (
                   <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '10px' }}>
@@ -341,19 +447,30 @@ export default function GraphicsInvoiceReviewModal({ job, onClose, onComplete }:
                       {effectiveCustomer.name || <span style={{ color: 'var(--text-muted)' }}>No customer</span>}
                       {effectiveCustomer.netsuiteId
                         ? <span style={{ color: 'var(--text-muted)', marginLeft: '8px' }}>NS {effectiveCustomer.netsuiteId}</span>
-                        : <span style={{ color: 'var(--danger, #ef4444)', marginLeft: '8px', fontWeight: 700, fontSize: '11px' }}>· no NetSuite customer — search one below</span>}
+                        : <span style={{ color: 'var(--danger, #ef4444)', marginLeft: '8px', fontWeight: 700, fontSize: '11px' }}>· no NetSuite customer — search or add one</span>}
                     </div>
-                    <button onClick={() => { setEditingCustomer(true); setCustSearch(''); }} style={{ background: 'transparent', border: 'none', color: '#60a5fa', fontSize: '11px', fontWeight: 700, cursor: 'pointer', whiteSpace: 'nowrap' }}>
-                      {effectiveCustomer.netsuiteId ? 'Change' : 'Search'}
-                    </button>
+                    <div style={{ display: 'flex', gap: '10px', whiteSpace: 'nowrap' }}>
+                      <button onClick={() => { setEditingCustomer(true); setCustSearch(''); }} style={{ background: 'transparent', border: 'none', color: '#60a5fa', fontSize: '11px', fontWeight: 700, cursor: 'pointer' }}>
+                        {effectiveCustomer.netsuiteId ? 'Change' : 'Search'}
+                      </button>
+                      {!effectiveCustomer.netsuiteId && (
+                        <button onClick={openCreateCustomer} style={{ background: 'transparent', border: 'none', color: '#60a5fa', fontSize: '11px', fontWeight: 700, cursor: 'pointer' }}>+ Add</button>
+                      )}
+                    </div>
                   </div>
                 )}
               </div>
 
-              {/* Quantity source hint */}
-              <div style={{ fontSize: '11px', color: 'var(--text-muted)' }}>
-                Quantities are suggested from {poNumber ? `PO #${poNumber}` : 'the linked PO'} where parts match, otherwise the job quantity ({job.quantity || 1}). Check each line before creating anything.
-              </div>
+              {/* Line source hint */}
+              {wrapQuote?.applied ? (
+                <div style={{ fontSize: '11px', color: '#a78bfa', padding: '8px 10px', borderRadius: '8px', background: 'rgba(167,139,250,0.06)', border: '1px solid rgba(167,139,250,0.2)' }}>
+                  Materials &amp; labor carried through from wrap quote{wrapQuote.quoteNumber ? ` ${wrapQuote.quoteNumber}` : ''} (total ${wrapQuote.total.toFixed(2)}). Verify the lines before creating the invoice.
+                </div>
+              ) : (
+                <div style={{ fontSize: '11px', color: 'var(--text-muted)' }}>
+                  Quantities are suggested from {poNumber ? `PO #${poNumber}` : 'the linked PO'} where parts match, otherwise the job quantity ({job.quantity || 1}). Check each line before creating anything.
+                </div>
+              )}
 
               {/* Lines */}
               <div>
@@ -421,6 +538,9 @@ export default function GraphicsInvoiceReviewModal({ job, onClose, onComplete }:
                               <span style={{ fontSize: '13px', fontWeight: 700, color: 'var(--text-primary)' }}>{line.partNumber || 'No part'}</span>
                               {line.qtySource === 'po' && (
                                 <span style={{ fontSize: '9px', fontWeight: 700, padding: '1px 5px', borderRadius: '4px', background: 'rgba(167,139,250,0.15)', color: '#a78bfa' }}>PO QTY</span>
+                              )}
+                              {line.qtySource === 'quote' && (
+                                <span style={{ fontSize: '9px', fontWeight: 700, padding: '1px 5px', borderRadius: '4px', background: 'rgba(167,139,250,0.15)', color: '#a78bfa' }}>QUOTE</span>
                               )}
                               <button
                                 onClick={() => { setActivePartRow(line.key); setPartSearch(line.partNumber || ''); }}

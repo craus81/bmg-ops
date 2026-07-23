@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { createClient } from '@supabase/supabase-js';
 import { requireStaff } from '@/lib/api-auth';
 import { createEstimate, findItems } from '@/lib/netsuite';
+import { WRAP_VINYL_ITEM as VINYL_ITEM, WRAP_LABOR_ITEM as LABOR_ITEM } from '@/lib/graphics-invoice';
 import { validateBody, z } from '@/lib/validate';
 
 export const dynamic = 'force-dynamic';
@@ -15,9 +16,8 @@ const Schema = z.object({ quoteId: z.string().uuid() });
 
 // The two NetSuite items every wrap quote maps onto. All vinyl/material
 // pricing becomes one line on the first; all labor becomes one line on the
-// second. Taxes are not sent — NetSuite's tax engine handles them.
-const VINYL_ITEM = '3M Vinyl';
-const LABOR_ITEM = 'Graphics Install Labor';
+// second. Taxes are not sent — NetSuite's tax engine handles them. Shared
+// with the graphics-invoice derivation so the estimate and invoice agree.
 
 /**
  * POST /api/wrap-quote/netsuite

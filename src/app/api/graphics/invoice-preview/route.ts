@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { createClient } from '@supabase/supabase-js';
 import { requireAuth } from '@/lib/api-auth';
 import { validateBody, z } from '@/lib/validate';
-import { resolveCustomerNsId, deriveProposedLines } from '@/lib/graphics-invoice';
+import { resolveCustomerNsId, deriveProposedLines, deriveWrapQuoteLines } from '@/lib/graphics-invoice';
 
 export const dynamic = 'force-dynamic';
 
@@ -44,10 +44,17 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ error: 'Graphics job not found' }, { status: 404 });
     }
 
-    const [customerNsId, derived] = await Promise.all([
+    const [customerNsId, derived, wrapQuote] = await Promise.all([
       resolveCustomerNsId(supabase, job),
       deriveProposedLines(supabase, job),
+      deriveWrapQuoteLines(supabase, job),
     ]);
+
+    // Parts on the job win; otherwise (the typical wrap-quote job, which has
+    // no parts) the wrap quote's material/labor totals carry through as the
+    // proposed lines so they reach the invoice.
+    const usingWrapQuote = derived.lines.length === 0 && !!wrapQuote && wrapQuote.lines.length > 0;
+    const lines = usingWrapQuote ? wrapQuote!.lines : derived.lines;
 
     return NextResponse.json({
       alreadyInvoiced: job.netsuite_invoice_id
@@ -56,8 +63,20 @@ export async function POST(req: NextRequest) {
       customer: { netsuiteId: customerNsId, name: job.customer || null },
       poNumber: job.po_number || null,
       jobQuantity: job.quantity || 1,
-      lines: derived.lines,
-      skippedParts: derived.skippedParts,
+      lines,
+      skippedParts: usingWrapQuote ? [] : derived.skippedParts,
+      wrapQuote: wrapQuote
+        ? {
+            quoteNumber: wrapQuote.quoteNumber,
+            materialsTotal: wrapQuote.materialsTotal,
+            laborTotal: wrapQuote.laborTotal,
+            total: wrapQuote.total,
+            applied: usingWrapQuote,
+          }
+        : null,
+      // Prefill for the "add NetSuite customer" form when the job has no
+      // NetSuite customer yet — taken from the wrap quote's customer snapshot.
+      customerPrefill: !customerNsId ? wrapQuote?.customerPrefill || null : null,
     });
   } catch (err: any) {
     console.error('Graphics invoice-preview error:', err);
