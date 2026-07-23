@@ -492,10 +492,17 @@ export default function GraphicsPage() {
     // Views are best-effort — if the graphics_job_views table or RPC
     // hasn't been migrated yet, the page should still render the jobs.
     try {
-      const { data: viewsData } = await supabase
-        .from('graphics_job_views')
-        .select('*');
-      setJobViews(groupViewsByJob((viewsData as GraphicsJobView[]) || []));
+      // One row per (user, opened job): unbounded, so paginate past the
+      // 1000-row cap or the "seen by" receipts silently drop for some jobs
+      // once the table fills up. id gives the deterministic unique order.
+      const { data: viewsData } = await fetchAllRows<GraphicsJobView>((from, to) =>
+        supabase
+          .from('graphics_job_views')
+          .select('*')
+          .order('id')
+          .range(from, to)
+      );
+      setJobViews(groupViewsByJob(viewsData));
     } catch (e) {
       console.warn('graphics_job_views unavailable:', e);
     }
