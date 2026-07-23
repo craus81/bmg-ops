@@ -448,28 +448,40 @@ export default function GraphicsPage() {
     // grows unboundedly, so paginate past PostgREST's 1000-row cap (a plain
     // read would silently drop the oldest jobs). Deterministic order + a unique
     // id tiebreaker keeps pages from skipping/duplicating rows mid-read.
-    const { data: jobsData } = await fetchAllRows<GraphicsJob>((from, to) => {
+    const { data: jobsData, error: jobsErr } = await fetchAllRows<GraphicsJob>((from, to) => {
       let q = supabase.from('graphics_jobs').select('*');
       if (!includeArchived) q = q.not('status', 'in', '("installed","cancelled")');
       return q.order('created_at', { ascending: false }).order('id').range(from, to);
     });
-    setJobs(jobsData || []);
+    // On a failed/partial read keep the last known-good board rather than
+    // overwriting it with a truncated or empty set — this runs on the 60s/focus
+    // poll too, so a transient failure must not blank a working board.
+    if (jobsErr) { setLoading(false); return; }
+    setJobs(jobsData);
     setLoading(false);
 
     // Time-in-stage: latest real status TRANSITION per job (note rows write
     // from_status === to_status and must not reset the clock). Best-effort —
     // metrics degrade to created_at if history can't load.
     try {
-      const ids = ((jobsData as GraphicsJob[]) || []).map(j => j.id);
+      const ids = jobsData.map(j => j.id);
       const since: Record<string, string> = {};
       for (let i = 0; i < ids.length; i += 200) {
-        const { data: hist } = await supabase
-          .from('graphics_status_history')
-          .select('job_id, from_status, to_status, created_at')
-          .in('job_id', ids.slice(i, i + 200))
-          .order('created_at', { ascending: false })
-          .limit(3000);
-        for (const h of hist || []) {
+        const chunk = ids.slice(i, i + 200);
+        // Paginate: a 200-job chunk of full-pipeline histories easily exceeds
+        // PostgREST's 1000-row cap (.limit does NOT raise it), which would drop
+        // the oldest jobs' newest transition and silently inflate their stage
+        // clock. created_at desc + id tiebreaker keeps pages stable.
+        const { data: hist } = await fetchAllRows<{ job_id: string; from_status: string | null; to_status: string; created_at: string }>((from, to) =>
+          supabase
+            .from('graphics_status_history')
+            .select('job_id, from_status, to_status, created_at')
+            .in('job_id', chunk)
+            .order('created_at', { ascending: false })
+            .order('id')
+            .range(from, to)
+        );
+        for (const h of hist) {
           if (h.from_status === h.to_status) continue;
           if (!since[h.job_id]) since[h.job_id] = h.created_at;
         }
@@ -1699,9 +1711,12 @@ export default function GraphicsPage() {
           onClick={() => {
             const next = !showArchived;
             setShowArchived(next);
-            // Jump straight to the Installed tab when opening the archive so the
-            // jobs that "disappeared" show immediately; back to Active on close.
-            setFilterStatus(next ? 'installed' : 'active');
+            // Open onto "All" so BOTH installed and cancelled show at once
+            // (matching the tooltip) — not the Installed tab, which would hide
+            // cancelled jobs and render blank when nothing is installed. "All"
+            // also keeps the current active rows visible while the archived
+            // set loads, avoiding an empty-board flash. Back to Active on close.
+            setFilterStatus(next ? 'all' : 'active');
             setMetricFilter(null);
             loadJobs(next);
           }}
