@@ -217,6 +217,21 @@ export default function PartsMailPage() {
   const visible = filter === 'all' ? rows : rows.filter(r => r.classification === filter);
   const reviewCount = rows.filter(r => r.classification === 'review').length;
 
+  // The same invoice is often captured from more than one watched mailbox, so
+  // collapse to one row per vendor+invoice, keeping the most-progressed copy
+  // (billed > PO-matched > captured). Guards existing dupes; the scan won't
+  // create new ones.
+  const invoiceRank = (i: InvoiceRow) => (i.status === 'billed' ? 2 : i.matched_po_id ? 1 : 0);
+  const dedupedInvoices = (() => {
+    const best = new Map<string, InvoiceRow>();
+    for (const inv of invoices) {
+      const key = `${(inv.vendor_name || '').toLowerCase()}|${(inv.invoice_number || inv.file_name).toLowerCase()}`;
+      const cur = best.get(key);
+      if (!cur || invoiceRank(inv) > invoiceRank(cur)) best.set(key, inv);
+    }
+    return [...best.values()];
+  })();
+
   const card: React.CSSProperties = { background: 'var(--card)', border: '1px solid var(--border)', borderRadius: '14px', padding: '14px', marginBottom: '14px' };
   const inputStyle: React.CSSProperties = { padding: '7px 10px', borderRadius: '8px', border: '1px solid var(--border)', background: 'var(--input-bg)', color: 'var(--text-primary)', fontSize: '12px', outline: 'none' };
 
@@ -268,13 +283,13 @@ export default function PartsMailPage() {
       )}
 
       {/* Captured vendor invoices → NetSuite bills */}
-      {invoices.length > 0 && (
+      {dedupedInvoices.length > 0 && (
         <div style={card}>
           <div style={{ fontSize: '11px', fontWeight: 800, color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.5px', marginBottom: '8px' }}>
-            Vendor Invoices ({invoices.filter(i => i.status === 'captured').length} to bill)
+            Vendor Invoices ({dedupedInvoices.filter(i => i.status === 'captured').length} to bill)
           </div>
           <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
-            {invoices.map(inv => (
+            {dedupedInvoices.map(inv => (
               <div key={inv.id} style={{ padding: '10px 12px', borderRadius: '10px', background: 'var(--input-bg)', border: `1px solid ${inv.status === 'billed' ? 'rgba(34,197,94,0.35)' : 'var(--border)'}` }}>
                 <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '8px', flexWrap: 'wrap' }}>
                   <button
