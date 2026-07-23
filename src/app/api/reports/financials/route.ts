@@ -17,21 +17,19 @@ export const dynamic = 'force-dynamic';
  *
  * Sourcing:
  *  - A/R = open customer invoices, aged by due date.
- *  - Cash / Card / A/P = GL account balances, summed straight from
- *    transactionaccountingline for specific account internal IDs (set in env):
- *      NETSUITE_BANK_ACCOUNT_IDS  → cash (asset)
- *      NETSUITE_CARD_ACCOUNT_ID   → credit cards (liability)
- *      NETSUITE_AP_ACCOUNT_IDS    → A/P control account (liability)
- *    The `account` table is NOT queryable by the integration role in this
- *    NetSuite instance ("Record 'account' was not found"), so accounts can't
- *    be auto-discovered by type — they're addressed by internal ID. We also
- *    deliberately do NOT join `transaction`: an inner join there drops posting
- *    lines whose transaction the role can't read, which undercounts balances.
- *  GL sign is debit-positive / credit-negative, so Bank sums positive and the
- *  liabilities sum negative — negated to a positive "owed".
+ *  - Cash / Card / A/P = GL account balances for specific account internal IDs
+ *    (env: NETSUITE_BANK_ACCOUNT_IDS / NETSUITE_CARD_ACCOUNT_ID /
+ *    NETSUITE_AP_ACCOUNT_IDS). The `account` table isn't queryable by the
+ *    integration role, so accounts are addressed by ID.
+ *  Balance = SUM(debit) − SUM(credit) over posted accounting lines. We do NOT
+ *  use SUM(amount): in this instance it isn't a signed net (it returned the
+ *  gross ~$2.6M of vendor bills for an A/P account whose real balance is
+ *  ~$3.5k). debit−credit nets correctly — assets come back positive, the
+ *  liabilities negative, which we negate to a positive "owed".
  *
- * ?debug=1 (super_admin) returns the raw per-account balances for reconciling
- * against the Chart of Accounts.
+ * ?debug=1 (super_admin) returns each configured account's balance computed
+ * several ways (amount / debit−credit / netamount) to reconcile against the
+ * Chart of Accounts.
  */
 
 function rolesOf(profile: any): string[] {
@@ -58,13 +56,13 @@ function idList(raw: string | undefined): string[] {
   return (raw || '').split(',').map(s => s.trim()).filter(s => /^\d{1,18}$/.test(s));
 }
 
-// GL balance per account, straight from the accounting lines (no `account`
-// or `transaction` join — both are restricted / lossy for this role).
+// GL balance (debit − credit) per account, straight from the posted accounting
+// lines. No `account`/`transaction` join — both are restricted / lossy here.
 async function accountBalances(ids: string[]): Promise<Record<string, number> | null> {
   if (ids.length === 0) return {};
   try {
     const rows = (await suiteqlQuery(`
-      SELECT tal.account AS id, SUM(tal.amount) AS bal
+      SELECT tal.account AS id, SUM(NVL(tal.debit, 0)) - SUM(NVL(tal.credit, 0)) AS bal
       FROM transactionaccountingline tal
       WHERE tal.posting = 'T' AND tal.account IN (${ids.join(',')})
       GROUP BY tal.account
@@ -76,6 +74,30 @@ async function accountBalances(ids: string[]): Promise<Record<string, number> | 
   } catch {
     return null; // balances unavailable → A/R still renders
   }
+}
+
+// Debug helper: the same accounts computed three ways so the correct formula
+// can be picked by comparing to the Chart of Accounts.
+async function debugBalances(ids: string[]) {
+  const candidates: Record<string, Record<string, number | null>> = {};
+  for (const id of ids) candidates[id] = { amount: null, debitMinusCredit: null, netamount: null };
+  const probes: [string, string][] = [
+    ['amount', 'SUM(tal.amount)'],
+    ['debitMinusCredit', 'SUM(NVL(tal.debit,0)) - SUM(NVL(tal.credit,0))'],
+    ['netamount', 'SUM(tal.netamount)'],
+  ];
+  for (const [key, expr] of probes) {
+    try {
+      const rows = (await suiteqlQuery(`
+        SELECT tal.account AS id, ${expr} AS bal
+        FROM transactionaccountingline tal
+        WHERE tal.posting = 'T' AND tal.account IN (${ids.join(',')})
+        GROUP BY tal.account
+      `))?.items || [];
+      for (const r of rows) candidates[String(r.id)][key] = num(r.bal);
+    } catch { /* column not available in this instance — leave null */ }
+  }
+  return candidates;
 }
 
 async function loadFinancials(debug: boolean) {
@@ -108,12 +130,13 @@ async function loadFinancials(debug: boolean) {
   const bankIds = idList(process.env.NETSUITE_BANK_ACCOUNT_IDS);
   const cardIds = idList(process.env.NETSUITE_CARD_ACCOUNT_ID);
   const apIds = idList(process.env.NETSUITE_AP_ACCOUNT_IDS);
-  const bals = await accountBalances([...new Set([...bankIds, ...cardIds, ...apIds])]);
+  const allIds = [...new Set([...bankIds, ...cardIds, ...apIds])];
+  const bals = await accountBalances(allIds);
   const balancesOk = bals !== null;
   const b = bals || {};
 
   let cash = 0;
-  for (const id of bankIds) cash += b[id] || 0; // asset: debit-normal, positive
+  for (const id of bankIds) cash += b[id] || 0; // asset: debit − credit positive
   let cardOwed = 0;
   for (const id of cardIds) { const owed = -(b[id] || 0); if (owed > 0.005) cardOwed += owed; }
   let vendorBills = 0;
@@ -133,7 +156,7 @@ async function loadFinancials(debug: boolean) {
       cardConfigured: cardIds.length > 0,
       apConfigured: apIds.length > 0,
     },
-    ...(debug ? { debug: { balances: b, bankIds, cardIds, apIds } } : {}),
+    ...(debug ? { debug: { candidates: await debugBalances(allIds), bankIds, cardIds, apIds } } : {}),
   };
 }
 
