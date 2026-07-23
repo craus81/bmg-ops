@@ -36,14 +36,18 @@ export const FEATURES = {
   audit_log: 'Audit Log',
   system_health: 'System Health',
   ai_instructions: 'AI Instructions',
+  financials: 'Financials (Executive)',
 } as const;
 
 export type FeatureKey = keyof typeof FEATURES;
 
 // Owner-level pages: super admins only by default. Regular admins don't see
 // these, but can be granted individual ones via per-user feature overrides.
+// `financials` is here so the executive P&L view (A/R, A/P, cash) is walled
+// off from regular admins — only super_admin (all features) and the
+// executive role (explicit default below) get it.
 export const SUPER_ADMIN_FEATURES: FeatureKey[] = [
-  'user_management', 'audit_log', 'system_health', 'ai_instructions', 'knowledge_base',
+  'user_management', 'audit_log', 'system_health', 'ai_instructions', 'knowledge_base', 'financials',
 ];
 
 // Default features per role — what each role can access out of the box
@@ -80,6 +84,13 @@ export const ROLE_DEFAULT_FEATURES: Record<string, FeatureKey[]> = {
   // being paid — without admin's user management or data tools.
   finance: [
     'home', 'messages', 'time', 'reports', 'vendor_payments', 'customers',
+  ],
+
+  // Leadership: the Home dashboard's Financials tab and nothing else — no
+  // settings, user management, or ops tooling. `financials` is otherwise
+  // super-admin-only, so this explicit grant is what lets an executive see it.
+  executive: [
+    'home', 'financials',
   ],
 
   customer: ['home'],
