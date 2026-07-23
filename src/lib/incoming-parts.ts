@@ -41,6 +41,8 @@ export function compareEta(a: string | null, b: string | null): number {
 // ── Raw row shapes (as fetched from Supabase) ────────────────────────────
 export interface RawPoLine {
   item_number: string | null;
+  /** PO line memo — used as the part name when the catalog has none. */
+  description?: string | null;
   quantity: number | string | null;
   quantity_received: number | string | null;
   netsuite_vendor_pos: {
@@ -146,7 +148,7 @@ export function assembleIncomingParts(input: {
   }
 
   // Incoming — open PO lines with something left to receive.
-  const incoming = new Map<string, { qty: number; shipments: IncomingShipment[] }>();
+  const incoming = new Map<string, { qty: number; shipments: IncomingShipment[]; description: string | null }>();
   let shipmentCount = 0;
   for (const l of input.poLines) {
     const po = l.netsuite_vendor_pos;
@@ -155,8 +157,12 @@ export function assembleIncomingParts(input: {
     if (remaining <= 0) continue;
     const key = normalizeItemNumber(l.item_number);
     if (!key) continue;
-    const g = incoming.get(key) || { qty: 0, shipments: [] };
+    const g = incoming.get(key) || { qty: 0, shipments: [], description: null };
     g.qty += remaining;
+    if (!g.description) {
+      const memo = String(l.description ?? '').trim();
+      if (memo) g.description = memo;
+    }
     g.shipments.push({
       tranid: po?.tranid || null,
       vendor: po?.vendor_name || null,
@@ -191,7 +197,9 @@ export function assembleIncomingParts(input: {
     const soonest_eta = shipments.find(sh => sh.eta)?.eta || null;
     rows.push({
       item_number: key,
-      display_name: s.display_name,
+      // Catalog name first, then the PO line memo, so a part missing from the
+      // catalog still shows a description instead of a bare item number.
+      display_name: s.display_name || inc.description,
       on_hand,
       available,
       allocated,

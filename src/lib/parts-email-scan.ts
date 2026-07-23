@@ -238,6 +238,22 @@ async function captureInvoiceAttachments(
   matchedPoId: string | null,
 ): Promise<number> {
   const pdfs = getPdfAttachments(message).slice(0, MAX_ATTACHMENTS_PER_EMAIL);
+
+  // The same vendor invoice routinely lands in several watched mailboxes (and
+  // gets forwarded around the office), and each mailbox is scanned on its own
+  // — so capture an invoice once, keyed on vendor + invoice number. Read the
+  // array (not .maybeSingle) since pre-existing dupes would make it throw.
+  if (extracted.invoice_number) {
+    let dupeQuery = service
+      .from('vendor_parts_invoices')
+      .select('id')
+      .eq('invoice_number', extracted.invoice_number)
+      .neq('status', 'dismissed');
+    if (extracted.vendor_name) dupeQuery = dupeQuery.eq('vendor_name', extracted.vendor_name);
+    const { data: existing } = await dupeQuery.limit(1);
+    if (existing && existing.length > 0) return 0;
+  }
+
   let captured = 0;
   for (const pdf of pdfs) {
     try {

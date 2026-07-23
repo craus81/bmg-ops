@@ -72,7 +72,7 @@ export default function IncomingParts({ refreshKey = 0 }: { refreshKey?: number 
     const [poRes, partsRes, allocRes] = await Promise.all([
       fetchAllRows<RawPoLine>((from, to) =>
         supabase.from('netsuite_vendor_po_lines')
-          .select('item_number, quantity, quantity_received, netsuite_vendor_pos!inner(tranid, vendor_name, status, eta_date, tracking_number, carrier, trandate)')
+          .select('item_number, description, quantity, quantity_received, netsuite_vendor_pos!inner(tranid, vendor_name, status, eta_date, tracking_number, carrier, trandate)')
           .order('id')
           .range(from, to)),
       fetchAllRows<RawPart>((from, to) =>

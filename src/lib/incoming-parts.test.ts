@@ -124,6 +124,26 @@ describe('assembleIncomingParts', () => {
     expect(rows[0].shipments.map(s => s.tranid)).toEqual(['PO201', 'PO200']); // ETA-sorted
   });
 
+  it('falls back to the PO line description when the catalog has no name', () => {
+    const withMemo = { ...line('WIDGET', 2), description: 'Steel Widget, 3in' };
+    const { rows } = assembleIncomingParts({
+      poLines: [withMemo],
+      parts: [],            // not in the catalog → no display_name
+      allocations: [],
+    });
+    expect(rows[0].display_name).toBe('Steel Widget, 3in');
+  });
+
+  it('prefers the catalog display_name over the PO line description', () => {
+    const withMemo = { ...line('WIDGET', 2), description: 'line memo' };
+    const { rows } = assembleIncomingParts({
+      poLines: [withMemo],
+      parts: [{ item_number: 'WIDGET', display_name: 'Catalog Widget', quantity_on_hand: 1, quantity_available: 1 }],
+      allocations: [],
+    });
+    expect(rows[0].display_name).toBe('Catalog Widget');
+  });
+
   it('normalizes item numbers across PO lines, stock, and allocations', () => {
     const { rows } = assembleIncomingParts({
       poLines: [line('Assembly : SHELF', 4)],
