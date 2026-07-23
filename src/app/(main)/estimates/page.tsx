@@ -9,6 +9,7 @@ import { useDialog } from '@/components/DialogProvider';
 import { theme } from '@/lib/theme';
 import CustomerDefaultsEditor from '@/components/CustomerDefaultsEditor';
 import MentionTextArea, { reportMentions } from '@/components/MentionTextArea';
+import { flashNote } from '@/lib/focus-note';
 
 interface Part {
   id: string;
@@ -224,7 +225,12 @@ export default function EstimatesPage() {
     const estId = searchParams.get('id');
     if (estId) {
       const est = estimates.find(e => e.id === estId);
-      if (est) openEstimate(est);
+      if (est) {
+        openEstimate(est);
+        // A mention on the Internal Notes field (&note=field) scroll-flashes
+        // it once the estimate form renders.
+        if (searchParams.get('note') === 'field') flashNote('est-notes-field');
+      }
     }
   // eslint-disable-next-line react-hooks/exhaustive-deps -- intentional: load once on mount
   }, [loading, searchParams]);
@@ -412,7 +418,7 @@ export default function EstimatesPage() {
             sourceType: 'estimate_note',
             sourceId: editingId || data.id,
             contextLabel: `Estimate — ${title || customerName || 'untitled'}`,
-            contextUrl: `/estimates?id=${editingId || data.id}`,
+            contextUrl: `/estimates?id=${editingId || data.id}&note=field`,
           });
           savedInternalNotesRef.current = internalNotes;
         }
@@ -1070,7 +1076,7 @@ export default function EstimatesPage() {
               placeholder="Dock hours, shipping method, etc."
             />
           </div>
-          <div>
+          <div id="est-notes-field">
             <div style={labelStyle}>Internal Notes (ops-only)</div>
             <MentionTextArea
               style={{ ...inputStyle, minHeight: '40px', resize: 'vertical', fontFamily: 'inherit' }}
