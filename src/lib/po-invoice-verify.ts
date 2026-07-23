@@ -21,10 +21,47 @@ export interface PoInvoiceVerifyResult {
 }
 
 // NetSuite sub-item ids come back as "PARENT : CHILD"; PO lines carry just the
-// item number, so compare on the last segment.
-function normPart(s: string): string {
+// item number, so compare on the last segment. Exported so the invoice-open
+// route groups a part's lines identically when it consumes open quantity —
+// the two must agree or their installed writes diverge.
+export function normPart(s: string): string {
   const segs = String(s || '').split(':');
   return segs[segs.length - 1].trim().toUpperCase();
+}
+
+/**
+ * Distribute a part's consumed total across its PO lines and return the lines
+ * whose `installed` should change.
+ *
+ * A part can appear on several PO lines, but a NetSuite invoice records only
+ * item + quantity, never which PO line it billed. So consumption can't be
+ * attributed to a specific line — it can only take the part's total consumed
+ * quantity and spread it across the part's lines. Two rules make that spread
+ * safe and repeatable:
+ *   - deterministic order: fill lines in id order, so the same total always
+ *     lands the same way (the invoice-open route and the verify sweep both
+ *     call this, and must agree);
+ *   - only raise: a line's installed is never lowered, because physical scans
+ *     legitimately push installed past what's been billed.
+ *
+ * Because it only raises and always fills in the same order, calling it with a
+ * larger total later (another invoice, the cumulative sweep) is idempotent with
+ * an earlier smaller call — the two never stack into a count above the total.
+ */
+export function distributeInstalled(
+  partLines: { id: string; quantity: number; installed: number | null }[],
+  consumedTotal: number,
+): { id: string; installed: number }[] {
+  const ordered = [...partLines].sort((a, b) => (a.id < b.id ? -1 : a.id > b.id ? 1 : 0));
+  const capacity = ordered.reduce((s, l) => s + (l.quantity || 0), 0);
+  let remaining = Math.min(Math.max(consumedTotal, 0), capacity);
+  const updates: { id: string; installed: number }[] = [];
+  for (const line of ordered) {
+    const fill = Math.min(remaining, line.quantity || 0);
+    remaining -= fill;
+    if (fill > (line.installed || 0)) updates.push({ id: line.id, installed: fill });
+  }
+  return updates;
 }
 
 /**
@@ -165,17 +202,9 @@ export async function verifyPoInvoiceQuantities(service: SupabaseClient, poIds?:
     let linesChanged = false;
     for (const key of ordered.keys()) {
       const partLines = lineRows.filter(l => normPart(l.part_number) === key);
-      let remaining = Math.min(
-        invoiced.get(key) || 0,
-        partLines.reduce((s, l) => s + (l.quantity || 0), 0),
-      );
-      for (const line of partLines) {
-        const fill = Math.min(remaining, line.quantity || 0);
-        remaining -= fill;
-        if (fill > (line.installed || 0)) {
-          await service.from('po_line_items').update({ installed: fill }).eq('id', line.id);
-          linesChanged = true;
-        }
+      for (const u of distributeInstalled(partLines, invoiced.get(key) || 0)) {
+        await service.from('po_line_items').update({ installed: u.installed }).eq('id', u.id);
+        linesChanged = true;
       }
     }
     if (linesChanged) billedPoIds.push(po.id);
