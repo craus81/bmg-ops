@@ -340,9 +340,16 @@ export default function GraphicsPage() {
     loadJobAssignments(jobId);
     loadJobFiles(jobId);
     recordJobView(jobId);
-    setTimeout(() => {
-      document.getElementById(`gfx-job-${jobId}`)?.scrollIntoView({ behavior: 'smooth', block: 'center' });
-    }, 200);
+    // A mention on an Activity-thread note (&note=<history id>) scroll-flashes
+    // that row once the thread loads; otherwise center the job card.
+    const noteId = searchParams.get('note');
+    if (noteId) {
+      flashNote(`gfx-hist-${noteId}`);
+    } else {
+      setTimeout(() => {
+        document.getElementById(`gfx-job-${jobId}`)?.scrollIntoView({ behavior: 'smooth', block: 'center' });
+      }, 200);
+    }
   // eslint-disable-next-line react-hooks/exhaustive-deps -- intentional: load once on mount
   }, [loading, searchParams]);
 
@@ -812,13 +819,13 @@ export default function GraphicsPage() {
   const addNote = async (jobId: string) => {
     if (!newNote.trim()) return;
     const job = jobs.find(j => j.id === jobId);
-    const { error } = await supabase.from('graphics_status_history').insert({
+    const { data: inserted, error } = await supabase.from('graphics_status_history').insert({
       job_id: jobId,
       from_status: job?.status || null,
       to_status: job?.status || 'received',
       changed_by: user?.id,
       note: newNote.trim(),
-    });
+    }).select('id').single();
     // Surface failures (RLS denials included) — a silently vanishing note
     // reads as data loss to the person typing it.
     if (error) { await dialog.alert(`Note failed to save: ${error.message}`); return; }
@@ -835,7 +842,10 @@ export default function GraphicsPage() {
       sourceType: 'graphics_note',
       sourceId: jobId,
       contextLabel: job ? (job.title || job.job_number || 'Graphics job') : 'Graphics job',
-      contextUrl: `/graphics?editJob=${jobId}`,
+      // View-mode deep link (?id=) so the Activity thread is visible — the
+      // ?editJob= link opens edit mode, which hides it. &note carries the
+      // exact history row to scroll-flash.
+      contextUrl: `/graphics?id=${jobId}${inserted?.id ? `&note=${inserted.id}` : ''}`,
     });
     setNewNote('');
     await loadHistory(jobId);
@@ -2191,7 +2201,7 @@ export default function GraphicsPage() {
                               {statusHistory.map(h => {
                                 const isNote = h.from_status === h.to_status && h.note;
                                 return (
-                                  <div key={h.id} style={{ fontSize: '10px', color: 'var(--text-label)', padding: '4px 6px', borderRadius: '6px', background: isNote ? 'rgba(245,158,11,0.06)' : 'transparent' }}>
+                                  <div key={h.id} id={`gfx-hist-${h.id}`} style={{ fontSize: '10px', color: 'var(--text-label)', padding: '4px 6px', borderRadius: '6px', background: isNote ? 'rgba(245,158,11,0.06)' : 'transparent' }}>
                                     <div style={{ display: 'flex', gap: '6px', alignItems: 'center' }}>
                                       <span style={{ color: 'var(--text-muted)', flexShrink: 0 }}>{new Date(h.created_at).toLocaleString()}</span>
                                       {!isNote && h.from_status && (
