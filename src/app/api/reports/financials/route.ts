@@ -15,16 +15,22 @@ export const dynamic = 'force-dynamic';
  * because `executive` is a standalone role outside INTERNAL_STAFF_ROLES, so we
  * authorize explicitly after a plain authenticated+approved check.
  *
- * Sourcing notes (verify against the live NetSuite instance):
- *  - A/R: open customer invoices (CustInvc, status 'A' = Open in this install),
- *    aged by due date. Amount uses foreigntotal — proven by the existing
- *    invoice queries. Partial payments would need amountremaining to be exact.
- *  - A/P: open vendor bills (VendBill, status 'A'). The VendBill open-status
- *    key mirrors CustInvc; if it differs, the total simply comes back empty
- *    rather than erroring.
- *  - Cash + card balances come from GL account registers, keyed by internal
- *    IDs in env (NETSUITE_BANK_ACCOUNT_IDS, NETSUITE_CARD_ACCOUNT_ID). Until
- *    those are set the two tiles report "unmapped" instead of a wrong number.
+ * Sourcing — balances come straight off the GL accounts (the same numbers the
+ * Chart of Accounts shows), discovered by account TYPE so nothing has to be
+ * mapped by hand:
+ *  - Cash  = sum of Bank account balances.
+ *  - Card  = sum of Credit Card balances we owe on.
+ *  - A/P   = the Accounts Payable control account balance (unpaid vendor bills)
+ *            — summing individual open bills is unreliable (partial payments,
+ *            unapplied credits); the control account is the truth.
+ *  - A/R   = open customer invoices, aged by due date (the aging split needs
+ *            invoice-level data; the total ties to the A/R control account).
+ * GL sign convention is debit-positive / credit-negative, so asset balances
+ * (Bank) come back positive and liability balances (Credit Card, A/P) come
+ * back negative — we negate the latter to a positive "owed".
+ *
+ * ?debug=1 (super_admin) returns the raw per-account balances so the numbers
+ * can be reconciled against the Chart of Accounts.
  */
 
 function rolesOf(profile: any): string[] {
@@ -32,6 +38,11 @@ function rolesOf(profile: any): string[] {
 }
 
 const DAY_MS = 86_400_000;
+
+function num(v: any): number {
+  const n = Number(v);
+  return Number.isFinite(n) ? n : 0;
+}
 
 // Days a due date is past today (negative / null → not yet due).
 function daysPastDue(due: string | null): number | null {
@@ -43,33 +54,13 @@ function daysPastDue(due: string | null): number | null {
   return Math.floor((todayUtc - t) / DAY_MS);
 }
 
-function num(v: any): number {
-  const n = Number(v);
-  return Number.isFinite(n) ? n : 0;
+// Optional allowlist of account internal IDs from an env var ("1,2,3").
+function idSet(raw: string | undefined): Set<string> | null {
+  const ids = (raw || '').split(',').map(s => s.trim()).filter(s => /^\d{1,18}$/.test(s));
+  return ids.length ? new Set(ids) : null;
 }
 
-// Sum the posted GL balance of one or more accounts. Best-effort: a bad id or
-// a query the integration role can't run returns null, never throws.
-async function accountBalance(ids: string[]): Promise<number | null> {
-  const clean = ids.map(s => s.trim()).filter(s => /^\d{1,18}$/.test(s));
-  if (clean.length === 0) return null;
-  try {
-    const q = `
-      SELECT SUM(tal.amount) AS bal
-      FROM transactionaccountingline tal
-      JOIN transaction t ON t.id = tal.transaction
-      WHERE tal.posting = 'T' AND tal.account IN (${clean.join(',')})
-    `;
-    const res = await suiteqlQuery(q);
-    const row = res?.items?.[0];
-    if (!row) return 0;
-    return num(row.bal);
-  } catch {
-    return null;
-  }
-}
-
-async function loadFinancials() {
+async function loadFinancials(debug: boolean) {
   // ── A/R: open customer invoices, aged by due date ──────────────────────
   const arRows = await suiteqlQueryAll(`
     SELECT t.id, t.duedate, t.foreigntotal AS amount, c.companyname AS customer
@@ -95,59 +86,49 @@ async function loadFinancials() {
   const pastDue = buckets.d1_30 + buckets.d31_60 + buckets.d61_90 + buckets.d90plus;
   const topOverdue = overdue.sort((a, b) => b.amount - a.amount).slice(0, 6);
 
-  // ── A/P: open vendor bills ─────────────────────────────────────────────
-  let vendorBills = 0, apCount = 0, apDueThisWeek = 0, apOverdue = 0;
-  try {
-    const apRows = await suiteqlQueryAll(`
-      SELECT t.id, t.duedate, t.foreigntotal AS amount
-      FROM transaction t
-      WHERE t.type = 'VendBill' AND t.status = 'A'
-    `);
-    for (const r of apRows) {
-      const amt = num(r.amount);
-      vendorBills += amt;
-      apCount += 1;
-      const d = daysPastDue(r.duedate);
-      if (d !== null && d > 0) apOverdue += amt;
-      else if (d !== null && d >= -7) apDueThisWeek += amt;
+  // ── GL account balances (cash, cards, A/P) by account type ─────────────
+  const balRows = (await suiteqlQuery(`
+    SELECT a.id, a.accttype, a.acctname, SUM(tal.amount) AS bal
+    FROM account a
+    JOIN transactionaccountingline tal ON tal.account = a.id
+    WHERE tal.posting = 'T'
+      AND a.isinactive = 'F'
+      AND a.accttype IN ('Bank', 'CreditCard', 'AcctPay')
+    GROUP BY a.id, a.accttype, a.acctname
+  `))?.items || [];
+
+  // Optional env allowlists to narrow which bank / card accounts count.
+  const bankFilter = idSet(process.env.NETSUITE_BANK_ACCOUNT_IDS);
+  const cardFilter = idSet(process.env.NETSUITE_CARD_ACCOUNT_ID);
+
+  let cash = 0, cardOwed = 0, vendorBills = 0;
+  const cards: { id: string; name: string; owed: number }[] = [];
+  const debugRows: any[] = [];
+  for (const r of balRows) {
+    const id = String(r.id);
+    const bal = num(r.bal);
+    if (debug) debugRows.push({ id, type: r.accttype, name: r.acctname, rawBal: bal });
+    if (r.accttype === 'Bank') {
+      if (bankFilter && !bankFilter.has(id)) continue;
+      cash += bal; // asset: debit-normal, already positive
+    } else if (r.accttype === 'CreditCard') {
+      if (cardFilter && !cardFilter.has(id)) continue;
+      const owed = -bal; // liability: credit-normal → negate to owed
+      if (owed > 0.005) { cardOwed += owed; cards.push({ id, name: r.acctname, owed }); }
+    } else if (r.accttype === 'AcctPay') {
+      vendorBills += -bal; // liability → positive owed
     }
-  } catch {
-    vendorBills = 0; // status key differs → leave empty, don't fail the page
   }
 
-  // ── Cash + credit card (GL account registers, keyed by env) ────────────
-  const bankIds = (process.env.NETSUITE_BANK_ACCOUNT_IDS || '').split(',').filter(Boolean);
-  const cardIds = (process.env.NETSUITE_CARD_ACCOUNT_ID || '').split(',').filter(Boolean);
-  const cash = await accountBalance(bankIds);
-  const cardRaw = await accountBalance(cardIds);
-  // Card is a liability (credit-normal) — what we owe is the magnitude.
-  const cardOwed = cardRaw === null ? null : Math.abs(cardRaw);
-
-  const apTotal = vendorBills + (cardOwed ?? 0);
-  const net = (cash ?? 0) + arTotal - apTotal;
+  const apTotal = vendorBills + cardOwed;
+  const net = cash + arTotal - apTotal;
 
   return {
-    ar: {
-      total: arTotal,
-      pastDue,
-      openCount: arRows.length,
-      buckets,
-      topOverdue,
-    },
-    ap: {
-      vendorBills,
-      cardOwed,
-      total: apTotal,
-      openCount: apCount,
-      dueThisWeek: apDueThisWeek,
-      overdue: apOverdue,
-    },
+    ar: { total: arTotal, pastDue, openCount: arRows.length, buckets, topOverdue },
+    ap: { vendorBills, cardOwed, total: apTotal, cards },
     cash,
     net,
-    config: {
-      cashMapped: cash !== null,
-      cardMapped: cardOwed !== null,
-    },
+    ...(debug ? { debug: debugRows.sort((a, b) => (a.type + a.id).localeCompare(b.type + b.id)) } : {}),
   };
 }
 
@@ -160,8 +141,11 @@ export async function GET(req: NextRequest) {
     return NextResponse.json({ error: 'Forbidden' }, { status: 403 });
   }
 
+  // Debug (raw per-account balances) is super_admin-only.
+  const debug = req.nextUrl.searchParams.get('debug') === '1' && roles.includes('super_admin');
+
   try {
-    const data = await loadFinancials();
+    const data = await loadFinancials(debug);
     return NextResponse.json(data);
   } catch (e: any) {
     return NextResponse.json({ error: e?.message || 'NetSuite query failed' }, { status: 500 });
