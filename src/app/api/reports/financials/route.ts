@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { suiteqlQueryAll, suiteqlQuery } from '@/lib/netsuite';
+import { suiteqlQueryAll, getAccountBalancesFromRestlet } from '@/lib/netsuite';
 import { requireAuth } from '@/lib/api-auth';
 
 export const dynamic = 'force-dynamic';
@@ -16,20 +16,17 @@ export const dynamic = 'force-dynamic';
  * authorize explicitly after a plain authenticated+approved check.
  *
  * Sourcing:
- *  - A/R = open customer invoices, aged by due date.
- *  - Cash / Card / A/P = GL account balances for specific account internal IDs
- *    (env: NETSUITE_BANK_ACCOUNT_IDS / NETSUITE_CARD_ACCOUNT_ID /
- *    NETSUITE_AP_ACCOUNT_IDS). The `account` table isn't queryable by the
- *    integration role, so accounts are addressed by ID.
- *  Balance = SUM(debit) − SUM(credit) over posted accounting lines. We do NOT
- *  use SUM(amount): in this instance it isn't a signed net (it returned the
- *  gross ~$2.6M of vendor bills for an A/P account whose real balance is
- *  ~$3.5k). debit−credit nets correctly — assets come back positive, the
- *  liabilities negative, which we negate to a positive "owed".
- *
- * ?debug=1 (super_admin) returns each configured account's balance computed
- * several ways (amount / debit−credit / netamount) to reconcile against the
- * Chart of Accounts.
+ *  - A/R = open customer invoices, aged by due date (SuiteQL — the role can
+ *    read invoices, so this reconciles to the A/R control account).
+ *  - Cash / Card / A/P = GL account balances from the financials RESTlet
+ *    (scripts/netsuite-financials-restlet.js), keyed by internal ID in env
+ *    (NETSUITE_BANK_ACCOUNT_IDS / NETSUITE_CARD_ACCOUNT_ID /
+ *    NETSUITE_AP_ACCOUNT_IDS). SuiteQL can't produce these for the integration
+ *    role — it can't see bill payments / card charges / the account table, so
+ *    summing transaction lines never matches the Chart of Accounts. The RESTlet
+ *    runs an account search under its own role and returns the CoA balance.
+ *    Until it's deployed, the balance tiles report "unavailable" rather than a
+ *    wrong number; A/R is unaffected.
  */
 
 function rolesOf(profile: any): string[] {
@@ -54,50 +51,6 @@ function daysPastDue(due: string | null): number | null {
 
 function idList(raw: string | undefined): string[] {
   return (raw || '').split(',').map(s => s.trim()).filter(s => /^\d{1,18}$/.test(s));
-}
-
-// GL balance (debit − credit) per account, straight from the posted accounting
-// lines. No `account`/`transaction` join — both are restricted / lossy here.
-async function accountBalances(ids: string[]): Promise<Record<string, number> | null> {
-  if (ids.length === 0) return {};
-  try {
-    const rows = (await suiteqlQuery(`
-      SELECT tal.account AS id, SUM(NVL(tal.debit, 0)) - SUM(NVL(tal.credit, 0)) AS bal
-      FROM transactionaccountingline tal
-      WHERE tal.posting = 'T' AND tal.account IN (${ids.join(',')})
-      GROUP BY tal.account
-    `))?.items || [];
-    const out: Record<string, number> = {};
-    for (const id of ids) out[id] = 0; // accounts with no posted lines → 0
-    for (const r of rows) out[String(r.id)] = num(r.bal);
-    return out;
-  } catch {
-    return null; // balances unavailable → A/R still renders
-  }
-}
-
-// Debug helper: the same accounts computed three ways so the correct formula
-// can be picked by comparing to the Chart of Accounts.
-async function debugBalances(ids: string[]) {
-  const candidates: Record<string, Record<string, number | null>> = {};
-  for (const id of ids) candidates[id] = { amount: null, debitMinusCredit: null, netamount: null };
-  const probes: [string, string][] = [
-    ['amount', 'SUM(tal.amount)'],
-    ['debitMinusCredit', 'SUM(NVL(tal.debit,0)) - SUM(NVL(tal.credit,0))'],
-    ['netamount', 'SUM(tal.netamount)'],
-  ];
-  for (const [key, expr] of probes) {
-    try {
-      const rows = (await suiteqlQuery(`
-        SELECT tal.account AS id, ${expr} AS bal
-        FROM transactionaccountingline tal
-        WHERE tal.posting = 'T' AND tal.account IN (${ids.join(',')})
-        GROUP BY tal.account
-      `))?.items || [];
-      for (const r of rows) candidates[String(r.id)][key] = num(r.bal);
-    } catch { /* column not available in this instance — leave null */ }
-  }
-  return candidates;
 }
 
 async function loadFinancials(debug: boolean) {
@@ -126,24 +79,30 @@ async function loadFinancials(debug: boolean) {
   const pastDue = buckets.d1_30 + buckets.d31_60 + buckets.d61_90 + buckets.d90plus;
   const topOverdue = overdue.sort((a, b) => b.amount - a.amount).slice(0, 6);
 
-  // ── GL account balances (cash, cards, A/P) by internal ID ──────────────
+  // ── Cash / Card / A/P — account balances via the financials RESTlet ────
   const bankIds = idList(process.env.NETSUITE_BANK_ACCOUNT_IDS);
   const cardIds = idList(process.env.NETSUITE_CARD_ACCOUNT_ID);
   const apIds = idList(process.env.NETSUITE_AP_ACCOUNT_IDS);
   const allIds = [...new Set([...bankIds, ...cardIds, ...apIds])];
-  const bals = await accountBalances(allIds);
-  const balancesOk = bals !== null;
-  const b = bals || {};
 
-  let cash = 0;
-  for (const id of bankIds) cash += b[id] || 0; // asset: debit − credit positive
-  let cardOwed = 0;
-  for (const id of cardIds) { const owed = -(b[id] || 0); if (owed > 0.005) cardOwed += owed; }
-  let vendorBills = 0;
-  for (const id of apIds) vendorBills += -(b[id] || 0); // liability → positive owed
+  const balResult = await getAccountBalancesFromRestlet(allIds);
+  const balancesOk = balResult.success;
+  const bals = balResult.balances || {};
+  const bal = (id: string) => num(bals[id]?.balance);
 
-  const apTotal = vendorBills + cardOwed;
-  const net = cash + arTotal - apTotal;
+  let cash: number | null = null;
+  let cardOwed: number | null = null;
+  let vendorBills: number | null = null;
+  if (balancesOk) {
+    // Assets read positive; liability "owed" is the magnitude (a card in
+    // credit — negative — isn't a payable, so it's excluded).
+    cash = bankIds.reduce((s, id) => s + bal(id), 0);
+    cardOwed = cardIds.reduce((s, id) => { const owed = Math.abs(bal(id)); return s + (bal(id) > 0.005 ? owed : 0); }, 0);
+    vendorBills = apIds.reduce((s, id) => s + Math.abs(bal(id)), 0);
+  }
+
+  const apTotal = balancesOk ? (vendorBills || 0) + (cardOwed || 0) : null;
+  const net = balancesOk ? (cash || 0) + arTotal - (apTotal || 0) : null;
 
   return {
     ar: { total: arTotal, pastDue, openCount: arRows.length, buckets, topOverdue },
@@ -152,11 +111,12 @@ async function loadFinancials(debug: boolean) {
     net,
     config: {
       balancesOk,
+      balancesError: balancesOk ? null : balResult.error || null,
       bankConfigured: bankIds.length > 0,
       cardConfigured: cardIds.length > 0,
       apConfigured: apIds.length > 0,
     },
-    ...(debug ? { debug: { candidates: await debugBalances(allIds), bankIds, cardIds, apIds } } : {}),
+    ...(debug ? { debug: { balances: bals, bankIds, cardIds, apIds } } : {}),
   };
 }
 

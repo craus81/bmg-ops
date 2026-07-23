@@ -4,8 +4,8 @@
  * Home → Financials tab (super_admin + executive only). A/R aging, A/P,
  * cash, and net position, sourced from NetSuite via /api/reports/financials.
  * Net position = Cash + A/R − A/P; green when positive, red when negative.
- * Cash / card / A/P are GL account balances keyed by internal ID in env; a
- * tile shows a "configure" hint until its account IDs are set.
+ * Cash / card / A/P are GL account balances from the financials RESTlet; until
+ * it's deployed those tiles show "—" with a hint (A/R works without it).
  */
 
 import { useEffect, useState } from 'react';
@@ -18,10 +18,10 @@ interface FinancialsData {
     buckets: { current: number; d1_30: number; d31_60: number; d61_90: number; d90plus: number };
     topOverdue: Overdue[];
   };
-  ap: { vendorBills: number; cardOwed: number; total: number };
-  cash: number;
-  net: number;
-  config: { balancesOk: boolean; bankConfigured: boolean; cardConfigured: boolean; apConfigured: boolean };
+  ap: { vendorBills: number | null; cardOwed: number | null; total: number | null };
+  cash: number | null;
+  net: number | null;
+  config: { balancesOk: boolean; balancesError: string | null; bankConfigured: boolean; cardConfigured: boolean; apConfigured: boolean };
 }
 
 const AGE = {
@@ -33,6 +33,7 @@ const AGE = {
 };
 
 const usd = (n: number) => n.toLocaleString('en-US', { style: 'currency', currency: 'USD', maximumFractionDigits: 0 });
+const money = (n: number | null) => (n === null ? '—' : usd(n));
 const pct = (part: number, whole: number) => (whole > 0 ? Math.round((part / whole) * 100) : 0);
 
 const card: React.CSSProperties = { background: 'var(--card)', border: '1px solid var(--border)', borderRadius: '14px', padding: '15px 16px' };
@@ -107,28 +108,28 @@ export default function FinancialsDashboard() {
     { key: 'd61_90', label: '61–90 days past due', amt: b.d61_90 },
     { key: 'd90plus', label: '90+ days past due', amt: b.d90plus },
   ];
-  const netColor = net >= 0 ? 'var(--success)' : 'var(--error)';
+  const netColor = net === null ? 'var(--text-muted)' : net >= 0 ? 'var(--success)' : 'var(--error)';
+  const netValue = net === null ? '—' : `${net >= 0 ? '+' : '−'}${usd(Math.abs(net))}`;
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: '18px' }}>
 
       {!config.balancesOk && (
-        <div style={{ ...card, padding: '10px 14px', fontSize: '12px', color: 'var(--warning)' }}>
-          Couldn’t read GL account balances from NetSuite — Cash, Card, and A/P may be incomplete. A/R is unaffected.
+        <div style={{ ...card, padding: '11px 14px', fontSize: '12px', color: 'var(--text-secondary)', borderColor: 'color-mix(in srgb, var(--warning) 35%, var(--border))' }}>
+          <span style={{ color: 'var(--warning)', fontWeight: 700 }}>Cash, cards & A/P need the balances RESTlet.</span>{' '}
+          The integration role can’t read GL balances via SuiteQL. Deploy <code>scripts/netsuite-financials-restlet.js</code> and set <code>NETSUITE_FINANCIALS_RESTLET_URL</code>. A/R is live below either way.
         </div>
       )}
 
       {/* Hero */}
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(150px, 1fr))', gap: '12px' }}>
-        <Tile swatch="var(--navy, #4d8ba6)" label="Cash on hand"
-          value={config.bankConfigured ? usd(cash) : '—'}
-          sub={config.bankConfigured ? 'Reconciled in NetSuite' : <span style={hint}>Set bank account ID(s)</span>} />
+        <Tile swatch="var(--navy, #4d8ba6)" label="Cash on hand" value={money(cash)}
+          sub={config.balancesOk ? 'Reconciled in NetSuite' : <span style={hint}>Balances RESTlet not deployed</span>} />
         <Tile swatch="var(--success)" label="Owed to us · A/R" value={usd(ar.total)}
           sub={<>{ar.openCount} open · <span style={{ color: 'var(--error)', fontWeight: 700 }}>{usd(ar.pastDue)} past due</span></>} />
-        <Tile swatch="var(--error)" label="We owe · A/P" value={usd(ap.total)}
-          sub={<>Bills {usd(ap.vendorBills)} · Card {usd(ap.cardOwed)}</>} />
-        <Tile swatch={netColor} label="Net position" value={`${net >= 0 ? '+' : '−'}${usd(Math.abs(net))}`} valueColor={netColor}
-          sub="Cash + A/R − A/P" />
+        <Tile swatch="var(--error)" label="We owe · A/P" value={money(ap.total)}
+          sub={<>Bills {money(ap.vendorBills)} · Card {money(ap.cardOwed)}</>} />
+        <Tile swatch={netColor} label="Net position" value={netValue} valueColor={netColor} sub="Cash + A/R − A/P" />
       </div>
 
       {/* A/R aging */}
@@ -187,19 +188,19 @@ export default function FinancialsDashboard() {
         <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))', gap: '12px' }}>
           <div style={card}>
             <div style={eyebrow}>Vendor bills</div>
-            <div style={{ ...bigNum, fontSize: '25px' }}>{config.apConfigured ? usd(ap.vendorBills) : '—'}</div>
-            <Row label="Unpaid vendor bills" value={config.apConfigured ? 'A/P control' : <span style={hint}>Set A/P account ID</span>} />
+            <div style={{ ...bigNum, fontSize: '25px' }}>{money(ap.vendorBills)}</div>
+            <Row label="Unpaid vendor bills" value={config.apConfigured ? 'A/P control account' : <span style={hint}>Set A/P account ID</span>} />
           </div>
           <div style={card}>
             <div style={eyebrow}>Credit card balance</div>
-            <div style={{ ...bigNum, fontSize: '25px' }}>{config.cardConfigured ? usd(ap.cardOwed) : '—'}</div>
+            <div style={{ ...bigNum, fontSize: '25px' }}>{money(ap.cardOwed)}</div>
             <Row label="Balances owed on cards" value={config.cardConfigured ? 'From NetSuite' : <span style={hint}>Set card account ID(s)</span>} />
           </div>
         </div>
       </div>
 
       <div style={{ fontSize: '11.5px', color: 'var(--text-muted)', lineHeight: 1.6, borderTop: '1px solid var(--border)', paddingTop: '12px' }}>
-        Live from NetSuite · Cash from bank accounts, A/P from the payables control account + credit cards, A/R aged from open customer invoices. Net position = Cash + A/R − A/P.
+        Live from NetSuite · Cash / A/P / cards from GL account balances (financials RESTlet), A/R aged from open customer invoices. Net position = Cash + A/R − A/P.
       </div>
 
       <style>{`@media (max-width:760px){ .fin-ar{ grid-template-columns:1fr !important; } }`}</style>

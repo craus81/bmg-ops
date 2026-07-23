@@ -1800,6 +1800,35 @@ export async function updateItemDescription(
 }
 
 /**
+ * Fetch current GL account balances from NetSuite via the financials RESTlet
+ * (scripts/netsuite-financials-restlet.js). SuiteQL can't read these for the
+ * integration role (it only sees part of the ledger), so balances come from a
+ * role-scoped account search that matches the Chart of Accounts. Returns a map
+ * of account internal id → { balance, type, name }.
+ */
+export async function getAccountBalancesFromRestlet(
+  accountIds: string[],
+): Promise<{ success: boolean; balances?: Record<string, { balance: number; type: string; name: string }>; error?: string }> {
+  const restletUrl = process.env.NETSUITE_FINANCIALS_RESTLET_URL;
+  if (!restletUrl) {
+    return { success: false, error: 'Financials RESTlet not configured. Set NETSUITE_FINANCIALS_RESTLET_URL (deploy scripts/netsuite-financials-restlet.js).' };
+  }
+  const ids = accountIds.filter(id => /^\d{1,18}$/.test(id));
+  if (ids.length === 0) return { success: true, balances: {} };
+  try {
+    const result = await callRestlet(restletUrl, 'GET', { accounts: ids.join(',') });
+    if (!result?.success) return { success: false, error: result?.error || 'NetSuite balance lookup failed' };
+    const map: Record<string, { balance: number; type: string; name: string }> = {};
+    for (const row of result.balances || []) {
+      map[String(row.id)] = { balance: Number(row.balance) || 0, type: String(row.type || ''), name: String(row.name || '') };
+    }
+    return { success: true, balances: map };
+  } catch (e: any) {
+    return { success: false, error: e?.message || 'NetSuite balance lookup failed' };
+  }
+}
+
+/**
  * Update editable fields on an item in NetSuite via the item RESTlet.
  *
  * NetSuite is the source of truth for the parts catalog (the sync overwrites
