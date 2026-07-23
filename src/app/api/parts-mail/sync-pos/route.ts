@@ -20,7 +20,10 @@ export async function POST(req: NextRequest) {
 
   const service = createServiceClient();
   try {
-    const result = await syncVendorPos(service);
+    // Manual = full resync (ignore the incremental cursor) so an empty/stuck
+    // table gets backfilled, and `modified` reflects the full PO history —
+    // the number that tells a NetSuite-access problem from a save problem.
+    const result = await syncVendorPos(service, { fullResync: true });
     const { count } = await service
       .from('netsuite_vendor_pos')
       .select('*', { count: 'exact', head: true });

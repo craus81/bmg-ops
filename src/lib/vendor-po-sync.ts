@@ -32,14 +32,22 @@ export interface VendorPoSyncResult {
   syncStateWrite?: HeartbeatResult;
 }
 
-export async function syncVendorPos(service: SupabaseClient): Promise<VendorPoSyncResult> {
-  const { data: syncState } = await service
-    .from('sync_state')
-    .select('last_synced_at')
-    .eq('sync_type', 'netsuite_vendor_pos')
-    .single();
-
-  const lastSynced = syncState?.last_synced_at || '2025-01-01T00:00:00Z';
+export async function syncVendorPos(
+  service: SupabaseClient,
+  opts?: { fullResync?: boolean },
+): Promise<VendorPoSyncResult> {
+  // A full resync ignores the incremental cursor and reaches back far enough
+  // to backfill history the cursor already advanced past — the manual "Sync
+  // POs" action uses it so a stuck/empty table can be repopulated in one go.
+  let lastSynced = '2024-01-01T00:00:00Z';
+  if (!opts?.fullResync) {
+    const { data: syncState } = await service
+      .from('sync_state')
+      .select('last_synced_at')
+      .eq('sync_type', 'netsuite_vendor_pos')
+      .single();
+    lastSynced = syncState?.last_synced_at || '2025-01-01T00:00:00Z';
+  }
   const since = new Date(lastSynced);
   // Overlap one day so edits right around a sync are never missed.
   since.setDate(since.getDate() - 1);
