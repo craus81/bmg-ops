@@ -73,7 +73,7 @@ export default function MorePage() {
         { title: 'Scan Log', sub: 'Review scans, match POs, export & invoice', path: '/admin/scans', show: F('reports') },
         { title: 'Parts Catalog', sub: 'Upfit & graphic parts from NetSuite', path: '/parts', show: F('parts_catalog') },
         { title: 'Inventory', sub: 'On hand · allocated to jobs · free · on order, at a glance', path: '/admin/inventory', show: F('parts_catalog') },
-        { title: 'Parts Mail', sub: 'Vendor order confirmations → parts ETAs, with a review queue', path: '/admin/parts-mail', show: F('upfit_projects') },
+        { title: 'Parts Mail', sub: 'Incoming parts & ETAs vs. stock and job allocations', path: '/admin/parts-mail', show: F('upfit_projects') },
         { title: 'Invoice Locations', sub: 'Backfill NetSuite invoice locations from the PO', path: '/admin/invoice-locations', show: isAdmin },
       ],
     },
