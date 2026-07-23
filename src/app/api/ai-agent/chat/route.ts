@@ -193,6 +193,30 @@ SUPABASE TABLES (BMG Fleet App)
     - Panel labels: A=Driver Side, B=Passenger Side, C=Rear, D=Front/Hood, E=Roof/Hood, F=Roof, G-K=Window Film panels
     - ~550 vehicles with full wrap dimension data
 
+20. netsuite_vendor_pos — VENDOR PURCHASE ORDERS (BMG buying parts from vendors; synced from NetSuite every 2h)
+    - id (uuid), netsuite_id (text), tranid (text — the PO number, e.g. "PO376")
+    - vendor_name (text), trandate (date)
+    - status (text — NetSuite code; 'F'/'G'/'H' = Fully Billed / Closed / Cancelled = DONE, anything else incl. NULL = OPEN / still receiving), status_label (text)
+    - eta_date (date — expected arrival, filled in from vendor confirmation emails), tracking_number, carrier, total (numeric)
+    - These are what's ON ORDER.
+
+21. netsuite_vendor_po_lines — VENDOR PO LINE ITEMS (one row per part on a vendor PO)
+    - id (uuid), po_id (FK netsuite_vendor_pos), item_number (text — normalized), description (text — line memo)
+    - quantity (ordered), quantity_received, quantity_billed (all numeric)
+    - INCOMING quantity for a part = quantity − quantity_received, on lines whose PO status is OPEN.
+    - Join netsuite_vendor_pos for vendor / ETA / tracking; match netsuite_parts and part_allocations by item_number.
+
+22. part_allocations — PARTS RESERVED TO JOBS (FleetSuite-side holds)
+    - id (uuid), project_id (FK upfit_projects), item_number (text), quantity (numeric)
+    - status ('reserved' = active hold, 'consumed' = job finished, 'released' = freed). Only 'reserved' is a live commitment.
+    - Join upfit_projects(project_name) to name the job a part is held for.
+
+INCOMING PARTS / WHAT'S ON ORDER — how to answer:
+- "What parts are incoming / on order and when?" → netsuite_vendor_po_lines joined to netsuite_vendor_pos, OPEN status only, remaining = quantity − quantity_received > 0, ordered by eta_date.
+- To say whether what's coming covers what's committed, cross-reference stock (netsuite_parts.quantity_available / quantity_on_hand) and reservations (part_allocations WHERE status='reserved') by item_number. A part is SHORT when quantity_available + incoming < reserved. This is the exact math the Parts Mail → Incoming Parts screen shows.
+- Example (incoming, soonest ETA first, with vendor):
+  {"id": "incoming", "source": "supabase", "sql": "SELECT l.item_number, COALESCE(l.description,'') AS description, (l.quantity - l.quantity_received) AS incoming, p.tranid AS po, p.vendor_name, p.eta_date FROM netsuite_vendor_po_lines l JOIN netsuite_vendor_pos p ON p.id = l.po_id WHERE UPPER(COALESCE(p.status,'ZZZ')) NOT IN ('F','G','H') AND (l.quantity - l.quantity_received) > 0 ORDER BY p.eta_date NULLS LAST, l.item_number FETCH FIRST 50 ROWS ONLY"}
+
 WHEN TO SEARCH VEHICLE TEMPLATES + KNOWLEDGE BASE FOR WRAP DIMENSIONS:
 - ANY question about vehicle dimensions, panel sizes, or wrap measurements
 - "How big is a [vehicle]?", "What are the dimensions for a [vehicle]?"
@@ -1058,6 +1082,9 @@ export async function POST(req: NextRequest) {
     try {
       const tablesToCheck = [
         'netsuite_parts',
+        'netsuite_vendor_pos',
+        'netsuite_vendor_po_lines',
+        'part_allocations',
         'vehicle_templates',
         'customers',
         'prospects',
