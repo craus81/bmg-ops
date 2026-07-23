@@ -24,6 +24,10 @@ const ALLOWLIST = new Set([
   // External installer companies log field scans by design; the route
   // enforces approved-account + non-customer-role checks itself.
   'src/app/api/scans/log/route.ts',
+  // Executive financials: requireAuth + an explicit super_admin/executive
+  // check. requireRole can't express this — it auto-passes any admin, but
+  // regular admins must NOT see the P&L.
+  'src/app/api/reports/financials/route.ts',
 ]);
 
 const repoRoot = join(__dirname, '..', '..');

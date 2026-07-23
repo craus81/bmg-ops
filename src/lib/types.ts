@@ -1,9 +1,10 @@
-export type AppRole = 'admin' | 'super_admin' | 'installer' | 'field_tech' | 'shop_tech' | 'sales' | 'graphics_production' | 'customer' | 'finance';
+export type AppRole = 'admin' | 'super_admin' | 'executive' | 'installer' | 'field_tech' | 'shop_tech' | 'sales' | 'graphics_production' | 'customer' | 'finance';
 
 // Human-readable labels for roles
 export const ROLE_LABELS: Record<AppRole, string> = {
   admin: 'Admin',
   super_admin: 'Super Admin',
+  executive: 'Executive',
   installer: 'Installer (Pre-Approval)',
   field_tech: 'Field Tech',
   shop_tech: 'Shop Tech (O\'Fallon)',
