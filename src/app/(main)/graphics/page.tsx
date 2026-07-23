@@ -22,6 +22,7 @@ import UploadProgressBar, { type UploadProgress } from '@/components/UploadProgr
 import { buildGraphicsJobPrefillFromPo, attachPartFilesToGraphicsJob } from '@/lib/graphics-job-from-po';
 import { INSTALL_LOCATIONS, SHOP_INSTALL_LOCATION } from '@/lib/shop-inbound';
 import { exportPackingListPDF, packingListFromJob, type PackingListLine } from '@/lib/packing-list-pdf';
+import { fetchAllRows } from '@/lib/fetch-all';
 import type {
   GraphicsJob, GraphicsJobStatus, GraphicsJobCategory, GraphicsStatusHistory, GraphicsJobView, Profile,
 } from '@/lib/types';
@@ -94,6 +95,11 @@ export default function GraphicsPage() {
   const [viewMode, setViewMode] = useState<ViewMode>('pipeline');
   const [filterStatus, setFilterStatus] = useState<FilterStatus>('active');
   const [filterCategory, setFilterCategory] = useState<FilterCategory>('all');
+  // Installed/cancelled jobs are archived off the active board. This toggle
+  // loads them back in so a job set to "installed" can be found again.
+  const [showArchived, setShowArchived] = useState(false);
+  const showArchivedRef = useRef(false);
+  showArchivedRef.current = showArchived;
   // Metric-tile filter: clicking Overdue / Due in 7 days / Stuck narrows the
   // board to just those jobs; clicking the active tile again clears it.
   const [metricFilter, setMetricFilter] = useState<MetricFilter | null>(null);
@@ -436,14 +442,18 @@ export default function GraphicsPage() {
     setAwaitingGraphics(prev => prev.filter(x => x.id !== ci.id));
   };
 
-  const loadJobs = async () => {
-    // Exclude installed/cancelled by default — they're archived
-    const { data: jobsData } = await supabase
-      .from('graphics_jobs')
-      .select('*')
-      .not('status', 'in', '("installed","cancelled")')
-      .order('created_at', { ascending: false });
-    setJobs((jobsData as GraphicsJob[]) || []);
+  const loadJobs = async (includeArchived: boolean = showArchivedRef.current) => {
+    // Exclude installed/cancelled by default — they're archived off the active
+    // board. The archive toggle brings them back; with them included the set
+    // grows unboundedly, so paginate past PostgREST's 1000-row cap (a plain
+    // read would silently drop the oldest jobs). Deterministic order + a unique
+    // id tiebreaker keeps pages from skipping/duplicating rows mid-read.
+    const { data: jobsData } = await fetchAllRows<GraphicsJob>((from, to) => {
+      let q = supabase.from('graphics_jobs').select('*');
+      if (!includeArchived) q = q.not('status', 'in', '("installed","cancelled")');
+      return q.order('created_at', { ascending: false }).order('id').range(from, to);
+    });
+    setJobs(jobsData || []);
     setLoading(false);
 
     // Time-in-stage: latest real status TRANSITION per job (note rows write
@@ -1684,6 +1694,27 @@ export default function GraphicsPage() {
           }}
         >
           All ({jobs.length})
+        </button>
+        <button
+          onClick={() => {
+            const next = !showArchived;
+            setShowArchived(next);
+            // Jump straight to the Installed tab when opening the archive so the
+            // jobs that "disappeared" show immediately; back to Active on close.
+            setFilterStatus(next ? 'installed' : 'active');
+            setMetricFilter(null);
+            loadJobs(next);
+          }}
+          title={showArchived ? 'Hide installed & cancelled jobs' : 'Show installed & cancelled (archived) jobs'}
+          style={{
+            padding: '6px 10px', borderRadius: '6px', fontSize: '10px', fontWeight: 700,
+            background: showArchived ? 'rgba(148,163,184,0.22)' : 'var(--subtle-bg)',
+            border: `1px solid ${showArchived ? 'rgba(148,163,184,0.5)' : 'var(--border)'}`,
+            color: showArchived ? 'var(--text-primary)' : 'var(--text-label)',
+            whiteSpace: 'nowrap', cursor: 'pointer', flexShrink: 0,
+          }}
+        >
+          🗄 Archived{showArchived ? ' ✓' : ''}
         </button>
       </div>
 
