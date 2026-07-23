@@ -11,9 +11,11 @@ export const maxDuration = 60;
 
 const Schema = z.object({
   poId: z.string().uuid(),
-  // Part number -> quantity to bill. Every part must be a line on the PO and
-  // the quantity can't exceed that line's open (quantity − installed) amount.
-  quantities: z.record(z.string().min(1).max(120), z.number().int().min(1).max(100000)),
+  // PO line id -> quantity to bill on that line. Keyed by line, NOT part
+  // number: a part can appear on several PO lines (split price/schedule), and
+  // keying by part collapses those lines into one — the quantity can't exceed
+  // that specific line's open (quantity − installed) amount.
+  quantities: z.record(z.string().uuid(), z.number().int().min(1).max(100000)),
 });
 
 const service = createClient(
@@ -46,28 +48,37 @@ export async function POST(req: NextRequest) {
       .maybeSingle();
     if (!po) return NextResponse.json({ error: 'PO not found' }, { status: 404 });
 
-    // Validate every requested part against the PO's lines and its open cap.
+    // Validate each requested line against ITS OWN open cap. Quantities are
+    // keyed by PO line id: a part can appear on several PO lines, so summing
+    // per part and checking against a single line's open would reject a
+    // correct total that's spread across lines (the "exceeds the open
+    // quantity" bug this flow used to hit).
     const lines = (po.po_line_items || []) as { id: string; part_number: string; description: string | null; quantity: number; installed: number | null; unit_price: number }[];
-    const lineByPart = new Map(lines.map(l => [String(l.part_number || '').toUpperCase(), l]));
+    const lineById = new Map(lines.map(l => [l.id, l]));
     const problems: string[] = [];
-    const toBill: { partNumber: string; quantity: number; rate: number; description: string }[] = [];
-    for (const [partNumber, qty] of Object.entries(quantities)) {
-      const line = lineByPart.get(partNumber.toUpperCase());
+    let hasUnknownLine = false;
+    const toBill: { lineId: string; partNumber: string; quantity: number; rate: number; description: string }[] = [];
+    for (const [lineId, qty] of Object.entries(quantities)) {
+      const line = lineById.get(lineId);
       if (!line) {
-        problems.push(`${partNumber} is not a line on this PO`);
+        hasUnknownLine = true;
         continue;
       }
       const open = (line.quantity || 0) - (line.installed || 0);
       if (qty > open) {
-        problems.push(`${partNumber}: ${qty} exceeds the open quantity (${Math.max(open, 0)})`);
+        problems.push(`${line.part_number}: ${qty} exceeds the open quantity (${Math.max(open, 0)})`);
         continue;
       }
       toBill.push({
+        lineId: line.id,
         partNumber: line.part_number,
         quantity: qty,
         rate: Number(line.unit_price) || 0,
         description: line.description || line.part_number,
       });
+    }
+    if (hasUnknownLine) {
+      problems.push('Some lines are no longer on this PO — refresh the page and try again.');
     }
     if (problems.length > 0) {
       return NextResponse.json({ error: problems.join('; ') }, { status: 400 });
@@ -87,12 +98,14 @@ export async function POST(req: NextRequest) {
       customerId = customerResult.customers[0].id;
     }
 
-    // Resolve NetSuite items for the billed parts; refuse unmatched ones.
-    const nsItems = await findItems(toBill.map(l => l.partNumber));
-    const unmatched = toBill.filter(l => !nsItems[l.partNumber.toUpperCase()]);
+    // Resolve NetSuite items for the billed parts; refuse unmatched ones. A
+    // part can span several billed lines, so resolve/report each part once.
+    const billedParts = [...new Set(toBill.map(l => l.partNumber))];
+    const nsItems = await findItems(billedParts);
+    const unmatched = billedParts.filter(p => !nsItems[p.toUpperCase()]);
     if (unmatched.length > 0) {
       return NextResponse.json({
-        error: `No NetSuite item found for: ${unmatched.map(l => l.partNumber).join(', ')}`,
+        error: `No NetSuite item found for: ${unmatched.join(', ')}`,
       }, { status: 400 });
     }
 
@@ -107,17 +120,25 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ error: 'Could not resolve a NetSuite location for this invoice' }, { status: 400 });
     }
 
+    // Collapse billed lines into invoice lines by (item, rate): a part split
+    // across several PO lines at the same price bills as ONE clean invoice
+    // line (e.g. 200 + 100 + 101 → 401), while lines of the same part at
+    // different prices stay separate so each rate is billed as agreed.
+    const invoiceLines = new Map<string, { itemId: string | number; quantity: number; rate: number; description: string }>();
+    for (const l of toBill) {
+      const itemId = nsItems[l.partNumber.toUpperCase()].id;
+      const key = `${itemId}|${l.rate}`;
+      const existing = invoiceLines.get(key);
+      if (existing) existing.quantity += l.quantity;
+      else invoiceLines.set(key, { itemId, quantity: l.quantity, rate: l.rate, description: l.description });
+    }
+
     const invoiceResult = await createDirectInvoice({
       customerId,
       locationId,
       memo: `Invoice from BMG FleetSuite — PO #${po.po_number} (open quantities)`,
       otherrefnum: po.po_number,
-      lineItems: toBill.map(l => ({
-        itemId: nsItems[l.partNumber.toUpperCase()].id,
-        quantity: l.quantity,
-        rate: l.rate,
-        description: l.description,
-      })),
+      lineItems: [...invoiceLines.values()],
     });
 
     if (!invoiceResult.success) {
@@ -126,6 +147,7 @@ export async function POST(req: NextRequest) {
 
     // Bookkeeping, matching the SO-based flow: legacy field + po_invoices row.
     const totalQty = toBill.reduce((s, l) => s + l.quantity, 0);
+    const invoiceLineCount = invoiceLines.size;
     await service
       .from('purchase_orders')
       .update({
@@ -137,9 +159,9 @@ export async function POST(req: NextRequest) {
       purchase_order_id: po.id,
       netsuite_invoice_id: invoiceResult.invoiceId,
       netsuite_invoice_number: invoiceResult.invoiceNumber,
-      line_count: toBill.length,
+      line_count: invoiceLineCount,
       total_qty: totalQty,
-      memo: `PO #${po.po_number} — open quantities, ${totalQty} unit${totalQty !== 1 ? 's' : ''} across ${toBill.length} line${toBill.length !== 1 ? 's' : ''}`,
+      memo: `PO #${po.po_number} — open quantities, ${totalQty} unit${totalQty !== 1 ? 's' : ''} across ${invoiceLineCount} line${invoiceLineCount !== 1 ? 's' : ''}`,
     });
 
     // Billed units consume the open quantity right away — the open cap above
@@ -147,7 +169,7 @@ export async function POST(req: NextRequest) {
     // waiting for the invoice verify sweep (which does the same for invoices
     // entered directly in NetSuite). A fully billed PO flips to 'complete'.
     for (const l of toBill) {
-      const line = lineByPart.get(l.partNumber.toUpperCase());
+      const line = lineById.get(l.lineId);
       if (!line) continue;
       await service.from('po_line_items').update({
         installed: Math.min((line.installed || 0) + l.quantity, line.quantity || 0),
@@ -160,7 +182,7 @@ export async function POST(req: NextRequest) {
       invoiceId: invoiceResult.invoiceId,
       invoiceNumber: invoiceResult.invoiceNumber,
       totalQty,
-      lineCount: toBill.length,
+      lineCount: invoiceLineCount,
     });
   } catch (err: any) {
     console.error('Invoice open quantities error:', err);

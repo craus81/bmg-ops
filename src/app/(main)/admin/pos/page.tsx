@@ -2206,10 +2206,12 @@ export default function POsPage() {
   const createOpenQtyInvoice = async () => {
     if (!invoiceOpenPo) return;
     const po = invoiceOpenPo;
+    // Key by PO line id, not part number: a part can be on several lines and
+    // the server validates/bills each line against its own open quantity.
     const quantities: Record<string, number> = {};
     for (const li of po.line_items) {
       const q = invoiceOpenQtys[li.id];
-      if (q && q > 0) quantities[li.part_number] = (quantities[li.part_number] || 0) + q;
+      if (q && q > 0) quantities[li.id] = q;
     }
     if (Object.keys(quantities).length === 0) {
       await dialog.alert('Every line is at 0 — nothing to invoice.');
@@ -2232,6 +2234,13 @@ export default function POsPage() {
         await dialog.alert(`Failed to create invoice: ${data.error || `request failed (${res.status})`}`);
       } else {
         const totalQty = Object.values(quantities).reduce((a, b) => a + b, 0);
+        // Invoice lines collapse by part+price on the server; mirror that here
+        // so the optimistic line count matches what a reload shows.
+        const billedLineCount = new Set(
+          po.line_items
+            .filter(li => (invoiceOpenQtys[li.id] || 0) > 0)
+            .map(li => `${li.part_number.toUpperCase()}|${li.unit_price}`),
+        ).size;
         setPos(prev => prev.map(p => {
           if (p.id !== po.id) return p;
           const newInvoice = {
@@ -2239,7 +2248,7 @@ export default function POsPage() {
             netsuite_invoice_number: result.invoiceNumber,
             created_at: new Date().toISOString(),
             total_qty: totalQty,
-            line_count: Object.keys(quantities).length,
+            line_count: billedLineCount,
             memo: `PO #${po.po_number} — open quantities`,
           };
           // Mirror the server: billed units consume the open quantity, and a
