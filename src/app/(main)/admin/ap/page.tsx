@@ -175,7 +175,7 @@ export default function ApQueuePage() {
   const tabDefs: { id: ApTab; label: string; color: string }[] = [
     { id: 'submitted', label: `Awaiting Approval (${byStatus('submitted').length})`, color: '#fbbf24' },
     { id: 'approved', label: `Ready to Bill (${byStatus('approved').length})`, color: '#22c55e' },
-    { id: 'billed', label: `Billed (${byStatus('billed').length})`, color: '#60a5fa' },
+    { id: 'billed', label: `Awaiting Payment (${byStatus('billed').length})`, color: '#60a5fa' },
     { id: 'paid', label: 'Paid', color: '#4ade80' },
     { id: 'rejected', label: `Rejected (${byStatus('rejected').length})`, color: '#ef4444' },
     { id: 'recorded', label: `Not Submitted (${byStatus('recorded').length})`, color: '#94a3b8' },
