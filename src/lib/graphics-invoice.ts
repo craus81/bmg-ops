@@ -20,6 +20,20 @@ import { findItems, getItemBasePrices } from '@/lib/netsuite';
 export const WRAP_VINYL_ITEM = '3M Vinyl';
 export const WRAP_LABOR_ITEM = 'Graphics Install Labor';
 
+/**
+ * Split a whole-job total into kit-quantity × per-kit rate for NetSuite
+ * lines — but only when the cents divide exactly, so quantity × rate always
+ * reconstructs the total to the penny. Otherwise one qty-1 line at the full
+ * amount (a rounded synthetic per-kit rate would desync the estimate or
+ * invoice from the quote the customer approved).
+ */
+export function kitLineSplit(total: number, kitQty: number): { quantity: number; rate: number } {
+  const cents = Math.round(total * 100);
+  const qty = Math.max(1, Math.floor(Number(kitQty) || 1));
+  if (qty > 1 && cents % qty === 0) return { quantity: qty, rate: cents / qty / 100 };
+  return { quantity: 1, rate: cents / 100 };
+}
+
 export interface ProposedInvoiceLine {
   partNumber: string;
   itemId: string | null;          // NetSuite internal id (null = not found in NS)
@@ -200,13 +214,14 @@ export async function deriveWrapQuoteLines(
 
   const { data: quote } = await supabase
     .from('wrap_quotes')
-    .select('id, quote_number, vehicle_description, materials_total, labor_total, total, customer')
+    .select('id, quote_number, vehicle_description, materials_total, labor_total, total, customer, package_qty')
     .eq('id', job.wrap_quote_id)
     .maybeSingle();
   if (!quote) return null;
 
   const materials = Math.round((Number(quote.materials_total) || 0) * 100) / 100;
   const labor = Math.round((Number(quote.labor_total) || 0) * 100) / 100;
+  const kitQty = Math.max(1, Number(quote.package_qty) || 1);
 
   // Resolve the two NetSuite items once; a missing item leaves itemId null so
   // the reviewer is prompted to pick one (the totals still show).
@@ -216,12 +231,15 @@ export async function deriveWrapQuoteLines(
 
   const lines: ProposedInvoiceLine[] = [];
   if (materials > 0) {
+    // Kit-quantity quotes bill as qty × per-kit rate when it divides to the
+    // cent (12 × $980 reads better than 1 × $11,760 and matches the quote).
+    const split = kitLineSplit(materials, kitQty);
     lines.push({
       partNumber: WRAP_VINYL_ITEM,
       itemId: vinyl?.id || null,
-      displayName: quote.vehicle_description || vinyl?.displayName || WRAP_VINYL_ITEM,
-      quantity: 1,
-      rate: materials,
+      displayName: `${quote.vehicle_description || vinyl?.displayName || WRAP_VINYL_ITEM}${kitQty > 1 ? ` — ${kitQty} kits` : ''}`,
+      quantity: split.quantity,
+      rate: split.rate,
       found: !!vinyl,
       priced: true,
       qtySource: 'quote',

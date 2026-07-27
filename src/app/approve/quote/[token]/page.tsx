@@ -129,7 +129,7 @@ export default function QuoteApprovalPage() {
                 <td style={{ padding: '8px 0', color: '#0f172a' }}>
                   <div style={{ fontWeight: 600 }}>{m.name}</div>
                   <div style={{ fontSize: '12px', color: '#475569' }}>
-                    {money(m.billed_area_sqft)} ft²{m.substrate_name ? ` · ${m.substrate_name}` : ''}
+                    {money(m.billed_area_sqft)} ft²{m.substrate_name ? ` · ${m.substrate_name}` : ''}{(q.package_qty || 1) > 1 ? ' · per kit' : ''}
                   </div>
                 </td>
                 <td style={{ padding: '8px 0', textAlign: 'right' }}>{m.qty || 1}</td>
@@ -137,6 +137,17 @@ export default function QuoteApprovalPage() {
                 <td style={{ padding: '8px 0', textAlign: 'right' }}>${money(m.line_total)}</td>
               </tr>
             ))}
+            {(q.package_qty || 1) > 1 && q.adjustments && (
+              <tr style={{ borderTop: '1px solid #e2e8f0' }}>
+                <td style={{ padding: '8px 0', color: '#0f172a' }}>
+                  <div style={{ fontWeight: 700 }}>Materials — {q.package_qty} kits</div>
+                  <div style={{ fontSize: '12px', color: '#475569' }}>{money(q.adjustments.kit_area_sqft)} ft² per kit</div>
+                </td>
+                <td style={{ padding: '8px 0', textAlign: 'right', fontWeight: 700 }}>{q.package_qty}</td>
+                <td style={{ padding: '8px 0', textAlign: 'right' }}>${money(q.adjustments.kit_materials)}</td>
+                <td style={{ padding: '8px 0', textAlign: 'right', fontWeight: 700 }}>${money(q.adjustments.pre_materials)}</td>
+              </tr>
+            )}
             {(q.labor?.films || []).filter((f: any) => (parseFloat(f.total) || 0) > 0).map((f: any) => (
               <tr key={`film-${f.id}`} style={{ borderTop: '1px solid #e2e8f0' }}>
                 <td style={{ padding: '8px 0', color: '#0f172a' }}>
@@ -163,6 +174,15 @@ export default function QuoteApprovalPage() {
           </tbody>
         </table>
         <div style={{ borderTop: '2px solid #cbd5e1', marginTop: '10px', paddingTop: '10px', fontSize: '13px', color: '#0f172a' }}>
+          {q.adjustments && ((parseFloat(q.adjustments.discount_amount) || 0) > 0.005 || (parseFloat(q.adjustments.min_bump) || 0) > 0.005) && (
+            <Row label="Subtotal before adjustments" value={`$${money(q.adjustments.pre_subtotal)}`} />
+          )}
+          {q.adjustments && (parseFloat(q.adjustments.discount_amount) || 0) > 0.005 && (
+            <Row label={`Quantity discount (${money(q.adjustments.discount_pct)}%)`} value={`−$${money(q.adjustments.discount_amount)}`} />
+          )}
+          {q.adjustments && (parseFloat(q.adjustments.min_bump) || 0) > 0.005 && (
+            <Row label="Shop minimum" value={`+$${money(q.adjustments.min_bump)}`} />
+          )}
           <Row label="Subtotal" value={`$${money(q.subtotal)}`} />
           <Row label={`Tax (${money(q.tax_rate)}%)`} value={`$${money(q.tax_amount)}`} />
           <Row label="Total" value={`$${money(q.total)}`} bold />

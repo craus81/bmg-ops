@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { createClient } from '@supabase/supabase-js';
 import { requireStaff } from '@/lib/api-auth';
 import { createEstimate, findItems } from '@/lib/netsuite';
-import { WRAP_VINYL_ITEM as VINYL_ITEM, WRAP_LABOR_ITEM as LABOR_ITEM } from '@/lib/graphics-invoice';
+import { WRAP_VINYL_ITEM as VINYL_ITEM, WRAP_LABOR_ITEM as LABOR_ITEM, kitLineSplit } from '@/lib/graphics-invoice';
 import { validateBody, z } from '@/lib/validate';
 
 export const dynamic = 'force-dynamic';
@@ -92,13 +92,24 @@ export async function POST(req: NextRequest) {
     }, { status: 400 });
   }
 
+  // Kit-quantity quotes: materials go over as qty × per-kit rate when the
+  // cents divide exactly (12 × $980 in NetSuite mirrors the quote document);
+  // otherwise one qty-1 line so the estimate total matches to the penny.
+  // materials_total already has any quantity discount / shop minimum folded
+  // in, so no separate adjustment line is needed — the memo says what
+  // happened for whoever reads the estimate in NetSuite.
+  const kitQty = Math.max(1, parseInt(quote.package_qty, 10) || 1);
+  const vinylSplit = kitLineSplit(materials, kitQty);
+  const vehicleDesc = quote.vehicle_description
+    ? `${quote.vehicle_description}${kitQty > 1 ? ` — ${kitQty} kits` : ''}`
+    : (kitQty > 1 ? `${kitQty} kits` : null);
   const lineItems = [
     ...(materials > 0 ? [{
       itemId: vinyl.id,
-      quantity: 1,
-      rate: Math.round(materials * 100) / 100,
+      quantity: vinylSplit.quantity,
+      rate: vinylSplit.rate,
       // The vehicle the quote was measured on (year make model [variant])
-      ...(quote.vehicle_description ? { description: quote.vehicle_description } : {}),
+      ...(vehicleDesc ? { description: vehicleDesc } : {}),
     }] : []),
     ...(labor > 0 ? [{
       itemId: laborItem.id,
@@ -107,9 +118,15 @@ export async function POST(req: NextRequest) {
     }] : []),
   ];
 
+  const adj = quote.adjustments || null;
+  const memoNotes = [
+    adj && (parseFloat(adj.discount_amount) || 0) > 0.005 ? `incl ${adj.discount_pct}% qty discount` : null,
+    adj && (parseFloat(adj.min_bump) || 0) > 0.005 ? 'incl shop minimum' : null,
+  ].filter(Boolean);
+
   const result = await createEstimate({
     customerId: customer.netsuite_id,
-    memo: `Wrap quote ${quote.quote_number}`,
+    memo: `Wrap quote ${quote.quote_number}${memoNotes.length > 0 ? ` (${memoNotes.join(', ')})` : ''}`,
     lineItems,
   });
   if (!result.success) {

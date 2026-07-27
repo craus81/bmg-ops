@@ -49,9 +49,17 @@ function buildQuoteHtml(quote: any, company: any, diagramUrl: string | null, log
   const cell = (v: string, right = false) =>
     `<td style="padding:8px 10px;border-bottom:1px solid #e5e7eb;font-size:13px;color:#111827;${right ? 'text-align:right;' : ''}">${v}</td>`;
 
+  // Kit-quantity jobs: the measurement lines price ONE kit; a bold rollup
+  // row shows kits × per-kit materials, and the totals block shows the
+  // quantity discount / shop minimum that produced the final subtotal.
+  const adj = quote.adjustments || null;
+  const kits = Math.max(1, parseInt(quote.package_qty, 10) || 1);
   for (const l of quote.measurements || []) {
-    const detail = `${money(l.billed_area_sqft)} ft²${l.substrate?.name ? ` · ${esc(l.substrate.name)}` : ''}`;
+    const detail = `${money(l.billed_area_sqft)} ft²${l.substrate?.name ? ` · ${esc(l.substrate.name)}` : ''}${kits > 1 ? ' · per kit' : ''}`;
     rows.push(`<tr>${cell(`${esc(l.name)} <span style="color:#6b7280;font-size:11px;">${detail}</span>`)}${cell(String(l.qty || 1), true)}${cell(money(l.unit_price), true)}${cell(money(l.line_total), true)}</tr>`);
+  }
+  if (kits > 1 && adj) {
+    rows.push(`<tr>${cell(`<b>Materials — ${kits} kits</b> <span style="color:#6b7280;font-size:11px;">${money(adj.kit_area_sqft)} ft² per kit</span>`)}${cell(`<b>${kits}</b>`, true)}${cell(money(adj.kit_materials), true)}${cell(`<b>${money(adj.pre_materials)}</b>`, true)}</tr>`);
   }
   for (const f of quote.labor?.films || []) {
     if (!(parseFloat(f.total) || 0)) continue;
@@ -113,6 +121,9 @@ function buildQuoteHtml(quote: any, company: any, diagramUrl: string | null, log
         <tbody>${rows.join('')}</tbody>
       </table>
       <table style="width:100%;border-collapse:collapse;margin-top:14px;">
+        ${adj && ((parseFloat(adj.discount_amount) || 0) > 0.005 || (parseFloat(adj.min_bump) || 0) > 0.005) ? `<tr><td style="text-align:right;font-size:13px;color:#6b7280;padding:2px 10px;">Subtotal before adjustments</td><td style="text-align:right;font-size:13px;color:#6b7280;padding:2px 10px;width:110px;">$${money(adj.pre_subtotal)}</td></tr>` : ''}
+        ${adj && (parseFloat(adj.discount_amount) || 0) > 0.005 ? `<tr><td style="text-align:right;font-size:13px;color:#7c3aed;padding:2px 10px;">Quantity discount (${money(adj.discount_pct)}%)</td><td style="text-align:right;font-size:13px;color:#7c3aed;padding:2px 10px;">−$${money(adj.discount_amount)}</td></tr>` : ''}
+        ${adj && (parseFloat(adj.min_bump) || 0) > 0.005 ? `<tr><td style="text-align:right;font-size:13px;color:#b45309;padding:2px 10px;">Shop minimum</td><td style="text-align:right;font-size:13px;color:#b45309;padding:2px 10px;">+$${money(adj.min_bump)}</td></tr>` : ''}
         <tr><td style="text-align:right;font-size:13px;color:#374151;padding:2px 10px;">Subtotal</td><td style="text-align:right;font-size:13px;color:#111827;padding:2px 10px;width:110px;">$${money(quote.subtotal)}</td></tr>
         <tr><td style="text-align:right;font-size:13px;color:#374151;padding:2px 10px;">Tax (${money(quote.tax_rate)}%)</td><td style="text-align:right;font-size:13px;color:#111827;padding:2px 10px;">$${money(quote.tax_amount)}</td></tr>
         <tr><td style="text-align:right;font-size:16px;font-weight:800;color:#111827;padding:6px 10px;">Total</td><td style="text-align:right;font-size:16px;font-weight:800;color:#059669;padding:6px 10px;">$${money(quote.total)}</td></tr>
