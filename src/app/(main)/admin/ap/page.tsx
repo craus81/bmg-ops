@@ -6,6 +6,7 @@ import { createClient } from '@/lib/supabase-browser';
 import { useAuth } from '@/components/AuthProvider';
 import { useDialog } from '@/components/DialogProvider';
 import { storage } from '@/lib/storage';
+import EditVendorInvoiceModal from '@/components/EditVendorInvoiceModal';
 
 interface ApInvoice {
   id: string;
@@ -15,6 +16,7 @@ interface ApInvoice {
   invoice_date: string | null;
   due_date: string | null;
   total_amount: number | null;
+  location_id: string | null;
   location_name: string | null;
   file_name: string | null;
   storage_path: string | null;
@@ -90,6 +92,9 @@ export default function ApQueuePage() {
   // its status tab, then scroll to + briefly highlight its card.
   const [highlightId, setHighlightId] = useState<string | null>(null);
   const focusedDeepLink = useRef(false);
+  // The invoice currently open in the header editor (fix vendor link, dates,
+  // amount, etc.) — null when the editor is closed.
+  const [editing, setEditing] = useState<ApInvoice | null>(null);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -299,6 +304,12 @@ export default function ApQueuePage() {
                       style={{ padding: '6px 10px', borderRadius: '7px', fontSize: '11px', fontWeight: 700, background: 'rgba(96,165,250,0.1)', border: '1px solid rgba(96,165,250,0.25)', color: '#60a5fa', textDecoration: 'none' }}
                     >📄 Invoice</a>
                   )}
+                  {['recorded', 'submitted', 'approved', 'rejected'].includes(inv.status) && (
+                    <button disabled={isBusy} onClick={() => setEditing(inv)} title="Edit invoice details — fix the vendor link, dates, or amount"
+                      style={{ padding: '6px 10px', borderRadius: '7px', fontSize: '11px', fontWeight: 700, background: 'var(--subtle-bg, rgba(148,163,184,0.1))', border: '1px solid var(--border)', color: 'var(--text-primary)', cursor: 'pointer' }}>
+                      ✎ Edit
+                    </button>
+                  )}
                   {inv.status === 'recorded' && (
                     <button disabled={isBusy} onClick={() => act(inv.id, { action: 'submit' })} style={{ padding: '7px 12px', borderRadius: '7px', fontSize: '11px', fontWeight: 700, background: '#f472b6', color: '#fff', border: 'none', cursor: 'pointer', opacity: isBusy ? 0.6 : 1 }}>
                       Submit for Payment
@@ -352,6 +363,14 @@ export default function ApQueuePage() {
           );
         })}
       </div>
+
+      {editing && (
+        <EditVendorInvoiceModal
+          invoice={editing}
+          onClose={() => setEditing(null)}
+          onSaved={() => { setEditing(null); load(); }}
+        />
+      )}
     </div>
   );
 }
