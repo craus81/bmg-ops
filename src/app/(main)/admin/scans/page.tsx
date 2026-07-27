@@ -2648,8 +2648,14 @@ function VendorInvoicesTab({ allParts, allLocations, poRequired, onCommitted, on
     setApplyPartSearch('');
     setApplyAmount('');
     setShowApplyPartDropdown(false);
-    // The newly assigned part may have a remembered rate for this vendor.
-    if (part) applyRememberedRates(selectedCompany ? { companyId: selectedCompany.id } : { vendorName: review.vendorName });
+    if (part) {
+      // The newly assigned part may have a remembered rate for this vendor.
+      applyRememberedRates(selectedCompany ? { companyId: selectedCompany.id } : { vendorName: review.vendorName });
+      // Re-tag the lines the part landed on — a badge inherited from a
+      // different install on the same vehicle (e.g. "Invoiced #…") must be
+      // re-derived for THIS part, not linger from the old guess.
+      recheckLines(review.lines.filter(l => l.selected).map(l => ({ ...l, partNumber: part })));
+    }
   };
 
   // Same lifecycle labels the scan tabs derive (shared scanLifecycle), for
@@ -2668,12 +2674,14 @@ function VendorInvoicesTab({ allParts, allLocations, poRequired, onCommitted, on
     );
     return lines.map(line => {
       const match = pickScanForLine(scans, line.vin, line.partNumber.trim() || null);
+      // The matched scan already knows what was installed — adopt its part
+      // when the line doesn't have one, so the invoice imports like a scan.
+      const partNumber = line.partNumber.trim() || match?.part_number || line.partNumber;
       return {
         ...line,
-        // The matched scan already knows what was installed — adopt its part
-        // when the line doesn't have one, so the invoice imports like a scan.
-        partNumber: line.partNumber.trim() || match?.part_number || line.partNumber,
+        partNumber,
         existing: match ? stateLabelFor(match) : null,
+        lastChecked: `${line.vin.trim().replace(/[^A-Za-z0-9]/g, '')}|${partNumber.trim().toUpperCase()}`,
       };
     });
   };
@@ -2781,25 +2789,41 @@ function VendorInvoicesTab({ allParts, allLocations, poRequired, onCommitted, on
     setReview(prev => prev ? { ...prev, lines: prev.lines.map(l => l.key === key ? { ...l, ...patch } : l) } : prev);
   };
 
-  // Re-check "already in system" for one line. Takes the line VALUE (not an
-  // index — rows can be removed while the query is in flight) and skips the
-  // query when nothing changed since the last check.
-  const recheckLine = async (line: VendorLine) => {
-    const cleaned = line.vin.trim().replace(/[^A-Za-z0-9]/g, '');
-    const checkKey = `${cleaned}|${line.partNumber.trim().toUpperCase()}`;
-    if (line.lastChecked === checkKey) return;
-    if (cleaned.length < 5) { updateLine(line.key, { existing: null, lastChecked: checkKey }); return; }
-    const [checked] = await checkExistingVins([line]);
-    updateLine(line.key, { existing: checked.existing, lastChecked: checkKey });
-  };
-
-  // Live version of the check while the VIN is being typed — debounced so a
-  // 17-character VIN doesn't fire 17 queries. Answers "new scan or update?"
-  // before the user ever leaves the field.
+  // Debounce timers for the live while-typing recheck, keyed by line.
   const vinCheckTimers = useRef<Record<number, ReturnType<typeof setTimeout>>>({});
+
+  // Re-check "already in system" for a batch of lines. Takes line VALUES
+  // (not indexes — rows can be removed while the query is in flight), skips
+  // lines whose vin|part combination hasn't changed since their last check,
+  // and cancels any pending debounced check so a stale result can't land on
+  // top of a fresh one. Matching is part-aware (pickScanForLine), so this
+  // must run on EVERY part change — correcting a part that was adopted from
+  // a different install flips the line from "Invoiced #…" back to "New scan".
+  const recheckLines = async (lines: VendorLine[]) => {
+    const keyOf = (l: VendorLine) => `${l.vin.trim().replace(/[^A-Za-z0-9]/g, '')}|${l.partNumber.trim().toUpperCase()}`;
+    const stale = lines.filter(l => l.lastChecked !== keyOf(l));
+    if (stale.length === 0) return;
+    for (const l of stale) clearTimeout(vinCheckTimers.current[l.key]);
+    const checked = await checkExistingVins(stale.filter(vinOk));
+    const byKey = new Map(checked.map(c => [c.key, c]));
+    setReview(prev => prev ? {
+      ...prev,
+      lines: prev.lines.map(l => {
+        const s = stale.find(x => x.key === l.key);
+        if (!s) return l;
+        const c = byKey.get(l.key);
+        return { ...l, existing: c?.existing ?? null, lastChecked: c?.lastChecked ?? keyOf(s) };
+      }),
+    } : prev);
+  };
+  const recheckLine = (line: VendorLine) => recheckLines([line]);
+
+  // Live version of the check while a VIN or part is being typed — debounced
+  // so a 17-character VIN doesn't fire 17 queries. Answers "new scan or
+  // update?" before the user ever leaves the field.
   const scheduleRecheck = (line: VendorLine) => {
     clearTimeout(vinCheckTimers.current[line.key]);
-    vinCheckTimers.current[line.key] = setTimeout(() => recheckLine(line), 400);
+    vinCheckTimers.current[line.key] = setTimeout(() => recheckLines([line]), 400);
   };
 
   // Tri-state for the line badge: has the current vin|part combination
@@ -3310,6 +3334,8 @@ function VendorInvoicesTab({ allParts, allLocations, poRequired, onCommitted, on
                                 lines: prev.lines.map(l => l.partNumber.trim() ? l : { ...l, partNumber: p.item_number }),
                               } : prev);
                               applyRememberedRates(selectedCompany ? { companyId: selectedCompany.id } : { vendorName: review.vendorName });
+                              // Part-aware match — refresh badges on the filled lines.
+                              recheckLines(review.lines.filter(l => !l.partNumber.trim()).map(l => ({ ...l, partNumber: p.item_number })));
                             }
                           }}
                           disabled={mirroringPart}
@@ -3334,6 +3360,8 @@ function VendorInvoicesTab({ allParts, allLocations, poRequired, onCommitted, on
                               lines: prev.lines.map(l => l.partNumber.trim() ? l : { ...l, partNumber: p.item_number }),
                             } : prev);
                             applyRememberedRates(selectedCompany ? { companyId: selectedCompany.id } : { vendorName: review.vendorName });
+                            // Part-aware match — refresh badges on the filled lines.
+                            recheckLines(review.lines.filter(l => !l.partNumber.trim()).map(l => ({ ...l, partNumber: p.item_number })));
                           }}
                           style={{ display: 'block', width: '100%', padding: '7px 9px', textAlign: 'left', border: 'none', borderBottom: `1px solid ${theme.border}`, background: 'transparent', cursor: 'pointer', fontSize: '11px', color: 'var(--text-primary)' }}
                         >
@@ -3501,9 +3529,20 @@ function VendorInvoicesTab({ allParts, allLocations, poRequired, onCommitted, on
               <div style={{ position: 'relative', flex: 2, minWidth: 0 }}>
                 <input
                   value={line.partNumber}
-                  onChange={e => { updateLine(line.key, { partNumber: e.target.value }); setPartSearchKey(line.key); }}
+                  onChange={e => {
+                    const partNumber = e.target.value;
+                    updateLine(line.key, { partNumber });
+                    setPartSearchKey(line.key);
+                    // Matching is part-aware — hand-typed part edits refresh
+                    // the already-in-system badge just like dropdown picks.
+                    scheduleRecheck({ ...line, partNumber });
+                  }}
                   onFocus={() => setPartSearchKey(line.key)}
-                  onBlur={() => setTimeout(() => setPartSearchKey(prev => prev === line.key ? null : prev), 150)}
+                  onBlur={e => {
+                    const partNumber = e.target.value;
+                    setTimeout(() => setPartSearchKey(prev => prev === line.key ? null : prev), 150);
+                    recheckLine({ ...line, partNumber });
+                  }}
                   placeholder="Part # (optional)"
                   style={{ width: '100%', padding: '6px 8px', borderRadius: '5px', border: '1px solid var(--border)', background: 'var(--input-bg)', color: 'var(--text-primary)', fontSize: '11px' }}
                 />
