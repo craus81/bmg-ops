@@ -171,6 +171,8 @@ function publicQuote(q: any) {
       line_total: m.line_total,
     })),
     labor: q.labor || null,
+    package_qty: q.package_qty || 1,
+    adjustments: q.adjustments || null,
     subtotal: q.subtotal,
     tax_rate: q.tax_rate,
     tax_amount: q.tax_amount,
@@ -231,13 +233,20 @@ function renderQuoteHtml(q: any, meta: any, agreement: string): string {
   const approvedAt = new Date().toISOString();
   const cust = (q.customer as any) || {};
   const rows: string[] = [];
+  // Kit-quantity jobs: measurement lines price ONE kit; the rollup row and
+  // the adjustment lines in the totals show how the final number was built.
+  const adj = q.adjustments || null;
+  const kits = Math.max(1, parseInt(q.package_qty, 10) || 1);
   for (const m of q.measurements || []) {
     rows.push(`<tr>
-      <td>${esc(m.name)}<div class="sub">${money(m.billed_area_sqft)} ft²${m.substrate?.name ? ` · ${esc(m.substrate.name)}` : ''}</div></td>
+      <td>${esc(m.name)}<div class="sub">${money(m.billed_area_sqft)} ft²${m.substrate?.name ? ` · ${esc(m.substrate.name)}` : ''}${kits > 1 ? ' · per kit' : ''}</div></td>
       <td class="r">${esc(m.qty || 1)}</td>
       <td class="r">$${money(m.unit_price)}</td>
       <td class="r">$${money(m.line_total)}</td>
     </tr>`);
+  }
+  if (kits > 1 && adj) {
+    rows.push(`<tr><td><b>Materials — ${kits} kits</b><div class="sub">${money(adj.kit_area_sqft)} ft² per kit</div></td><td class="r"><b>${kits}</b></td><td class="r">$${money(adj.kit_materials)}</td><td class="r"><b>$${money(adj.pre_materials)}</b></td></tr>`);
   }
   for (const f of q.labor?.films || []) {
     if (!(parseFloat(f.total) || 0)) continue;
@@ -282,6 +291,9 @@ td { border-top:1px solid #e2e8f0; padding:8px 0; vertical-align:top; }
   </table>
 
   <div class="totals">
+    ${adj && ((parseFloat(adj.discount_amount) || 0) > 0.005 || (parseFloat(adj.min_bump) || 0) > 0.005) ? `<div class="row" style="color:#64748b;"><span>Subtotal before adjustments</span><span>$${money(adj.pre_subtotal)}</span></div>` : ''}
+    ${adj && (parseFloat(adj.discount_amount) || 0) > 0.005 ? `<div class="row" style="color:#7c3aed;"><span>Quantity discount (${money(adj.discount_pct)}%)</span><span>−$${money(adj.discount_amount)}</span></div>` : ''}
+    ${adj && (parseFloat(adj.min_bump) || 0) > 0.005 ? `<div class="row" style="color:#b45309;"><span>Shop minimum</span><span>+$${money(adj.min_bump)}</span></div>` : ''}
     <div class="row"><span>Subtotal</span><span>$${money(q.subtotal)}</span></div>
     <div class="row"><span>Tax (${money(q.tax_rate)}%)</span><span>$${money(q.tax_amount)}</span></div>
     <div class="row grand"><span>Total</span><span>$${money(q.total)}</span></div>

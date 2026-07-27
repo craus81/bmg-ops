@@ -73,12 +73,19 @@ interface QuoteAttachment {
   type: string | null;
 }
 
+// Quantity-discount tier: pct applies once the kit count reaches min_qty
+// (highest qualifying pct wins).
+interface QtyDiscountTier { min_qty: number; pct: number }
+
 interface Settings {
   company: Company;
   tax_rate: number;
   design: LaborSection;
   preparation: LaborSection;
   installation: LaborSection;
+  // Job-pricing policy: pre-tax floor for any job + quantity discount tiers.
+  min_job_charge: number;
+  qty_discounts: QtyDiscountTier[];
 }
 
 type MType = 'box' | 'circle' | 'roof' | 'hood';
@@ -128,7 +135,25 @@ interface WrapQuote {
   archived_at: string | null;
   netsuite_estimate_id: string | null;
   netsuite_estimate_number: string | null;
+  package_qty: number | null;
+  adjustments: QuoteAdjustments | null;
   created_at: string;
+}
+
+// How the final totals were reached, snapshotted for display: the pre-
+// adjustment numbers plus the discount/minimum applied. The stored
+// materials_total/labor_total already have these folded in.
+interface QuoteAdjustments {
+  package_qty: number;
+  kit_area_sqft: number;
+  kit_materials: number;
+  pre_materials: number;
+  pre_labor: number;
+  pre_subtotal: number;
+  discount_pct: number;
+  discount_amount: number;
+  min_charge: number;
+  min_bump: number;
 }
 
 type Tab = 'estimator' | 'quote' | 'history' | 'pricing' | 'company' | 'templates';
@@ -179,7 +204,7 @@ export default function WrapQuotePage() {
   const [loading, setLoading] = useState(true);
   const [templates, setTemplates] = useState<Template[]>([]);
   const [substrates, setSubstrates] = useState<Film[]>([]);
-  const [settings, setSettings] = useState<Settings>({ company: {}, tax_rate: 0, design: EMPTY_LABOR, preparation: EMPTY_LABOR, installation: EMPTY_LABOR });
+  const [settings, setSettings] = useState<Settings>({ company: {}, tax_rate: 0, design: EMPTY_LABOR, preparation: EMPTY_LABOR, installation: EMPTY_LABOR, min_job_charge: 0, qty_discounts: [] });
   const [history, setHistory] = useState<WrapQuote[]>([]);
 
   // ----- Estimator state -----
@@ -299,6 +324,8 @@ export default function WrapQuotePage() {
         design: { ...EMPTY_LABOR, ...(setRes.data.design || {}) },
         preparation: { ...EMPTY_LABOR, ...(setRes.data.preparation || {}) },
         installation: { ...EMPTY_LABOR, ...(setRes.data.installation || {}) },
+        min_job_charge: num(setRes.data.min_job_charge),
+        qty_discounts: Array.isArray(setRes.data.qty_discounts) ? setRes.data.qty_discounts : [],
       });
     }
     setHistory((histRes.data || []) as WrapQuote[]);
@@ -371,48 +398,90 @@ export default function WrapQuotePage() {
     return o !== undefined && o !== '' ? num(o) : num(f.labor_per_sqft);
   };
 
+  // The drawn canvas is ONE kit; this multiplies the sqft-driven pricing
+  // (materials + per-film install labor) for "12 of this package" jobs.
+  const [packageQty, setPackageQty] = useState('1');
+  // Per-quote quantity-discount override (%). '' = use the settings tier
+  // that the kit count qualifies for.
+  const [discountPctOverride, setDiscountPctOverride] = useState('');
+
   const totals = useMemo(() => {
-    let area = 0, billedArea = 0, materials = 0;
+    const kitQty = Math.max(1, Math.floor(num(packageQty) || 1));
+    let kitArea = 0, kitBilledArea = 0, kitMaterials = 0;
     // Billed (with-bleed) square footage per film — drives material buying
     // and per-film install labor.
     const byFilm = new Map<string, { film: Film; sqft: number }>();
     for (const m of measurements) {
       const p = measurementPricing(m);
       const qty = Math.max(1, num(m.qty));
-      area += p.trimArea * qty;
-      billedArea += p.billedArea * qty;
-      materials += p.lineTotal;
+      kitArea += p.trimArea * qty;
+      kitBilledArea += p.billedArea * qty;
+      kitMaterials += p.lineTotal;
       if (p.sub) {
         const cur = byFilm.get(p.sub.id) || { film: p.sub, sqft: 0 };
         cur.sqft += p.billedArea * qty;
         byFilm.set(p.sub.id, cur);
       }
     }
-    const filmTotals = [...byFilm.values()].map(({ film, sqft }) => ({
-      id: film.id, label: filmLabel(film), sqft,
-      laborRate: filmLaborRate(film), laborTotal: sqft * filmLaborRate(film),
-    }));
+    // Whole-job numbers: the kit × package quantity. The three labor
+    // sections (design/prep/install) stay one-time job-level entries.
+    const area = kitArea * kitQty;
+    const billedArea = kitBilledArea * kitQty;
+    const materials = kitMaterials * kitQty;
+    const filmTotals = [...byFilm.values()].map(({ film, sqft }) => {
+      const jobSqft = sqft * kitQty;
+      return {
+        id: film.id, label: filmLabel(film), sqft: jobSqft,
+        laborRate: filmLaborRate(film), laborTotal: jobSqft * filmLaborRate(film),
+      };
+    });
     const filmLabor = filmTotals.reduce((sum, f) => sum + f.laborTotal, 0);
     const design = laborSectionTotal(settings.design);
     const prep = laborSectionTotal(settings.preparation);
     const install = laborSectionTotal(settings.installation);
     const labor = design + prep + install + filmLabor;
-    const subtotal = materials + labor;
+    const preSubtotal = materials + labor;
+
+    // Quantity discount: the highest settings tier the kit count reaches,
+    // unless this quote overrides the percentage.
+    const tierPct = settings.qty_discounts.reduce(
+      (best, t) => kitQty >= Math.max(1, num(t.min_qty)) ? Math.max(best, num(t.pct)) : best, 0);
+    const discountPct = discountPctOverride.trim() === ''
+      ? tierPct
+      : Math.min(100, Math.max(0, num(discountPctOverride)));
+    const discount = preSubtotal * discountPct / 100;
+
+    // Shop minimum: no job quotes below the pre-tax floor — the bump covers
+    // the fixed time a job takes regardless of its square footage.
+    const minCharge = num(settings.min_job_charge);
+    const afterDiscount = preSubtotal - discount;
+    const minBump = preSubtotal > 0 && afterDiscount < minCharge ? minCharge - afterDiscount : 0;
+    const subtotal = afterDiscount + minBump;
+    // Fold the adjustments into materials/labor proportionally: the NetSuite
+    // estimate and invoice read materials_total + labor_total directly, so
+    // those two must always sum to what the customer was actually quoted.
+    const adjust = preSubtotal > 0 ? subtotal / preSubtotal : 1;
+
     const tax = subtotal * num(settings.tax_rate) / 100;
-    // Internal margin readout: what the billed film actually costs us. Films
+    // Internal margin readout: what the billed film actually costs us
+    // (whole job), against what we charge for it AFTER the discount. Films
     // with no cost on the Pricing tab are listed so the gap is visible.
     let materialCost = 0;
     const uncostedFilms = new Set<string>();
     for (const { film, sqft } of byFilm.values()) {
-      if (filmHasCost(film)) materialCost += sqft * filmCost(film);
+      if (filmHasCost(film)) materialCost += sqft * kitQty * filmCost(film);
       else uncostedFilms.add(filmLabel(film));
     }
     return {
-      area, billedArea, materials, filmTotals, filmLabor, design, prep, install, labor, subtotal, tax, total: subtotal + tax,
+      kitQty, kitArea, kitMaterials,
+      area, billedArea, materials, filmTotals, filmLabor, design, prep, install, labor,
+      preSubtotal, tierPct, discountPct, discount, minCharge, minBump,
+      adjMaterials: materials * adjust, adjLabor: labor * adjust,
+      subtotal, tax, total: subtotal + tax,
       materialCost, uncostedFilms: [...uncostedFilms],
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps -- substrates feed measurementPricing
-  }, [measurements, settings, substrates, laborRates]);
+  }, [measurements, settings, substrates, laborRates, packageQty, discountPctOverride]);
 
   // ----- Canvas drawing -----
   const svgPoint = (e: React.PointerEvent): { x: number; y: number } | null => {
@@ -587,6 +656,8 @@ export default function WrapQuotePage() {
     setPendingPair(null);
     setSavedQuoteId(null);
     setQuoteNumber('');
+    setPackageQty('1');
+    setDiscountPctOverride('');
   };
 
   // ----- Quote snapshot / save / email -----
@@ -642,8 +713,25 @@ export default function WrapQuotePage() {
         films: totals.filmTotals.map(f => ({ id: f.id, label: f.label, sqft: f.sqft, rate: f.laborRate, total: f.laborTotal })),
       },
       total_area_sqft: totals.area,
-      materials_total: totals.materials,
-      labor_total: totals.labor,
+      package_qty: totals.kitQty,
+      // Display snapshot of how the totals were reached; null = plain
+      // single-kit quote. materials_total/labor_total below already have the
+      // discount + shop minimum folded in proportionally, so the NetSuite
+      // estimate and invoice (which read those columns) match the quote.
+      adjustments: (totals.kitQty > 1 || totals.discount > 0.005 || totals.minBump > 0.005) ? {
+        package_qty: totals.kitQty,
+        kit_area_sqft: totals.kitArea,
+        kit_materials: totals.kitMaterials,
+        pre_materials: totals.materials,
+        pre_labor: totals.labor,
+        pre_subtotal: totals.preSubtotal,
+        discount_pct: totals.discountPct,
+        discount_amount: totals.discount,
+        min_charge: totals.minCharge,
+        min_bump: totals.minBump,
+      } : null,
+      materials_total: totals.adjMaterials,
+      labor_total: totals.adjLabor,
       subtotal: totals.subtotal,
       tax_rate: num(settings.tax_rate),
       tax_amount: totals.tax,
@@ -887,7 +975,7 @@ export default function WrapQuotePage() {
   const createNetsuiteQuote = async () => {
     if (measurements.length === 0) { await dialog.alert('No measurements — draw the wrap areas on the Estimator tab first.'); return; }
     if (!customerId) { await dialog.alert('Pick the customer from the NetSuite search first — a typed-in name has no NetSuite record to attach the quote to.'); return; }
-    if (!(await dialog.confirm(`Create a NetSuite quote for ${customer.name}? Vinyl ($${fmt(totals.materials)}) maps to "3M Vinyl", labor ($${fmt(totals.labor)}) to "Graphics Install Labor" — NetSuite adds tax.`))) return;
+    if (!(await dialog.confirm(`Create a NetSuite quote for ${customer.name}? Vinyl ($${fmt(totals.adjMaterials)}${totals.kitQty > 1 ? `, ${totals.kitQty} kits` : ''}) maps to "3M Vinyl", labor ($${fmt(totals.adjLabor)}) to "Graphics Install Labor" — NetSuite adds tax.`))) return;
     setPushingNetsuite(true);
     try {
       const id = await saveQuote();
@@ -995,6 +1083,10 @@ export default function WrapQuotePage() {
     setAttachments(q.attachments || []);
     // Per-film install-labor overrides come back from the labor snapshot
     setLaborRates(Object.fromEntries(((q.labor?.films || []) as any[]).filter((f: any) => f.id).map((f: any) => [f.id, f.rate == null ? '' : String(f.rate)])));
+    setPackageQty(String(Math.max(1, num(q.package_qty) || 1)));
+    // Pin the saved discount % (clearing the field re-derives from the
+    // settings tiers); older quotes have no adjustments and stay on auto.
+    setDiscountPctOverride(q.adjustments?.discount_pct != null ? String(q.adjustments.discount_pct) : '');
     setSendMode('full');
     setViewQuote(null);
     setTab('quote');
@@ -1119,6 +1211,11 @@ export default function WrapQuotePage() {
       design: settings.design,
       preparation: settings.preparation,
       installation: settings.installation,
+      min_job_charge: num(settings.min_job_charge),
+      // Drop empty tier rows; keep only usable {min_qty, pct} pairs.
+      qty_discounts: settings.qty_discounts
+        .map(t => ({ min_qty: Math.max(1, Math.floor(num(t.min_qty))), pct: Math.min(100, Math.max(0, num(t.pct))) }))
+        .filter(t => t.min_qty > 1 || t.pct > 0),
       updated_at: new Date().toISOString(),
     });
     setSavingSettings(false);
@@ -1341,7 +1438,7 @@ export default function WrapQuotePage() {
 
   // Quote preview shared by the Quote tab and History view modal. `coverage`
   // overrides the stored diagram with a live render (Quote tab, pre-save).
-  const quotePreview = (q: { quote_number: string; vehicle_description: string | null; customer: any; project_type: string | null; project_notes: string | null; measurements: any[]; labor: any; subtotal: number; tax_rate: number; tax_amount: number; total: number; diagram_path?: string | null; attachments?: QuoteAttachment[] | null; created_at?: string }, coverage?: React.ReactNode) => (
+  const quotePreview = (q: { quote_number: string; vehicle_description: string | null; customer: any; project_type: string | null; project_notes: string | null; measurements: any[]; labor: any; subtotal: number; tax_rate: number; tax_amount: number; total: number; diagram_path?: string | null; attachments?: QuoteAttachment[] | null; created_at?: string; package_qty?: number | null; adjustments?: QuoteAdjustments | null }, coverage?: React.ReactNode) => (
     <div style={{ background: 'var(--card)', border: `1px solid ${theme.border}`, borderRadius: '12px', padding: '18px' }}>
       <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '12px' }}>
         <div style={{ fontSize: '17px', fontWeight: 800, color: 'var(--text-primary)' }}>Wrap Quote <span style={{ fontSize: '11px', color: 'var(--text-muted)', fontWeight: 700 }}>{q.quote_number}</span></div>
@@ -1391,7 +1488,7 @@ export default function WrapQuotePage() {
               <td style={{ padding: '5px 6px', borderBottom: `1px solid ${theme.border}` }}>
                 {l.name}
                 <span style={{ color: 'var(--text-muted)', marginLeft: '6px', fontSize: '9px' }}>
-                  {fmt(l.billed_area_sqft)} ft²{l.substrate ? ` · ${l.substrate.name}` : ''}
+                  {fmt(l.billed_area_sqft)} ft²{l.substrate ? ` · ${l.substrate.name}` : ''}{(q.package_qty || 1) > 1 ? ' · per kit' : ''}
                 </span>
               </td>
               <td style={{ padding: '5px 6px', textAlign: 'right', borderBottom: `1px solid ${theme.border}` }}>{l.qty}</td>
@@ -1399,6 +1496,19 @@ export default function WrapQuotePage() {
               <td style={{ padding: '5px 6px', textAlign: 'right', borderBottom: `1px solid ${theme.border}` }}>{fmt(l.line_total)}</td>
             </tr>
           ))}
+          {(q.package_qty || 1) > 1 && q.adjustments && (
+            <tr style={{ color: 'var(--text-primary)', fontWeight: 700 }}>
+              <td style={{ padding: '5px 6px', borderBottom: `1px solid ${theme.border}` }}>
+                Materials — {q.package_qty} kits
+                <span style={{ color: 'var(--text-muted)', marginLeft: '6px', fontSize: '9px', fontWeight: 400 }}>
+                  {fmt(q.adjustments.kit_area_sqft)} ft² per kit
+                </span>
+              </td>
+              <td style={{ padding: '5px 6px', textAlign: 'right', borderBottom: `1px solid ${theme.border}` }}>{q.package_qty}</td>
+              <td style={{ padding: '5px 6px', textAlign: 'right', borderBottom: `1px solid ${theme.border}` }}>{fmt(q.adjustments.kit_materials)}</td>
+              <td style={{ padding: '5px 6px', textAlign: 'right', borderBottom: `1px solid ${theme.border}` }}>{fmt(q.adjustments.pre_materials)}</td>
+            </tr>
+          )}
           {(q.labor?.films || []).filter((f: any) => num(f.total) > 0).map((f: any) => (
             <tr key={`labor-${f.id}`} style={{ color: 'var(--text-primary)' }}>
               <td style={{ padding: '5px 6px', borderBottom: `1px solid ${theme.border}` }}>
@@ -1432,6 +1542,15 @@ export default function WrapQuotePage() {
         </div>
       )}
       <div style={{ marginTop: '10px', display: 'flex', flexDirection: 'column', alignItems: 'flex-end', gap: '3px', fontSize: '12px', color: 'var(--text-primary)' }}>
+        {q.adjustments && (num(q.adjustments.discount_amount) > 0.005 || num(q.adjustments.min_bump) > 0.005) && (
+          <div style={{ color: 'var(--text-secondary)' }}>Subtotal before adjustments <b style={{ marginLeft: '14px' }}>${fmt(num(q.adjustments.pre_subtotal))}</b></div>
+        )}
+        {q.adjustments && num(q.adjustments.discount_amount) > 0.005 && (
+          <div style={{ color: '#a78bfa' }}>Quantity discount ({fmt(num(q.adjustments.discount_pct))}%) <b style={{ marginLeft: '14px' }}>−${fmt(num(q.adjustments.discount_amount))}</b></div>
+        )}
+        {q.adjustments && num(q.adjustments.min_bump) > 0.005 && (
+          <div style={{ color: '#fbbf24' }}>Shop minimum <b style={{ marginLeft: '14px' }}>+${fmt(num(q.adjustments.min_bump))}</b></div>
+        )}
         <div>Subtotal <b style={{ marginLeft: '14px' }}>${fmt(q.subtotal)}</b></div>
         <div>Tax ({fmt(q.tax_rate)}%) <b style={{ marginLeft: '14px' }}>${fmt(q.tax_amount)}</b></div>
         <div style={{ fontSize: '15px', fontWeight: 800 }}>Total <span style={{ marginLeft: '14px', color: '#22c55e' }}>${fmt(q.total)}</span></div>
@@ -1707,20 +1826,31 @@ export default function WrapQuotePage() {
                       bleed per side, which is what the quote's lines, install
                       labor, and film usage are priced on. Showing both keeps
                       this footer consistent with the quote totals. */}
-                  <div style={{ marginLeft: 'auto', fontSize: '12px', fontWeight: 800, color: 'var(--text-primary)' }}>Coverage: {fmt(totals.area)} ft²</div>
+                  {/* The drawn canvas is one kit; qty multiplies the job. */}
+                  <label title="How many of this graphics package the customer wants — one kit is what's drawn on the canvas" style={{ marginLeft: 'auto', display: 'flex', alignItems: 'center', gap: '5px', fontSize: '12px', fontWeight: 800, color: 'var(--text-primary)' }}>
+                    Kits ×
+                    <input type="number" min="1" step="1" value={packageQty}
+                      onChange={e => setPackageQty(e.target.value)}
+                      style={{ width: '58px', padding: '5px 7px', borderRadius: '6px', border: `1px solid ${theme.border}`, background: 'var(--input-bg)', color: 'var(--text-primary)', fontSize: '12px', fontWeight: 800 }} />
+                  </label>
+                  <div style={{ fontSize: '12px', fontWeight: 800, color: 'var(--text-primary)' }}>
+                    Coverage: {fmt(totals.area)} ft²{totals.kitQty > 1 ? ` (${fmt(totals.kitArea)}/kit)` : ''}
+                  </div>
                   {totals.billedArea - totals.area > 0.005 && (
                     <div title="Print area billed on the quote — each panel plus its film&#39;s bleed on every side. Set bleed per film on the Pricing tab." style={{ fontSize: '12px', fontWeight: 800, color: 'var(--text-secondary)' }}>
                       Billed film: {fmt(totals.billedArea)} ft²
                     </div>
                   )}
                   <div style={{ fontSize: '12px', fontWeight: 800, color: '#22c55e' }}>Estimated Cost: ${fmt(totals.total)}</div>
-                  {/* Internal materials margin — never appears on the emailed quote */}
-                  {totals.materials > 0 && (totals.materialCost > 0 || totals.uncostedFilms.length > 0) && (() => {
-                    const pct = totals.materialCost > 0 ? ((totals.materials - totals.materialCost) / totals.materials) * 100 : null;
+                  {/* Internal materials margin — never appears on the emailed
+                      quote. Compares cost against the DISCOUNTED material
+                      price, so a too-generous qty discount flags itself. */}
+                  {totals.adjMaterials > 0 && (totals.materialCost > 0 || totals.uncostedFilms.length > 0) && (() => {
+                    const pct = totals.materialCost > 0 ? ((totals.adjMaterials - totals.materialCost) / totals.adjMaterials) * 100 : null;
                     const color = pct == null ? 'var(--text-muted)' : pct < 0 ? '#ef4444' : pct < marginFloor ? '#fbbf24' : '#22c55e';
                     return (
                       <div
-                        title={totals.uncostedFilms.length > 0 ? `No cost set for: ${totals.uncostedFilms.join(', ')} — add film costs on the Pricing tab` : `Material cost $${fmt(totals.materialCost)} vs billed $${fmt(totals.materials)} · floor ${marginFloor}%`}
+                        title={totals.uncostedFilms.length > 0 ? `No cost set for: ${totals.uncostedFilms.join(', ')} — add film costs on the Pricing tab` : `Material cost $${fmt(totals.materialCost)} vs billed $${fmt(totals.adjMaterials)}${totals.discount > 0.005 ? ' (after discount)' : ''} · floor ${marginFloor}%`}
                         style={{ fontSize: '12px', fontWeight: 800, color }}
                       >
                         {pct != null
@@ -1804,6 +1934,38 @@ export default function WrapQuotePage() {
                 </div>
               ))}
             </>)}
+            {sectionHead('Job Pricing')}
+            <div style={{ display: 'flex', gap: '8px', marginBottom: '6px' }}>
+              <div>
+                <div style={labelStyle}>Kits (qty)</div>
+                <input type="number" min="1" step="1" value={packageQty} onChange={e => setPackageQty(e.target.value)} style={{ ...inputStyle, width: '70px' }} />
+              </div>
+              <div>
+                <div style={labelStyle}>Qty Discount (%)</div>
+                <input type="number" min="0" max="100" step="0.5" value={discountPctOverride}
+                  onChange={e => setDiscountPctOverride(e.target.value)}
+                  placeholder={totals.tierPct > 0 ? `auto ${totals.tierPct}` : '0'}
+                  style={{ ...inputStyle, width: '90px' }} />
+              </div>
+            </div>
+            {totals.kitQty > 1 && (
+              <div style={{ fontSize: '10px', color: 'var(--text-secondary)', marginBottom: '4px' }}>
+                One kit = {fmt(totals.kitArea)} ft² / ${fmt(totals.kitMaterials)} materials · × {totals.kitQty} kits
+              </div>
+            )}
+            {totals.discount > 0.005 && (
+              <div style={{ fontSize: '10px', fontWeight: 700, color: '#a78bfa', marginBottom: '4px' }}>
+                Quantity discount {fmt(totals.discountPct)}%{discountPctOverride.trim() === '' && totals.tierPct > 0 ? ` (auto — ${totals.kitQty}+ kits tier)` : ''}: −${fmt(totals.discount)}
+              </div>
+            )}
+            {totals.minBump > 0.005 && (
+              <div style={{ fontSize: '10px', fontWeight: 700, color: '#fbbf24', marginBottom: '4px' }}>
+                Shop minimum ${fmt(totals.minCharge)} applied: +${fmt(totals.minBump)}
+              </div>
+            )}
+            <div style={{ fontSize: '9px', color: 'var(--text-muted)', marginBottom: '12px' }}>
+              The drawing prices one kit; qty multiplies materials and film labor (design/prep/install stay one-time). Discount auto-fills from the Pricing tab tiers — type a % to override, clear to go back to auto.
+            </div>
             {sectionHead('Project')}
             <div style={{ marginBottom: '6px' }}>
               <div style={labelStyle}>Type</div>
@@ -2070,6 +2232,37 @@ export default function WrapQuotePage() {
           <div style={{ marginBottom: '16px' }}>
             <div style={labelStyle}>Tax Rate (%)</div>
             <input type="number" value={settings.tax_rate || ''} onChange={e => setSettings(prev => ({ ...prev, tax_rate: num(e.target.value) }))} style={{ ...inputStyle, width: '110px' }} />
+          </div>
+
+          {sectionHead('Job Pricing')}
+          <div style={{ marginBottom: '8px' }}>
+            <div style={labelStyle}>Shop Minimum ($ per job)</div>
+            <input type="number" min="0" value={settings.min_job_charge || ''}
+              onChange={e => setSettings(prev => ({ ...prev, min_job_charge: num(e.target.value) }))}
+              placeholder="0 = off" style={{ ...inputStyle, width: '110px' }} />
+          </div>
+          <div style={{ fontSize: '10px', color: 'var(--text-muted)', marginBottom: '10px' }}>
+            No job quotes below this (pre-tax). A one-decal job takes real time end to end — the quote shows a visible &ldquo;shop minimum&rdquo; line instead of going out at $45.
+          </div>
+          <div style={labelStyle}>Quantity Discounts</div>
+          {settings.qty_discounts.map((t, i) => (
+            <div key={i} style={{ display: 'flex', alignItems: 'center', gap: '6px', marginBottom: '4px' }}>
+              <input type="number" min="2" value={t.min_qty || ''}
+                onChange={e => setSettings(prev => { const tiers = [...prev.qty_discounts]; tiers[i] = { ...tiers[i], min_qty: num(e.target.value) }; return { ...prev, qty_discounts: tiers }; })}
+                placeholder="qty" style={{ ...inputStyle, width: '70px' }} />
+              <span style={{ fontSize: '11px', color: 'var(--text-secondary)' }}>+ kits →</span>
+              <input type="number" min="0" max="100" step="0.5" value={t.pct || ''}
+                onChange={e => setSettings(prev => { const tiers = [...prev.qty_discounts]; tiers[i] = { ...tiers[i], pct: num(e.target.value) }; return { ...prev, qty_discounts: tiers }; })}
+                placeholder="%" style={{ ...inputStyle, width: '70px' }} />
+              <span style={{ fontSize: '11px', color: 'var(--text-secondary)' }}>% off</span>
+              <button onClick={() => setSettings(prev => ({ ...prev, qty_discounts: prev.qty_discounts.filter((_, j) => j !== i) }))} title="Remove tier" style={btnStyle('#ef4444', 'transparent')}>✕</button>
+            </div>
+          ))}
+          <button onClick={() => setSettings(prev => ({ ...prev, qty_discounts: [...prev.qty_discounts, { min_qty: 0, pct: 0 }] }))} style={{ ...btnStyle('#a78bfa', 'rgba(167,139,250,0.08)'), marginBottom: '4px' }}>
+            + Add Tier
+          </button>
+          <div style={{ fontSize: '10px', color: 'var(--text-muted)', marginBottom: '16px' }}>
+            Applied automatically when a quote&apos;s kit quantity reaches a tier (highest qualifying % wins) — so 100 small decals don&apos;t price like 100 separate jobs. The estimator can override the % per quote.
           </div>
 
           {laborEditor('design', 'Design')}
