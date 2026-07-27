@@ -40,6 +40,26 @@ const PostSchema = z.object({
 
 const DeleteSchema = z.object({ id: z.string().uuid() });
 
+// Header-only edit of an invoice that hasn't been billed yet. Every field is
+// optional — only the keys present are changed. The common case is fixing the
+// vendor link (companyId) on an invoice recorded before its company existed
+// in NetSuite, but finance can correct the other header fields the same way.
+const PatchSchema = z.object({
+  id: z.string().uuid(),
+  companyId: z.string().uuid().nullable().optional(),
+  vendorName: z.string().trim().min(1).max(160).optional(),
+  invoiceNumber: z.string().trim().max(60).nullable().optional(),
+  invoiceDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).nullable().optional(),
+  dueDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).nullable().optional(),
+  totalAmount: z.number().nonnegative().nullable().optional(),
+  locationId: z.string().uuid().nullable().optional(),
+  notes: z.string().trim().max(2000).nullable().optional(),
+});
+
+// A bill in NetSuite already references the header, so editing after it's
+// created would silently desync the two. Edits are for the pre-bill stages.
+const EDITABLE_STATUSES = ['recorded', 'submitted', 'approved', 'rejected'];
+
 export async function GET(req: NextRequest) {
   // Finance (Jessie's AP queue) reads this too — admin passes requireRole.
   const auth = await requireRole(req, ['finance']);
@@ -99,6 +119,110 @@ export async function POST(req: NextRequest) {
     });
   } catch (e: any) {
     return NextResponse.json({ error: e.message || 'Failed to record vendor invoice' }, { status: 500 });
+  }
+}
+
+export async function PATCH(req: NextRequest) {
+  // Finance operates the AP queue, same as the lifecycle workflow route.
+  const auth = await requireRole(req, ['finance']);
+  if (auth.error) return auth.error;
+
+  const parsed = await validateBody(req, PatchSchema);
+  if (parsed.error) return parsed.error;
+  const body = parsed.data;
+
+  try {
+    const { data: current } = await service
+      .from('vendor_invoices')
+      .select('id, status, vendor_name, invoice_number')
+      .eq('id', body.id)
+      .maybeSingle();
+    if (!current) return NextResponse.json({ error: 'Invoice not found' }, { status: 404 });
+    if (!EDITABLE_STATUSES.includes(current.status)) {
+      return NextResponse.json(
+        { error: `Invoice is ${current.status} — a NetSuite bill already references it, so its details can't be edited here.` },
+        { status: 409 },
+      );
+    }
+
+    // Build the patch from only the keys actually supplied.
+    const patch: Record<string, unknown> = {};
+    if ('companyId' in body) patch.company_id = body.companyId || null;
+    if (body.vendorName !== undefined) patch.vendor_name = body.vendorName;
+    if ('invoiceNumber' in body) patch.invoice_number = body.invoiceNumber || null;
+    if ('invoiceDate' in body) patch.invoice_date = body.invoiceDate || null;
+    if ('dueDate' in body) patch.due_date = body.dueDate || null;
+    if ('totalAmount' in body) patch.total_amount = body.totalAmount ?? null;
+    if ('notes' in body) patch.notes = body.notes || null;
+    if ('locationId' in body) {
+      patch.location_id = body.locationId || null;
+      let locationName: string | null = null;
+      if (body.locationId) {
+        const { data: loc } = await service
+          .from('work_locations').select('name').eq('id', body.locationId).maybeSingle();
+        locationName = loc?.name || null;
+      }
+      patch.location_name = locationName;
+    }
+    if (Object.keys(patch).length === 0) {
+      return NextResponse.json({ error: 'Nothing to update' }, { status: 400 });
+    }
+
+    // Renumbering into a number another invoice from the same installer
+    // already carries would collide with the migration-146 unique index — the
+    // same duplicate the record path guards against. Catch it early with a
+    // clear message instead of a raw 23505.
+    const newNumber = 'invoiceNumber' in body ? (body.invoiceNumber || null) : undefined;
+    if (newNumber && newNumber.toLowerCase() !== (current.invoice_number || '').toLowerCase()) {
+      const numberEsc = newNumber.replace(/[\\%_]/g, ch => `\\${ch}`);
+      const name: string = body.vendorName ?? current.vendor_name ?? '';
+      const nameQuoted = `"${name.replace(/["\\%_]/g, ch => (ch === '"' ? '' : `\\${ch}`))}"`;
+      const orFilter = body.companyId
+        ? `company_id.eq.${body.companyId},vendor_name.ilike.${nameQuoted}`
+        : `vendor_name.ilike.${nameQuoted}`;
+      const { data: dupes } = await service
+        .from('vendor_invoices')
+        .select('id, vendor_name, invoice_number')
+        .ilike('invoice_number', numberEsc)
+        .neq('id', body.id)
+        .or(orFilter)
+        .limit(1);
+      if (dupes && dupes.length > 0) {
+        return NextResponse.json(
+          { error: `Invoice #${newNumber} from ${dupes[0].vendor_name} already exists — pick a distinct number.` },
+          { status: 409 },
+        );
+      }
+    }
+
+    const { error } = await service.from('vendor_invoices').update(patch).eq('id', body.id);
+    if (error) {
+      if (error.code === '23505') {
+        return NextResponse.json({ error: `Invoice #${newNumber} already exists for this installer — pick a distinct number.` }, { status: 409 });
+      }
+      return NextResponse.json({ error: error.message }, { status: 500 });
+    }
+
+    // vendor_name is stamped onto each covered scan as installer_name — keep
+    // those in sync when it changes.
+    if (patch.vendor_name !== undefined && patch.vendor_name !== current.vendor_name) {
+      const { data: lines } = await service
+        .from('vendor_invoice_lines').select('scan_log_id').eq('vendor_invoice_id', body.id);
+      const scanIds = (lines || []).map(l => l.scan_log_id).filter(Boolean) as string[];
+      if (scanIds.length > 0) await restampScans(service, scanIds);
+    }
+
+    await logAudit(service, {
+      actorId: auth.user!.id,
+      table: 'vendor_invoices',
+      recordId: body.id,
+      action: 'edit',
+      detail: { changed: Object.keys(patch), before: { vendor_name: current.vendor_name, invoice_number: current.invoice_number } },
+    });
+
+    return NextResponse.json({ success: true });
+  } catch (e: any) {
+    return NextResponse.json({ error: e.message || 'Edit failed' }, { status: 500 });
   }
 }
 
