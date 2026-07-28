@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { createClient } from '@supabase/supabase-js';
 import { requireStaff } from '@/lib/api-auth';
-import { createContact, updateContact } from '@/lib/netsuite';
+import { createContact, updateContact, deleteContact } from '@/lib/netsuite';
 
 export const dynamic = 'force-dynamic';
 
@@ -98,4 +98,44 @@ export async function POST(req: NextRequest) {
   }
 
   return NextResponse.json({ success: true, contact, netsuite });
+}
+
+/**
+ * DELETE /api/prospects/contacts?id=<prospect_contacts.id>
+ *
+ * Deletes a contact. When the contact is linked to a NetSuite contact, the
+ * NetSuite record is deleted FIRST — a local-only delete would resurrect on
+ * the next bulk contact sync — and a NetSuite failure (usually permissions)
+ * aborts the whole delete so the two systems never diverge. A NetSuite 404
+ * counts as already-deleted. Pass &netsuite=0 to skip the NetSuite side
+ * deliberately (the sync-resurrection caveat then applies).
+ */
+export async function DELETE(req: NextRequest) {
+  const auth = await requireStaff(req);
+  if (auth.error) return auth.error;
+
+  const id = req.nextUrl.searchParams.get('id') || '';
+  if (!/^[0-9a-f-]{36}$/i.test(id)) return NextResponse.json({ error: 'id required' }, { status: 400 });
+  const skipNetsuite = req.nextUrl.searchParams.get('netsuite') === '0';
+
+  const supabase = createClient(process.env.NEXT_PUBLIC_SUPABASE_URL!, process.env.SUPABASE_SERVICE_ROLE_KEY!);
+  const { data: contact } = await supabase.from('prospect_contacts')
+    .select('id, name, netsuite_contact_id').eq('id', id).maybeSingle();
+  if (!contact) return NextResponse.json({ error: 'Contact not found' }, { status: 404 });
+
+  let netsuiteDeleted = false;
+  if (contact.netsuite_contact_id && !skipNetsuite) {
+    const r = await deleteContact(String(contact.netsuite_contact_id));
+    if (!r.success) {
+      return NextResponse.json({
+        error: `NetSuite refused the delete, so the contact was kept here too (deleting only locally would resurrect it on the next sync): ${r.error}`,
+      }, { status: 502 });
+    }
+    netsuiteDeleted = true;
+  }
+
+  const { error } = await supabase.from('prospect_contacts').delete().eq('id', id);
+  if (error) return NextResponse.json({ error: error.message }, { status: 500 });
+
+  return NextResponse.json({ success: true, netsuiteDeleted });
 }
