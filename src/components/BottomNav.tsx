@@ -3,7 +3,7 @@
 import { usePathname, useRouter } from 'next/navigation';
 import { useAuth } from '@/components/AuthProvider';
 import { theme } from '@/lib/theme';
-import type { FeatureKey } from '@/lib/features';
+import { ROLE_DEFAULT_FEATURES, type FeatureKey } from '@/lib/features';
 import {
   Home, Palette, ClipboardCheck, Warehouse, Users,
   CalendarDays, ScanLine, Clock, FileText, Briefcase,
@@ -64,16 +64,27 @@ const TAB_ICONS: Record<string, React.ElementType> = {
 
 export const MAX_TABS = 7; // + More = 8 total
 
+// Every role that isn't 'customer'. Used to tell a customer-ONLY account
+// (locked to the portal nav) from a staff account that merely also carries
+// the customer role.
+const STAFF_ROLES = Object.keys(ROLE_DEFAULT_FEATURES).filter(r => r !== 'customer');
+
 export default function BottomNav({ clockStatus }: BottomNavProps) {
   const pathname = usePathname();
   const router = useRouter();
-  const { hasFeature, isCustomer } = useAuth();
+  const { hasFeature, isCustomer, hasRole } = useAuth();
+
+  // The portal nav (My Jobs + Settings) is for customer-ONLY accounts. An
+  // admin/staff profile that also has the customer role (e.g. linked to a
+  // NetSuite customer to use the portal) keeps the full staff nav —
+  // 'customer' must not veto every other tab.
+  const customerOnly = isCustomer && !STAFF_ROLES.some(r => hasRole(r));
 
   // Filter by feature access
   let visibleTabs = allTabs.filter(tab => {
     if (!tab.feature) return true;
-    if (tab.id === 'customer-dashboard') return isCustomer;
-    if (isCustomer && tab.id !== 'customer-dashboard') return false;
+    if (tab.id === 'customer-dashboard') return customerOnly;
+    if (customerOnly && tab.id !== 'customer-dashboard') return false;
     // Check-In merged into In-Shop: either feature grants the In-Shop tab
     // (a user with only fleet_checkin still needs a way to the panel).
     if (tab.id === 'tracking') return hasFeature('in_shop') || hasFeature('fleet_checkin');
@@ -84,8 +95,8 @@ export default function BottomNav({ clockStatus }: BottomNavProps) {
   visibleTabs.sort((a, b) => a.priority - b.priority);
   const tabs = visibleTabs.slice(0, MAX_TABS);
 
-  // Always add More at the end (unless customer)
-  if (!isCustomer) {
+  // Always add More at the end (unless customer-only)
+  if (!customerOnly) {
     tabs.push({ id: 'more', path: '/more', label: 'More', alwaysShow: true, priority: 99 });
   } else {
     tabs.push({ id: 'customer-settings', path: '/settings', label: 'Settings', alwaysShow: true, priority: 99 });
