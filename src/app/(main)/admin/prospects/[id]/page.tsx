@@ -112,7 +112,7 @@ function Kpi({ label, value, sub }: { label: string; value: string; sub?: string
 export default function CustomerRecordPage() {
   const router = useRouter();
   const params = useParams();
-  const { isAdmin, hasFeature, loading: authLoading } = useAuth();
+  const { user, profile, isAdmin, hasFeature, loading: authLoading } = useAuth();
   const supabase = createClient();
   const dialog = useDialog();
 
@@ -131,6 +131,31 @@ export default function CustomerRecordPage() {
   const [docsError, setDocsError] = useState<string | null>(null);
   const [docFilter, setDocFilter] = useState<'all' | 'invoice' | 'salesOrder' | 'estimate'>('all');
   const [pdfBusy, setPdfBusy] = useState<string | null>(null);
+
+  // Quick activity log — same prospect_activities insert the CRM card does,
+  // so touches logged here show up identically in the CRM list.
+  const [actType, setActType] = useState<'call' | 'email' | 'note' | 'meeting'>('call');
+  const [actText, setActText] = useState('');
+  const [actSaving, setActSaving] = useState(false);
+
+  const logActivity = async () => {
+    const text = actText.trim();
+    if (!text || !prospect || actSaving) return;
+    setActSaving(true);
+    const { data, error } = await supabase.from('prospect_activities').insert({
+      prospect_id: prospect.id,
+      type: actType,
+      summary: text,
+      created_by: user?.id,
+    }).select().single();
+    setActSaving(false);
+    if (error || !data) {
+      await dialog.alert(`Could not log the activity: ${error?.message || 'unknown error'}`);
+      return;
+    }
+    setActivities(prev => [{ ...(data as Activity), creator_name: profile?.full_name || null }, ...prev]);
+    setActText('');
+  };
 
   useEffect(() => {
     if (authLoading) return;
@@ -387,7 +412,36 @@ export default function CustomerRecordPage() {
 
           <div style={card}>
             <div style={eyebrow}>Recent activity</div>
-            {activities.length === 0 && <div style={{ fontSize: '12px', color: 'var(--text-muted)' }}>{prospect ? 'No activity logged.' : '—'}</div>}
+            {prospect && (
+              <div style={{ marginBottom: '10px' }}>
+                <div style={{ display: 'flex', gap: '4px', flexWrap: 'wrap', marginBottom: '6px' }}>
+                  {([['call', '📞 Call'], ['email', '✉️ Email'], ['note', '📝 Note'], ['meeting', '🤝 Meeting']] as const).map(([k, label]) => (
+                    <button key={k} onClick={() => setActType(k)} style={{
+                      padding: '4px 10px', borderRadius: '999px', fontSize: '10px', fontWeight: 700, cursor: 'pointer',
+                      background: actType === k ? 'var(--tab-active-bg)' : 'transparent',
+                      border: `1px solid ${actType === k ? 'var(--tab-active-border)' : 'var(--border)'}`,
+                      color: actType === k ? 'var(--text-primary)' : 'var(--text-muted)',
+                    }}>{label}</button>
+                  ))}
+                </div>
+                <div style={{ display: 'flex', gap: '6px' }}>
+                  <input
+                    value={actText}
+                    onChange={e => setActText(e.target.value)}
+                    onKeyDown={e => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); logActivity(); } }}
+                    placeholder={actType === 'call' ? 'What was said on the call…' : actType === 'email' ? 'What the email covered…' : actType === 'meeting' ? 'What the meeting covered…' : 'Add a note…'}
+                    style={{ flex: 1, minWidth: 0, padding: '8px 10px', borderRadius: '8px', fontSize: '12px', background: 'var(--input-bg)', border: '1px solid var(--border)', color: 'var(--text-primary)' }}
+                  />
+                  <button onClick={logActivity} disabled={actSaving || !actText.trim()} style={{
+                    padding: '8px 14px', borderRadius: '8px', fontSize: '11px', fontWeight: 700, whiteSpace: 'nowrap',
+                    background: actText.trim() ? 'var(--tab-active-bg)' : 'var(--subtle-bg)',
+                    border: '1px solid var(--border)', color: actText.trim() ? 'var(--text-primary)' : 'var(--text-muted)',
+                    cursor: actText.trim() ? 'pointer' : 'default', opacity: actSaving ? 0.6 : 1,
+                  }}>{actSaving ? 'Logging…' : 'Log'}</button>
+                </div>
+              </div>
+            )}
+            {activities.length === 0 && <div style={{ fontSize: '12px', color: 'var(--text-muted)' }}>{prospect ? 'No activity logged yet.' : '—'}</div>}
             {activities.map(a => (
               <div key={a.id} style={{ display: 'flex', gap: '8px', padding: '7px 0', borderTop: '1px solid var(--border)', fontSize: '12px' }}>
                 <span style={{ flexShrink: 0 }}>{ACTIVITY_ICONS[a.type] || '📝'}</span>
