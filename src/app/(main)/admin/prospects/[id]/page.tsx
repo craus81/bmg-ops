@@ -25,7 +25,8 @@ import { useDialog } from '@/components/DialogProvider';
 import { openNetSuitePdf } from '@/lib/netsuite-pdf-client';
 import { SortableTh, useTableSort } from '@/components/ui/SortableTh';
 import { printStatements, usd2 } from '@/lib/financials-print';
-import type { OpenArInvoice } from '@/lib/financials-data';
+import { AGE_META } from '@/components/FinancialsDrilldown';
+import type { OpenArInvoice, AgingBucketKey } from '@/lib/financials-data';
 
 interface Prospect {
   id: string;
@@ -126,6 +127,10 @@ const ACTIVITY_ICONS: Record<string, string> = { call: '\u{1F4DE}', email: '\u{1
 const DOCS_PAGE_SIZE = 100;
 
 const fmtMoney = (n: number) => n.toLocaleString('en-US', { style: 'currency', currency: 'USD', maximumFractionDigits: 0 });
+const fmtK = (n: number) => (n >= 1000 ? `$${(n / 1000).toFixed(n >= 100000 ? 0 : 1)}k` : fmtMoney(n));
+const MONTH_NAMES = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+const monthShort = (ym: string) => MONTH_NAMES[Number(ym.slice(5, 7)) - 1] || ym;
+const monthLabel = (ym: string) => `${monthShort(ym)} ${ym.slice(0, 4)}`;
 const fmtDate = (d: string | null) => {
   if (!d) return '—';
   const m = String(d).match(/^(\d{4})-(\d{2})-(\d{2})/);
@@ -194,6 +199,16 @@ export default function CustomerRecordPage() {
   interface PaymentRow { id: string; tranid: string; date: string | null; type: 'payment' | 'credit'; amount: number; memo: string | null }
   const [payments, setPayments] = useState<PaymentRow[] | null>(null);
   const [paymentsNote, setPaymentsNote] = useState<string | null>(null);
+
+  // Terms / credit limit / 12-month invoiced series (NetSuite).
+  interface ProfileData { terms: string | null; creditLimit: number | null; nsBalance: number | null; months: { month: string; total: number }[] }
+  const [nsProfile, setNsProfile] = useState<ProfileData | null>(null);
+
+  // FleetSuite-side quotes & estimates for this customer.
+  interface WrapQuoteRow { id: string; quote_number: string; vehicle_description: string | null; project_type: string | null; total: number | null; status: string; sent_at: string | null; created_at: string }
+  interface EstimateRow { id: string; estimate_number: string; title: string | null; status: string; grand_total: number | null; created_at: string }
+  const [wrapQuotes, setWrapQuotes] = useState<WrapQuoteRow[] | null>(null);
+  const [estimatesList, setEstimatesList] = useState<EstimateRow[] | null>(null);
 
   // Contact add/edit — saved through /api/prospects/contacts, which also
   // pushes the change to NetSuite when the record is linked.
@@ -332,7 +347,49 @@ export default function CustomerRecordPage() {
       loadDocs(nsId, false);
       loadStatement(nsId);
       loadPayments(nsId);
+      loadNsProfile(nsId);
     }
+    loadQuotesAndEstimates(p?.company_name || cust?.company_name || null, nsId);
+  };
+
+  const loadNsProfile = async (nsId: string) => {
+    try {
+      const res = await fetch(`/api/netsuite/customer-profile?customerId=${nsId}`);
+      const body = await res.json();
+      if (res.ok && body.success) setNsProfile(body);
+    } catch { /* header facts are optional — the page stands without them */ }
+  };
+
+  const loadQuotesAndEstimates = async (companyName: string | null, nsId: string | null) => {
+    if (companyName) {
+      const { data } = await supabase.from('wrap_quotes')
+        .select('id, quote_number, vehicle_description, project_type, total, status, sent_at, created_at')
+        .is('archived_at', null).in('status', ['draft', 'sent'])
+        .ilike('customer->>name', companyName)
+        .order('created_at', { ascending: false }).limit(10);
+      setWrapQuotes((data || []) as WrapQuoteRow[]);
+    } else {
+      setWrapQuotes([]);
+    }
+    // Estimates match precisely by NetSuite id, with a name fallback for
+    // records created before the customer was linked. Two queries — .or()
+    // can't safely carry free-text company names (commas break its syntax).
+    const found = new Map<string, EstimateRow>();
+    if (nsId) {
+      const { data } = await supabase.from('estimates')
+        .select('id, estimate_number, title, status, grand_total, created_at')
+        .eq('customer_netsuite_id', nsId)
+        .order('created_at', { ascending: false }).limit(6);
+      for (const e of (data || []) as EstimateRow[]) found.set(e.id, e);
+    }
+    if (companyName) {
+      const { data } = await supabase.from('estimates')
+        .select('id, estimate_number, title, status, grand_total, created_at')
+        .ilike('customer_name', companyName)
+        .order('created_at', { ascending: false }).limit(6);
+      for (const e of (data || []) as EstimateRow[]) found.set(e.id, e);
+    }
+    setEstimatesList([...found.values()].sort((a, b) => b.created_at.localeCompare(a.created_at)).slice(0, 6));
   };
 
   const loadPayments = async (nsId: string) => {
@@ -525,6 +582,79 @@ export default function CustomerRecordPage() {
         </div>
       )}
 
+      {/* A/R aging + credit terms */}
+      {stInvoices && stInvoices.length > 0 && (() => {
+        const buckets: Record<AgingBucketKey, number> = { current: 0, d1_30: 0, d31_60: 0, d61_90: 0, d90plus: 0 };
+        for (const i of stInvoices) buckets[i.bucket as AgingBucketKey] += i.unpaid;
+        const total = stInvoices.reduce((s, i) => s + i.unpaid, 0);
+        const limit = nsProfile?.creditLimit || null;
+        const used = limit && limit > 0 ? total / limit : null;
+        return (
+          <div style={card}>
+            <div style={{ display: 'flex', alignItems: 'baseline', gap: '10px', flexWrap: 'wrap' }}>
+              <div style={{ ...eyebrow, marginBottom: 0 }}>Accounts receivable — aging</div>
+              <span style={{ flex: 1 }} />
+              {nsProfile?.terms && <span style={{ fontSize: '11.5px', color: 'var(--text-secondary)' }}>Terms <strong style={{ color: 'var(--text-primary)' }}>{nsProfile.terms}</strong></span>}
+              {limit && (
+                <span style={{ fontSize: '11.5px', color: 'var(--text-secondary)' }}>
+                  Credit limit <strong style={{ color: 'var(--text-primary)', fontVariantNumeric: 'tabular-nums' }}>{fmtMoney(limit)}</strong>
+                  {used !== null && (
+                    <strong style={{ marginLeft: '5px', color: used > 1 ? 'var(--error)' : used > 0.8 ? 'var(--warning)' : 'var(--success)' }}>
+                      {Math.round(used * 100)}% used
+                    </strong>
+                  )}
+                </span>
+              )}
+            </div>
+            <div style={{ display: 'flex', gap: '2px', height: '18px', borderRadius: '6px', overflow: 'hidden', margin: '10px 0 10px' }}>
+              {AGE_META.filter(b => buckets[b.key] > 0.005).map(b => (
+                <div key={b.key} title={`${b.label} · ${usd2(buckets[b.key])}`} style={{ flex: buckets[b.key], minWidth: '4px', background: b.color }} />
+              ))}
+            </div>
+            <div style={{ display: 'flex', gap: '14px', flexWrap: 'wrap' }}>
+              {AGE_META.map(b => (
+                <span key={b.key} style={{ display: 'inline-flex', alignItems: 'center', gap: '5px', fontSize: '11.5px', color: buckets[b.key] > 0.005 ? 'var(--text-secondary)' : 'var(--text-muted)' }}>
+                  <span style={{ width: '8px', height: '8px', borderRadius: '2px', background: b.color, opacity: buckets[b.key] > 0.005 ? 1 : 0.35 }} />
+                  {b.shortLabel}
+                  <strong style={{ fontVariantNumeric: 'tabular-nums', color: buckets[b.key] > 0.005 ? 'var(--text-primary)' : 'var(--text-muted)' }}>{usd2(buckets[b.key])}</strong>
+                </span>
+              ))}
+            </div>
+          </div>
+        );
+      })()}
+
+      {/* Invoiced — last 12 months */}
+      {nsProfile && nsProfile.months.some(mm => mm.total > 0) && (() => {
+        const months = nsProfile.months;
+        const peak = Math.max(...months.map(mm => mm.total));
+        const peakIdx = months.findIndex(mm => mm.total === peak);
+        const yearTotal = months.reduce((s, mm) => s + mm.total, 0);
+        return (
+          <div style={card}>
+            <div style={{ display: 'flex', alignItems: 'baseline', gap: '8px' }}>
+              <div style={{ ...eyebrow, marginBottom: 0 }}>Invoiced — last 12 months</div>
+              <span style={{ fontSize: '11.5px', color: 'var(--text-secondary)', fontVariantNumeric: 'tabular-nums' }}>{fmtMoney(yearTotal)} total</span>
+            </div>
+            <div style={{ display: 'flex', alignItems: 'flex-end', gap: '3px', height: '88px', marginTop: '10px' }}>
+              {months.map((mm, i) => (
+                <div key={mm.month} title={`${monthLabel(mm.month)} · ${usd2(mm.total)}`} style={{ flex: 1, display: 'flex', flexDirection: 'column', justifyContent: 'flex-end', height: '100%', minWidth: 0 }}>
+                  {i === peakIdx && peak > 0 && (
+                    <div style={{ fontSize: '9px', fontWeight: 700, color: 'var(--text-secondary)', textAlign: 'center', marginBottom: '2px', whiteSpace: 'nowrap' }}>{fmtK(peak)}</div>
+                  )}
+                  <div style={{ height: `${mm.total > 0 ? Math.max(3, Math.round((mm.total / peak) * 66)) : 1}px`, background: mm.total > 0 ? '#60a5fa' : 'var(--progress-track)', borderRadius: '3px 3px 0 0' }} />
+                </div>
+              ))}
+            </div>
+            <div style={{ display: 'flex', gap: '3px', marginTop: '4px' }}>
+              {months.map(mm => (
+                <div key={mm.month} style={{ flex: 1, textAlign: 'center', fontSize: '8.5px', fontWeight: 700, color: 'var(--text-muted)', overflow: 'hidden' }}>{monthShort(mm.month)}</div>
+              ))}
+            </div>
+          </div>
+        );
+      })()}
+
       {/* Two-column detail */}
       <div style={{ display: 'grid', gridTemplateColumns: 'minmax(0,1fr) minmax(0,1fr)', gap: '14px' }} className="rec-cols">
         <div style={{ display: 'flex', flexDirection: 'column', gap: '14px' }}>
@@ -626,6 +756,38 @@ export default function CustomerRecordPage() {
               </div>
             ))}
           </div>
+
+          {((wrapQuotes?.length || 0) > 0 || (estimatesList?.length || 0) > 0) && (
+            <div style={card}>
+              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '8px' }}>
+                <div style={{ ...eyebrow, marginBottom: 0 }}>Quotes &amp; estimates</div>
+                <span style={{ display: 'flex', gap: '10px' }}>
+                  {(wrapQuotes?.length || 0) > 0 && <button onClick={() => router.push('/admin/wrap-quote')} style={{ background: 'none', border: 'none', cursor: 'pointer', fontSize: '10.5px', fontWeight: 700, color: '#60a5fa', padding: 0 }}>Wrap quotes ›</button>}
+                  {(estimatesList?.length || 0) > 0 && <button onClick={() => router.push('/estimates')} style={{ background: 'none', border: 'none', cursor: 'pointer', fontSize: '10.5px', fontWeight: 700, color: '#60a5fa', padding: 0 }}>Estimates ›</button>}
+                </span>
+              </div>
+              {(wrapQuotes || []).map(q => (
+                <div key={q.id} style={{ display: 'flex', alignItems: 'center', gap: '8px', padding: '7px 0', borderTop: '1px solid var(--border)', fontSize: '12.5px', marginTop: '4px' }}>
+                  <span style={{ fontSize: '9px', fontWeight: 800, padding: '2px 7px', borderRadius: '5px', flexShrink: 0, width: '48px', textAlign: 'center', background: 'rgba(96,165,250,0.12)', color: '#60a5fa' }}>QUOTE</span>
+                  <span style={{ fontWeight: 700, color: 'var(--text-primary)', flexShrink: 0 }}>{q.quote_number}</span>
+                  <span style={{ flex: 1, minWidth: 0, color: 'var(--text-muted)', fontSize: '11px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{q.vehicle_description || q.project_type || ''}</span>
+                  <span style={{ fontSize: '10px', fontWeight: 700, color: q.status === 'sent' ? '#60a5fa' : 'var(--text-muted)', flexShrink: 0 }}>{q.status === 'sent' ? 'Sent' : 'Draft'}</span>
+                  <span style={{ fontWeight: 700, fontVariantNumeric: 'tabular-nums', flexShrink: 0 }}>{q.total ? usd2(q.total) : '—'}</span>
+                </div>
+              ))}
+              {(estimatesList || []).map(e => (
+                <div key={e.id} style={{ display: 'flex', alignItems: 'center', gap: '8px', padding: '7px 0', borderTop: '1px solid var(--border)', fontSize: '12.5px', marginTop: '4px' }}>
+                  <span style={{ fontSize: '9px', fontWeight: 800, padding: '2px 7px', borderRadius: '5px', flexShrink: 0, width: '48px', textAlign: 'center', background: 'var(--subtle-bg)', color: 'var(--text-muted)' }}>EST</span>
+                  <span style={{ fontWeight: 700, color: 'var(--text-primary)', flexShrink: 0 }}>{e.estimate_number}</span>
+                  <span style={{ flex: 1, minWidth: 0, color: 'var(--text-muted)', fontSize: '11px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{e.title || ''}</span>
+                  <span style={{ fontSize: '10px', fontWeight: 700, flexShrink: 0, color: e.status === 'accepted' ? 'var(--success)' : e.status === 'rejected' ? 'var(--error)' : e.status === 'sent' ? '#60a5fa' : e.status === 'pushed' ? '#a78bfa' : 'var(--text-muted)' }}>
+                    {e.status.charAt(0).toUpperCase() + e.status.slice(1)}
+                  </span>
+                  <span style={{ fontWeight: 700, fontVariantNumeric: 'tabular-nums', flexShrink: 0 }}>{e.grand_total ? usd2(e.grand_total) : '—'}</span>
+                </div>
+              ))}
+            </div>
+          )}
 
           {(prospect?.netsuite_id || customer) && (
             <div style={card}>
