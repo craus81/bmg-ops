@@ -26,6 +26,7 @@ import { openNetSuitePdf } from '@/lib/netsuite-pdf-client';
 import { SortableTh, useTableSort } from '@/components/ui/SortableTh';
 import { usd2 } from '@/lib/financials-print';
 import { exportStatementPDF } from '@/lib/statement-pdf';
+import { fetchCompanyLetterhead, type CompanyLetterhead } from '@/lib/company-profile';
 import { AGE_META } from '@/components/FinancialsDrilldown';
 import type { OpenArInvoice, AgingBucketKey, StatementInvoice, StatementScope } from '@/lib/financials-data';
 
@@ -570,6 +571,11 @@ export default function CustomerRecordPage() {
     if (!res.ok) await dialog.alert(res.error || 'Could not open the PDF');
   };
 
+  // Company letterhead for statement documents — fetched on load so the
+  // PDF/print click stays synchronous (popup blockers).
+  const [letterhead, setLetterhead] = useState<CompanyLetterhead | null>(null);
+  useEffect(() => { fetchCompanyLetterhead().then(setLetterhead); }, []);
+
   // ── Statement options (scope + date range → PDF / print / email) ────────
   const [stModalOpen, setStModalOpen] = useState(false);
   const [stScope, setStScope] = useState<StatementScope>('open');
@@ -608,6 +614,7 @@ export default function CustomerRecordPage() {
           scope: stScope,
           from: stFrom || null,
           to: stTo || null,
+          letterhead,
         }, { print: kind === 'print' });
         setStModalOpen(false);
       }
