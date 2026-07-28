@@ -113,6 +113,24 @@ export async function notifyMany(
 }
 
 /**
+ * Approved super-admin accounts, optionally excluding one user (normally the
+ * person who triggered the event — they don't need to be told about their own
+ * action). super_admin lives in the `roles` ARRAY while the scalar `role`
+ * stays 'admin', so match on either to cover any legacy rows.
+ */
+export async function getSuperAdminIds(excludeUserId?: string | null): Promise<string[]> {
+  const { data } = await supabase
+    .from('profiles')
+    .select('id')
+    .or('role.eq.super_admin,roles.cs.{super_admin}')
+    .eq('status', 'approved');
+
+  return (data || [])
+    .map((p: any) => p.id)
+    .filter((id: string) => id && id !== excludeUserId);
+}
+
+/**
  * Determine which channels a user wants based on their notification preferences
  */
 async function getPreferredChannels(userId: string, type: string): Promise<NotifyChannel[]> {

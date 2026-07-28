@@ -9,6 +9,7 @@ import { validateBody, z } from '@/lib/validate';
 import { isProofLikeName } from '@/lib/pdf-classify';
 import { recomputePoFulfillment } from '@/lib/scan-match';
 import { fetchAllRows } from '@/lib/fetch-all';
+import { notifyPoImported, countGraphicsLines } from '@/lib/po-import-notify';
 
 // Full active catalog for part matching — paginated past PostgREST's
 // 1000-row cap. A truncated read here marks real parts "not in catalog"
@@ -420,9 +421,13 @@ export async function POST(req: NextRequest) {
   // Allow internal server-to-server calls (from auto-import cron)
   const authHeader = req.headers.get('authorization');
   const isInternalCall = authHeader === `Bearer ${process.env.SUPABASE_SERVICE_ROLE_KEY}`;
+  // Who confirmed this import. Stays null for the cron's server-to-server
+  // calls, which is what keeps the "imported by" alert to human imports only.
+  let actorId: string | null = null;
   if (!isInternalCall) {
     const auth = await requireAuth(req);
     if (auth.error) return auth.error;
+    actorId = auth.user?.id || null;
   }
 
   const parsed = await validateBody(req, ImportSchema);
@@ -562,6 +567,16 @@ export async function POST(req: NextRequest) {
           })
           .map((l: any) => ({ part_number: l.supplier_part || l.part_number, description: l.description || '', unit_price: parseFloat(l.unit_price) || 0 }));
 
+        await notifyPoImported(supabase, {
+          poId: existingPO.id,
+          poNumber: String(poNumber),
+          customer,
+          lineCount: lineInserts.length,
+          graphicsCount: countGraphicsLines(lineInserts),
+          updated: true,
+          actorId,
+        });
+
         return NextResponse.json({ status: 'updated', poNumber, poId: existingPO.id, customer, lineCount: lineInserts.length, unmatchedParts, extracted, proofsAttached });
       }
 
@@ -626,6 +641,15 @@ export async function POST(req: NextRequest) {
           );
         })
         .map((l: any) => ({ part_number: l.supplier_part || l.part_number, description: l.description || '', unit_price: parseFloat(l.unit_price) || 0 }));
+
+      await notifyPoImported(supabase, {
+        poId: newPO.id,
+        poNumber: String(poNumber),
+        customer,
+        lineCount: lineInserts.length,
+        graphicsCount: countGraphicsLines(lineInserts),
+        actorId,
+      });
 
       return NextResponse.json({ status: 'imported', poNumber, poId: newPO.id, customer, lineCount: lineInserts.length, unmatchedParts, extracted, proofsAttached });
     }
@@ -1080,6 +1104,16 @@ export async function POST(req: NextRequest) {
           unit_price: parseFloat(l.unit_price) || 0,
         }));
 
+      await notifyPoImported(supabase, {
+        poId: existingPO.id,
+        poNumber: String(poNumber),
+        customer,
+        lineCount: lineInserts.length,
+        graphicsCount: countGraphicsLines(lineInserts),
+        updated: true,
+        actorId,
+      });
+
       return NextResponse.json({
         status: 'updated',
         poNumber,
@@ -1193,6 +1227,15 @@ export async function POST(req: NextRequest) {
           description: l.description || '',
           unit_price: parseFloat(l.unit_price) || 0,
         }));
+
+      await notifyPoImported(supabase, {
+        poId: newPO.id,
+        poNumber: String(poNumber),
+        customer,
+        lineCount: lineInserts.length,
+        graphicsCount: countGraphicsLines(lineInserts),
+        actorId,
+      });
 
       return NextResponse.json({
         status: 'imported',
