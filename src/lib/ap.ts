@@ -1,6 +1,20 @@
 import type { SupabaseClient } from '@supabase/supabase-js';
 
 /**
+ * Where an AP decision notification should send the submitter: installers
+ * (who submit from the CNI portal) can't open admin pages.
+ */
+export async function apSubmitterUrl(
+  service: SupabaseClient<any, any, any>,
+  submitterId: string,
+): Promise<string> {
+  const { data } = await service
+    .from('profiles').select('role, roles').eq('id', submitterId).maybeSingle();
+  const roles: string[] = data?.roles?.length ? data.roles : [data?.role];
+  return roles.includes('installer') ? '/installer/invoices' : '/admin/ap';
+}
+
+/**
  * Everyone who should see AP notifications: finance users, falling back to
  * admins when no finance role has been assigned yet.
  */

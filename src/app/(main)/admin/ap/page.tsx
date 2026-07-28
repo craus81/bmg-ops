@@ -171,6 +171,30 @@ export default function ApQueuePage() {
     await act(inv.id, { action: 'record_bill', netsuiteBillId: billId.trim() });
   };
 
+  // On-demand run of the NetSuite payment sweep (the cron does the same
+  // every 2 hours): flips billed invoices whose bill is Paid In Full.
+  const [syncingPaid, setSyncingPaid] = useState(false);
+  const checkNetsuitePaid = async () => {
+    setSyncingPaid(true);
+    try {
+      const res = await fetch('/api/vendor-invoices/sync-paid', { method: 'POST' });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok || !data.success) {
+        await dialog.alert(data.error || 'NetSuite payment check failed');
+      } else {
+        if (data.paid > 0) await load();
+        await dialog.alert(
+          data.checked === 0
+            ? 'No billed invoices with a NetSuite bill to check.'
+            : `Checked ${data.checked} bill${data.checked !== 1 ? 's' : ''} in NetSuite — ${data.paid > 0 ? `${data.paid} now paid` : 'none paid yet'}.${(data.errors || []).length > 0 ? `\n\nErrors: ${data.errors.join('; ')}` : ''}`,
+        );
+      }
+    } catch (e: any) {
+      await dialog.alert(e.message || 'NetSuite payment check failed');
+    }
+    setSyncingPaid(false);
+  };
+
   const byStatus = (s: ApTab) => invoices.filter(i => i.status === s);
   const tabDefs: { id: ApTab; label: string; color: string }[] = [
     { id: 'submitted', label: `Awaiting Approval (${byStatus('submitted').length})`, color: '#fbbf24' },
@@ -228,6 +252,15 @@ export default function ApQueuePage() {
         ))}
       </div>
 
+      {tab === 'billed' && !loading && (
+        <div style={{ display: 'flex', justifyContent: 'flex-end', marginBottom: '10px' }}>
+          <button onClick={checkNetsuitePaid} disabled={syncingPaid} title="Ask NetSuite which of these bills are paid in full — runs automatically every 2 hours"
+            style={{ padding: '6px 12px', borderRadius: '7px', fontSize: '11px', fontWeight: 700, background: 'rgba(96,165,250,0.1)', border: '1px solid rgba(96,165,250,0.25)', color: '#60a5fa', cursor: 'pointer', opacity: syncingPaid ? 0.6 : 1 }}>
+            {syncingPaid ? 'Checking NetSuite…' : '⟳ Check NetSuite for payments'}
+          </button>
+        </div>
+      )}
+
       {loading && <div style={{ textAlign: 'center', padding: '30px', color: 'var(--text-muted)', fontSize: '13px' }}>Loading…</div>}
       {!loading && visible.length === 0 && (
         <div style={{ textAlign: 'center', padding: '30px', color: 'var(--text-muted)', fontSize: '13px', fontWeight: 600 }}>
@@ -282,7 +315,8 @@ export default function ApQueuePage() {
                     {stamp(inv.submitted_by, inv.submitted_at) && <span>Submitted: {stamp(inv.submitted_by, inv.submitted_at)}</span>}
                     {stamp(inv.approved_by, inv.approved_at) && <span>Approved: {stamp(inv.approved_by, inv.approved_at)}</span>}
                     {stamp(inv.billed_by, inv.billed_at) && <span>Billed: {stamp(inv.billed_by, inv.billed_at)}{inv.netsuite_bill_id ? ` · NS #${inv.netsuite_bill_id}` : ''}</span>}
-                    {stamp(inv.paid_by, inv.paid_at) && <span>Paid: {stamp(inv.paid_by, inv.paid_at)}</span>}
+                    {/* paid_by null + paid_at set = the NetSuite payment sync flipped it */}
+                    {(inv.paid_by || inv.paid_at) && <span>Paid: {inv.paid_by ? stamp(inv.paid_by, inv.paid_at) : `NetSuite · ${inv.paid_at ? new Date(inv.paid_at).toLocaleString([], { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' }) : ''}`}</span>}
                   </div>
                   {inv.status === 'rejected' && inv.rejection_reason && (
                     <div style={{ fontSize: '11px', color: '#ef4444', marginTop: '4px' }}>
