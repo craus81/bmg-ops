@@ -169,9 +169,12 @@ export async function printStatements(
  * Print a vendor-bill summary. NetSuite's PDF RESTlet can't render vendor
  * bills and the integration role can't read their lines, so this is the
  * header-level record with a pointer to NetSuite for full detail.
+ * `unpaidKnown: false` = NetSuite didn't return open balances, so the amount
+ * is the full bill total.
  */
-export async function printBill(bill: OpenVendorBill, alertFn: (message: string) => Promise<void>) {
-  const partial = Math.abs(bill.total - bill.unpaid) > 0.005;
+export async function printBill(bill: OpenVendorBill, alertFn: (message: string) => Promise<void>, opts?: { unpaidKnown?: boolean }) {
+  const unpaidKnown = opts?.unpaidKnown !== false;
+  const partial = unpaidKnown && Math.abs(bill.total - bill.unpaid) > 0.005;
   const body = `
   <div class="head">
     <img src="${window.location.origin}/bmg-logo-color.png" alt="BMG Fleet" onerror="this.style.display='none'">
@@ -207,7 +210,7 @@ Due date: ${escapeHtml(fmtDate(bill.dueDate))}${bill.daysPastDue > 0 ? `\n${bill
       <tr><td colspan="3" class="num">Balance due</td><td class="num">${usd2(bill.unpaid)}</td></tr>
     </tfoot>
   </table>
-  <div class="note">Header summary from NetSuite${partial ? ' (partially paid)' : ''}. Line-level detail on vendor bills isn't visible to the FleetSuite integration — open the bill in NetSuite for the full record.</div>`;
+  <div class="note">Header summary from NetSuite${partial ? ' (partially paid)' : ''}.${unpaidKnown ? '' : ' Amounts are full bill totals — partial payments may not be reflected.'} Line-level detail on vendor bills isn't visible to the FleetSuite integration — open the bill in NetSuite for the full record.</div>`;
   await openPrintWindow(`Vendor Bill ${bill.tranid}`, body, alertFn);
 }
 

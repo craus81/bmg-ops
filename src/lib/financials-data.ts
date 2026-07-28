@@ -95,18 +95,42 @@ export function bucketFor(days: number): AgingBucketKey {
   return 'd90plus';
 }
 
+/**
+ * SuiteQL rejects unknown columns/joins with a 400 (suiteqlQuery embeds the
+ * status in its error message). Only THAT justifies degrading to a simpler
+ * query — a 429/5xx/network error is transient, and silently falling back
+ * would swap correct open balances for gross totals with no visible cause.
+ */
+function isQueryShapeError(e: unknown): boolean {
+  return /SuiteQL error \(400\)/.test(e instanceof Error ? e.message : String(e));
+}
+
+/**
+ * Stable identity for grouping invoices per customer (statements, top-overdue,
+ * the by-customer drill-down). Keyed on the NetSuite entity id — companyname
+ * is null for individual-type customers, and grouping on the display string
+ * would merge unrelated "Unknown" parties into one statement.
+ */
+export function arCustomerKey(inv: { entityId: string | null; customer: string }): string {
+  return inv.entityId ? `e:${inv.entityId}` : `n:${inv.customer}`;
+}
+
 export async function fetchOpenArInvoices(): Promise<{ invoices: OpenArInvoice[]; unpaidColumn: boolean }> {
+  // ORDER BY keeps suiteqlQueryAll's offset paging deterministic (unordered
+  // pages can duplicate/drop rows past 1000 — see the CLAUDE.md domain note).
   const select = (withUnpaid: boolean) => `
     SELECT t.id, t.tranid, t.trandate, t.duedate, t.otherrefnum, t.foreigntotal${withUnpaid ? ', t.foreignamountunpaid' : ''}, t.entity, c.companyname AS customer
     FROM transaction t
     LEFT JOIN customer c ON c.id = t.entity
     WHERE t.type = 'CustInvc' AND t.status = 'A'
+    ORDER BY t.id
   `;
   let rows: any[];
   let unpaidColumn = true;
   try {
     rows = await suiteqlQueryAll(select(true));
-  } catch {
+  } catch (e) {
+    if (!isQueryShapeError(e)) throw e;
     unpaidColumn = false;
     rows = await suiteqlQueryAll(select(false));
   }
@@ -121,7 +145,7 @@ export async function fetchOpenArInvoices(): Promise<{ invoices: OpenArInvoice[]
       date: isoDate(r.trandate),
       dueDate,
       po: r.otherrefnum ? String(r.otherrefnum) : null,
-      customer: r.customer || 'Unknown',
+      customer: r.customer || (r.entity != null ? `Customer #${r.entity}` : 'Unknown'),
       entityId: r.entity != null ? String(r.entity) : null,
       total,
       unpaid,
@@ -133,31 +157,36 @@ export async function fetchOpenArInvoices(): Promise<{ invoices: OpenArInvoice[]
   return { invoices, unpaidColumn };
 }
 
+export interface OverdueAccount { key: string; customer: string; amount: number; days: number }
+
 export interface ArAging {
   total: number;
   pastDue: number;
   openCount: number;
   buckets: Record<AgingBucketKey, number>;
-  topOverdue: { customer: string; amount: number; days: number }[];
+  topOverdue: OverdueAccount[];
 }
 
 /**
  * Aggregate open invoices into the tile shape. Top overdue is per CUSTOMER
  * (summed past-due balance, oldest invoice age) — that's the actionable list
  * for chasing payment, and each row drills into that customer's invoices.
+ * Keyed by entity id (arCustomerKey) so same-named or unnamed customers
+ * never merge.
  */
 export function computeArAging(invoices: OpenArInvoice[]): ArAging {
   const buckets: Record<AgingBucketKey, number> = { current: 0, d1_30: 0, d31_60: 0, d61_90: 0, d90plus: 0 };
   let total = 0;
-  const byCustomer = new Map<string, { customer: string; amount: number; days: number }>();
+  const byCustomer = new Map<string, OverdueAccount>();
   for (const inv of invoices) {
     total += inv.unpaid;
     buckets[inv.bucket] += inv.unpaid;
     if (inv.bucket === 'current') continue;
-    const cur = byCustomer.get(inv.customer) || { customer: inv.customer, amount: 0, days: 0 };
+    const key = arCustomerKey(inv);
+    const cur = byCustomer.get(key) || { key, customer: inv.customer, amount: 0, days: 0 };
     cur.amount += inv.unpaid;
     cur.days = Math.max(cur.days, inv.daysPastDue);
-    byCustomer.set(inv.customer, cur);
+    byCustomer.set(key, cur);
   }
   const pastDue = buckets.d1_30 + buckets.d31_60 + buckets.d61_90 + buckets.d90plus;
   const topOverdue = [...byCustomer.values()].sort((a, b) => b.amount - a.amount).slice(0, 6);
@@ -170,9 +199,11 @@ export async function fetchOpenVendorBills(): Promise<{ bills: OpenVendorBill[];
     FROM transaction t
     ${withVendorJoin ? 'LEFT JOIN vendor v ON v.id = t.entity' : ''}
     WHERE t.type = 'VendBill' AND t.status = 'A'
+    ORDER BY t.id
   `;
   // Neither the vendor join nor the unpaid column is guaranteed for the
-  // integration role — degrade one at a time before giving up.
+  // integration role — degrade one at a time before giving up. Only a 400
+  // (bad column/join) falls through; transient errors surface immediately.
   const attempts: [boolean, boolean][] = [[true, true], [false, true], [true, false], [false, false]];
   let rows: any[] | null = null;
   let unpaidColumn = true;
@@ -183,13 +214,16 @@ export async function fetchOpenVendorBills(): Promise<{ bills: OpenVendorBill[];
       unpaidColumn = withUnpaid;
       break;
     } catch (e) {
+      if (!isQueryShapeError(e)) throw e;
       lastErr = e;
     }
   }
   if (!rows) throw lastErr;
   const bills = rows.map((r): OpenVendorBill => {
-    const total = num(r.foreigntotal);
-    const unpaid = unpaidColumn && r.foreignamountunpaid != null ? num(r.foreignamountunpaid) : total;
+    // Purchase-side SuiteQL amounts come back NEGATIVE (vendor-po-sync wraps
+    // every PO amount in Math.abs for the same reason) — flip to magnitudes.
+    const total = Math.abs(num(r.foreigntotal));
+    const unpaid = unpaidColumn && r.foreignamountunpaid != null ? Math.abs(num(r.foreignamountunpaid)) : total;
     const dueDate = isoDate(r.duedate);
     return {
       id: String(r.id),

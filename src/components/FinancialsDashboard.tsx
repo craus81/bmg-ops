@@ -17,7 +17,7 @@ import { useEffect, useState } from 'react';
 import { apiFetch } from '@/lib/api-client';
 import FinancialsDrilldown, { AGE_META, DrillTarget } from './FinancialsDrilldown';
 
-export interface Overdue { customer: string; amount: number; days: number }
+export interface Overdue { key: string; customer: string; amount: number; days: number }
 export interface FinancialsData {
   ar: {
     total: number; pastDue: number; openCount: number;
@@ -202,8 +202,8 @@ export default function FinancialsDashboard() {
                 <tbody>
                   {ar.topOverdue.map((o, i) => (
                     <tr key={i} className="fin-click" role="button" tabIndex={0}
-                      onClick={() => setDrill({ view: 'ar', bucket: 'pastdue', customer: o.customer })}
-                      onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); setDrill({ view: 'ar', bucket: 'pastdue', customer: o.customer }); } }}
+                      onClick={() => setDrill({ view: 'ar', bucket: 'pastdue', customer: { key: o.key, name: o.customer } })}
+                      onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); setDrill({ view: 'ar', bucket: 'pastdue', customer: { key: o.key, name: o.customer } }); } }}
                       style={{ cursor: 'pointer' }} title="See this customer's invoices">
                       <td style={{ padding: '9px 0', borderTop: i ? '1px solid var(--border)' : 'none', fontSize: '13px', fontWeight: 600, color: 'var(--text-primary)' }}>{o.customer}</td>
                       <td style={{ padding: '9px 0', borderTop: i ? '1px solid var(--border)' : 'none', fontSize: '13px', fontWeight: 700, textAlign: 'right', fontVariantNumeric: 'tabular-nums' }}>{usd(o.amount)}</td>
@@ -251,7 +251,9 @@ export default function FinancialsDashboard() {
 
       <style>{`
         @media (max-width:760px){ .fin-ar{ grid-template-columns:1fr !important; } }
-        .fin-click:hover { background: var(--card-hover, var(--subtle-bg)); border-color: var(--border-strong); }
+        /* !important so the hover beats the inline background/border on the
+           tiles — otherwise the clickable cards give no feedback at all. */
+        .fin-click:hover { background: var(--card-hover, var(--subtle-bg)) !important; border-color: var(--border-strong) !important; }
       `}</style>
     </div>
   );

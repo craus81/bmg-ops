@@ -35,40 +35,49 @@ export const AGE_META: { key: AgingBucketKey; label: string; shortLabel: string;
 
 export type DrillView = 'cash' | 'cards' | 'ar' | 'bills' | 'net';
 export type BucketFilter = AgingBucketKey | 'pastdue' | 'all';
+/** Customer filter — keyed by NetSuite entity id, with the display name for chips/titles. */
+export interface CustomerRef { key: string; name: string }
 export interface DrillTarget {
   view: DrillView;
   bucket?: BucketFilter;
-  customer?: string;
+  customer?: CustomerRef;
   grouped?: boolean;
 }
+
+// Must mirror arCustomerKey in src/lib/financials-data.ts (kept local — a
+// value import would pull the server-only NetSuite client into this bundle).
+const keyOf = (inv: { entityId: string | null; customer: string }): string =>
+  inv.entityId ? `e:${inv.entityId}` : `n:${inv.customer}`;
 
 interface ArBody { success: boolean; unpaidColumn: boolean; invoices: OpenArInvoice[] }
 interface BillsBody { success: boolean; unpaidColumn: boolean; bills: OpenVendorBill[] }
 interface AccountsBody { success: boolean; error?: string; bank: AccountBalance[]; card: AccountBalance[]; ap: AccountBalance[] }
 
-/** Fetch `url` once when `active` first becomes true; retry() re-arms it. */
+/**
+ * Fetch `url` once when `active` first becomes true; retry() re-arms it.
+ * Superseded requests are versioned out via a request id rather than an
+ * in-flight lock — a lock that outlives its effect wedges the view on the
+ * spinner forever (StrictMode's mount/cleanup/remount, or deactivating and
+ * reactivating the view while a slow fetch is still in the air).
+ */
 function useLazyFetch<T>(active: boolean, url: string) {
   const [state, setState] = useState<{ data: T | null; error: string | null }>({ data: null, error: null });
   const [attempt, setAttempt] = useState(0);
-  const inFlight = useRef(false);
+  const reqId = useRef(0);
 
   useEffect(() => {
-    if (!active || inFlight.current || state.data !== null || state.error !== null) return;
-    inFlight.current = true;
-    let alive = true;
+    if (!active || state.data !== null || state.error !== null) return;
+    const id = ++reqId.current;
     (async () => {
       try {
         const res = await apiFetch(url);
         const body = await res.json();
         if (!res.ok) throw new Error(body?.error || 'Request failed');
-        if (alive) setState({ data: body as T, error: null });
+        if (reqId.current === id) setState({ data: body as T, error: null });
       } catch (e: any) {
-        if (alive) setState({ data: null, error: e?.message || 'Request failed' });
-      } finally {
-        inFlight.current = false;
+        if (reqId.current === id) setState({ data: null, error: e?.message || 'Request failed' });
       }
     })();
-    return () => { alive = false; };
   }, [active, url, attempt, state]);
 
   const retry = useCallback(() => { setState({ data: null, error: null }); setAttempt(a => a + 1); }, []);
@@ -131,10 +140,11 @@ export default function FinancialsDrilldown({ target, summary, onClose }: {
 }) {
   const dialog = useDialog();
   const panelRef = useFocusTrap<HTMLDivElement>(true, onClose);
+  const downOnBackdrop = useRef(false);
 
   const [view, setView] = useState<DrillView>(target.view);
   const [bucket, setBucket] = useState<BucketFilter>(target.bucket ?? 'all');
-  const [customer, setCustomer] = useState<string | null>(target.customer ?? null);
+  const [customer, setCustomer] = useState<CustomerRef | null>(target.customer ?? null);
   const [grouped, setGrouped] = useState(!!target.grouped);
   const [search, setSearch] = useState('');
   const [pdfBusy, setPdfBusy] = useState<string | null>(null);
@@ -155,7 +165,7 @@ export default function FinancialsDrilldown({ target, summary, onClose }: {
   const invoices = useMemo(() => arData?.invoices ?? [], [arData]);
   const filtered = useMemo(() => {
     let list = invoices;
-    if (customer) list = list.filter(i => i.customer === customer);
+    if (customer) list = list.filter(i => keyOf(i) === customer.key);
     if (bucket === 'pastdue') list = list.filter(i => i.daysPastDue > 0);
     else if (bucket !== 'all') list = list.filter(i => i.bucket === bucket);
     const q = search.trim().toLowerCase();
@@ -164,22 +174,23 @@ export default function FinancialsDrilldown({ target, summary, onClose }: {
   }, [invoices, customer, bucket, search]);
 
   const customerRows = useMemo(() => {
-    const map = new Map<string, { customer: string; count: number; total: number; pastDue: number; oldest: number }>();
+    const map = new Map<string, { key: string; customer: string; count: number; total: number; pastDue: number; oldest: number }>();
     for (const i of filtered) {
-      const c = map.get(i.customer) || { customer: i.customer, count: 0, total: 0, pastDue: 0, oldest: 0 };
+      const key = keyOf(i);
+      const c = map.get(key) || { key, customer: i.customer, count: 0, total: 0, pastDue: 0, oldest: 0 };
       c.count += 1;
       c.total += i.unpaid;
       if (i.daysPastDue > 0) { c.pastDue += i.unpaid; c.oldest = Math.max(c.oldest, i.daysPastDue); }
-      map.set(i.customer, c);
+      map.set(key, c);
     }
     return [...map.values()].sort((a, b) => b.pastDue - a.pastDue || b.total - a.total);
   }, [filtered]);
 
   // Statements always cover the customer's FULL open balance, whatever the
   // current bucket/search filter shows — a partial statement misleads.
-  const statementGroupFor = useCallback((cust: string) => ({
-    customer: cust,
-    invoices: invoices.filter(i => i.customer === cust),
+  const statementGroupFor = useCallback((cust: CustomerRef) => ({
+    customer: cust.name,
+    invoices: invoices.filter(i => keyOf(i) === cust.key),
   }), [invoices]);
 
   const onPdf = async (inv: OpenArInvoice) => {
@@ -284,7 +295,7 @@ export default function FinancialsDrilldown({ target, summary, onClose }: {
           />
           {customer && (
             <button onClick={() => setCustomer(null)} style={{ ...btnSm, borderColor: 'var(--border-strong)' }}>
-              {customer} ✕
+              {customer.name} ✕
             </button>
           )}
           {customer && (
@@ -293,11 +304,18 @@ export default function FinancialsDrilldown({ target, summary, onClose }: {
             </button>
           )}
           {grouped && !customer && customerRows.length > 0 && (
-            <button onClick={() => printStatements(customerRows.map(c => statementGroupFor(c.customer)), dialog.alert)} style={{ ...btnSm, color: 'var(--text-primary)' }}>
-              🖨 Print all statements ({customerRows.length})
+            <button onClick={() => printStatements(customerRows.map(c => statementGroupFor({ key: c.key, name: c.customer })), dialog.alert)} style={{ ...btnSm, color: 'var(--text-primary)' }}>
+              {bucket !== 'all' || search.trim()
+                ? `🖨 Statements for these ${customerRows.length} customer${customerRows.length === 1 ? '' : 's'}`
+                : `🖨 Print all statements (${customerRows.length})`}
             </button>
           )}
         </div>
+        {grouped && !customer && (
+          <div style={{ ...infoText, marginBottom: '10px' }}>
+            Statements always include the customer&apos;s full open balance{bucket !== 'all' || search.trim() ? ' — the active filter only picks which customers print.' : '.'}
+          </div>
+        )}
         {!ar.data.unpaidColumn && (
           <div style={{ ...infoText, color: 'var(--warning)', marginBottom: '10px' }}>
             NetSuite didn&apos;t return open balances — amounts are full invoice totals, so partial payments aren&apos;t reflected.
@@ -314,14 +332,14 @@ export default function FinancialsDrilldown({ target, summary, onClose }: {
               </thead>
               <tbody>
                 {customerRows.map(c => (
-                  <tr key={c.customer} onClick={() => { setCustomer(c.customer); setGrouped(false); }} style={{ cursor: 'pointer' }} className="fin-row">
+                  <tr key={c.key} onClick={() => { setCustomer({ key: c.key, name: c.customer }); setGrouped(false); }} style={{ cursor: 'pointer' }} className="fin-row">
                     <td style={{ ...td, fontWeight: 600 }}>{c.customer}</td>
                     <td style={tdNum}>{c.count}</td>
                     <td style={tdNum}>{usd2(c.total)}</td>
                     <td style={{ ...tdNum, color: c.pastDue > 0.005 ? 'var(--error)' : 'var(--text-muted)', fontWeight: 700 }}>{c.pastDue > 0.005 ? usd2(c.pastDue) : '—'}</td>
                     <td style={tdNum}>{daysChip(c.oldest) || '—'}</td>
                     <td style={{ ...td, textAlign: 'right' }}>
-                      <button onClick={e => { e.stopPropagation(); printStatements([statementGroupFor(c.customer)], dialog.alert); }} style={btnSm}>🖨 Statement</button>
+                      <button onClick={e => { e.stopPropagation(); printStatements([statementGroupFor({ key: c.key, name: c.customer })], dialog.alert); }} style={btnSm}>🖨 Statement</button>
                     </td>
                   </tr>
                 ))}
@@ -346,7 +364,7 @@ export default function FinancialsDrilldown({ target, summary, onClose }: {
                       {inv.po && <div style={{ fontSize: '10.5px', fontWeight: 600, color: 'var(--text-muted)' }}>PO {inv.po}</div>}
                     </td>
                     <td style={tdMuted}>
-                      <span onClick={() => setCustomer(inv.customer)} style={{ cursor: 'pointer', textDecoration: 'underline', textDecorationColor: 'var(--border-strong)', textUnderlineOffset: '3px' }} title="Filter to this customer">
+                      <span onClick={() => setCustomer({ key: keyOf(inv), name: inv.customer })} style={{ cursor: 'pointer', textDecoration: 'underline', textDecorationColor: 'var(--border-strong)', textUnderlineOffset: '3px' }} title="Filter to this customer">
                         {inv.customer}
                       </span>
                     </td>
@@ -385,6 +403,11 @@ export default function FinancialsDrilldown({ target, summary, onClose }: {
         <div style={{ ...infoText, marginBottom: '12px' }}>
           Unpaid vendor bills visible to the FleetSuite integration. The tile is the NetSuite A/P account balance — vendor credits and unapplied payments aren&apos;t visible here, so a small difference between the two is normal.
         </div>
+        {!bills.data.unpaidColumn && (
+          <div style={{ ...infoText, color: 'var(--warning)', marginBottom: '10px' }}>
+            NetSuite didn&apos;t return open balances — amounts are full bill totals, so partial payments aren&apos;t reflected.
+          </div>
+        )}
         <div className="responsive-table">
           <table style={{ width: '100%', borderCollapse: 'collapse' }}>
             <thead>
@@ -407,7 +430,7 @@ export default function FinancialsDrilldown({ target, summary, onClose }: {
                   <td style={{ ...tdNum, fontWeight: 700 }}>{usd2(b.unpaid)}</td>
                   <td style={{ ...td, textAlign: 'right', whiteSpace: 'nowrap' }}>
                     <span style={{ display: 'inline-flex', gap: '8px', alignItems: 'center' }}>
-                      <button onClick={() => printBill(b, dialog.alert)} style={btnSm}>🖨 Print</button>
+                      <button onClick={() => printBill(b, dialog.alert, { unpaidKnown: bills.data!.unpaidColumn })} style={btnSm}>🖨 Print</button>
                       {nsLink(b.nsUrl)}
                     </span>
                   </td>
@@ -475,8 +498,15 @@ export default function FinancialsDrilldown({ target, summary, onClose }: {
   ) : null;
 
   return (
-    <div onClick={onClose} style={{ position: 'fixed', inset: 0, zIndex: 1000, background: 'rgba(0,0,0,0.65)', backdropFilter: 'blur(5px)', display: 'flex', alignItems: 'flex-start', justifyContent: 'center', overflowY: 'auto', padding: '4vh 12px calc(24px + env(safe-area-inset-bottom))' }}>
-      <div ref={panelRef} role="dialog" aria-modal="true" aria-label={VIEW_TITLES[view]} onClick={e => e.stopPropagation()}
+    // Close only when the click STARTED on the backdrop — a drag-select that
+    // ends past the panel edge must not nuke the modal (and its filters).
+    // zIndex 1200: above AiChat's 1000 mascot/panel, below DialogProvider's
+    // 4000 so error alerts still stack on top.
+    <div
+      onMouseDown={e => { downOnBackdrop.current = e.target === e.currentTarget; }}
+      onClick={e => { if (e.target === e.currentTarget && downOnBackdrop.current) onClose(); }}
+      style={{ position: 'fixed', inset: 0, zIndex: 1200, background: 'rgba(0,0,0,0.65)', backdropFilter: 'blur(5px)', display: 'flex', alignItems: 'flex-start', justifyContent: 'center', overflowY: 'auto', padding: '4vh 12px calc(24px + env(safe-area-inset-bottom))' }}>
+      <div ref={panelRef} role="dialog" aria-modal="true" aria-label={VIEW_TITLES[view]} onMouseDown={e => e.stopPropagation()} onClick={e => e.stopPropagation()}
         style={{ background: 'var(--bg)', border: '1px solid var(--border)', borderRadius: '14px', width: 'min(980px, 100%)', maxHeight: '92vh', display: 'flex', flexDirection: 'column', overflow: 'hidden', boxShadow: 'var(--shadow-md)' }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: '10px', padding: '13px 16px', borderBottom: '1px solid var(--border)', flexShrink: 0 }}>
           {view !== target.view && (
