@@ -17,12 +17,15 @@
  *                                   when the customer isn't in the CRM.
  */
 
-import { useState, useEffect, useRef } from 'react';
+import { useState, useEffect, useRef, useMemo } from 'react';
 import { useRouter, useParams } from 'next/navigation';
 import { createClient } from '@/lib/supabase-browser';
 import { useAuth } from '@/components/AuthProvider';
 import { useDialog } from '@/components/DialogProvider';
 import { openNetSuitePdf } from '@/lib/netsuite-pdf-client';
+import { SortableTh, useTableSort } from '@/components/ui/SortableTh';
+import { printStatements, usd2 } from '@/lib/financials-print';
+import type { OpenArInvoice } from '@/lib/financials-data';
 
 interface Prospect {
   id: string;
@@ -68,7 +71,51 @@ interface Opportunity { id: string; title: string; type: string; stage: string; 
 interface Activity { id: string; type: string; summary: string; created_by: string | null; created_at: string; creator_name?: string | null }
 interface Reminder { id: string; title: string; description: string | null; due_at: string }
 interface Tag { id: string; tag: string }
-interface CustDocument { id: string; number: string; date: string; status: string; type: 'invoice' | 'salesOrder' | 'estimate'; typeLabel: string }
+interface CustDocument {
+  id: string;
+  number: string;
+  date: string | null; // ISO
+  dueDate: string | null; // ISO
+  status: string; // display string from NetSuite
+  statusNorm: 'open' | 'pastdue' | 'paid' | 'other';
+  daysPastDue: number;
+  total: number;
+  type: 'invoice' | 'salesOrder' | 'estimate';
+  typeLabel: string;
+}
+
+/** Normalize NetSuite dates ('YYYY-MM-DD' or 'M/D/YYYY') to ISO, else null. */
+const toIso = (d: unknown): string | null => {
+  if (!d) return null;
+  const s = String(d);
+  if (/^\d{4}-\d{2}-\d{2}$/.test(s)) return s;
+  const m = s.match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})$/);
+  if (m) return `${m[3]}-${m[1].padStart(2, '0')}-${m[2].padStart(2, '0')}`;
+  const parsed = new Date(s);
+  return isNaN(parsed.getTime()) ? null : parsed.toISOString().slice(0, 10);
+};
+
+const docDaysPastDue = (dueIso: string | null): number => {
+  if (!dueIso) return 0;
+  const t = Date.parse(dueIso);
+  if (Number.isNaN(t)) return 0;
+  const now = new Date();
+  const todayUtc = Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate());
+  return Math.max(0, Math.floor((todayUtc - t) / 86_400_000));
+};
+
+const STATUS_RANK: Record<CustDocument['statusNorm'], number> = { pastdue: 0, open: 1, paid: 2, other: 3 };
+
+// Column getters for the sortable documents table (ISO dates compare correctly
+// as strings; nulls sort last via useTableSort).
+const DOC_SORT_COLS = {
+  type: (d: CustDocument) => d.typeLabel,
+  number: (d: CustDocument) => d.number,
+  date: (d: CustDocument) => d.date,
+  due: (d: CustDocument) => d.dueDate,
+  status: (d: CustDocument) => STATUS_RANK[d.statusNorm],
+  amount: (d: CustDocument) => d.total,
+};
 
 const OPP_TYPES: Record<string, string> = { tech_install: 'Tech Install', graphics: 'Graphics', rebrand: 'Rebrand', fleet_wrap: 'Fleet Wrap', other: 'Other' };
 const OPP_STAGES: Record<string, string> = { lead: 'Lead', quoted: 'Quoted', negotiating: 'Negotiating', won: 'Won', lost: 'Lost' };
@@ -98,6 +145,8 @@ const card: React.CSSProperties = { background: 'var(--card)', border: '1px soli
 const eyebrow: React.CSSProperties = { fontSize: '10px', fontWeight: 800, textTransform: 'uppercase', letterSpacing: '0.6px', color: 'var(--text-muted)', marginBottom: '8px' };
 const btnSm: React.CSSProperties = { padding: '6px 12px', borderRadius: '8px', fontSize: '11px', fontWeight: 700, cursor: 'pointer', background: 'var(--subtle-bg)', border: '1px solid var(--border)', color: 'var(--text-secondary)', whiteSpace: 'nowrap', textDecoration: 'none', display: 'inline-flex', alignItems: 'center', gap: '5px' };
 const infoRow: React.CSSProperties = { display: 'flex', justifyContent: 'space-between', gap: '10px', padding: '7px 0', borderTop: '1px solid var(--border)', fontSize: '12.5px' };
+const docTh: React.CSSProperties = { fontSize: '10px', fontWeight: 800, textTransform: 'uppercase', letterSpacing: '0.5px', color: 'var(--text-muted)', padding: '7px 8px', borderBottom: '1px solid var(--border)' };
+const docTd: React.CSSProperties = { fontSize: '12.5px', color: 'var(--text-secondary)', padding: '7px 8px', borderBottom: '1px solid var(--border)', verticalAlign: 'middle' };
 
 function Kpi({ label, value, sub }: { label: string; value: string; sub?: string }) {
   return (
@@ -130,7 +179,14 @@ export default function CustomerRecordPage() {
   const [docsLoading, setDocsLoading] = useState(false);
   const [docsError, setDocsError] = useState<string | null>(null);
   const [docFilter, setDocFilter] = useState<'all' | 'invoice' | 'salesOrder' | 'estimate'>('all');
+  const [docStatus, setDocStatus] = useState<'all' | 'open' | 'pastdue' | 'paid'>('all');
+  const [docSearch, setDocSearch] = useState('');
   const [pdfBusy, setPdfBusy] = useState<string | null>(null);
+
+  // Statement data — this customer's open invoices with true open balances,
+  // prefetched so the print click stays synchronous (popup blockers).
+  const [stInvoices, setStInvoices] = useState<OpenArInvoice[] | null>(null);
+  const [stError, setStError] = useState<string | null>(null);
 
   // Quick activity log — same prospect_activities insert the CRM card does,
   // so touches logged here show up identically in the CRM list.
@@ -220,7 +276,21 @@ export default function CustomerRecordPage() {
     }
 
     setLoading(false);
-    if (nsId) loadDocs(nsId, false);
+    if (nsId) {
+      loadDocs(nsId, false);
+      loadStatement(nsId);
+    }
+  };
+
+  const loadStatement = async (nsId: string) => {
+    try {
+      const res = await fetch(`/api/netsuite/customer-statement?customerId=${nsId}`);
+      const body = await res.json();
+      if (!res.ok || !body.success) throw new Error(body?.error || 'Failed to load open invoices');
+      setStInvoices(body.invoices || []);
+    } catch (err: any) {
+      setStError(err?.message || 'Failed to load open invoices');
+    }
   };
 
   // Same endpoint + paging the CRM card uses for its Documents section.
@@ -240,7 +310,26 @@ export default function CustomerRecordPage() {
       };
       const page: CustDocument[] = (data.transactions || []).map((t: any) => {
         const info = typeMap[t.type] || { type: 'invoice' as const, label: t.type };
-        return { id: String(t.id), number: t.tranid || String(t.id), date: t.trandate || '', status: t.status || '', type: info.type, typeLabel: info.label };
+        const dueDate = toIso(t.duedate);
+        const status = t.status || '';
+        const days = docDaysPastDue(dueDate);
+        const statusNorm: CustDocument['statusNorm'] =
+          info.type !== 'invoice' ? 'other'
+          : /paid/i.test(status) ? 'paid'
+          : /open/i.test(status) ? (days > 0 ? 'pastdue' : 'open')
+          : 'other';
+        return {
+          id: String(t.id),
+          number: t.tranid || String(t.id),
+          date: toIso(t.trandate),
+          dueDate,
+          status,
+          statusNorm,
+          daysPastDue: statusNorm === 'pastdue' ? days : 0,
+          total: Number(t.total) || 0,
+          type: info.type,
+          typeLabel: info.label,
+        };
       });
       setDocs(prev => (append ? [...(prev || []), ...page] : page));
       setDocsHasMore(!!data.hasMore);
@@ -256,6 +345,26 @@ export default function CustomerRecordPage() {
     setPdfBusy(null);
     if (!res.ok) await dialog.alert(res.error || 'Could not open the PDF');
   };
+
+  // Synchronous click handler over prefetched data — the print window must
+  // open inside the user gesture or popup blockers eat it.
+  const printStatement = () => {
+    if (!stInvoices || stInvoices.length === 0) return;
+    const customerName = prospect?.company_name || customer?.company_name || 'Unknown';
+    printStatements([{ customer: customerName, invoices: stInvoices }], dialog.alert);
+  };
+
+  // Documents: filter chips + search narrow the loaded set; headers sort it.
+  const filteredDocs = useMemo(() => {
+    let list = docs || [];
+    if (docFilter !== 'all') list = list.filter(d => d.type === docFilter);
+    if (docStatus !== 'all') list = list.filter(d => d.statusNorm === docStatus);
+    const q = docSearch.trim().toLowerCase();
+    if (q) list = list.filter(d => d.number.toLowerCase().includes(q) || d.status.toLowerCase().includes(q));
+    return list;
+  }, [docs, docFilter, docStatus, docSearch]);
+  const { sorted: sortedDocs, sort: docSort, toggle: toggleDocSort } = useTableSort(filteredDocs, DOC_SORT_COLS, { key: 'date', dir: 'desc' });
+  const openBalance = stInvoices ? stInvoices.reduce((s, i) => s + i.unpaid, 0) : null;
 
   if (loading) {
     return (
@@ -286,7 +395,6 @@ export default function CustomerRecordPage() {
   const m = customer;
   const openDeals = opportunities.filter(o => !['won', 'lost'].includes(o.stage));
   const closedDeals = opportunities.filter(o => ['won', 'lost'].includes(o.stage));
-  const filteredDocs = (docs || []).filter(d => docFilter === 'all' || d.type === docFilter);
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: '14px' }}>
@@ -324,6 +432,14 @@ export default function CustomerRecordPage() {
           {!prospect && (
             <button onClick={() => router.push(`/admin/prospects?q=${encodeURIComponent(name)}`)} title="This customer is synced from NetSuite but has no CRM record yet" style={btnSm}>
               Find in CRM
+            </button>
+          )}
+          {(prospect?.netsuite_id || customer) && !stError && (
+            <button onClick={printStatement}
+              disabled={!stInvoices || stInvoices.length === 0}
+              title={!stInvoices ? 'Loading open invoices…' : stInvoices.length === 0 ? 'No open invoices — nothing to put on a statement' : 'Print an open-item statement for this customer'}
+              style={{ ...btnSm, color: 'var(--text-primary)', opacity: !stInvoices || stInvoices.length === 0 ? 0.55 : 1, cursor: !stInvoices || stInvoices.length === 0 ? 'default' : 'pointer' }}>
+              🖨 Statement
             </button>
           )}
           {nsUrl && <a href={nsUrl} target="_blank" rel="noopener noreferrer" style={btnSm}>NetSuite ↗</a>}
@@ -470,8 +586,13 @@ export default function CustomerRecordPage() {
       {/* NetSuite documents */}
       {(prospect?.netsuite_id || customer) && (
         <div style={card}>
-          <div style={{ display: 'flex', alignItems: 'center', gap: '8px', flexWrap: 'wrap', marginBottom: '8px' }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: '8px', flexWrap: 'wrap', marginBottom: '6px' }}>
             <div style={{ ...eyebrow, marginBottom: 0 }}>NetSuite documents {docs ? `· ${docs.length}${docsHasMore ? '+' : ''}` : ''}</div>
+            {openBalance !== null && stInvoices && stInvoices.length > 0 && (
+              <span style={{ fontSize: '11.5px', color: 'var(--text-secondary)' }}>
+                · open balance <strong style={{ color: 'var(--text-primary)', fontVariantNumeric: 'tabular-nums' }}>{usd2(openBalance)}</strong> ({stInvoices.length} invoice{stInvoices.length === 1 ? '' : 's'})
+              </span>
+            )}
             <span style={{ flex: 1 }} />
             {(['all', 'invoice', 'salesOrder', 'estimate'] as const).map(f => (
               <button key={f} onClick={() => setDocFilter(f)} style={{
@@ -482,23 +603,74 @@ export default function CustomerRecordPage() {
               }}>{f === 'all' ? 'All' : f === 'invoice' ? 'Invoices' : f === 'salesOrder' ? 'Sales Orders' : 'Estimates'}</button>
             ))}
           </div>
+          <div style={{ display: 'flex', alignItems: 'center', gap: '6px', flexWrap: 'wrap', marginBottom: '8px' }}>
+            {([['all', 'Any status', 'var(--text-muted)'], ['open', 'Open', '#60a5fa'], ['pastdue', 'Past due', 'var(--error)'], ['paid', 'Paid', 'var(--success)']] as const).map(([k, label, color]) => (
+              <button key={k} onClick={() => setDocStatus(k)} style={{
+                padding: '4px 10px', borderRadius: '999px', fontSize: '10px', fontWeight: 700, cursor: 'pointer',
+                background: docStatus === k ? 'var(--tab-active-bg)' : 'transparent',
+                border: `1px solid ${docStatus === k ? color : 'var(--border)'}`,
+                color: docStatus === k ? 'var(--text-primary)' : 'var(--text-muted)',
+              }}>{label}</button>
+            ))}
+            <input
+              value={docSearch}
+              onChange={e => setDocSearch(e.target.value)}
+              placeholder="Search number…"
+              style={{ flex: '1 1 140px', minWidth: '120px', padding: '6px 10px', borderRadius: '8px', fontSize: '11.5px', background: 'var(--input-bg)', border: '1px solid var(--border)', color: 'var(--text-primary)' }}
+            />
+          </div>
           {docsError && <div style={{ fontSize: '12px', color: 'var(--error)', padding: '8px 0' }}>{docsError}</div>}
           {!docs && !docsError && <div style={{ fontSize: '12px', color: 'var(--text-muted)', padding: '8px 0' }}>Loading documents…</div>}
-          {docs && filteredDocs.length === 0 && <div style={{ fontSize: '12px', color: 'var(--text-muted)', padding: '8px 0' }}>No documents.</div>}
-          {filteredDocs.map(doc => (
-            <div key={`${doc.type}-${doc.id}`} style={{ display: 'flex', alignItems: 'center', gap: '10px', padding: '7px 0', borderTop: '1px solid var(--border)', fontSize: '12.5px' }}>
-              <span style={{ fontSize: '9px', fontWeight: 800, padding: '2px 7px', borderRadius: '5px', flexShrink: 0, width: '76px', textAlign: 'center', background: 'var(--subtle-bg)', color: 'var(--text-muted)' }}>{doc.typeLabel}</span>
-              <span style={{ fontWeight: 700, color: 'var(--text-primary)', flexShrink: 0 }}>{doc.number}</span>
-              <span style={{ color: 'var(--text-muted)', flexShrink: 0 }}>{fmtDate(doc.date)}</span>
-              <span style={{ flex: 1, minWidth: 0, color: 'var(--text-muted)', fontSize: '11px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{doc.status}</span>
-              <button onClick={() => viewPdf(doc)} disabled={pdfBusy === doc.id} style={{ ...btnSm, padding: '4px 10px', opacity: pdfBusy === doc.id ? 0.6 : 1 }}>
-                {pdfBusy === doc.id ? '…' : 'PDF'}
-              </button>
+          {docs && sortedDocs.length === 0 && <div style={{ fontSize: '12px', color: 'var(--text-muted)', padding: '8px 0' }}>No documents match.</div>}
+          {sortedDocs.length > 0 && (
+            <div className="responsive-table">
+              <table style={{ width: '100%', borderCollapse: 'collapse' }}>
+                <thead>
+                  <tr>
+                    <SortableTh label="Type" sortKey="type" sort={docSort} onToggle={toggleDocSort} style={docTh} />
+                    <SortableTh label="Number" sortKey="number" sort={docSort} onToggle={toggleDocSort} style={docTh} />
+                    <SortableTh label="Date" sortKey="date" sort={docSort} onToggle={toggleDocSort} defaultDir="desc" style={docTh} />
+                    <SortableTh label="Due" sortKey="due" sort={docSort} onToggle={toggleDocSort} style={docTh} />
+                    <SortableTh label="Status" sortKey="status" sort={docSort} onToggle={toggleDocSort} style={docTh} />
+                    <SortableTh label="Amount" sortKey="amount" sort={docSort} onToggle={toggleDocSort} defaultDir="desc" align="right" style={docTh} />
+                    <th style={docTh} />
+                  </tr>
+                </thead>
+                <tbody>
+                  {sortedDocs.map(doc => (
+                    <tr key={`${doc.type}-${doc.id}`}>
+                      <td style={docTd}>
+                        <span style={{ fontSize: '9px', fontWeight: 800, padding: '2px 7px', borderRadius: '5px', display: 'inline-block', minWidth: '76px', textAlign: 'center', background: 'var(--subtle-bg)', color: 'var(--text-muted)' }}>{doc.typeLabel}</span>
+                      </td>
+                      <td style={{ ...docTd, fontWeight: 700, color: 'var(--text-primary)', whiteSpace: 'nowrap' }}>{doc.number}</td>
+                      <td style={{ ...docTd, whiteSpace: 'nowrap' }}>{fmtDate(doc.date)}</td>
+                      <td style={{ ...docTd, whiteSpace: 'nowrap' }}>{fmtDate(doc.dueDate)}</td>
+                      <td style={docTd}>
+                        {doc.statusNorm === 'pastdue' ? (
+                          <span style={{ fontSize: '10.5px', fontWeight: 800, color: 'var(--error)', whiteSpace: 'nowrap' }}>{doc.daysPastDue}d past due</span>
+                        ) : doc.statusNorm === 'open' ? (
+                          <span style={{ fontSize: '10.5px', fontWeight: 800, color: '#60a5fa' }}>Open</span>
+                        ) : doc.statusNorm === 'paid' ? (
+                          <span style={{ fontSize: '10.5px', fontWeight: 800, color: 'var(--success)' }}>Paid</span>
+                        ) : (
+                          <span style={{ fontSize: '10.5px', color: 'var(--text-muted)', whiteSpace: 'nowrap' }}>{doc.status || '—'}</span>
+                        )}
+                      </td>
+                      <td style={{ ...docTd, textAlign: 'right', fontWeight: 700, fontVariantNumeric: 'tabular-nums', whiteSpace: 'nowrap' }}>{usd2(doc.total)}</td>
+                      <td style={{ ...docTd, textAlign: 'right' }}>
+                        <button onClick={() => viewPdf(doc)} disabled={pdfBusy === doc.id} style={{ ...btnSm, padding: '4px 10px', opacity: pdfBusy === doc.id ? 0.6 : 1 }}>
+                          {pdfBusy === doc.id ? '…' : 'PDF'}
+                        </button>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
             </div>
-          ))}
-          {docs && docsHasMore && docFilter === 'all' && (
+          )}
+          {docs && docsHasMore && (
             <button onClick={() => { const ns = prospect?.netsuite_id || customer?.netsuite_id; if (ns) loadDocs(ns, true); }} disabled={docsLoading} style={{ ...btnSm, marginTop: '10px' }}>
-              {docsLoading ? 'Loading…' : 'Load more'}
+              {docsLoading ? 'Loading…' : 'Load more history'}
             </button>
           )}
         </div>
