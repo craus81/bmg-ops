@@ -101,7 +101,10 @@ export async function POST(req: NextRequest) {
         cniProfile?.profile_complete
           ? 'BMG Fleet CNI — Your Login Link'
           : 'BMG Fleet CNI — Complete Your Profile',
-        buildCniReinviteEmailHtml(fullName || 'there', inviteLink)
+        buildCniReinviteEmailHtml(fullName || 'there', inviteLink),
+        undefined,
+        undefined,
+        auth.user?.email || undefined
       );
     } catch (emailErr: any) {
       console.warn('CNI resend invite email failed:', emailErr.message);

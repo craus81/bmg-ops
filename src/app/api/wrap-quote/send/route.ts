@@ -283,7 +283,9 @@ export async function POST(req: NextRequest) {
     });
   }
 
-  const ok = await sendEmail(to, subject, buildQuoteHtml(quote, company, diagramUrl, logoUrl, mode, message, approveUrl), undefined, attachments);
+  // Replies route to the staff member who sent the quote — the from
+  // address has no mailbox, so without this a customer reply bounces.
+  const ok = await sendEmail(to, subject, buildQuoteHtml(quote, company, diagramUrl, logoUrl, mode, message, approveUrl), undefined, attachments, auth.user?.email || undefined);
   if (!ok) {
     return NextResponse.json({ error: 'Email send failed (is Resend configured?)' }, { status: 502 });
   }

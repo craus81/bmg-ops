@@ -119,7 +119,7 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
       ` Review and approve using the button below. Link expires in ${expiryDays} days.`;
     const html = buildNotificationEmail(subject.replace('[BMG Fleet] ', ''), body, link, 'Review & Approve');
     try {
-      const ok = await sendEmail(email, subject, html);
+      const ok = await sendEmail(email, subject, html, undefined, undefined, auth.user?.email || undefined);
       dispatch.email = { target: email, ok };
     } catch (err: any) {
       dispatch.email = { target: email, ok: false, error: err?.message };

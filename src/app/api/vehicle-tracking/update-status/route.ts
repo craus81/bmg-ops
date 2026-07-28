@@ -154,7 +154,7 @@ export async function POST(request: Request) {
     // On in_progress → complete, fire notifications.
     if (currentStatus === 'in_progress' && newStatus === 'complete') {
       // Don't block the response on notifications
-      notifyCompletion(vehicle, userName).catch((err) => {
+      notifyCompletion(vehicle, userName, user.email || null).catch((err) => {
         console.error('notifyCompletion error:', err);
       });
     }
@@ -162,7 +162,7 @@ export async function POST(request: Request) {
     // On → shipped, tell the customer their vehicle left the shop —
     // "where is my vehicle?" answered before it's asked.
     if (newStatus === 'shipped') {
-      notifyShipped(vehicle).catch((err) => {
+      notifyShipped(vehicle, user.email || null).catch((err) => {
         console.error('notifyShipped error:', err);
       });
     }
@@ -224,7 +224,7 @@ async function instantiateChecklist(vehicleId: string, hasGraphics: boolean) {
   }
 }
 
-async function notifyCompletion(vehicle: any, actorName: string) {
+async function notifyCompletion(vehicle: any, actorName: string, actorEmail: string | null) {
   const vehicleLabel = [vehicle.vehicle_year, vehicle.vehicle_make, vehicle.vehicle_model]
     .filter(Boolean)
     .join(' ') || `VIN ${vehicle.vin?.slice(-8) || ''}`;
@@ -269,11 +269,12 @@ async function notifyCompletion(vehicle: any, actorName: string) {
     emailHtml: buildNotificationEmail(`Your vehicle is ready — ${vehicleLabel}`, emailBody, jobCardUrl, 'Open job card'),
     messageBody: emailBody,
     smsBody: `[BMG Fleet] Your ${vehicleLabel} is ready for pickup. VIN ending ${vehicle.vin?.slice(-8)}.`,
+    replyTo: actorEmail,
   });
 }
 
 /** Customer email when their vehicle leaves the shop. */
-async function notifyShipped(vehicle: any) {
+async function notifyShipped(vehicle: any, actorEmail: string | null) {
   if (!vehicle.customer_name) return;
   const vehicleLabel = [vehicle.vehicle_year, vehicle.vehicle_make, vehicle.vehicle_model]
     .filter(Boolean)
@@ -288,5 +289,6 @@ async function notifyShipped(vehicle: any) {
     emailSubject: `[BMG Fleet] Your vehicle has shipped — ${vehicleLabel}`,
     emailHtml: buildNotificationEmail(`On its way — ${vehicleLabel}`, emailBody),
     messageBody: emailBody,
+    replyTo: actorEmail,
   });
 }

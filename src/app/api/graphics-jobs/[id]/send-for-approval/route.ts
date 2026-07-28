@@ -35,6 +35,7 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
 
   const result = await sendProofApproval(supabase, params.id, {
     actorId: auth.user.id,
+    actorEmail: auth.user.email || null,
     email: body.email || null,
     phone: body.phone || null,
     proofFileId: body.proofFileId ?? null,

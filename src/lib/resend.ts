@@ -3,6 +3,11 @@ import { Resend } from 'resend';
 const apiKey = process.env.RESEND_API_KEY;
 const fromEmail = process.env.RESEND_FROM_EMAIL || 'notifications@bmgfleet.com';
 const fromName = process.env.RESEND_FROM_NAME || 'BMG Fleet';
+// The from address is send-only — no mailbox exists behind it, so a customer
+// hitting Reply bounces unless the email carries a Reply-To pointing at a
+// real address. Callers pass the sending user's email where one exists;
+// RESEND_REPLY_TO_EMAIL is the fallback for automated sends (crons, digests).
+const defaultReplyTo = process.env.RESEND_REPLY_TO_EMAIL || '';
 
 const resend = apiKey ? new Resend(apiKey) : null;
 
@@ -53,12 +58,18 @@ export async function sendEmailDetailed(
   subject: string,
   htmlBody: string,
   textBody?: string,
-  attachments?: Attachment[]
+  attachments?: Attachment[],
+  replyTo?: string | string[]
 ): Promise<{ ok: boolean; id: string | null }> {
   if (!resend) {
     console.warn('Resend not configured — skipping email send');
     return { ok: false, id: null };
   }
+
+  const effectiveReplyTo =
+    replyTo && (typeof replyTo === 'string' ? replyTo.trim() : replyTo.length > 0)
+      ? replyTo
+      : defaultReplyTo || undefined;
 
   try {
     return await enqueueSend(async () => {
@@ -69,6 +80,7 @@ export async function sendEmailDetailed(
           subject,
           html: htmlBody,
           text: textBody || htmlBody.replace(/<[^>]*>/g, ''),
+          ...(effectiveReplyTo ? { replyTo: effectiveReplyTo } : {}),
           ...(attachments && attachments.length > 0 ? { attachments } : {}),
         });
         lastSendAt = Date.now();
@@ -99,9 +111,10 @@ export async function sendEmail(
   subject: string,
   htmlBody: string,
   textBody?: string,
-  attachments?: Attachment[]
+  attachments?: Attachment[],
+  replyTo?: string | string[]
 ): Promise<boolean> {
-  const { ok } = await sendEmailDetailed(to, subject, htmlBody, textBody, attachments);
+  const { ok } = await sendEmailDetailed(to, subject, htmlBody, textBody, attachments, replyTo);
   return ok;
 }
 

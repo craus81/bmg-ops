@@ -17,6 +17,9 @@ type Service = SupabaseClient<any, any, any>;
 export interface SendProofOptions {
   /** Staff user who triggered a manual send; null for the cron. */
   actorId?: string | null;
+  /** Email of that staff user — becomes the Reply-To so customer replies
+   *  reach them; null for the cron (falls back to RESEND_REPLY_TO_EMAIL). */
+  actorEmail?: string | null;
   email?: string | null;
   phone?: string | null;
   proofFileId?: string | null;
@@ -142,7 +145,7 @@ export async function sendProofApproval(
       emailBody, link, 'Review Proof',
     );
     try {
-      const ok = await sendEmail(email, subject, html);
+      const ok = await sendEmail(email, subject, html, undefined, undefined, opts.actorEmail || undefined);
       dispatch.email = { target: email, ok };
     } catch (err: any) {
       dispatch.email = { target: email, ok: false, error: err?.message };

@@ -191,7 +191,10 @@ export async function POST(req: NextRequest) {
       emailSent = await sendEmail(
         email.toLowerCase().trim(),
         'You\'re Invited — BMG Fleet CNI Program',
-        buildCniInviteEmailHtml(fullName, email.toLowerCase().trim(), password, inviteLink)
+        buildCniInviteEmailHtml(fullName, email.toLowerCase().trim(), password, inviteLink),
+        undefined,
+        undefined,
+        auth.user?.email || undefined
       );
     } catch (emailErr: any) {
       console.warn('CNI invite email failed:', emailErr.message);

@@ -30,6 +30,9 @@ export interface CustomerNotifyInput {
   /** Staff-edited recipient for this one send — replaces the resolved
    *  primary-contact email without touching the contact record. */
   overrideEmail?: string | null;
+  /** Reply-To for the email — the staff user who triggered the send.
+   *  Omit for automated sends (falls back to RESEND_REPLY_TO_EMAIL). */
+  replyTo?: string | null;
 }
 
 export interface CustomerNotifyResult {
@@ -136,7 +139,7 @@ export async function notifyCustomerByName(
   let emailed = false;
   if (email) {
     try {
-      emailed = await sendEmail(email, input.emailSubject, input.emailHtml);
+      emailed = await sendEmail(email, input.emailSubject, input.emailHtml, undefined, undefined, input.replyTo || undefined);
       if (threadId) {
         await service.from('customer_messages').insert({
           thread_id: threadId,
