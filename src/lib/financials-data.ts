@@ -115,14 +115,20 @@ export function arCustomerKey(inv: { entityId: string | null; customer: string }
   return inv.entityId ? `e:${inv.entityId}` : `n:${inv.customer}`;
 }
 
-export async function fetchOpenArInvoices(): Promise<{ invoices: OpenArInvoice[]; unpaidColumn: boolean }> {
+/**
+ * Open customer invoices — the whole book, or one customer's when
+ * `entityId` (a pre-validated numeric NetSuite id) is passed. The single-
+ * customer form feeds statement printing from the Customer Record page.
+ */
+export async function fetchOpenArInvoices(entityId?: string): Promise<{ invoices: OpenArInvoice[]; unpaidColumn: boolean }> {
+  if (entityId && !/^\d{1,15}$/.test(entityId)) throw new Error('Invalid entity id');
   // ORDER BY keeps suiteqlQueryAll's offset paging deterministic (unordered
   // pages can duplicate/drop rows past 1000 — see the CLAUDE.md domain note).
   const select = (withUnpaid: boolean) => `
     SELECT t.id, t.tranid, t.trandate, t.duedate, t.otherrefnum, t.foreigntotal${withUnpaid ? ', t.foreignamountunpaid' : ''}, t.entity, c.companyname AS customer
     FROM transaction t
     LEFT JOIN customer c ON c.id = t.entity
-    WHERE t.type = 'CustInvc' AND t.status = 'A'
+    WHERE t.type = 'CustInvc' AND t.status = 'A'${entityId ? ` AND t.entity = ${entityId}` : ''}
     ORDER BY t.id
   `;
   let rows: any[];
