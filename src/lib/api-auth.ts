@@ -162,6 +162,25 @@ export async function requireAdmin(req: NextRequest): Promise<AuthResult> {
 }
 
 /**
+ * Verify the request has a valid session AND the user can see company
+ * financials: super_admin or executive ONLY (not regular admin/staff),
+ * matching the `financials` feature in src/lib/features.ts. `executive` is a
+ * standalone role outside INTERNAL_STAFF_ROLES, so requireStaff can't gate
+ * these routes.
+ */
+export async function requireFinancials(req: NextRequest): Promise<AuthResult> {
+  const auth = await requireAuth(req);
+  if (auth.error) return auth;
+
+  const roles = profileRoles(auth.profile);
+  if (!(roles.includes('super_admin') || roles.includes('executive'))) {
+    return { user: auth.user, profile: auth.profile, error: NextResponse.json({ error: 'Forbidden' }, { status: 403 }) };
+  }
+
+  return auth;
+}
+
+/**
  * Verify the request has a valid session AND the user has one of the specified roles.
  */
 export async function requireRole(req: NextRequest, allowedRoles: string[]): Promise<AuthResult> {

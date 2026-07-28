@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { suiteqlQueryAll, getAccountBalancesFromRestlet } from '@/lib/netsuite';
-import { requireAuth } from '@/lib/api-auth';
+import { requireFinancials } from '@/lib/api-auth';
+import { fetchOpenArInvoices, computeArAging, fetchAccountGroups } from '@/lib/financials-data';
 
 export const dynamic = 'force-dynamic';
 
@@ -9,15 +9,18 @@ export const dynamic = 'force-dynamic';
  *
  * The executive P&L snapshot behind the Home → Financials tab: A/R aging,
  * A/P, cash + credit-card balances, and net position — all from NetSuite.
+ * The transaction lists behind each number live in the sibling routes
+ * (./ar-invoices, ./ap-bills, ./accounts, ./invoice-pdf) and share the same
+ * data helpers (src/lib/financials-data.ts) so the drill-downs always
+ * reconcile with these tiles.
  *
  * Access is super_admin or executive ONLY (not regular admin) — matching the
- * `financials` feature in src/lib/features.ts. We can't use requireStaff here
- * because `executive` is a standalone role outside INTERNAL_STAFF_ROLES, so we
- * authorize explicitly after a plain authenticated+approved check.
+ * `financials` feature in src/lib/features.ts (requireFinancials).
  *
  * Sourcing:
  *  - A/R = open customer invoices, aged by due date (SuiteQL — the role can
- *    read invoices, so this reconciles to the A/R control account).
+ *    read invoices, so this reconciles to the A/R control account). Aged by
+ *    open balance when foreignamountunpaid is available, else invoice total.
  *  - Cash / Card / A/P = GL account balances from the financials RESTlet
  *    (scripts/netsuite-financials-restlet.js), keyed by internal ID in env
  *    (NETSUITE_BANK_ACCOUNT_IDS / NETSUITE_CARD_ACCOUNT_ID /
@@ -29,66 +32,14 @@ export const dynamic = 'force-dynamic';
  *    wrong number; A/R is unaffected.
  */
 
-function rolesOf(profile: any): string[] {
-  return profile?.roles?.length ? profile.roles : (profile?.role ? [profile.role] : []);
-}
-
-const DAY_MS = 86_400_000;
-
-function num(v: any): number {
-  const n = Number(v);
-  return Number.isFinite(n) ? n : 0;
-}
-
-function daysPastDue(due: string | null): number | null {
-  if (!due) return null;
-  const t = Date.parse(due);
-  if (Number.isNaN(t)) return null;
-  const today = new Date();
-  const todayUtc = Date.UTC(today.getUTCFullYear(), today.getUTCMonth(), today.getUTCDate());
-  return Math.floor((todayUtc - t) / DAY_MS);
-}
-
-function idList(raw: string | undefined): string[] {
-  return (raw || '').split(',').map(s => s.trim()).filter(s => /^\d{1,18}$/.test(s));
-}
-
 async function loadFinancials(debug: boolean) {
   // ── A/R: open customer invoices, aged by due date ──────────────────────
-  const arRows = await suiteqlQueryAll(`
-    SELECT t.id, t.duedate, t.foreigntotal AS amount, c.companyname AS customer
-    FROM transaction t
-    LEFT JOIN customer c ON c.id = t.entity
-    WHERE t.type = 'CustInvc' AND t.status = 'A'
-  `);
-
-  const buckets = { current: 0, d1_30: 0, d31_60: 0, d61_90: 0, d90plus: 0 };
-  const overdue: { customer: string; amount: number; days: number }[] = [];
-  let arTotal = 0;
-  for (const r of arRows) {
-    const amt = num(r.amount);
-    arTotal += amt;
-    const d = daysPastDue(r.duedate);
-    if (d === null || d <= 0) { buckets.current += amt; continue; }
-    if (d <= 30) buckets.d1_30 += amt;
-    else if (d <= 60) buckets.d31_60 += amt;
-    else if (d <= 90) buckets.d61_90 += amt;
-    else buckets.d90plus += amt;
-    overdue.push({ customer: r.customer || 'Unknown', amount: amt, days: d });
-  }
-  const pastDue = buckets.d1_30 + buckets.d31_60 + buckets.d61_90 + buckets.d90plus;
-  const topOverdue = overdue.sort((a, b) => b.amount - a.amount).slice(0, 6);
+  const { invoices } = await fetchOpenArInvoices();
+  const aging = computeArAging(invoices);
 
   // ── Cash / Card / A/P — account balances via the financials RESTlet ────
-  const bankIds = idList(process.env.NETSUITE_BANK_ACCOUNT_IDS);
-  const cardIds = idList(process.env.NETSUITE_CARD_ACCOUNT_ID);
-  const apIds = idList(process.env.NETSUITE_AP_ACCOUNT_IDS);
-  const allIds = [...new Set([...bankIds, ...cardIds, ...apIds])];
-
-  const balResult = await getAccountBalancesFromRestlet(allIds);
-  const balancesOk = balResult.success;
-  const bals = balResult.balances || {};
-  const bal = (id: string) => num(bals[id]?.balance);
+  const acct = await fetchAccountGroups();
+  const balancesOk = acct.success;
 
   let cash: number | null = null;
   let cardOwed: number | null = null;
@@ -96,39 +47,41 @@ async function loadFinancials(debug: boolean) {
   if (balancesOk) {
     // Assets read positive; liability "owed" is the magnitude (a card in
     // credit — negative — isn't a payable, so it's excluded).
-    cash = bankIds.reduce((s, id) => s + bal(id), 0);
-    cardOwed = cardIds.reduce((s, id) => { const owed = Math.abs(bal(id)); return s + (bal(id) > 0.005 ? owed : 0); }, 0);
-    vendorBills = apIds.reduce((s, id) => s + Math.abs(bal(id)), 0);
+    cash = acct.bank.reduce((s, a) => s + (a.balance || 0), 0);
+    cardOwed = acct.card.reduce((s, a) => s + ((a.balance || 0) > 0.005 ? Math.abs(a.balance || 0) : 0), 0);
+    vendorBills = acct.ap.reduce((s, a) => s + Math.abs(a.balance || 0), 0);
   }
 
   const apTotal = balancesOk ? (vendorBills || 0) + (cardOwed || 0) : null;
-  const net = balancesOk ? (cash || 0) + arTotal - (apTotal || 0) : null;
+  const net = balancesOk ? (cash || 0) + aging.total - (apTotal || 0) : null;
 
   return {
-    ar: { total: arTotal, pastDue, openCount: arRows.length, buckets, topOverdue },
+    ar: {
+      total: aging.total,
+      pastDue: aging.pastDue,
+      openCount: aging.openCount,
+      buckets: aging.buckets,
+      topOverdue: aging.topOverdue,
+    },
     ap: { vendorBills, cardOwed, total: apTotal },
     cash,
     net,
     config: {
       balancesOk,
-      balancesError: balancesOk ? null : balResult.error || null,
-      bankConfigured: bankIds.length > 0,
-      cardConfigured: cardIds.length > 0,
-      apConfigured: apIds.length > 0,
+      balancesError: balancesOk ? null : acct.error || null,
+      bankConfigured: acct.bank.length > 0,
+      cardConfigured: acct.card.length > 0,
+      apConfigured: acct.ap.length > 0,
     },
-    ...(debug ? { debug: { balances: bals, bankIds, cardIds, apIds } } : {}),
+    ...(debug ? { debug: { accounts: acct } } : {}),
   };
 }
 
 export async function GET(req: NextRequest) {
-  const auth = await requireAuth(req);
+  const auth = await requireFinancials(req);
   if (auth.error) return auth.error;
 
-  const roles = rolesOf(auth.profile);
-  if (!(roles.includes('super_admin') || roles.includes('executive'))) {
-    return NextResponse.json({ error: 'Forbidden' }, { status: 403 });
-  }
-
+  const roles: string[] = auth.profile?.roles?.length ? auth.profile.roles : [auth.profile?.role];
   const debug = req.nextUrl.searchParams.get('debug') === '1' && roles.includes('super_admin');
 
   try {

@@ -20,14 +20,13 @@ const SENSITIVE_DIRS = [
 ];
 
 // Deliberate exceptions, with the reason they are safe as-is.
+// (The executive financials routes use requireFinancials — super_admin/
+// executive only, which requireRole can't express since it auto-passes any
+// admin — so they pass this check without an exemption.)
 const ALLOWLIST = new Set([
   // External installer companies log field scans by design; the route
   // enforces approved-account + non-customer-role checks itself.
   'src/app/api/scans/log/route.ts',
-  // Executive financials: requireAuth + an explicit super_admin/executive
-  // check. requireRole can't express this — it auto-passes any admin, but
-  // regular admins must NOT see the P&L.
-  'src/app/api/reports/financials/route.ts',
 ]);
 
 const repoRoot = join(__dirname, '..', '..');
