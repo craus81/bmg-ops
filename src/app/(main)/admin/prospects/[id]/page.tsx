@@ -189,6 +189,12 @@ export default function CustomerRecordPage() {
   const [stInvoices, setStInvoices] = useState<OpenArInvoice[] | null>(null);
   const [stError, setStError] = useState<string | null>(null);
 
+  // Payments received + credit memos (financials RESTlet — the SuiteQL role
+  // can't see CustPymt). success:false carries the redeploy/config hint.
+  interface PaymentRow { id: string; tranid: string; date: string | null; type: 'payment' | 'credit'; amount: number; memo: string | null }
+  const [payments, setPayments] = useState<PaymentRow[] | null>(null);
+  const [paymentsNote, setPaymentsNote] = useState<string | null>(null);
+
   // Contact add/edit — saved through /api/prospects/contacts, which also
   // pushes the change to NetSuite when the record is linked.
   const emptyContactForm = { name: '', title: '', email: '', phone: '', is_decision_maker: false };
@@ -325,6 +331,19 @@ export default function CustomerRecordPage() {
     if (nsId) {
       loadDocs(nsId, false);
       loadStatement(nsId);
+      loadPayments(nsId);
+    }
+  };
+
+  const loadPayments = async (nsId: string) => {
+    try {
+      const res = await fetch(`/api/netsuite/customer-payments?customerId=${nsId}`);
+      const body = await res.json();
+      if (!res.ok) throw new Error(body?.error || `HTTP ${res.status}`);
+      if (!body.success) { setPaymentsNote(body.error || 'Payment history unavailable'); return; }
+      setPayments(body.transactions || []);
+    } catch (err: any) {
+      setPaymentsNote(err?.message || 'Payment history unavailable');
     }
   };
 
@@ -607,6 +626,32 @@ export default function CustomerRecordPage() {
               </div>
             ))}
           </div>
+
+          {(prospect?.netsuite_id || customer) && (
+            <div style={card}>
+              <div style={eyebrow}>Payments &amp; credits</div>
+              {paymentsNote && (
+                <div style={{ fontSize: '11.5px', color: 'var(--text-muted)', lineHeight: 1.5 }}>
+                  {/restlet/i.test(paymentsNote)
+                    ? <><span style={{ color: 'var(--warning)', fontWeight: 700 }}>Needs the updated NetSuite RESTlet.</span> {paymentsNote}</>
+                    : paymentsNote}
+                </div>
+              )}
+              {!payments && !paymentsNote && <div style={{ fontSize: '12px', color: 'var(--text-muted)' }}>Loading payment history…</div>}
+              {payments && payments.length === 0 && <div style={{ fontSize: '12px', color: 'var(--text-muted)' }}>No payments or credits on file.</div>}
+              {(payments || []).map(p => (
+                <div key={p.id} style={{ display: 'flex', alignItems: 'center', gap: '8px', padding: '7px 0', borderTop: '1px solid var(--border)', fontSize: '12.5px' }}>
+                  <span style={{ fontSize: '9px', fontWeight: 800, padding: '2px 7px', borderRadius: '5px', flexShrink: 0, width: '58px', textAlign: 'center', background: p.type === 'credit' ? 'rgba(167,139,250,0.12)' : 'var(--success-bg)', color: p.type === 'credit' ? '#a78bfa' : 'var(--success)' }}>
+                    {p.type === 'credit' ? 'CREDIT' : 'PAYMENT'}
+                  </span>
+                  <span style={{ fontWeight: 700, color: 'var(--text-primary)', flexShrink: 0 }}>{p.tranid}</span>
+                  <span style={{ color: 'var(--text-muted)', flexShrink: 0, whiteSpace: 'nowrap' }}>{fmtDate(p.date)}</span>
+                  <span style={{ flex: 1, minWidth: 0, color: 'var(--text-muted)', fontSize: '11px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{p.memo || ''}</span>
+                  <span style={{ fontWeight: 700, fontVariantNumeric: 'tabular-nums', flexShrink: 0 }}>{usd2(p.amount)}</span>
+                </div>
+              ))}
+            </div>
+          )}
 
           {reminders.length > 0 && (
             <div style={card}>
