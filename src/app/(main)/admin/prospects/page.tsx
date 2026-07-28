@@ -11,6 +11,7 @@ import { DropZone } from '@/components/DropZone';
 import DropboxProofSearch from '@/components/DropboxProofSearch';
 import { exportProspectPDF } from '@/lib/prospect-pdf';
 import { downloadXlsx } from '@/lib/xlsx-export';
+import { fetchAllRows } from '@/lib/fetch-all';
 
 interface Prospect {
   id: string;
@@ -123,6 +124,12 @@ export default function ProspectsPage() {
   const [openQuoteFilter, setOpenQuoteFilter] = useState<boolean>(false);
   const [openQuoteCustomers, setOpenQuoteCustomers] = useState<Set<string>>(new Set());
   const [exporting, setExporting] = useState(false);
+
+  // Pipeline-stage filter, deep-linked from the dashboard's Sales band
+  // (?stage=lead|quoted|negotiating|won|lost, or 'open' = any unclosed
+  // stage). '' = off. Opportunity stages load lazily on first activation.
+  const [stageFilter, setStageFilter] = useState<string>('');
+  const [oppStagesByProspect, setOppStagesByProspect] = useState<Record<string, Set<string>> | null>(null);
 
   // Detail data (loaded on expand)
   const [contacts, setContacts] = useState<Record<string, Contact[]>>({});
@@ -254,25 +261,67 @@ export default function ProspectsPage() {
     setOpenQuoteCustomers(names);
   };
 
-  // Deep link from notifications/search: reset any filter that could hide
-  // the record, expand it, and scroll it into view — without the scroll a
-  // deep link into a long A-Z list looks like it just opened the CRM.
+  // Deep link from notifications/search/dashboard: ?id=<prospect uuid> or
+  // ?ns=<NetSuite customer id> (dashboard Top customers). Reset any filter
+  // that could hide the record, expand it, and scroll it into view — without
+  // the scroll a deep link into a long A-Z list looks like it just opened
+  // the CRM.
   useEffect(() => {
     if (loading) return;
     const prospectId = searchParams.get('id');
-    if (!prospectId || !prospects.some(p => p.id === prospectId)) return;
+    const nsId = searchParams.get('ns');
+    const target = prospectId
+      ? prospects.find(p => p.id === prospectId)
+      : nsId ? prospects.find(p => p.netsuite_id === nsId) : undefined;
+    if (!target) return;
     setStatusFilter('all');
     setTagFilter('');
     setOwnerFilter('all');
     setSpendTierFilter('all');
     setOpenQuoteFilter(false);
+    setStageFilter('');
     setSearch('');
-    if (expandedId !== prospectId) toggleExpand(prospectId);
+    if (expandedId !== target.id) toggleExpand(target.id);
     setTimeout(() => {
-      document.getElementById(`prospect-${prospectId}`)?.scrollIntoView({ behavior: 'smooth', block: 'center' });
+      document.getElementById(`prospect-${target.id}`)?.scrollIntoView({ behavior: 'smooth', block: 'center' });
     }, 200);
   // eslint-disable-next-line react-hooks/exhaustive-deps -- intentional: load once on mount
   }, [loading, searchParams]);
+
+  // Dashboard Sales-band deep links: ?stage= filters to prospects with an
+  // opportunity in that pipeline stage, ?sort= pre-sorts the list (e.g.
+  // ytd_spend for Top customers), ?q= prefills search — the fallback when
+  // ?ns= doesn't match a CRM record (customer synced but not in the CRM).
+  useEffect(() => {
+    if (loading) return;
+    const sort = searchParams.get('sort');
+    if (sort && ['company', 'total_spend', 'ytd_spend', 'last_order'].includes(sort)) setSortBy(sort as SortBy);
+    const stage = searchParams.get('stage');
+    if (stage && (stage === 'open' || stage in OPP_STAGES)) setStageFilter(stage);
+    const q = searchParams.get('q');
+    const nsId = searchParams.get('ns');
+    if (q && !(nsId && prospects.some(p => p.netsuite_id === nsId))) setSearch(q);
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- intentional: apply once after load
+  }, [loading, searchParams]);
+
+  // Opportunity stages for the pipeline filter — one paginated read of
+  // prospect_opportunities, loaded the first time the filter activates.
+  useEffect(() => {
+    if (!stageFilter || oppStagesByProspect) return;
+    (async () => {
+      const { data: rows, error } = await fetchAllRows<{ prospect_id: string; stage: string }>((from, to) =>
+        supabase.from('prospect_opportunities').select('prospect_id, stage').order('id').range(from, to));
+      if (error) {
+        // Filtering against a partial read would hide real deals — drop the filter.
+        setStageFilter('');
+        return;
+      }
+      const map: Record<string, Set<string>> = {};
+      for (const r of rows) (map[r.prospect_id] = map[r.prospect_id] || new Set()).add(r.stage);
+      setOppStagesByProspect(map);
+    })();
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- intentional: load once when the filter first activates
+  }, [stageFilter, oppStagesByProspect]);
 
   // Load metrics once prospects are loaded
   useEffect(() => {
@@ -633,6 +682,11 @@ export default function ProspectsPage() {
   // Filter
   const filtered = prospects.filter(p => {
     if (statusFilter !== 'all' && p.status !== statusFilter) return false;
+    if (stageFilter && oppStagesByProspect) {
+      const want = stageFilter === 'open' ? ['lead', 'quoted', 'negotiating'] : [stageFilter];
+      const stages = oppStagesByProspect[p.id];
+      if (!stages || !want.some(w => stages.has(w))) return false;
+    }
     if (tagFilter && !(tags[p.id] || []).some(t => t.tag === tagFilter)) return false;
     if (ownerFilter !== 'all' && p.created_by !== ownerFilter) return false;
     if (openQuoteFilter && !openQuoteCustomers.has((p.company_name || '').toLowerCase())) return false;
@@ -862,6 +916,14 @@ export default function ProspectsPage() {
             <option value="">All Tags</option>
             {allTags.map(t => <option key={t} value={t}>{t}</option>)}
           </select>
+        )}
+        {stageFilter && (
+          <button onClick={() => setStageFilter('')} title="Clear the pipeline-stage filter" style={{
+            padding: '5px 10px', borderRadius: '6px', fontSize: '10px', fontWeight: 700,
+            background: 'rgba(96,165,250,0.12)', border: '1px solid rgba(96,165,250,0.4)', color: '#60a5fa', cursor: 'pointer',
+          }}>
+            Pipeline: {stageFilter === 'open' ? 'Open deals' : OPP_STAGES[stageFilter] || stageFilter}{!oppStagesByProspect ? ' …' : ''} ✕
+          </button>
         )}
       </div>
 
