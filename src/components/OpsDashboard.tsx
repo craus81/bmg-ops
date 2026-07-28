@@ -64,7 +64,7 @@ interface DashData {
   sales: {
     stages: { stage: string; label: string; count: number; value: number }[];
     wonValue: number;
-    topCustomers: { name: string; ytd: number }[];
+    topCustomers: { name: string; ytd: number; nsId: string | null }[];
     openQuotes: { count: number; value: number };
     estimatesWeek: number;
   };
@@ -195,7 +195,7 @@ export default function OpsDashboard() {
         .order('created_at', { ascending: false }).limit(50),
       // Sales
       supabase.from('prospect_opportunities').select('stage, value'),
-      supabase.from('customers').select('company_name, ytd_spend').eq('active', true).gt('ytd_spend', 0).order('ytd_spend', { ascending: false }).limit(4),
+      supabase.from('customers').select('netsuite_id, company_name, ytd_spend').eq('active', true).gt('ytd_spend', 0).order('ytd_spend', { ascending: false }).limit(4),
       supabase.from('wrap_quotes').select('total').in('status', ['draft', 'sent']),
       supabase.from('estimates').select('*', { count: 'exact', head: true }).gte('created_at', weekAgo.toISOString()),
       // Unpriced pay — credits with no dollar amount. Accumulating unseen is
@@ -450,7 +450,7 @@ export default function OpsDashboard() {
       })),
       sales: {
         stages: stageAgg, wonValue,
-        topCustomers: rows(custRes).map((c: any) => ({ name: c.company_name, ytd: Number(c.ytd_spend) || 0 })),
+        topCustomers: rows(custRes).map((c: any) => ({ name: c.company_name, ytd: Number(c.ytd_spend) || 0, nsId: c.netsuite_id ? String(c.netsuite_id) : null })),
         openQuotes: { count: quotes.length, value: quotes.reduce((s: number, q: any) => s + (q.total || 0), 0) },
         estimatesWeek: count(estRes),
       },
@@ -583,7 +583,7 @@ export default function OpsDashboard() {
           {d.poBacklog.count} open POs{d.poBacklog.total > 0 ? ` · ${Math.round(((d.poBacklog.total - d.poBacklog.remaining) / d.poBacklog.total) * 100)}% delivered` : ''}
         </div>
       </button>
-      <button onClick={() => router.push('/admin/prospects')} style={{ ...card, textAlign: 'left', padding: '14px 16px 12px', cursor: 'pointer' }}>
+      <button onClick={() => router.push('/admin/prospects?stage=open')} style={{ ...card, textAlign: 'left', padding: '14px 16px 12px', cursor: 'pointer' }}>
         <div style={{ fontSize: '10px', fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.7px', color: 'var(--text-muted)' }}>Sales pipeline</div>
         <div style={{ fontSize: '25px', fontWeight: 800, letterSpacing: '-0.5px', marginTop: '4px', color: 'var(--text-primary)', fontVariantNumeric: 'tabular-nums' }}>
           {fmtMoney(d.pipelineValue.total)}
@@ -740,33 +740,45 @@ export default function OpsDashboard() {
         <div style={{ padding: '12px 16px', borderRight: '1px solid var(--border)' }}>
           <div style={{ fontSize: '10px', fontWeight: 800, textTransform: 'uppercase', letterSpacing: '0.6px', color: 'var(--text-muted)', marginBottom: '8px' }}>Pipeline by stage</div>
           {d.sales.stages.map(s => (
-            <div key={s.stage} style={{ marginBottom: '6px' }}>
+            <button key={s.stage} onClick={() => router.push(`/admin/prospects?stage=${s.stage}`)}
+              title={`See ${s.label.toLowerCase()} deals in the CRM`}
+              style={{ display: 'block', width: '100%', marginBottom: '6px', padding: 0, background: 'none', border: 'none', cursor: 'pointer', textAlign: 'left' }}>
               <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '12px', fontVariantNumeric: 'tabular-nums' }}>
                 <span style={{ color: 'var(--text-secondary)', fontWeight: 600 }}>{s.label} ({s.count})</span>
-                <span style={{ fontWeight: 800, color: 'var(--text-primary)' }}>{fmtK(s.value)}</span>
+                <span style={{ fontWeight: 800, color: 'var(--text-primary)' }}>{fmtK(s.value)} <span style={{ color: 'var(--text-muted)', fontWeight: 600 }}>›</span></span>
               </div>
               <div style={{ height: '4px', background: 'var(--progress-track)', borderRadius: '2px', marginTop: '2px' }}>
                 <div style={{ height: '100%', borderRadius: '2px', background: '#60a5fa', width: `${d.pipelineValue.total > 0 ? Math.round((s.value / d.pipelineValue.total) * 100) : 0}%` }} />
               </div>
-            </div>
+            </button>
           ))}
           {d.sales.wonValue > 0 && (
-            <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '12px', marginTop: '8px' }}>
+            <button onClick={() => router.push('/admin/prospects?stage=won')}
+              style={{ display: 'flex', justifyContent: 'space-between', width: '100%', fontSize: '12px', marginTop: '8px', padding: 0, background: 'none', border: 'none', cursor: 'pointer' }}>
               <span style={{ color: 'var(--text-muted)', fontWeight: 600 }}>Won (all time)</span>
-              <span style={{ fontWeight: 800, color: 'var(--success)' }}>{fmtK(d.sales.wonValue)}</span>
-            </div>
+              <span style={{ fontWeight: 800, color: 'var(--success)', fontVariantNumeric: 'tabular-nums' }}>{fmtK(d.sales.wonValue)} <span style={{ color: 'var(--text-muted)', fontWeight: 600 }}>›</span></span>
+            </button>
           )}
         </div>
-        <button onClick={() => router.push('/admin/prospects')} style={{ padding: '12px 16px', borderRight: '1px solid var(--border)', background: 'transparent', border: 'none', cursor: 'pointer', textAlign: 'left' }}>
-          <div style={{ fontSize: '10px', fontWeight: 800, textTransform: 'uppercase', letterSpacing: '0.6px', color: 'var(--text-muted)', marginBottom: '8px' }}>Top customers · YTD (NetSuite)</div>
+        <div style={{ padding: '12px 16px', borderRight: '1px solid var(--border)' }}>
+          <button onClick={() => router.push('/admin/prospects?sort=ytd_spend')}
+            title="Open the CRM sorted by YTD spend"
+            style={{ display: 'block', width: '100%', fontSize: '10px', fontWeight: 800, textTransform: 'uppercase', letterSpacing: '0.6px', color: 'var(--text-muted)', marginBottom: '8px', padding: 0, background: 'none', border: 'none', cursor: 'pointer', textAlign: 'left' }}>
+            Top customers · YTD (NetSuite) ›
+          </button>
           {d.sales.topCustomers.length === 0 && <div style={{ fontSize: '12px', color: 'var(--text-muted)' }}>No YTD spend synced yet</div>}
           {d.sales.topCustomers.map(c => (
-            <div key={c.name} style={{ display: 'flex', justifyContent: 'space-between', fontSize: '12px', padding: '3px 0', fontVariantNumeric: 'tabular-nums' }}>
+            <button key={c.name}
+              onClick={() => router.push(c.nsId
+                ? `/admin/prospects?ns=${encodeURIComponent(c.nsId)}&q=${encodeURIComponent(c.name)}`
+                : `/admin/prospects?q=${encodeURIComponent(c.name)}`)}
+              title={`Open ${c.name} in the CRM`}
+              style={{ display: 'flex', justifyContent: 'space-between', width: '100%', fontSize: '12px', padding: '3px 0', background: 'none', border: 'none', cursor: 'pointer', fontVariantNumeric: 'tabular-nums' }}>
               <span style={{ color: 'var(--text-secondary)', fontWeight: 600, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', paddingRight: '8px' }}>{c.name}</span>
-              <span style={{ fontWeight: 800, color: 'var(--text-primary)' }}>{fmtK(c.ytd)}</span>
-            </div>
+              <span style={{ fontWeight: 800, color: 'var(--text-primary)' }}>{fmtK(c.ytd)} <span style={{ color: 'var(--text-muted)', fontWeight: 600 }}>›</span></span>
+            </button>
           ))}
-        </button>
+        </div>
         <div style={{ padding: '12px 16px' }}>
           <div style={{ fontSize: '10px', fontWeight: 800, textTransform: 'uppercase', letterSpacing: '0.6px', color: 'var(--text-muted)', marginBottom: '8px' }}>Quotes &amp; estimates</div>
           <button onClick={() => router.push('/admin/wrap-quote')} style={{ display: 'flex', justifyContent: 'space-between', width: '100%', fontSize: '12px', padding: '3px 0', background: 'none', border: 'none', cursor: 'pointer', fontVariantNumeric: 'tabular-nums' }}>
