@@ -102,7 +102,7 @@ const labelStyle: React.CSSProperties = {
 export default function ProspectsPage() {
   const router = useRouter();
   const searchParams = useSearchParams();
-  const { user, isAdmin, isSales, hasFeature, loading: authLoading } = useAuth();
+  const { user, profile, isAdmin, isSales, hasFeature, loading: authLoading } = useAuth();
   const supabase = createClient();
   const dialog = useDialog();
 
@@ -237,14 +237,21 @@ export default function ProspectsPage() {
   const [scanning, setScanning] = useState(false);
   const cardInputRef = useRef<HTMLInputElement>(null);
 
+  const crmLoadStarted = useRef(false);
   useEffect(() => {
     if (authLoading) return; // role flags aren't resolved until auth finishes loading
+    // Cold-boot deep links (notification ?id= links, Record-page back links):
+    // wait for the profile row before judging roles, or a legitimate user
+    // gets bounced to /home while their roles are still in flight.
+    if (user && !profile) return;
     if (!hasFeature('prospects') && !isAdmin) { router.push('/home'); return; }
+    if (crmLoadStarted.current) return;
+    crmLoadStarted.current = true;
     loadProspects();
     loadProfiles();
     loadOpenQuoteCustomers();
-  // eslint-disable-next-line react-hooks/exhaustive-deps -- intentional: load once on mount
-  }, [authLoading]);
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- intentional: load once when auth + profile resolve
+  }, [authLoading, user, profile]);
 
   // Preload customer names with at least one open quote so the
   // "open quote" filter doesn't need to round-trip per prospect.

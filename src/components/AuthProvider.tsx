@@ -93,7 +93,12 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         // real sign-ins go through a full page navigation and hit init().
         loadProfileAndOverrides(u.id).catch(() => {});
       }
-      if (mountedRef.current) setLoading(false);
+      // INITIAL_SESSION fires while init() is still awaiting the profile
+      // row. Flipping `loading` here would let role-gated pages evaluate
+      // their gates with a user but NO roles yet, silently bouncing cold
+      // deep links (e.g. the Customer Record in a fresh tab) to /home.
+      // init() always flips `loading` itself once the profile resolves.
+      if (mountedRef.current && !(u && event === 'INITIAL_SESSION')) setLoading(false);
     });
 
     return () => {
