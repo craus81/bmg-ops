@@ -890,6 +890,46 @@ export async function updateContact(
 }
 
 /**
+ * Delete a NetSuite contact record.
+ * DELETE /services/rest/record/v1/contact/{id}. A 404 counts as success —
+ * the contact is already gone, which is the state the caller wants.
+ */
+export async function deleteContact(contactId: string): Promise<{ success: boolean; error?: string }> {
+  const config = getConfig();
+  const baseUrl = getBaseUrl(config.accountId);
+  const url = `${baseUrl}/services/rest/record/v1/contact/${contactId}`;
+  const { oauth, token } = createOAuth(config);
+  const authHeader = getAuthHeader(oauth, token, { url, method: 'DELETE' });
+
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), 25000);
+  try {
+    const response = await fetch(url, {
+      method: 'DELETE',
+      headers: { 'Authorization': authHeader, 'Prefer': 'respondAsync=false' },
+      signal: controller.signal,
+    });
+
+    if (!response.ok && response.status !== 404) {
+      const text = await response.text();
+      let detail = text.slice(0, 400);
+      try {
+        const parsed = JSON.parse(text);
+        detail = parsed?.['o:errorDetails']?.[0]?.detail || parsed?.title || detail;
+      } catch { /* keep raw text */ }
+      return { success: false, error: `NetSuite ${response.status}: ${detail}` };
+    }
+
+    return { success: true };
+  } catch (e: any) {
+    const msg = e?.name === 'AbortError' ? 'NetSuite request timed out' : e?.message || 'Unknown error';
+    return { success: false, error: msg };
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+/**
  * Create a vendor record in NetSuite (for CNI installer payouts / bills).
  * The returned internalId is the numeric Internal ID that vendor-bill
  * creation needs in `entity.id` — store THAT, never the Entity ID/name

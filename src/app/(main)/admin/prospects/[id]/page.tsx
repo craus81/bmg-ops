@@ -234,6 +234,33 @@ export default function CustomerRecordPage() {
     setCFormOpen(true);
   };
 
+  const removeContact = async () => {
+    if (!cEditId || cSaving) return;
+    const target = contacts.find(c => c.id === cEditId);
+    if (!target) return;
+    const linked = !!target.netsuite_contact_id;
+    const ok = await dialog.confirm(
+      linked
+        ? `Delete ${target.name}? This also deletes the contact in NetSuite — otherwise the next contact sync would bring it back.`
+        : `Delete ${target.name}?`,
+      { destructive: true, confirmLabel: 'Delete', title: 'Delete contact' },
+    );
+    if (!ok) return;
+    setCSaving(true);
+    try {
+      const res = await fetch(`/api/prospects/contacts?id=${cEditId}`, { method: 'DELETE' });
+      const body = await res.json();
+      if (!res.ok || !body.success) throw new Error(body?.error || `HTTP ${res.status}`);
+      setContacts(prev => prev.filter(c => c.id !== cEditId));
+      setCFormOpen(false);
+      setCEditId(null);
+      setCForm(emptyContactForm);
+    } catch (err: any) {
+      await dialog.alert(`Could not delete the contact: ${err?.message || 'unknown error'}`);
+    }
+    setCSaving(false);
+  };
+
   const saveContact = async () => {
     if (!prospect || !cForm.name.trim() || cSaving) return;
     setCSaving(true);
@@ -791,6 +818,13 @@ export default function CustomerRecordPage() {
                     background: cForm.name.trim() ? '#22c55e' : 'var(--border)', color: '#fff', border: 'none',
                     cursor: cForm.name.trim() ? 'pointer' : 'default', opacity: cSaving ? 0.6 : 1,
                   }}>{cSaving ? 'Saving…' : cEditId ? 'Save changes' : 'Add contact'}</button>
+                  {cEditId && (
+                    <button onClick={removeContact} disabled={cSaving} title="Delete this contact" style={{
+                      padding: '8px 14px', borderRadius: '7px', fontSize: '11.5px', fontWeight: 700,
+                      background: 'var(--error-bg)', border: '1px solid var(--error-border)', color: 'var(--error)',
+                      cursor: 'pointer', opacity: cSaving ? 0.6 : 1,
+                    }}>Delete</button>
+                  )}
                   {cEditId && (
                     <button onClick={() => { setCFormOpen(false); setCEditId(null); }} style={{ ...btnSm, padding: '8px 14px' }}>Cancel</button>
                   )}
