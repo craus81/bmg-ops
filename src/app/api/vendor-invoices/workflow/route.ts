@@ -5,7 +5,7 @@ import { validateBody, z } from '@/lib/validate';
 import { createVendorBill, findLocation } from '@/lib/netsuite';
 import { logAudit } from '@/lib/audit';
 import { notifyMany } from '@/lib/notify';
-import { financeUserIds } from '@/lib/ap';
+import { financeUserIds, apSubmitterUrl } from '@/lib/ap';
 
 export const dynamic = 'force-dynamic';
 // NetSuite bill creation is slow.
@@ -31,16 +31,7 @@ const PostSchema = z.union([
   z.object({ action: z.literal('mark_paid'), id: z.string().uuid() }),
 ]);
 
-/**
- * Where a decision notification should send the submitter: installers (who
- * submit from the CNI portal) can't open admin pages.
- */
-async function submitterUrl(submitterId: string): Promise<string> {
-  const { data } = await service
-    .from('profiles').select('role, roles').eq('id', submitterId).maybeSingle();
-  const roles: string[] = data?.roles?.length ? data.roles : [data?.role];
-  return roles.includes('installer') ? '/installer/invoices' : '/admin/ap';
-}
+const submitterUrl = (submitterId: string) => apSubmitterUrl(service, submitterId);
 
 /**
  * Vendor-invoice payment lifecycle:
@@ -112,6 +103,21 @@ export async function POST(req: NextRequest) {
           title: `Approved: ${label}`,
           body: `Payment of $${amount.toFixed(2)} was approved.`,
           url: await submitterUrl(invoice.submitted_by),
+          channels: ['in_app', 'push'],
+          forceChannels: true,
+        });
+      }
+      // The rest of the finance team hears it's ready to bill — the
+      // approver isn't always the one who creates the NetSuite bill.
+      // (financeUserIds already excludes the approver; the submitter got
+      // their own "Approved" note above.)
+      const billers = (await financeUserIds(service, actorId)).filter(id => id !== invoice.submitted_by);
+      if (billers.length > 0) {
+        await notifyMany(billers, {
+          type: 'ap_approved',
+          title: `Ready to bill: ${label}`,
+          body: `$${amount.toFixed(2)} to ${invoice.vendor_name} was approved — create the NetSuite bill from the AP queue.`,
+          url: '/admin/ap',
           channels: ['in_app', 'push'],
           forceChannels: true,
         });
@@ -202,6 +208,19 @@ export async function POST(req: NextRequest) {
         title: `Paid: ${label}`,
         body: `Payment of $${amount.toFixed(2)} has been sent.`,
         url: await submitterUrl(invoice.submitted_by),
+        channels: ['in_app', 'push'],
+        forceChannels: true,
+      });
+    }
+    // The rest of the finance team sees the queue shrink (same note the
+    // NetSuite payment sync sends when it detects a bill paid there).
+    const financeRest = (await financeUserIds(service, actorId)).filter(id => id !== invoice.submitted_by);
+    if (financeRest.length > 0) {
+      await notifyMany(financeRest, {
+        type: 'ap_paid',
+        title: `Bill paid: ${label}`,
+        body: `$${amount.toFixed(2)} to ${invoice.vendor_name} was marked paid.`,
+        url: '/admin/ap',
         channels: ['in_app', 'push'],
         forceChannels: true,
       });

@@ -6,6 +6,7 @@ import { syncPoInvoices } from '@/lib/po-invoice-sync';
 import { verifyPoInvoiceQuantities } from '@/lib/po-invoice-verify';
 import { syncVendorPos } from '@/lib/vendor-po-sync';
 import { syncInventoryQuantities } from '@/lib/inventory-sync';
+import { syncVendorBillPayments } from '@/lib/vendor-bill-sync';
 import { recordHeartbeat } from '@/lib/system-health';
 
 export const dynamic = 'force-dynamic';
@@ -378,6 +379,18 @@ export async function GET(req: NextRequest) {
   } catch (err: any) {
     console.error('[cron] Inventory sweep error:', err.message);
     results.inventory = { error: err.message };
+  }
+
+  // ═══════════ 3d. VENDOR BILL PAYMENT SWEEP ═══════════
+  // CNI vendor invoices waiting at "billed" get flipped to "paid" once
+  // NetSuite shows their vendor bill Paid In Full — with the submitter and
+  // finance notified — so the AP queue tracks reality without a manual
+  // "Mark Paid" for bills settled inside NetSuite.
+  try {
+    results.vendorBills = await syncVendorBillPayments(supabase);
+  } catch (err: any) {
+    console.error('[cron] Vendor bill payment sweep error:', err.message);
+    results.vendorBills = { error: err.message };
   }
 
   // ═══════════ 4. INVOICED-QUANTITY CHECK ═══════════
