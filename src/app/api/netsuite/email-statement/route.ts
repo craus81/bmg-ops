@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { createClient } from '@supabase/supabase-js';
 import { requireRole } from '@/lib/api-auth';
 import { safeIntId, SqlSafeError } from '@/lib/sql-safe';
-import { fetchOpenArInvoices, type OpenArInvoice } from '@/lib/financials-data';
+import { fetchStatementInvoices, type StatementInvoice, type StatementScope } from '@/lib/financials-data';
 import { getNetSuitePdf } from '@/lib/netsuite';
 import { sendEmailDetailed } from '@/lib/resend';
 
@@ -38,7 +38,7 @@ const fmtD = (iso: string | null) => {
   return `${Number(m)}/${Number(d)}/${y}`;
 };
 
-function statementEmailHtml(customer: string, invoices: OpenArInvoice[], customBody?: string, attachNote?: string): string {
+function statementEmailHtml(customer: string, invoices: StatementInvoice[], scope: StatementScope, rangeNote: string, customBody?: string, attachNote?: string): string {
   const total = invoices.reduce((s, i) => s + i.unpaid, 0);
   const pastDue = invoices.reduce((s, i) => s + (i.daysPastDue > 0 ? i.unpaid : 0), 0);
   const td = 'padding:7px 10px;border-bottom:1px solid #2a3644;font-size:13px;color:#f5f8fc;';
@@ -52,24 +52,24 @@ function statementEmailHtml(customer: string, invoices: OpenArInvoice[], customB
         <td style="${td}">${esc(i.tranid)}</td>
         <td style="${td}">${esc(i.po || '—')}</td>
         <td style="${td}">${esc(fmtD(i.dueDate))}</td>
-        <td style="${tdNum}${i.daysPastDue > 0 ? 'color:#f87171;font-weight:700;' : ''}">${i.daysPastDue > 0 ? `${i.daysPastDue}d` : '—'}</td>
+        <td style="${tdNum}${i.daysPastDue > 0 ? 'color:#f87171;font-weight:700;' : ''}">${i.status === 'paid' ? 'Paid' : i.daysPastDue > 0 ? `${i.daysPastDue}d late` : 'Open'}</td>
         <td style="${tdNum}">${usd(i.unpaid)}</td>
       </tr>`).join('');
 
   const intro = customBody && customBody.trim()
     ? esc(customBody).replace(/\n/g, '<br>')
-    : `Please find your current statement below${invoices.length ? ' — open invoices are attached as PDFs' : ''}.`;
+    : `Please find your current statement below${invoices.some(i => i.status === 'open') ? ' — open invoices are attached as PDFs' : ''}.`;
 
   return `
   <div style="background:#0f1722;padding:28px 16px;font-family:-apple-system,'Segoe UI',Helvetica,Arial,sans-serif;">
     <div style="max-width:640px;margin:0 auto;background:#16202e;border:1px solid #2a3644;border-radius:12px;padding:26px 26px 20px;">
       <div style="font-size:19px;font-weight:800;color:#f5f8fc;">BMG Fleet — Statement</div>
-      <div style="font-size:13px;color:#8899aa;margin-top:2px;">${esc(customer)} · as of ${esc(new Date().toLocaleDateString('en-US'))}</div>
+      <div style="font-size:13px;color:#8899aa;margin-top:2px;">${esc(customer)} · as of ${esc(new Date().toLocaleDateString('en-US'))} · ${scope === 'all' ? 'all invoices' : 'open items'}${esc(rangeNote)}</div>
       <div style="font-size:14px;color:#d5dde6;line-height:1.6;margin:16px 0;">${intro}</div>
       <table style="width:100%;border-collapse:collapse;margin-top:4px;">
         <thead><tr>
           <th style="${th}">Date</th><th style="${th}">Invoice #</th><th style="${th}">PO #</th>
-          <th style="${th}">Due</th><th style="${th}text-align:right;">Past due</th><th style="${th}text-align:right;">Balance</th>
+          <th style="${th}">Due</th><th style="${th}text-align:right;">Status</th><th style="${th}text-align:right;">Balance</th>
         </tr></thead>
         <tbody>${rows}</tbody>
         <tfoot><tr>
@@ -104,19 +104,24 @@ export async function POST(req: NextRequest) {
     if (recipients.length === 0 || recipients.length > 10) {
       return NextResponse.json({ error: 'Provide 1-10 valid recipient email addresses' }, { status: 400 });
     }
+    const scope: StatementScope = body?.scope === 'all' ? 'all' : 'open';
+    const dateRe = /^\d{4}-\d{2}-\d{2}$/;
+    const from = dateRe.test(String(body?.from || '')) ? String(body.from) : null;
+    const to = dateRe.test(String(body?.to || '')) ? String(body.to) : null;
+    const rangeNote = from || to ? ` (${from ? `from ${fmtD(from)}` : ''}${from && to ? ' ' : ''}${to ? `through ${fmtD(to)}` : ''})` : '';
 
-    const { invoices } = await fetchOpenArInvoices(customerId);
+    const { invoices } = await fetchStatementInvoices(customerId, { scope, from, to });
     if (invoices.length === 0) {
-      return NextResponse.json({ error: 'No open invoices — nothing to put on a statement' }, { status: 400 });
+      return NextResponse.json({ error: scope === 'open' ? 'No open invoices — nothing to put on a statement' : 'No invoices in that range' }, { status: 400 });
     }
     const customerName = invoices[0].customer;
 
-    // ── Attach invoice PDFs (best effort, capped) ─────────────────────────
+    // ── Attach OPEN invoices' PDFs (best effort, capped) ──────────────────
     const attachInvoices = body?.attachInvoices !== false;
     const attachments: { filename: string; content: Buffer; contentType: string }[] = [];
     const failedAttachments: string[] = [];
     if (attachInvoices) {
-      const toAttach = [...invoices]
+      const toAttach = invoices.filter(i => i.status === 'open')
         .sort((a, b) => b.daysPastDue - a.daysPastDue || (a.date || '').localeCompare(b.date || ''))
         .slice(0, MAX_ATTACH);
       for (const inv of toAttach) {
@@ -132,12 +137,13 @@ export async function POST(req: NextRequest) {
         }
       }
     }
+    const openCount = invoices.filter(i => i.status === 'open').length;
     const attachNote = [
-      attachInvoices && invoices.length > MAX_ATTACH ? `The ${Math.min(MAX_ATTACH, attachments.length)} most overdue invoices are attached; the table above covers all ${invoices.length}.` : '',
+      attachInvoices && openCount > MAX_ATTACH ? `The ${Math.min(MAX_ATTACH, attachments.length)} most overdue invoices are attached; the table above covers all ${invoices.length}.` : '',
       failedAttachments.length ? `PDFs unavailable for: ${failedAttachments.join(', ')}.` : '',
     ].filter(Boolean).join(' ');
 
-    const html = statementEmailHtml(customerName, invoices, body?.customBody, attachNote);
+    const html = statementEmailHtml(customerName, invoices, scope, rangeNote, body?.customBody, attachNote);
     const subject = `Statement — ${customerName} — ${new Date().toLocaleDateString('en-US')}`;
     const result = await sendEmailDetailed(recipients, subject, html, undefined, attachments);
     if (!result.ok) {

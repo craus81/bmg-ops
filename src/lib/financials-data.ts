@@ -116,51 +116,88 @@ export function arCustomerKey(inv: { entityId: string | null; customer: string }
 }
 
 /**
+ * Shared CustInvc query + row mapping. `extraWhere` is composed from
+ * pre-validated fragments only (numeric ids, regex-checked ISO dates).
+ * ORDER BY keeps suiteqlQueryAll's offset paging deterministic (unordered
+ * pages can duplicate/drop rows past 1000 — see the CLAUDE.md domain note).
+ */
+async function queryArInvoices(extraWhere: string): Promise<{ rows: any[]; unpaidColumn: boolean }> {
+  const select = (withUnpaid: boolean) => `
+    SELECT t.id, t.tranid, t.trandate, t.duedate, t.otherrefnum, t.status, t.foreigntotal${withUnpaid ? ', t.foreignamountunpaid' : ''}, t.entity, c.companyname AS customer
+    FROM transaction t
+    LEFT JOIN customer c ON c.id = t.entity
+    WHERE t.type = 'CustInvc'${extraWhere}
+    ORDER BY t.id
+  `;
+  try {
+    return { rows: await suiteqlQueryAll(select(true)), unpaidColumn: true };
+  } catch (e) {
+    if (!isQueryShapeError(e)) throw e;
+    return { rows: await suiteqlQueryAll(select(false)), unpaidColumn: false };
+  }
+}
+
+function mapArRow(r: any, unpaidColumn: boolean): OpenArInvoice & { status: 'open' | 'paid' } {
+  const status: 'open' | 'paid' = r.status === 'B' || /paid/i.test(String(r.status || '')) ? 'paid' : 'open';
+  const total = num(r.foreigntotal);
+  // Paid invoices carry no open balance — never let the totals fallback
+  // report a paid invoice as owing its full amount.
+  const unpaid = status === 'paid' ? 0
+    : unpaidColumn && r.foreignamountunpaid != null ? num(r.foreignamountunpaid) : total;
+  const dueDate = isoDate(r.duedate);
+  const days = status === 'open' ? daysPastDue(dueDate) : 0;
+  return {
+    id: String(r.id),
+    tranid: String(r.tranid || r.id),
+    date: isoDate(r.trandate),
+    dueDate,
+    po: r.otherrefnum ? String(r.otherrefnum) : null,
+    customer: r.customer || (r.entity != null ? `Customer #${r.entity}` : 'Unknown'),
+    entityId: r.entity != null ? String(r.entity) : null,
+    total,
+    unpaid,
+    daysPastDue: days,
+    bucket: bucketFor(days),
+    nsUrl: transactionUrl('custinvc', r.id),
+    status,
+  };
+}
+
+/**
  * Open customer invoices — the whole book, or one customer's when
- * `entityId` (a pre-validated numeric NetSuite id) is passed. The single-
- * customer form feeds statement printing from the Customer Record page.
+ * `entityId` (a pre-validated numeric NetSuite id) is passed. Feeds the
+ * Financials aging tiles and default (open-item) statements.
  */
 export async function fetchOpenArInvoices(entityId?: string): Promise<{ invoices: OpenArInvoice[]; unpaidColumn: boolean }> {
   if (entityId && !/^\d{1,15}$/.test(entityId)) throw new Error('Invalid entity id');
-  // ORDER BY keeps suiteqlQueryAll's offset paging deterministic (unordered
-  // pages can duplicate/drop rows past 1000 — see the CLAUDE.md domain note).
-  const select = (withUnpaid: boolean) => `
-    SELECT t.id, t.tranid, t.trandate, t.duedate, t.otherrefnum, t.foreigntotal${withUnpaid ? ', t.foreignamountunpaid' : ''}, t.entity, c.companyname AS customer
-    FROM transaction t
-    LEFT JOIN customer c ON c.id = t.entity
-    WHERE t.type = 'CustInvc' AND t.status = 'A'${entityId ? ` AND t.entity = ${entityId}` : ''}
-    ORDER BY t.id
-  `;
-  let rows: any[];
-  let unpaidColumn = true;
-  try {
-    rows = await suiteqlQueryAll(select(true));
-  } catch (e) {
-    if (!isQueryShapeError(e)) throw e;
-    unpaidColumn = false;
-    rows = await suiteqlQueryAll(select(false));
-  }
-  const invoices = rows.map((r): OpenArInvoice => {
-    const total = num(r.foreigntotal);
-    const unpaid = unpaidColumn && r.foreignamountunpaid != null ? num(r.foreignamountunpaid) : total;
-    const dueDate = isoDate(r.duedate);
-    const days = daysPastDue(dueDate);
-    return {
-      id: String(r.id),
-      tranid: String(r.tranid || r.id),
-      date: isoDate(r.trandate),
-      dueDate,
-      po: r.otherrefnum ? String(r.otherrefnum) : null,
-      customer: r.customer || (r.entity != null ? `Customer #${r.entity}` : 'Unknown'),
-      entityId: r.entity != null ? String(r.entity) : null,
-      total,
-      unpaid,
-      daysPastDue: days,
-      bucket: bucketFor(days),
-      nsUrl: transactionUrl('custinvc', r.id),
-    };
-  });
-  return { invoices, unpaidColumn };
+  const { rows, unpaidColumn } = await queryArInvoices(
+    ` AND t.status = 'A'${entityId ? ` AND t.entity = ${entityId}` : ''}`,
+  );
+  return { invoices: rows.map(r => mapArRow(r, unpaidColumn)), unpaidColumn };
+}
+
+export type StatementScope = 'open' | 'all';
+export type StatementInvoice = OpenArInvoice & { status: 'open' | 'paid' };
+
+/**
+ * One customer's invoices for a statement, with explicit scope and an
+ * optional trandate range: 'open' = open items only (the classic remittance
+ * statement); 'all' = every invoice in the range, paid ones at $0 balance
+ * (an activity statement). Dates must be pre-validated YYYY-MM-DD.
+ */
+export async function fetchStatementInvoices(
+  entityId: string,
+  opts: { scope: StatementScope; from?: string | null; to?: string | null },
+): Promise<{ invoices: StatementInvoice[]; unpaidColumn: boolean }> {
+  if (!/^\d{1,15}$/.test(entityId)) throw new Error('Invalid entity id');
+  const dateRe = /^\d{4}-\d{2}-\d{2}$/;
+  const where =
+    ` AND t.entity = ${entityId}` +
+    (opts.scope === 'open' ? ` AND t.status = 'A'` : ` AND t.status IN ('A', 'B')`) +
+    (opts.from && dateRe.test(opts.from) ? ` AND t.trandate >= TO_DATE('${opts.from}', 'YYYY-MM-DD')` : '') +
+    (opts.to && dateRe.test(opts.to) ? ` AND t.trandate <= TO_DATE('${opts.to}', 'YYYY-MM-DD')` : '');
+  const { rows, unpaidColumn } = await queryArInvoices(where);
+  return { invoices: rows.map(r => mapArRow(r, unpaidColumn)), unpaidColumn };
 }
 
 export interface OverdueAccount { key: string; customer: string; amount: number; days: number }
