@@ -48,6 +48,7 @@ interface Prospect {
   netsuite_id: string | null;
   netsuite_url: string | null;
   created_by: string | null;
+  billing_emails: string[] | null;
 }
 
 interface CustomerRow {
@@ -204,6 +205,13 @@ export default function CustomerRecordPage() {
   interface ProfileData { terms: string | null; creditLimit: number | null; nsBalance: number | null; months: { month: string; total: number }[] }
   const [nsProfile, setNsProfile] = useState<ProfileData | null>(null);
 
+  // Files attached to the record (R2 via /api/prospects/files).
+  interface ProspectFile { id: string; file_name: string; content_type: string | null; size_bytes: number | null; public_url: string; created_at: string }
+  const [files, setFiles] = useState<ProspectFile[] | null>(null);
+  const [uploading, setUploading] = useState(false);
+  const fileInputRef = useRef<HTMLInputElement>(null);
+  const [emailingSt, setEmailingSt] = useState(false);
+
   // FleetSuite-side quotes & estimates for this customer.
   interface WrapQuoteRow { id: string; quote_number: string; vehicle_description: string | null; project_type: string | null; total: number | null; status: string; sent_at: string | null; created_at: string }
   interface EstimateRow { id: string; estimate_number: string; title: string | null; status: string; grand_total: number | null; created_at: string }
@@ -350,6 +358,71 @@ export default function CustomerRecordPage() {
       loadNsProfile(nsId);
     }
     loadQuotesAndEstimates(p?.company_name || cust?.company_name || null, nsId);
+    if (p) loadFiles(p.id);
+  };
+
+  const loadFiles = async (pid: string) => {
+    try {
+      const res = await fetch(`/api/prospects/files?prospectId=${pid}`);
+      const body = await res.json();
+      if (res.ok && body.success) setFiles(body.files || []);
+    } catch { /* files card degrades to its loading state */ }
+  };
+
+  const uploadFile = async (f: File) => {
+    if (!prospect || uploading) return;
+    setUploading(true);
+    try {
+      const type = f.type || 'application/octet-stream';
+      const post = (payload: any) => fetch('/api/prospects/files', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload),
+      }).then(r => r.json());
+      const presign = await post({ action: 'presign', prospectId: prospect.id, fileName: f.name, contentType: type, size: f.size });
+      if (!presign.success) throw new Error(presign.error || 'Could not start the upload');
+      const put = await fetch(presign.uploadUrl, { method: 'PUT', headers: { 'Content-Type': type }, body: f });
+      if (!put.ok) throw new Error(`Upload failed (HTTP ${put.status})`);
+      const rec = await post({ action: 'record', prospectId: prospect.id, path: presign.path, fileName: f.name, contentType: type, size: f.size });
+      if (!rec.success) throw new Error(rec.error || 'Failed to save the file record');
+      setFiles(prev => [rec.file, ...(prev || [])]);
+    } catch (err: any) {
+      await dialog.alert(`Could not upload ${f.name}: ${err?.message || 'unknown error'}`);
+    }
+    setUploading(false);
+  };
+
+  const deleteFile = async (file: ProspectFile) => {
+    if (!(await dialog.confirm(`Delete ${file.file_name}?`, { destructive: true, confirmLabel: 'Delete' }))) return;
+    try {
+      const res = await fetch(`/api/prospects/files?id=${file.id}`, { method: 'DELETE' });
+      const body = await res.json();
+      if (!res.ok || !body.success) throw new Error(body?.error || `HTTP ${res.status}`);
+      setFiles(prev => (prev || []).filter(x => x.id !== file.id));
+    } catch (err: any) {
+      await dialog.alert(`Could not delete the file: ${err?.message || 'unknown error'}`);
+    }
+  };
+
+  const emailStatement = async () => {
+    const nsId = prospect?.netsuite_id || customer?.netsuite_id;
+    if (!nsId || !stInvoices || stInvoices.length === 0 || emailingSt) return;
+    const prefill = (prospect?.billing_emails?.length ? prospect.billing_emails.join(', ') : '') || prospect?.email || customer?.email || '';
+    const input = await dialog.prompt('Email this statement to (comma-separated):', prefill, { title: 'Email statement', confirmLabel: 'Send' });
+    if (input === null) return;
+    const recipients = input.split(',').map(s => s.trim()).filter(Boolean);
+    if (recipients.length === 0) return;
+    setEmailingSt(true);
+    try {
+      const res = await fetch('/api/netsuite/email-statement', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ customerId: nsId, recipients }),
+      });
+      const body = await res.json();
+      if (!res.ok || !body.success) throw new Error(body?.error || `HTTP ${res.status}`);
+      await dialog.alert(`Statement sent to ${body.sent.join(', ')} with ${body.attached} invoice PDF${body.attached === 1 ? '' : 's'} attached.${body.failedAttachments?.length ? `\n\nPDFs unavailable for: ${body.failedAttachments.join(', ')}` : ''}`);
+    } catch (err: any) {
+      await dialog.alert(`Could not send the statement: ${err?.message || 'unknown error'}`);
+    }
+    setEmailingSt(false);
   };
 
   const loadNsProfile = async (nsId: string) => {
@@ -557,12 +630,20 @@ export default function CustomerRecordPage() {
             </button>
           )}
           {(prospect?.netsuite_id || customer) && !stError && (
-            <button onClick={printStatement}
-              disabled={!stInvoices || stInvoices.length === 0}
-              title={!stInvoices ? 'Loading open invoices…' : stInvoices.length === 0 ? 'No open invoices — nothing to put on a statement' : 'Print an open-item statement for this customer'}
-              style={{ ...btnSm, color: 'var(--text-primary)', opacity: !stInvoices || stInvoices.length === 0 ? 0.55 : 1, cursor: !stInvoices || stInvoices.length === 0 ? 'default' : 'pointer' }}>
-              🖨 Statement
-            </button>
+            <>
+              <button onClick={printStatement}
+                disabled={!stInvoices || stInvoices.length === 0}
+                title={!stInvoices ? 'Loading open invoices…' : stInvoices.length === 0 ? 'No open invoices — nothing to put on a statement' : 'Print an open-item statement for this customer'}
+                style={{ ...btnSm, color: 'var(--text-primary)', opacity: !stInvoices || stInvoices.length === 0 ? 0.55 : 1, cursor: !stInvoices || stInvoices.length === 0 ? 'default' : 'pointer' }}>
+                🖨 Statement
+              </button>
+              <button onClick={emailStatement}
+                disabled={!stInvoices || stInvoices.length === 0 || emailingSt}
+                title={!stInvoices ? 'Loading open invoices…' : stInvoices.length === 0 ? 'No open invoices — nothing to put on a statement' : 'Email the statement with invoice PDFs attached'}
+                style={{ ...btnSm, color: 'var(--text-primary)', opacity: !stInvoices || stInvoices.length === 0 || emailingSt ? 0.55 : 1, cursor: !stInvoices || stInvoices.length === 0 ? 'default' : 'pointer' }}>
+                {emailingSt ? 'Sending…' : '✉️ Email statement'}
+              </button>
+            </>
           )}
           {nsUrl && <a href={nsUrl} target="_blank" rel="noopener noreferrer" style={btnSm}>NetSuite ↗</a>}
         </div>
@@ -739,6 +820,32 @@ export default function CustomerRecordPage() {
               </div>
             ))}
           </div>
+          {prospect && (
+            <div style={card}>
+              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '8px' }}>
+                <div style={{ ...eyebrow, marginBottom: 0 }}>Files {files && files.length > 0 && <span style={{ fontWeight: 600 }}>· {files.length}</span>}</div>
+                <button onClick={() => fileInputRef.current?.click()} disabled={uploading}
+                  style={{ background: 'none', border: 'none', cursor: 'pointer', fontSize: '11px', fontWeight: 700, color: '#60a5fa', padding: 0, opacity: uploading ? 0.6 : 1 }}>
+                  {uploading ? 'Uploading…' : '+ Upload'}
+                </button>
+                <input ref={fileInputRef} type="file" style={{ display: 'none' }}
+                  onChange={e => { const f = e.target.files?.[0]; if (f) uploadFile(f); e.target.value = ''; }} />
+              </div>
+              {files === null && <div style={{ fontSize: '12px', color: 'var(--text-muted)', marginTop: '8px' }}>Loading files…</div>}
+              {files && files.length === 0 && <div style={{ fontSize: '12px', color: 'var(--text-muted)', marginTop: '8px' }}>No files yet — quotes, signed approvals, COIs…</div>}
+              {(files || []).map(f => (
+                <div key={f.id} style={{ display: 'flex', alignItems: 'center', gap: '8px', padding: '7px 0', borderTop: '1px solid var(--border)', fontSize: '12.5px', marginTop: '4px' }}>
+                  <a href={f.public_url} target="_blank" rel="noopener noreferrer" style={{ flex: 1, minWidth: 0, fontWeight: 600, color: '#60a5fa', textDecoration: 'none', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                    {f.file_name}
+                  </a>
+                  <span style={{ color: 'var(--text-muted)', fontSize: '11px', flexShrink: 0 }}>
+                    {f.size_bytes ? (f.size_bytes >= 1048576 ? `${(f.size_bytes / 1048576).toFixed(1)}MB` : `${Math.max(1, Math.round(f.size_bytes / 1024))}KB`) : ''} · {fmtDate(f.created_at.slice(0, 10))}
+                  </span>
+                  <button onClick={() => deleteFile(f)} title="Delete file" style={{ background: 'none', border: 'none', cursor: 'pointer', color: 'var(--text-muted)', fontSize: '12px', padding: '2px 4px', flexShrink: 0 }}>✕</button>
+                </div>
+              ))}
+            </div>
+          )}
         </div>
 
         <div style={{ display: 'flex', flexDirection: 'column', gap: '14px' }}>
