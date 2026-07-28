@@ -87,6 +87,7 @@ export async function POST(req: NextRequest) {
         messageBody: emailBody,
         respectOptOut: false,
         overrideEmail: customerEmail || null,
+        replyTo: auth.user?.email || null,
       });
     } catch (err) {
       console.error('customer graphics-shipped email failed:', err);
