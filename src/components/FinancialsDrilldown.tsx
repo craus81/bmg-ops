@@ -22,6 +22,7 @@ import { apiFetch } from '@/lib/api-client';
 import { useDialog } from '@/components/DialogProvider';
 import { useFocusTrap } from '@/lib/use-focus-trap';
 import { printStatements, printBill, openArInvoicePdf, usd2, fmtDate } from '@/lib/financials-print';
+import { fetchCompanyLetterhead, type CompanyLetterhead } from '@/lib/company-profile';
 import type { OpenArInvoice, OpenVendorBill, AccountBalance, AgingBucketKey } from '@/lib/financials-data';
 import type { FinancialsData } from './FinancialsDashboard';
 
@@ -141,6 +142,11 @@ export default function FinancialsDrilldown({ target, summary, onClose }: {
   const dialog = useDialog();
   const panelRef = useFocusTrap<HTMLDivElement>(true, onClose);
   const downOnBackdrop = useRef(false);
+
+  // Company letterhead for printed statements/bills — same source as the
+  // wrap quote's header. Loaded up front so print clicks stay synchronous.
+  const [letterhead, setLetterhead] = useState<CompanyLetterhead | null>(null);
+  useEffect(() => { fetchCompanyLetterhead().then(setLetterhead); }, []);
 
   const [view, setView] = useState<DrillView>(target.view);
   const [bucket, setBucket] = useState<BucketFilter>(target.bucket ?? 'all');
@@ -299,12 +305,12 @@ export default function FinancialsDrilldown({ target, summary, onClose }: {
             </button>
           )}
           {customer && (
-            <button onClick={() => printStatements([statementGroupFor(customer)], dialog.alert)} style={{ ...btnSm, color: 'var(--text-primary)' }}>
+            <button onClick={() => printStatements([statementGroupFor(customer)], dialog.alert, letterhead)} style={{ ...btnSm, color: 'var(--text-primary)' }}>
               🖨 Print statement
             </button>
           )}
           {grouped && !customer && customerRows.length > 0 && (
-            <button onClick={() => printStatements(customerRows.map(c => statementGroupFor({ key: c.key, name: c.customer })), dialog.alert)} style={{ ...btnSm, color: 'var(--text-primary)' }}>
+            <button onClick={() => printStatements(customerRows.map(c => statementGroupFor({ key: c.key, name: c.customer })), dialog.alert, letterhead)} style={{ ...btnSm, color: 'var(--text-primary)' }}>
               {bucket !== 'all' || search.trim()
                 ? `🖨 Statements for these ${customerRows.length} customer${customerRows.length === 1 ? '' : 's'}`
                 : `🖨 Print all statements (${customerRows.length})`}
@@ -339,7 +345,7 @@ export default function FinancialsDrilldown({ target, summary, onClose }: {
                     <td style={{ ...tdNum, color: c.pastDue > 0.005 ? 'var(--error)' : 'var(--text-muted)', fontWeight: 700 }}>{c.pastDue > 0.005 ? usd2(c.pastDue) : '—'}</td>
                     <td style={tdNum}>{daysChip(c.oldest) || '—'}</td>
                     <td style={{ ...td, textAlign: 'right' }}>
-                      <button onClick={e => { e.stopPropagation(); printStatements([statementGroupFor({ key: c.key, name: c.customer })], dialog.alert); }} style={btnSm}>🖨 Statement</button>
+                      <button onClick={e => { e.stopPropagation(); printStatements([statementGroupFor({ key: c.key, name: c.customer })], dialog.alert, letterhead); }} style={btnSm}>🖨 Statement</button>
                     </td>
                   </tr>
                 ))}
@@ -430,7 +436,7 @@ export default function FinancialsDrilldown({ target, summary, onClose }: {
                   <td style={{ ...tdNum, fontWeight: 700 }}>{usd2(b.unpaid)}</td>
                   <td style={{ ...td, textAlign: 'right', whiteSpace: 'nowrap' }}>
                     <span style={{ display: 'inline-flex', gap: '8px', alignItems: 'center' }}>
-                      <button onClick={() => printBill(b, dialog.alert, { unpaidKnown: bills.data!.unpaidColumn })} style={btnSm}>🖨 Print</button>
+                      <button onClick={() => printBill(b, dialog.alert, { unpaidKnown: bills.data!.unpaidColumn, letterhead })} style={btnSm}>🖨 Print</button>
                       {nsLink(b.nsUrl)}
                     </span>
                   </td>

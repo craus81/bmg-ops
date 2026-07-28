@@ -5,6 +5,7 @@ import { safeIntId, SqlSafeError } from '@/lib/sql-safe';
 import { fetchStatementInvoices, type StatementInvoice, type StatementScope } from '@/lib/financials-data';
 import { getNetSuitePdf } from '@/lib/netsuite';
 import { sendEmailDetailed } from '@/lib/resend';
+import { r2PublicUrl } from '@/lib/r2';
 
 export const dynamic = 'force-dynamic';
 export const maxDuration = 60;
@@ -38,12 +39,14 @@ const fmtD = (iso: string | null) => {
   return `${Number(m)}/${Number(d)}/${y}`;
 };
 
-function statementEmailHtml(customer: string, invoices: StatementInvoice[], scope: StatementScope, rangeNote: string, customBody?: string, attachNote?: string): string {
+interface Letterhead { company: any; logoUrl: string | null }
+
+function statementEmailHtml(customer: string, invoices: StatementInvoice[], scope: StatementScope, rangeNote: string, lh: Letterhead, customBody?: string, attachNote?: string): string {
   const total = invoices.reduce((s, i) => s + i.unpaid, 0);
   const pastDue = invoices.reduce((s, i) => s + (i.daysPastDue > 0 ? i.unpaid : 0), 0);
-  const td = 'padding:7px 10px;border-bottom:1px solid #2a3644;font-size:13px;color:#f5f8fc;';
+  const td = 'padding:8px 10px;border-bottom:1px solid #e5e7eb;font-size:13px;color:#111827;';
   const tdNum = td + 'text-align:right;white-space:nowrap;';
-  const th = 'padding:7px 10px;border-bottom:2px solid #3a4654;font-size:11px;color:#8899aa;text-transform:uppercase;letter-spacing:.5px;text-align:left;';
+  const th = 'padding:8px 10px;background:#f9fafb;border-bottom:2px solid #e5e7eb;font-size:11px;color:#6b7280;text-transform:uppercase;letter-spacing:.5px;text-align:left;';
   const rows = [...invoices]
     .sort((a, b) => (a.date || '').localeCompare(b.date || ''))
     .map(i => `
@@ -52,7 +55,7 @@ function statementEmailHtml(customer: string, invoices: StatementInvoice[], scop
         <td style="${td}">${esc(i.tranid)}</td>
         <td style="${td}">${esc(i.po || '—')}</td>
         <td style="${td}">${esc(fmtD(i.dueDate))}</td>
-        <td style="${tdNum}${i.daysPastDue > 0 ? 'color:#f87171;font-weight:700;' : ''}">${i.status === 'paid' ? 'Paid' : i.daysPastDue > 0 ? `${i.daysPastDue}d late` : 'Open'}</td>
+        <td style="${tdNum}${i.daysPastDue > 0 ? 'color:#b91c1c;font-weight:700;' : ''}">${i.status === 'paid' ? 'Paid' : i.daysPastDue > 0 ? `${i.daysPastDue}d late` : 'Open'}</td>
         <td style="${tdNum}">${usd(i.unpaid)}</td>
       </tr>`).join('');
 
@@ -60,13 +63,37 @@ function statementEmailHtml(customer: string, invoices: StatementInvoice[], scop
     ? esc(customBody).replace(/\n/g, '<br>')
     : `Please find your current statement below${invoices.some(i => i.status === 'open') ? ' — open invoices are attached as PDFs' : ''}.`;
 
-  return `
-  <div style="background:#0f1722;padding:28px 16px;font-family:-apple-system,'Segoe UI',Helvetica,Arial,sans-serif;">
-    <div style="max-width:640px;margin:0 auto;background:#16202e;border:1px solid #2a3644;border-radius:12px;padding:26px 26px 20px;">
-      <div style="font-size:19px;font-weight:800;color:#f5f8fc;">BMG Fleet — Statement</div>
-      <div style="font-size:13px;color:#8899aa;margin-top:2px;">${esc(customer)} · as of ${esc(new Date().toLocaleDateString('en-US'))} · ${scope === 'all' ? 'all invoices' : 'open items'}${esc(rangeNote)}</div>
-      <div style="font-size:14px;color:#d5dde6;line-height:1.6;margin:16px 0;">${intro}</div>
-      <table style="width:100%;border-collapse:collapse;margin-top:4px;">
+  const co = lh.company || {};
+  const coName = co.name || 'BMG Fleet';
+  const companyLines = [
+    co.name, co.address,
+    [co.city, co.state, co.zip].filter(Boolean).join(', '),
+    co.phone, co.email,
+  ].filter(Boolean).map((l: string) => esc(l)).join('<br>');
+
+  return `<!DOCTYPE html>
+<html>
+<head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"></head>
+<body style="margin:0;padding:0;background:#f3f4f6;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;">
+  <div style="max-width:640px;margin:0 auto;padding:24px;">
+    <div style="background:#ffffff;border:1px solid #e5e7eb;border-radius:12px;padding:28px;">
+      <table style="width:100%;border-collapse:collapse;margin-bottom:20px;">
+        <tr>
+          <td style="vertical-align:top;">
+            ${lh.logoUrl ? `<img src="${esc(lh.logoUrl)}" alt="${esc(coName)}" height="44" style="height:44px;max-width:220px;display:block;margin-bottom:10px;">` : ''}
+            <div style="font-size:22px;font-weight:800;color:#111827;">Statement</div>
+            <div style="font-size:12px;color:#6b7280;">As of ${esc(new Date().toLocaleDateString('en-US', { year: 'numeric', month: 'long', day: 'numeric' }))} · ${scope === 'all' ? 'All invoices' : 'Open items only'}${esc(rangeNote)}</div>
+          </td>
+        </tr>
+      </table>
+      <table style="width:100%;border-collapse:collapse;margin-bottom:16px;">
+        <tr>
+          <td style="vertical-align:top;font-size:12px;color:#374151;line-height:1.5;">${companyLines || esc(coName)}</td>
+          <td style="vertical-align:top;font-size:12px;color:#374151;line-height:1.5;text-align:right;"><b style="color:#111827;">Customer</b><br>${esc(customer)}<br>${invoices.length} invoice${invoices.length === 1 ? '' : 's'} · Balance due ${usd(total)}</td>
+        </tr>
+      </table>
+      <div style="font-size:13px;color:#374151;margin:0 0 16px;line-height:1.5;">${intro}</div>
+      <table style="width:100%;border-collapse:collapse;">
         <thead><tr>
           <th style="${th}">Date</th><th style="${th}">Invoice #</th><th style="${th}">PO #</th>
           <th style="${th}">Due</th><th style="${th}text-align:right;">Status</th><th style="${th}text-align:right;">Balance</th>
@@ -77,13 +104,16 @@ function statementEmailHtml(customer: string, invoices: StatementInvoice[], scop
           <td style="${tdNum}font-weight:800;border-bottom:none;padding-top:12px;">${usd(total)}</td>
         </tr></tfoot>
       </table>
-      ${pastDue > 0.005 ? `<div style="font-size:13px;color:#f87171;font-weight:700;margin-top:10px;">${usd(pastDue)} of this balance is past due.</div>` : ''}
-      ${attachNote ? `<div style="font-size:12px;color:#8899aa;margin-top:10px;">${esc(attachNote)}</div>` : ''}
-      <div style="font-size:12px;color:#8899aa;margin-top:18px;border-top:1px solid #2a3644;padding-top:12px;">
+      ${pastDue > 0.005 ? `<div style="font-size:13px;color:#b91c1c;font-weight:700;margin-top:10px;">${usd(pastDue)} of this balance is past due.</div>` : ''}
+      ${attachNote ? `<div style="font-size:12px;color:#6b7280;margin-top:10px;">${esc(attachNote)}</div>` : ''}
+      <div style="font-size:12px;color:#6b7280;margin-top:18px;border-top:1px solid #e5e7eb;padding-top:12px;">
         Amounts are open balances as of the statement date. Please reply to this email with any questions.
       </div>
     </div>
-  </div>`;
+    <div style="text-align:center;padding:14px;font-size:11px;color:#9ca3af;">Sent by ${esc(coName)}</div>
+  </div>
+</body>
+</html>`;
 }
 
 export async function POST(req: NextRequest) {
@@ -143,7 +173,14 @@ export async function POST(req: NextRequest) {
       failedAttachments.length ? `PDFs unavailable for: ${failedAttachments.join(', ')}.` : '',
     ].filter(Boolean).join(' ');
 
-    const html = statementEmailHtml(customerName, invoices, scope, rangeNote, body?.customBody, attachNote);
+    // Letterhead from the same settings singleton the wrap quote uses, so
+    // both documents carry identical branding.
+    const supabaseLh = createClient(process.env.NEXT_PUBLIC_SUPABASE_URL!, process.env.SUPABASE_SERVICE_ROLE_KEY!);
+    const { data: settings } = await supabaseLh.from('wrap_quote_settings').select('company').eq('id', 1).maybeSingle();
+    const co: any = settings?.company || {};
+    const lh = { company: co, logoUrl: co.logo_path ? r2PublicUrl('vehicle-templates', co.logo_path) : null };
+
+    const html = statementEmailHtml(customerName, invoices, scope, rangeNote, lh, body?.customBody, attachNote);
     const subject = `Statement — ${customerName} — ${new Date().toLocaleDateString('en-US')}`;
     const result = await sendEmailDetailed(recipients, subject, html, undefined, attachments);
     if (!result.ok) {

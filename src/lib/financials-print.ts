@@ -14,6 +14,7 @@
  */
 
 import { apiFetch } from '@/lib/api-client';
+import { companyLines, type CompanyLetterhead } from '@/lib/company-profile';
 import type { OpenArInvoice, OpenVendorBill, AgingBucketKey } from '@/lib/financials-data';
 
 export const usd2 = (n: number) => n.toLocaleString('en-US', { style: 'currency', currency: 'USD' });
@@ -34,9 +35,9 @@ const PRINT_STYLE = `
   body { font-family: -apple-system, Segoe UI, Helvetica, Arial, sans-serif; color: #111; margin: 32px; font-size: 12px; }
   h1 { margin: 0 0 4px 0; font-size: 22px; }
   .sub { color: #666; font-size: 12px; }
-  .head { display: flex; justify-content: space-between; align-items: flex-start; gap: 16px; margin-bottom: 8px; }
-  .head img { height: 42px; }
-  .head-right { text-align: right; }
+  .head { margin-bottom: 8px; }
+  .head img { height: 42px; display: block; margin-bottom: 8px; }
+  .head h1 { color: #111827; }
   .grid { display: grid; grid-template-columns: 1fr 1fr; gap: 24px; margin: 20px 0 24px; }
   .box h3 { margin: 0 0 6px 0; font-size: 11px; text-transform: uppercase; letter-spacing: 0.5px; color: #666; }
   .box .v { white-space: pre-line; font-weight: 600; }
@@ -79,8 +80,8 @@ const AGING_LABELS: [AgingBucketKey, string][] = [
   ['d90plus', '90+ days'],
 ];
 
-/** One customer's open-item statement body (logo header, invoice table, aging). */
-function statementBody(customer: string, invoices: OpenArInvoice[]): string {
+/** One customer's open-item statement body (letterhead, invoice table, aging). */
+function statementBody(customer: string, invoices: OpenArInvoice[], letterhead?: CompanyLetterhead | null): string {
   const asOf = new Date().toLocaleDateString('en-US');
   const total = invoices.reduce((s, i) => s + i.unpaid, 0);
   const pastDue = invoices.reduce((s, i) => s + (i.daysPastDue > 0 ? i.unpaid : 0), 0);
@@ -103,22 +104,27 @@ function statementBody(customer: string, invoices: OpenArInvoice[]): string {
   const agingCells = AGING_LABELS.map(([k]) => `<td class="num">${usd2(buckets[k])}</td>`).join('');
   const agingHead = AGING_LABELS.map(([, label]) => `<th class="num">${label}</th>`).join('');
 
+  const logo = letterhead?.logoDataUrl || letterhead?.logoUrl || `${window.location.origin}/bmg-logo-color.png`;
+  const coName = letterhead?.company?.name || 'BMG Fleet';
+  const coLines = companyLines(letterhead?.company).map(l => escapeHtml(l)).join('\n');
+
   return `
   <div class="head">
-    <img src="${window.location.origin}/bmg-logo-color.png" alt="BMG Fleet" onerror="this.style.display='none'">
-    <div class="head-right">
+    <div>
+      <img src="${escapeHtml(logo)}" alt="${escapeHtml(coName)}" onerror="this.style.display='none'">
       <h1>Statement</h1>
-      <div class="sub">As of ${escapeHtml(asOf)}</div>
+      <div class="sub">As of ${escapeHtml(asOf)} · Open items only</div>
     </div>
   </div>
   <div class="grid">
     <div class="box">
-      <h3>Customer</h3>
-      <div class="v">${escapeHtml(customer)}</div>
+      <h3>${escapeHtml(coName)}</h3>
+      <div class="v">${coLines}</div>
     </div>
     <div class="box">
-      <h3>Summary</h3>
-      <div class="v">${invoices.length} open invoice${invoices.length === 1 ? '' : 's'}
+      <h3>Customer</h3>
+      <div class="v">${escapeHtml(customer)}
+${invoices.length} open invoice${invoices.length === 1 ? '' : 's'}
 Balance due: ${usd2(total)}${pastDue > 0.005 ? `\nPast due: ${usd2(pastDue)}` : ''}</div>
     </div>
   </div>
@@ -146,7 +152,7 @@ Balance due: ${usd2(total)}${pastDue > 0.005 ? `\nPast due: ${usd2(pastDue)}` : 
     <thead><tr>${agingHead}</tr></thead>
     <tbody><tr>${agingCells}</tr></tbody>
   </table>
-  <div class="note">Amounts are open balances as of the statement date. Please contact BMG Fleet with any questions about this statement.</div>`;
+  <div class="note">Amounts are open balances as of the statement date. Please contact ${escapeHtml(coName)} with any questions about this statement.</div>`;
 }
 
 /**
@@ -156,12 +162,13 @@ Balance due: ${usd2(total)}${pastDue > 0.005 ? `\nPast due: ${usd2(pastDue)}` : 
 export async function printStatements(
   groups: { customer: string; invoices: OpenArInvoice[] }[],
   alertFn: (message: string) => Promise<void>,
+  letterhead?: CompanyLetterhead | null,
 ) {
   if (groups.length === 0) return;
   const title = groups.length === 1
     ? `Statement — ${groups[0].customer}`
     : `Customer statements (${groups.length})`;
-  const body = groups.map(g => `<div class="page">${statementBody(g.customer, g.invoices)}</div>`).join('');
+  const body = groups.map(g => `<div class="page">${statementBody(g.customer, g.invoices, letterhead)}</div>`).join('');
   await openPrintWindow(title, body, alertFn);
 }
 
@@ -172,13 +179,18 @@ export async function printStatements(
  * `unpaidKnown: false` = NetSuite didn't return open balances, so the amount
  * is the full bill total.
  */
-export async function printBill(bill: OpenVendorBill, alertFn: (message: string) => Promise<void>, opts?: { unpaidKnown?: boolean }) {
+export async function printBill(
+  bill: OpenVendorBill,
+  alertFn: (message: string) => Promise<void>,
+  opts?: { unpaidKnown?: boolean; letterhead?: CompanyLetterhead | null },
+) {
   const unpaidKnown = opts?.unpaidKnown !== false;
   const partial = unpaidKnown && Math.abs(bill.total - bill.unpaid) > 0.005;
+  const lh = opts?.letterhead;
   const body = `
   <div class="head">
-    <img src="${window.location.origin}/bmg-logo-color.png" alt="BMG Fleet" onerror="this.style.display='none'">
-    <div class="head-right">
+    <div>
+      <img src="${escapeHtml(lh?.logoDataUrl || lh?.logoUrl || `${window.location.origin}/bmg-logo-color.png`)}" alt="${escapeHtml(lh?.company?.name || 'BMG Fleet')}" onerror="this.style.display='none'">
       <h1>Vendor Bill ${escapeHtml(bill.tranid)}</h1>
       <div class="sub">Open · printed ${escapeHtml(new Date().toLocaleDateString('en-US'))}</div>
     </div>
