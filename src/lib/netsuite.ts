@@ -484,6 +484,12 @@ export function itemUrl(internalId: string | number): string {
   return `https://${accountForUrl}.app.netsuite.com/app/common/item/item.nl?id=${internalId}`;
 }
 
+/** NetSuite UI link for a transaction record (customer invoice, vendor bill). */
+export function transactionUrl(page: 'custinvc' | 'vendbill', internalId: string | number): string {
+  const accountForUrl = getConfig().accountId.replace(/-/g, '_').toUpperCase();
+  return `https://${accountForUrl}.app.netsuite.com/app/accounting/transactions/${page}.nl?id=${internalId}`;
+}
+
 export async function createItem(payload: {
   itemId: string;
   recordType: string; // e.g. 'serviceSaleItem', 'nonInventoryResaleItem', 'inventoryItem'
