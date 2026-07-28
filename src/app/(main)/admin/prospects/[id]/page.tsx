@@ -17,7 +17,7 @@
  *                                   when the customer isn't in the CRM.
  */
 
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import { useRouter, useParams } from 'next/navigation';
 import { createClient } from '@/lib/supabase-browser';
 import { useAuth } from '@/components/AuthProvider';
@@ -157,12 +157,19 @@ export default function CustomerRecordPage() {
     setActText('');
   };
 
+  const loadStarted = useRef(false);
   useEffect(() => {
     if (authLoading) return;
+    // Cold boot in a fresh tab: auth can briefly report "done" with a user
+    // but no profile row (roles) yet — redirecting then bounces a legitimate
+    // admin to /home. Wait for the profile; this effect re-runs when it lands.
+    if (user && !profile) return;
     if (!hasFeature('prospects') && !isAdmin) { router.push('/home'); return; }
+    if (loadStarted.current) return;
+    loadStarted.current = true;
     load();
-  // eslint-disable-next-line react-hooks/exhaustive-deps -- intentional: load once when auth resolves
-  }, [authLoading]);
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- intentional: load once when auth + profile resolve
+  }, [authLoading, user, profile]);
 
   const load = async () => {
     const raw = String(params?.id || '');
