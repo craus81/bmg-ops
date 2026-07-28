@@ -1848,6 +1848,51 @@ export async function updateInvoiceLocation(
 }
 
 /**
+ * Recent customer payments + credit memos via the financials RESTlet — the
+ * SuiteQL integration role cannot see CustPymt at all (see the RESTlet
+ * header), so the RESTlet's own role answers instead. Requires the updated
+ * scripts/netsuite-financials-restlet.js to be re-uploaded in NetSuite; an
+ * old deployment ignores `action` and answers the balances shape, which is
+ * detected and reported as a redeploy hint rather than an empty history.
+ */
+export async function getCustomerPaymentsFromRestlet(customerId: string, limit = 50): Promise<{
+  success: boolean;
+  transactions?: { id: string; tranid: string; date: string; type: string; amount: number; memo: string | null }[];
+  error?: string;
+}> {
+  const restletUrl = process.env.NETSUITE_FINANCIALS_RESTLET_URL;
+  if (!restletUrl) return { success: false, error: 'Financials RESTlet URL not configured' };
+  if (!/^\d{1,15}$/.test(customerId)) return { success: false, error: 'Invalid customer id' };
+
+  try {
+    const result = await callRestlet(restletUrl, 'GET', {
+      action: 'customerPayments',
+      customerId,
+      limit: String(Math.max(1, Math.min(limit, 200))),
+    });
+    if (!result?.success) {
+      return { success: false, error: result?.error || 'RESTlet error' };
+    }
+    if (!Array.isArray(result.transactions)) {
+      return { success: false, error: 'Payment history needs the updated financials RESTlet — re-upload scripts/netsuite-financials-restlet.js in NetSuite' };
+    }
+    return {
+      success: true,
+      transactions: result.transactions.map((t: any) => ({
+        id: String(t.id),
+        tranid: String(t.tranid || t.id),
+        date: String(t.date || ''),
+        type: String(t.type || ''),
+        amount: Number(t.amount) || 0,
+        memo: t.memo ? String(t.memo) : null,
+      })),
+    };
+  } catch (e: any) {
+    return { success: false, error: e?.message || 'RESTlet call failed' };
+  }
+}
+
+/**
  * Fetch a transaction PDF from the NetSuite RESTlet.
  * Supports: salesOrder, invoice, estimate (matches the RESTlet's query
  * params — estimate requires the updated scripts/netsuite-pdf-restlet.js
