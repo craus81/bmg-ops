@@ -10,6 +10,19 @@ import { apiFetch } from '@/lib/api-client';
 import { openNetSuitePdf } from '@/lib/netsuite-pdf-client';
 import { DropZone } from '@/components/DropZone';
 import { theme } from '@/lib/theme';
+import { RollNesting, RollFilmInfo } from '@/components/RollNesting';
+import {
+  DEFAULT_ROLL,
+  NestPiece,
+  PlacementMap,
+  RollConfig,
+  computeUsage,
+  fmtFtIn,
+  offsetArea,
+  polygonArea,
+  polygonPerimeter,
+  reconcilePlacements,
+} from '@/lib/roll-nesting';
 
 // Manual wrap-quote estimator (WrapUP-style): pick a 1:20 vehicle outline
 // template, draw measurement shapes over it, price by substrate + labor,
@@ -88,11 +101,14 @@ interface Settings {
   qty_discounts: QtyDiscountTier[];
 }
 
-type MType = 'box' | 'circle' | 'roof' | 'hood';
+type MType = 'box' | 'circle' | 'roof' | 'hood' | 'poly';
 
 // Geometry is stored in template-image pixel coordinates so shapes redraw
 // at any display size; dim1_in/dim2_in are the real-world dimensions and are
 // the source of truth for pricing (the user can override them numerically).
+// Freeform shapes ('poly') additionally carry their closed outline plus the
+// real polygon area/perimeter in inches — dims alone would overbill an
+// L-shape or door cutout by its bounding box.
 interface Measurement {
   id: string;
   name: string;
@@ -100,6 +116,9 @@ interface Measurement {
   rect?: { x: number; y: number; w: number; h: number };
   line1?: { x1: number; y1: number; x2: number; y2: number };
   line2?: { x1: number; y1: number; x2: number; y2: number };
+  points?: { x: number; y: number }[];
+  area_in2?: number;
+  perimeter_in?: number;
   dim1_in: number;
   dim2_in: number;
   qty: number;
@@ -137,7 +156,33 @@ interface WrapQuote {
   netsuite_estimate_number: string | null;
   package_qty: number | null;
   adjustments: QuoteAdjustments | null;
+  nesting: NestingSnapshot | null;
   created_at: string;
+}
+
+// Saved roll-nesting layout + usage rollup. `enabled` = materials were
+// priced from roll consumption (width × used length per film) instead of
+// per-shape area; the layout is stored either way so reopening a quote
+// restores the arrangement. Placements reference measurements by index
+// into the snapshot's measurements array (ids are regenerated on load).
+interface NestingSnapshot {
+  enabled: boolean;
+  roll_width_in: number;
+  roll_length_in: number;
+  spacing_in: number;
+  edge_margin_in: number;
+  sets: number;
+  films: {
+    film_id: string | null;
+    label: string;
+    rate_per_sqft: number;
+    rolls: { used_length_in: number; piece_count: number }[];
+    roll_sqft: number;
+    graphic_sqft: number;
+    material_total: number;
+  }[];
+  unplaced: { name: string; w_in: number; h_in: number; film_id: string | null }[];
+  placements: { m: number; copy: number; set: number; roll: number; x: number; y: number; rot: 0 | 90 }[];
 }
 
 // How the final totals were reached, snapshotted for display: the pre-
@@ -156,8 +201,8 @@ interface QuoteAdjustments {
   min_bump: number;
 }
 
-type Tab = 'estimator' | 'quote' | 'history' | 'pricing' | 'company' | 'templates';
-type Tool = 'select' | 'box' | 'circle' | 'roof' | 'hood' | 'calibrate';
+type Tab = 'estimator' | 'nesting' | 'quote' | 'history' | 'pricing' | 'company' | 'templates';
+type Tool = 'select' | 'box' | 'circle' | 'roof' | 'hood' | 'poly' | 'calibrate';
 
 const EMPTY_LABOR: LaborSection = { flat: 0, hourly: 0, hours: 0, extra: 0 };
 const fmt = (n: number) => (n || 0).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
@@ -166,12 +211,31 @@ const num = (v: any) => { const n = parseFloat(v); return isNaN(n) ? 0 : n; };
 const laborSectionTotal = (s: LaborSection) => num(s.flat) + num(s.hourly) * num(s.hours) + num(s.extra);
 
 // Area of one unit, in ft². Bleed extends each dimension on both sides
-// (print size), which is what gets billed.
+// (print size), which is what gets billed. Freeform shapes bill their real
+// polygon area grown by the bleed (A + P·b + πb²), not the bounding box.
 const unitAreaSqft = (m: Measurement, bleedIn: number) => {
+  if (m.type === 'poly') {
+    return offsetArea(Math.max(0, num(m.area_in2)), Math.max(0, num(m.perimeter_in)), Math.max(0, bleedIn)) / 144;
+  }
   const d1 = Math.max(0, num(m.dim1_in) + 2 * bleedIn);
   const d2 = Math.max(0, num(m.dim2_in) + 2 * bleedIn);
   if (m.type === 'circle') return (Math.PI * (d1 / 2) * (d2 / 2)) / 144;
   return (d1 * d2) / 144;
+};
+
+// Bounding box + real area/perimeter of a polygon drawn in template-image
+// pixels, converted to inches with the template's calibration.
+const polyMetrics = (points: { x: number; y: number }[], ppi: number) => {
+  const xs = points.map(p => p.x), ys = points.map(p => p.y);
+  const wPx = Math.max(...xs) - Math.min(...xs);
+  const hPx = Math.max(...ys) - Math.min(...ys);
+  const scale = ppi > 0 ? ppi : 1;
+  return {
+    dim1_in: wPx / scale,
+    dim2_in: hPx / scale,
+    area_in2: polygonArea(points) / (scale * scale),
+    perimeter_in: polygonPerimeter(points) / scale,
+  };
 };
 
 const templateLabel = (t: Template) =>
@@ -228,6 +292,10 @@ export default function WrapQuotePage() {
   // Calibration: after drawing the line, ask for its real length.
   const [calibLine, setCalibLine] = useState<{ lenPx: number } | null>(null);
   const [calibInches, setCalibInches] = useState('');
+  // Freeform shape in progress: clicked vertices + the live cursor point
+  // (image-pixel coords). Clicking the first vertex again closes the shape.
+  const [polyDraft, setPolyDraft] = useState<{ x: number; y: number }[] | null>(null);
+  const [polyHover, setPolyHover] = useState<{ x: number; y: number } | null>(null);
   const svgRef = useRef<SVGSVGElement | null>(null);
 
   // ----- Quote state -----
@@ -405,6 +473,56 @@ export default function WrapQuotePage() {
   // that the kit count qualifies for.
   const [discountPctOverride, setDiscountPctOverride] = useState('');
 
+  // ----- Roll nesting -----
+  // Shapes transfer onto rolls of their film (58.5" × 150' by default) on
+  // the Roll Nesting tab; when the toggle is on, materials price from the
+  // roll length actually consumed instead of per-shape area.
+  const [rollConfig, setRollConfig] = useState<RollConfig>({ ...DEFAULT_ROLL });
+  const [placements, setPlacements] = useState<PlacementMap>({});
+  const [useRollPricing, setUseRollPricing] = useState(false);
+  const kitSets = Math.max(1, Math.floor(num(packageQty) || 1));
+
+  // Every measurement copy in every set is one print piece (drawn size +
+  // bleed per side). Capped so a fat-fingered qty can't hang the packer.
+  const NEST_PIECE_CAP = 800;
+  const nestPieces = useMemo<NestPiece[]>(() => {
+    const out: NestPiece[] = [];
+    for (const m of measurements) {
+      const sub = substrateById(m.substrate_id);
+      const bleed = sub ? Math.max(0, num(sub.bleed_in)) : 0;
+      const w = Math.max(0.5, num(m.dim1_in) + 2 * bleed);
+      const h = Math.max(0.5, num(m.dim2_in) + 2 * bleed);
+      const qty = Math.max(1, num(m.qty));
+      for (let s = 0; s < kitSets; s++) {
+        for (let c = 0; c < qty; c++) {
+          if (out.length >= NEST_PIECE_CAP) return out;
+          out.push({ key: `${m.id}:${c}:${s}`, filmKey: m.substrate_id || '', name: m.name, w, h, set: s, copy: c });
+        }
+      }
+    }
+    return out;
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- substrateById reads substrates
+  }, [measurements, kitSets, substrates]);
+  const nestCapped = nestPieces.length >= NEST_PIECE_CAP;
+
+  const nestFilms = useMemo<RollFilmInfo[]>(() => {
+    const used = new Set(measurements.map(m => m.substrate_id || ''));
+    const out: RollFilmInfo[] = substrates
+      .filter(s => used.has(s.id))
+      .map(s => ({ key: s.id, label: filmLabel(s), color: filmColor(s.id), ratePerSqft: filmRate(s) }));
+    if (used.has('')) out.push({ key: '', label: 'No film', color: '#94a3b8', ratePerSqft: 0 });
+    return out;
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- filmColor reads substrates
+  }, [measurements, substrates]);
+
+  // Keep the layout in step with the drawing: new pieces pack into the
+  // gaps, deleted shapes free their spots, manual arrangements stay put.
+  useEffect(() => {
+    setPlacements(prev => reconcilePlacements(nestPieces, prev, rollConfig));
+  }, [nestPieces, rollConfig]);
+
+  const nestUsage = useMemo(() => computeUsage(nestPieces, placements, rollConfig), [nestPieces, placements, rollConfig]);
+
   const totals = useMemo(() => {
     const kitQty = Math.max(1, Math.floor(num(packageQty) || 1));
     let kitArea = 0, kitBilledArea = 0, kitMaterials = 0;
@@ -427,7 +545,30 @@ export default function WrapQuotePage() {
     // sections (design/prep/install) stay one-time job-level entries.
     const area = kitArea * kitQty;
     const billedArea = kitBilledArea * kitQty;
-    const materials = kitMaterials * kitQty;
+    let materials = kitMaterials * kitQty;
+
+    // Roll pricing: materials come from the vinyl actually cut — roll
+    // width × used length per film, and the nested layout already contains
+    // every set, so this is a whole-job number (NOT multiplied by kits).
+    // Pieces the packer couldn't fit still bill by their area. Install
+    // labor stays on the graphic area — waste isn't installed.
+    const nested = useRollPricing && nestPieces.length > 0;
+    let nestedRollSqft = 0;
+    if (nested) {
+      let rollMaterials = 0;
+      for (const f of nestUsage.films) {
+        const film = substrateById(f.filmKey || null);
+        if (!film) continue;
+        rollMaterials += f.rollSqft * filmRate(film);
+        nestedRollSqft += f.rollSqft;
+      }
+      for (const p of nestUsage.unplaced) {
+        const film = substrateById(p.filmKey || null);
+        if (film) rollMaterials += ((p.w * p.h) / 144) * filmRate(film);
+      }
+      materials = rollMaterials;
+      kitMaterials = rollMaterials / kitQty;
+    }
     const filmTotals = [...byFilm.values()].map(({ film, sqft }) => {
       const jobSqft = sqft * kitQty;
       return {
@@ -466,11 +607,25 @@ export default function WrapQuotePage() {
     // Internal margin readout: what the billed film actually costs us
     // (whole job), against what we charge for it AFTER the discount. Films
     // with no cost on the Pricing tab are listed so the gap is visible.
+    // With roll pricing on, cost follows the same roll footage we charge.
     let materialCost = 0;
     const uncostedFilms = new Set<string>();
-    for (const { film, sqft } of byFilm.values()) {
-      if (filmHasCost(film)) materialCost += sqft * kitQty * filmCost(film);
-      else uncostedFilms.add(filmLabel(film));
+    if (nested) {
+      for (const f of nestUsage.films) {
+        const film = substrateById(f.filmKey || null);
+        if (!film) continue;
+        if (filmHasCost(film)) materialCost += f.rollSqft * filmCost(film);
+        else uncostedFilms.add(filmLabel(film));
+      }
+      for (const p of nestUsage.unplaced) {
+        const film = substrateById(p.filmKey || null);
+        if (film && filmHasCost(film)) materialCost += ((p.w * p.h) / 144) * filmCost(film);
+      }
+    } else {
+      for (const { film, sqft } of byFilm.values()) {
+        if (filmHasCost(film)) materialCost += sqft * kitQty * filmCost(film);
+        else uncostedFilms.add(filmLabel(film));
+      }
     }
     return {
       kitQty, kitArea, kitMaterials,
@@ -479,12 +634,13 @@ export default function WrapQuotePage() {
       adjMaterials: materials * adjust, adjLabor: labor * adjust,
       subtotal, tax, total: subtotal + tax,
       materialCost, uncostedFilms: [...uncostedFilms],
+      nested, nestedRollSqft,
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps -- substrates feed measurementPricing
-  }, [measurements, settings, substrates, laborRates, packageQty, discountPctOverride]);
+  }, [measurements, settings, substrates, laborRates, packageQty, discountPctOverride, useRollPricing, nestPieces, nestUsage]);
 
   // ----- Canvas drawing -----
-  const svgPoint = (e: React.PointerEvent): { x: number; y: number } | null => {
+  const svgPoint = (e: { clientX: number; clientY: number }): { x: number; y: number } | null => {
     const svg = svgRef.current;
     if (!svg || !imgDim) return null;
     const r = svg.getBoundingClientRect();
@@ -494,11 +650,83 @@ export default function WrapQuotePage() {
     };
   };
 
+  // ----- Freeform shape tool -----
+  // Vertex snapping: clicks land square with the previous point when close
+  // (clean horizontal/vertical edges), and near the first point they snap
+  // onto it exactly so the outline closes without pixel-hunting.
+  const polySnapRadius = () => (imgDim ? Math.max(8, imgDim.w / 90) : 12);
+
+  const polySnapped = (p: { x: number; y: number }, draft: { x: number; y: number }[]) => {
+    const snap = polySnapRadius();
+    if (draft.length >= 3) {
+      const first = draft[0];
+      if (Math.hypot(p.x - first.x, p.y - first.y) < snap) return { ...first };
+    }
+    const out = { ...p };
+    const last = draft[draft.length - 1];
+    if (last) {
+      if (Math.abs(p.x - last.x) < snap / 2) out.x = last.x;
+      if (Math.abs(p.y - last.y) < snap / 2) out.y = last.y;
+    }
+    return out;
+  };
+
+  const closesPoly = (p: { x: number; y: number }, draft: { x: number; y: number }[]) =>
+    draft.length >= 3 && Math.hypot(p.x - draft[0].x, p.y - draft[0].y) < polySnapRadius();
+
+  const closePoly = () => {
+    const ppi = num(template?.px_per_in);
+    if (!polyDraft || !ppi) { setPolyDraft(null); setPolyHover(null); return; }
+    // Drop consecutive near-duplicate clicks (double-click close leaves one).
+    const pts = polyDraft.filter((p, i) => i === 0 || Math.hypot(p.x - polyDraft[i - 1].x, p.y - polyDraft[i - 1].y) > 2);
+    if (pts.length < 3) { setPolyDraft(null); setPolyHover(null); setTool('select'); return; }
+    const metrics = polyMetrics(pts, ppi);
+    const m: Measurement = {
+      id: crypto.randomUUID(),
+      name: `Shape ${measurements.length + 1}`,
+      type: 'poly',
+      points: pts,
+      ...metrics,
+      qty: 1,
+      substrate_id: defaultFilmId(),
+    };
+    setMeasurements(prev => [...prev, m]);
+    setSelectedId(m.id);
+    setPolyDraft(null);
+    setPolyHover(null);
+    setTool('select');
+  };
+
+  const cancelPoly = () => { setPolyDraft(null); setPolyHover(null); setTool('select'); };
+  const undoPolyPoint = () => setPolyDraft(d => (d && d.length > 1 ? d.slice(0, -1) : null));
+
+  // Keyboard shortcuts while drawing a shape (Enter close, Esc cancel,
+  // Backspace undo). Re-subscribed every render so the handlers see fresh
+  // state; skipped entirely when no draft is active.
+  useEffect(() => {
+    if (!polyDraft) return;
+    const onKey = (e: KeyboardEvent) => {
+      const tag = (e.target as HTMLElement)?.tagName;
+      if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT') return;
+      if (e.key === 'Escape') cancelPoly();
+      else if (e.key === 'Enter') closePoly();
+      else if (e.key === 'Backspace') { e.preventDefault(); undoPolyPoint(); }
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  });
+
   const onPointerDown = (e: React.PointerEvent) => {
     if (tool === 'select' || !imgDim) return;
     if (tool !== 'calibrate' && !template?.px_per_in) return;
     const p = svgPoint(e);
     if (!p) return;
+    if (tool === 'poly') {
+      const draft = polyDraft || [];
+      if (closesPoly(p, draft)) { closePoly(); return; }
+      setPolyDraft([...draft, polySnapped(p, draft)]);
+      return;
+    }
     (e.target as Element).setPointerCapture?.(e.pointerId);
     setDrag({ x1: p.x, y1: p.y, x2: p.x, y2: p.y });
   };
@@ -506,11 +734,24 @@ export default function WrapQuotePage() {
   const onPointerMove = (e: React.PointerEvent) => {
     const p = svgPoint(e);
     if (!p) return;
+    if (tool === 'poly') {
+      setPolyHover(polyDraft && polyDraft.length > 0 ? polySnapped(p, polyDraft) : p);
+      return;
+    }
     if (editDrag) {
       const dx = p.x - editDrag.grabX, dy = p.y - editDrag.grabY;
       const ppi = num(template?.px_per_in);
       setMeasurements(prev => prev.map(m => {
-        if (m.id !== editDrag.id || !m.rect) return m;
+        if (m.id !== editDrag.id) return m;
+        if (editDrag.points) {
+          if (editDrag.kind === 'move') {
+            return { ...m, points: editDrag.points.map(pt => ({ x: pt.x + dx, y: pt.y + dy })) };
+          }
+          // vertex drag: reshape one corner and rewrite the real dims/area
+          const pts = editDrag.points.map((pt, i) => i === editDrag.vertexIndex ? { x: pt.x + dx, y: pt.y + dy } : pt);
+          return { ...m, points: pts, ...(ppi > 0 ? polyMetrics(pts, ppi) : {}) };
+        }
+        if (!m.rect || !editDrag.rect) return m;
         if (editDrag.kind === 'move') {
           return { ...m, rect: { ...m.rect, x: editDrag.rect.x + dx, y: editDrag.rect.y + dy } };
         }
@@ -602,27 +843,52 @@ export default function WrapQuotePage() {
       if (m.id !== id) return m;
       const next = { ...m, ...patch };
       // Typing a width/height reshapes the drawn box to match (boxes only —
-      // roof/hood line pairs are numeric-first).
+      // roof/hood line pairs are numeric-first). Freeform shapes scale their
+      // outline to the new bounding box and recompute the real area.
       const ppi = num(template?.px_per_in);
       if (next.type === 'box' && next.rect && ppi > 0 && ('dim1_in' in patch || 'dim2_in' in patch)) {
         next.rect = { ...next.rect, w: Math.max(2, num(next.dim1_in) * ppi), h: Math.max(2, num(next.dim2_in) * ppi) };
+      }
+      if (next.type === 'poly' && next.points && ppi > 0 && ('dim1_in' in patch || 'dim2_in' in patch)) {
+        const xs = next.points.map(p => p.x), ys = next.points.map(p => p.y);
+        const minX = Math.min(...xs), minY = Math.min(...ys);
+        const w = Math.max(1, Math.max(...xs) - minX), h = Math.max(1, Math.max(...ys) - minY);
+        const sx = Math.max(2, num(next.dim1_in) * ppi) / w;
+        const sy = Math.max(2, num(next.dim2_in) * ppi) / h;
+        next.points = next.points.map(p => ({ x: minX + (p.x - minX) * sx, y: minY + (p.y - minY) * sy }));
+        Object.assign(next, polyMetrics(next.points, ppi));
       }
       return next;
     }));
   };
 
-  // Move/resize drag on already-drawn boxes (select mode). Move keeps the
-  // dimensions; dragging the corner handle resizes and rewrites the inches.
-  const [editDrag, setEditDrag] = useState<{ kind: 'move' | 'resize'; id: string; grabX: number; grabY: number; rect: { x: number; y: number; w: number; h: number } } | null>(null);
+  // Move/resize drag on already-drawn boxes and freeform shapes (select
+  // mode). Move keeps the dimensions; dragging a box's corner handle or a
+  // shape's vertex reshapes it and rewrites the inches.
+  const [editDrag, setEditDrag] = useState<{
+    kind: 'move' | 'resize' | 'vertex';
+    id: string;
+    grabX: number;
+    grabY: number;
+    rect?: { x: number; y: number; w: number; h: number };
+    points?: { x: number; y: number }[];
+    vertexIndex?: number;
+  } | null>(null);
 
-  const beginEditDrag = (e: React.PointerEvent, m: Measurement, kind: 'move' | 'resize') => {
-    if (tool !== 'select' || !m.rect) return;
+  const beginEditDrag = (e: React.PointerEvent, m: Measurement, kind: 'move' | 'resize' | 'vertex', vertexIndex?: number) => {
+    if (tool !== 'select') return;
+    if (kind === 'vertex' || m.type === 'poly') { if (!m.points) return; } else if (!m.rect) return;
     e.stopPropagation();
     const pt = svgPoint(e);
     if (!pt) return;
     setSelectedId(m.id);
     (e.target as Element).setPointerCapture?.(e.pointerId);
-    setEditDrag({ kind, id: m.id, grabX: pt.x, grabY: pt.y, rect: { ...m.rect } });
+    setEditDrag({
+      kind, id: m.id, grabX: pt.x, grabY: pt.y,
+      rect: m.type === 'poly' ? undefined : m.rect ? { ...m.rect } : undefined,
+      points: m.type === 'poly' && m.points ? m.points.map(p => ({ ...p })) : undefined,
+      vertexIndex,
+    });
   };
 
   const removeMeasurement = (id: string) => {
@@ -643,6 +909,7 @@ export default function WrapQuotePage() {
       rect: src.rect ? { ...src.rect, x: src.rect.x + OFFSET, y: src.rect.y + OFFSET } : undefined,
       line1: src.line1 ? { x1: src.line1.x1 + OFFSET, y1: src.line1.y1 + OFFSET, x2: src.line1.x2 + OFFSET, y2: src.line1.y2 + OFFSET } : undefined,
       line2: src.line2 ? { x1: src.line2.x1 + OFFSET, y1: src.line2.y1 + OFFSET, x2: src.line2.x2 + OFFSET, y2: src.line2.y2 + OFFSET } : undefined,
+      points: src.points ? src.points.map(p => ({ x: p.x + OFFSET, y: p.y + OFFSET })) : undefined,
     };
     setMeasurements(prev => [...prev, copy]);
     setSelectedId(copy.id);
@@ -654,10 +921,14 @@ export default function WrapQuotePage() {
     setMeasurements([]);
     setSelectedId(null);
     setPendingPair(null);
+    setPolyDraft(null);
+    setPolyHover(null);
     setSavedQuoteId(null);
     setQuoteNumber('');
     setPackageQty('1');
     setDiscountPctOverride('');
+    setPlacements({});
+    setUseRollPricing(false);
   };
 
   // ----- Quote snapshot / save / email -----
@@ -676,6 +947,10 @@ export default function WrapQuotePage() {
   };
 
   const buildSnapshot = () => {
+    // With roll pricing on, the per-shape lines are informational (sizes and
+    // films) and the priced rows are the per-film roll materials — so the
+    // shape lines carry null prices instead of numbers that don't sum.
+    const nested = totals.nested;
     const lines = measurements.map(m => {
       const p = measurementPricing(m);
       return {
@@ -684,18 +959,62 @@ export default function WrapQuotePage() {
         qty: Math.max(1, num(m.qty)),
         dim1_in: num(m.dim1_in),
         dim2_in: num(m.dim2_in),
+        area_in2: m.area_in2 ?? null,
+        perimeter_in: m.perimeter_in ?? null,
         // Snapshot stores the combined film+laminate label and effective rate
         // so quote history, preview, and the emailed document all match.
         substrate: p.sub ? { id: p.sub.id, name: filmLabel(p.sub), price_per_sqft: filmRate(p.sub), bleed_in: num(p.sub.bleed_in), film_name: p.sub.name, laminate_name: p.sub.laminate_name } : null,
         trim_area_sqft: p.trimArea,
         billed_area_sqft: p.billedArea,
-        unit_price: p.unitPrice,
-        line_total: p.lineTotal,
+        unit_price: nested ? null : p.unitPrice,
+        line_total: nested ? null : p.lineTotal,
         // Canvas geometry (template-image pixels) so a saved quote can be
         // reopened in the estimator with its shapes intact.
-        geometry: { rect: m.rect || null, line1: m.line1 || null, line2: m.line2 || null },
+        geometry: { rect: m.rect || null, line1: m.line1 || null, line2: m.line2 || null, poly: m.points || null },
       };
     });
+    // The roll layout rides along whenever pieces are placed (so reopening
+    // restores the arrangement); `enabled` records whether materials were
+    // actually priced from it. Placements key on measurement INDEX because
+    // measurement ids are regenerated when a quote reloads.
+    const measurementIndex = new Map(measurements.map((m, i) => [m.id, i]));
+    let nesting: NestingSnapshot | null = null;
+    if (Object.keys(placements).length > 0) {
+      const placementRows: NestingSnapshot['placements'] = [];
+      for (const m of measurements) {
+        const idx = measurementIndex.get(m.id)!;
+        const qty = Math.max(1, num(m.qty));
+        for (let s = 0; s < kitSets; s++) {
+          for (let c = 0; c < qty; c++) {
+            const pl = placements[`${m.id}:${c}:${s}`];
+            if (pl) placementRows.push({ m: idx, copy: c, set: s, roll: pl.roll, x: pl.x, y: pl.y, rot: pl.rot });
+          }
+        }
+      }
+      nesting = {
+        enabled: nested,
+        roll_width_in: rollConfig.widthIn,
+        roll_length_in: rollConfig.lengthIn,
+        spacing_in: rollConfig.spacingIn,
+        edge_margin_in: rollConfig.edgeMarginIn,
+        sets: kitSets,
+        films: nestUsage.films.map(f => {
+          const film = substrateById(f.filmKey || null);
+          const rate = film ? filmRate(film) : 0;
+          return {
+            film_id: f.filmKey || null,
+            label: film ? filmLabel(film) : 'No film',
+            rate_per_sqft: rate,
+            rolls: f.rolls.map(r => ({ used_length_in: r.usedLengthIn, piece_count: r.pieceCount })),
+            roll_sqft: f.rollSqft,
+            graphic_sqft: f.graphicSqft,
+            material_total: f.rollSqft * rate,
+          };
+        }),
+        unplaced: nestUsage.unplaced.map(p => ({ name: p.name, w_in: p.w, h_in: p.h, film_id: p.filmKey || null })),
+        placements: placementRows,
+      };
+    }
     return {
       quote_number: quoteNumber || wqBase(),
       template_id: template?.id || null,
@@ -714,6 +1033,7 @@ export default function WrapQuotePage() {
       },
       total_area_sqft: totals.area,
       package_qty: totals.kitQty,
+      nesting,
       // Display snapshot of how the totals were reached; null = plain
       // single-kit quote. materials_total/labor_total below already have the
       // discount + shop minimum folded in proportionally, so the NetSuite
@@ -777,6 +1097,14 @@ export default function WrapQuotePage() {
         ctx.ellipse(m.rect.x + m.rect.w / 2, m.rect.y + m.rect.h / 2, m.rect.w / 2, m.rect.h / 2, 0, 0, Math.PI * 2);
         ctx.fill();
         ctx.stroke();
+      } else if (m.type === 'poly' && m.points && m.points.length >= 3) {
+        ctx.fillStyle = fc + '26';
+        ctx.strokeStyle = fc;
+        ctx.beginPath();
+        m.points.forEach((pt, i) => i === 0 ? ctx.moveTo(pt.x, pt.y) : ctx.lineTo(pt.x, pt.y));
+        ctx.closePath();
+        ctx.fill();
+        ctx.stroke();
       } else {
         // roof/hood line pairs keep the editor's colors (red = length, blue = width)
         for (const [line, color] of [[m.line1, '#ef4444'], [m.line2, '#3b82f6']] as const) {
@@ -788,9 +1116,10 @@ export default function WrapQuotePage() {
           ctx.stroke();
         }
       }
-      if (m.rect || m.line1) {
+      const anchor = m.rect || (m.points?.length ? { x: Math.min(...m.points.map(p => p.x)), y: Math.min(...m.points.map(p => p.y)) } : m.line1 ? { x: m.line1.x1, y: m.line1.y1 } : null);
+      if (anchor) {
         ctx.fillStyle = fc;
-        ctx.fillText(m.name, (m.rect ? m.rect.x : m.line1!.x1) + fontSize / 3, (m.rect ? m.rect.y : m.line1!.y1) - fontSize / 3);
+        ctx.fillText(m.name, anchor.x + fontSize / 3, anchor.y - fontSize / 3);
       }
     }
     return await new Promise<Blob | null>(resolve => canvas.toBlob(resolve, 'image/png'));
@@ -1058,7 +1387,15 @@ export default function WrapQuotePage() {
         rect: l.geometry?.rect || undefined,
         line1: l.geometry?.line1 || undefined,
         line2: l.geometry?.line2 || undefined,
+        points: l.geometry?.poly || undefined,
+        area_in2: l.area_in2 != null ? num(l.area_in2) : undefined,
+        perimeter_in: l.perimeter_in != null ? num(l.perimeter_in) : undefined,
       };
+      // Freeform shapes missing their cached metrics (hand-edited rows)
+      // recompute from the outline when the template is calibrated.
+      if (m.type === 'poly' && m.points && (m.area_in2 == null || m.perimeter_in == null) && ppi > 0) {
+        Object.assign(m, polyMetrics(m.points, ppi));
+      }
       if (!m.rect && !m.line1 && (m.type === 'box' || m.type === 'circle') && ppi > 0) {
         const w = Math.max(2, m.dim1_in * ppi);
         const h = Math.max(2, m.dim2_in * ppi);
@@ -1073,6 +1410,8 @@ export default function WrapQuotePage() {
     setMeasurements(ms);
     setSelectedId(null);
     setPendingPair(null);
+    setPolyDraft(null);
+    setPolyHover(null);
     setSavedQuoteId(q.id);
     setQuoteNumber(q.quote_number);
     setCustomer({ name: '', address: '', city: '', state: '', zip: '', phone: '', email: '', email_cc: '', ...(q.customer || {}) });
@@ -1087,6 +1426,28 @@ export default function WrapQuotePage() {
     // Pin the saved discount % (clearing the field re-derives from the
     // settings tiers); older quotes have no adjustments and stay on auto.
     setDiscountPctOverride(q.adjustments?.discount_pct != null ? String(q.adjustments.discount_pct) : '');
+    // Restore the roll-nesting layout: placements were saved by measurement
+    // index, so re-key them onto the freshly minted measurement ids.
+    const n = q.nesting;
+    if (n) {
+      setRollConfig({
+        widthIn: num(n.roll_width_in) || DEFAULT_ROLL.widthIn,
+        lengthIn: num(n.roll_length_in) || DEFAULT_ROLL.lengthIn,
+        spacingIn: n.spacing_in != null ? Math.max(0, num(n.spacing_in)) : DEFAULT_ROLL.spacingIn,
+        edgeMarginIn: n.edge_margin_in != null ? Math.max(0, num(n.edge_margin_in)) : DEFAULT_ROLL.edgeMarginIn,
+      });
+      const restored: PlacementMap = {};
+      for (const row of n.placements || []) {
+        const target = ms[row.m];
+        if (!target) continue;
+        restored[`${target.id}:${row.copy}:${row.set}`] = { roll: Math.max(0, num(row.roll)), x: num(row.x), y: num(row.y), rot: row.rot === 90 ? 90 : 0 };
+      }
+      setPlacements(restored);
+      setUseRollPricing(!!n.enabled);
+    } else {
+      setPlacements({});
+      setUseRollPricing(false);
+    }
     setSendMode('full');
     setViewQuote(null);
     setTab('quote');
@@ -1419,14 +1780,21 @@ export default function WrapQuotePage() {
                 {m.type === 'circle' && m.rect && (
                   <ellipse cx={m.rect.x + m.rect.w / 2} cy={m.rect.y + m.rect.h / 2} rx={m.rect.w / 2} ry={m.rect.h / 2} fill={fc + '26'} stroke={fc} strokeWidth={2} vectorEffect="non-scaling-stroke" />
                 )}
+                {m.type === 'poly' && m.points && m.points.length >= 3 && (
+                  <polygon points={m.points.map(p => `${p.x},${p.y}`).join(' ')} fill={fc + '26'} stroke={fc} strokeWidth={2} vectorEffect="non-scaling-stroke" />
+                )}
                 {(m.type === 'roof' || m.type === 'hood') && (
                   <>
                     {m.line1 && <line x1={m.line1.x1} y1={m.line1.y1} x2={m.line1.x2} y2={m.line1.y2} stroke="#ef4444" strokeWidth={3} vectorEffect="non-scaling-stroke" />}
                     {m.line2 && <line x1={m.line2.x1} y1={m.line2.y1} x2={m.line2.x2} y2={m.line2.y2} stroke="#3b82f6" strokeWidth={3} vectorEffect="non-scaling-stroke" />}
                   </>
                 )}
-                {(m.rect || m.line1) && (
-                  <text x={(m.rect ? m.rect.x : m.line1!.x1) + fontSize / 3} y={(m.rect ? m.rect.y : m.line1!.y1) - fontSize / 3} fontSize={fontSize} fontWeight={700} fill={fc}>{m.name}</text>
+                {(m.rect || m.line1 || m.points?.length) && (
+                  <text
+                    x={(m.rect ? m.rect.x : m.points?.length ? Math.min(...m.points.map(p => p.x)) : m.line1!.x1) + fontSize / 3}
+                    y={(m.rect ? m.rect.y : m.points?.length ? Math.min(...m.points.map(p => p.y)) : m.line1!.y1) - fontSize / 3}
+                    fontSize={fontSize} fontWeight={700} fill={fc}
+                  >{m.name}</text>
                 )}
               </g>
             );
@@ -1438,7 +1806,7 @@ export default function WrapQuotePage() {
 
   // Quote preview shared by the Quote tab and History view modal. `coverage`
   // overrides the stored diagram with a live render (Quote tab, pre-save).
-  const quotePreview = (q: { quote_number: string; vehicle_description: string | null; customer: any; project_type: string | null; project_notes: string | null; measurements: any[]; labor: any; subtotal: number; tax_rate: number; tax_amount: number; total: number; diagram_path?: string | null; attachments?: QuoteAttachment[] | null; created_at?: string; package_qty?: number | null; adjustments?: QuoteAdjustments | null }, coverage?: React.ReactNode) => (
+  const quotePreview = (q: { quote_number: string; vehicle_description: string | null; customer: any; project_type: string | null; project_notes: string | null; measurements: any[]; labor: any; subtotal: number; tax_rate: number; tax_amount: number; total: number; diagram_path?: string | null; attachments?: QuoteAttachment[] | null; created_at?: string; package_qty?: number | null; adjustments?: QuoteAdjustments | null; nesting?: NestingSnapshot | null }, coverage?: React.ReactNode) => (
     <div style={{ background: 'var(--card)', border: `1px solid ${theme.border}`, borderRadius: '12px', padding: '18px' }}>
       <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '12px' }}>
         <div style={{ fontSize: '17px', fontWeight: 800, color: 'var(--text-primary)' }}>Wrap Quote <span style={{ fontSize: '11px', color: 'var(--text-muted)', fontWeight: 700 }}>{q.quote_number}</span></div>
@@ -1492,11 +1860,26 @@ export default function WrapQuotePage() {
                 </span>
               </td>
               <td style={{ padding: '5px 6px', textAlign: 'right', borderBottom: `1px solid ${theme.border}` }}>{l.qty}</td>
-              <td style={{ padding: '5px 6px', textAlign: 'right', borderBottom: `1px solid ${theme.border}` }}>{fmt(l.unit_price)}</td>
-              <td style={{ padding: '5px 6px', textAlign: 'right', borderBottom: `1px solid ${theme.border}` }}>{fmt(l.line_total)}</td>
+              <td style={{ padding: '5px 6px', textAlign: 'right', borderBottom: `1px solid ${theme.border}` }}>{l.unit_price == null ? '—' : fmt(l.unit_price)}</td>
+              <td style={{ padding: '5px 6px', textAlign: 'right', borderBottom: `1px solid ${theme.border}` }}>{l.line_total == null ? '—' : fmt(l.line_total)}</td>
             </tr>
           ))}
-          {(q.package_qty || 1) > 1 && q.adjustments && (
+          {/* Roll pricing: materials bill as the vinyl cut off each film's
+              roll — the shape rows above show sizes only. */}
+          {q.nesting?.enabled && (q.nesting.films || []).filter(f => num(f.material_total) > 0.005).map((f, i) => (
+            <tr key={`roll-${i}`} style={{ color: 'var(--text-primary)', fontWeight: 700 }}>
+              <td style={{ padding: '5px 6px', borderBottom: `1px solid ${theme.border}` }}>
+                Material — {f.label}
+                <span style={{ color: 'var(--text-muted)', marginLeft: '6px', fontSize: '9px', fontWeight: 400 }}>
+                  {fmt(f.roll_sqft)} ft² · {(f.rolls || []).length > 1 ? `${f.rolls.length} rolls, ` : ''}{fmtFtIn((f.rolls || []).reduce((s, r) => s + num(r.used_length_in), 0))} of {num(q.nesting!.roll_width_in)}&quot; roll{(q.nesting!.sets || 1) > 1 ? ` · ${q.nesting!.sets} sets` : ''}
+                </span>
+              </td>
+              <td style={{ padding: '5px 6px', textAlign: 'right', borderBottom: `1px solid ${theme.border}` }}>1</td>
+              <td style={{ padding: '5px 6px', textAlign: 'right', borderBottom: `1px solid ${theme.border}` }}>{fmt(f.material_total)}</td>
+              <td style={{ padding: '5px 6px', textAlign: 'right', borderBottom: `1px solid ${theme.border}` }}>{fmt(f.material_total)}</td>
+            </tr>
+          ))}
+          {(q.package_qty || 1) > 1 && q.adjustments && !q.nesting?.enabled && (
             <tr style={{ color: 'var(--text-primary)', fontWeight: 700 }}>
               <td style={{ padding: '5px 6px', borderBottom: `1px solid ${theme.border}` }}>
                 Materials — {q.package_qty} kits
@@ -1541,6 +1924,13 @@ export default function WrapQuotePage() {
           {(q.labor.films as any[]).map((f: any) => `${f.label} — ${fmt(f.sqft)} ft²`).join('  ·  ')}
         </div>
       )}
+      {q.nesting?.enabled && (
+        <div style={{ marginTop: '4px', fontSize: '10px', color: 'var(--text-secondary)' }}>
+          <b style={{ color: 'var(--text-primary)' }}>Materials priced from nested roll layout:</b>{' '}
+          {fmt((q.nesting.films || []).reduce((s, f) => s + num(f.roll_sqft), 0))} ft² of {num(q.nesting.roll_width_in)}&quot; roll
+          {(q.nesting.sets || 1) > 1 ? ` · ${q.nesting.sets} sets nested together` : ''}
+        </div>
+      )}
       <div style={{ marginTop: '10px', display: 'flex', flexDirection: 'column', alignItems: 'flex-end', gap: '3px', fontSize: '12px', color: 'var(--text-primary)' }}>
         {q.adjustments && (num(q.adjustments.discount_amount) > 0.005 || num(q.adjustments.min_bump) > 0.005) && (
           <div style={{ color: 'var(--text-secondary)' }}>Subtotal before adjustments <b style={{ marginLeft: '14px' }}>${fmt(num(q.adjustments.pre_subtotal))}</b></div>
@@ -1574,6 +1964,7 @@ export default function WrapQuotePage() {
       <div style={{ display: 'flex', gap: '4px', marginBottom: '12px', flexWrap: 'wrap' }}>
         {([
           { id: 'estimator' as Tab, label: 'Estimator', color: '#06b6d4' },
+          { id: 'nesting' as Tab, label: `Roll Nesting${nestPieces.length > 0 ? ` (${nestPieces.length})` : ''}`, color: '#f472b6' },
           { id: 'quote' as Tab, label: 'Quote', color: '#22c55e' },
           { id: 'history' as Tab, label: `Quote History (${history.filter(q => !q.archived_at).length})`, color: '#a78bfa' },
           { id: 'pricing' as Tab, label: 'Pricing', color: '#f59e0b' },
@@ -1647,10 +2038,11 @@ export default function WrapQuotePage() {
                 <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '6px', marginBottom: '10px' }}>
                   {([
                     { id: 'box' as Tool, label: 'Draw Box' },
+                    { id: 'poly' as Tool, label: 'Draw Shape' },
                     { id: 'roof' as Tool, label: 'Draw Roof' },
                     { id: 'hood' as Tool, label: 'Draw Hood' },
                   ]).map(t => (
-                    <button key={t.id} onClick={() => { setTool(t.id); setPendingPair(null); }} disabled={!template.px_per_in} title={!template.px_per_in ? 'Calibrate the template first' : (t.id === 'roof' || t.id === 'hood') ? 'Drag line 1 along the side view, then line 2 across the front/back view — area = L1 × L2' : undefined} style={{
+                    <button key={t.id} onClick={() => { setTool(t.id); setPendingPair(null); if (t.id !== 'poly') { setPolyDraft(null); setPolyHover(null); } }} disabled={!template.px_per_in} title={!template.px_per_in ? 'Calibrate the template first' : (t.id === 'roof' || t.id === 'hood') ? 'Drag line 1 along the side view, then line 2 across the front/back view — area = L1 × L2' : t.id === 'poly' ? 'Click to place connected corners; click the first point again to close the shape' : undefined} style={{
                       padding: '8px 6px', borderRadius: '8px', fontSize: '10px', fontWeight: 700, cursor: template.px_per_in ? 'pointer' : 'default',
                       background: tool === t.id ? 'rgba(6,182,212,0.15)' : 'var(--subtle-bg)',
                       border: tool === t.id ? '1px solid rgba(6,182,212,0.4)' : '1px solid var(--border)',
@@ -1678,6 +2070,25 @@ export default function WrapQuotePage() {
                   <div style={{ padding: '8px', borderRadius: '8px', background: 'rgba(6,182,212,0.08)', border: '1px solid rgba(6,182,212,0.25)', fontSize: '10px', fontWeight: 700, color: '#06b6d4', marginBottom: '10px' }}>
                     Line 1 done ({fmt(pendingPair.dim1_in)} in) — now drag line 2 across the {pendingPair.type === 'roof' ? 'front/back view of the roof' : 'front view of the hood'}.
                     <button onClick={() => { setPendingPair(null); setTool('select'); }} style={{ display: 'block', marginTop: '4px', background: 'none', border: 'none', color: '#ef4444', fontSize: '10px', fontWeight: 700, cursor: 'pointer', padding: 0 }}>Cancel</button>
+                  </div>
+                )}
+
+                {tool === 'poly' && (!polyDraft || polyDraft.length === 0) && (
+                  <div style={{ padding: '8px', borderRadius: '8px', background: 'rgba(6,182,212,0.08)', border: '1px solid rgba(6,182,212,0.25)', fontSize: '10px', color: 'var(--text-secondary)', marginBottom: '10px', lineHeight: 1.5 }}>
+                    <b style={{ color: '#06b6d4' }}>Freeform shape:</b> click to place each corner — the lines connect
+                    as you go and snap square to the previous point. Click the <b>first point</b> again to close the
+                    shape (it highlights when you&apos;re close). Pricing uses the shape&apos;s true area, not its bounding box.
+                  </div>
+                )}
+
+                {polyDraft && polyDraft.length > 0 && (
+                  <div style={{ padding: '8px', borderRadius: '8px', background: 'rgba(6,182,212,0.08)', border: '1px solid rgba(6,182,212,0.25)', fontSize: '10px', fontWeight: 700, color: '#06b6d4', marginBottom: '10px' }}>
+                    {polyDraft.length} point{polyDraft.length !== 1 ? 's' : ''} placed{polyDraft.length >= 3 ? ' — click the first point (or Close Shape) to finish.' : ' — keep clicking corners.'}
+                    <div style={{ display: 'flex', gap: '4px', marginTop: '6px', flexWrap: 'wrap' }}>
+                      <button onClick={closePoly} disabled={polyDraft.length < 3} style={{ ...btnStyle('#22c55e', 'rgba(34,197,94,0.1)'), opacity: polyDraft.length < 3 ? 0.5 : 1 }}>Close Shape</button>
+                      <button onClick={undoPolyPoint} style={btnStyle('#f59e0b', 'transparent')}>Undo Point</button>
+                      <button onClick={cancelPoly} style={btnStyle('#ef4444', 'transparent')}>Cancel</button>
+                    </div>
                   </div>
                 )}
 
@@ -1776,7 +2187,7 @@ export default function WrapQuotePage() {
                         const fill = sel ? 'rgba(245,158,11,0.18)' : fc + '26';
                         const fontSize = imgDim.w / 70;
                         return (
-                          <g key={m.id} onPointerDown={e => { if (tool === 'select') { if (m.type === 'box' && m.rect) { beginEditDrag(e, m, 'move'); } else { e.stopPropagation(); setSelectedId(m.id); } } }} style={{ cursor: tool === 'select' ? 'move' : 'pointer' }}>
+                          <g key={m.id} onPointerDown={e => { if (tool === 'select') { if (m.type === 'box' && m.rect) { beginEditDrag(e, m, 'move'); } else if (m.type === 'poly' && m.points) { beginEditDrag(e, m, 'move'); } else { e.stopPropagation(); setSelectedId(m.id); } } }} style={{ cursor: tool === 'select' ? 'move' : 'pointer' }}>
                             {m.type === 'box' && m.rect && (
                               <rect x={m.rect.x} y={m.rect.y} width={m.rect.w} height={m.rect.h} fill={fill} stroke={stroke} strokeWidth={2} vectorEffect="non-scaling-stroke" />
                             )}
@@ -1791,14 +2202,42 @@ export default function WrapQuotePage() {
                             {m.type === 'circle' && m.rect && (
                               <ellipse cx={m.rect.x + m.rect.w / 2} cy={m.rect.y + m.rect.h / 2} rx={m.rect.w / 2} ry={m.rect.h / 2} fill={fill} stroke={stroke} strokeWidth={2} vectorEffect="non-scaling-stroke" />
                             )}
+                            {m.type === 'poly' && m.points && m.points.length >= 3 && (
+                              <polygon points={m.points.map(p => `${p.x},${p.y}`).join(' ')} fill={fill} stroke={stroke} strokeWidth={2} vectorEffect="non-scaling-stroke" />
+                            )}
+                            {/* Selected shapes expose their corners for fine-tuning
+                                and label each edge with its real length. */}
+                            {m.type === 'poly' && m.points && sel && tool === 'select' && (
+                              <>
+                                {num(template.px_per_in) > 0 && m.points.map((pt, i) => {
+                                  const nxt = m.points![(i + 1) % m.points!.length];
+                                  const lenIn = Math.hypot(nxt.x - pt.x, nxt.y - pt.y) / num(template.px_per_in);
+                                  if (lenIn < 0.5) return null;
+                                  return (
+                                    <text key={`edge-${i}`} x={(pt.x + nxt.x) / 2} y={(pt.y + nxt.y) / 2 - fontSize / 4} fontSize={fontSize * 0.75} fontWeight={700} fill="#f59e0b" textAnchor="middle">{lenIn.toFixed(1)}&quot;</text>
+                                  );
+                                })}
+                                {m.points.map((pt, i) => (
+                                  <circle key={`vtx-${i}`} cx={pt.x} cy={pt.y} r={Math.max(5, imgDim.w / 220)}
+                                    fill="#f59e0b" stroke="#fff" strokeWidth={1.5} vectorEffect="non-scaling-stroke"
+                                    style={{ cursor: 'grab' }}
+                                    onPointerDown={e => beginEditDrag(e, m, 'vertex', i)}
+                                  />
+                                ))}
+                              </>
+                            )}
                             {(m.type === 'roof' || m.type === 'hood') && (
                               <>
                                 {m.line1 && <line x1={m.line1.x1} y1={m.line1.y1} x2={m.line1.x2} y2={m.line1.y2} stroke="#ef4444" strokeWidth={3} vectorEffect="non-scaling-stroke" />}
                                 {m.line2 && <line x1={m.line2.x1} y1={m.line2.y1} x2={m.line2.x2} y2={m.line2.y2} stroke="#3b82f6" strokeWidth={3} vectorEffect="non-scaling-stroke" />}
                               </>
                             )}
-                            {(m.rect || m.line1) && (
-                              <text x={(m.rect ? m.rect.x : m.line1!.x1) + fontSize / 3} y={(m.rect ? m.rect.y : m.line1!.y1) - fontSize / 3} fontSize={fontSize} fontWeight={700} fill={stroke}>{m.name}</text>
+                            {(m.rect || m.line1 || m.points?.length) && (
+                              <text
+                                x={(m.rect ? m.rect.x : m.points?.length ? Math.min(...m.points.map(p => p.x)) : m.line1!.x1) + fontSize / 3}
+                                y={(m.rect ? m.rect.y : m.points?.length ? Math.min(...m.points.map(p => p.y)) : m.line1!.y1) - fontSize / 3}
+                                fontSize={fontSize} fontWeight={700} fill={stroke}
+                              >{m.name}</text>
                             )}
                           </g>
                         );
@@ -1813,6 +2252,34 @@ export default function WrapQuotePage() {
                       ) : (
                         <line x1={drag.x1} y1={drag.y1} x2={drag.x2} y2={drag.y2} stroke={tool === 'calibrate' ? '#fbbf24' : pendingPair ? '#3b82f6' : '#ef4444'} strokeWidth={3} vectorEffect="non-scaling-stroke" strokeDasharray="6 4" />
                       ))}
+                      {/* Freeform shape in progress: placed corners, the live
+                          edge to the cursor, per-edge lengths, and a green
+                          first point when one more click closes the shape. */}
+                      {tool === 'poly' && polyDraft && polyDraft.length > 0 && (() => {
+                        const ppi = num(template.px_per_in);
+                        const pts = polyHover ? [...polyDraft, polyHover] : polyDraft;
+                        const closeReady = !!polyHover && closesPoly(polyHover, polyDraft);
+                        const fontSize = imgDim.w / 70;
+                        return (
+                          <g>
+                            <polyline points={pts.map(p => `${p.x},${p.y}`).join(' ')} fill={pts.length >= 3 ? 'rgba(6,182,212,0.08)' : 'none'} stroke="#06b6d4" strokeWidth={2} vectorEffect="non-scaling-stroke" strokeDasharray="6 4" />
+                            {ppi > 0 && pts.slice(0, -1).map((pt, i) => {
+                              const nxt = pts[i + 1];
+                              const lenIn = Math.hypot(nxt.x - pt.x, nxt.y - pt.y) / ppi;
+                              if (lenIn < 0.5) return null;
+                              return (
+                                <text key={`dlen-${i}`} x={(pt.x + nxt.x) / 2} y={(pt.y + nxt.y) / 2 - fontSize / 4} fontSize={fontSize * 0.75} fontWeight={700} fill="#06b6d4" textAnchor="middle">{lenIn.toFixed(1)}&quot;</text>
+                              );
+                            })}
+                            {polyDraft.map((pt, i) => (
+                              <circle key={`dpt-${i}`} cx={pt.x} cy={pt.y}
+                                r={i === 0 && polyDraft.length >= 3 ? Math.max(6, imgDim.w / 170) : Math.max(4, imgDim.w / 260)}
+                                fill={i === 0 && closeReady ? '#22c55e' : i === 0 && polyDraft.length >= 3 ? 'rgba(34,197,94,0.5)' : '#06b6d4'}
+                                stroke="#fff" strokeWidth={1.5} vectorEffect="non-scaling-stroke" />
+                            ))}
+                          </g>
+                        );
+                      })()}
                     </svg>
                   )}
                 </div>
@@ -1841,6 +2308,11 @@ export default function WrapQuotePage() {
                       Billed film: {fmt(totals.billedArea)} ft²
                     </div>
                   )}
+                  {totals.nested && (
+                    <div title="Materials are priced from the nested roll layout — roll width × used length per film" style={{ fontSize: '12px', fontWeight: 800, color: '#f472b6' }}>
+                      Roll: {fmt(totals.nestedRollSqft)} ft²
+                    </div>
+                  )}
                   <div style={{ fontSize: '12px', fontWeight: 800, color: '#22c55e' }}>Estimated Cost: ${fmt(totals.total)}</div>
                   {/* Internal materials margin — never appears on the emailed
                       quote. Compares cost against the DISCOUNTED material
@@ -1859,6 +2331,13 @@ export default function WrapQuotePage() {
                       </div>
                     );
                   })()}
+                  <button onClick={() => setTab('nesting')} disabled={measurements.length === 0} title="Lay the shapes out on the vinyl roll and price by material actually used" style={{
+                    padding: '8px 16px', borderRadius: '8px', fontSize: '12px', fontWeight: 800,
+                    background: measurements.length === 0 ? 'var(--subtle-bg)' : 'rgba(244,114,182,0.12)',
+                    border: measurements.length === 0 ? 'none' : '1px solid rgba(244,114,182,0.4)',
+                    color: measurements.length === 0 ? 'var(--text-muted)' : '#f472b6',
+                    cursor: measurements.length === 0 ? 'default' : 'pointer',
+                  }}>Nest Roll →</button>
                   <button onClick={() => setTab('quote')} disabled={measurements.length === 0} style={{
                     padding: '8px 16px', borderRadius: '8px', fontSize: '12px', fontWeight: 800, border: 'none',
                     background: measurements.length === 0 ? 'var(--subtle-bg)' : '#22c55e',
@@ -1867,6 +2346,47 @@ export default function WrapQuotePage() {
                   }}>Quote →</button>
                 </div>
               </div>
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* ================= ROLL NESTING ================= */}
+      {tab === 'nesting' && (
+        <div>
+          {nestCapped && (
+            <div style={{ padding: '8px 12px', borderRadius: '8px', marginBottom: '10px', background: 'rgba(251,191,36,0.08)', border: '1px solid rgba(251,191,36,0.3)', fontSize: '11px', fontWeight: 700, color: '#fbbf24' }}>
+              Layout capped at {nestPieces.length} pieces (quantity × sets is very large) — the roll usage below covers only what&apos;s shown.
+            </div>
+          )}
+          <RollNesting
+            pieces={nestPieces}
+            films={nestFilms}
+            config={rollConfig}
+            onConfigChange={setRollConfig}
+            placements={placements}
+            onPlacementsChange={setPlacements}
+            sets={kitSets}
+            onSetsChange={n => setPackageQty(String(n))}
+            useRollPricing={useRollPricing}
+            onUseRollPricingChange={setUseRollPricing}
+          />
+          {nestPieces.length > 0 && (
+            <div style={{ display: 'flex', alignItems: 'center', gap: '14px', flexWrap: 'wrap', padding: '10px 14px', marginTop: '10px', background: 'var(--card)', border: `1px solid ${theme.border}`, borderRadius: '10px' }}>
+              <div style={{ fontSize: '12px', fontWeight: 800, color: 'var(--text-primary)' }}>
+                Roll material: {fmt(nestUsage.totalRollSqft)} ft²
+              </div>
+              <div style={{ fontSize: '12px', fontWeight: 800, color: 'var(--text-secondary)' }}>
+                Graphics: {fmt(totals.billedArea)} ft²
+              </div>
+              {totals.nested && (
+                <div style={{ fontSize: '12px', fontWeight: 800, color: '#f472b6' }}>Quote materials: ${fmt(totals.adjMaterials)}</div>
+              )}
+              <div style={{ marginLeft: 'auto', fontSize: '12px', fontWeight: 800, color: '#22c55e' }}>Estimated Cost: ${fmt(totals.total)}</div>
+              <button onClick={() => setTab('quote')} style={{
+                padding: '8px 16px', borderRadius: '8px', fontSize: '12px', fontWeight: 800, border: 'none',
+                background: '#22c55e', color: '#fff', cursor: 'pointer',
+              }}>Quote →</button>
             </div>
           )}
         </div>

@@ -1,0 +1,23 @@
+-- Roll-nesting layouts for wrap quotes.
+--
+-- The estimator's Roll Nesting tab lays every drawn shape (× qty × sets)
+-- out on rolls of its film (58.5" × 150' by default) so materials can be
+-- priced from the vinyl actually cut — roll width × used length per film —
+-- instead of per-shape area. FlexiSign-style auto-nest plus manual drag.
+--
+-- nesting is the saved layout + usage rollup:
+--   { enabled,                      -- true = materials priced from the roll
+--     roll_width_in, roll_length_in, spacing_in, edge_margin_in,
+--     sets,                         -- kit count nested together (= package_qty)
+--     films: [{ film_id, label, rate_per_sqft,
+--               rolls: [{ used_length_in, piece_count }],
+--               roll_sqft, graphic_sqft, material_total }],
+--     unplaced: [{ name, w_in, h_in, film_id }],   -- didn't fit; billed by area
+--     placements: [{ m, copy, set, roll, x, y, rot }] }  -- m = measurement index
+--
+-- When enabled, the measurement lines in the snapshot carry null
+-- unit_price/line_total (sizes only) and the priced rows are the per-film
+-- roll materials; materials_total already reflects roll pricing, so the
+-- NetSuite estimate push and graphics-invoice derivation need no changes.
+-- NULL = quote predates nesting or was never nested.
+ALTER TABLE wrap_quotes ADD COLUMN IF NOT EXISTS nesting JSONB;

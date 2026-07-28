@@ -133,11 +133,26 @@ export default function QuoteApprovalPage() {
                   </div>
                 </td>
                 <td style={{ padding: '8px 0', textAlign: 'right' }}>{m.qty || 1}</td>
-                <td style={{ padding: '8px 0', textAlign: 'right' }}>${money(m.unit_price)}</td>
-                <td style={{ padding: '8px 0', textAlign: 'right' }}>${money(m.line_total)}</td>
+                <td style={{ padding: '8px 0', textAlign: 'right' }}>{m.unit_price == null ? '—' : `$${money(m.unit_price)}`}</td>
+                <td style={{ padding: '8px 0', textAlign: 'right' }}>{m.line_total == null ? '—' : `$${money(m.line_total)}`}</td>
               </tr>
             ))}
-            {(q.package_qty || 1) > 1 && q.adjustments && (
+            {/* Roll-nested quotes: materials bill as vinyl cut off each
+                film's roll — the shape rows above show sizes only. */}
+            {q.nesting?.enabled && (q.nesting.films || []).filter((f: any) => (parseFloat(f.material_total) || 0) > 0.005).map((f: any, i: number) => (
+              <tr key={`roll-${i}`} style={{ borderTop: '1px solid #e2e8f0' }}>
+                <td style={{ padding: '8px 0', color: '#0f172a' }}>
+                  <div style={{ fontWeight: 700 }}>Material — {f.label}</div>
+                  <div style={{ fontSize: '12px', color: '#475569' }}>
+                    {money(f.roll_sqft)} ft² · {(((f.rolls || []).reduce((s: number, r: any) => s + (parseFloat(r.used_length_in) || 0), 0)) / 12).toFixed(1)} ft of {money(q.nesting.roll_width_in)}&quot; roll{(q.nesting.sets || 1) > 1 ? ` · ${q.nesting.sets} sets` : ''}
+                  </div>
+                </td>
+                <td style={{ padding: '8px 0', textAlign: 'right' }}>1</td>
+                <td style={{ padding: '8px 0', textAlign: 'right' }}>${money(f.material_total)}</td>
+                <td style={{ padding: '8px 0', textAlign: 'right', fontWeight: 700 }}>${money(f.material_total)}</td>
+              </tr>
+            ))}
+            {(q.package_qty || 1) > 1 && q.adjustments && !q.nesting?.enabled && (
               <tr style={{ borderTop: '1px solid #e2e8f0' }}>
                 <td style={{ padding: '8px 0', color: '#0f172a' }}>
                   <div style={{ fontWeight: 700 }}>Materials — {q.package_qty} kits</div>

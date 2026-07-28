@@ -173,6 +173,7 @@ function publicQuote(q: any) {
     labor: q.labor || null,
     package_qty: q.package_qty || 1,
     adjustments: q.adjustments || null,
+    nesting: q.nesting || null,
     subtotal: q.subtotal,
     tax_rate: q.tax_rate,
     tax_amount: q.tax_amount,
@@ -235,17 +236,28 @@ function renderQuoteHtml(q: any, meta: any, agreement: string): string {
   const rows: string[] = [];
   // Kit-quantity jobs: measurement lines price ONE kit; the rollup row and
   // the adjustment lines in the totals show how the final number was built.
+  // Roll-nested quotes price materials as vinyl cut off each film's roll:
+  // shape lines carry null prices (sizes only) and per-film Material rows
+  // carry the roll totals.
   const adj = q.adjustments || null;
   const kits = Math.max(1, parseInt(q.package_qty, 10) || 1);
+  const nest = q.nesting?.enabled ? q.nesting : null;
   for (const m of q.measurements || []) {
     rows.push(`<tr>
       <td>${esc(m.name)}<div class="sub">${money(m.billed_area_sqft)} ft²${m.substrate?.name ? ` · ${esc(m.substrate.name)}` : ''}${kits > 1 ? ' · per kit' : ''}</div></td>
       <td class="r">${esc(m.qty || 1)}</td>
-      <td class="r">$${money(m.unit_price)}</td>
-      <td class="r">$${money(m.line_total)}</td>
+      <td class="r">${m.unit_price == null ? '—' : `$${money(m.unit_price)}`}</td>
+      <td class="r">${m.line_total == null ? '—' : `$${money(m.line_total)}`}</td>
     </tr>`);
   }
-  if (kits > 1 && adj) {
+  if (nest) {
+    for (const f of nest.films || []) {
+      if (!((parseFloat(f.material_total) || 0) > 0.005)) continue;
+      const usedIn = (f.rolls || []).reduce((s: number, r: any) => s + (parseFloat(r.used_length_in) || 0), 0);
+      rows.push(`<tr><td><b>Material — ${esc(f.label)}</b><div class="sub">${money(f.roll_sqft)} ft² · ${(usedIn / 12).toFixed(1)} ft of ${money(nest.roll_width_in)}" roll${(nest.sets || 1) > 1 ? ` · ${nest.sets} sets` : ''}</div></td><td class="r">1</td><td class="r">$${money(f.material_total)}</td><td class="r"><b>$${money(f.material_total)}</b></td></tr>`);
+    }
+  }
+  if (kits > 1 && adj && !nest) {
     rows.push(`<tr><td><b>Materials — ${kits} kits</b><div class="sub">${money(adj.kit_area_sqft)} ft² per kit</div></td><td class="r"><b>${kits}</b></td><td class="r">$${money(adj.kit_materials)}</td><td class="r"><b>$${money(adj.pre_materials)}</b></td></tr>`);
   }
   for (const f of q.labor?.films || []) {
