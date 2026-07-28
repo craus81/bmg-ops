@@ -8,9 +8,14 @@ vi.mock('resend', () => ({
   },
 }));
 
-async function loadSendEmail() {
+async function loadSendEmail(env?: { replyTo?: string }) {
   vi.resetModules();
   process.env.RESEND_API_KEY = 'test-key';
+  if (env?.replyTo !== undefined) {
+    process.env.RESEND_REPLY_TO_EMAIL = env.replyTo;
+  } else {
+    delete process.env.RESEND_REPLY_TO_EMAIL;
+  }
   const mod = await import('./resend');
   return mod.sendEmail;
 }
@@ -91,6 +96,61 @@ describe('sendEmail', () => {
     expect(sendMock).toHaveBeenCalledTimes(3);
     expect(callTimes[1] - callTimes[0]).toBeGreaterThanOrEqual(600);
     expect(callTimes[2] - callTimes[1]).toBeGreaterThanOrEqual(600);
+  });
+
+  it('passes an explicit replyTo through to Resend', async () => {
+    const sendEmail = await loadSendEmail();
+    sendMock.mockResolvedValue({ error: null });
+
+    const result = sendEmail('a@example.com', 'Subject', '<p>Hi</p>', undefined, undefined, 'cgeorge@bmgfleet.com');
+    await vi.runAllTimersAsync();
+
+    expect(await result).toBe(true);
+    expect(sendMock.mock.calls[0][0]).toMatchObject({ replyTo: 'cgeorge@bmgfleet.com' });
+  });
+
+  it('falls back to RESEND_REPLY_TO_EMAIL when no per-send replyTo is given', async () => {
+    const sendEmail = await loadSendEmail({ replyTo: 'sales@bmgfleet.com' });
+    sendMock.mockResolvedValue({ error: null });
+
+    const result = sendEmail('a@example.com', 'Subject', '<p>Hi</p>');
+    await vi.runAllTimersAsync();
+
+    expect(await result).toBe(true);
+    expect(sendMock.mock.calls[0][0]).toMatchObject({ replyTo: 'sales@bmgfleet.com' });
+  });
+
+  it('per-send replyTo wins over the env default', async () => {
+    const sendEmail = await loadSendEmail({ replyTo: 'sales@bmgfleet.com' });
+    sendMock.mockResolvedValue({ error: null });
+
+    const result = sendEmail('a@example.com', 'Subject', '<p>Hi</p>', undefined, undefined, 'cgeorge@bmgfleet.com');
+    await vi.runAllTimersAsync();
+
+    expect(await result).toBe(true);
+    expect(sendMock.mock.calls[0][0]).toMatchObject({ replyTo: 'cgeorge@bmgfleet.com' });
+  });
+
+  it('omits replyTo entirely when neither per-send nor env value is set', async () => {
+    const sendEmail = await loadSendEmail();
+    sendMock.mockResolvedValue({ error: null });
+
+    const result = sendEmail('a@example.com', 'Subject', '<p>Hi</p>');
+    await vi.runAllTimersAsync();
+
+    expect(await result).toBe(true);
+    expect(sendMock.mock.calls[0][0]).not.toHaveProperty('replyTo');
+  });
+
+  it('a blank per-send replyTo falls back to the env default', async () => {
+    const sendEmail = await loadSendEmail({ replyTo: 'sales@bmgfleet.com' });
+    sendMock.mockResolvedValue({ error: null });
+
+    const result = sendEmail('a@example.com', 'Subject', '<p>Hi</p>', undefined, undefined, '  ');
+    await vi.runAllTimersAsync();
+
+    expect(await result).toBe(true);
+    expect(sendMock.mock.calls[0][0]).toMatchObject({ replyTo: 'sales@bmgfleet.com' });
   });
 
   it('a failed send does not block queued sends behind it', async () => {

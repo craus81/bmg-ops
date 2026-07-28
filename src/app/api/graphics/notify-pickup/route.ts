@@ -176,6 +176,9 @@ export async function POST(req: NextRequest) {
           contactEmail,
           `[BMG Fleet] Your graphics are ready for pickup — ${jobLabel}`,
           html,
+          undefined,
+          undefined,
+          auth.user?.email || undefined,
         );
         dispatch.email = { target: contactEmail, ok };
         if (threadId) {

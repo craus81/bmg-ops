@@ -196,7 +196,7 @@ export async function POST(req: NextRequest) {
       });
     }
 
-    const { ok: sent, id: resendId } = await sendEmailDetailed(recipients, subject, html, undefined, attachments);
+    const { ok: sent, id: resendId } = await sendEmailDetailed(recipients, subject, html, undefined, attachments, auth.user?.email || undefined);
 
     if (!sent) {
       return NextResponse.json({ error: 'Failed to send email' }, { status: 500 });

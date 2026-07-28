@@ -111,7 +111,7 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
         appUrl,
         'Open'
       );
-      const ok = await sendEmail(contact.email, '[BMG Fleet] Message', html);
+      const ok = await sendEmail(contact.email, '[BMG Fleet] Message', html, undefined, undefined, auth.user?.email || undefined);
       deliveryStatus = ok ? 'sent' : 'failed';
       providerName = 'resend';
     } catch (err: any) {
