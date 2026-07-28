@@ -6,7 +6,7 @@ import { validateBody, z } from '@/lib/validate';
 export const dynamic = 'force-dynamic';
 
 const RoleEnum = z.enum([
-  'admin', 'installer', 'field_tech', 'shop_tech', 'sales', 'graphics_production', 'customer',
+  'admin', 'finance', 'installer', 'field_tech', 'shop_tech', 'sales', 'graphics_production', 'customer',
 ]);
 
 const CreateUserSchema = z
