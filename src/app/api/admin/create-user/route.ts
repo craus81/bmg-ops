@@ -6,7 +6,7 @@ import { validateBody, z } from '@/lib/validate';
 export const dynamic = 'force-dynamic';
 
 const RoleEnum = z.enum([
-  'admin', 'finance', 'installer', 'field_tech', 'shop_tech', 'sales', 'graphics_production', 'customer',
+  'super_admin', 'admin', 'executive', 'finance', 'installer', 'field_tech', 'shop_tech', 'sales', 'graphics_production', 'customer',
 ]);
 
 const CreateUserSchema = z
@@ -81,7 +81,12 @@ export async function POST(req: NextRequest) {
 
   try {
     const userRoles: string[] = (roles && roles.length > 0) ? roles : (role ? [role] : []);
-    const primaryRole = userRoles.includes('admin') ? 'admin' : (userRoles[0] || 'installer');
+    // super_admin lives in the roles ARRAY; the scalar role stays 'admin' so
+    // RLS policies keyed on role='admin' keep working (migration 169 — same
+    // rule the edit modal applies).
+    const primaryRole = userRoles.includes('admin') || userRoles.includes('super_admin')
+      ? 'admin'
+      : (userRoles[0] || 'installer');
 
     // 1. Create the auth user via Supabase Admin API
     const { data: authData, error: authError } = await supabase.auth.admin.createUser({

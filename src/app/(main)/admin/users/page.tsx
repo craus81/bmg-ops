@@ -16,6 +16,7 @@ interface Company {
 const ROLES: { value: AppRole; label: string; color: string }[] = [
   { value: 'super_admin', label: 'Super Admin', color: '#f472b6' },
   { value: 'admin', label: 'Admin', color: 'var(--orange)' },
+  { value: 'executive', label: 'Executive', color: '#eab308' },
   { value: 'finance', label: 'Finance / AP', color: '#2dd4bf' },
   { value: 'sales', label: 'Sales', color: '#60a5fa' },
   { value: 'graphics_production', label: 'Graphics / Production', color: '#c084fc' },
