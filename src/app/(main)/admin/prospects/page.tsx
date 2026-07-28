@@ -1233,6 +1233,15 @@ export default function ProspectsPage() {
                         background: prospect.multi_location ? 'rgba(251,191,36,0.1)' : 'var(--subtle-bg)', border: `1px solid ${prospect.multi_location ? 'rgba(251,191,36,0.25)' : 'var(--border)'}`, color: prospect.multi_location ? '#f59e0b' : 'var(--text-muted)',
                       }}>{prospect.multi_location ? '✓ Multi-Location' : 'Multi-Location'}</button>
                       <button
+                        onClick={() => window.open(`/admin/prospects/${prospect.id}`, '_blank')}
+                        title="Open the standalone customer record page in a new tab"
+                        style={{
+                          padding: '5px 10px', borderRadius: '6px', fontSize: '10px', fontWeight: 700, cursor: 'pointer',
+                          background: 'rgba(74,222,128,0.1)', border: '1px solid rgba(74,222,128,0.25)', color: '#4ade80',
+                          marginLeft: 'auto',
+                        }}
+                      >Open Record ↗</button>
+                      <button
                         onClick={() => exportProspectPDF({
                           prospect,
                           statusLabel: STATUS_LABELS[prospect.status] || prospect.status || '',
@@ -1248,7 +1257,6 @@ export default function ProspectsPage() {
                         style={{
                           padding: '5px 10px', borderRadius: '6px', fontSize: '10px', fontWeight: 700, cursor: 'pointer',
                           background: 'rgba(96,165,250,0.1)', border: '1px solid rgba(96,165,250,0.25)', color: '#60a5fa',
-                          marginLeft: 'auto',
                         }}
                       >Export PDF</button>
                     </div>

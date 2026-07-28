@@ -769,10 +769,13 @@ export default function OpsDashboard() {
           {d.sales.topCustomers.length === 0 && <div style={{ fontSize: '12px', color: 'var(--text-muted)' }}>No YTD spend synced yet</div>}
           {d.sales.topCustomers.map(c => (
             <button key={c.name}
-              onClick={() => router.push(c.nsId
-                ? `/admin/prospects?ns=${encodeURIComponent(c.nsId)}&q=${encodeURIComponent(c.name)}`
-                : `/admin/prospects?q=${encodeURIComponent(c.name)}`)}
-              title={`Open ${c.name} in the CRM`}
+              onClick={() => {
+                // Customer Record opens in a new tab so the dashboard stays put;
+                // without a NetSuite id there's no record page — search the CRM.
+                if (c.nsId) window.open(`/admin/prospects/ns-${c.nsId}`, '_blank');
+                else router.push(`/admin/prospects?q=${encodeURIComponent(c.name)}`);
+              }}
+              title={`Open ${c.name}'s customer record`}
               style={{ display: 'flex', justifyContent: 'space-between', width: '100%', fontSize: '12px', padding: '3px 0', background: 'none', border: 'none', cursor: 'pointer', fontVariantNumeric: 'tabular-nums' }}>
               <span style={{ color: 'var(--text-secondary)', fontWeight: 600, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', paddingRight: '8px' }}>{c.name}</span>
               <span style={{ fontWeight: 800, color: 'var(--text-primary)' }}>{fmtK(c.ytd)} <span style={{ color: 'var(--text-muted)', fontWeight: 600 }}>›</span></span>
