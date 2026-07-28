@@ -554,16 +554,41 @@ export default function ProspectsPage() {
     setScanning(false);
   };
 
-  // Add contact
+  // Add or edit a contact — through /api/prospects/contacts so the change
+  // also lands on the linked NetSuite customer's contact record. The local
+  // save always wins; a NetSuite failure is surfaced but nothing rolls back.
+  const [editingContactCrmId, setEditingContactCrmId] = useState<string | null>(null);
+  const [savingContact, setSavingContact] = useState(false);
   const addContact = async (prospectId: string) => {
-    if (!contactForm.name.trim()) return;
-    const { data } = await supabase.from('prospect_contacts').insert({ prospect_id: prospectId, ...contactForm }).select().single();
-    if (data) {
-      setContacts(prev => ({ ...prev, [prospectId]: [data as Contact, ...(prev[prospectId] || [])] }));
+    if (!contactForm.name.trim() || savingContact) return;
+    setSavingContact(true);
+    try {
+      const res = await fetch('/api/prospects/contacts', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ prospectId, contactId: editingContactCrmId || undefined, ...contactForm }),
+      });
+      const body = await res.json();
+      if (!res.ok || !body.success) throw new Error(body?.error || `HTTP ${res.status}`);
+      const saved = body.contact as Contact;
+      const isEdit = !!editingContactCrmId;
+      setContacts(prev => {
+        const list = prev[prospectId] || [];
+        const idx = list.findIndex(c => c.id === saved.id);
+        const next = idx >= 0 ? list.map(c => (c.id === saved.id ? saved : c)) : [saved, ...list];
+        return { ...prev, [prospectId]: next };
+      });
       setContactForm({ name: '', title: '', email: '', phone: '', is_decision_maker: false });
       setShowContactForm(null);
-      logActivity(prospectId, 'note', `Added contact: ${contactForm.name}${contactForm.is_decision_maker ? ' (decision maker)' : ''}`);
+      setEditingContactCrmId(null);
+      if (!isEdit) logActivity(prospectId, 'note', `Added contact: ${saved.name}${saved.is_decision_maker ? ' (decision maker)' : ''}`);
+      if (body.netsuite?.error) {
+        await dialog.alert(`Contact saved in the CRM, but the NetSuite update failed:\n\n${body.netsuite.error}`);
+      }
+    } catch (err: any) {
+      await dialog.alert(`Could not save the contact: ${err?.message || 'unknown error'}`);
     }
+    setSavingContact(false);
   };
 
   // Add opportunity
@@ -1302,7 +1327,10 @@ export default function ProspectsPage() {
                     <div style={{ marginBottom: '12px' }}>
                       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '6px' }}>
                         <div style={labelStyle}>Contacts ({pContacts.length})</div>
-                        <button onClick={() => setShowContactForm(showContactForm === prospect.id ? null : prospect.id)} style={{ fontSize: '10px', fontWeight: 700, color: '#60a5fa', background: 'none', border: 'none', cursor: 'pointer' }}>
+                        <button onClick={() => {
+                          if (showContactForm === prospect.id) { setShowContactForm(null); setEditingContactCrmId(null); setContactForm({ name: '', title: '', email: '', phone: '', is_decision_maker: false }); }
+                          else { setEditingContactCrmId(null); setContactForm({ name: '', title: '', email: '', phone: '', is_decision_maker: false }); setShowContactForm(prospect.id); }
+                        }} style={{ fontSize: '10px', fontWeight: 700, color: '#60a5fa', background: 'none', border: 'none', cursor: 'pointer' }}>
                           {showContactForm === prospect.id ? 'Cancel' : '+ Add'}
                         </button>
                       </div>
@@ -1316,7 +1344,14 @@ export default function ProspectsPage() {
                             <input type="checkbox" checked={contactForm.is_decision_maker} onChange={e => setContactForm({ ...contactForm, is_decision_maker: e.target.checked })} />
                             Key decision maker
                           </label>
-                          <button onClick={() => addContact(prospect.id)} disabled={!contactForm.name.trim()} style={{ gridColumn: '1 / -1', padding: '6px', borderRadius: '6px', fontSize: '11px', fontWeight: 700, background: '#22c55e', color: '#fff', border: 'none', cursor: 'pointer', opacity: contactForm.name.trim() ? 1 : 0.5 }}>Add Contact</button>
+                          {prospect.netsuite_id && (
+                            <div style={{ fontSize: '10px', color: 'var(--text-muted)', gridColumn: '1 / -1' }}>
+                              Also {editingContactCrmId ? 'updates' : 'creates'} the contact on the linked NetSuite customer.
+                            </div>
+                          )}
+                          <button onClick={() => addContact(prospect.id)} disabled={!contactForm.name.trim() || savingContact} style={{ gridColumn: '1 / -1', padding: '6px', borderRadius: '6px', fontSize: '11px', fontWeight: 700, background: '#22c55e', color: '#fff', border: 'none', cursor: 'pointer', opacity: contactForm.name.trim() && !savingContact ? 1 : 0.5 }}>
+                            {savingContact ? 'Saving…' : editingContactCrmId ? 'Save Changes' : 'Add Contact'}
+                          </button>
                         </div>
                       )}
                       {pContacts.map(c => (
@@ -1326,9 +1361,16 @@ export default function ProspectsPage() {
                               <span style={{ fontSize: '13px', fontWeight: 700, color: 'var(--text-primary)' }}>{c.name}</span>
                               {c.is_decision_maker && <span style={{ fontSize: '8px', fontWeight: 700, padding: '1px 5px', borderRadius: '3px', background: 'rgba(251,191,36,0.1)', color: '#fbbf24' }}>DM</span>}
                             </div>
-                            {c.title && !['Customer Center', 'Customer'].includes(c.title) && (
-                              <span style={{ fontSize: '10px', color: 'var(--text-muted)', fontWeight: 600 }}>{c.title}</span>
-                            )}
+                            <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+                              {c.title && !['Customer Center', 'Customer'].includes(c.title) && (
+                                <span style={{ fontSize: '10px', color: 'var(--text-muted)', fontWeight: 600 }}>{c.title}</span>
+                              )}
+                              <button onClick={() => {
+                                setEditingContactCrmId(c.id);
+                                setContactForm({ name: c.name, title: c.title || '', email: c.email || '', phone: c.phone || '', is_decision_maker: c.is_decision_maker });
+                                setShowContactForm(prospect.id);
+                              }} title="Edit contact" style={{ background: 'none', border: 'none', cursor: 'pointer', color: 'var(--text-muted)', fontSize: '11px', padding: '1px 3px' }}>✎</button>
+                            </div>
                           </div>
                           {(c.email || c.phone) && (
                             <div style={{ display: 'flex', gap: '12px', fontSize: '11px' }}>

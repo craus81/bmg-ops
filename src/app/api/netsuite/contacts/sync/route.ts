@@ -129,6 +129,9 @@ export async function POST(req: NextRequest) {
         title: row.title || null,
         email: row.email || null,
         phone,
+        // Link back to the NetSuite contact so in-app edits PATCH the same
+        // record instead of creating duplicates (migration 178).
+        netsuite_contact_id: row.contact_id ? String(row.contact_id) : null,
       }, { onConflict: 'prospect_id,name' });
 
       if (!upsertErr) {

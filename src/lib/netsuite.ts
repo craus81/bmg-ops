@@ -772,6 +772,124 @@ export function vendorUrl(internalId: string | number): string {
 }
 
 /**
+ * Create a contact record in NetSuite, attached to a customer.
+ * `companyId` is the customer's numeric Internal ID. NetSuite requires a
+ * name (it derives the contact's entity id from it); other fields optional.
+ * NetSuite's own rejection message is returned verbatim — common cases are
+ * a missing Lists > Contacts permission on the integration role, or a
+ * single-word name where the account requires a last name.
+ */
+export async function createContact(payload: {
+  companyId: string;
+  firstName: string;
+  lastName?: string;
+  email?: string;
+  phone?: string;
+  title?: string;
+}): Promise<{ success: boolean; internalId?: string; error?: string }> {
+  const body: any = {
+    firstName: payload.firstName,
+    company: { id: payload.companyId },
+    // Same hardcoded-with-override subsidiary as vendor/customer creates —
+    // the integration role cannot SuiteQL the subsidiary table.
+    subsidiary: { id: process.env.NETSUITE_SUBSIDIARY_ID || '2' },
+  };
+  if (payload.lastName) body.lastName = payload.lastName;
+  if (payload.email) body.email = payload.email;
+  if (payload.phone) body.phone = payload.phone;
+  if (payload.title) body.title = payload.title;
+
+  try {
+    const config = getConfig();
+    const baseUrl = getBaseUrl(config.accountId);
+    const url = `${baseUrl}/services/rest/record/v1/contact`;
+    const { oauth, token } = createOAuth(config);
+    const authHeader = getAuthHeader(oauth, token, { url, method: 'POST' });
+
+    const response = await fetch(url, {
+      method: 'POST',
+      headers: {
+        'Authorization': authHeader,
+        'Content-Type': 'application/json',
+        'Prefer': 'respondAsync=false',
+      },
+      body: JSON.stringify(body),
+    });
+
+    if (!response.ok) {
+      const text = await response.text();
+      console.error('NetSuite create contact error:', response.status, text);
+      let detail = text.slice(0, 400);
+      try {
+        const parsed = JSON.parse(text);
+        detail = parsed?.['o:errorDetails']?.[0]?.detail || parsed?.title || detail;
+      } catch { /* keep raw text */ }
+      return { success: false, error: `NetSuite ${response.status}: ${detail}` };
+    }
+
+    const location = response.headers.get('location') || '';
+    const idMatch = location.match(/\/contact\/(\d+)/) || location.match(/\/(\d+)(?:\?|$)/);
+    return { success: true, internalId: idMatch ? idMatch[1] : undefined };
+  } catch (error: any) {
+    console.error('NetSuite create contact exception:', error);
+    return { success: false, error: error?.message || 'Unknown error' };
+  }
+}
+
+/**
+ * Update fields on an existing NetSuite contact.
+ * PATCH /services/rest/record/v1/contact/{id} — only the provided fields are
+ * sent; NetSuite's rejection message is returned verbatim.
+ */
+export async function updateContact(
+  contactId: string,
+  fields: { firstName?: string; lastName?: string; email?: string; phone?: string; title?: string },
+): Promise<{ success: boolean; error?: string }> {
+  const body: any = {};
+  for (const [k, v] of Object.entries(fields)) {
+    if (v !== undefined) body[k] = v;
+  }
+
+  const config = getConfig();
+  const baseUrl = getBaseUrl(config.accountId);
+  const url = `${baseUrl}/services/rest/record/v1/contact/${contactId}`;
+  const { oauth, token } = createOAuth(config);
+  const authHeader = getAuthHeader(oauth, token, { url, method: 'PATCH' });
+
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), 25000);
+  try {
+    const response = await fetch(url, {
+      method: 'PATCH',
+      headers: {
+        'Authorization': authHeader,
+        'Content-Type': 'application/json',
+        'Prefer': 'respondAsync=false',
+      },
+      body: JSON.stringify(body),
+      signal: controller.signal,
+    });
+
+    if (!response.ok) {
+      const text = await response.text();
+      let detail = text.slice(0, 400);
+      try {
+        const parsed = JSON.parse(text);
+        detail = parsed?.['o:errorDetails']?.[0]?.detail || parsed?.title || detail;
+      } catch { /* keep raw text */ }
+      return { success: false, error: `NetSuite ${response.status}: ${detail}` };
+    }
+
+    return { success: true };
+  } catch (e: any) {
+    const msg = e?.name === 'AbortError' ? 'NetSuite request timed out' : e?.message || 'Unknown error';
+    return { success: false, error: msg };
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+/**
  * Create a vendor record in NetSuite (for CNI installer payouts / bills).
  * The returned internalId is the numeric Internal ID that vendor-bill
  * creation needs in `entity.id` — store THAT, never the Entity ID/name

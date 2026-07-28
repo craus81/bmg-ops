@@ -66,7 +66,7 @@ interface CustomerRow {
   last_order_date: string | null;
 }
 
-interface Contact { id: string; name: string; title: string | null; email: string | null; phone: string | null; is_decision_maker: boolean }
+interface Contact { id: string; name: string; title: string | null; email: string | null; phone: string | null; is_decision_maker: boolean; netsuite_contact_id: string | null }
 interface Opportunity { id: string; title: string; type: string; stage: string; value: number | null; expected_close_date: string | null; created_at: string }
 interface Activity { id: string; type: string; summary: string; created_by: string | null; created_at: string; creator_name?: string | null }
 interface Reminder { id: string; title: string; description: string | null; due_at: string }
@@ -146,6 +146,7 @@ const eyebrow: React.CSSProperties = { fontSize: '10px', fontWeight: 800, textTr
 const btnSm: React.CSSProperties = { padding: '6px 12px', borderRadius: '8px', fontSize: '11px', fontWeight: 700, cursor: 'pointer', background: 'var(--subtle-bg)', border: '1px solid var(--border)', color: 'var(--text-secondary)', whiteSpace: 'nowrap', textDecoration: 'none', display: 'inline-flex', alignItems: 'center', gap: '5px' };
 const infoRow: React.CSSProperties = { display: 'flex', justifyContent: 'space-between', gap: '10px', padding: '7px 0', borderTop: '1px solid var(--border)', fontSize: '12.5px' };
 const docTh: React.CSSProperties = { fontSize: '10px', fontWeight: 800, textTransform: 'uppercase', letterSpacing: '0.5px', color: 'var(--text-muted)', padding: '7px 8px', borderBottom: '1px solid var(--border)' };
+const cInput: React.CSSProperties = { width: '100%', padding: '7px 9px', borderRadius: '7px', fontSize: '11.5px', background: 'var(--input-bg)', border: '1px solid var(--border)', color: 'var(--text-primary)' };
 const docTd: React.CSSProperties = { fontSize: '12.5px', color: 'var(--text-secondary)', padding: '7px 8px', borderBottom: '1px solid var(--border)', verticalAlign: 'middle' };
 
 function Kpi({ label, value, sub }: { label: string; value: string; sub?: string }) {
@@ -187,6 +188,51 @@ export default function CustomerRecordPage() {
   // prefetched so the print click stays synchronous (popup blockers).
   const [stInvoices, setStInvoices] = useState<OpenArInvoice[] | null>(null);
   const [stError, setStError] = useState<string | null>(null);
+
+  // Contact add/edit — saved through /api/prospects/contacts, which also
+  // pushes the change to NetSuite when the record is linked.
+  const emptyContactForm = { name: '', title: '', email: '', phone: '', is_decision_maker: false };
+  const [cFormOpen, setCFormOpen] = useState(false);
+  const [cEditId, setCEditId] = useState<string | null>(null);
+  const [cForm, setCForm] = useState(emptyContactForm);
+  const [cSyncNs, setCSyncNs] = useState(true);
+  const [cSaving, setCSaving] = useState(false);
+
+  const openContactForm = (c?: Contact) => {
+    setCEditId(c?.id || null);
+    setCForm(c ? { name: c.name, title: c.title || '', email: c.email || '', phone: c.phone || '', is_decision_maker: c.is_decision_maker } : emptyContactForm);
+    setCSyncNs(true);
+    setCFormOpen(true);
+  };
+
+  const saveContact = async () => {
+    if (!prospect || !cForm.name.trim() || cSaving) return;
+    setCSaving(true);
+    try {
+      const res = await fetch('/api/prospects/contacts', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ prospectId: prospect.id, contactId: cEditId || undefined, syncNetsuite: cSyncNs, ...cForm }),
+      });
+      const body = await res.json();
+      if (!res.ok || !body.success) throw new Error(body?.error || `HTTP ${res.status}`);
+      const saved: Contact = body.contact;
+      setContacts(prev => {
+        const idx = prev.findIndex(c => c.id === saved.id);
+        if (idx >= 0) { const next = [...prev]; next[idx] = saved; return next; }
+        return [saved, ...prev];
+      });
+      setCFormOpen(false);
+      setCEditId(null);
+      setCForm(emptyContactForm);
+      if (body.netsuite?.error) {
+        await dialog.alert(`Contact saved in the CRM, but the NetSuite update failed:\n\n${body.netsuite.error}`);
+      }
+    } catch (err: any) {
+      await dialog.alert(`Could not save the contact: ${err?.message || 'unknown error'}`);
+    }
+    setCSaving(false);
+  };
 
   // Quick activity log — same prospect_activities insert the CRM card does,
   // so touches logged here show up identically in the CRM list.
@@ -255,7 +301,7 @@ export default function CustomerRecordPage() {
 
     if (p) {
       const [cRes, oRes, aRes, tRes, rRes] = await Promise.all([
-        supabase.from('prospect_contacts').select('id, name, title, email, phone, is_decision_maker').eq('prospect_id', p.id).order('is_decision_maker', { ascending: false }),
+        supabase.from('prospect_contacts').select('id, name, title, email, phone, is_decision_maker, netsuite_contact_id').eq('prospect_id', p.id).order('is_decision_maker', { ascending: false }),
         supabase.from('prospect_opportunities').select('id, title, type, stage, value, expected_close_date, created_at').eq('prospect_id', p.id).order('created_at', { ascending: false }),
         supabase.from('prospect_activities').select('id, type, summary, created_by, created_at').eq('prospect_id', p.id).order('created_at', { ascending: false }).limit(20),
         supabase.from('prospect_tags').select('id, tag').eq('prospect_id', p.id),
@@ -485,14 +531,55 @@ export default function CustomerRecordPage() {
           </div>
 
           <div style={card}>
-            <div style={eyebrow}>Contacts {contacts.length > 0 && <span style={{ fontWeight: 600 }}>· {contacts.length}</span>}</div>
-            {contacts.length === 0 && <div style={{ fontSize: '12px', color: 'var(--text-muted)' }}>{prospect ? 'No contacts yet.' : '—'}</div>}
+            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '8px' }}>
+              <div style={{ ...eyebrow, marginBottom: 0 }}>Contacts {contacts.length > 0 && <span style={{ fontWeight: 600 }}>· {contacts.length}</span>}</div>
+              {prospect && (
+                <button onClick={() => (cFormOpen && !cEditId ? setCFormOpen(false) : openContactForm())} style={{ background: 'none', border: 'none', cursor: 'pointer', fontSize: '11px', fontWeight: 700, color: '#60a5fa', padding: 0 }}>
+                  {cFormOpen && !cEditId ? 'Cancel' : '+ Add'}
+                </button>
+              )}
+            </div>
+            {cFormOpen && (
+              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '6px', margin: '10px 0 4px', padding: '10px', background: 'var(--subtle-bg)', borderRadius: '9px' }}>
+                <input style={cInput} placeholder="Name (First Last) *" value={cForm.name} onChange={e => setCForm({ ...cForm, name: e.target.value })} />
+                <input style={cInput} placeholder="Title" value={cForm.title} onChange={e => setCForm({ ...cForm, title: e.target.value })} />
+                <input style={cInput} type="email" placeholder="Email" value={cForm.email} onChange={e => setCForm({ ...cForm, email: e.target.value })} />
+                <input style={cInput} placeholder="Phone" value={cForm.phone} onChange={e => setCForm({ ...cForm, phone: e.target.value })} />
+                <label style={{ display: 'flex', alignItems: 'center', gap: '6px', fontSize: '11px', color: 'var(--text-secondary)', gridColumn: '1 / -1' }}>
+                  <input type="checkbox" checked={cForm.is_decision_maker} onChange={e => setCForm({ ...cForm, is_decision_maker: e.target.checked })} />
+                  Key decision maker
+                </label>
+                {prospect?.netsuite_id && (
+                  <label style={{ display: 'flex', alignItems: 'center', gap: '6px', fontSize: '11px', color: 'var(--text-secondary)', gridColumn: '1 / -1' }}>
+                    <input type="checkbox" checked={cSyncNs} onChange={e => setCSyncNs(e.target.checked)} />
+                    Also {cEditId ? 'update' : 'create'} the contact in NetSuite
+                  </label>
+                )}
+                <div style={{ display: 'flex', gap: '6px', gridColumn: '1 / -1' }}>
+                  <button onClick={saveContact} disabled={cSaving || !cForm.name.trim()} style={{
+                    flex: 1, padding: '8px', borderRadius: '7px', fontSize: '11.5px', fontWeight: 700,
+                    background: cForm.name.trim() ? '#22c55e' : 'var(--border)', color: '#fff', border: 'none',
+                    cursor: cForm.name.trim() ? 'pointer' : 'default', opacity: cSaving ? 0.6 : 1,
+                  }}>{cSaving ? 'Saving…' : cEditId ? 'Save changes' : 'Add contact'}</button>
+                  {cEditId && (
+                    <button onClick={() => { setCFormOpen(false); setCEditId(null); }} style={{ ...btnSm, padding: '8px 14px' }}>Cancel</button>
+                  )}
+                </div>
+              </div>
+            )}
+            {contacts.length === 0 && !cFormOpen && <div style={{ fontSize: '12px', color: 'var(--text-muted)', marginTop: '8px' }}>{prospect ? 'No contacts yet.' : '—'}</div>}
             {contacts.map(c => (
-              <div key={c.id} style={{ padding: '8px 0', borderTop: '1px solid var(--border)' }}>
+              <div key={c.id} style={{ padding: '8px 0', borderTop: '1px solid var(--border)', marginTop: contacts.indexOf(c) === 0 ? '8px' : 0 }}>
                 <div style={{ display: 'flex', alignItems: 'center', gap: '6px', fontSize: '13px', fontWeight: 700, color: 'var(--text-primary)' }}>
-                  {c.name}
-                  {c.is_decision_maker && <span style={{ fontSize: '9px', fontWeight: 800, padding: '2px 6px', borderRadius: '4px', background: 'rgba(251,191,36,0.12)', color: '#f59e0b' }}>DM</span>}
-                  {c.title && <span style={{ fontSize: '11px', fontWeight: 600, color: 'var(--text-muted)' }}>{c.title}</span>}
+                  <span style={{ flex: 1, minWidth: 0 }}>
+                    {c.name}
+                    {c.is_decision_maker && <span style={{ fontSize: '9px', fontWeight: 800, padding: '2px 6px', borderRadius: '4px', background: 'rgba(251,191,36,0.12)', color: '#f59e0b', marginLeft: '6px' }}>DM</span>}
+                    {c.title && <span style={{ fontSize: '11px', fontWeight: 600, color: 'var(--text-muted)', marginLeft: '6px' }}>{c.title}</span>}
+                  </span>
+                  {prospect && (
+                    <button onClick={() => openContactForm(c)} title={`Edit ${c.name}${c.netsuite_contact_id ? ' (linked to NetSuite)' : ''}`}
+                      style={{ background: 'none', border: 'none', cursor: 'pointer', color: 'var(--text-muted)', fontSize: '12px', padding: '2px 4px', flexShrink: 0 }}>✎</button>
+                  )}
                 </div>
                 {(c.phone || c.email) && (
                   <div style={{ display: 'flex', gap: '14px', marginTop: '3px', fontSize: '12px' }}>
