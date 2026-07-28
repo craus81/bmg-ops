@@ -24,9 +24,10 @@ import { useAuth } from '@/components/AuthProvider';
 import { useDialog } from '@/components/DialogProvider';
 import { openNetSuitePdf } from '@/lib/netsuite-pdf-client';
 import { SortableTh, useTableSort } from '@/components/ui/SortableTh';
-import { printStatements, usd2 } from '@/lib/financials-print';
+import { usd2 } from '@/lib/financials-print';
+import { exportStatementPDF } from '@/lib/statement-pdf';
 import { AGE_META } from '@/components/FinancialsDrilldown';
-import type { OpenArInvoice, AgingBucketKey } from '@/lib/financials-data';
+import type { OpenArInvoice, AgingBucketKey, StatementInvoice, StatementScope } from '@/lib/financials-data';
 
 interface Prospect {
   id: string;
@@ -431,7 +432,7 @@ export default function CustomerRecordPage() {
 
   const emailStatement = async () => {
     const nsId = prospect?.netsuite_id || customer?.netsuite_id;
-    if (!nsId || !stInvoices || stInvoices.length === 0 || emailingSt) return;
+    if (!nsId || emailingSt) return;
     const prefill = (prospect?.billing_emails?.length ? prospect.billing_emails.join(', ') : '') || prospect?.email || customer?.email || '';
     const input = await dialog.prompt('Email this statement to (comma-separated):', prefill, { title: 'Email statement', confirmLabel: 'Send' });
     if (input === null) return;
@@ -441,11 +442,12 @@ export default function CustomerRecordPage() {
     try {
       const res = await fetch('/api/netsuite/email-statement', {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ customerId: nsId, recipients }),
+        body: JSON.stringify({ customerId: nsId, recipients, scope: stScope, from: stFrom || undefined, to: stTo || undefined }),
       });
       const body = await res.json();
       if (!res.ok || !body.success) throw new Error(body?.error || `HTTP ${res.status}`);
       await dialog.alert(`Statement sent to ${body.sent.join(', ')} with ${body.attached} invoice PDF${body.attached === 1 ? '' : 's'} attached.${body.failedAttachments?.length ? `\n\nPDFs unavailable for: ${body.failedAttachments.join(', ')}` : ''}`);
+      setStModalOpen(false);
     } catch (err: any) {
       await dialog.alert(`Could not send the statement: ${err?.message || 'unknown error'}`);
     }
@@ -568,12 +570,51 @@ export default function CustomerRecordPage() {
     if (!res.ok) await dialog.alert(res.error || 'Could not open the PDF');
   };
 
-  // Synchronous click handler over prefetched data — the print window must
-  // open inside the user gesture or popup blockers eat it.
-  const printStatement = () => {
-    if (!stInvoices || stInvoices.length === 0) return;
-    const customerName = prospect?.company_name || customer?.company_name || 'Unknown';
-    printStatements([{ customer: customerName, invoices: stInvoices }], dialog.alert);
+  // ── Statement options (scope + date range → PDF / print / email) ────────
+  const [stModalOpen, setStModalOpen] = useState(false);
+  const [stScope, setStScope] = useState<StatementScope>('open');
+  const [stFrom, setStFrom] = useState('');
+  const [stTo, setStTo] = useState('');
+  const [stWorking, setStWorking] = useState(false);
+
+  const fetchStatementData = async (): Promise<StatementInvoice[]> => {
+    const nsId = prospect?.netsuite_id || customer?.netsuite_id;
+    if (!nsId) throw new Error('Not linked to a NetSuite customer');
+    // Default options match the prefetched open-item data — using it keeps
+    // the window.open inside the click gesture (popup blockers).
+    if (stScope === 'open' && !stFrom && !stTo && stInvoices) {
+      return stInvoices.map(i => ({ ...i, status: 'open' as const }));
+    }
+    const qs = new URLSearchParams({ customerId: nsId, scope: stScope });
+    if (stFrom) qs.set('from', stFrom);
+    if (stTo) qs.set('to', stTo);
+    const res = await fetch(`/api/netsuite/customer-statement?${qs.toString()}`);
+    const body = await res.json();
+    if (!res.ok || !body.success) throw new Error(body?.error || `HTTP ${res.status}`);
+    return body.invoices || [];
+  };
+
+  const generateStatement = async (kind: 'pdf' | 'print') => {
+    if (stWorking) return;
+    setStWorking(true);
+    try {
+      const invoices = await fetchStatementData();
+      if (invoices.length === 0) {
+        await dialog.alert(stScope === 'open' ? 'No open invoices — nothing to put on a statement.' : 'No invoices in that date range.');
+      } else {
+        exportStatementPDF({
+          customer: prospect?.company_name || customer?.company_name || 'Unknown',
+          invoices,
+          scope: stScope,
+          from: stFrom || null,
+          to: stTo || null,
+        }, { print: kind === 'print' });
+        setStModalOpen(false);
+      }
+    } catch (err: any) {
+      await dialog.alert(`Could not build the statement: ${err?.message || 'unknown error'}`);
+    }
+    setStWorking(false);
   };
 
   // Documents: filter chips + search narrow the loaded set; headers sort it.
@@ -657,20 +698,11 @@ export default function CustomerRecordPage() {
             </button>
           )}
           {(prospect?.netsuite_id || customer) && !stError && (
-            <>
-              <button onClick={printStatement}
-                disabled={!stInvoices || stInvoices.length === 0}
-                title={!stInvoices ? 'Loading open invoices…' : stInvoices.length === 0 ? 'No open invoices — nothing to put on a statement' : 'Print an open-item statement for this customer'}
-                style={{ ...btnSm, color: 'var(--text-primary)', opacity: !stInvoices || stInvoices.length === 0 ? 0.55 : 1, cursor: !stInvoices || stInvoices.length === 0 ? 'default' : 'pointer' }}>
-                🖨 Statement
-              </button>
-              <button onClick={emailStatement}
-                disabled={!stInvoices || stInvoices.length === 0 || emailingSt}
-                title={!stInvoices ? 'Loading open invoices…' : stInvoices.length === 0 ? 'No open invoices — nothing to put on a statement' : 'Email the statement with invoice PDFs attached'}
-                style={{ ...btnSm, color: 'var(--text-primary)', opacity: !stInvoices || stInvoices.length === 0 || emailingSt ? 0.55 : 1, cursor: !stInvoices || stInvoices.length === 0 ? 'default' : 'pointer' }}>
-                {emailingSt ? 'Sending…' : '✉️ Email statement'}
-              </button>
-            </>
+            <button onClick={() => setStModalOpen(true)}
+              title="Open, print, or email a statement — choose open items or all invoices, with an optional date range"
+              style={{ ...btnSm, color: 'var(--text-primary)' }}>
+              📄 Statement
+            </button>
           )}
           {nsUrl && <a href={nsUrl} target="_blank" rel="noopener noreferrer" style={btnSm}>NetSuite ↗</a>}
         </div>
@@ -1108,6 +1140,55 @@ export default function CustomerRecordPage() {
               {docsLoading ? 'Loading…' : 'Load more history'}
             </button>
           )}
+        </div>
+      )}
+
+      {/* Statement options */}
+      {stModalOpen && (
+        <div onClick={() => !stWorking && !emailingSt && setStModalOpen(false)}
+          style={{ position: 'fixed', inset: 0, zIndex: 1200, background: 'rgba(0,0,0,0.6)', backdropFilter: 'blur(4px)', display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '16px' }}>
+          <div onClick={e => e.stopPropagation()} role="dialog" aria-modal="true" aria-label="Statement options"
+            style={{ background: 'var(--card)', border: '1px solid var(--border)', borderRadius: '14px', padding: '18px', width: 'min(440px, 100%)' }}>
+            <div style={{ fontSize: '14px', fontWeight: 800, color: 'var(--text-primary)', marginBottom: '12px' }}>Statement</div>
+            <div style={{ fontSize: '9px', fontWeight: 700, color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.5px', marginBottom: '5px' }}>Include</div>
+            <div style={{ display: 'flex', gap: '6px', marginBottom: '6px' }}>
+              {([['open', 'Open invoices only'], ['all', 'All invoices']] as const).map(([k, label]) => (
+                <button key={k} onClick={() => setStScope(k)} style={{
+                  flex: 1, padding: '7px 10px', borderRadius: '8px', fontSize: '11.5px', fontWeight: 700, cursor: 'pointer',
+                  background: stScope === k ? 'var(--tab-active-bg)' : 'transparent',
+                  border: `1px solid ${stScope === k ? 'var(--tab-active-border)' : 'var(--border)'}`,
+                  color: stScope === k ? 'var(--text-primary)' : 'var(--text-muted)',
+                }}>{label}</button>
+              ))}
+            </div>
+            <div style={{ fontSize: '11px', color: 'var(--text-muted)', lineHeight: 1.5, marginBottom: '12px' }}>
+              {stScope === 'open'
+                ? 'The classic remittance statement — everything the customer currently owes.'
+                : 'Activity statement — every invoice in the range, paid ones shown with a $0 balance.'}
+            </div>
+            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '8px', marginBottom: '14px' }}>
+              <div>
+                <div style={{ fontSize: '9px', fontWeight: 700, color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.5px', marginBottom: '4px' }}>From (optional)</div>
+                <input type="date" value={stFrom} onChange={e => setStFrom(e.target.value)} style={cInput} />
+              </div>
+              <div>
+                <div style={{ fontSize: '9px', fontWeight: 700, color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.5px', marginBottom: '4px' }}>To (optional)</div>
+                <input type="date" value={stTo} onChange={e => setStTo(e.target.value)} style={cInput} />
+              </div>
+            </div>
+            <div style={{ display: 'flex', gap: '6px', flexWrap: 'wrap' }}>
+              <button onClick={() => generateStatement('pdf')} disabled={stWorking || emailingSt} style={{
+                flex: 1, padding: '9px 12px', borderRadius: '8px', fontSize: '12px', fontWeight: 700, whiteSpace: 'nowrap',
+                background: 'var(--tab-active-bg)', border: '1px solid var(--tab-active-border)', color: 'var(--text-primary)',
+                cursor: 'pointer', opacity: stWorking ? 0.6 : 1,
+              }}>{stWorking ? 'Building…' : 'Open PDF'}</button>
+              <button onClick={() => generateStatement('print')} disabled={stWorking || emailingSt} style={{ ...btnSm, padding: '9px 12px', fontSize: '12px' }}>🖨 Print</button>
+              <button onClick={emailStatement} disabled={stWorking || emailingSt} style={{ ...btnSm, padding: '9px 12px', fontSize: '12px' }}>
+                {emailingSt ? 'Sending…' : '✉️ Email…'}
+              </button>
+              <button onClick={() => setStModalOpen(false)} disabled={stWorking || emailingSt} style={{ ...btnSm, padding: '9px 12px', fontSize: '12px' }}>Cancel</button>
+            </div>
+          </div>
         </div>
       )}
 
