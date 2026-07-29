@@ -1,20 +1,21 @@
 'use client';
 
 /**
- * The standalone Customer Record — one customer/prospect on its own page,
- * deep-linkable from the dashboard's Top customers (opens in a new tab)
- * and from the CRM list's "Open Record" button. Shows everything the CRM's
- * expanded card knows — identity, NetSuite spend metrics, contacts, deals,
- * reminders, activity, and NetSuite documents with PDFs — without landing
- * in the full A-Z list and scrolling. Editing stays on the CRM list page
- * ("Open in CRM").
+ * The Customer Record — one customer/prospect on its own page, and the
+ * primary surface for working a customer: identity, NetSuite spend metrics,
+ * contacts, deals, reminders, activity, files, and NetSuite documents with
+ * PDFs. Everything is editable here — field edits, status changes, convert
+ * to customer, tags, deals, reminders, voice notes, delete — so nothing
+ * requires a round-trip to the CRM list (which is just the index/pipeline
+ * view).
  *
  * Routes:
  *   /admin/prospects/<uuid>       — CRM prospect id
  *   /admin/prospects/ns-<id>      — NetSuite customer internal id (dashboard
  *                                   links, which only know the NetSuite id).
  *                                   Falls back to the synced customers row
- *                                   when the customer isn't in the CRM.
+ *                                   when the customer isn't in the CRM;
+ *                                   "+ Add to CRM" creates the missing row.
  */
 
 import { useState, useEffect, useRef, useMemo } from 'react';
@@ -23,6 +24,8 @@ import { createClient } from '@/lib/supabase-browser';
 import { useAuth } from '@/components/AuthProvider';
 import { useDialog } from '@/components/DialogProvider';
 import { openNetSuitePdf } from '@/lib/netsuite-pdf-client';
+import DropboxProofSearch from '@/components/DropboxProofSearch';
+import { exportProspectPDF } from '@/lib/prospect-pdf';
 import { SortableTh, useTableSort } from '@/components/ui/SortableTh';
 import { usd2 } from '@/lib/financials-print';
 import { exportStatementPDF } from '@/lib/statement-pdf';
@@ -47,9 +50,13 @@ interface Prospect {
   lead_source: string | null;
   lead_source_other: string | null;
   is_hot: boolean;
+  multi_location: boolean;
+  email_campaign: boolean;
   netsuite_id: string | null;
   netsuite_url: string | null;
+  converted_customer_id: string | null;
   created_by: string | null;
+  created_at: string;
   billing_emails: string[] | null;
 }
 
@@ -127,7 +134,9 @@ const STAGE_COLORS: Record<string, string> = { lead: '#60a5fa', quoted: '#a78bfa
 const STATUS_LABELS: Record<string, string> = { active: 'Prospect', nurturing: 'Nurturing', converted: 'Customer' };
 const STATUS_COLORS: Record<string, string> = { active: '#4ade80', nurturing: '#60a5fa', converted: '#a78bfa' };
 const ACTIVITY_ICONS: Record<string, string> = { call: '\u{1F4DE}', email: '\u{1F4E7}', note: '\u{1F4DD}', meeting: '\u{1F91D}', quote_sent: '\u{1F4CB}', status_change: '\u{1F504}' };
+const LEAD_SOURCES = ['Cold Call', 'Lead', 'Maryland Heights Chamber of Commerce', 'Little Black Book', 'Other'];
 const DOCS_PAGE_SIZE = 100;
+const ACTS_PAGE_SIZE = 30;
 
 const fmtMoney = (n: number) => n.toLocaleString('en-US', { style: 'currency', currency: 'USD', maximumFractionDigits: 0 });
 const fmtK = (n: number) => (n >= 1000 ? `$${(n / 1000).toFixed(n >= 100000 ? 0 : 1)}k` : fmtMoney(n));
@@ -281,8 +290,10 @@ export default function CustomerRecordPage() {
         return [saved, ...prev];
       });
       setCFormOpen(false);
+      const wasCreate = !cEditId;
       setCEditId(null);
       setCForm(emptyContactForm);
+      if (wasCreate) logAuto('note', `Added contact: ${saved.name}${saved.is_decision_maker ? ' (decision maker)' : ''}`);
       if (body.netsuite?.error) {
         await dialog.alert(`Contact saved in the CRM, but the NetSuite update failed:\n\n${body.netsuite.error}`);
       }
@@ -315,6 +326,292 @@ export default function CustomerRecordPage() {
     }
     setActivities(prev => [{ ...(data as Activity), creator_name: profile?.full_name || null }, ...prev]);
     setActText('');
+  };
+
+  // Auto-logged touches (status flips, deal changes, contact adds) — the
+  // same prospect_activities insert, threaded into the feed silently.
+  const logAuto = async (type: string, summary: string) => {
+    if (!prospect) return;
+    const { data } = await supabase.from('prospect_activities').insert({
+      prospect_id: prospect.id, type, summary, created_by: user?.id,
+    }).select().single();
+    if (data) setActivities(prev => [{ ...(data as Activity), creator_name: profile?.full_name || null }, ...prev]);
+  };
+
+  // ── Record editing (ported from the CRM list card — the record page is
+  // the primary edit surface now, the list is just the index) ──────────────
+  const emptyEditForm = { company_name: '', contact_name: '', email: '', phone: '', website: '', address: '', city: '', state: '', zip: '', notes: '', location_count: 1, lead_source: '', lead_source_other: '' };
+  const [editOpen, setEditOpen] = useState(false);
+  const [editForm, setEditForm] = useState(emptyEditForm);
+  const [editSaving, setEditSaving] = useState(false);
+
+  const openEdit = () => {
+    if (!prospect) return;
+    setEditForm({
+      company_name: prospect.company_name || '', contact_name: prospect.contact_name || '',
+      email: prospect.email || '', phone: prospect.phone || '', website: prospect.website || '',
+      address: prospect.address || '', city: prospect.city || '', state: prospect.state || '', zip: prospect.zip || '',
+      notes: prospect.notes || '', location_count: prospect.location_count || 1,
+      lead_source: prospect.lead_source || '', lead_source_other: prospect.lead_source_other || '',
+    });
+    setEditOpen(true);
+  };
+
+  const saveEdit = async () => {
+    if (!prospect || !editForm.company_name.trim() || editSaving) return;
+    setEditSaving(true);
+    const patch = {
+      company_name: editForm.company_name.trim(), contact_name: editForm.contact_name || null,
+      email: editForm.email || null, phone: editForm.phone || null, website: editForm.website || null,
+      address: editForm.address || null, city: editForm.city || null, state: editForm.state || null, zip: editForm.zip || null,
+      notes: editForm.notes || null, location_count: editForm.location_count || 1,
+      lead_source: editForm.lead_source || null,
+      lead_source_other: editForm.lead_source === 'Other' ? editForm.lead_source_other || null : null,
+    };
+    const { error } = await supabase.from('prospects').update(patch).eq('id', prospect.id);
+    setEditSaving(false);
+    if (error) { await dialog.alert(`Could not save: ${error.message}`); return; }
+    setProspect(prev => (prev ? { ...prev, ...patch } : prev));
+    setEditOpen(false);
+  };
+
+  const deleteRecord = async () => {
+    if (!prospect || editSaving) return;
+    const ok = await dialog.confirm(
+      `Delete ${prospect.company_name} and all associated contacts, deals, reminders, and activity?`,
+      { destructive: true, confirmLabel: 'Delete', title: 'Delete record' },
+    );
+    if (!ok) return;
+    const { error } = await supabase.from('prospects').delete().eq('id', prospect.id);
+    if (error) { await dialog.alert(`Could not delete: ${error.message}`); return; }
+    router.push('/admin/prospects');
+  };
+
+  const changeStatus = async (newStatus: string) => {
+    if (!prospect) return;
+    const { error } = await supabase.from('prospects').update({ status: newStatus }).eq('id', prospect.id);
+    if (error) { await dialog.alert(`Could not change the status: ${error.message}`); return; }
+    logAuto('status_change', `Status: ${STATUS_LABELS[prospect.status] || prospect.status} → ${STATUS_LABELS[newStatus] || newStatus}`);
+    setProspect(prev => (prev ? { ...prev, status: newStatus } : prev));
+  };
+
+  const toggleFlag = async (field: 'is_hot' | 'email_campaign' | 'multi_location') => {
+    if (!prospect) return;
+    const next = !prospect[field];
+    const { error } = await supabase.from('prospects').update({ [field]: next }).eq('id', prospect.id);
+    if (error) { await dialog.alert(`Could not update: ${error.message}`); return; }
+    setProspect(prev => (prev ? { ...prev, [field]: next } : prev));
+  };
+
+  const [converting, setConverting] = useState(false);
+  const convertToCustomer = async () => {
+    if (!prospect || converting) return;
+    if (prospect.netsuite_id) { await dialog.alert('Already pushed to NetSuite.'); return; }
+    if (!(await dialog.confirm(`Convert "${prospect.company_name}" to a customer in NetSuite? All prospect data is preserved.`, { confirmLabel: 'Convert' }))) return;
+    setConverting(true);
+    try {
+      const res = await fetch('/api/prospects/push-to-netsuite', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ prospectId: prospect.id, type: 'customer', userId: user?.id }),
+      });
+      const data = await res.json();
+      if (!res.ok || !data.success) throw new Error(data?.error || `HTTP ${res.status}`);
+      await supabase.from('prospects').update({ status: 'converted', converted_customer_id: data.customerId }).eq('id', prospect.id);
+      logAuto('status_change', `Converted to NetSuite customer #${data.entityId}`);
+      setProspect(prev => (prev ? { ...prev, status: 'converted', netsuite_id: data.customerId, netsuite_url: data.netsuiteUrl, converted_customer_id: data.customerId } : prev));
+      // The record is linked now — the NetSuite panels can load.
+      const nsId = String(data.customerId);
+      loadDocs(nsId, false); loadStatement(nsId); loadPayments(nsId); loadNsProfile(nsId);
+    } catch (err: any) {
+      await dialog.alert(`Convert failed: ${err?.message || 'unknown error'}`);
+    }
+    setConverting(false);
+  };
+
+  // Creates the missing CRM row for a NetSuite-synced customer, so
+  // "Not in CRM" records stop being read-only dead ends.
+  const [addingToCrm, setAddingToCrm] = useState(false);
+  const addToCrm = async () => {
+    if (!customer || prospect || addingToCrm) return;
+    setAddingToCrm(true);
+    const { data, error } = await supabase.from('prospects').insert({
+      company_name: customer.company_name || customer.entity_id || 'Unknown',
+      email: customer.email, phone: customer.phone, address: customer.address,
+      status: 'converted', netsuite_id: customer.netsuite_id, netsuite_url: customer.netsuite_url,
+      created_by: user?.id,
+    }).select().single();
+    setAddingToCrm(false);
+    if (error || !data) { await dialog.alert(`Could not create the CRM record: ${error?.message || 'unknown error'}`); return; }
+    setProspect(data as Prospect);
+    loadFiles(data.id);
+  };
+
+  const [tagInput, setTagInput] = useState('');
+  const addTag = async () => {
+    const t = tagInput.trim().toLowerCase();
+    if (!t || !prospect) return;
+    const { data, error } = await supabase.from('prospect_tags').insert({ prospect_id: prospect.id, tag: t }).select().single();
+    if (error || !data) { await dialog.alert(`Could not add the tag: ${error?.message || 'unknown error'}`); return; }
+    setTags(prev => [...prev, data as Tag]);
+    setTagInput('');
+  };
+
+  const removeTag = async (tag: Tag) => {
+    const { error } = await supabase.from('prospect_tags').delete().eq('id', tag.id);
+    if (error) { await dialog.alert(`Could not remove the tag: ${error.message}`); return; }
+    setTags(prev => prev.filter(t => t.id !== tag.id));
+  };
+
+  const emptyOppForm = { title: '', type: 'tech_install', value: '', expected_close_date: '' };
+  const [oppFormOpen, setOppFormOpen] = useState(false);
+  const [oppForm, setOppForm] = useState(emptyOppForm);
+  const [oppSaving, setOppSaving] = useState(false);
+
+  const addOpportunity = async () => {
+    if (!prospect || !oppForm.title.trim() || oppSaving) return;
+    setOppSaving(true);
+    const { data, error } = await supabase.from('prospect_opportunities').insert({
+      prospect_id: prospect.id, title: oppForm.title.trim(), type: oppForm.type, stage: 'lead',
+      value: oppForm.value ? parseFloat(oppForm.value) : null,
+      expected_close_date: oppForm.expected_close_date || null,
+      created_by: user?.id,
+    }).select().single();
+    setOppSaving(false);
+    if (error || !data) { await dialog.alert(`Could not add the deal: ${error?.message || 'unknown error'}`); return; }
+    setOpportunities(prev => [data as Opportunity, ...prev]);
+    logAuto('note', `Created opportunity: ${oppForm.title.trim()} (${OPP_TYPES[oppForm.type] || oppForm.type})`);
+    setOppForm(emptyOppForm);
+    setOppFormOpen(false);
+  };
+
+  const setOppStage = async (opp: Opportunity, newStage: string) => {
+    if (opp.stage === newStage) return;
+    const { error } = await supabase.from('prospect_opportunities')
+      .update({ stage: newStage, ...(newStage === 'won' || newStage === 'lost' ? { closed_at: new Date().toISOString() } : {}) })
+      .eq('id', opp.id);
+    if (error) { await dialog.alert(`Could not update the deal: ${error.message}`); return; }
+    setOpportunities(prev => prev.map(o => (o.id === opp.id ? { ...o, stage: newStage } : o)));
+    logAuto('status_change', `${opp.title}: ${OPP_STAGES[opp.stage] || opp.stage} → ${OPP_STAGES[newStage] || newStage}`);
+  };
+
+  const completeReminder = async (r: Reminder) => {
+    const { error } = await supabase.from('prospect_reminders').update({ completed_at: new Date().toISOString() }).eq('id', r.id);
+    if (error) { await dialog.alert(`Could not complete the reminder: ${error.message}`); return; }
+    setReminders(prev => prev.filter(x => x.id !== r.id));
+  };
+
+  // Older history pages on demand — the CRM list capped at 50 and this page
+  // at 20, leaving anything older invisible everywhere. Not anymore.
+  const [actsHasMore, setActsHasMore] = useState(false);
+  const [actsLoadingMore, setActsLoadingMore] = useState(false);
+  const loadMoreActivities = async () => {
+    if (!prospect || actsLoadingMore) return;
+    setActsLoadingMore(true);
+    const from = activities.length;
+    const { data } = await supabase.from('prospect_activities')
+      .select('id, type, summary, created_by, created_at')
+      .eq('prospect_id', prospect.id)
+      .order('created_at', { ascending: false }).order('id')
+      .range(from, from + ACTS_PAGE_SIZE - 1);
+    const page = (data || []) as Activity[];
+    const creatorIds = [...new Set(page.map(a => a.created_by).filter(Boolean))] as string[];
+    const names: Record<string, string> = {};
+    if (creatorIds.length > 0) {
+      const { data: profs } = await supabase.from('profiles').select('id, full_name').in('id', creatorIds);
+      for (const pr of profs || []) names[pr.id] = pr.full_name;
+    }
+    setActivities(prev => [...prev, ...page.map(a => ({ ...a, creator_name: a.created_by ? names[a.created_by] || null : null }))]);
+    setActsHasMore(page.length === ACTS_PAGE_SIZE);
+    setActsLoadingMore(false);
+  };
+
+  // Re-pull activities + reminders after the voice-note API writes them
+  // server-side (it parses the transcript into both).
+  const refreshFeed = async (pid: string) => {
+    const [aRes, rRes] = await Promise.all([
+      supabase.from('prospect_activities').select('id, type, summary, created_by, created_at').eq('prospect_id', pid).order('created_at', { ascending: false }).order('id').limit(20),
+      supabase.from('prospect_reminders').select('id, title, description, due_at').eq('prospect_id', pid).is('completed_at', null).order('due_at'),
+    ]);
+    const acts = (aRes.data || []) as Activity[];
+    const creatorIds = [...new Set(acts.map(a => a.created_by).filter(Boolean))] as string[];
+    const names: Record<string, string> = {};
+    if (creatorIds.length > 0) {
+      const { data: profs } = await supabase.from('profiles').select('id, full_name').in('id', creatorIds);
+      for (const pr of profs || []) names[pr.id] = pr.full_name;
+    }
+    setActivities(acts.map(a => ({ ...a, creator_name: a.created_by ? names[a.created_by] || null : null })));
+    setActsHasMore(acts.length === 20);
+    setReminders((rRes.data || []) as Reminder[]);
+  };
+
+  // Voice note → /api/prospects/voice-note, which parses the transcript
+  // into activities AND reminders (the app's only reminder-creation flow).
+  const [recording, setRecording] = useState(false);
+  const [voiceProcessing, setVoiceProcessing] = useState(false);
+  const [voiceResult, setVoiceResult] = useState<{ summary: string; reminders: number } | null>(null);
+  const recognitionRef = useRef<any>(null);
+
+  const startVoiceNote = async () => {
+    const SpeechRecognition = (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition;
+    if (!SpeechRecognition) { await dialog.alert('Speech recognition not supported in this browser. Try Chrome.'); return; }
+    const recognition = new SpeechRecognition();
+    recognition.continuous = true;
+    recognition.interimResults = true;
+    recognition.lang = 'en-US';
+    recognition.onresult = (event: any) => {
+      let transcript = '';
+      for (let i = 0; i < event.results.length; i++) transcript += event.results[i][0].transcript;
+      setActText(transcript);
+    };
+    recognition.onerror = () => setRecording(false);
+    recognition.onend = () => setRecording(false);
+    recognition.start();
+    recognitionRef.current = recognition;
+    setRecording(true);
+    setVoiceResult(null);
+  };
+
+  const stopVoiceNote = async () => {
+    recognitionRef.current?.stop();
+    recognitionRef.current = null;
+    setRecording(false);
+    const text = actText.trim();
+    if (!text || !prospect) return;
+    setVoiceProcessing(true);
+    try {
+      const res = await fetch('/api/prospects/voice-note', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ prospectId: prospect.id, noteText: text, userId: user?.id }),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data?.error || `HTTP ${res.status}`);
+      setVoiceResult({ summary: data.summary, reminders: data.reminders || 0 });
+      setActText('');
+      refreshFeed(prospect.id);
+    } catch (err: any) {
+      await dialog.alert(`Could not process the voice note: ${err?.message || 'unknown error'}`);
+    }
+    setVoiceProcessing(false);
+  };
+
+  const exportPdf = () => {
+    if (!prospect) return;
+    exportProspectPDF({
+      prospect,
+      statusLabel: STATUS_LABELS[prospect.status] || prospect.status || '',
+      ownerName: null,
+      metrics: customer ? {
+        total_spend: customer.total_spend ?? undefined, total_orders: customer.total_orders ?? undefined,
+        ytd_spend: customer.ytd_spend ?? undefined, ytd_orders: customer.ytd_orders ?? undefined,
+        last_year_spend: customer.last_year_spend ?? undefined, last_order_date: customer.last_order_date,
+        avg_order_value: customer.avg_order_value ?? undefined,
+      } : null,
+      contacts,
+      opportunities,
+      activities: activities.map(a => ({ ...a, creator_name: a.creator_name ?? undefined })),
+      tags,
+      documents: (docs || []).map(d => ({ number: d.number, date: d.date || '', typeLabel: d.typeLabel, status: d.status })),
+    });
   };
 
   const loadStarted = useRef(false);
@@ -361,7 +658,7 @@ export default function CustomerRecordPage() {
       const [cRes, oRes, aRes, tRes, rRes] = await Promise.all([
         supabase.from('prospect_contacts').select('id, name, title, email, phone, is_decision_maker, netsuite_contact_id').eq('prospect_id', p.id).order('is_decision_maker', { ascending: false }),
         supabase.from('prospect_opportunities').select('id, title, type, stage, value, expected_close_date, created_at').eq('prospect_id', p.id).order('created_at', { ascending: false }),
-        supabase.from('prospect_activities').select('id, type, summary, created_by, created_at').eq('prospect_id', p.id).order('created_at', { ascending: false }).limit(20),
+        supabase.from('prospect_activities').select('id, type, summary, created_by, created_at').eq('prospect_id', p.id).order('created_at', { ascending: false }).order('id').limit(20),
         supabase.from('prospect_tags').select('id, tag').eq('prospect_id', p.id),
         supabase.from('prospect_reminders').select('id, title, description, due_at').eq('prospect_id', p.id).is('completed_at', null).order('due_at'),
       ]);
@@ -375,6 +672,7 @@ export default function CustomerRecordPage() {
       setContacts((cRes.data || []) as Contact[]);
       setOpportunities((oRes.data || []) as Opportunity[]);
       setActivities(acts.map(a => ({ ...a, creator_name: a.created_by ? names[a.created_by] || null : null })));
+      setActsHasMore(acts.length === 20);
       setTags((tRes.data || []) as Tag[]);
       setReminders((rRes.data || []) as Reminder[]);
     }
@@ -682,9 +980,15 @@ export default function CustomerRecordPage() {
             <span style={{ fontSize: '10px', fontWeight: 800, padding: '3px 9px', borderRadius: '999px', background: 'var(--warning-bg)', color: 'var(--warning)' }}>Not in CRM</span>
           )}
           {prospect?.is_hot && <span style={{ fontSize: '11px' }}>🔥</span>}
-          {tags.map(t => (
+          {tags.map(t => prospect ? (
+            <button key={t.id} onClick={() => removeTag(t)} title="Remove tag" style={{ fontSize: '10px', fontWeight: 700, padding: '3px 8px', borderRadius: '999px', background: 'var(--subtle-bg)', border: '1px solid var(--border)', color: 'var(--text-muted)', cursor: 'pointer' }}>{t.tag} ✕</button>
+          ) : (
             <span key={t.id} style={{ fontSize: '10px', fontWeight: 700, padding: '3px 8px', borderRadius: '999px', background: 'var(--subtle-bg)', border: '1px solid var(--border)', color: 'var(--text-muted)' }}>{t.tag}</span>
           ))}
+          {prospect && (
+            <input value={tagInput} onChange={e => setTagInput(e.target.value)} onKeyDown={e => { if (e.key === 'Enter') addTag(); }}
+              placeholder="+ tag" style={{ width: '76px', padding: '3px 9px', borderRadius: '999px', fontSize: '10px', background: 'var(--input-bg)', border: '1px solid var(--border)', color: 'var(--text-primary)' }} />
+          )}
         </div>
         {(prospect?.contact_name || customer?.entity_id) && (
           <div style={{ fontSize: '12px', color: 'var(--text-muted)', marginTop: '4px' }}>
@@ -694,14 +998,15 @@ export default function CustomerRecordPage() {
         <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap', marginTop: '12px' }}>
           {phone && <a href={`tel:${phone}`} style={{ ...btnSm, color: '#22c55e' }}>📞 {phone}</a>}
           {email && <a href={`mailto:${email}`} style={{ ...btnSm, color: '#60a5fa' }}>✉️ Email</a>}
-          {prospect && (
-            <button onClick={() => router.push(`/admin/prospects?id=${prospect.id}`)} title="Open this record in the CRM list to edit it" style={btnSm}>
-              Edit in CRM
+          {prospect && <button onClick={openEdit} title="Edit company details, lead source, and notes" style={btnSm}>✎ Edit</button>}
+          {prospect && prospect.status !== 'converted' && (
+            <button onClick={convertToCustomer} disabled={converting} title="Create this prospect as a customer in NetSuite" style={{ ...btnSm, color: '#a78bfa', opacity: converting ? 0.6 : 1 }}>
+              {converting ? 'Converting…' : 'Convert to Customer'}
             </button>
           )}
-          {!prospect && (
-            <button onClick={() => router.push(`/admin/prospects?q=${encodeURIComponent(name)}`)} title="This customer is synced from NetSuite but has no CRM record yet" style={btnSm}>
-              Find in CRM
+          {!prospect && customer && (
+            <button onClick={addToCrm} disabled={addingToCrm} title="Create a CRM record for this NetSuite customer so contacts, deals, and activity can be tracked here" style={btnSm}>
+              {addingToCrm ? 'Adding…' : '+ Add to CRM'}
             </button>
           )}
           {(prospect?.netsuite_id || customer) && !stError && (
@@ -713,6 +1018,33 @@ export default function CustomerRecordPage() {
           )}
           {nsUrl && <a href={nsUrl} target="_blank" rel="noopener noreferrer" style={btnSm}>NetSuite ↗</a>}
         </div>
+        {prospect && (
+          <div style={{ display: 'flex', gap: '6px', flexWrap: 'wrap', alignItems: 'center', marginTop: '8px' }}>
+            {['active', 'nurturing', 'converted'].filter(s => s !== prospect.status).map(s => (
+              <button key={s} onClick={() => changeStatus(s)} title={`Change status to ${STATUS_LABELS[s]}`} style={{
+                padding: '4px 10px', borderRadius: '6px', fontSize: '10px', fontWeight: 700, cursor: 'pointer',
+                background: `${STATUS_COLORS[s]}12`, border: `1px solid ${STATUS_COLORS[s]}33`, color: STATUS_COLORS[s],
+              }}>→ {STATUS_LABELS[s]}</button>
+            ))}
+            <button onClick={() => toggleFlag('is_hot')} style={{
+              padding: '4px 10px', borderRadius: '6px', fontSize: '10px', fontWeight: 700, cursor: 'pointer',
+              background: prospect.is_hot ? 'rgba(239,68,68,0.1)' : 'var(--subtle-bg)', border: `1px solid ${prospect.is_hot ? 'rgba(239,68,68,0.25)' : 'var(--border)'}`, color: prospect.is_hot ? '#ef4444' : 'var(--text-muted)',
+            }}>{prospect.is_hot ? '🔥 Hot' : 'Mark Hot'}</button>
+            <button onClick={() => toggleFlag('email_campaign')} style={{
+              padding: '4px 10px', borderRadius: '6px', fontSize: '10px', fontWeight: 700, cursor: 'pointer',
+              background: prospect.email_campaign ? 'rgba(59,130,246,0.1)' : 'var(--subtle-bg)', border: `1px solid ${prospect.email_campaign ? 'rgba(59,130,246,0.25)' : 'var(--border)'}`, color: prospect.email_campaign ? '#60a5fa' : 'var(--text-muted)',
+            }}>{prospect.email_campaign ? '✓ Email Campaign' : 'Email Campaign'}</button>
+            <button onClick={() => toggleFlag('multi_location')} style={{
+              padding: '4px 10px', borderRadius: '6px', fontSize: '10px', fontWeight: 700, cursor: 'pointer',
+              background: prospect.multi_location ? 'rgba(251,191,36,0.1)' : 'var(--subtle-bg)', border: `1px solid ${prospect.multi_location ? 'rgba(251,191,36,0.25)' : 'var(--border)'}`, color: prospect.multi_location ? '#f59e0b' : 'var(--text-muted)',
+            }}>{prospect.multi_location ? '✓ Multi-Location' : 'Multi-Location'}</button>
+            <span style={{ flex: 1 }} />
+            <button onClick={exportPdf} title="Download a printable PDF summary of this record" style={{
+              padding: '4px 10px', borderRadius: '6px', fontSize: '10px', fontWeight: 700, cursor: 'pointer',
+              background: 'rgba(96,165,250,0.1)', border: '1px solid rgba(96,165,250,0.25)', color: '#60a5fa',
+            }}>Export PDF</button>
+          </div>
+        )}
       </div>
 
       {/* Spend KPIs (NetSuite) */}
@@ -919,20 +1251,62 @@ export default function CustomerRecordPage() {
               ))}
             </div>
           )}
+          <div style={card}>
+            <div style={eyebrow}>Prior artwork — Dropbox</div>
+            <DropboxProofSearch defaultQuery={name} />
+          </div>
         </div>
 
         <div style={{ display: 'flex', flexDirection: 'column', gap: '14px' }}>
           <div style={card}>
-            <div style={eyebrow}>Deals {openDeals.length > 0 && <span style={{ fontWeight: 600 }}>· {openDeals.length} open</span>}</div>
-            {opportunities.length === 0 && <div style={{ fontSize: '12px', color: 'var(--text-muted)' }}>{prospect ? 'No deals yet.' : '—'}</div>}
+            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '8px' }}>
+              <div style={{ ...eyebrow, marginBottom: 0 }}>Deals {openDeals.length > 0 && <span style={{ fontWeight: 600 }}>· {openDeals.length} open</span>}</div>
+              {prospect && (
+                <button onClick={() => setOppFormOpen(v => !v)} style={{ background: 'none', border: 'none', cursor: 'pointer', fontSize: '11px', fontWeight: 700, color: '#60a5fa', padding: 0 }}>
+                  {oppFormOpen ? 'Cancel' : '+ Add'}
+                </button>
+              )}
+            </div>
+            {oppFormOpen && (
+              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '6px', margin: '10px 0 4px', padding: '10px', background: 'var(--subtle-bg)', borderRadius: '9px' }}>
+                <input style={{ ...cInput, gridColumn: '1 / -1' }} placeholder="Deal title *" value={oppForm.title} onChange={e => setOppForm({ ...oppForm, title: e.target.value })} />
+                <select style={cInput} value={oppForm.type} onChange={e => setOppForm({ ...oppForm, type: e.target.value })}>
+                  {Object.entries(OPP_TYPES).map(([k, v]) => <option key={k} value={k}>{v}</option>)}
+                </select>
+                <input type="number" style={cInput} placeholder="Est. value $" value={oppForm.value} onChange={e => setOppForm({ ...oppForm, value: e.target.value })} />
+                <input type="date" style={cInput} value={oppForm.expected_close_date} onChange={e => setOppForm({ ...oppForm, expected_close_date: e.target.value })} title="Expected close date" />
+                <button onClick={addOpportunity} disabled={oppSaving || !oppForm.title.trim()} style={{
+                  padding: '8px', borderRadius: '7px', fontSize: '11.5px', fontWeight: 700,
+                  background: oppForm.title.trim() ? '#22c55e' : 'var(--border)', color: '#fff', border: 'none',
+                  cursor: oppForm.title.trim() ? 'pointer' : 'default', opacity: oppSaving ? 0.6 : 1,
+                }}>{oppSaving ? 'Adding…' : 'Add deal'}</button>
+              </div>
+            )}
+            {opportunities.length === 0 && !oppFormOpen && <div style={{ fontSize: '12px', color: 'var(--text-muted)', marginTop: '8px' }}>{prospect ? 'No deals yet.' : '—'}</div>}
             {[...openDeals, ...closedDeals].map(o => (
-              <div key={o.id} style={{ display: 'flex', alignItems: 'center', gap: '8px', padding: '8px 0', borderTop: '1px solid var(--border)' }}>
-                <span style={{ flex: 1, minWidth: 0, fontSize: '12.5px', fontWeight: 600, color: 'var(--text-secondary)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-                  {o.title}
-                  <span style={{ color: 'var(--text-muted)', fontWeight: 500 }}> · {OPP_TYPES[o.type] || o.type}</span>
-                </span>
-                <span style={{ fontSize: '9px', fontWeight: 800, padding: '2px 8px', borderRadius: '999px', flexShrink: 0, background: `${STAGE_COLORS[o.stage] || '#60a5fa'}1f`, color: STAGE_COLORS[o.stage] || '#60a5fa' }}>{OPP_STAGES[o.stage] || o.stage}</span>
-                <span style={{ fontSize: '12.5px', fontWeight: 800, fontVariantNumeric: 'tabular-nums', flexShrink: 0 }}>{o.value ? fmtMoney(o.value) : '—'}</span>
+              <div key={o.id} style={{ padding: '8px 0', borderTop: '1px solid var(--border)' }}>
+                <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                  <span style={{ flex: 1, minWidth: 0, fontSize: '12.5px', fontWeight: 600, color: 'var(--text-secondary)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                    {o.title}
+                    <span style={{ color: 'var(--text-muted)', fontWeight: 500 }}> · {OPP_TYPES[o.type] || o.type}</span>
+                  </span>
+                  {!prospect && (
+                    <span style={{ fontSize: '9px', fontWeight: 800, padding: '2px 8px', borderRadius: '999px', flexShrink: 0, background: `${STAGE_COLORS[o.stage] || '#60a5fa'}1f`, color: STAGE_COLORS[o.stage] || '#60a5fa' }}>{OPP_STAGES[o.stage] || o.stage}</span>
+                  )}
+                  <span style={{ fontSize: '12.5px', fontWeight: 800, fontVariantNumeric: 'tabular-nums', flexShrink: 0 }}>{o.value ? fmtMoney(o.value) : '—'}</span>
+                </div>
+                {prospect && (
+                  <div style={{ display: 'flex', gap: '3px', marginTop: '5px', flexWrap: 'wrap' }}>
+                    {Object.entries(OPP_STAGES).map(([k, v]) => (
+                      <button key={k} onClick={() => setOppStage(o, k)} disabled={o.stage === k} style={{
+                        padding: '2px 8px', borderRadius: '4px', fontSize: '9px', fontWeight: 700,
+                        background: o.stage === k ? `${STAGE_COLORS[k]}33` : 'transparent',
+                        border: `1px solid ${o.stage === k ? STAGE_COLORS[k] : 'var(--border)'}`,
+                        color: o.stage === k ? STAGE_COLORS[k] : 'var(--text-muted)', cursor: o.stage === k ? 'default' : 'pointer',
+                      }}>{v}</button>
+                    ))}
+                  </div>
+                )}
               </div>
             ))}
           </div>
@@ -999,9 +1373,15 @@ export default function CustomerRecordPage() {
             <div style={card}>
               <div style={eyebrow}>Reminders · {reminders.length}</div>
               {reminders.map(r => (
-                <div key={r.id} style={{ padding: '7px 0', borderTop: '1px solid var(--border)', fontSize: '12.5px' }}>
-                  <span style={{ fontWeight: 700, color: new Date(r.due_at) < new Date() ? 'var(--error)' : 'var(--text-primary)' }}>{fmtDate(r.due_at.slice(0, 10))}</span>
-                  <span style={{ color: 'var(--text-secondary)', marginLeft: '8px' }}>{r.title}</span>
+                <div key={r.id} style={{ display: 'flex', alignItems: 'center', gap: '8px', padding: '7px 0', borderTop: '1px solid var(--border)', fontSize: '12.5px' }}>
+                  <span style={{ fontWeight: 700, flexShrink: 0, color: new Date(r.due_at) < new Date() ? 'var(--error)' : 'var(--text-primary)' }}>{fmtDate(r.due_at.slice(0, 10))}</span>
+                  <span style={{ flex: 1, minWidth: 0, color: 'var(--text-secondary)' }}>{r.title}</span>
+                  {prospect && (
+                    <button onClick={() => completeReminder(r)} title="Mark this reminder done" style={{
+                      padding: '3px 10px', borderRadius: '5px', fontSize: '10px', fontWeight: 700, flexShrink: 0,
+                      background: 'rgba(34,197,94,0.1)', border: '1px solid rgba(34,197,94,0.25)', color: '#22c55e', cursor: 'pointer',
+                    }}>Done</button>
+                  )}
                 </div>
               ))}
             </div>
@@ -1035,7 +1415,27 @@ export default function CustomerRecordPage() {
                     border: '1px solid var(--border)', color: actText.trim() ? 'var(--text-primary)' : 'var(--text-muted)',
                     cursor: actText.trim() ? 'pointer' : 'default', opacity: actSaving ? 0.6 : 1,
                   }}>{actSaving ? 'Logging…' : 'Log'}</button>
+                  {recording ? (
+                    <button onClick={stopVoiceNote} title="Stop recording and save" style={{
+                      padding: '8px 12px', borderRadius: '8px', fontSize: '12px', fontWeight: 700,
+                      background: 'rgba(239,68,68,0.15)', border: '1px solid rgba(239,68,68,0.3)', color: '#ef4444', cursor: 'pointer',
+                    }}>■ Stop</button>
+                  ) : (
+                    <button onClick={startVoiceNote} disabled={voiceProcessing} title="Voice note — AI files it as activity and creates any reminders you mention" style={{
+                      padding: '8px 12px', borderRadius: '8px', fontSize: '12px',
+                      background: 'rgba(167,139,250,0.1)', border: '1px solid rgba(167,139,250,0.25)', color: '#a78bfa',
+                      cursor: 'pointer', opacity: voiceProcessing ? 0.6 : 1,
+                    }}>🎤</button>
+                  )}
                 </div>
+                {voiceProcessing && (
+                  <div style={{ fontSize: '10.5px', color: '#a78bfa', fontWeight: 600, marginTop: '5px' }}>AI is parsing your note and creating reminders…</div>
+                )}
+                {voiceResult && (
+                  <div style={{ padding: '6px 10px', borderRadius: '6px', marginTop: '5px', background: 'rgba(34,197,94,0.06)', border: '1px solid rgba(34,197,94,0.2)', fontSize: '10.5px', color: '#22c55e', fontWeight: 600 }}>
+                    Saved: {voiceResult.summary.slice(0, 80)}{voiceResult.summary.length > 80 ? '…' : ''}{voiceResult.reminders > 0 ? ` · ${voiceResult.reminders} reminder${voiceResult.reminders !== 1 ? 's' : ''} created` : ''}
+                  </div>
+                )}
               </div>
             )}
             {activities.length === 0 && <div style={{ fontSize: '12px', color: 'var(--text-muted)' }}>{prospect ? 'No activity logged yet.' : '—'}</div>}
@@ -1048,9 +1448,9 @@ export default function CustomerRecordPage() {
                 </span>
               </div>
             ))}
-            {prospect && activities.length > 0 && (
-              <button onClick={() => router.push(`/admin/prospects?id=${prospect.id}`)} style={{ background: 'none', border: 'none', cursor: 'pointer', fontSize: '11px', fontWeight: 700, color: '#60a5fa', padding: '8px 0 0' }}>
-                Full history &amp; log activity in CRM →
+            {prospect && actsHasMore && (
+              <button onClick={loadMoreActivities} disabled={actsLoadingMore} style={{ background: 'none', border: 'none', cursor: 'pointer', fontSize: '11px', fontWeight: 700, color: '#60a5fa', padding: '8px 0 0', opacity: actsLoadingMore ? 0.6 : 1 }}>
+                {actsLoadingMore ? 'Loading…' : 'Show older activity ↓'}
               </button>
             )}
           </div>
@@ -1147,6 +1547,58 @@ export default function CustomerRecordPage() {
               {docsLoading ? 'Loading…' : 'Load more history'}
             </button>
           )}
+        </div>
+      )}
+
+      {/* Edit record */}
+      {editOpen && prospect && (
+        <div onClick={() => !editSaving && setEditOpen(false)}
+          style={{ position: 'fixed', inset: 0, zIndex: 1200, background: 'rgba(0,0,0,0.6)', backdropFilter: 'blur(4px)', display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '16px' }}>
+          <div onClick={e => e.stopPropagation()} role="dialog" aria-modal="true" aria-label="Edit record"
+            style={{ background: 'var(--card)', border: '1px solid var(--border)', borderRadius: '14px', padding: '18px', width: 'min(560px, 100%)', maxHeight: '90vh', overflowY: 'auto' }}>
+            <div style={{ fontSize: '14px', fontWeight: 800, color: 'var(--text-primary)', marginBottom: '12px' }}>Edit record</div>
+            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '8px' }}>
+              <input style={{ ...cInput, gridColumn: '1 / -1' }} placeholder="Company name *" value={editForm.company_name} onChange={e => setEditForm({ ...editForm, company_name: e.target.value })} />
+              <input style={cInput} placeholder="Contact name" value={editForm.contact_name} onChange={e => setEditForm({ ...editForm, contact_name: e.target.value })} />
+              <input style={cInput} placeholder="Phone" value={editForm.phone} onChange={e => setEditForm({ ...editForm, phone: e.target.value })} />
+              <input style={cInput} type="email" placeholder="Email" value={editForm.email} onChange={e => setEditForm({ ...editForm, email: e.target.value })} />
+              <input style={cInput} placeholder="Website" value={editForm.website} onChange={e => setEditForm({ ...editForm, website: e.target.value })} />
+              <input style={{ ...cInput, gridColumn: '1 / -1' }} placeholder="Street address" value={editForm.address} onChange={e => setEditForm({ ...editForm, address: e.target.value })} />
+              <input style={cInput} placeholder="City" value={editForm.city} onChange={e => setEditForm({ ...editForm, city: e.target.value })} />
+              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '8px' }}>
+                <input style={cInput} placeholder="State" value={editForm.state} onChange={e => setEditForm({ ...editForm, state: e.target.value })} />
+                <input style={cInput} placeholder="Zip" value={editForm.zip} onChange={e => setEditForm({ ...editForm, zip: e.target.value })} />
+              </div>
+              <div>
+                <div style={{ fontSize: '9px', fontWeight: 700, color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.5px', marginBottom: '4px' }}>Lead source</div>
+                <select style={cInput} value={editForm.lead_source} onChange={e => setEditForm({ ...editForm, lead_source: e.target.value })}>
+                  <option value="">— Select —</option>
+                  {LEAD_SOURCES.map(s => <option key={s} value={s}>{s}</option>)}
+                </select>
+                {editForm.lead_source === 'Other' && (
+                  <input style={{ ...cInput, marginTop: '4px' }} placeholder="Specify source…" value={editForm.lead_source_other} onChange={e => setEditForm({ ...editForm, lead_source_other: e.target.value })} />
+                )}
+              </div>
+              <div>
+                <div style={{ fontSize: '9px', fontWeight: 700, color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.5px', marginBottom: '4px' }}>Locations</div>
+                <input style={cInput} type="number" min={1} value={editForm.location_count} onChange={e => setEditForm({ ...editForm, location_count: parseInt(e.target.value) || 1 })} />
+              </div>
+              <textarea style={{ ...cInput, gridColumn: '1 / -1', resize: 'vertical' }} rows={3} placeholder="Notes" value={editForm.notes} onChange={e => setEditForm({ ...editForm, notes: e.target.value })} />
+            </div>
+            <div style={{ display: 'flex', gap: '6px', marginTop: '14px' }}>
+              <button onClick={deleteRecord} disabled={editSaving} title="Delete this record and everything attached to it" style={{
+                padding: '9px 14px', borderRadius: '8px', fontSize: '12px', fontWeight: 700,
+                background: 'var(--error-bg)', border: '1px solid var(--error-border)', color: 'var(--error)', cursor: 'pointer',
+              }}>Delete</button>
+              <span style={{ flex: 1 }} />
+              <button onClick={() => setEditOpen(false)} disabled={editSaving} style={{ ...btnSm, padding: '9px 14px', fontSize: '12px' }}>Cancel</button>
+              <button onClick={saveEdit} disabled={editSaving || !editForm.company_name.trim()} style={{
+                padding: '9px 18px', borderRadius: '8px', fontSize: '12px', fontWeight: 700,
+                background: editForm.company_name.trim() ? '#22c55e' : 'var(--border)', color: '#fff', border: 'none',
+                cursor: editForm.company_name.trim() ? 'pointer' : 'default', opacity: editSaving ? 0.6 : 1,
+              }}>{editSaving ? 'Saving…' : 'Save'}</button>
+            </div>
+          </div>
         </div>
       )}
 
