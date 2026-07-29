@@ -896,20 +896,39 @@ export default function WrapQuotePage() {
     if (selectedId === id) setSelectedId(null);
   };
 
+  // Mirror a freeform shape's outline about its own bounding-box center.
+  // Reflection keeps area, perimeter, and bbox dims, so pricing and the
+  // nesting piece are untouched — only the drawn geometry changes.
+  const mirrorPoints = (points: { x: number; y: number }[], axis: 'h' | 'v') => {
+    const xs = points.map(p => p.x), ys = points.map(p => p.y);
+    const sumX = Math.min(...xs) + Math.max(...xs);
+    const sumY = Math.min(...ys) + Math.max(...ys);
+    return points.map(p => axis === 'h' ? { x: sumX - p.x, y: p.y } : { x: p.x, y: sumY - p.y });
+  };
+
+  const flipMeasurement = (id: string, axis: 'h' | 'v') => {
+    setMeasurements(prev => prev.map(m =>
+      m.id === id && m.type === 'poly' && m.points ? { ...m, points: mirrorPoints(m.points, axis) } : m));
+  };
+
   // Clone a measurement (same dims/film/qty) offset a little so the copy
-  // isn't hidden under the original.
-  const duplicateMeasurement = (id: string) => {
+  // isn't hidden under the original. `mirror` flips the copy horizontally —
+  // the usual wrap move: duplicate the driver-side shape, mirrored, for the
+  // passenger side.
+  const duplicateMeasurement = (id: string, mirror = false) => {
     const src = measurements.find(m => m.id === id);
     if (!src) return;
     const OFFSET = 14;
+    let points = src.points ? src.points.map(p => ({ x: p.x + OFFSET, y: p.y + OFFSET })) : undefined;
+    if (points && mirror) points = mirrorPoints(points, 'h');
     const copy: Measurement = {
       ...src,
       id: crypto.randomUUID(),
-      name: `${src.name} copy`,
+      name: `${src.name}${mirror ? ' mirror' : ' copy'}`,
       rect: src.rect ? { ...src.rect, x: src.rect.x + OFFSET, y: src.rect.y + OFFSET } : undefined,
       line1: src.line1 ? { x1: src.line1.x1 + OFFSET, y1: src.line1.y1 + OFFSET, x2: src.line1.x2 + OFFSET, y2: src.line1.y2 + OFFSET } : undefined,
       line2: src.line2 ? { x1: src.line2.x1 + OFFSET, y1: src.line2.y1 + OFFSET, x2: src.line2.x2 + OFFSET, y2: src.line2.y2 + OFFSET } : undefined,
-      points: src.points ? src.points.map(p => ({ x: p.x + OFFSET, y: p.y + OFFSET })) : undefined,
+      points,
     };
     setMeasurements(prev => [...prev, copy]);
     setSelectedId(copy.id);
@@ -2140,8 +2159,17 @@ export default function WrapQuotePage() {
                         <option value="">— none —</option>
                         {activeSubstrates.map(s => <option key={s.id} value={s.id}>{filmLabel(s)} (${fmt(filmRate(s))}/ft²)</option>)}
                       </select>
-                      <div style={{ display: 'flex', gap: '6px', margin: '2px 0 8px' }}>
+                      <div style={{ display: 'flex', gap: '6px', margin: '2px 0 8px', flexWrap: 'wrap' }}>
                         <button onClick={() => duplicateMeasurement(selected.id)} style={btnStyle('#06b6d4', 'rgba(6,182,212,0.08)')}>⧉ Duplicate</button>
+                        {selected.type === 'poly' && (
+                          <button onClick={() => duplicateMeasurement(selected.id, true)} title="Duplicate this shape flipped horizontally — driver side → passenger side" style={btnStyle('#a78bfa', 'rgba(167,139,250,0.08)')}>⧉ Mirror Copy</button>
+                        )}
+                        {selected.type === 'poly' && (
+                          <button onClick={() => flipMeasurement(selected.id, 'h')} title="Flip this shape left↔right in place" style={btnStyle('#f59e0b', 'transparent')}>⇋ Flip</button>
+                        )}
+                        {selected.type === 'poly' && (
+                          <button onClick={() => flipMeasurement(selected.id, 'v')} title="Flip this shape top↕bottom in place" style={btnStyle('#f59e0b', 'transparent')}>⇵ Flip</button>
+                        )}
                         <button onClick={() => removeMeasurement(selected.id)} style={btnStyle('#ef4444', 'transparent')}>Delete</button>
                       </div>
                       <div style={{ fontSize: '10px', color: 'var(--text-secondary)', fontWeight: 700 }}>
