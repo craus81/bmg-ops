@@ -18,7 +18,10 @@ export interface RollConfig {
   overlapIn: number; // seam overlap added when a panel is split to fit the width
 }
 
-export const DEFAULT_ROLL: RollConfig = { widthIn: 58.5, lengthIn: 1800, spacingIn: 0.5, edgeMarginIn: 0.5, overlapIn: 0.5 };
+// Edge margin defaults to 0: 58.5" is already the roll's PRINTABLE width,
+// so vertical panels come out a true 58.5" wide (58.5 + 58.5 + 58.5 + 26
+// covers a 200" side with 0.5" seam overlaps).
+export const DEFAULT_ROLL: RollConfig = { widthIn: 58.5, lengthIn: 1800, spacingIn: 0.5, edgeMarginIn: 0, overlapIn: 0.5 };
 
 // One physical piece to cut: a measurement copy within a set. w/h are the
 // piece's print dimensions (drawn size + bleed on both sides); rotation at
@@ -46,24 +49,26 @@ export const partLetter = (i: number) => (i < 26 ? String.fromCharCode(65 + i) :
 
 /**
  * Split a panel that is wider than the roll in BOTH orientations into
- * strips that fit, splitting the smaller dimension so the strips run
- * lengthwise down the roll. Adjoining strips share a seam overlap (extra
- * printed material on each seam — that's how oversized box-truck sides
- * actually get produced). Returns [{w, h, partIndex}]; a single entry with
- * partIndex -1 means no split was needed.
+ * VERTICAL panels, the way wraps are actually paneled: the drawn width is
+ * sliced into full-roll-width panels plus one remainder panel, each the
+ * panel's full height (which runs down the roll). Adjoining panels share a
+ * seam overlap — extra printed material at every seam. A 200" × 96" box
+ * side on a 58.5" roll with 0.5" overlap becomes 58.5, 58.5, 58.5, and 26
+ * inches wide, all 96" tall. Returns [{w, h, partIndex}]; a single entry
+ * with partIndex -1 means no split was needed.
  */
 export function splitForRoll(w: number, h: number, config: RollConfig): { w: number; h: number; partIndex: number }[] {
   const usable = config.widthIn - 2 * config.edgeMarginIn;
-  const small = Math.min(w, h), large = Math.max(w, h);
-  if (usable <= 0 || small <= usable) return [{ w, h, partIndex: -1 }];
+  if (usable <= 0 || Math.min(w, h) <= usable) return [{ w, h, partIndex: -1 }];
+  // min(w,h) > usable implies w > usable, so slicing the width always
+  // produces panels that fit across the roll.
   const overlap = Math.max(0, Math.min(config.overlapIn, usable / 2));
-  const n = usable > overlap
-    ? Math.max(2, Math.ceil((small - overlap) / (usable - overlap)))
-    : Math.max(2, Math.ceil(small / usable));
-  // n strips of width x cover `small` with (n-1) overlapped seams:
-  // n·x − (n−1)·overlap = small.
-  const x = (small + (n - 1) * overlap) / n;
-  return Array.from({ length: n }, (_, i) => ({ w: x, h: large, partIndex: i }));
+  const step = usable - overlap; // net new coverage per added panel
+  const n = Math.max(2, Math.ceil((w - overlap) / step));
+  // Full-width panels first; the remainder panel covers what's left plus
+  // its share of the seams: widths sum to w + (n−1)·overlap of print.
+  const last = w - (n - 1) * step;
+  return Array.from({ length: n }, (_, i) => ({ w: i < n - 1 ? usable : last, h, partIndex: i }));
 }
 
 export interface Placement {

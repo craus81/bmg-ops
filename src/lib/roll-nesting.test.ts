@@ -194,21 +194,32 @@ describe('splitForRoll', () => {
     expect(splitForRoll(40, 80, cfg)).toEqual([{ w: 40, h: 80, partIndex: -1 }]);
   });
 
-  it('splits an oversized panel into strips that fit, with seam overlap', () => {
-    // 60" × 200" box-truck side: 60 > 57.5 usable in both orientations.
+  it('panels a 200×96 box side the way wraps are paneled: 58.5 + 58.5 + 58.5 + 26', () => {
+    // Full-width vertical panels first, remainder last, 0.5" overlap at
+    // each of the three seams (58.5" roll, no edge margin).
+    const full: RollConfig = { ...cfg, edgeMarginIn: 0 };
+    const parts = splitForRoll(200, 96, full);
+    expect(parts.map(p => p.w)).toEqual([58.5, 58.5, 58.5, 200 - 3 * 58]);
+    expect(parts.every(p => p.h === 96)).toBe(true);
+    // Printed width = net width + one overlap per seam.
+    expect(parts.reduce((s, p) => s + p.w, 0)).toBeCloseTo(200 + 3 * 0.5);
+  });
+
+  it('splits vertically with the remainder panel last', () => {
+    // 60" × 200": one full-width panel + a remainder panel, both 200" tall.
     const parts = splitForRoll(60, 200, cfg);
     expect(parts).toHaveLength(2);
+    expect(parts[0].w).toBeCloseTo(57.5);
+    expect(parts[1].w).toBeCloseTo(60 - 57);
     for (const p of parts) {
       expect(Math.min(p.w, p.h)).toBeLessThanOrEqual(57.5 + 1e-9);
       expect(p.h).toBe(200);
     }
-    // n·x − (n−1)·overlap = 60 → strips cover the panel plus one seam.
-    const totalW = parts.reduce((s, p) => s + p.w, 0);
-    expect(totalW).toBeCloseTo(60 + 0.5);
+    expect(parts.reduce((s, p) => s + p.w, 0)).toBeCloseTo(60 + 0.5);
     expect(parts.map(p => p.partIndex)).toEqual([0, 1]);
   });
 
-  it('splits very wide panels into more strips', () => {
+  it('splits very wide panels into more panels', () => {
     const parts = splitForRoll(170, 200, cfg);
     expect(parts.length).toBe(3);
     for (const p of parts) expect(p.w).toBeLessThanOrEqual(57.5 + 1e-9);
@@ -312,8 +323,10 @@ describe('fmtFtIn', () => {
 });
 
 describe('DEFAULT_ROLL', () => {
-  it('is the 58.5" × 150 ft roll', () => {
+  it('is the 58.5" × 150 ft roll with no edge margin (58.5 is the printable width)', () => {
     expect(DEFAULT_ROLL.widthIn).toBe(58.5);
     expect(DEFAULT_ROLL.lengthIn).toBe(1800);
+    expect(DEFAULT_ROLL.edgeMarginIn).toBe(0);
+    expect(DEFAULT_ROLL.overlapIn).toBe(0.5);
   });
 });
