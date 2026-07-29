@@ -52,13 +52,29 @@ function buildQuoteHtml(quote: any, company: any, diagramUrl: string | null, log
   // Kit-quantity jobs: the measurement lines price ONE kit; a bold rollup
   // row shows kits × per-kit materials, and the totals block shows the
   // quantity discount / shop minimum that produced the final subtotal.
+  // Roll-nested quotes instead price materials as vinyl cut off each film's
+  // roll: the shape lines carry no prices (sizes only, unit_price null) and
+  // per-film "Material" rows carry the roll totals.
   const adj = quote.adjustments || null;
   const kits = Math.max(1, parseInt(quote.package_qty, 10) || 1);
+  const nest = quote.nesting?.enabled ? quote.nesting : null;
   for (const l of quote.measurements || []) {
     const detail = `${money(l.billed_area_sqft)} ft²${l.substrate?.name ? ` · ${esc(l.substrate.name)}` : ''}${kits > 1 ? ' · per kit' : ''}`;
-    rows.push(`<tr>${cell(`${esc(l.name)} <span style="color:#6b7280;font-size:11px;">${detail}</span>`)}${cell(String(l.qty || 1), true)}${cell(money(l.unit_price), true)}${cell(money(l.line_total), true)}</tr>`);
+    rows.push(`<tr>${cell(`${esc(l.name)} <span style="color:#6b7280;font-size:11px;">${detail}</span>`)}${cell(String(l.qty || 1), true)}${cell(l.unit_price == null ? '—' : money(l.unit_price), true)}${cell(l.line_total == null ? '—' : money(l.line_total), true)}</tr>`);
   }
-  if (kits > 1 && adj) {
+  if (nest) {
+    for (const f of nest.films || []) {
+      if (!((parseFloat(f.material_total) || 0) > 0.005)) continue;
+      const usedIn = (f.rolls || []).reduce((s: number, r: any) => s + (parseFloat(r.used_length_in) || 0), 0);
+      const extra = parseFloat(f.extra_area_sqft) || 0;
+      const detail = [
+        (parseFloat(f.roll_sqft) || 0) > 0.005 ? `${money(f.roll_sqft)} ft² · ${(usedIn / 12).toFixed(1)} ft of ${money(nest.roll_width_in)}" roll` : '',
+        extra > 0.005 ? `${money(extra)} ft² billed by area` : '',
+      ].filter(Boolean).join(' + ') + ((nest.sets || 1) > 1 ? ` · ${nest.sets} sets` : '');
+      rows.push(`<tr>${cell(`<b>Material — ${esc(f.label)}</b> <span style="color:#6b7280;font-size:11px;">${detail}</span>`)}${cell('1', true)}${cell(money(f.material_total), true)}${cell(`<b>${money(f.material_total)}</b>`, true)}</tr>`);
+    }
+  }
+  if (kits > 1 && adj && !nest) {
     rows.push(`<tr>${cell(`<b>Materials — ${kits} kits</b> <span style="color:#6b7280;font-size:11px;">${money(adj.kit_area_sqft)} ft² per kit</span>`)}${cell(`<b>${kits}</b>`, true)}${cell(money(adj.kit_materials), true)}${cell(`<b>${money(adj.pre_materials)}</b>`, true)}</tr>`);
   }
   for (const f of quote.labor?.films || []) {
@@ -129,6 +145,7 @@ function buildQuoteHtml(quote: any, company: any, diagramUrl: string | null, log
         <tr><td style="text-align:right;font-size:16px;font-weight:800;color:#111827;padding:6px 10px;">Total</td><td style="text-align:right;font-size:16px;font-weight:800;color:#059669;padding:6px 10px;">$${money(quote.total)}</td></tr>
       </table>` : ''}
       ${(quote.labor?.films || []).length ? `<div style="margin-top:12px;font-size:11px;color:#6b7280;"><b style="color:#374151;">Film usage:</b> ${(quote.labor.films as any[]).map((f: any) => `${esc(f.label)} — ${money(f.sqft)} ft²`).join(' &middot; ')}</div>` : ''}
+      ${nest && pricing ? `<div style="margin-top:4px;font-size:11px;color:#6b7280;"><b style="color:#374151;">Materials priced from nested roll layout:</b> ${money((nest.films || []).reduce((s: number, f: any) => s + (parseFloat(f.roll_sqft) || 0), 0))} ft² of ${money(nest.roll_width_in)}&quot; roll${(nest.sets || 1) > 1 ? ` &middot; ${nest.sets} sets nested together` : ''}</div>` : ''}
       ${quote.project_notes ? `<div style="margin-top:16px;font-size:12px;color:#374151;"><b>Project Notes:</b> ${esc(quote.project_notes)}</div>` : ''}
       ${approveUrl ? `
       <div style="margin-top:22px;padding:18px;background:#f0fdf4;border:1px solid #bbf7d0;border-radius:10px;text-align:center;">
