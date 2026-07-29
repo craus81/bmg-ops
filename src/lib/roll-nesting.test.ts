@@ -5,6 +5,7 @@ import {
   PlacementMap,
   RollConfig,
   computeUsage,
+  ellipseOutline,
   findLayoutIssues,
   fmtFtIn,
   offsetArea,
@@ -15,7 +16,9 @@ import {
   polygonPerimeter,
   polygonSelfIntersects,
   reconcilePlacements,
+  scaleOutline,
   splitForRoll,
+  splitOutlineForRoll,
 } from './roll-nesting';
 
 const piece = (key: string, w: number, h: number, filmKey = 'f1'): NestPiece =>
@@ -231,6 +234,76 @@ describe('splitForRoll', () => {
     const pieces = parts.map((p, i) => ({ ...piece(`s${i}`, p.w, p.h), part: partLetter(p.partIndex) }));
     const { unplaced } = packPieces(pieces, cfg);
     expect(unplaced).toHaveLength(0);
+  });
+});
+
+describe('splitOutlineForRoll', () => {
+  const full: RollConfig = { ...cfg, edgeMarginIn: 0 }; // usable = 58.5
+
+  it('trims panel heights to the outline — van profile', () => {
+    // 200" van side: front 80" is only 36" tall (fender area, bottom edge
+    // raised), rear is the full 96". Same widths/letters as the bbox split,
+    // but the front panel comes out 36" tall, not 96".
+    const van = [
+      { x: 0, y: 60 }, { x: 80, y: 60 }, { x: 80, y: 0 },
+      { x: 200, y: 0 }, { x: 200, y: 96 }, { x: 0, y: 96 },
+    ];
+    const parts = splitOutlineForRoll(van, 0, full);
+    expect(parts.map(p => p.w)).toEqual([58.5, 58.5, 58.5, 200 - 3 * 58]);
+    expect(parts[0].h).toBeCloseTo(36); // fender-only window
+    expect(parts[1].h).toBeCloseTo(96); // window crosses the step at x=80
+    expect(parts[2].h).toBeCloseTo(96);
+    expect(parts[3].h).toBeCloseTo(96);
+  });
+
+  it('adds bleed to trimmed panels', () => {
+    const van = [
+      { x: 0, y: 60 }, { x: 80, y: 60 }, { x: 80, y: 0 },
+      { x: 200, y: 0 }, { x: 200, y: 96 }, { x: 0, y: 96 },
+    ];
+    const parts = splitOutlineForRoll(van, 0.5, full);
+    // Piece is 201" wide with bleed; still 4 panels, trimmed heights grow
+    // by the bleed on both ends.
+    expect(parts).toHaveLength(4);
+    expect(parts[0].h).toBeCloseTo(37);
+    expect(parts[3].h).toBeCloseTo(97);
+  });
+
+  it('trims a split circle where the arc pulls in', () => {
+    const parts = splitOutlineForRoll(ellipseOutline(70, 70), 0, full);
+    expect(parts).toHaveLength(2);
+    expect(parts[0].h).toBeGreaterThan(65); // window includes the center
+    // Remainder window covers only x ∈ [58, 70] — chord height ~52.8".
+    expect(parts[1].h).toBeLessThan(55);
+    expect(parts[1].h).toBeGreaterThan(40);
+  });
+
+  it('returns the plain bbox piece when no split is needed', () => {
+    const tri = [{ x: 0, y: 0 }, { x: 40, y: 0 }, { x: 0, y: 30 }];
+    expect(splitOutlineForRoll(tri, 0.25, full)).toEqual([{ w: 40.5, h: 30.5, partIndex: -1 }]);
+  });
+
+  it('matches splitForRoll panel widths exactly', () => {
+    const van = [
+      { x: 0, y: 60 }, { x: 80, y: 60 }, { x: 80, y: 0 },
+      { x: 200, y: 0 }, { x: 200, y: 96 }, { x: 0, y: 96 },
+    ];
+    const outlineParts = splitOutlineForRoll(van, 0, full);
+    const rectParts = splitForRoll(200, 96, full);
+    expect(outlineParts.map(p => [p.w, p.partIndex])).toEqual(rectParts.map(p => [p.w, p.partIndex]));
+  });
+});
+
+describe('scaleOutline', () => {
+  it('maps the outline bbox onto the given dims at origin', () => {
+    const scaled = scaleOutline([{ x: 10, y: 10 }, { x: 30, y: 10 }, { x: 30, y: 20 }, { x: 10, y: 20 }], 100, 50);
+    expect(scaled).toEqual([{ x: 0, y: 0 }, { x: 100, y: 0 }, { x: 100, y: 50 }, { x: 0, y: 50 }]);
+  });
+
+  it('falls back to a rectangle for degenerate outlines', () => {
+    expect(scaleOutline([{ x: 5, y: 5 }, { x: 5, y: 9 }], 20, 10)).toEqual([
+      { x: 0, y: 0 }, { x: 20, y: 0 }, { x: 20, y: 10 }, { x: 0, y: 10 },
+    ]);
   });
 });
 

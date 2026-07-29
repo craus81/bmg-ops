@@ -57,7 +57,9 @@ export const partLetter = (i: number) => (i < 26 ? String.fromCharCode(65 + i) :
  * inches wide, all 96" tall. Returns [{w, h, partIndex}]; a single entry
  * with partIndex -1 means no split was needed.
  */
-export function splitForRoll(w: number, h: number, config: RollConfig): { w: number; h: number; partIndex: number }[] {
+export interface PanelPart { w: number; h: number; partIndex: number }
+
+export function splitForRoll(w: number, h: number, config: RollConfig): PanelPart[] {
   const usable = config.widthIn - 2 * config.edgeMarginIn;
   if (usable <= 0 || Math.min(w, h) <= usable) return [{ w, h, partIndex: -1 }];
   // min(w,h) > usable implies w > usable, so slicing the width always
@@ -69,6 +71,87 @@ export function splitForRoll(w: number, h: number, config: RollConfig): { w: num
   // its share of the seams: widths sum to w + (n−1)·overlap of print.
   const last = w - (n - 1) * step;
   return Array.from({ length: n }, (_, i) => ({ w: i < n - 1 ? usable : last, h, partIndex: i }));
+}
+
+/**
+ * Outline-aware paneling for non-rectangular shapes. Panel count, widths,
+ * and lettering are exactly what splitForRoll gives the shape's bounding
+ * box — but each panel's HEIGHT is trimmed to the outline's real vertical
+ * extent inside that panel's window (plus bleed top and bottom). A van
+ * side that is 36" tall over the front fender and 96" at the rear panels
+ * as 58.5 × 36 up front and 58.5 × 96 at the back, instead of four
+ * full-height tiles. Panels stay rectangles — that's how printed tiles
+ * are actually cut.
+ *
+ * `outline` is the closed shape in inches (any origin, any winding);
+ * `bleed` grows the piece on every side, same as rectangular pieces.
+ */
+export function splitOutlineForRoll(outline: Pt[], bleed: number, config: RollConfig): PanelPart[] {
+  const xs = outline.map(p => p.x), ys = outline.map(p => p.y);
+  const minX = Math.min(...xs), maxX = Math.max(...xs);
+  const minY = Math.min(...ys), maxY = Math.max(...ys);
+  const b = Math.max(0, bleed);
+  const W = Math.max(0.5, maxX - minX + 2 * b);
+  const H = Math.max(0.5, maxY - minY + 2 * b);
+  const panels = splitForRoll(W, H, config);
+  if (panels.length === 1 || outline.length < 3) return panels;
+  const usable = config.widthIn - 2 * config.edgeMarginIn;
+  const overlap = Math.max(0, Math.min(config.overlapIn, usable / 2));
+  const step = usable - overlap;
+  return panels.map(p => {
+    // Panel i covers piece x ∈ [i·step, i·step + w]; the outline sits at
+    // piece x − b. Measure the outline's y-extent inside the window.
+    const x0 = minX + p.partIndex * step - b;
+    const ext = clippedYExtent(outline, x0, x0 + p.w);
+    if (!ext) return p; // window misses the outline entirely — keep full height
+    return { ...p, h: Math.max(0.5, Math.min(H, ext.maxY - ext.minY + 2 * b)) };
+  });
+}
+
+// y-extent of a polygon clipped to the vertical band x ∈ [x0, x1]
+// (Sutherland–Hodgman against the two half-planes; extent survives any
+// degenerate bridging edges the clip may introduce on concave shapes).
+function clippedYExtent(poly: Pt[], x0: number, x1: number): { minY: number; maxY: number } | null {
+  const clip = (pts: Pt[], keep: (p: Pt) => boolean, cross: (a: Pt, b: Pt) => Pt): Pt[] => {
+    const out: Pt[] = [];
+    for (let i = 0; i < pts.length; i++) {
+      const a = pts[i], b = pts[(i + 1) % pts.length];
+      if (keep(a)) out.push(a);
+      if (keep(a) !== keep(b)) out.push(cross(a, b));
+    }
+    return out;
+  };
+  const atX = (a: Pt, b: Pt, x: number): Pt => ({ x, y: a.y + ((x - a.x) / (b.x - a.x)) * (b.y - a.y) });
+  let pts = clip(poly, p => p.x >= x0, (a, b) => atX(a, b, x0));
+  if (pts.length === 0) return null;
+  pts = clip(pts, p => p.x <= x1, (a, b) => atX(a, b, x1));
+  if (pts.length === 0) return null;
+  let minY = Infinity, maxY = -Infinity;
+  for (const p of pts) { minY = Math.min(minY, p.y); maxY = Math.max(maxY, p.y); }
+  return { minY, maxY };
+}
+
+/** Ellipse outline for paneling circles the same way as freeform shapes. */
+export function ellipseOutline(w: number, h: number, segments = 36): Pt[] {
+  return Array.from({ length: segments }, (_, i) => {
+    const t = (2 * Math.PI * i) / segments;
+    return { x: (w / 2) * (1 + Math.cos(t)), y: (h / 2) * (1 + Math.sin(t)) };
+  });
+}
+
+/**
+ * Scale an outline so its bounding box is exactly w × h at origin 0,0 —
+ * converts template-pixel points to real inches using the measurement's
+ * (possibly hand-edited) dims, with no dependency on template calibration.
+ */
+export function scaleOutline(points: Pt[], w: number, h: number): Pt[] {
+  const xs = points.map(p => p.x), ys = points.map(p => p.y);
+  const minX = Math.min(...xs), minY = Math.min(...ys);
+  const bw = Math.max(...xs) - minX, bh = Math.max(...ys) - minY;
+  if (bw <= 0 || bh <= 0 || w <= 0 || h <= 0) {
+    return [{ x: 0, y: 0 }, { x: w, y: 0 }, { x: w, y: h }, { x: 0, y: h }];
+  }
+  return points.map(p => ({ x: ((p.x - minX) / bw) * w, y: ((p.y - minY) / bh) * h }));
 }
 
 export interface Placement {
