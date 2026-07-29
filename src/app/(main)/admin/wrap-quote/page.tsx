@@ -2420,6 +2420,42 @@ export default function WrapQuotePage() {
                       ) : (
                         <line x1={drag.x1} y1={drag.y1} x2={drag.x2} y2={drag.y2} stroke={tool === 'calibrate' ? '#fbbf24' : pendingPair ? '#3b82f6' : '#ef4444'} strokeWidth={3} vectorEffect="non-scaling-stroke" strokeDasharray="6 4" />
                       ))}
+                      {/* Live size readout while drawing — follows the cursor
+                          so boxes can be drawn to fit the vinyl roll; flips
+                          pink with a panel count once the shape is too wide
+                          for the roll in both directions. */}
+                      {drag && tool !== 'calibrate' && num(template.px_per_in) > 0 && (() => {
+                        const ppi = num(template.px_per_in);
+                        const wIn = Math.abs(drag.x2 - drag.x1) / ppi;
+                        const hIn = Math.abs(drag.y2 - drag.y1) / ppi;
+                        const fontSize = imgDim.w / 70;
+                        const boxLike = tool === 'box' || tool === 'circle';
+                        const panels = boxLike ? splitForRoll(wIn, hIn, rollConfig).length : 1;
+                        const label = boxLike
+                          ? `${wIn.toFixed(1)}" × ${hIn.toFixed(1)}"${panels > 1 ? ` · ${panels} panels` : ''}`
+                          : `${(Math.hypot(drag.x2 - drag.x1, drag.y2 - drag.y1) / ppi).toFixed(1)}"`;
+                        return (
+                          <text x={drag.x2 + fontSize / 2} y={drag.y2 - fontSize / 2} fontSize={fontSize * 0.85} fontWeight={800}
+                            fill={panels > 1 ? '#db2777' : '#0891b2'} stroke="#fff" strokeWidth={fontSize / 7} paintOrder="stroke"
+                            style={{ pointerEvents: 'none', userSelect: 'none' }}>
+                            {label}
+                          </text>
+                        );
+                      })()}
+                      {/* Same readout while resizing an existing box. */}
+                      {editDrag?.kind === 'resize' && (() => {
+                        const m = measurements.find(x => x.id === editDrag.id);
+                        if (!m?.rect) return null;
+                        const fontSize = imgDim.w / 70;
+                        const panels = splitForRoll(num(m.dim1_in), num(m.dim2_in), rollConfig).length;
+                        return (
+                          <text x={m.rect.x + m.rect.w + fontSize / 2} y={m.rect.y + m.rect.h + fontSize} fontSize={fontSize * 0.85} fontWeight={800}
+                            fill={panels > 1 ? '#db2777' : '#0891b2'} stroke="#fff" strokeWidth={fontSize / 7} paintOrder="stroke"
+                            style={{ pointerEvents: 'none', userSelect: 'none' }}>
+                            {num(m.dim1_in).toFixed(1)}&quot; × {num(m.dim2_in).toFixed(1)}&quot;{panels > 1 ? ` · ${panels} panels` : ''}
+                          </text>
+                        );
+                      })()}
                       {/* Freeform shape in progress: placed corners, the live
                           edge to the cursor, per-edge lengths, and a green
                           first point when one more click closes the shape. */}
