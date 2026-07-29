@@ -18,6 +18,7 @@ import {
   PlacementMap,
   RollConfig,
   computeUsage,
+  ellipseOutline,
   fmtFtIn,
   offsetArea,
   partLetter,
@@ -26,7 +27,9 @@ import {
   polygonPerimeter,
   polygonSelfIntersects,
   reconcilePlacements,
+  scaleOutline,
   splitForRoll,
+  splitOutlineForRoll,
 } from '@/lib/roll-nesting';
 
 // Manual wrap-quote estimator (WrapUP-style): pick a 1:20 vehicle outline
@@ -508,11 +511,21 @@ export default function WrapQuotePage() {
     for (const m of measurements) {
       const sub = substrateById(m.substrate_id);
       const bleed = sub ? Math.max(0, num(sub.bleed_in)) : 0;
-      const w = Math.max(0.5, num(m.dim1_in) + 2 * bleed);
-      const h = Math.max(0.5, num(m.dim2_in) + 2 * bleed);
+      const d1 = num(m.dim1_in), d2 = num(m.dim2_in);
+      const w = Math.max(0.5, d1 + 2 * bleed);
+      const h = Math.max(0.5, d2 + 2 * bleed);
       const qty = Math.max(1, num(m.qty));
       const filmKey = m.substrate_id || '';
-      const parts = splitForRoll(w, h, rollConfig);
+      // Non-rectangular shapes panel against their real outline: same
+      // panel widths/letters as the bounding box, but each panel's height
+      // trims to the shape inside it (a van's 36"-tall fender panel isn't
+      // cut 96" tall just because the rear of the van is).
+      const parts =
+        m.type === 'poly' && m.points && m.points.length >= 3 && d1 > 0 && d2 > 0
+          ? splitOutlineForRoll(scaleOutline(m.points, d1, d2), bleed, rollConfig)
+          : m.type === 'circle' && d1 > 0 && d2 > 0
+            ? splitOutlineForRoll(ellipseOutline(d1, d2), bleed, rollConfig)
+            : splitForRoll(w, h, rollConfig);
       for (let s = 0; s < kitSets; s++) {
         for (let c = 0; c < qty; c++) {
           for (const part of parts) {
