@@ -67,7 +67,6 @@ export function RollNesting(props: Props) {
   const filmByKey = useMemo(() => new Map(films.map(f => [f.key, f])), [films]);
 
   const margin = config.edgeMarginIn;
-  const usableW = config.widthIn - 2 * margin;
 
   // Film groups in the order the films prop lists them (films with pieces only).
   const filmGroups = useMemo(() => {
@@ -78,8 +77,12 @@ export function RollNesting(props: Props) {
   }, [pieces, films, filmByKey]);
 
   const commitConfig = (key: keyof RollConfig, raw: string, min: number, scale = 1) => {
-    const v = Math.max(min, numv(raw) * scale);
     setCfgDraft(d => ({ ...d, [key]: undefined }));
+    // An emptied or garbled field reverts to the current value instead of
+    // committing the minimum (a blank width must not become a 1" roll).
+    const parsed = parseFloat(raw);
+    if (raw.trim() === '' || !isFinite(parsed)) return;
+    const v = Math.max(min, parsed * scale);
     if (Math.abs(v - config[key]) > 1e-9) onConfigChange({ ...config, [key]: v });
   };
 
@@ -160,7 +163,7 @@ export function RollNesting(props: Props) {
   }, [pieces]);
 
   const pieceLabel = (p: NestPiece) =>
-    `${p.name}${multiCopy.has(`${p.filmKey}|${p.name}`) ? ` #${p.copy + 1}` : ''}${sets > 1 ? ` · S${p.set + 1}` : ''}`;
+    `${p.name}${p.part ? `-${p.part}` : ''}${multiCopy.has(`${p.filmKey}|${p.name}`) ? ` #${p.copy + 1}` : ''}${sets > 1 ? ` · S${p.set + 1}` : ''}`;
 
   const selPiece = selectedKey ? pieceByKey.get(selectedKey) : null;
   const selPl = selectedKey ? placements[selectedKey] : null;
@@ -206,6 +209,12 @@ export function RollNesting(props: Props) {
             onChange={e => setCfgDraft(d => ({ ...d, edgeMarginIn: e.target.value }))}
             onBlur={e => commitConfig('edgeMarginIn', e.target.value, 0)} style={inputStyle} />
         </div>
+        <div title="Panels wider than the roll split into lettered strips (Panel-A, Panel-B); adjoining strips overlap by this much at the seam">
+          <div style={labelStyle}>Seam Overlap (in)</div>
+          <input type="number" step="0.25" value={cfgDraft.overlapIn ?? String(config.overlapIn)}
+            onChange={e => setCfgDraft(d => ({ ...d, overlapIn: e.target.value }))}
+            onBlur={e => commitConfig('overlapIn', e.target.value, 0)} style={inputStyle} />
+        </div>
         <div title="How many complete sets of the drawn graphics to nest — this is the quote's kit quantity">
           <div style={labelStyle}>Sets (kits)</div>
           <input type="number" min="1" step="1" value={sets}
@@ -247,10 +256,8 @@ export function RollNesting(props: Props) {
       )}
       {usage.unplaced.length > 0 && (
         <div style={{ padding: '8px 12px', borderRadius: '8px', marginBottom: '10px', background: 'rgba(251,191,36,0.08)', border: '1px solid rgba(251,191,36,0.3)', fontSize: '11px', fontWeight: 700, color: '#fbbf24' }}>
-          Couldn&apos;t place: {usage.unplaced.map(p => `${pieceLabel(p)} (${fmt1(p.w)}" × ${fmt1(p.h)}")`).join(', ')} — {
-            usage.unplaced.some(p => Math.min(p.w, p.h) > usableW)
-              ? 'wider than the roll in both orientations; split the panel or it will be billed by its area instead.'
-              : 'no roll space left; these bill by area instead.'}
+          Couldn&apos;t place: {usage.unplaced.map(p => `${pieceLabel(p)} (${fmt1(p.w)}" × ${fmt1(p.h)}")`).join(', ')} — longer
+          than the roll or out of roll space. These still bill, by their area instead of roll footage.
         </div>
       )}
 

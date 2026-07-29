@@ -15,21 +15,55 @@ export interface RollConfig {
   lengthIn: number; // full roll length (150 ft = 1800)
   spacingIn: number; // minimum gap between pieces
   edgeMarginIn: number; // margin kept clear at the roll edges
+  overlapIn: number; // seam overlap added when a panel is split to fit the width
 }
 
-export const DEFAULT_ROLL: RollConfig = { widthIn: 58.5, lengthIn: 1800, spacingIn: 0.5, edgeMarginIn: 0.5 };
+export const DEFAULT_ROLL: RollConfig = { widthIn: 58.5, lengthIn: 1800, spacingIn: 0.5, edgeMarginIn: 0.5, overlapIn: 0.5 };
 
 // One physical piece to cut: a measurement copy within a set. w/h are the
 // piece's print dimensions (drawn size + bleed on both sides); rotation at
-// placement time decides which one runs along the roll.
+// placement time decides which one runs along the roll. Panels too wide for
+// the roll are split into lettered parts ("Panel 1-A", "Panel 1-B") before
+// packing — `part` carries the letter, '' for unsplit pieces.
 export interface NestPiece {
-  key: string; // `${measurementId}:${copy}:${set}` — stable per layout
+  key: string; // pieceKey(...) — stable per layout, changes when film changes
   filmKey: string; // film id, '' = no film assigned
   name: string;
   w: number;
   h: number;
   set: number; // 0-based set (kit) index
   copy: number; // 0-based copy index within the measurement's qty
+  part: string; // 'A', 'B', … when split to fit the roll; '' otherwise
+}
+
+// Placement keys embed everything that invalidates a spot: the measurement,
+// which copy/set/part it is, and the film (film changes move a piece to a
+// different roll group, so its old placement must not survive).
+export const pieceKey = (mid: string, copy: number, set: number, part: number, filmKey: string) =>
+  `${mid}:${copy}:${set}:${part}:${filmKey}`;
+
+export const partLetter = (i: number) => (i < 26 ? String.fromCharCode(65 + i) : `P${i + 1}`);
+
+/**
+ * Split a panel that is wider than the roll in BOTH orientations into
+ * strips that fit, splitting the smaller dimension so the strips run
+ * lengthwise down the roll. Adjoining strips share a seam overlap (extra
+ * printed material on each seam — that's how oversized box-truck sides
+ * actually get produced). Returns [{w, h, partIndex}]; a single entry with
+ * partIndex -1 means no split was needed.
+ */
+export function splitForRoll(w: number, h: number, config: RollConfig): { w: number; h: number; partIndex: number }[] {
+  const usable = config.widthIn - 2 * config.edgeMarginIn;
+  const small = Math.min(w, h), large = Math.max(w, h);
+  if (usable <= 0 || small <= usable) return [{ w, h, partIndex: -1 }];
+  const overlap = Math.max(0, Math.min(config.overlapIn, usable / 2));
+  const n = usable > overlap
+    ? Math.max(2, Math.ceil((small - overlap) / (usable - overlap)))
+    : Math.max(2, Math.ceil(small / usable));
+  // n strips of width x cover `small` with (n-1) overlapped seams:
+  // n·x − (n−1)·overlap = small.
+  const x = (small + (n - 1) * overlap) / n;
+  return Array.from({ length: n }, (_, i) => ({ w: x, h: large, partIndex: i }));
 }
 
 export interface Placement {
@@ -144,8 +178,11 @@ export function packPieces(
     };
     for (const { piece, placement } of existing) {
       if (piece.filmKey !== filmKey) continue;
+      // Clamp the roll index — a hand-edited or corrupt snapshot must not
+      // allocate bins unboundedly or crash the page.
+      const roll = Math.min(MAX_ROLLS_PER_FILM - 1, Math.max(0, Math.floor(placement.roll) || 0));
       const r = placedRect(piece, placement);
-      occupy(ensureBin(placement.roll), { x: r.x - margin, y: r.y - margin, w: r.w, h: r.h }, spacing);
+      occupy(ensureBin(roll), { x: r.x - margin, y: r.y - margin, w: r.w, h: r.h }, spacing);
     }
 
     // Longest side first, biggest first — the classic ordering that keeps
@@ -194,30 +231,27 @@ function cmpScore(a: [number, number, number, number], b: [number, number, numbe
 }
 
 /**
- * Keep valid placements, drop placements whose piece no longer exists, and
- * pack any new pieces into the remaining space (existing pieces stay put).
- * Returns the SAME map object when nothing changed, so state effects can
- * cheaply no-op.
+ * Pack any new pieces into the remaining space; already-placed pieces stay
+ * put. Placements for pieces that no longer exist are KEPT (they're inert —
+ * usage and obstacle math only ever consult current pieces) so a transient
+ * state like retyping the kit count from 12 → 1 → 15 doesn't wipe a manual
+ * arrangement; Auto-Nest rebuilds the map from scratch and clears them.
+ * Returns the SAME map object when nothing needed placing, so state
+ * effects can cheaply no-op.
  */
 export function reconcilePlacements(
   pieces: NestPiece[],
   placements: PlacementMap,
   config: RollConfig
 ): PlacementMap {
-  const byKey = new Map(pieces.map(p => [p.key, p]));
-  const kept: PlacementMap = {};
-  let dropped = false;
-  for (const [key, pl] of Object.entries(placements)) {
-    if (byKey.has(key)) kept[key] = pl;
-    else dropped = true;
-  }
-  const missing = pieces.filter(p => !(p.key in kept));
-  if (missing.length === 0) return dropped ? kept : placements;
+  const missing = pieces.filter(p => !(p.key in placements));
+  if (missing.length === 0) return placements;
   const existing = pieces
-    .filter(p => p.key in kept)
-    .map(p => ({ piece: p, placement: kept[p.key] }));
+    .filter(p => p.key in placements)
+    .map(p => ({ piece: p, placement: placements[p.key] }));
   const { placements: added } = packPieces(missing, config, existing);
-  return { ...kept, ...added };
+  if (Object.keys(added).length === 0) return placements;
+  return { ...placements, ...added };
 }
 
 // ---------------------------------------------------------------- Usage
@@ -358,4 +392,39 @@ export function polygonPerimeter(points: Pt[]): number {
 export function offsetArea(area: number, perimeter: number, bleed: number): number {
   if (bleed <= 0) return area;
   return area + perimeter * bleed + Math.PI * bleed * bleed;
+}
+
+/**
+ * True when the closed outline crosses itself (a "bowtie"). The shoelace
+ * formula cancels the overlapping lobes of such a shape, so a crossed
+ * outline would silently under-bill — the drawing tools refuse to close
+ * one and flag it if vertex edits create one.
+ */
+export function polygonSelfIntersects(points: Pt[]): boolean {
+  const n = points.length;
+  if (n < 4) return false;
+  const seg = (i: number) => [points[i], points[(i + 1) % n]] as const;
+  for (let i = 0; i < n; i++) {
+    for (let j = i + 1; j < n; j++) {
+      // Skip the shared-vertex neighbours (and the first/last wrap pair).
+      if (j === i + 1 || (i === 0 && j === n - 1)) continue;
+      const [a, b] = seg(i), [c, d] = seg(j);
+      if (segmentsCross(a, b, c, d)) return true;
+    }
+  }
+  return false;
+}
+
+function segmentsCross(a: Pt, b: Pt, c: Pt, d: Pt): boolean {
+  const orient = (p: Pt, q: Pt, r: Pt) => {
+    const v = (q.x - p.x) * (r.y - p.y) - (q.y - p.y) * (r.x - p.x);
+    return Math.abs(v) < 1e-9 ? 0 : Math.sign(v);
+  };
+  const o1 = orient(a, b, c), o2 = orient(a, b, d), o3 = orient(c, d, a), o4 = orient(c, d, b);
+  if (o1 !== o2 && o3 !== o4 && o1 !== 0 && o2 !== 0 && o3 !== 0 && o4 !== 0) return true;
+  const onSeg = (p: Pt, q: Pt, r: Pt) =>
+    orient(p, q, r) === 0 &&
+    Math.min(p.x, q.x) - 1e-9 <= r.x && r.x <= Math.max(p.x, q.x) + 1e-9 &&
+    Math.min(p.y, q.y) - 1e-9 <= r.y && r.y <= Math.max(p.y, q.y) + 1e-9;
+  return onSeg(a, b, c) || onSeg(a, b, d) || onSeg(c, d, a) || onSeg(c, d, b);
 }

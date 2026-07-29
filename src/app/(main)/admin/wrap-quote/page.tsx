@@ -19,9 +19,13 @@ import {
   computeUsage,
   fmtFtIn,
   offsetArea,
+  partLetter,
+  pieceKey,
   polygonArea,
   polygonPerimeter,
+  polygonSelfIntersects,
   reconcilePlacements,
+  splitForRoll,
 } from '@/lib/roll-nesting';
 
 // Manual wrap-quote estimator (WrapUP-style): pick a 1:20 vehicle outline
@@ -171,6 +175,7 @@ interface NestingSnapshot {
   roll_length_in: number;
   spacing_in: number;
   edge_margin_in: number;
+  overlap_in: number;
   sets: number;
   films: {
     film_id: string | null;
@@ -179,10 +184,15 @@ interface NestingSnapshot {
     rolls: { used_length_in: number; piece_count: number }[];
     roll_sqft: number;
     graphic_sqft: number;
+    // ft² billed by area rather than roll usage (pieces that couldn't be
+    // placed); material_total = (roll_sqft + extra_area_sqft) × rate so the
+    // rendered rows always sum to the stored materials_total.
+    extra_area_sqft: number;
     material_total: number;
   }[];
   unplaced: { name: string; w_in: number; h_in: number; film_id: string | null }[];
-  placements: { m: number; copy: number; set: number; roll: number; x: number; y: number; rot: 0 | 90 }[];
+  // part: -1 = whole panel, 0+ = index of a lettered split strip (A, B, …)
+  placements: { m: number; copy: number; set: number; part: number; roll: number; x: number; y: number; rot: 0 | 90 }[];
 }
 
 // How the final totals were reached, snapshotted for display: the pre-
@@ -483,27 +493,52 @@ export default function WrapQuotePage() {
   const kitSets = Math.max(1, Math.floor(num(packageQty) || 1));
 
   // Every measurement copy in every set is one print piece (drawn size +
-  // bleed per side). Capped so a fat-fingered qty can't hang the packer.
+  // bleed per side). Panels too wide for the roll in both orientations are
+  // auto-split into lettered strips with a seam overlap ("Panel 1-A",
+  // "Panel 1-B") so they actually fit. Enumeration is capped so a
+  // fat-fingered qty can't hang the packer — anything past the cap skips
+  // the layout but still BILLS by area (overflowSqft) so the quote never
+  // silently under-charges.
   const NEST_PIECE_CAP = 800;
-  const nestPieces = useMemo<NestPiece[]>(() => {
-    const out: NestPiece[] = [];
+  const nest = useMemo(() => {
+    const pieces: NestPiece[] = [];
+    const overflowSqft = new Map<string, number>();
+    let capped = false;
     for (const m of measurements) {
       const sub = substrateById(m.substrate_id);
       const bleed = sub ? Math.max(0, num(sub.bleed_in)) : 0;
       const w = Math.max(0.5, num(m.dim1_in) + 2 * bleed);
       const h = Math.max(0.5, num(m.dim2_in) + 2 * bleed);
       const qty = Math.max(1, num(m.qty));
+      const filmKey = m.substrate_id || '';
+      const parts = splitForRoll(w, h, rollConfig);
       for (let s = 0; s < kitSets; s++) {
         for (let c = 0; c < qty; c++) {
-          if (out.length >= NEST_PIECE_CAP) return out;
-          out.push({ key: `${m.id}:${c}:${s}`, filmKey: m.substrate_id || '', name: m.name, w, h, set: s, copy: c });
+          for (const part of parts) {
+            if (pieces.length >= NEST_PIECE_CAP) {
+              capped = true;
+              overflowSqft.set(filmKey, (overflowSqft.get(filmKey) || 0) + (part.w * part.h) / 144);
+            } else {
+              pieces.push({
+                key: pieceKey(m.id, c, s, part.partIndex, filmKey),
+                filmKey,
+                name: m.name,
+                w: part.w,
+                h: part.h,
+                set: s,
+                copy: c,
+                part: part.partIndex >= 0 ? partLetter(part.partIndex) : '',
+              });
+            }
+          }
         }
       }
     }
-    return out;
+    return { pieces, overflowSqft, capped };
     // eslint-disable-next-line react-hooks/exhaustive-deps -- substrateById reads substrates
-  }, [measurements, kitSets, substrates]);
-  const nestCapped = nestPieces.length >= NEST_PIECE_CAP;
+  }, [measurements, kitSets, substrates, rollConfig]);
+  const nestPieces = nest.pieces;
+  const nestCapped = nest.capped;
 
   const nestFilms = useMemo<RollFilmInfo[]>(() => {
     const used = new Set(measurements.map(m => m.substrate_id || ''));
@@ -522,6 +557,25 @@ export default function WrapQuotePage() {
   }, [nestPieces, rollConfig]);
 
   const nestUsage = useMemo(() => computeUsage(nestPieces, placements, rollConfig), [nestPieces, placements, rollConfig]);
+
+  // Per-film nested billing, shared by the totals math AND the saved
+  // snapshot so the numbers on documents always sum: roll consumption plus
+  // area-billed extras (pieces the packer couldn't fit and anything past
+  // the enumeration cap).
+  const nestFilmBilling = useMemo(() => {
+    const rows = new Map<string, { rollSqft: number; graphicSqft: number; extraSqft: number; rolls: { usedLengthIn: number; pieceCount: number }[] }>();
+    for (const f of nestUsage.films) {
+      rows.set(f.filmKey, { rollSqft: f.rollSqft, graphicSqft: f.graphicSqft, extraSqft: 0, rolls: f.rolls });
+    }
+    const addExtra = (filmKey: string, sqft: number) => {
+      const row = rows.get(filmKey) || { rollSqft: 0, graphicSqft: 0, extraSqft: 0, rolls: [] };
+      row.extraSqft += sqft;
+      rows.set(filmKey, row);
+    };
+    for (const p of nestUsage.unplaced) addExtra(p.filmKey, (p.w * p.h) / 144);
+    for (const [filmKey, sqft] of nest.overflowSqft) addExtra(filmKey, sqft);
+    return rows;
+  }, [nestUsage, nest]);
 
   const totals = useMemo(() => {
     const kitQty = Math.max(1, Math.floor(num(packageQty) || 1));
@@ -556,15 +610,11 @@ export default function WrapQuotePage() {
     let nestedRollSqft = 0;
     if (nested) {
       let rollMaterials = 0;
-      for (const f of nestUsage.films) {
-        const film = substrateById(f.filmKey || null);
+      for (const [filmKey, row] of nestFilmBilling) {
+        const film = substrateById(filmKey || null);
         if (!film) continue;
-        rollMaterials += f.rollSqft * filmRate(film);
-        nestedRollSqft += f.rollSqft;
-      }
-      for (const p of nestUsage.unplaced) {
-        const film = substrateById(p.filmKey || null);
-        if (film) rollMaterials += ((p.w * p.h) / 144) * filmRate(film);
+        rollMaterials += (row.rollSqft + row.extraSqft) * filmRate(film);
+        nestedRollSqft += row.rollSqft;
       }
       materials = rollMaterials;
       kitMaterials = rollMaterials / kitQty;
@@ -611,15 +661,11 @@ export default function WrapQuotePage() {
     let materialCost = 0;
     const uncostedFilms = new Set<string>();
     if (nested) {
-      for (const f of nestUsage.films) {
-        const film = substrateById(f.filmKey || null);
+      for (const [filmKey, row] of nestFilmBilling) {
+        const film = substrateById(filmKey || null);
         if (!film) continue;
-        if (filmHasCost(film)) materialCost += f.rollSqft * filmCost(film);
+        if (filmHasCost(film)) materialCost += (row.rollSqft + row.extraSqft) * filmCost(film);
         else uncostedFilms.add(filmLabel(film));
-      }
-      for (const p of nestUsage.unplaced) {
-        const film = substrateById(p.filmKey || null);
-        if (film && filmHasCost(film)) materialCost += ((p.w * p.h) / 144) * filmCost(film);
       }
     } else {
       for (const { film, sqft } of byFilm.values()) {
@@ -637,7 +683,7 @@ export default function WrapQuotePage() {
       nested, nestedRollSqft,
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps -- substrates feed measurementPricing
-  }, [measurements, settings, substrates, laborRates, packageQty, discountPctOverride, useRollPricing, nestPieces, nestUsage]);
+  }, [measurements, settings, substrates, laborRates, packageQty, discountPctOverride, useRollPricing, nestPieces, nestFilmBilling]);
 
   // ----- Canvas drawing -----
   const svgPoint = (e: { clientX: number; clientY: number }): { x: number; y: number } | null => {
@@ -680,6 +726,12 @@ export default function WrapQuotePage() {
     // Drop consecutive near-duplicate clicks (double-click close leaves one).
     const pts = polyDraft.filter((p, i) => i === 0 || Math.hypot(p.x - polyDraft[i - 1].x, p.y - polyDraft[i - 1].y) > 2);
     if (pts.length < 3) { setPolyDraft(null); setPolyHover(null); setTool('select'); return; }
+    // A crossed outline ("bowtie") would shoelace to a smaller area than
+    // what's visually filled and under-bill — refuse and let them fix it.
+    if (polygonSelfIntersects(pts)) {
+      void dialog.alert('The outline crosses itself — undo the last point or place the corners so the lines don\'t cross, then close the shape.');
+      return;
+    }
     const metrics = polyMetrics(pts, ppi);
     const m: Measurement = {
       id: crypto.randomUUID(),
@@ -743,6 +795,15 @@ export default function WrapQuotePage() {
       const ppi = num(template?.px_per_in);
       setMeasurements(prev => prev.map(m => {
         if (m.id !== editDrag.id) return m;
+        if (editDrag.kind === 'lineend' && editDrag.line && editDrag.lineNo) {
+          const moved = editDrag.endNo === 1
+            ? { ...editDrag.line, x1: editDrag.line.x1 + dx, y1: editDrag.line.y1 + dy }
+            : { ...editDrag.line, x2: editDrag.line.x2 + dx, y2: editDrag.line.y2 + dy };
+          const lenIn = ppi > 0 ? Math.hypot(moved.x2 - moved.x1, moved.y2 - moved.y1) / ppi : 0;
+          return editDrag.lineNo === 1
+            ? { ...m, line1: moved, dim1_in: ppi > 0 ? lenIn : m.dim1_in }
+            : { ...m, line2: moved, dim2_in: ppi > 0 ? lenIn : m.dim2_in };
+        }
         if (editDrag.points) {
           if (editDrag.kind === 'move') {
             return { ...m, points: editDrag.points.map(pt => ({ x: pt.x + dx, y: pt.y + dy })) };
@@ -850,12 +911,16 @@ export default function WrapQuotePage() {
         next.rect = { ...next.rect, w: Math.max(2, num(next.dim1_in) * ppi), h: Math.max(2, num(next.dim2_in) * ppi) };
       }
       if (next.type === 'poly' && next.points && ppi > 0 && ('dim1_in' in patch || 'dim2_in' in patch)) {
-        const xs = next.points.map(p => p.x), ys = next.points.map(p => p.y);
-        const minX = Math.min(...xs), minY = Math.min(...ys);
-        const w = Math.max(1, Math.max(...xs) - minX), h = Math.max(1, Math.max(...ys) - minY);
-        const sx = Math.max(2, num(next.dim1_in) * ppi) / w;
-        const sy = Math.max(2, num(next.dim2_in) * ppi) / h;
-        next.points = next.points.map(p => ({ x: minX + (p.x - minX) * sx, y: minY + (p.y - minY) * sy }));
+        if (num(next.dim1_in) > 0 && num(next.dim2_in) > 0) {
+          const xs = next.points.map(p => p.x), ys = next.points.map(p => p.y);
+          const minX = Math.min(...xs), minY = Math.min(...ys);
+          const w = Math.max(1, Math.max(...xs) - minX), h = Math.max(1, Math.max(...ys) - minY);
+          const sx = (num(next.dim1_in) * ppi) / w;
+          const sy = (num(next.dim2_in) * ppi) / h;
+          next.points = next.points.map(p => ({ x: minX + (p.x - minX) * sx, y: minY + (p.y - minY) * sy }));
+        }
+        // A cleared/zero field never collapses the outline — the dims just
+        // snap back to the shape's real bounding box.
         Object.assign(next, polyMetrics(next.points, ppi));
       }
       return next;
@@ -866,14 +931,32 @@ export default function WrapQuotePage() {
   // mode). Move keeps the dimensions; dragging a box's corner handle or a
   // shape's vertex reshapes it and rewrites the inches.
   const [editDrag, setEditDrag] = useState<{
-    kind: 'move' | 'resize' | 'vertex';
+    kind: 'move' | 'resize' | 'vertex' | 'lineend';
     id: string;
     grabX: number;
     grabY: number;
     rect?: { x: number; y: number; w: number; h: number };
     points?: { x: number; y: number }[];
     vertexIndex?: number;
+    // roof/hood endpoint drags: which line and which end is being moved
+    line?: { x1: number; y1: number; x2: number; y2: number };
+    lineNo?: 1 | 2;
+    endNo?: 1 | 2;
   } | null>(null);
+
+  // Grab an endpoint of a roof/hood line to fix where it landed — the
+  // measured inches rewrite from the line's new length as it moves.
+  const beginLineEndDrag = (e: React.PointerEvent, m: Measurement, lineNo: 1 | 2, endNo: 1 | 2) => {
+    if (tool !== 'select') return;
+    const src = lineNo === 1 ? m.line1 : m.line2;
+    if (!src) return;
+    e.stopPropagation();
+    const pt = svgPoint(e);
+    if (!pt) return;
+    setSelectedId(m.id);
+    (e.target as Element).setPointerCapture?.(e.pointerId);
+    setEditDrag({ kind: 'lineend', id: m.id, grabX: pt.x, grabY: pt.y, line: { ...src }, lineNo, endNo });
+  };
 
   const beginEditDrag = (e: React.PointerEvent, m: Measurement, kind: 'move' | 'resize' | 'vertex', vertexIndex?: number) => {
     if (tool !== 'select') return;
@@ -992,23 +1075,23 @@ export default function WrapQuotePage() {
         geometry: { rect: m.rect || null, line1: m.line1 || null, line2: m.line2 || null, poly: m.points || null },
       };
     });
-    // The roll layout rides along whenever pieces are placed (so reopening
-    // restores the arrangement); `enabled` records whether materials were
-    // actually priced from it. Placements key on measurement INDEX because
-    // measurement ids are regenerated when a quote reloads.
+    // The roll layout rides along whenever pieces are placed OR roll
+    // pricing is on (so a roll-priced quote always carries the Material
+    // rows its documents render, even if nothing could be placed);
+    // `enabled` records whether materials were actually priced from it.
+    // Placements key on measurement INDEX because measurement ids are
+    // regenerated when a quote reloads.
     const measurementIndex = new Map(measurements.map((m, i) => [m.id, i]));
     let nesting: NestingSnapshot | null = null;
-    if (Object.keys(placements).length > 0) {
+    if (nested || Object.keys(placements).length > 0) {
       const placementRows: NestingSnapshot['placements'] = [];
-      for (const m of measurements) {
-        const idx = measurementIndex.get(m.id)!;
-        const qty = Math.max(1, num(m.qty));
-        for (let s = 0; s < kitSets; s++) {
-          for (let c = 0; c < qty; c++) {
-            const pl = placements[`${m.id}:${c}:${s}`];
-            if (pl) placementRows.push({ m: idx, copy: c, set: s, roll: pl.roll, x: pl.x, y: pl.y, rot: pl.rot });
-          }
-        }
+      for (const p of nestPieces) {
+        const pl = placements[p.key];
+        if (!pl) continue;
+        const keyBits = p.key.split(':');
+        const idx = measurementIndex.get(keyBits[0]);
+        if (idx == null) continue;
+        placementRows.push({ m: idx, copy: p.copy, set: p.set, part: parseInt(keyBits[3], 10), roll: pl.roll, x: pl.x, y: pl.y, rot: pl.rot });
       }
       nesting = {
         enabled: nested,
@@ -1016,21 +1099,23 @@ export default function WrapQuotePage() {
         roll_length_in: rollConfig.lengthIn,
         spacing_in: rollConfig.spacingIn,
         edge_margin_in: rollConfig.edgeMarginIn,
+        overlap_in: rollConfig.overlapIn,
         sets: kitSets,
-        films: nestUsage.films.map(f => {
-          const film = substrateById(f.filmKey || null);
+        films: [...nestFilmBilling.entries()].map(([filmKey, row]) => {
+          const film = substrateById(filmKey || null);
           const rate = film ? filmRate(film) : 0;
           return {
-            film_id: f.filmKey || null,
+            film_id: filmKey || null,
             label: film ? filmLabel(film) : 'No film',
             rate_per_sqft: rate,
-            rolls: f.rolls.map(r => ({ used_length_in: r.usedLengthIn, piece_count: r.pieceCount })),
-            roll_sqft: f.rollSqft,
-            graphic_sqft: f.graphicSqft,
-            material_total: f.rollSqft * rate,
+            rolls: row.rolls.map(r => ({ used_length_in: r.usedLengthIn, piece_count: r.pieceCount })),
+            roll_sqft: row.rollSqft,
+            graphic_sqft: row.graphicSqft,
+            extra_area_sqft: row.extraSqft,
+            material_total: (row.rollSqft + row.extraSqft) * rate,
           };
         }),
-        unplaced: nestUsage.unplaced.map(p => ({ name: p.name, w_in: p.w, h_in: p.h, film_id: p.filmKey || null })),
+        unplaced: nestUsage.unplaced.map(p => ({ name: p.part ? `${p.name}-${p.part}` : p.name, w_in: p.w, h_in: p.h, film_id: p.filmKey || null })),
         placements: placementRows,
       };
     }
@@ -1454,16 +1539,21 @@ export default function WrapQuotePage() {
         lengthIn: num(n.roll_length_in) || DEFAULT_ROLL.lengthIn,
         spacingIn: n.spacing_in != null ? Math.max(0, num(n.spacing_in)) : DEFAULT_ROLL.spacingIn,
         edgeMarginIn: n.edge_margin_in != null ? Math.max(0, num(n.edge_margin_in)) : DEFAULT_ROLL.edgeMarginIn,
+        overlapIn: n.overlap_in != null ? Math.max(0, num(n.overlap_in)) : DEFAULT_ROLL.overlapIn,
       });
       const restored: PlacementMap = {};
       for (const row of n.placements || []) {
         const target = ms[row.m];
         if (!target) continue;
-        restored[`${target.id}:${row.copy}:${row.set}`] = { roll: Math.max(0, num(row.roll)), x: num(row.x), y: num(row.y), rot: row.rot === 90 ? 90 : 0 };
+        // Older snapshots predate split parts — treat them as whole panels.
+        const part = row.part != null ? Math.trunc(num(row.part)) : -1;
+        restored[pieceKey(target.id, row.copy, row.set, part, target.substrate_id || '')] =
+          { roll: Math.max(0, num(row.roll)), x: num(row.x), y: num(row.y), rot: row.rot === 90 ? 90 : 0 };
       }
       setPlacements(restored);
       setUseRollPricing(!!n.enabled);
     } else {
+      setRollConfig({ ...DEFAULT_ROLL });
       setPlacements({});
       setUseRollPricing(false);
     }
@@ -1890,7 +1980,10 @@ export default function WrapQuotePage() {
               <td style={{ padding: '5px 6px', borderBottom: `1px solid ${theme.border}` }}>
                 Material — {f.label}
                 <span style={{ color: 'var(--text-muted)', marginLeft: '6px', fontSize: '9px', fontWeight: 400 }}>
-                  {fmt(f.roll_sqft)} ft² · {(f.rolls || []).length > 1 ? `${f.rolls.length} rolls, ` : ''}{fmtFtIn((f.rolls || []).reduce((s, r) => s + num(r.used_length_in), 0))} of {num(q.nesting!.roll_width_in)}&quot; roll{(q.nesting!.sets || 1) > 1 ? ` · ${q.nesting!.sets} sets` : ''}
+                  {[
+                    num(f.roll_sqft) > 0.005 ? `${fmt(f.roll_sqft)} ft² · ${(f.rolls || []).length > 1 ? `${f.rolls.length} rolls, ` : ''}${fmtFtIn((f.rolls || []).reduce((s, r) => s + num(r.used_length_in), 0))} of ${num(q.nesting!.roll_width_in)}" roll` : '',
+                    num(f.extra_area_sqft) > 0.005 ? `${fmt(f.extra_area_sqft)} ft² billed by area` : '',
+                  ].filter(Boolean).join(' + ')}{(q.nesting!.sets || 1) > 1 ? ` · ${q.nesting!.sets} sets` : ''}
                 </span>
               </td>
               <td style={{ padding: '5px 6px', textAlign: 'right', borderBottom: `1px solid ${theme.border}` }}>1</td>
@@ -2070,7 +2163,7 @@ export default function WrapQuotePage() {
                     }}>{t.label}</button>
                   ))}
                 </div>
-                <button onClick={() => { setTool('calibrate'); setPendingPair(null); }} style={{
+                <button onClick={() => { setTool('calibrate'); setPendingPair(null); setPolyDraft(null); setPolyHover(null); }} style={{
                   width: '100%', padding: '6px', borderRadius: '8px', fontSize: '10px', fontWeight: 700, cursor: 'pointer', marginBottom: '10px',
                   background: tool === 'calibrate' ? 'rgba(251,191,36,0.15)' : 'transparent',
                   border: '1px solid rgba(251,191,36,0.35)', color: '#fbbf24',
@@ -2172,6 +2265,11 @@ export default function WrapQuotePage() {
                         )}
                         <button onClick={() => removeMeasurement(selected.id)} style={btnStyle('#ef4444', 'transparent')}>Delete</button>
                       </div>
+                      {selected.type === 'poly' && selected.points && polygonSelfIntersects(selected.points) && (
+                        <div style={{ fontSize: '10px', color: '#fbbf24', fontWeight: 700, marginBottom: '4px' }}>
+                          ⚠ Outline crosses itself — the area can&apos;t be trusted. Drag the corners apart.
+                        </div>
+                      )}
                       <div style={{ fontSize: '10px', color: 'var(--text-secondary)', fontWeight: 700 }}>
                         Area: {fmt(p.trimArea)} ft²{p.sub && num(p.sub.bleed_in) > 0 ? ` · billed ${fmt(p.billedArea)} ft² with ${p.sub.bleed_in}" bleed` : ''}
                       </div>
@@ -2254,12 +2352,27 @@ export default function WrapQuotePage() {
                                 ))}
                               </>
                             )}
-                            {(m.type === 'roof' || m.type === 'hood') && (
-                              <>
-                                {m.line1 && <line x1={m.line1.x1} y1={m.line1.y1} x2={m.line1.x2} y2={m.line1.y2} stroke="#ef4444" strokeWidth={3} vectorEffect="non-scaling-stroke" />}
-                                {m.line2 && <line x1={m.line2.x1} y1={m.line2.y1} x2={m.line2.x2} y2={m.line2.y2} stroke="#3b82f6" strokeWidth={3} vectorEffect="non-scaling-stroke" />}
-                              </>
-                            )}
+                            {(m.type === 'roof' || m.type === 'hood') && ([
+                              [m.line1, '#ef4444', 1, num(m.dim1_in)] as const,
+                              [m.line2, '#3b82f6', 2, num(m.dim2_in)] as const,
+                            ]).map(([ln, color, no, dimIn]) => ln && (
+                              <g key={`ln-${no}`}>
+                                <line x1={ln.x1} y1={ln.y1} x2={ln.x2} y2={ln.y2} stroke={color} strokeWidth={3} vectorEffect="non-scaling-stroke" />
+                                {/* Each line wears its measured length so a
+                                    misdrawn width line is obvious at a glance */}
+                                {dimIn > 0 && (
+                                  <text x={(ln.x1 + ln.x2) / 2} y={(ln.y1 + ln.y2) / 2 - fontSize / 3} fontSize={fontSize * 0.75} fontWeight={700} fill={color} textAnchor="middle">{dimIn.toFixed(1)}&quot;</text>
+                                )}
+                                {sel && tool === 'select' && ([1, 2] as const).map(endNo => (
+                                  <circle key={endNo}
+                                    cx={endNo === 1 ? ln.x1 : ln.x2} cy={endNo === 1 ? ln.y1 : ln.y2}
+                                    r={Math.max(5, imgDim.w / 220)} fill={color} stroke="#fff" strokeWidth={1.5} vectorEffect="non-scaling-stroke"
+                                    style={{ cursor: 'grab' }}
+                                    onPointerDown={e => beginLineEndDrag(e, m, no, endNo)}
+                                  />
+                                ))}
+                              </g>
+                            ))}
                             {(m.rect || m.line1 || m.points?.length) && (
                               <text
                                 x={(m.rect ? m.rect.x : m.points?.length ? Math.min(...m.points.map(p => p.x)) : m.line1!.x1) + fontSize / 3}
@@ -2384,7 +2497,8 @@ export default function WrapQuotePage() {
         <div>
           {nestCapped && (
             <div style={{ padding: '8px 12px', borderRadius: '8px', marginBottom: '10px', background: 'rgba(251,191,36,0.08)', border: '1px solid rgba(251,191,36,0.3)', fontSize: '11px', fontWeight: 700, color: '#fbbf24' }}>
-              Layout capped at {nestPieces.length} pieces (quantity × sets is very large) — the roll usage below covers only what&apos;s shown.
+              The layout shows the first {nestPieces.length} pieces (quantity × sets is very large). Pieces beyond that
+              still bill — by their area instead of roll footage — so the quote stays whole.
             </div>
           )}
           <RollNesting

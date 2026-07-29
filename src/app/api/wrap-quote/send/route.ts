@@ -66,7 +66,11 @@ function buildQuoteHtml(quote: any, company: any, diagramUrl: string | null, log
     for (const f of nest.films || []) {
       if (!((parseFloat(f.material_total) || 0) > 0.005)) continue;
       const usedIn = (f.rolls || []).reduce((s: number, r: any) => s + (parseFloat(r.used_length_in) || 0), 0);
-      const detail = `${money(f.roll_sqft)} ft² · ${(usedIn / 12).toFixed(1)} ft of ${money(nest.roll_width_in)}" roll${(nest.sets || 1) > 1 ? ` · ${nest.sets} sets` : ''}`;
+      const extra = parseFloat(f.extra_area_sqft) || 0;
+      const detail = [
+        (parseFloat(f.roll_sqft) || 0) > 0.005 ? `${money(f.roll_sqft)} ft² · ${(usedIn / 12).toFixed(1)} ft of ${money(nest.roll_width_in)}" roll` : '',
+        extra > 0.005 ? `${money(extra)} ft² billed by area` : '',
+      ].filter(Boolean).join(' + ') + ((nest.sets || 1) > 1 ? ` · ${nest.sets} sets` : '');
       rows.push(`<tr>${cell(`<b>Material — ${esc(f.label)}</b> <span style="color:#6b7280;font-size:11px;">${detail}</span>`)}${cell('1', true)}${cell(money(f.material_total), true)}${cell(`<b>${money(f.material_total)}</b>`, true)}</tr>`);
     }
   }

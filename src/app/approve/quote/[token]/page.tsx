@@ -144,7 +144,10 @@ export default function QuoteApprovalPage() {
                 <td style={{ padding: '8px 0', color: '#0f172a' }}>
                   <div style={{ fontWeight: 700 }}>Material — {f.label}</div>
                   <div style={{ fontSize: '12px', color: '#475569' }}>
-                    {money(f.roll_sqft)} ft² · {(((f.rolls || []).reduce((s: number, r: any) => s + (parseFloat(r.used_length_in) || 0), 0)) / 12).toFixed(1)} ft of {money(q.nesting.roll_width_in)}&quot; roll{(q.nesting.sets || 1) > 1 ? ` · ${q.nesting.sets} sets` : ''}
+                    {[
+                      (parseFloat(f.roll_sqft) || 0) > 0.005 ? `${money(f.roll_sqft)} ft² · ${(((f.rolls || []).reduce((s: number, r: any) => s + (parseFloat(r.used_length_in) || 0), 0)) / 12).toFixed(1)} ft of ${money(q.nesting.roll_width_in)}" roll` : '',
+                      (parseFloat(f.extra_area_sqft) || 0) > 0.005 ? `${money(f.extra_area_sqft)} ft² billed by area` : '',
+                    ].filter(Boolean).join(' + ')}{(q.nesting.sets || 1) > 1 ? ` · ${q.nesting.sets} sets` : ''}
                   </div>
                 </td>
                 <td style={{ padding: '8px 0', textAlign: 'right' }}>1</td>

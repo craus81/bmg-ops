@@ -9,16 +9,19 @@ import {
   fmtFtIn,
   offsetArea,
   packPieces,
+  partLetter,
   placedRect,
   polygonArea,
   polygonPerimeter,
+  polygonSelfIntersects,
   reconcilePlacements,
+  splitForRoll,
 } from './roll-nesting';
 
 const piece = (key: string, w: number, h: number, filmKey = 'f1'): NestPiece =>
-  ({ key, filmKey, name: key, w, h, set: 0, copy: 0 });
+  ({ key, filmKey, name: key, w, h, set: 0, copy: 0, part: '' });
 
-const cfg: RollConfig = { widthIn: 58.5, lengthIn: 1800, spacingIn: 0.5, edgeMarginIn: 0.5 };
+const cfg: RollConfig = { widthIn: 58.5, lengthIn: 1800, spacingIn: 0.5, edgeMarginIn: 0.5, overlapIn: 0.5 };
 
 // Every pair of placed pieces on the same film+roll must be separated by at
 // least the configured spacing (checked by inflating one rect by spacing).
@@ -146,16 +149,91 @@ describe('reconcilePlacements', () => {
     expect(reconcilePlacements(pieces, placements, cfg)).toBe(placements);
   });
 
-  it('drops stale placements and packs new pieces around kept ones', () => {
+  it('packs new pieces around existing ones without moving them', () => {
     const pieces = [piece('a', 10, 10), piece('b', 12, 12)];
     const { placements } = packPieces(pieces, cfg);
-    const next = [pieces[0], piece('c', 14, 14)];
+    const next = [pieces[0], pieces[1], piece('c', 14, 14)];
     const merged = reconcilePlacements(next, placements, cfg);
-    expect(merged['b']).toBeUndefined();
     expect(merged['a']).toEqual(placements['a']); // untouched
     expect(merged['c']).toBeTruthy();
     const issues = findLayoutIssues(next, merged, cfg);
     expect(issues.overlapping.size).toBe(0);
+  });
+
+  it('keeps placements for temporarily missing pieces so they survive a round-trip', () => {
+    // Retyping "12" sets → "1" → "12" must not wipe the manual layout.
+    const pieces = [piece('a', 10, 10), piece('b', 12, 12)];
+    const { placements } = packPieces(pieces, cfg);
+    const shrunk = reconcilePlacements([pieces[0]], placements, cfg);
+    expect(shrunk['b']).toEqual(placements['b']); // retained, inert
+    const restored = reconcilePlacements(pieces, shrunk, cfg);
+    expect(restored['b']).toEqual(placements['b']);
+    expect(restored['a']).toEqual(placements['a']);
+  });
+
+  it('returns the same object when the only missing pieces are unplaceable', () => {
+    const pieces = [piece('a', 10, 10), piece('big', 70, 70)];
+    const { placements } = packPieces([pieces[0]], cfg);
+    const r1 = reconcilePlacements(pieces, placements, cfg);
+    expect(r1).toBe(placements);
+  });
+
+  it('ignores stale placements when packing (they are not obstacles)', () => {
+    const stale: PlacementMap = { ghost: { roll: 0, x: 0.5, y: 0.5, rot: 0 } };
+    const pieces = [piece('a', 20, 20)];
+    const merged = reconcilePlacements(pieces, stale, cfg);
+    // 'a' may land exactly where the ghost sat — the ghost isn't real.
+    expect(merged['a']).toBeTruthy();
+    expect(merged['a'].x).toBeCloseTo(0.5);
+    expect(merged['a'].y).toBeCloseTo(0.5);
+  });
+});
+
+describe('splitForRoll', () => {
+  it('leaves pieces that fit alone', () => {
+    expect(splitForRoll(40, 80, cfg)).toEqual([{ w: 40, h: 80, partIndex: -1 }]);
+  });
+
+  it('splits an oversized panel into strips that fit, with seam overlap', () => {
+    // 60" × 200" box-truck side: 60 > 57.5 usable in both orientations.
+    const parts = splitForRoll(60, 200, cfg);
+    expect(parts).toHaveLength(2);
+    for (const p of parts) {
+      expect(Math.min(p.w, p.h)).toBeLessThanOrEqual(57.5 + 1e-9);
+      expect(p.h).toBe(200);
+    }
+    // n·x − (n−1)·overlap = 60 → strips cover the panel plus one seam.
+    const totalW = parts.reduce((s, p) => s + p.w, 0);
+    expect(totalW).toBeCloseTo(60 + 0.5);
+    expect(parts.map(p => p.partIndex)).toEqual([0, 1]);
+  });
+
+  it('splits very wide panels into more strips', () => {
+    const parts = splitForRoll(170, 200, cfg);
+    expect(parts.length).toBe(3);
+    for (const p of parts) expect(p.w).toBeLessThanOrEqual(57.5 + 1e-9);
+    expect(parts.reduce((s, p) => s + p.w, 0)).toBeCloseTo(170 + 2 * 0.5);
+  });
+
+  it('split pieces actually pack onto the roll', () => {
+    const parts = splitForRoll(60, 200, cfg);
+    const pieces = parts.map((p, i) => ({ ...piece(`s${i}`, p.w, p.h), part: partLetter(p.partIndex) }));
+    const { unplaced } = packPieces(pieces, cfg);
+    expect(unplaced).toHaveLength(0);
+  });
+});
+
+describe('polygonSelfIntersects', () => {
+  it('accepts simple shapes', () => {
+    const square = [{ x: 0, y: 0 }, { x: 10, y: 0 }, { x: 10, y: 10 }, { x: 0, y: 10 }];
+    const lShape = [{ x: 0, y: 0 }, { x: 10, y: 0 }, { x: 10, y: 4 }, { x: 4, y: 4 }, { x: 4, y: 10 }, { x: 0, y: 10 }];
+    expect(polygonSelfIntersects(square)).toBe(false);
+    expect(polygonSelfIntersects(lShape)).toBe(false);
+  });
+
+  it('flags a bowtie', () => {
+    const bowtie = [{ x: 0, y: 0 }, { x: 10, y: 10 }, { x: 10, y: 0 }, { x: 0, y: 10 }];
+    expect(polygonSelfIntersects(bowtie)).toBe(true);
   });
 });
 

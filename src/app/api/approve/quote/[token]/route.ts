@@ -254,7 +254,12 @@ function renderQuoteHtml(q: any, meta: any, agreement: string): string {
     for (const f of nest.films || []) {
       if (!((parseFloat(f.material_total) || 0) > 0.005)) continue;
       const usedIn = (f.rolls || []).reduce((s: number, r: any) => s + (parseFloat(r.used_length_in) || 0), 0);
-      rows.push(`<tr><td><b>Material — ${esc(f.label)}</b><div class="sub">${money(f.roll_sqft)} ft² · ${(usedIn / 12).toFixed(1)} ft of ${money(nest.roll_width_in)}" roll${(nest.sets || 1) > 1 ? ` · ${nest.sets} sets` : ''}</div></td><td class="r">1</td><td class="r">$${money(f.material_total)}</td><td class="r"><b>$${money(f.material_total)}</b></td></tr>`);
+      const extra = parseFloat(f.extra_area_sqft) || 0;
+      const detail = [
+        (parseFloat(f.roll_sqft) || 0) > 0.005 ? `${money(f.roll_sqft)} ft² · ${(usedIn / 12).toFixed(1)} ft of ${money(nest.roll_width_in)}" roll` : '',
+        extra > 0.005 ? `${money(extra)} ft² billed by area` : '',
+      ].filter(Boolean).join(' + ') + ((nest.sets || 1) > 1 ? ` · ${nest.sets} sets` : '');
+      rows.push(`<tr><td><b>Material — ${esc(f.label)}</b><div class="sub">${detail}</div></td><td class="r">1</td><td class="r">$${money(f.material_total)}</td><td class="r"><b>$${money(f.material_total)}</b></td></tr>`);
     }
   }
   if (kits > 1 && adj && !nest) {
