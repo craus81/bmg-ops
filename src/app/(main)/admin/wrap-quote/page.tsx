@@ -224,6 +224,18 @@ const num = (v: any) => { const n = parseFloat(v); return isNaN(n) ? 0 : n; };
 
 const laborSectionTotal = (s: LaborSection) => num(s.flat) + num(s.hourly) * num(s.hours) + num(s.extra);
 
+// A column this page writes that the database doesn't have yet comes back
+// from PostgREST as PGRST204 ("Could not find the 'x' column … in the schema
+// cache") — the deploy is ahead of the database, not anything the user did.
+// Say that, with the command that fixes it, instead of the raw string.
+const saveErrorMessage = (error: { message?: string; code?: string } | null | undefined) => {
+  const msg = error?.message || 'unknown error';
+  const schemaDrift = error?.code === 'PGRST204' || /schema cache|column .* does not exist/i.test(msg);
+  return schemaDrift
+    ? `${msg}\n\nThis database is missing a column this page writes, which means pending migrations haven't been applied. Run "npm run migrate" (list them first with "npm run migrate -- --dry-run").`
+    : msg;
+};
+
 // Area of one unit, in ft². Bleed extends each dimension on both sides
 // (print size), which is what gets billed. Freeform shapes bill their real
 // polygon area grown by the bleed (A + P·b + πb²), not the bounding box.
@@ -1289,7 +1301,7 @@ export default function WrapQuotePage() {
     const row = diagramPath ? { ...snap, diagram_path: diagramPath } : snap;
     if (savedQuoteId) {
       const { error } = await supabase.from('wrap_quotes').update({ ...row, updated_at: new Date().toISOString() }).eq('id', savedQuoteId);
-      if (error) { await dialog.alert(`Save failed: ${error.message}`); return null; }
+      if (error) { await dialog.alert(`Save failed: ${saveErrorMessage(error)}`); return null; }
       await loadAll();
       return savedQuoteId;
     }
@@ -1302,7 +1314,7 @@ export default function WrapQuotePage() {
       insert = await supabase.from('wrap_quotes').insert({ ...row, created_by: user?.id }).select('id').single();
     }
     const { data, error } = insert;
-    if (error || !data) { await dialog.alert(`Save failed: ${error?.message || 'unknown error'}`); return null; }
+    if (error || !data) { await dialog.alert(`Save failed: ${saveErrorMessage(error)}`); return null; }
     setSavedQuoteId(data.id);
     await loadAll();
     return data.id;
@@ -1700,7 +1712,7 @@ export default function WrapQuotePage() {
     const { error } = subSel
       ? await supabase.from('wrap_substrates').update(row).eq('id', subSel)
       : await supabase.from('wrap_substrates').insert({ ...row, is_active: true });
-    if (error) { await dialog.alert(`Save failed: ${error.message}`); return; }
+    if (error) { await dialog.alert(`Save failed: ${saveErrorMessage(error)}`); return; }
     setSubSel(''); setSubForm({ name: '', price_per_sqft: '', bleed_in: '', laminate_name: '', laminate_price_per_sqft: '', labor_per_sqft: '', color: '', cost_per_sqft: '', laminate_cost_per_sqft: '' });
     await loadAll();
   };
@@ -1714,22 +1726,32 @@ export default function WrapQuotePage() {
   // for the setSettings state update to flush.
   const saveSettings = async (companyOverride?: Company) => {
     setSavingSettings(true);
-    const { error } = await supabase.from('wrap_quote_settings').upsert({
-      id: 1,
-      company: companyOverride ?? settings.company,
-      tax_rate: num(settings.tax_rate),
-      design: settings.design,
-      preparation: settings.preparation,
-      installation: settings.installation,
-      min_job_charge: num(settings.min_job_charge),
-      // Drop empty tier rows; keep only usable {min_qty, pct} pairs.
-      qty_discounts: settings.qty_discounts
-        .map(t => ({ min_qty: Math.max(1, Math.floor(num(t.min_qty))), pct: Math.min(100, Math.max(0, num(t.pct))) }))
-        .filter(t => t.min_qty > 1 || t.pct > 0),
-      updated_at: new Date().toISOString(),
-    });
-    setSavingSettings(false);
-    if (error) await dialog.alert(`Save failed: ${error.message}`);
+    try {
+      const { error } = await supabase.from('wrap_quote_settings').upsert({
+        id: 1,
+        company: companyOverride ?? settings.company,
+        tax_rate: num(settings.tax_rate),
+        design: settings.design,
+        preparation: settings.preparation,
+        installation: settings.installation,
+        min_job_charge: num(settings.min_job_charge),
+        // Drop empty tier rows; keep only usable {min_qty, pct} pairs.
+        qty_discounts: settings.qty_discounts
+          .map(t => ({ min_qty: Math.max(1, Math.floor(num(t.min_qty))), pct: Math.min(100, Math.max(0, num(t.pct))) }))
+          .filter(t => t.min_qty > 1 || t.pct > 0),
+        updated_at: new Date().toISOString(),
+      });
+      if (error) { await dialog.alert(`Save failed: ${saveErrorMessage(error)}`); return; }
+      // Re-read so the form shows what's actually stored — a save that
+      // didn't land can't sit on screen looking like it did.
+      await loadAll();
+    } catch (e: any) {
+      // Network/unexpected throw: without this the button sticks on "Saving…"
+      // forever and the failure is invisible.
+      await dialog.alert(`Save failed: ${e?.message || e}`);
+    } finally {
+      setSavingSettings(false);
+    }
   };
 
   // Company logo shown on quote documents (preview + email header).
@@ -2955,7 +2977,14 @@ export default function WrapQuotePage() {
                     onChange={e => setMarginFloor(num(e.target.value))}
                     onBlur={async e => {
                       const v = num(e.target.value);
-                      await supabase.from('quote_settings').upsert({ id: 1, margin_floor_pct: v, updated_at: new Date().toISOString(), updated_by: user?.id || null });
+                      // Silent failure here reads as "the floor won't save":
+                      // surface it instead of swallowing the error.
+                      try {
+                        const { error } = await supabase.from('quote_settings').upsert({ id: 1, margin_floor_pct: v, updated_at: new Date().toISOString(), updated_by: user?.id || null });
+                        if (error) await dialog.alert(`Margin floor didn't save: ${saveErrorMessage(error)}`);
+                      } catch (err: any) {
+                        await dialog.alert(`Margin floor didn't save: ${err?.message || err}`);
+                      }
                     }}
                     style={{ ...inputStyle, width: '90px' }}
                   />
