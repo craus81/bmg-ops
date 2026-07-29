@@ -79,7 +79,9 @@ export interface Rect { x: number; y: number; w: number; h: number }
 
 const EPS = 1e-6;
 // More rolls than any sane job; stops a pathological config from looping.
-const MAX_ROLLS_PER_FILM = 25;
+// Exported so snapshot restores can clamp corrupt roll indexes to the same
+// bound the packer uses.
+export const MAX_ROLLS_PER_FILM = 25;
 
 export const placedSize = (p: NestPiece, rot: 0 | 90) =>
   rot === 90 ? { w: p.h, h: p.w } : { w: p.w, h: p.h };

@@ -38,6 +38,10 @@ interface Props {
   onSetsChange: (n: number) => void;
   useRollPricing: boolean;
   onUseRollPricingChange: (v: boolean) => void;
+  // ft² per film billed by AREA on the quote (unplaceable pieces + anything
+  // past the layout cap) — folded into the dollar readouts here so this tab
+  // never shows a smaller materials number than the quote itself.
+  extraSqftByFilm?: Record<string, number>;
 }
 
 const fmt1 = (n: number) => (Math.round(n * 10) / 10).toLocaleString('en-US', { minimumFractionDigits: 1, maximumFractionDigits: 1 });
@@ -53,7 +57,7 @@ interface DragState {
 }
 
 export function RollNesting(props: Props) {
-  const { pieces, films, config, onConfigChange, placements, onPlacementsChange, sets, onSetsChange, useRollPricing, onUseRollPricingChange } = props;
+  const { pieces, films, config, onConfigChange, placements, onPlacementsChange, sets, onSetsChange, useRollPricing, onUseRollPricingChange, extraSqftByFilm = {} } = props;
 
   const [zoom, setZoom] = useState(6); // px per inch
   const [selectedKey, setSelectedKey] = useState<string | null>(null);
@@ -171,7 +175,10 @@ export function RollNesting(props: Props) {
   const inputStyle: React.CSSProperties = { width: '72px', padding: '6px 8px', borderRadius: '6px', border: `1px solid ${theme.border}`, background: 'var(--input-bg)', color: 'var(--text-primary)', fontSize: '12px' };
   const labelStyle: React.CSSProperties = { fontSize: '9px', fontWeight: 700, color: 'var(--text-muted)', textTransform: 'uppercase', marginBottom: '3px' };
 
-  const totalMaterial = usage.films.reduce((sum, f) => sum + f.rollSqft * (filmByKey.get(f.filmKey)?.ratePerSqft || 0), 0);
+  const totalExtraSqft = Object.values(extraSqftByFilm).reduce((s, v) => s + (v || 0), 0);
+  const totalMaterial =
+    usage.films.reduce((sum, f) => sum + f.rollSqft * (filmByKey.get(f.filmKey)?.ratePerSqft || 0), 0) +
+    Object.entries(extraSqftByFilm).reduce((sum, [k, sqft]) => sum + (sqft || 0) * (filmByKey.get(k)?.ratePerSqft || 0), 0);
 
   if (pieces.length === 0) {
     return (
@@ -242,7 +249,7 @@ export function RollNesting(props: Props) {
           <input type="checkbox" checked={useRollPricing} onChange={e => onUseRollPricingChange(e.target.checked)} />
           Price materials from roll usage
           <span style={{ fontWeight: 700, color: 'var(--text-muted)' }}>
-            {fmt1(usage.totalRollSqft)} ft²{totalMaterial > 0 ? ` → $${fmt2(totalMaterial)}` : ''}
+            {fmt1(usage.totalRollSqft)} ft²{totalExtraSqft > 0.005 ? ` + ${fmt1(totalExtraSqft)} ft² by area` : ''}{totalMaterial > 0 ? ` → $${fmt2(totalMaterial)}` : ''}
           </span>
         </label>
       </div>
@@ -267,16 +274,17 @@ export function RollNesting(props: Props) {
         const filmPieces = pieces.filter(p => p.filmKey === film.key);
         const rollIndexes = [...new Set(filmPieces.map(p => placements[p.key]?.roll).filter((r): r is number => r != null))].sort((a, b) => a - b);
         const waste = fUsage && fUsage.rollSqft > 0 ? Math.max(0, (1 - fUsage.graphicSqft / fUsage.rollSqft) * 100) : 0;
-        const material = (fUsage?.rollSqft || 0) * film.ratePerSqft;
+        const extra = extraSqftByFilm[film.key] || 0;
+        const material = ((fUsage?.rollSqft || 0) + extra) * film.ratePerSqft;
         return (
           <div key={film.key || 'none'} style={{ marginBottom: '16px' }}>
             <div style={{ display: 'flex', alignItems: 'center', gap: '8px', flexWrap: 'wrap', marginBottom: '6px' }}>
               <span style={{ width: '10px', height: '10px', borderRadius: '3px', background: film.color, flexShrink: 0 }} />
               <span style={{ fontSize: '12px', fontWeight: 800, color: 'var(--text-primary)' }}>{film.key ? film.label : 'No film assigned'}</span>
-              {fUsage && (
+              {(fUsage || extra > 0.005) && (
                 <span style={{ fontSize: '11px', fontWeight: 700, color: 'var(--text-secondary)' }}>
-                  {fUsage.rolls.length > 1 ? `${fUsage.rolls.length} rolls · ` : ''}
-                  {fmtFtIn(fUsage.rolls.reduce((s, r) => s + r.usedLengthIn, 0))} used · {fmt1(fUsage.rollSqft)} ft² roll · {fmt1(fUsage.graphicSqft)} ft² graphics · {waste.toFixed(0)}% waste
+                  {fUsage ? `${fUsage.rolls.length > 1 ? `${fUsage.rolls.length} rolls · ` : ''}${fmtFtIn(fUsage.rolls.reduce((s, r) => s + r.usedLengthIn, 0))} used · ${fmt1(fUsage.rollSqft)} ft² roll · ${fmt1(fUsage.graphicSqft)} ft² graphics · ${waste.toFixed(0)}% waste` : ''}
+                  {extra > 0.005 ? `${fUsage ? ' · ' : ''}${fmt1(extra)} ft² billed by area` : ''}
                   {film.ratePerSqft > 0 ? ` · $${fmt2(material)} @ $${fmt2(film.ratePerSqft)}/ft²` : ''}
                 </span>
               )}

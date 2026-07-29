@@ -13,6 +13,7 @@ import { theme } from '@/lib/theme';
 import { RollNesting, RollFilmInfo } from '@/components/RollNesting';
 import {
   DEFAULT_ROLL,
+  MAX_ROLLS_PER_FILM,
   NestPiece,
   PlacementMap,
   RollConfig,
@@ -720,7 +721,12 @@ export default function WrapQuotePage() {
   const closesPoly = (p: { x: number; y: number }, draft: { x: number; y: number }[]) =>
     draft.length >= 3 && Math.hypot(p.x - draft[0].x, p.y - draft[0].y) < polySnapRadius();
 
-  const closePoly = () => {
+  // While the crossed-outline alert is up, the draft hotkeys must go dead —
+  // otherwise Escape (the natural "dismiss" key) silently wipes the very
+  // outline the alert is asking the user to fix.
+  const polyAlertRef = useRef(false);
+
+  const closePoly = async () => {
     const ppi = num(template?.px_per_in);
     if (!polyDraft || !ppi) { setPolyDraft(null); setPolyHover(null); return; }
     // Drop consecutive near-duplicate clicks (double-click close leaves one).
@@ -729,7 +735,13 @@ export default function WrapQuotePage() {
     // A crossed outline ("bowtie") would shoelace to a smaller area than
     // what's visually filled and under-bill — refuse and let them fix it.
     if (polygonSelfIntersects(pts)) {
-      void dialog.alert('The outline crosses itself — undo the last point or place the corners so the lines don\'t cross, then close the shape.');
+      if (polyAlertRef.current) return;
+      polyAlertRef.current = true;
+      try {
+        await dialog.alert('The outline crosses itself — undo the last point or place the corners so the lines don\'t cross, then close the shape.');
+      } finally {
+        polyAlertRef.current = false;
+      }
       return;
     }
     const metrics = polyMetrics(pts, ppi);
@@ -758,10 +770,11 @@ export default function WrapQuotePage() {
   useEffect(() => {
     if (!polyDraft) return;
     const onKey = (e: KeyboardEvent) => {
+      if (polyAlertRef.current) return;
       const tag = (e.target as HTMLElement)?.tagName;
       if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT') return;
       if (e.key === 'Escape') cancelPoly();
-      else if (e.key === 'Enter') closePoly();
+      else if (e.key === 'Enter') void closePoly();
       else if (e.key === 'Backspace') { e.preventDefault(); undoPolyPoint(); }
     };
     window.addEventListener('keydown', onKey);
@@ -796,6 +809,10 @@ export default function WrapQuotePage() {
       setMeasurements(prev => prev.map(m => {
         if (m.id !== editDrag.id) return m;
         if (editDrag.kind === 'lineend' && editDrag.line && editDrag.lineNo) {
+          // Dead zone: a jittery tap on an endpoint (touchscreens emit a
+          // move during most taps) must not rewrite a hand-typed dim with
+          // the line's drawn length. Real drags clear this instantly.
+          if (Math.hypot(dx, dy) < 3) return m;
           const moved = editDrag.endNo === 1
             ? { ...editDrag.line, x1: editDrag.line.x1 + dx, y1: editDrag.line.y1 + dy }
             : { ...editDrag.line, x2: editDrag.line.x2 + dx, y2: editDrag.line.y2 + dy };
@@ -1244,6 +1261,14 @@ export default function WrapQuotePage() {
   };
 
   const saveQuote = async (): Promise<string | null> => {
+    // A crossed freeform outline shoelaces to less area than what's visually
+    // filled — block the save (and therefore email/NetSuite) until it's
+    // fixed rather than letting an under-billed quote out the door.
+    const crossed = measurements.filter(m => m.type === 'poly' && m.points && polygonSelfIntersects(m.points));
+    if (crossed.length > 0) {
+      await dialog.alert(`${crossed.map(m => m.name).join(', ')} ${crossed.length === 1 ? 'has' : 'have'} an outline that crosses itself, so the area can't be billed correctly. Select the shape and drag its corners apart, then save again.`);
+      return null;
+    }
     const snap = buildSnapshot();
     if (!savedQuoteId) snap.quote_number = await nextQuoteNumber();
     if (!quoteNumber) setQuoteNumber(snap.quote_number);
@@ -1548,7 +1573,9 @@ export default function WrapQuotePage() {
         // Older snapshots predate split parts — treat them as whole panels.
         const part = row.part != null ? Math.trunc(num(row.part)) : -1;
         restored[pieceKey(target.id, row.copy, row.set, part, target.substrate_id || '')] =
-          { roll: Math.max(0, num(row.roll)), x: num(row.x), y: num(row.y), rot: row.rot === 90 ? 90 : 0 };
+          // Same clamp the packer applies to obstacles — a corrupt roll
+          // index must not spawn phantom rolls in usage or rendering.
+          { roll: Math.min(MAX_ROLLS_PER_FILM - 1, Math.max(0, Math.trunc(num(row.roll)))), x: num(row.x), y: num(row.y), rot: row.rot === 90 ? 90 : 0 };
       }
       setPlacements(restored);
       setUseRollPricing(!!n.enabled);
@@ -2512,6 +2539,7 @@ export default function WrapQuotePage() {
             onSetsChange={n => setPackageQty(String(n))}
             useRollPricing={useRollPricing}
             onUseRollPricingChange={setUseRollPricing}
+            extraSqftByFilm={Object.fromEntries([...nestFilmBilling].filter(([, v]) => v.extraSqft > 0).map(([k, v]) => [k, v.extraSqft]))}
           />
           {nestPieces.length > 0 && (
             <div style={{ display: 'flex', alignItems: 'center', gap: '14px', flexWrap: 'wrap', padding: '10px 14px', marginTop: '10px', background: 'var(--card)', border: `1px solid ${theme.border}`, borderRadius: '10px' }}>
