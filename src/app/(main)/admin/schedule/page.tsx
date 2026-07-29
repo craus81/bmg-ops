@@ -195,7 +195,7 @@ export default function SchedulePage() {
       (rems || []).forEach((r: any) => allEvents.push({
         id: `rem-${r.id}`, title: r.title, subtitle: r.description,
         date: r.due_at.split('T')[0], type: 'reminder', color: TYPE_COLORS.reminder,
-        linkTo: r.prospect_id ? `/admin/prospects?id=${r.prospect_id}` : '/admin/prospects',
+        linkTo: r.prospect_id ? `/admin/prospects/${r.prospect_id}` : '/admin/prospects',
       }));
     }
 

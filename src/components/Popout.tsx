@@ -54,7 +54,7 @@ export function pathFor(type: PopoutType, item: any): string {
     case 'graphics_jobs': return `/graphics?id=${item.id}`;
     case 'estimates': return `/estimates?id=${item.id}`;
     case 'parts': return `/parts?catalog=${item.catalog || 'upfit'}&q=${encodeURIComponent(item.part_number || '')}`;
-    case 'customers': return `/admin/prospects?id=${item.id}`;
+    case 'customers': return `/admin/prospects/${item.id}`;
     case 'messages': return `/messages?conversation=${item.conversation_id}`;
     case 'quotes': return `/admin/wrap-quote?id=${item.id}`;
     // Invoices live in NetSuite — deep-link to whichever record in the app

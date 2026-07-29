@@ -1,6 +1,7 @@
 'use client';
 
 import { useState, useRef, useEffect, useCallback } from 'react';
+import { useRouter } from 'next/navigation';
 import { usePopout, PopoutType } from '@/components/Popout';
 
 interface UniversalSearchProps {
@@ -199,6 +200,7 @@ const valueStyle: React.CSSProperties = {
 };
 
 export default function UniversalSearch({ open, onClose }: UniversalSearchProps) {
+  const router = useRouter();
   const { open: openPopout } = usePopout();
   const inputRef = useRef<HTMLInputElement>(null);
   const [query, setQuery] = useState('');
@@ -207,10 +209,16 @@ export default function UniversalSearch({ open, onClose }: UniversalSearchProps)
   const debounceRef = useRef<NodeJS.Timeout | null>(null);
 
   // Tapping a result closes the search and pops out the shared detail view.
+  // Customers skip the popout and go straight to the customer record page —
+  // the record shows far more than the popout's five fields ever did.
   const openDetail = useCallback((group: string, item: any) => {
     onClose();
+    if (group === 'customers') {
+      router.push(`/admin/prospects/${item.id}`);
+      return;
+    }
     openPopout(group as PopoutType, item);
-  }, [onClose, openPopout]);
+  }, [onClose, openPopout, router]);
 
   // Focus input when opened
   useEffect(() => {
