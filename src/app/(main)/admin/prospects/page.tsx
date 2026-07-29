@@ -1,15 +1,24 @@
 'use client';
 
+/**
+ * The CRM index — a thin list over prospects & customers. Rows navigate to
+ * the standalone Customer Record (/admin/prospects/<id>), which is the
+ * primary surface for viewing AND editing a customer; nothing expands or
+ * edits inline here anymore. What stays list-level: search/filters/sort,
+ * the pipeline-stage filter the dashboard deep-links (?stage/?sort/?q),
+ * prospect creation (+ business-card scan), XLSX export, the cross-company
+ * contacts directory, and the NetSuite sync buttons.
+ *
+ * Legacy deep links (?id= / ?ns=) predate the record pages and are
+ * forwarded there so old notification URLs and bookmarks keep working.
+ */
+
 import { useState, useEffect, useRef } from 'react';
 import { useRouter, useSearchParams } from 'next/navigation';
 import { createClient } from '@/lib/supabase-browser';
 import { useAuth } from '@/components/AuthProvider';
 import { useDialog } from '@/components/DialogProvider';
-import { theme } from '@/lib/theme';
-import NetSuitePdf from '@/components/NetSuitePdf';
 import { DropZone } from '@/components/DropZone';
-import DropboxProofSearch from '@/components/DropboxProofSearch';
-import { exportProspectPDF } from '@/lib/prospect-pdf';
 import { downloadXlsx } from '@/lib/xlsx-export';
 import { fetchAllRows } from '@/lib/fetch-all';
 
@@ -40,7 +49,7 @@ interface Prospect {
   created_at: string;
 }
 
-interface Contact {
+interface DirectoryContact {
   id: string;
   prospect_id: string;
   name: string;
@@ -48,47 +57,22 @@ interface Contact {
   email: string | null;
   phone: string | null;
   is_decision_maker: boolean;
-  notes: string | null;
+  company_name?: string;
 }
 
-interface Opportunity {
-  id: string;
-  prospect_id: string;
-  title: string;
-  type: string;
-  stage: string;
-  value: number | null;
-  notes: string | null;
-  expected_close_date: string | null;
-  created_at: string;
+interface CustomerMetrics {
+  total_spend: number;
+  avg_order_value: number;
+  ytd_spend: number;
+  ytd_orders: number;
+  last_year_spend: number;
+  total_orders: number;
+  last_order_date: string | null;
 }
 
-interface Activity {
-  id: string;
-  prospect_id: string;
-  type: string;
-  summary: string;
-  details: string | null;
-  contact_id: string | null;
-  created_by: string | null;
-  created_at: string;
-  creator_name?: string;
-}
-
-interface Tag {
-  id: string;
-  prospect_id: string;
-  tag: string;
-  auto_generated: boolean;
-}
-
-const LEAD_SOURCES = ['Cold Call', 'Lead', 'Maryland Heights Chamber of Commerce', 'Little Black Book', 'Other'];
-const OPP_TYPES: Record<string, string> = { tech_install: 'Tech Install', graphics: 'Graphics', rebrand: 'Rebrand', fleet_wrap: 'Fleet Wrap', other: 'Other' };
 const OPP_STAGES: Record<string, string> = { lead: 'Lead', quoted: 'Quoted', negotiating: 'Negotiating', won: 'Won', lost: 'Lost' };
-const STAGE_COLORS: Record<string, string> = { lead: '#60a5fa', quoted: '#a78bfa', negotiating: '#fbbf24', won: '#4ade80', lost: '#f87171' };
 const STATUS_LABELS: Record<string, string> = { active: 'Prospects', nurturing: 'Nurturing', converted: 'Converted' };
 const STATUS_COLORS: Record<string, string> = { active: '#4ade80', nurturing: '#60a5fa', converted: '#a78bfa' };
-const ACTIVITY_ICONS: Record<string, string> = { call: '\u{1F4DE}', email: '\u{1F4E7}', note: '\u{1F4DD}', meeting: '\u{1F91D}', quote_sent: '\u{1F4CB}', status_change: '\u{1F504}' };
 
 const inputStyle: React.CSSProperties = {
   width: '100%', padding: '8px 10px', borderRadius: '8px', fontSize: '12px',
@@ -102,7 +86,7 @@ const labelStyle: React.CSSProperties = {
 export default function ProspectsPage() {
   const router = useRouter();
   const searchParams = useSearchParams();
-  const { user, profile, isAdmin, isSales, hasFeature, loading: authLoading } = useAuth();
+  const { user, profile, isAdmin, hasFeature, loading: authLoading } = useAuth();
   const supabase = createClient();
   const dialog = useDialog();
 
@@ -112,7 +96,6 @@ export default function ProspectsPage() {
   const [statusFilter, setStatusFilter] = useState<string>('all');
   const [crmTab, setCrmTab] = useState<'prospects' | 'contacts'>('prospects');
   const [tagFilter, setTagFilter] = useState<string>('');
-  const [expandedId, setExpandedId] = useState<string | null>(null);
 
   // Sort + extended filters (Ashley's request: spend, recent activity,
   // owner, open quote, spend tier).
@@ -131,106 +114,27 @@ export default function ProspectsPage() {
   const [stageFilter, setStageFilter] = useState<string>('');
   const [oppStagesByProspect, setOppStagesByProspect] = useState<Record<string, Set<string>> | null>(null);
 
-  // Detail data (loaded on expand)
-  const [contacts, setContacts] = useState<Record<string, Contact[]>>({});
-  const [allContacts, setAllContacts] = useState<(Contact & { company_name?: string; prospect_id: string })[]>([]);
+  // Tags for the tag filter — loaded globally, so the dropdown sees every
+  // tag (it used to only see tags of cards expanded this session).
+  const [tagsByProspect, setTagsByProspect] = useState<Record<string, string[]>>({});
+
+  // Contacts directory tab
+  const [allContacts, setAllContacts] = useState<DirectoryContact[]>([]);
   const [contactsLoaded, setContactsLoaded] = useState(false);
   const [contactSearch, setContactSearch] = useState('');
   const [syncingContacts, setSyncingContacts] = useState(false);
-  const [opportunities, setOpportunities] = useState<Record<string, Opportunity[]>>({});
-  const [activities, setActivities] = useState<Record<string, Activity[]>>({});
-  interface Reminder { id: string; title: string; description: string | null; due_at: string; completed_at: string | null; }
-  const [reminders, setReminders] = useState<Record<string, Reminder[]>>({});
-  const [tags, setTags] = useState<Record<string, Tag[]>>({});
 
-  // Forms
+  // Create form (creation only — editing lives on the record page)
+  const emptyForm = { company_name: '', contact_name: '', email: '', phone: '', address: '', city: '', state: '', zip: '', website: '', notes: '', location_count: 1 };
   const [showCreate, setShowCreate] = useState(false);
-  const [editingProspectId, setEditingProspectId] = useState<string | null>(null);
-  const [form, setForm] = useState({ company_name: '', contact_name: '', email: '', phone: '', address: '', city: '', state: '', zip: '', website: '', notes: '', location_count: 1 });
+  const [form, setForm] = useState(emptyForm);
   const [saving, setSaving] = useState(false);
   const [syncing, setSyncing] = useState(false);
 
-  // Customer metrics (from customers table, keyed by netsuite_id)
-  const [customerMetrics, setCustomerMetrics] = useState<Record<string, { total_spend: number; avg_order_value: number; ytd_spend: number; ytd_orders: number; last_year_spend: number; total_orders: number; last_order_date: string | null }>>({});
-  // Invoices per prospect (keyed by prospect id)
-  interface CustDocument { id: string; number: string; date: string; status: string; type: 'invoice' | 'salesOrder' | 'estimate'; typeLabel: string; }
-  const [documents, setDocuments] = useState<Record<string, CustDocument[]>>({});
-  const [loadingDocs, setLoadingDocs] = useState<string | null>(null);
-  const [docsExpanded, setDocsExpanded] = useState<Set<string>>(new Set());
-  const [docsShowAll, setDocsShowAll] = useState<Set<string>>(new Set());
-  const [docsError, setDocsError] = useState<Record<string, string>>({});
-  const [docsHasMore, setDocsHasMore] = useState<Record<string, boolean>>({});
-  // Per-prospect type filter for the NetSuite Documents list. 'all' shows
-  // everything; otherwise narrows to a single document type.
-  type DocTypeFilter = 'all' | 'invoice' | 'salesOrder' | 'estimate';
-  const [docTypeFilter, setDocTypeFilter] = useState<Record<string, DocTypeFilter>>({});
+  // Customer spend metrics (customers table), keyed by prospect id
+  const [customerMetrics, setCustomerMetrics] = useState<Record<string, CustomerMetrics>>({});
 
-  // Inline forms
-  const [showContactForm, setShowContactForm] = useState<string | null>(null);
-  const [contactForm, setContactForm] = useState({ name: '', title: '', email: '', phone: '', is_decision_maker: false });
-  const [showOppForm, setShowOppForm] = useState<string | null>(null);
-  const [oppForm, setOppForm] = useState({ title: '', type: 'tech_install', value: '', expected_close_date: '' });
-  const [activityInput, setActivityInput] = useState<Record<string, string>>({});
-  const [activityType, setActivityType] = useState<Record<string, string>>({});
-  const [tagInput, setTagInput] = useState('');
-
-  // Voice notes
-  const [recording, setRecording] = useState<string | null>(null); // prospect id being recorded
-  const [voiceProcessing, setVoiceProcessing] = useState(false);
-  const [voiceResult, setVoiceResult] = useState<{ summary: string; reminders: number } | null>(null);
-  const recognitionRef = useRef<any>(null);
-
-  const startVoiceNote = async (prospectId: string) => {
-    const SpeechRecognition = (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition;
-    if (!SpeechRecognition) { await dialog.alert('Speech recognition not supported in this browser. Try Chrome.'); return; }
-
-    const recognition = new SpeechRecognition();
-    recognition.continuous = true;
-    recognition.interimResults = true;
-    recognition.lang = 'en-US';
-
-    recognition.onresult = (event: any) => {
-      let transcript = '';
-      for (let i = 0; i < event.results.length; i++) {
-        transcript += event.results[i][0].transcript;
-      }
-      setActivityInput(prev => ({ ...prev, [prospectId]: transcript }));
-    };
-
-    recognition.onerror = () => { setRecording(null); };
-    recognition.onend = () => { if (recording === prospectId) setRecording(null); };
-
-    recognition.start();
-    recognitionRef.current = recognition;
-    setRecording(prospectId);
-    setVoiceResult(null);
-  };
-
-  const stopVoiceNote = async (prospectId: string) => {
-    if (recognitionRef.current) { recognitionRef.current.stop(); recognitionRef.current = null; }
-    setRecording(null);
-
-    const text = (activityInput[prospectId] || '').trim();
-    if (!text) return;
-
-    setVoiceProcessing(true);
-    try {
-      const res = await fetch('/api/prospects/voice-note', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ prospectId, noteText: text, userId: user?.id }),
-      });
-      const data = await res.json();
-      if (res.ok) {
-        setVoiceResult({ summary: data.summary, reminders: data.reminders || 0 });
-        setActivityInput(prev => ({ ...prev, [prospectId]: '' }));
-        loadDetail(prospectId);
-      }
-    } catch {}
-    setVoiceProcessing(false);
-  };
-
-  // Profiles for activity display
+  // Profiles for the owner filter + export
   const [profiles, setProfiles] = useState<Record<string, string>>({});
 
   // Card scan
@@ -240,9 +144,8 @@ export default function ProspectsPage() {
   const crmLoadStarted = useRef(false);
   useEffect(() => {
     if (authLoading) return; // role flags aren't resolved until auth finishes loading
-    // Cold-boot deep links (notification ?id= links, Record-page back links):
-    // wait for the profile row before judging roles, or a legitimate user
-    // gets bounced to /home while their roles are still in flight.
+    // Cold-boot deep links: wait for the profile row before judging roles,
+    // or a legitimate user gets bounced to /home while roles are in flight.
     if (user && !profile) return;
     if (!hasFeature('prospects') && !isAdmin) { router.push('/home'); return; }
     if (crmLoadStarted.current) return;
@@ -250,55 +153,28 @@ export default function ProspectsPage() {
     loadProspects();
     loadProfiles();
     loadOpenQuoteCustomers();
+    loadTags();
   // eslint-disable-next-line react-hooks/exhaustive-deps -- intentional: load once when auth + profile resolve
   }, [authLoading, user, profile]);
 
-  // Preload customer names with at least one open quote so the
-  // "open quote" filter doesn't need to round-trip per prospect.
-  const loadOpenQuoteCustomers = async () => {
-    const { data } = await supabase
-      .from('wrap_quotes')
-      .select('customer')
-      .in('status', ['draft', 'sent']);
-    const names = new Set<string>();
-    for (const row of data || []) {
-      const name = (row as any).customer?.name;
-      if (name) names.add(String(name).toLowerCase());
-    }
-    setOpenQuoteCustomers(names);
-  };
-
-  // Deep link from notifications/search/dashboard: ?id=<prospect uuid> or
-  // ?ns=<NetSuite customer id> (dashboard Top customers). Reset any filter
-  // that could hide the record, expand it, and scroll it into view — without
-  // the scroll a deep link into a long A-Z list looks like it just opened
-  // the CRM.
+  // Legacy deep links (?id=<prospect uuid>, ?ns=<NetSuite id>) used to
+  // expand a card in this list — forward them to the record page instead.
   useEffect(() => {
     if (loading) return;
     const prospectId = searchParams.get('id');
     const nsId = searchParams.get('ns');
-    const target = prospectId
-      ? prospects.find(p => p.id === prospectId)
-      : nsId ? prospects.find(p => p.netsuite_id === nsId) : undefined;
-    if (!target) return;
-    setStatusFilter('all');
-    setTagFilter('');
-    setOwnerFilter('all');
-    setSpendTierFilter('all');
-    setOpenQuoteFilter(false);
-    setStageFilter('');
-    setSearch('');
-    if (expandedId !== target.id) toggleExpand(target.id);
-    setTimeout(() => {
-      document.getElementById(`prospect-${target.id}`)?.scrollIntoView({ behavior: 'smooth', block: 'center' });
-    }, 200);
-  // eslint-disable-next-line react-hooks/exhaustive-deps -- intentional: load once on mount
+    if (prospectId) { router.replace(`/admin/prospects/${prospectId}`); return; }
+    if (nsId) {
+      const match = prospects.find(p => p.netsuite_id === nsId);
+      router.replace(`/admin/prospects/${match ? match.id : `ns-${nsId}`}`);
+    }
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- intentional: forward once after load
   }, [loading, searchParams]);
 
   // Dashboard Sales-band deep links: ?stage= filters to prospects with an
   // opportunity in that pipeline stage, ?sort= pre-sorts the list (e.g.
-  // ytd_spend for Top customers), ?q= prefills search — the fallback when
-  // ?ns= doesn't match a CRM record (customer synced but not in the CRM).
+  // ytd_spend for Top customers), ?q= prefills search — the fallback for
+  // customer links that only know a company name.
   useEffect(() => {
     if (loading) return;
     const sort = searchParams.get('sort');
@@ -306,8 +182,7 @@ export default function ProspectsPage() {
     const stage = searchParams.get('stage');
     if (stage && (stage === 'open' || stage in OPP_STAGES)) setStageFilter(stage);
     const q = searchParams.get('q');
-    const nsId = searchParams.get('ns');
-    if (q && !(nsId && prospects.some(p => p.netsuite_id === nsId))) setSearch(q);
+    if (q && !searchParams.get('id') && !searchParams.get('ns')) setSearch(q);
   // eslint-disable-next-line react-hooks/exhaustive-deps -- intentional: apply once after load
   }, [loading, searchParams]);
 
@@ -330,187 +205,91 @@ export default function ProspectsPage() {
   // eslint-disable-next-line react-hooks/exhaustive-deps -- intentional: load once when the filter first activates
   }, [stageFilter, oppStagesByProspect]);
 
-  // Load metrics once prospects are loaded
+  // Spend metrics for converted customers, one paginated bulk read.
   useEffect(() => {
     if (prospects.length === 0) return;
     const converted = prospects.filter(p => p.netsuite_id);
     if (converted.length === 0) return;
-    const loadAllMetrics = async () => {
-      const { data } = await supabase.from('customers').select('netsuite_id, total_spend, avg_order_value, ytd_spend, ytd_orders, last_year_spend, total_orders, last_order_date');
-      if (!data) return;
-      const nsMap: Record<string, any> = {};
-      data.forEach((c: any) => { if (c.netsuite_id) nsMap[c.netsuite_id] = c; });
-      const metricsMap: Record<string, any> = {};
+    (async () => {
+      const { data: rows } = await fetchAllRows<CustomerMetrics & { netsuite_id: string | null }>((from, to) =>
+        supabase.from('customers')
+          .select('netsuite_id, total_spend, avg_order_value, ytd_spend, ytd_orders, last_year_spend, total_orders, last_order_date')
+          .order('netsuite_id').range(from, to));
+      const nsMap: Record<string, CustomerMetrics> = {};
+      for (const c of rows || []) { if (c.netsuite_id) nsMap[c.netsuite_id] = c; }
+      const metricsMap: Record<string, CustomerMetrics> = {};
       converted.forEach(p => { if (nsMap[p.netsuite_id!]) metricsMap[p.id] = nsMap[p.netsuite_id!]; });
       setCustomerMetrics(metricsMap);
-    };
-    loadAllMetrics();
-  // eslint-disable-next-line react-hooks/exhaustive-deps -- intentional: load once on mount
+    })();
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- intentional: load once per prospects load
   }, [prospects]);
 
   const loadProspects = async () => {
-    // Supabase defaults to 1000 rows — paginate to get all
-    let all: Prospect[] = [];
-    let page = 0;
-    const pageSize = 1000;
-    let hasMore = true;
-    while (hasMore) {
-      const from = page * pageSize;
-      const { data } = await supabase.from('prospects').select('*').order('company_name').range(from, from + pageSize - 1);
-      const batch = (data || []) as Prospect[];
-      all = [...all, ...batch];
-      hasMore = batch.length === pageSize;
-      page++;
-    }
-    setProspects(all);
+    const { data: rows, error } = await fetchAllRows<Prospect>((from, to) =>
+      supabase.from('prospects').select('*').order('company_name').order('id').range(from, to));
+    if (error) console.error('[prospects] load failed:', error);
+    setProspects(rows || []);
     setLoading(false);
+  };
+
+  const loadProfiles = async () => {
+    const { data: rows } = await fetchAllRows<{ id: string; full_name: string }>((from, to) =>
+      supabase.from('profiles').select('id, full_name').order('id').range(from, to));
+    const map: Record<string, string> = {};
+    for (const p of rows || []) map[p.id] = p.full_name;
+    setProfiles(map);
+  };
+
+  // Preload customer names with at least one open quote so the
+  // "open quote" filter doesn't need to round-trip per prospect.
+  const loadOpenQuoteCustomers = async () => {
+    const { data: rows } = await fetchAllRows<{ customer: { name?: string } | null }>((from, to) =>
+      supabase.from('wrap_quotes').select('customer').in('status', ['draft', 'sent']).order('id').range(from, to));
+    const names = new Set<string>();
+    for (const row of rows || []) {
+      const name = row.customer?.name;
+      if (name) names.add(String(name).toLowerCase());
+    }
+    setOpenQuoteCustomers(names);
+  };
+
+  const loadTags = async () => {
+    const { data: rows } = await fetchAllRows<{ prospect_id: string; tag: string }>((from, to) =>
+      supabase.from('prospect_tags').select('prospect_id, tag').order('id').range(from, to));
+    const map: Record<string, string[]> = {};
+    for (const t of rows || []) (map[t.prospect_id] = map[t.prospect_id] || []).push(t.tag);
+    setTagsByProspect(map);
   };
 
   const loadAllContacts = async () => {
     if (contactsLoaded) return;
-    try {
-      let all: any[] = [];
-      let page = 0;
-      let hasMore = true;
-      while (hasMore) {
-        const from = page * 1000;
-        const { data, error } = await supabase.from('prospect_contacts').select('*, prospects(company_name)').order('name').range(from, from + 999);
-        if (error) { console.error('Contact load error:', error.message); break; }
-        const batch = (data || []).map((c: any) => ({ ...c, company_name: c.prospects?.company_name }));
-        all = [...all, ...batch];
-        hasMore = (data || []).length === 1000;
-        page++;
-      }
-      setAllContacts(all);
-    } catch (err: any) {
-      console.error('loadAllContacts error:', err.message);
-    }
+    const { data: rows, error } = await fetchAllRows<any>((from, to) =>
+      supabase.from('prospect_contacts').select('*, prospects(company_name)').order('name').order('id').range(from, to));
+    if (error) console.error('Contact load error:', error);
+    setAllContacts((rows || []).map((c: any) => ({ ...c, company_name: c.prospects?.company_name })));
     setContactsLoaded(true);
   };
 
-  const loadProfiles = async () => {
-    const { data } = await supabase.from('profiles').select('id, full_name');
-    if (data) {
-      const map: Record<string, string> = {};
-      data.forEach((p: any) => { map[p.id] = p.full_name; });
-      setProfiles(map);
-    }
-  };
-
-  // Load spend metrics for converted customers
-  const loadMetrics = async (nsId: string, prospectId: string) => {
-    if (customerMetrics[prospectId]) return;
-    const { data } = await supabase.from('customers').select('total_spend, avg_order_value, ytd_spend, ytd_orders, last_year_spend, total_orders, last_order_date').eq('netsuite_id', nsId).maybeSingle();
-    if (data) setCustomerMetrics(prev => ({ ...prev, [prospectId]: data }));
-  };
-
-  // Paginated fetch from /api/netsuite/customer-invoices. First call
-  // (no append) replaces the list; subsequent "Load more" calls append.
-  // Per-prospect hasMore state lets the UI show/hide the load-more
-  // button without re-checking the server until clicked.
-  const DOCS_PAGE_SIZE = 100;
-  const loadDocuments = async (nsId: string, prospectId: string, opts: { append?: boolean } = {}) => {
-    if (loadingDocs === prospectId) return;
-    if (!opts.append && documents[prospectId]) return;
-    setLoadingDocs(prospectId);
-    setDocsError(prev => { const n = { ...prev }; delete n[prospectId]; return n; });
-    try {
-      const offset = opts.append ? (documents[prospectId]?.length || 0) : 0;
-      const res = await fetch(`/api/netsuite/customer-invoices?customerId=${nsId}&limit=${DOCS_PAGE_SIZE}&offset=${offset}`);
-      const data = await res.json();
-      if (!res.ok) {
-        throw new Error(data?.error || `HTTP ${res.status}`);
-      }
-      const docs: CustDocument[] = (data.transactions || []).map((t: any) => {
-        const typeMap: Record<string, { type: CustDocument['type']; label: string }> = {
-          CustInvc: { type: 'invoice', label: 'Invoice' },
-          SalesOrd: { type: 'salesOrder', label: 'Sales Order' },
-          Estimate: { type: 'estimate', label: 'Estimate' },
-        };
-        const info = typeMap[t.type] || { type: 'invoice' as const, label: t.type };
-        return { id: String(t.id), number: t.tranid || t.id, date: t.trandate || '', status: t.status || '', type: info.type, typeLabel: info.label };
-      });
-      setDocuments(prev => ({
-        ...prev,
-        [prospectId]: opts.append ? [...(prev[prospectId] || []), ...docs] : docs,
-      }));
-      setDocsHasMore(prev => ({ ...prev, [prospectId]: !!data.hasMore }));
-    } catch (err: any) {
-      console.error('[prospects] loadDocuments failed:', err);
-      setDocsError(prev => ({ ...prev, [prospectId]: err?.message || 'Failed to load NetSuite documents' }));
-    }
-    setLoadingDocs(null);
-  };
-
-  const fmtK = (n: number) => n >= 1000 ? '$' + (n / 1000).toFixed(1) + 'k' : '$' + n.toFixed(0);
-
-
-  const loadDetail = async (prospectId: string) => {
-    const [cRes, oRes, aRes, tRes, rRes] = await Promise.all([
-      supabase.from('prospect_contacts').select('*').eq('prospect_id', prospectId).order('is_decision_maker', { ascending: false }),
-      supabase.from('prospect_opportunities').select('*').eq('prospect_id', prospectId).order('created_at', { ascending: false }),
-      supabase.from('prospect_activities').select('*').eq('prospect_id', prospectId).order('created_at', { ascending: false }).limit(50),
-      supabase.from('prospect_tags').select('*').eq('prospect_id', prospectId),
-      supabase.from('prospect_reminders').select('*').eq('prospect_id', prospectId).is('completed_at', null).order('due_at'),
-    ]);
-    setContacts(prev => ({ ...prev, [prospectId]: (cRes.data || []) as Contact[] }));
-    setOpportunities(prev => ({ ...prev, [prospectId]: (oRes.data || []) as Opportunity[] }));
-    setActivities(prev => ({ ...prev, [prospectId]: (aRes.data || []).map((a: any) => ({ ...a, creator_name: profiles[a.created_by] || null })) as Activity[] }));
-    setTags(prev => ({ ...prev, [prospectId]: (tRes.data || []) as Tag[] }));
-    setReminders(prev => ({ ...prev, [prospectId]: (rRes.data || []) as Reminder[] }));
-  };
-
-  const toggleExpand = (id: string) => {
-    if (expandedId === id) { setExpandedId(null); return; }
-    setExpandedId(id);
-    loadDetail(id);
-    // Load metrics + invoices for converted customers, and auto-expand
-    // the Documents section so the NetSuite history is visible without
-    // a second click. Users were missing it entirely when it stayed
-    // collapsed behind a small chevron.
-    const p = prospects.find(pr => pr.id === id);
-    if (p?.netsuite_id) {
-      loadMetrics(p.netsuite_id, id);
-      loadDocuments(p.netsuite_id, id);
-      setDocsExpanded(prev => { const n = new Set(prev); n.add(id); return n; });
-    }
-  };
-
-  // Create prospect
-  const startEdit = (p: Prospect) => {
-    setForm({ company_name: p.company_name, contact_name: p.contact_name || '', email: p.email || '', phone: p.phone || '', address: p.address || '', city: p.city || '', state: p.state || '', zip: p.zip || '', website: p.website || '', notes: p.notes || '', location_count: p.location_count || 1 });
-    setEditingProspectId(p.id);
-    setShowCreate(true);
-  };
-
-  const saveProspect = async () => {
-    if (!form.company_name.trim()) return;
+  // Create a prospect, then land on its record page — the record is where
+  // everything else (contacts, deals, activity) gets added.
+  const createProspect = async () => {
+    if (!form.company_name.trim() || saving) return;
     setSaving(true);
-    if (editingProspectId) {
-      // Update
-      const { error } = await supabase.from('prospects').update({ ...form, location_count: form.location_count || 1 }).eq('id', editingProspectId);
-      if (!error) {
-        setProspects(prev => prev.map(p => p.id === editingProspectId ? { ...p, ...form } as Prospect : p));
-        setShowCreate(false);
-        setEditingProspectId(null);
-        setForm({ company_name: '', contact_name: '', email: '', phone: '', address: '', city: '', state: '', zip: '', website: '', notes: '', location_count: 1 });
-      }
-    } else {
-      // Create
-      const { data, error } = await supabase.from('prospects').insert({ ...form, location_count: form.location_count || 1, created_by: user?.id }).select().single();
-      if (!error && data) {
-        setProspects(prev => [data as Prospect, ...prev]);
-        setShowCreate(false);
-        setForm({ company_name: '', contact_name: '', email: '', phone: '', address: '', city: '', state: '', zip: '', website: '', notes: '', location_count: 1 });
-        if (form.location_count > 1) {
-          await supabase.from('prospect_tags').insert({ prospect_id: data.id, tag: 'multilocation', auto_generated: true });
-        }
-      }
+    const { data, error } = await supabase.from('prospects')
+      .insert({ ...form, company_name: form.company_name.trim(), location_count: form.location_count || 1, created_by: user?.id })
+      .select().single();
+    if (error || !data) {
+      setSaving(false);
+      await dialog.alert(`Could not create the prospect: ${error?.message || 'unknown error'}`);
+      return;
     }
-    setSaving(false);
+    if (form.location_count > 1) {
+      await supabase.from('prospect_tags').insert({ prospect_id: data.id, tag: 'multilocation', auto_generated: true });
+    }
+    router.push(`/admin/prospects/${data.id}`);
   };
 
-  // Scan business card
+  // Scan business card → OCR prefills the create form
   const handleScanCard = async (file: File) => {
     setScanning(true);
     const canvas = document.createElement('canvas');
@@ -554,154 +333,10 @@ export default function ProspectsPage() {
     setScanning(false);
   };
 
-  // Add or edit a contact — through /api/prospects/contacts so the change
-  // also lands on the linked NetSuite customer's contact record. The local
-  // save always wins; a NetSuite failure is surfaced but nothing rolls back.
-  const [editingContactCrmId, setEditingContactCrmId] = useState<string | null>(null);
-  const [savingContact, setSavingContact] = useState(false);
-  const addContact = async (prospectId: string) => {
-    if (!contactForm.name.trim() || savingContact) return;
-    setSavingContact(true);
-    try {
-      const res = await fetch('/api/prospects/contacts', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ prospectId, contactId: editingContactCrmId || undefined, ...contactForm }),
-      });
-      const body = await res.json();
-      if (!res.ok || !body.success) throw new Error(body?.error || `HTTP ${res.status}`);
-      const saved = body.contact as Contact;
-      const isEdit = !!editingContactCrmId;
-      setContacts(prev => {
-        const list = prev[prospectId] || [];
-        const idx = list.findIndex(c => c.id === saved.id);
-        const next = idx >= 0 ? list.map(c => (c.id === saved.id ? saved : c)) : [saved, ...list];
-        return { ...prev, [prospectId]: next };
-      });
-      setContactForm({ name: '', title: '', email: '', phone: '', is_decision_maker: false });
-      setShowContactForm(null);
-      setEditingContactCrmId(null);
-      if (!isEdit) logActivity(prospectId, 'note', `Added contact: ${saved.name}${saved.is_decision_maker ? ' (decision maker)' : ''}`);
-      if (body.netsuite?.error) {
-        await dialog.alert(`Contact saved in the CRM, but the NetSuite update failed:\n\n${body.netsuite.error}`);
-      }
-    } catch (err: any) {
-      await dialog.alert(`Could not save the contact: ${err?.message || 'unknown error'}`);
-    }
-    setSavingContact(false);
-  };
+  const fmtK = (n: number) => n >= 1000 ? '$' + (n / 1000).toFixed(1) + 'k' : '$' + n.toFixed(0);
 
-  // Add opportunity
-  const addOpportunity = async (prospectId: string) => {
-    if (!oppForm.title.trim()) return;
-    const { data } = await supabase.from('prospect_opportunities').insert({
-      prospect_id: prospectId,
-      title: oppForm.title,
-      type: oppForm.type,
-      stage: 'lead',
-      value: oppForm.value ? parseFloat(oppForm.value) : null,
-      expected_close_date: oppForm.expected_close_date || null,
-      created_by: user?.id,
-    }).select().single();
-    if (data) {
-      setOpportunities(prev => ({ ...prev, [prospectId]: [data as Opportunity, ...(prev[prospectId] || [])] }));
-      setOppForm({ title: '', type: 'tech_install', value: '', expected_close_date: '' });
-      setShowOppForm(null);
-      logActivity(prospectId, 'note', `Created opportunity: ${oppForm.title} (${OPP_TYPES[oppForm.type]})`);
-    }
-  };
-
-  // Update opportunity stage
-  const updateOppStage = async (opp: Opportunity, newStage: string) => {
-    await supabase.from('prospect_opportunities').update({ stage: newStage, ...(newStage === 'won' || newStage === 'lost' ? { closed_at: new Date().toISOString() } : {}) }).eq('id', opp.id);
-    setOpportunities(prev => ({
-      ...prev,
-      [opp.prospect_id]: (prev[opp.prospect_id] || []).map(o => o.id === opp.id ? { ...o, stage: newStage } : o),
-    }));
-    logActivity(opp.prospect_id, 'status_change', `${opp.title}: ${OPP_STAGES[opp.stage]} → ${OPP_STAGES[newStage]}`);
-  };
-
-  // Log activity
-  const logActivity = async (prospectId: string, type: string, summary: string) => {
-    const { data } = await supabase.from('prospect_activities').insert({
-      prospect_id: prospectId,
-      type,
-      summary,
-      created_by: user?.id,
-    }).select().single();
-    if (data) {
-      setActivities(prev => ({
-        ...prev,
-        [prospectId]: [{ ...data, creator_name: profiles[user?.id || ''] || null } as Activity, ...(prev[prospectId] || [])],
-      }));
-    }
-  };
-
-  // Quick activity log
-  const submitActivity = async (prospectId: string) => {
-    const text = (activityInput[prospectId] || '').trim();
-    if (!text) return;
-    const type = activityType[prospectId] || 'note';
-    await logActivity(prospectId, type, text);
-    setActivityInput(prev => ({ ...prev, [prospectId]: '' }));
-  };
-
-  // Add tag
-  const addTag = async (prospectId: string) => {
-    const t = tagInput.trim().toLowerCase();
-    if (!t) return;
-    const { data } = await supabase.from('prospect_tags').insert({ prospect_id: prospectId, tag: t }).select().single();
-    if (data) {
-      setTags(prev => ({ ...prev, [prospectId]: [...(prev[prospectId] || []), data as Tag] }));
-      setTagInput('');
-    }
-  };
-
-  const removeTag = async (tag: Tag) => {
-    await supabase.from('prospect_tags').delete().eq('id', tag.id);
-    setTags(prev => ({ ...prev, [tag.prospect_id]: (prev[tag.prospect_id] || []).filter(t => t.id !== tag.id) }));
-  };
-
-  // Update prospect status
-  const updateStatus = async (prospect: Prospect, newStatus: string) => {
-    await supabase.from('prospects').update({ status: newStatus }).eq('id', prospect.id);
-    setProspects(prev => prev.map(p => p.id === prospect.id ? { ...p, status: newStatus } : p));
-    logActivity(prospect.id, 'status_change', `Status: ${STATUS_LABELS[prospect.status]} → ${STATUS_LABELS[newStatus]}`);
-  };
-
-  // Convert to customer (push to NetSuite + preserve data)
-  const convertToCustomer = async (prospect: Prospect) => {
-    if (prospect.netsuite_id) { await dialog.alert('Already pushed to NetSuite'); return; }
-    if (!(await dialog.confirm(`Convert "${prospect.company_name}" to a customer in NetSuite? All prospect data will be preserved.`, { confirmLabel: 'Convert' }))) return;
-    try {
-      const res = await fetch('/api/prospects/push-to-netsuite', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ prospectId: prospect.id, type: 'customer', userId: user?.id }),
-      });
-      const data = await res.json();
-      if (data.success) {
-        await supabase.from('prospects').update({ status: 'converted', converted_customer_id: data.customerId }).eq('id', prospect.id);
-        setProspects(prev => prev.map(p => p.id === prospect.id ? { ...p, status: 'converted', netsuite_id: data.customerId, netsuite_url: data.netsuiteUrl, converted_customer_id: data.customerId } : p));
-        logActivity(prospect.id, 'status_change', `Converted to NetSuite customer #${data.entityId}`);
-      } else {
-        await dialog.alert('Failed: ' + (data.error || 'Unknown error'));
-      }
-    } catch (e) {
-      await dialog.alert('Network error');
-    }
-  };
-
-  // Delete prospect
-  const deleteProspect = async (id: string) => {
-    if (!(await dialog.confirm('Delete this prospect and all associated data?', { destructive: true, confirmLabel: 'Delete' }))) return;
-    await supabase.from('prospects').delete().eq('id', id);
-    setProspects(prev => prev.filter(p => p.id !== id));
-    setExpandedId(null);
-  };
-
-  // All unique tags for filter
-  const allTags = [...new Set(Object.values(tags).flat().map((t: Tag) => t.tag))].sort();
+  // All unique tags for the filter dropdown
+  const allTags = [...new Set(Object.values(tagsByProspect).flat())].sort();
 
   // Distinct prospect owners (created_by) for the owner filter dropdown.
   const ownerOptions = (() => {
@@ -719,7 +354,7 @@ export default function ProspectsPage() {
       const stages = oppStagesByProspect[p.id];
       if (!stages || !want.some(w => stages.has(w))) return false;
     }
-    if (tagFilter && !(tags[p.id] || []).some(t => t.tag === tagFilter)) return false;
+    if (tagFilter && !(tagsByProspect[p.id] || []).includes(tagFilter)) return false;
     if (ownerFilter !== 'all' && p.created_by !== ownerFilter) return false;
     if (openQuoteFilter && !openQuoteCustomers.has((p.company_name || '').toLowerCase())) return false;
     if (spendTierFilter !== 'all') {
@@ -822,7 +457,7 @@ export default function ProspectsPage() {
             background: 'rgba(167,139,250,0.1)', border: '1px solid rgba(167,139,250,0.25)', color: '#a78bfa', cursor: 'pointer',
           }}>{scanning ? 'Scanning...' : 'Scan Card'}</button>
           </DropZone>
-          <button onClick={() => { if (showCreate) { setShowCreate(false); setEditingProspectId(null); setForm({ company_name: '', contact_name: '', email: '', phone: '', address: '', city: '', state: '', zip: '', website: '', notes: '', location_count: 1 }); } else { setShowCreate(true); setEditingProspectId(null); } }} style={{
+          <button onClick={() => { if (showCreate) { setShowCreate(false); setForm(emptyForm); } else { setShowCreate(true); } }} style={{
             padding: '8px 14px', borderRadius: '8px', fontSize: '11px', fontWeight: 700,
             background: 'var(--tab-active-bg)', border: '1px solid var(--tab-active-border)', color: 'var(--tab-active-color)', cursor: 'pointer',
           }}>{showCreate ? 'Cancel' : '+ New'}</button>
@@ -847,11 +482,11 @@ export default function ProspectsPage() {
             <div><div style={labelStyle}># of Locations</div><input type="number" min="1" style={inputStyle} value={form.location_count} onChange={e => setForm({ ...form, location_count: parseInt(e.target.value) || 1 })} /></div>
             <div style={{ gridColumn: '1 / -1' }}><div style={labelStyle}>Notes</div><textarea style={{ ...inputStyle, minHeight: '50px', resize: 'vertical' }} value={form.notes} onChange={e => setForm({ ...form, notes: e.target.value })} /></div>
           </div>
-          <button onClick={saveProspect} disabled={saving || !form.company_name.trim()} style={{
+          <button onClick={createProspect} disabled={saving || !form.company_name.trim()} style={{
             width: '100%', padding: '12px', borderRadius: '10px', fontSize: '13px', fontWeight: 700,
             background: form.company_name.trim() ? '#22c55e' : 'var(--border)', color: '#fff', border: 'none', cursor: 'pointer',
             opacity: saving ? 0.5 : 1,
-          }}>{saving ? 'Saving...' : editingProspectId ? 'Save Changes' : 'Create Prospect'}</button>
+          }}>{saving ? 'Creating...' : 'Create Prospect'}</button>
         </div>
       )}
 
@@ -898,17 +533,20 @@ export default function ProspectsPage() {
             <div style={{ textAlign: 'center', padding: '40px', color: 'var(--text-muted)', fontSize: '13px' }}>Loading contacts...</div>
           ) : (() => {
             const q = contactSearch.toLowerCase();
-            const filtered = q ? allContacts.filter(c => c.name?.toLowerCase().includes(q) || c.email?.toLowerCase().includes(q) || c.phone?.toLowerCase().includes(q) || c.company_name?.toLowerCase().includes(q) || c.title?.toLowerCase().includes(q)) : allContacts;
-            return filtered.length === 0 ? (
+            const matches = q ? allContacts.filter(c => c.name?.toLowerCase().includes(q) || c.email?.toLowerCase().includes(q) || c.phone?.toLowerCase().includes(q) || c.company_name?.toLowerCase().includes(q) || c.title?.toLowerCase().includes(q)) : allContacts;
+            return matches.length === 0 ? (
               <div style={{ textAlign: 'center', padding: '40px', color: 'var(--text-muted)', fontSize: '13px' }}>No contacts found</div>
             ) : (
               <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
-                {filtered.map(c => (
+                {matches.map(c => (
                   <div key={c.id} style={{ background: 'var(--card)', border: '1px solid var(--border)', borderRadius: '10px', padding: '10px 12px' }}>
                     <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '2px' }}>
                       <div>
                         <div style={{ fontSize: '14px', fontWeight: 700, color: 'var(--text-body)' }}>{c.name}</div>
-                        <div style={{ fontSize: '12px', color: '#60a5fa', fontWeight: 600 }}>{c.company_name || 'Unknown company'}</div>
+                        <button onClick={() => router.push(`/admin/prospects/${c.prospect_id}`)} title="Open the customer record"
+                          style={{ fontSize: '12px', color: '#60a5fa', fontWeight: 600, background: 'none', border: 'none', cursor: 'pointer', padding: 0, textAlign: 'left' }}>
+                          {c.company_name || 'Unknown company'}
+                        </button>
                       </div>
                       {c.title && !['Customer Center', 'Customer'].includes(c.title) && (
                         <span style={{ fontSize: '10px', color: 'var(--text-muted)', fontWeight: 600, textAlign: 'right', flexShrink: 0, maxWidth: '40%' }}>{c.title}</span>
@@ -1011,7 +649,7 @@ export default function ProspectsPage() {
         >{exporting ? 'Exporting…' : 'Export to Excel'}</button>
       </div>
 
-      {/* Prospect List */}
+      {/* Prospect list — every row opens the customer record */}
       {sorted.length === 0 ? (
         <div style={{ textAlign: 'center', padding: '40px', color: 'var(--text-muted)' }}>
           <div style={{ fontSize: '13px', fontWeight: 700 }}>{search ? 'No matching prospects' : 'No prospects match the current filters'}</div>
@@ -1019,516 +657,32 @@ export default function ProspectsPage() {
       ) : (
         <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
           {sorted.map(prospect => {
-            const isExpanded = expandedId === prospect.id;
-            const pContacts = contacts[prospect.id] || [];
-            const pOpps = opportunities[prospect.id] || [];
-            const pActivities = activities[prospect.id] || [];
-            const pTags = tags[prospect.id] || [];
             const statusColor = STATUS_COLORS[prospect.status] || '#6b7280';
-
             return (
-              <div key={prospect.id} id={`prospect-${prospect.id}`} style={{ background: 'var(--card)', border: '1px solid var(--border)', borderRadius: '14px', overflow: 'hidden' }}>
-                {/* Header */}
-                <div onClick={() => toggleExpand(prospect.id)} style={{ padding: '12px 14px', cursor: 'pointer' }}>
-                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
-                    <div style={{ flex: 1, minWidth: 0 }}>
-                      <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
-                        <span style={{ fontWeight: 800, fontSize: '14px', color: 'var(--text-primary)' }}>{prospect.company_name}</span>
-                        <span style={{ fontSize: '9px', fontWeight: 700, padding: '2px 6px', borderRadius: '4px', background: `${statusColor}18`, color: statusColor }}>{STATUS_LABELS[prospect.status]}</span>
-                        {prospect.is_hot && <span style={{ fontSize: '8px', fontWeight: 700, padding: '1px 5px', borderRadius: '3px', background: 'rgba(239,68,68,0.1)', color: '#ef4444' }}>HOT</span>}
-                        {prospect.email_campaign && <span style={{ fontSize: '8px', fontWeight: 700, padding: '1px 5px', borderRadius: '3px', background: 'rgba(59,130,246,0.1)', color: '#60a5fa' }}>EMAIL</span>}
-                        {prospect.multi_location && <span style={{ fontSize: '8px', fontWeight: 700, padding: '1px 5px', borderRadius: '3px', background: 'rgba(251,191,36,0.1)', color: '#f59e0b' }}>MULTI-LOC</span>}
-                        {prospect.netsuite_id && <span style={{ fontSize: '8px', fontWeight: 700, padding: '1px 5px', borderRadius: '3px', background: 'rgba(167,139,250,0.1)', color: '#a78bfa' }}>NS</span>}
-                      </div>
-                      {prospect.contact_name && <div style={{ fontSize: '11px', color: 'var(--text-secondary)', marginTop: '2px' }}>{prospect.contact_name}{prospect.email ? ` · ${prospect.email}` : ''}</div>}
-                      {prospect.notes && <div style={{ fontSize: '10px', color: 'var(--text-muted)', marginTop: '2px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{prospect.notes}</div>}
+              <div key={prospect.id} id={`prospect-${prospect.id}`}
+                onClick={() => router.push(`/admin/prospects/${prospect.id}`)}
+                style={{ background: 'var(--card)', border: '1px solid var(--border)', borderRadius: '14px', padding: '12px 14px', cursor: 'pointer' }}>
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
+                  <div style={{ flex: 1, minWidth: 0 }}>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '6px', flexWrap: 'wrap' }}>
+                      <span style={{ fontWeight: 800, fontSize: '14px', color: 'var(--text-primary)' }}>{prospect.company_name}</span>
+                      <span style={{ fontSize: '9px', fontWeight: 700, padding: '2px 6px', borderRadius: '4px', background: `${statusColor}18`, color: statusColor }}>{STATUS_LABELS[prospect.status]}</span>
+                      {prospect.is_hot && <span style={{ fontSize: '8px', fontWeight: 700, padding: '1px 5px', borderRadius: '3px', background: 'rgba(239,68,68,0.1)', color: '#ef4444' }}>HOT</span>}
+                      {prospect.email_campaign && <span style={{ fontSize: '8px', fontWeight: 700, padding: '1px 5px', borderRadius: '3px', background: 'rgba(59,130,246,0.1)', color: '#60a5fa' }}>EMAIL</span>}
+                      {prospect.multi_location && <span style={{ fontSize: '8px', fontWeight: 700, padding: '1px 5px', borderRadius: '3px', background: 'rgba(251,191,36,0.1)', color: '#f59e0b' }}>MULTI-LOC</span>}
+                      {prospect.netsuite_id && <span style={{ fontSize: '8px', fontWeight: 700, padding: '1px 5px', borderRadius: '3px', background: 'rgba(167,139,250,0.1)', color: '#a78bfa' }}>NS</span>}
                     </div>
-                    <div style={{ flexShrink: 0, textAlign: 'right' }}>
-                      {customerMetrics[prospect.id]?.ytd_spend ? (
-                        <div style={{ fontSize: '13px', fontWeight: 800, color: '#4ade80' }}>{fmtK(customerMetrics[prospect.id].ytd_spend)}</div>
-                      ) : null}
-                      <div style={{ fontSize: '10px', color: 'var(--text-muted)' }}>{new Date(prospect.created_at).toLocaleDateString()}</div>
-                      <div style={{ marginTop: '2px' }}>{isExpanded ? '▲' : '▼'}</div>
-                    </div>
+                    {prospect.contact_name && <div style={{ fontSize: '11px', color: 'var(--text-secondary)', marginTop: '2px' }}>{prospect.contact_name}{prospect.email ? ` · ${prospect.email}` : ''}</div>}
+                    {prospect.notes && <div style={{ fontSize: '10px', color: 'var(--text-muted)', marginTop: '2px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{prospect.notes}</div>}
+                  </div>
+                  <div style={{ flexShrink: 0, textAlign: 'right' }}>
+                    {customerMetrics[prospect.id]?.ytd_spend ? (
+                      <div style={{ fontSize: '13px', fontWeight: 800, color: '#4ade80' }}>{fmtK(customerMetrics[prospect.id].ytd_spend)}</div>
+                    ) : null}
+                    <div style={{ fontSize: '10px', color: 'var(--text-muted)' }}>{new Date(prospect.created_at).toLocaleDateString()}</div>
+                    <div style={{ marginTop: '2px', color: 'var(--text-muted)', fontWeight: 700 }}>›</div>
                   </div>
                 </div>
-
-                {/* Expanded Detail */}
-                {isExpanded && (
-                  <div style={{ borderTop: '1px solid var(--border)', padding: '14px' }}>
-
-                    {/* Status Actions */}
-                    <div style={{ display: 'flex', gap: '4px', marginBottom: '12px', flexWrap: 'wrap' }}>
-                      {['active', 'nurturing', 'converted'].filter(s => s !== prospect.status).map(s => (
-                        <button key={s} onClick={() => updateStatus(prospect, s)} style={{
-                          padding: '4px 10px', borderRadius: '6px', fontSize: '10px', fontWeight: 700,
-                          background: `${STATUS_COLORS[s]}12`, border: `1px solid ${STATUS_COLORS[s]}33`, color: STATUS_COLORS[s], cursor: 'pointer',
-                        }}>{STATUS_LABELS[s]}</button>
-                      ))}
-                      {prospect.status !== 'converted' && (
-                        <button onClick={() => convertToCustomer(prospect)} style={{
-                          padding: '4px 10px', borderRadius: '6px', fontSize: '10px', fontWeight: 700,
-                          background: 'rgba(167,139,250,0.1)', border: '1px solid rgba(167,139,250,0.3)', color: '#a78bfa', cursor: 'pointer',
-                        }}>Convert to Customer</button>
-                      )}
-                    </div>
-
-                    {/* Tags */}
-                    <div style={{ marginBottom: '12px' }}>
-                      <div style={labelStyle}>Tags</div>
-                      <div style={{ display: 'flex', gap: '4px', flexWrap: 'wrap', alignItems: 'center' }}>
-                        {pTags.map(t => (
-                          <span key={t.id} onClick={() => removeTag(t)} style={{
-                            padding: '2px 8px', borderRadius: '4px', fontSize: '10px', fontWeight: 700,
-                            background: t.auto_generated ? 'rgba(251,191,36,0.1)' : 'rgba(59,130,246,0.1)',
-                            border: `1px solid ${t.auto_generated ? 'rgba(251,191,36,0.25)' : 'rgba(59,130,246,0.25)'}`,
-                            color: t.auto_generated ? '#fbbf24' : '#60a5fa', cursor: 'pointer',
-                          }}>{t.tag} ✕</span>
-                        ))}
-                        <div style={{ display: 'flex', gap: '4px' }}>
-                          <input value={tagInput} onChange={e => setTagInput(e.target.value)} onKeyDown={e => { if (e.key === 'Enter') addTag(prospect.id); }} placeholder="Add tag..." style={{ ...inputStyle, width: '100px', padding: '3px 8px', fontSize: '10px' }} />
-                        </div>
-                      </div>
-                    </div>
-
-                    {/* Spend Metrics (converted customers only) */}
-                    {prospect.netsuite_id && customerMetrics[prospect.id] && (() => {
-                      const m = customerMetrics[prospect.id];
-                      return (
-                        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: '6px', marginBottom: '12px' }}>
-                          <div style={{ textAlign: 'center', padding: '8px 4px', borderRadius: '8px', background: 'rgba(34,197,94,0.08)' }}>
-                            <div style={{ fontSize: '15px', fontWeight: 800, color: '#4ade80' }}>{fmtK(m.ytd_spend)}</div>
-                            <div style={{ fontSize: '8px', fontWeight: 600, color: 'var(--text-muted)', textTransform: 'uppercase' }}>YTD{m.ytd_orders > 0 ? ` · ${m.ytd_orders}` : ''}</div>
-                          </div>
-                          <div style={{ textAlign: 'center', padding: '8px 4px', borderRadius: '8px', background: 'rgba(251,191,36,0.08)' }}>
-                            <div style={{ fontSize: '15px', fontWeight: 800, color: '#fbbf24' }}>{fmtK(m.last_year_spend)}</div>
-                            <div style={{ fontSize: '8px', fontWeight: 600, color: 'var(--text-muted)', textTransform: 'uppercase' }}>Last Year</div>
-                          </div>
-                          <div style={{ textAlign: 'center', padding: '8px 4px', borderRadius: '8px', background: 'rgba(59,130,246,0.08)' }}>
-                            <div style={{ fontSize: '15px', fontWeight: 800, color: '#60a5fa' }}>{fmtK(m.total_spend)}</div>
-                            <div style={{ fontSize: '8px', fontWeight: 600, color: 'var(--text-muted)', textTransform: 'uppercase' }}>All-Time · {m.total_orders}</div>
-                          </div>
-                          <div style={{ textAlign: 'center', padding: '8px 4px', borderRadius: '8px', background: 'rgba(168,85,247,0.08)' }}>
-                            <div style={{ fontSize: '15px', fontWeight: 800, color: '#a855f7' }}>{fmtK(m.avg_order_value)}</div>
-                            <div style={{ fontSize: '8px', fontWeight: 600, color: 'var(--text-muted)', textTransform: 'uppercase' }}>Avg Order</div>
-                          </div>
-                        </div>
-                      );
-                    })()}
-
-                    {/* NetSuite Documents — invoices, sales orders, estimates */}
-                    {prospect.netsuite_id ? (
-                      <div style={{ marginBottom: '12px' }}>
-                        <div onClick={() => setDocsExpanded(prev => { const n = new Set(prev); if (n.has(prospect.id)) n.delete(prospect.id); else n.add(prospect.id); return n; })}
-                          style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', cursor: 'pointer', marginBottom: docsExpanded.has(prospect.id) ? '6px' : 0 }}>
-                          <div style={labelStyle}>
-                            <span style={{ marginRight: '4px', fontSize: '8px', transition: 'transform 0.15s', display: 'inline-block', transform: docsExpanded.has(prospect.id) ? 'rotate(0deg)' : 'rotate(-90deg)' }}>▼</span>
-                            NetSuite Documents (invoices, SOs, estimates)
-                            {loadingDocs === prospect.id ? (
-                              <span style={{ marginLeft: '6px', color: 'var(--text-muted)', fontWeight: 500 }}>loading…</span>
-                            ) : (
-                              <span style={{ marginLeft: '6px', color: 'var(--text-muted)', fontWeight: 500 }}>· {(documents[prospect.id] || []).length}</span>
-                            )}
-                          </div>
-                        </div>
-                        {docsExpanded.has(prospect.id) && (
-                          <div>
-                            {loadingDocs === prospect.id ? (
-                              <div style={{ fontSize: '11px', color: 'var(--text-muted)', padding: '8px 0' }}>Loading NetSuite documents…</div>
-                            ) : docsError[prospect.id] ? (
-                              <div style={{
-                                padding: '8px 10px', borderRadius: '6px', marginBottom: '6px',
-                                background: 'rgba(239,68,68,0.08)', border: '1px solid rgba(239,68,68,0.2)',
-                                color: '#ef4444', fontSize: '11px', display: 'flex',
-                                justifyContent: 'space-between', alignItems: 'center', gap: '8px',
-                              }}>
-                                <span>NetSuite error: {docsError[prospect.id]}</span>
-                                <button
-                                  onClick={(e) => { e.stopPropagation(); setDocuments(prev => { const n = { ...prev }; delete n[prospect.id]; return n; }); if (prospect.netsuite_id) loadDocuments(prospect.netsuite_id, prospect.id); }}
-                                  style={{ padding: '3px 8px', borderRadius: '4px', fontSize: '10px', fontWeight: 700, background: 'transparent', border: '1px solid rgba(239,68,68,0.3)', color: '#ef4444', cursor: 'pointer' }}
-                                >Retry</button>
-                              </div>
-                            ) : (documents[prospect.id] || []).length === 0 ? (
-                              <div style={{ fontSize: '11px', color: 'var(--text-muted)', padding: '8px 10px', borderRadius: '6px', background: 'var(--subtle-bg)' }}>
-                                No documents found for this customer in NetSuite.
-                              </div>
-                            ) : (() => {
-                              const allDocs = documents[prospect.id] || [];
-                              const active: DocTypeFilter = docTypeFilter[prospect.id] || 'all';
-                              const counts = {
-                                all: allDocs.length,
-                                invoice: allDocs.filter(d => d.type === 'invoice').length,
-                                salesOrder: allDocs.filter(d => d.type === 'salesOrder').length,
-                                estimate: allDocs.filter(d => d.type === 'estimate').length,
-                              };
-                              const filtered = active === 'all' ? allDocs : allDocs.filter(d => d.type === active);
-                              const showAll = docsShowAll.has(prospect.id);
-                              const visible = showAll ? filtered : filtered.slice(0, 5);
-                              const TYPE_DOC_COLORS: Record<string, string> = { invoice: '#34d399', salesOrder: '#60a5fa', estimate: '#fbbf24' };
-                              const pills: { key: DocTypeFilter; label: string; count: number; color: string }[] = [
-                                { key: 'all', label: 'All', count: counts.all, color: '#a78bfa' },
-                                { key: 'invoice', label: 'Invoices', count: counts.invoice, color: TYPE_DOC_COLORS.invoice },
-                                { key: 'salesOrder', label: 'Sales Orders', count: counts.salesOrder, color: TYPE_DOC_COLORS.salesOrder },
-                                { key: 'estimate', label: 'Estimates', count: counts.estimate, color: TYPE_DOC_COLORS.estimate },
-                              ];
-                              return (
-                                <div>
-                                  <div style={{ display: 'flex', gap: '4px', flexWrap: 'wrap', marginBottom: '8px' }}>
-                                    {pills.map(p => {
-                                      const isActive = active === p.key;
-                                      return (
-                                        <button
-                                          key={p.key}
-                                          onClick={() => {
-                                            setDocTypeFilter(prev => ({ ...prev, [prospect.id]: p.key }));
-                                            setDocsShowAll(prev => { const n = new Set(prev); n.delete(prospect.id); return n; });
-                                          }}
-                                          style={{
-                                            padding: '4px 10px', borderRadius: '999px', fontSize: '10px', fontWeight: 700,
-                                            cursor: 'pointer',
-                                            background: isActive ? `${p.color}22` : 'var(--subtle-bg)',
-                                            border: `1px solid ${isActive ? p.color : 'var(--border)'}`,
-                                            color: isActive ? p.color : 'var(--text-muted)',
-                                          }}
-                                        >{p.label} · {p.count}</button>
-                                      );
-                                    })}
-                                  </div>
-                                  {filtered.length === 0 ? (
-                                    <div style={{ fontSize: '11px', color: 'var(--text-muted)', padding: '8px 10px', borderRadius: '6px', background: 'var(--subtle-bg)' }}>
-                                      No {active === 'all' ? 'documents' : pills.find(p => p.key === active)?.label.toLowerCase()} for this customer.
-                                    </div>
-                                  ) : (
-                                    <div style={{ display: 'flex', flexDirection: 'column', gap: '3px' }}>
-                                      {visible.map(doc => (
-                                        <div key={`${doc.type}-${doc.id}`} style={{ padding: '6px 8px', borderRadius: '6px', background: 'var(--subtle-bg)' }}>
-                                          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '2px' }}>
-                                            <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
-                                              <span style={{ fontSize: '8px', fontWeight: 700, padding: '1px 5px', borderRadius: '3px', background: `${TYPE_DOC_COLORS[doc.type] || '#6b7280'}18`, color: TYPE_DOC_COLORS[doc.type] || '#6b7280' }}>{doc.typeLabel}</span>
-                                              <span style={{ fontSize: '11px', fontWeight: 700, color: 'var(--text-primary)' }}>#{doc.number}</span>
-                                            </div>
-                                            <span style={{ fontSize: '9px', color: 'var(--text-muted)' }}>{doc.date}{doc.status ? ` · ${doc.status}` : ''}</span>
-                                          </div>
-                                          <NetSuitePdf type={doc.type === 'invoice' ? 'invoice' : 'salesOrder'} recordId={doc.id} recordNumber={doc.number} />
-                                        </div>
-                                      ))}
-                                    </div>
-                                  )}
-                                  {filtered.length > 5 && !showAll && (
-                                    <button onClick={() => setDocsShowAll(prev => { const n = new Set(prev); n.add(prospect.id); return n; })} style={{ width: '100%', padding: '6px', borderRadius: '6px', fontSize: '10px', fontWeight: 700, marginTop: '4px', background: 'var(--subtle-bg)', border: '1px solid var(--border)', color: '#60a5fa', cursor: 'pointer' }}>
-                                      Show All ({filtered.length})
-                                    </button>
-                                  )}
-                                  {docsHasMore[prospect.id] && (
-                                    <button
-                                      onClick={() => prospect.netsuite_id && loadDocuments(prospect.netsuite_id, prospect.id, { append: true })}
-                                      disabled={loadingDocs === prospect.id}
-                                      style={{ width: '100%', padding: '6px', borderRadius: '6px', fontSize: '10px', fontWeight: 700, marginTop: '4px', background: 'rgba(96,165,250,0.08)', border: '1px solid rgba(96,165,250,0.2)', color: '#60a5fa', cursor: loadingDocs === prospect.id ? 'default' : 'pointer', opacity: loadingDocs === prospect.id ? 0.5 : 1 }}
-                                    >
-                                      {loadingDocs === prospect.id ? 'Loading more…' : `Load older history (page ${Math.ceil((allDocs.length / 100)) + 1})`}
-                                    </button>
-                                  )}
-                                </div>
-                              );
-                            })()}
-                          </div>
-                        )}
-                      </div>
-                    ) : (
-                      <div style={{ marginBottom: '12px', padding: '8px 10px', borderRadius: '6px', background: 'var(--subtle-bg)', border: '1px solid var(--border)' }}>
-                        <div style={labelStyle}>NetSuite Documents</div>
-                        <div style={{ fontSize: '11px', color: 'var(--text-muted)', marginTop: '4px' }}>
-                          This prospect isn&apos;t linked to a NetSuite customer record yet. Once it&apos;s converted, NetSuite invoices, sales orders, and estimates will appear here.
-                        </div>
-                      </div>
-                    )}
-
-                    {/* Dropbox proof search — pre-fills with the company
-                        name so users can find prior artwork without
-                        manually navigating the Dropbox folder tree. */}
-                    <div style={{ marginBottom: '12px' }}>
-                      <DropboxProofSearch defaultQuery={prospect.company_name || ''} />
-                    </div>
-
-                    {/* Quick toggles & details */}
-                    <div style={{ display: 'flex', gap: '6px', flexWrap: 'wrap', marginBottom: '12px' }}>
-                      <button onClick={async () => { await supabase.from('prospects').update({ is_hot: !prospect.is_hot }).eq('id', prospect.id); setProspects(prev => prev.map(p => p.id === prospect.id ? { ...p, is_hot: !p.is_hot } : p)); }} style={{
-                        padding: '5px 10px', borderRadius: '6px', fontSize: '10px', fontWeight: 700, cursor: 'pointer',
-                        background: prospect.is_hot ? 'rgba(239,68,68,0.1)' : 'var(--subtle-bg)', border: `1px solid ${prospect.is_hot ? 'rgba(239,68,68,0.25)' : 'var(--border)'}`, color: prospect.is_hot ? '#ef4444' : 'var(--text-muted)',
-                      }}>{prospect.is_hot ? '🔥 Hot' : 'Mark Hot'}</button>
-                      <button onClick={async () => { await supabase.from('prospects').update({ email_campaign: !prospect.email_campaign }).eq('id', prospect.id); setProspects(prev => prev.map(p => p.id === prospect.id ? { ...p, email_campaign: !p.email_campaign } : p)); }} style={{
-                        padding: '5px 10px', borderRadius: '6px', fontSize: '10px', fontWeight: 700, cursor: 'pointer',
-                        background: prospect.email_campaign ? 'rgba(59,130,246,0.1)' : 'var(--subtle-bg)', border: `1px solid ${prospect.email_campaign ? 'rgba(59,130,246,0.25)' : 'var(--border)'}`, color: prospect.email_campaign ? '#60a5fa' : 'var(--text-muted)',
-                      }}>{prospect.email_campaign ? '✓ Email Campaign' : 'Email Campaign'}</button>
-                      <button onClick={async () => { await supabase.from('prospects').update({ multi_location: !prospect.multi_location }).eq('id', prospect.id); setProspects(prev => prev.map(p => p.id === prospect.id ? { ...p, multi_location: !p.multi_location } : p)); }} style={{
-                        padding: '5px 10px', borderRadius: '6px', fontSize: '10px', fontWeight: 700, cursor: 'pointer',
-                        background: prospect.multi_location ? 'rgba(251,191,36,0.1)' : 'var(--subtle-bg)', border: `1px solid ${prospect.multi_location ? 'rgba(251,191,36,0.25)' : 'var(--border)'}`, color: prospect.multi_location ? '#f59e0b' : 'var(--text-muted)',
-                      }}>{prospect.multi_location ? '✓ Multi-Location' : 'Multi-Location'}</button>
-                      <button
-                        onClick={() => window.open(`/admin/prospects/${prospect.id}`, '_blank')}
-                        title="Open the standalone customer record page in a new tab"
-                        style={{
-                          padding: '5px 10px', borderRadius: '6px', fontSize: '10px', fontWeight: 700, cursor: 'pointer',
-                          background: 'rgba(74,222,128,0.1)', border: '1px solid rgba(74,222,128,0.25)', color: '#4ade80',
-                          marginLeft: 'auto',
-                        }}
-                      >Open Record ↗</button>
-                      <button
-                        onClick={() => exportProspectPDF({
-                          prospect,
-                          statusLabel: STATUS_LABELS[prospect.status] || prospect.status || '',
-                          ownerName: profiles[prospect.created_by || ''] || null,
-                          metrics: customerMetrics[prospect.id] || null,
-                          contacts: contacts[prospect.id] || [],
-                          opportunities: opportunities[prospect.id] || [],
-                          activities: activities[prospect.id] || [],
-                          tags: tags[prospect.id] || [],
-                          documents: documents[prospect.id] || [],
-                        })}
-                        title="Download a printable PDF summary of this prospect"
-                        style={{
-                          padding: '5px 10px', borderRadius: '6px', fontSize: '10px', fontWeight: 700, cursor: 'pointer',
-                          background: 'rgba(96,165,250,0.1)', border: '1px solid rgba(96,165,250,0.25)', color: '#60a5fa',
-                        }}
-                      >Export PDF</button>
-                    </div>
-
-                    {/* Lead source & details */}
-                    <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '8px', marginBottom: '12px' }}>
-                      <div>
-                        <div style={labelStyle}>Lead Source</div>
-                        <select value={prospect.lead_source || ''} onChange={async (e) => {
-                          const val = e.target.value;
-                          await supabase.from('prospects').update({ lead_source: val || null }).eq('id', prospect.id);
-                          setProspects(prev => prev.map(p => p.id === prospect.id ? { ...p, lead_source: val || null } : p));
-                        }} style={{ ...inputStyle, padding: '6px 8px' }}>
-                          <option value="">— Select —</option>
-                          {LEAD_SOURCES.map(s => <option key={s} value={s}>{s}</option>)}
-                        </select>
-                        {prospect.lead_source === 'Other' && (
-                          <input placeholder="Specify source..." value={prospect.lead_source_other || ''} onChange={async (e) => {
-                            const val = e.target.value;
-                            await supabase.from('prospects').update({ lead_source_other: val }).eq('id', prospect.id);
-                            setProspects(prev => prev.map(p => p.id === prospect.id ? { ...p, lead_source_other: val } : p));
-                          }} style={{ ...inputStyle, padding: '4px 8px', marginTop: '4px', fontSize: '11px' }} />
-                        )}
-                      </div>
-                      <div>
-                        <div style={labelStyle}>Location</div>
-                        <div style={{ fontSize: '12px', color: 'var(--text-body)' }}>
-                          {[prospect.address, prospect.city, prospect.state, prospect.zip].filter(Boolean).join(', ') || '—'}
-                        </div>
-                      </div>
-                      {prospect.phone && <div><div style={labelStyle}>Phone</div><div style={{ fontSize: '12px', color: 'var(--text-body)' }}>{prospect.phone}</div></div>}
-                      {prospect.email && <div><div style={labelStyle}>Email</div><div style={{ fontSize: '12px', color: 'var(--text-body)' }}>{prospect.email}</div></div>}
-                    </div>
-
-                    {/* Contacts */}
-                    <div style={{ marginBottom: '12px' }}>
-                      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '6px' }}>
-                        <div style={labelStyle}>Contacts ({pContacts.length})</div>
-                        <button onClick={() => {
-                          if (showContactForm === prospect.id) { setShowContactForm(null); setEditingContactCrmId(null); setContactForm({ name: '', title: '', email: '', phone: '', is_decision_maker: false }); }
-                          else { setEditingContactCrmId(null); setContactForm({ name: '', title: '', email: '', phone: '', is_decision_maker: false }); setShowContactForm(prospect.id); }
-                        }} style={{ fontSize: '10px', fontWeight: 700, color: '#60a5fa', background: 'none', border: 'none', cursor: 'pointer' }}>
-                          {showContactForm === prospect.id ? 'Cancel' : '+ Add'}
-                        </button>
-                      </div>
-                      {showContactForm === prospect.id && (
-                        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '6px', marginBottom: '8px', padding: '8px', background: 'var(--subtle-bg)', borderRadius: '8px' }}>
-                          <input style={{ ...inputStyle, padding: '6px 8px', fontSize: '11px' }} placeholder="Name *" value={contactForm.name} onChange={e => setContactForm({ ...contactForm, name: e.target.value })} />
-                          <input style={{ ...inputStyle, padding: '6px 8px', fontSize: '11px' }} placeholder="Title" value={contactForm.title} onChange={e => setContactForm({ ...contactForm, title: e.target.value })} />
-                          <input style={{ ...inputStyle, padding: '6px 8px', fontSize: '11px' }} placeholder="Email" value={contactForm.email} onChange={e => setContactForm({ ...contactForm, email: e.target.value })} />
-                          <input style={{ ...inputStyle, padding: '6px 8px', fontSize: '11px' }} placeholder="Phone" value={contactForm.phone} onChange={e => setContactForm({ ...contactForm, phone: e.target.value })} />
-                          <label style={{ display: 'flex', alignItems: 'center', gap: '6px', fontSize: '11px', color: 'var(--text-secondary)', gridColumn: '1 / -1' }}>
-                            <input type="checkbox" checked={contactForm.is_decision_maker} onChange={e => setContactForm({ ...contactForm, is_decision_maker: e.target.checked })} />
-                            Key decision maker
-                          </label>
-                          {prospect.netsuite_id && (
-                            <div style={{ fontSize: '10px', color: 'var(--text-muted)', gridColumn: '1 / -1' }}>
-                              Also {editingContactCrmId ? 'updates' : 'creates'} the contact on the linked NetSuite customer.
-                            </div>
-                          )}
-                          <button onClick={() => addContact(prospect.id)} disabled={!contactForm.name.trim() || savingContact} style={{ gridColumn: '1 / -1', padding: '6px', borderRadius: '6px', fontSize: '11px', fontWeight: 700, background: '#22c55e', color: '#fff', border: 'none', cursor: 'pointer', opacity: contactForm.name.trim() && !savingContact ? 1 : 0.5 }}>
-                            {savingContact ? 'Saving…' : editingContactCrmId ? 'Save Changes' : 'Add Contact'}
-                          </button>
-                        </div>
-                      )}
-                      {pContacts.map(c => (
-                        <div key={c.id} style={{ padding: '8px 10px', borderRadius: '8px', background: 'var(--subtle-bg)', marginBottom: '4px' }}>
-                          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '2px' }}>
-                            <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
-                              <span style={{ fontSize: '13px', fontWeight: 700, color: 'var(--text-primary)' }}>{c.name}</span>
-                              {c.is_decision_maker && <span style={{ fontSize: '8px', fontWeight: 700, padding: '1px 5px', borderRadius: '3px', background: 'rgba(251,191,36,0.1)', color: '#fbbf24' }}>DM</span>}
-                            </div>
-                            <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
-                              {c.title && !['Customer Center', 'Customer'].includes(c.title) && (
-                                <span style={{ fontSize: '10px', color: 'var(--text-muted)', fontWeight: 600 }}>{c.title}</span>
-                              )}
-                              <button onClick={() => {
-                                setEditingContactCrmId(c.id);
-                                setContactForm({ name: c.name, title: c.title || '', email: c.email || '', phone: c.phone || '', is_decision_maker: c.is_decision_maker });
-                                setShowContactForm(prospect.id);
-                              }} title="Edit contact" style={{ background: 'none', border: 'none', cursor: 'pointer', color: 'var(--text-muted)', fontSize: '11px', padding: '1px 3px' }}>✎</button>
-                            </div>
-                          </div>
-                          {(c.email || c.phone) && (
-                            <div style={{ display: 'flex', gap: '12px', fontSize: '11px' }}>
-                              {c.email && <a href={`mailto:${c.email}`} style={{ color: '#60a5fa', textDecoration: 'none' }}>{c.email}</a>}
-                              {c.phone && <a href={`tel:${c.phone}`} style={{ color: '#22c55e', textDecoration: 'none', whiteSpace: 'nowrap' }}>{c.phone}</a>}
-                            </div>
-                          )}
-                        </div>
-                      ))}
-                    </div>
-
-                    {/* Opportunities */}
-                    <div style={{ marginBottom: '12px' }}>
-                      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '6px' }}>
-                        <div style={labelStyle}>Opportunities ({pOpps.length})</div>
-                        <button onClick={() => setShowOppForm(showOppForm === prospect.id ? null : prospect.id)} style={{ fontSize: '10px', fontWeight: 700, color: '#60a5fa', background: 'none', border: 'none', cursor: 'pointer' }}>
-                          {showOppForm === prospect.id ? 'Cancel' : '+ Add'}
-                        </button>
-                      </div>
-                      {showOppForm === prospect.id && (
-                        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '6px', marginBottom: '8px', padding: '8px', background: 'var(--subtle-bg)', borderRadius: '8px' }}>
-                          <input style={{ ...inputStyle, padding: '6px 8px', fontSize: '11px' }} placeholder="Opportunity title *" value={oppForm.title} onChange={e => setOppForm({ ...oppForm, title: e.target.value })} />
-                          <select style={{ ...inputStyle, padding: '6px 8px', fontSize: '11px' }} value={oppForm.type} onChange={e => setOppForm({ ...oppForm, type: e.target.value })}>
-                            {Object.entries(OPP_TYPES).map(([k, v]) => <option key={k} value={k}>{v}</option>)}
-                          </select>
-                          <input type="number" style={{ ...inputStyle, padding: '6px 8px', fontSize: '11px' }} placeholder="Est. value $" value={oppForm.value} onChange={e => setOppForm({ ...oppForm, value: e.target.value })} />
-                          <input type="date" style={{ ...inputStyle, padding: '6px 8px', fontSize: '11px' }} value={oppForm.expected_close_date} onChange={e => setOppForm({ ...oppForm, expected_close_date: e.target.value })} />
-                          <button onClick={() => addOpportunity(prospect.id)} disabled={!oppForm.title.trim()} style={{ gridColumn: '1 / -1', padding: '6px', borderRadius: '6px', fontSize: '11px', fontWeight: 700, background: '#22c55e', color: '#fff', border: 'none', cursor: 'pointer', opacity: oppForm.title.trim() ? 1 : 0.5 }}>Add Opportunity</button>
-                        </div>
-                      )}
-                      {pOpps.map(opp => (
-                        <div key={opp.id} style={{ padding: '8px', borderRadius: '8px', background: 'var(--subtle-bg)', marginBottom: '4px' }}>
-                          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '4px' }}>
-                            <div>
-                              <span style={{ fontSize: '12px', fontWeight: 700, color: 'var(--text-primary)' }}>{opp.title}</span>
-                              <span style={{ fontSize: '9px', fontWeight: 700, marginLeft: '6px', padding: '2px 6px', borderRadius: '4px', background: `${STAGE_COLORS[opp.stage]}18`, color: STAGE_COLORS[opp.stage] }}>{OPP_STAGES[opp.stage]}</span>
-                            </div>
-                            {opp.value && <span style={{ fontSize: '12px', fontWeight: 700, color: '#4ade80' }}>${opp.value.toLocaleString()}</span>}
-                          </div>
-                          <div style={{ display: 'flex', gap: '3px', fontSize: '9px' }}>
-                            {Object.entries(OPP_STAGES).map(([k, v]) => (
-                              <button key={k} onClick={() => updateOppStage(opp, k)} disabled={opp.stage === k} style={{
-                                padding: '2px 6px', borderRadius: '4px', fontWeight: 700,
-                                background: opp.stage === k ? `${STAGE_COLORS[k]}33` : 'transparent',
-                                border: `1px solid ${opp.stage === k ? STAGE_COLORS[k] : 'var(--border)'}`,
-                                color: opp.stage === k ? STAGE_COLORS[k] : 'var(--text-muted)', cursor: opp.stage === k ? 'default' : 'pointer',
-                              }}>{v}</button>
-                            ))}
-                          </div>
-                        </div>
-                      ))}
-                    </div>
-
-                    {/* Reminders */}
-                    {(reminders[prospect.id] || []).length > 0 && (
-                      <div style={{ marginBottom: '12px' }}>
-                        <div style={labelStyle}>Upcoming Reminders</div>
-                        <div style={{ display: 'flex', flexDirection: 'column', gap: '3px' }}>
-                          {(reminders[prospect.id] || []).map(r => {
-                            const isDue = new Date(r.due_at) <= new Date();
-                            return (
-                              <div key={r.id} style={{
-                                display: 'flex', justifyContent: 'space-between', alignItems: 'center',
-                                padding: '6px 8px', borderRadius: '6px',
-                                background: isDue ? 'rgba(239,68,68,0.06)' : 'var(--subtle-bg)',
-                                border: `1px solid ${isDue ? 'rgba(239,68,68,0.2)' : 'var(--border)'}`,
-                              }}>
-                                <div>
-                                  <div style={{ fontSize: '11px', fontWeight: 700, color: isDue ? '#ef4444' : 'var(--text-primary)' }}>{r.title}</div>
-                                  <div style={{ fontSize: '9px', color: 'var(--text-muted)' }}>{new Date(r.due_at).toLocaleDateString([], { weekday: 'short', month: 'short', day: 'numeric' })}</div>
-                                </div>
-                                <button onClick={async () => {
-                                  await supabase.from('prospect_reminders').update({ completed_at: new Date().toISOString() }).eq('id', r.id);
-                                  setReminders(prev => ({ ...prev, [prospect.id]: (prev[prospect.id] || []).filter(rem => rem.id !== r.id) }));
-                                }} style={{ padding: '3px 8px', borderRadius: '4px', fontSize: '9px', fontWeight: 700, background: 'rgba(34,197,94,0.1)', border: '1px solid rgba(34,197,94,0.25)', color: '#22c55e', cursor: 'pointer' }}>Done</button>
-                              </div>
-                            );
-                          })}
-                        </div>
-                      </div>
-                    )}
-
-                    {/* Activity Log */}
-                    <div style={{ marginBottom: '12px' }}>
-                      <div style={labelStyle}>Activity</div>
-                      <div style={{ display: 'flex', gap: '4px', marginBottom: '6px' }}>
-                        <select value={activityType[prospect.id] || 'note'} onChange={e => setActivityType(prev => ({ ...prev, [prospect.id]: e.target.value }))} style={{ ...inputStyle, width: '90px', padding: '6px 8px', fontSize: '11px' }}>
-                          <option value="note">Note</option>
-                          <option value="call">Call</option>
-                          <option value="email">Email</option>
-                          <option value="meeting">Meeting</option>
-                        </select>
-                        <input
-                          value={activityInput[prospect.id] || ''} onChange={e => setActivityInput(prev => ({ ...prev, [prospect.id]: e.target.value }))}
-                          onKeyDown={e => { if (e.key === 'Enter') submitActivity(prospect.id); }}
-                          placeholder="Log activity..."
-                          style={{ ...inputStyle, flex: 1, padding: '6px 8px', fontSize: '11px' }}
-                        />
-                        <button onClick={() => submitActivity(prospect.id)} disabled={!(activityInput[prospect.id] || '').trim()} style={{
-                          padding: '6px 12px', borderRadius: '6px', fontSize: '10px', fontWeight: 700,
-                          background: (activityInput[prospect.id] || '').trim() ? 'rgba(59,130,246,0.15)' : 'var(--subtle-bg)',
-                          border: `1px solid ${(activityInput[prospect.id] || '').trim() ? 'rgba(59,130,246,0.3)' : 'var(--border)'}`,
-                          color: (activityInput[prospect.id] || '').trim() ? '#60a5fa' : 'var(--text-muted)', cursor: 'pointer',
-                        }}>Post</button>
-                        {recording === prospect.id ? (
-                          <button onClick={() => stopVoiceNote(prospect.id)} style={{
-                            padding: '6px 10px', borderRadius: '6px', fontSize: '12px', fontWeight: 700,
-                            background: 'rgba(239,68,68,0.15)', border: '1px solid rgba(239,68,68,0.3)',
-                            color: '#ef4444', cursor: 'pointer', animation: 'pulse 1.5s infinite',
-                          }}>&#9632; Stop</button>
-                        ) : (
-                          <button onClick={() => startVoiceNote(prospect.id)} disabled={voiceProcessing} style={{
-                            padding: '6px 10px', borderRadius: '6px', fontSize: '12px',
-                            background: 'rgba(167,139,250,0.1)', border: '1px solid rgba(167,139,250,0.25)',
-                            color: '#a78bfa', cursor: 'pointer',
-                          }} title="Voice note">&#127908;</button>
-                        )}
-                      </div>
-                      {voiceProcessing && recording === null && (
-                        <div style={{ fontSize: '10px', color: '#a78bfa', fontWeight: 600, marginBottom: '4px' }}>AI is parsing your note and creating reminders...</div>
-                      )}
-                      {voiceResult && (
-                        <div style={{ padding: '6px 10px', borderRadius: '6px', marginBottom: '4px', background: 'rgba(34,197,94,0.06)', border: '1px solid rgba(34,197,94,0.2)', fontSize: '10px', color: '#22c55e', fontWeight: 600 }}>
-                          Saved: {voiceResult.summary.slice(0, 80)}{voiceResult.summary.length > 80 ? '...' : ''}{voiceResult.reminders > 0 ? ` · ${voiceResult.reminders} reminder${voiceResult.reminders !== 1 ? 's' : ''} created` : ''}
-                        </div>
-                      )}
-                      <div style={{ display: 'flex', flexDirection: 'column', gap: '3px', maxHeight: '200px', overflowY: 'auto' }}>
-                        {pActivities.map(a => (
-                          <div key={a.id} style={{ display: 'flex', gap: '6px', padding: '4px 6px', borderRadius: '6px', fontSize: '10px', color: 'var(--text-label)' }}>
-                            <span>{ACTIVITY_ICONS[a.type] || ''}</span>
-                            <span style={{ color: 'var(--text-muted)', flexShrink: 0 }}>{new Date(a.created_at).toLocaleDateString([], { month: 'short', day: 'numeric' })}</span>
-                            <span style={{ color: 'var(--text-body)', flex: 1 }}>{a.summary}</span>
-                            {a.creator_name && <span style={{ color: 'var(--text-muted)', flexShrink: 0 }}>— {a.creator_name}</span>}
-                          </div>
-                        ))}
-                        {pActivities.length === 0 && <div style={{ fontSize: '11px', color: 'var(--text-muted)', padding: '8px 0' }}>No activity yet</div>}
-                      </div>
-                    </div>
-
-                    {/* Info & Actions */}
-                    <div style={{ display: 'flex', gap: '6px', marginTop: '10px' }}>
-                      <button onClick={() => startEdit(prospect)} style={{
-                        flex: 1, padding: '8px', borderRadius: '8px', fontSize: '11px', fontWeight: 700,
-                        background: 'rgba(59,130,246,0.08)', border: '1px solid rgba(59,130,246,0.2)', color: '#60a5fa', cursor: 'pointer',
-                      }}>Edit</button>
-                      {prospect.netsuite_url && (
-                        <a href={prospect.netsuite_url} target="_blank" rel="noopener noreferrer" style={{
-                          flex: 1, padding: '8px', borderRadius: '8px', fontSize: '11px', fontWeight: 700, textAlign: 'center', textDecoration: 'none',
-                          background: 'rgba(167,139,250,0.08)', border: '1px solid rgba(167,139,250,0.2)', color: '#a78bfa',
-                        }}>View in NetSuite</a>
-                      )}
-                      <button onClick={() => deleteProspect(prospect.id)} style={{
-                        padding: '8px 14px', borderRadius: '8px', fontSize: '11px', fontWeight: 700,
-                        background: 'rgba(248,113,113,0.08)', border: '1px solid rgba(248,113,113,0.2)', color: '#f87171', cursor: 'pointer',
-                      }}>Delete</button>
-                    </div>
-                  </div>
-                )}
               </div>
             );
           })}
