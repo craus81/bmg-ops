@@ -10,6 +10,7 @@ import { theme } from '@/lib/theme';
 import CustomerDefaultsEditor from '@/components/CustomerDefaultsEditor';
 import MentionTextArea, { reportMentions } from '@/components/MentionTextArea';
 import { flashNote } from '@/lib/focus-note';
+import { openNetSuitePdf } from '@/lib/netsuite-pdf-client';
 
 interface Part {
   id: string;
@@ -198,6 +199,15 @@ export default function EstimatesPage() {
   const [partSearching, setPartSearching] = useState(false);
   const partSearchRef = useRef<HTMLInputElement>(null);
 
+  // Per-line NetSuite item matcher — lets a custom line (typed description +
+  // price, no item) get resolved to a real catalog item without deleting and
+  // re-adding it. NetSuite silently drops estimate lines with no item id, so
+  // this is required before push, not optional cleanup.
+  const [matchingLineKey, setMatchingLineKey] = useState<string | null>(null);
+  const [lineMatchQuery, setLineMatchQuery] = useState('');
+  const [lineMatchResults, setLineMatchResults] = useState<Part[]>([]);
+  const [viewingPdf, setViewingPdf] = useState(false);
+
   // Customer search
   const [custSearch, setCustSearch] = useState('');
   const [custResults, setCustResults] = useState<Customer[]>([]);
@@ -297,6 +307,43 @@ export default function EstimatesPage() {
   // eslint-disable-next-line react-hooks/exhaustive-deps -- intentional: load once on mount
   }, [partSearch]);
 
+  // ── Match a custom line to a real NetSuite item ──
+  const searchLineMatch = useCallback(async (q: string) => {
+    if (q.length < 2) { setLineMatchResults([]); return; }
+    const { data } = await supabase
+      .from('netsuite_parts')
+      .select('id, netsuite_id, item_number, display_name, description, sales_price, labor_hours, catalog, purchase_price, avg_install_cost')
+      .eq('is_active', true)
+      .or(`item_number.ilike.%${q}%,display_name.ilike.%${q}%,description.ilike.%${q}%`)
+      .limit(10);
+    setLineMatchResults((data as Part[]) || []);
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- intentional: load once on mount
+  }, []);
+
+  useEffect(() => {
+    if (!matchingLineKey) return;
+    const t = setTimeout(() => searchLineMatch(lineMatchQuery), 300);
+    return () => clearTimeout(t);
+  }, [lineMatchQuery, matchingLineKey, searchLineMatch]);
+
+  // Resolve a custom line to a picked catalog part — keeps whatever qty/price
+  // the rep already typed, fills in the real NetSuite item id + description.
+  const matchLineToPart = (key: string, part: Part) => {
+    setLines(prev => prev.map(l => l.key === key ? {
+      ...l,
+      part_id: part.id,
+      netsuite_item_id: part.netsuite_id,
+      item_number: part.item_number,
+      description: l.description || part.display_name || part.description,
+      catalog: part.catalog,
+      purchase_price: part.purchase_price,
+      avg_install_cost: part.avg_install_cost,
+    } : l));
+    setMatchingLineKey(null);
+    setLineMatchQuery('');
+    setLineMatchResults([]);
+  };
+
   // ── Add part as line item ──
   const addPartLine = (part: Part) => {
     const line: LineItem = {
@@ -342,6 +389,12 @@ export default function EstimatesPage() {
   const removeLine = (key: string) => {
     setLines(prev => prev.filter(l => l.key !== key));
   };
+
+  // Lines with no NetSuite item id would silently vanish from the pushed
+  // NetSuite Estimate (NetSuite estimate lines require a real item id — there
+  // is no free-text line type), so pushing is blocked until every line is
+  // matched to a catalog item.
+  const unmatchedLines = lines.filter(l => !l.netsuite_item_id);
 
   // ── Computed totals ──
   const subtotal = lines.reduce((s, l) => s + l.quantity * l.unit_price, 0);
@@ -446,6 +499,14 @@ export default function EstimatesPage() {
       await dialog.alert('Please add at least one line item');
       return;
     }
+    if (unmatchedLines.length > 0) {
+      await dialog.alert(
+        `${unmatchedLines.length} line item${unmatchedLines.length !== 1 ? 's are' : ' is'} not matched to a NetSuite item: `
+        + unmatchedLines.map(l => l.item_number || l.description || 'untitled line').join(', ')
+        + '. NetSuite estimate lines require a real item — pick one for each line (use "Match NetSuite item" below the line) before pushing.'
+      );
+      return;
+    }
 
     const confirmMsg = isSync
       ? 'Sync changes to NetSuite? This will update the existing Estimate in NetSuite.'
@@ -469,9 +530,15 @@ export default function EstimatesPage() {
       });
       const data = await res.json();
       if (data.success) {
-        const msg = data.updated
+        let msg = data.updated
           ? 'Estimate synced to NetSuite!'
           : `Estimate pushed to NetSuite!\nEstimate #: ${data.netsuite_estimate_number || data.netsuite_estimate_id}`;
+        if (data.customLines?.length) {
+          msg += `\n\nPushed via FS-CUSTOM placeholder (no catalog match): ${data.customLines.join(', ')}`;
+        }
+        if (data.unmappedItems?.length) {
+          msg += `\n\n⚠ Could NOT push (FS-CUSTOM item missing in NetSuite): ${data.unmappedItems.join(', ')}`;
+        }
         await dialog.alert(msg);
         await loadEstimates();
         resetBuilder();
@@ -484,6 +551,16 @@ export default function EstimatesPage() {
     }
     setPushing(false);
     setSyncing(false);
+  };
+
+  // ── Open the NetSuite estimate PDF in a new tab ──
+  const viewEstimatePdf = async () => {
+    const nsId = estimates.find(e => e.id === editingId)?.netsuite_estimate_id;
+    if (!nsId) return;
+    setViewingPdf(true);
+    const { ok, error } = await openNetSuitePdf('estimate', nsId);
+    if (!ok) await dialog.alert(`Could not open the NetSuite PDF: ${error}`);
+    setViewingPdf(false);
   };
 
   // ── Convert Estimate to Sales Order in NetSuite ──
@@ -889,6 +966,22 @@ export default function EstimatesPage() {
                       </div>
                     </div>
                     <div style={{ display: 'flex', gap: '4px', alignItems: 'center', flexShrink: 0 }}>
+                      {est.netsuite_estimate_id && (
+                        <button
+                          onClick={async (e) => {
+                            e.stopPropagation();
+                            const { ok, error } = await openNetSuitePdf('estimate', est.netsuite_estimate_id as string);
+                            if (!ok) await dialog.alert(`Could not open the NetSuite PDF: ${error}`);
+                          }}
+                          style={{
+                            padding: '4px 8px', borderRadius: '6px', fontSize: '10px', fontWeight: 700,
+                            background: 'rgba(167,139,250,0.08)', border: '1px solid rgba(167,139,250,0.2)',
+                            color: '#a78bfa', cursor: 'pointer',
+                          }}
+                        >
+                          PDF
+                        </button>
+                      )}
                       <div style={{
                         padding: '4px 10px', borderRadius: '6px', fontSize: '10px', fontWeight: 700,
                         background: `${statusColor}18`, border: `1px solid ${statusColor}44`,
@@ -1186,86 +1279,159 @@ export default function EstimatesPage() {
               <div></div>
             </div>
 
-            {sortedLines.map(line => (
-              <div
-                key={line.key}
-                style={{
-                  display: 'grid', gridTemplateColumns: '1fr 2fr 60px 80px 80px 60px 30px',
-                  gap: '4px', alignItems: 'center',
-                  padding: '6px 0', borderBottom: '1px solid var(--border)',
-                }}
-              >
-                {line.is_custom ? (
+            {sortedLines.map(line => {
+              const unmatched = !line.netsuite_item_id;
+              return (
+              <div key={line.key}>
+                <div
+                  style={{
+                    display: 'grid', gridTemplateColumns: '1fr 2fr 60px 80px 80px 60px 30px',
+                    gap: '4px', alignItems: 'center',
+                    padding: '6px 0', borderBottom: unmatched ? 'none' : '1px solid var(--border)',
+                  }}
+                >
+                  {line.is_custom ? (
+                    <input
+                      style={{ ...inputStyle, padding: '4px 6px', fontSize: '11px' }}
+                      value={line.item_number}
+                      onChange={e => updateLine(line.key, 'item_number', e.target.value)}
+                      placeholder="Item #"
+                    />
+                  ) : (
+                    <div style={{ fontSize: '11px', fontWeight: 700, color: 'var(--text-body)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                      {line.item_number}
+                    </div>
+                  )}
+
+                  {line.is_custom ? (
+                    <input
+                      style={{ ...inputStyle, padding: '4px 6px', fontSize: '11px' }}
+                      value={line.description}
+                      onChange={e => updateLine(line.key, 'description', e.target.value)}
+                      placeholder="Description"
+                    />
+                  ) : (
+                    <div style={{ fontSize: '11px', color: 'var(--text-body)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{line.description}</div>
+                  )}
+
                   <input
-                    style={{ ...inputStyle, padding: '4px 6px', fontSize: '11px' }}
-                    value={line.item_number}
-                    onChange={e => updateLine(line.key, 'item_number', e.target.value)}
-                    placeholder="Item #"
+                    type="number"
+                    style={{ ...inputStyle, padding: '4px 6px', fontSize: '11px', textAlign: 'center' }}
+                    value={line.quantity}
+                    onChange={e => updateLine(line.key, 'quantity', parseFloat(e.target.value) || 0)}
+
+                    min={0}
                   />
-                ) : (
-                  <div style={{ fontSize: '11px', fontWeight: 700, color: 'var(--text-body)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-                    {line.item_number}
-                    {line.is_custom && <span style={{ color: '#fbbf24', fontSize: '9px', marginLeft: '4px' }}>CUSTOM</span>}
+
+                  <input
+                    type="number"
+                    style={{ ...inputStyle, padding: '4px 6px', fontSize: '11px', textAlign: 'right' }}
+                    value={line.unit_price}
+                    onChange={e => updateLine(line.key, 'unit_price', parseFloat(e.target.value) || 0)}
+
+                    step={0.01}
+                  />
+
+                  <div style={{ fontSize: '11px', fontWeight: 700, color: 'var(--text-body)', textAlign: 'right' }}>
+                    {fmt(line.quantity * line.unit_price)}
+                    {(() => {
+                      const pct = lineMarginPct(line);
+                      if (pct == null) return null;
+                      return (
+                        <div title={`True cost ${fmt(lineTrueCost(line))}/ea (part ${fmt(line.purchase_price ?? 0)} + install ${fmt(line.avg_install_cost ?? 0)})`}
+                          style={{ fontSize: '9px', fontWeight: 700, color: marginColor(pct) }}>
+                          {pct.toFixed(0)}% m
+                        </div>
+                      );
+                    })()}
+                  </div>
+
+                  <div style={{ fontSize: '10px', color: line.labor_hours > 0 ? '#fbbf24' : 'var(--text-label)', textAlign: 'center' }}>
+                    {line.labor_hours > 0 ? `${(line.labor_hours * line.quantity).toFixed(1)}h` : '—'}
+                  </div>
+
+                  {(
+                    <button
+                      onClick={() => removeLine(line.key)}
+                      style={{ background: 'transparent', border: 'none', color: '#f87171', fontSize: '14px', cursor: 'pointer', padding: '2px' }}
+                    >
+                      ×
+                    </button>
+                  )}
+                </div>
+
+                {/* NetSuite item id required — a line without one silently
+                    drops off the pushed Estimate. Force a catalog match here
+                    instead of letting it disappear invisibly at push time. */}
+                {unmatched && (
+                  <div style={{
+                    padding: '6px 8px', marginBottom: '4px', borderRadius: '6px',
+                    background: 'rgba(251,191,36,0.08)', border: '1px solid rgba(251,191,36,0.25)',
+                  }}>
+                    <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '8px' }}>
+                      <span style={{ fontSize: '10px', fontWeight: 700, color: '#fbbf24' }}>
+                        ⚠ No NetSuite item matched — this line won&apos;t reach the pushed Estimate until matched.
+                      </span>
+                      <button
+                        onClick={() => { setMatchingLineKey(matchingLineKey === line.key ? null : line.key); setLineMatchQuery(''); setLineMatchResults([]); }}
+                        style={{
+                          padding: '3px 8px', borderRadius: '5px', fontSize: '10px', fontWeight: 700,
+                          background: 'rgba(251,191,36,0.15)', border: '1px solid rgba(251,191,36,0.35)',
+                          color: '#fbbf24', cursor: 'pointer', whiteSpace: 'nowrap', flexShrink: 0,
+                        }}
+                      >
+                        {matchingLineKey === line.key ? 'Cancel' : 'Match NetSuite item'}
+                      </button>
+                    </div>
+
+                    {matchingLineKey === line.key && (
+                      <div style={{ position: 'relative', marginTop: '6px' }}>
+                        <input
+                          autoFocus
+                          placeholder="Search parts catalog…"
+                          value={lineMatchQuery}
+                          onChange={e => setLineMatchQuery(e.target.value)}
+                          style={{ ...inputStyle, background: 'var(--card)' }}
+                        />
+                        {lineMatchResults.length > 0 && (
+                          <div style={{
+                            position: 'relative', zIndex: 50, marginTop: '2px',
+                            background: 'var(--card)', border: '1px solid var(--border)', borderRadius: '8px',
+                            maxHeight: '220px', overflowY: 'auto',
+                          }}>
+                            {lineMatchResults.map(p => (
+                              <button
+                                key={p.id}
+                                onClick={() => matchLineToPart(line.key, p)}
+                                style={{
+                                  width: '100%', textAlign: 'left', padding: '8px 10px', border: 'none',
+                                  background: 'transparent', color: 'var(--text-body)', fontSize: '12px',
+                                  cursor: 'pointer', borderBottom: '1px solid var(--border)',
+                                }}
+                              >
+                                <div style={{ display: 'flex', justifyContent: 'space-between' }}>
+                                  <div>
+                                    <span style={{ fontWeight: 700 }}>{p.item_number}</span>
+                                    <span style={{ color: 'var(--text-label)', marginLeft: '8px' }}>{p.display_name || p.description}</span>
+                                  </div>
+                                  <span style={{ color: '#22c55e', fontWeight: 700, flexShrink: 0 }}>{fmt(p.sales_price)}</span>
+                                </div>
+                              </button>
+                            ))}
+                          </div>
+                        )}
+                        {lineMatchQuery.length >= 2 && lineMatchResults.length === 0 && (
+                          <div style={{ fontSize: '10px', color: 'var(--text-muted)', marginTop: '4px' }}>
+                            No catalog items match. Ask an admin to add it via Parts Sync.
+                          </div>
+                        )}
+                      </div>
+                    )}
                   </div>
                 )}
-
-                {line.is_custom ? (
-                  <input
-                    style={{ ...inputStyle, padding: '4px 6px', fontSize: '11px' }}
-                    value={line.description}
-                    onChange={e => updateLine(line.key, 'description', e.target.value)}
-                    placeholder="Description"
-                  />
-                ) : (
-                  <div style={{ fontSize: '11px', color: 'var(--text-body)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{line.description}</div>
-                )}
-
-                <input
-                  type="number"
-                  style={{ ...inputStyle, padding: '4px 6px', fontSize: '11px', textAlign: 'center' }}
-                  value={line.quantity}
-                  onChange={e => updateLine(line.key, 'quantity', parseFloat(e.target.value) || 0)}
-      
-                  min={0}
-                />
-
-                <input
-                  type="number"
-                  style={{ ...inputStyle, padding: '4px 6px', fontSize: '11px', textAlign: 'right' }}
-                  value={line.unit_price}
-                  onChange={e => updateLine(line.key, 'unit_price', parseFloat(e.target.value) || 0)}
-      
-                  step={0.01}
-                />
-
-                <div style={{ fontSize: '11px', fontWeight: 700, color: 'var(--text-body)', textAlign: 'right' }}>
-                  {fmt(line.quantity * line.unit_price)}
-                  {(() => {
-                    const pct = lineMarginPct(line);
-                    if (pct == null) return null;
-                    return (
-                      <div title={`True cost ${fmt(lineTrueCost(line))}/ea (part ${fmt(line.purchase_price ?? 0)} + install ${fmt(line.avg_install_cost ?? 0)})`}
-                        style={{ fontSize: '9px', fontWeight: 700, color: marginColor(pct) }}>
-                        {pct.toFixed(0)}% m
-                      </div>
-                    );
-                  })()}
-                </div>
-
-                <div style={{ fontSize: '10px', color: line.labor_hours > 0 ? '#fbbf24' : 'var(--text-label)', textAlign: 'center' }}>
-                  {line.labor_hours > 0 ? `${(line.labor_hours * line.quantity).toFixed(1)}h` : '—'}
-                </div>
-
-                {(
-                  <button
-                    onClick={() => removeLine(line.key)}
-                    style={{ background: 'transparent', border: 'none', color: '#f87171', fontSize: '14px', cursor: 'pointer', padding: '2px' }}
-                  >
-                    ×
-                  </button>
-                )}
               </div>
-            ))}
+              );
+            })}
           </div>
         )}
       </div>
@@ -1566,8 +1732,21 @@ export default function EstimatesPage() {
                 NS Estimate #: {estimates.find(e => e.id === editingId)?.netsuite_estimate_number || 'N/A'}
               </div>
             </div>
-            <div style={{ fontSize: '10px', color: 'var(--text-label)' }}>
-              Edit below &amp; sync changes
+            <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+              <div style={{ fontSize: '10px', color: 'var(--text-label)' }}>
+                Edit below &amp; sync changes
+              </div>
+              <button
+                onClick={viewEstimatePdf}
+                disabled={viewingPdf}
+                style={{
+                  padding: '6px 10px', borderRadius: '6px', fontSize: '11px', fontWeight: 700,
+                  background: 'rgba(167,139,250,0.1)', border: '1px solid rgba(167,139,250,0.25)',
+                  color: '#a78bfa', cursor: viewingPdf ? 'wait' : 'pointer', whiteSpace: 'nowrap',
+                }}
+              >
+                {viewingPdf ? 'Opening…' : 'View PDF'}
+              </button>
             </div>
           </div>
         )}
@@ -1599,19 +1778,28 @@ export default function EstimatesPage() {
 
         {/* Push or Sync to NetSuite */}
         {editingId && customerNsId && lines.length > 0 && (
-          <button
-            onClick={() => pushToNetSuite(!!isPushed)}
-            disabled={pushing || syncing}
-            style={{
-              width: '100%', padding: '12px', borderRadius: '10px',
-              background: (pushing || syncing) ? 'var(--subtle-bg)' : 'rgba(167,139,250,0.15)',
-              border: '1px solid rgba(167,139,250,0.3)',
-              color: '#a78bfa', fontWeight: 800, fontSize: '13px', cursor: 'pointer',
-              opacity: (pushing || syncing) ? 0.5 : 1,
-            }}
-          >
-            {pushing ? 'Pushing to NetSuite...' : syncing ? 'Syncing to NetSuite...' : isPushed ? 'Sync Changes to NetSuite' : 'Push to NetSuite as Estimate'}
-          </button>
+          <>
+            <button
+              onClick={() => pushToNetSuite(!!isPushed)}
+              disabled={pushing || syncing || unmatchedLines.length > 0}
+              title={unmatchedLines.length > 0 ? 'Match every line to a NetSuite item first' : undefined}
+              style={{
+                width: '100%', padding: '12px', borderRadius: '10px',
+                background: (pushing || syncing) ? 'var(--subtle-bg)' : 'rgba(167,139,250,0.15)',
+                border: '1px solid rgba(167,139,250,0.3)',
+                color: '#a78bfa', fontWeight: 800, fontSize: '13px',
+                cursor: unmatchedLines.length > 0 ? 'not-allowed' : 'pointer',
+                opacity: (pushing || syncing || unmatchedLines.length > 0) ? 0.5 : 1,
+              }}
+            >
+              {pushing ? 'Pushing to NetSuite...' : syncing ? 'Syncing to NetSuite...' : isPushed ? 'Sync Changes to NetSuite' : 'Push to NetSuite as Estimate'}
+            </button>
+            {unmatchedLines.length > 0 && (
+              <div style={{ fontSize: '10px', color: '#fbbf24', fontWeight: 700, textAlign: 'center', marginTop: '-2px' }}>
+                {unmatchedLines.length} line{unmatchedLines.length !== 1 ? 's' : ''} need a NetSuite item match before pushing
+              </div>
+            )}
+          </>
         )}
 
         {/* Send for Customer Approval (magic link) */}
