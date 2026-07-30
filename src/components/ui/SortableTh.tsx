@@ -37,6 +37,10 @@ export function useTableSort<T>(
       : { key, dir: defaultDir }));
   }, []);
 
+  // Programmatic sort (deep links like ?sort=ytd_spend) — same state the
+  // header clicks drive, so the ▲/▼ indicators stay in agreement.
+  const set = useCallback((next: SortState | null) => setSort(next), []);
+
   const sorted = useMemo(() => {
     const get = sort ? columns[sort.key] : null;
     if (!sort || !get) return rows;
@@ -53,7 +57,7 @@ export function useTableSort<T>(
   // eslint-disable-next-line react-hooks/exhaustive-deps -- columns is a stable per-table literal
   }, [rows, sort]);
 
-  return { sorted, sort, toggle };
+  return { sorted, sort, toggle, set };
 }
 
 export function SortableTh({ label, sortKey, sort, onToggle, defaultDir = 'asc', style, align }: {

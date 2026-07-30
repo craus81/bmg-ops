@@ -258,6 +258,16 @@ button {
   -webkit-overflow-scrolling: touch;
 }
 
+/* A table row that navigates on click (list-index tables: Customers, POs,
+   Graphics). Inline styles can't express :hover, so the hover highlight
+   lives here. */
+.table-row-link {
+  cursor: pointer;
+}
+.table-row-link:hover {
+  background: var(--card-hover);
+}
+
 /* Honor the user's "reduce motion" setting — disables non-essential animation
    for users with vestibular disorders or who simply prefer less motion. */
 @media (prefers-reduced-motion: reduce) {
