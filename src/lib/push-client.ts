@@ -24,6 +24,21 @@ function urlBase64ToUint8Array(base64String: string): Uint8Array {
   return outputArray;
 }
 
+/**
+ * `navigator.serviceWorker.ready` never resolves if registration failed or
+ * never activates (bad scope, insecure origin, a stuck previous worker,
+ * etc.) — race it against a timeout so callers always get a result instead
+ * of hanging indefinitely.
+ */
+function waitForServiceWorker(timeoutMs = 8000): Promise<ServiceWorkerRegistration> {
+  return Promise.race([
+    navigator.serviceWorker.ready,
+    new Promise<ServiceWorkerRegistration>((_, reject) =>
+      setTimeout(() => reject(new Error('Service worker did not activate in time. Try reloading the page.')), timeoutMs)
+    ),
+  ]);
+}
+
 /** Check if push notifications are supported in this browser */
 export function isPushSupported(): boolean {
   return (
@@ -44,7 +59,7 @@ export function getPushPermission(): NotificationPermission | 'unsupported' {
 export async function getExistingSubscription(): Promise<PushSubscription | null> {
   if (!isPushSupported()) return null;
   try {
-    const registration = await navigator.serviceWorker.ready;
+    const registration = await waitForServiceWorker();
     return await registration.pushManager.getSubscription();
   } catch {
     return null;
@@ -72,7 +87,7 @@ export async function subscribeToPush(): Promise<{ ok: boolean; error?: string }
     }
 
     // Wait for service worker to be ready
-    const registration = await navigator.serviceWorker.ready;
+    const registration = await waitForServiceWorker();
 
     // Subscribe to push
     const subscription = await registration.pushManager.subscribe({
