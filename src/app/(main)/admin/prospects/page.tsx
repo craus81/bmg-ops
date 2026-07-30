@@ -21,6 +21,8 @@ import { useDialog } from '@/components/DialogProvider';
 import { DropZone } from '@/components/DropZone';
 import { downloadXlsx } from '@/lib/xlsx-export';
 import { fetchAllRows } from '@/lib/fetch-all';
+import { SortableTh, useTableSort, type SortState } from '@/components/ui/SortableTh';
+import FilterButton, { FilterLabel } from '@/components/ui/FilterButton';
 
 interface Prospect {
   id: string;
@@ -97,11 +99,10 @@ export default function ProspectsPage() {
   const [crmTab, setCrmTab] = useState<'prospects' | 'contacts'>('prospects');
   const [tagFilter, setTagFilter] = useState<string>('');
 
-  // Sort + extended filters (Ashley's request: spend, recent activity,
-  // owner, open quote, spend tier).
-  type SortBy = 'company' | 'total_spend' | 'ytd_spend' | 'last_order';
+  // Extended filters (Ashley's request: spend, recent activity, owner, open
+  // quote, spend tier) — they live in the Filter popover; sorting is the
+  // table headers' job.
   type SpendTier = 'all' | '10k' | '50k' | '100k';
-  const [sortBy, setSortBy] = useState<SortBy>('company');
   const [ownerFilter, setOwnerFilter] = useState<string>('all'); // 'all' or user_id
   const [spendTierFilter, setSpendTierFilter] = useState<SpendTier>('all');
   const [openQuoteFilter, setOpenQuoteFilter] = useState<boolean>(false);
@@ -177,8 +178,6 @@ export default function ProspectsPage() {
   // customer links that only know a company name.
   useEffect(() => {
     if (loading) return;
-    const sort = searchParams.get('sort');
-    if (sort && ['company', 'total_spend', 'ytd_spend', 'last_order'].includes(sort)) setSortBy(sort as SortBy);
     const stage = searchParams.get('stage');
     if (stage && (stage === 'open' || stage in OPP_STAGES)) setStageFilter(stage);
     const q = searchParams.get('q');
@@ -369,26 +368,34 @@ export default function ProspectsPage() {
     return true;
   });
 
-  // Sort. Numeric sorts put 0/missing at the bottom by descending revenue;
-  // company name is the default A-Z behavior.
-  const sorted = [...filtered].sort((a, b) => {
-    const ma = customerMetrics[a.id];
-    const mb = customerMetrics[b.id];
-    switch (sortBy) {
-      case 'total_spend':
-        return (mb?.total_spend || 0) - (ma?.total_spend || 0);
-      case 'ytd_spend':
-        return (mb?.ytd_spend || 0) - (ma?.ytd_spend || 0);
-      case 'last_order': {
-        const ad = ma?.last_order_date ? new Date(ma.last_order_date).getTime() : 0;
-        const bd = mb?.last_order_date ? new Date(mb.last_order_date).getTime() : 0;
-        return bd - ad;
-      }
-      case 'company':
-      default:
-        return a.company_name.localeCompare(b.company_name);
-    }
-  });
+  // Sort — click-to-sort table headers (SortableTh). Missing metrics sort
+  // last in either direction, so prospects without NetSuite history don't
+  // float above real revenue.
+  const STATUS_RANK: Record<string, number> = { active: 0, nurturing: 1, converted: 2 };
+  const { sorted, sort, toggle, set: setSort } = useTableSort(filtered, {
+    company: p => p.company_name,
+    status: p => STATUS_RANK[p.status] ?? 3,
+    contact: p => p.contact_name?.toLowerCase() || null,
+    ytd: p => customerMetrics[p.id]?.ytd_spend || null,
+    total: p => customerMetrics[p.id]?.total_spend || null,
+    last: p => customerMetrics[p.id]?.last_order_date || null,
+    added: p => p.created_at,
+  }, { key: 'company', dir: 'asc' });
+
+  // Dashboard deep links (?sort=ytd_spend for Top customers, etc.) map onto
+  // the header-sort state so the ▲/▼ indicators agree with the link.
+  useEffect(() => {
+    if (loading) return;
+    const map: Record<string, SortState> = {
+      company: { key: 'company', dir: 'asc' },
+      total_spend: { key: 'total', dir: 'desc' },
+      ytd_spend: { key: 'ytd', dir: 'desc' },
+      last_order: { key: 'last', dir: 'desc' },
+    };
+    const sortParam = searchParams.get('sort');
+    if (sortParam && map[sortParam]) setSort(map[sortParam]);
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- intentional: apply once after load
+  }, [loading, searchParams]);
 
   const exportToExcel = async () => {
     setExporting(true);
@@ -572,7 +579,7 @@ export default function ProspectsPage() {
         placeholder="Search prospects & customers..."
         style={{ ...inputStyle, marginBottom: '8px' }}
       />
-      <div style={{ display: 'flex', gap: '4px', marginBottom: '6px', flexWrap: 'wrap' }}>
+      <div style={{ display: 'flex', gap: '4px', marginBottom: '6px', flexWrap: 'wrap', alignItems: 'center' }}>
         {['all', 'active', 'nurturing', 'converted'].map(s => (
           <button key={s} onClick={() => setStatusFilter(s)} style={{
             padding: '5px 10px', borderRadius: '6px', fontSize: '10px', fontWeight: 700,
@@ -581,12 +588,6 @@ export default function ProspectsPage() {
             color: statusFilter === s ? 'var(--tab-active-color)' : 'var(--text-muted)', cursor: 'pointer',
           }}>{s === 'all' ? 'All' : STATUS_LABELS[s]}</button>
         ))}
-        {allTags.length > 0 && (
-          <select value={tagFilter} onChange={e => setTagFilter(e.target.value)} style={{ padding: '5px 8px', borderRadius: '6px', fontSize: '10px', fontWeight: 700, background: 'var(--input-bg)', border: '1px solid var(--border)', color: 'var(--text-primary)' }}>
-            <option value="">All Tags</option>
-            {allTags.map(t => <option key={t} value={t}>{t}</option>)}
-          </select>
-        )}
         {stageFilter && (
           <button onClick={() => setStageFilter('')} title="Clear the pipeline-stage filter" style={{
             padding: '5px 10px', borderRadius: '6px', fontSize: '10px', fontWeight: 700,
@@ -595,42 +596,49 @@ export default function ProspectsPage() {
             Pipeline: {stageFilter === 'open' ? 'Open deals' : OPP_STAGES[stageFilter] || stageFilter}{!oppStagesByProspect ? ' …' : ''} ✕
           </button>
         )}
-      </div>
-
-      {/* Extended filters + sort */}
-      <div style={{ display: 'flex', gap: '6px', marginBottom: '6px', flexWrap: 'wrap', alignItems: 'center' }}>
-        <span style={{ fontSize: '9px', fontWeight: 700, color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.5px' }}>Sort:</span>
-        <select value={sortBy} onChange={e => setSortBy(e.target.value as SortBy)} style={{ padding: '5px 8px', borderRadius: '6px', fontSize: '10px', fontWeight: 700, background: 'var(--input-bg)', border: '1px solid var(--border)', color: 'var(--text-primary)' }}>
-          <option value="company">Company (A-Z)</option>
-          <option value="total_spend">Total Spend ↓</option>
-          <option value="ytd_spend">YTD Spend ↓</option>
-          <option value="last_order">Last Order ↓</option>
-        </select>
-        <span style={{ fontSize: '9px', fontWeight: 700, color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.5px', marginLeft: '4px' }}>Owner:</span>
-        <select value={ownerFilter} onChange={e => setOwnerFilter(e.target.value)} style={{ padding: '5px 8px', borderRadius: '6px', fontSize: '10px', fontWeight: 700, background: 'var(--input-bg)', border: '1px solid var(--border)', color: 'var(--text-primary)' }}>
-          <option value="all">All Owners</option>
-          {ownerOptions.map(o => <option key={o.id} value={o.id}>{o.name}</option>)}
-        </select>
-        <span style={{ fontSize: '9px', fontWeight: 700, color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.5px', marginLeft: '4px' }}>YTD spend:</span>
-        {([
-          { key: 'all', label: 'Any' },
-          { key: '10k', label: '≥ $10k' },
-          { key: '50k', label: '≥ $50k' },
-          { key: '100k', label: '≥ $100k' },
-        ] as { key: SpendTier; label: string }[]).map(t => (
-          <button key={t.key} onClick={() => setSpendTierFilter(t.key)} style={{
+        <div style={{ flex: 1 }} />
+        <FilterButton
+          activeCount={(ownerFilter !== 'all' ? 1 : 0) + (tagFilter ? 1 : 0) + (spendTierFilter !== 'all' ? 1 : 0) + (openQuoteFilter ? 1 : 0)}
+          onClear={() => { setOwnerFilter('all'); setTagFilter(''); setSpendTierFilter('all'); setOpenQuoteFilter(false); }}
+        >
+          <FilterLabel>Owner</FilterLabel>
+          <select value={ownerFilter} onChange={e => setOwnerFilter(e.target.value)} style={{ width: '100%', padding: '6px 8px', borderRadius: '7px', fontSize: '12px', fontWeight: 600, background: 'var(--input-bg)', border: '1px solid var(--border)', color: 'var(--text-primary)' }}>
+            <option value="all">All Owners</option>
+            {ownerOptions.map(o => <option key={o.id} value={o.id}>{o.name}</option>)}
+          </select>
+          {allTags.length > 0 && (
+            <>
+              <FilterLabel>Tag</FilterLabel>
+              <select value={tagFilter} onChange={e => setTagFilter(e.target.value)} style={{ width: '100%', padding: '6px 8px', borderRadius: '7px', fontSize: '12px', fontWeight: 600, background: 'var(--input-bg)', border: '1px solid var(--border)', color: 'var(--text-primary)' }}>
+                <option value="">All Tags</option>
+                {allTags.map(t => <option key={t} value={t}>{t}</option>)}
+              </select>
+            </>
+          )}
+          <FilterLabel>YTD spend</FilterLabel>
+          <div style={{ display: 'flex', gap: '4px', flexWrap: 'wrap' }}>
+            {([
+              { key: 'all', label: 'Any' },
+              { key: '10k', label: '≥ $10k' },
+              { key: '50k', label: '≥ $50k' },
+              { key: '100k', label: '≥ $100k' },
+            ] as { key: SpendTier; label: string }[]).map(t => (
+              <button key={t.key} onClick={() => setSpendTierFilter(t.key)} style={{
+                padding: '4px 9px', borderRadius: '999px', fontSize: '10px', fontWeight: 700, cursor: 'pointer',
+                background: spendTierFilter === t.key ? 'rgba(34,197,94,0.12)' : 'var(--subtle-bg)',
+                border: `1px solid ${spendTierFilter === t.key ? 'rgba(34,197,94,0.4)' : 'var(--border)'}`,
+                color: spendTierFilter === t.key ? '#22c55e' : 'var(--text-muted)',
+              }}>{t.label}</button>
+            ))}
+          </div>
+          <FilterLabel>Other</FilterLabel>
+          <button onClick={() => setOpenQuoteFilter(v => !v)} style={{
             padding: '4px 9px', borderRadius: '999px', fontSize: '10px', fontWeight: 700, cursor: 'pointer',
-            background: spendTierFilter === t.key ? 'rgba(34,197,94,0.12)' : 'var(--subtle-bg)',
-            border: `1px solid ${spendTierFilter === t.key ? 'rgba(34,197,94,0.4)' : 'var(--border)'}`,
-            color: spendTierFilter === t.key ? '#22c55e' : 'var(--text-muted)',
-          }}>{t.label}</button>
-        ))}
-        <button onClick={() => setOpenQuoteFilter(v => !v)} style={{
-          padding: '4px 9px', borderRadius: '999px', fontSize: '10px', fontWeight: 700, cursor: 'pointer', marginLeft: '4px',
-          background: openQuoteFilter ? 'rgba(251,191,36,0.12)' : 'var(--subtle-bg)',
-          border: `1px solid ${openQuoteFilter ? 'rgba(251,191,36,0.4)' : 'var(--border)'}`,
-          color: openQuoteFilter ? '#f59e0b' : 'var(--text-muted)',
-        }}>{openQuoteFilter ? '✓ Open Quote' : 'Open Quote'}</button>
+            background: openQuoteFilter ? 'rgba(251,191,36,0.12)' : 'var(--subtle-bg)',
+            border: `1px solid ${openQuoteFilter ? 'rgba(251,191,36,0.4)' : 'var(--border)'}`,
+            color: openQuoteFilter ? '#f59e0b' : 'var(--text-muted)',
+          }}>{openQuoteFilter ? '✓ Open Quote' : 'Open Quote'}</button>
+        </FilterButton>
       </div>
 
       {/* Result count + export */}
@@ -649,45 +657,83 @@ export default function ProspectsPage() {
         >{exporting ? 'Exporting…' : 'Export to Excel'}</button>
       </div>
 
-      {/* Prospect list — every row opens the customer record */}
+      {/* Prospect table — every row opens the customer record */}
       {sorted.length === 0 ? (
         <div style={{ textAlign: 'center', padding: '40px', color: 'var(--text-muted)' }}>
           <div style={{ fontSize: '13px', fontWeight: 700 }}>{search ? 'No matching prospects' : 'No prospects match the current filters'}</div>
         </div>
-      ) : (
-        <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
-          {sorted.map(prospect => {
-            const statusColor = STATUS_COLORS[prospect.status] || '#6b7280';
-            return (
-              <div key={prospect.id} id={`prospect-${prospect.id}`}
-                onClick={() => router.push(`/admin/prospects/${prospect.id}`)}
-                style={{ background: 'var(--card)', border: '1px solid var(--border)', borderRadius: '14px', padding: '12px 14px', cursor: 'pointer' }}>
-                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
-                  <div style={{ flex: 1, minWidth: 0 }}>
-                    <div style={{ display: 'flex', alignItems: 'center', gap: '6px', flexWrap: 'wrap' }}>
-                      <span style={{ fontWeight: 800, fontSize: '14px', color: 'var(--text-primary)' }}>{prospect.company_name}</span>
-                      <span style={{ fontSize: '9px', fontWeight: 700, padding: '2px 6px', borderRadius: '4px', background: `${statusColor}18`, color: statusColor }}>{STATUS_LABELS[prospect.status]}</span>
-                      {prospect.is_hot && <span style={{ fontSize: '8px', fontWeight: 700, padding: '1px 5px', borderRadius: '3px', background: 'rgba(239,68,68,0.1)', color: '#ef4444' }}>HOT</span>}
-                      {prospect.email_campaign && <span style={{ fontSize: '8px', fontWeight: 700, padding: '1px 5px', borderRadius: '3px', background: 'rgba(59,130,246,0.1)', color: '#60a5fa' }}>EMAIL</span>}
-                      {prospect.multi_location && <span style={{ fontSize: '8px', fontWeight: 700, padding: '1px 5px', borderRadius: '3px', background: 'rgba(251,191,36,0.1)', color: '#f59e0b' }}>MULTI-LOC</span>}
-                      {prospect.netsuite_id && <span style={{ fontSize: '8px', fontWeight: 700, padding: '1px 5px', borderRadius: '3px', background: 'rgba(167,139,250,0.1)', color: '#a78bfa' }}>NS</span>}
-                    </div>
-                    {prospect.contact_name && <div style={{ fontSize: '11px', color: 'var(--text-secondary)', marginTop: '2px' }}>{prospect.contact_name}{prospect.email ? ` · ${prospect.email}` : ''}</div>}
-                    {prospect.notes && <div style={{ fontSize: '10px', color: 'var(--text-muted)', marginTop: '2px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{prospect.notes}</div>}
-                  </div>
-                  <div style={{ flexShrink: 0, textAlign: 'right' }}>
-                    {customerMetrics[prospect.id]?.ytd_spend ? (
-                      <div style={{ fontSize: '13px', fontWeight: 800, color: '#4ade80' }}>{fmtK(customerMetrics[prospect.id].ytd_spend)}</div>
-                    ) : null}
-                    <div style={{ fontSize: '10px', color: 'var(--text-muted)' }}>{new Date(prospect.created_at).toLocaleDateString()}</div>
-                    <div style={{ marginTop: '2px', color: 'var(--text-muted)', fontWeight: 700 }}>›</div>
-                  </div>
-                </div>
-              </div>
-            );
-          })}
-        </div>
-      )}
+      ) : (() => {
+        const thStyle: React.CSSProperties = {
+          fontSize: '10px', fontWeight: 800, textTransform: 'uppercase', letterSpacing: '0.5px',
+          color: 'var(--text-muted)', padding: '10px 12px', borderBottom: '1px solid var(--border-strong)',
+        };
+        const tdStyle: React.CSSProperties = {
+          padding: '9px 12px', borderBottom: '1px solid var(--border)', fontSize: '12.5px', whiteSpace: 'nowrap',
+        };
+        const numStyle: React.CSSProperties = { ...tdStyle, textAlign: 'right', fontVariantNumeric: 'tabular-nums' };
+        const badge = (label: string, color: string, bg: string) => (
+          <span style={{ fontSize: '8px', fontWeight: 700, padding: '1px 5px', borderRadius: '3px', background: bg, color, marginLeft: '5px', verticalAlign: '1px' }}>{label}</span>
+        );
+        return (
+          <div style={{ background: 'var(--card)', border: '1px solid var(--border)', borderRadius: '12px', overflow: 'hidden' }}>
+            <div className="responsive-table">
+              <table style={{ borderCollapse: 'collapse', width: '100%', minWidth: '760px' }}>
+                <thead><tr>
+                  <SortableTh label="Company" sortKey="company" sort={sort} onToggle={toggle} style={thStyle} />
+                  <SortableTh label="Status" sortKey="status" sort={sort} onToggle={toggle} style={thStyle} />
+                  <SortableTh label="Contact" sortKey="contact" sort={sort} onToggle={toggle} style={thStyle} />
+                  <SortableTh label="YTD Spend" sortKey="ytd" sort={sort} onToggle={toggle} defaultDir="desc" align="right" style={thStyle} />
+                  <SortableTh label="Total Spend" sortKey="total" sort={sort} onToggle={toggle} defaultDir="desc" align="right" style={thStyle} />
+                  <SortableTh label="Last Order" sortKey="last" sort={sort} onToggle={toggle} defaultDir="desc" style={thStyle} />
+                  <SortableTh label="Added" sortKey="added" sort={sort} onToggle={toggle} defaultDir="desc" style={thStyle} />
+                </tr></thead>
+                <tbody>
+                  {sorted.map(prospect => {
+                    const statusColor = STATUS_COLORS[prospect.status] || '#6b7280';
+                    const m = customerMetrics[prospect.id];
+                    return (
+                      <tr key={prospect.id} id={`prospect-${prospect.id}`} className="table-row-link"
+                        onClick={() => router.push(`/admin/prospects/${prospect.id}`)}
+                        title={prospect.notes || undefined}>
+                        <td style={tdStyle}>
+                          <span style={{ fontWeight: 800, color: '#60a5fa' }}>{prospect.company_name}</span>
+                          {prospect.is_hot && badge('HOT', '#ef4444', 'rgba(239,68,68,0.1)')}
+                          {prospect.email_campaign && badge('EMAIL', '#60a5fa', 'rgba(59,130,246,0.1)')}
+                          {prospect.multi_location && badge('MULTI-LOC', '#f59e0b', 'rgba(251,191,36,0.1)')}
+                          {prospect.netsuite_id && badge('NS', '#a78bfa', 'rgba(167,139,250,0.1)')}
+                        </td>
+                        <td style={tdStyle}>
+                          <span style={{ fontSize: '9px', fontWeight: 700, padding: '2px 6px', borderRadius: '4px', background: `${statusColor}18`, color: statusColor }}>
+                            {STATUS_LABELS[prospect.status] || prospect.status}
+                          </span>
+                        </td>
+                        <td style={tdStyle}>
+                          {prospect.contact_name ? (
+                            <>
+                              <span style={{ color: 'var(--text-secondary)' }}>{prospect.contact_name}</span>
+                              {prospect.email && <div style={{ fontSize: '10.5px', color: 'var(--text-muted)' }}>{prospect.email}</div>}
+                            </>
+                          ) : <span style={{ color: 'var(--text-muted)' }}>—</span>}
+                        </td>
+                        <td style={numStyle}>
+                          {m?.ytd_spend ? <span style={{ fontWeight: 700, color: '#4ade80' }}>{fmtK(m.ytd_spend)}</span> : <span style={{ color: 'var(--text-muted)' }}>—</span>}
+                        </td>
+                        <td style={numStyle}>
+                          {m?.total_spend ? <span style={{ color: 'var(--text-secondary)' }}>{fmtK(m.total_spend)}</span> : <span style={{ color: 'var(--text-muted)' }}>—</span>}
+                        </td>
+                        <td style={tdStyle}>
+                          {m?.last_order_date ? new Date(m.last_order_date).toLocaleDateString() : <span style={{ color: 'var(--text-muted)' }}>—</span>}
+                        </td>
+                        <td style={{ ...tdStyle, color: 'var(--text-muted)' }}>{new Date(prospect.created_at).toLocaleDateString()}</td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            </div>
+          </div>
+        );
+      })()}
       </>
       )}
     </div>
