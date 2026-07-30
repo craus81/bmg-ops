@@ -28,14 +28,30 @@ see `full-job-walkthrough.md`.
 
 ---
 
-## Why "FS-CUSTOM" matters
+## Every line needs a NetSuite item
 
-If your estimate has any **Custom Line** items (not from the
-catalog), they all roll up under one item in NetSuite called
-**FS-CUSTOM**. Your admin needs to create that item in NetSuite once
-or the SO push will fail with an "unmapped lines" error.
+NetSuite estimate/SO lines require a real item — there's no free-text
+line type. If you add a **Custom Line** (typed description + price
+instead of picking from the catalog), the builder flags it with an
+amber warning and blocks **Push to NetSuite** until you either:
 
-If you see that error: tell your admin.
+- **Match NetSuite item** on that line and pick the real catalog item, or
+- Fall back to the **FS-CUSTOM** placeholder item (used automatically
+  by **Convert to Sales Order**, and by **Push to NetSuite as
+  Estimate** if no catalog match exists). Your admin needs to create
+  that item in NetSuite once, or the push/conversion will fail with an
+  "unmapped lines" error and tell you which lines couldn't be sent.
+
+If you see that error: tell your admin. Before this, a custom line
+with no item could silently vanish from the pushed NetSuite record
+with no warning — now it's blocked in the UI or reported back by name.
+
+## Downloading the estimate PDF
+
+Once an estimate has been pushed to NetSuite, a **View PDF** button
+appears (in the builder's NetSuite status banner, and next to each
+pushed estimate in the list) — opens the NetSuite-generated PDF in a
+new tab.
 
 ---
 

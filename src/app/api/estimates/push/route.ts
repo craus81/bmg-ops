@@ -21,6 +21,26 @@ function getSupabase() {
   );
 }
 
+/**
+ * Resolve the NetSuite item id for the FS-CUSTOM placeholder used to land
+ * line items that have no matched NetSuite item. Mirrors the same fallback
+ * in api/estimates/convert-to-so/route.ts — an estimate line with no item id
+ * would otherwise be silently dropped, since NetSuite estimate lines require
+ * a real item and have no free-text line type.
+ */
+async function findCustomItemId(): Promise<string | null> {
+  try {
+    const { suiteqlQuery } = await import('@/lib/netsuite');
+    const res = await suiteqlQuery(
+      "SELECT i.id FROM item i WHERE UPPER(i.itemid) = 'FS-CUSTOM' FETCH FIRST 1 ROWS ONLY"
+    );
+    const id = res?.items?.[0]?.id;
+    return id ? id.toString() : null;
+  } catch {
+    return null;
+  }
+}
+
 function getNetSuiteConfig() {
   const accountId = process.env.NETSUITE_ACCOUNT_ID;
   const consumerKey = process.env.NETSUITE_CONSUMER_KEY;
@@ -235,9 +255,16 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ error: 'No line items on this estimate' }, { status: 400 });
     }
 
-    // Build NS line items — only items with netsuite_item_id can be pushed
-    // Custom lines without NS item ID will use a generic "Other Charge" item or be skipped
+    // Build NS line items. NetSuite estimate lines require a real item id —
+    // there is no free-text line type — so any line without netsuite_item_id
+    // is routed through the FS-CUSTOM placeholder item (same fallback as
+    // convert-to-so) rather than being silently dropped. If FS-CUSTOM isn't
+    // set up in NetSuite yet, the line is reported back as unmapped instead
+    // of vanishing without a trace.
     const nsLineItems: { itemId: string; quantity: number; rate: number; description?: string }[] = [];
+    const customLineDescriptions: string[] = [];
+    const unmappedLineDescriptions: string[] = [];
+    let customItemId: string | null = null;
 
     for (const line of lines) {
       if (line.netsuite_item_id) {
@@ -247,12 +274,24 @@ export async function POST(req: NextRequest) {
           rate: line.unit_price,
           description: line.description || undefined,
         });
-      } else if (line.is_custom) {
-        // For custom lines, we'll add them as a description line
-        // They need a generic NS item — skip for now if no NS item
-        // The user can map these in NetSuite after push
-        console.warn(`Skipping custom line without NS item ID: ${line.item_number}`);
+        continue;
       }
+
+      if (customItemId === null) customItemId = await findCustomItemId();
+      const label = line.item_number
+        ? `${line.item_number}${line.description ? ' — ' + line.description : ''}`
+        : (line.description || 'Custom item');
+      if (!customItemId) {
+        unmappedLineDescriptions.push(label);
+        continue;
+      }
+      nsLineItems.push({
+        itemId: customItemId,
+        quantity: line.quantity,
+        rate: line.unit_price,
+        description: line.notes ? `${label} (${line.notes})` : label,
+      });
+      customLineDescriptions.push(label);
     }
 
     // Add labor as a line item if there are labor hours
@@ -282,7 +321,10 @@ export async function POST(req: NextRequest) {
     }
 
     if (nsLineItems.length === 0) {
-      return NextResponse.json({ error: 'No pushable line items (all items need NetSuite IDs)' }, { status: 400 });
+      return NextResponse.json({
+        error: 'No pushable line items. Match every line to a NetSuite item, or create the FS-CUSTOM placeholder item in NetSuite.',
+        unmappedItems: unmappedLineDescriptions,
+      }, { status: 400 });
     }
 
     const config = getNetSuiteConfig();
@@ -315,6 +357,8 @@ export async function POST(req: NextRequest) {
         updated: true,
         netsuite_estimate_id: estimate.netsuite_estimate_id,
         netsuite_estimate_number: estimate.netsuite_estimate_number,
+        customLines: customLineDescriptions.length > 0 ? customLineDescriptions : undefined,
+        unmappedItems: unmappedLineDescriptions.length > 0 ? unmappedLineDescriptions : undefined,
       });
     }
 
@@ -347,6 +391,8 @@ export async function POST(req: NextRequest) {
       success: true,
       netsuite_estimate_id: result.estimateId,
       netsuite_estimate_number: result.estimateNumber,
+      customLines: customLineDescriptions.length > 0 ? customLineDescriptions : undefined,
+      unmappedItems: unmappedLineDescriptions.length > 0 ? unmappedLineDescriptions : undefined,
     });
   } catch (err: any) {
     console.error('Push estimate error:', err);
