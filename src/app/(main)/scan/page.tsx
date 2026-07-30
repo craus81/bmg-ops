@@ -43,7 +43,7 @@ interface ScanEntry {
 // other part keeps the plain VIN flow below.
 
 export default function ScanPage() {
-  const { user } = useAuth();
+  const { user, isAdmin } = useAuth();
   const supabase = createClient();
 
   // Step state
@@ -63,6 +63,13 @@ export default function ScanPage() {
   // Location selection
   const [locations, setLocations] = useState<Location[]>([]);
   const [selectedLocation, setSelectedLocation] = useState<Location | null>(null);
+  // Admin-only inline "add a location" form on the location step, for job
+  // sites that aren't in work_locations yet (RLS restricts writes to
+  // internal staff; the UI additionally gates to admins).
+  const [showAddLocation, setShowAddLocation] = useState(false);
+  const [newLocation, setNewLocation] = useState({ name: '', city: '', state: '' });
+  const [addingLocation, setAddingLocation] = useState(false);
+  const [addLocationError, setAddLocationError] = useState('');
 
   // Scanning
   const [vin, setVin] = useState('');
@@ -392,6 +399,35 @@ export default function ScanPage() {
       .order('name');
     setLocations((data || []) as Location[]);
     try { localStorage.setItem('cached_locations', JSON.stringify(data || [])); } catch {}
+  };
+
+  // Admin-only: create a work location from the picker and select it right
+  // away, so a new job site doesn't block scanning until someone finds the
+  // locations manager elsewhere.
+  const addLocation = async () => {
+    const name = newLocation.name.trim();
+    if (!name || addingLocation) return;
+    if (locations.some(l => l.name.toLowerCase() === name.toLowerCase())) {
+      setAddLocationError('A location with that name already exists — pick it from the list.');
+      return;
+    }
+    setAddingLocation(true);
+    setAddLocationError('');
+    const { data, error } = await supabase
+      .from('work_locations')
+      .insert({ name, city: newLocation.city.trim() || null, state: newLocation.state.trim() || null })
+      .select('id, name')
+      .single();
+    setAddingLocation(false);
+    if (error || !data) {
+      setAddLocationError(error?.message || 'Could not create the location');
+      return;
+    }
+    setShowAddLocation(false);
+    setNewLocation({ name: '', city: '', state: '' });
+    loadLocations();
+    setSelectedLocation(data as Location);
+    setStep('scan');
   };
 
   const loadTodayScans = useCallback(async () => {
@@ -788,6 +824,54 @@ export default function ScanPage() {
               }}>{loc.name}</button>
             ))}
           </div>
+
+          {isAdmin && !showAddLocation && (
+            <button onClick={() => { setShowAddLocation(true); setAddLocationError(''); }} style={{
+              width: '100%', padding: '12px 16px', borderRadius: '12px', marginTop: '6px', textAlign: 'center',
+              border: `1px dashed ${theme.border}`, background: 'transparent',
+              cursor: 'pointer', fontSize: '13px', fontWeight: 700, color: '#60a5fa',
+            }}>+ Add Location</button>
+          )}
+          {isAdmin && showAddLocation && (
+            <div style={{ marginTop: '6px', padding: '12px', borderRadius: '12px', border: `1px solid ${theme.border}`, background: theme.card }}>
+              <input
+                value={newLocation.name}
+                onChange={e => setNewLocation({ ...newLocation, name: e.target.value })}
+                placeholder="Location name *"
+                autoFocus
+                style={{ width: '100%', padding: '10px 12px', borderRadius: '10px', fontSize: '14px', border: `1px solid ${theme.border}`, background: theme.inputBg, color: theme.textPrimary, marginBottom: '6px' }}
+              />
+              <div style={{ display: 'grid', gridTemplateColumns: '2fr 1fr', gap: '6px', marginBottom: '6px' }}>
+                <input
+                  value={newLocation.city}
+                  onChange={e => setNewLocation({ ...newLocation, city: e.target.value })}
+                  placeholder="City"
+                  style={{ padding: '10px 12px', borderRadius: '10px', fontSize: '14px', border: `1px solid ${theme.border}`, background: theme.inputBg, color: theme.textPrimary }}
+                />
+                <input
+                  value={newLocation.state}
+                  onChange={e => setNewLocation({ ...newLocation, state: e.target.value })}
+                  placeholder="State"
+                  maxLength={2}
+                  style={{ padding: '10px 12px', borderRadius: '10px', fontSize: '14px', border: `1px solid ${theme.border}`, background: theme.inputBg, color: theme.textPrimary, textTransform: 'uppercase' }}
+                />
+              </div>
+              {addLocationError && (
+                <div style={{ fontSize: '11px', color: '#f87171', fontWeight: 600, marginBottom: '6px' }}>{addLocationError}</div>
+              )}
+              <div style={{ display: 'flex', gap: '6px' }}>
+                <button onClick={addLocation} disabled={addingLocation || !newLocation.name.trim()} style={{
+                  flex: 1, padding: '10px', borderRadius: '10px', fontSize: '13px', fontWeight: 700,
+                  background: newLocation.name.trim() ? '#3b82f6' : theme.border, color: '#fff', border: 'none',
+                  cursor: 'pointer', opacity: addingLocation ? 0.6 : 1,
+                }}>{addingLocation ? 'Adding…' : 'Add & Select'}</button>
+                <button onClick={() => { setShowAddLocation(false); setNewLocation({ name: '', city: '', state: '' }); setAddLocationError(''); }} style={{
+                  padding: '10px 14px', borderRadius: '10px', fontSize: '13px', fontWeight: 700,
+                  background: 'transparent', border: `1px solid ${theme.border}`, color: theme.textMuted, cursor: 'pointer',
+                }}>Cancel</button>
+              </div>
+            </div>
+          )}
 
           <button onClick={() => setStep('part')} style={{
             width: '100%', padding: '10px', borderRadius: '10px', marginTop: '12px',
