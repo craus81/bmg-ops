@@ -38,7 +38,9 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
         <script dangerouslySetInnerHTML={{ __html: `
           if ('serviceWorker' in navigator) {
             window.addEventListener('load', function() {
-              navigator.serviceWorker.register('/sw.js');
+              navigator.serviceWorker.register('/sw.js').catch(function(err) {
+                console.error('Service worker registration failed:', err);
+              });
               // Safari WindowClient lacks .navigate(), so the service worker
               // posts NOTIFICATION_NAVIGATE for notification clicks instead.
               // Route here on the main thread.
