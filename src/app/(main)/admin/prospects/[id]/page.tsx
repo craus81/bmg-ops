@@ -19,6 +19,7 @@
  */
 
 import { useState, useEffect, useRef, useMemo } from 'react';
+import JSZip from 'jszip';
 import { useRouter, useParams } from 'next/navigation';
 import { createClient } from '@/lib/supabase-browser';
 import { useAuth } from '@/components/AuthProvider';
@@ -200,6 +201,13 @@ export default function CustomerRecordPage() {
   const [docStatus, setDocStatus] = useState<'all' | 'open' | 'pastdue' | 'paid'>('all');
   const [docSearch, setDocSearch] = useState('');
   const [pdfBusy, setPdfBusy] = useState<string | null>(null);
+
+  // Bulk PDF download — pick specific documents (e.g. the invoices a
+  // customer asked for copies of) and pull them down as one ZIP.
+  const [selectedDocKeys, setSelectedDocKeys] = useState<Set<string>>(new Set());
+  const [bulkDownloading, setBulkDownloading] = useState(false);
+  const [bulkProgress, setBulkProgress] = useState<string | null>(null);
+  const [bulkError, setBulkError] = useState<string | null>(null);
 
   // Statement data — this customer's open invoices with true open balances,
   // prefetched so the print click stays synchronous (popup blockers).
@@ -869,6 +877,87 @@ export default function CustomerRecordPage() {
     if (!res.ok) await dialog.alert(res.error || 'Could not open the PDF');
   };
 
+  // Composite key — a doc's raw NetSuite `id` isn't guaranteed unique across
+  // types (invoice/SO/estimate share NetSuite's transaction id space in
+  // some accounts), so selection is keyed by type+id like the table rows.
+  const docKey = (d: CustDocument) => `${d.type}-${d.id}`;
+  const toggleDocSelected = (d: CustDocument) => {
+    setSelectedDocKeys(prev => {
+      const next = new Set(prev);
+      const k = docKey(d);
+      if (next.has(k)) next.delete(k); else next.add(k);
+      return next;
+    });
+  };
+  const toggleAllDocsSelected = () => {
+    setSelectedDocKeys(prev =>
+      sortedDocs.length > 0 && sortedDocs.every(d => prev.has(docKey(d)))
+        ? new Set()
+        : new Set(sortedDocs.map(docKey))
+    );
+  };
+  // Fetch each selected document's PDF individually (capped concurrency) and
+  // zip them client-side — mirrors src/app/(main)/invoices/bulk-download's
+  // downloadZip(), which exists specifically because one server request
+  // fetching+zipping every PDF hit Vercel's 60s limit around ~50 documents.
+  const downloadSelectedPdfs = async () => {
+    const items = (docs || []).filter(d => selectedDocKeys.has(docKey(d)));
+    if (items.length === 0) return;
+    setBulkDownloading(true);
+    setBulkError(null);
+    try {
+      const zip = new JSZip();
+      const queue = [...items];
+      const failed: string[] = [];
+      let done = 0;
+      await Promise.all(Array.from({ length: 4 }, async () => {
+        for (;;) {
+          const doc = queue.shift();
+          if (!doc) return;
+          try {
+            const res = await fetch(`/api/netsuite/pdf?type=${doc.type}&id=${encodeURIComponent(doc.id)}`);
+            const data = await res.json();
+            if (!data.success || !data.pdfBase64) throw new Error(data.error || 'PDF fetch failed');
+            const prefix = doc.type === 'invoice' ? 'INV' : doc.type === 'salesOrder' ? 'SO' : 'EST';
+            zip.file(`${prefix}-${doc.number}.pdf`, Uint8Array.from(atob(data.pdfBase64), ch => ch.charCodeAt(0)));
+          } catch {
+            failed.push(doc.number);
+          }
+          done++;
+          setBulkProgress(`Fetching PDFs ${done}/${items.length}…`);
+        }
+      }));
+
+      if (failed.length === items.length) {
+        setBulkError('Every PDF fetch failed — check that NetSuite is reachable and try again.');
+        return;
+      }
+
+      setBulkProgress('Zipping…');
+      const blob = await zip.generateAsync({ type: 'blob' });
+      const custName = (prospect?.company_name || customer?.company_name || 'customer').replace(/[^a-zA-Z0-9._-]+/g, '_').slice(0, 80);
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = `${custName}-documents.zip`;
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      URL.revokeObjectURL(url);
+
+      if (failed.length > 0) {
+        setBulkError(`Downloaded ${items.length - failed.length} of ${items.length} — failed: ${failed.join(', ')}. Retry to fetch just the rest.`);
+      } else {
+        setSelectedDocKeys(new Set());
+      }
+    } catch (e: any) {
+      setBulkError(e.message || 'Download failed');
+    } finally {
+      setBulkDownloading(false);
+      setBulkProgress(null);
+    }
+  };
+
   // Company letterhead for statement documents — fetched on load so the
   // PDF/print click stays synchronous (popup blockers).
   const [letterhead, setLetterhead] = useState<CompanyLetterhead | null>(null);
@@ -932,6 +1021,7 @@ export default function CustomerRecordPage() {
     return list;
   }, [docs, docFilter, docStatus, docSearch]);
   const { sorted: sortedDocs, sort: docSort, toggle: toggleDocSort } = useTableSort(filteredDocs, DOC_SORT_COLS, { key: 'date', dir: 'desc' });
+  const allDocsSelected = sortedDocs.length > 0 && sortedDocs.every(d => selectedDocKeys.has(docKey(d)));
   const openBalance = stInvoices ? stInvoices.reduce((s, i) => s + i.unpaid, 0) : null;
 
   if (loading) {
@@ -1497,50 +1587,69 @@ export default function CustomerRecordPage() {
           {!docs && !docsError && <div style={{ fontSize: '12px', color: 'var(--text-muted)', padding: '8px 0' }}>Loading documents…</div>}
           {docs && sortedDocs.length === 0 && <div style={{ fontSize: '12px', color: 'var(--text-muted)', padding: '8px 0' }}>No documents match.</div>}
           {sortedDocs.length > 0 && (
-            <div className="responsive-table">
-              <table style={{ width: '100%', borderCollapse: 'collapse' }}>
-                <thead>
-                  <tr>
-                    <SortableTh label="Type" sortKey="type" sort={docSort} onToggle={toggleDocSort} style={docTh} />
-                    <SortableTh label="Number" sortKey="number" sort={docSort} onToggle={toggleDocSort} style={docTh} />
-                    <SortableTh label="Date" sortKey="date" sort={docSort} onToggle={toggleDocSort} defaultDir="desc" style={docTh} />
-                    <SortableTh label="Due" sortKey="due" sort={docSort} onToggle={toggleDocSort} style={docTh} />
-                    <SortableTh label="Status" sortKey="status" sort={docSort} onToggle={toggleDocSort} style={docTh} />
-                    <SortableTh label="Amount" sortKey="amount" sort={docSort} onToggle={toggleDocSort} defaultDir="desc" align="right" style={docTh} />
-                    <th style={docTh} />
-                  </tr>
-                </thead>
-                <tbody>
-                  {sortedDocs.map(doc => (
-                    <tr key={`${doc.type}-${doc.id}`}>
-                      <td style={docTd}>
-                        <span style={{ fontSize: '9px', fontWeight: 800, padding: '2px 7px', borderRadius: '5px', display: 'inline-block', minWidth: '76px', textAlign: 'center', background: 'var(--subtle-bg)', color: 'var(--text-muted)' }}>{doc.typeLabel}</span>
-                      </td>
-                      <td style={{ ...docTd, fontWeight: 700, color: 'var(--text-primary)', whiteSpace: 'nowrap' }}>{doc.number}</td>
-                      <td style={{ ...docTd, whiteSpace: 'nowrap' }}>{fmtDate(doc.date)}</td>
-                      <td style={{ ...docTd, whiteSpace: 'nowrap' }}>{fmtDate(doc.dueDate)}</td>
-                      <td style={docTd}>
-                        {doc.statusNorm === 'pastdue' ? (
-                          <span style={{ fontSize: '10.5px', fontWeight: 800, color: 'var(--error)', whiteSpace: 'nowrap' }}>{doc.daysPastDue}d past due</span>
-                        ) : doc.statusNorm === 'open' ? (
-                          <span style={{ fontSize: '10.5px', fontWeight: 800, color: '#60a5fa' }}>Open</span>
-                        ) : doc.statusNorm === 'paid' ? (
-                          <span style={{ fontSize: '10.5px', fontWeight: 800, color: 'var(--success)' }}>Paid</span>
-                        ) : (
-                          <span style={{ fontSize: '10.5px', color: 'var(--text-muted)', whiteSpace: 'nowrap' }}>{doc.status || '—'}</span>
-                        )}
-                      </td>
-                      <td style={{ ...docTd, textAlign: 'right', fontWeight: 700, fontVariantNumeric: 'tabular-nums', whiteSpace: 'nowrap' }}>{usd2(doc.total)}</td>
-                      <td style={{ ...docTd, textAlign: 'right' }}>
-                        <button onClick={() => viewPdf(doc)} disabled={pdfBusy === doc.id} style={{ ...btnSm, padding: '4px 10px', opacity: pdfBusy === doc.id ? 0.6 : 1 }}>
-                          {pdfBusy === doc.id ? '…' : 'PDF'}
-                        </button>
-                      </td>
+            <>
+              <div style={{ display: 'flex', alignItems: 'center', gap: '10px', flexWrap: 'wrap', marginBottom: '8px' }}>
+                <button onClick={toggleAllDocsSelected} style={{ ...btnSm, padding: '4px 10px' }}>
+                  {allDocsSelected ? 'Deselect all' : 'Select all'} ({selectedDocKeys.size}/{sortedDocs.length})
+                </button>
+                {selectedDocKeys.size > 0 && (
+                  <button onClick={downloadSelectedPdfs} disabled={bulkDownloading} style={{ ...btnSm, padding: '4px 10px', background: 'var(--success)', color: '#fff', border: 'none', opacity: bulkDownloading ? 0.6 : 1 }}>
+                    {bulkDownloading ? (bulkProgress || 'Preparing…') : `Download ${selectedDocKeys.size} PDF${selectedDocKeys.size === 1 ? '' : 's'} as ZIP`}
+                  </button>
+                )}
+                {bulkError && <span style={{ fontSize: '11px', color: 'var(--error)' }}>{bulkError}</span>}
+              </div>
+              <div className="responsive-table">
+                <table style={{ width: '100%', borderCollapse: 'collapse' }}>
+                  <thead>
+                    <tr>
+                      <th style={docTh}>
+                        <input type="checkbox" checked={allDocsSelected} onChange={toggleAllDocsSelected} style={{ cursor: 'pointer' }} />
+                      </th>
+                      <SortableTh label="Type" sortKey="type" sort={docSort} onToggle={toggleDocSort} style={docTh} />
+                      <SortableTh label="Number" sortKey="number" sort={docSort} onToggle={toggleDocSort} style={docTh} />
+                      <SortableTh label="Date" sortKey="date" sort={docSort} onToggle={toggleDocSort} defaultDir="desc" style={docTh} />
+                      <SortableTh label="Due" sortKey="due" sort={docSort} onToggle={toggleDocSort} style={docTh} />
+                      <SortableTh label="Status" sortKey="status" sort={docSort} onToggle={toggleDocSort} style={docTh} />
+                      <SortableTh label="Amount" sortKey="amount" sort={docSort} onToggle={toggleDocSort} defaultDir="desc" align="right" style={docTh} />
+                      <th style={docTh} />
                     </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
+                  </thead>
+                  <tbody>
+                    {sortedDocs.map(doc => (
+                      <tr key={`${doc.type}-${doc.id}`}>
+                        <td style={docTd}>
+                          <input type="checkbox" checked={selectedDocKeys.has(docKey(doc))} onChange={() => toggleDocSelected(doc)} style={{ cursor: 'pointer' }} />
+                        </td>
+                        <td style={docTd}>
+                          <span style={{ fontSize: '9px', fontWeight: 800, padding: '2px 7px', borderRadius: '5px', display: 'inline-block', minWidth: '76px', textAlign: 'center', background: 'var(--subtle-bg)', color: 'var(--text-muted)' }}>{doc.typeLabel}</span>
+                        </td>
+                        <td style={{ ...docTd, fontWeight: 700, color: 'var(--text-primary)', whiteSpace: 'nowrap' }}>{doc.number}</td>
+                        <td style={{ ...docTd, whiteSpace: 'nowrap' }}>{fmtDate(doc.date)}</td>
+                        <td style={{ ...docTd, whiteSpace: 'nowrap' }}>{fmtDate(doc.dueDate)}</td>
+                        <td style={docTd}>
+                          {doc.statusNorm === 'pastdue' ? (
+                            <span style={{ fontSize: '10.5px', fontWeight: 800, color: 'var(--error)', whiteSpace: 'nowrap' }}>{doc.daysPastDue}d past due</span>
+                          ) : doc.statusNorm === 'open' ? (
+                            <span style={{ fontSize: '10.5px', fontWeight: 800, color: '#60a5fa' }}>Open</span>
+                          ) : doc.statusNorm === 'paid' ? (
+                            <span style={{ fontSize: '10.5px', fontWeight: 800, color: 'var(--success)' }}>Paid</span>
+                          ) : (
+                            <span style={{ fontSize: '10.5px', color: 'var(--text-muted)', whiteSpace: 'nowrap' }}>{doc.status || '—'}</span>
+                          )}
+                        </td>
+                        <td style={{ ...docTd, textAlign: 'right', fontWeight: 700, fontVariantNumeric: 'tabular-nums', whiteSpace: 'nowrap' }}>{usd2(doc.total)}</td>
+                        <td style={{ ...docTd, textAlign: 'right' }}>
+                          <button onClick={() => viewPdf(doc)} disabled={pdfBusy === doc.id} style={{ ...btnSm, padding: '4px 10px', opacity: pdfBusy === doc.id ? 0.6 : 1 }}>
+                            {pdfBusy === doc.id ? '…' : 'PDF'}
+                          </button>
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            </>
           )}
           {docs && docsHasMore && (
             <button onClick={() => { const ns = prospect?.netsuite_id || customer?.netsuite_id; if (ns) loadDocs(ns, true); }} disabled={docsLoading} style={{ ...btnSm, marginTop: '10px' }}>
