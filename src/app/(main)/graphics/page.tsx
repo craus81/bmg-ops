@@ -777,7 +777,6 @@ export default function GraphicsPage() {
   // Sort — click-to-sort table headers (SortableTh). Missing values (no due
   // date, no PO) sort last in either direction. Default: due date ascending.
   const { sorted, sort, toggle } = useTableSort(filteredJobs, {
-    job: j => j.job_number,
     title: j => j.title?.toLowerCase() || null,
     customer: j => j.customer?.toLowerCase() || null,
     po: j => j.po_number || null,
@@ -1108,9 +1107,8 @@ export default function GraphicsPage() {
         return (
           <div style={{ background: 'var(--card)', border: '1px solid var(--border)', borderRadius: '12px', overflow: 'hidden' }}>
             <div className="responsive-table">
-              <table style={{ borderCollapse: 'collapse', width: '100%', minWidth: '880px' }}>
+              <table style={{ borderCollapse: 'collapse', width: '100%', minWidth: '820px' }}>
                 <thead><tr>
-                  <SortableTh label="Job #" sortKey="job" sort={sort} onToggle={toggle} style={thStyle} />
                   <SortableTh label="Title" sortKey="title" sort={sort} onToggle={toggle} style={thStyle} />
                   <SortableTh label="Customer" sortKey="customer" sort={sort} onToggle={toggle} style={thStyle} />
                   <SortableTh label="PO #" sortKey="po" sort={sort} onToggle={toggle} style={thStyle} />
@@ -1183,18 +1181,11 @@ export default function GraphicsPage() {
                         onClick={() => router.push(`/graphics/${job.id}`)}
                         title={job.notes ? (job.notes.length > 120 ? job.notes.slice(0, 120) + '...' : job.notes) : undefined}
                       >
-                        <td style={tdStyle}>
-                          <span style={{ display: 'inline-flex', alignItems: 'center', gap: '6px' }}>
-                            {hasNew && (
-                              <span title="New activity since you last viewed this job" style={{ width: '8px', height: '8px', borderRadius: '50%', background: '#ef4444', flexShrink: 0 }} />
-                            )}
-                            {job.job_number
-                              ? <span style={{ color: '#60a5fa', fontWeight: 800 }}>{job.job_number}</span>
-                              : <span style={{ color: 'var(--text-muted)' }}>—</span>}
-                          </span>
-                        </td>
-                        <td style={{ ...tdStyle, maxWidth: '280px', overflow: 'hidden', textOverflow: 'ellipsis' }}>
-                          <span style={{ fontWeight: 700 }}>{job.title}</span>
+                        <td style={{ ...tdStyle, maxWidth: '320px', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+                          {hasNew && (
+                            <span title="New activity since you last viewed this job" style={{ display: 'inline-block', width: '8px', height: '8px', borderRadius: '50%', background: '#ef4444', flexShrink: 0, marginRight: '6px', verticalAlign: '1px' }} />
+                          )}
+                          <span style={{ color: '#60a5fa', fontWeight: 800 }}>{job.title}</span>
                           {job.job_category && job.job_category !== 'production' && (
                             <span style={{
                               marginLeft: '6px', fontSize: '8px', fontWeight: 700, padding: '1px 5px', borderRadius: '3px',
