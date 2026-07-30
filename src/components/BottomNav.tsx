@@ -33,7 +33,7 @@ export const allTabs: Tab[] = [
   // existing visible tabs without displacing anything.
   { id: 'pos', path: '/admin/pos', label: 'POs', feature: 'purchase_orders', priority: 3.2 },
   { id: 'scans', path: '/admin/scans', label: 'Scans', feature: 'reports', priority: 3.3 },
-  { id: 'prospects', path: '/admin/prospects', label: 'CRM', feature: 'prospects', priority: 3.5 },
+  { id: 'prospects', path: '/admin/prospects', label: 'Customers', feature: 'prospects', priority: 3.5 },
   { id: 'schedule', path: '/admin/schedule', label: 'Schedule', feature: 'schedule', priority: 4 },
   { id: 'scan', path: '/scan', label: 'Scan', feature: 'scan', priority: 5 },
   { id: 'time', path: '/time', label: 'Time', feature: 'time', priority: 6 },

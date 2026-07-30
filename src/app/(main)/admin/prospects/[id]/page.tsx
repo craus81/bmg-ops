@@ -295,7 +295,7 @@ export default function CustomerRecordPage() {
       setCForm(emptyContactForm);
       if (wasCreate) logAuto('note', `Added contact: ${saved.name}${saved.is_decision_maker ? ' (decision maker)' : ''}`);
       if (body.netsuite?.error) {
-        await dialog.alert(`Contact saved in the CRM, but the NetSuite update failed:\n\n${body.netsuite.error}`);
+        await dialog.alert(`Contact saved, but the NetSuite update failed:\n\n${body.netsuite.error}`);
       }
     } catch (err: any) {
       await dialog.alert(`Could not save the contact: ${err?.message || 'unknown error'}`);
@@ -441,7 +441,7 @@ export default function CustomerRecordPage() {
       created_by: user?.id,
     }).select().single();
     setAddingToCrm(false);
-    if (error || !data) { await dialog.alert(`Could not create the CRM record: ${error?.message || 'unknown error'}`); return; }
+    if (error || !data) { await dialog.alert(`Could not create the record: ${error?.message || 'unknown error'}`); return; }
     setProspect(data as Prospect);
     loadFiles(data.id);
   };
@@ -947,8 +947,8 @@ export default function CustomerRecordPage() {
     return (
       <div style={{ ...card, textAlign: 'center', padding: '40px 16px' }}>
         <div style={{ fontSize: '14px', fontWeight: 700, color: 'var(--text-secondary)' }}>Customer not found</div>
-        <div style={{ fontSize: '12px', color: 'var(--text-muted)', marginTop: '6px' }}>No CRM record or synced NetSuite customer matches this link.</div>
-        <button onClick={() => router.push('/admin/prospects')} style={{ ...btnSm, marginTop: '14px' }}>‹ Back to CRM</button>
+        <div style={{ fontSize: '12px', color: 'var(--text-muted)', marginTop: '6px' }}>No customer record or synced NetSuite customer matches this link.</div>
+        <button onClick={() => router.push('/admin/prospects')} style={{ ...btnSm, marginTop: '14px' }}>‹ Back to Customers</button>
       </div>
     );
   }
@@ -969,7 +969,7 @@ export default function CustomerRecordPage() {
 
       {/* Header */}
       <div style={card}>
-        <button onClick={() => router.push('/admin/prospects')} style={{ background: 'none', border: 'none', cursor: 'pointer', fontSize: '11px', fontWeight: 700, color: 'var(--text-muted)', padding: 0, marginBottom: '8px' }}>‹ CRM</button>
+        <button onClick={() => router.push('/admin/prospects')} style={{ background: 'none', border: 'none', cursor: 'pointer', fontSize: '11px', fontWeight: 700, color: 'var(--text-muted)', padding: 0, marginBottom: '8px' }}>‹ Customers</button>
         <div style={{ display: 'flex', alignItems: 'center', gap: '10px', flexWrap: 'wrap' }}>
           <div style={{ fontSize: '24px', fontWeight: 800, letterSpacing: '-0.5px', color: 'var(--text-primary)' }}>{name}</div>
           {prospect ? (
@@ -977,7 +977,7 @@ export default function CustomerRecordPage() {
               {STATUS_LABELS[prospect.status] || prospect.status}
             </span>
           ) : (
-            <span style={{ fontSize: '10px', fontWeight: 800, padding: '3px 9px', borderRadius: '999px', background: 'var(--warning-bg)', color: 'var(--warning)' }}>Not in CRM</span>
+            <span style={{ fontSize: '10px', fontWeight: 800, padding: '3px 9px', borderRadius: '999px', background: 'var(--warning-bg)', color: 'var(--warning)' }}>Not tracked</span>
           )}
           {prospect?.is_hot && <span style={{ fontSize: '11px' }}>🔥</span>}
           {tags.map(t => prospect ? (
@@ -1005,8 +1005,8 @@ export default function CustomerRecordPage() {
             </button>
           )}
           {!prospect && customer && (
-            <button onClick={addToCrm} disabled={addingToCrm} title="Create a CRM record for this NetSuite customer so contacts, deals, and activity can be tracked here" style={btnSm}>
-              {addingToCrm ? 'Adding…' : '+ Add to CRM'}
+            <button onClick={addToCrm} disabled={addingToCrm} title="Create a record for this NetSuite customer so contacts, deals, and activity can be tracked here" style={btnSm}>
+              {addingToCrm ? 'Adding…' : '+ Add Record'}
             </button>
           )}
           {(prospect?.netsuite_id || customer) && !stError && (

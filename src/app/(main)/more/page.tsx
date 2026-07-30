@@ -47,7 +47,7 @@ export default function MorePage() {
     {
       header: 'Sales & Quoting',
       items: [
-        { title: 'CRM', sub: 'Prospects, customers & sales pipeline', path: '/admin/prospects', show: F('prospects') },
+        { title: 'Customers', sub: 'Prospects, customers & sales pipeline', path: '/admin/prospects', show: F('prospects') },
         { title: 'Estimates', sub: 'Build estimates & push to NetSuite', path: '/estimates', show: F('estimates') },
         { title: 'Wrap Quotes', sub: 'Measure a vehicle template by hand & email the quote', path: '/admin/wrap-quote', show: isAdmin || isSales || isGraphicsProduction },
         { title: 'Quote Follow-Ups', sub: 'Sent quotes aging without an answer — chase, mark won or lost', path: '/admin/quote-followups', show: isAdmin || isSales },

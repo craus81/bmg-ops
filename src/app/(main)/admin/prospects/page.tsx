@@ -417,7 +417,7 @@ export default function ProspectsPage() {
         };
       });
       const today = new Date().toISOString().split('T')[0];
-      await downloadXlsx(rows, { sheetName: 'CRM', filename: `crm-export-${today}.xlsx` });
+      await downloadXlsx(rows, { sheetName: 'Customers', filename: `customers-export-${today}.xlsx` });
     } catch (err: any) {
       console.error('[crm export] failed:', err);
       await dialog.alert(`Export failed: ${err?.message || err}`);
@@ -432,7 +432,7 @@ export default function ProspectsPage() {
       {/* Header */}
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: '14px' }}>
         <div>
-          <div style={{ fontSize: '22px', fontWeight: 800, color: 'var(--text-primary)' }}>CRM</div>
+          <div style={{ fontSize: '22px', fontWeight: 800, color: 'var(--text-primary)' }}>Customers</div>
           <div style={{ fontSize: '11px', color: 'var(--text-muted)', marginTop: '2px' }}>{prospects.length} total · {prospects.filter(p => p.status === 'active').length} active · {prospects.filter(p => p.status === 'converted').length} customers</div>
         </div>
         <div style={{ display: 'flex', gap: '6px', flexWrap: 'wrap' }}>
@@ -441,7 +441,7 @@ export default function ProspectsPage() {
             try {
               const res = await fetch('/api/netsuite/customers');
               const data = await res.json();
-              await dialog.alert(`Customers: ${data.synced || 0}\nCRM: ${data.prospectsSynced || 0}\nContacts: ${data.contactsSynced || 0} synced, ${data.contactsSkipped || 0} skipped, ${data.contactErrors || 0} errors${data.restApiError ? '\nREST API error (HTTP ' + data.restApiError.status + '): ' + data.restApiError.body : ''}${data.firstContactError ? '\nContact error: ' + data.firstContactError : ''}${data.firstProspectError ? '\nCRM error: ' + data.firstProspectError : ''}`);
+              await dialog.alert(`Customers: ${data.synced || 0}\nProspects: ${data.prospectsSynced || 0}\nContacts: ${data.contactsSynced || 0} synced, ${data.contactsSkipped || 0} skipped, ${data.contactErrors || 0} errors${data.restApiError ? '\nREST API error (HTTP ' + data.restApiError.status + '): ' + data.restApiError.body : ''}${data.firstContactError ? '\nContact error: ' + data.firstContactError : ''}${data.firstProspectError ? '\nProspect error: ' + data.firstProspectError : ''}`);
               loadProspects();
             } catch { await dialog.alert('Sync failed'); }
             setSyncing(false);

@@ -21,7 +21,7 @@ logo and phone number on the outside. You exchange business cards.
 
 **What to do back at the office:**
 
-1. Open BMG Fleet on your laptop and click **CRM** in the bottom nav
+1. Open BMG Fleet on your laptop and click **Customers** in the bottom nav
    (or go to `/admin/prospects`).
 2. Click **+ New** to add a prospect.
 3. Fill in:

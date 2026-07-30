@@ -734,14 +734,14 @@ export default function OpsDashboard() {
     <div style={card}>
       <div style={cardHead}>
         <h2 style={headTitle}>Sales</h2>
-        <button onClick={() => router.push('/admin/prospects')} style={headLink}>CRM →</button>
+        <button onClick={() => router.push('/admin/prospects')} style={headLink}>Customers →</button>
       </div>
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(190px, 1fr))', borderTop: '1px solid var(--border)' }}>
         <div style={{ padding: '12px 16px', borderRight: '1px solid var(--border)' }}>
           <div style={{ fontSize: '10px', fontWeight: 800, textTransform: 'uppercase', letterSpacing: '0.6px', color: 'var(--text-muted)', marginBottom: '8px' }}>Pipeline by stage</div>
           {d.sales.stages.map(s => (
             <button key={s.stage} onClick={() => router.push(`/admin/prospects?stage=${s.stage}`)}
-              title={`See ${s.label.toLowerCase()} deals in the CRM`}
+              title={`See ${s.label.toLowerCase()} deals in Customers`}
               style={{ display: 'block', width: '100%', marginBottom: '6px', padding: 0, background: 'none', border: 'none', cursor: 'pointer', textAlign: 'left' }}>
               <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '12px', fontVariantNumeric: 'tabular-nums' }}>
                 <span style={{ color: 'var(--text-secondary)', fontWeight: 600 }}>{s.label} ({s.count})</span>
@@ -762,7 +762,7 @@ export default function OpsDashboard() {
         </div>
         <div style={{ padding: '12px 16px', borderRight: '1px solid var(--border)' }}>
           <button onClick={() => router.push('/admin/prospects?sort=ytd_spend')}
-            title="Open the CRM sorted by YTD spend"
+            title="Open Customers sorted by YTD spend"
             style={{ display: 'block', width: '100%', fontSize: '10px', fontWeight: 800, textTransform: 'uppercase', letterSpacing: '0.6px', color: 'var(--text-muted)', marginBottom: '8px', padding: 0, background: 'none', border: 'none', cursor: 'pointer', textAlign: 'left' }}>
             Top customers · YTD (NetSuite) ›
           </button>
