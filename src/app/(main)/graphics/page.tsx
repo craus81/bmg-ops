@@ -1,22 +1,32 @@
 'use client';
 
+/**
+ * The Graphics board — a thin sortable table over graphics_jobs. Rows
+ * navigate to the standalone Job Record (/graphics/<id>), which owns all
+ * per-job viewing, editing, and status changes; nothing expands or edits
+ * inline here anymore. What stays board-level: search / filters / header
+ * sort, the metric tiles (overdue / due soon / stuck), the create wizard
+ * (+ its ?new=1&fromPo prefill flow), the Awaiting Graphics queue, and
+ * the mentions inbox.
+ *
+ * Legacy deep links (?editJob= / ?id=) predate the record page and are
+ * forwarded there so old notification URLs keep working. ?invoiceJob=
+ * (the bell notification's "create invoice?" prompt) stays here: the
+ * record page has no query-param handling, so the confirm + invoice
+ * review modal flow lives on the board for that deep link only.
+ */
+
 import { useState, useEffect, useRef } from 'react';
 import { useRouter, useSearchParams } from 'next/navigation';
 import { createClient } from '@/lib/supabase-browser';
 import { storage } from '@/lib/storage';
-import { apiFetch } from '@/lib/api-client';
 import { useAuth } from '@/components/AuthProvider';
 import { useDialog } from '@/components/DialogProvider';
 import { theme } from '@/lib/theme';
 import AssignmentPicker from '@/components/AssignmentPicker';
-import AssignJobPOModal from '@/components/AssignJobPOModal';
 import GraphicsInvoiceReviewModal from '@/components/GraphicsInvoiceReviewModal';
 import EmailInvoicesModal, { type EmailableInvoice } from '@/components/EmailInvoicesModal';
-import { PartLabel } from '@/components/PartLabel';
-import DropboxProofSearch from '@/components/DropboxProofSearch';
-import GraphicsMaterialsCard from '@/components/GraphicsMaterialsCard';
 import MentionTextArea, { reportMentions } from '@/components/MentionTextArea';
-import { flashNote } from '@/lib/focus-note';
 import MentionsInbox from '@/components/MentionsInbox';
 import { DropZone } from '@/components/DropZone';
 import UploadProgressBar, { type UploadProgress } from '@/components/UploadProgressBar';
@@ -24,15 +34,14 @@ import { buildGraphicsJobPrefillFromPo, attachPartFilesToGraphicsJob } from '@/l
 import { INSTALL_LOCATIONS, SHOP_INSTALL_LOCATION } from '@/lib/shop-inbound';
 import { exportPackingListPDF, packingListFromJob, type PackingListLine } from '@/lib/packing-list-pdf';
 import { fetchAllRows } from '@/lib/fetch-all';
-import type {
-  GraphicsJob, GraphicsJobStatus, GraphicsJobCategory, GraphicsStatusHistory, GraphicsJobView, Profile,
-} from '@/lib/types';
+import { SortableTh, useTableSort } from '@/components/ui/SortableTh';
+import FilterButton, { FilterLabel } from '@/components/ui/FilterButton';
+import type { GraphicsJob, GraphicsJobStatus, GraphicsJobCategory, GraphicsJobView } from '@/lib/types';
 import {
   GRAPHICS_STATUS_LABELS, GRAPHICS_STATUS_COLORS, GRAPHICS_STATUS_ORDER,
   GRAPHICS_CATEGORY_LABELS, GRAPHICS_CATEGORY_COLORS,
 } from '@/lib/types';
 
-type ViewMode = 'pipeline' | 'list';
 type FilterStatus = GraphicsJobStatus | 'all' | 'active';
 type FilterCategory = GraphicsJobCategory | 'all';
 type MetricFilter = 'overdue' | 'dueWeek' | 'stuck';
@@ -53,28 +62,13 @@ function displayDate(dateStr: string | null | undefined): string {
   return d.toLocaleDateString();
 }
 
-// Extract YYYY-MM-DD for date input value
-function toDateInputValue(dateStr: string | null | undefined): string {
-  if (!dateStr) return '';
-  return dateStr.substring(0, 10);
-}
-
-function relativeTime(iso: string): string {
-  const then = new Date(iso).getTime();
-  if (!isFinite(then)) return '';
-  const sec = Math.max(0, Math.round((Date.now() - then) / 1000));
-  if (sec < 60) return 'just now';
-  const min = Math.round(sec / 60);
-  if (min < 60) return `${min}m ago`;
-  const hr = Math.round(min / 60);
-  if (hr < 24) return `${hr}h ago`;
-  const day = Math.round(hr / 24);
-  if (day < 7) return `${day}d ago`;
-  return new Date(iso).toLocaleDateString();
-}
-
 // Active statuses (not terminal)
 const ACTIVE_STATUSES: GraphicsJobStatus[] = ['flagged', 'received', 'designing', 'revision', 'printing', 'outgassing', 'cutting', 'packing', 'ready', 'ready_to_pickup'];
+
+// Statuses past which the due date has done its job — no overdue warning.
+const DONE_STATUSES: GraphicsJobStatus[] = ['shipped', 'picked_up', 'installed', 'cancelled'];
+
+const PRIORITY_RANK: Record<string, number> = { low: 0, normal: 1, high: 2, rush: 3 };
 
 // Everything ships UPS — tracking numbers link straight to their site.
 const upsTrackingUrl = (trackingNumber: string) =>
@@ -83,17 +77,12 @@ const upsTrackingUrl = (trackingNumber: string) =>
 export default function GraphicsPage() {
   const router = useRouter();
   const searchParams = useSearchParams();
-  const { user, isAdmin, isProduction, isSales, profile, loading: authLoading } = useAuth();
+  const { user, isAdmin, isProduction, isSales, loading: authLoading } = useAuth();
   const dialog = useDialog();
   const supabase = createClient();
 
   const [jobs, setJobs] = useState<GraphicsJob[]>([]);
-  const [profiles, setProfiles] = useState<Profile[]>([]);
-  // Parent upfit projects, keyed by upfit_project_id, populated on mount
-  // for any job that has a non-null upfit_project_id (migration 084).
-  const [upfitProjects, setUpfitProjects] = useState<Record<string, { id: string; project_name: string; status: string; customer_name: string | null }>>({});
   const [loading, setLoading] = useState(true);
-  const [viewMode, setViewMode] = useState<ViewMode>('pipeline');
   const [filterStatus, setFilterStatus] = useState<FilterStatus>('active');
   const [filterCategory, setFilterCategory] = useState<FilterCategory>('all');
   // Installed/cancelled jobs are archived off the active board. This toggle
@@ -125,28 +114,11 @@ export default function GraphicsPage() {
 
   const isMine = (j: GraphicsJob) => j.assigned_to === user?.id || myAssignedIds.has(j.id);
   const [search, setSearch] = useState('');
-  const [sortBy, setSortBy] = useState<'due_date' | 'created_at' | 'status'>('due_date');
-  const [sortDir, setSortDir] = useState<'asc' | 'desc'>('asc');
-  const [expandedJobId, setExpandedJobId] = useState<string | null>(null);
-  const [editingJob, setEditingJob] = useState<GraphicsJob | null>(null);
+
+  // ?invoiceJob= deep-link flow (bell notification → confirm → invoice modal)
   const [invoiceJob, setInvoiceJob] = useState<GraphicsJob | null>(null);
-  const [linkPoJob, setLinkPoJob] = useState<GraphicsJob | null>(null);
   const [emailInvoiceTarget, setEmailInvoiceTarget] = useState<{ customerName: string; invoices: EmailableInvoice[] } | null>(null);
   const invoicePromptHandled = useRef<Set<string>>(new Set());
-  const [statusHistory, setStatusHistory] = useState<GraphicsStatusHistory[]>([]);
-
-  // Status change with comment
-  const [pendingStatus, setPendingStatus] = useState<{ job: GraphicsJob; status: GraphicsJobStatus } | null>(null);
-  const [statusComment, setStatusComment] = useState('');
-  // Job whose materials modal should auto-open — set when a job moves past
-  // printing with nothing logged, so material usage gets captured while
-  // it's fresh.
-  const [materialPromptJobId, setMaterialPromptJobId] = useState<string | null>(null);
-  // Tracking number captured when moving to "shipped"
-  const [shipTracking, setShipTracking] = useState('');
-
-  // Internal notes (comment thread)
-  const [newNote, setNewNote] = useState('');
 
   // Create job state
   const [showCreate, setShowCreate] = useState(false);
@@ -182,7 +154,6 @@ export default function GraphicsPage() {
   // Customer autocomplete
   const [customerSearch, setCustomerSearch] = useState('');
   const [customerResults, setCustomerResults] = useState<{ company_name: string }[]>([]);
-  const [customerLoading, setCustomerLoading] = useState(false);
   const customerTimeout = useRef<any>(null);
 
   const searchCustomers = (query: string) => {
@@ -191,7 +162,6 @@ export default function GraphicsPage() {
     if (customerTimeout.current) clearTimeout(customerTimeout.current);
     if (query.length < 2) { setCustomerResults([]); return; }
     customerTimeout.current = setTimeout(async () => {
-      setCustomerLoading(true);
       const { data } = await supabase
         .from('customers')
         .select('company_name')
@@ -200,7 +170,6 @@ export default function GraphicsPage() {
         .order('company_name')
         .limit(8);
       setCustomerResults(data || []);
-      setCustomerLoading(false);
     }, 250);
   };
 
@@ -210,34 +179,15 @@ export default function GraphicsPage() {
     setCustomerResults([]);
   };
 
-  // Job files
-  interface JobFile { id: string; job_id: string; file_name: string; file_type: string | null; file_size: number | null; storage_path: string; uploaded_by: string | null; uploaded_at: string; }
-  interface PoFile { id: string; po_id: string; file_name: string; file_type: string | null; file_size: number | null; storage_path: string; source: string | null; uploaded_at: string; }
-  const [jobFiles, setJobFiles] = useState<Record<string, JobFile[]>>({});
-  // PO PDFs surfaced read-only on jobs that link to a PO
-  const [jobPoFiles, setJobPoFiles] = useState<Record<string, PoFile[]>>({});
+  // Files attached in the create wizard, uploaded after the job row exists
   const [createFiles, setCreateFiles] = useState<File[]>([]);
   const [uploadingFiles, setUploadingFiles] = useState(false);
   const [uploadProgress, setUploadProgress] = useState<UploadProgress | null>(null);
-  const fileInputRef = useRef<HTMLInputElement>(null);
   const createFileInputRef = useRef<HTMLInputElement>(null);
 
-  // Job assignments
-  const [jobAssignments, setJobAssignments] = useState<Record<string, string[]>>({});
-  // Per-job generation counter for assignment loads. Bumped by saves so that
-  // an in-flight load can detect it's stale and skip overwriting state.
-  const assignmentsLoadGen = useRef<Record<string, number>>({});
-
-  // Job views — record of who has opened each job (read receipts).
-  // Loaded eagerly for all jobs so the collapsed cards can show "seen by".
+  // Job views — record of who has opened each job (read receipts). Loaded
+  // eagerly for all jobs so the table can show the unread-activity dot.
   const [jobViews, setJobViews] = useState<Record<string, GraphicsJobView[]>>({});
-
-  // Saving state
-  const [saving, setSaving] = useState(false);
-
-  // Estimate & Invoice state
-  const [creatingEstimate, setCreatingEstimate] = useState(false);
-  const [fetchingPdfJobId, setFetchingPdfJobId] = useState<string | null>(null);
 
   useEffect(() => {
     // Wait for auth to finish before role-gating: on a fresh tab (deep links
@@ -247,8 +197,6 @@ export default function GraphicsPage() {
     if (authLoading || !user) return;
     if (!isProduction && !isAdmin && !isSales) { router.push('/home'); return; }
     loadJobs();
-    loadProfiles();
-    loadUpfitProjects();
   // eslint-disable-next-line react-hooks/exhaustive-deps -- intentional: load once on mount
   }, [user, isAdmin, isProduction, authLoading]);
 
@@ -270,29 +218,14 @@ export default function GraphicsPage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps -- loadJobs is stable per mount
   }, [user]);
 
-  // Auto-open a job for editing when navigated from PO page via ?editJob=<id>
+  // Legacy deep links (?editJob=<id> from mention notifications, ?id=<id>
+  // from bell/new-job notifications) used to expand a card here — the
+  // record page owns per-job viewing/editing now, so forward them there.
   useEffect(() => {
-    if (loading) return;
-    const editJobId = searchParams.get('editJob');
-    if (!editJobId) return;
-    // Read before router.replace strips the query string below.
-    const focusNotes = searchParams.get('note') === 'field';
-    const job = jobs.find(j => j.id === editJobId);
-    if (job) {
-      setExpandedJobId(job.id);
-      setEditingJob({ ...job });
-      setFilterStatus('all');
-      loadHistory(job.id);
-      loadJobAssignments(job.id);
-      loadJobFiles(job.id);
-      recordJobView(job.id);
-      // A mention on the job's Internal Notes field scroll-flashes it once
-      // the edit form renders.
-      if (focusNotes) flashNote('gfx-notes-field');
-    }
-    router.replace('/graphics', { scroll: false });
-  // eslint-disable-next-line react-hooks/exhaustive-deps -- intentional: load once on mount
-  }, [loading, searchParams]);
+    const target = searchParams.get('editJob') || searchParams.get('id');
+    if (target) router.replace(`/graphics/${target}`);
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- intentional: forward once per URL change
+  }, [searchParams]);
 
   // Admin "create invoice in FleetSuite?" prompt — opens when navigated
   // from the bell notification with ?invoiceJob=<id>. Confirms once; on
@@ -331,35 +264,6 @@ export default function GraphicsPage() {
     })();
   // eslint-disable-next-line react-hooks/exhaustive-deps -- intentional: load once on mount
   }, [loading, searchParams, jobs]);
-
-  // Deep link from notifications/search: widen the filters if they'd hide
-  // the job (the board defaults to active jobs only), expand it, and scroll
-  // it into view.
-  useEffect(() => {
-    if (loading) return;
-    const jobId = searchParams.get('id');
-    const target = jobId ? jobs.find(j => j.id === jobId) : null;
-    if (!jobId || !target) return;
-    if (!ACTIVE_STATUSES.includes(target.status)) setFilterStatus('all');
-    setFilterCategory('all');
-    setSearch('');
-    setExpandedJobId(jobId);
-    loadHistory(jobId);
-    loadJobAssignments(jobId);
-    loadJobFiles(jobId);
-    recordJobView(jobId);
-    // A mention on an Activity-thread note (&note=<history id>) scroll-flashes
-    // that row once the thread loads; otherwise center the job card.
-    const noteId = searchParams.get('note');
-    if (noteId) {
-      flashNote(`gfx-hist-${noteId}`);
-    } else {
-      setTimeout(() => {
-        document.getElementById(`gfx-job-${jobId}`)?.scrollIntoView({ behavior: 'smooth', block: 'center' });
-      }, 200);
-    }
-  // eslint-disable-next-line react-hooks/exhaustive-deps -- intentional: load once on mount
-  }, [loading, searchParams]);
 
   // Open the create-job modal when other pages deep-link with ?new=1.
   // Customer / SO / VIN / checkin id flow through URL params from
@@ -495,7 +399,7 @@ export default function GraphicsPage() {
     // hasn't been migrated yet, the page should still render the jobs.
     try {
       // One row per (user, opened job): unbounded, so paginate past the
-      // 1000-row cap or the "seen by" receipts silently drop for some jobs
+      // 1000-row cap or the unread dots silently misfire for some jobs
       // once the table fills up. id gives the deterministic unique order.
       const { data: viewsData } = await fetchAllRows<GraphicsJobView>((from, to) =>
         supabase
@@ -522,97 +426,7 @@ export default function GraphicsPage() {
     return out;
   };
 
-  const recordJobView = async (jobId: string) => {
-    if (!user) return;
-    try {
-      const { error } = await supabase.rpc('record_graphics_job_view', { p_job_id: jobId });
-      if (error) {
-        console.warn('Failed to record job view:', error.message);
-        return;
-      }
-      const { data } = await supabase
-        .from('graphics_job_views')
-        .select('*')
-        .eq('job_id', jobId);
-      if (data) {
-        setJobViews(prev => ({ ...prev, [jobId]: (data as GraphicsJobView[])
-          .sort((a, b) => b.last_viewed_at.localeCompare(a.last_viewed_at)) }));
-      }
-    } catch (e) {
-      console.warn('record_graphics_job_view unavailable:', e);
-    }
-  };
-
-  const loadProfiles = async () => {
-    const { data } = await supabase
-      .from('profiles')
-      .select('id, full_name, email, role, status')
-      .eq('status', 'approved');
-    setProfiles((data as Profile[]) || []);
-  };
-
-  const loadUpfitProjects = async () => {
-    // Cheap unconditional load — there are typically far fewer upfit
-    // projects than graphics jobs and the rows are small.
-    const { data } = await supabase
-      .from('upfit_projects')
-      .select('id, project_name, status, customer_name');
-    if (!data) return;
-    const map: Record<string, { id: string; project_name: string; status: string; customer_name: string | null }> = {};
-    for (const p of data as any[]) map[p.id] = p;
-    setUpfitProjects(map);
-  };
-
-  const loadHistory = async (jobId: string) => {
-    const { data } = await supabase
-      .from('graphics_status_history')
-      .select('*')
-      .eq('job_id', jobId)
-      .order('created_at', { ascending: false });
-    setStatusHistory((data as GraphicsStatusHistory[]) || []);
-  };
-
-  const loadJobAssignments = async (jobId: string) => {
-    // Bump generation so a concurrent save can invalidate this load. Without
-    // this guard, a load fired on expand/edit can resolve AFTER the user
-    // clicks a name and clobber the optimistic state with stale DB data.
-    const gen = (assignmentsLoadGen.current[jobId] || 0) + 1;
-    assignmentsLoadGen.current[jobId] = gen;
-    const { data } = await supabase
-      .from('job_assignments')
-      .select('user_id')
-      .eq('job_type', 'graphics_job')
-      .eq('job_id', jobId);
-    if (assignmentsLoadGen.current[jobId] !== gen) return;
-    if (data) {
-      setJobAssignments(prev => ({
-        ...prev,
-        [jobId]: data.map((a: any) => a.user_id),
-      }));
-    }
-  };
-
-  const loadJobFiles = async (jobId: string) => {
-    const { data } = await supabase
-      .from('graphics_job_files')
-      .select('*')
-      .eq('job_id', jobId)
-      .order('uploaded_at', { ascending: false });
-    if (data) {
-      setJobFiles(prev => ({ ...prev, [jobId]: data as JobFile[] }));
-    }
-    // If the job is linked to a PO, also surface that PO's PDFs read-only.
-    const job = jobs.find(j => j.id === jobId);
-    if (job?.po_id) {
-      const { data: poData } = await supabase
-        .from('po_files')
-        .select('*')
-        .eq('po_id', job.po_id)
-        .order('uploaded_at', { ascending: false });
-      setJobPoFiles(prev => ({ ...prev, [jobId]: (poData as PoFile[]) || [] }));
-    }
-  };
-
+  // Upload the create wizard's attachments once the job row exists.
   const uploadFilesToJob = async (jobId: string, files: File[]) => {
     if (files.length === 0) return;
     setUploadingFiles(true);
@@ -651,407 +465,9 @@ export default function GraphicsPage() {
     }
     setUploadProgress(null);
     setUploadingFiles(false);
-    await loadJobFiles(jobId);
     if (errors.length > 0) {
       await dialog.alert(`Uploaded ${uploaded} of ${files.length} file${files.length === 1 ? '' : 's'}.\n\n${errors.join('\n')}`);
     }
-  };
-
-  const deleteJobFile = async (file: JobFile) => {
-    if (!(await dialog.confirm(`Delete "${file.file_name}"?`, { destructive: true, confirmLabel: 'Delete' }))) return;
-    // Files linked from a PO (po-pdfs/…) or a part's catalog record
-    // (part-files/…) share their storage object with the source record —
-    // only unlink them from the job. The object itself is deleted only for
-    // the job's own uploads (graphics-files/…).
-    if (file.storage_path.startsWith('graphics-files/')) {
-      await storage.from('graphics-proofs').remove([file.storage_path]);
-    }
-    await supabase.from('graphics_job_files').delete().eq('id', file.id);
-    setJobFiles(prev => ({
-      ...prev,
-      [file.job_id]: (prev[file.job_id] || []).filter(f => f.id !== file.id),
-    }));
-  };
-
-  const getFileUrl = (path: string) => {
-    const { data } = storage.from('graphics-proofs').getPublicUrl(path);
-    return data.publicUrl;
-  };
-
-  const formatFileSize = (bytes: number | null) => {
-    if (!bytes) return '';
-    if (bytes < 1024) return `${bytes} B`;
-    if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(0)} KB`;
-    return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
-  };
-
-  const saveJobAssignments = async (jobId: string, userIds: string[], jobTitle?: string) => {
-    // Invalidate any in-flight load so it can't overwrite this save.
-    assignmentsLoadGen.current[jobId] = (assignmentsLoadGen.current[jobId] || 0) + 1;
-    const prev = jobAssignments[jobId] || [];
-    setJobAssignments(p => ({ ...p, [jobId]: userIds }));
-    try {
-      const res = await fetch('/api/jobs/assign', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          jobType: 'graphics_job',
-          jobId,
-          userIds,
-          assignedBy: user?.id,
-          notifyUsers: true,
-          notifyTeam: false,
-          jobTitle,
-        }),
-      });
-      if (!res.ok) {
-        console.error('Assignment save failed:', res.status, await res.text());
-        setJobAssignments(p => ({ ...p, [jobId]: prev }));
-      }
-    } catch (err) {
-      console.error('Assignment save error:', err);
-      setJobAssignments(p => ({ ...p, [jobId]: prev }));
-    }
-  };
-
-  // Prompt for status comment before changing
-  const promptStatusChange = (job: GraphicsJob, newStatus: GraphicsJobStatus) => {
-    if (job.status === newStatus) return;
-    setPendingStatus({ job, status: newStatus });
-    setStatusComment('');
-    // Prefill from the job so a tracking number entered earlier via Edit
-    // Job isn't blanked by the ship dialog.
-    setShipTracking(job.tracking_number || '');
-  };
-
-  const confirmStatusChange = async () => {
-    if (!pendingStatus) return;
-    const ship = pendingStatus.status === 'shipped'
-      ? { tracking: shipTracking.trim() || undefined }
-      : undefined;
-    await changeStatus(pendingStatus.job, pendingStatus.status, statusComment.trim() || undefined, ship);
-    setPendingStatus(null);
-    setStatusComment('');
-  };
-
-  // Change job status
-  const changeStatus = async (
-    job: GraphicsJob,
-    newStatus: GraphicsJobStatus,
-    note?: string,
-    ship?: { tracking?: string },
-  ) => {
-    const oldStatus = job.status;
-    if (oldStatus === newStatus) return;
-
-    const shipFields: Partial<GraphicsJob> = {};
-    if (ship?.tracking) shipFields.tracking_number = ship.tracking;
-
-    const { error } = await supabase
-      .from('graphics_jobs')
-      .update({ status: newStatus, updated_at: new Date().toISOString(), ...shipFields })
-      .eq('id', job.id);
-
-    if (!error) {
-      // Log status change
-      await supabase.from('graphics_status_history').insert({
-        job_id: job.id,
-        from_status: oldStatus,
-        to_status: newStatus,
-        changed_by: user?.id,
-        note: note || null,
-      });
-
-      // Tracking number gets its own entry in the job file (rendered as a
-      // note row) so it's findable in the history independent of the
-      // status-change comment.
-      if (ship?.tracking && ship.tracking !== job.tracking_number) {
-        await supabase.from('graphics_status_history').insert({
-          job_id: job.id,
-          from_status: newStatus,
-          to_status: newStatus,
-          changed_by: user?.id,
-          note: `Tracking #: ${ship.tracking}`,
-        });
-      }
-
-      // Notifications split by target audience:
-      //   - newStatus === 'ready': install-readiness event. Fire to a narrow
-      //     install-target set (assigned installers + admins + opt-ins) via
-      //     /api/graphics/notify-ready. Graphics-team users who want generic
-      //     status-change pings still get them via the second path below.
-      //   - All transitions also fire a generic status-change notification to
-      //     anyone whose preferences include that type — preserves the
-      //     existing awareness for the production team.
-      if (newStatus === 'ready') {
-        fetch('/api/graphics/notify-ready', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ jobId: job.id }),
-        }).catch(() => {});
-      } else if (newStatus === 'ready_to_pickup') {
-        // Customer notifications are on-demand: ask, with an editable email.
-        promptPickupNotify(job);
-      } else if (newStatus === 'shipped') {
-        promptShippedNotify(job);
-      }
-
-      // Assignee + preference-gated status notifications, computed
-      // server-side (assignees always hear about their jobs; opted-in users
-      // get the generic status ping; nobody gets both).
-      apiFetch('/api/graphics/notify-assignees', {
-        method: 'POST',
-        body: JSON.stringify({
-          jobId: job.id,
-          kind: 'status',
-          newStatus,
-          statusLabel: GRAPHICS_STATUS_LABELS[newStatus],
-        }),
-      }).catch(() => {});
-
-      // Shop-install jobs: keep the arrival schedule current (the inbound
-      // entry cancels once the job ships / is picked up / installed).
-      if (job.install_location === SHOP_INSTALL_LOCATION) {
-        fetch('/api/shop-inbound', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ sourceType: 'graphics_job', sourceId: job.id }),
-        }).catch(() => {});
-      }
-
-      // Sync calendar (updates status in description, or deletes if cancelled)
-      if (job.scheduled_install_date || job.calendar_event_id) {
-        fetch('/api/calendar/sync-graphics', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ jobId: job.id }),
-        }).catch(() => {});
-      }
-
-      setJobs(prev => prev.map(j => j.id === job.id ? { ...j, status: newStatus, updated_at: new Date().toISOString(), ...shipFields } : j));
-      // Re-stamp my view so my own status change doesn't light the unread dot.
-      recordJobView(job.id);
-      if (expandedJobId === job.id) loadHistory(job.id);
-
-      // Leaving printing with nothing logged: prompt for material usage now,
-      // while the roll is still on the table. Skippable — the job card keeps
-      // a "+ Log Material" button either way.
-      if (oldStatus === 'printing' && !['cancelled', 'flagged', 'received', 'designing', 'revision'].includes(newStatus)) {
-        const { count } = await supabase
-          .from('graphics_job_materials')
-          .select('*', { count: 'exact', head: true })
-          .eq('graphics_job_id', job.id);
-        if (!count) setMaterialPromptJobId(job.id);
-      }
-    }
-  };
-
-  // Add internal note (timestamped comment, no status change)
-  const addNote = async (jobId: string) => {
-    if (!newNote.trim()) return;
-    const job = jobs.find(j => j.id === jobId);
-    const { data: inserted, error } = await supabase.from('graphics_status_history').insert({
-      job_id: jobId,
-      from_status: job?.status || null,
-      to_status: job?.status || 'received',
-      changed_by: user?.id,
-      note: newNote.trim(),
-    }).select('id').single();
-    // Surface failures (RLS denials included) — a silently vanishing note
-    // reads as data loss to the person typing it.
-    if (error) { await dialog.alert(`Note failed to save: ${error.message}`); return; }
-    // Everyone assigned to the job hears about new notes (fire-and-forget).
-    // The route also bumps the job's updated_at (for unread dots), so my own
-    // view re-stamp waits until it finishes — otherwise the bump could land
-    // after the stamp and my own note would light the dot for me.
-    apiFetch('/api/graphics/notify-assignees', {
-      method: 'POST',
-      body: JSON.stringify({ jobId, kind: 'note', note: newNote.trim() }),
-    }).catch(() => {}).finally(() => recordJobView(jobId));
-    reportMentions({
-      text: newNote.trim(),
-      sourceType: 'graphics_note',
-      sourceId: jobId,
-      contextLabel: job ? (job.title || job.job_number || 'Graphics job') : 'Graphics job',
-      // View-mode deep link (?id=) so the Activity thread is visible — the
-      // ?editJob= link opens edit mode, which hides it. &note carries the
-      // exact history row to scroll-flash.
-      contextUrl: `/graphics?id=${jobId}${inserted?.id ? `&note=${inserted.id}` : ''}`,
-    });
-    setNewNote('');
-    await loadHistory(jobId);
-  };
-
-  // Send proof to customer for approval (magic link)
-  const [sendingApprovalId, setSendingApprovalId] = useState<string | null>(null);
-  // Per-job picker state — clicking "Send proof" opens a small inline file
-  // picker inside the Customer Approval block. The actual API call doesn't
-  // fire until the user picks a file and confirms.
-  const [approvalPickerJobId, setApprovalPickerJobId] = useState<string | null>(null);
-  const [approvalPickerFileId, setApprovalPickerFileId] = useState<string | null>(null);
-
-  const openApprovalPicker = (jobId: string) => {
-    if (sendingApprovalId) return;
-    // Pre-fill with the most recently uploaded file if any (it's the
-    // common case: artist uploads the proof, then sends).
-    const files = jobFiles[jobId] || [];
-    setApprovalPickerJobId(jobId);
-    setApprovalPickerFileId(files[0]?.id || null);
-  };
-
-  const closeApprovalPicker = () => {
-    setApprovalPickerJobId(null);
-    setApprovalPickerFileId(null);
-  };
-
-  const confirmSendForApproval = async (jobId: string) => {
-    if (sendingApprovalId) return;
-    if (!approvalPickerFileId) {
-      await dialog.alert('Pick a proof file to send.');
-      return;
-    }
-    setSendingApprovalId(jobId);
-    const res = await fetch(`/api/graphics-jobs/${jobId}/send-for-approval`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ proofFileId: approvalPickerFileId }),
-    });
-    const data = await res.json();
-    setSendingApprovalId(null);
-    if (!res.ok) {
-      await dialog.alert('Send failed: ' + (data.error || 'Unknown error'));
-      return;
-    }
-    closeApprovalPicker();
-    await loadJobs();
-    const emailInfo = data.dispatch?.email
-      ? (data.dispatch.email.ok ? `Email sent to ${data.dispatch.email.target}` : `Email failed: ${data.dispatch.email.error || 'unknown'}`)
-      : null;
-    const smsInfo = data.dispatch?.sms
-      ? (data.dispatch.sms.skipped
-          ? 'SMS skipped (provider disabled)'
-          : data.dispatch.sms.ok
-            ? `SMS sent to ${data.dispatch.sms.target}`
-            : `SMS failed: ${data.dispatch.sms.error || 'unknown'}`)
-      : null;
-    await dialog.alert(`Proof sent for approval. Link: ${data.approvalUrl}\n\n${[emailInfo, smsInfo].filter(Boolean).join('\n')}`);
-  };
-
-  // Save job edits
-  // ── On-demand customer notifications ──
-  // Nothing emails the customer automatically anymore: when a job hits
-  // ready_to_pickup / shipped, staff get a dialog with the customer's email
-  // prefilled (editable per send) and Cancel sends nothing. Subscriptions to
-  // automatic emails are per customer on the Customer Notifications page.
-  const jobShortLabel = (job: GraphicsJob) => job.title || job.job_number || 'this job';
-
-  const promptPickupNotify = async (job: GraphicsJob) => {
-    try {
-      const res = await apiFetch('/api/graphics/notify-pickup', {
-        method: 'POST',
-        body: JSON.stringify({ jobId: job.id, preview: true }),
-      });
-      const info = await res.json();
-      const entry = await dialog.prompt(
-        `Tell ${job.customer || 'the customer'} that ${jobShortLabel(job)} is ready for pickup? Confirm or edit the email below — Cancel sends nothing.`,
-        info?.email || '',
-        { title: 'Notify customer?', confirmLabel: 'Send', placeholder: 'customer@company.com' },
-      );
-      if (entry === null) return; // staff chose not to notify
-      const email = entry.trim();
-      if (!email) { await dialog.alert('No email address — nothing was sent.'); return; }
-      const sendRes = await apiFetch('/api/graphics/notify-pickup', {
-        method: 'POST',
-        body: JSON.stringify({ jobId: job.id, email }),
-      });
-      const sent = await sendRes.json();
-      if (!sendRes.ok || (!sent?.dispatch?.email?.ok && !sent?.dispatch?.sms?.ok)) {
-        await dialog.alert(`Pickup notification failed${sent?.warning ? `: ${sent.warning}` : ' — check the email address.'}`);
-      }
-    } catch {
-      await dialog.alert('Pickup notification failed — network error.');
-    }
-  };
-
-  const promptShippedNotify = async (job: GraphicsJob) => {
-    // The billing prompt must fire regardless of the customer choice, so
-    // every path below still POSTs — only notifyCustomer varies.
-    let notifyCustomer = false;
-    let customerEmail: string | null = null;
-    try {
-      const res = await apiFetch('/api/graphics/notify-shipped-invoice', {
-        method: 'POST',
-        body: JSON.stringify({ jobId: job.id, preview: true }),
-      });
-      const info = await res.json();
-      const entry = await dialog.prompt(
-        `Email ${job.customer || 'the customer'} that ${jobShortLabel(job)} shipped${job.tracking_number ? ' (includes tracking)' : ''}? Confirm or edit the email below — Cancel sends nothing to the customer.`,
-        info?.email || '',
-        { title: 'Notify customer?', confirmLabel: 'Send', placeholder: 'customer@company.com' },
-      );
-      if (entry !== null && entry.trim()) {
-        notifyCustomer = true;
-        customerEmail = entry.trim();
-      }
-    } catch { /* fall through — still fire the billing prompt */ }
-    apiFetch('/api/graphics/notify-shipped-invoice', {
-      method: 'POST',
-      body: JSON.stringify({ jobId: job.id, notifyCustomer, customerEmail }),
-    }).catch(() => {});
-  };
-
-  const saveJob = async () => {
-    if (!editingJob) return;
-    setSaving(true);
-    // assigned_to is owned by the AssignmentPicker (saved immediately via the
-    // /api/jobs/assign route, which also keeps the legacy column in sync). If
-    // we included it here, the stale local value would clobber a fresh save.
-    const { id, created_at, created_by, assigned_to: _assigned_to, ...updateFields } = editingJob;
-    // Convert non-date values like "N/A" or empty strings to null for date columns
-    const sanitized = {
-      ...updateFields,
-      due_date: updateFields.due_date && updateFields.due_date !== 'N/A' ? updateFields.due_date : null,
-      scheduled_install_date: updateFields.scheduled_install_date && updateFields.scheduled_install_date !== 'N/A' ? updateFields.scheduled_install_date : null,
-      updated_at: new Date().toISOString(),
-    };
-    const { error } = await supabase
-      .from('graphics_jobs')
-      .update(sanitized)
-      .eq('id', id);
-
-    if (!error) {
-      // Notify teammates newly @mentioned in the notes field this save.
-      const prevNotes = jobs.find(j => j.id === id)?.notes || '';
-      if ((editingJob.notes || '') !== prevNotes) {
-        reportMentions({
-          text: editingJob.notes || '',
-          previousText: prevNotes,
-          sourceType: 'graphics_note',
-          sourceId: id,
-          contextLabel: editingJob.title || editingJob.job_number || 'Graphics job',
-          contextUrl: `/graphics?editJob=${id}&note=field`,
-        });
-      }
-
-      setJobs(prev => prev.map(j => j.id === id ? editingJob : j));
-      setEditingJob(null);
-
-      // Sync install date to Google Calendar (create, update, or delete event)
-      fetch('/api/calendar/sync-graphics', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ jobId: id }),
-      }).catch(() => {});
-
-      // Re-derive the shop arrival entry (idempotent — also cancels it when
-      // the install location moves away from our shop).
-      fetch('/api/shop-inbound', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ sourceType: 'graphics_job', sourceId: id }),
-      }).catch(() => {});
-    }
-    setSaving(false);
   };
 
   // Create new job
@@ -1112,7 +528,7 @@ export default function GraphicsPage() {
           sourceType: 'graphics_note',
           sourceId: data.id,
           contextLabel: createForm.title || jobNumber,
-          contextUrl: `/graphics?editJob=${data.id}&note=field`,
+          contextUrl: `/graphics/${data.id}`,
         });
       }
 
@@ -1171,7 +587,7 @@ export default function GraphicsPage() {
               type: 'graphics_new',
               title: `New Graphics Job: ${createForm.title || 'Untitled'}`,
               body: `${createForm.customer || 'Unknown'} · ${createForm.quantity} unit${createForm.quantity !== 1 ? 's' : ''}${createForm.part_number ? ` · ${createForm.part_number}` : ''}`,
-              url: `/graphics?id=${data.id}`,
+              url: `/graphics/${data.id}`,
               excludeUserId: user?.id,
             }),
           }).catch(() => {});
@@ -1250,51 +666,6 @@ export default function GraphicsPage() {
     setCreating(false);
   };
 
-  // Delete job
-  const deleteJob = async (jobId: string) => {
-    if (!(await dialog.confirm('Delete this graphics job? This cannot be undone.', { destructive: true, confirmLabel: 'Delete' }))) return;
-    const { error } = await supabase.from('graphics_jobs').delete().eq('id', jobId);
-    if (!error) {
-      setJobs(prev => prev.filter(j => j.id !== jobId));
-      setExpandedJobId(null);
-      setEditingJob(null);
-    }
-  };
-
-  // Create estimate from graphics job
-  const createEstimateFromJob = async (job: GraphicsJob) => {
-    if (job.estimate_id) {
-      await dialog.alert('This job already has an estimate linked.');
-      return;
-    }
-    if (!job.part_number && !job.customer) {
-      await dialog.alert('Please add at least a part number or customer to this job before creating an estimate.');
-      return;
-    }
-    if (!(await dialog.confirm('Create an estimate from this graphics job? The estimate will be pre-populated with the job\'s part numbers and customer.'))) return;
-
-    setCreatingEstimate(true);
-    try {
-      const res = await fetch('/api/graphics/create-estimate', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ jobId: job.id, userId: user?.id }),
-      });
-      const data = await res.json();
-      if (data.success) {
-        await dialog.alert(`Estimate created: ${data.estimate_number}\n${data.line_item_count} line item${data.line_item_count !== 1 ? 's' : ''}\nTotal: $${data.grand_total?.toFixed(2) || '0.00'}\n\nYou can edit this estimate on the Estimates page.`);
-        // Update local job state
-        setJobs(prev => prev.map(j => j.id === job.id ? { ...j, estimate_id: data.estimate_id, updated_at: new Date().toISOString() } : j));
-        loadHistory(job.id);
-      } else {
-        await dialog.alert('Failed to create estimate: ' + (data.error || 'Unknown error'));
-      }
-    } catch {
-      await dialog.alert('Network error — please try again');
-    }
-    setCreatingEstimate(false);
-  };
-
   // Print a packing list for the job. `overrides` lets us merge in fresh
   // invoice info right after creating one (before local state catches up).
   const printPackingList = async (job: GraphicsJob, overrides?: Partial<GraphicsJob>, lines?: PackingListLine[]) => {
@@ -1309,10 +680,9 @@ export default function GraphicsPage() {
     }
   };
 
-  // Pull the invoice PDF from NetSuite and store it on the job record.
-  // `silent` is used for the best-effort auto-fetch right after invoicing.
-  const storeInvoicePdf = async (jobId: string, silent = false): Promise<string | null> => {
-    setFetchingPdfJobId(jobId);
+  // Best-effort: pull the invoice PDF from NetSuite and store it on the job
+  // record right after invoicing (the record page has the on-demand button).
+  const storeInvoicePdf = async (jobId: string) => {
     try {
       const res = await fetch('/api/graphics/invoice-pdf', {
         method: 'POST',
@@ -1322,15 +692,8 @@ export default function GraphicsPage() {
       const data = await res.json();
       if (data.success && data.url) {
         setJobs(prev => prev.map(j => j.id === jobId ? { ...j, invoice_pdf_url: data.url } : j));
-        return data.url as string;
       }
-      if (!silent) await dialog.alert('Could not get the invoice PDF: ' + (data.error || 'Unknown error'));
-    } catch {
-      if (!silent) await dialog.alert('Network error fetching the invoice PDF — please try again.');
-    } finally {
-      setFetchingPdfJobId(null);
-    }
-    return null;
+    } catch { /* best-effort */ }
   };
 
   // Open the shared email-invoice modal for a job's NetSuite invoice. The
@@ -1352,26 +715,9 @@ export default function GraphicsPage() {
 
   // ── Production metrics (time-in-stage + due risk) ──
   const PRODUCTION_STAGES: GraphicsJobStatus[] = ['received', 'designing', 'revision', 'printing', 'outgassing', 'cutting', 'packing'];
-  const EARLY_STAGES: GraphicsJobStatus[] = ['flagged', 'received', 'designing', 'revision'];
   const stageDays = (j: GraphicsJob): number => {
     const since = stageSince[j.id] || j.created_at;
     return Math.floor((Date.now() - new Date(since).getTime()) / 86_400_000);
-  };
-  const dueRisk = (j: GraphicsJob): { label: string; color: string } | null => {
-    // Once produced (ready onward), the due date did its job.
-    if (!j.due_date || !PRODUCTION_STAGES.includes(j.status) && j.status !== 'flagged') return null;
-    const todayStr2 = new Date().toISOString().slice(0, 10);
-    const due = j.due_date.slice(0, 10);
-    if (due < todayStr2) {
-      const days = Math.floor((Date.now() - new Date(due + 'T12:00:00').getTime()) / 86_400_000);
-      return { label: `overdue ${days}d`, color: '#ef4444' };
-    }
-    const daysUntil = Math.floor((new Date(due + 'T12:00:00').getTime() - Date.now()) / 86_400_000);
-    if (daysUntil > 3) return null;
-    const weekday = new Date(due + 'T12:00:00').toLocaleDateString([], { weekday: 'short' });
-    return EARLY_STAGES.includes(j.status)
-      ? { label: `due ${weekday} — still in ${GRAPHICS_STATUS_LABELS[j.status].toLowerCase()}`, color: '#ef4444' }
-      : { label: `due ${weekday}`, color: '#fbbf24' };
   };
   const metricJobs = jobs.filter(j => PRODUCTION_STAGES.includes(j.status));
   // Shared predicates so the metric tiles and the tile-click filter always
@@ -1426,41 +772,24 @@ export default function GraphicsPage() {
       );
     }
     return true;
-  }).sort((a, b) => {
-    const dirMul = sortDir === 'asc' ? 1 : -1;
-    if (sortBy === 'due_date') {
-      // Missing due dates always sink to the bottom, regardless of direction
-      if (!a.due_date && !b.due_date) return 0;
-      if (!a.due_date) return 1;
-      if (!b.due_date) return -1;
-      return a.due_date.localeCompare(b.due_date) * dirMul;
-    }
-    if (sortBy === 'created_at') {
-      return (a.created_at || '').localeCompare(b.created_at || '') * dirMul;
-    }
-    // status: order by pipeline position
-    const aIdx = GRAPHICS_STATUS_ORDER.indexOf(a.status);
-    const bIdx = GRAPHICS_STATUS_ORDER.indexOf(b.status);
-    if (aIdx !== bIdx) return (aIdx - bIdx) * dirMul;
-    // Tiebreak within a status: soonest due date first
-    if (!a.due_date && !b.due_date) return 0;
-    if (!a.due_date) return 1;
-    if (!b.due_date) return -1;
-    return a.due_date.localeCompare(b.due_date);
   });
 
-  // Pipeline counts (hide flagged from non-admins)
+  // Sort — click-to-sort table headers (SortableTh). Missing values (no due
+  // date, no PO) sort last in either direction. Default: due date ascending.
+  const { sorted, sort, toggle } = useTableSort(filteredJobs, {
+    job: j => j.job_number,
+    title: j => j.title?.toLowerCase() || null,
+    customer: j => j.customer?.toLowerCase() || null,
+    po: j => j.po_number || null,
+    qty: j => j.quantity,
+    priority: j => PRIORITY_RANK[j.priority] ?? 1,
+    due: j => j.due_date ? j.due_date.slice(0, 10) : null,
+    status: j => GRAPHICS_STATUS_ORDER.indexOf(j.status),
+  }, { key: 'due', dir: 'asc' });
+
+  // Tab counts (hide flagged from non-admins)
   const visibleJobs = isAdmin ? jobs : jobs.filter(j => j.status !== 'flagged');
-  const statusCounts: Record<string, number> = {};
-  GRAPHICS_STATUS_ORDER.forEach(s => {
-    statusCounts[s] = visibleJobs.filter(j => j.status === s).length;
-  });
-
-  const getProfileName = (userId: string | null) => {
-    if (!userId) return null;
-    const p = profiles.find(pr => pr.id === userId);
-    return p?.full_name || p?.email || null;
-  };
+  const activeCount = visibleJobs.filter(j => ACTIVE_STATUSES.includes(j.status)).length;
 
   const priorityColor = (p: string) => {
     switch (p) {
@@ -1470,6 +799,21 @@ export default function GraphicsPage() {
       case 'low': return '#6b7280';
       default: return '#6b7280';
     }
+  };
+
+  // Whether the popover's per-status select (not the tabs) is narrowing
+  const statusSelectActive = filterStatus !== 'active' && filterStatus !== 'all';
+
+  const toggleArchived = () => {
+    const next = !showArchived;
+    setShowArchived(next);
+    // Open onto "All" so BOTH installed and cancelled show at once —
+    // filtering to Active would hide the entire archived set just loaded.
+    // "All" also keeps the current active rows visible while the archived
+    // set loads, avoiding an empty-board flash. Back to Active on close.
+    setFilterStatus(next ? 'all' : 'active');
+    setMetricFilter(null);
+    loadJobs(next);
   };
 
   const inputStyle: React.CSSProperties = {
@@ -1586,70 +930,23 @@ export default function GraphicsPage() {
 
       <MentionsInbox />
 
-      {/* Category Filter */}
-      <div style={{ display: 'flex', gap: '4px', marginBottom: '8px', flexWrap: 'wrap' }}>
-        {(() => {
-          const mineCount = jobs.filter(j => (isAdmin || j.status !== 'flagged') && isMine(j)).length;
-          return (
-            <button
-              onClick={() => setMyJobsOnly(v => !v)}
-              title="Only jobs assigned to you"
-              style={{
-                padding: '5px 10px', borderRadius: '6px', fontSize: '10px', fontWeight: 700,
-                background: myJobsOnly ? 'rgba(34,197,94,0.18)' : 'var(--subtle-bg)',
-                border: `1px solid ${myJobsOnly ? 'rgba(34,197,94,0.5)' : 'var(--border)'}`,
-                color: myJobsOnly ? '#22c55e' : 'var(--text-label)',
-                cursor: 'pointer', whiteSpace: 'nowrap',
-              }}
-            >
-              ★ My Jobs ({mineCount})
-            </button>
-          );
-        })()}
-        {([
-          { id: 'all' as const, label: 'All', color: '#60a5fa' },
-          { id: 'production' as const, label: 'Production', color: GRAPHICS_CATEGORY_COLORS.production },
-          { id: 'customer_supplied' as const, label: 'Cust. Supplied', color: GRAPHICS_CATEGORY_COLORS.customer_supplied },
-          { id: 'proofing' as const, label: 'Proofing', color: GRAPHICS_CATEGORY_COLORS.proofing },
-          { id: 'internal' as const, label: 'Internal', color: GRAPHICS_CATEGORY_COLORS.internal },
-        ]).map(c => {
-          const count = c.id === 'all' ? jobs.length : jobs.filter(j => (j.job_category || 'production') === c.id).length;
-          return (
-            <button
-              key={c.id}
-              onClick={() => setFilterCategory(c.id)}
-              style={{
-                padding: '5px 10px', borderRadius: '6px', fontSize: '10px', fontWeight: 700,
-                background: filterCategory === c.id ? `${c.color}22` : 'var(--subtle-bg)',
-                border: `1px solid ${filterCategory === c.id ? `${c.color}55` : 'var(--border)'}`,
-                color: filterCategory === c.id ? c.color : 'var(--text-label)',
-                cursor: 'pointer', whiteSpace: 'nowrap',
-              }}
-            >
-              {c.label} ({count})
-            </button>
-          );
-        })}
-      </div>
-
       {/* Production metrics strip — bottleneck + due-date risk at a glance */}
       {metricJobs.length > 0 && (
         <div style={{ display: 'flex', gap: '8px', marginBottom: '12px', overflowX: 'auto', WebkitOverflowScrolling: 'touch' }}>
           {[
-            { id: 'all' as const, label: 'All jobs', value: String(visibleJobs.filter(j => ACTIVE_STATUSES.includes(j.status)).length), color: '#60a5fa' },
             { id: 'overdue' as const, label: 'Overdue', value: String(metrics.overdue), color: metrics.overdue > 0 ? '#ef4444' : '#22c55e' },
             { id: 'dueWeek' as const, label: 'Due in 7 days', value: String(metrics.dueWeek), color: metrics.dueWeek > 0 ? '#fbbf24' : 'var(--text-muted)' },
             { id: 'stuck' as const, label: 'Stuck 5+ days in stage', value: String(metrics.stuck), color: metrics.stuck > 0 ? '#fbbf24' : '#22c55e' },
             { id: null, label: 'Avg days in stage', value: metrics.avgStageDays.toFixed(1), color: 'var(--text-primary)' },
           ].map(t => {
-            const active = t.id === 'all' ? metricFilter === null : (t.id !== null && metricFilter === t.id);
+            const active = t.id !== null && metricFilter === t.id;
             return (
               <button
                 key={t.label}
                 disabled={t.id === null}
-                title={t.id === null ? undefined : t.id === 'all' ? 'Show every job' : active ? 'Show all jobs again' : 'Show only these jobs'}
+                title={t.id === null ? undefined : active ? 'Show all jobs again' : 'Show only these jobs'}
                 onClick={t.id === null ? undefined : () => {
-                  const next = t.id === 'all' || metricFilter === t.id ? null : t.id;
+                  const next = metricFilter === t.id ? null : t.id;
                   setMetricFilter(next);
                   // Tiles span several statuses — widen a narrowed status
                   // filter so every matching job is actually visible.
@@ -1672,1322 +969,297 @@ export default function GraphicsPage() {
         </div>
       )}
 
-      {/* Status Pipeline Summary */}
-      <div style={{
-        display: 'flex', gap: '3px', marginBottom: '12px', overflowX: 'auto',
-        padding: '2px 0', WebkitOverflowScrolling: 'touch',
-      }}>
+      {/* Toolbar: Active/All tabs + search + Filter popover */}
+      <div style={{ display: 'flex', gap: '6px', marginBottom: '12px', alignItems: 'center', flexWrap: 'wrap' }}>
         <button
           onClick={() => { setFilterStatus('active'); setMetricFilter(null); }}
           style={{
-            padding: '6px 10px', borderRadius: '6px', fontSize: '10px', fontWeight: 700,
-            background: filterStatus === 'active' ? 'rgba(59,130,246,0.2)' : 'var(--subtle-bg)',
-            border: `1px solid ${filterStatus === 'active' ? 'rgba(59,130,246,0.4)' : 'var(--border)'}`,
-            color: filterStatus === 'active' ? '#60a5fa' : 'var(--text-label)',
+            padding: '7px 12px', borderRadius: '8px', fontSize: '11px', fontWeight: 700,
+            background: filterStatus === 'active' ? 'rgba(34,197,94,0.15)' : 'var(--subtle-bg)',
+            border: `1px solid ${filterStatus === 'active' ? 'rgba(34,197,94,0.5)' : 'var(--border)'}`,
+            color: filterStatus === 'active' ? '#22c55e' : 'var(--text-label)',
             whiteSpace: 'nowrap', cursor: 'pointer', flexShrink: 0,
           }}
         >
-          Active ({visibleJobs.filter(j => ACTIVE_STATUSES.includes(j.status)).length})
+          Active ({activeCount})
         </button>
-        {GRAPHICS_STATUS_ORDER.filter(s => (statusCounts[s] > 0 || s === 'received') && (s !== 'flagged' || isAdmin)).map(s => (
-          <button
-            key={s}
-            onClick={() => { setFilterStatus(filterStatus === s ? 'active' : s); setMetricFilter(null); }}
-            style={{
-              padding: '6px 10px', borderRadius: '6px', fontSize: '10px', fontWeight: 700,
-              background: filterStatus === s ? `${GRAPHICS_STATUS_COLORS[s]}22` : 'var(--subtle-bg)',
-              border: `1px solid ${filterStatus === s ? `${GRAPHICS_STATUS_COLORS[s]}66` : 'var(--border)'}`,
-              color: filterStatus === s ? GRAPHICS_STATUS_COLORS[s] : 'var(--text-label)',
-              whiteSpace: 'nowrap', cursor: 'pointer', flexShrink: 0,
-            }}
-          >
-            {GRAPHICS_STATUS_LABELS[s].replace('Job ', '')} ({statusCounts[s] || 0})
-          </button>
-        ))}
         <button
-          onClick={() => setFilterStatus('all')}
+          onClick={() => { setFilterStatus('all'); setMetricFilter(null); }}
           style={{
-            padding: '6px 10px', borderRadius: '6px', fontSize: '10px', fontWeight: 700,
+            padding: '7px 12px', borderRadius: '8px', fontSize: '11px', fontWeight: 700,
             background: filterStatus === 'all' ? 'rgba(59,130,246,0.2)' : 'var(--subtle-bg)',
             border: `1px solid ${filterStatus === 'all' ? 'rgba(59,130,246,0.4)' : 'var(--border)'}`,
             color: filterStatus === 'all' ? '#60a5fa' : 'var(--text-label)',
             whiteSpace: 'nowrap', cursor: 'pointer', flexShrink: 0,
           }}
         >
-          All ({jobs.length})
+          All ({visibleJobs.length})
         </button>
-        <button
-          onClick={() => {
-            const next = !showArchived;
-            setShowArchived(next);
-            // Open onto "All" so BOTH installed and cancelled show at once
-            // (matching the tooltip) — not the Installed tab, which would hide
-            // cancelled jobs and render blank when nothing is installed. "All"
-            // also keeps the current active rows visible while the archived
-            // set loads, avoiding an empty-board flash. Back to Active on close.
-            setFilterStatus(next ? 'all' : 'active');
-            setMetricFilter(null);
-            loadJobs(next);
-          }}
-          title={showArchived ? 'Hide installed & cancelled jobs' : 'Show installed & cancelled (archived) jobs'}
-          style={{
-            padding: '6px 10px', borderRadius: '6px', fontSize: '10px', fontWeight: 700,
-            background: showArchived ? 'rgba(148,163,184,0.22)' : 'var(--subtle-bg)',
-            border: `1px solid ${showArchived ? 'rgba(148,163,184,0.5)' : 'var(--border)'}`,
-            color: showArchived ? 'var(--text-primary)' : 'var(--text-label)',
-            whiteSpace: 'nowrap', cursor: 'pointer', flexShrink: 0,
-          }}
-        >
-          🗄 Archived{showArchived ? ' ✓' : ''}
-        </button>
-      </div>
-
-      {/* Search + Sort */}
-      <div style={{ display: 'flex', gap: '6px', marginBottom: '12px', alignItems: 'stretch' }}>
         <input
           placeholder="Search jobs..."
           value={search}
           onChange={e => setSearch(e.target.value)}
           style={{
-            ...inputStyle, flex: 1, marginBottom: 0,
+            ...inputStyle, flex: 1, minWidth: '160px', marginBottom: 0,
             background: 'var(--subtle-bg)', border: '1px solid var(--border)',
           }}
         />
-        <select
-          value={sortBy}
-          onChange={e => setSortBy(e.target.value as 'due_date' | 'created_at' | 'status')}
-          title="Sort jobs by"
-          style={{
-            ...inputStyle, marginBottom: 0, width: 'auto', minWidth: '120px',
-            background: 'var(--subtle-bg)', border: '1px solid var(--border)',
-            cursor: 'pointer',
+        <FilterButton
+          activeCount={(filterCategory !== 'all' ? 1 : 0) + (statusSelectActive ? 1 : 0) + (myJobsOnly ? 1 : 0) + (showArchived ? 1 : 0)}
+          onClear={() => {
+            setFilterCategory('all');
+            setMyJobsOnly(false);
+            setFilterStatus('active');
+            if (showArchived) { setShowArchived(false); loadJobs(false); }
           }}
         >
-          <option value="due_date">Due date</option>
-          <option value="created_at">Date created</option>
-          <option value="status">Status</option>
-        </select>
-        <button
-          onClick={() => setSortDir(sortDir === 'asc' ? 'desc' : 'asc')}
-          title={sortDir === 'asc' ? 'Ascending — click for descending' : 'Descending — click for ascending'}
-          style={{
-            padding: '0 12px', borderRadius: '6px', fontSize: '14px', fontWeight: 700,
-            background: 'var(--subtle-bg)', border: '1px solid var(--border)',
-            color: 'var(--text-label)', cursor: 'pointer', whiteSpace: 'nowrap',
-          }}
-        >
-          {sortDir === 'asc' ? '↑' : '↓'}
-        </button>
+          <FilterLabel>Category</FilterLabel>
+          <div style={{ display: 'flex', gap: '4px', flexWrap: 'wrap' }}>
+            {([
+              { id: 'all' as const, label: 'All', color: '#60a5fa' },
+              { id: 'production' as const, label: 'Production', color: GRAPHICS_CATEGORY_COLORS.production },
+              { id: 'customer_supplied' as const, label: 'Cust. Supplied', color: GRAPHICS_CATEGORY_COLORS.customer_supplied },
+              { id: 'proofing' as const, label: 'Proofing', color: GRAPHICS_CATEGORY_COLORS.proofing },
+              { id: 'internal' as const, label: 'Internal', color: GRAPHICS_CATEGORY_COLORS.internal },
+            ]).map(c => {
+              const count = c.id === 'all' ? jobs.length : jobs.filter(j => (j.job_category || 'production') === c.id).length;
+              return (
+                <button
+                  key={c.id}
+                  onClick={() => setFilterCategory(c.id)}
+                  style={{
+                    padding: '4px 9px', borderRadius: '999px', fontSize: '10px', fontWeight: 700, cursor: 'pointer',
+                    background: filterCategory === c.id ? `${c.color}22` : 'var(--subtle-bg)',
+                    border: `1px solid ${filterCategory === c.id ? `${c.color}55` : 'var(--border)'}`,
+                    color: filterCategory === c.id ? c.color : 'var(--text-muted)',
+                    whiteSpace: 'nowrap',
+                  }}
+                >
+                  {c.label} ({count})
+                </button>
+              );
+            })}
+          </div>
+          <FilterLabel>Status</FilterLabel>
+          <select
+            value={statusSelectActive ? filterStatus : ''}
+            onChange={e => {
+              const v = e.target.value as GraphicsJobStatus | '';
+              setFilterStatus(v || (showArchived ? 'all' : 'active'));
+              if (v) setMetricFilter(null);
+            }}
+            style={{ width: '100%', padding: '6px 8px', borderRadius: '7px', fontSize: '12px', fontWeight: 600, background: 'var(--input-bg)', border: '1px solid var(--border)', color: 'var(--text-primary)' }}
+          >
+            <option value="">Any status</option>
+            {GRAPHICS_STATUS_ORDER.filter(s => s !== 'flagged' || isAdmin).map(s => (
+              <option key={s} value={s}>{GRAPHICS_STATUS_LABELS[s]}</option>
+            ))}
+          </select>
+          <FilterLabel>Other</FilterLabel>
+          <div style={{ display: 'flex', gap: '4px', flexWrap: 'wrap' }}>
+            <button
+              onClick={() => setMyJobsOnly(v => !v)}
+              title="Only jobs assigned to you"
+              style={{
+                padding: '4px 9px', borderRadius: '999px', fontSize: '10px', fontWeight: 700, cursor: 'pointer',
+                background: myJobsOnly ? 'rgba(34,197,94,0.18)' : 'var(--subtle-bg)',
+                border: `1px solid ${myJobsOnly ? 'rgba(34,197,94,0.5)' : 'var(--border)'}`,
+                color: myJobsOnly ? '#22c55e' : 'var(--text-muted)',
+                whiteSpace: 'nowrap',
+              }}
+            >
+              ★ My Jobs ({jobs.filter(j => (isAdmin || j.status !== 'flagged') && isMine(j)).length})
+            </button>
+            <button
+              onClick={toggleArchived}
+              title={showArchived ? 'Hide installed & cancelled jobs' : 'Show installed & cancelled (archived) jobs'}
+              style={{
+                padding: '4px 9px', borderRadius: '999px', fontSize: '10px', fontWeight: 700, cursor: 'pointer',
+                background: showArchived ? 'rgba(148,163,184,0.22)' : 'var(--subtle-bg)',
+                border: `1px solid ${showArchived ? 'rgba(148,163,184,0.5)' : 'var(--border)'}`,
+                color: showArchived ? 'var(--text-primary)' : 'var(--text-muted)',
+                whiteSpace: 'nowrap',
+              }}
+            >
+              🗄 Archived{showArchived ? ' ✓' : ''}
+            </button>
+          </div>
+        </FilterButton>
       </div>
 
-      {/* Job List */}
-      {filteredJobs.length === 0 ? (
+      {/* Job table — every row opens the job record */}
+      {sorted.length === 0 ? (
         <div style={{ textAlign: 'center', padding: '30px 0', color: 'var(--text-label)', fontSize: '13px' }}>
           {search ? 'No matching jobs found.' : 'No graphics jobs yet.'}
         </div>
-      ) : (
-        <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
-          {filteredJobs.map(job => {
-            const isExpanded = expandedJobId === job.id;
-            const isEditing = editingJob?.id === job.id;
-            const editJob = isEditing ? editingJob : job;
-            const statusColor = GRAPHICS_STATUS_COLORS[job.status];
-            // Unread: activity (status change, note, edit) since this viewer
-            // last opened the job. No view row = never opened = unread.
-            // Cleared by recordJobView on expand.
-            const myView = (jobViews[job.id] || []).find(v => v.user_id === user?.id);
-            const hasNew = !myView || new Date(job.updated_at).getTime() > new Date(myView.last_viewed_at).getTime();
-            const highlightNew = hasNew && !isExpanded;
-
-            return (
-              <div key={job.id} id={`gfx-job-${job.id}`} style={{
-                borderRadius: '12px', overflow: 'hidden',
-                border: `1px solid ${isExpanded ? `${statusColor}44` : highlightNew ? '#ef444477' : 'var(--border)'}`,
-                background: highlightNew ? 'rgba(239,68,68,0.07)' : 'var(--subtle-bg)',
-                boxShadow: highlightNew ? 'inset 4px 0 0 0 #ef4444' : undefined,
-              }}>
-                {/* Job card header */}
-                <div
-                  onClick={() => {
-                    if (isExpanded) {
-                      setExpandedJobId(null);
-                      setEditingJob(null);
-                    } else {
-                      setExpandedJobId(job.id);
-                      loadHistory(job.id);
-                      loadJobAssignments(job.id);
-                      loadJobFiles(job.id);
-                      recordJobView(job.id);
-                    }
-                  }}
-                  style={{ padding: '12px', cursor: 'pointer' }}
-                >
-                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: '8px' }}>
-                    <div style={{ flex: 1, minWidth: 0 }}>
-                      <div style={{ display: 'flex', alignItems: 'center', gap: '6px', marginBottom: '3px' }}>
-                        {hasNew && (
-                          <span title="New activity since you last viewed this job" style={{ width: '9px', height: '9px', borderRadius: '50%', background: '#ef4444', flexShrink: 0 }} />
-                        )}
-                        {job.priority !== 'normal' && (
-                          <span style={{ fontSize: '9px', fontWeight: 800, color: priorityColor(job.priority), textTransform: 'uppercase', padding: '1px 5px', borderRadius: '3px', background: `${priorityColor(job.priority)}15`, border: `1px solid ${priorityColor(job.priority)}33` }}>
-                            {job.priority}
-                          </span>
-                        )}
-                        <div style={{ fontSize: '13px', fontWeight: 800, color: 'var(--text-body)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-                          {job.title}
-                        </div>
-                      </div>
-                      <div style={{ fontSize: '10px', color: 'var(--text-label)', display: 'flex', gap: '8px', flexWrap: 'wrap', alignItems: 'center' }}>
-                        {(job.job_category && job.job_category !== 'production') && (
-                          <span style={{
-                            padding: '1px 6px', borderRadius: '4px', fontSize: '9px', fontWeight: 700,
-                            background: `${GRAPHICS_CATEGORY_COLORS[job.job_category]}18`,
-                            border: `1px solid ${GRAPHICS_CATEGORY_COLORS[job.job_category]}44`,
-                            color: GRAPHICS_CATEGORY_COLORS[job.job_category],
-                            textTransform: 'uppercase', letterSpacing: '0.3px',
-                          }}>
-                            {GRAPHICS_CATEGORY_LABELS[job.job_category]}
-                          </span>
-                        )}
-                        {job.customer && <span>{job.customer}</span>}
-                        {job.part_number && job.part_number.split(',').map((pn, i) => {
-                          const trimmed = pn.trim();
-                          if (!trimmed) return null;
-                          return (
-                            <span key={i} style={{ background: 'rgba(59,130,246,0.08)', padding: '0 4px', borderRadius: '3px' }}>
-                              <PartLabel partNumber={trimmed} />
-                            </span>
-                          );
-                        })}
-                        <span>Qty: {job.quantity}</span>
-                        {job.due_date && <span style={{ color: (parseLocalDate(job.due_date) || new Date()) < new Date() ? '#ef4444' : '#fbbf24' }}>Due: {displayDate(job.due_date)}</span>}
-                        {job.scheduled_install_date && <span style={{ color: job.scheduled_install_date === 'N/A' ? 'var(--text-muted)' : '#22d3ee' }}>Install: {job.scheduled_install_date === 'N/A' ? 'N/A' : displayDate(job.scheduled_install_date)}</span>}
-                        {job.install_location === SHOP_INSTALL_LOCATION && <span style={{ color: '#38bdf8' }}>Shop install</span>}
-                        {job.po_number && <span style={{ color: '#a78bfa', fontWeight: 700 }}>PO #{job.po_number}</span>}
-                        {job.estimate_id && <span style={{ padding: '0 4px', borderRadius: '3px', background: 'rgba(96,165,250,0.1)', color: '#60a5fa', fontWeight: 700 }}>Estimate</span>}
-                        {job.upfit_project_id && upfitProjects[job.upfit_project_id] && (
-                          <span style={{ padding: '0 4px', borderRadius: '3px', background: 'rgba(249,115,22,0.12)', color: '#f97316', fontWeight: 700 }} title={upfitProjects[job.upfit_project_id].project_name}>
-                            Upfit
-                          </span>
-                        )}
-                        {job.netsuite_invoice_number && <span style={{ padding: '0 4px', borderRadius: '3px', background: 'rgba(34,197,94,0.1)', color: '#22c55e', fontWeight: 700 }}>INV {job.netsuite_invoice_number}</span>}
-                        {job.tracking_number && (
-                          <a
-                            href={upsTrackingUrl(job.tracking_number)}
-                            target="_blank"
-                            rel="noopener noreferrer"
-                            onClick={e => e.stopPropagation()}
-                            title="Track on ups.com"
-                            style={{ padding: '0 4px', borderRadius: '3px', background: 'rgba(96,165,250,0.1)', color: '#60a5fa', fontWeight: 700, textDecoration: 'none' }}
-                          >
-                            📦 {job.tracking_number}
-                          </a>
-                        )}
-                        {(() => {
-                          const others = (jobViews[job.id] || []).filter(v => v.user_id !== user?.id);
-                          if (others.length === 0) return null;
-                          const names = others.map(v => {
-                            const p = profiles.find(pr => pr.id === v.user_id);
-                            return p?.full_name || p?.email || 'Unknown';
-                          });
-                          const tooltip = others
-                            .map((v, i) => `${names[i]} — ${relativeTime(v.last_viewed_at)}`)
-                            .join('\n');
-                          return (
-                            <span
-                              title={`Seen by:\n${tooltip}`}
-                              style={{ padding: '0 4px', borderRadius: '3px', background: 'rgba(148,163,184,0.12)', color: 'var(--text-muted)', fontWeight: 700 }}
-                            >
-                              👁 {others.length}
-                            </span>
-                          );
-                        })()}
-                      </div>
-                    </div>
-                    {/* Due-date risk + time-in-stage — the bottleneck, per job */}
-                    {(() => {
-                      const risk = dueRisk(job);
-                      if (!risk) return null;
-                      return (
-                        <div style={{
-                          padding: '4px 8px', borderRadius: '6px', fontSize: '10px', fontWeight: 700,
-                          background: `${risk.color}18`, border: `1px solid ${risk.color}44`, color: risk.color,
-                          whiteSpace: 'nowrap', flexShrink: 0,
-                        }}>
-                          ⚠ {risk.label}
-                        </div>
-                      );
-                    })()}
-                    {(() => {
-                      if (!PRODUCTION_STAGES.includes(job.status)) return null;
+      ) : (() => {
+        const thStyle: React.CSSProperties = {
+          fontSize: '10px', fontWeight: 800, textTransform: 'uppercase', letterSpacing: '0.5px',
+          color: 'var(--text-muted)', padding: '10px 12px', borderBottom: '1px solid var(--border-strong)',
+        };
+        const tdStyle: React.CSSProperties = {
+          padding: '9px 12px', borderBottom: '1px solid var(--border)', fontSize: '12.5px', whiteSpace: 'nowrap',
+        };
+        const flagChip = (color: string): React.CSSProperties => ({
+          fontSize: '10px', fontWeight: 700, color, padding: '1px 6px', borderRadius: '4px',
+          background: `${color}15`, border: `1px solid ${color}33`, whiteSpace: 'nowrap',
+        });
+        const todayStr = new Date().toISOString().slice(0, 10);
+        return (
+          <div style={{ background: 'var(--card)', border: '1px solid var(--border)', borderRadius: '12px', overflow: 'hidden' }}>
+            <div className="responsive-table">
+              <table style={{ borderCollapse: 'collapse', width: '100%', minWidth: '880px' }}>
+                <thead><tr>
+                  <SortableTh label="Job #" sortKey="job" sort={sort} onToggle={toggle} style={thStyle} />
+                  <SortableTh label="Title" sortKey="title" sort={sort} onToggle={toggle} style={thStyle} />
+                  <SortableTh label="Customer" sortKey="customer" sort={sort} onToggle={toggle} style={thStyle} />
+                  <SortableTh label="PO #" sortKey="po" sort={sort} onToggle={toggle} style={thStyle} />
+                  <SortableTh label="Qty" sortKey="qty" sort={sort} onToggle={toggle} align="right" style={thStyle} />
+                  <SortableTh label="Priority" sortKey="priority" sort={sort} onToggle={toggle} defaultDir="desc" style={thStyle} />
+                  <SortableTh label="Due" sortKey="due" sort={sort} onToggle={toggle} style={thStyle} />
+                  <SortableTh label="Status" sortKey="status" sort={sort} onToggle={toggle} style={thStyle} />
+                  <th style={{ ...thStyle, textAlign: 'left' }}>Flags</th>
+                </tr></thead>
+                <tbody>
+                  {sorted.map(job => {
+                    const statusColor = GRAPHICS_STATUS_COLORS[job.status];
+                    // Unread: activity (status change, note, edit) since this
+                    // viewer last opened the job. No view row = never opened =
+                    // unread. Cleared when the record page stamps a view.
+                    const myView = (jobViews[job.id] || []).find(v => v.user_id === user?.id);
+                    const hasNew = !myView || new Date(job.updated_at).getTime() > new Date(myView.last_viewed_at).getTime();
+                    const overdue = !!job.due_date && job.due_date.slice(0, 10) < todayStr && !DONE_STATUSES.includes(job.status);
+                    // Flags: stuck-in-stage, proof aging, invoice, tracking
+                    const flags: React.ReactNode[] = [];
+                    if (PRODUCTION_STAGES.includes(job.status)) {
                       const d = stageDays(job);
-                      if (d < 4) return null;
-                      const c = d >= 7 ? '#ef4444' : '#fbbf24';
-                      return (
-                        <div
-                          title={`In ${GRAPHICS_STATUS_LABELS[job.status]} since ${new Date(stageSince[job.id] || job.created_at).toLocaleDateString()}`}
-                          style={{
-                            padding: '4px 8px', borderRadius: '6px', fontSize: '10px', fontWeight: 700,
-                            background: `${c}18`, border: `1px solid ${c}44`, color: c,
-                            whiteSpace: 'nowrap', flexShrink: 0,
-                          }}
-                        >
-                          ⏱ in {GRAPHICS_STATUS_LABELS[job.status].toLowerCase()} {d}d
-                        </div>
-                      );
-                    })()}
-                    {/* Proof aging: waiting on the customer 3+ days shows on the board */}
-                    {(() => {
-                      const j = job as any;
-                      if (j.customer_approved || j.customer_rejected_at || !j.sent_for_approval_at) return null;
-                      const waitDays = Math.floor((Date.now() - new Date(j.sent_for_approval_at).getTime()) / 86_400_000);
-                      if (waitDays < 3) return null;
-                      const c = waitDays >= 7 ? '#ef4444' : '#fbbf24';
-                      return (
-                        <div
-                          title={`Proof sent ${new Date(j.sent_for_approval_at).toLocaleDateString()}${j.approval_reminder_count ? ` · ${j.approval_reminder_count} auto-reminder${j.approval_reminder_count !== 1 ? 's' : ''}` : ''}${j.approval_escalated_at ? ' · escalated' : ''}`}
-                          style={{
-                            padding: '4px 8px', borderRadius: '6px', fontSize: '10px', fontWeight: 700,
-                            background: `${c}18`, border: `1px solid ${c}44`, color: c,
-                            whiteSpace: 'nowrap', flexShrink: 0,
-                          }}
-                        >
-                          ⏱ proof {waitDays}d
-                        </div>
-                      );
-                    })()}
-                    <div style={{
-                      padding: '4px 10px', borderRadius: '6px', fontSize: '10px', fontWeight: 700,
-                      background: `${statusColor}18`, border: `1px solid ${statusColor}44`,
-                      color: statusColor, whiteSpace: 'nowrap', flexShrink: 0,
-                    }}>
-                      {GRAPHICS_STATUS_LABELS[job.status]}
-                    </div>
-                  </div>
-                </div>
-
-                {/* Internal notes preview (always visible) */}
-                {job.notes && (
-                  <div style={{ padding: '0 12px 8px', fontSize: '11px', color: 'var(--text-muted)', lineHeight: 1.4 }}>
-                    <span style={{ fontWeight: 700, fontSize: '9px', textTransform: 'uppercase', letterSpacing: '0.3px', color: 'var(--warning)', marginRight: '4px' }}>Note:</span>
-                    {job.notes.length > 120 ? job.notes.slice(0, 120) + '...' : job.notes}
-                  </div>
-                )}
-
-                {/* Expanded view — rendered as a centered modal so deep
-                    links don't open a card off-screen. Bounded height with
-                    an inner scroll area so the edit form's sticky-bottom
-                    Save bar can stick correctly. */}
-                {isExpanded && (
-                  <div
-                    onClick={(e) => {
-                      if (e.target === e.currentTarget) {
-                        setExpandedJobId(null);
-                        setEditingJob(null);
+                      if (d >= 4) {
+                        flags.push(
+                          <span
+                            key="stage"
+                            title={`In ${GRAPHICS_STATUS_LABELS[job.status]} since ${new Date(stageSince[job.id] || job.created_at).toLocaleDateString()}`}
+                            style={flagChip(d >= 7 ? '#ef4444' : '#fbbf24')}
+                          >⏱ {d}d</span>
+                        );
                       }
-                    }}
-                    style={{
-                      position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.7)',
-                      zIndex: 500, display: 'flex', alignItems: 'center',
-                      justifyContent: 'center', padding: '24px 12px',
-                    }}
-                  >
-                  <div
-                    onClick={(e) => e.stopPropagation()}
-                    style={{
-                      background: 'var(--card)', borderRadius: '14px',
-                      border: `1px solid ${statusColor}44`,
-                      boxShadow: '0 16px 60px rgba(0,0,0,0.3)',
-                      width: '100%', maxWidth: '720px',
-                      maxHeight: 'calc(100vh - 48px)',
-                      display: 'flex', flexDirection: 'column',
-                    }}
-                  >
-                    {/* Modal header — fixed at top via flex layout. */}
-                    <div style={{
-                      flexShrink: 0,
-                      background: 'var(--card)',
-                      borderRadius: '14px 14px 0 0',
-                      borderBottom: '1px solid var(--border)',
-                      padding: '12px 14px',
-                      display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: '8px',
-                    }}>
-                      <div style={{ flex: 1, minWidth: 0 }}>
-                        <div style={{ display: 'flex', alignItems: 'center', gap: '6px', marginBottom: '3px' }}>
-                          {job.priority !== 'normal' && (
-                            <span style={{ fontSize: '9px', fontWeight: 800, color: priorityColor(job.priority), textTransform: 'uppercase', padding: '1px 5px', borderRadius: '3px', background: `${priorityColor(job.priority)}15`, border: `1px solid ${priorityColor(job.priority)}33` }}>
-                              {job.priority}
+                    }
+                    const ja = job as any;
+                    if (!ja.customer_approved && !ja.customer_rejected_at && ja.sent_for_approval_at) {
+                      const waitDays = Math.floor((Date.now() - new Date(ja.sent_for_approval_at).getTime()) / 86_400_000);
+                      if (waitDays >= 3) {
+                        flags.push(
+                          <span
+                            key="proof"
+                            title={`Proof sent ${new Date(ja.sent_for_approval_at).toLocaleDateString()}${ja.approval_reminder_count ? ` · ${ja.approval_reminder_count} auto-reminder${ja.approval_reminder_count !== 1 ? 's' : ''}` : ''}${ja.approval_escalated_at ? ' · escalated' : ''}`}
+                            style={flagChip(waitDays >= 7 ? '#ef4444' : '#fbbf24')}
+                          >⏱ proof {waitDays}d</span>
+                        );
+                      }
+                    }
+                    if (job.netsuite_invoice_number) {
+                      flags.push(
+                        <span key="inv" style={{ fontSize: '10px', fontWeight: 700, color: '#22c55e', whiteSpace: 'nowrap' }}>
+                          INV {job.netsuite_invoice_number}
+                        </span>
+                      );
+                    }
+                    if (job.tracking_number) {
+                      flags.push(
+                        <a
+                          key="track"
+                          href={upsTrackingUrl(job.tracking_number)}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          onClick={e => e.stopPropagation()}
+                          title="Track on ups.com"
+                          style={{ fontSize: '10px', fontWeight: 700, color: '#60a5fa', textDecoration: 'none', whiteSpace: 'nowrap' }}
+                        >📦 {job.tracking_number}</a>
+                      );
+                    }
+                    return (
+                      <tr
+                        key={job.id}
+                        className="table-row-link"
+                        onClick={() => router.push(`/graphics/${job.id}`)}
+                        title={job.notes ? (job.notes.length > 120 ? job.notes.slice(0, 120) + '...' : job.notes) : undefined}
+                      >
+                        <td style={tdStyle}>
+                          <span style={{ display: 'inline-flex', alignItems: 'center', gap: '6px' }}>
+                            {hasNew && (
+                              <span title="New activity since you last viewed this job" style={{ width: '8px', height: '8px', borderRadius: '50%', background: '#ef4444', flexShrink: 0 }} />
+                            )}
+                            {job.job_number
+                              ? <span style={{ color: '#60a5fa', fontWeight: 800 }}>{job.job_number}</span>
+                              : <span style={{ color: 'var(--text-muted)' }}>—</span>}
+                          </span>
+                        </td>
+                        <td style={{ ...tdStyle, maxWidth: '280px', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+                          <span style={{ fontWeight: 700 }}>{job.title}</span>
+                          {job.job_category && job.job_category !== 'production' && (
+                            <span style={{
+                              marginLeft: '6px', fontSize: '8px', fontWeight: 700, padding: '1px 5px', borderRadius: '3px',
+                              background: `${GRAPHICS_CATEGORY_COLORS[job.job_category]}18`,
+                              color: GRAPHICS_CATEGORY_COLORS[job.job_category],
+                              textTransform: 'uppercase', letterSpacing: '0.3px', verticalAlign: '1px',
+                            }}>
+                              {GRAPHICS_CATEGORY_LABELS[job.job_category]}
                             </span>
                           )}
-                          <div style={{ fontSize: '14px', fontWeight: 800, color: 'var(--text-body)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-                            {job.title}
-                          </div>
-                        </div>
-                        <div style={{ fontSize: '10px', color: 'var(--text-label)', display: 'flex', gap: '8px', flexWrap: 'wrap', alignItems: 'center' }}>
-                          {job.customer && <span>{job.customer}</span>}
-                          <span>Qty: {job.quantity}</span>
-                          {job.po_number && <span style={{ color: '#a78bfa', fontWeight: 700 }}>PO #{job.po_number}</span>}
-                          {job.tracking_number && (
-                            <a
-                              href={upsTrackingUrl(job.tracking_number)}
-                              target="_blank"
-                              rel="noopener noreferrer"
-                              onClick={e => e.stopPropagation()}
-                              title="Track on ups.com"
-                              style={{ padding: '0 4px', borderRadius: '3px', background: 'rgba(96,165,250,0.1)', color: '#60a5fa', fontWeight: 700, textDecoration: 'none' }}
-                            >
-                              📦 {job.tracking_number}
-                            </a>
-                          )}
-                        </div>
-                      </div>
-                      <div style={{ display: 'flex', alignItems: 'center', gap: '8px', flexShrink: 0 }}>
-                        <div style={{
-                          padding: '4px 10px', borderRadius: '6px', fontSize: '10px', fontWeight: 700,
-                          background: `${statusColor}18`, border: `1px solid ${statusColor}44`,
-                          color: statusColor, whiteSpace: 'nowrap',
-                        }}>
-                          {GRAPHICS_STATUS_LABELS[job.status]}
-                        </div>
-                        <button
-                          onClick={() => { setExpandedJobId(null); setEditingJob(null); }}
-                          aria-label="Close"
-                          style={{
-                            background: 'transparent', border: '1px solid var(--border)',
-                            color: 'var(--text-label)', cursor: 'pointer',
-                            width: '28px', height: '28px', borderRadius: '6px',
-                            fontSize: '14px', lineHeight: 1,
-                            display: 'flex', alignItems: 'center', justifyContent: 'center',
-                          }}
-                        >
-                          ✕
-                        </button>
-                      </div>
-                    </div>
-                  <div style={{ flex: 1, overflowY: 'auto', WebkitOverflowScrolling: 'touch', padding: '12px 14px 16px' }}>
-
-                    {/* Quick status change */}
-                    <div style={{ marginTop: '10px', marginBottom: '12px' }}>
-                      <div style={labelStyle}>Change Status</div>
-                      <div style={{ display: 'flex', gap: '3px', flexWrap: 'wrap', marginTop: '4px' }}>
-                        {GRAPHICS_STATUS_ORDER.filter(s => s !== 'cancelled' && s !== 'flagged').map(s => (
-                          <button
-                            key={s}
-                            onClick={() => promptStatusChange(job, s)}
-                            disabled={job.status === s}
-                            style={{
-                              padding: '4px 8px', borderRadius: '5px', fontSize: '9px', fontWeight: 700,
-                              background: job.status === s ? `${GRAPHICS_STATUS_COLORS[s]}33` : 'var(--bg)',
-                              border: `1px solid ${job.status === s ? GRAPHICS_STATUS_COLORS[s] : 'var(--border)'}`,
-                              color: job.status === s ? GRAPHICS_STATUS_COLORS[s] : 'var(--text-label)',
-                              cursor: job.status === s ? 'default' : 'pointer',
-                              opacity: job.status === s ? 1 : 0.7,
-                            }}
-                          >
-                            {GRAPHICS_STATUS_LABELS[s].replace('Job ', '')}
-                          </button>
-                        ))}
-                      </div>
-                    </div>
-
-                    {/* Seen by — read receipts of who has opened this job. */}
-                    {(() => {
-                      const others = (jobViews[job.id] || []).filter(v => v.user_id !== user?.id);
-                      if (others.length === 0) return null;
-                      return (
-                        <div style={{ marginBottom: '12px' }}>
-                          <div style={labelStyle}>Seen By</div>
-                          <div style={{ display: 'flex', flexDirection: 'column', gap: '3px', marginTop: '4px' }}>
-                            {others.map(v => {
-                              const p = profiles.find(pr => pr.id === v.user_id);
-                              const name = p?.full_name || p?.email || 'Unknown';
-                              return (
-                                <div key={v.id} style={{ fontSize: '11px', color: 'var(--text-body)', display: 'flex', justifyContent: 'space-between', gap: '8px' }}>
-                                  <span>
-                                    {name}
-                                    {v.view_count > 1 && (
-                                      <span style={{ marginLeft: '6px', color: 'var(--text-muted)', fontSize: '10px' }}>
-                                        ({v.view_count}×)
-                                      </span>
-                                    )}
-                                  </span>
-                                  <span style={{ color: 'var(--text-muted)', fontSize: '10px' }}>
-                                    {relativeTime(v.last_viewed_at)}
-                                  </span>
-                                </div>
-                              );
-                            })}
-                          </div>
-                        </div>
-                      );
-                    })()}
-
-                    {/* Parent context — surfaces customer + upfit project (when
-                        linked via migration 084) so the production team has
-                        the deal context without leaving the graphics page.
-                        Hidden if there's no customer AND no upfit project. */}
-                    {(() => {
-                      const upfit = job.upfit_project_id ? upfitProjects[job.upfit_project_id] : null;
-                      const cust = job.customer || upfit?.customer_name || null;
-                      if (!cust && !upfit) return null;
-                      return (
-                        <div style={{
-                          marginBottom: '12px', padding: '10px', borderRadius: '8px',
-                          background: 'rgba(249,115,22,0.05)', border: '1px solid rgba(249,115,22,0.18)',
-                        }}>
-                          <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: '8px' }}>
-                            <div style={{ minWidth: 0, flex: 1 }}>
-                              {cust && (
-                                <div style={{ fontSize: '11px', marginBottom: upfit ? '4px' : 0 }}>
-                                  <span style={{ color: 'var(--text-muted)', fontWeight: 700, textTransform: 'uppercase', fontSize: '9px', letterSpacing: '0.4px', marginRight: '6px' }}>Customer</span>
-                                  <span style={{ color: 'var(--text-body)', fontWeight: 600 }}>{cust}</span>
-                                </div>
-                              )}
-                              {upfit && (
-                                <div style={{ fontSize: '11px' }}>
-                                  <span style={{ color: 'var(--text-muted)', fontWeight: 700, textTransform: 'uppercase', fontSize: '9px', letterSpacing: '0.4px', marginRight: '6px' }}>Upfit Project</span>
-                                  <span style={{ color: 'var(--text-body)', fontWeight: 600 }}>{upfit.project_name}</span>
-                                  <span style={{
-                                    marginLeft: '6px', padding: '1px 6px', borderRadius: '4px', fontSize: '9px', fontWeight: 700,
-                                    background: 'rgba(249,115,22,0.12)', color: '#f97316', textTransform: 'uppercase', letterSpacing: '0.3px',
-                                  }}>{upfit.status.replace(/_/g, ' ')}</span>
-                                </div>
-                              )}
-                            </div>
-                            {upfit && (
-                              <a
-                                href={`/upfit?id=${upfit.id}`}
-                                style={{
-                                  flexShrink: 0, padding: '4px 10px', borderRadius: '6px',
-                                  fontSize: '11px', fontWeight: 700, color: '#f97316',
-                                  background: 'rgba(249,115,22,0.10)', border: '1px solid rgba(249,115,22,0.35)',
-                                  textDecoration: 'none', whiteSpace: 'nowrap',
-                                }}
-                              >Open ↗</a>
-                            )}
-                          </div>
-                        </div>
-                      );
-                    })()}
-
-                    {/* Toggle edit mode */}
-                    {!isEditing ? (
-                      <div>
-                        {/* Job details read-only */}
-                        {job.content && (
-                          <div style={{ marginBottom: '10px' }}>
-                            <div style={labelStyle}>Content / Special Instructions</div>
-                            <div style={{ fontSize: '12px', color: 'var(--text-body)', padding: '8px', borderRadius: '6px', background: 'var(--bg)', whiteSpace: 'pre-wrap' }}>{job.content}</div>
-                          </div>
-                        )}
-
-                        {/* Vinyl specs */}
-                        {(job.vinyl_type || job.vinyl_color || job.laminate || job.print_method || job.cut_method || job.premask) && (
-                          <div style={{ marginBottom: '10px' }}>
-                            <div style={labelStyle}>Vinyl Specifications</div>
-                            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: '4px', marginTop: '4px' }}>
-                              {job.vinyl_type && <div style={{ padding: '4px 6px', borderRadius: '4px', background: 'var(--bg)', fontSize: '10px' }}><span style={{ color: 'var(--text-label)' }}>Type:</span> <span style={{ color: 'var(--text-body)' }}>{job.vinyl_type}</span></div>}
-                              {job.vinyl_color && <div style={{ padding: '4px 6px', borderRadius: '4px', background: 'var(--bg)', fontSize: '10px' }}><span style={{ color: 'var(--text-label)' }}>Color:</span> <span style={{ color: 'var(--text-body)' }}>{job.vinyl_color}</span></div>}
-                              {job.laminate && <div style={{ padding: '4px 6px', borderRadius: '4px', background: 'var(--bg)', fontSize: '10px' }}><span style={{ color: 'var(--text-label)' }}>Lam:</span> <span style={{ color: 'var(--text-body)' }}>{job.laminate}</span></div>}
-                              {job.print_method && <div style={{ padding: '4px 6px', borderRadius: '4px', background: 'var(--bg)', fontSize: '10px' }}><span style={{ color: 'var(--text-label)' }}>Print:</span> <span style={{ color: 'var(--text-body)' }}>{job.print_method}</span></div>}
-                              {job.cut_method && <div style={{ padding: '4px 6px', borderRadius: '4px', background: 'var(--bg)', fontSize: '10px' }}><span style={{ color: 'var(--text-label)' }}>Cut:</span> <span style={{ color: 'var(--text-body)' }}>{job.cut_method}</span></div>}
-                              {job.premask && <div style={{ padding: '4px 6px', borderRadius: '4px', background: 'var(--bg)', fontSize: '10px' }}><span style={{ color: 'var(--text-label)' }}>Premask:</span> <span style={{ color: 'var(--text-body)' }}>{job.premask}</span></div>}
-                            </div>
-                          </div>
-                        )}
-
-                        {/* Material usage log — feeds the Graphics Costs report */}
-                        <GraphicsMaterialsCard
-                          job={job}
-                          autoPrompt={materialPromptJobId === job.id}
-                          onAutoPromptHandled={() => setMaterialPromptJobId(null)}
-                        />
-
-                        {/* Tracking */}
-                        {(job.tracking_number || job.ship_to) && (
-                          <div style={{ marginBottom: '10px' }}>
-                            <div style={labelStyle}>Shipping</div>
-                            <div style={{ fontSize: '11px' }}>
-                              <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap' }}>
-                                {job.tracking_number && (
-                                  <a
-                                    href={upsTrackingUrl(job.tracking_number)}
-                                    target="_blank"
-                                    rel="noopener noreferrer"
-                                    title="Track on ups.com"
-                                    style={{ color: '#60a5fa', fontWeight: 700 }}
-                                  >
-                                    {job.tracking_number}
-                                  </a>
-                                )}
-                              </div>
-                              {job.ship_to && (
-                                <div style={{ color: 'var(--text-label)', whiteSpace: 'pre-wrap', marginTop: '4px', padding: '4px 6px', borderRadius: '4px', background: 'var(--bg)', lineHeight: 1.4 }}>
-                                  {job.ship_to}
-                                </div>
-                              )}
-                            </div>
-                          </div>
-                        )}
-
-                        {job.notes && (
-                          <div style={{ marginBottom: '10px' }}>
-                            <div style={labelStyle}>Notes</div>
-                            <div style={{ fontSize: '11px', color: 'var(--text-body)', whiteSpace: 'pre-wrap' }}>{job.notes}</div>
-                          </div>
-                        )}
-
-                        {/* Dates & Metadata */}
-                        <div style={{ fontSize: '10px', color: 'var(--text-label)', display: 'flex', gap: '12px', flexWrap: 'wrap', marginBottom: '10px' }}>
-                          <span>Created: {new Date(job.created_at).toLocaleDateString()}</span>
-                          {job.due_date && <span style={{ color: (parseLocalDate(job.due_date) || new Date()) < new Date() ? '#ef4444' : '#fbbf24' }}>Due: {displayDate(job.due_date)}</span>}
-                          {job.scheduled_install_date && <span style={{ color: job.scheduled_install_date === 'N/A' ? 'var(--text-muted)' : '#22d3ee' }}>Install: {job.scheduled_install_date === 'N/A' ? 'N/A' : displayDate(job.scheduled_install_date)}{job.calendar_event_id ? '' : ''}</span>}
-                          {job.install_location === SHOP_INSTALL_LOCATION && <span style={{ color: '#38bdf8' }}>Shop install</span>}
-                          {getProfileName(job.assigned_to) && <span>Assigned: {getProfileName(job.assigned_to)}</span>}
-                          {getProfileName(job.created_by) && <span>By: {getProfileName(job.created_by)}</span>}
-                          {job.job_number && <span style={{ color: 'var(--text-muted)' }}>#{job.job_number}</span>}
-                        </div>
-
-                        {/* Activity / Status history + Notes */}
-                        <div style={{ marginBottom: '10px' }}>
-                          <div style={labelStyle}>Activity</div>
-                          {statusHistory.length > 0 && (
-                            <div style={{ display: 'flex', flexDirection: 'column', gap: '4px', marginTop: '4px', maxHeight: '200px', overflowY: 'auto' }}>
-                              {statusHistory.map(h => {
-                                const isNote = h.from_status === h.to_status && h.note;
-                                return (
-                                  <div key={h.id} id={`gfx-hist-${h.id}`} style={{ fontSize: '10px', color: 'var(--text-label)', padding: '4px 6px', borderRadius: '6px', background: isNote ? 'rgba(245,158,11,0.06)' : 'transparent' }}>
-                                    <div style={{ display: 'flex', gap: '6px', alignItems: 'center' }}>
-                                      <span style={{ color: 'var(--text-muted)', flexShrink: 0 }}>{new Date(h.created_at).toLocaleString()}</span>
-                                      {!isNote && h.from_status && (
-                                        <span><span style={{ color: GRAPHICS_STATUS_COLORS[h.from_status as GraphicsJobStatus] || 'var(--text-body)' }}>{GRAPHICS_STATUS_LABELS[h.from_status as GraphicsJobStatus] || h.from_status}</span> →</span>
-                                      )}
-                                      {!isNote && (
-                                        <span style={{ color: GRAPHICS_STATUS_COLORS[h.to_status as GraphicsJobStatus] || 'var(--text-body)', fontWeight: 700 }}>{GRAPHICS_STATUS_LABELS[h.to_status as GraphicsJobStatus] || h.to_status}</span>
-                                      )}
-                                      {getProfileName(h.changed_by) && <span style={{ color: 'var(--text-muted)' }}>— {getProfileName(h.changed_by)}</span>}
-                                    </div>
-                                    {h.note && (
-                                      <div style={{ marginTop: '2px', fontSize: '11px', color: 'var(--text-body)', whiteSpace: 'pre-wrap', lineHeight: 1.4 }}>
-                                        {h.note}
-                                      </div>
-                                    )}
-                                  </div>
-                                );
-                              })}
-                            </div>
-                          )}
-                          {/* Add note — @mention a teammate to ping them */}
-                          <div style={{ display: 'flex', gap: '4px', marginTop: '6px' }}>
-                            <MentionTextArea
-                              value={newNote}
-                              onChange={setNewNote}
-                              onKeyDown={e => { if (e.key === 'Enter' && !e.shiftKey && newNote.trim()) { e.preventDefault(); addNote(job.id); } }}
-                              placeholder="Add a note... @name to tag"
-                              style={{
-                                flex: 1, padding: '6px 10px', borderRadius: '6px', fontSize: '11px',
-                                background: 'var(--input-bg)', border: '1px solid var(--border)',
-                                color: 'var(--text-primary)', outline: 'none',
-                              }}
-                            />
-                            <button
-                              onClick={() => addNote(job.id)}
-                              disabled={!newNote.trim()}
-                              style={{
-                                padding: '6px 12px', borderRadius: '6px', fontSize: '10px', fontWeight: 700,
-                                background: newNote.trim() ? 'rgba(59,130,246,0.15)' : 'var(--subtle-bg)',
-                                border: '1px solid ' + (newNote.trim() ? 'rgba(59,130,246,0.3)' : 'var(--border)'),
-                                color: newNote.trim() ? '#60a5fa' : 'var(--text-muted)',
-                                cursor: newNote.trim() ? 'pointer' : 'default',
-                              }}
-                            >
-                              Post
-                            </button>
-                          </div>
-                        </div>
-
-                        {/* Customer approval */}
-                        <div style={{ marginBottom: '10px', padding: '8px 10px', borderRadius: '8px', background: (job as any).customer_approved ? 'rgba(34,197,94,0.1)' : 'var(--subtle-bg)', border: '1px solid ' + ((job as any).customer_approved ? 'rgba(34,197,94,0.3)' : 'var(--border)') }}>
-                          <div style={{ ...labelStyle, marginBottom: '6px' }}>Customer Approval</div>
-                          {(job as any).customer_approved ? (
-                            <div style={{ fontSize: '11px', color: '#22c55e', fontWeight: 700 }}>
-                              ✓ Approved {(job as any).customer_approved_at ? ` · ${new Date((job as any).customer_approved_at).toLocaleString()}` : ''}
-                            </div>
-                          ) : (job as any).customer_rejected_at ? (
-                            <div>
-                              <div style={{ fontSize: '11px', color: '#ef4444', fontWeight: 700, marginBottom: '4px' }}>Changes requested</div>
-                              {(job as any).customer_rejection_reason && (
-                                <div style={{ fontSize: '11px', color: 'var(--text-body)', fontStyle: 'italic' }}>{(job as any).customer_rejection_reason}</div>
-                              )}
-                              {approvalPickerJobId !== job.id && (
-                                <button
-                                  onClick={() => openApprovalPicker(job.id)}
-                                  disabled={sendingApprovalId === job.id}
-                                  style={{
-                                    marginTop: '6px', padding: '6px 12px', borderRadius: '6px', fontSize: '11px', fontWeight: 700,
-                                    background: 'rgba(59,130,246,0.15)', border: '1px solid rgba(59,130,246,0.3)',
-                                    color: '#60a5fa', cursor: 'pointer',
-                                  }}
-                                >Resend for approval</button>
-                              )}
-                            </div>
-                          ) : (
-                            <div>
-                              {(job as any).sent_for_approval_at && (() => {
-                                const waitDays = Math.floor((Date.now() - new Date((job as any).sent_for_approval_at).getTime()) / 86_400_000);
-                                const waitColor = waitDays >= 7 ? '#ef4444' : waitDays >= 3 ? '#fbbf24' : 'var(--text-muted)';
-                                const reminders = (job as any).approval_reminder_count || 0;
-                                return (
-                                  <div style={{ fontSize: '11px', color: 'var(--text-muted)', marginBottom: '4px' }}>
-                                    <span style={{ fontWeight: 700, color: waitColor }}>
-                                      ⏱ Awaiting approval — {waitDays}d
-                                    </span>
-                                    {' · sent '}{new Date((job as any).sent_for_approval_at).toLocaleDateString([], { month: 'short', day: 'numeric' })}
-                                    {reminders > 0 && ` · ${reminders} auto-reminder${reminders !== 1 ? 's' : ''}`}
-                                    {(job as any).approval_escalated_at && <span style={{ color: '#ef4444', fontWeight: 700 }}> · escalated</span>}
-                                  </div>
-                                );
-                              })()}
-                              {approvalPickerJobId !== job.id && (
-                                <button
-                                  onClick={() => openApprovalPicker(job.id)}
-                                  disabled={sendingApprovalId === job.id}
-                                  style={{
-                                    padding: '6px 12px', borderRadius: '6px', fontSize: '11px', fontWeight: 700,
-                                    background: 'rgba(59,130,246,0.15)', border: '1px solid rgba(59,130,246,0.3)',
-                                    color: '#60a5fa', cursor: 'pointer',
-                                  }}
-                                >{(job as any).sent_for_approval_at ? 'Resend approval link' : 'Send proof for customer approval'}</button>
-                              )}
-                            </div>
-                          )}
-
-                          {/* File picker — opens when user clicks Send / Resend. Shows the
-                              job's attached files with radio buttons; only the chosen file
-                              is sent to the customer. */}
-                          {approvalPickerJobId === job.id && (
-                            <div style={{
-                              marginTop: '8px', padding: '10px', borderRadius: '8px',
-                              background: 'var(--card)', border: '1px solid var(--border)',
-                            }}>
-                              <div style={{ fontSize: '11px', fontWeight: 700, color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.5px', marginBottom: '6px' }}>
-                                Pick the proof to send
-                              </div>
-                              {(jobFiles[job.id] || []).length === 0 ? (
-                                <div style={{ fontSize: '12px', color: 'var(--text-muted)', padding: '8px 0' }}>
-                                  No files attached to this job. Upload a proof first.
-                                </div>
-                              ) : (
-                                <div style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
-                                  {(jobFiles[job.id] || []).map(f => (
-                                    <label key={f.id} style={{
-                                      display: 'flex', alignItems: 'center', gap: '8px',
-                                      padding: '6px 8px', borderRadius: '6px',
-                                      background: approvalPickerFileId === f.id ? 'rgba(59,130,246,0.1)' : 'var(--subtle-bg)',
-                                      border: '1px solid ' + (approvalPickerFileId === f.id ? 'rgba(59,130,246,0.3)' : 'var(--border)'),
-                                      cursor: 'pointer',
-                                    }}>
-                                      <input
-                                        type="radio"
-                                        name={`approval-file-${job.id}`}
-                                        checked={approvalPickerFileId === f.id}
-                                        onChange={() => setApprovalPickerFileId(f.id)}
-                                      />
-                                      <span style={{ fontSize: '12px', color: 'var(--text-primary)', flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-                                        {f.file_name}
-                                      </span>
-                                      {f.file_type && (
-                                        <span style={{ fontSize: '10px', color: 'var(--text-muted)' }}>{f.file_type.split('/')[1] || f.file_type}</span>
-                                      )}
-                                    </label>
-                                  ))}
-                                </div>
-                              )}
-                              <div style={{ display: 'flex', gap: '8px', marginTop: '8px' }}>
-                                <button
-                                  onClick={() => confirmSendForApproval(job.id)}
-                                  disabled={!approvalPickerFileId || sendingApprovalId === job.id}
-                                  style={{
-                                    flex: 1, padding: '8px 12px', borderRadius: '6px', fontSize: '12px', fontWeight: 700,
-                                    background: approvalPickerFileId ? '#22c55e' : 'var(--border)',
-                                    border: 'none', color: '#fff',
-                                    cursor: approvalPickerFileId && sendingApprovalId !== job.id ? 'pointer' : 'not-allowed',
-                                    opacity: approvalPickerFileId && sendingApprovalId !== job.id ? 1 : 0.5,
-                                  }}
-                                >{sendingApprovalId === job.id ? 'Sending…' : 'Send to customer'}</button>
-                                <button
-                                  onClick={closeApprovalPicker}
-                                  disabled={sendingApprovalId === job.id}
-                                  style={{
-                                    padding: '8px 12px', borderRadius: '6px', fontSize: '12px', fontWeight: 700,
-                                    background: 'transparent', border: '1px solid var(--border)',
-                                    color: 'var(--text-muted)', cursor: 'pointer',
-                                  }}
-                                >Cancel</button>
-                              </div>
-                            </div>
-                          )}
-                        </div>
-
-                        {/* Files */}
-                        <DropZone
-                          onFiles={(files) => uploadFilesToJob(job.id, files)}
-                          multiple
-                          disabled={uploadingFiles}
-                          style={{ marginBottom: '10px' }}
-                        >
-                          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '6px' }}>
-                            <div style={labelStyle}>Files &amp; Attachments</div>
-                            {(jobFiles[job.id] || []).length > 1 && (
-                              <a
-                                href={`/api/graphics-jobs/${job.id}/download-all`}
-                                style={{
-                                  padding: '4px 10px', borderRadius: '6px', fontSize: '11px', fontWeight: 700,
-                                  background: 'rgba(96,165,250,0.12)',
-                                  border: '1px solid rgba(96,165,250,0.3)',
-                                  color: '#60a5fa', textDecoration: 'none',
-                                }}
-                              >⬇ Download all ({(jobFiles[job.id] || []).length})</a>
-                            )}
-                          </div>
-                          {(jobFiles[job.id] || []).length > 0 && (
-                            <div style={{ display: 'flex', flexDirection: 'column', gap: '4px', marginBottom: '6px' }}>
-                              {(jobFiles[job.id] || []).map(f => {
-                                const isImage = f.file_type?.startsWith('image/');
-                                const isPdf = f.file_type === 'application/pdf';
-                                return (
-                                  <div key={f.id} style={{ display: 'flex', alignItems: 'center', gap: '8px', padding: '6px 8px', borderRadius: '8px', background: 'var(--subtle-bg)' }}>
-                                    <span style={{ fontSize: '14px', flexShrink: 0 }}>{isImage ? '\ud83d\uddbc\ufe0f' : isPdf ? '\ud83d\udcc4' : '\ud83d\udcce'}</span>
-                                    <a
-                                      href={getFileUrl(f.storage_path)}
-                                      target="_blank"
-                                      rel="noopener noreferrer"
-                                      style={{ flex: 1, fontSize: '11px', fontWeight: 600, color: '#60a5fa', textDecoration: 'none', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}
-                                    >
-                                      {f.file_name}
-                                    </a>
-                                    {f.file_size && <span style={{ fontSize: '9px', color: 'var(--text-muted)', flexShrink: 0 }}>{formatFileSize(f.file_size)}</span>}
-                                    <button
-                                      onClick={() => deleteJobFile(f)}
-                                      style={{ padding: '2px 6px', borderRadius: '4px', border: 'none', background: 'rgba(248,113,113,0.1)', color: '#f87171', fontSize: '10px', fontWeight: 700, cursor: 'pointer', flexShrink: 0 }}
-                                    >
-                                      ✕
-                                    </button>
-                                  </div>
-                                );
-                              })}
-                            </div>
-                          )}
-                          {(jobPoFiles[job.id] || []).length > 0 && (
-                            <div style={{ marginBottom: '6px' }}>
-                              <div style={{ fontSize: '9px', fontWeight: 700, color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.3px', marginBottom: '4px' }}>From linked PO</div>
-                              <div style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
-                                {jobPoFiles[job.id].map(f => (
-                                  <div key={f.id} style={{ display: 'flex', alignItems: 'center', gap: '8px', padding: '6px 8px', borderRadius: '8px', background: 'rgba(96,165,250,0.06)', border: '1px dashed rgba(96,165,250,0.3)' }}>
-                                    <span style={{ fontSize: '14px', flexShrink: 0 }}>{'📄'}</span>
-                                    <a
-                                      href={getFileUrl(f.storage_path)}
-                                      target="_blank"
-                                      rel="noopener noreferrer"
-                                      style={{ flex: 1, fontSize: '11px', fontWeight: 600, color: '#60a5fa', textDecoration: 'none', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}
-                                    >
-                                      {f.file_name}
-                                    </a>
-                                    {f.file_size && <span style={{ fontSize: '9px', color: 'var(--text-muted)', flexShrink: 0 }}>{formatFileSize(f.file_size)}</span>}
-                                  </div>
-                                ))}
-                              </div>
-                            </div>
-                          )}
-                          <input
-                            ref={fileInputRef}
-                            type="file"
-                            multiple
-                            onChange={async (e) => {
-                              const files = Array.from(e.target.files || []) as File[];
-                              if (files.length > 0) await uploadFilesToJob(job.id, files);
-                              e.target.value = '';
-                            }}
-                            style={{ display: 'none' }}
-                          />
-                          <button
-                            onClick={() => fileInputRef.current?.click()}
-                            disabled={uploadingFiles}
-                            style={{
-                              width: '100%', padding: '8px', borderRadius: '8px',
-                              fontSize: '11px', fontWeight: 700, cursor: 'pointer',
-                              background: 'var(--subtle-bg)', border: '1px dashed var(--border)',
-                              color: uploadingFiles ? 'var(--text-muted)' : 'var(--text-secondary)',
-                            }}
-                          >
-                            {uploadingFiles ? 'Uploading...' : '+ Upload Files (proofs, logos, photos)'}
-                          </button>
-
-                          {/* Dropbox proof search — pre-fills with customer
-                              so users can find existing artwork without
-                              hand-walking the Dropbox folder tree. */}
-                          <div style={{ marginTop: '8px' }}>
-                            <DropboxProofSearch
-                              defaultQuery={job.customer || job.part_number || ''}
-                            />
-                          </div>
-                        </DropZone>
-
-                        {/* Team Assignment */}
-                        <div style={{ marginBottom: '10px' }}>
-                          <AssignmentPicker
-                            jobType="graphics_job"
-                            jobId={job.id}
-                            selectedIds={jobAssignments[job.id] || []}
-                            onChange={(ids) => saveJobAssignments(job.id, ids, job.title)}
-                            roles={['graphics_production', 'production', 'admin', 'field_tech', 'shop_tech']}
-                            label="Assigned Team"
-                            compact
-                          />
-                        </div>
-
-                        {/* Purchase Order — POs sometimes arrive after the
-                            job is already entered (common with Bodewell), so
-                            this stays linkable any time, not just at creation. */}
-                        <div style={{ marginBottom: '10px' }}>
-                          <div style={labelStyle}>Purchase Order</div>
-                          {job.po_id ? (
-                            <div style={{ padding: '8px 10px', borderRadius: '8px', background: 'rgba(167,139,250,0.06)', border: '1px solid rgba(167,139,250,0.15)' }}>
-                              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                                <div style={{ fontSize: '11px', color: '#a78bfa', fontWeight: 700 }}>PO #{job.po_number || '—'} Linked</div>
-                                <button
-                                  onClick={() => router.push(`/admin/pos?id=${job.po_id}`)}
-                                  style={{ fontSize: '10px', fontWeight: 700, color: '#a78bfa', background: 'rgba(167,139,250,0.1)', border: '1px solid rgba(167,139,250,0.2)', borderRadius: '5px', padding: '3px 8px', cursor: 'pointer' }}
-                                >
-                                  Open PO
-                                </button>
-                              </div>
-                            </div>
-                          ) : (
-                            <button
-                              onClick={() => setLinkPoJob(job)}
-                              style={{ width: '100%', padding: '8px', borderRadius: '8px', fontSize: '11px', fontWeight: 700, cursor: 'pointer', background: 'rgba(167,139,250,0.08)', border: '1px dashed rgba(167,139,250,0.3)', color: '#a78bfa' }}
-                            >
-                              + Link PO{job.po_number ? ` (PO #${job.po_number} on file, not linked)` : ''}
-                            </button>
-                          )}
-                        </div>
-
-                        {/* Estimate & Invoice */}
-                        <div style={{ marginBottom: '10px' }}>
-                          <div style={labelStyle}>Estimate & Invoice</div>
-
-                          {/* Show linked estimate */}
-                          {job.estimate_id && (
-                            <div style={{ padding: '8px 10px', borderRadius: '8px', background: 'rgba(96,165,250,0.06)', border: '1px solid rgba(96,165,250,0.15)', marginBottom: '6px' }}>
-                              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                                <div style={{ fontSize: '11px', color: '#60a5fa', fontWeight: 700 }}>Estimate Linked</div>
-                                <button
-                                  onClick={() => router.push('/estimates')}
-                                  style={{ fontSize: '10px', fontWeight: 700, color: '#60a5fa', background: 'rgba(96,165,250,0.1)', border: '1px solid rgba(96,165,250,0.2)', borderRadius: '5px', padding: '3px 8px', cursor: 'pointer' }}
-                                >
-                                  Open Estimates
-                                </button>
-                              </div>
-                            </div>
-                          )}
-
-                          {/* Show source wrap quote — opens that quote's detail
-                              view on the wrap quote screen */}
-                          {job.wrap_quote_id && (
-                            <div style={{ padding: '8px 10px', borderRadius: '8px', background: 'rgba(167,139,250,0.06)', border: '1px solid rgba(167,139,250,0.15)', marginBottom: '6px' }}>
-                              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                                <div style={{ fontSize: '11px', color: '#a78bfa', fontWeight: 700 }}>Wrap Quote Linked</div>
-                                <button
-                                  onClick={() => router.push(`/admin/wrap-quote?id=${job.wrap_quote_id}`)}
-                                  style={{ fontSize: '10px', fontWeight: 700, color: '#a78bfa', background: 'rgba(167,139,250,0.1)', border: '1px solid rgba(167,139,250,0.2)', borderRadius: '5px', padding: '3px 8px', cursor: 'pointer' }}
-                                >
-                                  Open Wrap Quote
-                                </button>
-                              </div>
-                            </div>
-                          )}
-
-                          {/* Show invoice info if invoiced. id 'external' means
-                              "marked invoiced outside FleetSuite" — no NetSuite
-                              record to link to or fetch a PDF from. */}
-                          {job.netsuite_invoice_id && (
-                            <div style={{ padding: '8px 10px', borderRadius: '8px', background: 'rgba(34,197,94,0.06)', border: '1px solid rgba(34,197,94,0.15)', marginBottom: '6px' }}>
-                              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '8px' }}>
-                                <div>
-                                  {job.netsuite_invoice_id === 'external' ? (
-                                    <span style={{ fontSize: '11px', color: '#22c55e', fontWeight: 700 }}>
-                                      Invoiced outside FleetSuite{job.netsuite_invoice_number && job.netsuite_invoice_number !== 'External' ? ` — #${job.netsuite_invoice_number}` : ''}
-                                    </span>
-                                  ) : (
-                                  <a
-                                    href={`https://system.netsuite.com/app/accounting/transactions/custinvc.nl?id=${job.netsuite_invoice_id}`}
-                                    target="_blank"
-                                    rel="noopener noreferrer"
-                                    style={{ fontSize: '11px', color: '#22c55e', fontWeight: 700, textDecoration: 'none' }}
-                                  >
-                                    Invoice #{job.netsuite_invoice_number || job.netsuite_invoice_id} ↗
-                                  </a>
-                                  )}
-                                  <div style={{ fontSize: '10px', color: 'var(--text-label)', marginTop: '2px' }}>
-                                    {job.invoice_amount ? `$${job.invoice_amount.toLocaleString('en-US', { minimumFractionDigits: 2 })}` : ''}
-                                    {job.invoiced_at ? ` — ${new Date(job.invoiced_at).toLocaleDateString()}` : ''}
-                                    {job.po_number ? ` — PO #${job.po_number}` : ''}
-                                  </div>
-                                </div>
-                                <div style={{ display: 'flex', gap: '6px', alignItems: 'center', flexShrink: 0 }}>
-                                  {job.invoice_pdf_url ? (
-                                    <a
-                                      href={job.invoice_pdf_url}
-                                      target="_blank"
-                                      rel="noopener noreferrer"
-                                      style={{ padding: '6px 10px', borderRadius: '7px', fontSize: '11px', fontWeight: 700, cursor: 'pointer', background: 'rgba(59,130,246,0.12)', border: '1px solid rgba(59,130,246,0.3)', color: '#60a5fa', whiteSpace: 'nowrap', textDecoration: 'none' }}
-                                    >
-                                      View Invoice PDF ↗
-                                    </a>
-                                  ) : job.netsuite_invoice_id !== 'external' && (
-                                    <button
-                                      onClick={() => storeInvoicePdf(job.id)}
-                                      disabled={fetchingPdfJobId === job.id}
-                                      style={{ padding: '6px 10px', borderRadius: '7px', fontSize: '11px', fontWeight: 700, cursor: fetchingPdfJobId === job.id ? 'default' : 'pointer', background: 'rgba(59,130,246,0.12)', border: '1px solid rgba(59,130,246,0.3)', color: '#60a5fa', whiteSpace: 'nowrap', opacity: fetchingPdfJobId === job.id ? 0.5 : 1 }}
-                                    >
-                                      {fetchingPdfJobId === job.id ? 'Getting…' : 'Get Invoice PDF'}
-                                    </button>
-                                  )}
-                                  <button
-                                    onClick={() => openEmailInvoice(job)}
-                                    style={{ padding: '6px 10px', borderRadius: '7px', fontSize: '11px', fontWeight: 700, cursor: 'pointer', background: 'rgba(251,191,36,0.1)', border: '1px solid rgba(251,191,36,0.25)', color: '#fbbf24', whiteSpace: 'nowrap' }}
-                                  >
-                                    Email Invoice
-                                  </button>
-                                  <button
-                                    onClick={() => printPackingList(job)}
-                                    style={{ padding: '6px 10px', borderRadius: '7px', fontSize: '11px', fontWeight: 700, cursor: 'pointer', background: 'rgba(34,197,94,0.12)', border: '1px solid rgba(34,197,94,0.3)', color: '#22c55e', whiteSpace: 'nowrap' }}
-                                  >
-                                    Print Packing List
-                                  </button>
-                                </div>
-                              </div>
-                            </div>
-                          )}
-
-                          {/* PO number display */}
-                          {job.po_number && !job.netsuite_invoice_id && (
-                            <div style={{ fontSize: '11px', color: '#a78bfa', marginBottom: '6px', padding: '4px 8px', borderRadius: '6px', background: 'rgba(167,139,250,0.06)' }}>
-                              PO #{job.po_number} — ready to invoice when job completes
-                            </div>
-                          )}
-
-                          {/* Action buttons for estimate/invoice */}
-                          {job.status !== 'cancelled' && (
-                            <div style={{ display: 'flex', gap: '6px', marginTop: '6px' }}>
-                              {!job.estimate_id && (
-                                <button
-                                  onClick={() => createEstimateFromJob(job)}
-                                  disabled={creatingEstimate}
-                                  style={{
-                                    flex: 1, padding: '8px', borderRadius: '7px', fontSize: '11px', fontWeight: 700, cursor: 'pointer',
-                                    background: 'rgba(96,165,250,0.08)', border: '1px solid rgba(96,165,250,0.2)', color: '#60a5fa',
-                                    opacity: creatingEstimate ? 0.5 : 1,
-                                  }}
-                                >
-                                  {creatingEstimate ? 'Creating...' : 'Create Estimate'}
-                                </button>
-                              )}
-                              {!job.netsuite_invoice_id && (
-                                <button
-                                  onClick={() => setInvoiceJob(job)}
-                                  style={{
-                                    flex: 1, padding: '8px', borderRadius: '7px', fontSize: '11px', fontWeight: 700, cursor: 'pointer',
-                                    background: 'rgba(34,197,94,0.08)', border: '1px solid rgba(34,197,94,0.2)', color: '#22c55e',
-                                  }}
-                                >
-                                  Review &amp; Invoice
-                                </button>
-                              )}
-                            </div>
-                          )}
-                        </div>
-
-                        {/* Action buttons */}
-                        <div style={{ display: 'flex', gap: '6px' }}>
-                          <button
-                            onClick={() => { setEditingJob({ ...job }); loadJobAssignments(job.id); }}
-                            style={{ flex: 1, padding: '10px', borderRadius: '8px', background: 'rgba(59,130,246,0.1)', border: '1px solid rgba(59,130,246,0.2)', color: '#60a5fa', fontSize: '12px', fontWeight: 700, cursor: 'pointer' }}
-                          >
-                            Edit Job
-                          </button>
-                          {isAdmin && (
-                            <button
-                              onClick={() => deleteJob(job.id)}
-                              style={{ padding: '10px 14px', borderRadius: '8px', background: 'rgba(248,113,113,0.08)', border: '1px solid rgba(248,113,113,0.2)', color: '#f87171', fontSize: '12px', fontWeight: 700, cursor: 'pointer' }}
-                            >
-                              Delete
-                            </button>
-                          )}
-                          {job.status !== 'cancelled' && (
-                            <button
-                              onClick={() => promptStatusChange(job, 'cancelled')}
-                              style={{ padding: '10px 14px', borderRadius: '8px', background: 'rgba(107,114,128,0.08)', border: '1px solid rgba(107,114,128,0.2)', color: '#6b7280', fontSize: '12px', fontWeight: 700, cursor: 'pointer' }}
-                            >
-                              Cancel
-                            </button>
-                          )}
-                        </div>
-                      </div>
-                    ) : (
-                      /* Edit mode */
-                      <div>
-                        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '8px', marginBottom: '10px' }}>
-                          <div style={{ gridColumn: '1 / -1' }}>
-                            <div style={labelStyle}>Title</div>
-                            <input style={inputStyle} value={editJob!.title} onChange={e => setEditingJob({ ...editJob!, title: e.target.value })} />
-                          </div>
-                          <div style={{ gridColumn: '1 / -1' }}>
-                            <div style={labelStyle}>Part Number(s) — PO Line Items</div>
-                            {(() => {
-                              const parts = (editJob!.part_number || '').split(',').map(s => s.trim()).filter(Boolean);
-                              return (
-                                <>
-                                  {parts.length > 0 && (
-                                    <div style={{ display: 'flex', flexWrap: 'wrap', gap: '4px', marginBottom: '4px' }}>
-                                      {parts.map((pn, i) => (
-                                        <span key={i} style={{ display: 'inline-flex', alignItems: 'center', gap: '4px', padding: '3px 10px', borderRadius: '6px', fontSize: '12px', fontWeight: 700, background: 'rgba(59,130,246,0.1)', color: '#3b82f6', border: '1px solid rgba(59,130,246,0.2)' }}>
-                                          {pn}
-                                          <span onClick={() => setEditingJob({ ...editJob!, part_number: parts.filter((_, j) => j !== i).join(', ') || null })} style={{ cursor: 'pointer', fontSize: '14px', marginLeft: '2px' }}>&times;</span>
-                                        </span>
-                                      ))}
-                                    </div>
-                                  )}
-                                  <input style={inputStyle} placeholder="Type each part # and press Enter to add (supports multiple PO lines)"
-                                    onKeyDown={e => {
-                                      const val = (e.target as HTMLInputElement).value.trim();
-                                      if ((e.key === 'Enter' || e.key === ',') && val) {
-                                        e.preventDefault();
-                                        const newParts = [...parts, val].join(', ');
-                                        setEditingJob({ ...editJob!, part_number: newParts });
-                                        (e.target as HTMLInputElement).value = '';
-                                      }
-                                    }}
-                                  />
-                                </>
-                              );
-                            })()}
-                          </div>
-                          <div>
-                            <div style={labelStyle}>Customer</div>
-                            <input style={inputStyle} value={editJob!.customer || ''} onChange={e => setEditingJob({ ...editJob!, customer: e.target.value })} />
-                          </div>
-                          <div>
-                            <div style={labelStyle}>Quantity</div>
-                            <input type="number" style={inputStyle} value={editJob!.quantity} onChange={e => setEditingJob({ ...editJob!, quantity: parseInt(e.target.value) || 1 })} />
-                          </div>
-                          <div>
-                            <div style={labelStyle}>PO Number</div>
-                            <input style={inputStyle} value={editJob!.po_number || ''} onChange={e => setEditingJob({ ...editJob!, po_number: e.target.value || null })} placeholder="e.g. PO-12345" />
-                          </div>
-                          <div>
-                            <div style={labelStyle}>Priority</div>
-                            <select style={inputStyle} value={editJob!.priority} onChange={e => setEditingJob({ ...editJob!, priority: e.target.value as any })}>
-                              <option value="low">Low</option>
-                              <option value="normal">Normal</option>
-                              <option value="high">High</option>
-                              <option value="rush">Rush</option>
-                            </select>
-                          </div>
-                          <div>
-                            <div style={labelStyle}>Due Date</div>
-                            <input type="date" style={inputStyle} value={toDateInputValue(editJob!.due_date)} onChange={e => setEditingJob({ ...editJob!, due_date: e.target.value })} />
-                          </div>
-                          <div>
-                            <div style={labelStyle}>Scheduled Install Date</div>
-                            {editJob!.scheduled_install_date === 'N/A' ? (
-                              <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-                                <div style={{ ...inputStyle, display: 'flex', alignItems: 'center', color: 'var(--text-muted)', fontStyle: 'italic' }}>N/A</div>
-                                <button type="button" onClick={() => setEditingJob({ ...editJob!, scheduled_install_date: '' })} style={{ fontSize: '10px', fontWeight: 700, color: '#60a5fa', background: 'none', border: 'none', cursor: 'pointer', whiteSpace: 'nowrap' }}>Set Date</button>
-                              </div>
-                            ) : (
-                              <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-                                <input type="date" style={{ ...inputStyle, flex: 1 }} value={toDateInputValue(editJob!.scheduled_install_date)} onChange={e => setEditingJob({ ...editJob!, scheduled_install_date: e.target.value })} />
-                                <button type="button" onClick={() => setEditingJob({ ...editJob!, scheduled_install_date: 'N/A' })} style={{ fontSize: '10px', fontWeight: 700, color: 'var(--text-muted)', background: 'none', border: 'none', cursor: 'pointer', whiteSpace: 'nowrap' }}>N/A</button>
-                              </div>
-                            )}
-                            {editJob!.calendar_event_id && <div style={{ fontSize: '9px', color: '#22d3ee', marginTop: '2px' }}>Synced to Google Calendar</div>}
-                          </div>
-                          <div>
-                            <div style={labelStyle}>Install Location</div>
-                            <select style={inputStyle} value={editJob!.install_location || ''} onChange={e => setEditingJob({ ...editJob!, install_location: e.target.value || null })}>
-                              <option value="">Not set</option>
-                              {INSTALL_LOCATIONS.map(loc => <option key={loc} value={loc}>{loc}</option>)}
-                            </select>
-                            {editJob!.install_location === SHOP_INSTALL_LOCATION && (
-                              <div style={{ fontSize: '9px', color: '#38bdf8', marginTop: '2px' }}>On the shop arrival schedule</div>
-                            )}
-                          </div>
-                          <div style={{ gridColumn: '1 / -1' }}>
-                            <AssignmentPicker
-                              jobType="graphics_job"
-                              jobId={editJob!.id}
-                              selectedIds={jobAssignments[editJob!.id] || []}
-                              onChange={(ids) => saveJobAssignments(editJob!.id, ids, editJob!.title)}
-                              roles={['graphics_production', 'production', 'admin', 'field_tech', 'shop_tech']}
-                              label="Assigned Team (select one or more)"
-                            />
-                          </div>
-                        </div>
-
-                        <div style={{ marginBottom: '10px' }}>
-                          <div style={labelStyle}>Content / Special Instructions (unit numbers, addresses, etc.)</div>
-                          <textarea
-                            style={{ ...inputStyle, minHeight: '60px', resize: 'vertical' }}
-                            value={editJob!.content || ''}
-                            onChange={e => setEditingJob({ ...editJob!, content: e.target.value })}
-                            placeholder="Unit numbers, addresses, or other unit-specific details..."
-                          />
-                        </div>
-
-                        <div style={labelStyle}>Vinyl Specifications</div>
-                        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: '6px', marginBottom: '10px' }}>
-                          <div>
-                            <div style={{ ...labelStyle, fontSize: '8px' }}>Vinyl Type</div>
-                            <input style={inputStyle} value={editJob!.vinyl_type || ''} onChange={e => setEditingJob({ ...editJob!, vinyl_type: e.target.value })} placeholder="e.g. 3M IJ180Cv3" />
-                          </div>
-                          <div>
-                            <div style={{ ...labelStyle, fontSize: '8px' }}>Color</div>
-                            <input style={inputStyle} value={editJob!.vinyl_color || ''} onChange={e => setEditingJob({ ...editJob!, vinyl_color: e.target.value })} placeholder="e.g. White" />
-                          </div>
-                          <div>
-                            <div style={{ ...labelStyle, fontSize: '8px' }}>Laminate</div>
-                            <select style={inputStyle} value={editJob!.laminate || ''} onChange={e => setEditingJob({ ...editJob!, laminate: e.target.value })}>
-                              <option value="">Select...</option>
-                              <option value="N/A">N/A</option>
-                              <option value="8428G">8428G</option>
-                              <option value="8418">8418</option>
-                              <option value="8508">8508</option>
-                              <option value="Other">Other</option>
-                            </select>
-                          </div>
-                          <div>
-                            <div style={{ ...labelStyle, fontSize: '8px' }}>Print</div>
-                            <input style={inputStyle} value={editJob!.print_method || ''} onChange={e => setEditingJob({ ...editJob!, print_method: e.target.value })} placeholder="e.g. Solvent" />
-                          </div>
-                          <div>
-                            <div style={{ ...labelStyle, fontSize: '8px' }}>Cut</div>
-                            <input style={inputStyle} value={editJob!.cut_method || ''} onChange={e => setEditingJob({ ...editJob!, cut_method: e.target.value })} placeholder="e.g. Contour" />
-                          </div>
-                          <div>
-                            <div style={{ ...labelStyle, fontSize: '8px' }}>Premask</div>
-                            <input style={inputStyle} value={editJob!.premask || ''} onChange={e => setEditingJob({ ...editJob!, premask: e.target.value })} placeholder="e.g. R-Tape 4075" />
-                          </div>
-                        </div>
-
-                        <div style={labelStyle}>Shipping</div>
-                        <div style={{ marginBottom: '6px' }}>
-                          <div style={{ ...labelStyle, fontSize: '8px' }}>Tracking #</div>
-                          <input style={inputStyle} value={editJob!.tracking_number || ''} onChange={e => setEditingJob({ ...editJob!, tracking_number: e.target.value })} />
-                        </div>
-                        <div style={{ marginBottom: '10px' }}>
-                          <div style={{ ...labelStyle, fontSize: '8px' }}>Ship To Address</div>
-                          <textarea style={{ ...inputStyle, minHeight: '60px', resize: 'vertical' }} value={editJob!.ship_to || ''} onChange={e => setEditingJob({ ...editJob!, ship_to: e.target.value })}
-                            placeholder={'Company Name\n123 Street Address\nCity, State ZIP'}
-                          />
-                        </div>
-
-                        <div id="gfx-notes-field" style={{ marginBottom: '10px' }}>
-                          <div style={labelStyle}>Internal Notes</div>
-                          <MentionTextArea
-                            style={{ ...inputStyle, minHeight: '40px', resize: 'vertical' }}
-                            value={editJob!.notes || ''}
-                            onChange={v => setEditingJob({ ...editJob!, notes: v })}
-                            placeholder="@ tags a teammate"
-                          />
-                        </div>
-
-                        <DropZone
-                          onFiles={(files) => uploadFilesToJob(job.id, files)}
-                          multiple
-                          disabled={uploadingFiles}
-                          style={{ marginBottom: '10px' }}
-                        >
-                          <div style={labelStyle}>Files &amp; Attachments</div>
-                          {(jobFiles[job.id] || []).length > 0 && (
-                            <div style={{ display: 'flex', flexDirection: 'column', gap: '4px', marginBottom: '6px' }}>
-                              {(jobFiles[job.id] || []).map(f => {
-                                const isImage = f.file_type?.startsWith('image/');
-                                const isPdf = f.file_type === 'application/pdf';
-                                return (
-                                  <div key={f.id} style={{ display: 'flex', alignItems: 'center', gap: '8px', padding: '6px 8px', borderRadius: '8px', background: 'var(--subtle-bg)' }}>
-                                    <span style={{ fontSize: '14px', flexShrink: 0 }}>{isImage ? '🖼️' : isPdf ? '📄' : '📎'}</span>
-                                    <a href={getFileUrl(f.storage_path)} target="_blank" rel="noopener noreferrer" style={{ flex: 1, fontSize: '11px', fontWeight: 600, color: '#60a5fa', textDecoration: 'none', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-                                      {f.file_name}
-                                    </a>
-                                    {f.file_size && <span style={{ fontSize: '9px', color: 'var(--text-muted)', flexShrink: 0 }}>{formatFileSize(f.file_size)}</span>}
-                                    <button onClick={() => deleteJobFile(f)} style={{ padding: '2px 6px', borderRadius: '4px', border: 'none', background: 'rgba(248,113,113,0.1)', color: '#f87171', fontSize: '10px', fontWeight: 700, cursor: 'pointer', flexShrink: 0 }}>✕</button>
-                                  </div>
-                                );
-                              })}
-                            </div>
-                          )}
-                          <input
-                            type="file"
-                            multiple
-                            id={`edit-files-${job.id}`}
-                            onChange={async (e) => {
-                              const files = Array.from(e.target.files || []) as File[];
-                              if (files.length > 0) await uploadFilesToJob(job.id, files);
-                              e.target.value = '';
-                            }}
-                            style={{ display: 'none' }}
-                          />
-                          <button
-                            type="button"
-                            onClick={() => document.getElementById(`edit-files-${job.id}`)?.click()}
-                            disabled={uploadingFiles}
-                            style={{ width: '100%', padding: '8px', borderRadius: '8px', fontSize: '11px', fontWeight: 700, cursor: 'pointer', background: 'var(--subtle-bg)', border: '1px dashed var(--border)', color: uploadingFiles ? 'var(--text-muted)' : 'var(--text-secondary)' }}
-                          >
-                            {uploadingFiles ? 'Uploading...' : '+ Upload Files (proofs, logos, photos)'}
-                          </button>
-                        </DropZone>
-
-                        <div style={{
-                          position: 'sticky',
-                          bottom: 'calc(env(safe-area-inset-bottom, 0px))',
-                          display: 'flex',
-                          gap: '6px',
-                          padding: '10px',
-                          marginLeft: '-14px',
-                          marginRight: '-14px',
-                          marginBottom: '-16px',
-                          background: 'var(--card)',
-                          borderTop: '1px solid var(--border)',
-                          backdropFilter: 'blur(6px)',
-                          zIndex: 5,
-                        }}>
-                          <button
-                            onClick={saveJob}
-                            disabled={saving}
-                            style={{ flex: 1, padding: '12px', borderRadius: '8px', background: '#22c55e', color: '#fff', fontSize: '13px', fontWeight: 800, border: 'none', cursor: 'pointer', opacity: saving ? 0.5 : 1, boxShadow: '0 4px 12px rgba(34,197,94,0.25)' }}
-                          >
-                            {saving ? 'Saving...' : 'Save Changes'}
-                          </button>
-                          <button
-                            onClick={() => setEditingJob(null)}
-                            style={{ padding: '12px 18px', borderRadius: '8px', background: 'transparent', border: '1px solid var(--border)', color: 'var(--text-body)', fontSize: '13px', fontWeight: 700, cursor: 'pointer' }}
-                          >
-                            Cancel
-                          </button>
-                        </div>
-                      </div>
-                    )}
-                  </div>
-                  </div>
-                  </div>
-                )}
-              </div>
-            );
-          })}
-        </div>
-      )}
+                        </td>
+                        <td style={{ ...tdStyle, maxWidth: '180px', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+                          {job.customer || <span style={{ color: 'var(--text-muted)' }}>—</span>}
+                        </td>
+                        <td style={tdStyle}>
+                          {job.po_number
+                            ? <span style={{ color: '#a78bfa', fontWeight: 700 }}>{job.po_number}</span>
+                            : <span style={{ color: 'var(--text-muted)' }}>—</span>}
+                        </td>
+                        <td style={{ ...tdStyle, textAlign: 'right', fontVariantNumeric: 'tabular-nums' }}>{job.quantity}</td>
+                        <td style={tdStyle}>
+                          {job.priority !== 'normal'
+                            ? (
+                              <span style={{
+                                fontSize: '9px', fontWeight: 800, color: priorityColor(job.priority), textTransform: 'uppercase',
+                                padding: '2px 6px', borderRadius: '4px',
+                                background: `${priorityColor(job.priority)}15`, border: `1px solid ${priorityColor(job.priority)}33`,
+                              }}>
+                                {job.priority}
+                              </span>
+                            )
+                            : <span style={{ color: 'var(--text-muted)' }}>—</span>}
+                        </td>
+                        <td style={tdStyle}>
+                          {job.due_date
+                            ? (
+                              <span style={{ color: overdue ? '#ef4444' : '#fbbf24', fontWeight: overdue ? 700 : 600 }}>
+                                {overdue ? '⚠ ' : ''}{displayDate(job.due_date)}
+                              </span>
+                            )
+                            : <span style={{ color: 'var(--text-muted)' }}>—</span>}
+                        </td>
+                        <td style={tdStyle}>
+                          <span style={{
+                            fontSize: '9px', fontWeight: 700, padding: '2px 7px', borderRadius: '4px',
+                            background: `${statusColor}18`, border: `1px solid ${statusColor}44`,
+                            color: statusColor, whiteSpace: 'nowrap',
+                          }}>
+                            {GRAPHICS_STATUS_LABELS[job.status].replace('Job ', '')}
+                          </span>
+                        </td>
+                        <td style={tdStyle}>
+                          {flags.length > 0
+                            ? <span style={{ display: 'inline-flex', alignItems: 'center', gap: '6px' }}>{flags}</span>
+                            : <span style={{ color: 'var(--text-muted)' }}>—</span>}
+                        </td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            </div>
+          </div>
+        );
+      })()}
 
       {/* ═══════════ CREATE JOB MODAL ═══════════ */}
       {showCreate && (
@@ -3334,7 +1606,7 @@ export default function GraphicsPage() {
                 <div style={{ display: 'flex', flexDirection: 'column', gap: '8px', paddingTop: '4px' }}>
                   <button
                     onClick={createJob}
-                    disabled={creating || !createForm.title.trim()}
+                    disabled={creating || uploadingFiles || !createForm.title.trim()}
                     style={{
                       width: '100%', padding: '16px', borderRadius: '12px',
                       background: creating || !createForm.title.trim() ? 'var(--border)' : GRAPHICS_CATEGORY_COLORS[createForm.job_category as GraphicsJobCategory] || '#22c55e',
@@ -3358,79 +1630,8 @@ export default function GraphicsPage() {
         </div>
       )}
 
-      {/* Status change comment modal. zIndex must clear the expanded-job
-          modal (500) and the invoice modal (1000) so it stays on top
-          when triggered from inside either of them — otherwise the
-          "verify status change" panel lands underneath the job card. */}
-      {pendingStatus && (
-        <div style={{
-          position: 'fixed', inset: 0, background: 'var(--overlay)', zIndex: 1500,
-          display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '20px',
-        }} onClick={() => setPendingStatus(null)}>
-          <div onClick={e => e.stopPropagation()} style={{
-            background: 'var(--card)', borderRadius: '14px', padding: '20px',
-            width: '100%', maxWidth: '400px', boxShadow: '0 8px 30px rgba(0,0,0,0.3)',
-          }}>
-            <div style={{ fontSize: '14px', fontWeight: 700, color: 'var(--text-primary)', marginBottom: '4px' }}>
-              Change Status
-            </div>
-            <div style={{ fontSize: '12px', color: 'var(--text-muted)', marginBottom: '14px' }}>
-              {pendingStatus.job.title} — <span style={{ color: GRAPHICS_STATUS_COLORS[pendingStatus.job.status] }}>{GRAPHICS_STATUS_LABELS[pendingStatus.job.status]}</span> → <span style={{ color: GRAPHICS_STATUS_COLORS[pendingStatus.status], fontWeight: 700 }}>{GRAPHICS_STATUS_LABELS[pendingStatus.status]}</span>
-            </div>
-            {pendingStatus.status === 'shipped' && (
-              <div style={{ marginBottom: '10px' }}>
-                <div style={{ fontSize: '9px', fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.3px', color: 'var(--text-label)', marginBottom: '3px' }}>Tracking #</div>
-                <input
-                  value={shipTracking}
-                  onChange={e => setShipTracking(e.target.value)}
-                  placeholder="e.g. 1Z999AA10123456784"
-                  style={{
-                    width: '100%', padding: '10px', borderRadius: '8px', fontSize: '12px',
-                    background: 'var(--input-bg)', border: '1px solid var(--border)',
-                    color: 'var(--text-primary)', outline: 'none',
-                  }}
-                />
-              </div>
-            )}
-            <textarea
-              autoFocus
-              value={statusComment}
-              onChange={e => setStatusComment(e.target.value)}
-              placeholder={pendingStatus.status === 'shipped' ? 'Shipping notes (optional)...' : 'Add a comment (optional)...'}
-              style={{
-                width: '100%', padding: '10px', borderRadius: '8px', fontSize: '12px',
-                background: 'var(--input-bg)', border: '1px solid var(--border)',
-                color: 'var(--text-primary)', minHeight: '70px', resize: 'vertical',
-                outline: 'none',
-              }}
-            />
-            <div style={{ display: 'flex', gap: '8px', marginTop: '12px' }}>
-              <button
-                onClick={() => setPendingStatus(null)}
-                style={{
-                  flex: 1, padding: '10px', borderRadius: '8px', fontSize: '12px', fontWeight: 700,
-                  background: 'transparent', border: '1px solid var(--border)',
-                  color: 'var(--text-body)', cursor: 'pointer',
-                }}
-              >
-                Cancel
-              </button>
-              <button
-                onClick={confirmStatusChange}
-                style={{
-                  flex: 1, padding: '10px', borderRadius: '8px', fontSize: '12px', fontWeight: 700,
-                  background: GRAPHICS_STATUS_COLORS[pendingStatus.status] + '22',
-                  border: `1px solid ${GRAPHICS_STATUS_COLORS[pendingStatus.status]}55`,
-                  color: GRAPHICS_STATUS_COLORS[pendingStatus.status], cursor: 'pointer',
-                }}
-              >
-                Confirm
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
-
+      {/* Invoice review modal — reached only via the ?invoiceJob= deep link
+          (the record page owns the on-page Review & Invoice button). */}
       {invoiceJob && (
         <GraphicsInvoiceReviewModal
           job={invoiceJob}
@@ -3448,7 +1649,6 @@ export default function GraphicsPage() {
                 invoiced_at: new Date().toISOString(),
                 updated_at: new Date().toISOString(),
               } : j));
-              loadHistory(job.id);
             }
             const printNow = await dialog.confirm(
               `Invoice ${result.invoiceNumber || result.invoiceId || 'created'} in FleetSuite.\n\nPrint packing list now?`
@@ -3461,7 +1661,7 @@ export default function GraphicsPage() {
               }, result.lines);
             }
             // Best-effort: pull the invoice PDF and store it on the record.
-            if (job) storeInvoicePdf(job.id, true);
+            if (job) storeInvoicePdf(job.id);
             // Offer to email the fresh invoice to the customer — same flow as
             // the Scans screen.
             if (job) {
@@ -3484,38 +1684,6 @@ export default function GraphicsPage() {
           customerName={emailInvoiceTarget.customerName}
           invoices={emailInvoiceTarget.invoices}
           onClose={() => setEmailInvoiceTarget(null)}
-        />
-      )}
-
-      {linkPoJob && (
-        <AssignJobPOModal
-          open={!!linkPoJob}
-          onClose={() => setLinkPoJob(null)}
-          jobId={linkPoJob.id}
-          jobPartNumber={linkPoJob.part_number}
-          jobTitle={linkPoJob.title}
-          initialQuery={linkPoJob.po_number || ''}
-          onAssigned={async (result) => {
-            const job = linkPoJob;
-            setLinkPoJob(null);
-            if (job) {
-              setJobs(prev => prev.map(j => j.id === job.id ? {
-                ...j,
-                po_id: result.po_id,
-                po_number: result.po_number,
-                po_line_item_id: result.matched_line_item_id ?? j.po_line_item_id,
-              } : j));
-              // Surface the newly-linked PO's files read-only, same as at
-              // creation time — loadJobFiles reads po_id off the (still
-              // stale) jobs closure, so query directly with the fresh id.
-              const { data: poData } = await supabase
-                .from('po_files')
-                .select('*')
-                .eq('po_id', result.po_id)
-                .order('uploaded_at', { ascending: false });
-              if (poData) setJobPoFiles(prev => ({ ...prev, [job.id]: poData as PoFile[] }));
-            }
-          }}
         />
       )}
 
