@@ -344,7 +344,7 @@ export default function POsPage() {
   };
   const [loading, setLoading] = useState(true);
   const [poTab, setPoTab] = useState<'open' | 'fulfilled' | 'closed'>('open');
-  const [poSortField, setPoSortField] = useState<'po_number' | 'location' | 'date'>('po_number');
+  const [poSortField, setPoSortField] = useState<'po_number' | 'location' | 'date' | 'customer'>('po_number');
   const [showCreate, setShowCreate] = useState(false);
   const [showImport, setShowImport] = useState(false);
   const [expandedPo, setExpandedPo] = useState<string | null>(null);
@@ -370,6 +370,7 @@ export default function POsPage() {
   // and a date window on the PO date (imported date when none on record).
   type PoFilter = 'all' | 'billing' | 'not_invoiced' | 'notes' | 'has_gfx' | 'no_gfx';
   const [poFilter, setPoFilter] = useState<PoFilter>('all');
+  const [poCustomerFilter, setPoCustomerFilter] = useState<string>('all');
   const [poDateRange, setPoDateRange] = useState<'all' | '30' | '90' | 'month' | 'lastmonth'>('all');
   // Collapsed "⋯ More" menu for the secondary toolbar actions
   const [showMoreMenu, setShowMoreMenu] = useState(false);
@@ -2407,9 +2408,16 @@ export default function POsPage() {
     has_gfx: tabPos.filter(p => matchesPoFilter(p, 'has_gfx')).length,
     no_gfx: tabPos.filter(p => matchesPoFilter(p, 'no_gfx')).length,
   };
+  // Distinct customers present in the current tab, for the customer filter
+  // dropdown — counts computed the same way as poFilterCounts (before
+  // search), so the menu reads as "what's here".
+  const poCustomerCounts = new Map<string, number>();
+  for (const p of tabPos) poCustomerCounts.set(p.customer, (poCustomerCounts.get(p.customer) || 0) + 1);
+  const poCustomerOptions = Array.from(poCustomerCounts.keys()).sort((a, b) => a.localeCompare(b));
 
   const filteredPos = tabPos
     .filter(po => matchesPoFilter(po, poFilter) && matchesPoDateRange(po))
+    .filter(po => poCustomerFilter === 'all' || po.customer === poCustomerFilter)
     .filter((po) => {
       if (!poSearch.trim()) return true;
       const q = poSearch.toLowerCase();
@@ -2436,6 +2444,10 @@ export default function POsPage() {
         if (!la) return 1;
         if (!lb) return -1;
         const cmp = la.localeCompare(lb) || byPoNumber;
+        return poSort === 'asc' ? cmp : -cmp;
+      }
+      if (poSortField === 'customer') {
+        const cmp = a.customer.localeCompare(b.customer) || byPoNumber;
         return poSort === 'asc' ? cmp : -cmp;
       }
       return poSort === 'asc' ? byPoNumber : -byPoNumber;
@@ -2684,7 +2696,7 @@ export default function POsPage() {
 
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '8px' }}>
         <div style={{ fontSize: '11px', fontWeight: 700, color: 'var(--text-label)', textTransform: 'uppercase', letterSpacing: '0.5px' }}>
-          {poTab === 'closed' ? 'Closed' : poTab === 'fulfilled' ? 'Fulfilled' : ''} Purchase Orders ({filteredPos.length}{poSearch || poFilter !== 'all' || poDateRange !== 'all' ? ` of ${tabPos.length}` : ''})
+          {poTab === 'closed' ? 'Closed' : poTab === 'fulfilled' ? 'Fulfilled' : ''} Purchase Orders ({filteredPos.length}{poSearch || poFilter !== 'all' || poCustomerFilter !== 'all' || poDateRange !== 'all' ? ` of ${tabPos.length}` : ''})
         </div>
         <div style={{ display: 'flex', gap: '6px' }}>
           {!editMode ? (
@@ -2852,6 +2864,17 @@ export default function POsPage() {
                 <option value="no_gfx">No graphics job ({poFilterCounts.no_gfx})</option>
               </select>
               <select
+                value={poCustomerFilter}
+                onChange={e => setPoCustomerFilter(e.target.value)}
+                title="Show only POs for one customer"
+                style={{ ...selectStyle, ...(poCustomerFilter !== 'all' ? { border: '1px solid var(--tab-active-border)', color: '#60a5fa' } : {}) }}
+              >
+                <option value="all">Customer: All</option>
+                {poCustomerOptions.map(c => (
+                  <option key={c} value={c}>{c} ({poCustomerCounts.get(c)})</option>
+                ))}
+              </select>
+              <select
                 value={poDateRange}
                 onChange={e => setPoDateRange(e.target.value as typeof poDateRange)}
                 title="Limit to a PO-date window (imported date when the PO has no date on record)"
@@ -2877,6 +2900,7 @@ export default function POsPage() {
                 <option value="po_number">Sort: PO #</option>
                 <option value="date">Sort: Date</option>
                 <option value="location">Sort: Location</option>
+                <option value="customer">Sort: Customer</option>
               </select>
               <button
                 onClick={() => setPoSort(s => s === 'asc' ? 'desc' : 'asc')}
@@ -2885,9 +2909,9 @@ export default function POsPage() {
               >
                 {poSort === 'asc' ? '▲' : '▼'}
               </button>
-              {(poFilter !== 'all' || poDateRange !== 'all') && (
+              {(poFilter !== 'all' || poCustomerFilter !== 'all' || poDateRange !== 'all') && (
                 <button
-                  onClick={() => { setPoFilter('all'); setPoDateRange('all'); }}
+                  onClick={() => { setPoFilter('all'); setPoCustomerFilter('all'); setPoDateRange('all'); }}
                   style={{ ...selectStyle, color: 'var(--text-label)' }}
                 >
                   ✕ Clear filters
@@ -3986,7 +4010,7 @@ export default function POsPage() {
         </div>
       )}
 
-      {pos.length > 0 && filteredPos.length === 0 && (poSearch || poFilter !== 'all' || poDateRange !== 'all') && (
+      {pos.length > 0 && filteredPos.length === 0 && (poSearch || poFilter !== 'all' || poCustomerFilter !== 'all' || poDateRange !== 'all') && (
         <div style={{ textAlign: 'center', padding: '24px 0', color: 'var(--text-label)' }}>
           <div style={{ fontSize: '12px' }}>
             {poSearch ? <>No POs matching &quot;{poSearch}&quot;</> : 'No POs match the current filters'}
