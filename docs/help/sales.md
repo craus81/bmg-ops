@@ -9,7 +9,7 @@ For the full story of one job from prospect to ship, see
 
 ## Add a new prospect
 
-1. Tap **CRM** in the bottom nav.
+1. Tap **Customers** in the bottom nav.
 2. Tap **+ New**.
 3. Type the company name.
 4. Pick a **Lead Source**.
@@ -25,7 +25,7 @@ To add a contact (name, email, phone) on that prospect:
 
 ## Mark a prospect "Hot"
 
-1. Open the prospect's row in **CRM**.
+1. Open the prospect's row in **Customers**.
 2. Tap **Mark Hot**.
 
 The flame icon shows up. Hot prospects rise on your dashboard.
@@ -34,7 +34,7 @@ The flame icon shows up. Hot prospects rise on your dashboard.
 
 ## Move a prospect through the pipeline
 
-1. Open **CRM**.
+1. Open **Customers**.
 2. On the prospect row, find the **Stage** dropdown.
 3. Pick **Lead → Quoted → Negotiating → Won** (or **Lost**).
 
@@ -124,7 +124,7 @@ fields. You can still override per-estimate.
 
 ## Convert a prospect to a real customer
 
-1. Open the prospect in **CRM**.
+1. Open the prospect in **Customers**.
 2. Tap **Convert to Customer**.
 
 The customer record is created and any estimates / threads transfer

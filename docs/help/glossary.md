@@ -16,8 +16,8 @@ get worked on, billed at the end. Has its own queue at **CNI Jobs**.
 **Completion ceremony** — The process at the end of an install:
 checklist done, photos taken, notes written, customer notified, done.
 
-**CRM** — Where prospects live before they're real customers. Tap
-**CRM** in the bottom nav.
+**Customers** — Where prospects live before they're real customers. Tap
+**Customers** in the bottom nav.
 
 **Estimate** — Your quote for a job. Built at **Estimates**, sent for
 customer approval, then converted to a Sales Order.
@@ -49,7 +49,7 @@ proofs, install context, the QC checklist, photo timeline, and the
 **Proof** — A graphics design file the customer needs to approve
 before production.
 
-**Prospect** — A pre-customer sales lead. Lives in **CRM**.
+**Prospect** — A pre-customer sales lead. Lives in **Customers**.
 
 **QC checklist** — The required tasks for an install. The installer
 checks them off on the pick-list.

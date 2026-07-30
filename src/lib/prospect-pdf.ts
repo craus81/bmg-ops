@@ -229,7 +229,7 @@ export function exportProspectPDF(data: ProspectPDFData) {
     doc.setFontSize(8);
     doc.setTextColor(140);
     doc.text(
-      `BMG Fleet CRM · Generated ${new Date().toLocaleString()} · Page ${i} of ${pageCount}`,
+      `BMG Fleet Customers · Generated ${new Date().toLocaleString()} · Page ${i} of ${pageCount}`,
       margin,
       doc.internal.pageSize.getHeight() - 20,
     );

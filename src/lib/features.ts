@@ -31,7 +31,7 @@ export const FEATURES = {
   proof_hygiene: 'Proof Search', // legacy key — now gates the Proof Search page only
   all_jobs: 'CNI Jobs',
   catalog_management: 'Part Catalog Management',
-  prospects: 'Prospects / Sales CRM',
+  prospects: 'Customers (Prospects & Sales)',
   upfit_projects: 'Upfit Projects',
   audit_log: 'Audit Log',
   system_health: 'System Health',
