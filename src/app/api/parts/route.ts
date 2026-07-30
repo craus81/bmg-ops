@@ -13,7 +13,10 @@ export async function GET(req: NextRequest) {
   const auth = await requireAuth(req);
   if (auth.error) return auth.error;
   const roles: string[] = auth.profile?.roles?.length ? auth.profile.roles : [auth.profile?.role];
-  if (roles.includes('customer')) {
+  // Customer-ONLY accounts are blocked. A multi-role account (e.g. an admin
+  // who also carries the customer role to preview the portal) is still
+  // internal — same semantics as /api/scans/log.
+  if (roles.includes('customer') && roles.length === 1) {
     return NextResponse.json({ error: 'Forbidden' }, { status: 403 });
   }
 

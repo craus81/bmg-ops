@@ -48,7 +48,10 @@ export async function POST(req: NextRequest) {
     .eq('status', 'approved');
   const staff = (profiles || []).filter(p => {
     const roles: string[] = p.roles?.length ? p.roles : [p.role];
-    return !roles.includes('customer');
+    // Only customer-ONLY accounts are un-mentionable; a multi-role account
+    // (e.g. admin + customer) is still staff — same semantics as
+    // /api/scans/log and /api/parts.
+    return !(roles.includes('customer') && roles.length === 1);
   });
 
   // Resolve "@Jessie" / "@Jessie Smith" tokens (up to two words) to profile
