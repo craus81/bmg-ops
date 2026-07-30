@@ -1,12 +1,13 @@
 'use client';
 
 /**
- * The Purchase Order record — one PO on its own page. Step 1 of replacing
- * the PO list's expand-in-place cards with a thin table that links here:
- * everything the expanded card could do lives on this page instead —
- * header facts, Edit PO (customer resolution, ship-to, dates, status),
- * line items (edit / add / delete, per-line graphics jobs), invoices with
- * the billing check verdict, PDF attachments, and @mention notes.
+ * The Purchase Order record — one PO on its own page. The PO list is a thin
+ * table that links here: everything its old expand-in-place card could do
+ * lives on this page instead — header facts, Edit PO (customer resolution,
+ * ship-to, dates, status), NetSuite sales order creation, invoicing open
+ * quantities, print / CSV export, line items (edit / add / delete, per-line
+ * graphics jobs and add-to-catalog), invoices with the billing check
+ * verdict, PDF attachments, and @mention notes.
  *
  * Route: /admin/pos/<uuid>
  */
@@ -24,6 +25,9 @@ import CustomerPicker from '@/components/CustomerPicker';
 import MentionTextArea, { reportMentions } from '@/components/MentionTextArea';
 import { PartLabel } from '@/components/PartLabel';
 import { DropZone } from '@/components/DropZone';
+import EmailInvoicesModal, { type EmailableInvoice } from '@/components/EmailInvoicesModal';
+import { printPo, downloadPoCsv } from '@/lib/po-print';
+import { findOrCreateManualPart } from '@/lib/parts-catalog';
 import type { PurchaseOrder, POLineItem, PoLocation, GraphicsJobStatus } from '@/lib/types';
 import { GRAPHICS_STATUS_LABELS, GRAPHICS_STATUS_COLORS } from '@/lib/types';
 
@@ -76,8 +80,14 @@ type PoRecord = PurchaseOrder & {
   po_invoices: PoInvoiceRow[];
   netsuite_invoice_id?: string | null;
   netsuite_invoice_number?: string | null;
+  netsuite_so_id?: string | null;
   netsuite_so_number?: string | null;
 };
+
+// A netsuite_parts row matched to one of this PO's lines — powers the
+// per-line "in catalog / add to catalog" state without loading the whole
+// (unbounded) catalog client-side.
+interface CatalogPartRow { id: string; item_number: string; catalog: string | null }
 
 const STATUS_META: Record<string, { label: string; color: string }> = {
   open: { label: 'Open', color: '#60a5fa' },
@@ -264,6 +274,25 @@ export default function PoRecordPage() {
   // ── Invoices ─────────────────────────────────────────────────────────────
   const [rechecking, setRechecking] = useState(false);
 
+  // ── NetSuite sales order (ported from the PO list's expanded card) ───────
+  const [creatingSO, setCreatingSO] = useState(false);
+  const [soResult, setSoResult] = useState<any | null>(null);
+
+  // ── Invoice from OPEN quantities (ported from the PO list) ───────────────
+  // Lines not yet complete, prefilled with quantity − installed, editable
+  // before the invoice is created. Completed lines never enter this invoice.
+  const [invoiceOpenVisible, setInvoiceOpenVisible] = useState(false);
+  const [invoiceOpenQtys, setInvoiceOpenQtys] = useState<Record<string, number>>({});
+  const [creatingOpenInvoice, setCreatingOpenInvoice] = useState(false);
+  // Fresh invoice → straight into the shared email screen (same modal the
+  // Invoicing hub and Scans page use).
+  const [emailTarget, setEmailTarget] = useState<{ customerName: string; invoices: EmailableInvoice[] } | null>(null);
+
+  // ── Per-line catalog state (ported from the PO list) ─────────────────────
+  const [catalogParts, setCatalogParts] = useState<CatalogPartRow[]>([]);
+  const [addingToCatalog, setAddingToCatalog] = useState<string | null>(null); // part_number being added
+  const [catalogAddResults, setCatalogAddResults] = useState<Record<string, 'added' | 'error'>>({});
+
   const shapePo = (row: any): PoRecord => ({
     ...row,
     line_items: row.po_line_items || [],
@@ -318,6 +347,25 @@ export default function PoRecordPage() {
     setTeamProfiles(
       ((profRes.data || []) as any[]).filter(p => p.role === 'admin' || (Array.isArray(p.roles) && p.roles.includes('admin'))),
     );
+
+    // Catalog matches for the per-line "Add to Catalog" state: linked part
+    // ids plus exact item-number matches for unlinked lines. A rare
+    // case-insensitive miss just shows the Add button — clicking it goes
+    // through findOrCreateManualPart, which dedupes case-insensitively.
+    const lineRows = (data.po_line_items || []) as POLineItem[];
+    const partIds = [...new Set(lineRows.map(l => l.part_id).filter((v): v is string => !!v))];
+    const partNums = [...new Set(lineRows.map(l => l.part_number).filter(Boolean))];
+    const [byIdRes, byNumRes] = await Promise.all([
+      partIds.length > 0
+        ? supabase.from('netsuite_parts').select('id, item_number, catalog').in('id', partIds)
+        : Promise.resolve({ data: [] as any[] }),
+      partNums.length > 0
+        ? supabase.from('netsuite_parts').select('id, item_number, catalog').eq('is_active', true).in('item_number', partNums)
+        : Promise.resolve({ data: [] as any[] }),
+    ]);
+    const partRows = new Map<string, CatalogPartRow>();
+    for (const p of ([...(byIdRes.data || []), ...(byNumRes.data || [])] as CatalogPartRow[])) partRows.set(p.id, p);
+    setCatalogParts([...partRows.values()]);
   };
 
   const loadPoFiles = async (poId: string) => {
@@ -650,6 +698,160 @@ export default function PoRecordPage() {
     setRechecking(false);
   };
 
+  // ── NetSuite sales order (same endpoint as the list's expanded card) ─────
+  const createNetSuiteSO = async () => {
+    if (!po || creatingSO) return;
+    setCreatingSO(true);
+    try {
+      const res = await fetch('/api/netsuite/create-sales-order', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ poId: po.id }),
+      });
+      const data = await res.json();
+
+      if (!res.ok || data.error) {
+        setSoResult({ status: 'error', error: data.error || 'Failed' });
+      } else {
+        setSoResult(data);
+        // Update the local PO with the NetSuite SO info
+        if (data.salesOrderId) {
+          setPo(prev => (prev
+            ? { ...prev, netsuite_so_id: data.salesOrderId, netsuite_so_number: data.salesOrderNumber }
+            : prev));
+        }
+      }
+    } catch (err: any) {
+      setSoResult({ status: 'error', error: err.message || 'Network error' });
+    }
+    setCreatingSO(false);
+  };
+
+  // ── Invoice from open quantities (same endpoint as the list had) ─────────
+  const openInvoiceModal = () => {
+    if (!po) return;
+    const qtys: Record<string, number> = {};
+    for (const li of po.line_items) {
+      const open = li.quantity - (li.installed || 0);
+      if (open > 0) qtys[li.id] = open;
+    }
+    setInvoiceOpenQtys(qtys);
+    setInvoiceOpenVisible(true);
+  };
+
+  const createOpenQtyInvoice = async () => {
+    if (!po) return;
+    // Key by PO line id, not part number: a part can be on several lines and
+    // the server validates/bills each line against its own open quantity.
+    const quantities: Record<string, number> = {};
+    for (const li of po.line_items) {
+      const q = invoiceOpenQtys[li.id];
+      if (q && q > 0) quantities[li.id] = q;
+    }
+    if (Object.keys(quantities).length === 0) {
+      await dialog.alert('Every line is at 0 — nothing to invoice.');
+      return;
+    }
+    setCreatingOpenInvoice(true);
+    try {
+      // Direct NetSuite invoice — deliberately NOT via a sales order;
+      // FleetSuite bypasses SO creation entirely.
+      const res = await fetch('/api/pos/invoice-open', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ poId: po.id, quantities }),
+      });
+      const data = await res.json();
+      const result = res.ok && data.success
+        ? { invoiceId: data.invoiceId, invoiceNumber: data.invoiceNumber }
+        : null;
+      if (!result) {
+        await dialog.alert(`Failed to create invoice: ${data.error || `request failed (${res.status})`}`);
+      } else {
+        const totalUnits = Object.values(quantities).reduce((a, b) => a + b, 0);
+        // Invoice lines collapse by part+price on the server; mirror that here
+        // so the optimistic line count matches what a reload shows.
+        const billedLineCount = new Set(
+          po.line_items
+            .filter(li => (invoiceOpenQtys[li.id] || 0) > 0)
+            .map(li => `${li.part_number.toUpperCase()}|${li.unit_price}`),
+        ).size;
+        setPo(prev => {
+          if (!prev) return prev;
+          const newInvoice: PoInvoiceRow = {
+            netsuite_invoice_id: result.invoiceId != null ? String(result.invoiceId) : '',
+            netsuite_invoice_number: result.invoiceNumber || null,
+            created_at: new Date().toISOString(),
+            total_qty: totalUnits,
+            line_count: billedLineCount,
+            memo: `PO #${prev.po_number} — open quantities`,
+          };
+          // Mirror the server: billed units consume the open quantity, and a
+          // fully billed PO reads as fulfilled without a reload.
+          const line_items = prev.line_items.map(li => {
+            const billed = invoiceOpenQtys[li.id] || 0;
+            return billed > 0
+              ? { ...li, installed: Math.min((li.installed || 0) + billed, li.quantity) }
+              : li;
+          });
+          const fulfilled = line_items.length > 0 && line_items.every(li => (li.installed || 0) >= li.quantity);
+          return {
+            ...prev,
+            line_items,
+            status: fulfilled && prev.status === 'open' ? 'complete' : prev.status,
+            netsuite_invoice_id: result.invoiceId != null ? String(result.invoiceId) : prev.netsuite_invoice_id,
+            netsuite_invoice_number: result.invoiceNumber || prev.netsuite_invoice_number,
+            po_invoices: [newInvoice, ...prev.po_invoices],
+          };
+        });
+        setInvoiceOpenVisible(false);
+        if (result.invoiceNumber) {
+          setEmailTarget({
+            customerName: po.customer,
+            invoices: [{
+              invoiceId: result.invoiceId != null ? String(result.invoiceId) : undefined,
+              invoiceNumber: result.invoiceNumber,
+              po: po.po_number,
+            }],
+          });
+        } else {
+          // No invoice number back from NetSuite — nothing to attach, so the
+          // email screen can't help; fall back to the plain confirmation.
+          await dialog.alert(`Invoice created for PO #${po.po_number} (${totalUnits} unit${totalUnits !== 1 ? 's' : ''}).`);
+        }
+      }
+    } catch (err: any) {
+      await dialog.alert(`Failed to create invoice: ${err.message || 'network error'}`);
+    }
+    setCreatingOpenInvoice(false);
+  };
+
+  // ── Add a PO line item's part to the catalog (same flow as the list) ─────
+  const addLineToCatalog = async (li: POLineItem) => {
+    if (!po) return;
+    setAddingToCatalog(li.part_number);
+    try {
+      const created = await findOrCreateManualPart(supabase, {
+        partNumber: li.part_number,
+        description: li.description || null,
+        price: li.unit_price,
+        customer: po.customer || null,
+        graphicPackage: li.description || null,
+      });
+      if (!created) {
+        setCatalogAddResults(prev => ({ ...prev, [li.part_number]: 'error' }));
+      } else {
+        setCatalogAddResults(prev => ({ ...prev, [li.part_number]: 'added' }));
+        setCatalogParts(prev => prev.some(p => p.id === created.id)
+          ? prev
+          : [...prev, { id: created.id, item_number: created.part_number, catalog: created.catalog || null }]);
+      }
+    } catch {
+      setCatalogAddResults(prev => ({ ...prev, [li.part_number]: 'error' }));
+    }
+    setAddingToCatalog(null);
+  };
+
   // ── Render ───────────────────────────────────────────────────────────────
   if (loading) {
     return (
@@ -753,10 +955,53 @@ export default function PoRecordPage() {
           >
             + Graphics Job
           </button>
+          {(() => {
+            const hasSO = po.netsuite_so_id || soResult?.salesOrderId;
+            const soError = soResult?.status === 'error';
+            return (
+              <button
+                onClick={createNetSuiteSO}
+                disabled={creatingSO}
+                title="Create a NetSuite sales order from this PO"
+                style={{ ...btnSm, color: soError ? '#ef4444' : '#a78bfa', opacity: creatingSO ? 0.6 : 1 }}
+              >
+                {creatingSO ? 'Creating...' : hasSO ? `NS SO #${po.netsuite_so_number || soResult?.salesOrderNumber || 'Created'}` : soError ? 'Retry NS SO' : 'Create NS SO'}
+              </button>
+            );
+          })()}
+          {po.line_items.some(li => (li.installed || 0) < li.quantity) && (
+            <button
+              onClick={openInvoiceModal}
+              title="Invoice this PO's open (not yet installed) quantities directly in NetSuite"
+              style={{ ...btnSm, color: '#34d399' }}
+            >
+              Invoice Open Qty ({po.line_items.reduce((s, li) => s + Math.max(0, li.quantity - (li.installed || 0)), 0)} units)
+            </button>
+          )}
+          <button onClick={() => printPo(po, dialog.alert)} style={btnSm}>Print PO</button>
+          <button
+            onClick={() => downloadPoCsv(po)}
+            disabled={po.line_items.length === 0}
+            style={{ ...btnSm, opacity: po.line_items.length === 0 ? 0.5 : 1, cursor: po.line_items.length === 0 ? 'not-allowed' : 'pointer' }}
+          >
+            Download CSV
+          </button>
           {isAdmin && (
             <button onClick={deletePO} style={{ ...btnSm, color: '#f87171' }}>Delete PO</button>
           )}
         </div>
+
+        {soResult?.status === 'error' && (
+          <div style={{ marginTop: '8px', padding: '6px 8px', borderRadius: '6px', background: 'rgba(239,68,68,0.06)', border: '1px solid rgba(239,68,68,0.15)', fontSize: '10px', color: '#ef4444' }}>
+            {soResult.error}
+          </div>
+        )}
+
+        {soResult?.unmatchedParts?.length > 0 && soResult?.status !== 'error' && (
+          <div style={{ marginTop: '8px', padding: '6px 8px', borderRadius: '6px', background: 'rgba(251,191,36,0.06)', border: '1px solid rgba(251,191,36,0.15)', fontSize: '10px', color: '#fbbf24' }}>
+            Note: {soResult.unmatchedParts.length} part(s) not found in NetSuite: {soResult.unmatchedParts.join(', ')}
+          </div>
+        )}
 
         {/* Facts */}
         <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(140px, 1fr))', gap: '10px', marginTop: '14px' }}>
@@ -922,6 +1167,10 @@ export default function PoRecordPage() {
                   );
                 }
                 const lineGfxJob = gfxJobs.find(j => j.po_line_item_id === li.id) || null;
+                const catalogMatch = catalogParts.find(p =>
+                  p.id === li.part_id || p.item_number.toUpperCase() === li.part_number.toUpperCase()
+                ) || null;
+                const catalogAdded = catalogAddResults[li.part_number] === 'added';
                 return (
                   <tr key={li.id}>
                     <td style={{ ...td, fontWeight: 700, color: 'var(--text-primary)', cursor: 'pointer' }} onClick={() => startEditLine(li)} title="Edit this line">{li.part_number}</td>
@@ -929,7 +1178,26 @@ export default function PoRecordPage() {
                       <div style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', fontSize: '11.5px', color: 'var(--text-muted)' }}>
                         <PartLabel partNumber={li.part_number} fallbackDescription={li.description} nameOnly />
                       </div>
-                      <div style={{ marginTop: '4px' }}>
+                      <div style={{ marginTop: '4px', display: 'flex', gap: '6px', flexWrap: 'wrap', alignItems: 'center' }}>
+                        {catalogMatch ? (
+                          <button
+                            onClick={() => router.push(`/parts?catalog=${catalogMatch.catalog || 'graphics'}&q=${encodeURIComponent(li.part_number)}`)}
+                            title="Open this part in the Parts Catalog to edit it"
+                            style={{ padding: '2px 8px', borderRadius: '4px', fontSize: '9px', fontWeight: 700, background: 'rgba(34,197,94,0.08)', border: '1px solid rgba(34,197,94,0.25)', color: '#4ade80', cursor: 'pointer' }}
+                          >
+                            ✓ In catalog — edit ↗
+                          </button>
+                        ) : catalogAdded ? (
+                          <span style={{ fontSize: '9px', color: '#4ade80', fontWeight: 600 }}>✓ In catalog</span>
+                        ) : (
+                          <button
+                            onClick={() => addLineToCatalog(li)}
+                            disabled={addingToCatalog === li.part_number}
+                            style={{ padding: '2px 8px', borderRadius: '4px', fontSize: '9px', fontWeight: 700, background: 'rgba(251,191,36,0.1)', border: '1px solid rgba(251,191,36,0.3)', color: '#fbbf24', cursor: 'pointer' }}
+                          >
+                            {addingToCatalog === li.part_number ? 'Adding...' : '+ Add to Catalog'}
+                          </button>
+                        )}
                         {lineGfxJob ? (
                           <button
                             onClick={() => router.push(`/graphics?editJob=${lineGfxJob.id}`)}
@@ -1254,6 +1522,84 @@ export default function PoRecordPage() {
           </button>
         </div>
       </div>
+
+      {/* Invoice open quantities modal (ported from the PO list) */}
+      {invoiceOpenVisible && (() => {
+        const openLines = po.line_items.filter(li => (li.installed || 0) < li.quantity);
+        const openUnits = openLines.reduce((s, li) => s + (invoiceOpenQtys[li.id] || 0), 0);
+        const openValue = openLines.reduce((s, li) => s + (invoiceOpenQtys[li.id] || 0) * li.unit_price, 0);
+        return (
+          <div style={{ position: 'fixed', top: 0, left: 0, right: 0, bottom: 0, background: 'var(--overlay)', zIndex: 1000, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '16px' }}>
+            <div style={{ background: 'var(--card)', border: '1px solid rgba(52,211,153,0.3)', borderRadius: '14px', padding: '18px', width: '100%', maxWidth: '560px', maxHeight: '85vh', overflowY: 'auto' }}>
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: '4px' }}>
+                <div style={{ fontSize: '16px', fontWeight: 800, color: 'var(--text-primary)' }}>Invoice Open Quantities — PO #{po.po_number}</div>
+                <button onClick={() => setInvoiceOpenVisible(false)} style={{ background: 'none', border: 'none', color: 'var(--text-muted)', fontSize: '18px', cursor: 'pointer', padding: '2px' }}>✕</button>
+              </div>
+              <div style={{ fontSize: '11px', color: 'var(--text-muted)', marginBottom: '12px' }}>
+                Prefilled with each line&apos;s open (not yet installed) quantity — adjust before creating. Completed lines are left off.
+              </div>
+              <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
+                {openLines.map(li => {
+                  const open = li.quantity - (li.installed || 0);
+                  return (
+                    <div key={li.id} style={{ display: 'flex', alignItems: 'center', gap: '10px', padding: '8px 10px', borderRadius: '8px', background: 'var(--subtle-bg)', border: '1px solid var(--border)' }}>
+                      <div style={{ flex: 1, minWidth: 0 }}>
+                        <div style={{ fontSize: '13px', fontWeight: 700, color: 'var(--text-primary)' }}>{li.part_number}</div>
+                        <div style={{ fontSize: '11px', color: 'var(--text-muted)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                          {li.description || '—'} · open {open} of {li.quantity} · ${li.unit_price.toFixed(2)}/ea
+                        </div>
+                      </div>
+                      <input
+                        type="number"
+                        min={0}
+                        max={open}
+                        value={invoiceOpenQtys[li.id] ?? 0}
+                        onChange={e => {
+                          const v = Math.max(0, Math.min(open, parseInt(e.target.value) || 0));
+                          setInvoiceOpenQtys(prev => ({ ...prev, [li.id]: v }));
+                        }}
+                        style={{ width: '76px', padding: '8px', borderRadius: '8px', border: '1px solid var(--border)', background: 'var(--input-bg)', color: 'var(--text-primary)', fontSize: '14px', fontWeight: 700, textAlign: 'right' }}
+                      />
+                    </div>
+                  );
+                })}
+              </div>
+              <div style={{ marginTop: '10px', padding: '8px 10px', borderRadius: '8px', background: 'rgba(52,211,153,0.06)', border: '1px solid rgba(52,211,153,0.2)', fontSize: '12px', fontWeight: 700, color: '#34d399' }}>
+                {openUnits} unit{openUnits !== 1 ? 's' : ''} · ${openValue.toFixed(2)}
+              </div>
+              <div style={{ display: 'flex', gap: '8px', marginTop: '12px' }}>
+                <button
+                  onClick={createOpenQtyInvoice}
+                  disabled={creatingOpenInvoice || openUnits === 0}
+                  style={{
+                    flex: 1, padding: '12px', borderRadius: '10px', border: 'none',
+                    background: creatingOpenInvoice || openUnits === 0 ? 'var(--subtle-bg)' : '#10b981',
+                    color: '#fff', fontWeight: 800, fontSize: '13px', cursor: 'pointer',
+                    opacity: creatingOpenInvoice || openUnits === 0 ? 0.5 : 1,
+                  }}
+                >
+                  {creatingOpenInvoice ? 'Creating…' : `Create Invoice (${openUnits} unit${openUnits !== 1 ? 's' : ''})`}
+                </button>
+                <button
+                  onClick={() => setInvoiceOpenVisible(false)}
+                  style={{ flex: 1, padding: '12px', borderRadius: '10px', background: 'transparent', border: '1px solid var(--border)', color: 'var(--text-secondary)', fontWeight: 700, fontSize: '13px', cursor: 'pointer' }}
+                >
+                  Cancel
+                </button>
+              </div>
+            </div>
+          </div>
+        );
+      })()}
+
+      {/* Email the freshly created invoice (shared component) */}
+      {emailTarget && (
+        <EmailInvoicesModal
+          customerName={emailTarget.customerName}
+          invoices={emailTarget.invoices}
+          onClose={() => setEmailTarget(null)}
+        />
+      )}
 
       {/* PDF preview modal */}
       {pdfPreview && (
