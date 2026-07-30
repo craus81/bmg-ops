@@ -9,6 +9,7 @@ import { useAuth } from '@/components/AuthProvider';
 import { useDialog } from '@/components/DialogProvider';
 import { theme } from '@/lib/theme';
 import AssignmentPicker from '@/components/AssignmentPicker';
+import AssignJobPOModal from '@/components/AssignJobPOModal';
 import GraphicsInvoiceReviewModal from '@/components/GraphicsInvoiceReviewModal';
 import EmailInvoicesModal, { type EmailableInvoice } from '@/components/EmailInvoicesModal';
 import { PartLabel } from '@/components/PartLabel';
@@ -129,6 +130,7 @@ export default function GraphicsPage() {
   const [expandedJobId, setExpandedJobId] = useState<string | null>(null);
   const [editingJob, setEditingJob] = useState<GraphicsJob | null>(null);
   const [invoiceJob, setInvoiceJob] = useState<GraphicsJob | null>(null);
+  const [linkPoJob, setLinkPoJob] = useState<GraphicsJob | null>(null);
   const [emailInvoiceTarget, setEmailInvoiceTarget] = useState<{ customerName: string; invoices: EmailableInvoice[] } | null>(null);
   const invoicePromptHandled = useRef<Set<string>>(new Set());
   const [statusHistory, setStatusHistory] = useState<GraphicsStatusHistory[]>([]);
@@ -2544,6 +2546,33 @@ export default function GraphicsPage() {
                           />
                         </div>
 
+                        {/* Purchase Order — POs sometimes arrive after the
+                            job is already entered (common with Bodewell), so
+                            this stays linkable any time, not just at creation. */}
+                        <div style={{ marginBottom: '10px' }}>
+                          <div style={labelStyle}>Purchase Order</div>
+                          {job.po_id ? (
+                            <div style={{ padding: '8px 10px', borderRadius: '8px', background: 'rgba(167,139,250,0.06)', border: '1px solid rgba(167,139,250,0.15)' }}>
+                              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                                <div style={{ fontSize: '11px', color: '#a78bfa', fontWeight: 700 }}>PO #{job.po_number || '—'} Linked</div>
+                                <button
+                                  onClick={() => router.push(`/admin/pos?id=${job.po_id}`)}
+                                  style={{ fontSize: '10px', fontWeight: 700, color: '#a78bfa', background: 'rgba(167,139,250,0.1)', border: '1px solid rgba(167,139,250,0.2)', borderRadius: '5px', padding: '3px 8px', cursor: 'pointer' }}
+                                >
+                                  Open PO
+                                </button>
+                              </div>
+                            </div>
+                          ) : (
+                            <button
+                              onClick={() => setLinkPoJob(job)}
+                              style={{ width: '100%', padding: '8px', borderRadius: '8px', fontSize: '11px', fontWeight: 700, cursor: 'pointer', background: 'rgba(167,139,250,0.08)', border: '1px dashed rgba(167,139,250,0.3)', color: '#a78bfa' }}
+                            >
+                              + Link PO{job.po_number ? ` (PO #${job.po_number} on file, not linked)` : ''}
+                            </button>
+                          )}
+                        </div>
+
                         {/* Estimate & Invoice */}
                         <div style={{ marginBottom: '10px' }}>
                           <div style={labelStyle}>Estimate & Invoice</div>
@@ -3455,6 +3484,38 @@ export default function GraphicsPage() {
           customerName={emailInvoiceTarget.customerName}
           invoices={emailInvoiceTarget.invoices}
           onClose={() => setEmailInvoiceTarget(null)}
+        />
+      )}
+
+      {linkPoJob && (
+        <AssignJobPOModal
+          open={!!linkPoJob}
+          onClose={() => setLinkPoJob(null)}
+          jobId={linkPoJob.id}
+          jobPartNumber={linkPoJob.part_number}
+          jobTitle={linkPoJob.title}
+          initialQuery={linkPoJob.po_number || ''}
+          onAssigned={async (result) => {
+            const job = linkPoJob;
+            setLinkPoJob(null);
+            if (job) {
+              setJobs(prev => prev.map(j => j.id === job.id ? {
+                ...j,
+                po_id: result.po_id,
+                po_number: result.po_number,
+                po_line_item_id: result.matched_line_item_id ?? j.po_line_item_id,
+              } : j));
+              // Surface the newly-linked PO's files read-only, same as at
+              // creation time — loadJobFiles reads po_id off the (still
+              // stale) jobs closure, so query directly with the fresh id.
+              const { data: poData } = await supabase
+                .from('po_files')
+                .select('*')
+                .eq('po_id', result.po_id)
+                .order('uploaded_at', { ascending: false });
+              if (poData) setJobPoFiles(prev => ({ ...prev, [job.id]: poData as PoFile[] }));
+            }
+          }}
         />
       )}
 
