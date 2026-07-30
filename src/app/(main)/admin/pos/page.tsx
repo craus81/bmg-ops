@@ -15,6 +15,7 @@ import MentionTextArea, { reportMentions } from '@/components/MentionTextArea';
 import { CreateNetsuiteItemModal } from '@/components/CreateNetsuiteItemModal';
 import EmailInvoicesModal, { type EmailableInvoice } from '@/components/EmailInvoicesModal';
 import { useDialog } from '@/components/DialogProvider';
+import CustomerPicker from '@/components/CustomerPicker';
 import { isProofLikeName } from '@/lib/pdf-classify';
 import { openNetSuitePdf } from '@/lib/netsuite-pdf-client';
 import { formatShipTo, shipToCityLabel } from '@/lib/graphics-job-from-po';
@@ -351,7 +352,7 @@ export default function POsPage() {
   // Deep-link target to briefly highlight after search/notification navigation.
   const [highlightPo, setHighlightPo] = useState<string | null>(null);
   const [editPoId, setEditPoId] = useState<string | null>(null);
-  const [editPoForm, setEditPoForm] = useState({ po_number: '', customer: '', status: '' as string, ordered_date: '', requested_delivery_date: '', notes: '' });
+  const [editPoForm, setEditPoForm] = useState({ po_number: '', customer: '', customer_netsuite_id: null as string | null, status: '' as string, ordered_date: '', requested_delivery_date: '', notes: '' });
   const [editLineId, setEditLineId] = useState<string | null>(null);
   const [editLineForm, setEditLineForm] = useState({ part_number: '', quantity: '', unit_price: '', installed: '' });
   // Add-a-line state: lets the user tack on a part the scan missed while
@@ -359,7 +360,7 @@ export default function POsPage() {
   const [addLinePoId, setAddLinePoId] = useState<string | null>(null);
   const [addLineForm, setAddLineForm] = useState({ part_number: '', quantity: '1', unit_price: '' });
   const [addingLine, setAddingLine] = useState(false);
-  const [form, setForm] = useState({ po_number: '', customer: 'Masterack', ordered_date: '', requested_delivery_date: '', notes: '' });
+  const [form, setForm] = useState({ po_number: '', customer: 'Masterack', customer_netsuite_id: null as string | null, ordered_date: '', requested_delivery_date: '', notes: '' });
   const [lineItems, setLineItems] = useState<{ part_id: string | null; part_number: string; quantity: number; unit_price: number }[]>([]);
   // Staging form for adding a line while building a new PO — mirrors the
   // existing-PO "+ Add Line" form (catalog prefill + free-text fallback).
@@ -1228,9 +1229,12 @@ export default function POsPage() {
   const handleCreate = async () => {
     if (!form.po_number || !form.customer || lineItems.length === 0 || !user) return null;
     const hasShipTo = Object.values(createShipTo).some(v => (v || '').toString().trim());
-    // Resolve the picked name ("Masterack") to the real NetSuite customer
-    // ("Masterack LLC" + internal id) before storing.
-    const { customer, customerNetsuiteId } = await resolvePoCustomer(supabase, form.customer);
+    // The customer picker already resolves as the user types/picks/creates;
+    // only fall back to re-resolving here for free text that was typed
+    // without clicking a suggestion (e.g. an exact but unclicked match).
+    const { customer, customerNetsuiteId } = form.customer_netsuite_id
+      ? { customer: form.customer, customerNetsuiteId: form.customer_netsuite_id }
+      : await resolvePoCustomer(supabase, form.customer);
     const { data: po, error } = await supabase
       .from('purchase_orders')
       .insert({
@@ -1254,7 +1258,7 @@ export default function POsPage() {
       .select();
 
     setPos((prev) => [{ ...po, line_items: (items as POLineItem[]) || [] }, ...prev]);
-    setForm({ po_number: '', customer: 'Masterack', ordered_date: '', requested_delivery_date: '', notes: '' });
+    setForm({ po_number: '', customer: 'Masterack', customer_netsuite_id: null, ordered_date: '', requested_delivery_date: '', notes: '' });
     setLineItems([]);
     setCreateLineForm({ part_number: '', quantity: '1', unit_price: '' });
     setCreateShipToId('');
@@ -1357,6 +1361,7 @@ export default function POsPage() {
     setEditPoForm({
       po_number: po.po_number,
       customer: po.customer,
+      customer_netsuite_id: po.customer_netsuite_id || null,
       status: po.status,
       ordered_date: po.ordered_date ? po.ordered_date.slice(0, 10) : '',
       requested_delivery_date: po.requested_delivery_date ? po.requested_delivery_date.slice(0, 10) : '',
@@ -1377,9 +1382,18 @@ export default function POsPage() {
   const saveEditPO = async () => {
     if (!editPoId) return;
     const hasShipTo = Object.values(editShipTo).some(v => (v || '').toString().trim());
+    // The picker resolves as the user types/picks/creates; fall back to
+    // re-resolving for free text typed without clicking a suggestion. Either
+    // way, always write customer_netsuite_id here — previously this saved
+    // the customer's display text without ever touching the NetSuite link,
+    // so editing the customer left the old PO's match silently stale.
+    const { customer, customerNetsuiteId } = editPoForm.customer_netsuite_id
+      ? { customer: editPoForm.customer, customerNetsuiteId: editPoForm.customer_netsuite_id }
+      : await resolvePoCustomer(supabase, editPoForm.customer);
     const update = {
       po_number: editPoForm.po_number,
-      customer: editPoForm.customer,
+      customer,
+      customer_netsuite_id: customerNetsuiteId,
       status: editPoForm.status,
       ship_to: hasShipTo ? editShipTo : null,
       ordered_date: editPoForm.ordered_date || null,
@@ -3240,10 +3254,10 @@ export default function POsPage() {
               </div>
               <div>
                 <div style={{ fontSize: '9px', fontWeight: 700, color: 'var(--text-label)', textTransform: 'uppercase', marginBottom: '3px' }}>Customer</div>
-                <input
+                <CustomerPicker
                   value={reviewingExtraction.extracted.customer || ''}
-                  onChange={e => setReviewingExtraction(prev => prev ? { ...prev, extracted: { ...prev.extracted, customer: e.target.value } } : prev)}
-                  style={{ width: '100%', padding: '6px 8px', borderRadius: '6px', border: '1px solid var(--border)', background: 'var(--input-bg)', color: 'var(--text-body)', fontSize: '12px' }}
+                  netsuiteId={reviewingExtraction.extracted.customer_netsuite_id}
+                  onChange={({ customer, customerNetsuiteId }) => setReviewingExtraction(prev => prev ? { ...prev, extracted: { ...prev.extracted, customer, customer_netsuite_id: customerNetsuiteId } } : prev)}
                 />
               </div>
               <div>
@@ -3887,9 +3901,11 @@ export default function POsPage() {
           </div>
           <div style={{ marginBottom: '8px' }}>
             <label style={labelStyle}>Customer</label>
-            <select value={form.customer} onChange={(e) => setForm({ ...form, customer: e.target.value })} style={inputStyle}>
-              <option>Masterack</option><option>Knapheide</option><option>Bodewell</option><option>Designs That Stick</option>
-            </select>
+            <CustomerPicker
+              value={form.customer}
+              netsuiteId={form.customer_netsuite_id}
+              onChange={({ customer, customerNetsuiteId }) => setForm({ ...form, customer, customer_netsuite_id: customerNetsuiteId })}
+            />
           </div>
           <ShipToPicker
             label="Ship To"
@@ -4278,9 +4294,11 @@ export default function POsPage() {
                         </div>
                         <div>
                           <label style={labelStyle}>Customer</label>
-                          <select value={editPoForm.customer} onChange={(e) => setEditPoForm({ ...editPoForm, customer: e.target.value })} style={inputStyle}>
-                            <option>Masterack</option><option>Knapheide</option><option>Bodewell</option><option>Designs That Stick</option>
-                          </select>
+                          <CustomerPicker
+                            value={editPoForm.customer}
+                            netsuiteId={editPoForm.customer_netsuite_id}
+                            onChange={({ customer, customerNetsuiteId }) => setEditPoForm({ ...editPoForm, customer, customer_netsuite_id: customerNetsuiteId })}
+                          />
                         </div>
                       </div>
                       <div style={{ marginTop: '6px' }}>
