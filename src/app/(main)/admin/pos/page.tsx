@@ -8,27 +8,17 @@ import { parseMasterackPO, type ParsedPO, type ParsedPOLine } from '@/lib/parseP
 import { resolvePoCustomer } from '@/lib/customer-match';
 import { storage } from '@/lib/storage';
 import type { PurchaseOrder, POLineItem, CatalogItem, PoLocation, GraphicsJobStatus } from '@/lib/types';
-import { GRAPHICS_STATUS_LABELS, GRAPHICS_STATUS_COLORS } from '@/lib/types';
-import { PartLabel } from '@/components/PartLabel';
+import { GRAPHICS_STATUS_LABELS } from '@/lib/types';
 import { DropZone } from '@/components/DropZone';
-import MentionTextArea, { reportMentions } from '@/components/MentionTextArea';
 import { CreateNetsuiteItemModal } from '@/components/CreateNetsuiteItemModal';
-import EmailInvoicesModal, { type EmailableInvoice } from '@/components/EmailInvoicesModal';
 import { useDialog } from '@/components/DialogProvider';
 import CustomerPicker from '@/components/CustomerPicker';
 import { isProofLikeName } from '@/lib/pdf-classify';
-import { openNetSuitePdf } from '@/lib/netsuite-pdf-client';
 import { formatShipTo, shipToCityLabel } from '@/lib/graphics-job-from-po';
-import { flashNote } from '@/lib/focus-note';
-
-interface PoNoteRow {
-  id: string;
-  po_id: string;
-  author_id: string | null;
-  body: string;
-  mentions: string[];
-  created_at: string;
-}
+import { printPos } from '@/lib/po-print';
+import { PART_FIELDS, partToCatalogItem, findOrCreateManualPart } from '@/lib/parts-catalog';
+import { SortableTh, useTableSort } from '@/components/ui/SortableTh';
+import FilterButton, { FilterLabel } from '@/components/ui/FilterButton';
 
 interface ImportLine extends ParsedPOLine {
   catalog_match: CatalogItem | null;
@@ -41,17 +31,6 @@ interface ImportLine extends ParsedPOLine {
   new_graphic_package: string;
 }
 
-interface PoFile {
-  id: string;
-  po_id: string;
-  file_name: string;
-  file_type: string | null;
-  file_size: number | null;
-  storage_path: string;
-  source: 'pdf_upload' | 'email_import' | null;
-  uploaded_at: string;
-}
-
 // A graphics job linked back to a PO (whole-PO jobs have a null line item id)
 interface PoGfxJob {
   id: string;
@@ -62,163 +41,12 @@ interface PoGfxJob {
   po_line_item_id: string | null;
 }
 
-function csvEscape(value: string | number | null | undefined): string {
-  if (value == null) return '';
-  const s = String(value);
-  return /[",\n\r]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
-}
-
-function downloadPoCsv(po: PurchaseOrder & { line_items: POLineItem[] }) {
-  const header = ['Part Number', 'Description', 'Quantity', 'Installed', 'Unit Price', 'Line Total'];
-  const rows = po.line_items.map(li => [
-    li.part_number,
-    li.description || '',
-    li.quantity,
-    li.installed,
-    li.unit_price.toFixed(2),
-    (li.quantity * li.unit_price).toFixed(2),
-  ]);
-  const total = po.line_items.reduce((s, li) => s + li.quantity * li.unit_price, 0);
-  rows.push(['', '', '', '', 'Total', total.toFixed(2)]);
-  const csv = [header, ...rows].map(r => r.map(csvEscape).join(',')).join('\r\n');
-  const blob = new Blob(['﻿' + csv], { type: 'text/csv;charset=utf-8' });
-  const url = URL.createObjectURL(blob);
-  const a = document.createElement('a');
-  a.href = url;
-  a.download = `PO-${po.po_number || po.id}.csv`;
-  document.body.appendChild(a);
-  a.click();
-  document.body.removeChild(a);
-  URL.revokeObjectURL(url);
-}
-
-const escapeHtml = (s: string) => s.replace(/[&<>"']/g, c => (
-  { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]!
-));
-
-const PO_PRINT_STYLE = `
-  * { box-sizing: border-box; }
-  body { font-family: -apple-system, Segoe UI, Helvetica, Arial, sans-serif; color: #111; margin: 32px; font-size: 12px; }
-  h1 { margin: 0 0 4px 0; font-size: 22px; }
-  .sub { color: #666; font-size: 12px; }
-  .grid { display: grid; grid-template-columns: 1fr 1fr; gap: 24px; margin: 20px 0 24px; }
-  .box h3 { margin: 0 0 6px 0; font-size: 11px; text-transform: uppercase; letter-spacing: 0.5px; color: #666; }
-  .box .v { white-space: pre-line; font-weight: 600; }
-  table { width: 100%; border-collapse: collapse; }
-  th, td { padding: 8px 10px; border-bottom: 1px solid #ddd; text-align: left; vertical-align: top; }
-  th { background: #f4f4f4; font-size: 11px; text-transform: uppercase; letter-spacing: 0.4px; color: #333; }
-  td.num, th.num { text-align: right; white-space: nowrap; }
-  tfoot td { font-weight: 700; border-top: 2px solid #111; border-bottom: none; padding-top: 12px; }
-  .notes { margin-top: 24px; padding: 12px; border: 1px solid #ddd; border-radius: 6px; background: #fafafa; }
-  .notes h3 { margin: 0 0 6px 0; font-size: 11px; text-transform: uppercase; letter-spacing: 0.5px; color: #666; }
-  .po-page { page-break-after: always; }
-  .po-page:last-child { page-break-after: auto; }
-  @media print { body { margin: 16px; } @page { margin: 0.5in; } }
-`;
-
-// One PO's printable body — shared by the single-PO print and the multi-PO
-// batch print (which stacks these with a page break between POs).
-function poPrintBody(po: PurchaseOrder & { line_items: POLineItem[] }): string {
-  const ship = formatShipTo(po.ship_to);
-  const total = po.line_items.reduce((s, li) => s + li.quantity * li.unit_price, 0);
-  const ordered = po.ordered_date ? new Date(po.ordered_date).toLocaleDateString() : '';
-  const requested = po.requested_delivery_date ? new Date(po.requested_delivery_date).toLocaleDateString() : '';
-  const linesHtml = po.line_items.map(li => `
-    <tr>
-      <td>${escapeHtml(li.part_number)}</td>
-      <td>${escapeHtml(li.description || '')}</td>
-      <td class="num">${li.quantity}</td>
-      <td class="num">$${li.unit_price.toFixed(2)}</td>
-      <td class="num">$${(li.quantity * li.unit_price).toFixed(2)}</td>
-    </tr>`).join('');
-  return `
-  <h1>Purchase Order #${escapeHtml(po.po_number)}</h1>
-  <div class="sub">${escapeHtml(po.customer)}${po.status ? ` · ${escapeHtml(po.status)}` : ''}</div>
-  <div class="grid">
-    <div class="box">
-      <h3>Ship To</h3>
-      <div class="v">${ship ? escapeHtml(ship) : '<span style="color:#999">—</span>'}</div>
-    </div>
-    <div class="box">
-      <h3>Dates</h3>
-      <div class="v">Ordered: ${escapeHtml(ordered) || '—'}${requested ? `\nRequested: ${escapeHtml(requested)}` : ''}</div>
-    </div>
-  </div>
-  <table>
-    <thead>
-      <tr>
-        <th>Part #</th>
-        <th>Description</th>
-        <th class="num">Qty</th>
-        <th class="num">Unit Price</th>
-        <th class="num">Total</th>
-      </tr>
-    </thead>
-    <tbody>${linesHtml}</tbody>
-    <tfoot>
-      <tr>
-        <td colspan="4" class="num">Total</td>
-        <td class="num">$${total.toFixed(2)}</td>
-      </tr>
-    </tfoot>
-  </table>
-  ${po.notes ? `<div class="notes"><h3>Notes</h3>${escapeHtml(po.notes)}</div>` : ''}`;
-}
-
-async function openPrintWindow(title: string, bodyHtml: string, alertFn: (message: string) => Promise<void>) {
-  const html = `<!doctype html>
-<html>
-<head>
-<meta charset="utf-8">
-<title>${escapeHtml(title)}</title>
-<style>${PO_PRINT_STYLE}</style>
-</head>
-<body>${bodyHtml}</body>
-</html>`;
-  const w = window.open('', '_blank');
-  if (!w) { await alertFn('Pop-up blocked. Allow pop-ups to print.'); return; }
-  w.document.open();
-  w.document.write(html);
-  w.document.close();
-  w.onload = () => { w.focus(); w.print(); };
-}
-
-async function printPo(po: PurchaseOrder & { line_items: POLineItem[] }, alertFn: (message: string) => Promise<void>) {
-  await openPrintWindow(`PO #${po.po_number}`, poPrintBody(po), alertFn);
-}
-
-// Batch print: every selected PO in one document, one PO per page.
-async function printPos(posToPrint: (PurchaseOrder & { line_items: POLineItem[] })[], alertFn: (message: string) => Promise<void>) {
-  if (posToPrint.length === 0) return;
-  if (posToPrint.length === 1) return printPo(posToPrint[0], alertFn);
-  const body = posToPrint.map(po => `<div class="po-page">${poPrintBody(po)}</div>`).join('');
-  await openPrintWindow(`Purchase Orders (${posToPrint.length})`, body, alertFn);
-}
-
 // ── Unified parts catalog (phase 2) ──────────────────────────────────────
 // The catalog the PO screen matches against is now netsuite_parts (the merged
-// catalog), not the old `catalog` table. These helpers load it in the
-// CatalogItem shape the screen already works in, and create manual (non-
-// NetSuite) parts as source='manual' with a NULL netsuite_id so the NetSuite
-// sync never deactivates them.
-const PART_FIELDS =
-  'id, item_number, catalog, customer, billable_customer, vehicle_type, graphic_package, sales_price, proof_pages, is_active';
-
-function partToCatalogItem(p: any): CatalogItem {
-  return {
-    id: p.id,
-    part_number: p.item_number,
-    catalog: p.catalog === 'upfit' ? 'upfit' : 'graphics',
-    customer: p.customer || '',
-    end_customer: p.billable_customer || '',
-    vehicle_type: p.vehicle_type || '',
-    graphic_package: p.graphic_package || '',
-    price: Number(p.sales_price) || 0,
-    proof_pages: p.proof_pages ?? 1,
-    active: p.is_active !== false,
-  };
-}
-
+// catalog), not the old `catalog` table. PART_FIELDS / partToCatalogItem /
+// findOrCreateManualPart live in src/lib/parts-catalog.ts (shared with the
+// PO record page); this loader stays here because only the list needs the
+// whole catalog in memory.
 async function loadUnifiedCatalog(
   supabase: ReturnType<typeof createClient>,
 ): Promise<CatalogItem[] | null> {
@@ -247,53 +75,49 @@ async function loadUnifiedCatalog(
   return all.map(partToCatalogItem);
 }
 
-// Find a part by item number (case-insensitive), creating a manual row if it
-// doesn't exist yet. Returns it in CatalogItem shape (its id is a part_id).
-async function findOrCreateManualPart(
-  supabase: ReturnType<typeof createClient>,
-  params: {
-    partNumber: string;
-    description?: string | null;
-    price?: number;
-    customer?: string | null;
-    billableCustomer?: string | null;
-    vehicleType?: string | null;
-    graphicPackage?: string | null;
-  },
-): Promise<CatalogItem | null> {
-  const partNumber = (params.partNumber || '').trim();
-  if (!partNumber) return null;
-  // ilike fetches a case-insensitive superset; narrow to an exact match in JS
-  // so wildcard chars in a part number can't cause a false positive.
-  const { data: candidates } = await supabase
-    .from('netsuite_parts')
-    .select(PART_FIELDS)
-    .ilike('item_number', partNumber);
-  const existing = ((candidates as any[]) || []).find(
-    (c) => (c.item_number || '').toUpperCase() === partNumber.toUpperCase(),
-  );
-  if (existing) return partToCatalogItem(existing);
+// ── Billed dollars for the list's Billed column ──────────────────────────
+// po_invoices has NO amount column; the verify-invoices check stores per-part
+// billed QUANTITIES on purchase_orders.invoice_check.lines, so dollars are
+// reconstructed as billed qty × the PO line's unit price. A part can span
+// several lines (possibly at different prices): billed units fill the lines
+// in id order — the same deterministic rule the server uses when consuming
+// open quantity (see distributeInstalled in src/lib/po-invoice-verify.ts) —
+// and any overflow beyond the ordered quantity (over-billing) is priced at
+// the last line's rate. Parts invoiced but not on the PO at all ('extra')
+// have no known price and contribute $0.
+const normPart = (s: string): string => {
+  const segs = String(s || '').split(':');
+  return segs[segs.length - 1].trim().toUpperCase();
+};
 
-  const { data: created } = await supabase
-    .from('netsuite_parts')
-    .insert({
-      netsuite_id: null,
-      item_number: partNumber,
-      display_name: params.description || partNumber,
-      description: params.description || null,
-      catalog: 'graphics',
-      source: 'manual',
-      sales_price: params.price || 0,
-      customer: params.customer || null,
-      billable_customer: params.billableCustomer || null,
-      vehicle_type: params.vehicleType || null,
-      graphic_package: params.graphicPackage || null,
-      is_active: true,
-    })
-    .select(PART_FIELDS)
-    .single();
-  return created ? partToCatalogItem(created as any) : null;
+function billedDollars(po: PurchaseOrder & { line_items: POLineItem[] }): number {
+  const checkLines = po.invoice_check?.lines;
+  if (!checkLines || checkLines.length === 0) return 0;
+  let total = 0;
+  for (const chk of checkLines) {
+    if (!chk.invoiced) continue;
+    const partLines = po.line_items
+      .filter(li => normPart(li.part_number) === normPart(chk.part_number))
+      .sort((a, b) => (a.id < b.id ? -1 : a.id > b.id ? 1 : 0));
+    if (partLines.length === 0) continue; // 'extra' part — price unknown
+    let remaining = chk.invoiced;
+    for (const li of partLines) {
+      const fill = Math.min(remaining, li.quantity || 0);
+      total += fill * li.unit_price;
+      remaining -= fill;
+    }
+    if (remaining > 0) total += remaining * partLines[partLines.length - 1].unit_price;
+  }
+  return total;
 }
+
+// Status chip meta for the table's Status column.
+const PO_STATUS_META: Record<string, { label: string; color: string }> = {
+  open: { label: 'Open', color: '#60a5fa' },
+  complete: { label: 'Fulfilled', color: '#4ade80' },
+  closed: { label: 'Closed', color: '#94a3b8' },
+  cancelled: { label: 'Cancelled', color: '#9ca3af' },
+};
 
 // Upload the source PDF to R2 and record it on the PO so it stays attached
 // to the record (and is visible on linked graphics jobs).
@@ -345,21 +169,8 @@ export default function POsPage() {
   };
   const [loading, setLoading] = useState(true);
   const [poTab, setPoTab] = useState<'open' | 'fulfilled' | 'closed'>('open');
-  const [poSortField, setPoSortField] = useState<'po_number' | 'location' | 'date' | 'customer'>('po_number');
   const [showCreate, setShowCreate] = useState(false);
   const [showImport, setShowImport] = useState(false);
-  const [expandedPo, setExpandedPo] = useState<string | null>(null);
-  // Deep-link target to briefly highlight after search/notification navigation.
-  const [highlightPo, setHighlightPo] = useState<string | null>(null);
-  const [editPoId, setEditPoId] = useState<string | null>(null);
-  const [editPoForm, setEditPoForm] = useState({ po_number: '', customer: '', customer_netsuite_id: null as string | null, status: '' as string, ordered_date: '', requested_delivery_date: '', notes: '' });
-  const [editLineId, setEditLineId] = useState<string | null>(null);
-  const [editLineForm, setEditLineForm] = useState({ part_number: '', quantity: '', unit_price: '', installed: '' });
-  // Add-a-line state: lets the user tack on a part the scan missed while
-  // viewing a PO. Keyed by PO id so only one PO's form is open at a time.
-  const [addLinePoId, setAddLinePoId] = useState<string | null>(null);
-  const [addLineForm, setAddLineForm] = useState({ part_number: '', quantity: '1', unit_price: '' });
-  const [addingLine, setAddingLine] = useState(false);
   const [form, setForm] = useState({ po_number: '', customer: 'Masterack', customer_netsuite_id: null as string | null, ordered_date: '', requested_delivery_date: '', notes: '' });
   const [lineItems, setLineItems] = useState<{ part_id: string | null; part_number: string; quantity: number; unit_price: number }[]>([]);
   // Staging form for adding a line while building a new PO — mirrors the
@@ -380,18 +191,6 @@ export default function POsPage() {
   const [parsedPO, setParsedPO] = useState<ParsedPO | null>(null);
   const [parsedPdfFile, setParsedPdfFile] = useState<File | null>(null);
   const [importLines, setImportLines] = useState<ImportLine[]>([]);
-  // PO files (PDFs) attached to each PO, lazy-loaded on expand
-  const [poFiles, setPoFiles] = useState<Record<string, PoFile[]>>({});
-  // Manual PO PDF backfill state
-  const poFileInputRef = useRef<HTMLInputElement>(null);
-  const [uploadingPoId, setUploadingPoId] = useState<string | null>(null);
-  const [uploadingPoPdf, setUploadingPoPdf] = useState(false);
-  // Auto-popped PDF preview (set after upload or when a file row is clicked)
-  const [pdfPreview, setPdfPreview] = useState<{ url: string; name: string } | null>(null);
-  // True while the AI ship-to extraction is running after an upload
-  const [extractingShipTo, setExtractingShipTo] = useState(false);
-  // PO list sort direction (by PO number)
-  const [poSort, setPoSort] = useState<'asc' | 'desc'>('asc');
   const [parseError, setParseError] = useState('');
   const [importing, setImporting] = useState(false);
   const [pdfOverwriteExisting, setPdfOverwriteExisting] = useState<any>(null); // existing PO to overwrite
@@ -455,10 +254,6 @@ export default function POsPage() {
   // NetSuite item creation from a review line: holds the line being created; tracks created lines by index
   const [createNsItemLine, setCreateNsItemLine] = useState<{ idx: number; partNumber: string; description: string | null } | null>(null);
   const [createdNsLines, setCreatedNsLines] = useState<Set<number>>(new Set());
-  // NetSuite SO creation state
-  const [creatingSOForPo, setCreatingSOForPo] = useState<string | null>(null);
-  const [soResults, setSoResults] = useState<Record<string, any>>({});
-  // NetSuite Invoice state
   // Catalog add state for unmatched parts
   const [addingToCatalog, setAddingToCatalog] = useState<string | null>(null); // part_number being added
   const [catalogAddResults, setCatalogAddResults] = useState<Record<string, 'added' | 'error'>>({});
@@ -481,21 +276,9 @@ export default function POsPage() {
   const [gmailErrorsOpen, setGmailErrorsOpen] = useState(false);
   // Batch delete state
   const [editMode, setEditMode] = useState(false);
-  // Line item sort
-  const [liSort, setLiSort] = useState<{ col: 'part_number' | 'quantity' | 'installed' | 'unit_price'; dir: 'asc' | 'desc' }>({ col: 'part_number', dir: 'asc' });
-  const toggleLiSort = (col: typeof liSort.col) => {
-    setLiSort(prev => prev.col === col ? { col, dir: prev.dir === 'asc' ? 'desc' : 'asc' } : { col, dir: 'asc' });
-  };
-  const liSortIndicator = (col: typeof liSort.col) => liSort.col === col ? (liSort.dir === 'asc' ? ' ▲' : ' ▼') : '';
-  const sortLineItems = (items: POLineItem[]) => [...items].sort((a, b) => {
-    const av = a[liSort.col]; const bv = b[liSort.col];
-    const cmp = typeof av === 'string' ? av.localeCompare(bv as string) : (av as number) - (bv as number);
-    return liSort.dir === 'asc' ? cmp : -cmp;
-  });
 
   // Pending PO queue state
   const [pendingPOs, setPendingPOs] = useState<any[]>([]);
-  const [pendingLoading, setPendingLoading] = useState(false);
 
   // Saved ship-to locations
   const [locations, setLocations] = useState<PoLocation[]>([]);
@@ -504,8 +287,6 @@ export default function POsPage() {
   const [locationSaving, setLocationSaving] = useState(false);
   const [createShipToId, setCreateShipToId] = useState<string>('');
   const [createShipTo, setCreateShipTo] = useState<NonNullable<PurchaseOrder['ship_to']>>({});
-  const [editShipToId, setEditShipToId] = useState<string>('');
-  const [editShipTo, setEditShipTo] = useState<NonNullable<PurchaseOrder['ship_to']>>({});
 
   function applyLocationToShipTo(locId: string, setShipToId: (s: string) => void, setShipTo: (s: NonNullable<PurchaseOrder['ship_to']>) => void) {
     setShipToId(locId);
@@ -519,25 +300,6 @@ export default function POsPage() {
       state: loc.state || '',
       zip: loc.zip || '',
     });
-  }
-
-  // One-click location assignment straight from the PO details — pick a
-  // saved location and it lands on the PO immediately, no Edit PO round-trip.
-  // For a one-off address that isn't a saved location, Edit PO still has the
-  // full ship-to fields.
-  async function applyQuickLocation(poId: string, locId: string) {
-    const loc = locations.find(l => l.id === locId);
-    if (!loc) return;
-    const ship_to = {
-      name: loc.name,
-      address: loc.address || '',
-      city: loc.city || '',
-      state: loc.state || '',
-      zip: loc.zip || '',
-    };
-    const { error } = await supabase.from('purchase_orders').update({ ship_to }).eq('id', poId);
-    if (error) { await dialog.alert('Failed to set location: ' + error.message); return; }
-    setPos(prev => prev.map(p => p.id === poId ? { ...p, ship_to } : p));
   }
 
   async function saveLocation() {
@@ -862,38 +624,14 @@ export default function POsPage() {
     setGmailRunning(false);
   };
 
-  // Auto-open PO from URL param (deep link from notifications/search): switch to
-  // the right tab, clear any filter, expand it, then scroll to + highlight it so
-  // it's not buried somewhere down the list.
+  // ?id= deep links (notifications / search) used to expand the PO in place;
+  // the PO record page owns per-PO viewing now, so send them straight there.
   useEffect(() => {
-    if (loading) return;
     const poId = searchParams.get('id');
     if (!poId) return;
-    const target = pos.find(p => p.id === poId);
-    if (!target) return;
-    setPoTab(target.status === 'closed' ? 'closed' : target.status === 'complete' ? 'fulfilled' : 'open');
-    setPoSearch('');
-    setPoFilter('all');
-    setPoDateRange('all');
-    setExpandedPo(poId);
-    // Expanding via setExpandedPo (not toggleExpand) skips the note fetch, so
-    // a mention deep link would land on an empty Notes list — load them here.
-    loadPoNotes(poId);
-    setHighlightPo(poId);
-    const clear = setTimeout(() => setHighlightPo(null), 2500);
-    // A mention deep link (&note=<id>) scroll-flashes that exact note once it
-    // renders; otherwise fall back to centering the PO row.
-    const noteId = searchParams.get('note');
-    if (noteId) {
-      flashNote(`po-note-${noteId}`);
-    } else {
-      setTimeout(() => {
-        document.getElementById(`po-row-${poId}`)?.scrollIntoView({ behavior: 'smooth', block: 'center' });
-      }, 200);
-    }
-    return () => clearTimeout(clear);
-  // eslint-disable-next-line react-hooks/exhaustive-deps -- intentional: deep-link once after load
-  }, [loading, searchParams]);
+    router.replace(`/admin/pos/${poId}`);
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- intentional: redirect on param change only
+  }, [searchParams]);
 
   useEffect(() => {
     if (!reviewingExtraction) { setReviewShipToId(''); return; }
@@ -1097,7 +835,6 @@ export default function POsPage() {
 
     if (parsedPdfFile) {
       await persistPoPdf(supabase, po.id, parsedPdfFile, user.id);
-      setPoFiles(prev => { const c = { ...prev }; delete c[po.id]; return c; });
     }
 
     setPos((prev) => [{ ...po, line_items: (items as POLineItem[]) || [] }, ...prev]);
@@ -1180,7 +917,6 @@ export default function POsPage() {
 
     if (parsedPdfFile) {
       await persistPoPdf(supabase, existingPo.id, parsedPdfFile, user.id);
-      setPoFiles(prev => { const c = { ...prev }; delete c[existingPo.id]; return c; });
     }
 
     // Update local state
@@ -1278,24 +1014,6 @@ export default function POsPage() {
     router.push(`/graphics?${params.toString()}`);
   };
 
-  const handleDeletePO = async (poId: string) => {
-    try {
-      const res = await fetch('/api/pos/delete', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ poIds: [poId] }),
-      });
-      const data = await res.json();
-      if (data.success) {
-        setPos((prev) => prev.filter((p) => p.id !== poId));
-      } else {
-        await dialog.alert(`Failed to delete PO: ${data.results?.[0]?.error || data.error || 'Unknown error'}`);
-      }
-    } catch {
-      await dialog.alert('Delete failed — please try again');
-    }
-  };
-
   const toggleDeleteSelection = (poId: string) => {
     setSelectedForDelete(prev => {
       const next = new Set(prev);
@@ -1334,210 +1052,6 @@ export default function POsPage() {
     setDeletingBatch(false);
   };
 
-  const handleDeleteLineItem = async (lineId: string, poId: string) => {
-    try {
-      const res = await fetch('/api/pos/delete-line', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ lineId }),
-      });
-      const data = await res.json();
-      if (data.success) {
-        setPos((prev) =>
-          prev.map((po) =>
-            po.id === poId
-              ? { ...po, line_items: po.line_items.filter((li) => li.id !== lineId) }
-              : po
-          )
-        );
-      }
-    } catch {
-      await dialog.alert('Failed to delete line item');
-    }
-  };
-
-  const startEditPO = (po: PurchaseOrder & { line_items: POLineItem[] }) => {
-    setEditPoId(po.id);
-    setEditPoForm({
-      po_number: po.po_number,
-      customer: po.customer,
-      customer_netsuite_id: po.customer_netsuite_id || null,
-      status: po.status,
-      ordered_date: po.ordered_date ? po.ordered_date.slice(0, 10) : '',
-      requested_delivery_date: po.requested_delivery_date ? po.requested_delivery_date.slice(0, 10) : '',
-      notes: po.notes || '',
-    });
-    const ship = po.ship_to || {};
-    setEditShipTo({ ...ship });
-    const match = locations.find(l =>
-      (l.name || '').trim() === (ship.name || '').trim() &&
-      (l.address || '') === (ship.address || '') &&
-      (l.city || '') === (ship.city || '') &&
-      (l.state || '') === (ship.state || '') &&
-      (l.zip || '') === (ship.zip || '')
-    );
-    setEditShipToId(match ? match.id : '');
-  };
-
-  const saveEditPO = async () => {
-    if (!editPoId) return;
-    const hasShipTo = Object.values(editShipTo).some(v => (v || '').toString().trim());
-    // The picker resolves as the user types/picks/creates; fall back to
-    // re-resolving for free text typed without clicking a suggestion. Either
-    // way, always write customer_netsuite_id here — previously this saved
-    // the customer's display text without ever touching the NetSuite link,
-    // so editing the customer left the old PO's match silently stale.
-    const { customer, customerNetsuiteId } = editPoForm.customer_netsuite_id
-      ? { customer: editPoForm.customer, customerNetsuiteId: editPoForm.customer_netsuite_id }
-      : await resolvePoCustomer(supabase, editPoForm.customer);
-    const update = {
-      po_number: editPoForm.po_number,
-      customer,
-      customer_netsuite_id: customerNetsuiteId,
-      status: editPoForm.status,
-      ship_to: hasShipTo ? editShipTo : null,
-      ordered_date: editPoForm.ordered_date || null,
-      requested_delivery_date: editPoForm.requested_delivery_date || null,
-      notes: editPoForm.notes.trim() || null,
-    };
-    const { error } = await supabase
-      .from('purchase_orders')
-      .update(update)
-      .eq('id', editPoId);
-
-    if (!error) {
-      setPos((prev) =>
-        prev.map((po) =>
-          po.id === editPoId
-            ? { ...po, ...update, status: update.status as any }
-            : po
-        )
-      );
-      setEditPoId(null);
-    }
-  };
-
-  const startEditLine = (li: POLineItem) => {
-    setEditLineId(li.id);
-    setEditLineForm({ part_number: li.part_number || '', quantity: li.quantity.toString(), unit_price: li.unit_price.toString(), installed: li.installed.toString() });
-  };
-
-  const saveEditLine = async (poId: string) => {
-    if (!editLineId) return;
-    const partNum = editLineForm.part_number.trim();
-    const qty = parseInt(editLineForm.quantity) || 1;
-    const price = parseFloat(editLineForm.unit_price) || 0;
-    const installed = parseInt(editLineForm.installed) || 0;
-    const { error } = await supabase
-      .from('po_line_items')
-      .update({ part_number: partNum, quantity: qty, unit_price: price, installed })
-      .eq('id', editLineId);
-
-    if (!error) {
-      setPos((prev) =>
-        prev.map((po) =>
-          po.id === poId
-            ? { ...po, line_items: po.line_items.map((li) => li.id === editLineId ? { ...li, part_number: partNum, quantity: qty, unit_price: price, installed } : li) }
-            : po
-        )
-      );
-      setEditLineId(null);
-    }
-  };
-
-  const startAddLine = (poId: string) => {
-    setEditLineId(null);
-    setAddLinePoId(poId);
-    setAddLineForm({ part_number: '', quantity: '1', unit_price: '' });
-  };
-
-  const cancelAddLine = () => {
-    setAddLinePoId(null);
-    setAddLineForm({ part_number: '', quantity: '1', unit_price: '' });
-  };
-
-  // Quick-pick from the catalog dropdown: fill in the part number and the
-  // catalog price. The user can still tweak qty/price before adding.
-  const pickAddLinePart = (catId: string) => {
-    const item = catalog.find((c) => c.id === catId);
-    if (!item) return;
-    setAddLineForm((prev) => ({ ...prev, part_number: item.part_number, unit_price: item.price.toString() }));
-  };
-
-  const saveAddLine = async (poId: string) => {
-    const partNum = addLineForm.part_number.trim();
-    if (!partNum) { await dialog.alert('Enter or pick a part number'); return; }
-    const qty = parseInt(addLineForm.quantity) || 1;
-    const price = parseFloat(addLineForm.unit_price) || 0;
-    // Link the catalog part when the number matches, mirroring the PDF/email
-    // import paths. PartLabel resolves the display name from part_number, so
-    // we leave description null like the manual-create flow.
-    const catalogMatch = catalog.find((c) => c.part_number.toUpperCase() === partNum.toUpperCase());
-    setAddingLine(true);
-    const { data, error } = await supabase
-      .from('po_line_items')
-      .insert({
-        po_id: poId,
-        ...(catalogMatch?.id ? { part_id: catalogMatch.id } : {}),
-        part_number: partNum,
-        quantity: qty,
-        unit_price: price,
-      })
-      .select()
-      .single();
-    setAddingLine(false);
-    if (error || !data) { await dialog.alert('Error adding line: ' + (error?.message || 'unknown')); return; }
-    setPos((prev) =>
-      prev.map((po) =>
-        po.id === poId ? { ...po, line_items: [...po.line_items, data as POLineItem] } : po
-      )
-    );
-    // Keep the form open with cleared fields so several missed parts can be
-    // added back-to-back. Cancel/Done closes it.
-    setAddLineForm({ part_number: '', quantity: '1', unit_price: '' });
-  };
-
-  const toggleExpand = (poId: string) => {
-    const opening = expandedPo !== poId;
-    setExpandedPo(opening ? poId : null);
-    setEditPoId(null);
-    setEditLineId(null);
-    setAddLinePoId(null);
-    if (opening && !poFiles[poId]) loadPoFiles(poId);
-    if (opening) loadPoNotes(poId);
-  };
-
-  // ── PO notes with @tags ──────────────────────────────────────────────────
-  // The team flags a PO that needs fixing/attention and tags whoever should
-  // look; tagged users get notified through their usual channels.
-  const [poNotes, setPoNotes] = useState<Record<string, PoNoteRow[]>>({});
-  const [noteText, setNoteText] = useState('');
-  const [noteTags, setNoteTags] = useState<Set<string>>(new Set());
-  const [postingNote, setPostingNote] = useState(false);
-  const [teamProfiles, setTeamProfiles] = useState<{ id: string; full_name: string | null; email: string }[]>([]);
-
-  useEffect(() => {
-    supabase
-      .from('profiles')
-      .select('id, full_name, email, role, roles, status')
-      .eq('status', 'approved')
-      .then(({ data }: { data: any[] | null }) => {
-        // Only ADMINS are taggable on PO notes — never CNI installers or
-        // other roles. (An account's roles may live in the legacy single
-        // `role` column or the `roles` array.)
-        setTeamProfiles(
-          (data || []).filter(p => p.role === 'admin' || (Array.isArray(p.roles) && p.roles.includes('admin'))),
-        );
-      });
-  // eslint-disable-next-line react-hooks/exhaustive-deps -- load once on mount
-  }, []);
-
-  const profileName = (id: string | null): string => {
-    if (!id) return 'Someone';
-    const p = teamProfiles.find(t => t.id === id);
-    return p?.full_name || p?.email || 'Someone';
-  };
-
   // Note counts are fetched separately and best-effort: embedding po_notes in
   // the main PO select makes the ENTIRE list fail when the table hasn't been
   // migrated yet — an empty page is a far worse failure than a missing badge.
@@ -1550,114 +1064,6 @@ export default function POsPage() {
       }
     } catch { /* table may not exist yet */ }
     return byPo;
-  };
-
-  const loadPoNotes = async (poId: string) => {
-    const { data } = await supabase
-      .from('po_notes')
-      .select('*')
-      .eq('po_id', poId)
-      .order('created_at', { ascending: true });
-    setPoNotes(prev => ({ ...prev, [poId]: (data as PoNoteRow[]) || [] }));
-  };
-
-  const postNote = async (po: PurchaseOrder) => {
-    const body = noteText.trim();
-    if (!body || postingNote) return;
-    setPostingNote(true);
-    const mentions = [...noteTags];
-    const { data, error } = await supabase
-      .from('po_notes')
-      .insert({ po_id: po.id, author_id: user?.id || null, body, mentions })
-      .select()
-      .single();
-    if (error || !data) {
-      await dialog.alert(`Failed to post note: ${error?.message || 'no row returned'}`);
-    } else {
-      setPoNotes(prev => ({ ...prev, [po.id]: [...(prev[po.id] || []), data as PoNoteRow] }));
-      // Keep the row badge count in sync
-      setPos(prev => prev.map(p => p.id === po.id ? ({ ...p, po_notes: [...((p as any).po_notes || []), { id: data.id }] } as any) : p));
-      setNoteText('');
-      setNoteTags(new Set());
-      // Tag chips + any @names in the text both go through the mentions
-      // pipeline: push/in-app notification plus a Mentions-inbox entry.
-      reportMentions({
-        text: body,
-        sourceType: 'po_note',
-        sourceId: po.id,
-        contextLabel: `PO #${po.po_number}`,
-        contextUrl: `/admin/pos?id=${po.id}&note=${data.id}`,
-        userIds: mentions,
-      });
-    }
-    setPostingNote(false);
-  };
-
-  const loadPoFiles = async (poId: string) => {
-    const { data } = await supabase
-      .from('po_files')
-      .select('*')
-      .eq('po_id', poId)
-      .order('uploaded_at', { ascending: false });
-    setPoFiles(prev => ({ ...prev, [poId]: (data as PoFile[]) || [] }));
-  };
-
-  const triggerPoPdfUpload = (poId: string) => {
-    setUploadingPoId(poId);
-    poFileInputRef.current?.click();
-  };
-
-  const handlePoPdfUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
-    const files = Array.from(e.target.files || []);
-    e.target.value = '';
-    const poId = uploadingPoId;
-    if (!poId || files.length === 0 || !user) {
-      setUploadingPoId(null);
-      return;
-    }
-    await uploadPoPdfs(poId, files);
-  };
-
-  // Shared core for the hidden-input picker and drag-and-drop onto a PO's
-  // attachments area — both routes end up here.
-  const uploadPoPdfs = async (poId: string, files: File[]) => {
-    if (files.length === 0 || !user) return;
-    setUploadingPoId(poId);
-    setUploadingPoPdf(true);
-    let lastUpload: { path: string; name: string } | null = null;
-    for (const file of files) {
-      const result = await persistPoPdf(supabase, poId, file, user.id);
-      if (result) lastUpload = result;
-    }
-    await loadPoFiles(poId);
-    setUploadingPoPdf(false);
-    setUploadingPoId(null);
-    // Pop the freshly uploaded PDF into its own preview window so the user
-    // doesn't have to scroll the list to find it.
-    if (lastUpload) {
-      const url = storage.from('graphics-proofs').getPublicUrl(lastUpload.path).data.publicUrl;
-      setPdfPreview({ url, name: lastUpload.name });
-      // Mirror the Gmail import behaviour: send the freshly uploaded PDF to
-      // the extraction endpoint so the PO's ship_to gets filled in
-      // automatically. Best-effort; failures are logged but don't block.
-      setExtractingShipTo(true);
-      try {
-        const res = await fetch('/api/pos/extract-ship-to', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ poId, storagePath: lastUpload.path }),
-        });
-        const data = await res.json().catch(() => ({}));
-        if (res.ok && data.ship_to) {
-          setPos(prev => prev.map(p => p.id === poId ? { ...p, ship_to: data.ship_to } : p));
-        } else if (!res.ok) {
-          console.warn('Ship-to extraction failed:', data.error || res.status);
-        }
-      } catch (err) {
-        console.warn('Ship-to extraction threw:', err);
-      }
-      setExtractingShipTo(false);
-    }
   };
 
   // Gmail import functions
@@ -1862,49 +1268,6 @@ export default function POsPage() {
       await dialog.alert(`Billing check failed: ${err.message || 'network error'}`);
     }
     setVerifyingInvoices(false);
-  };
-
-  // Per-PO billing recheck: after fixing an invoice in NetSuite, pull the
-  // fix in right now — refresh this PO's invoice links (new invoices in,
-  // deleted ones out) and re-run the quantity check, without waiting for
-  // the cron sweep or re-checking the whole book.
-  const [recheckingPoId, setRecheckingPoId] = useState<string | null>(null);
-  const recheckPoBilling = async (po: PurchaseOrder) => {
-    if (recheckingPoId) return;
-    setRecheckingPoId(po.id);
-    try {
-      const res = await fetch('/api/pos/verify-invoices', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ poId: po.id }),
-      });
-      const data = await res.json();
-      if (!res.ok || data.error) {
-        await dialog.alert(`Recheck failed: ${data.error || `request failed (${res.status})`}`);
-      } else if (data.po) {
-        setPos(prev => prev.map(p => p.id === data.po.id ? {
-          ...p,
-          ...data.po,
-          line_items: data.po.po_line_items || [],
-          po_invoices: (data.po.po_invoices || []).sort((a: any, b: any) =>
-            new Date(b.created_at).getTime() - new Date(a.created_at).getTime()),
-        } : p));
-        const links = data.links || {};
-        const bits: string[] = [];
-        if (links.linked) bits.push(`${links.linked} new invoice${links.linked !== 1 ? 's' : ''} linked`);
-        if (links.unlinked) bits.push(`${links.unlinked} removed (no longer in NetSuite)`);
-        const status = data.po.invoice_check_status;
-        const verdict = status === 'attention'
-          ? '⚠ Billing still needs attention — see the flagged lines.'
-          : status === 'no_invoices'
-            ? 'No invoices are linked to this PO now.'
-            : '✓ Billed quantities match this PO now.';
-        await dialog.alert(`Rechecked PO #${po.po_number}. ${bits.length ? bits.join(', ') + '. ' : ''}${verdict}`);
-      }
-    } catch (err: any) {
-      await dialog.alert(`Recheck failed: ${err.message || 'network error'}`);
-    }
-    setRecheckingPoId(null);
   };
 
   // Pull in invoices created directly in NetSuite (matched by the PO number
@@ -2169,144 +1532,6 @@ export default function POsPage() {
     advanceReviewQueue();
   };
 
-  const createNetSuiteSO = async (poId: string) => {
-    setCreatingSOForPo(poId);
-    try {
-      const res = await fetch('/api/netsuite/create-sales-order', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ poId }),
-      });
-      const data = await res.json();
-
-      if (!res.ok || data.error) {
-        setSoResults(prev => ({ ...prev, [poId]: { status: 'error', error: data.error || 'Failed' } }));
-      } else {
-        setSoResults(prev => ({ ...prev, [poId]: data }));
-        // Update the local PO with the NetSuite SO info
-        if (data.salesOrderId) {
-          setPos(prev => prev.map(po =>
-            po.id === poId
-              ? { ...po, netsuite_so_id: data.salesOrderId, netsuite_so_number: data.salesOrderNumber }
-              : po
-          ));
-        }
-      }
-    } catch (err: any) {
-      setSoResults(prev => ({ ...prev, [poId]: { status: 'error', error: err.message || 'Network error' } }));
-    }
-    setCreatingSOForPo(null);
-  };
-
-  // Invoice from a PO's OPEN quantities: lines not yet complete, prefilled
-  // with quantity − installed, editable before the invoice is created.
-  // Completed lines never enter this invoice.
-  const [invoiceOpenPo, setInvoiceOpenPo] = useState<(PurchaseOrder & { line_items: POLineItem[] }) | null>(null);
-  const [invoiceOpenQtys, setInvoiceOpenQtys] = useState<Record<string, number>>({});
-  const [creatingOpenInvoice, setCreatingOpenInvoice] = useState(false);
-  // Fresh invoice → straight into the shared email screen (same modal the
-  // Invoicing hub and Scans page use).
-  const [emailTarget, setEmailTarget] = useState<{ customerName: string; invoices: EmailableInvoice[] } | null>(null);
-
-  const openInvoiceFromPo = (po: PurchaseOrder & { line_items: POLineItem[] }) => {
-    const qtys: Record<string, number> = {};
-    for (const li of po.line_items) {
-      const open = li.quantity - (li.installed || 0);
-      if (open > 0) qtys[li.id] = open;
-    }
-    setInvoiceOpenQtys(qtys);
-    setInvoiceOpenPo(po);
-  };
-
-  const createOpenQtyInvoice = async () => {
-    if (!invoiceOpenPo) return;
-    const po = invoiceOpenPo;
-    // Key by PO line id, not part number: a part can be on several lines and
-    // the server validates/bills each line against its own open quantity.
-    const quantities: Record<string, number> = {};
-    for (const li of po.line_items) {
-      const q = invoiceOpenQtys[li.id];
-      if (q && q > 0) quantities[li.id] = q;
-    }
-    if (Object.keys(quantities).length === 0) {
-      await dialog.alert('Every line is at 0 — nothing to invoice.');
-      return;
-    }
-    setCreatingOpenInvoice(true);
-    try {
-      // Direct NetSuite invoice — deliberately NOT via a sales order;
-      // FleetSuite bypasses SO creation entirely.
-      const res = await fetch('/api/pos/invoice-open', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ poId: po.id, quantities }),
-      });
-      const data = await res.json();
-      const result = res.ok && data.success
-        ? { status: 'success', invoiceId: data.invoiceId, invoiceNumber: data.invoiceNumber }
-        : null;
-      if (!result) {
-        await dialog.alert(`Failed to create invoice: ${data.error || `request failed (${res.status})`}`);
-      } else {
-        const totalQty = Object.values(quantities).reduce((a, b) => a + b, 0);
-        // Invoice lines collapse by part+price on the server; mirror that here
-        // so the optimistic line count matches what a reload shows.
-        const billedLineCount = new Set(
-          po.line_items
-            .filter(li => (invoiceOpenQtys[li.id] || 0) > 0)
-            .map(li => `${li.part_number.toUpperCase()}|${li.unit_price}`),
-        ).size;
-        setPos(prev => prev.map(p => {
-          if (p.id !== po.id) return p;
-          const newInvoice = {
-            netsuite_invoice_id: result.invoiceId,
-            netsuite_invoice_number: result.invoiceNumber,
-            created_at: new Date().toISOString(),
-            total_qty: totalQty,
-            line_count: billedLineCount,
-            memo: `PO #${po.po_number} — open quantities`,
-          };
-          // Mirror the server: billed units consume the open quantity, and a
-          // fully billed PO reads as fulfilled without a reload.
-          const line_items = p.line_items.map(li => {
-            const billed = invoiceOpenQtys[li.id] || 0;
-            return billed > 0
-              ? { ...li, installed: Math.min((li.installed || 0) + billed, li.quantity) }
-              : li;
-          });
-          const fulfilled = line_items.length > 0 && line_items.every(li => (li.installed || 0) >= li.quantity);
-          return {
-            ...p,
-            line_items,
-            status: fulfilled && p.status === 'open' ? 'complete' : p.status,
-            netsuite_invoice_id: result.invoiceId,
-            netsuite_invoice_number: result.invoiceNumber,
-            po_invoices: [newInvoice, ...((p as any).po_invoices || [])],
-          } as any;
-        }));
-        setInvoiceOpenPo(null);
-        if (result.invoiceNumber) {
-          setEmailTarget({
-            customerName: po.customer,
-            invoices: [{
-              invoiceId: result.invoiceId != null ? String(result.invoiceId) : undefined,
-              invoiceNumber: result.invoiceNumber,
-              po: po.po_number,
-            }],
-          });
-        } else {
-          // No invoice number back from NetSuite — nothing to attach, so the
-          // email screen can't help; fall back to the plain confirmation.
-          await dialog.alert(`Invoice created for PO #${po.po_number} (${totalQty} unit${totalQty !== 1 ? 's' : ''}).`);
-        }
-      }
-    } catch (err: any) {
-      await dialog.alert(`Failed to create invoice: ${err.message || 'network error'}`);
-    }
-    setCreatingOpenInvoice(false);
-  };
-
-
   const importAllNewPOs = async () => {
     const newEmails = emailEmails.filter(e => !e.alreadyImported && !e.alreadyInSystem && e.pdfs.length > 0 && !emailImportResults[e.messageId]);
     for (let i = 0; i < newEmails.length; i++) {
@@ -2316,41 +1541,6 @@ export default function POsPage() {
         await new Promise(r => setTimeout(r, 5000));
       }
     }
-  };
-
-  // Add a PO line item's part to the catalog
-  const addLineItemToCatalog = async (li: { id: string; part_number: string; description: string | null; unit_price: number }, customer: string) => {
-    setAddingToCatalog(li.part_number);
-    try {
-      const created = await findOrCreateManualPart(supabase, {
-        partNumber: li.part_number,
-        description: li.description || null,
-        price: li.unit_price,
-        customer: customer || null,
-        graphicPackage: li.description || null,
-      });
-      if (!created) {
-        setCatalogAddResults(prev => ({ ...prev, [li.part_number]: 'error' }));
-      } else {
-        setCatalogAddResults(prev => ({ ...prev, [li.part_number]: 'added' }));
-        await refreshCatalog();
-      }
-    } catch {
-      setCatalogAddResults(prev => ({ ...prev, [li.part_number]: 'error' }));
-    }
-    setAddingToCatalog(null);
-  };
-
-  // Link any PDFs already saved on the PO into the new graphics job's files.
-  // Reuses the same R2 storage_path so the PO and job point at one object.
-  // Creating a graphics job from a PO opens the graphics page's create
-  // wizard prefilled from the PO (?new=1&fromPo=...&poLine=...) — the SAME
-  // form and submit as creating from the graphics screen, so the user
-  // reviews and edits every field before anything is created. The wizard's
-  // submit writes po_id / po_line_item_id and attaches the PO's PDFs and
-  // the parts' catalog files.
-  const openCreateGfxJob = (po: PurchaseOrder, lineItemId?: string) => {
-    router.push(`/graphics?new=1&fromPo=${po.id}${lineItemId ? `&poLine=${lineItemId}` : ''}`);
   };
 
   const addPartToCatalog = async (part: { part_number: string; description: string; unit_price: number }, customer: string) => {
@@ -2439,58 +1629,24 @@ export default function POsPage() {
       if (po.customer.toLowerCase().includes(q)) return true;
       if (po.line_items.some((li) => li.part_number.toLowerCase().includes(q) || li.description?.toLowerCase().includes(q))) return true;
       return false;
-    })
-    .sort((a, b) => {
-      const byPoNumber = a.po_number.localeCompare(b.po_number, undefined, { numeric: true });
-      if (poSortField === 'date') {
-        // Same date the row shows: the PO's ordered date, or when it was
-        // imported for POs with no date on record.
-        const da = new Date(a.ordered_date || a.created_at).getTime() || 0;
-        const db = new Date(b.ordered_date || b.created_at).getTime() || 0;
-        const cmp = (da - db) || byPoNumber;
-        return poSort === 'asc' ? cmp : -cmp;
-      }
-      if (poSortField === 'location') {
-        const la = shipToCityLabel(a.ship_to);
-        const lb = shipToCityLabel(b.ship_to);
-        // POs without a location group at the end regardless of direction
-        if (!la && !lb) return poSort === 'asc' ? byPoNumber : -byPoNumber;
-        if (!la) return 1;
-        if (!lb) return -1;
-        const cmp = la.localeCompare(lb) || byPoNumber;
-        return poSort === 'asc' ? cmp : -cmp;
-      }
-      if (poSortField === 'customer') {
-        const cmp = a.customer.localeCompare(b.customer) || byPoNumber;
-        return poSort === 'asc' ? cmp : -cmp;
-      }
-      return poSort === 'asc' ? byPoNumber : -byPoNumber;
     });
 
-  const closePO = async (poId: string) => {
-    await supabase.from('purchase_orders').update({ status: 'closed' }).eq('id', poId);
-    setPos(prev => prev.map(p => p.id === poId ? { ...p, status: 'closed' as any } : p));
-    setExpandedPo(null);
-  };
-
-  const reopenPO = async (poId: string) => {
-    await supabase.from('purchase_orders').update({ status: 'open' }).eq('id', poId);
-    setPos(prev => prev.map(p => p.id === poId ? { ...p, status: 'open' } : p));
-  };
+  // Column headers own sorting (SortableTh) — no separate Sort dropdown.
+  // Newest first is the natural default for a PO list.
+  const { sorted: sortedPos, sort: poTableSort, toggle: togglePoSort } = useTableSort(filteredPos, {
+    po: p => p.po_number,
+    customer: p => p.customer,
+    location: p => shipToCityLabel(p.ship_to) || null,
+    date: p => new Date(p.ordered_date || p.created_at).getTime() || 0,
+    billed: p => billedDollars(p),
+    total: p => p.line_items.reduce((s, l) => s + l.quantity * l.unit_price, 0),
+    status: p => (PO_STATUS_META[p.status] || { label: p.status }).label,
+  }, { key: 'date', dir: 'desc' });
 
   if (loading) return <div style={{ textAlign: 'center', padding: '40px', color: 'var(--text-label)' }}>Loading...</div>;
 
   return (
     <div>
-      {/* Hidden file input used by per-PO "Upload PDF" buttons */}
-      <input
-        ref={poFileInputRef}
-        type="file"
-        accept=".pdf,application/pdf"
-        multiple
-        onChange={handlePoPdfUpload}
-        style={{ display: 'none' }}
-      />
       {/* Gmail auto-import runs on a 20-minute cron — silent when healthy.
           This strip only appears when something needs a human: Gmail is
           disconnected, the last run failed, the cron looks stalled, or a
@@ -2854,102 +2010,74 @@ export default function POsPage() {
         </div>
       </div>
 
-      {/* Filter / date / sort controls */}
-      <div style={{ display: 'flex', gap: '6px', marginBottom: '8px', flexWrap: 'wrap', alignItems: 'center' }}>
+      {/* Search + filter popover (sorting lives on the column headers) */}
+      <div style={{ display: 'flex', gap: '6px', marginBottom: '10px', alignItems: 'center' }}>
+        <div style={{ position: 'relative', flex: 1 }}>
+          <input
+            value={poSearch}
+            onChange={(e) => setPoSearch(e.target.value)}
+            placeholder="Search PO #, part #, or customer..."
+            style={{ width: '100%', padding: '9px 12px', borderRadius: '8px', border: '1px solid var(--border)', background: 'var(--input-bg)', color: 'var(--text-body)', fontSize: '12px', outline: 'none' }}
+          />
+          {poSearch && (
+            <button
+              onClick={() => setPoSearch('')}
+              style={{ position: 'absolute', right: '8px', top: '50%', transform: 'translateY(-50%)', background: 'none', border: 'none', color: 'var(--text-body)', fontSize: '14px', cursor: 'pointer', padding: '0 4px' }}
+            >×</button>
+          )}
+        </div>
         {(() => {
-          const selectStyle: React.CSSProperties = {
-            padding: '6px 8px', borderRadius: '7px', fontSize: '11px', fontWeight: 700,
-            background: 'var(--subtle-bg)', border: '1px solid var(--border)',
-            color: 'var(--text-body)', cursor: 'pointer', outline: 'none',
+          const filterSelectStyle: React.CSSProperties = {
+            width: '100%', padding: '6px 8px', borderRadius: '7px', fontSize: '12px', fontWeight: 600,
+            background: 'var(--input-bg)', border: '1px solid var(--border)', color: 'var(--text-primary)',
           };
           return (
-            <>
+            <FilterButton
+              activeCount={(poFilter !== 'all' ? 1 : 0) + (poCustomerFilter !== 'all' ? 1 : 0) + (poDateRange !== 'all' ? 1 : 0)}
+              onClear={() => { setPoFilter('all'); setPoCustomerFilter('all'); setPoDateRange('all'); }}
+            >
+              <FilterLabel>Show only</FilterLabel>
               <select
                 value={poFilter}
                 onChange={e => setPoFilter(e.target.value as PoFilter)}
                 title="Show only POs matching a condition"
-                style={{ ...selectStyle, ...(poFilter !== 'all' ? { border: '1px solid var(--tab-active-border)', color: '#60a5fa' } : {}) }}
+                style={filterSelectStyle}
               >
-                <option value="all">Filter: All ({poFilterCounts.all})</option>
+                <option value="all">All ({poFilterCounts.all})</option>
                 <option value="billing">⚠ Billing needs attention ({poFilterCounts.billing})</option>
                 <option value="not_invoiced">⚠ Fulfilled, not invoiced ({poFilterCounts.not_invoiced})</option>
                 <option value="notes">💬 Has notes ({poFilterCounts.notes})</option>
                 <option value="has_gfx">🎨 Has graphics job ({poFilterCounts.has_gfx})</option>
                 <option value="no_gfx">No graphics job ({poFilterCounts.no_gfx})</option>
               </select>
+              <FilterLabel>Customer</FilterLabel>
               <select
                 value={poCustomerFilter}
                 onChange={e => setPoCustomerFilter(e.target.value)}
                 title="Show only POs for one customer"
-                style={{ ...selectStyle, ...(poCustomerFilter !== 'all' ? { border: '1px solid var(--tab-active-border)', color: '#60a5fa' } : {}) }}
+                style={filterSelectStyle}
               >
-                <option value="all">Customer: All</option>
+                <option value="all">All customers ({tabPos.length})</option>
                 {poCustomerOptions.map(c => (
                   <option key={c} value={c}>{c} ({poCustomerCounts.get(c)})</option>
                 ))}
               </select>
+              <FilterLabel>Date</FilterLabel>
               <select
                 value={poDateRange}
                 onChange={e => setPoDateRange(e.target.value as typeof poDateRange)}
                 title="Limit to a PO-date window (imported date when the PO has no date on record)"
-                style={{ ...selectStyle, ...(poDateRange !== 'all' ? { border: '1px solid var(--tab-active-border)', color: '#fbbf24' } : {}) }}
+                style={filterSelectStyle}
               >
-                <option value="all">Date: All time</option>
+                <option value="all">All time</option>
                 <option value="30">Last 30 days</option>
                 <option value="90">Last 90 days</option>
                 <option value="month">This month</option>
                 <option value="lastmonth">Last month</option>
               </select>
-              <select
-                value={poSortField}
-                onChange={e => {
-                  const f = e.target.value as typeof poSortField;
-                  setPoSortField(f);
-                  // Newest first is the natural default for a date sort
-                  setPoSort(f === 'date' ? 'desc' : 'asc');
-                }}
-                title="Sort the list"
-                style={selectStyle}
-              >
-                <option value="po_number">Sort: PO #</option>
-                <option value="date">Sort: Date</option>
-                <option value="location">Sort: Location</option>
-                <option value="customer">Sort: Customer</option>
-              </select>
-              <button
-                onClick={() => setPoSort(s => s === 'asc' ? 'desc' : 'asc')}
-                title="Flip the sort direction"
-                style={{ ...selectStyle, padding: '6px 10px' }}
-              >
-                {poSort === 'asc' ? '▲' : '▼'}
-              </button>
-              {(poFilter !== 'all' || poCustomerFilter !== 'all' || poDateRange !== 'all') && (
-                <button
-                  onClick={() => { setPoFilter('all'); setPoCustomerFilter('all'); setPoDateRange('all'); }}
-                  style={{ ...selectStyle, color: 'var(--text-label)' }}
-                >
-                  ✕ Clear filters
-                </button>
-              )}
-            </>
+            </FilterButton>
           );
         })()}
-      </div>
-
-      {/* Search bar */}
-      <div style={{ position: 'relative', marginBottom: '10px' }}>
-        <input
-          value={poSearch}
-          onChange={(e) => setPoSearch(e.target.value)}
-          placeholder="Search PO #, part #, or customer..."
-          style={{ width: '100%', padding: '9px 12px', borderRadius: '8px', border: '1px solid var(--border)', background: 'var(--input-bg)', color: 'var(--text-body)', fontSize: '12px', outline: 'none' }}
-        />
-        {poSearch && (
-          <button
-            onClick={() => setPoSearch('')}
-            style={{ position: 'absolute', right: '8px', top: '50%', transform: 'translateY(-50%)', background: 'none', border: 'none', color: 'var(--text-body)', fontSize: '14px', cursor: 'pointer', padding: '0 4px' }}
-          >×</button>
-        )}
       </div>
 
       {/* Pending PO Queue */}
@@ -3451,84 +2579,6 @@ export default function POsPage() {
       )}
 
       {/* PO Overwrite Confirmation Dialog */}
-      {/* Invoice open quantities modal */}
-      {invoiceOpenPo && (() => {
-        const openLines = invoiceOpenPo.line_items.filter(li => (li.installed || 0) < li.quantity);
-        const totalUnits = openLines.reduce((s, li) => s + (invoiceOpenQtys[li.id] || 0), 0);
-        const totalValue = openLines.reduce((s, li) => s + (invoiceOpenQtys[li.id] || 0) * li.unit_price, 0);
-        return (
-          <div style={{ position: 'fixed', top: 0, left: 0, right: 0, bottom: 0, background: 'var(--overlay)', zIndex: 1000, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '16px' }}>
-            <div style={{ background: 'var(--card)', border: '1px solid rgba(52,211,153,0.3)', borderRadius: '14px', padding: '18px', width: '100%', maxWidth: '560px', maxHeight: '85vh', overflowY: 'auto' }}>
-              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: '4px' }}>
-                <div style={{ fontSize: '16px', fontWeight: 800, color: 'var(--text-body)' }}>Invoice Open Quantities — PO #{invoiceOpenPo.po_number}</div>
-                <button onClick={() => setInvoiceOpenPo(null)} style={{ background: 'none', border: 'none', color: 'var(--text-label)', fontSize: '18px', cursor: 'pointer', padding: '2px' }}>✕</button>
-              </div>
-              <div style={{ fontSize: '11px', color: 'var(--text-label)', marginBottom: '12px' }}>
-                Prefilled with each line's open (not yet installed) quantity — adjust before creating. Completed lines are left off.
-              </div>
-              <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
-                {openLines.map(li => {
-                  const open = li.quantity - (li.installed || 0);
-                  return (
-                    <div key={li.id} style={{ display: 'flex', alignItems: 'center', gap: '10px', padding: '8px 10px', borderRadius: '8px', background: 'var(--subtle-bg)', border: '1px solid var(--border)' }}>
-                      <div style={{ flex: 1, minWidth: 0 }}>
-                        <div style={{ fontSize: '13px', fontWeight: 700, color: 'var(--text-body)' }}>{li.part_number}</div>
-                        <div style={{ fontSize: '11px', color: 'var(--text-label)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-                          {li.description || '—'} · open {open} of {li.quantity} · ${li.unit_price.toFixed(2)}/ea
-                        </div>
-                      </div>
-                      <input
-                        type="number"
-                        min={0}
-                        max={open}
-                        value={invoiceOpenQtys[li.id] ?? 0}
-                        onChange={e => {
-                          const v = Math.max(0, Math.min(open, parseInt(e.target.value) || 0));
-                          setInvoiceOpenQtys(prev => ({ ...prev, [li.id]: v }));
-                        }}
-                        style={{ width: '76px', padding: '8px', borderRadius: '8px', border: '1px solid var(--border)', background: 'var(--input-bg)', color: 'var(--text-body)', fontSize: '14px', fontWeight: 700, textAlign: 'right' }}
-                      />
-                    </div>
-                  );
-                })}
-              </div>
-              <div style={{ marginTop: '10px', padding: '8px 10px', borderRadius: '8px', background: 'rgba(52,211,153,0.06)', border: '1px solid rgba(52,211,153,0.2)', fontSize: '12px', fontWeight: 700, color: '#34d399' }}>
-                {totalUnits} unit{totalUnits !== 1 ? 's' : ''} · ${totalValue.toFixed(2)}
-              </div>
-              <div style={{ display: 'flex', gap: '8px', marginTop: '12px' }}>
-                <button
-                  onClick={createOpenQtyInvoice}
-                  disabled={creatingOpenInvoice || totalUnits === 0}
-                  style={{
-                    flex: 1, padding: '12px', borderRadius: '10px', border: 'none',
-                    background: creatingOpenInvoice || totalUnits === 0 ? 'var(--subtle-bg)' : '#10b981',
-                    color: '#fff', fontWeight: 800, fontSize: '13px', cursor: 'pointer',
-                    opacity: creatingOpenInvoice || totalUnits === 0 ? 0.5 : 1,
-                  }}
-                >
-                  {creatingOpenInvoice ? 'Creating…' : `Create Invoice (${totalUnits} unit${totalUnits !== 1 ? 's' : ''})`}
-                </button>
-                <button
-                  onClick={() => setInvoiceOpenPo(null)}
-                  style={{ flex: 1, padding: '12px', borderRadius: '10px', background: 'transparent', border: '1px solid var(--border)', color: 'var(--text-body)', fontWeight: 700, fontSize: '13px', cursor: 'pointer' }}
-                >
-                  Cancel
-                </button>
-              </div>
-            </div>
-          </div>
-        );
-      })()}
-
-      {/* Email the freshly created invoice (shared component) */}
-      {emailTarget && (
-        <EmailInvoicesModal
-          customerName={emailTarget.customerName}
-          invoices={emailTarget.invoices}
-          onClose={() => setEmailTarget(null)}
-        />
-      )}
-
       {showOverwriteConfirm && overwriteData && (
         <div style={{ position: 'fixed', top: 0, left: 0, right: 0, bottom: 0, background: 'var(--overlay)', zIndex: 1000, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '16px' }}>
           <div style={{ background: 'var(--card)', border: '1px solid rgba(251,191,36,0.3)', borderRadius: '14px', padding: '18px', maxWidth: '420px', width: '100%', maxHeight: '80vh', overflowY: 'auto' }}>
@@ -4035,924 +3085,145 @@ export default function POsPage() {
       )}
 
 
-      {filteredPos.map((po) => {
-        const totalQty = po.line_items.reduce((s, l) => s + l.quantity, 0);
-        const totalInstalled = po.line_items.reduce((s, l) => s + l.installed, 0);
-        const totalValue = po.line_items.reduce((s, l) => s + l.quantity * l.unit_price, 0);
-        const pct = totalQty > 0 ? (totalInstalled / totalQty) * 100 : 0;
-        const isExpanded = expandedPo === po.id;
-        const isEditingPO = editPoId === po.id;
-        const displayDate = po.ordered_date ? new Date(po.ordered_date + 'T00:00:00') : new Date(po.created_at);
-
+      {/* PO table — thin rows; each row opens the PO record page. In edit
+          (select) mode a leading checkbox column replaces row navigation. */}
+      {sortedPos.length > 0 && (() => {
+        const thStyle: React.CSSProperties = {
+          fontSize: '10px', fontWeight: 800, textTransform: 'uppercase', letterSpacing: '0.5px',
+          color: 'var(--text-muted)', padding: '10px 12px', borderBottom: '1px solid var(--border-strong)',
+        };
+        const tdStyle: React.CSSProperties = {
+          padding: '9px 12px', borderBottom: '1px solid var(--border)', fontSize: '12.5px', whiteSpace: 'nowrap',
+        };
+        const numStyle: React.CSSProperties = { ...tdStyle, textAlign: 'right', fontVariantNumeric: 'tabular-nums' };
         return (
-            <div key={po.id} id={`po-row-${po.id}`} style={{ background: 'var(--subtle-bg)', border: highlightPo === po.id ? '1px solid #60a5fa' : (editMode && selectedForDelete.has(po.id) ? '1px solid rgba(248,113,113,0.5)' : '1px solid var(--border)'), boxShadow: highlightPo === po.id ? '0 0 0 2px rgba(96,165,250,0.5)' : undefined, transition: 'box-shadow 0.3s ease, border-color 0.3s ease', borderRadius: '10px', marginBottom: '6px', overflow: 'hidden' }}>
-              <div onClick={() => editMode ? toggleDeleteSelection(po.id) : toggleExpand(po.id)} style={{ padding: '12px', cursor: 'pointer' }}>
-                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'start' }}>
-                  <div style={{ display: 'flex', alignItems: 'start', gap: '8px' }}>
-                    {/* Edit mode: delete checkbox */}
-                    {editMode && (
-                      <input
-                        type="checkbox"
-                        checked={selectedForDelete.has(po.id)}
-                        onChange={(e) => { e.stopPropagation(); toggleDeleteSelection(po.id); }}
-                        onClick={(e) => e.stopPropagation()}
-                        style={{ marginTop: '4px', width: '16px', height: '16px', accentColor: '#ef4444', cursor: 'pointer', flexShrink: 0 }}
-                      />
-                    )}
-                    {/* Invoiced marker */}
-                    {!editMode && !!(po as any).netsuite_invoice_id && (
-                      <div style={{ marginTop: '3px', width: '16px', height: '16px', borderRadius: '4px', background: 'rgba(52,211,153,0.15)', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}>
-                        <span style={{ fontSize: '10px', color: '#34d399' }}>$</span>
-                      </div>
-                    )}
-                    <div>
-                      <div style={{ display: 'flex', alignItems: 'center', gap: '8px', flexWrap: 'wrap' }}>
-                        <div style={{ fontWeight: 800, fontSize: '15px' }}>PO #{po.po_number}</div>
-                        {(() => {
-                          // Ship-to location, front and center next to the PO
-                          // number — just the city ("Wentzville"), not the
-                          // plant string. Full address on hover.
-                          const loc = shipToCityLabel(po.ship_to);
-                          if (!loc) return null;
-                          return (
-                            <span
-                              title={formatShipTo(po.ship_to) || undefined}
-                              style={{
-                                fontSize: '11px', fontWeight: 800, color: '#22d3ee',
-                                background: 'rgba(34,211,238,0.1)', border: '1px solid rgba(34,211,238,0.3)',
-                                padding: '1px 8px', borderRadius: '10px', whiteSpace: 'nowrap',
-                                maxWidth: '260px', overflow: 'hidden', textOverflow: 'ellipsis',
-                              }}
-                            >
-                              📍 {loc}
-                            </span>
-                          );
-                        })()}
-                        {(() => {
-                          // Tag POs that already have a graphics job, so nobody
-                          // has to cross-reference the graphics board. Click
-                          // jumps straight to the job.
-                          const jobs = gfxJobsByPo[po.id] || [];
-                          if (jobs.length === 0) return null;
-                          return (
-                            <span
-                              onClick={(e) => { e.stopPropagation(); router.push(`/graphics?editJob=${jobs[0].id}`); }}
-                              title={jobs.map(j => `${j.job_number || j.id.slice(0, 8)} — ${GRAPHICS_STATUS_LABELS[j.status] || j.status}`).join('\n')}
-                              style={{
-                                fontSize: '11px', fontWeight: 800, color: '#a78bfa',
-                                background: 'rgba(167,139,250,0.1)', border: '1px solid rgba(167,139,250,0.3)',
-                                padding: '1px 8px', borderRadius: '10px', whiteSpace: 'nowrap', cursor: 'pointer',
-                              }}
-                            >
-                              🎨 GFX{jobs.length > 1 ? ` ×${jobs.length}` : ''}
-                            </span>
-                          );
-                        })()}
-                      </div>
-                      <div style={{ fontSize: '12px', color: 'var(--text-label)', marginTop: '1px' }}>
-                        {po.customer} • <span title={po.ordered_date ? 'PO date' : 'Imported date (no PO date on record)'}>{displayDate.toLocaleDateString([], { month: 'short', day: 'numeric', year: 'numeric' })}</span> • {po.line_items.length} item{po.line_items.length !== 1 ? 's' : ''}
-                        {po.status === 'complete' && <span style={{ color: '#4ade80', marginLeft: '6px' }}>&#10003; Fulfilled</span>}
-                        {(po as any).netsuite_invoice_number && <span style={{ color: '#34d399', marginLeft: '6px' }}>INV #{(po as any).netsuite_invoice_number}</span>}
-                        {(po as any).invoice_check_status === 'attention' && (
-                          <span
-                            style={{ color: '#f87171', marginLeft: '6px', fontWeight: 700 }}
-                            title={(((po as any).invoice_check?.problems || []) as string[]).join('\n') || 'Billed quantities don\'t match this PO'}
-                          >
-                            ⚠ Billing
-                          </span>
-                        )}
-                        {(po as any).invoice_check_status === 'no_invoices' && (
-                          po.status === 'complete' ? (
-                            <span style={{ color: '#fbbf24', marginLeft: '6px', fontWeight: 700 }} title="This PO is fulfilled but has no invoices linked — nothing has been billed">
-                              ⚠ Not invoiced
-                            </span>
-                          ) : (
-                            <span style={{ color: 'var(--text-label)', marginLeft: '6px' }} title="No invoices linked to this PO yet">
-                              No invoices
-                            </span>
-                          )
-                        )}
-                        {((po as any).po_notes || []).length > 0 && (
-                          <span style={{ color: '#fbbf24', marginLeft: '6px', fontWeight: 700 }} title={`${(po as any).po_notes.length} note${(po as any).po_notes.length !== 1 ? 's' : ''}`}>
-                            💬 {(po as any).po_notes.length}
-                          </span>
-                        )}
-                      </div>
-                    </div>
-                  </div>
-                  <div style={{ textAlign: 'right' }}>
-                    <div style={{ fontSize: '14px', fontWeight: 800, color: '#60a5fa' }}>{fmt(totalValue)}</div>
-                    <div style={{ fontSize: '10px', color: 'var(--text-label)', marginTop: '1px' }}>{isExpanded ? '▲' : '▼'} Details</div>
-                  </div>
-                </div>
-                <div style={{ marginTop: '8px' }}>
-                  <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '11px', marginBottom: '3px' }}>
-                    <span style={{ color: 'var(--text-label)' }}>Progress</span>
-                    <span style={{ color: pct >= 100 ? '#4ade80' : '#60a5fa', fontWeight: 700 }}>{totalInstalled}/{totalQty}</span>
-                  </div>
-                  <div style={{ height: '6px', background: 'var(--subtle-bg)', borderRadius: '3px' }}>
-                    <div style={{ height: '100%', width: `${Math.min(pct, 100)}%`, background: pct >= 100 ? '#22c55e' : '#3b82f6', borderRadius: '3px', transition: 'width 0.3s' }} />
-                  </div>
-                </div>
-              </div>
-
-              {isExpanded && (
-                <div style={{ borderTop: '1px solid var(--border)', padding: '10px 12px' }}>
-                  {/* PDF Attachments */}
-                  <DropZone
-                    accept=".pdf,application/pdf"
-                    disabled={uploadingPoPdf}
-                    onFiles={files => uploadPoPdfs(po.id, files)}
-                    style={{ marginBottom: '10px' }}
-                  >
-                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                      <div style={labelStyle}>PDF Attachments</div>
-                      <button
-                        onClick={() => triggerPoPdfUpload(po.id)}
-                        disabled={uploadingPoPdf && uploadingPoId === po.id}
-                        style={{
-                          padding: '3px 8px', borderRadius: '6px', fontSize: '10px', fontWeight: 700,
-                          background: 'rgba(96,165,250,0.12)', border: '1px solid rgba(96,165,250,0.3)',
-                          color: '#60a5fa', cursor: uploadingPoPdf && uploadingPoId === po.id ? 'default' : 'pointer',
-                          opacity: uploadingPoPdf && uploadingPoId === po.id ? 0.6 : 1,
-                        }}
-                      >
-                        {uploadingPoPdf && uploadingPoId === po.id ? 'Uploading…' : '+ Upload PDF'}
-                      </button>
-                    </div>
-                    {(poFiles[po.id] || []).length > 0 ? (
-                      <div style={{ display: 'flex', flexDirection: 'column', gap: '4px', marginTop: '4px' }}>
-                        {poFiles[po.id].map(f => (
-                          <button
-                            key={f.id}
-                            type="button"
-                            onClick={() => {
-                              const url = storage.from('graphics-proofs').getPublicUrl(f.storage_path).data.publicUrl;
-                              setPdfPreview({ url, name: f.file_name });
-                            }}
-                            style={{
-                              display: 'flex', alignItems: 'center', gap: '8px',
-                              padding: '6px 8px', borderRadius: '6px',
-                              background: 'var(--subtle-bg)', border: '1px solid var(--border)',
-                              fontSize: '11px', fontWeight: 600, color: '#60a5fa', textAlign: 'left',
-                              cursor: 'pointer', width: '100%',
-                            }}
-                          >
-                            <span style={{ fontSize: '14px' }}>{'📄'}</span>
-                            <span style={{ flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{f.file_name}</span>
-                            {f.source && <span style={{ fontSize: '9px', color: 'var(--text-muted)', textTransform: 'uppercase' }}>{f.source === 'pdf_upload' ? 'PDF' : 'Email'}</span>}
-                            {f.file_size && <span style={{ fontSize: '9px', color: 'var(--text-muted)' }}>{(f.file_size / 1024).toFixed(0)}KB</span>}
-                          </button>
-                        ))}
-                      </div>
-                    ) : (
-                      <div style={{ fontSize: '11px', color: 'var(--text-muted)', marginTop: '4px' }}>No attachments. Use the button above to add a PDF.</div>
-                    )}
-                  </DropZone>
-
-                  {/* Notes — flag a PO that needs attention and tag teammates */}
-                  <div style={{ marginBottom: '10px' }}>
-                    <div style={labelStyle}>Notes</div>
-                    {(poNotes[po.id] || []).length > 0 && (
-                      <div style={{ display: 'flex', flexDirection: 'column', gap: '4px', marginTop: '4px', marginBottom: '6px' }}>
-                        {(poNotes[po.id] || []).map(n => (
-                          <div key={n.id} id={`po-note-${n.id}`} style={{ padding: '7px 9px', borderRadius: '8px', background: 'var(--subtle-bg)', border: '1px solid var(--border)' }}>
-                            <div style={{ display: 'flex', justifyContent: 'space-between', gap: '8px', marginBottom: '2px' }}>
-                              <span style={{ fontSize: '11px', fontWeight: 700, color: '#fbbf24' }}>{profileName(n.author_id)}</span>
-                              <span style={{ fontSize: '10px', color: 'var(--text-muted)' }}>{new Date(n.created_at).toLocaleString([], { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' })}</span>
-                            </div>
-                            <div style={{ fontSize: '12px', color: 'var(--text-body)', whiteSpace: 'pre-wrap' }}>{n.body}</div>
-                            {(n.mentions || []).length > 0 && (
-                              <div style={{ display: 'flex', gap: '4px', flexWrap: 'wrap', marginTop: '4px' }}>
-                                {n.mentions.map(id => (
-                                  <span key={id} style={{ fontSize: '10px', fontWeight: 700, color: '#60a5fa', background: 'rgba(59,130,246,0.1)', border: '1px solid rgba(59,130,246,0.25)', padding: '0 6px', borderRadius: '8px' }}>
-                                    @{profileName(id)}
-                                  </span>
-                                ))}
-                              </div>
-                            )}
-                          </div>
-                        ))}
-                      </div>
-                    )}
-                    <div onClick={e => e.stopPropagation()} style={{ marginTop: '4px' }}>
-                      <MentionTextArea
-                        value={noteText}
-                        onChange={setNoteText}
-                        placeholder="Add a note — @ tags a teammate, e.g. what needs fixing or attention…"
-                        rows={2}
-                        style={{ width: '100%', padding: '8px', borderRadius: '8px', border: '1px solid var(--border)', background: 'var(--input-bg)', color: 'var(--text-body)', fontSize: '12px', resize: 'vertical' }}
-                      />
-                    </div>
-                    <div style={{ display: 'flex', gap: '4px', flexWrap: 'wrap', alignItems: 'center', marginTop: '4px' }}>
-                      <span style={{ fontSize: '10px', color: 'var(--text-muted)', fontWeight: 700 }}>Tag:</span>
-                      {teamProfiles.filter(p => p.id !== user?.id).map(p => {
-                        const tagged = noteTags.has(p.id);
-                        return (
-                          <button
-                            key={p.id}
-                            onClick={(e) => {
-                              e.stopPropagation();
-                              setNoteTags(prev => {
-                                const next = new Set(prev);
-                                if (next.has(p.id)) next.delete(p.id); else next.add(p.id);
-                                return next;
-                              });
-                            }}
-                            style={{
-                              padding: '2px 8px', borderRadius: '10px', fontSize: '10px', fontWeight: 700, cursor: 'pointer',
-                              background: tagged ? 'rgba(59,130,246,0.18)' : 'var(--subtle-bg)',
-                              border: tagged ? '1px solid rgba(59,130,246,0.5)' : '1px solid var(--border)',
-                              color: tagged ? '#60a5fa' : 'var(--text-label)',
-                            }}
-                          >
-                            @{p.full_name || p.email}
-                          </button>
-                        );
-                      })}
-                      <button
-                        onClick={(e) => { e.stopPropagation(); postNote(po); }}
-                        disabled={postingNote || !noteText.trim()}
-                        style={{
-                          marginLeft: 'auto', padding: '5px 14px', borderRadius: '8px', fontSize: '11px', fontWeight: 800,
-                          background: postingNote || !noteText.trim() ? 'var(--subtle-bg)' : '#f59e0b',
-                          color: postingNote || !noteText.trim() ? 'var(--text-muted)' : '#111',
-                          border: 'none', cursor: postingNote || !noteText.trim() ? 'default' : 'pointer',
-                        }}
-                      >
-                        {postingNote ? 'Posting…' : 'Post'}
-                      </button>
-                    </div>
-                  </div>
-
-                  {isEditingPO ? (
-                    <div style={{ marginBottom: '10px', padding: '8px', background: 'rgba(59,130,246,0.05)', borderRadius: '8px' }}>
-                      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '6px' }}>
-                        <div>
-                          <label style={labelStyle}>PO Number</label>
-                          <input value={editPoForm.po_number} onChange={(e) => setEditPoForm({ ...editPoForm, po_number: e.target.value })} style={inputStyle} />
-                        </div>
-                        <div>
-                          <label style={labelStyle}>Customer</label>
-                          <CustomerPicker
-                            value={editPoForm.customer}
-                            netsuiteId={editPoForm.customer_netsuite_id}
-                            onChange={({ customer, customerNetsuiteId }) => setEditPoForm({ ...editPoForm, customer, customer_netsuite_id: customerNetsuiteId })}
-                          />
-                        </div>
-                      </div>
-                      <div style={{ marginTop: '6px' }}>
-                        <label style={labelStyle}>Status</label>
-                        <select value={editPoForm.status} onChange={(e) => setEditPoForm({ ...editPoForm, status: e.target.value })} style={inputStyle}>
-                          <option value="open">Open</option><option value="complete">Fulfilled</option><option value="cancelled">Cancelled</option>
-                        </select>
-                      </div>
-                      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '6px', marginTop: '6px' }}>
-                        <div>
-                          <label style={labelStyle}>Ordered Date</label>
-                          <input type="date" value={editPoForm.ordered_date} onChange={e => setEditPoForm({ ...editPoForm, ordered_date: e.target.value })} style={inputStyle} />
-                        </div>
-                        <div>
-                          <label style={labelStyle}>Requested Delivery</label>
-                          <input type="date" value={editPoForm.requested_delivery_date} onChange={e => setEditPoForm({ ...editPoForm, requested_delivery_date: e.target.value })} style={inputStyle} />
-                        </div>
-                      </div>
-                      <div style={{ marginTop: '6px' }}>
-                        <label style={labelStyle}>Notes</label>
-                        <textarea
-                          value={editPoForm.notes}
-                          onChange={e => setEditPoForm({ ...editPoForm, notes: e.target.value })}
-                          rows={2}
-                          style={{ ...inputStyle, resize: 'vertical', fontFamily: 'inherit' }}
-                        />
-                      </div>
-                      <div style={{ marginTop: '6px' }}>
-                        <ShipToPicker
-                          label="Ship To"
-                          locations={locations}
-                          selectedId={editShipToId}
-                          shipTo={editShipTo}
-                          onSelect={(id) => applyLocationToShipTo(id, setEditShipToId, setEditShipTo)}
-                          onChange={(next) => { setEditShipToId(''); setEditShipTo(next); }}
-                          onManage={() => setShowLocations(true)}
-                          onSave={() => saveShipToAsLocation(editShipTo, setEditShipToId)}
-                        />
-                      </div>
-                      <div style={{ display: 'flex', gap: '6px', marginTop: '8px' }}>
-                        <button onClick={saveEditPO} style={{ flex: 1, padding: '8px', borderRadius: '8px', background: '#22c55e', color: '#fff', fontSize: '12px', fontWeight: 700, border: 'none' }}>Save</button>
-                        <button onClick={() => setEditPoId(null)} style={{ flex: 1, padding: '8px', borderRadius: '8px', background: 'transparent', border: '1px solid var(--border)', color: 'var(--text-body)', fontSize: '12px', fontWeight: 700 }}>Cancel</button>
-                      </div>
-                    </div>
-                  ) : (
-                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '6px' }}>
-                      <div style={{ fontSize: '10px', color: 'var(--text-label)' }}>
-                        {po.ordered_date ? 'PO Date' : 'Imported'} {displayDate.toLocaleDateString([], { month: 'short', day: 'numeric', year: 'numeric' })}
-                        {(po as any).netsuite_so_number && (
-                          <span style={{ color: '#a78bfa', marginLeft: '6px' }}>
-                            · NS SO #{(po as any).netsuite_so_number}
-                          </span>
-                        )}
-                      </div>
-                      <div style={{ display: 'flex', gap: '4px' }}>
-                        {(() => {
-                          const soResult = soResults[po.id];
-                          const isCreating = creatingSOForPo === po.id;
-                          const hasSO = (po as any).netsuite_so_id || soResult?.salesOrderId;
-                          const soError = soResult?.status === 'error';
-
-                          return (
-                            <button
-                              onClick={(e) => { e.stopPropagation(); createNetSuiteSO(po.id); }}
-                              disabled={isCreating}
-                              style={{
-                                padding: '3px 8px', borderRadius: '6px', fontSize: '10px', fontWeight: 700, cursor: 'pointer',
-                                background: hasSO ? 'rgba(167,139,250,0.1)' : soError ? 'rgba(239,68,68,0.1)' : 'rgba(167,139,250,0.1)',
-                                border: `1px solid ${hasSO ? 'rgba(167,139,250,0.25)' : soError ? 'rgba(239,68,68,0.25)' : 'rgba(167,139,250,0.25)'}`,
-                                color: hasSO ? '#a78bfa' : soError ? '#ef4444' : '#a78bfa',
-                              }}
-                            >
-                              {isCreating ? 'Creating...' : hasSO ? `NS SO #${(po as any).netsuite_so_number || soResult?.salesOrderNumber || 'Created'}` : soError ? 'Retry NS SO' : 'Create NS SO'}
-                            </button>
-                          );
-                        })()}
-                        <button
-                          onClick={(e) => { e.stopPropagation(); startEditPO(po); }}
-                          style={{ padding: '3px 8px', borderRadius: '6px', background: 'rgba(59,130,246,0.1)', border: '1px solid rgba(59,130,246,0.25)', color: '#60a5fa', fontSize: '10px', fontWeight: 700 }}
-                        >
-                          Edit PO
-                        </button>
-                      </div>
-                    </div>
-                  )}
-
-                  {soResults[po.id]?.status === 'error' && (
-                    <div style={{ padding: '6px 8px', borderRadius: '6px', background: 'rgba(239,68,68,0.06)', border: '1px solid rgba(239,68,68,0.15)', fontSize: '10px', color: '#ef4444', marginBottom: '6px' }}>
-                      {soResults[po.id].error}
-                    </div>
-                  )}
-
-                  {soResults[po.id]?.unmatchedParts?.length > 0 && soResults[po.id]?.status !== 'error' && (
-                    <div style={{ padding: '6px 8px', borderRadius: '6px', background: 'rgba(251,191,36,0.06)', border: '1px solid rgba(251,191,36,0.15)', fontSize: '10px', color: '#fbbf24', marginBottom: '6px' }}>
-                      Note: {soResults[po.id].unmatchedParts.length} part(s) not found in NetSuite: {soResults[po.id].unmatchedParts.join(', ')}
-                    </div>
-                  )}
-
-                  {po.ship_to ? (
-                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '8px', padding: '6px 8px', borderRadius: '6px', background: 'rgba(59,130,246,0.06)', border: '1px solid rgba(59,130,246,0.12)', marginBottom: '8px', fontSize: '11px', color: '#8899aa' }}>
-                      <div>
-                        <span style={{ fontWeight: 700, color: '#60a5fa', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '0.3px' }}>Ship To: </span>
-                        {[po.ship_to.name, po.ship_to.address, po.ship_to.city && po.ship_to.state ? `${po.ship_to.city}, ${po.ship_to.state} ${po.ship_to.zip || ''}`.trim() : po.ship_to.city || po.ship_to.state].filter(Boolean).join(' · ')}
-                      </div>
-                      <button
-                        onClick={(e) => { e.stopPropagation(); startEditPO(po); }}
-                        title="Change this PO's ship-to location (opens Edit PO)"
-                        style={{ padding: '2px 8px', borderRadius: '5px', fontSize: '10px', fontWeight: 700, background: 'rgba(96,165,250,0.1)', border: '1px solid rgba(96,165,250,0.25)', color: '#60a5fa', cursor: 'pointer', flexShrink: 0 }}
-                      >
-                        Change
-                      </button>
-                    </div>
-                  ) : (
-                    // No location on this PO — set one right here: pick a
-                    // saved location for instant assignment, or Custom for
-                    // the full ship-to fields in Edit PO.
-                    <div style={{ display: 'flex', alignItems: 'center', gap: '6px', flexWrap: 'wrap', padding: '6px 8px', borderRadius: '6px', background: 'rgba(251,191,36,0.06)', border: '1px solid rgba(251,191,36,0.2)', marginBottom: '8px' }}>
-                      <span style={{ fontWeight: 700, color: '#fbbf24', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '0.3px' }}>📍 No location</span>
-                      <select
-                        defaultValue=""
-                        onClick={(e) => e.stopPropagation()}
-                        onChange={(e) => { if (e.target.value) applyQuickLocation(po.id, e.target.value); }}
-                        style={{ ...inputStyle, flex: 1, minWidth: '160px', padding: '4px 6px', fontSize: '11px' }}
-                      >
-                        <option value="">Set a saved location…</option>
-                        {locations.map(loc => (
-                          <option key={loc.id} value={loc.id}>
-                            {loc.name}{loc.city ? ` — ${loc.city}${loc.state ? `, ${loc.state}` : ''}` : ''}
-                          </option>
-                        ))}
-                      </select>
-                      <button
-                        onClick={(e) => { e.stopPropagation(); startEditPO(po); }}
-                        title="Enter a one-off address (opens Edit PO with the full ship-to fields)"
-                        style={{ padding: '4px 8px', borderRadius: '5px', fontSize: '10px', fontWeight: 700, background: 'rgba(96,165,250,0.1)', border: '1px solid rgba(96,165,250,0.25)', color: '#60a5fa', cursor: 'pointer' }}
-                      >
-                        Custom…
-                      </button>
-                    </div>
-                  )}
-
-                  <div style={{ display: 'flex', gap: '4px', padding: '8px 0 4px', borderBottom: '1px solid var(--border)', fontSize: '10px', fontWeight: 700, color: 'var(--text-label)', textTransform: 'uppercase', letterSpacing: '0.3px' }}>
-                    <div onClick={() => toggleLiSort('part_number')} style={{ flex: 1, cursor: 'pointer', color: liSort.col === 'part_number' ? '#60a5fa' : undefined }}>Part #{liSortIndicator('part_number')}</div>
-                    <div onClick={() => toggleLiSort('quantity')} style={{ width: '36px', textAlign: 'center', cursor: 'pointer', color: liSort.col === 'quantity' ? '#60a5fa' : undefined }}>Qty{liSortIndicator('quantity')}</div>
-                    <div onClick={() => toggleLiSort('installed')} style={{ width: '42px', textAlign: 'center', cursor: 'pointer', color: liSort.col === 'installed' ? '#60a5fa' : undefined }}>Done{liSortIndicator('installed')}</div>
-                    <div onClick={() => toggleLiSort('unit_price')} style={{ width: '65px', textAlign: 'right', cursor: 'pointer', color: liSort.col === 'unit_price' ? '#60a5fa' : undefined }}>Price{liSortIndicator('unit_price')}</div>
-                    <div style={{ width: '55px', textAlign: 'right' }}>Total</div>
-                    <div style={{ width: '24px' }}></div>
-                  </div>
-
-                  {sortLineItems(po.line_items).map((li) => {
-                    const lineTotal = li.quantity * li.unit_price;
-                    const linePct = li.quantity > 0 ? (li.installed / li.quantity) * 100 : 0;
-                    const isEditingLine = editLineId === li.id;
-
-                    if (isEditingLine) {
-                      return (
-                        <div key={li.id} style={{ padding: '8px 0', borderBottom: '1px solid rgba(30,45,61,0.5)' }}>
-                          <div style={{ marginBottom: '6px' }}>
-                            <label style={{ ...labelStyle, fontSize: '9px' }}>Part Number</label>
-                            <input value={editLineForm.part_number} onChange={(e) => setEditLineForm({ ...editLineForm, part_number: e.target.value })} style={{ ...inputStyle, padding: '6px 8px', fontSize: '12px', fontWeight: 700 }} />
-                          </div>
-                          <div style={{ display: 'flex', gap: '6px', alignItems: 'end' }}>
-                            <div style={{ flex: 1 }}>
-                              <label style={{ ...labelStyle, fontSize: '9px' }}>Qty</label>
-                              <input type="number" value={editLineForm.quantity} onChange={(e) => setEditLineForm({ ...editLineForm, quantity: e.target.value })} style={{ ...inputStyle, padding: '6px 8px', fontSize: '12px' }} />
-                            </div>
-                            <div style={{ flex: 1 }}>
-                              <label style={{ ...labelStyle, fontSize: '9px' }}>Done</label>
-                              <input type="number" value={editLineForm.installed} onChange={(e) => setEditLineForm({ ...editLineForm, installed: e.target.value })} style={{ ...inputStyle, padding: '6px 8px', fontSize: '12px' }} />
-                            </div>
-                            <div style={{ flex: 1 }}>
-                              <label style={{ ...labelStyle, fontSize: '9px' }}>Unit Price</label>
-                              <input type="number" value={editLineForm.unit_price} onChange={(e) => setEditLineForm({ ...editLineForm, unit_price: e.target.value })} style={{ ...inputStyle, padding: '6px 8px', fontSize: '12px' }} step="0.01" />
-                            </div>
-                            <button onClick={() => saveEditLine(po.id)} style={{ padding: '6px 10px', borderRadius: '6px', background: '#22c55e', color: '#fff', fontSize: '11px', fontWeight: 700, border: 'none' }}>✓</button>
-                            <button onClick={() => setEditLineId(null)} style={{ padding: '6px 10px', borderRadius: '6px', background: 'transparent', border: '1px solid var(--border)', color: 'var(--text-body)', fontSize: '11px', fontWeight: 700 }}>✕</button>
-                          </div>
-                        </div>
-                      );
-                    }
-
-                    const catalogMatch = catalog.find(c => c.part_number.toUpperCase() === li.part_number.toUpperCase());
-                    const catalogAdded = catalogAddResults[li.part_number] === 'added';
-                    const lineGfxJob = (gfxJobsByPo[po.id] || []).find(j => j.po_line_item_id === li.id) || null;
-
+          <div style={{ background: 'var(--card)', border: '1px solid var(--border)', borderRadius: '12px', overflow: 'hidden' }}>
+            <div className="responsive-table">
+              <table style={{ borderCollapse: 'collapse', width: '100%', minWidth: '820px' }}>
+                <thead><tr>
+                  {editMode && <th style={{ ...thStyle, width: '28px' }} aria-label="Select"></th>}
+                  <SortableTh label="PO #" sortKey="po" sort={poTableSort} onToggle={togglePoSort} style={thStyle} />
+                  <SortableTh label="Customer" sortKey="customer" sort={poTableSort} onToggle={togglePoSort} style={thStyle} />
+                  <SortableTh label="Location" sortKey="location" sort={poTableSort} onToggle={togglePoSort} style={thStyle} />
+                  <SortableTh label="Date" sortKey="date" sort={poTableSort} onToggle={togglePoSort} defaultDir="desc" style={thStyle} />
+                  <SortableTh label="Billed" sortKey="billed" sort={poTableSort} onToggle={togglePoSort} defaultDir="desc" align="right" style={thStyle} />
+                  <SortableTh label="Total" sortKey="total" sort={poTableSort} onToggle={togglePoSort} defaultDir="desc" align="right" style={thStyle} />
+                  <SortableTh label="Status" sortKey="status" sort={poTableSort} onToggle={togglePoSort} style={thStyle} />
+                  <th style={thStyle}>Flags</th>
+                </tr></thead>
+                <tbody>
+                  {sortedPos.map((po) => {
+                    const totalValue = po.line_items.reduce((s, l) => s + l.quantity * l.unit_price, 0);
+                    const billed = billedDollars(po);
+                    const billedColor = billed <= 0
+                      ? 'var(--text-muted)'
+                      : billed > totalValue + 0.005
+                        ? '#f87171'
+                        : billed >= totalValue - 0.005
+                          ? '#4ade80'
+                          : '#60a5fa';
+                    const displayDate = po.ordered_date ? new Date(po.ordered_date + 'T00:00:00') : new Date(po.created_at);
+                    const loc = shipToCityLabel(po.ship_to);
+                    const statusMeta = PO_STATUS_META[po.status] || { label: po.status, color: '#94a3b8' };
+                    const jobs = gfxJobsByPo[po.id] || [];
+                    const noteCount = ((po as any).po_notes || []).length;
+                    const checkStatus = (po as any).invoice_check_status;
+                    const hasFlags = jobs.length > 0 || noteCount > 0 || checkStatus === 'attention'
+                      || (checkStatus === 'no_invoices' && po.status === 'complete')
+                      || !!(po as any).netsuite_invoice_number;
                     return (
-                      <div key={li.id} style={{ padding: '8px 0', borderBottom: '1px solid rgba(30,45,61,0.5)' }}>
-                        <div style={{ display: 'flex', gap: '4px', alignItems: 'center', fontSize: '12px' }}>
-                          <div style={{ flex: 1 }} onClick={() => startEditLine(li)}>
-                            <div style={{ fontWeight: 700, color: 'var(--text-body)' }}>{li.part_number}</div>
-                            <div style={{ fontSize: '10px', color: 'var(--text-label)', marginTop: '1px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-                              <PartLabel partNumber={li.part_number} fallbackDescription={li.description} nameOnly />
+                      <tr
+                        key={po.id}
+                        className="table-row-link"
+                        onClick={() => editMode ? toggleDeleteSelection(po.id) : router.push(`/admin/pos/${po.id}`)}
+                      >
+                        {editMode && (
+                          <td style={tdStyle} onClick={(e) => e.stopPropagation()}>
+                            <input
+                              type="checkbox"
+                              checked={selectedForDelete.has(po.id)}
+                              onChange={() => toggleDeleteSelection(po.id)}
+                              style={{ width: '15px', height: '15px', accentColor: '#ef4444', cursor: 'pointer', display: 'block' }}
+                            />
+                          </td>
+                        )}
+                        <td style={tdStyle}>
+                          <span style={{ fontWeight: 800, color: '#60a5fa' }}>{po.po_number}</span>
+                        </td>
+                        <td style={{ ...tdStyle, color: 'var(--text-secondary)' }}>{po.customer}</td>
+                        <td style={{ ...tdStyle, color: loc ? 'var(--text-secondary)' : 'var(--text-muted)' }} title={formatShipTo(po.ship_to) || undefined}>
+                          {loc || '—'}
+                        </td>
+                        <td style={{ ...tdStyle, color: 'var(--text-secondary)' }} title={po.ordered_date ? 'PO date' : 'Imported date (no PO date on record)'}>
+                          {displayDate.toLocaleDateString([], { month: 'short', day: 'numeric', year: 'numeric' })}
+                        </td>
+                        <td style={numStyle} title={`${billed <= 0 ? '$0' : fmt(billed)} billed of ${fmt(totalValue)}`}>
+                          <span style={{ fontWeight: 700, color: billedColor }}>{billed <= 0 ? '$0' : fmt(billed)}</span>
+                        </td>
+                        <td style={numStyle}>
+                          <span style={{ fontWeight: 800, color: '#60a5fa' }}>{fmt(totalValue)}</span>
+                        </td>
+                        <td style={tdStyle}>
+                          <span style={{
+                            fontSize: '10px', fontWeight: 800, padding: '2px 8px', borderRadius: '999px',
+                            background: `${statusMeta.color}15`, border: `1px solid ${statusMeta.color}33`, color: statusMeta.color,
+                          }}>
+                            {statusMeta.label}
+                          </span>
+                        </td>
+                        <td style={tdStyle}>
+                          {hasFlags ? (
+                            <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                              {jobs.length > 0 && (
+                                <span
+                                  onClick={(e) => { e.stopPropagation(); router.push(`/graphics?editJob=${jobs[0].id}`); }}
+                                  title={jobs.map(j => `${j.job_number || j.id.slice(0, 8)} — ${GRAPHICS_STATUS_LABELS[j.status] || j.status}`).join('\n')}
+                                  style={{ cursor: 'pointer', fontWeight: 700, color: '#a78bfa', fontSize: '12px' }}
+                                >
+                                  🎨{jobs.length > 1 ? ` ×${jobs.length}` : ''}
+                                </span>
+                              )}
+                              {noteCount > 0 && (
+                                <span style={{ color: '#fbbf24', fontWeight: 700, fontSize: '11px' }} title={`${noteCount} note${noteCount !== 1 ? 's' : ''}`}>
+                                  💬 {noteCount}
+                                </span>
+                              )}
+                              {checkStatus === 'attention' && (
+                                <span
+                                  style={{ color: '#f87171', fontWeight: 700, fontSize: '11px' }}
+                                  title={(((po as any).invoice_check?.problems || []) as string[]).join('\n') || 'Billed quantities don\'t match this PO'}
+                                >
+                                  ⚠ Billing
+                                </span>
+                              )}
+                              {checkStatus === 'no_invoices' && po.status === 'complete' && (
+                                <span style={{ color: '#fbbf24', fontWeight: 700, fontSize: '11px' }} title="This PO is fulfilled but has no invoices linked — nothing has been billed">
+                                  ⚠ Not invoiced
+                                </span>
+                              )}
+                              {(po as any).netsuite_invoice_number && (
+                                <span style={{ color: '#34d399', fontWeight: 700, fontSize: '11px' }}>
+                                  INV #{(po as any).netsuite_invoice_number}
+                                </span>
+                              )}
                             </div>
-                            <div style={{ height: '3px', background: 'var(--subtle-bg)', borderRadius: '2px', marginTop: '3px', width: '80%' }}>
-                              <div style={{ height: '100%', width: `${Math.min(linePct, 100)}%`, background: linePct >= 100 ? '#22c55e' : '#3b82f6', borderRadius: '2px' }} />
-                            </div>
-                          </div>
-                          <div style={{ width: '36px', textAlign: 'center', color: 'var(--text-body)', fontWeight: 600 }} onClick={() => startEditLine(li)}>{li.quantity}</div>
-                          <div style={{ width: '42px', textAlign: 'center', fontWeight: 700, color: li.installed >= li.quantity ? '#4ade80' : '#fbbf24' }}>{li.installed}</div>
-                          <div style={{ width: '65px', textAlign: 'right', color: 'var(--text-body)', fontSize: '11px' }} onClick={() => startEditLine(li)}>{fmt(li.unit_price)}</div>
-                          <div style={{ width: '55px', textAlign: 'right', fontWeight: 700, color: 'var(--text-body)' }}>{fmt(lineTotal)}</div>
-                          <button
-                            onClick={async () => { if (await dialog.confirm(`Remove ${li.part_number} from this PO?`, { destructive: true, confirmLabel: 'Remove' })) handleDeleteLineItem(li.id, po.id); }}
-                            style={{ width: '24px', background: 'none', border: 'none', color: '#f87171', fontSize: '14px', padding: 0, cursor: 'pointer' }}
-                          >
-                            ×
-                          </button>
-                        </div>
-                        {/* Action buttons: Add to Catalog / Create Graphics Job */}
-                        <div style={{ display: 'flex', gap: '6px', marginTop: '6px', paddingLeft: '2px' }}>
-                          {catalogMatch ? (
-                            <button
-                              onClick={() => router.push(`/parts?catalog=${catalogMatch.catalog || 'graphics'}&q=${encodeURIComponent(li.part_number)}`)}
-                              title="Open this part in the Parts Catalog to edit it"
-                              style={{
-                                padding: '3px 8px', borderRadius: '4px', fontSize: '9px', fontWeight: 700,
-                                background: 'rgba(34,197,94,0.08)', border: '1px solid rgba(34,197,94,0.25)',
-                                color: '#4ade80', cursor: 'pointer',
-                              }}
-                            >
-                              ✓ In catalog — edit ↗
-                            </button>
-                          ) : catalogAdded ? (
-                            <span style={{ fontSize: '9px', color: '#4ade80', fontWeight: 600 }}>✓ In catalog</span>
                           ) : (
-                            <button
-                              onClick={() => addLineItemToCatalog(li, po.customer)}
-                              disabled={addingToCatalog === li.part_number}
-                              style={{
-                                padding: '3px 8px', borderRadius: '4px', fontSize: '9px', fontWeight: 700,
-                                background: 'rgba(251,191,36,0.1)', border: '1px solid rgba(251,191,36,0.3)',
-                                color: '#fbbf24', cursor: 'pointer',
-                              }}
-                            >
-                              {addingToCatalog === li.part_number ? 'Adding...' : '+ Add to Catalog'}
-                            </button>
+                            <span style={{ color: 'var(--text-muted)' }}>—</span>
                           )}
-                          {lineGfxJob ? (
-                            <button
-                              onClick={() => router.push(`/graphics?editJob=${lineGfxJob.id}`)}
-                              title={`${lineGfxJob.job_number || 'Graphics job'} — ${GRAPHICS_STATUS_LABELS[lineGfxJob.status] || lineGfxJob.status}`}
-                              style={{
-                                padding: '3px 8px', borderRadius: '4px', fontSize: '9px', fontWeight: 700,
-                                background: 'rgba(167,139,250,0.08)', border: '1px solid rgba(167,139,250,0.25)',
-                                color: '#a78bfa', cursor: 'pointer',
-                              }}
-                            >
-                              ✓ Graphics job — view ↗
-                            </button>
-                          ) : (
-                            <button
-                              onClick={() => openCreateGfxJob(po, li.id)}
-                              title="Opens the graphics job form prefilled from this line — review and submit to create"
-                              style={{
-                                padding: '3px 8px', borderRadius: '4px', fontSize: '9px', fontWeight: 700,
-                                background: 'rgba(167,139,250,0.1)', border: '1px solid rgba(167,139,250,0.3)',
-                                color: '#a78bfa', cursor: 'pointer',
-                              }}
-                            >
-                              + Graphics Job
-                            </button>
-                          )}
-                        </div>
-                      </div>
+                        </td>
+                      </tr>
                     );
                   })}
-
-                  {/* Add a line for a part the scan missed */}
-                  {addLinePoId === po.id ? (
-                    <div style={{ padding: '10px 0 8px', borderBottom: '1px solid rgba(30,45,61,0.5)' }}>
-                      <div style={{ marginBottom: '6px' }}>
-                        <label style={{ ...labelStyle, fontSize: '9px' }}>Search Catalog</label>
-                        <CatalogPartSearch
-                          catalog={catalog}
-                          customer={po.customer}
-                          onPick={(c) => pickAddLinePart(c.id)}
-                          inputStyle={{ ...inputStyle, padding: '6px 8px', fontSize: '12px' }}
-                        />
-                      </div>
-                      <div style={{ marginBottom: '6px' }}>
-                        <label style={{ ...labelStyle, fontSize: '9px' }}>Part Number</label>
-                        <input value={addLineForm.part_number} onChange={(e) => setAddLineForm({ ...addLineForm, part_number: e.target.value })} placeholder="Type or pick a part…" style={{ ...inputStyle, padding: '6px 8px', fontSize: '12px', fontWeight: 700 }} />
-                      </div>
-                      <div style={{ display: 'flex', gap: '6px', alignItems: 'end' }}>
-                        <div style={{ flex: 1 }}>
-                          <label style={{ ...labelStyle, fontSize: '9px' }}>Qty</label>
-                          <input type="number" value={addLineForm.quantity} onChange={(e) => setAddLineForm({ ...addLineForm, quantity: e.target.value })} style={{ ...inputStyle, padding: '6px 8px', fontSize: '12px' }} min={1} />
-                        </div>
-                        <div style={{ flex: 1 }}>
-                          <label style={{ ...labelStyle, fontSize: '9px' }}>Unit Price</label>
-                          <input type="number" value={addLineForm.unit_price} onChange={(e) => setAddLineForm({ ...addLineForm, unit_price: e.target.value })} style={{ ...inputStyle, padding: '6px 8px', fontSize: '12px' }} step="0.01" />
-                        </div>
-                        <button onClick={() => saveAddLine(po.id)} disabled={addingLine || !addLineForm.part_number.trim()} style={{ padding: '6px 10px', borderRadius: '6px', background: '#22c55e', color: '#fff', fontSize: '11px', fontWeight: 700, border: 'none', opacity: addingLine || !addLineForm.part_number.trim() ? 0.5 : 1, cursor: addingLine ? 'default' : 'pointer' }}>{addingLine ? '…' : '✓ Add'}</button>
-                        <button onClick={cancelAddLine} style={{ padding: '6px 10px', borderRadius: '6px', background: 'transparent', border: '1px solid var(--border)', color: 'var(--text-body)', fontSize: '11px', fontWeight: 700, cursor: 'pointer' }}>Done</button>
-                      </div>
-                    </div>
-                  ) : (
-                    <button
-                      onClick={() => startAddLine(po.id)}
-                      style={{ width: '100%', marginTop: '8px', padding: '8px', borderRadius: '8px', background: 'rgba(34,197,94,0.08)', border: '1px dashed rgba(34,197,94,0.4)', color: '#22c55e', fontSize: '12px', fontWeight: 700, cursor: 'pointer' }}
-                    >
-                      + Add Line
-                    </button>
-                  )}
-
-                  <div style={{ display: 'flex', gap: '4px', padding: '10px 0 4px', fontSize: '13px' }}>
-                    <div style={{ flex: 1, fontWeight: 800, color: 'var(--text-body)' }}>Total</div>
-                    <div style={{ width: '36px', textAlign: 'center', fontWeight: 700, color: 'var(--text-body)' }}>{totalQty}</div>
-                    <div style={{ width: '42px', textAlign: 'center', fontWeight: 700, color: totalInstalled >= totalQty ? '#4ade80' : '#60a5fa' }}>{totalInstalled}</div>
-                    <div style={{ width: '65px' }}></div>
-                    <div style={{ width: '55px', textAlign: 'right', fontWeight: 800, color: '#60a5fa' }}>{fmt(totalValue)}</div>
-                    <div style={{ width: '24px' }}></div>
-                  </div>
-
-                  {/* Invoices linked to this PO */}
-                  {(() => {
-                    const invoices = (po as any).po_invoices || [];
-                    if (invoices.length === 0 && !(po as any).netsuite_invoice_id) return null;
-
-                    // If we have po_invoices records, show them; otherwise fall back to the legacy single field
-                    const invoiceList = invoices.length > 0 ? invoices : (po as any).netsuite_invoice_id ? [{
-                      netsuite_invoice_id: (po as any).netsuite_invoice_id,
-                      netsuite_invoice_number: (po as any).netsuite_invoice_number,
-                      created_at: null,
-                      total_qty: null,
-                      line_count: null,
-                      memo: null,
-                    }] : [];
-
-                    if (invoiceList.length === 0) return null;
-
-                    return (
-                      <div style={{ marginTop: '10px', padding: '8px', borderRadius: '8px', background: 'rgba(52,211,153,0.04)', border: '1px solid rgba(52,211,153,0.15)' }}>
-                        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '6px' }}>
-                          <div style={{ fontSize: '10px', fontWeight: 700, color: '#34d399', textTransform: 'uppercase', letterSpacing: '0.3px' }}>
-                            Invoices ({invoiceList.length})
-                          </div>
-                          <button
-                            onClick={(e) => { e.stopPropagation(); recheckPoBilling(po); }}
-                            disabled={recheckingPoId !== null}
-                            title="Re-pull this PO's invoices from NetSuite and re-run the billing check — use after fixing an invoice in NetSuite"
-                            style={{
-                              padding: '3px 10px', borderRadius: '6px', fontSize: '10px', fontWeight: 700,
-                              background: 'rgba(52,211,153,0.1)', border: '1px solid rgba(52,211,153,0.3)',
-                              color: '#34d399', cursor: recheckingPoId ? 'wait' : 'pointer',
-                              opacity: recheckingPoId && recheckingPoId !== po.id ? 0.5 : 1,
-                            }}
-                          >
-                            {recheckingPoId === po.id ? 'Rechecking…' : '↻ Recheck billing'}
-                          </button>
-                        </div>
-                        {invoiceList.map((inv: any, idx: number) => (
-                          <div key={inv.netsuite_invoice_id || idx} style={{
-                            display: 'flex', justifyContent: 'space-between', alignItems: 'center',
-                            padding: '6px 8px', borderRadius: '6px', marginBottom: idx < invoiceList.length - 1 ? '4px' : 0,
-                            background: 'rgba(52,211,153,0.06)',
-                          }}>
-                            <div>
-                              <a
-                                href={`https://system.netsuite.com/app/accounting/transactions/custinvc.nl?id=${inv.netsuite_invoice_id}`}
-                                target="_blank"
-                                rel="noopener noreferrer"
-                                onClick={(e) => e.stopPropagation()}
-                                style={{ color: '#34d399', fontWeight: 700, fontSize: '12px', textDecoration: 'none' }}
-                              >
-                                INV #{inv.netsuite_invoice_number || inv.netsuite_invoice_id}
-                              </a>
-                              {(() => {
-                                // Payment status from NetSuite, refreshed by the
-                                // invoice sync sweeps and the Recheck button.
-                                if (inv.ns_status === 'paid') {
-                                  return <span style={{ marginLeft: '6px', fontSize: '9px', fontWeight: 800, padding: '2px 6px', borderRadius: '5px', background: 'rgba(74,222,128,0.12)', color: '#4ade80' }}>PAID</span>;
-                                }
-                                if (inv.ns_status === 'open') {
-                                  const today = new Date().toISOString().slice(0, 10);
-                                  if (inv.due_date && inv.due_date < today) {
-                                    const days = Math.floor((Date.now() - new Date(inv.due_date + 'T12:00:00').getTime()) / 86_400_000);
-                                    return <span style={{ marginLeft: '6px', fontSize: '9px', fontWeight: 800, padding: '2px 6px', borderRadius: '5px', background: 'rgba(248,113,113,0.12)', color: '#f87171' }}>PAST DUE · {days}d</span>;
-                                  }
-                                  return <span style={{ marginLeft: '6px', fontSize: '9px', fontWeight: 800, padding: '2px 6px', borderRadius: '5px', background: 'rgba(96,165,250,0.12)', color: '#60a5fa' }}>OPEN</span>;
-                                }
-                                return null;
-                              })()}
-                              {inv.memo && (
-                                <div style={{ fontSize: '10px', color: 'var(--text-label)', marginTop: '2px' }}>{inv.memo}</div>
-                              )}
-                            </div>
-                            <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-                              <div style={{ textAlign: 'right' }}>
-                                {inv.total_qty != null && (
-                                  <div style={{ fontSize: '11px', color: 'var(--text-body)', fontWeight: 600 }}>{inv.total_qty} unit{inv.total_qty !== 1 ? 's' : ''}</div>
-                                )}
-                                {inv.created_at && (
-                                  <div style={{ fontSize: '9px', color: 'var(--text-label)' }}>
-                                    {new Date(inv.created_at).toLocaleDateString([], { month: 'short', day: 'numeric' })}
-                                  </div>
-                                )}
-                              </div>
-                              <button
-                                onClick={async (e) => {
-                                  e.stopPropagation();
-                                  const r = await openNetSuitePdf('invoice', String(inv.netsuite_invoice_id));
-                                  if (!r.ok) await dialog.alert(`Couldn't open the invoice PDF: ${r.error}`);
-                                }}
-                                title="Open the invoice PDF"
-                                style={{
-                                  padding: '4px 10px', borderRadius: '6px', fontSize: '10px', fontWeight: 700,
-                                  background: 'rgba(52,211,153,0.12)', border: '1px solid rgba(52,211,153,0.35)',
-                                  color: '#34d399', cursor: 'pointer', whiteSpace: 'nowrap',
-                                }}
-                              >
-                                📄 PDF
-                              </button>
-                            </div>
-                          </div>
-                        ))}
-                        {(() => {
-                          // Invoiced-quantity check verdict for this PO —
-                          // list every line that doesn't add up.
-                          const check = (po as any).invoice_check;
-                          const checkStatus = (po as any).invoice_check_status;
-                          if (!checkStatus || !check) return null;
-                          if (checkStatus !== 'attention') {
-                            return (
-                              <div style={{ marginTop: '6px', fontSize: '10px', color: '#34d399', fontWeight: 600 }}>
-                                ✓ Billed quantities match this PO (checked {new Date(check.checked_at).toLocaleDateString([], { month: 'short', day: 'numeric' })})
-                              </div>
-                            );
-                          }
-                          // Same rule as the server check: under-billing only
-                          // counts against a fulfilled PO.
-                          const bad = (check.lines || []).filter((l: any) =>
-                            l.status === 'over' || l.status === 'extra' || (l.status === 'under' && po.status === 'complete'));
-                          return (
-                            <div style={{ marginTop: '8px', padding: '8px', borderRadius: '6px', background: 'rgba(248,113,113,0.06)', border: '1px solid rgba(248,113,113,0.25)' }}>
-                              <div style={{ fontSize: '10px', fontWeight: 700, color: '#f87171', textTransform: 'uppercase', letterSpacing: '0.3px', marginBottom: '4px' }}>
-                                ⚠ Billing needs attention
-                              </div>
-                              {bad.map((l: any, i: number) => (
-                                <div key={i} style={{ display: 'flex', justifyContent: 'space-between', gap: '8px', fontSize: '11px', padding: '2px 0', color: 'var(--text-body)' }}>
-                                  <span style={{ fontWeight: 700 }}>{l.part_number}</span>
-                                  <span style={{ color: l.status === 'under' ? '#fbbf24' : '#f87171', fontWeight: 600 }}>
-                                    {l.status === 'extra'
-                                      ? `invoiced ${l.invoiced} — not on this PO`
-                                      : `invoiced ${l.invoiced} of ${l.ordered} ordered${l.status === 'over' ? ' — over-billed' : ''}`}
-                                  </span>
-                                </div>
-                              ))}
-                            </div>
-                          );
-                        })()}
-                      </div>
-                    );
-                  })()}
-
-                  {/* Graphics jobs already created from this PO */}
-                  {(() => {
-                    const jobs = gfxJobsByPo[po.id] || [];
-                    if (jobs.length === 0) return null;
-                    return (
-                      <div style={{ marginTop: '10px', padding: '8px', borderRadius: '8px', background: 'rgba(167,139,250,0.04)', border: '1px solid rgba(167,139,250,0.15)' }}>
-                        <div style={{ fontSize: '10px', fontWeight: 700, color: '#a78bfa', textTransform: 'uppercase', letterSpacing: '0.3px', marginBottom: '6px' }}>
-                          Graphics Jobs ({jobs.length})
-                        </div>
-                        {jobs.map((j, idx) => (
-                          <div
-                            key={j.id}
-                            onClick={(e) => { e.stopPropagation(); router.push(`/graphics?editJob=${j.id}`); }}
-                            style={{
-                              display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '8px',
-                              padding: '6px 8px', borderRadius: '6px', marginBottom: idx < jobs.length - 1 ? '4px' : 0,
-                              background: 'rgba(167,139,250,0.06)', cursor: 'pointer',
-                            }}
-                          >
-                            <div style={{ minWidth: 0 }}>
-                              <div style={{ color: '#a78bfa', fontWeight: 700, fontSize: '12px' }}>{j.job_number || j.id.slice(0, 8)}</div>
-                              {j.title && (
-                                <div style={{ fontSize: '10px', color: 'var(--text-label)', marginTop: '2px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{j.title}</div>
-                              )}
-                            </div>
-                            <span style={{
-                              fontSize: '10px', fontWeight: 700, whiteSpace: 'nowrap',
-                              color: GRAPHICS_STATUS_COLORS[j.status] || 'var(--text-body)',
-                            }}>
-                              {GRAPHICS_STATUS_LABELS[j.status] || j.status}
-                            </span>
-                          </div>
-                        ))}
-                      </div>
-                    );
-                  })()}
-
-                  {/* Create Graphics Job for entire PO — opens the prefilled wizard */}
-                  <button
-                    onClick={(e) => { e.stopPropagation(); openCreateGfxJob(po); }}
-                    title="Opens the graphics job form prefilled from this PO — review and submit to create"
-                    style={{
-                      width: '100%', padding: '10px', borderRadius: '8px', marginTop: '10px',
-                      background: 'rgba(167,139,250,0.08)', border: '1px solid rgba(167,139,250,0.25)',
-                      color: '#a78bfa', fontSize: '12px', fontWeight: 700, cursor: 'pointer',
-                      display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '6px',
-                    }}
-                  >
-                    + Create Graphics Job ({po.line_items.length} part{po.line_items.length !== 1 ? 's' : ''})
-                  </button>
-
-                  {/* Invoice from open (uninstalled) quantities — created
-                      directly in NetSuite, no sales order needed; completed
-                      lines never enter this invoice. */}
-                  {po.line_items.some(li => (li.installed || 0) < li.quantity) && (
-                    <button
-                      onClick={(e) => { e.stopPropagation(); openInvoiceFromPo(po); }}
-                      style={{
-                        width: '100%', padding: '10px', borderRadius: '8px', marginTop: '10px',
-                        background: 'rgba(52,211,153,0.08)', border: '1px solid rgba(52,211,153,0.3)',
-                        color: '#34d399', fontSize: '12px', fontWeight: 700, cursor: 'pointer',
-                      }}
-                    >
-                      Invoice Open Qty ({po.line_items.reduce((s, li) => s + Math.max(0, li.quantity - (li.installed || 0)), 0)} units)
-                    </button>
-                  )}
-
-                  {/* Print / CSV export */}
-                  <div style={{ display: 'flex', gap: '6px', marginTop: '10px' }}>
-                    <button
-                      onClick={(e) => { e.stopPropagation(); printPo(po, dialog.alert); }}
-                      style={{
-                        flex: 1, padding: '8px', borderRadius: '8px',
-                        background: 'rgba(148,163,184,0.08)', border: '1px solid rgba(148,163,184,0.25)',
-                        color: 'var(--text-body)', fontSize: '12px', fontWeight: 700, cursor: 'pointer',
-                      }}
-                    >
-                      Print PO
-                    </button>
-                    <button
-                      onClick={(e) => { e.stopPropagation(); downloadPoCsv(po); }}
-                      disabled={po.line_items.length === 0}
-                      style={{
-                        flex: 1, padding: '8px', borderRadius: '8px',
-                        background: 'rgba(148,163,184,0.08)', border: '1px solid rgba(148,163,184,0.25)',
-                        color: po.line_items.length === 0 ? 'var(--text-label)' : 'var(--text-body)',
-                        fontSize: '12px', fontWeight: 700,
-                        cursor: po.line_items.length === 0 ? 'not-allowed' : 'pointer',
-                      }}
-                    >
-                      Download CSV
-                    </button>
-                  </div>
-
-                  {/* Close / Reopen / Delete PO buttons */}
-                  <div style={{ display: 'flex', gap: '6px', marginTop: '10px' }}>
-                    {po.status === 'closed' ? (
-                      <button
-                        onClick={(e) => { e.stopPropagation(); reopenPO(po.id); }}
-                        style={{ flex: 1, padding: '8px', borderRadius: '8px', background: 'rgba(59,130,246,0.08)', border: '1px solid rgba(59,130,246,0.2)', color: '#60a5fa', fontSize: '12px', fontWeight: 700, cursor: 'pointer' }}
-                      >
-                        Reopen PO
-                      </button>
-                    ) : (
-                      <button
-                        onClick={(e) => { e.stopPropagation(); closePO(po.id); }}
-                        style={{ flex: 1, padding: '8px', borderRadius: '8px', background: 'rgba(34,197,94,0.08)', border: '1px solid rgba(34,197,94,0.2)', color: '#22c55e', fontSize: '12px', fontWeight: 700, cursor: 'pointer' }}
-                      >
-                        Close PO
-                      </button>
-                    )}
-                    <button
-                      onClick={async (e) => {
-                        e.stopPropagation();
-                        if (await dialog.confirm(`Delete PO #${po.po_number} and all its line items? This cannot be undone.`, { destructive: true, confirmLabel: 'Delete' })) {
-                          handleDeletePO(po.id);
-                        }
-                      }}
-                      style={{ padding: '8px 14px', borderRadius: '8px', background: 'rgba(248,113,113,0.08)', border: '1px solid rgba(248,113,113,0.2)', color: '#f87171', fontSize: '12px', fontWeight: 700, cursor: 'pointer' }}
-                    >
-                      Delete
-                    </button>
-                  </div>
-                </div>
-              )}
+                </tbody>
+              </table>
             </div>
+          </div>
         );
-      })}
+      })()}
 
       <button onClick={() => router.push('/more')} style={{ width: '100%', padding: '10px', borderRadius: '10px', marginTop: '14px', border: '1px solid var(--border)', background: 'transparent', color: 'var(--text-body)', fontSize: '13px', fontWeight: 700 }}>
         ← Back
       </button>
-
-      {pdfPreview && (
-        <div
-          onClick={() => setPdfPreview(null)}
-          style={{
-            position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.7)',
-            zIndex: 2000, display: 'flex', alignItems: 'center', justifyContent: 'center',
-            padding: '20px',
-          }}
-        >
-          <div
-            onClick={e => e.stopPropagation()}
-            style={{
-              background: 'var(--card)', borderRadius: '12px',
-              width: 'min(960px, 100%)', height: 'min(90vh, 100%)',
-              display: 'flex', flexDirection: 'column',
-              border: '1px solid var(--border)', boxShadow: '0 24px 60px rgba(0,0,0,0.4)',
-              overflow: 'hidden',
-            }}
-          >
-            <div style={{
-              display: 'flex', alignItems: 'center', justifyContent: 'space-between',
-              gap: '12px', padding: '12px 16px', borderBottom: '1px solid var(--border)',
-            }}>
-              <div style={{ minWidth: 0, flex: 1 }}>
-                <div style={{ fontSize: '13px', fontWeight: 700, color: 'var(--text-primary)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-                  {pdfPreview.name}
-                </div>
-                {extractingShipTo && (
-                  <div style={{ fontSize: '11px', fontWeight: 600, color: '#60a5fa', marginTop: '2px' }}>
-                    Reading ship-to from PDF…
-                  </div>
-                )}
-              </div>
-              <div style={{ display: 'flex', gap: '8px', flexShrink: 0 }}>
-                <a
-                  href={pdfPreview.url}
-                  target="_blank"
-                  rel="noopener noreferrer"
-                  style={{
-                    padding: '6px 12px', borderRadius: '6px', fontSize: '11px', fontWeight: 700,
-                    background: 'rgba(96,165,250,0.12)', border: '1px solid rgba(96,165,250,0.3)',
-                    color: '#60a5fa', textDecoration: 'none',
-                  }}
-                >Open in new tab ↗</a>
-                <button
-                  type="button"
-                  onClick={() => setPdfPreview(null)}
-                  aria-label="Close"
-                  style={{
-                    width: '32px', height: '32px', borderRadius: '8px',
-                    background: 'var(--subtle-bg)', border: '1px solid var(--border)',
-                    color: 'var(--text-muted)', fontSize: '16px', fontWeight: 700,
-                    cursor: 'pointer',
-                  }}
-                >✕</button>
-              </div>
-            </div>
-            <iframe
-              src={pdfPreview.url}
-              title={pdfPreview.name}
-              style={{ flex: 1, width: '100%', border: 'none', background: '#525659' }}
-            />
-          </div>
-        </div>
-      )}
 
       {createNsItemLine !== null && (
         <CreateNetsuiteItemModal
