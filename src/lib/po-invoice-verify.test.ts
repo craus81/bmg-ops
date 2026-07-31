@@ -1,5 +1,13 @@
-import { describe, it, expect } from 'vitest';
-import { distributeInstalled, normPart } from './po-invoice-verify';
+import { describe, it, expect, vi } from 'vitest';
+
+// po-invoice-verify wires the attention alert through po-billing-notify →
+// notify.ts, which builds Supabase/Twilio/Resend clients at module scope —
+// stub it so importing the pure helpers doesn't drag delivery clients in.
+vi.mock('@/lib/po-billing-notify', () => ({
+  notifyPoBillingAttention: async () => 0,
+}));
+
+import { distributeInstalled, normPart, computeOverbillProblems } from './po-invoice-verify';
 
 // distributeInstalled is the single source of truth for how a part's consumed
 // quantity is spread across its PO lines. Both the invoice-open route (immediate
@@ -91,5 +99,66 @@ describe('normPart', () => {
     expect(normPart('rm531429')).toBe('RM531429');
     expect(normPart('PARENT : Child')).toBe('CHILD');
     expect(normPart(' spaced ')).toBe('SPACED');
+  });
+});
+
+// computeOverbillProblems is the pre-flight gate the scan-invoice flow runs
+// before creating a NetSuite invoice. Its judgments must match the verify
+// sweep's ('over' / 'extra'), so anything it lets through is exactly what the
+// sweep would rate 'ok'.
+describe('computeOverbillProblems', () => {
+  const lines = [
+    { part_number: 'RM531429', quantity: 40 },
+    { part_number: '02T278', quantity: 10 },
+  ];
+
+  it('passes a bill that fits inside what remains', () => {
+    const billed = new Map([['RM531429', 28]]);
+    expect(computeOverbillProblems(lines, billed, [{ partNumber: 'RM531429', quantity: 12 }])).toEqual([]);
+  });
+
+  it('blocks billing past the ordered quantity and names the amounts', () => {
+    const billed = new Map([['RM531429', 30]]);
+    const problems = computeOverbillProblems(lines, billed, [{ partNumber: 'RM531429', quantity: 12 }]);
+    expect(problems).toHaveLength(1);
+    expect(problems[0]).toContain('RM531429');
+    expect(problems[0]).toContain('30 already invoiced');
+    expect(problems[0]).toContain('40 ordered');
+  });
+
+  it('blocks a fully invoiced part outright (the pre-billed-PO incident)', () => {
+    const billed = new Map([['RM531429', 40]]);
+    const problems = computeOverbillProblems(lines, billed, [{ partNumber: 'RM531429', quantity: 1 }]);
+    expect(problems).toHaveLength(1);
+    expect(problems[0]).toMatch(/already fully invoiced/);
+  });
+
+  it('blocks parts the PO never ordered', () => {
+    const problems = computeOverbillProblems(lines, new Map(), [{ partNumber: 'RM999', quantity: 2 }]);
+    expect(problems).toHaveLength(1);
+    expect(problems[0]).toContain('not a line on this PO');
+  });
+
+  it('sums ordered across split lines and matches sub-item ids case-insensitively', () => {
+    const split = [
+      { part_number: 'RM531429', quantity: 200 },
+      { part_number: 'rm531429', quantity: 100 },
+    ];
+    // 250 billed + 50 to bill = 300 exactly — fits.
+    expect(computeOverbillProblems(split, new Map([['RM531429', 250]]), [{ partNumber: 'PARENT : rm531429', quantity: 50 }])).toEqual([]);
+    // One more unit is over.
+    expect(computeOverbillProblems(split, new Map([['RM531429', 250]]), [{ partNumber: 'rm531429', quantity: 51 }])).toHaveLength(1);
+  });
+
+  it('aggregates duplicate to-bill entries of the same part before checking', () => {
+    const problems = computeOverbillProblems([{ part_number: 'A1', quantity: 10 }], new Map(), [
+      { partNumber: 'A1', quantity: 6 },
+      { partNumber: 'a1', quantity: 6 },
+    ]);
+    expect(problems).toHaveLength(1); // 12 > 10 even though each entry alone fits
+  });
+
+  it('reports nothing with no PO overlap at all', () => {
+    expect(computeOverbillProblems(lines, new Map(), [{ partNumber: '02T278', quantity: 10 }])).toEqual([]);
   });
 });

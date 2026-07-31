@@ -1,6 +1,7 @@
 import type { SupabaseClient } from '@supabase/supabase-js';
 import { suiteqlQueryAll } from '@/lib/netsuite';
 import { recomputePoFulfillment } from '@/lib/scan-match';
+import { notifyPoBillingAttention, type FlaggedPoAlert } from '@/lib/po-billing-notify';
 
 export interface PoInvoiceLineCheck {
   part_number: string;
@@ -65,6 +66,121 @@ export function distributeInstalled(
 }
 
 /**
+ * Per-item billed quantities for a set of NetSuite invoices, straight from
+ * transactionline: invoice id -> normPart(item) -> quantity. Invoice item
+ * lines carry negative quantities in SuiteQL, hence the sign flip on read.
+ * Non-numeric ids are dropped rather than inlined into the query.
+ */
+export async function fetchInvoiceItemQuantities(invoiceIds: string[]): Promise<Map<string, Map<string, number>>> {
+  const ids = [...new Set(
+    invoiceIds.map(id => String(id || '').trim()).filter(id => /^\d+$/.test(id)),
+  )];
+
+  const invoiceItemQty = new Map<string, Map<string, number>>();
+  for (let i = 0; i < ids.length; i += 100) {
+    const chunk = ids.slice(i, i + 100);
+    const rows = await suiteqlQueryAll(`
+      SELECT tl.transaction AS invoice_id, i.itemid AS item_name, SUM(tl.quantity) AS qty
+      FROM transactionline tl
+      LEFT JOIN item i ON i.id = tl.item
+      WHERE tl.transaction IN (${chunk.join(', ')})
+        AND tl.mainline = 'F'
+        AND tl.taxline = 'F'
+        AND tl.item IS NOT NULL
+      GROUP BY tl.transaction, i.itemid
+    `);
+    for (const row of rows) {
+      const invId = String(row.invoice_id ?? '');
+      const item = normPart(row.item_name);
+      const qty = Math.abs(parseFloat(row.qty || '0')) || 0;
+      if (!invId || !item || qty === 0) continue;
+      const byItem = invoiceItemQty.get(invId) || new Map<string, number>();
+      byItem.set(item, (byItem.get(item) || 0) + qty);
+      invoiceItemQty.set(invId, byItem);
+    }
+  }
+  return invoiceItemQty;
+}
+
+/**
+ * What a PO's linked invoices have already billed, per part (normPart ->
+ * quantity), plus the invoice numbers for error messages. Call
+ * refreshPoInvoiceLinks first when the answer must include invoices entered
+ * in NetSuite since the last sweep — this only reads what's linked.
+ */
+export async function getPoBilledByPart(service: SupabaseClient, poId: string): Promise<{
+  billedByPart: Map<string, number>;
+  invoiceNumbers: string[];
+}> {
+  const { data: links } = await service
+    .from('po_invoices')
+    .select('netsuite_invoice_id, netsuite_invoice_number')
+    .eq('purchase_order_id', poId);
+
+  const byInvoice = await fetchInvoiceItemQuantities(
+    (links || []).map(l => String(l.netsuite_invoice_id || '')),
+  );
+  const billedByPart = new Map<string, number>();
+  for (const byItem of byInvoice.values()) {
+    for (const [item, qty] of byItem) billedByPart.set(item, (billedByPart.get(item) || 0) + qty);
+  }
+  const invoiceNumbers = (links || [])
+    .map(l => l.netsuite_invoice_number)
+    .filter(Boolean) as string[];
+  return { billedByPart, invoiceNumbers };
+}
+
+/**
+ * The gate an invoice flow runs BEFORE creating an invoice: would billing
+ * `toBill` on top of what's already invoiced exceed what the PO ordered?
+ * Returns one problem string per offending part; empty means safe to bill.
+ *
+ * Mirrors the sweep's judgments exactly — anything blocked here is precisely
+ * what verifyPoInvoiceQuantities would flag 'attention' right afterwards
+ * ('over' for quantity beyond ordered, 'extra' for a part the PO never had).
+ * Blocking up front turns the sweep's after-the-fact badge into prevention.
+ */
+export function computeOverbillProblems(
+  poLines: { part_number: string; quantity: number }[],
+  billedByPart: Map<string, number>,
+  toBill: { partNumber: string; quantity: number }[],
+): string[] {
+  const orderedByPart = new Map<string, number>();
+  for (const line of poLines) {
+    const key = normPart(line.part_number);
+    if (!key) continue;
+    orderedByPart.set(key, (orderedByPart.get(key) || 0) + (line.quantity || 0));
+  }
+
+  const toBillByPart = new Map<string, { part: string; qty: number }>();
+  for (const t of toBill) {
+    const key = normPart(t.partNumber);
+    if (!key) continue;
+    const cur = toBillByPart.get(key) || { part: t.partNumber, qty: 0 };
+    cur.qty += t.quantity || 0;
+    toBillByPart.set(key, cur);
+  }
+
+  const problems: string[] = [];
+  for (const [key, t] of toBillByPart) {
+    if (!orderedByPart.has(key)) {
+      problems.push(`${t.part}: not a line on this PO`);
+      continue;
+    }
+    const ordered = orderedByPart.get(key) || 0;
+    const billed = billedByPart.get(key) || 0;
+    if (billed + t.qty > ordered) {
+      problems.push(
+        billed >= ordered
+          ? `${t.part}: the ${ordered} ordered ${ordered === 1 ? 'is' : 'are'} already fully invoiced`
+          : `${t.part}: billing ${t.qty} on top of ${billed} already invoiced exceeds the ${ordered} ordered`,
+      );
+    }
+  }
+  return problems;
+}
+
+/**
  * Verify that each PO's linked invoices bill the quantities the PO ordered,
  * and flag POs that don't add up as needing attention.
  *
@@ -107,43 +223,14 @@ export async function verifyPoInvoiceQuantities(service: SupabaseClient, poIds?:
   const withInvoices = (pos || []).filter(po => (po.po_invoices || []).length > 0);
 
   // One SuiteQL sweep for every linked invoice's per-item quantities.
-  // Invoice ids are NetSuite internal ids (numeric) — drop anything else
-  // rather than inlining it into the query.
-  const invoiceIds = [...new Set(
-    withInvoices
-      .flatMap(po => (po.po_invoices || []).map((inv: any) => String(inv.netsuite_invoice_id || '').trim()))
-      .filter(id => /^\d+$/.test(id)),
-  )];
-
-  // invoice id -> item name -> billed quantity. Invoice item lines carry
-  // negative quantities in SuiteQL, hence the sign flip on read.
-  const invoiceItemQty = new Map<string, Map<string, number>>();
-  for (let i = 0; i < invoiceIds.length; i += 100) {
-    const chunk = invoiceIds.slice(i, i + 100);
-    const rows = await suiteqlQueryAll(`
-      SELECT tl.transaction AS invoice_id, i.itemid AS item_name, SUM(tl.quantity) AS qty
-      FROM transactionline tl
-      LEFT JOIN item i ON i.id = tl.item
-      WHERE tl.transaction IN (${chunk.join(', ')})
-        AND tl.mainline = 'F'
-        AND tl.taxline = 'F'
-        AND tl.item IS NOT NULL
-      GROUP BY tl.transaction, i.itemid
-    `);
-    for (const row of rows) {
-      const invId = String(row.invoice_id ?? '');
-      const item = normPart(row.item_name);
-      const qty = Math.abs(parseFloat(row.qty || '0')) || 0;
-      if (!invId || !item || qty === 0) continue;
-      const byItem = invoiceItemQty.get(invId) || new Map<string, number>();
-      byItem.set(item, (byItem.get(item) || 0) + qty);
-      invoiceItemQty.set(invId, byItem);
-    }
-  }
+  const invoiceItemQty = await fetchInvoiceItemQuantities(
+    withInvoices.flatMap(po => (po.po_invoices || []).map((inv: any) => String(inv.netsuite_invoice_id || ''))),
+  );
 
   let flagged = 0;
   let cleared = 0;
   const flaggedPos: PoInvoiceVerifyResult['flaggedPos'] = [];
+  const newlyFlagged: FlaggedPoAlert[] = [];
   const billedPoIds: string[] = [];
 
   for (const po of withInvoices) {
@@ -223,6 +310,11 @@ export async function verifyPoInvoiceQuantities(service: SupabaseClient, poIds?:
     if (status === 'attention') {
       flagged++;
       flaggedPos.push({ poId: po.id, poNumber: po.po_number, problems });
+      // Only a FLIP into 'attention' alerts anyone — a PO that stays flagged
+      // across repeated sweeps would otherwise ping every couple hours.
+      if (po.invoice_check_status !== 'attention') {
+        newlyFlagged.push({ poId: po.id, poNumber: po.po_number, problems });
+      }
     } else if (po.invoice_check_status === 'attention') {
       cleared++;
     }
@@ -231,6 +323,12 @@ export async function verifyPoInvoiceQuantities(service: SupabaseClient, poIds?:
   // Billed units may have filled a PO — flip it to 'complete' with the same
   // rule scan matching uses, so it reads as Fulfilled everywhere.
   await recomputePoFulfillment(service, billedPoIds);
+
+  // Money-out problems shouldn't wait to be stumbled on via the PO-page
+  // badge — alert the super admins the moment a PO flips to 'attention'.
+  // Never throws, so a broken send can't fail the sweep or an invoice flow
+  // that ran it.
+  await notifyPoBillingAttention(newlyFlagged);
 
   // POs with zero invoices linked get their own marker. Closed POs are
   // skipped (archived — no billing expected); cancelled ones never loaded.
