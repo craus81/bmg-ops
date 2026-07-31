@@ -5,7 +5,8 @@ import { validateBody, z } from '@/lib/validate';
 import { createDirectInvoice, findCustomer, findItems } from '@/lib/netsuite';
 import { resolveLocationWithOverride } from '@/lib/invoice-location';
 import { recomputePoFulfillment } from '@/lib/scan-match';
-import { normPart, distributeInstalled } from '@/lib/po-invoice-verify';
+import { normPart, distributeInstalled, verifyPoInvoiceQuantities } from '@/lib/po-invoice-verify';
+import { refreshPoInvoiceLinks } from '@/lib/po-invoice-sync';
 
 export const dynamic = 'force-dynamic';
 export const maxDuration = 60;
@@ -42,6 +43,15 @@ export async function POST(req: NextRequest) {
   const { poId, quantities } = parsed.data;
 
   try {
+    // Open quantities are only as current as the last sweep — an invoice
+    // entered directly in NetSuite minutes ago hasn't consumed installed
+    // yet. Refresh this PO's links and re-derive billed consumption now
+    // (the same pair the "Recheck billing" button runs), so the per-line
+    // caps below validate against live billing state instead of the state
+    // as of the last cron run.
+    await refreshPoInvoiceLinks(service, poId);
+    await verifyPoInvoiceQuantities(service, [poId]);
+
     const { data: po } = await service
       .from('purchase_orders')
       .select('id, po_number, customer, customer_netsuite_id, ship_to, po_line_items(id, part_number, description, quantity, installed, unit_price)')

@@ -4,6 +4,12 @@ import { createDirectInvoice, findCustomer, findItems } from '@/lib/netsuite';
 import { resolveLocationWithOverride } from '@/lib/invoice-location';
 import { requireRole } from '@/lib/api-auth';
 import { validateBody, z } from '@/lib/validate';
+import { refreshPoInvoiceLinks } from '@/lib/po-invoice-sync';
+import { getPoBilledByPart, computeOverbillProblems } from '@/lib/po-invoice-verify';
+
+// The over-billing gate adds a couple of SuiteQL round trips per PO group on
+// top of the NetSuite invoice creation itself.
+export const maxDuration = 60;
 
 const Schema = z.object({
   scanIds: z.array(z.string().uuid()).min(1).max(500),
@@ -75,6 +81,63 @@ export async function POST(req: NextRequest) {
 
     for (const { customer: customerName, po: poNumber, scans: custScans } of Object.values(byCustomerPO)) {
       try {
+        // Group scans by part number and aggregate quantities (built before
+        // any NetSuite call — the billing gate needs the counts).
+        const partGroups: Record<string, { count: number; price: number; description: string }> = {};
+        for (const s of custScans) {
+          const partNum = s.part_number || 'UNKNOWN';
+          if (!partGroups[partNum]) {
+            partGroups[partNum] = {
+              count: 0,
+              price: priceMap[partNum] || 0,
+              description: s.part_description || partNum,
+            };
+          }
+          partGroups[partNum].count++;
+        }
+
+        // ── Over-billing gate ──────────────────────────────────────────
+        // This flow used to bill selected scans with no idea what the PO had
+        // already been invoiced for — so a PO pre-billed in full (e.g. an
+        // admin invoicing on receipt) got billed AGAIN per scanned vehicle,
+        // and the quantity sweep could only flag it after the money went
+        // out. Now the PO's invoice links are refreshed live (catching an
+        // invoice typed into NetSuite minutes ago, as long as it carries the
+        // PO in Reference No.) and the group is refused with specifics when
+        // billing it would exceed what the PO ordered. POs FleetSuite
+        // doesn't track (no row / no line items) can't be checked and pass
+        // through; the sweep still watches those after the fact.
+        let poRow: { id: string; ship_to: unknown } | null = null;
+        if (poNumber) {
+          const { data: po } = await supabase
+            .from('purchase_orders')
+            .select('id, ship_to, po_line_items(part_number, quantity)')
+            .eq('po_number', poNumber)
+            .maybeSingle();
+          poRow = po ? { id: po.id, ship_to: po.ship_to } : null;
+          const poLines = (po?.po_line_items || []) as { part_number: string; quantity: number }[];
+          if (po && poLines.length > 0) {
+            await refreshPoInvoiceLinks(supabase, po.id);
+            const { billedByPart, invoiceNumbers } = await getPoBilledByPart(supabase, po.id);
+            const problems = computeOverbillProblems(
+              poLines,
+              billedByPart,
+              Object.entries(partGroups).map(([partNumber, g]) => ({ partNumber, quantity: g.count })),
+            );
+            if (problems.length > 0) {
+              results.push({
+                customer: customerName,
+                po: poNumber,
+                scanIds: custScans.map(s => s.id),
+                vehicleCount: custScans.length,
+                status: 'error',
+                error: `Blocked — billing these scans would over-bill PO ${poNumber}${invoiceNumbers.length ? ` (already invoiced on ${invoiceNumbers.join(', ')})` : ''}: ${problems.join('; ')}. Fix the invoices or the PO in NetSuite, then use Recheck billing on the PO page.`,
+              });
+              continue;
+            }
+          }
+        }
+
         // Find the NetSuite customer
         const customerResult = await findCustomer(customerName);
         if (!customerResult.found || customerResult.customers.length === 0) {
@@ -89,20 +152,6 @@ export async function POST(req: NextRequest) {
           continue;
         }
         const nsCustomer = customerResult.customers[0];
-
-        // Group scans by part number and aggregate quantities
-        const partGroups: Record<string, { count: number; price: number; description: string }> = {};
-        for (const s of custScans) {
-          const partNum = s.part_number || 'UNKNOWN';
-          if (!partGroups[partNum]) {
-            partGroups[partNum] = {
-              count: 0,
-              price: priceMap[partNum] || 0,
-              description: s.part_description || partNum,
-            };
-          }
-          partGroups[partNum].count++;
-        }
 
         // Look up NetSuite items by part number
         const nsItems = await findItems(Object.keys(partGroups));
@@ -169,16 +218,8 @@ export async function POST(req: NextRequest) {
 
         // Resolve the NetSuite location from our PO rules: the billed customer
         // plus the plant signal from the PO ship-to / scan work location.
-        // O'Fallon is the built-in default.
-        let poShipTo: { city?: string; name?: string } | null = null;
-        if (poNumber) {
-          const { data: po } = await supabase
-            .from('purchase_orders')
-            .select('ship_to')
-            .eq('po_number', poNumber)
-            .maybeSingle();
-          poShipTo = (po?.ship_to as { city?: string; name?: string } | null) || null;
-        }
+        // O'Fallon is the built-in default. (PO row already loaded by the gate.)
+        const poShipTo = (poRow?.ship_to as { city?: string; name?: string } | null) || null;
         const firstLocation = custScans.find(s => s.location_name)?.location_name;
         const { id: locationId } = await resolveLocationWithOverride(supabase, poNumber, {
           customerName,
@@ -246,6 +287,21 @@ export async function POST(req: NextRequest) {
               .from('scan_logs')
               .update({ exported_at: nowIso, exported_by: auth.user.id })
               .in('id', unexportedIds);
+          }
+
+          // Link the invoice to its PO right away, matching the invoice-open
+          // flow's bookkeeping — the cron sweep would find it by Reference
+          // No. within a couple hours anyway, but an immediate link means
+          // the gate and the PO page see it on the very next request.
+          if (poRow) {
+            await supabase.from('po_invoices').upsert({
+              purchase_order_id: poRow.id,
+              netsuite_invoice_id: invoiceResult.invoiceId,
+              netsuite_invoice_number: invoiceResult.invoiceNumber,
+              line_count: lineItems.length,
+              total_qty: custScans.length,
+              memo: `Scan invoice — ${custScans.length} vehicle${custScans.length !== 1 ? 's' : ''}`,
+            }, { onConflict: 'purchase_order_id,netsuite_invoice_id', ignoreDuplicates: true });
           }
 
           results.push({
