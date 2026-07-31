@@ -291,44 +291,53 @@ export default function ProspectsPage() {
   // Scan business card → OCR prefills the create form
   const handleScanCard = async (file: File) => {
     setScanning(true);
-    const canvas = document.createElement('canvas');
-    const img = new Image();
     const url = URL.createObjectURL(file);
-    img.src = url;
-    await new Promise(r => { img.onload = r; });
-    const maxDim = 1536;
-    const scale = Math.min(maxDim / img.width, maxDim / img.height, 1);
-    canvas.width = img.width * scale;
-    canvas.height = img.height * scale;
-    canvas.getContext('2d')!.drawImage(img, 0, 0, canvas.width, canvas.height);
-    URL.revokeObjectURL(url);
-    const base64 = canvas.toDataURL('image/jpeg', 0.85).split(',')[1];
-
     try {
+      const img = new Image();
+      await new Promise<void>((resolve, reject) => {
+        img.onload = () => resolve();
+        img.onerror = () => reject(new Error('Could not read that image — try a JPG or PNG photo'));
+        img.src = url;
+      });
+      const canvas = document.createElement('canvas');
+      const maxDim = 1536;
+      const scale = Math.min(maxDim / img.width, maxDim / img.height, 1);
+      canvas.width = img.width * scale;
+      canvas.height = img.height * scale;
+      canvas.getContext('2d')!.drawImage(img, 0, 0, canvas.width, canvas.height);
+      const base64 = canvas.toDataURL('image/jpeg', 0.85).split(',')[1];
+
       const res = await fetch('/api/prospects/scan-card', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ image: base64 }),
       });
-      const data = await res.json();
-      if (data.company_name || data.contact_name) {
+      const json = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(json.error || `HTTP ${res.status}`);
+      // The API wraps the extracted fields as { success, data: {...} }
+      const card = json.data || {};
+      if (Object.values(card).some(v => v)) {
         setForm(prev => ({
           ...prev,
-          company_name: data.company_name || prev.company_name,
-          contact_name: data.contact_name || prev.contact_name,
-          email: data.email || prev.email,
-          phone: data.phone || prev.phone,
-          address: data.address || prev.address,
-          city: data.city || prev.city,
-          state: data.state || prev.state,
-          zip: data.zip || prev.zip,
-          website: data.website || prev.website,
+          company_name: card.company_name || prev.company_name,
+          contact_name: card.contact_name || prev.contact_name,
+          email: card.email || prev.email,
+          phone: card.phone || prev.phone,
+          address: card.address || prev.address,
+          city: card.city || prev.city,
+          state: card.state || prev.state,
+          zip: card.zip || prev.zip,
+          website: card.website || prev.website,
         }));
         setShowCreate(true);
+      } else {
+        await dialog.alert('Could not read any contact info off that card — try a closer, sharper photo.');
       }
-    } catch (e) {
+    } catch (e: any) {
       console.error('Card scan failed:', e);
+      await dialog.alert(`Card scan failed: ${e?.message || 'Unknown error'}`);
     }
+    URL.revokeObjectURL(url);
     setScanning(false);
   };
 
