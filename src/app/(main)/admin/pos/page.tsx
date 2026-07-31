@@ -1219,6 +1219,21 @@ export default function POsPage() {
     await dialog.alert(lines.join('\n'));
   };
 
+  // Re-pull the PO book after a maintenance action (sync / billing check /
+  // audit) so badges and invoice lists reflect what the server just wrote.
+  const reloadPosAfterMaintenance = async () => {
+    const { data: poData } = await supabase
+      .from('purchase_orders')
+      .select('*, po_line_items(*), po_invoices(*)')
+      .order('created_at', { ascending: false });
+    const notesByPo = await fetchNoteCounts();
+    const FILTERED_CUSTOMERS = ['ranger design', 'enterprise fleet management', 'bmg fleet installations'];
+    const mapped = (poData || [])
+      .filter((po: any) => !FILTERED_CUSTOMERS.some(fc => po.customer?.toLowerCase().includes(fc)))
+      .map((po: any) => ({ ...po, line_items: po.po_line_items || [], po_notes: notesByPo[po.id] || [], po_invoices: (po.po_invoices || []).sort((a: any, b: any) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime()) }));
+    setPos(mapped);
+  };
+
   // Check every PO's linked invoices against its ordered quantities and flag
   // mismatches (over-billed, fulfilled-but-under-billed, billed parts not on
   // the PO) as needing attention.
@@ -1235,16 +1250,7 @@ export default function POsPage() {
       if (!res.ok || data.error) {
         await dialog.alert(`Billing check failed: ${data.error || `request failed (${res.status})`}`);
       } else {
-        const { data: poData } = await supabase
-          .from('purchase_orders')
-          .select('*, po_line_items(*), po_invoices(*)')
-          .order('created_at', { ascending: false });
-        const notesByPo = await fetchNoteCounts();
-        const FILTERED_CUSTOMERS = ['ranger design', 'enterprise fleet management', 'bmg fleet installations'];
-        const mapped = (poData || [])
-          .filter((po: any) => !FILTERED_CUSTOMERS.some(fc => po.customer?.toLowerCase().includes(fc)))
-          .map((po: any) => ({ ...po, line_items: po.po_line_items || [], po_notes: notesByPo[po.id] || [], po_invoices: (po.po_invoices || []).sort((a: any, b: any) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime()) }));
-        setPos(mapped);
+        await reloadPosAfterMaintenance();
         const flaggedList = (data.flaggedPos || [])
           .slice(0, 12)
           .map((f: any) => `PO #${f.poNumber}`)
@@ -1287,22 +1293,85 @@ export default function POsPage() {
       if (!res.ok || !data.success) {
         await dialog.alert(`Invoice sync failed: ${data.error || `request failed (${res.status})`}`);
       } else {
-        const { data: poData } = await supabase
-          .from('purchase_orders')
-          .select('*, po_line_items(*), po_invoices(*)')
-          .order('created_at', { ascending: false });
-        const notesByPo = await fetchNoteCounts();
-        const FILTERED_CUSTOMERS = ['ranger design', 'enterprise fleet management', 'bmg fleet installations'];
-        const mapped = (poData || [])
-          .filter((po: any) => !FILTERED_CUSTOMERS.some(fc => po.customer?.toLowerCase().includes(fc)))
-          .map((po: any) => ({ ...po, line_items: po.po_line_items || [], po_notes: notesByPo[po.id] || [], po_invoices: (po.po_invoices || []).sort((a: any, b: any) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime()) }));
-        setPos(mapped);
+        await reloadPosAfterMaintenance();
         await dialog.alert(`Linked ${data.linked} new invoice${data.linked !== 1 ? 's' : ''} (${data.invoicesFound} found across ${data.posScanned} PO numbers).`);
       }
     } catch (err: any) {
       await dialog.alert(`Invoice sync failed: ${err.message || 'network error'}`);
     }
     setSyncingInvoices(false);
+  };
+
+  // Deep audit: sweep EVERY NetSuite invoice in a window and find ones that
+  // look like they belong to a PO but aren't linked — a blank or
+  // reformatted Reference No., a PO only the memo or the scan stamps know
+  // about. Those invoices are invisible to Sync Invoices / Check Billing
+  // (which match Reference No. exactly), so a PO can read "all clear" while
+  // carrying unlinked billing. Dry-run first; on confirm, link the matches
+  // and re-run the billing check on the affected POs.
+  const [auditingInvoices, setAuditingInvoices] = useState(false);
+  const auditInvoices = async () => {
+    if (auditingInvoices) return;
+    setAuditingInvoices(true);
+    try {
+      const res = await fetch('/api/pos/audit-invoices', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ months: 12 }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok || !data.success) {
+        await dialog.alert(`Invoice audit failed: ${data.error || `request failed (${res.status})`}`);
+      } else {
+        const matches: any[] = data.matches || [];
+        const ambiguous: any[] = data.ambiguous || [];
+        const header = `Scanned ${data.invoicesInRange} NetSuite invoice${data.invoicesInRange !== 1 ? 's' : ''} from the last ${data.months} months — ${data.alreadyLinked} already linked to POs.`;
+        if (matches.length === 0 && ambiguous.length === 0) {
+          await dialog.alert(`${header}\nNone of the rest look like they belong to a PO.`);
+        } else {
+          const lines = [header];
+          if (matches.length > 0) {
+            lines.push('', `${matches.length} unlinked invoice${matches.length !== 1 ? 's' : ''} matched a PO:`);
+            for (const m of matches.slice(0, 12)) {
+              lines.push(`• ${m.invoiceNumber} → PO #${m.poNumber} (${m.detail})`);
+            }
+            if (matches.length > 12) lines.push(`…and ${matches.length - 12} more`);
+          }
+          if (ambiguous.length > 0) {
+            lines.push('', `${ambiguous.length} matched more than one PO — left alone, review by hand:`);
+            for (const a of ambiguous.slice(0, 6)) {
+              lines.push(`• ${a.invoiceNumber} could be PO ${a.candidates.join(' or ')}`);
+            }
+          }
+          if (matches.length === 0) {
+            await dialog.alert(lines.join('\n'));
+          } else if (await dialog.confirm(`${lines.join('\n')}\n\nLink ${matches.length === 1 ? 'this invoice' : 'these invoices'} and recheck billing on the affected POs?`)) {
+            const applyRes = await fetch('/api/pos/audit-invoices', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ months: 12, apply: true }),
+            });
+            const applied = await applyRes.json().catch(() => ({}));
+            if (!applyRes.ok || !applied.success) {
+              await dialog.alert(`Linking failed: ${applied.error || `request failed (${applyRes.status})`}`);
+            } else {
+              await reloadPosAfterMaintenance();
+              const v = applied.verify;
+              const flaggedList = (v?.flaggedPos || []).slice(0, 12).map((f: any) => `PO #${f.poNumber}`).join(', ');
+              await dialog.alert([
+                `Linked ${applied.applied} invoice${applied.applied !== 1 ? 's' : ''}.`,
+                v && v.flagged > 0
+                  ? `⚠ ${v.flagged} PO${v.flagged !== 1 ? 's' : ''} now need${v.flagged === 1 ? 's' : ''} billing attention: ${flaggedList} — look for the ⚠ badge.`
+                  : 'Billed quantities still check out on the affected POs.',
+              ].join('\n'));
+            }
+          }
+        }
+      }
+    } catch (err: any) {
+      await dialog.alert(`Invoice audit failed: ${err.message || 'network error'}`);
+    }
+    setAuditingInvoices(false);
   };
 
   // Multi-PO emails queue one review per PO. Advance to the next one, or
@@ -1937,6 +2006,11 @@ export default function POsPage() {
                           label: verifyingInvoices ? 'Checking Billing…' : 'Check Billing',
                           hint: 'Flag POs whose invoices don’t add up',
                           onClick: verifyInvoices, busy: verifyingInvoices,
+                        },
+                        {
+                          label: auditingInvoices ? 'Auditing Invoices…' : 'Audit Invoices',
+                          hint: 'Find NetSuite invoices missing their PO link',
+                          onClick: auditInvoices, busy: auditingInvoices,
                         },
                         {
                           label: showLocations ? 'Close Locations' : 'Locations',
