@@ -4,11 +4,78 @@ import { useMemo, useState, useEffect, useRef, type CSSProperties } from 'react'
 import { useRouter } from 'next/navigation';
 import { useAuth } from '@/components/AuthProvider';
 import { useDialog } from '@/components/DialogProvider';
+import { createClient } from '@/lib/supabase-browser';
 import { theme } from '@/lib/theme';
 import { isVerizonRfidPart, validateSerial, validateImei, validateIccid, VERIZON_RFID_PART } from '@/lib/rfid';
 import { parsePastedText, parseSpreadsheetFile, looksLikeVin, type ImportRow as Row, type ParseOutcome } from '@/lib/import-installs-parse';
+import { loadCompaniesWithCounts, type CompanyOption } from '@/lib/cni-companies';
+import CustomerPicker from '@/components/CustomerPicker';
 
 const CHUNK = 100;
+
+/**
+ * Company name input with a typeahead over the shared `companies` table (the
+ * CNI company list). The import API stamps the name as free text on purpose —
+ * work can be credited to a company that hasn't registered yet — so an
+ * unmatched name is allowed, but flagged so a typo doesn't silently split an
+ * installer's history across two spellings.
+ */
+function CompanyNameField({ value, onChange, companies, inputStyle }: {
+  value: string;
+  onChange: (v: string) => void;
+  companies: CompanyOption[];
+  inputStyle: CSSProperties;
+}) {
+  const [open, setOpen] = useState(false);
+  const boxRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    const handler = (e: MouseEvent) => {
+      if (boxRef.current && !boxRef.current.contains(e.target as Node)) setOpen(false);
+    };
+    document.addEventListener('mousedown', handler);
+    return () => document.removeEventListener('mousedown', handler);
+  }, []);
+
+  const q = value.trim().toLowerCase();
+  const matches = (q ? companies.filter((c) => c.name.toLowerCase().includes(q)) : companies).slice(0, 8);
+  const exact = q ? companies.find((c) => c.name.toLowerCase() === q) : undefined;
+
+  return (
+    <div ref={boxRef} style={{ position: 'relative' }}>
+      <input
+        style={inputStyle}
+        value={value}
+        onChange={(e) => { onChange(e.target.value); setOpen(true); }}
+        onFocus={() => setOpen(true)}
+        placeholder="CNI company name"
+      />
+      {value.trim() && !open && (
+        exact ? (
+          <div style={{ fontSize: 10, color: theme.success, fontWeight: 700, marginTop: 3 }}>✓ Existing CNI company</div>
+        ) : (
+          <div style={{ fontSize: 10, color: theme.warning, fontWeight: 700, marginTop: 3 }}>
+            Not a known CNI company — will be stamped as typed; pick from the list to avoid typos
+          </div>
+        )
+      )}
+      {open && matches.length > 0 && (
+        <div style={{ position: 'absolute', top: '100%', left: 0, right: 0, marginTop: 4, background: theme.card, border: `1px solid ${theme.border}`, borderRadius: 8, boxShadow: '0 8px 24px rgba(0,0,0,0.35)', zIndex: 60, maxHeight: 240, overflowY: 'auto' }}>
+          {matches.map((c) => (
+            <div
+              key={c.id}
+              onClick={() => { onChange(c.name); setOpen(false); }}
+              style={{ padding: '8px 10px', cursor: 'pointer', fontSize: 12, borderBottom: `1px solid ${theme.border}` }}
+            >
+              <div style={{ fontWeight: 700, color: theme.textPrimary }}>{c.name}</div>
+              <div style={{ fontSize: 10, color: theme.textMuted }}>{c.memberCount} installer{c.memberCount !== 1 ? 's' : ''}</div>
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
 
 function rowErrors(r: Row, isRfid: boolean): string[] {
   const errs: string[] = [];
@@ -27,9 +94,11 @@ export default function ImportInstallsPage() {
   const dialog = useDialog();
 
   const [companyName, setCompanyName] = useState('');
+  const [companies, setCompanies] = useState<CompanyOption[]>([]);
   const [partNumber, setPartNumber] = useState(VERIZON_RFID_PART);
   const [partDescription, setPartDescription] = useState('Verizon RFID Install');
   const [billableCustomer, setBillableCustomer] = useState('');
+  const [billableNsId, setBillableNsId] = useState<string | null>(null);
   const [locationName, setLocationName] = useState('');
 
   const [raw, setRaw] = useState('');
@@ -45,6 +114,15 @@ export default function ImportInstallsPage() {
   useEffect(() => {
     if (isAdmin === false) router.push('/home');
   }, [isAdmin, router]);
+
+  useEffect(() => {
+    if (!isAdmin) return;
+    let cancelled = false;
+    loadCompaniesWithCounts(createClient()).then((list) => {
+      if (!cancelled) setCompanies(list);
+    });
+    return () => { cancelled = true; };
+  }, [isAdmin]);
 
   const isRfid = isVerizonRfidPart(partNumber);
   const validated = useMemo(
@@ -146,7 +224,7 @@ export default function ImportInstallsPage() {
       <div style={{ ...card, display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))', gap: 12 }}>
         <div>
           <label style={label}>Credit to company *</label>
-          <input style={input} value={companyName} onChange={(e) => setCompanyName(e.target.value)} placeholder="New CNI company name" />
+          <CompanyNameField value={companyName} onChange={setCompanyName} companies={companies} inputStyle={input} />
         </div>
         <div>
           <label style={label}>Part number *</label>
@@ -158,7 +236,14 @@ export default function ImportInstallsPage() {
         </div>
         <div>
           <label style={label}>Billable customer (for invoicing)</label>
-          <input style={input} value={billableCustomer} onChange={(e) => setBillableCustomer(e.target.value)} placeholder="Who gets invoiced" />
+          {/* Invoicing later resolves this name in NetSuite (findCustomer), so an
+              unmatched spelling fails at billing time — match it here instead. */}
+          <CustomerPicker
+            value={billableCustomer}
+            netsuiteId={billableNsId}
+            onChange={({ customer, customerNetsuiteId }) => { setBillableCustomer(customer); setBillableNsId(customerNetsuiteId); }}
+            placeholder="Who gets invoiced"
+          />
         </div>
         <div>
           <label style={label}>Location (optional)</label>
