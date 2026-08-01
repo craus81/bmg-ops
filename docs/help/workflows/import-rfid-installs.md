@@ -34,8 +34,10 @@ non-RFID part number, only the VIN is checked.
 
 ## Step 1 — Prepare the spreadsheet
 
-One row per vehicle. A header row is recommended. Column names are
-flexible — these all work (case/spacing/punctuation ignored):
+One row per vehicle, saved as **.xlsx** or **.csv** (`.tsv` and plain
+text work too — legacy `.xls` doesn't; re-save it as `.xlsx` first). A
+header row is recommended. Column names are flexible — these all work
+(case/spacing/punctuation ignored):
 
 | Field | Required | Accepted headers |
 |---|---|---|
@@ -52,6 +54,10 @@ flexible — these all work (case/spacing/punctuation ignored):
 exact order: **VIN, SN, IMEI, CCID, Year, Make, Model, Unit**. It will
 warn you it guessed — check the preview before importing.
 
+**A title above the headers is fine.** The importer looks for the header
+row within the first few rows, so a sheet that starts with something like
+"RFID installs — July" still parses correctly.
+
 ---
 
 ## Step 2 — Fill in the top form
@@ -67,16 +73,20 @@ warn you it guessed — check the preview before importing.
 
 ---
 
-## Step 3 — Paste and parse
+## Step 3 — Upload the file (or paste)
 
-1. In your spreadsheet, select the cells (including the header row) and
-   copy.
-2. Paste into the **Paste spreadsheet rows** box. Tab-separated (straight
-   from Excel/Sheets) or comma-separated both work.
-3. Tap **Parse**.
+Drop the spreadsheet file onto the upload box — or click it and pick the
+file. It's read and parsed on the spot; no copy-paste needed.
 
-You'll get a count: how many rows, how many are **valid**, and how many
-**need fixing**.
+- **Multi-sheet workbooks:** the first sheet with real install data is
+  used (a leading "Instructions"/"Notes" sheet is skipped), and the
+  status line tells you which sheet it read.
+- **Prefer to paste?** The old way still works: copy the cells (including
+  the header row) from Excel/Sheets into the paste box and tap **Parse**.
+  Tab-separated and comma-separated both work.
+
+Either way you'll get a count: how many rows, how many are **valid**, and
+how many **need fixing**.
 
 ---
 
@@ -88,6 +98,10 @@ The preview table shows every row with a **Status** column:
 - **fix: …** — lists exactly what's wrong (e.g. `fix: IMEI, CCID`).
   These rows are highlighted and **will not** be imported until fixed.
 
+> **CCID column tip:** keep the CCID column formatted as **text** in
+> Excel. If it's numeric, Excel itself rounds off digits past the 15th —
+> the file arrives already wrong, and no importer can get them back.
+
 What gets flagged on an RFID import:
 
 - **VIN** — not 11–17 characters / not a valid VIN shape.
@@ -95,7 +109,8 @@ What gets flagged on an RFID import:
 - **IMEI** — not exactly 15 digits.
 - **CCID** — not 18–22 digits.
 
-Fix the data in your spreadsheet, copy again, and re-parse.
+Fix the data in your spreadsheet and upload it again — the preview
+refreshes with the corrected file.
 
 ---
 
