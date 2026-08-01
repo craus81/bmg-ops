@@ -20,6 +20,7 @@ import { useState, useEffect } from 'react';
 import { useRouter } from 'next/navigation';
 import { createClient } from '@/lib/supabase-browser';
 import { useAuth } from '@/components/AuthProvider';
+import RecentActivity from '@/components/RecentActivity';
 import type { GraphicsJobStatus } from '@/lib/types';
 import { fetchAllRows } from '@/lib/fetch-all';
 
@@ -863,6 +864,7 @@ export default function OpsDashboard() {
           ))}
         </div>
       </div>
+      <RecentActivity />
       <div style={card}>
         <div style={cardHead}>
           <h2 style={headTitle}>Messages</h2>
