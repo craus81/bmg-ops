@@ -1,86 +1,14 @@
 'use client';
 
-import { useMemo, useState, useEffect, type CSSProperties } from 'react';
+import { useMemo, useState, useEffect, useRef, type CSSProperties } from 'react';
 import { useRouter } from 'next/navigation';
 import { useAuth } from '@/components/AuthProvider';
 import { useDialog } from '@/components/DialogProvider';
 import { theme } from '@/lib/theme';
 import { isVerizonRfidPart, validateSerial, validateImei, validateIccid, VERIZON_RFID_PART } from '@/lib/rfid';
+import { parsePastedText, parseSpreadsheetFile, looksLikeVin, type ImportRow as Row, type ParseOutcome } from '@/lib/import-installs-parse';
 
 const CHUNK = 100;
-
-interface Row {
-  vin: string;
-  serialNumber: string;
-  imei: string;
-  iccid: string;
-  vehicleYear: string;
-  vehicleMake: string;
-  vehicleModel: string;
-  unitNumber: string;
-}
-
-// Header aliases (normalized) → field. Order of fields here is also the
-// positional fallback when a paste has no recognizable header row.
-const FIELD_ALIASES: [keyof Row, string[]][] = [
-  ['vin', ['vin']],
-  ['serialNumber', ['sn', 'serial', 'serialnumber', 'serialno', 'serialnum']],
-  ['imei', ['imei']],
-  ['iccid', ['ccid', 'iccid', 'sim', 'simid', 'simnumber']],
-  ['vehicleYear', ['year', 'vehicleyear', 'modelyear', 'yr']],
-  ['vehicleMake', ['make', 'vehiclemake']],
-  ['vehicleModel', ['model', 'vehiclemodel']],
-  ['unitNumber', ['unit', 'unitnumber', 'unitno', 'unitnum']],
-];
-
-const norm = (s: string) => s.toLowerCase().replace(/[^a-z0-9]/g, '');
-const looksLikeVin = (v: string) => /^[A-HJ-NPR-Z0-9]{11,17}$/i.test(v);
-
-function parsePaste(text: string): { rows: Row[]; mode: 'header' | 'positional' | 'empty' } {
-  const lines = text.split(/\r?\n/).filter((l) => l.trim().length);
-  if (lines.length === 0) return { rows: [], mode: 'empty' };
-  const delim = lines[0].includes('\t') ? '\t' : ',';
-  const split = (l: string) => l.split(delim).map((c) => c.trim());
-
-  const cols: Partial<Record<keyof Row, number>> = {};
-  split(lines[0]).forEach((cell, i) => {
-    const h = norm(cell);
-    for (const [field, names] of FIELD_ALIASES) if (names.includes(h) && cols[field] === undefined) cols[field] = i;
-  });
-
-  let dataLines: string[];
-  let mode: 'header' | 'positional';
-  if (cols.vin !== undefined) {
-    dataLines = lines.slice(1);
-    mode = 'header';
-  } else {
-    // No headers — assume the columns are in the order listed above.
-    FIELD_ALIASES.forEach(([field], i) => { cols[field] = i; });
-    dataLines = lines;
-    mode = 'positional';
-  }
-
-  const get = (cells: string[], field: keyof Row) => {
-    const i = cols[field];
-    return i !== undefined && cells[i] !== undefined ? cells[i].trim() : '';
-  };
-  const rows = dataLines
-    .map((line) => {
-      const cells = split(line);
-      return {
-        vin: get(cells, 'vin').toUpperCase(),
-        serialNumber: get(cells, 'serialNumber'),
-        imei: get(cells, 'imei'),
-        iccid: get(cells, 'iccid'),
-        vehicleYear: get(cells, 'vehicleYear'),
-        vehicleMake: get(cells, 'vehicleMake'),
-        vehicleModel: get(cells, 'vehicleModel'),
-        unitNumber: get(cells, 'unitNumber'),
-      };
-    })
-    .filter((r) => r.vin);
-  return { rows, mode };
-}
 
 function rowErrors(r: Row, isRfid: boolean): string[] {
   const errs: string[] = [];
@@ -105,7 +33,11 @@ export default function ImportInstallsPage() {
   const [locationName, setLocationName] = useState('');
 
   const [raw, setRaw] = useState('');
-  const [parsed, setParsed] = useState<{ rows: Row[]; mode: 'header' | 'positional' | 'empty' } | null>(null);
+  const [parsed, setParsed] = useState<ParseOutcome | null>(null);
+  const [fileName, setFileName] = useState<string | null>(null);
+  const [parsingFile, setParsingFile] = useState(false);
+  const [dragOver, setDragOver] = useState(false);
+  const fileInputRef = useRef<HTMLInputElement>(null);
   const [importing, setImporting] = useState(false);
   const [progress, setProgress] = useState<{ done: number; total: number } | null>(null);
   const [result, setResult] = useState<{ created: number; failed: number; errors: { vin: string; error?: string }[] } | null>(null);
@@ -121,6 +53,25 @@ export default function ImportInstallsPage() {
   );
   const valid = validated.filter((r) => r.errors.length === 0);
   const canImport = companyName.trim().length > 0 && partNumber.trim().length > 0 && valid.length > 0 && !importing;
+
+  async function handleFile(file: File) {
+    setParsingFile(true);
+    try {
+      const outcome = await parseSpreadsheetFile(file);
+      setParsed(outcome);
+      setFileName(file.name);
+      setResult(null);
+    } catch (e: any) {
+      await dialog.alert(e?.message || 'Could not read that file.');
+    }
+    setParsingFile(false);
+  }
+
+  function parseRaw() {
+    setParsed(parsePastedText(raw));
+    setFileName(null);
+    setResult(null);
+  }
 
   async function doImport() {
     if (!canImport) return;
@@ -188,7 +139,7 @@ export default function ImportInstallsPage() {
       <h1 style={{ fontSize: 22, fontWeight: 700, marginBottom: 4 }}>Import Installs</h1>
       <p style={{ color: theme.textSecondary, fontSize: 14, marginBottom: 16 }}>
         Bulk-load vehicle installs from a spreadsheet and credit them to a CNI installer. Each row becomes an
-        install record (in the scan log, ready for reporting and invoicing). Paste your rows below — include a
+        install record (in the scan log, ready for reporting and invoicing). Upload the file below — include a
         header row with <strong>VIN, SN, IMEI, CCID</strong> (year / make / model / unit optional).
       </p>
 
@@ -216,24 +167,59 @@ export default function ImportInstallsPage() {
       </div>
 
       <div style={card}>
-        <label style={label}>Paste spreadsheet rows (copy the cells from Excel/Sheets)</label>
+        <label style={label}>Upload the spreadsheet (.xlsx, .csv, .tsv)</label>
+        <input
+          ref={fileInputRef}
+          type="file"
+          accept=".xlsx,.xlsm,.csv,.tsv,.txt"
+          style={{ display: 'none' }}
+          onChange={(e) => {
+            const f = e.target.files?.[0];
+            e.target.value = ''; // allow re-picking the same file after fixing it
+            if (f) handleFile(f);
+          }}
+        />
+        <button
+          onClick={() => fileInputRef.current?.click()}
+          disabled={parsingFile}
+          onDragOver={(e) => { e.preventDefault(); setDragOver(true); }}
+          onDragLeave={() => setDragOver(false)}
+          onDrop={(e) => { e.preventDefault(); setDragOver(false); const f = e.dataTransfer.files?.[0]; if (f) handleFile(f); }}
+          style={{
+            width: '100%', padding: '22px 16px', borderRadius: 10, cursor: 'pointer', fontSize: 14, fontWeight: 600,
+            border: `2px dashed ${dragOver ? theme.orange : theme.border}`,
+            background: dragOver ? theme.subtleBg : theme.inputBg,
+            color: fileName ? theme.textPrimary : theme.textSecondary,
+          }}
+        >
+          {parsingFile ? 'Reading…' : fileName ? `📄 ${fileName} — click to replace` : '📄 Drop the spreadsheet here, or click to choose'}
+        </button>
+
+        <div style={{ margin: '14px 0 8px', display: 'flex', alignItems: 'center', gap: 10, color: theme.textMuted, fontSize: 12 }}>
+          <div style={{ flex: 1, height: 1, background: theme.border }} />
+          or paste rows (copy the cells from Excel/Sheets)
+          <div style={{ flex: 1, height: 1, background: theme.border }} />
+        </div>
+
         <textarea
           value={raw}
           onChange={(e) => setRaw(e.target.value)}
-          rows={8}
+          rows={6}
           spellCheck={false}
           style={{ ...input, fontFamily: 'monospace', fontSize: 12, resize: 'vertical' }}
           placeholder={'VIN\tSN\tIMEI\tCCID\n1FTBW2CM9...\tABC123\t357...15digits\t8914...19digits'}
         />
         <div style={{ marginTop: 10, display: 'flex', gap: 10, alignItems: 'center', flexWrap: 'wrap' }}>
-          <button onClick={() => setParsed(parsePaste(raw))} disabled={!raw.trim()} style={{ ...btn, opacity: raw.trim() ? 1 : 0.5 }}>
+          <button onClick={parseRaw} disabled={!raw.trim()} style={{ ...btn, opacity: raw.trim() ? 1 : 0.5 }}>
             Parse
           </button>
           {parsed && (
             <span style={{ fontSize: 13, color: theme.textSecondary }}>
+              {fileName && parsed.sheetName && <>sheet “{parsed.sheetName}” of {parsed.sheetCount} · </>}
               {validated.length} rows · <strong style={{ color: theme.success }}>{valid.length} valid</strong>
               {validated.length - valid.length > 0 && <> · <strong style={{ color: theme.warning }}>{validated.length - valid.length} need fixing</strong></>}
               {parsed.mode === 'positional' && <> · <span style={{ color: theme.warning }}>no header row — assumed VIN, SN, IMEI, CCID order; check the preview</span></>}
+              {parsed.mode === 'empty' && <span style={{ color: theme.warning }}>no rows found</span>}
             </span>
           )}
         </div>
