@@ -62,13 +62,21 @@ row within the first few rows, so a sheet that starts with something like
 
 ## Step 2 — Fill in the top form
 
-- **Credit to company \*** — the CNI company that did the work. This is
-  stamped on every imported install.
+- **Credit to company \*** — the CNI company that did the work, stamped
+  on every imported install. Start typing and pick from the suggestions
+  (the app's CNI company list) — you'll see **✓ Existing CNI company**
+  when it matches. A name that isn't in the list still works (e.g. the
+  company hasn't registered yet), but it's flagged so a typo doesn't
+  split the company's history across two spellings.
 - **Part number \*** — defaults to the Verizon RFID part `06CS901033`.
   Leave it for RFID jobs; change it for a different part.
 - **Part description** — defaults to "Verizon RFID Install".
 - **Billable customer** — who gets invoiced for this work (optional but
-  recommended so the installs are ready to bill).
+  recommended so the installs are ready to bill). This searches the
+  NetSuite customer list — pick a match (**✓ Matched to NetSuite**) so
+  invoicing can find the customer later; a misspelled free-text name
+  fails at billing time. If the customer truly doesn't exist yet, the
+  picker offers to create it in NetSuite.
 - **Location** — optional.
 
 ---
