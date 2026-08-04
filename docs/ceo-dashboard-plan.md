@@ -236,7 +236,7 @@ available — **Labor Cost % of Revenue** and **Revenue per Employee**.
     hours for field crews; the real metric needs job-linked time
     entries, which is a workflow change to the time clock.
 
-## Open questions for Zach / Chris
+## Open questions for Zach / Craig
 
 1. **Bank**: answered — First Bank (first.bank), Plaid-supported (see
    bank section). Remaining: who is the card issuer, and OK to sign up
