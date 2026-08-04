@@ -55,7 +55,7 @@ export async function POST(req: NextRequest) {
   const supabase = createClient(process.env.NEXT_PUBLIC_SUPABASE_URL!, process.env.SUPABASE_SERVICE_ROLE_KEY!);
 
   const { data: prospect } = await supabase.from('prospects').select('id, netsuite_id').eq('id', prospectId).maybeSingle();
-  if (!prospect) return NextResponse.json({ error: 'Prospect not found' }, { status: 404 });
+  if (!prospect) return NextResponse.json({ error: 'Customer not found' }, { status: 404 });
 
   let contact: any;
   if (contactId) {

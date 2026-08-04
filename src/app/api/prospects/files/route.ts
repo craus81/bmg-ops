@@ -49,7 +49,7 @@ export async function POST(req: NextRequest) {
 
   const supabase = service();
   const { data: prospect } = await supabase.from('prospects').select('id').eq('id', prospectId).maybeSingle();
-  if (!prospect) return NextResponse.json({ error: 'Prospect not found' }, { status: 404 });
+  if (!prospect) return NextResponse.json({ error: 'Customer not found' }, { status: 404 });
 
   if (body.action === 'presign') {
     const path = `${prospectId}/${Date.now()}-${fileName}`;

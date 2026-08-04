@@ -352,6 +352,28 @@ export async function resolveDefaultLocationId(): Promise<string | null> {
 }
 
 /**
+ * Business-card scans feed raw OCR text into customer creates, and NetSuite
+ * hard-rejects the whole record over one cosmetic field — a Web Address
+ * without a scheme ("www.acme.com") fails the create with
+ * "Error while accessing a resource. Invalid URL." Normalize what's fixable
+ * (prepend https://), drop what isn't — the raw value still lives on the
+ * local prospect row, so nothing is lost by omitting it here.
+ */
+export function normalizeWebsiteUrl(raw?: string | null): string | undefined {
+  if (!raw) return undefined;
+  const site = raw.trim().replace(/\s+/g, '');
+  if (!site) return undefined;
+  const withScheme = /^https?:\/\//i.test(site) ? site : `https://${site}`;
+  try {
+    const parsed = new URL(withScheme);
+    if (!parsed.hostname.includes('.')) return undefined;
+    return withScheme;
+  } catch {
+    return undefined;
+  }
+}
+
+/**
  * Create a Customer or Lead record in NetSuite
  * Uses the REST Record API: POST /services/rest/record/v1/customer
  * The 'stage' field determines Customer vs Lead/Prospect
@@ -402,9 +424,13 @@ export async function createCustomerOrLead(payload: {
     subsidiary: { id: process.env.NETSUITE_SUBSIDIARY_ID || '2' },
   };
 
-  if (payload.email) body.email = payload.email;
-  if (payload.phone) body.phone = payload.phone;
-  if (payload.website) body.url = payload.website;
+  // Same omit-over-fail rule for the other validated fields: a malformed
+  // scanned email or a partial phone must not block the customer create.
+  const email = payload.email?.trim();
+  if (email && /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) body.email = email;
+  if (payload.phone && payload.phone.replace(/\D/g, '').length >= 7) body.phone = payload.phone;
+  const website = normalizeWebsiteUrl(payload.website);
+  if (website) body.url = website;
 
   // Default address
   if (payload.address || payload.city || payload.state || payload.zip) {

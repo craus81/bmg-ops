@@ -1,13 +1,18 @@
 'use client';
 
 /**
- * The Customer Record — one customer/prospect on its own page, and the
- * primary surface for working a customer: identity, NetSuite spend metrics,
+ * The Customer Record — one customer on its own page, and the primary
+ * surface for working a customer: identity, NetSuite spend metrics,
  * contacts, deals, reminders, activity, files, and NetSuite documents with
- * PDFs. Everything is editable here — field edits, status changes, convert
- * to customer, tags, deals, reminders, voice notes, delete — so nothing
- * requires a round-trip to the CRM list (which is just the index/pipeline
- * view).
+ * PDFs. Everything is editable here — field edits, tags, deals, reminders,
+ * voice notes, delete — so nothing requires a round-trip to the CRM list
+ * (which is just the index/pipeline view).
+ *
+ * Prospects and customers are unified: records are created in NetSuite as
+ * customers at creation time, so there is no prospect status or convert
+ * step here. The one remaining distinction is a record whose NetSuite
+ * create failed (netsuite_id is null) — it gets an "Add to NetSuite" retry
+ * button.
  *
  * Routes:
  *   /admin/prospects/<uuid>       — CRM prospect id
@@ -132,8 +137,7 @@ const DOC_SORT_COLS = {
 const OPP_TYPES: Record<string, string> = { tech_install: 'Tech Install', graphics: 'Graphics', rebrand: 'Rebrand', fleet_wrap: 'Fleet Wrap', other: 'Other' };
 const OPP_STAGES: Record<string, string> = { lead: 'Lead', quoted: 'Quoted', negotiating: 'Negotiating', won: 'Won', lost: 'Lost' };
 const STAGE_COLORS: Record<string, string> = { lead: '#60a5fa', quoted: '#a78bfa', negotiating: '#fbbf24', won: '#4ade80', lost: '#f87171' };
-const STATUS_LABELS: Record<string, string> = { active: 'Prospect', nurturing: 'Nurturing', converted: 'Customer' };
-const STATUS_COLORS: Record<string, string> = { active: '#4ade80', nurturing: '#60a5fa', converted: '#a78bfa' };
+// status_change stays in the icon map so historical feed entries still render.
 const ACTIVITY_ICONS: Record<string, string> = { call: '\u{1F4DE}', email: '\u{1F4E7}', note: '\u{1F4DD}', meeting: '\u{1F91D}', quote_sent: '\u{1F4CB}', status_change: '\u{1F504}' };
 const LEAD_SOURCES = ['Cold Call', 'Lead', 'Maryland Heights Chamber of Commerce', 'Little Black Book', 'Other'];
 const DOCS_PAGE_SIZE = 100;
@@ -395,14 +399,6 @@ export default function CustomerRecordPage() {
     router.push('/admin/prospects');
   };
 
-  const changeStatus = async (newStatus: string) => {
-    if (!prospect) return;
-    const { error } = await supabase.from('prospects').update({ status: newStatus }).eq('id', prospect.id);
-    if (error) { await dialog.alert(`Could not change the status: ${error.message}`); return; }
-    logAuto('status_change', `Status: ${STATUS_LABELS[prospect.status] || prospect.status} → ${STATUS_LABELS[newStatus] || newStatus}`);
-    setProspect(prev => (prev ? { ...prev, status: newStatus } : prev));
-  };
-
   const toggleFlag = async (field: 'is_hot' | 'email_campaign' | 'multi_location') => {
     if (!prospect) return;
     const next = !prospect[field];
@@ -411,11 +407,13 @@ export default function CustomerRecordPage() {
     setProspect(prev => (prev ? { ...prev, [field]: next } : prev));
   };
 
+  // Retry path for records whose NetSuite create failed at creation time —
+  // customers are normally pushed to NetSuite the moment they're created.
   const [converting, setConverting] = useState(false);
-  const convertToCustomer = async () => {
+  const addToNetSuite = async () => {
     if (!prospect || converting) return;
-    if (prospect.netsuite_id) { await dialog.alert('Already pushed to NetSuite.'); return; }
-    if (!(await dialog.confirm(`Convert "${prospect.company_name}" to a customer in NetSuite? All prospect data is preserved.`, { confirmLabel: 'Convert' }))) return;
+    if (prospect.netsuite_id) { await dialog.alert('Already in NetSuite.'); return; }
+    if (!(await dialog.confirm(`Add "${prospect.company_name}" to NetSuite as a customer?`, { confirmLabel: 'Add' }))) return;
     setConverting(true);
     try {
       const res = await fetch('/api/prospects/push-to-netsuite', {
@@ -424,14 +422,13 @@ export default function CustomerRecordPage() {
       });
       const data = await res.json();
       if (!res.ok || !data.success) throw new Error(data?.error || `HTTP ${res.status}`);
-      await supabase.from('prospects').update({ status: 'converted', converted_customer_id: data.customerId }).eq('id', prospect.id);
-      logAuto('status_change', `Converted to NetSuite customer #${data.entityId}`);
+      logAuto('status_change', `Added to NetSuite as customer #${data.entityId}`);
       setProspect(prev => (prev ? { ...prev, status: 'converted', netsuite_id: data.customerId, netsuite_url: data.netsuiteUrl, converted_customer_id: data.customerId } : prev));
       // The record is linked now — the NetSuite panels can load.
       const nsId = String(data.customerId);
       loadDocs(nsId, false); loadStatement(nsId); loadPayments(nsId); loadNsProfile(nsId);
     } catch (err: any) {
-      await dialog.alert(`Convert failed: ${err?.message || 'unknown error'}`);
+      await dialog.alert(`NetSuite create failed: ${err?.message || 'unknown error'}`);
     }
     setConverting(false);
   };
@@ -606,7 +603,6 @@ export default function CustomerRecordPage() {
     if (!prospect) return;
     exportProspectPDF({
       prospect,
-      statusLabel: STATUS_LABELS[prospect.status] || prospect.status || '',
       ownerName: null,
       metrics: customer ? {
         total_spend: customer.total_spend ?? undefined, total_orders: customer.total_orders ?? undefined,
@@ -1063,9 +1059,9 @@ export default function CustomerRecordPage() {
         <div style={{ display: 'flex', alignItems: 'center', gap: '10px', flexWrap: 'wrap' }}>
           <div style={{ fontSize: '24px', fontWeight: 800, letterSpacing: '-0.5px', color: 'var(--text-primary)' }}>{name}</div>
           {prospect ? (
-            <span style={{ fontSize: '10px', fontWeight: 800, padding: '3px 9px', borderRadius: '999px', background: `${STATUS_COLORS[prospect.status] || '#60a5fa'}1f`, color: STATUS_COLORS[prospect.status] || '#60a5fa' }}>
-              {STATUS_LABELS[prospect.status] || prospect.status}
-            </span>
+            !prospect.netsuite_id && (
+              <span title="The NetSuite create failed or hasn't run — use Add to NetSuite below" style={{ fontSize: '10px', fontWeight: 800, padding: '3px 9px', borderRadius: '999px', background: 'var(--warning-bg)', color: 'var(--warning)' }}>Not in NetSuite yet</span>
+            )
           ) : (
             <span style={{ fontSize: '10px', fontWeight: 800, padding: '3px 9px', borderRadius: '999px', background: 'var(--warning-bg)', color: 'var(--warning)' }}>Not tracked</span>
           )}
@@ -1089,9 +1085,9 @@ export default function CustomerRecordPage() {
           {phone && <a href={`tel:${phone}`} style={{ ...btnSm, color: '#22c55e' }}>📞 {phone}</a>}
           {email && <a href={`mailto:${email}`} style={{ ...btnSm, color: '#60a5fa' }}>✉️ Email</a>}
           {prospect && <button onClick={openEdit} title="Edit company details, lead source, and notes" style={btnSm}>✎ Edit</button>}
-          {prospect && prospect.status !== 'converted' && (
-            <button onClick={convertToCustomer} disabled={converting} title="Create this prospect as a customer in NetSuite" style={{ ...btnSm, color: '#a78bfa', opacity: converting ? 0.6 : 1 }}>
-              {converting ? 'Converting…' : 'Convert to Customer'}
+          {prospect && !prospect.netsuite_id && (
+            <button onClick={addToNetSuite} disabled={converting} title="Create this customer in NetSuite (normally automatic at creation — this retries)" style={{ ...btnSm, color: '#a78bfa', opacity: converting ? 0.6 : 1 }}>
+              {converting ? 'Adding…' : 'Add to NetSuite'}
             </button>
           )}
           {!prospect && customer && (
@@ -1110,12 +1106,6 @@ export default function CustomerRecordPage() {
         </div>
         {prospect && (
           <div style={{ display: 'flex', gap: '6px', flexWrap: 'wrap', alignItems: 'center', marginTop: '8px' }}>
-            {['active', 'nurturing', 'converted'].filter(s => s !== prospect.status).map(s => (
-              <button key={s} onClick={() => changeStatus(s)} title={`Change status to ${STATUS_LABELS[s]}`} style={{
-                padding: '4px 10px', borderRadius: '6px', fontSize: '10px', fontWeight: 700, cursor: 'pointer',
-                background: `${STATUS_COLORS[s]}12`, border: `1px solid ${STATUS_COLORS[s]}33`, color: STATUS_COLORS[s],
-              }}>→ {STATUS_LABELS[s]}</button>
-            ))}
             <button onClick={() => toggleFlag('is_hot')} style={{
               padding: '4px 10px', borderRadius: '6px', fontSize: '10px', fontWeight: 700, cursor: 'pointer',
               background: prospect.is_hot ? 'rgba(239,68,68,0.1)' : 'var(--subtle-bg)', border: `1px solid ${prospect.is_hot ? 'rgba(239,68,68,0.25)' : 'var(--border)'}`, color: prospect.is_hot ? '#ef4444' : 'var(--text-muted)',

@@ -142,7 +142,7 @@ function renderResult(group: string, item: any, onSelect: (group: string, item: 
         <button key={item.id} onClick={select} style={resultBtnStyle}>
           <span style={titleStyle}>{item.company_name}</span>
           <div style={subtitleStyle}>
-            {item.contact_name || ''}{item.email ? ` · ${item.email}` : ''}{item.status === 'converted' ? ' · Customer' : item.status === 'active' ? ' · Prospect' : ''}
+            {item.contact_name || ''}{item.email ? ` · ${item.email}` : ''}
           </div>
         </button>
       );
@@ -295,7 +295,7 @@ export default function UniversalSearch({ open, onClose }: UniversalSearchProps)
             type="text"
             value={query}
             onChange={(e) => handleInput(e.target.value)}
-            placeholder="Search POs, invoices, vehicles, jobs, parts, prospects..."
+            placeholder="Search POs, invoices, vehicles, jobs, parts, customers..."
             style={{
               flex: 1, background: 'transparent', border: 'none', outline: 'none',
               color: 'var(--text-body)', fontSize: '16px', fontWeight: 600,

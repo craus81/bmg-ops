@@ -11,7 +11,9 @@ const supabase = createClient(
 
 const Schema = z.object({
   prospectId: z.string().uuid(),
-  type: z.enum(['customer', 'lead', 'prospect']),
+  // Prospects and customers are unified — everything is created as a
+  // CUSTOMER. The lead/prospect stages remain accepted for API compat.
+  type: z.enum(['customer', 'lead', 'prospect']).optional().default('customer'),
   userId: z.string().uuid().optional().nullable(),
 });
 
@@ -37,7 +39,7 @@ export async function POST(req: NextRequest) {
       .single();
 
     if (fetchError || !prospect) {
-      return NextResponse.json({ error: 'Prospect not found' }, { status: 404 });
+      return NextResponse.json({ error: 'Customer not found' }, { status: 404 });
     }
 
     if (prospect.netsuite_id) {
@@ -63,13 +65,16 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ error: result.error || 'Failed to create in NetSuite' }, { status: 500 });
     }
 
-    // Update the prospect with NetSuite info
+    // Update the prospect with NetSuite info. Status is set here (not by the
+    // caller) so every create path lands in the same converted state.
     await supabase
       .from('prospects')
       .update({
         netsuite_id: result.customerId,
         netsuite_type: type,
         netsuite_url: result.netsuiteUrl,
+        status: 'converted',
+        converted_customer_id: result.customerId,
         pushed_at: new Date().toISOString(),
         pushed_by: userId || null,
       })

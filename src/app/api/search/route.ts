@@ -64,10 +64,10 @@ export async function GET(req: NextRequest) {
       .or(`item_number.ilike.${like},display_name.ilike.${like},billable_customer.ilike.${like},vehicle_type.ilike.${like},graphic_package.ilike.${like}`)
       .limit(MAX_PER_GROUP * 4),
 
-    // Customers & Prospects — search by company name, contact, email
+    // Customers — search by company name, contact, email
     supabase
       .from('prospects')
-      .select('id, company_name, contact_name, email, phone, status, netsuite_id')
+      .select('id, company_name, contact_name, email, phone, netsuite_id')
       .or(`company_name.ilike.${like},contact_name.ilike.${like},email.ilike.${like}`)
       .order('company_name')
       .limit(MAX_PER_GROUP),
