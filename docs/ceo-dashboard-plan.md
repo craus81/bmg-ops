@@ -76,7 +76,7 @@ Legend: ✅ have it · 🟡 partial / needs surfacing · ❌ missing
 |---|---|---|
 | Revenue per Employee | 🟡 | See above (headcount). |
 | Gross Profit per Employee | ❌ | Needs P&L + headcount. |
-| Labor Cost as % of Revenue | ❌ | Only labor cost captured is installer piece-rate pay (`install_credits`). No wages for shop/graphics/sales/admin. Path: payroll GL accounts via the RESTlet P&L. |
+| Labor Cost as % of Revenue | ❌ | Only labor cost captured is installer piece-rate pay (`install_credits`). No wages for shop/graphics/sales/admin. Path: payroll GL accounts via the RESTlet P&L, or the Paychex API. |
 | Total Payroll | 🟡 | Biweekly installer piece-rate payroll exists (`/admin/payroll`, CSV, mark-paid, accounting package totals). No W-2 wages, salaries, taxes, or burden anywhere. |
 | Time Clock Accuracy / Billable Hours | 🟡/❌ | Attendance clock exists (clock in/out, breaks, weekly OT view) but has no API/report (the help doc's "Admin → Reports → Time Clock" page doesn't exist), no missed-punch detection, no edit trail. No job linkage → billable hours not derivable from the clock. |
 
@@ -90,7 +90,7 @@ Legend: ✅ have it · 🟡 partial / needs surfacing · ❌ missing
 | Credit Card Balance | ✅* | GL balance via RESTlet (`NETSUITE_CARD_ACCOUNT_ID`). *Book, not the issuer's actual balance. |
 | Bank Balance | ❌ | No bank integration of any kind. See below. |
 
-## The two structural unlocks
+## The structural unlocks
 
 ### 1. Extend the financials RESTlet (unblocks 6+ metrics)
 
@@ -155,6 +155,32 @@ eBanking login (business portals occasionally appear as a separate
 institution entry), confirm the Transactions product, and check which
 alert types the eBanking portal offers. Card issuer still unknown.
 
+### 3. Paychex payroll data (provider identified Aug 2026)
+
+Payroll runs on Paychex, and the Paychex Flex External API
+(developer.paychex.com) is the official way in: OAuth2
+client-credentials → bearer token, REST endpoints for companies,
+workers, and payrolls/checks, plus webhooks for worker changes. That
+covers **Total Payroll** (pay-period totals including employer taxes),
+**active W-2 headcount** (workers endpoint — solves the "no employee
+roster" problem without new profile fields), and — with revenue already
+available — **Labor Cost % of Revenue** and **Revenue per Employee**.
+
+- **Access**: check Paychex Flex → Company Settings → Access →
+  Integrated applications for a "Create App" option (needs a Flex
+  Super Admin / Security Admin; issues a client ID/secret with scoped
+  data access). If that's not available on our plan, API access goes
+  through a request on the developer portal and can take weeks —
+  start it early.
+- **Build**: a `paychex-sync` cron (like `netsuite-sync`) storing
+  aggregate pay-period totals and a daily headcount snapshot. Keep it
+  aggregate — no per-person pay in the dashboard; gate behind
+  `requireFinancials`.
+- **Complementary**: if Paychex's GL service is (or can be) set to
+  post payroll journals into NetSuite, the RESTlet P&L picks up
+  payroll expense automatically — that's what makes **Net Profit %**
+  honest. Worth confirming with the accountant either way.
+
 ## Phased plan
 
 **Phase 1 — quick wins, existing data only (small PRs)**
@@ -173,30 +199,35 @@ alert types the eBanking portal offers. Card issuer still unknown.
    accruing immediately (everything is live-read today; history can't be
    backfilled, so the sooner this ships the sooner charts exist).
 
-**Phase 2 — RESTlet extension (one SuiteScript redeploy)**
+**Phase 2 — external data unlocks (RESTlet redeploy + Paychex API)**
 7. `incomeStatement` mode + `/api/reports/financials/pnl` + tiles:
    Revenue, GM %, Net Profit %, Total Payroll, Labor % of Revenue.
-8. `collections` mode → collections this month + trend.
-9. **Gross profit by customer**: first try selecting
+8. **Paychex payroll sync** — pay-period totals + headcount snapshots
+   → Total Payroll (actual), Labor % of Revenue, Revenue per Employee.
+   (Kick off the API-access request early; provisioning can take
+   weeks.)
+9. `collections` mode → collections this month + trend.
+10. **Gross profit by customer**: first try selecting
    `costestimate`/`estgrossprofit` on invoice lines via SuiteQL (may or
    may not be visible to the role); fallback is estimated GP joining
    invoice lines to `netsuite_parts.purchase_price + avg_install_cost`.
 
 **Phase 3 — bank integration**
-10. Chosen option from above → `bank_balances` (+ `bank_transactions`
+11. Chosen option from above → `bank_balances` (+ `bank_transactions`
     if Plaid) + daily cron + "Bank vs Book" tiles + actual cash in/out.
 
 **Phase 4 — metrics that need new data capture / process change**
-11. **Warranty/rework flag** on `scan_logs` / `graphics_jobs` (and a
+12. **Warranty/rework flag** on `scan_logs` / `graphics_jobs` (and a
     `rework` source on `install_credits`) + monthly rework-cost report.
     Needs a shop process decision: who marks a job as rework and when.
-12. **Headcount**: employment-type field on `profiles` (or a simple
-    settings list) → Revenue per Employee, GP per Employee.
-13. **Time clock accuracy report**: open entries (missed clock-outs),
+13. **Headcount**: prefer the Paychex workers endpoint once connected
+    (item 8); fallback is an employment-type field on `profiles` →
+    Revenue per Employee, GP per Employee.
+14. **Time clock accuracy report**: open entries (missed clock-outs),
     missing lunches on long days, weekly totals; move clock writes
     server-side for an edit/audit trail. (Also fixes the stale help-doc
     reference to a Time Clock report.)
-14. **Labor utilization**: v1 proxy = `work_shifts` crew hours ÷ clocked
+15. **Labor utilization**: v1 proxy = `work_shifts` crew hours ÷ clocked
     hours for field crews; the real metric needs job-linked time
     entries, which is a workflow change to the time clock.
 
@@ -206,8 +237,10 @@ alert types the eBanking portal offers. Card issuer still unknown.
    bank section). Remaining: who is the card issuer, and OK to sign up
    for Plaid and do the 2-minute Link flow with the Business eBanking
    login?
-2. **Payroll**: is payroll journaled into NetSuite (which provider /
-   which GL accounts)? Needed for Net Profit %, Labor %, Total Payroll.
+2. **Payroll**: provider answered — Paychex. Remaining: (a) does
+   Paychex post GL journals into NetSuite today, and to which accounts
+   (needed for Net Profit %)? (b) who has Flex Super Admin to create
+   the Integrated App / kick off API access?
 3. **Sales rep**: is the Sales Rep field maintained on NetSuite
    customers/transactions? (Determines how revenue-per-rep is
    attributed; quote metrics already attribute to whoever creates the
