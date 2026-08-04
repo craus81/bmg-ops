@@ -22,7 +22,6 @@ export interface ProspectPDFData {
     zip: string | null;
     website: string | null;
     notes: string | null;
-    status: string;
     netsuite_id: string | null;
     is_hot: boolean;
     multi_location: boolean;
@@ -30,7 +29,6 @@ export interface ProspectPDFData {
     lead_source: string | null;
     created_at: string;
   };
-  statusLabel: string;
   ownerName?: string | null;
   metrics?: {
     total_spend?: number;
@@ -75,14 +73,17 @@ export function exportProspectPDF(data: ProspectPDFData) {
   doc.setFontSize(10);
   doc.setFont('helvetica', 'normal');
   doc.setTextColor(110);
-  const headerBits: string[] = [data.statusLabel];
+  const headerBits: string[] = [];
   if (data.prospect.is_hot) headerBits.push('🔥 Hot');
   if (data.prospect.multi_location) headerBits.push('Multi-Location');
   if (data.prospect.email_campaign) headerBits.push('Email Campaign');
   if (data.ownerName) headerBits.push(`Owner: ${data.ownerName}`);
   if (data.prospect.lead_source) headerBits.push(`Source: ${data.prospect.lead_source}`);
-  doc.text(headerBits.join('  ·  '), margin, y);
-  y += 14;
+  if (!data.prospect.netsuite_id) headerBits.push('Not yet in NetSuite');
+  if (headerBits.length > 0) {
+    doc.text(headerBits.join('  ·  '), margin, y);
+    y += 14;
+  }
 
   doc.setTextColor(0);
   const addrLine = [
@@ -235,7 +236,7 @@ export function exportProspectPDF(data: ProspectPDFData) {
     );
   }
 
-  const safeName = (data.prospect.company_name || 'prospect').replace(/[^a-z0-9]+/gi, '-').toLowerCase();
+  const safeName = (data.prospect.company_name || 'customer').replace(/[^a-z0-9]+/gi, '-').toLowerCase();
   const stamp = new Date().toISOString().split('T')[0];
   doc.save(`crm-${safeName}-${stamp}.pdf`);
 }

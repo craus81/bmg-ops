@@ -50,7 +50,7 @@ export async function POST(req: NextRequest) {
 
     const totalCustomers = Object.keys(nsToProspect).length;
     if (totalCustomers === 0) {
-      return NextResponse.json({ error: 'No prospects with NetSuite IDs found' }, { status: 400 });
+      return NextResponse.json({ error: 'No customers linked to NetSuite found' }, { status: 400 });
     }
 
     // Step 2: Bulk-fetch ALL contacts with their company links from NetSuite via SuiteQL

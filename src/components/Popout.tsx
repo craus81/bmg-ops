@@ -126,7 +126,7 @@ async function fetchItem(
     case 'customers': {
       const { data } = await supabase
         .from('prospects')
-        .select('id, company_name, contact_name, email, phone, status')
+        .select('id, company_name, contact_name, email, phone, netsuite_id')
         .eq('id', id).maybeSingle();
       return data;
     }
@@ -264,7 +264,7 @@ export function renderDetail(type: PopoutType, item: any) {
           {detailRow('Contact', item.contact_name)}
           {detailRow('Email', item.email)}
           {detailRow('Phone', item.phone)}
-          {detailRow('Status', item.status)}
+          {detailRow('NetSuite', item.netsuite_id ? `Customer #${item.netsuite_id}` : 'Not in NetSuite yet')}
         </div>
       );
     case 'messages':

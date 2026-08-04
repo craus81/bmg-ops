@@ -1,13 +1,21 @@
 'use client';
 
 /**
- * The CRM index — a thin list over prospects & customers. Rows navigate to
- * the standalone Customer Record (/admin/prospects/<id>), which is the
+ * The CRM index — a thin list over customers. Rows navigate to the
+ * standalone Customer Record (/admin/prospects/<id>), which is the
  * primary surface for viewing AND editing a customer; nothing expands or
  * edits inline here anymore. What stays list-level: search/filters/sort,
  * the pipeline-stage filter the dashboard deep-links (?stage/?sort/?q),
- * prospect creation (+ business-card scan), XLSX export, the cross-company
+ * customer creation (+ business-card scan), XLSX export, the cross-company
  * contacts directory, and the NetSuite sync buttons.
+ *
+ * Prospects and customers are unified: creating a record (typed or scanned
+ * off a business card) immediately creates it in NetSuite as a customer —
+ * there is no separate "prospect" stage or convert step. The legacy
+ * prospects.status column persists in the DB but is no longer surfaced;
+ * the only distinction that matters is whether the record is linked to
+ * NetSuite yet (netsuite_id), and the record page offers a retry when the
+ * NetSuite create failed.
  *
  * Legacy deep links (?id= / ?ns=) predate the record pages and are
  * forwarded there so old notification URLs and bookmarks keep working.
@@ -73,8 +81,6 @@ interface CustomerMetrics {
 }
 
 const OPP_STAGES: Record<string, string> = { lead: 'Lead', quoted: 'Quoted', negotiating: 'Negotiating', won: 'Won', lost: 'Lost' };
-const STATUS_LABELS: Record<string, string> = { active: 'Prospects', nurturing: 'Nurturing', converted: 'Converted' };
-const STATUS_COLORS: Record<string, string> = { active: '#4ade80', nurturing: '#60a5fa', converted: '#a78bfa' };
 
 const inputStyle: React.CSSProperties = {
   width: '100%', padding: '8px 10px', borderRadius: '8px', fontSize: '12px',
@@ -95,7 +101,6 @@ export default function ProspectsPage() {
   const [prospects, setProspects] = useState<Prospect[]>([]);
   const [loading, setLoading] = useState(true);
   const [search, setSearch] = useState('');
-  const [statusFilter, setStatusFilter] = useState<string>('all');
   const [crmTab, setCrmTab] = useState<'prospects' | 'contacts'>('prospects');
   const [tagFilter, setTagFilter] = useState<string>('');
 
@@ -269,9 +274,12 @@ export default function ProspectsPage() {
     setContactsLoaded(true);
   };
 
-  // Create a prospect, then land on its record page — the record is where
-  // everything else (contacts, deals, activity) gets added.
-  const createProspect = async () => {
+  // Create a customer, then land on its record page — the record is where
+  // everything else (contacts, deals, activity) gets added. Creation is one
+  // step: the record is pushed to NetSuite as a customer immediately (no
+  // separate prospect stage / convert step). If the NetSuite create fails,
+  // the local record still exists and the record page offers a retry.
+  const createCustomer = async () => {
     if (!form.company_name.trim() || saving) return;
     setSaving(true);
     const { data, error } = await supabase.from('prospects')
@@ -279,11 +287,21 @@ export default function ProspectsPage() {
       .select().single();
     if (error || !data) {
       setSaving(false);
-      await dialog.alert(`Could not create the prospect: ${error?.message || 'unknown error'}`);
+      await dialog.alert(`Could not create the customer: ${error?.message || 'unknown error'}`);
       return;
     }
     if (form.location_count > 1) {
       await supabase.from('prospect_tags').insert({ prospect_id: data.id, tag: 'multilocation', auto_generated: true });
+    }
+    try {
+      const res = await fetch('/api/prospects/push-to-netsuite', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ prospectId: data.id, type: 'customer', userId: user?.id }),
+      });
+      const body = await res.json().catch(() => ({}));
+      if (!res.ok || !body.success) throw new Error(body?.error || `HTTP ${res.status}`);
+    } catch (e: any) {
+      await dialog.alert(`Saved locally, but the NetSuite customer could not be created: ${e?.message || 'unknown error'}\n\nUse "Add to NetSuite" on the record to retry.`);
     }
     router.push(`/admin/prospects/${data.id}`);
   };
@@ -356,7 +374,6 @@ export default function ProspectsPage() {
 
   // Filter
   const filtered = prospects.filter(p => {
-    if (statusFilter !== 'all' && p.status !== statusFilter) return false;
     if (stageFilter && oppStagesByProspect) {
       const want = stageFilter === 'open' ? ['lead', 'quoted', 'negotiating'] : [stageFilter];
       const stages = oppStagesByProspect[p.id];
@@ -378,12 +395,10 @@ export default function ProspectsPage() {
   });
 
   // Sort — click-to-sort table headers (SortableTh). Missing metrics sort
-  // last in either direction, so prospects without NetSuite history don't
+  // last in either direction, so customers without NetSuite history don't
   // float above real revenue.
-  const STATUS_RANK: Record<string, number> = { active: 0, nurturing: 1, converted: 2 };
   const { sorted, sort, toggle, set: setSort } = useTableSort(filtered, {
     company: p => p.company_name,
-    status: p => STATUS_RANK[p.status] ?? 3,
     contact: p => p.contact_name?.toLowerCase() || null,
     ytd: p => customerMetrics[p.id]?.ytd_spend || null,
     total: p => customerMetrics[p.id]?.total_spend || null,
@@ -413,7 +428,6 @@ export default function ProspectsPage() {
         const m = customerMetrics[p.id];
         return {
           Company: p.company_name,
-          Status: STATUS_LABELS[p.status] || p.status || '',
           Owner: profiles[p.created_by || ''] || '',
           'Contact Name': p.contact_name || '',
           Email: p.email || '',
@@ -449,7 +463,7 @@ export default function ProspectsPage() {
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: '14px' }}>
         <div>
           <div style={{ fontSize: '22px', fontWeight: 800, color: 'var(--text-primary)' }}>Customers</div>
-          <div style={{ fontSize: '11px', color: 'var(--text-muted)', marginTop: '2px' }}>{prospects.length} total · {prospects.filter(p => p.status === 'active').length} active · {prospects.filter(p => p.status === 'converted').length} customers</div>
+          <div style={{ fontSize: '11px', color: 'var(--text-muted)', marginTop: '2px' }}>{prospects.length} total · {prospects.filter(p => p.netsuite_id).length} in NetSuite</div>
         </div>
         <div style={{ display: 'flex', gap: '6px', flexWrap: 'wrap' }}>
           <button onClick={async () => {
@@ -498,11 +512,11 @@ export default function ProspectsPage() {
             <div><div style={labelStyle}># of Locations</div><input type="number" min="1" style={inputStyle} value={form.location_count} onChange={e => setForm({ ...form, location_count: parseInt(e.target.value) || 1 })} /></div>
             <div style={{ gridColumn: '1 / -1' }}><div style={labelStyle}>Notes</div><textarea style={{ ...inputStyle, minHeight: '50px', resize: 'vertical' }} value={form.notes} onChange={e => setForm({ ...form, notes: e.target.value })} /></div>
           </div>
-          <button onClick={createProspect} disabled={saving || !form.company_name.trim()} style={{
+          <button onClick={createCustomer} disabled={saving || !form.company_name.trim()} style={{
             width: '100%', padding: '12px', borderRadius: '10px', fontSize: '13px', fontWeight: 700,
             background: form.company_name.trim() ? '#22c55e' : 'var(--border)', color: '#fff', border: 'none', cursor: 'pointer',
             opacity: saving ? 0.5 : 1,
-          }}>{saving ? 'Creating...' : 'Create Prospect'}</button>
+          }}>{saving ? 'Creating...' : 'Create Customer'}</button>
         </div>
       )}
 
@@ -513,7 +527,7 @@ export default function ProspectsPage() {
             padding: '8px 16px', fontSize: '12px', fontWeight: 700, cursor: 'pointer',
             background: 'none', border: 'none', borderBottom: crmTab === tab ? '2px solid #3b82f6' : '2px solid transparent',
             color: crmTab === tab ? '#3b82f6' : 'var(--text-muted)', marginBottom: '-2px',
-          }}>{tab === 'prospects' ? `Prospects (${prospects.length})` : `Contacts${contactsLoaded ? ` (${allContacts.length})` : ''}`}</button>
+          }}>{tab === 'prospects' ? `Customers (${prospects.length})` : `Contacts${contactsLoaded ? ` (${allContacts.length})` : ''}`}</button>
         ))}
       </div>
 
@@ -585,18 +599,10 @@ export default function ProspectsPage() {
       {/* Search & Filters */}
       <input
         value={search} onChange={e => setSearch(e.target.value)}
-        placeholder="Search prospects & customers..."
+        placeholder="Search customers..."
         style={{ ...inputStyle, marginBottom: '8px' }}
       />
       <div style={{ display: 'flex', gap: '4px', marginBottom: '6px', flexWrap: 'wrap', alignItems: 'center' }}>
-        {['all', 'active', 'nurturing', 'converted'].map(s => (
-          <button key={s} onClick={() => setStatusFilter(s)} style={{
-            padding: '5px 10px', borderRadius: '6px', fontSize: '10px', fontWeight: 700,
-            background: statusFilter === s ? 'var(--tab-active-bg)' : 'transparent',
-            border: statusFilter === s ? '1px solid var(--tab-active-border)' : '1px solid var(--border)',
-            color: statusFilter === s ? 'var(--tab-active-color)' : 'var(--text-muted)', cursor: 'pointer',
-          }}>{s === 'all' ? 'All' : STATUS_LABELS[s]}</button>
-        ))}
         {stageFilter && (
           <button onClick={() => setStageFilter('')} title="Clear the pipeline-stage filter" style={{
             padding: '5px 10px', borderRadius: '6px', fontSize: '10px', fontWeight: 700,
@@ -666,10 +672,10 @@ export default function ProspectsPage() {
         >{exporting ? 'Exporting…' : 'Export to Excel'}</button>
       </div>
 
-      {/* Prospect table — every row opens the customer record */}
+      {/* Customer table — every row opens the customer record */}
       {sorted.length === 0 ? (
         <div style={{ textAlign: 'center', padding: '40px', color: 'var(--text-muted)' }}>
-          <div style={{ fontSize: '13px', fontWeight: 700 }}>{search ? 'No matching prospects' : 'No prospects match the current filters'}</div>
+          <div style={{ fontSize: '13px', fontWeight: 700 }}>{search ? 'No matching customers' : 'No customers match the current filters'}</div>
         </div>
       ) : (() => {
         const thStyle: React.CSSProperties = {
@@ -689,7 +695,6 @@ export default function ProspectsPage() {
               <table style={{ borderCollapse: 'collapse', width: '100%', minWidth: '760px' }}>
                 <thead><tr>
                   <SortableTh label="Company" sortKey="company" sort={sort} onToggle={toggle} style={thStyle} />
-                  <SortableTh label="Status" sortKey="status" sort={sort} onToggle={toggle} style={thStyle} />
                   <SortableTh label="Contact" sortKey="contact" sort={sort} onToggle={toggle} style={thStyle} />
                   <SortableTh label="YTD Spend" sortKey="ytd" sort={sort} onToggle={toggle} defaultDir="desc" align="right" style={thStyle} />
                   <SortableTh label="Total Spend" sortKey="total" sort={sort} onToggle={toggle} defaultDir="desc" align="right" style={thStyle} />
@@ -698,7 +703,6 @@ export default function ProspectsPage() {
                 </tr></thead>
                 <tbody>
                   {sorted.map(prospect => {
-                    const statusColor = STATUS_COLORS[prospect.status] || '#6b7280';
                     const m = customerMetrics[prospect.id];
                     return (
                       <tr key={prospect.id} id={`prospect-${prospect.id}`} className="table-row-link"
@@ -710,11 +714,6 @@ export default function ProspectsPage() {
                           {prospect.email_campaign && badge('EMAIL', '#60a5fa', 'rgba(59,130,246,0.1)')}
                           {prospect.multi_location && badge('MULTI-LOC', '#f59e0b', 'rgba(251,191,36,0.1)')}
                           {prospect.netsuite_id && badge('NS', '#a78bfa', 'rgba(167,139,250,0.1)')}
-                        </td>
-                        <td style={tdStyle}>
-                          <span style={{ fontSize: '9px', fontWeight: 700, padding: '2px 6px', borderRadius: '4px', background: `${statusColor}18`, color: statusColor }}>
-                            {STATUS_LABELS[prospect.status] || prospect.status}
-                          </span>
                         </td>
                         <td style={tdStyle}>
                           {prospect.contact_name ? (
