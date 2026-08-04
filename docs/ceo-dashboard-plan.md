@@ -160,7 +160,11 @@ alert types the eBanking portal offers. Card issuer still unknown.
 Payroll runs on Paychex, and the Paychex Flex External API
 (developer.paychex.com) is the official way in: OAuth2
 client-credentials → bearer token, REST endpoints for companies,
-workers, and payrolls/checks, plus webhooks for worker changes. That
+workers, pay periods, and checks (per the External API OpenAPI spec:
+`payperiods` carry start/end/check dates and status; `checks` are
+queried per pay period and carry `grossEarnings`, `netPay`, and tax
+components flagged employer- vs employee-paid), plus webhooks for
+worker changes. That
 covers **Total Payroll** (pay-period totals including employer taxes),
 **active W-2 headcount** (workers endpoint — solves the "no employee
 roster" problem without new profile fields), and — with revenue already

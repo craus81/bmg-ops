@@ -4,10 +4,11 @@
  *
  * Verifies the client-credentials setup end to end without storing or
  * printing anything sensitive: mints a token, lists companies, then
- * checks whether the app's entitlements expose workers (headcount) and
- * payrolls (pay-period) data — the two feeds the CEO dashboard payroll
- * sync needs (docs/ceo-dashboard-plan.md). Prints counts and HTTP
- * statuses only: no worker names, no pay amounts, no token.
+ * checks whether the app's entitlements expose workers (headcount),
+ * pay periods, and checks — the feeds the CEO dashboard payroll sync
+ * needs (docs/ceo-dashboard-plan.md). Endpoints match the External
+ * API OpenAPI spec (v1.0). Prints counts and HTTP statuses only: no
+ * worker names, no pay amounts, no token.
  *
  * Usage:
  *   PAYCHEX_CLIENT_ID=... PAYCHEX_CLIENT_SECRET=... node scripts/paychex-smoke-test.mjs
@@ -97,7 +98,8 @@ if (companies.status !== 200 || companyList.length === 0) {
 ok('companies', `${companyList.length} visible`);
 
 let workersOk = false;
-let payrollsOk = false;
+let payPeriodsOk = false;
+let checksOk = false;
 
 for (const c of companyList.slice(0, 3)) {
   const companyId = c.companyId || c.id;
@@ -112,25 +114,39 @@ for (const c of companyList.slice(0, 3)) {
     bad('workers', explain(workers.status, workers.error));
   }
 
-  // Recent pay periods; some deployments reject the date filter, so fall
-  // back to the bare endpoint before concluding anything.
+  // Pay periods over the last ~90 days, then a checks probe against the
+  // most recent one — checks are only queryable per pay period
+  // (payperiodid is a required parameter in the External API).
   const to = new Date().toISOString().slice(0, 10);
   const from = new Date(Date.now() - 90 * 86_400_000).toISOString().slice(0, 10);
-  let payrolls = await get(`/companies/${companyId}/payrolls?from=${from}&to=${to}`, token);
-  if (payrolls.status === 400) payrolls = await get(`/companies/${companyId}/payrolls`, token);
-  if (payrolls.status === 200) {
-    ok('payrolls', `${rows(payrolls.body).length} pay period(s) returned`);
-    payrollsOk = true;
+  const periods = await get(`/companies/${companyId}/payperiods?from=${from}&to=${to}`, token);
+  if (periods.status !== 200) {
+    bad('payperiods', explain(periods.status, periods.error));
+    continue;
+  }
+  const list = rows(periods.body);
+  ok('payperiods', `${list.length} in the last 90 days`);
+  payPeriodsOk = true;
+
+  const latest = [...list].sort((a, b) => String(b.endDate || '').localeCompare(String(a.endDate || '')))[0];
+  if (!latest?.payPeriodId) {
+    console.log('  · checks probe skipped (no pay period found in range)');
+    continue;
+  }
+  const checks = await get(`/companies/${companyId}/checks?payperiodid=${latest.payPeriodId}`, token);
+  if (checks.status === 200) {
+    ok('checks', `${rows(checks.body).length} in pay period ending ${latest.endDate || '?'}`);
+    checksOk = true;
   } else {
-    bad('payrolls', explain(payrolls.status, payrolls.error));
+    bad('checks', explain(checks.status, checks.error));
   }
 }
 
 console.log('');
-if (workersOk && payrollsOk) {
-  console.log('All good: the app can read headcount AND payroll — the dashboard sync is fully unblocked.');
-} else if (workersOk || payrollsOk) {
-  console.log('Partial: one data type is readable, the other needs its entitlement enabled in Paychex Flex.');
+if (workersOk && payPeriodsOk && checksOk) {
+  console.log('All good: headcount, pay periods, and check data are all readable — the dashboard sync is fully unblocked.');
+} else if (workersOk || payPeriodsOk || checksOk) {
+  console.log('Partial: some data is readable, the ✗ items above need their entitlements enabled in Paychex Flex.');
   process.exitCode = 1;
 } else {
   console.log('Token works but no payroll/worker data is readable — enable data access for this app in Paychex Flex.');
