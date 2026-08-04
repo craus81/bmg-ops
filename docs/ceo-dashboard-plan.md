@@ -173,7 +173,10 @@ available — **Labor Cost % of Revenue** and **Revenue per Employee**.
   through a request on the developer portal and can take weeks.
   **Status: credentials are provisioned — the client-credentials
   token flow was verified working (bearer token issued, 10-minute
-  expiry) on Aug 4, 2026.**
+  expiry) on Aug 4, 2026.** Entitlement check:
+  `PAYCHEX_CLIENT_ID=… PAYCHEX_CLIENT_SECRET=… node
+  scripts/paychex-smoke-test.mjs` (prints counts/statuses only, no
+  PII or pay data).
 - **Build**: a `paychex-sync` cron (like `netsuite-sync`) storing
   aggregate pay-period totals and a daily headcount snapshot. Keep it
   aggregate — no per-person pay in the dashboard; gate behind
