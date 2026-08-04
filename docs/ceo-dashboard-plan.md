@@ -170,8 +170,10 @@ available — **Labor Cost % of Revenue** and **Revenue per Employee**.
   Integrated applications for a "Create App" option (needs a Flex
   Super Admin / Security Admin; issues a client ID/secret with scoped
   data access). If that's not available on our plan, API access goes
-  through a request on the developer portal and can take weeks —
-  start it early.
+  through a request on the developer portal and can take weeks.
+  **Status: credentials are provisioned — the client-credentials
+  token flow was verified working (bearer token issued, 10-minute
+  expiry) on Aug 4, 2026.**
 - **Build**: a `paychex-sync` cron (like `netsuite-sync`) storing
   aggregate pay-period totals and a daily headcount snapshot. Keep it
   aggregate — no per-person pay in the dashboard; gate behind
@@ -204,8 +206,8 @@ available — **Labor Cost % of Revenue** and **Revenue per Employee**.
    Revenue, GM %, Net Profit %, Total Payroll, Labor % of Revenue.
 8. **Paychex payroll sync** — pay-period totals + headcount snapshots
    → Total Payroll (actual), Labor % of Revenue, Revenue per Employee.
-   (Kick off the API-access request early; provisioning can take
-   weeks.)
+   (Unblocked: API credentials verified working Aug 2026 — needs the
+   client ID/secret added as Vercel env vars.)
 9. `collections` mode → collections this month + trend.
 10. **Gross profit by customer**: first try selecting
    `costestimate`/`estgrossprofit` on invoice lines via SuiteQL (may or
@@ -237,10 +239,11 @@ available — **Labor Cost % of Revenue** and **Revenue per Employee**.
    bank section). Remaining: who is the card issuer, and OK to sign up
    for Plaid and do the 2-minute Link flow with the Business eBanking
    login?
-2. **Payroll**: provider answered — Paychex. Remaining: (a) does
-   Paychex post GL journals into NetSuite today, and to which accounts
-   (needed for Net Profit %)? (b) who has Flex Super Admin to create
-   the Integrated App / kick off API access?
+2. **Payroll**: provider answered — Paychex, and API credentials are
+   provisioned (token flow verified Aug 2026). Remaining: does Paychex
+   post GL journals into NetSuite today, and to which accounts (needed
+   for Net Profit %)? To build the sync, add the client ID/secret as
+   Vercel env vars (never in the repo).
 3. **Sales rep**: is the Sales Rep field maintained on NetSuite
    customers/transactions? (Determines how revenue-per-rep is
    attributed; quote metrics already attribute to whoever creates the
