@@ -126,13 +126,19 @@ Options, in recommended order:
   **Bank (actual, as-of time)** next to **NetSuite (book)**. Also covers
   credit-card actual balances, and bank transactions give real cash
   in/out for free. Modest per-account monthly cost; occasional re-link
-  when the bank forces re-auth.
+  when the bank forces re-auth. **Coverage confirmed:** Plaid lists
+  First Bank as a supported institution with Auth, Balance, and Assets
+  products — Balance is exactly what the cash tile needs; confirm the
+  Transactions product (for cash in/out) during the sandbox Link test.
 - **B. Daily balance-alert email → existing Gmail pipeline (quick MVP).**
   Most business banks can email a daily balance alert. The app already
   ingests and parses Gmail on cron (`/api/gmail/auto-import`,
   parts-email-scan) — a small parser writes `bank_balances`. Zero new
   vendors and fast, but balance-only and fragile to email format changes.
-  Reasonable stopgap while deciding on A.
+  Reasonable stopgap while deciding on A. First Bank's eBanking supports
+  email/text account alerts (low-balance threshold, large-deposit);
+  whether a scheduled daily-balance alert type exists needs a look
+  inside the portal.
 - **C. NetSuite Bank Feeds SuiteApp.** Free SuiteApp that imports bank
   lines into NetSuite for reconciliation. Would reduce the book-vs-bank
   drift at the source but doesn't expose "available balance" to this app
@@ -141,8 +147,13 @@ Options, in recommended order:
 - **D. Scraping the bank website — not recommended** (MFA, ToS,
   breakage).
 
-Decision needed: which bank + card issuer, whether daily balance emails
-are available, and appetite for an aggregator.
+**Bank identified (Aug 2026): First Bank (first.bank), the family-owned
+bank out of Creve Coeur, MO (MO/IL/CA/KS footprint).** Plaid lists it as
+a supported institution (Auth, Balance, Assets). Remaining verification:
+run a Plaid sandbox→development Link test with the real Business
+eBanking login (business portals occasionally appear as a separate
+institution entry), confirm the Transactions product, and check which
+alert types the eBanking portal offers. Card issuer still unknown.
 
 ## Phased plan
 
@@ -191,8 +202,10 @@ are available, and appetite for an aggregator.
 
 ## Open questions for Zach / Chris
 
-1. **Bank**: which bank and card issuer? Do they offer daily balance
-   alert emails? OK with a Plaid-style aggregator connection?
+1. **Bank**: answered — First Bank (first.bank), Plaid-supported (see
+   bank section). Remaining: who is the card issuer, and OK to sign up
+   for Plaid and do the 2-minute Link flow with the Business eBanking
+   login?
 2. **Payroll**: is payroll journaled into NetSuite (which provider /
    which GL accounts)? Needed for Net Profit %, Labor %, Total Payroll.
 3. **Sales rep**: is the Sales Rep field maintained on NetSuite
