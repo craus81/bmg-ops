@@ -267,6 +267,9 @@ export default function UsersPage() {
   const handleUpdateRoles = async (userId: string, roles: AppRole[]) => {
     // super_admin always rides alongside admin in the roles array — the
     // scalar role stays 'admin' so every RLS policy keyed on it still passes.
+    // Enforced here too: a roles array with super_admin but no admin fails
+    // every roles-array gate (requireAdmin, PO-note tagging, View As).
+    if (roles.includes('super_admin') && !roles.includes('admin')) roles = [...roles, 'admin'];
     const primaryRole = roles.includes('admin') || roles.includes('super_admin') ? 'admin' : roles[0];
     const { error } = await supabase
       .from('profiles')
@@ -365,7 +368,12 @@ export default function UsersPage() {
     if (!editUser) return;
     setSaving(true);
 
-    const primaryRole = editForm.roles.includes('admin') || editForm.roles.includes('super_admin') ? 'admin' : editForm.roles[0];
+    // Same invariant as handleUpdateRoles: super_admin implies admin in the
+    // roles array, or the account fails every roles-array admin gate.
+    const roles = editForm.roles.includes('super_admin') && !editForm.roles.includes('admin')
+      ? [...editForm.roles, 'admin' as AppRole]
+      : editForm.roles;
+    const primaryRole = roles.includes('admin') || roles.includes('super_admin') ? 'admin' : roles[0];
 
     const { error } = await supabase
       .from('profiles')
@@ -373,7 +381,7 @@ export default function UsersPage() {
         full_name: editForm.fullName.trim(),
         email: editForm.email.trim(),
         role: primaryRole,
-        roles: editForm.roles,
+        roles,
         company_id: editForm.companyId || null,
       })
       .eq('id', editUser.id);
@@ -394,7 +402,7 @@ export default function UsersPage() {
       const company = companies.find(c => c.id === editForm.companyId);
       setUsers((prev) => prev.map((u) =>
         u.id === editUser.id
-          ? { ...u, full_name: editForm.fullName.trim(), email: editForm.email.trim(), role: primaryRole as any, roles: editForm.roles, company_id: editForm.companyId || undefined, company_name: company?.name || '' }
+          ? { ...u, full_name: editForm.fullName.trim(), email: editForm.email.trim(), role: primaryRole as any, roles, company_id: editForm.companyId || undefined, company_name: company?.name || '' }
           : u
       ));
       setEditUser(null);

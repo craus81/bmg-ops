@@ -81,6 +81,9 @@ export async function POST(req: NextRequest) {
 
   try {
     const userRoles: string[] = (roles && roles.length > 0) ? roles : (role ? [role] : []);
+    // super_admin implies admin in the roles array — without it the account
+    // fails every roles-array gate (requireAdmin, PO-note tagging, View As).
+    if (userRoles.includes('super_admin') && !userRoles.includes('admin')) userRoles.push('admin');
     // super_admin lives in the roles ARRAY; the scalar role stays 'admin' so
     // RLS policies keyed on role='admin' keep working (migration 169 — same
     // rule the edit modal applies).

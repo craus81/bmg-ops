@@ -648,6 +648,7 @@ export default function Header({ clockStatus, activePartNumber, activeEndCustome
                         { key: 'shop_tech', label: 'Shop Tech' },
                         { key: 'field_tech', label: 'Field Tech' },
                         { key: 'installer', label: 'Installer' },
+                        { key: 'customer', label: 'Customer' },
                       ].map(r => {
                         const active = viewAsRole === r.key;
                         return (
