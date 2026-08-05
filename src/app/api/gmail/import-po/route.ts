@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { getMessage, getPdfAttachments, getAttachment, getHeader } from '@/lib/google';
 import { createClient } from '@supabase/supabase-js';
 import { notifyMany } from '@/lib/notify';
+import { deepLinks } from '@/lib/deep-links';
 import { requireAuth } from '@/lib/api-auth';
 import { r2Upload } from '@/lib/r2';
 import { resolvePoCustomer } from '@/lib/customer-match';
@@ -246,7 +247,7 @@ async function flagGraphicParts(
             type: 'graphics_flagged',
             title: `Graphics Job Flagged: ${job.title}`,
             body: `PO #${poNumber} (${customer}) has a graphic part that needs review`,
-            url: `/graphics?id=${job.id}`,
+            url: deepLinks.graphicsJob(job.id),
           });
         }
       }

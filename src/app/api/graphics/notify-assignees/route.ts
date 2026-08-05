@@ -3,6 +3,7 @@ import { createClient } from '@supabase/supabase-js';
 import { notifyMany } from '@/lib/notify';
 import { requireAuth } from '@/lib/api-auth';
 import { validateBody, z } from '@/lib/validate';
+import { deepLinks } from '@/lib/deep-links';
 
 export const dynamic = 'force-dynamic';
 
@@ -80,7 +81,7 @@ export async function POST(req: NextRequest) {
     if (actorId) assigneeIds.delete(actorId);
 
     const jobLabel = job.title || `#${job.job_number || job.id.slice(0, 8)}`;
-    const url = `/graphics?id=${job.id}`;
+    const url = deepLinks.graphicsJob(job.id);
 
     let actorName = '';
     if (actorId) {

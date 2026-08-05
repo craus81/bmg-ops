@@ -19,6 +19,7 @@ import { normalizeNsInvoiceStatus } from '@/lib/po-invoice-sync';
 import { fetchAllRows } from '@/lib/fetch-all';
 import { financeUserIds, apSubmitterUrl } from '@/lib/ap';
 import { notifyMany } from '@/lib/notify';
+import { deepLinks } from '@/lib/deep-links';
 import { logAudit } from '@/lib/audit';
 import { findBillForRef, type NsBill } from '@/lib/vendor-bill-match';
 
@@ -120,7 +121,7 @@ export async function syncVendorBillPayments(service: Service): Promise<{
           type: 'ap_decision',
           title: `Paid: ${label}`,
           body: `Payment of $${amount.toFixed(2)} has been sent (bill paid in NetSuite).`,
-          url: await apSubmitterUrl(service, inv.submitted_by),
+          url: await apSubmitterUrl(service, inv.submitted_by, inv.id),
           channels: ['in_app', 'push'],
           forceChannels: true,
         });
@@ -131,7 +132,7 @@ export async function syncVendorBillPayments(service: Service): Promise<{
           type: 'ap_paid',
           title: `Bill paid: ${label}`,
           body: `NetSuite shows bill ${inv.netsuite_bill_id} paid in full ($${amount.toFixed(2)}) — the invoice moved to Paid.`,
-          url: '/admin/ap',
+          url: deepLinks.apInvoice(inv.id),
           channels: ['in_app', 'push'],
           forceChannels: true,
         });

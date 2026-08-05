@@ -1,7 +1,7 @@
 'use client';
 
 import { useState, useEffect, useCallback } from 'react';
-import { useRouter } from 'next/navigation';
+import { useRouter, useSearchParams } from 'next/navigation';
 import { createClient } from '@/lib/supabase-browser';
 import { useAuth } from '@/components/AuthProvider';
 
@@ -33,12 +33,16 @@ interface ReadyVehicle {
 
 export default function ReadyForInstallPage() {
   const router = useRouter();
+  const searchParams = useSearchParams();
   const { user, isInstaller, isAdmin } = useAuth();
   const supabase = createClient();
 
   const [vehicles, setVehicles] = useState<ReadyVehicle[]>([]);
   const [loading, setLoading] = useState(true);
   const [filter, setFilter] = useState<'mine' | 'all'>('mine');
+  // ?job=<graphics job id> deep link ("Graphics ready" notifications):
+  // highlight that job's vehicles and scroll the first one into view.
+  const [highlightJobId, setHighlightJobId] = useState<string | null>(null);
   const [editingDateId, setEditingDateId] = useState<string | null>(null);
   const [pendingDate, setPendingDate] = useState<string>('');
   const [savingId, setSavingId] = useState<string | null>(null);
@@ -65,6 +69,22 @@ export default function ReadyForInstallPage() {
     }
     load();
   }, [user, isInstaller, isAdmin, router, load]);
+
+  useEffect(() => {
+    const jobId = searchParams?.get('job');
+    if (!jobId || loading) return;
+    const matches = vehicles.filter(v => v.graphicsJob.id === jobId);
+    // The linked job's vehicles may all be assigned to someone else —
+    // widen from the default "mine" filter instead of showing an empty page.
+    if (matches.length === 0 && filter === 'mine') { setFilter('all'); return; }
+    if (matches.length === 0) return;
+    setHighlightJobId(jobId);
+    requestAnimationFrame(() => {
+      document.getElementById(`rfi-${matches[0].id}`)?.scrollIntoView({ behavior: 'smooth', block: 'center' });
+    });
+    const t = setTimeout(() => setHighlightJobId(null), 4000);
+    return () => clearTimeout(t);
+  }, [searchParams, loading, vehicles, filter]);
 
   const startEditDate = (v: ReadyVehicle) => {
     setEditingDateId(v.id);
@@ -162,11 +182,15 @@ export default function ReadyForInstallPage() {
           {vehicles.map(v => (
             <div
               key={v.id}
+              id={`rfi-${v.id}`}
               style={{
                 background: rowColor(v),
-                border: `1px solid ${v.stale ? 'var(--danger, #ef4444)' : 'var(--border)'}`,
+                border: highlightJobId === v.graphicsJob.id
+                  ? '2px solid var(--accent, #2563eb)'
+                  : `1px solid ${v.stale ? 'var(--danger, #ef4444)' : 'var(--border)'}`,
                 borderRadius: '14px',
                 padding: '14px',
+                transition: 'border-color 0.3s',
               }}
             >
               <button

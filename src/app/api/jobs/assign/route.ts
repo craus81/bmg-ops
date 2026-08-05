@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { createClient } from '@supabase/supabase-js';
 import { notifyMany } from '@/lib/notify';
+import { deepLinks } from '@/lib/deep-links';
 import { requireAuth } from '@/lib/api-auth';
 import { validateBody, z } from '@/lib/validate';
 
@@ -84,7 +85,7 @@ export async function POST(req: NextRequest) {
         type: 'assignment',
         title,
         body,
-        url: jobType === 'graphics_job' ? `/graphics?id=${jobId}` : `/tracking?vehicle=${jobId}`,
+        url: jobType === 'graphics_job' ? deepLinks.graphicsJob(jobId) : deepLinks.vehicle(jobId),
       }).catch(err => console.warn('Assignment notification error:', err));
 
       // Mark as notified
@@ -115,7 +116,7 @@ export async function POST(req: NextRequest) {
             type: 'graphics',
             title: 'New Graphics Job',
             body: jobTitle ? `New job: ${jobTitle}` : 'A new graphics job has been created.',
-            url: `/graphics?id=${jobId}`,
+            url: deepLinks.graphicsJob(jobId),
           }).catch(err => console.warn('Team notification error:', err));
         }
       }

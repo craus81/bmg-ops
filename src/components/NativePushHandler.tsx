@@ -49,9 +49,12 @@ export default function NativePushHandler() {
         listeners.push(regErr);
 
         // Tapping a notification opens its deep link (same-origin paths only).
+        // A missing/foreign url falls back to home — same as the web service
+        // worker — so a tap always lands somewhere the bell and "New for you"
+        // strip can resurface the notification, never a dead no-op.
         const tap = await PushNotifications.addListener('pushNotificationActionPerformed', (action) => {
           const url = action?.notification?.data?.url;
-          if (typeof url === 'string' && url.startsWith('/')) router.push(url);
+          router.push(typeof url === 'string' && url.startsWith('/') ? url : '/');
         });
         listeners.push(tap);
 

@@ -6,6 +6,7 @@ import { createVendorBill, findLocation } from '@/lib/netsuite';
 import { logAudit } from '@/lib/audit';
 import { notifyMany } from '@/lib/notify';
 import { financeUserIds, apSubmitterUrl } from '@/lib/ap';
+import { deepLinks } from '@/lib/deep-links';
 
 export const dynamic = 'force-dynamic';
 // NetSuite bill creation is slow.
@@ -31,7 +32,7 @@ const PostSchema = z.union([
   z.object({ action: z.literal('mark_paid'), id: z.string().uuid() }),
 ]);
 
-const submitterUrl = (submitterId: string) => apSubmitterUrl(service, submitterId);
+const submitterUrl = (submitterId: string, invoiceId: string) => apSubmitterUrl(service, submitterId, invoiceId);
 
 /**
  * Vendor-invoice payment lifecycle:
@@ -85,7 +86,7 @@ export async function POST(req: NextRequest) {
           type: 'ap_submitted',
           title: `Payment request: ${label}`,
           body: `${invoice.vendor_name} invoice${invoice.invoice_number ? ` #${invoice.invoice_number}` : ''} for $${amount.toFixed(2)} is awaiting approval.`,
-          url: '/admin/ap',
+          url: deepLinks.apInvoice(invoice.id),
           channels: ['in_app', 'push'],
           forceChannels: true,
         });
@@ -102,7 +103,7 @@ export async function POST(req: NextRequest) {
           type: 'ap_decision',
           title: `Approved: ${label}`,
           body: `Payment of $${amount.toFixed(2)} was approved.`,
-          url: await submitterUrl(invoice.submitted_by),
+          url: await submitterUrl(invoice.submitted_by, invoice.id),
           channels: ['in_app', 'push'],
           forceChannels: true,
         });
@@ -117,7 +118,7 @@ export async function POST(req: NextRequest) {
           type: 'ap_approved',
           title: `Ready to bill: ${label}`,
           body: `$${amount.toFixed(2)} to ${invoice.vendor_name} was approved — create the NetSuite bill from the AP queue.`,
-          url: '/admin/ap',
+          url: deepLinks.apInvoice(invoice.id),
           channels: ['in_app', 'push'],
           forceChannels: true,
         });
@@ -136,7 +137,7 @@ export async function POST(req: NextRequest) {
           type: 'ap_decision',
           title: `Rejected: ${label}`,
           body: body.reason,
-          url: await submitterUrl(invoice.submitted_by),
+          url: await submitterUrl(invoice.submitted_by, invoice.id),
           channels: ['in_app', 'push'],
           forceChannels: true,
         });
@@ -207,7 +208,7 @@ export async function POST(req: NextRequest) {
         type: 'ap_decision',
         title: `Paid: ${label}`,
         body: `Payment of $${amount.toFixed(2)} has been sent.`,
-        url: await submitterUrl(invoice.submitted_by),
+        url: await submitterUrl(invoice.submitted_by, invoice.id),
         channels: ['in_app', 'push'],
         forceChannels: true,
       });
@@ -220,7 +221,7 @@ export async function POST(req: NextRequest) {
         type: 'ap_paid',
         title: `Bill paid: ${label}`,
         body: `$${amount.toFixed(2)} to ${invoice.vendor_name} was marked paid.`,
-        url: '/admin/ap',
+        url: deepLinks.apInvoice(invoice.id),
         channels: ['in_app', 'push'],
         forceChannels: true,
       });

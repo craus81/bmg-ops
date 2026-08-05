@@ -152,9 +152,18 @@ export default function InvoicingHubPage() {
   }, [tab, sentRange]);
 
   // Deep link: /invoices?tab=sent|scans|graphics (used by the dashboard KPI).
+  // &invoice=<number> (bounced-email alerts) lands on the Invoiced tab
+  // prefiltered to that invoice, with the window widened so it can't be
+  // outside the default 30 days.
   useEffect(() => {
     const t = searchParams.get('tab');
     if (t === 'sent' || t === 'scans' || t === 'graphics') setTab(t);
+    const invoiceNumber = searchParams.get('invoice');
+    if (invoiceNumber) {
+      setTab('sent');
+      setSearch(invoiceNumber);
+      setSentRange('all');
+    }
   // eslint-disable-next-line react-hooks/exhaustive-deps -- intentional: read once on mount
   }, []);
 

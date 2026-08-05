@@ -3,6 +3,7 @@ import { createClient } from '@supabase/supabase-js';
 import { notifyMany } from '@/lib/notify';
 import { requireAuth } from '@/lib/api-auth';
 import { validateBody, z } from '@/lib/validate';
+import { deepLinks } from '@/lib/deep-links';
 
 export const dynamic = 'force-dynamic';
 
@@ -126,7 +127,9 @@ export async function POST(req: NextRequest) {
       type: 'graphics_ready_for_install',
       title: `Graphics ready: ${job.title || jobLabel}`,
       body: `Job #${jobLabel}${job.customer ? ` for ${job.customer}` : ''} is ready.${bodySuffix}`,
-      url: '/installer/ready-for-install',
+      // Installer-facing list, highlighted on this job's vehicles — the
+      // recipients include install techs who may not have graphics access.
+      url: deepLinks.readyForInstall(job.id),
     });
 
     return NextResponse.json({

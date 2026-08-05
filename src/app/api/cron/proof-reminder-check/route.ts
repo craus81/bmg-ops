@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { createServiceClient } from '@/lib/supabase-service';
 import { requireAdmin } from '@/lib/api-auth';
 import { notifyMany } from '@/lib/notify';
+import { deepLinks } from '@/lib/deep-links';
 import { recordHeartbeat } from '@/lib/system-health';
 import { sendProofApproval } from '@/lib/proof-approval-send';
 
@@ -91,7 +92,7 @@ export async function GET(req: NextRequest) {
             type: 'proof_stale',
             title: `Proof stuck ${Math.floor(sentDays)}d — ${label}`,
             body: `${job.customer || 'The customer'} hasn't answered the proof for ${label} in ${Math.floor(sentDays)} days (${job.approval_reminder_count || 0} automatic reminder${(job.approval_reminder_count || 0) !== 1 ? 's' : ''} sent). Production is blocked — worth a call.`,
-            url: '/graphics',
+            url: deepLinks.graphicsJob(job.id),
             channels: ['in_app', 'push'],
             forceChannels: true,
           });

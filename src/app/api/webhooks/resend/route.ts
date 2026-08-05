@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import crypto from 'crypto';
 import { createClient } from '@supabase/supabase-js';
 import { notifyMany } from '@/lib/notify';
+import { deepLinks } from '@/lib/deep-links';
 import { financeUserIds } from '@/lib/ap';
 
 export const dynamic = 'force-dynamic';
@@ -134,7 +135,9 @@ export async function POST(req: NextRequest) {
             type: 'invoice_email_bounced',
             title: `⚠ Invoice email ${status}: ${invoiceList}`,
             body: `The invoice email to ${(first.recipients || []).join(', ') || 'the customer'}${first.customer_name ? ` (${first.customer_name})` : ''} ${status === 'complained' ? 'was marked as spam' : status}. ${detail ? `Reason: ${detail}. ` : ''}Resend it from the Invoices page.`,
-            url: '/invoices',
+            // Sent tab, prefiltered to the first bounced invoice (the body
+            // lists the rest when one event covers several).
+            url: deepLinks.invoicesSent(first.invoice_number),
             channels: ['in_app', 'push'],
             forceChannels: true,
           });

@@ -1,7 +1,7 @@
 'use client';
 
 import { useState, useEffect, useRef, useCallback } from 'react';
-import { useRouter } from 'next/navigation';
+import { useRouter, useSearchParams } from 'next/navigation';
 import { useAuth } from '@/components/AuthProvider';
 import { useDialog } from '@/components/DialogProvider';
 import { storage } from '@/lib/storage';
@@ -57,6 +57,7 @@ const MAX_EXTRACT_BYTES = 3.5 * 1024 * 1024;
 
 export default function InstallerInvoicesPage() {
   const router = useRouter();
+  const searchParams = useSearchParams();
   const { user, isInstaller, isAdmin, loading: authLoading } = useAuth();
   const dialog = useDialog();
   const fileInputRef = useRef<HTMLInputElement>(null);
@@ -101,6 +102,20 @@ export default function InstallerInvoicesPage() {
     if (!isInstaller && !isAdmin) { router.push('/home'); return; }
     load();
   }, [authLoading, user, isInstaller, isAdmin, router, load]);
+
+  // ?invoice=<id> deep link (AP decision notifications): expand that
+  // invoice's card and scroll it into view once the list is loaded.
+  const focusedDeepLink = useRef(false);
+  useEffect(() => {
+    const target = searchParams?.get('invoice');
+    if (!target || loading || focusedDeepLink.current) return;
+    if (!invoices.some(inv => inv.id === target)) return;
+    focusedDeepLink.current = true;
+    setExpanded(prev => new Set(prev).add(target));
+    requestAnimationFrame(() => {
+      document.getElementById(`inv-${target}`)?.scrollIntoView({ behavior: 'smooth', block: 'center' });
+    });
+  }, [searchParams, loading, invoices]);
 
   const blankLine = (): DraftLine => ({ key: ++lineKeyRef.current, vin: '', partNumber: '', amount: '' });
   const vinOk = (l: DraftLine) => l.vin.trim().replace(/[^A-Za-z0-9]/g, '').length >= 5;
@@ -402,7 +417,7 @@ export default function InstallerInvoicesPage() {
             : inv.lines.reduce((s, l) => s + (l.amount != null ? Number(l.amount) : 0), 0);
           const isExpanded = expanded.has(inv.id);
           return (
-            <div key={inv.id} style={{ background: 'var(--card)', border: `1px solid ${inv.status === 'rejected' ? 'rgba(239,68,68,0.35)' : 'var(--border)'}`, borderRadius: '12px', overflow: 'hidden' }}>
+            <div key={inv.id} id={`inv-${inv.id}`} style={{ background: 'var(--card)', border: `1px solid ${inv.status === 'rejected' ? 'rgba(239,68,68,0.35)' : 'var(--border)'}`, borderRadius: '12px', overflow: 'hidden' }}>
               <div
                 onClick={() => setExpanded(prev => { const n = new Set(prev); if (n.has(inv.id)) n.delete(inv.id); else n.add(inv.id); return n; })}
                 style={{ padding: '12px 14px', cursor: 'pointer' }}

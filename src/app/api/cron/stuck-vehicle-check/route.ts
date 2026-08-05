@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { createServiceClient } from '@/lib/supabase-service';
 import { requireAdmin } from '@/lib/api-auth';
 import { notifyMany } from '@/lib/notify';
+import { deepLinks } from '@/lib/deep-links';
 import { recordHeartbeat } from '@/lib/system-health';
 
 export const dynamic = 'force-dynamic';
@@ -84,7 +85,7 @@ export async function GET(req: NextRequest) {
           type: 'vehicle_stuck',
           title: `🚩 ${label} stuck ${Math.floor(stuckHours / 24)}d — ${reason}`,
           body: `${v.customer_name ? `${v.customer_name}'s ` : ''}${label} (VIN …${String(v.vin || '').slice(-8)}) has been ${reason} for ${Math.floor(stuckHours)} hours. Reach out to the customer before they call.`,
-          url: '/tracking',
+          url: deepLinks.vehicle(v.id),
           channels: ['in_app', 'push'],
           forceChannels: true,
         });

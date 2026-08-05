@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { createServiceClient } from '@/lib/supabase-service';
 import { requireAdmin } from '@/lib/api-auth';
 import { notifyMany } from '@/lib/notify';
+import { deepLinks } from '@/lib/deep-links';
 import { recordHeartbeat } from '@/lib/system-health';
 
 export const dynamic = 'force-dynamic';
@@ -96,11 +97,16 @@ export async function GET(req: NextRequest) {
           .sort((a, b) => b.quietDays - a.quietDays)
           .map(q => `${q.number} ${q.customer} (${fmtK(q.total)}, quiet ${q.quietDays}d)`)
           .join(' · ');
+        // A one-quote nudge (the common case) opens the quote itself; only
+        // real multi-quote digests land on the follow-ups list.
+        const only = quotes.length === 1 ? quotes[0] : null;
         await notifyMany([repId], {
           type: 'quote_followup',
           title: `${quotes.length} quote${quotes.length !== 1 ? 's' : ''} need${quotes.length === 1 ? 's' : ''} a follow-up`,
           body: lines.slice(0, 900),
-          url: '/admin/quote-followups',
+          url: only
+            ? (only.table === 'estimates' ? deepLinks.estimate(only.id) : deepLinks.wrapQuote(only.id))
+            : '/admin/quote-followups',
           channels: ['in_app', 'push'],
           forceChannels: true,
         });

@@ -333,7 +333,11 @@ Actions let you modify data in the app. Use them when the user asks you to DO so
    params: { to_user_id, body }
 
 4. create_notification — Send a notification to a user
-   params: { user_id, type, title, body }
+   params: { user_id, type, title, body, url }
+   url: app-relative deep link to the record the notification is about —
+   ALWAYS set it when you know the entity (you usually just queried it):
+   /graphics/<job_id>, /admin/pos/<po_id>, /estimates?id=<estimate_id>,
+   /tracking?vehicle=<checkin_id>, /admin/ap?invoice=<vendor_invoice_id>
 
 5. create_estimate — Create a draft estimate with line items
    params: {
@@ -854,11 +858,13 @@ async function executeAction(action: string, params: Record<string, any>): Promi
     }
 
     case 'create_notification': {
-      const { user_id, type, title, body } = params;
+      const { user_id, type, title, body, url } = params;
       if (!user_id || !title || !body) throw new Error('user_id, title, and body required');
 
+      // Only app-relative deep links — consumers router.push this value.
+      const safeUrl = typeof url === 'string' && url.startsWith('/') ? url : null;
       const { error } = await supabase.from('notifications').insert({
-        user_id, type: type || 'ai_agent', title, body,
+        user_id, type: type || 'ai_agent', title, body, url: safeUrl,
       });
       if (error) throw new Error(`Failed to create notification: ${error.message}`);
       return { success: true, message: `Notification sent` };

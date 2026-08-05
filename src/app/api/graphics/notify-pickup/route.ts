@@ -5,6 +5,7 @@ import { requireAuth } from '@/lib/api-auth';
 import { sendEmail, buildNotificationEmail } from '@/lib/resend';
 import { sendSMS } from '@/lib/sms-provider';
 import { validateBody, z } from '@/lib/validate';
+import { deepLinks } from '@/lib/deep-links';
 
 export const dynamic = 'force-dynamic';
 
@@ -164,7 +165,7 @@ export async function POST(req: NextRequest) {
     if (contactEmail) {
       try {
         const appUrl = process.env.NEXT_PUBLIC_APP_URL || 'https://bmg-ops.vercel.app';
-        const jobCardUrl = `${appUrl}/graphics?id=${job.id}`;
+        const jobCardUrl = `${appUrl}${deepLinks.graphicsJob(job.id)}`;
         const emailBody = `Your graphics for ${jobLabel}${job.quantity ? ` (qty ${job.quantity})` : ''} are ready for pickup. ${pickupAddress}`;
         const html = buildNotificationEmail(
           `Your graphics are ready for pickup — ${jobLabel}`,
@@ -241,7 +242,7 @@ export async function POST(req: NextRequest) {
         type: 'graphics_ready_for_pickup',
         title: `Ready for pickup: ${jobLabel}`,
         body: `${job.customer || 'Customer'} has been notified that ${jobLabel} is ready for pickup.`,
-        url: '/graphics',
+        url: deepLinks.graphicsJob(job.id),
       });
     }
 

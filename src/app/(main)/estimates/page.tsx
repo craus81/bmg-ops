@@ -234,12 +234,26 @@ export default function EstimatesPage() {
     if (loading) return;
     const estId = searchParams.get('id');
     if (estId) {
-      const est = estimates.find(e => e.id === estId);
-      if (est) {
+      const focus = (est: any) => {
         openEstimate(est);
         // A mention on the Internal Notes field (&note=field) scroll-flashes
         // it once the estimate form renders.
         if (searchParams.get('note') === 'field') flashNote('est-notes-field');
+      };
+      const est = estimates.find(e => e.id === estId);
+      if (est) {
+        focus(est);
+      } else {
+        // Not in the list response (older than the 1000-row read cap, or a
+        // status the list filtered out) — fetch it by id so the deep link
+        // still lands instead of silently doing nothing.
+        (async () => {
+          try {
+            const res = await fetch(`/api/estimates?id=${estId}`);
+            const data = await res.json();
+            if (res.ok && data.estimates?.[0]) focus(data.estimates[0]);
+          } catch { /* deep link degrades to the plain list */ }
+        })();
       }
     }
   // eslint-disable-next-line react-hooks/exhaustive-deps -- intentional: load once on mount

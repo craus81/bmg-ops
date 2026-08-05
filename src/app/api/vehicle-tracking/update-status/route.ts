@@ -281,13 +281,17 @@ async function notifyShipped(vehicle: any, actorEmail: string | null) {
     .join(' ') || `VIN ${vehicle.vin?.slice(-8) || ''}`;
   const { notifyCustomerByName } = await import('@/lib/customer-notify');
   const { buildNotificationEmail } = await import('@/lib/resend');
+  const appUrl = process.env.NEXT_PUBLIC_APP_URL || 'https://bmg-ops.vercel.app';
+  // Same job-card CTA the completion email carries — the shipped email was
+  // the only customer email rendered with no button at all.
+  const jobCardUrl = `${appUrl}/vehicles/${vehicle.vin}/pick-list`;
   const emailBody = `Your ${vehicleLabel} (VIN ending ${vehicle.vin?.slice(-8)}) has left our facility. Reply to this email with any questions.`;
   await notifyCustomerByName(serviceSupabase, vehicle.customer_name, {
     contextEntityType: 'fleet_checkin',
     contextEntityId: vehicle.id,
     threadSubject: `${vehicleLabel} shipped`,
     emailSubject: `[BMG Fleet] Your vehicle has shipped — ${vehicleLabel}`,
-    emailHtml: buildNotificationEmail(`On its way — ${vehicleLabel}`, emailBody),
+    emailHtml: buildNotificationEmail(`On its way — ${vehicleLabel}`, emailBody, jobCardUrl, 'Open job card'),
     messageBody: emailBody,
     replyTo: actorEmail,
   });

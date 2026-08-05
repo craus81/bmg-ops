@@ -12,6 +12,7 @@
 
 import type { SupabaseClient } from '@supabase/supabase-js';
 import { notifyMany } from '@/lib/notify';
+import { deepLinks } from '@/lib/deep-links';
 
 /**
  * The billing users are the approved admins who opted in to invoicing
@@ -53,7 +54,8 @@ export async function notifyInvoiceCreated(
       .from('notifications')
       .update({ read_at: new Date().toISOString() })
       .eq('type', 'graphics_invoice_prompt')
-      .eq('url', `/invoices?invoiceJob=${jobId}`)
+      // Must match the url the prompt was created with (notify-shipped-invoice).
+      .eq('url', deepLinks.createInvoiceForJob(jobId))
       .is('read_at', null);
   } catch (err) {
     console.error('notifyInvoiceCreated: failed to clear prompts:', err);
@@ -75,7 +77,9 @@ export async function notifyInvoiceCreated(
       type: 'graphics_invoice_created',
       title: `Invoice ${invoiceNumber ? `${invoiceNumber} ` : ''}created`,
       body: `${actorName} invoiced ${jobLabel}${customer ? ` for ${customer}` : ''}${how ? ` (${how})` : ''}.`,
-      url: '/invoices',
+      // The job record shows the invoice state; /invoices?invoiceJob= would
+      // wrongly re-open the CREATE dialog for an already-invoiced job.
+      url: deepLinks.graphicsJob(jobId),
     });
   } catch (err) {
     console.error('notifyInvoiceCreated: failed to notify billing users:', err);

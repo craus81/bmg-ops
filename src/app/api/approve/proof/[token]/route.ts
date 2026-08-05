@@ -5,6 +5,7 @@ import {
   getRequestIp, AGREEMENT_TEXT,
 } from '@/lib/magic-link-approval';
 import { notifyMany } from '@/lib/notify';
+import { deepLinks } from '@/lib/deep-links';
 import { r2Get, r2PublicUrl, r2Upload } from '@/lib/r2';
 import { validateBody, z } from '@/lib/validate';
 
@@ -257,7 +258,7 @@ async function notifyGraphicsTeam(job: any, verdict: 'approved' | 'revision', re
     type: verdict === 'approved' ? 'proof_approved' : 'proof_revision_requested',
     title,
     body,
-    url: '/graphics',
+    url: deepLinks.graphicsJob(job.id),
   });
 }
 
