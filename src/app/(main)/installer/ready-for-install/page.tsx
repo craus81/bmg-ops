@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, useRef } from 'react';
 import { useRouter, useSearchParams } from 'next/navigation';
 import { createClient } from '@/lib/supabase-browser';
 import { useAuth } from '@/components/AuthProvider';
@@ -34,7 +34,7 @@ interface ReadyVehicle {
 export default function ReadyForInstallPage() {
   const router = useRouter();
   const searchParams = useSearchParams();
-  const { user, isInstaller, isAdmin } = useAuth();
+  const { user, isInstaller, isAdmin, isGraphicsProduction } = useAuth();
   const supabase = createClient();
 
   const [vehicles, setVehicles] = useState<ReadyVehicle[]>([]);
@@ -63,21 +63,35 @@ export default function ReadyForInstallPage() {
 
   useEffect(() => {
     if (!user) return;
-    if (!isInstaller && !isAdmin) {
+    // Graphics roles receive the "Graphics ready" notification too (creator/
+    // assignee) — let them see the install-readiness list instead of
+    // bouncing their click to /home.
+    if (!isInstaller && !isAdmin && !isGraphicsProduction) {
       router.push('/home');
       return;
     }
     load();
-  }, [user, isInstaller, isAdmin, router, load]);
+  }, [user, isInstaller, isAdmin, isGraphicsProduction, router, load]);
 
+  // One-shot per job id: once a job has been highlighted (or widening was
+  // tried once), the user's own filter toggles and later data refreshes must
+  // never re-trigger the focus or yank the scroll position again.
+  const handledJobRef = useRef<string | null>(null);
+  const widenedForRef = useRef<string | null>(null);
   useEffect(() => {
     const jobId = searchParams?.get('job');
-    if (!jobId || loading) return;
+    if (!jobId || loading || handledJobRef.current === jobId) return;
     const matches = vehicles.filter(v => v.graphicsJob.id === jobId);
-    // The linked job's vehicles may all be assigned to someone else —
-    // widen from the default "mine" filter instead of showing an empty page.
-    if (matches.length === 0 && filter === 'mine') { setFilter('all'); return; }
-    if (matches.length === 0) return;
+    if (matches.length === 0) {
+      // The linked job's vehicles may all be assigned to someone else —
+      // widen from the default "mine" filter, but only once per job id.
+      if (filter === 'mine' && widenedForRef.current !== jobId) {
+        widenedForRef.current = jobId;
+        setFilter('all');
+      }
+      return;
+    }
+    handledJobRef.current = jobId;
     setHighlightJobId(jobId);
     requestAnimationFrame(() => {
       document.getElementById(`rfi-${matches[0].id}`)?.scrollIntoView({ behavior: 'smooth', block: 'center' });

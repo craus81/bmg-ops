@@ -76,14 +76,16 @@ export default function UsersPage() {
   }, [authLoading, isAdmin]);
 
   // ?user=<profile id> deep link (access-request notifications): open that
-  // user's edit modal once the list has loaded.
-  const deepLinkedUser = useRef(false);
+  // user's edit modal once the list has loaded. One-shot PER ID — clicking a
+  // second request's notification while already on this page (same-route
+  // router.push, no remount) must still open that user's modal.
+  const deepLinkedUser = useRef<string | null>(null);
   useEffect(() => {
     const target = searchParams?.get('user');
-    if (!target || loading || deepLinkedUser.current) return;
+    if (!target || loading || deepLinkedUser.current === target) return;
     const match = users.find(u => u.id === target);
     if (!match) return;
-    deepLinkedUser.current = true;
+    deepLinkedUser.current = target;
     openEditModal(match);
   // eslint-disable-next-line react-hooks/exhaustive-deps -- openEditModal is recreated per render
   }, [searchParams, loading, users]);

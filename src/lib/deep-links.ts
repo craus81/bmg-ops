@@ -31,8 +31,10 @@ export const deepLinks = {
   /** Upfit board — opens the project detail (optionally flashing a note or task). */
   upfitProject: (projectId: string, opts?: { noteId?: string | null; taskId?: string | null }) =>
     `/upfit?id=${projectId}${opts?.noteId ? `&note=${opts.noteId}` : ''}${opts?.taskId ? `&task=${opts.taskId}` : ''}`,
-  /** Estimates page — opens the estimate in the builder view. */
-  estimate: (estimateId: string) => `/estimates?id=${estimateId}`,
+  /** Estimates page — opens the estimate in the builder view; flashNotes
+   *  scroll-flashes the Internal Notes field (estimate-note mentions). */
+  estimate: (estimateId: string, opts?: { flashNotes?: boolean }) =>
+    `/estimates?id=${estimateId}${opts?.flashNotes ? '&note=field' : ''}`,
   /** Wrap-quote list — opens that quote (page reads ?id=). */
   wrapQuote: (quoteId: string) => `/admin/wrap-quote?id=${quoteId}`,
   /** AP queue — jumps to the vendor invoice's status tab and highlights it. */
@@ -66,6 +68,14 @@ export const deepLinks = {
   /** Ready-for-install list — highlights the vehicles for one graphics job. */
   readyForInstall: (graphicsJobId?: string | null) =>
     `/installer/ready-for-install${graphicsJobId ? `?job=${graphicsJobId}` : ''}`,
+  /** Tech-facing photo page for one scanned vehicle (photo review verdicts). */
+  scanPhotos: (scannedVehicleId: string) => `/photos?id=${scannedVehicleId}`,
+  /** POs page with the pending-import review queue opened on one entry. */
+  poPendingReview: (messageId: string) => `/admin/pos?review=${encodeURIComponent(messageId)}`,
+  /** Customer portal dashboard — the only in-app destination an external
+   *  customer login can open; use for customer email CTAs when no public
+   *  page (carrier tracking, approval magic link) fits. */
+  customerPortal: () => '/customer/dashboard',
   /** System health dashboard (checks are keyed by sync type, not record ids). */
   systemHealth: () => '/admin/system-health',
 };

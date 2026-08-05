@@ -165,13 +165,15 @@ export async function POST(req: NextRequest) {
     if (contactEmail) {
       try {
         const appUrl = process.env.NEXT_PUBLIC_APP_URL || 'https://bmg-ops.vercel.app';
-        const jobCardUrl = `${appUrl}${deepLinks.graphicsJob(job.id)}`;
+        // Customer CTA → portal dashboard (shows their graphics orders); the
+        // internal /graphics job card is role-gated and dead-clicks customers.
+        const portalUrl = `${appUrl}${deepLinks.customerPortal()}`;
         const emailBody = `Your graphics for ${jobLabel}${job.quantity ? ` (qty ${job.quantity})` : ''} are ready for pickup. ${pickupAddress}`;
         const html = buildNotificationEmail(
           `Your graphics are ready for pickup — ${jobLabel}`,
           emailBody,
-          jobCardUrl,
-          'Open job card',
+          portalUrl,
+          'View order status',
         );
         const ok = await sendEmail(
           contactEmail,

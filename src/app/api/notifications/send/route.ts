@@ -16,7 +16,9 @@ const NotifySchema = z.object({
   body: z.string().trim().min(1).max(1000),
   // App-relative deep link to the exact record ('/graphics/<id>', ...) —
   // sendViaEmail prefixes the app origin, so absolute URLs are rejected.
-  url: z.string().max(2000).startsWith('/', { message: 'url must be app-relative (start with /)' }).optional(),
+  // The regex also blocks protocol-relative '//host' urls, which pass a
+  // naive startsWith('/') and would hard-navigate off-app.
+  url: z.string().max(2000).regex(/^\/(?!\/)/, { message: 'url must be app-relative (start with / but not //)' }).optional(),
   excludeUserId: z.string().uuid().optional(),
 });
 

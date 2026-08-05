@@ -65,10 +65,21 @@ export async function GET(req: NextRequest) {
   const auth = await requireRole(req, ['finance']);
   if (auth.error) return auth.error;
 
+  const SELECT = '*, company:companies(id, name, netsuite_vendor_id), lines:vendor_invoice_lines(id, vin, part_number, amount, was_existing_scan, scan_log_id)';
+
+  // Single-invoice fetch: the ?invoice= deep-link fallback for rows older
+  // than the newest-200 window the list returns.
+  const id = req.nextUrl.searchParams.get('id')?.trim();
+  if (id) {
+    const { data, error } = await service.from('vendor_invoices').select(SELECT).eq('id', id).maybeSingle();
+    if (error) return NextResponse.json({ error: error.message }, { status: 500 });
+    return NextResponse.json({ invoices: data ? [data] : [] });
+  }
+
   const status = req.nextUrl.searchParams.get('status')?.trim() || '';
   let q = service
     .from('vendor_invoices')
-    .select('*, company:companies(id, name, netsuite_vendor_id), lines:vendor_invoice_lines(id, vin, part_number, amount, was_existing_scan, scan_log_id)')
+    .select(SELECT)
     .order('created_at', { ascending: false })
     .limit(200);
   if (status) q = q.eq('status', status);

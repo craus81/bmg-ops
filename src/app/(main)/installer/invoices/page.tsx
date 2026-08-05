@@ -105,16 +105,34 @@ export default function InstallerInvoicesPage() {
 
   // ?invoice=<id> deep link (AP decision notifications): expand that
   // invoice's card and scroll it into view once the list is loaded.
-  const focusedDeepLink = useRef(false);
+  // One-shot PER ID — a later notification tapped while this page is
+  // already open (same-route push, no remount) still focuses its invoice.
+  const focusedDeepLinks = useRef<Set<string>>(new Set());
   useEffect(() => {
     const target = searchParams?.get('invoice');
-    if (!target || loading || focusedDeepLink.current) return;
-    if (!invoices.some(inv => inv.id === target)) return;
-    focusedDeepLink.current = true;
-    setExpanded(prev => new Set(prev).add(target));
-    requestAnimationFrame(() => {
-      document.getElementById(`inv-${target}`)?.scrollIntoView({ behavior: 'smooth', block: 'center' });
-    });
+    if (!target || loading || focusedDeepLinks.current.has(target)) return;
+    const focus = () => {
+      focusedDeepLinks.current.add(target);
+      setExpanded(prev => new Set(prev).add(target));
+      requestAnimationFrame(() => {
+        document.getElementById(`inv-${target}`)?.scrollIntoView({ behavior: 'smooth', block: 'center' });
+      });
+    };
+    if (invoices.some(inv => inv.id === target)) { focus(); return; }
+    // Older than the 100-invoice window the list loads — fetch the single
+    // (still company-scoped) row and merge it in so the link lands anyway.
+    (async () => {
+      try {
+        const qs = preview?.companyId ? `&companyId=${preview.companyId}` : '';
+        const res = await fetch(`/api/cni/my-invoices?id=${target}${qs}`);
+        const data = await res.json();
+        const fetched = (data.invoices || [])[0] as MyInvoice | undefined;
+        if (!res.ok || !fetched) return;
+        setInvoices(prev => prev.some(i => i.id === fetched.id) ? prev : [fetched, ...prev]);
+        focus();
+      } catch { /* deep link degrades to the plain list */ }
+    })();
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- preview is stable per mount
   }, [searchParams, loading, invoices]);
 
   const blankLine = (): DraftLine => ({ key: ++lineKeyRef.current, vin: '', partNumber: '', amount: '' });

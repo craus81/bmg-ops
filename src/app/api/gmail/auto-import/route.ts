@@ -3,6 +3,7 @@ import { searchPOEmails, getMessage, getPdfAttachments, getHeader } from '@/lib/
 import { createServiceClient } from '@/lib/supabase-service';
 import { requireAdmin } from '@/lib/api-auth';
 import { recordHeartbeat } from '@/lib/system-health';
+import { deepLinks } from '@/lib/deep-links';
 
 // This route is called by Vercel Cron every 20 minutes
 // It searches Gmail for new PO emails and auto-imports them
@@ -164,11 +165,11 @@ export async function GET(req: NextRequest) {
         .eq('notify_new_po', true);
       const adminIds = (poPrefs || []).map((p: any) => p.user_id);
       if (adminIds.length > 0) {
-        const poNumbers = results
-          .filter((r: any) => r.status === 'review' || r.status === 'imported')
-          .map((r: any) => r.poNumber)
-          .filter(Boolean)
-          .join(', ');
+        const fresh = results.filter((r: any) => r.status === 'review' || r.status === 'imported');
+        const poNumbers = fresh.map((r: any) => r.poNumber).filter(Boolean).join(', ');
+        // A single pending PO links straight to its queue entry; only a
+        // true multi-PO digest lands on the bare POs page.
+        const single = fresh.length === 1 ? fresh[0] : null;
         fetch(new URL('/api/notifications/send', req.url), {
           method: 'POST',
           headers: {
@@ -180,7 +181,7 @@ export async function GET(req: NextRequest) {
             type: 'po_pending',
             title: `${imported} new PO${imported !== 1 ? 's' : ''} pending review`,
             body: poNumbers ? `PO #${poNumbers}` : 'New purchase orders found in Gmail',
-            url: '/admin/pos',
+            url: single ? deepLinks.poPendingReview(single.messageId) : '/admin/pos',
           }),
         }).catch(() => {});
       }

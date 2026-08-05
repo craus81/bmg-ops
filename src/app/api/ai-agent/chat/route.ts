@@ -862,7 +862,9 @@ async function executeAction(action: string, params: Record<string, any>): Promi
       if (!user_id || !title || !body) throw new Error('user_id, title, and body required');
 
       // Only app-relative deep links — consumers router.push this value.
-      const safeUrl = typeof url === 'string' && url.startsWith('/') ? url : null;
+      // '//host' is protocol-relative (off-app navigation), so block it too.
+      const safeUrl = typeof url === 'string' && url.startsWith('/') && !url.startsWith('//') ? url : null;
+      if (!safeUrl) console.warn(`[ai-agent] create_notification without a usable url (got ${JSON.stringify(url ?? null)}) — clicks will go nowhere; pass an app-relative deep link`);
       const { error } = await supabase.from('notifications').insert({
         user_id, type: type || 'ai_agent', title, body, url: safeUrl,
       });

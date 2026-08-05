@@ -5,6 +5,7 @@ import { useRouter } from 'next/navigation';
 import { createClient } from '@/lib/supabase-browser';
 import { useAuth } from '@/components/AuthProvider';
 import { storage } from '@/lib/storage';
+import { deepLinks } from '@/lib/deep-links';
 import { PartLabel } from '@/components/PartLabel';
 
 interface ReviewVehicle {
@@ -108,6 +109,7 @@ export default function ReviewsPage() {
           title: 'Photos Approved',
           body: `Your photos for ${vehicleTitle(vehicle)} have been approved.`,
           vehicle_id: vehicleId,
+          url: deepLinks.scanPhotos(vehicleId),
         });
 
       // Get installer email
@@ -174,6 +176,7 @@ export default function ReviewsPage() {
           title: 'Photos Need Rework',
           body: `${vehicleTitle(vehicle)}: ${denyNotes.trim()}`,
           vehicle_id: vehicleId,
+          url: deepLinks.scanPhotos(vehicleId),
         });
 
       // Get installer email

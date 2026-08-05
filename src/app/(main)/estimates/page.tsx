@@ -10,6 +10,7 @@ import { theme } from '@/lib/theme';
 import CustomerDefaultsEditor from '@/components/CustomerDefaultsEditor';
 import MentionTextArea, { reportMentions } from '@/components/MentionTextArea';
 import { flashNote } from '@/lib/focus-note';
+import { deepLinks } from '@/lib/deep-links';
 import { openNetSuitePdf } from '@/lib/netsuite-pdf-client';
 
 interface Part {
@@ -229,11 +230,18 @@ export default function EstimatesPage() {
   // eslint-disable-next-line react-hooks/exhaustive-deps -- intentional: load once on mount
   }, [authLoading, user, isAdmin, isSales, isGraphicsProduction]);
 
-  // Auto-open estimate from URL param (deep link from notifications/search)
+  // Auto-open estimate from URL param (deep link from notifications/search).
+  // One-shot per id: loadEstimates() toggles `loading` on every save/convert,
+  // and ?id= stays in the URL — without the guard each toggle would silently
+  // re-open the deep-linked estimate over whatever the user moved on to.
+  // Distinct ids still focus (deps include searchParams), so clicking a
+  // second estimate's notification from the bell works.
+  const handledEstimateId = useRef<string | null>(null);
   useEffect(() => {
     if (loading) return;
     const estId = searchParams.get('id');
-    if (estId) {
+    if (estId && handledEstimateId.current !== estId) {
+      handledEstimateId.current = estId;
       const focus = (est: any) => {
         openEstimate(est);
         // A mention on the Internal Notes field (&note=field) scroll-flashes
@@ -485,7 +493,7 @@ export default function EstimatesPage() {
             sourceType: 'estimate_note',
             sourceId: editingId || data.id,
             contextLabel: `Estimate — ${title || customerName || 'untitled'}`,
-            contextUrl: `/estimates?id=${editingId || data.id}&note=field`,
+            contextUrl: deepLinks.estimate(editingId || data.id, { flashNotes: true }),
           });
           savedInternalNotesRef.current = internalNotes;
         }

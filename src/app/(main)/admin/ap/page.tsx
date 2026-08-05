@@ -91,7 +91,7 @@ export default function ApQueuePage() {
   // Deep link (e.g. from a CNI company page): focus one invoice — switch to
   // its status tab, then scroll to + briefly highlight its card.
   const [highlightId, setHighlightId] = useState<string | null>(null);
-  const focusedDeepLink = useRef(false);
+  const focusedDeepLink = useRef<string | null>(null);
   // The invoice currently open in the header editor (fix vendor link, dates,
   // amount, etc.) — null when the editor is closed.
   const [editing, setEditing] = useState<ApInvoice | null>(null);
@@ -124,22 +124,36 @@ export default function ApQueuePage() {
   }, [authLoading, canAct, router, load]);
 
   // Once invoices are loaded, honor ?invoice=<id>: jump to the right tab and
-  // spotlight the card. One-shot so acting on it (which reloads) doesn't yank
-  // the tab back.
+  // spotlight the card. One-shot per id so acting on it (which reloads)
+  // doesn't yank the tab back, while a second invoice's notification clicked
+  // from the bell (same-route push, no remount) still focuses.
   useEffect(() => {
-    if (loading || focusedDeepLink.current) return;
+    if (loading) return;
     const id = searchParams.get('invoice');
-    if (!id) return;
+    if (!id || focusedDeepLink.current === id) return;
+    const focus = (target: ApInvoice) => {
+      focusedDeepLink.current = id;
+      setTab(target.status);
+      setHighlightId(id);
+      setTimeout(() => document.getElementById(`ap-invoice-${id}`)?.scrollIntoView({ behavior: 'smooth', block: 'center' }), 150);
+      setTimeout(() => setHighlightId(null), 2600);
+    };
     const target = invoices.find(i => i.id === id);
-    if (!target) return;
-    focusedDeepLink.current = true;
-    setTab(target.status);
-    setHighlightId(id);
-    setTimeout(() => document.getElementById(`ap-invoice-${id}`)?.scrollIntoView({ behavior: 'smooth', block: 'center' }), 150);
-    const clear = setTimeout(() => setHighlightId(null), 2600);
-    return () => clearTimeout(clear);
-  // eslint-disable-next-line react-hooks/exhaustive-deps -- fire once after first load
-  }, [loading]);
+    if (target) { focus(target); return; }
+    // Outside the newest-200 window (e.g. an old bill finally marked paid by
+    // the NetSuite sweep) — fetch the one invoice and merge it in.
+    (async () => {
+      try {
+        const res = await fetch(`/api/vendor-invoices?id=${id}`);
+        const data = await res.json();
+        const fetched = (data.invoices || [])[0] as ApInvoice | undefined;
+        if (!res.ok || !fetched) return;
+        setInvoices(prev => prev.some(i => i.id === fetched.id) ? prev : [fetched, ...prev]);
+        focus(fetched);
+      } catch { /* deep link degrades to the plain queue */ }
+    })();
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- fire once per deep-linked id
+  }, [loading, searchParams]);
 
   const act = async (invoiceId: string, payload: Record<string, unknown>, confirmMsg?: string) => {
     if (confirmMsg && !(await dialog.confirm(confirmMsg))) return;

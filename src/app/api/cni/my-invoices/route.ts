@@ -97,6 +97,20 @@ export async function GET(req: NextRequest) {
   }
   if (!company) return NextResponse.json({ invoices: [], noCompany: true });
 
+  // Single-invoice fetch (still company-scoped): the ?invoice= deep-link
+  // fallback for rows older than the newest-100 window below.
+  const id = req.nextUrl.searchParams.get('id')?.trim();
+  if (id) {
+    const { data, error } = await service
+      .from('vendor_invoices')
+      .select(INSTALLER_COLUMNS)
+      .eq('company_id', company.id)
+      .eq('id', id)
+      .maybeSingle();
+    if (error) return NextResponse.json({ error: error.message }, { status: 500 });
+    return NextResponse.json({ invoices: data ? [data] : [], companyId: company.id, companyName: company.name });
+  }
+
   const { data, error } = await service
     .from('vendor_invoices')
     .select(INSTALLER_COLUMNS)

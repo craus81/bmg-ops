@@ -54,7 +54,10 @@ export default function NativePushHandler() {
         // strip can resurface the notification, never a dead no-op.
         const tap = await PushNotifications.addListener('pushNotificationActionPerformed', (action) => {
           const url = action?.notification?.data?.url;
-          router.push(typeof url === 'string' && url.startsWith('/') ? url : '/');
+          // startsWith('/') alone admits protocol-relative '//host' urls,
+          // which navigate off-app — require a single leading slash.
+          const safe = typeof url === 'string' && url.startsWith('/') && !url.startsWith('//');
+          router.push(safe ? url : '/');
         });
         listeners.push(tap);
 

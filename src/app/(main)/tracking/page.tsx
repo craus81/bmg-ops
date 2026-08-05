@@ -268,17 +268,23 @@ export default function TrackingPage() {
   // eslint-disable-next-line react-hooks/exhaustive-deps -- supabase client is a stable singleton
   }, [vehicles]);
 
+  // Offset for Load More comes from how many rows we actually FETCHED, not
+  // vehicles.length — the ?vehicle= deep-link fallback can prepend a row
+  // outside the paged window, and counting it would skip a DB row on the
+  // next page. Appends also dedupe by id for when that row pages back in.
+  const fetchedCountRef = useRef(0);
   const loadVehicles = async (append = false) => {
     if (append) setLoadingMore(true); else setLoading(true);
-    const offset = append ? vehicles.length : 0;
+    const offset = append ? fetchedCountRef.current : 0;
     const { data } = await supabase
       .from('fleet_checkins')
       .select('*')
       .order('updated_at', { ascending: false })
       .range(offset, offset + PAGE_SIZE - 1);
     if (data) {
+      fetchedCountRef.current = offset + data.length;
       if (append) {
-        setVehicles(prev => [...prev, ...data]);
+        setVehicles(prev => [...prev, ...data.filter((d: FleetCheckin) => !prev.some(p => p.id === d.id))]);
       } else {
         setVehicles(data);
       }

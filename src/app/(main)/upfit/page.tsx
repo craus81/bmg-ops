@@ -207,19 +207,30 @@ export default function UpfitProjectsPage() {
 
   // Deep-link: ?id=<projectId> auto-opens that project so /upfit?id= works
   // from the graphics page parent-link, the tracking page, etc.
+  const flashedSubRecordKey = useRef<string | null>(null);
   useEffect(() => {
     if (loading) return;
     const projectId = searchParams.get('id');
-    if (!projectId || selected?.id === projectId) return;
+    if (!projectId) return;
     // A mention deep link (&note=<id>) scroll-flashes that note once the
     // project's Activity timeline loads; a task-assignment deep link
-    // (&task=<id>) does the same for the task row.
+    // (&task=<id>) does the same for the task row. Keyed one-shot so data
+    // refreshes don't re-yank the scroll, but a NEW note/task link to the
+    // already-open project (same-route push, no remount) still flashes.
     const noteId = searchParams.get('note');
     const taskId = searchParams.get('task');
+    const subKey = `${projectId}:${noteId || ''}:${taskId || ''}`;
     const focusSubRecords = () => {
+      if (flashedSubRecordKey.current === subKey) return;
+      flashedSubRecordKey.current = subKey;
       if (noteId) flashNote(`upnote-${noteId}`);
       if (taskId) flashNote(`uptask-${taskId}`);
     };
+    if (selected?.id === projectId) {
+      // Project already open — just focus the linked note/task.
+      focusSubRecords();
+      return;
+    }
     const inList = projects.find(p => p.id === projectId);
     if (inList) {
       openProject(inList);
