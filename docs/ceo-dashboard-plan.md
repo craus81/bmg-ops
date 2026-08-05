@@ -175,16 +175,15 @@ available — **Labor Cost % of Revenue** and **Revenue per Employee**.
   Super Admin / Security Admin; issues a client ID/secret with scoped
   data access). If that's not available on our plan, API access goes
   through a request on the developer portal and can take weeks.
-  **Status (Aug 5, 2026): self-serve app creation confirmed in Flex**
-  ("New app" under BMG Fleet Installations LLC). The form exposes two
-  scopes: **"Company and worker APIs"** — toggleable today, covers
-  companies + workers (headcount) — and **"Payroll and check APIs"** —
-  grayed out with "Need Access? Your Paychex representative can help",
-  i.e. the pay-period/check feed (Total Payroll, Labor %) requires a
-  rep enablement. Plan: create the app with the worker scope now, ask
-  the rep to light up the payroll scope. (Historical note: an earlier
-  "verified token" was the developer portal's documentation sample.)
-  Once credentials exist, entitlement check:
+  **Status (Aug 5, 2026): real credentials verified.** The Flex app
+  ("New app" under BMG Fleet Installations LLC) was created self-serve
+  with the **"Company and worker APIs"** scope; a live call to
+  `/companies` returns BMG's real company record. **"Payroll and check
+  APIs"** is grayed out in Flex and confirmed blocked at the API level
+  (`API-2` unauthorized on pay-period calls) until the Paychex rep
+  enables it — that scope gates the feed behind Total Payroll and
+  Labor %. (Historical note: an earlier "verified token" was the
+  developer portal's documentation sample.) Entitlement check:
   `PAYCHEX_CLIENT_ID=… PAYCHEX_CLIENT_SECRET=… node
   scripts/paychex-smoke-test.mjs` (prints counts/statuses only, no
   PII or pay data).
@@ -253,12 +252,13 @@ available — **Labor Cost % of Revenue** and **Revenue per Employee**.
    bank section). Remaining: who is the card issuer, and OK to sign up
    for Plaid and do the 2-minute Link flow with the Business eBanking
    login?
-2. **Payroll**: provider answered — Paychex. Remaining: (a) create the
-   Flex app (worker scope is self-serve today) and have the Paychex
-   rep enable "Payroll and check APIs" (grayed out until they do);
-   (b) does Paychex post GL journals into NetSuite today, and to which
-   accounts (needed for Net Profit %)? When credentials exist they go
-   in Vercel env vars, never the repo.
+2. **Payroll**: provider answered — Paychex, and working credentials
+   exist (Flex app, worker scope). Remaining: (a) Paychex rep enables
+   "Payroll and check APIs" for the app; (b) does Paychex post GL
+   journals into NetSuite today, and to which accounts (needed for
+   Net Profit %)? (c) add the API key/secret to Vercel as
+   `PAYCHEX_CLIENT_ID` / `PAYCHEX_CLIENT_SECRET` (never the repo) so
+   the sync can ship.
 3. **Sales rep**: is the Sales Rep field maintained on NetSuite
    customers/transactions? (Determines how revenue-per-rep is
    attributed; quote metrics already attribute to whoever creates the
