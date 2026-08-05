@@ -76,7 +76,10 @@ export default function MentionTextArea({
       const options = (data || [])
         .filter((p: any) => {
           const roles: string[] = p.roles?.length ? p.roles : [p.role];
-          return !roles.includes('customer') && p.full_name;
+          // Only customer-ONLY accounts are un-mentionable — staff who also
+          // carry the customer role (e.g. to test the portal) stay taggable.
+          // Same rule as /api/mentions, which resolves the saved @names.
+          return !(roles.includes('customer') && roles.length === 1) && p.full_name;
         })
         .map((p: any) => ({ id: p.id, name: p.full_name }));
       staffCache = options;
