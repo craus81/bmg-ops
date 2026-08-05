@@ -11,6 +11,7 @@ import { useState, useEffect, useCallback } from 'react';
 import { useRouter } from 'next/navigation';
 import { createClient } from '@/lib/supabase-browser';
 import { useAuth } from '@/components/AuthProvider';
+import { mentionSourceUrl } from '@/lib/deep-links';
 
 interface Mention {
   id: string;
@@ -25,21 +26,20 @@ interface Mention {
 }
 
 // Mentions recorded before deep links carried bare page URLs (e.g. just
-// "/tracking"), which land on the page but not the record. Rebuild the deep
-// link from source_type + source_id for those; anything already carrying a
-// query string is trusted as-is.
+// "/tracking"), which land on the page but not the record — and rows saved
+// with no context_url at all. Rebuild the canonical deep link from
+// source_type + source_id (src/lib/deep-links.ts) for those; anything
+// already pointing at the record is trusted as-is.
 function mentionUrl(m: Mention): string | null {
-  if (!m.context_url || m.context_url.includes('?') || !m.source_id) return m.context_url;
-  const deep: Record<string, string> = {
-    checkin_note: `/tracking?vehicle=${m.source_id}`,
-    vehicle_note: `/tracking?vehicle=${m.source_id}`,
-    po_note: `/admin/pos?id=${m.source_id}`,
-    graphics_note: `/graphics?editJob=${m.source_id}`,
-    upfit_note: `/upfit?id=${m.source_id}`,
-    calendar_event_note: `/admin/schedule?card=${m.source_id}`,
-    customer_note: `/admin/reports/at-risk?id=${m.source_id}`,
-  };
-  return deep[m.source_type] || m.context_url;
+  // No stored url: the rebuilt link is the only way to land on the record.
+  if (!m.context_url) return mentionSourceUrl(m.source_type, m.source_id);
+  // A query string, or a bare path that embeds the record id (e.g.
+  // /graphics/<id>, /installer/jobs/<id>), already deep-links — keep it.
+  // CNI chat urls in particular differ by portal (admin vs installer), so
+  // the stored one is more audience-correct than any rebuild.
+  if (m.context_url.includes('?')) return m.context_url;
+  if (m.source_id && m.context_url.includes(m.source_id)) return m.context_url;
+  return mentionSourceUrl(m.source_type, m.source_id) || m.context_url;
 }
 
 export default function MentionsInbox({ showWhenEmpty = false }: { showWhenEmpty?: boolean }) {

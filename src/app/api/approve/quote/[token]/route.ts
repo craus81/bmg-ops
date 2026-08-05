@@ -9,6 +9,7 @@ import {
   AGREEMENT_TEXT,
 } from '@/lib/magic-link-approval';
 import { notifyMany } from '@/lib/notify';
+import { deepLinks } from '@/lib/deep-links';
 import { validateBody, z } from '@/lib/validate';
 import { r2PublicUrl } from '@/lib/r2';
 
@@ -215,7 +216,7 @@ async function notifySalesRep(quote: any, verdict: 'accepted' | 'rejected', reas
     body: verdict === 'accepted'
       ? `${customerName} accepted the $${Number(quote.total || 0).toFixed(2)} wrap quote.`
       : `${customerName} requested changes: ${reason || '(no reason provided)'}`,
-    url: '/admin/wrap-quote',
+    url: deepLinks.wrapQuote(quote.id),
   });
 }
 

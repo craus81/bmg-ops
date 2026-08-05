@@ -10,6 +10,7 @@ import { theme } from '@/lib/theme';
 import CustomerDefaultsEditor from '@/components/CustomerDefaultsEditor';
 import MentionTextArea, { reportMentions } from '@/components/MentionTextArea';
 import { flashNote } from '@/lib/focus-note';
+import { deepLinks } from '@/lib/deep-links';
 import { openNetSuitePdf } from '@/lib/netsuite-pdf-client';
 
 interface Part {
@@ -229,17 +230,38 @@ export default function EstimatesPage() {
   // eslint-disable-next-line react-hooks/exhaustive-deps -- intentional: load once on mount
   }, [authLoading, user, isAdmin, isSales, isGraphicsProduction]);
 
-  // Auto-open estimate from URL param (deep link from notifications/search)
+  // Auto-open estimate from URL param (deep link from notifications/search).
+  // One-shot per id: loadEstimates() toggles `loading` on every save/convert,
+  // and ?id= stays in the URL — without the guard each toggle would silently
+  // re-open the deep-linked estimate over whatever the user moved on to.
+  // Distinct ids still focus (deps include searchParams), so clicking a
+  // second estimate's notification from the bell works.
+  const handledEstimateId = useRef<string | null>(null);
   useEffect(() => {
     if (loading) return;
     const estId = searchParams.get('id');
-    if (estId) {
-      const est = estimates.find(e => e.id === estId);
-      if (est) {
+    if (estId && handledEstimateId.current !== estId) {
+      handledEstimateId.current = estId;
+      const focus = (est: any) => {
         openEstimate(est);
         // A mention on the Internal Notes field (&note=field) scroll-flashes
         // it once the estimate form renders.
         if (searchParams.get('note') === 'field') flashNote('est-notes-field');
+      };
+      const est = estimates.find(e => e.id === estId);
+      if (est) {
+        focus(est);
+      } else {
+        // Not in the list response (older than the 1000-row read cap, or a
+        // status the list filtered out) — fetch it by id so the deep link
+        // still lands instead of silently doing nothing.
+        (async () => {
+          try {
+            const res = await fetch(`/api/estimates?id=${estId}`);
+            const data = await res.json();
+            if (res.ok && data.estimates?.[0]) focus(data.estimates[0]);
+          } catch { /* deep link degrades to the plain list */ }
+        })();
       }
     }
   // eslint-disable-next-line react-hooks/exhaustive-deps -- intentional: load once on mount
@@ -471,7 +493,7 @@ export default function EstimatesPage() {
             sourceType: 'estimate_note',
             sourceId: editingId || data.id,
             contextLabel: `Estimate — ${title || customerName || 'untitled'}`,
-            contextUrl: `/estimates?id=${editingId || data.id}&note=field`,
+            contextUrl: deepLinks.estimate(editingId || data.id, { flashNotes: true }),
           });
           savedInternalNotesRef.current = internalNotes;
         }

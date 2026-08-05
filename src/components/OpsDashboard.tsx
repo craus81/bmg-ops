@@ -528,7 +528,9 @@ export default function OpsDashboard() {
               {n.body && <span style={{ display: 'block', fontSize: '11px', color: 'var(--text-muted)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{n.body}</span>}
             </span>
             <span style={{ fontSize: '10px', color: 'var(--text-muted)', flexShrink: 0 }}>{n.ago}</span>
-            <span style={{ color: 'var(--text-muted)', fontSize: '15px' }}>›</span>
+            {/* Chevron only when the click actually navigates — a url-less
+                row is dismiss-only and shouldn't promise a destination. */}
+            {n.url && <span style={{ color: 'var(--text-muted)', fontSize: '15px' }}>›</span>}
           </button>
         ))}
         {(hiddenUnread > 0 || unreadExpanded) && (

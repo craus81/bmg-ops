@@ -9,6 +9,7 @@
  */
 
 import { notifyMany, getSuperAdminIds } from '@/lib/notify';
+import { deepLinks } from '@/lib/deep-links';
 
 export const PO_IMPORTED_NOTIFICATION_TYPE = 'po_imported';
 
@@ -96,7 +97,7 @@ export async function notifyPoImported(supabase: any, args: NotifyPoImportedArgs
       type: PO_IMPORTED_NOTIFICATION_TYPE,
       title,
       body,
-      url: `/admin/pos?id=${args.poId}`,
+      url: deepLinks.po(args.poId),
       channels: ['in_app', 'email', 'push'],
       forceChannels: true,
     });

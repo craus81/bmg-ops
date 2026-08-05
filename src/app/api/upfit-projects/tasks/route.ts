@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { createClient } from '@supabase/supabase-js';
 import { requireAuth } from '@/lib/api-auth';
 import { notify } from '@/lib/notify';
+import { deepLinks } from '@/lib/deep-links';
 import { validateBody, z } from '@/lib/validate';
 
 const supabase = createClient(
@@ -86,7 +87,7 @@ export async function POST(req: NextRequest) {
       type: 'assignment',
       title: 'New upfit task',
       body: `${data.title}${project?.project_name ? ` — ${project.project_name}` : ''}`,
-      url: `/upfit?id=${body.project_id}`,
+      url: deepLinks.upfitProject(body.project_id, { taskId: data.id }),
     }).catch(err => console.warn('Task assignment notification error:', err));
   }
 
@@ -153,7 +154,7 @@ export async function PATCH(req: NextRequest) {
       type: 'assignment',
       title: 'Upfit task assigned',
       body: `${existing.title}${project?.project_name ? ` — ${project.project_name}` : ''}`,
-      url: `/upfit?id=${existing.project_id}`,
+      url: deepLinks.upfitProject(existing.project_id, { taskId: id }),
     }).catch(err => console.warn('Task reassignment notification error:', err));
   }
 

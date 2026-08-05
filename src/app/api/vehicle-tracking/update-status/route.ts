@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { requireAuth } from '@/lib/api-auth';
 import { notify, notifyMany } from '@/lib/notify';
+import { deepLinks } from '@/lib/deep-links';
 import { createClient as createServiceClient } from '@supabase/supabase-js';
 
 const serviceSupabase = createServiceClient(
@@ -259,14 +260,17 @@ async function notifyCompletion(vehicle: any, actorName: string, actorEmail: str
   const { notifyCustomerByName } = await import('@/lib/customer-notify');
   const { buildNotificationEmail } = await import('@/lib/resend');
   const appUrl = process.env.NEXT_PUBLIC_APP_URL || 'https://bmg-ops.vercel.app';
-  const jobCardUrl = `${appUrl}/vehicles/${vehicle.vin}/pick-list`;
+  // Customer CTA: the portal dashboard is the only in-app page a customer
+  // login can open — the internal pick-list job card bounces customers to
+  // /home (and non-logins to the login wall), a guaranteed dead click.
+  const portalUrl = `${appUrl}${deepLinks.customerPortal()}`;
   const emailBody = `The install for your ${vehicleLabel} (VIN ending ${vehicle.vin?.slice(-8)}) is complete. Please contact us to arrange pickup.`;
   await notifyCustomerByName(serviceSupabase, vehicle.customer_name, {
     contextEntityType: 'fleet_checkin',
     contextEntityId: vehicle.id,
     threadSubject: `${vehicleLabel} ready for pickup`,
     emailSubject: `[BMG Fleet] Your vehicle is ready — ${vehicleLabel}`,
-    emailHtml: buildNotificationEmail(`Your vehicle is ready — ${vehicleLabel}`, emailBody, jobCardUrl, 'Open job card'),
+    emailHtml: buildNotificationEmail(`Your vehicle is ready — ${vehicleLabel}`, emailBody, portalUrl, 'View order status'),
     messageBody: emailBody,
     smsBody: `[BMG Fleet] Your ${vehicleLabel} is ready for pickup. VIN ending ${vehicle.vin?.slice(-8)}.`,
     replyTo: actorEmail,
@@ -281,13 +285,17 @@ async function notifyShipped(vehicle: any, actorEmail: string | null) {
     .join(' ') || `VIN ${vehicle.vin?.slice(-8) || ''}`;
   const { notifyCustomerByName } = await import('@/lib/customer-notify');
   const { buildNotificationEmail } = await import('@/lib/resend');
+  const appUrl = process.env.NEXT_PUBLIC_APP_URL || 'https://bmg-ops.vercel.app';
+  // Customer CTA → portal dashboard (see notifyCompletion) — the shipped
+  // email previously had no button at all.
+  const portalUrl = `${appUrl}${deepLinks.customerPortal()}`;
   const emailBody = `Your ${vehicleLabel} (VIN ending ${vehicle.vin?.slice(-8)}) has left our facility. Reply to this email with any questions.`;
   await notifyCustomerByName(serviceSupabase, vehicle.customer_name, {
     contextEntityType: 'fleet_checkin',
     contextEntityId: vehicle.id,
     threadSubject: `${vehicleLabel} shipped`,
     emailSubject: `[BMG Fleet] Your vehicle has shipped — ${vehicleLabel}`,
-    emailHtml: buildNotificationEmail(`On its way — ${vehicleLabel}`, emailBody),
+    emailHtml: buildNotificationEmail(`On its way — ${vehicleLabel}`, emailBody, portalUrl, 'View order status'),
     messageBody: emailBody,
     replyTo: actorEmail,
   });

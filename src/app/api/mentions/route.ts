@@ -3,6 +3,7 @@ import { createClient } from '@supabase/supabase-js';
 import { requireStaff } from '@/lib/api-auth';
 import { validateBody, z } from '@/lib/validate';
 import { notifyMany } from '@/lib/notify';
+import { mentionSourceUrl } from '@/lib/deep-links';
 
 export const dynamic = 'force-dynamic';
 
@@ -86,6 +87,11 @@ export async function POST(req: NextRequest) {
   const actorName = staff.find(p => p.id === auth.user!.id)?.full_name || 'A teammate';
   const excerpt = text.length > 240 ? `${text.slice(0, 240)}…` : text;
 
+  // A mention must land ON the note's record: trust the surface's contextUrl,
+  // else derive the canonical deep link from the source entity server-side —
+  // '/home' is the last resort only when neither identifies the record.
+  const deepUrl = contextUrl || mentionSourceUrl(sourceType, sourceId) || null;
+
   await service.from('note_mentions').insert(
     [...mentionedIds].map(userId => ({
       mentioned_user_id: userId,
@@ -93,7 +99,7 @@ export async function POST(req: NextRequest) {
       source_type: sourceType,
       source_id: sourceId || null,
       context_label: contextLabel || null,
-      context_url: contextUrl || null,
+      context_url: deepUrl,
       note_excerpt: excerpt,
     })),
   );
@@ -102,7 +108,7 @@ export async function POST(req: NextRequest) {
     type: 'mention',
     title: `${actorName} mentioned you${contextLabel ? ` — ${contextLabel}` : ''}`,
     body: excerpt,
-    url: contextUrl || '/home',
+    url: deepUrl || '/home',
     channels: ['in_app', 'push'],
     forceChannels: true,
   });

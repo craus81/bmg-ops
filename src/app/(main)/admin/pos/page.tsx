@@ -2,6 +2,7 @@
 
 import { useState, useEffect, useRef } from 'react';
 import { useRouter, useSearchParams } from 'next/navigation';
+import { flashNote } from '@/lib/focus-note';
 import { createClient } from '@/lib/supabase-browser';
 import { useAuth } from '@/components/AuthProvider';
 import { parseMasterackPO, type ParsedPO, type ParsedPOLine } from '@/lib/parsePO';
@@ -632,6 +633,20 @@ export default function POsPage() {
     router.replace(`/admin/pos/${poId}`);
   // eslint-disable-next-line react-hooks/exhaustive-deps -- intentional: redirect on param change only
   }, [searchParams]);
+
+  // ?review=<gmail message id> deep link ("1 new PO pending review"
+  // notifications): scroll-flash that entry in the pending-import queue once
+  // it loads. One-shot per message id; the queue refreshes on a timer, so
+  // without the guard every tick would re-flash.
+  const reviewDeepLink = useRef<string | null>(null);
+  useEffect(() => {
+    const msgId = searchParams.get('review');
+    if (!msgId || reviewDeepLink.current === msgId) return;
+    const entry = pendingPOs.find(p => p.message_id === msgId);
+    if (!entry) return; // already imported/dismissed — the queue box explains itself
+    reviewDeepLink.current = msgId;
+    flashNote(`pending-po-${entry.id}`);
+  }, [searchParams, pendingPOs]);
 
   useEffect(() => {
     if (!reviewingExtraction) { setReviewShipToId(''); return; }
@@ -2167,7 +2182,7 @@ export default function POsPage() {
               const customer = extracted?.customer || '';
               const lineCount = extracted?.line_items?.length || 0;
               return (
-                <div key={p.id} style={{
+                <div key={p.id} id={`pending-po-${p.id}`} style={{
                   padding: '10px 12px', borderRadius: '8px', background: 'var(--bg)', border: '1px solid var(--border)',
                 }}>
                   <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '8px' }}>

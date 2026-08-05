@@ -1,0 +1,138 @@
+/**
+ * Canonical deep-link builders — the ONE place app entity URL formats live.
+ *
+ * Every notification (`notify`/`notifyMany` url), mention contextUrl, and
+ * email CTA must link to the exact record it references, and the string
+ * should come from here so producers and consumers can never drift apart.
+ * A link that lands on a list page while a record id was in scope is a bug
+ * ("New for you" clicks must always arrive AT the thing, not near it).
+ *
+ * Adding a page or notification?
+ *  1. Add (or reuse) a builder here.
+ *  2. Make the destination page actually handle the params the builder emits
+ *     (open the record's modal/detail, scroll to it, flash it).
+ *  3. Pass the built url at every notify()/reportMentions call site.
+ *
+ * Pure string helpers — safe in server routes and client components alike.
+ * Digest notifications (many records, no single id) may link to the list
+ * page; everything else links to the record.
+ */
+
+export const deepLinks = {
+  /** Dedicated PO record page. */
+  po: (poId: string) => `/admin/pos/${poId}`,
+  /** Dedicated graphics job record page. */
+  graphicsJob: (jobId: string) => `/graphics/${jobId}`,
+  /** In-Shop board — opens the vehicle's detail modal (optionally flashing one note). */
+  vehicle: (checkinId: string, noteId?: string | null) =>
+    `/tracking?vehicle=${checkinId}${noteId ? `&note=${noteId}` : ''}`,
+  /** Vehicle job card / pick list by VIN. */
+  pickList: (vin: string) => `/vehicles/${vin}/pick-list`,
+  /** Upfit board — opens the project detail (optionally flashing a note or task). */
+  upfitProject: (projectId: string, opts?: { noteId?: string | null; taskId?: string | null }) =>
+    `/upfit?id=${projectId}${opts?.noteId ? `&note=${opts.noteId}` : ''}${opts?.taskId ? `&task=${opts.taskId}` : ''}`,
+  /** Estimates page — opens the estimate in the builder view; flashNotes
+   *  scroll-flashes the Internal Notes field (estimate-note mentions). */
+  estimate: (estimateId: string, opts?: { flashNotes?: boolean }) =>
+    `/estimates?id=${estimateId}${opts?.flashNotes ? '&note=field' : ''}`,
+  /** Wrap-quote list — opens that quote (page reads ?id=). */
+  wrapQuote: (quoteId: string) => `/admin/wrap-quote?id=${quoteId}`,
+  /** AP queue — jumps to the vendor invoice's status tab and highlights it. */
+  apInvoice: (invoiceId: string) => `/admin/ap?invoice=${invoiceId}`,
+  /** Installer portal invoice list — expands and scrolls to the invoice. */
+  installerInvoice: (invoiceId: string) => `/installer/invoices?invoice=${invoiceId}`,
+  /** Messages — opens the conversation thread. */
+  conversation: (conversationId: string) => `/messages?conversation=${conversationId}`,
+  /** Schedule — opens a calendar event card (optionally flashing one note). */
+  scheduleCard: (eventId: string, noteId?: string | null) =>
+    `/admin/schedule?card=${eventId}${noteId ? `&note=${noteId}` : ''}`,
+  /** At-risk report — opens the account's note editor and flashes the row. */
+  atRiskCustomer: (customerId: string) => `/admin/reports/at-risk?id=${customerId}`,
+  /** Dedicated CNI job record page (admin side). */
+  cniJob: (jobId: string) => `/admin/cni/jobs/${jobId}`,
+  /** Dedicated CNI installer record page (optionally flashing an internal note). */
+  cniInstaller: (userId: string, noteId?: string | null) =>
+    `/admin/cni/installers/${userId}${noteId ? `?note=${noteId}` : ''}`,
+  /** Dedicated prospect / customer record page. */
+  prospect: (prospectId: string) => `/admin/prospects/${prospectId}`,
+  /** Users admin — opens the user's edit modal (e.g. a pending access request). */
+  adminUser: (userId: string) => `/admin/users?user=${userId}`,
+  /** Invoices hub, Invoiced tab — optionally prefilters to one invoice number. */
+  invoicesSent: (invoiceNumber?: string | null) =>
+    `/invoices?tab=sent${invoiceNumber ? `&invoice=${encodeURIComponent(invoiceNumber)}` : ''}`,
+  /** Invoices hub — opens the create-invoice dialog for a shipped graphics job.
+   *  NOTE: this exact string doubles as the match key that marks the prompt
+   *  read once the invoice exists (graphics-invoice-notify.ts) — change both
+   *  sides together or not at all. */
+  createInvoiceForJob: (jobId: string) => `/invoices?invoiceJob=${jobId}`,
+  /** Ready-for-install list — highlights the vehicles for one graphics job. */
+  readyForInstall: (graphicsJobId?: string | null) =>
+    `/installer/ready-for-install${graphicsJobId ? `?job=${graphicsJobId}` : ''}`,
+  /** Tech-facing photo page for one scanned vehicle (photo review verdicts). */
+  scanPhotos: (scannedVehicleId: string) => `/photos?id=${scannedVehicleId}`,
+  /** POs page with the pending-import review queue opened on one entry. */
+  poPendingReview: (messageId: string) => `/admin/pos?review=${encodeURIComponent(messageId)}`,
+  /** Customer portal dashboard — the only in-app destination an external
+   *  customer login can open; use for customer email CTAs when no public
+   *  page (carrier tracking, approval magic link) fits. */
+  customerPortal: () => '/customer/dashboard',
+  /** System health dashboard (checks are keyed by sync type, not record ids). */
+  systemHealth: () => '/admin/system-health',
+};
+
+/**
+ * Public carrier tracking page for a shipment — the right CTA for
+ * customer-facing shipped emails (customers can't open internal app pages).
+ * Returns null when the carrier/number don't identify a known carrier.
+ */
+export function carrierTrackingUrl(
+  carrier: string | null | undefined,
+  trackingNumber: string | null | undefined,
+): string | null {
+  if (!trackingNumber) return null;
+  const c = (carrier || '').toLowerCase();
+  const t = trackingNumber.trim();
+  if (c.includes('ups') || /^1Z/i.test(t)) return `https://www.ups.com/track?tracknum=${encodeURIComponent(t)}`;
+  if (c.includes('fedex')) return `https://www.fedex.com/fedextrack/?trknbr=${encodeURIComponent(t)}`;
+  if (c.includes('usps')) return `https://tools.usps.com/go/TrackConfirmAction?tLabels=${encodeURIComponent(t)}`;
+  return null;
+}
+
+/**
+ * Canonical URL for a note @mention's source entity — the server-side
+ * fallback when a surface saves a mention without a contextUrl, and the
+ * rebuild map MentionsInbox uses for legacy rows whose stored URL predates
+ * deep links. Keys are the sourceType strings surfaces pass to /api/mentions.
+ */
+export function mentionSourceUrl(
+  sourceType: string | null | undefined,
+  sourceId: string | null | undefined,
+): string | null {
+  if (!sourceId) return null;
+  switch (sourceType) {
+    case 'checkin_note':
+    case 'vehicle_note':
+      return deepLinks.vehicle(sourceId);
+    case 'po_note':
+      return deepLinks.po(sourceId);
+    case 'graphics_note':
+      return deepLinks.graphicsJob(sourceId);
+    case 'upfit_note':
+      return deepLinks.upfitProject(sourceId);
+    case 'estimate_note':
+      return deepLinks.estimate(sourceId);
+    case 'calendar_event_note':
+      return deepLinks.scheduleCard(sourceId);
+    case 'customer_note':
+      return deepLinks.atRiskCustomer(sourceId);
+    case 'cni_internal_note':
+      return deepLinks.cniInstaller(sourceId);
+    // cni_job_message always arrives with a contextUrl (the chat page's own
+    // pathname, which differs between the admin and installer portals), so
+    // this admin-side fallback only catches rows saved with none at all.
+    case 'cni_job_message':
+      return deepLinks.cniJob(sourceId);
+    default:
+      return null;
+  }
+}

@@ -64,6 +64,15 @@ export async function GET(req: NextRequest) {
   try {
     const supabase = getSupabase();
     const status = req.nextUrl.searchParams.get('status');
+    // Single-estimate fetch: the deep-link fallback for records outside the
+    // list response (PostgREST caps un-limited reads at 1000 rows, newest
+    // first, so old estimates fall out of the list).
+    const id = req.nextUrl.searchParams.get('id');
+    if (id) {
+      const { data, error } = await supabase.from('estimates').select('*').eq('id', id).maybeSingle();
+      if (error) return NextResponse.json({ error: error.message }, { status: 500 });
+      return NextResponse.json({ estimates: data ? [data] : [] });
+    }
 
     let query = supabase
       .from('estimates')

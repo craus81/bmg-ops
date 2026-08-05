@@ -142,7 +142,7 @@ describe('notifyPoImported', () => {
     expect(ids).toEqual(['admin-a', 'admin-b']);
     expect(payload.type).toBe('po_imported');
     expect(payload.title).toBe('PO #35045953 imported by Jamie Rivera');
-    expect(payload.url).toBe('/admin/pos?id=po-uuid');
+    expect(payload.url).toBe('/admin/pos/po-uuid');
     expect(payload.channels).toEqual(['in_app', 'email', 'push']);
     expect(payload.forceChannels).toBe(true);
   });

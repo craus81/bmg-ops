@@ -9,6 +9,7 @@ import {
   AGREEMENT_TEXT,
 } from '@/lib/magic-link-approval';
 import { notifyMany } from '@/lib/notify';
+import { deepLinks } from '@/lib/deep-links';
 import { validateBody, z } from '@/lib/validate';
 
 export const dynamic = 'force-dynamic';
@@ -233,7 +234,7 @@ async function notifySalesRep(estimate: any, verdict: 'accepted' | 'rejected', r
     type: verdict === 'accepted' ? 'estimate_accepted' : 'estimate_rejected',
     title,
     body,
-    url: '/estimates',
+    url: deepLinks.estimate(estimate.id),
   });
 }
 

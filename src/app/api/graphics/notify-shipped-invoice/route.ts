@@ -4,6 +4,7 @@ import { notifyMany } from '@/lib/notify';
 import { getBillingUserIds } from '@/lib/graphics-invoice-notify';
 import { requireAuth } from '@/lib/api-auth';
 import { validateBody, z } from '@/lib/validate';
+import { deepLinks, carrierTrackingUrl } from '@/lib/deep-links';
 
 export const dynamic = 'force-dynamic';
 
@@ -78,12 +79,17 @@ export async function POST(req: NextRequest) {
         ? ` Tracking${job.carrier ? ` (${job.carrier})` : ''}: ${job.tracking_number}.`
         : '';
       const emailBody = `Your graphics order — ${jobLabel} — has shipped.${trackingLine} Reply to this email with any questions.`;
+      // CTA goes to the public carrier tracking page — customers can't open
+      // internal app pages, so with no tracking number there's no button.
+      const trackingUrl = carrierTrackingUrl(job.carrier, job.tracking_number);
       await notifyCustomerByName(supabase, job.customer, {
         contextEntityType: 'graphics_job',
         contextEntityId: job.id,
         threadSubject: `${jobLabel} shipped`,
         emailSubject: `[BMG Fleet] Your graphics have shipped — ${jobLabel}`,
-        emailHtml: buildNotificationEmail(`On the way — ${jobLabel}`, emailBody),
+        emailHtml: trackingUrl
+          ? buildNotificationEmail(`On the way — ${jobLabel}`, emailBody, trackingUrl, 'Track shipment')
+          : buildNotificationEmail(`On the way — ${jobLabel}`, emailBody),
         messageBody: emailBody,
         respectOptOut: false,
         overrideEmail: customerEmail || null,
@@ -103,7 +109,7 @@ export async function POST(req: NextRequest) {
     type: 'graphics_invoice_prompt',
     title: 'Graphics shipped — create invoice?',
     body: `${jobLabel}${job.customer ? ` for ${job.customer}` : ''} has shipped. Create invoice in FleetSuite?`,
-    url: `/invoices?invoiceJob=${job.id}`,
+    url: deepLinks.createInvoiceForJob(job.id),
   });
 
   return NextResponse.json({ notified: billingUserIds.length });

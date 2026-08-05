@@ -53,23 +53,25 @@ export default function AtRiskReportPage() {
   const [noteSavedValue, setNoteSavedValue] = useState('');
   const [noteSaving, setNoteSaving] = useState(false);
 
-  // Deep link (mentions inbox): ?id=<customer id> opens that row's note and
-  // scrolls to it once the report has loaded. One-shot — re-runs of the
-  // report (filter changes) don't re-trigger it.
-  const deepLinked = useRef(false);
+  // Deep link (mentions inbox + at-risk nudges): ?id=<customer id> opens
+  // that row's note and scrolls to it once the report has loaded. One-shot
+  // PER ID — report re-runs (filter changes) don't re-trigger it, but a
+  // second account's notification clicked from the bell (same-route
+  // router.push, no remount) still focuses its row.
+  const deepLinked = useRef<string | null>(null);
   useEffect(() => {
-    if (loading || deepLinked.current) return;
+    if (loading) return;
     const id = searchParams.get('id');
-    if (!id) return;
-    deepLinked.current = true;
+    if (!id || deepLinked.current === id) return;
+    deepLinked.current = id;
     const row = rows.find(r => r.id === id);
     if (!row) return; // e.g. dismissed rows aren't in the default view
     setNoteOpenId(row.id);
     setNoteDraft(row.internal_notes || '');
     setNoteSavedValue(row.internal_notes || '');
     flashNote(`atrisk-${id}`);
-  // eslint-disable-next-line react-hooks/exhaustive-deps -- intentional: fire once after first load
-  }, [loading]);
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- intentional: fire once per deep-linked id
+  }, [loading, searchParams]);
 
   const run = useCallback(async (ms: string, qd: string, incDismissed: boolean) => {
     setLoading(true);

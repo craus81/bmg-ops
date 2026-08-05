@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { createClient } from '@supabase/supabase-js';
 import { validateBody, z } from '@/lib/validate';
+import { deepLinks } from '@/lib/deep-links';
 
 export const dynamic = 'force-dynamic';
 
@@ -78,7 +79,7 @@ export async function POST(req: NextRequest) {
             type: 'access_request',
             title: 'New Access Request',
             body: `${fullName} (${email}) is requesting ${requestedRole || 'installer'} access.`,
-            url: '/admin/users',
+            url: deepLinks.adminUser(userId),
           }
         );
       }

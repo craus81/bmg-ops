@@ -349,16 +349,31 @@ export default function WrapQuotePage() {
   const [emailPreview, setEmailPreview] = useState<{ to: string[]; subject: string; html: string; attachments: string[] } | null>(null);
   const [previewLoading, setPreviewLoading] = useState(false);
 
-  // Deep link from search/popout: ?id= opens that quote's detail view over
-  // the history tab once the quote list has loaded.
+  // Deep link from search/popout/notifications: ?id= opens that quote's
+  // detail view over the history tab once the quote list has loaded.
+  // One-shot per id: loadAll() refreshes `history` after every save/archive/
+  // delete, and ?id= stays in the URL — without the guard each refresh would
+  // yank the user back to the deep-linked quote. Distinct ids still focus.
+  const handledQuoteId = useRef<string | null>(null);
   useEffect(() => {
     const qid = searchParams.get('id');
-    if (!qid || history.length === 0) return;
+    if (!qid || history.length === 0 || handledQuoteId.current === qid) return;
+    handledQuoteId.current = qid;
     const q = history.find(h => h.id === qid);
     if (q) {
       setTab('history');
       setViewQuote(q);
+      return;
     }
+    // Outside the newest-200 window the list loads — fetch it by id so an
+    // old quote's accepted/rejected notification still lands on the quote.
+    (async () => {
+      const { data } = await supabase.from('wrap_quotes').select('*').eq('id', qid).maybeSingle();
+      if (data) {
+        setTab('history');
+        setViewQuote(data);
+      }
+    })();
   // eslint-disable-next-line react-hooks/exhaustive-deps -- intentional: deep-link once after load
   }, [history, searchParams]);
 

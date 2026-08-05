@@ -6,6 +6,7 @@ import { recordVendorInvoice } from '@/lib/vendor-invoice-record';
 import { financeUserIds } from '@/lib/ap';
 import { logAudit } from '@/lib/audit';
 import { notifyMany } from '@/lib/notify';
+import { deepLinks } from '@/lib/deep-links';
 
 export const dynamic = 'force-dynamic';
 // Scan matching + VIN decoding on submit can take a while for big invoices.
@@ -55,6 +56,7 @@ async function callerCompany(userId: string): Promise<{ id: string; name: string
 
 async function notifyFinanceOfSubmission(
   actorId: string,
+  invoiceId: string,
   companyName: string,
   invoiceNumber: string | null,
   amount: number,
@@ -68,7 +70,7 @@ async function notifyFinanceOfSubmission(
     type: 'ap_submitted',
     title: `${resubmitted ? 'Resubmitted' : 'Installer invoice'}: ${companyName}${num}`,
     body: `${companyName} ${resubmitted ? 'resubmitted' : 'submitted'} invoice${num} for $${amount.toFixed(2)} (${vinCount} VIN${vinCount !== 1 ? 's' : ''}) — awaiting approval.`,
-    url: '/admin/ap',
+    url: deepLinks.apInvoice(invoiceId),
     channels: ['in_app', 'push'],
     forceChannels: true,
   });
@@ -94,6 +96,20 @@ export async function GET(req: NextRequest) {
     company = await callerCompany(auth.user!.id);
   }
   if (!company) return NextResponse.json({ invoices: [], noCompany: true });
+
+  // Single-invoice fetch (still company-scoped): the ?invoice= deep-link
+  // fallback for rows older than the newest-100 window below.
+  const id = req.nextUrl.searchParams.get('id')?.trim();
+  if (id) {
+    const { data, error } = await service
+      .from('vendor_invoices')
+      .select(INSTALLER_COLUMNS)
+      .eq('company_id', company.id)
+      .eq('id', id)
+      .maybeSingle();
+    if (error) return NextResponse.json({ error: error.message }, { status: 500 });
+    return NextResponse.json({ invoices: data ? [data] : [], companyId: company.id, companyName: company.name });
+  }
 
   const { data, error } = await service
     .from('vendor_invoices')
@@ -153,7 +169,7 @@ export async function POST(req: NextRequest) {
     const amount = body.totalAmount
       ?? body.lines.reduce((s, l) => s + (l.amount != null ? Number(l.amount) : 0), 0);
     await notifyFinanceOfSubmission(
-      auth.user!.id, company.name, body.invoiceNumber || null, amount, body.lines.length, false,
+      auth.user!.id, result.invoiceId, company.name, body.invoiceNumber || null, amount, body.lines.length, false,
     );
 
     return NextResponse.json({
@@ -208,7 +224,7 @@ export async function PATCH(req: NextRequest) {
     ? Number(invoice.total_amount)
     : (invoice.lines || []).reduce((s: number, l: { amount: number | null }) => s + (l.amount != null ? Number(l.amount) : 0), 0);
   await notifyFinanceOfSubmission(
-    auth.user!.id, company.name, invoice.invoice_number, amount, (invoice.lines || []).length, true,
+    auth.user!.id, invoice.id, company.name, invoice.invoice_number, amount, (invoice.lines || []).length, true,
   );
   await logAudit(service, {
     actorId: auth.user!.id,

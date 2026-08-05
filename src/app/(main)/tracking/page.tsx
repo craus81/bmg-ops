@@ -195,26 +195,38 @@ export default function TrackingPage() {
   useEffect(() => {
     if (loading) return;
     const vehicleId = searchParams.get('vehicle');
-    const target = vehicleId ? vehicles.find(v => v.id === vehicleId) : null;
-    if (!vehicleId || !target) return;
-    setShowArchived(!!(target as any).archived_at);
-    setFilterStatus(target.status === 'shipped' ? 'shipped' : 'all');
-    setSearchTerm('');
-    setExpandedId(vehicleId);
-    loadHistory(vehicleId);
-    loadAssignments(vehicleId);
-    loadPhotos(vehicleId);
-    loadNotes(vehicleId);
-    // A mention deep link (&note=<id>) scroll-flashes that note inside the
-    // detail modal once it loads; otherwise center the vehicle card.
-    const noteId = searchParams.get('note');
-    if (noteId) {
-      flashNote(`vnote-${noteId}`);
-    } else {
-      setTimeout(() => {
-        document.getElementById(`vehicle-${vehicleId}`)?.scrollIntoView({ behavior: 'smooth', block: 'center' });
-      }, 200);
-    }
+    if (!vehicleId) return;
+    const focus = (target: FleetCheckin) => {
+      setShowArchived(!!(target as any).archived_at);
+      setFilterStatus(target.status === 'shipped' ? 'shipped' : 'all');
+      setSearchTerm('');
+      setExpandedId(vehicleId);
+      loadHistory(vehicleId);
+      loadAssignments(vehicleId);
+      loadPhotos(vehicleId);
+      loadNotes(vehicleId);
+      // A mention deep link (&note=<id>) scroll-flashes that note inside the
+      // detail modal once it loads; otherwise center the vehicle card.
+      const noteId = searchParams.get('note');
+      if (noteId) {
+        flashNote(`vnote-${noteId}`);
+      } else {
+        setTimeout(() => {
+          document.getElementById(`vehicle-${vehicleId}`)?.scrollIntoView({ behavior: 'smooth', block: 'center' });
+        }, 200);
+      }
+    };
+    const target = vehicles.find(v => v.id === vehicleId);
+    if (target) { focus(target); return; }
+    // The list pages 50 rows at a time by recency, so an older vehicle's
+    // deep link can miss the loaded window — fetch it by id and prepend
+    // instead of silently doing nothing.
+    (async () => {
+      const { data } = await supabase.from('fleet_checkins').select('*').eq('id', vehicleId).maybeSingle();
+      if (!data) return;
+      setVehicles(prev => prev.some(v => v.id === data.id) ? prev : [data as FleetCheckin, ...prev]);
+      focus(data as FleetCheckin);
+    })();
   // eslint-disable-next-line react-hooks/exhaustive-deps -- intentional: load once on mount
   }, [loading, searchParams]);
 
@@ -256,17 +268,23 @@ export default function TrackingPage() {
   // eslint-disable-next-line react-hooks/exhaustive-deps -- supabase client is a stable singleton
   }, [vehicles]);
 
+  // Offset for Load More comes from how many rows we actually FETCHED, not
+  // vehicles.length — the ?vehicle= deep-link fallback can prepend a row
+  // outside the paged window, and counting it would skip a DB row on the
+  // next page. Appends also dedupe by id for when that row pages back in.
+  const fetchedCountRef = useRef(0);
   const loadVehicles = async (append = false) => {
     if (append) setLoadingMore(true); else setLoading(true);
-    const offset = append ? vehicles.length : 0;
+    const offset = append ? fetchedCountRef.current : 0;
     const { data } = await supabase
       .from('fleet_checkins')
       .select('*')
       .order('updated_at', { ascending: false })
       .range(offset, offset + PAGE_SIZE - 1);
     if (data) {
+      fetchedCountRef.current = offset + data.length;
       if (append) {
-        setVehicles(prev => [...prev, ...data]);
+        setVehicles(prev => [...prev, ...data.filter((d: FleetCheckin) => !prev.some(p => p.id === d.id))]);
       } else {
         setVehicles(data);
       }

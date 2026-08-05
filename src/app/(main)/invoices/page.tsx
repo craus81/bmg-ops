@@ -158,6 +158,23 @@ export default function InvoicingHubPage() {
   // eslint-disable-next-line react-hooks/exhaustive-deps -- intentional: read once on mount
   }, []);
 
+  // Deep link: &invoice=<number> (bounced-email alerts) lands on the
+  // Invoiced tab prefiltered to that invoice, with the window widened so it
+  // can't be outside the default 30 days. Runs on searchParams (NOT mount):
+  // bell/strip clicks router.push to this same route without remounting, so
+  // a mount-only read would dead-click anyone already on /invoices. One-shot
+  // per invoice number; the param is stripped after applying.
+  const invoiceParamHandled = useRef<Set<string>>(new Set());
+  useEffect(() => {
+    const invoiceNumber = searchParams.get('invoice');
+    if (!invoiceNumber || invoiceParamHandled.current.has(invoiceNumber)) return;
+    invoiceParamHandled.current.add(invoiceNumber);
+    setTab('sent');
+    setSearch(invoiceNumber);
+    setSentRange('all');
+    router.replace('/invoices', { scroll: false });
+  }, [searchParams, router]);
+
   // ── Data ──
   const [uninvoicedJobs, setUninvoicedJobs] = useState<GraphicsJob[]>([]);
   const [invoicedJobs, setInvoicedJobs] = useState<GraphicsJob[]>([]);

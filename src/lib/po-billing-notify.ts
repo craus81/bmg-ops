@@ -11,6 +11,7 @@
  */
 
 import { notifyMany, getSuperAdminIds } from '@/lib/notify';
+import { deepLinks } from '@/lib/deep-links';
 
 export const PO_BILLING_ATTENTION_NOTIFICATION_TYPE = 'po_billing_attention';
 
@@ -77,7 +78,7 @@ export async function notifyPoBillingAttention(pos: FlaggedPoAlert[]): Promise<n
         type: PO_BILLING_ATTENTION_NOTIFICATION_TYPE,
         title,
         body,
-        url: `/admin/pos/${po.poId}`,
+        url: deepLinks.po(po.poId),
         channels: ['in_app', 'email', 'push'],
         forceChannels: true,
       });

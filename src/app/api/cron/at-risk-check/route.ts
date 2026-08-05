@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { createServiceClient } from '@/lib/supabase-service';
 import { requireAdmin } from '@/lib/api-auth';
 import { notifyMany } from '@/lib/notify';
+import { deepLinks } from '@/lib/deep-links';
 import { recordHeartbeat } from '@/lib/system-health';
 import { evaluateAtRiskCustomers } from '@/lib/at-risk';
 
@@ -53,7 +54,9 @@ export async function GET(req: NextRequest) {
           type: 'at_risk_account',
           title: `⚠ ${fresh.length} account${fresh.length !== 1 ? 's' : ''} newly at risk`,
           body: lines.slice(0, 900),
-          url: '/admin/reports/at-risk',
+          // Digest: multi-account batches land on the report; a lone account
+          // opens flashed on its row.
+          url: fresh.length === 1 ? deepLinks.atRiskCustomer(fresh[0].id) : '/admin/reports/at-risk',
           channels: ['in_app', 'push'],
           forceChannels: true,
         });
@@ -65,7 +68,7 @@ export async function GET(req: NextRequest) {
             type: 'at_risk_account',
             title: `⚠ Your account ${c.company_name} has gone quiet`,
             body: `${fmtK(c.last_year_spend)} last year, ${fmtK(c.ytd_spend)} this year${c.days_quiet != null ? ` — no orders in ${c.days_quiet} days` : ''}. Worth a call.`,
-            url: '/admin/reports/at-risk',
+            url: deepLinks.atRiskCustomer(c.id),
             channels: ['in_app', 'push'],
             forceChannels: true,
           });

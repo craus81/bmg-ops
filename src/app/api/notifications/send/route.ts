@@ -14,7 +14,11 @@ const NotifySchema = z.object({
   type: z.string().trim().min(1).max(60),
   title: z.string().trim().min(1).max(200),
   body: z.string().trim().min(1).max(1000),
-  url: z.string().max(2000).optional(),
+  // App-relative deep link to the exact record ('/graphics/<id>', ...) —
+  // sendViaEmail prefixes the app origin, so absolute URLs are rejected.
+  // The regex also blocks protocol-relative '//host' urls, which pass a
+  // naive startsWith('/') and would hard-navigate off-app.
+  url: z.string().max(2000).regex(/^\/(?!\/)/, { message: 'url must be app-relative (start with / but not //)' }).optional(),
   excludeUserId: z.string().uuid().optional(),
 });
 
@@ -53,6 +57,11 @@ export async function POST(req: NextRequest) {
     if (filteredIds.length === 0) {
       return NextResponse.json({ sent: 0 });
     }
+
+    // Every notification should deep-link (see src/lib/deep-links.ts) — a
+    // url-less one produces dead clicks in "New for you"/the bell, so make
+    // the offending caller findable in logs rather than silently shipping.
+    if (!url) console.warn(`[notifications/send] no url on type='${type}' — clicks will go nowhere; build one from src/lib/deep-links.ts`);
 
     await notifyMany(filteredIds, { type, title, body, url });
 

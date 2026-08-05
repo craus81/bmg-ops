@@ -58,6 +58,21 @@ they tell you to go back to auto-shipping.
 
 ## Domain notes
 
+- **Deep links are mandatory on every notification.** Anything that lands
+  in "New for you", the bell, the Mentions inbox, a push, or an email CTA
+  (`notify`/`notifyMany` `url`, `reportMentions` `contextUrl`,
+  `buildNotificationEmail` cta) must link to the EXACT record it
+  references — never a bare list page while a record id is in scope, and
+  never no url at all (that's a dead click). Build every URL from
+  `src/lib/deep-links.ts` — one canonical builder per entity — so
+  producers and destination pages can't drift. True digests (many records,
+  no single id) may link to the list; a digest of ONE record links to the
+  record. When adding a new page or notification: add its builder to
+  deep-links.ts, make the destination page actually handle the params the
+  builder emits (open the record's modal, scroll to it, `flashNote` it),
+  and pass the built url at the call site. This came from a field bug
+  ("New for you" clicks going to the page, or nowhere).
+
 - **Supabase reads silently cap at 1000 rows** (PostgREST default —
   `.limit(N > 1000)` does NOT raise it). Any read of a table that can
   grow unboundedly (netsuite_parts, scan_logs, po/invoice line items,
