@@ -1066,7 +1066,8 @@ export default function EstimatesPage() {
             {showCustDropdown && custResults.length > 0 && (
               <div style={{
                 position: 'absolute', top: '100%', left: 0, right: 0, zIndex: 50,
-                background: 'var(--subtle-bg)', border: '1px solid var(--border)', borderRadius: '8px',
+                background: 'var(--card)', border: '1px solid var(--border)', borderRadius: '8px',
+                boxShadow: '0 4px 12px rgba(0,0,0,0.2)',
                 maxHeight: '200px', overflowY: 'auto', marginTop: '2px',
               }}>
                 {custResults.map(c => (
@@ -1230,7 +1231,8 @@ export default function EstimatesPage() {
             {partResults.length > 0 && (
               <div style={{
                 position: 'absolute', top: '100%', left: 0, right: 0, zIndex: 50,
-                background: 'var(--subtle-bg)', border: '1px solid var(--border)', borderRadius: '8px',
+                background: 'var(--card)', border: '1px solid var(--border)', borderRadius: '8px',
+                boxShadow: '0 4px 12px rgba(0,0,0,0.2)',
                 maxHeight: '250px', overflowY: 'auto', marginTop: '2px',
               }}>
                 {partResults.map(p => (
@@ -1534,6 +1536,7 @@ export default function EstimatesPage() {
                 <div style={{
                   position: 'absolute', top: '100%', left: 0, right: 0, zIndex: 50,
                   background: 'var(--card)', border: '1px solid var(--border)', borderRadius: '8px',
+                  boxShadow: '0 4px 12px rgba(0,0,0,0.2)',
                   maxHeight: '250px', overflowY: 'auto', marginTop: '2px',
                 }}>
                   {graphicsPickerResults.map(j => (
