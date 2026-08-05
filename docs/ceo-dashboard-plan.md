@@ -175,9 +175,12 @@ available — **Labor Cost % of Revenue** and **Revenue per Employee**.
   Super Admin / Security Admin; issues a client ID/secret with scoped
   data access). If that's not available on our plan, API access goes
   through a request on the developer portal and can take weeks.
-  **Status: credentials are provisioned — the client-credentials
-  token flow was verified working (bearer token issued, 10-minute
-  expiry) on Aug 4, 2026.** Entitlement check:
+  **Status (corrected Aug 4, 2026): NOT yet verified.** An earlier
+  "successful" token response turned out to be the developer portal's
+  documentation sample, and a real call to the token endpoint returned
+  `Bad credentials` — so an actual API key/secret pair still needs to
+  be created (Flex Integrated Applications, or via the Paychex rep).
+  Once real credentials exist, entitlement check:
   `PAYCHEX_CLIENT_ID=… PAYCHEX_CLIENT_SECRET=… node
   scripts/paychex-smoke-test.mjs` (prints counts/statuses only, no
   PII or pay data).
@@ -213,8 +216,8 @@ available — **Labor Cost % of Revenue** and **Revenue per Employee**.
    Revenue, GM %, Net Profit %, Total Payroll, Labor % of Revenue.
 8. **Paychex payroll sync** — pay-period totals + headcount snapshots
    → Total Payroll (actual), Labor % of Revenue, Revenue per Employee.
-   (Unblocked: API credentials verified working Aug 2026 — needs the
-   client ID/secret added as Vercel env vars.)
+   (Blocked on obtaining a real API key/secret — see the Paychex
+   section status and open question 2.)
 9. `collections` mode → collections this month + trend.
 10. **Gross profit by customer**: first try selecting
    `costestimate`/`estgrossprofit` on invoice lines via SuiteQL (may or
@@ -246,11 +249,12 @@ available — **Labor Cost % of Revenue** and **Revenue per Employee**.
    bank section). Remaining: who is the card issuer, and OK to sign up
    for Plaid and do the 2-minute Link flow with the Business eBanking
    login?
-2. **Payroll**: provider answered — Paychex, and API credentials are
-   provisioned (token flow verified Aug 2026). Remaining: does Paychex
-   post GL journals into NetSuite today, and to which accounts (needed
-   for Net Profit %)? To build the sync, add the client ID/secret as
-   Vercel env vars (never in the repo).
+2. **Payroll**: provider answered — Paychex. Remaining: (a) obtain a
+   real API key/secret (the earlier token was a docs-page sample —
+   check Flex → Company Settings → Access → Integrated Applications,
+   or ask the Paychex rep); (b) does Paychex post GL journals into
+   NetSuite today, and to which accounts (needed for Net Profit %)?
+   When credentials exist they go in Vercel env vars, never the repo.
 3. **Sales rep**: is the Sales Rep field maintained on NetSuite
    customers/transactions? (Determines how revenue-per-rep is
    attributed; quote metrics already attribute to whoever creates the
