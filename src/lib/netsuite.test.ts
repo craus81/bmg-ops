@@ -4,6 +4,7 @@ import {
   suiteqlQueryAll,
   createSalesOrder,
   createDirectInvoice,
+  createInvoiceFromSO,
   createCustomerOrLead,
   getItemBasePrices,
 } from './netsuite';
@@ -254,6 +255,49 @@ describe('createDirectInvoice', () => {
     expect(result.success).toBe(false);
     expect(result.error).toContain('not assigned to the invoice\'s subsidiary');
     consoleSpy.mockRestore();
+  });
+});
+
+describe('createInvoiceFromSO', () => {
+  it('carries SO line descriptions into partial-invoice line overrides', async () => {
+    fetchMock
+      // SO line lookup
+      .mockResolvedValueOnce(jsonResponse({ items: [
+        { linesequencenumber: '1', item: '55', quantity: '4', rate: '125.5', memo: 'Shelf unit — mount behind driver bulkhead' },
+        { linesequencenumber: '2', item: '56', quantity: '2', rate: '80' }, // no memo on the SO line
+      ] }))
+      // invoice transform POST
+      .mockResolvedValueOnce(new Response(null, {
+        status: 204,
+        headers: { Location: 'https://x/services/rest/record/v1/invoice/900' },
+      }))
+      // tranid lookup
+      .mockResolvedValueOnce(jsonResponse({ items: [{ tranid: 'INV-3001' }] }));
+
+    const result = await createInvoiceFromSO({
+      salesOrderId: '12345',
+      installedQuantities: { 1: 2, 2: 1 },
+      locationId: '7',
+      memo: 'Invoice from BMG FleetSuite — PO #1',
+    });
+
+    // The SO line query must fetch the line description (tl.memo)…
+    expect(JSON.parse(fetchMock.mock.calls[0][1].body).q).toContain('tl.memo');
+
+    // …because ?replace=item rebuilds every line: one sent without a
+    // description reverts to the item record's default text, silently
+    // dropping estimate/SO placement notes.
+    const [transformUrl, init] = fetchMock.mock.calls[1];
+    expect(transformUrl).toBe(
+      'https://1234567-sb1.suitetalk.api.netsuite.com/services/rest/record/v1/invoice?init=salesOrder&id=12345&replace=item'
+    );
+    const body = JSON.parse(init.body);
+    expect(body.item.items).toEqual([
+      { item: { id: '55' }, quantity: 2, price: { id: '-1' }, rate: 125.5, description: 'Shelf unit — mount behind driver bulkhead' },
+      { item: { id: '56' }, quantity: 1, price: { id: '-1' }, rate: 80 },
+    ]);
+    expect(body.location).toEqual({ id: '7' });
+    expect(result).toEqual({ success: true, invoiceId: '900', invoiceNumber: 'INV-3001' });
   });
 });
 
