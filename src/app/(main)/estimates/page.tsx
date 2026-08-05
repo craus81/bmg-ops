@@ -1303,16 +1303,19 @@ export default function EstimatesPage() {
                     </div>
                   )}
 
-                  {line.is_custom ? (
-                    <input
-                      style={{ ...inputStyle, padding: '4px 6px', fontSize: '11px' }}
-                      value={line.description}
-                      onChange={e => updateLine(line.key, 'description', e.target.value)}
-                      placeholder="Description"
-                    />
-                  ) : (
-                    <div style={{ fontSize: '11px', color: 'var(--text-body)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{line.description}</div>
-                  )}
+                  {/* Editable on every line, not just custom ones — reps add
+                      placement notes etc. It pushes as the NetSuite transaction
+                      line's description (a per-transaction override; the item
+                      record is never modified). Cleared = NetSuite falls back
+                      to the item's default description. */}
+                  <input
+                    style={{ ...inputStyle, padding: '4px 6px', fontSize: '11px' }}
+                    value={line.description}
+                    onChange={e => updateLine(line.key, 'description', e.target.value)}
+                    placeholder="Description / placement notes"
+                    title={line.description}
+                  />
+
 
                   <input
                     type="number"

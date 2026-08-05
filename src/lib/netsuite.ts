@@ -1746,8 +1746,12 @@ export async function createInvoiceFromSO(payload: {
   if (payload.installedQuantities && Object.keys(payload.installedQuantities).length > 0) {
     // Get SO line details first to map line numbers to items
     try {
+      // tl.memo is the SO line's Description field. It must ride along into
+      // the rebuilt lines below: ?replace=item resets every line, and a line
+      // sent without a description reverts to the item record's default —
+      // silently dropping estimate/SO-level notes (placement notes etc.).
       const linesQuery = `
-        SELECT tl.linesequencenumber, tl.item, tl.quantity, tl.rate
+        SELECT tl.linesequencenumber, tl.item, tl.quantity, tl.rate, tl.memo
         FROM transactionline tl
         WHERE tl.transaction = ${payload.salesOrderId}
         AND tl.mainline = 'F'
@@ -1784,6 +1788,7 @@ export async function createInvoiceFromSO(payload: {
           // Pin "Custom" price level (id -1) so NetSuite keeps the rate we send
           // rather than re-sourcing it from the item's / customer's price level.
           ...(rate > 0 ? { price: { id: '-1' }, rate } : {}),
+          ...(line.memo ? { description: line.memo } : {}),
         };
       });
     } catch (e) {
