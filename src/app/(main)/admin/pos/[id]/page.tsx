@@ -28,6 +28,7 @@ import { DropZone } from '@/components/DropZone';
 import EmailInvoicesModal, { type EmailableInvoice } from '@/components/EmailInvoicesModal';
 import { printPo, downloadPoCsv } from '@/lib/po-print';
 import { findOrCreateManualPart } from '@/lib/parts-catalog';
+import { deepLinks } from '@/lib/deep-links';
 import type { PurchaseOrder, POLineItem, PoLocation, GraphicsJobStatus } from '@/lib/types';
 import { GRAPHICS_STATUS_LABELS, GRAPHICS_STATUS_COLORS } from '@/lib/types';
 
@@ -581,6 +582,32 @@ export default function PoRecordPage() {
 
   // ── Files (same storage flow as the list's manual PDF backfill) ──────────
   const fileUrl = (storagePath: string) => storage.from('graphics-proofs').getPublicUrl(storagePath).data.publicUrl;
+
+  // "Open in new tab" goes through the in-app viewer rather than at the raw
+  // file: a bare PDF tab has no app chrome and no working Back button, which
+  // left people stranded in it. The viewer's ← closes the tab back into this
+  // record (or navigates here when the tab can't close itself).
+  const pdfTabUrl = (url: string, name: string) =>
+    deepLinks.pdfViewer(url, {
+      name,
+      back: po ? deepLinks.po(po.id) : '/admin/pos',
+      backLabel: 'the PO',
+    });
+
+  // window.open (not a plain target="_blank") so the viewer tab keeps an
+  // opener and may close itself; modifier-clicks keep native behavior.
+  const openPdfTab = (e: React.MouseEvent<HTMLAnchorElement>) => {
+    if (e.metaKey || e.ctrlKey || e.shiftKey || e.altKey || e.button !== 0) return;
+    const href = e.currentTarget.href;
+    e.preventDefault();
+    // A blocked popup would leave the click doing nothing at all, so fall
+    // back to a plain new tab (no opener — the viewer's ← navigates instead).
+    if (!window.open(href, '_blank')) {
+      const a = document.createElement('a');
+      a.href = href; a.target = '_blank'; a.rel = 'noreferrer';
+      a.click();
+    }
+  };
 
   const uploadPoPdfs = async (files: File[]) => {
     if (!po || files.length === 0 || !user || uploadingPdf) return;
@@ -1442,7 +1469,7 @@ export default function PoRecordPage() {
                 </button>
                 {f.source && <span style={{ fontSize: '9px', color: 'var(--text-muted)', textTransform: 'uppercase' }}>{f.source === 'pdf_upload' ? 'PDF' : 'Email'}</span>}
                 {f.file_size != null && <span style={{ fontSize: '9px', color: 'var(--text-muted)' }}>{(f.file_size / 1024).toFixed(0)}KB</span>}
-                <a href={fileUrl(f.storage_path)} target="_blank" rel="noopener noreferrer" title="Open in a new tab" style={{ fontSize: '10px', fontWeight: 700, color: 'var(--text-muted)', textDecoration: 'none' }}>↗</a>
+                <a href={pdfTabUrl(fileUrl(f.storage_path), f.file_name)} onClick={openPdfTab} target="_blank" rel="noreferrer" title="Open in a new tab" style={{ fontSize: '10px', fontWeight: 700, color: 'var(--text-muted)', textDecoration: 'none' }}>↗</a>
               </div>
             ))}
           </div>
@@ -1618,9 +1645,10 @@ export default function PoRecordPage() {
               </div>
               <div style={{ display: 'flex', gap: '8px', flexShrink: 0 }}>
                 <a
-                  href={pdfPreview.url}
+                  href={pdfTabUrl(pdfPreview.url, pdfPreview.name)}
+                  onClick={openPdfTab}
                   target="_blank"
-                  rel="noopener noreferrer"
+                  rel="noreferrer"
                   style={{ padding: '6px 12px', borderRadius: '6px', fontSize: '11px', fontWeight: 700, background: 'rgba(96,165,250,0.12)', border: '1px solid rgba(96,165,250,0.3)', color: '#60a5fa', textDecoration: 'none' }}
                 >Open in new tab ↗</a>
                 <button

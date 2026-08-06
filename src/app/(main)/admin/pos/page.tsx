@@ -15,6 +15,7 @@ import { CreateNetsuiteItemModal } from '@/components/CreateNetsuiteItemModal';
 import { useDialog } from '@/components/DialogProvider';
 import CustomerPicker from '@/components/CustomerPicker';
 import { isProofLikeName } from '@/lib/pdf-classify';
+import { deepLinks } from '@/lib/deep-links';
 import { formatShipTo, shipToCityLabel } from '@/lib/graphics-job-from-po';
 import { printPos } from '@/lib/po-print';
 import { PART_FIELDS, partToCatalogItem, findOrCreateManualPart } from '@/lib/parts-catalog';
@@ -237,6 +238,33 @@ export default function POsPage() {
     if (attachmentId) params.set('attachmentId', attachmentId);
     if (filename) params.set('filename', filename);
     return `/api/gmail/attachment?${params.toString()}`;
+  };
+
+  // Where "Open in new tab" points for the review PDF: the in-app viewer, not
+  // the raw bytes. A bare PDF tab has no app chrome and no working Back
+  // button, so opening one mid-import stranded you there; the viewer keeps the
+  // header/nav and its ← closes the tab straight back into this review.
+  const pdfTabUrl = (pdf: { url: string; name: string }, messageId: string) =>
+    deepLinks.pdfViewer(pdf.url, {
+      name: pdf.name,
+      back: deepLinks.poPendingReview(messageId),
+      backLabel: 'PO import',
+    });
+
+  // Opened with window.open (not a plain target="_blank") so the new tab keeps
+  // an opener and is allowed to close itself — modifier-clicks fall through to
+  // the browser's own new-tab handling.
+  const openPdfTab = (e: React.MouseEvent<HTMLAnchorElement>) => {
+    if (e.metaKey || e.ctrlKey || e.shiftKey || e.altKey || e.button !== 0) return;
+    const href = e.currentTarget.href;
+    e.preventDefault();
+    // A blocked popup would leave the click doing nothing at all, so fall
+    // back to a plain new tab (no opener — the viewer's ← navigates instead).
+    if (!window.open(href, '_blank')) {
+      const a = document.createElement('a');
+      a.href = href; a.target = '_blank'; a.rel = 'noreferrer';
+      a.click();
+    }
   };
 
   // The extractor returns both the customer's item number (part_number) and
@@ -2658,7 +2686,7 @@ export default function POsPage() {
               <div style={{ flex: '1 1 340px', minWidth: 0, borderLeft: '1px solid var(--border)', display: 'flex', flexDirection: 'column', background: 'var(--subtle-bg)' }}>
                 <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '8px', padding: '8px 12px', borderBottom: '1px solid var(--border)' }}>
                   <div style={{ fontSize: '11px', fontWeight: 700, color: 'var(--text-label)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{reviewingExtraction.pdf.name}</div>
-                  <a href={reviewingExtraction.pdf.url} target="_blank" rel="noreferrer" style={{ fontSize: '10px', fontWeight: 700, color: '#60a5fa', textDecoration: 'none', whiteSpace: 'nowrap' }}>Open in new tab ↗</a>
+                  <a href={pdfTabUrl(reviewingExtraction.pdf, reviewingExtraction.messageId)} onClick={openPdfTab} target="_blank" rel="noreferrer" style={{ fontSize: '10px', fontWeight: 700, color: '#60a5fa', textDecoration: 'none', whiteSpace: 'nowrap' }}>Open in new tab ↗</a>
                 </div>
                 <iframe src={reviewingExtraction.pdf.url} title={reviewingExtraction.pdf.name} style={{ flex: 1, width: '100%', border: 'none' }} />
               </div>

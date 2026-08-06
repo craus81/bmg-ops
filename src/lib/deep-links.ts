@@ -78,7 +78,50 @@ export const deepLinks = {
   customerPortal: () => '/customer/dashboard',
   /** System health dashboard (checks are keyed by sync type, not record ids). */
   systemHealth: () => '/admin/system-health',
+  /** In-app PDF viewer tab. Use this instead of linking a new tab straight at
+   *  PDF bytes: a raw-PDF tab has no app chrome and no working Back button,
+   *  so it strands whoever opened it (field bug: opening a PO PDF mid-import).
+   *  `src` must be a same-origin path or a URL on our file host — the viewer
+   *  refuses anything else. `back` is where its ← lands when the tab can't
+   *  close itself; pass the deep link to the record being worked on. */
+  pdfViewer: (
+    src: string,
+    opts?: { name?: string | null; back?: string | null; backLabel?: string | null },
+  ) => {
+    const params = new URLSearchParams({ src });
+    if (opts?.name) params.set('name', opts.name);
+    if (opts?.back) params.set('back', opts.back);
+    if (opts?.backLabel) params.set('backLabel', opts.backLabel);
+    return `/pdf?${params.toString()}`;
+  },
 };
+
+/**
+ * Vet a `pdfViewer` src before the viewer renders it in an iframe.
+ *
+ * Only same-origin paths/URLs and our public file host are allowed: the
+ * viewer draws the app's header and nav around whatever it's given, so an
+ * arbitrary URL would turn a link anyone can craft into a convincing
+ * phishing frame. Returns the URL to render, or null to refuse.
+ */
+export function allowedPdfSrc(
+  raw: string | null | undefined,
+  appOrigin: string,
+): string | null {
+  if (!raw) return null;
+  // Same-origin path. Reject "//host" (protocol-relative, i.e. off-site) and
+  // anything that isn't a path at all ("javascript:…", "data:…").
+  if (raw.startsWith('/')) return raw.startsWith('//') ? null : raw;
+  let fileHost = '';
+  try { fileHost = new URL(process.env.NEXT_PUBLIC_R2_PUBLIC_URL || '').origin; } catch { /* unset */ }
+  try {
+    const u = new URL(raw);
+    if (u.protocol !== 'https:') return null;
+    if (u.origin === appOrigin) return u.toString();
+    if (fileHost && u.origin === fileHost) return u.toString();
+  } catch { /* not a URL */ }
+  return null;
+}
 
 /**
  * Public carrier tracking page for a shipment — the right CTA for
