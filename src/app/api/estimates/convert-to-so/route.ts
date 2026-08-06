@@ -4,9 +4,16 @@ import { createClient } from '@supabase/supabase-js';
 import { requireStaff } from '@/lib/api-auth';
 import { validateBody, z } from '@/lib/validate';
 import { safeStringLiteral } from '@/lib/sql-safe';
+import { logAudit } from '@/lib/audit';
+import { notifyMany } from '@/lib/notify';
+import { deepLinks } from '@/lib/deep-links';
 
 const ConvertSchema = z.object({
   estimateId: z.string().uuid(),
+  /** Admin-only: converts an estimate the customer hasn't accepted, with the
+   *  reason recorded in the audit log (phone/email/PO approvals never touch
+   *  the magic link, so a hard gate would block legitimate conversions). */
+  overrideReason: z.string().trim().min(3).max(500).optional(),
 });
 
 /**
@@ -34,7 +41,7 @@ export async function POST(req: NextRequest) {
 
   const parsed = await validateBody(req, ConvertSchema);
   if (parsed.error) return parsed.error;
-  const { estimateId } = parsed.data;
+  const { estimateId, overrideReason } = parsed.data;
 
   try {
     const supabase = createClient(
@@ -60,6 +67,35 @@ export async function POST(req: NextRequest) {
         salesOrderId: estimate.netsuite_so_id,
         salesOrderNumber: estimate.netsuite_so_number || '',
         message: `Sales Order already exists (SO #${estimate.netsuite_so_number || estimate.netsuite_so_id})`,
+      });
+    }
+
+    // ── Acceptance gate ──
+    // customer_approved is the real acceptance signal (set by the magic-link
+    // approval flow and safe from Save clobbers). status is written by three
+    // unrelated paths and is NOT trusted here. Anyone could previously
+    // convert a draft; now conversion requires customer approval — or an
+    // admin override with a recorded reason, because plenty of customers
+    // approve by phone/email/PO and never click the link.
+    if (!estimate.customer_approved) {
+      const roles: string[] = auth.profile?.roles?.length > 0 ? auth.profile.roles : [auth.profile?.role];
+      const isAdminActor = roles.includes('admin') || roles.includes('super_admin');
+      const reason = overrideReason?.trim();
+      if (!isAdminActor || !reason) {
+        return NextResponse.json({
+          error: isAdminActor
+            ? 'This estimate has not been accepted by the customer. Provide an override reason to convert anyway.'
+            : 'This estimate has not been accepted by the customer yet. Send it for approval, or ask an admin to override with a recorded reason.',
+          step: 'not_approved',
+          canOverride: isAdminActor,
+        }, { status: 409 });
+      }
+      await logAudit(supabase, {
+        actorId: auth.user.id,
+        table: 'estimates',
+        recordId: estimateId,
+        action: 'convert_to_so_override',
+        detail: { reason, estimate_number: estimate.estimate_number, grand_total: estimate.grand_total },
       });
     }
 
@@ -195,9 +231,42 @@ export async function POST(req: NextRequest) {
       .update({
         netsuite_so_id: result.salesOrderId,
         netsuite_so_number: result.salesOrderNumber || null,
+        // With the acceptance gate above, conversion only happens once the
+        // customer approved (or an admin overrode with a recorded reason) —
+        // so 'accepted' is now a truthful consequence, and the funnel report
+        // keeps its won signal for phone/email-approved deals.
         status: 'accepted',
       })
       .eq('id', estimateId);
+
+    // Conversion previously notified nobody at all. FYI the estimate's
+    // creator and the account owner (minus whoever clicked Convert);
+    // non-fatal — the SO already exists either way.
+    try {
+      const targetIds = new Set<string>();
+      if (estimate.created_by) targetIds.add(estimate.created_by);
+      if (estimate.customer_id) {
+        const { data: cust } = await supabase
+          .from('customers')
+          .select('account_owner_id')
+          .eq('id', estimate.customer_id)
+          .maybeSingle();
+        if (cust?.account_owner_id) targetIds.add(cust.account_owner_id);
+      }
+      targetIds.delete(auth.user.id);
+      if (targetIds.size > 0) {
+        const { data: actorProfile } = await supabase
+          .from('profiles').select('full_name').eq('id', auth.user.id).maybeSingle();
+        await notifyMany(Array.from(targetIds), {
+          type: 'estimate_converted',
+          title: `Sales Order created: ${estimate.estimate_number}`,
+          body: `${actorProfile?.full_name || 'A teammate'} converted ${estimate.customer_name || 'the customer'}'s estimate to SO #${result.salesOrderNumber || result.salesOrderId}${overrideReason ? ' (admin override — customer approval was recorded outside the app)' : ''}.`,
+          url: deepLinks.estimate(estimateId),
+        });
+      }
+    } catch (notifyErr) {
+      console.error('estimate_converted notification failed:', notifyErr);
+    }
 
     return NextResponse.json({
       status: 'created',
