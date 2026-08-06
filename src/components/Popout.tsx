@@ -12,6 +12,7 @@
 import { createContext, useContext, useState, useCallback, ReactNode } from 'react';
 import { useRouter } from 'next/navigation';
 import { createClient } from '@/lib/supabase-browser';
+import { deepLinks } from '@/lib/deep-links';
 
 export type PopoutType =
   | 'purchase_orders'
@@ -49,20 +50,22 @@ function formatCurrency(val: number) {
 // Full-page deep-link path for the "Open full page" button.
 export function pathFor(type: PopoutType, item: any): string {
   switch (type) {
-    case 'purchase_orders': return `/admin/pos?id=${item.id}`;
-    case 'vehicles': return `/tracking?vehicle=${item.id}`;
-    case 'graphics_jobs': return `/graphics?id=${item.id}`;
-    case 'estimates': return `/estimates?id=${item.id}`;
+    case 'purchase_orders': return deepLinks.po(item.id);
+    case 'vehicles': return deepLinks.vehicle(item.id);
+    case 'graphics_jobs': return deepLinks.graphicsJob(item.id);
+    case 'estimates': return deepLinks.estimate(item.id);
+    // Parts previews land on a filtered search — not a record page, so no
+    // entity builder exists for this one.
     case 'parts': return `/parts?catalog=${item.catalog || 'upfit'}&q=${encodeURIComponent(item.part_number || '')}`;
-    case 'customers': return `/admin/prospects/${item.id}`;
-    case 'messages': return `/messages?conversation=${item.conversation_id}`;
-    case 'quotes': return `/admin/wrap-quote?id=${item.id}`;
+    case 'customers': return deepLinks.prospect(item.id);
+    case 'messages': return deepLinks.conversation(item.conversation_id);
+    case 'quotes': return deepLinks.wrapQuote(item.id);
     // Invoices live in NetSuite — deep-link to whichever record in the app
     // references this one (PO, graphics job, or the sent-invoices list).
     case 'invoices':
-      if (item.po_id) return `/admin/pos?id=${item.po_id}`;
-      if (item.job_id) return `/graphics?id=${item.job_id}`;
-      return '/invoices?tab=sent';
+      if (item.po_id) return deepLinks.po(item.po_id);
+      if (item.job_id) return deepLinks.graphicsJob(item.job_id);
+      return deepLinks.invoicesSent();
     default: return '/';
   }
 }

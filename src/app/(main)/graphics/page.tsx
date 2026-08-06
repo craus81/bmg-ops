@@ -19,6 +19,7 @@
 import { useState, useEffect, useRef } from 'react';
 import { useRouter, useSearchParams } from 'next/navigation';
 import { createClient } from '@/lib/supabase-browser';
+import { deepLinks } from '@/lib/deep-links';
 import { storage } from '@/lib/storage';
 import { useAuth } from '@/components/AuthProvider';
 import { useDialog } from '@/components/DialogProvider';
@@ -594,7 +595,7 @@ export default function GraphicsPage() {
               type: 'graphics_new',
               title: `New Graphics Job: ${createForm.title || 'Untitled'}`,
               body: `${createForm.customer || 'Unknown'} · ${createForm.quantity} unit${createForm.quantity !== 1 ? 's' : ''}${createForm.part_number ? ` · ${createForm.part_number}` : ''}`,
-              url: `/graphics/${data.id}`,
+              url: deepLinks.graphicsJob(data.id),
               excludeUserId: user?.id,
             }),
           }).catch(() => {});

@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { createClient } from '@supabase/supabase-js';
 import { notify } from '@/lib/notify';
+import { deepLinks } from '@/lib/deep-links';
 import { requireAuth } from '@/lib/api-auth';
 import { validateBody, z } from '@/lib/validate';
 
@@ -64,7 +65,7 @@ export async function POST(req: NextRequest) {
       type: 'message',
       title: `Message from ${senderName}`,
       body,
-      url: `/messages?conversation=${conversationId}`,
+      url: deepLinks.conversation(conversationId),
       messageContext: {
         senderName,
         messageBody: body,

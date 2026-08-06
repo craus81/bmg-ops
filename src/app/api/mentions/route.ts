@@ -104,6 +104,14 @@ export async function POST(req: NextRequest) {
     })),
   );
 
+  // A mention should always land ON its source record. /home is the last
+  // resort (it mounts the MentionsInbox card) — reaching it means a surface
+  // passed no contextUrl AND mentionSourceUrl doesn't know its sourceType;
+  // warn so the missing mapping gets noticed instead of shipping dead-ish
+  // clicks silently.
+  if (!deepUrl) {
+    console.warn(`mention with unresolvable url: sourceType=${sourceType || 'none'} sourceId=${sourceId || 'none'}`);
+  }
   await notifyMany([...mentionedIds], {
     type: 'mention',
     title: `${actorName} mentioned you${contextLabel ? ` — ${contextLabel}` : ''}`,
