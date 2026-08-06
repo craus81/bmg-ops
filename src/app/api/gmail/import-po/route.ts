@@ -324,10 +324,21 @@ LOOK FOR THESE SPECIFIC ELEMENTS:
 
 COLUMN IDENTIFICATION — THIS IS CRITICAL:
 The PO table has multiple columns that contain part-number-like codes. You MUST use the correct columns:
-- "Item Number" (also labeled "Part Number" or "Part Number Supplier Part Number") column: THIS IS THE COLUMN THE PART NUMBERS COME FROM. Read every part number out of the Item Number column and nowhere else. Use this value for part_number.
+- "Item Number" (also labeled "Part Number", "Supplier Part Number", or a stacked "Part Number / Supplier Part Number") column: this is the SECOND column, immediately right of the line number and immediately LEFT of the description. THIS IS THE ONLY COLUMN PART NUMBERS COME FROM. Use its value for part_number.
 - "Supplier Part" row below a line item: This is BMG's part number. Use this for supplier_part.
-- "Drawing Number" or "Drawing Number and Revision" column: COMPLETELY IGNORE THIS COLUMN. Do NOT extract values from it. Do NOT put drawing numbers or revision numbers into part_number or supplier_part. These are engineering drawing references that have nothing to do with part numbers.
-- "Revision" column: COMPLETELY IGNORE THIS COLUMN. Revision numbers are NOT part numbers.
+- "Drawing Number" or "Drawing Number & Revision" column: the LAST column, to the RIGHT of the description. Put its value in drawing_number and NOWHERE ELSE. It is never part_number and never supplier_part.
+- "Revision" column: put nothing from it anywhere. Revision numbers are NOT part numbers.
+
+THE DRAWING COLUMN IS A TRAP — it holds a code that looks exactly like a part
+number. On these POs the drawing number is usually the SAME suffix as the
+item number with a DIFFERENT prefix. Real example, one row:
+  Line No. 1.000 | Item Number 06U233 | Description INSTALL DCL VERIZON VZT 2026 CHEVY EXPRESS | Drawing Number & Revision 02U233
+The correct part_number for that row is 06U233 (left of the description).
+02U233 is the DRAWING number (right of the description) and goes only in
+drawing_number. Taking 02U233 as the part number is WRONG and is the single
+most common mistake on this document. Before you write each line's
+part_number, confirm you read it from the column LEFT of the description,
+not the one on the far right.
 
 02 vs 06 PREFIXES — READ THE DIGITS CAREFULLY:
 Item numbers start with a two-digit prefix that says what the line is:
@@ -362,6 +373,7 @@ Return ONLY valid JSON, no markdown, no backticks, no other text:
       "line_no": "1.000",
       "part_number": "02T278",
       "supplier_part": "02T278",
+      "drawing_number": "06T278",
       "description": "GRAPHIC KIT-FORD TRANSIT",
       "quantity": 10,
       "unit_price": 45.00,
@@ -371,6 +383,7 @@ Return ONLY valid JSON, no markdown, no backticks, no other text:
       "line_no": "2.000",
       "part_number": "06T278",
       "supplier_part": "06T278",
+      "drawing_number": "02T278",
       "description": "INSTALL GRAPHIC KIT-FORD TRANSIT",
       "quantity": 10,
       "unit_price": 22.00,
@@ -382,10 +395,10 @@ Return ONLY valid JSON, no markdown, no backticks, no other text:
 
 RULES:
 - Extract EVERY line item row — do not skip any
-- part_number: The Masterack/buyer part number from the "Item Number" column (e.g., RM530432, 02T278, 06T278). This is the PRIMARY identifier.
+- part_number: The Masterack/buyer part number from the "Item Number" column, LEFT of the description (e.g., RM530432, 02T278, 06T278). This is the PRIMARY identifier.
 - supplier_part: BMG's supplier part number, often shown on the line below the main item row. If not present, copy part_number.
-- Before returning, re-check every line whose description mentions install: its part_number and supplier_part must start with 06, not 02.
-- DO NOT include drawing numbers or revision numbers anywhere. Ignore those columns entirely. Only extract from the "Item Number" and "Supplier Part" columns.
+- drawing_number: The "Drawing Number & Revision" value from the far-right column, or null if the PO has no such column. Extract it into this field so it can never be confused with the part number. Never reuse it as part_number or supplier_part.
+- Before returning, re-check every line twice: (1) its part_number came from the column LEFT of the description, not the drawing column on the right — if part_number and drawing_number came out identical you read the same column twice and must re-read the row; (2) if the description mentions install, part_number and supplier_part start with 06, not 02.
 - quantity: Integer only
 - unit_price: Decimal number, no $ sign (e.g., 45.00)
 - delivery_date: The requested delivery date for that line, if shown

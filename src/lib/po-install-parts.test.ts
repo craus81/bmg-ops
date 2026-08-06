@@ -3,6 +3,7 @@ import {
   isInstallDescription,
   correctInstallPartNumber,
   applyInstallPartRule,
+  partNumberIsDrawingNumber,
   type InstallRuleLine,
 } from './po-install-parts';
 
@@ -92,7 +93,48 @@ describe('applyInstallPartRule', () => {
   });
 
   it('handles empty / missing input', () => {
-    expect(applyInstallPartRule([])).toEqual({ lines: [], correctedCount: 0 });
-    expect(applyInstallPartRule(null)).toEqual({ lines: [], correctedCount: 0 });
+    expect(applyInstallPartRule([])).toEqual({ lines: [], correctedCount: 0, drawingColumnCount: 0 });
+    expect(applyInstallPartRule(null)).toEqual({ lines: [], correctedCount: 0, drawingColumnCount: 0 });
+  });
+});
+
+// PO 35050312 as it actually arrived: the item number is 06U233 (left of the
+// description) and 02U233 is the Drawing Number & Revision (far right). The
+// extractor read the drawing column, which looks exactly like a part number.
+describe('drawing-column misreads', () => {
+  it('spots a part number that is really the drawing number', () => {
+    expect(partNumberIsDrawingNumber({ part_number: '02U233', drawing_number: '02U233' })).toBe(true);
+    expect(partNumberIsDrawingNumber({ part_number: '02u233', drawing_number: ' 02U233 ' })).toBe(true);
+    // The correctly-read row: item number and drawing number differ
+    expect(partNumberIsDrawingNumber({ part_number: '06U233', drawing_number: '02U233' })).toBe(false);
+    // Nothing to compare against
+    expect(partNumberIsDrawingNumber({ part_number: '06U233' })).toBe(false);
+    expect(partNumberIsDrawingNumber({ drawing_number: '02U233' })).toBe(false);
+    expect(partNumberIsDrawingNumber(null)).toBe(false);
+  });
+
+  it('repairs the real PO 35050312 rows through the install rule', () => {
+    const { lines, correctedCount, drawingColumnCount } = applyInstallPartRule<InstallRuleLine>([
+      { part_number: '02U233', drawing_number: '02U233', description: 'INSTALL DCL VERIZON VZT 2026 CHEVY EXPRESS' },
+      { part_number: '02U259', drawing_number: '02U259', description: 'INSTALL DCL VERIZON FIOS DECAL CHEVY EXPRESS' },
+    ]);
+    expect(correctedCount).toBe(2);
+    // Install lines, so the 06 number is knowable — no human needed
+    expect(drawingColumnCount).toBe(0);
+    expect(lines.map(l => l.part_number)).toEqual(['06U233', '06U259']);
+    expect(lines.every(l => l.install_prefix_corrected)).toBe(true);
+    expect(lines.some(l => l.part_from_drawing_column)).toBe(false);
+  });
+
+  it('flags a drawing-column misread it cannot repair', () => {
+    // No install wording, so the item number is not derivable — say so rather
+    // than guess a prefix.
+    const { lines, correctedCount, drawingColumnCount } = applyInstallPartRule<InstallRuleLine>([
+      { part_number: '02U233', drawing_number: '02U233', description: 'DCL VERIZON VZT 2026 CHEVY EXPRESS' },
+    ]);
+    expect(correctedCount).toBe(0);
+    expect(drawingColumnCount).toBe(1);
+    expect(lines[0].part_number).toBe('02U233'); // left as read — not invented
+    expect(lines[0].part_from_drawing_column).toBe(true);
   });
 });
