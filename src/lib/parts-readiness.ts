@@ -1,6 +1,7 @@
 import type { SupabaseClient } from '@supabase/supabase-js';
 import { suiteqlQueryAll } from '@/lib/netsuite';
 import { normalizeItemNumber, isOpenPoStatus } from '@/lib/vendor-po-sync';
+import { fetchAllRows } from '@/lib/fetch-all';
 
 /**
  * The part-level math the shop runs on: for an upfit project's sales order,
@@ -158,11 +159,14 @@ export async function computePartsReadiness(service: SupabaseClient, projectId: 
   } catch { /* non-inventory items have no on-hand — leave 0 */ }
 
   // ── FleetSuite reservations, this project vs everyone else ──
-  const { data: allocations } = await service
+  // Paginated: reservations across all projects can pass the 1000-row cap.
+  const { data: allocations } = await fetchAllRows<any>((from, to) => service
     .from('part_allocations')
     .select('project_id, item_number, quantity')
     .eq('status', 'reserved')
-    .in('item_number', [...parts.keys()]);
+    .in('item_number', [...parts.keys()])
+    .order('id')
+    .range(from, to));
   for (const a of allocations || []) {
     const row = parts.get(a.item_number);
     if (!row) continue;
@@ -172,10 +176,15 @@ export async function computePartsReadiness(service: SupabaseClient, projectId: 
   }
 
   // ── On order across all open vendor POs (synced, matched on part number) ──
-  const { data: poLines } = await service
+  // Paginated: this table holds every line of every synced vendor PO — the
+  // unpaginated read capped at 1000 rows and silently under-reported
+  // on-order quantities (roadmap B7).
+  const { data: poLines } = await fetchAllRows<any>((from, to) => service
     .from('netsuite_vendor_po_lines')
     .select('item_number, quantity, quantity_received, netsuite_vendor_pos!inner(tranid, vendor_name, trandate, status, status_label, eta_date)')
-    .in('item_number', [...parts.keys()]);
+    .in('item_number', [...parts.keys()])
+    .order('id')
+    .range(from, to));
   for (const l of poLines || []) {
     const po = (l as any).netsuite_vendor_pos;
     if (!isOpenPoStatus(po?.status)) continue;

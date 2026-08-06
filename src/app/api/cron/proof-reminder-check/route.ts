@@ -5,6 +5,7 @@ import { notifyMany } from '@/lib/notify';
 import { deepLinks } from '@/lib/deep-links';
 import { recordHeartbeat } from '@/lib/system-health';
 import { sendProofApproval } from '@/lib/proof-approval-send';
+import { fetchAllRows } from '@/lib/fetch-all';
 
 export const dynamic = 'force-dynamic';
 export const maxDuration = 120;
@@ -38,13 +39,17 @@ export async function GET(req: NextRequest) {
   }
 
   try {
-    const { data: jobs } = await service
+    // Paginated sweep: the bare .limit(500) had no deterministic order, so
+    // which 500 awaiting-approval jobs got reminders was arbitrary and the
+    // rest were silently skipped (roadmap B9).
+    const { data: jobs } = await fetchAllRows<any>((from, to) => service
       .from('graphics_jobs')
       .select('id, job_number, title, customer, status, sent_for_approval_at, sent_for_approval_by, created_by, assigned_to, approval_reminder_sent_at, approval_reminder_count, approval_escalated_at')
       .not('sent_for_approval_at', 'is', null)
       .eq('customer_approved', false)
       .is('customer_rejected_at', null)
-      .limit(500);
+      .order('id')
+      .range(from, to));
 
     const now = Date.now();
     const dayMs = 86_400_000;
