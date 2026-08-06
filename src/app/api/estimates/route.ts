@@ -239,7 +239,7 @@ export async function POST(req: NextRequest) {
         await supabase.from('estimate_line_items').insert(lineRows);
       }
 
-      return NextResponse.json({ success: true, id: data.id, estimate_number });
+      return NextResponse.json({ success: true, id: data.id, estimate_number: data.estimate_number });
     }
   } catch (err: any) {
     return NextResponse.json({ error: err.message }, { status: 500 });
