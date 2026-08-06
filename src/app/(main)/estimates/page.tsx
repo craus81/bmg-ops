@@ -231,9 +231,9 @@ export default function EstimatesPage() {
   }, [authLoading, user, isAdmin, isSales, isGraphicsProduction]);
 
   // Auto-open estimate from URL param (deep link from notifications/search).
-  // One-shot per id: loadEstimates() toggles `loading` on every save/convert,
-  // and ?id= stays in the URL — without the guard each toggle would silently
-  // re-open the deep-linked estimate over whatever the user moved on to.
+  // One-shot per id: ?id= stays in the URL, and the effect re-runs whenever
+  // its deps change — without the guard a re-run would silently re-open the
+  // deep-linked estimate over whatever the user moved on to.
   // Distinct ids still focus (deps include searchParams), so clicking a
   // second estimate's notification from the bell works.
   const handledEstimateId = useRef<string | null>(null);
@@ -267,12 +267,14 @@ export default function EstimatesPage() {
   // eslint-disable-next-line react-hooks/exhaustive-deps -- intentional: load once on mount
   }, [loading, searchParams]);
 
-  const loadEstimates = async () => {
-    setLoading(true);
+  // `silent` skips the `loading` toggle so mid-session refreshes (after a
+  // Save/Sync/Convert) don't unmount the builder behind the full-page spinner.
+  const loadEstimates = async (silent: boolean = false) => {
+    if (!silent) setLoading(true);
     const res = await fetch('/api/estimates');
     const data = await res.json();
     setEstimates(data.estimates || []);
-    setLoading(false);
+    if (!silent) setLoading(false);
   };
 
   // ── Customer search ──
@@ -497,7 +499,7 @@ export default function EstimatesPage() {
           });
           savedInternalNotesRef.current = internalNotes;
         }
-        await loadEstimates();
+        await loadEstimates(true);
       } else {
         await dialog.alert('Save failed: ' + (data.error || 'Unknown error'));
       }
@@ -562,9 +564,9 @@ export default function EstimatesPage() {
           msg += `\n\n⚠ Could NOT push (FS-CUSTOM item missing in NetSuite): ${data.unmappedItems.join(', ')}`;
         }
         await dialog.alert(msg);
-        await loadEstimates();
-        resetBuilder();
-        setView('list');
+        // Stay in the estimate — the NetSuite banner re-derives from the
+        // refreshed list, and bouncing to the list view lost the user's place.
+        await loadEstimates(true);
       } else {
         await dialog.alert((isSync ? 'Sync' : 'Push') + ' failed: ' + (data.error || 'Unknown error'));
       }
@@ -614,7 +616,7 @@ export default function EstimatesPage() {
             : `SMS failed: ${data.dispatch.sms.error || 'unknown'}`)
       : null;
     await dialog.alert(`Approval link sent. Link: ${data.approvalUrl}\n\n${[emailInfo, smsInfo].filter(Boolean).join('\n')}`);
-    loadEstimates();
+    loadEstimates(true);
   };
 
   const convertToSalesOrder = async () => {
@@ -636,9 +638,8 @@ export default function EstimatesPage() {
       const data = await res.json();
       if (res.ok && data.status === 'created') {
         await dialog.alert(`Sales Order created!\nSO #: ${data.salesOrderNumber || data.salesOrderId}\nLine items: ${data.lineItemCount}${data.skippedItems ? '\nSkipped (no NS item): ' + data.skippedItems.join(', ') : ''}`);
-        await loadEstimates();
-        resetBuilder();
-        setView('list');
+        // Stay in the estimate so the new SO number is visible in context.
+        await loadEstimates(true);
       } else if (data.status === 'already_created') {
         await dialog.alert(data.message);
       } else {

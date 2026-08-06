@@ -224,6 +224,12 @@ export async function POST(req: NextRequest) {
   if (parsed.error) return parsed.error;
   const { estimateId, userId } = parsed.data;
 
+  // Pushing/syncing records NetSuite state, not sales state — an estimate
+  // that is 'sent' (in the follow-up queue) or 'accepted' must keep that
+  // stage when its NetSuite copy is created or refreshed. Mirrors the guard
+  // in POST /api/estimates; 'pushed' only replaces 'draft'.
+  const SALES_STAGES = ['sent', 'accepted', 'rejected'];
+
   try {
     const supabase = getSupabase();
 
@@ -345,7 +351,7 @@ export async function POST(req: NextRequest) {
       await supabase
         .from('estimates')
         .update({
-          status: 'pushed',
+          status: SALES_STAGES.includes(estimate.status) ? estimate.status : 'pushed',
           updated_at: new Date().toISOString(),
           pushed_at: new Date().toISOString(),
           pushed_by: userId || null,
@@ -380,7 +386,7 @@ export async function POST(req: NextRequest) {
       .update({
         netsuite_estimate_id: result.estimateId,
         netsuite_estimate_number: result.estimateNumber,
-        status: 'pushed',
+        status: SALES_STAGES.includes(estimate.status) ? estimate.status : 'pushed',
         pushed_at: new Date().toISOString(),
         pushed_by: userId || null,
         updated_at: new Date().toISOString(),
