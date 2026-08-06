@@ -11,6 +11,7 @@ import {
 import { notifyMany } from '@/lib/notify';
 import { deepLinks } from '@/lib/deep-links';
 import { validateBody, z } from '@/lib/validate';
+import { renderEstimateDocument, escHtml } from '@/lib/estimate-document';
 
 export const dynamic = 'force-dynamic';
 
@@ -135,7 +136,7 @@ export async function POST(req: NextRequest, { params }: { params: { token: stri
   }
 
   // Accept path — snapshot the signed document first, then record approval
-  const snapshotHtml = renderEstimateHtml(estimate, lines, metadata, body.agreementText || AGREEMENT_TEXT);
+  const snapshotHtml = await renderSignedSnapshot(estimate, lines, metadata, body.agreementText || AGREEMENT_TEXT);
   let signedPath: string | null = null;
   let signedHash: string | null = null;
   try {
@@ -238,82 +239,28 @@ async function notifySalesRep(estimate: any, verdict: 'accepted' | 'rejected', r
   });
 }
 
-function esc(s: string | number | null | undefined): string {
-  if (s === null || s === undefined) return '';
-  return String(s)
-    .replace(/&/g, '&amp;')
-    .replace(/</g, '&lt;')
-    .replace(/>/g, '&gt;')
-    .replace(/"/g, '&quot;');
-}
-
-function renderEstimateHtml(est: any, lines: any[], meta: any, agreement: string): string {
+async function renderSignedSnapshot(est: any, lines: any[], meta: any, agreement: string): Promise<string> {
+  // The snapshot is the shared customer-facing document (the same renderer
+  // the approval email uses — if they drift, the legal record stops
+  // matching what the customer was sent) plus the E-SIGN audit block.
   const approvedAt = new Date().toISOString();
-  const rows = lines.map((l: any) => {
-    const total = Number(l.line_total || l.unit_price * l.quantity || 0).toFixed(2);
-    return `<tr>
-      <td>${esc(l.item_number || l.description || 'Item')}${l.description && l.description !== l.item_number ? `<div class="sub">${esc(l.description)}</div>` : ''}${l.notes ? `<div class="note">${esc(l.notes)}</div>` : ''}</td>
-      <td class="r">${esc(l.quantity)}</td>
-      <td class="r">$${Number(l.unit_price).toFixed(2)}</td>
-      <td class="r">$${total}</td>
-    </tr>`;
-  }).join('\n');
-  return `<!doctype html>
-<html><head><meta charset="utf-8"/><title>Estimate ${esc(est.estimate_number)} — Signed</title>
-<style>
-body { font-family: -apple-system, BlinkMacSystemFont, sans-serif; color:#0f172a; background:#f1f5f9; padding:24px; }
-.card { max-width: 720px; margin: 0 auto; background:#fff; border:1px solid #e2e8f0; border-radius:14px; padding:24px; }
-h1 { font-size:22px; margin:0 0 4px; }
-.meta { color:#64748b; font-size:12px; }
-table { width:100%; border-collapse:collapse; margin:18px 0; font-size:13px; }
-th { text-align:left; font-size:11px; text-transform:uppercase; letter-spacing:.5px; color:#64748b; padding-bottom:8px; }
-td { border-top:1px solid #e2e8f0; padding:8px 0; vertical-align:top; }
-.r { text-align:right; }
-.sub { font-size:12px; color:#475569; }
-.note { font-size:11px; color:#94a3b8; font-style:italic; }
-.totals { border-top:2px solid #cbd5e1; padding-top:10px; margin-top:10px; font-size:13px; }
-.totals .row { display:flex; justify-content:space-between; padding:2px 0; }
-.totals .grand { font-size:15px; font-weight:800; }
-.section { background:#f8fafc; border:1px solid #e2e8f0; border-radius:10px; padding:12px; margin-top:12px; font-size:13px; white-space:pre-wrap; }
-.section h3 { margin:0 0 6px; font-size:11px; font-weight:700; color:#64748b; text-transform:uppercase; letter-spacing:.5px; }
-.signed { margin-top:20px; padding:14px; border:1px solid #16a34a; background:#dcfce7; border-radius:10px; font-size:12px; }
-.signed strong { color:#14532d; }
-.audit { margin-top:12px; font-size:11px; color:#475569; }
-.audit div { margin-bottom:2px; }
-</style></head><body>
-<div class="card">
-  <h1>Estimate #${esc(est.estimate_number)}</h1>
-  ${est.title ? `<div class="meta">${esc(est.title)}</div>` : ''}
-  <div class="meta">For ${esc(est.customer_name || 'customer')}</div>
-
-  <table>
-    <thead><tr><th>Item</th><th class="r">Qty</th><th class="r">Rate</th><th class="r">Total</th></tr></thead>
-    <tbody>${rows}</tbody>
-  </table>
-
-  <div class="totals">
-    <div class="row"><span>Subtotal</span><span>$${Number(est.subtotal || 0).toFixed(2)}</span></div>
-    ${est.labor_total > 0 ? `<div class="row"><span>Labor (${esc(est.labor_hours_override ?? est.labor_hours)} hrs @ $${esc(est.labor_rate)}/hr)</span><span>$${Number(est.labor_total).toFixed(2)}</span></div>` : ''}
-    ${(!est.tax_exempt && est.tax_amount > 0) ? `<div class="row"><span>Tax (${(Number(est.tax_rate) * 100).toFixed(2)}%)</span><span>$${Number(est.tax_amount).toFixed(2)}</span></div>` : ''}
-    <div class="row grand"><span>Total</span><span>$${Number(est.grand_total || 0).toFixed(2)}</span></div>
-  </div>
-
-  ${est.install_instructions ? `<div class="section"><h3>Install Instructions</h3>${esc(est.install_instructions)}</div>` : ''}
-  ${(est.on_site_contact_name || est.on_site_contact_phone) ? `<div class="section"><h3>On-site Contact</h3>${esc(est.on_site_contact_name || '')}${est.on_site_contact_phone ? ' · ' + esc(est.on_site_contact_phone) : ''}</div>` : ''}
-  ${est.delivery_preferences ? `<div class="section"><h3>Delivery</h3>${esc(est.delivery_preferences)}</div>` : ''}
-  ${est.notes ? `<div class="section"><h3>Notes</h3>${esc(est.notes)}</div>` : ''}
-
-  <div class="signed">
-    <strong>ACCEPTED</strong>
-    <div class="audit">
-      <div><em>${esc(agreement)}</em></div>
-      <div>Approved at: ${esc(approvedAt)}</div>
-      <div>IP: ${esc(meta.ip)}</div>
-      <div>User agent: ${esc(meta.userAgent)}</div>
-      ${meta.deliveryChannel ? `<div>Delivered via: ${esc(meta.deliveryChannel)}${meta.deliveryTarget ? ' to ' + esc(meta.deliveryTarget) : ''}</div>` : ''}
+  const { data: settings } = await supabase
+    .from('wrap_quote_settings')
+    .select('company')
+    .eq('id', 1)
+    .maybeSingle();
+  const company = settings?.company || {};
+  const signedBlockHtml = `
+  <div style="margin-top:20px;padding:14px;border:1px solid #16a34a;background:#dcfce7;border-radius:10px;font-size:12px;">
+    <strong style="color:#14532d;">ACCEPTED</strong>
+    <div style="margin-top:8px;font-size:11px;color:#374151;">
+      <div><em>${escHtml(agreement)}</em></div>
+      <div>Approved at: ${escHtml(approvedAt)}</div>
+      <div>IP: ${escHtml(meta.ip)}</div>
+      <div>User agent: ${escHtml(meta.userAgent)}</div>
+      ${meta.deliveryChannel ? `<div>Delivered via: ${escHtml(meta.deliveryChannel)}${meta.deliveryTarget ? ' to ' + escHtml(meta.deliveryTarget) : ''}</div>` : ''}
       ${typeof meta.timeOnPageSeconds === 'number' ? `<div>Time on page: ${meta.timeOnPageSeconds}s</div>` : ''}
     </div>
-  </div>
-</div>
-</body></html>`;
+  </div>`;
+  return renderEstimateDocument(est, lines, { company, signedBlockHtml });
 }
