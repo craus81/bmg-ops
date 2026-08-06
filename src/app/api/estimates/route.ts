@@ -178,9 +178,14 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ success: true, id });
     } else {
       // ── CREATE new estimate ──
-      const estimate_number = generateEstimateNumber();
-
-      const { data, error: insertErr } = await supabase
+      // The number has a UNIQUE constraint and a 4-char random suffix — two
+      // creates in the same month can collide, so retry with a fresh number
+      // on 23505 instead of failing the save (wrap-quote does the same).
+      let data: any = null;
+      let insertErr: any = null;
+      for (let attempt = 0; attempt < 3; attempt++) {
+        const estimate_number = generateEstimateNumber();
+        const res = await supabase
         .from('estimates')
         .insert({
           estimate_number,
@@ -208,6 +213,10 @@ export async function POST(req: NextRequest) {
         })
         .select()
         .single();
+        data = res.data;
+        insertErr = res.error;
+        if (!insertErr || insertErr.code !== '23505') break;
+      }
 
       if (insertErr) return NextResponse.json({ error: insertErr.message }, { status: 500 });
 

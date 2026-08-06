@@ -98,7 +98,7 @@ async function fetchItem(
     case 'estimates': {
       const { data } = await supabase
         .from('estimates')
-        .select('id, estimate_number, title, status, total')
+        .select('id, estimate_number, title, status, grand_total')
         .eq('id', id).maybeSingle();
       return data;
     }
