@@ -1,7 +1,7 @@
 'use client';
 
 import { useState, useEffect, useMemo, useRef } from 'react';
-import { useSearchParams } from 'next/navigation';
+import { useRouter, useSearchParams } from 'next/navigation';
 import { createClient } from '@/lib/supabase-browser';
 import { useAuth } from '@/components/AuthProvider';
 import { useDialog } from '@/components/DialogProvider';
@@ -291,6 +291,7 @@ export default function WrapQuotePage() {
 
   const [tab, setTab] = useState<Tab>('estimator');
   const searchParams = useSearchParams();
+  const router = useRouter();
   const [loading, setLoading] = useState(true);
   const [templates, setTemplates] = useState<Template[]>([]);
   const [substrates, setSubstrates] = useState<Film[]>([]);
@@ -351,18 +352,24 @@ export default function WrapQuotePage() {
 
   // Deep link from search/popout/notifications: ?id= opens that quote's
   // detail view over the history tab once the quote list has loaded.
-  // One-shot per id: loadAll() refreshes `history` after every save/archive/
-  // delete, and ?id= stays in the URL — without the guard each refresh would
-  // yank the user back to the deep-linked quote. Distinct ids still focus.
+  // The ref guards the handling window: loadAll() refreshes `history` after
+  // every save/archive/delete, and until the router.replace below lands the
+  // ?id= is still in the URL — without the guard each refresh would yank the
+  // user back to the deep-linked quote. Once the quote is open the id is
+  // consumed out of the URL and the ref cleared, so clicking the same
+  // notification again re-opens the quote (it used to be a dead click).
   const handledQuoteId = useRef<string | null>(null);
   useEffect(() => {
     const qid = searchParams.get('id');
-    if (!qid || history.length === 0 || handledQuoteId.current === qid) return;
+    if (!qid) { handledQuoteId.current = null; return; }
+    if (history.length === 0 || handledQuoteId.current === qid) return;
     handledQuoteId.current = qid;
+    const consume = () => router.replace('/admin/wrap-quote', { scroll: false });
     const q = history.find(h => h.id === qid);
     if (q) {
       setTab('history');
       setViewQuote(q);
+      consume();
       return;
     }
     // Outside the newest-200 window the list loads — fetch it by id so an
@@ -373,6 +380,7 @@ export default function WrapQuotePage() {
         setTab('history');
         setViewQuote(data);
       }
+      consume();
     })();
   // eslint-disable-next-line react-hooks/exhaustive-deps -- intentional: deep-link once after load
   }, [history, searchParams]);

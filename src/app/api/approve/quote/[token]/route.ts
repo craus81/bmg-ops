@@ -186,6 +186,10 @@ function publicQuote(q: any) {
   };
 }
 
+// Roles that can open /admin/wrap-quote (mirrors the page's hasAccess gate:
+// admin/sales/graphics — legacy 'production' maps to graphics_production).
+const WRAP_QUOTE_ROLES = ['admin', 'super_admin', 'sales', 'graphics_production', 'production'];
+
 async function notifySalesRep(quote: any, verdict: 'accepted' | 'rejected', reason?: string) {
   const targetIds = new Set<string>();
   if (quote.created_by) targetIds.add(quote.created_by);
@@ -197,6 +201,30 @@ async function notifySalesRep(quote: any, verdict: 'accepted' | 'rejected', reas
       .maybeSingle();
     if (cust?.account_owner_id) targetIds.add(cust.account_owner_id);
   }
+
+  // An account owner outside the wrap-quote roles would click through to
+  // "You don't have access to Wrap Quotes" — a dead notification. Keep only
+  // recipients who can actually open the page; if nobody survives the
+  // filter, fall through to the admin fallback below.
+  if (targetIds.size > 0) {
+    const { data: profs } = await supabase
+      .from('profiles')
+      .select('id, role, roles')
+      .in('id', Array.from(targetIds))
+      .eq('status', 'approved');
+    const allowed = new Set(
+      (profs || [])
+        .filter((p: any) => {
+          const roles: string[] = p.roles?.length > 0 ? p.roles : [p.role];
+          return roles.some(r => WRAP_QUOTE_ROLES.includes(r));
+        })
+        .map((p: any) => p.id)
+    );
+    for (const tid of Array.from(targetIds)) {
+      if (!allowed.has(tid)) targetIds.delete(tid);
+    }
+  }
+
   if (targetIds.size === 0) {
     const { data: admins } = await supabase
       .from('profiles')
