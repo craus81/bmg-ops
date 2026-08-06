@@ -195,7 +195,14 @@ export default function GraphicsPage() {
     // loads, so the role flags are all false for a moment — bailing then
     // bounced legitimate users to /home.
     if (authLoading || !user) return;
-    if (!isProduction && !isAdmin && !isSales) { router.push('/home'); return; }
+    if (!isProduction && !isAdmin && !isSales) {
+      // Old notification emails still carry legacy record links
+      // (?editJob=/?id=). The forward effect below sends those to
+      // /graphics/<id>, which now admits every staff role — don't race
+      // that navigation to /home.
+      if (!searchParams.get('editJob') && !searchParams.get('id')) router.push('/home');
+      return;
+    }
     loadJobs();
   // eslint-disable-next-line react-hooks/exhaustive-deps -- intentional: load once on mount
   }, [user, isAdmin, isProduction, authLoading]);

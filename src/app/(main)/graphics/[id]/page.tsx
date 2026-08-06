@@ -99,7 +99,7 @@ export default function GraphicsJobRecordPage() {
   const router = useRouter();
   const params = useParams();
   const jobId = String(params?.id || '');
-  const { user, isAdmin, isProduction, isSales, loading: authLoading } = useAuth();
+  const { user, isAdmin, isProduction, isSales, isInstaller, isFieldTech, isShopTech, loading: authLoading } = useAuth();
   const dialog = useDialog();
   const supabase = createClient();
 
@@ -153,13 +153,18 @@ export default function GraphicsJobRecordPage() {
   const loadStarted = useRef(false);
   useEffect(() => {
     if (authLoading || !user) return;
-    // Same feature gating as the board.
-    if (!isProduction && !isAdmin && !isSales) { router.push('/home'); return; }
+    // Every graphics notification (assignment, note, status change) deep-links
+    // here, and those fan out to assignees of ANY staff role — installers and
+    // shop/field techs included, whom RLS already grants full read/write on
+    // graphics_jobs. Gating to the board's roles bounced their email/bell
+    // clicks to /home, so only customer-only portal accounts are turned away.
+    const isStaff = isProduction || isAdmin || isSales || isInstaller || isFieldTech || isShopTech;
+    if (!isStaff) { router.push('/home'); return; }
     if (loadStarted.current) return;
     loadStarted.current = true;
     load();
   // eslint-disable-next-line react-hooks/exhaustive-deps -- intentional: load once when auth resolves
-  }, [authLoading, user, isAdmin, isProduction, isSales]);
+  }, [authLoading, user, isAdmin, isProduction, isSales, isInstaller, isFieldTech, isShopTech]);
 
   const load = async () => {
     const { data } = await supabase
