@@ -2,8 +2,10 @@ import { NextRequest, NextResponse } from 'next/server';
 import { createClient } from '@supabase/supabase-js';
 import { requireStaff } from '@/lib/api-auth';
 import { generateToken } from '@/lib/magic-link-approval';
-import { sendEmail, buildNotificationEmail } from '@/lib/resend';
+import { sendEmail } from '@/lib/resend';
 import { sendSMS } from '@/lib/sms-provider';
+import { renderEstimateDocument } from '@/lib/estimate-document';
+import { r2PublicUrl } from '@/lib/r2';
 import { validateBody, z } from '@/lib/validate';
 
 export const dynamic = 'force-dynamic';
@@ -113,11 +115,29 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
 
   if (email) {
     const link = `${appUrl}/approve/estimate/${token}?via=email${email ? `&to=${encodeURIComponent(email)}` : ''}`;
-    const body =
-      `Estimate #${estimate.estimate_number}${estimate.title ? ` — ${estimate.title}` : ''}` +
-      ` for ${estimate.customer_name || 'you'}. Total: $${Number(estimate.grand_total || 0).toFixed(2)}.` +
-      ` Review and approve using the button below. Link expires in ${expiryDays} days.`;
-    const html = buildNotificationEmail(subject.replace('[BMG Fleet] ', ''), body, link, 'Review & Approve');
+    // The real estimate document, not a notification card: the old email
+    // carried a one-line summary and no quantities, rates, or line totals
+    // at all — the fields customers kept asking about.
+    const { data: lineItems } = await supabase
+      .from('estimate_line_items')
+      .select('*')
+      .eq('estimate_id', estimate.id)
+      .order('sort_order')
+      .order('id');
+    const { data: settings } = await supabase
+      .from('wrap_quote_settings')
+      .select('company')
+      .eq('id', 1)
+      .maybeSingle();
+    const company = settings?.company || {};
+    const logoUrl = company?.logo_path ? r2PublicUrl('vehicle-templates', company.logo_path) : null;
+    const html = renderEstimateDocument(estimate, lineItems || [], {
+      company,
+      logoUrl,
+      ctaUrl: link,
+      ctaLabel: 'Review & Approve',
+      ctaNote: `This link expires in ${expiryDays} days.`,
+    });
     try {
       const ok = await sendEmail(email, subject, html, undefined, undefined, auth.user?.email || undefined);
       dispatch.email = { target: email, ok };
