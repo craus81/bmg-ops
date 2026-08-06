@@ -9,6 +9,7 @@ const VehicleCheckIn = lazy(() => import('@/components/VehicleCheckIn'));
 import { createClient } from '@/lib/supabase-browser';
 import { useAuth } from '@/components/AuthProvider';
 import { storage } from '@/lib/storage';
+import { fetchAllRows } from '@/lib/fetch-all';
 import StatusBadge from '@/components/StatusBadge';
 import AssignmentPicker from '@/components/AssignmentPicker';
 import VehiclePhotoTimeline from '@/components/VehiclePhotoTimeline';
@@ -253,12 +254,16 @@ export default function TrackingPage() {
     (async () => {
       const since: Record<string, string> = {};
       for (let i = 0; i < missing.length; i += 200) {
-        const { data } = await supabase
+        // Paginated: .limit(3000) was still capped at 1000 by PostgREST, so
+        // busy boards silently fell back to created_at for "days in stage".
+        const chunk = missing.slice(i, i + 200);
+        const { data } = await fetchAllRows<{ vehicle_id: string; created_at: string }>((from, to) => supabase
           .from('vehicle_status_history')
           .select('vehicle_id, created_at')
-          .in('vehicle_id', missing.slice(i, i + 200))
+          .in('vehicle_id', chunk)
           .order('created_at', { ascending: false })
-          .limit(3000);
+          .order('id')
+          .range(from, to));
         for (const h of data || []) {
           if (!since[h.vehicle_id]) since[h.vehicle_id] = h.created_at;
         }
