@@ -16,7 +16,7 @@ import { useDialog } from '@/components/DialogProvider';
 import CustomerPicker from '@/components/CustomerPicker';
 import { isProofLikeName } from '@/lib/pdf-classify';
 import { deepLinks } from '@/lib/deep-links';
-import { applyInstallPartRule, isInstallDescription } from '@/lib/po-install-parts';
+import { applyInstallPartRule, isInstallDescription, partNumberIsDrawingNumber } from '@/lib/po-install-parts';
 import { formatShipTo, shipToCityLabel } from '@/lib/graphics-job-from-po';
 import { printPos } from '@/lib/po-print';
 import { PART_FIELDS, partToCatalogItem, findOrCreateManualPart } from '@/lib/parts-catalog';
@@ -274,12 +274,18 @@ export default function POsPage() {
   // endpoint prefers supplier_part when saving lines — so collapse the pair
   // into a single editable Part Number before review (supplier_part wins) and
   // drop supplier_part, otherwise edits to the visible field wouldn't stick.
+  // The 02/06 install rule runs here too, not just at extraction time: the
+  // pending-import queue replays extractions stored earlier (by the cron,
+  // possibly before the rule existed), and those would otherwise reach review
+  // uncorrected.
   const collapseSupplierParts = (extracted: any) => ({
     ...extracted,
-    lines: (extracted.lines || []).map(({ supplier_part, ...l }: any) => ({
-      ...l,
-      part_number: supplier_part || l.part_number,
-    })),
+    lines: applyInstallPartRule(
+      (extracted.lines || []).map(({ supplier_part, ...l }: any) => ({
+        ...l,
+        part_number: supplier_part || l.part_number,
+      })),
+    ).lines,
   });
   // NetSuite item creation from a review line: holds the line being created; tracks created lines by index
   const [createNsItemLine, setCreateNsItemLine] = useState<{ idx: number; partNumber: string; description: string | null } | null>(null);
@@ -2569,6 +2575,9 @@ export default function POsPage() {
               // to one — and flag it if an edit puts it back to an 02.
               const installMismatch = isInstallDescription(line.description)
                 && (line.part_number || '').trim().toUpperCase().startsWith('02');
+              // Part number equal to the row's drawing number means the
+              // far-right column got read instead of the Item Number column.
+              const fromDrawingColumn = partNumberIsDrawingNumber(line);
               return (
                 <div key={idx} style={{
                   padding: '10px', marginBottom: '6px', borderRadius: '8px',
@@ -2580,7 +2589,12 @@ export default function POsPage() {
                     <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
                       {catalogMatch && <span style={{ fontSize: '9px', color: '#4ade80', fontWeight: 600 }}>✓ Catalog match</span>}
                       {!catalogMatch && <span style={{ fontSize: '9px', color: '#fbbf24', fontWeight: 600 }}>No catalog match</span>}
-                      {installMismatch ? (
+                      {fromDrawingColumn ? (
+                        <span
+                          title="This matches the line's Drawing Number & Revision — the part number belongs to the Item Number column, left of the description. Check the PDF."
+                          style={{ fontSize: '9px', color: '#f87171', fontWeight: 700 }}
+                        >⚠ Drawing #, not item #</span>
+                      ) : installMismatch ? (
                         <span
                           title="This line reads as an installation charge, so its item number should start with 06 (02 is the physical part)."
                           style={{ fontSize: '9px', color: '#f87171', fontWeight: 700 }}

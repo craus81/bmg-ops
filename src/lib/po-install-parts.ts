@@ -55,9 +55,30 @@ export interface InstallRuleLine {
   part_number?: string | null;
   supplier_part?: string | null;
   description?: string | null;
+  /** "Drawing Number & Revision" — extracted into its own field precisely so
+   *  it can be told apart from the part number. */
+  drawing_number?: string | null;
   /** Set when this line's number was corrected, so the review panel can say so. */
   install_prefix_corrected?: boolean;
+  /** Set when the part number was read out of the drawing column and the rule
+   *  couldn't repair it — a human has to pick the right number. */
+  part_from_drawing_column?: boolean;
   [key: string]: any;
+}
+
+/**
+ * Did this line's part number come out of the "Drawing Number & Revision"
+ * column? On these POs the drawing number is the same suffix under a
+ * different prefix (item 06U233 / drawing 02U233), so reading the far-right
+ * column instead of the one left of the description produces a plausible —
+ * and wrong — part number. Identical values in both fields means the same
+ * column was read twice.
+ */
+export function partNumberIsDrawingNumber(line: InstallRuleLine | null | undefined): boolean {
+  const norm = (v: string | null | undefined) => String(v || '').trim().toUpperCase();
+  const pn = norm(line?.part_number);
+  const dn = norm(line?.drawing_number);
+  return !!pn && !!dn && pn === dn;
 }
 
 /**
@@ -67,19 +88,27 @@ export interface InstallRuleLine {
  */
 export function applyInstallPartRule<T extends InstallRuleLine>(
   lines: T[] | null | undefined,
-): { lines: T[]; correctedCount: number } {
+): { lines: T[]; correctedCount: number; drawingColumnCount: number } {
   let correctedCount = 0;
+  let drawingColumnCount = 0;
   const out = (lines || []).map(line => {
     const part = correctInstallPartNumber(line?.part_number, line?.description);
     const supplier = correctInstallPartNumber(line?.supplier_part, line?.description);
-    if (!part.corrected && !supplier.corrected) return line;
-    correctedCount++;
+    // Read off the drawing column? On an install line the rule below already
+    // knows the answer (the 06 number), so the repair also fixes the misread.
+    // On any other line we can't reconstruct the item number — flag it and
+    // let a human read it off the PDF rather than invent one.
+    const fromDrawing = partNumberIsDrawingNumber(line);
+    if (fromDrawing && !part.corrected) drawingColumnCount++;
+    if (!part.corrected && !supplier.corrected && !fromDrawing) return line;
+    if (part.corrected || supplier.corrected) correctedCount++;
     return {
       ...line,
       ...(part.corrected ? { part_number: part.value } : {}),
       ...(supplier.corrected ? { supplier_part: supplier.value } : {}),
-      install_prefix_corrected: true,
+      ...(part.corrected || supplier.corrected ? { install_prefix_corrected: true } : {}),
+      ...(fromDrawing && !part.corrected ? { part_from_drawing_column: true } : {}),
     };
   });
-  return { lines: out, correctedCount };
+  return { lines: out, correctedCount, drawingColumnCount };
 }
