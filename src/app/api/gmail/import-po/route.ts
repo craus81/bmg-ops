@@ -11,6 +11,7 @@ import { isProofLikeName } from '@/lib/pdf-classify';
 import { recomputePoFulfillment } from '@/lib/scan-match';
 import { fetchAllRows } from '@/lib/fetch-all';
 import { notifyPoImported, countGraphicsLines } from '@/lib/po-import-notify';
+import { applyInstallPartRule } from '@/lib/po-install-parts';
 
 // Full active catalog for part matching — paginated past PostgREST's
 // 1000-row cap. A truncated read here marks real parts "not in catalog"
@@ -323,10 +324,25 @@ LOOK FOR THESE SPECIFIC ELEMENTS:
 
 COLUMN IDENTIFICATION — THIS IS CRITICAL:
 The PO table has multiple columns that contain part-number-like codes. You MUST use the correct columns:
-- "Part Number" or "Part Number Supplier Part Number" column: This is the CORRECT column for the buyer/Masterack part number. Use this value for part_number.
+- "Item Number" (also labeled "Part Number" or "Part Number Supplier Part Number") column: THIS IS THE COLUMN THE PART NUMBERS COME FROM. Read every part number out of the Item Number column and nowhere else. Use this value for part_number.
 - "Supplier Part" row below a line item: This is BMG's part number. Use this for supplier_part.
 - "Drawing Number" or "Drawing Number and Revision" column: COMPLETELY IGNORE THIS COLUMN. Do NOT extract values from it. Do NOT put drawing numbers or revision numbers into part_number or supplier_part. These are engineering drawing references that have nothing to do with part numbers.
 - "Revision" column: COMPLETELY IGNORE THIS COLUMN. Revision numbers are NOT part numbers.
+
+02 vs 06 PREFIXES — READ THE DIGITS CAREFULLY:
+Item numbers start with a two-digit prefix that says what the line is:
+- "02…" is a PHYSICAL PART (a graphic kit, rack, shelf, partition — something shipped).
+- "06…" is the INSTALLATION CHARGE for that part (labor, not a shipped item).
+A part and its install share the same suffix — 02T278 is the part, 06T278 is
+installing it — so the prefix is the ONLY thing that tells them apart, and a
+PO usually lists both, one after the other. Do not guess and do not copy the
+prefix from a neighboring row: read each row's own digits.
+
+HARD RULE: if a line's description says INSTALL (install, installs,
+installed, installation, INSTL, INST), that line's item number ALWAYS starts
+with 06 — never 02. A line described as an install with an 02 number is a
+misread. Likewise a description with no install wording is the physical part
+and normally starts with 02.
 
 Return ONLY valid JSON, no markdown, no backticks, no other text:
 {
@@ -344,11 +360,20 @@ Return ONLY valid JSON, no markdown, no backticks, no other text:
   "lines": [
     {
       "line_no": "1.000",
-      "part_number": "06T278",
-      "supplier_part": "06T278",
+      "part_number": "02T278",
+      "supplier_part": "02T278",
       "description": "GRAPHIC KIT-FORD TRANSIT",
       "quantity": 10,
       "unit_price": 45.00,
+      "delivery_date": "03/25/2026"
+    },
+    {
+      "line_no": "2.000",
+      "part_number": "06T278",
+      "supplier_part": "06T278",
+      "description": "INSTALL GRAPHIC KIT-FORD TRANSIT",
+      "quantity": 10,
+      "unit_price": 22.00,
       "delivery_date": "03/25/2026"
     }
   ],
@@ -357,9 +382,10 @@ Return ONLY valid JSON, no markdown, no backticks, no other text:
 
 RULES:
 - Extract EVERY line item row — do not skip any
-- part_number: The Masterack/buyer part number from the "Part Number" column (e.g., RM530432, 06T278). This is the PRIMARY identifier.
+- part_number: The Masterack/buyer part number from the "Item Number" column (e.g., RM530432, 02T278, 06T278). This is the PRIMARY identifier.
 - supplier_part: BMG's supplier part number, often shown on the line below the main item row. If not present, copy part_number.
-- DO NOT include drawing numbers or revision numbers anywhere. Ignore those columns entirely. Only extract from the "Part Number" and "Supplier Part" columns.
+- Before returning, re-check every line whose description mentions install: its part_number and supplier_part must start with 06, not 02.
+- DO NOT include drawing numbers or revision numbers anywhere. Ignore those columns entirely. Only extract from the "Item Number" and "Supplier Part" columns.
 - quantity: Integer only
 - unit_price: Decimal number, no $ sign (e.g., 45.00)
 - delivery_date: The requested delivery date for that line, if shown
@@ -406,9 +432,22 @@ async function extractFromPdfs(base64Docs: string[], promptSuffix: string, apiKe
       const jsonMatch = aiText.match(/\{[\s\S]*\}/);
       if (jsonMatch) jsonStr = jsonMatch[0];
     }
+    const extracted = JSON.parse(jsonStr);
+    // The prompt states the 02/06 rule, but a misread digit is exactly the
+    // kind of thing a model gets wrong occasionally — and it's cheap to
+    // settle deterministically: a line described as an install is always an
+    // 06. Corrected lines carry install_prefix_corrected so the review panel
+    // can show what changed instead of quietly editing the PO.
+    if (Array.isArray(extracted?.lines)) {
+      const { lines, correctedCount } = applyInstallPartRule(extracted.lines);
+      extracted.lines = lines;
+      if (correctedCount > 0) {
+        console.log(`PO extraction: corrected ${correctedCount} install line(s) from 02 to 06`);
+      }
+    }
     return {
       ok: true,
-      extracted: JSON.parse(jsonStr),
+      extracted,
       stopReason: aiResult.stop_reason || null,
       inputTokens: aiResult.usage?.input_tokens || 0,
       outputTokens: aiResult.usage?.output_tokens || 0,
