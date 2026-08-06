@@ -99,6 +99,13 @@ async function createNetSuiteEstimate(config: ReturnType<typeof getNetSuiteConfi
     body.memo = payload.memo;
   }
 
+  // Only sent for exempt estimates so the common path's payload is
+  // unchanged: NetSuite otherwise taxed exempt estimates because the flag
+  // was accepted here and never written into the request.
+  if (payload.taxExempt) {
+    body.istaxable = false;
+  }
+
   const response = await fetch(url, {
     method: 'POST',
     headers: {
@@ -148,6 +155,7 @@ async function updateNetSuiteEstimate(config: ReturnType<typeof getNetSuiteConfi
   customerId: string;
   memo?: string;
   lineItems: { itemId: string; quantity: number; rate: number; description?: string }[];
+  taxExempt: boolean;
 }) {
   const { oauth, token, baseUrl } = await getOAuthHelpers(config);
   // ?replace=item tells NetSuite to replace the entire item sublist instead of
@@ -171,6 +179,10 @@ async function updateNetSuiteEstimate(config: ReturnType<typeof getNetSuiteConfi
 
   if (payload.memo) {
     body.memo = payload.memo;
+  }
+
+  if (payload.taxExempt) {
+    body.istaxable = false;
   }
 
   const response = await fetch(url, {
@@ -336,6 +348,7 @@ export async function POST(req: NextRequest) {
         customerId: estimate.customer_netsuite_id,
         memo,
         lineItems: nsLineItems,
+        taxExempt: estimate.tax_exempt,
       });
 
       if (!updateResult.success) {
