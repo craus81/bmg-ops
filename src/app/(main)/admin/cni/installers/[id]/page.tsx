@@ -9,6 +9,7 @@ import { theme } from '@/lib/theme';
 import { loadCompaniesWithCounts, type CompanyOption } from '@/lib/cni-companies';
 import { storage } from '@/lib/storage';
 import MentionTextArea, { reportMentions } from '@/components/MentionTextArea';
+import PhoneInput from '@/components/PhoneInput';
 import { flashNote } from '@/lib/focus-note';
 
 const RISK_TAG_OPTIONS = [
@@ -535,7 +536,7 @@ export default function CniInstallerDetailPage() {
             </div>
             <div>
               <label style={labelStyle}>Phone</label>
-              <input style={inputStyle} value={editForm.phone} onChange={e => setEditForm({ ...editForm, phone: e.target.value })} />
+              <PhoneInput style={inputStyle} value={editForm.phone} onChange={v => setEditForm({ ...editForm, phone: v })} />
             </div>
           </div>
 

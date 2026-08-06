@@ -31,6 +31,7 @@ import { useAuth } from '@/components/AuthProvider';
 import { useDialog } from '@/components/DialogProvider';
 import { openNetSuitePdf } from '@/lib/netsuite-pdf-client';
 import DropboxProofSearch from '@/components/DropboxProofSearch';
+import PhoneInput from '@/components/PhoneInput';
 import { exportProspectPDF } from '@/lib/prospect-pdf';
 import { SortableTh, useTableSort } from '@/components/ui/SortableTh';
 import { usd2 } from '@/lib/financials-print';
@@ -1252,7 +1253,7 @@ export default function CustomerRecordPage() {
                 <input style={cInput} placeholder="Name (First Last) *" value={cForm.name} onChange={e => setCForm({ ...cForm, name: e.target.value })} />
                 <input style={cInput} placeholder="Title" value={cForm.title} onChange={e => setCForm({ ...cForm, title: e.target.value })} />
                 <input style={cInput} type="email" placeholder="Email" value={cForm.email} onChange={e => setCForm({ ...cForm, email: e.target.value })} />
-                <input style={cInput} placeholder="Phone" value={cForm.phone} onChange={e => setCForm({ ...cForm, phone: e.target.value })} />
+                <PhoneInput style={cInput} placeholder="Phone" value={cForm.phone} onChange={v => setCForm({ ...cForm, phone: v })} />
                 <label style={{ display: 'flex', alignItems: 'center', gap: '6px', fontSize: '11px', color: 'var(--text-secondary)', gridColumn: '1 / -1' }}>
                   <input type="checkbox" checked={cForm.is_decision_maker} onChange={e => setCForm({ ...cForm, is_decision_maker: e.target.checked })} />
                   Key decision maker
@@ -1659,7 +1660,7 @@ export default function CustomerRecordPage() {
             <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '8px' }}>
               <input style={{ ...cInput, gridColumn: '1 / -1' }} placeholder="Company name *" value={editForm.company_name} onChange={e => setEditForm({ ...editForm, company_name: e.target.value })} />
               <input style={cInput} placeholder="Contact name" value={editForm.contact_name} onChange={e => setEditForm({ ...editForm, contact_name: e.target.value })} />
-              <input style={cInput} placeholder="Phone" value={editForm.phone} onChange={e => setEditForm({ ...editForm, phone: e.target.value })} />
+              <PhoneInput style={cInput} placeholder="Phone" value={editForm.phone} onChange={v => setEditForm({ ...editForm, phone: v })} />
               <input style={cInput} type="email" placeholder="Email" value={editForm.email} onChange={e => setEditForm({ ...editForm, email: e.target.value })} />
               <input style={cInput} placeholder="Website" value={editForm.website} onChange={e => setEditForm({ ...editForm, website: e.target.value })} />
               <input style={{ ...cInput, gridColumn: '1 / -1' }} placeholder="Street address" value={editForm.address} onChange={e => setEditForm({ ...editForm, address: e.target.value })} />

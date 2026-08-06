@@ -15,6 +15,7 @@
 
 import { useState, useEffect, useCallback } from 'react';
 import { createClient } from '@/lib/supabase-browser';
+import PhoneInput from '@/components/PhoneInput';
 import type { GraphicsJob } from '@/lib/types';
 import { exportPackingListPDF, packingListFromJob, type PackingListLine } from '@/lib/packing-list-pdf';
 
@@ -389,7 +390,7 @@ export default function GraphicsInvoiceReviewModal({ job, onClose, onComplete }:
                     <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '8px' }}>
                       <input value={newCust.companyName} onChange={e => setNewCust(v => ({ ...v, companyName: e.target.value }))} placeholder="Company name *" autoFocus style={{ ...searchInput, gridColumn: '1 / -1' }} />
                       <input value={newCust.email} onChange={e => setNewCust(v => ({ ...v, email: e.target.value }))} placeholder="Email" style={searchInput} />
-                      <input value={newCust.phone} onChange={e => setNewCust(v => ({ ...v, phone: e.target.value }))} placeholder="Phone" style={searchInput} />
+                      <PhoneInput value={newCust.phone} onChange={val => setNewCust(v => ({ ...v, phone: val }))} placeholder="Phone" style={searchInput} />
                       <input value={newCust.address} onChange={e => setNewCust(v => ({ ...v, address: e.target.value }))} placeholder="Address" style={{ ...searchInput, gridColumn: '1 / -1' }} />
                       <input value={newCust.city} onChange={e => setNewCust(v => ({ ...v, city: e.target.value }))} placeholder="City" style={searchInput} />
                       <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '8px' }}>

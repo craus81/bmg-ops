@@ -6,6 +6,7 @@ import { createClient } from '@/lib/supabase-browser';
 import { useAuth } from '@/components/AuthProvider';
 import { DropZone } from '@/components/DropZone';
 import PartPicker, { type PickedPart } from '@/components/PartPicker';
+import PhoneInput from '@/components/PhoneInput';
 import { loadCompaniesWithCounts, type CompanyOption } from '@/lib/cni-companies';
 import { uploadJobFiles } from '@/lib/job-files';
 import { isVerizonRfidPart } from '@/lib/rfid';
@@ -333,7 +334,7 @@ export default function CreateCniJobPage() {
           <label style={labelStyle}>Site Contact</label>
           <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '10px' }}>
             <input style={inputStyle} value={siteContactName} onChange={e => setSiteContactName(e.target.value)} placeholder="Name" />
-            <input style={inputStyle} value={siteContactPhone} onChange={e => setSiteContactPhone(e.target.value)} placeholder="Phone" />
+            <PhoneInput style={inputStyle} value={siteContactPhone} onChange={v => setSiteContactPhone(v)} placeholder="Phone" />
           </div>
           <input style={{ ...inputStyle, marginTop: '10px' }} value={siteContactEmail} onChange={e => setSiteContactEmail(e.target.value)} placeholder="Email" />
         </div>
