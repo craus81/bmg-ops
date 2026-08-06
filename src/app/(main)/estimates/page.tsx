@@ -626,14 +626,37 @@ export default function EstimatesPage() {
       await dialog.alert(`This estimate already has a Sales Order: SO #${est.netsuite_so_number || est.netsuite_so_id}`);
       return;
     }
-    if (!(await dialog.confirm('Create a Sales Order in NetSuite from this estimate?'))) return;
+
+    // Conversion is gated server-side on customer approval. Admins can
+    // override for phone/email/PO approvals — the reason lands in the
+    // audit log with their name on it.
+    let overrideReason: string | undefined;
+    if (!(est as any)?.customer_approved) {
+      if (!isAdmin) {
+        await dialog.alert('This estimate has not been accepted by the customer yet. Send it for approval first, or ask an admin to override.');
+        return;
+      }
+      const reason = await dialog.prompt(
+        'The customer has not accepted this estimate in the app. How was it approved? (recorded in the audit log)',
+        '',
+        { title: 'Convert without in-app approval', confirmLabel: 'Convert' },
+      );
+      if (reason === null) return;
+      if (reason.trim().length < 3) {
+        await dialog.alert('An override reason is required (e.g. "approved by phone, spoke to Dana 8/6").');
+        return;
+      }
+      overrideReason = reason.trim();
+    } else if (!(await dialog.confirm('Create a Sales Order in NetSuite from this estimate?'))) {
+      return;
+    }
 
     setConvertingToSO(true);
     try {
       const res = await fetch('/api/estimates/convert-to-so', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ estimateId: editingId }),
+        body: JSON.stringify({ estimateId: editingId, ...(overrideReason ? { overrideReason } : {}) }),
       });
       const data = await res.json();
       if (res.ok && data.status === 'created') {
@@ -1848,22 +1871,32 @@ export default function EstimatesPage() {
           </button>
         )}
 
-        {/* Convert to Sales Order */}
-        {editingId && customerNsId && lines.length > 0 && !estimates.find(e => e.id === editingId)?.netsuite_so_id && (
-          <button
-            onClick={convertToSalesOrder}
-            disabled={convertingToSO}
-            style={{
-              width: '100%', padding: '12px', borderRadius: '10px',
-              background: convertingToSO ? 'var(--subtle-bg)' : 'rgba(34,197,94,0.12)',
-              border: '1px solid rgba(34,197,94,0.3)',
-              color: '#22c55e', fontWeight: 800, fontSize: '13px', cursor: 'pointer',
-              opacity: convertingToSO ? 0.5 : 1,
-            }}
-          >
-            {convertingToSO ? 'Creating Sales Order...' : 'Convert to Sales Order in NetSuite'}
-          </button>
-        )}
+        {/* Convert to Sales Order — gated on customer approval; admins can
+            override with a recorded reason (phone/email/PO approvals). */}
+        {editingId && customerNsId && lines.length > 0 && !estimates.find(e => e.id === editingId)?.netsuite_so_id && (() => {
+          const approved = !!(estimates.find(e => e.id === editingId) as any)?.customer_approved;
+          const locked = !approved && !isAdmin;
+          return (
+            <button
+              onClick={convertToSalesOrder}
+              disabled={convertingToSO || locked}
+              title={locked ? 'Waiting on customer approval — send the estimate for approval, or ask an admin to override.' : undefined}
+              style={{
+                width: '100%', padding: '12px', borderRadius: '10px',
+                background: convertingToSO || locked ? 'var(--subtle-bg)' : 'rgba(34,197,94,0.12)',
+                border: '1px solid rgba(34,197,94,0.3)',
+                color: locked ? 'var(--text-muted)' : '#22c55e', fontWeight: 800, fontSize: '13px',
+                cursor: locked ? 'not-allowed' : 'pointer',
+                opacity: convertingToSO ? 0.5 : 1,
+              }}
+            >
+              {convertingToSO ? 'Creating Sales Order...'
+                : locked ? 'Convert to Sales Order — waiting on customer approval'
+                : approved ? 'Convert to Sales Order in NetSuite'
+                : 'Convert to Sales Order (admin override)'}
+            </button>
+          );
+        })()}
 
         {/* Show SO number if already converted */}
         {editingId && estimates.find(e => e.id === editingId)?.netsuite_so_id && (
