@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { createServiceClient } from '@/lib/supabase-service';
 import { requireAdmin } from '@/lib/api-auth';
 import { notifyMany } from '@/lib/notify';
+import { deepLinks } from '@/lib/deep-links';
 import { evaluateSystemHealth, recordHeartbeat } from '@/lib/system-health';
 
 export const dynamic = 'force-dynamic';
@@ -95,7 +96,7 @@ export async function GET(req: NextRequest) {
           type: 'system_health',
           title: `⚠ ${toAlert.length} background job${toAlert.length !== 1 ? 's' : ''} need attention`,
           body: lines.slice(0, 900),
-          url: '/admin/system-health',
+          url: deepLinks.systemHealth(),
           channels: ['in_app', 'push'],
           forceChannels: true,
         });

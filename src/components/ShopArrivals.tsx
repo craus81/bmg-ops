@@ -11,6 +11,7 @@
 import { useState, useEffect, useCallback } from 'react';
 import { useRouter } from 'next/navigation';
 import { createClient } from '@/lib/supabase-browser';
+import { deepLinks } from '@/lib/deep-links';
 import { useAuth } from '@/components/AuthProvider';
 
 const IN_SHOP_STATUSES = ['received', 'checked_in', 'in_progress', 'stuck_parts', 'stuck_graphics'];
@@ -102,8 +103,8 @@ export default function ShopArrivals() {
     await supabase.from('shop_inbound').update({ status: 'cancelled', updated_at: new Date().toISOString() }).eq('id', row.id);
   };
   const openSource = (row: InboundRow) => {
-    if (row.source_type === 'graphics_job') router.push(`/graphics?id=${row.source_id}`);
-    else if (row.source_type === 'upfit_project') router.push('/upfit');
+    if (row.source_type === 'graphics_job') router.push(deepLinks.graphicsJob(row.source_id));
+    else if (row.source_type === 'upfit_project') router.push(deepLinks.upfitProject(row.source_id));
   };
 
   const addManual = async () => {

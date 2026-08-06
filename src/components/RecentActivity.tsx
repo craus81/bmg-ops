@@ -20,6 +20,7 @@ import { useState, useEffect } from 'react';
 import { useRouter } from 'next/navigation';
 import { createClient } from '@/lib/supabase-browser';
 import { useAuth } from '@/components/AuthProvider';
+import { deepLinks } from '@/lib/deep-links';
 import { GRAPHICS_STATUS_LABELS, VEHICLE_STATUS_LABELS } from '@/lib/types';
 
 interface ActivityItem {
@@ -132,7 +133,7 @@ export default function RecentActivity() {
         out.push({
           key: `gfx-${h.id}`, when: h.created_at, tag: 'GFX', title,
           subtitle: [job.title, job.customer].filter(Boolean).join(' · '),
-          path: `/graphics?id=${job.id}`,
+          path: deepLinks.graphicsJob(job.id),
         });
       }
 
@@ -147,7 +148,7 @@ export default function RecentActivity() {
         out.push({
           key: `veh-${h.id}`, when: h.created_at, tag: 'SHOP', title,
           subtitle: [desc, v.customer_name].filter(Boolean).join(' · '),
-          path: `/tracking?vehicle=${v.id}`,
+          path: deepLinks.vehicle(v.id),
         });
       }
 
@@ -156,7 +157,7 @@ export default function RecentActivity() {
           key: `est-${e.id}`, when: e.updated_at || e.created_at, tag: 'EST',
           title: `${wasEdited(e.created_at, e.updated_at) ? 'Updated' : 'Created'} estimate ${e.estimate_number}`,
           subtitle: [e.title, e.customer_name].filter(Boolean).join(' · '),
-          path: `/estimates?id=${e.id}`,
+          path: deepLinks.estimate(e.id),
         });
       }
 
@@ -165,7 +166,7 @@ export default function RecentActivity() {
           key: `quote-${q.id}`, when: q.updated_at || q.created_at, tag: 'QUOTE',
           title: `${wasEdited(q.created_at, q.updated_at) ? 'Updated' : 'Created'} wrap quote ${q.quote_number}`,
           subtitle: [q.vehicle_description, q.customer?.name].filter(Boolean).join(' · '),
-          path: `/admin/wrap-quote?id=${q.id}`,
+          path: deepLinks.wrapQuote(q.id),
         });
       }
 
@@ -176,7 +177,7 @@ export default function RecentActivity() {
           key: `crm-${a.id}`, when: a.created_at, tag: 'CRM',
           title: CRM_LABELS[a.type] || pretty(a.type),
           subtitle: [p.company_name, a.summary].filter(Boolean).join(' — '),
-          path: `/admin/prospects/${p.id}`,
+          path: deepLinks.prospect(p.id),
         });
       }
 
@@ -187,7 +188,7 @@ export default function RecentActivity() {
           key: `cni-${h.id}`, when: h.created_at, tag: 'CNI',
           title: `Moved to ${pretty(h.to_status)}`,
           subtitle: [job.title, job.customer_name].filter(Boolean).join(' · '),
-          path: `/admin/cni/jobs/${job.id}`,
+          path: deepLinks.cniJob(job.id),
         });
       }
 

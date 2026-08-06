@@ -250,7 +250,7 @@ async function notifyCompletion(vehicle: any, actorName: string, actorEmail: str
       type: 'vehicle_complete',
       title: `Install complete: ${vehicleLabel}`,
       body: `${actorName} marked ${vehicleLabel} (${customerName}) complete. VIN ${vehicle.vin}.`,
-      url: `/vehicles/${vehicle.vin}/pick-list`,
+      url: deepLinks.pickList(vehicle.vin),
     });
   }
 
