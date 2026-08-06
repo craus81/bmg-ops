@@ -340,7 +340,11 @@ export default function WrapQuotePage() {
   const [attachments, setAttachments] = useState<QuoteAttachment[]>([]);
   const [attaching, setAttaching] = useState(false);
   const [showArchived, setShowArchived] = useState(false);
-  const [sendMode, setSendMode] = useState<'full' | 'quote_only' | 'coverage_only' | 'netsuite_pdf'>('full');
+  // Email content checkboxes (replaced the single-select mode — you can now
+  // mix them, e.g. picture + total with no line items, or pricing + PDF).
+  const [sendInclude, setSendInclude] = useState<{ pricing: boolean; lineItems: boolean; diagram: boolean; netsuitePdf: boolean }>({
+    pricing: true, lineItems: true, diagram: true, netsuitePdf: false,
+  });
   // Email preview modal: shows exactly what will go out (rendered body,
   // recipients, attachments) with an optional personal message and
   // per-attachment include toggles before anything is sent.
@@ -1353,7 +1357,7 @@ export default function WrapQuotePage() {
         method: 'POST',
         body: JSON.stringify({
           quoteId: id,
-          mode: sendMode,
+          include: sendInclude,
           preview: true,
           message: msg.trim() || undefined,
           attachmentPaths: attachments.filter(a => include[a.path] !== false).map(a => a.path),
@@ -1379,7 +1383,11 @@ export default function WrapQuotePage() {
   const createAndEmail = async () => {
     if (!customer.email?.trim()) { await dialog.alert('Enter a customer email first.'); return; }
     if (measurements.length === 0) { await dialog.alert('No measurements — draw the wrap areas on the Estimator tab first.'); return; }
-    if (sendMode === 'netsuite_pdf' && !history.find(q => q.id === savedQuoteId)?.netsuite_estimate_id) {
+    if (!sendInclude.pricing && !sendInclude.diagram && !sendInclude.netsuitePdf) {
+      await dialog.alert('Nothing selected to send — pick pricing, the coverage picture, or the NetSuite PDF.');
+      return;
+    }
+    if (sendInclude.netsuitePdf && !history.find(q => q.id === savedQuoteId)?.netsuite_estimate_id) {
       await dialog.alert('This quote isn\'t in NetSuite yet — use "Create Quote in NetSuite" first.');
       return;
     }
@@ -1400,14 +1408,14 @@ export default function WrapQuotePage() {
 
   const sendQuoteEmail = async () => {
     if (!emailQuoteId) return;
-    const coverageOnly = sendMode === 'coverage_only';
+    const coverageOnly = !sendInclude.pricing && !sendInclude.netsuitePdf;
     setSending(true);
     try {
       const res = await apiFetch('/api/wrap-quote/send', {
         method: 'POST',
         body: JSON.stringify({
           quoteId: emailQuoteId,
-          mode: sendMode,
+          include: sendInclude,
           message: emailMessage.trim() || undefined,
           attachmentPaths: attachments.filter(a => attachInclude[a.path] !== false).map(a => a.path),
         }),
@@ -1633,7 +1641,7 @@ export default function WrapQuotePage() {
       setPlacements({});
       setUseRollPricing(false);
     }
-    setSendMode('full');
+    setSendInclude({ pricing: true, lineItems: true, diagram: true, netsuitePdf: false });
     setViewQuote(null);
     setTab('quote');
   };
@@ -2777,17 +2785,31 @@ export default function WrapQuotePage() {
             </DropZone>
             <div style={{ marginBottom: '8px' }}>
               <div style={labelStyle}>Email Content</div>
-              <select value={sendMode} onChange={e => setSendMode(e.target.value as typeof sendMode)} style={inputStyle}>
-                <option value="full">Quote + coverage picture</option>
-                <option value="quote_only">Quote only (no picture)</option>
-                <option value="coverage_only">Coverage picture only (no pricing)</option>
-                <option value="netsuite_pdf">NetSuite quote PDF (attached)</option>
-              </select>
+              {([
+                ['diagram', 'Coverage picture', 'The vehicle drawing with the wrap areas'],
+                ['pricing', 'Pricing', 'Subtotal, tax, and total in the email body'],
+                ['lineItems', 'Itemized line items', 'The per-area rows — uncheck for just the total'],
+                ['netsuitePdf', 'NetSuite quote PDF', 'Attached; NetSuite\u2019s totals are the document of record'],
+              ] as const).map(([key, label, hint]) => {
+                const disabled = key === 'lineItems' && !sendInclude.pricing;
+                return (
+                  <label key={key} style={{ display: 'flex', alignItems: 'center', gap: '8px', padding: '4px 2px', cursor: disabled ? 'not-allowed' : 'pointer', opacity: disabled ? 0.45 : 1 }}>
+                    <input
+                      type="checkbox"
+                      checked={key === 'lineItems' ? sendInclude.lineItems && sendInclude.pricing : sendInclude[key]}
+                      disabled={disabled}
+                      onChange={e => setSendInclude(prev => ({ ...prev, [key]: e.target.checked }))}
+                    />
+                    <span style={{ fontSize: '11px', fontWeight: 700, color: 'var(--text-primary)' }}>{label}</span>
+                    <span style={{ fontSize: '10px', color: 'var(--text-muted)' }}>{hint}</span>
+                  </label>
+                );
+              })}
             </div>
             <div style={{ display: 'flex', gap: '6px', flexWrap: 'wrap' }}>
               <button onClick={() => saveQuote()} style={btnStyle('#60a5fa', 'rgba(59,130,246,0.1)')}>{savedQuoteId ? 'Update Draft' : 'Save Draft'}</button>
               <button onClick={createAndEmail} disabled={sending} style={{ ...btnStyle('#fff', '#22c55e'), border: 'none' }}>
-                {sending ? 'Working…' : sendMode === 'coverage_only' ? 'Preview & Email Coverage' : 'Preview & Email Quote'}
+                {sending ? 'Working…' : (!sendInclude.pricing && !sendInclude.netsuitePdf) ? 'Preview & Email Coverage' : 'Preview & Email Quote'}
               </button>
             </div>
             <div style={{ display: 'flex', gap: '6px', flexWrap: 'wrap', alignItems: 'center', marginTop: '6px' }}>
@@ -3223,10 +3245,10 @@ export default function WrapQuotePage() {
                 style={{ ...inputStyle, resize: 'vertical' }}
               />
             </div>
-            {(attachments.length > 0 || sendMode === 'netsuite_pdf') && (
+            {(attachments.length > 0 || sendInclude.netsuitePdf) && (
               <div>
                 <div style={labelStyle}>Attachments</div>
-                {sendMode === 'netsuite_pdf' && (
+                {sendInclude.netsuitePdf && (
                   <label style={{ display: 'flex', alignItems: 'center', gap: '6px', fontSize: '11px', fontWeight: 700, color: 'var(--text-primary)', marginBottom: '3px' }}>
                     <input type="checkbox" checked disabled />
                     NetSuite quote PDF <span style={{ color: 'var(--text-muted)', fontWeight: 400 }}>(always included in this mode)</span>
@@ -3261,7 +3283,7 @@ export default function WrapQuotePage() {
                 Refresh Preview
               </button>
               <button onClick={sendQuoteEmail} disabled={sending || previewLoading} style={{ ...btnStyle('#fff', '#22c55e'), border: 'none' }}>
-                {sending ? 'Sending…' : sendMode === 'coverage_only' ? 'Send Coverage' : 'Send Quote'}
+                {sending ? 'Sending…' : (!sendInclude.pricing && !sendInclude.netsuitePdf) ? 'Send Coverage' : 'Send Quote'}
               </button>
             </div>
           </div>

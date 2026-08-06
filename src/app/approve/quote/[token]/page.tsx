@@ -114,7 +114,9 @@ export default function QuoteApprovalPage() {
       )}
 
       <div style={{ background: '#f8fafc', border: '1px solid #e2e8f0', borderRadius: '12px', padding: '14px', marginBottom: '16px' }}>
-        <table style={{ width: '100%', fontSize: '13px', borderCollapse: 'collapse' }}>
+        {/* Sent as "picture + total": line data never left the server, so
+            render just the money block below. */}
+        {!q.hide_line_items && <table style={{ width: '100%', fontSize: '13px', borderCollapse: 'collapse' }}>
           <thead>
             <tr style={{ textAlign: 'left', color: '#64748b', fontSize: '11px', textTransform: 'uppercase', letterSpacing: '0.5px' }}>
               <th style={{ paddingBottom: '8px' }}>Item</th>
@@ -190,8 +192,8 @@ export default function QuoteApprovalPage() {
               );
             })}
           </tbody>
-        </table>
-        <div style={{ borderTop: '2px solid #cbd5e1', marginTop: '10px', paddingTop: '10px', fontSize: '13px', color: '#0f172a' }}>
+        </table>}
+        <div style={{ borderTop: q.hide_line_items ? 'none' : '2px solid #cbd5e1', marginTop: q.hide_line_items ? 0 : '10px', paddingTop: q.hide_line_items ? 0 : '10px', fontSize: '13px', color: '#0f172a' }}>
           {q.adjustments && ((parseFloat(q.adjustments.discount_amount) || 0) > 0.005 || (parseFloat(q.adjustments.min_bump) || 0) > 0.005) && (
             <Row label="Subtotal before adjustments" value={`$${money(q.adjustments.pre_subtotal)}`} />
           )}
