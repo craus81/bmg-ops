@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { createClient } from '@supabase/supabase-js';
 import { requireAuth } from '@/lib/api-auth';
 import { validateBody, z } from '@/lib/validate';
+import { fmtInches } from '@/lib/format';
 
 export const dynamic = 'force-dynamic';
 
@@ -158,7 +159,7 @@ export async function POST(req: NextRequest) {
     const laminateNames = [...new Set(measurements.map(m => m.substrate?.laminate_name).filter(Boolean))];
     const areaLines = measurements.map(m => {
       const qty = Math.max(1, Number(m.qty) || 1);
-      const dims = `${m.dim1_in || 0}" × ${m.dim2_in || 0}"`;
+      const dims = `${fmtInches(m.dim1_in)}" × ${fmtInches(m.dim2_in)}"`;
       const film = m.substrate?.name ? ` — ${m.substrate.name}` : '';
       return `${m.name || 'Area'}: ${qty > 1 ? `${qty}× ` : ''}${dims}${film}`;
     });
