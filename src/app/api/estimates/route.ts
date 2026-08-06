@@ -133,14 +133,18 @@ export async function POST(req: NextRequest) {
       // explicitly moving to one (Send for Approval pre-saves with 'sent').
       const SALES_STAGES = ['sent', 'accepted', 'rejected'];
       const requestedStatus = status || 'draft';
-      let effectiveStatus = requestedStatus;
+      let effectiveStatus: string | undefined = requestedStatus;
       if (requestedStatus === 'draft' || requestedStatus === 'pushed') {
-        const { data: existing } = await supabase
+        const { data: existing, error: statusReadErr } = await supabase
           .from('estimates')
           .select('status')
           .eq('id', id)
           .maybeSingle();
-        if (existing && SALES_STAGES.includes(existing.status)) {
+        if (statusReadErr) {
+          // Fail closed: if we can't see the current stage, leave status
+          // untouched rather than risk writing 'draft' over an approval.
+          effectiveStatus = undefined;
+        } else if (existing && SALES_STAGES.includes(existing.status)) {
           effectiveStatus = existing.status;
         }
       }
@@ -153,7 +157,7 @@ export async function POST(req: NextRequest) {
           customer_netsuite_id: customer_netsuite_id || null,
           title: title || null,
           notes: notes || null,
-          status: effectiveStatus,
+          ...(effectiveStatus !== undefined ? { status: effectiveStatus } : {}),
           tax_rate: effectiveTaxRate,
           tax_exempt: !!tax_exempt,
           labor_rate: effectiveLaborRate,
