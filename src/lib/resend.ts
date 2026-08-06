@@ -35,6 +35,22 @@ function isRateLimitError(error: { name?: string } | null): boolean {
   return error?.name === 'rate_limit_exceeded';
 }
 
+/**
+ * Armor email HTML against a lossy hop between Resend and the recipient's
+ * inbox that quoted-printable-decodes the body one time too many: any
+ * literal `=` followed by two hex digits gets swallowed as a QP escape, so
+ * "?id=5f5cbf95…" arrived in the field as "?id_cbf95…" and every UUID
+ * query-param deep link (all-hex ids!) broke, while path-style links
+ * survived untouched. Writing those `=` as the HTML entity `&#61;` keeps
+ * the fragile byte sequence out of the transmitted body; HTML parsers
+ * decode the entity, so rendered links and text are unchanged. `=` followed
+ * by anything else (e.g. the `="` of attribute syntax) is not a valid QP
+ * escape and passes through decoders literally, so it needs no armoring.
+ */
+export function qpProofHtml(html: string): string {
+  return html.replace(/=(?=[0-9A-Fa-f]{2})/g, '&#61;');
+}
+
 function enqueueSend<T>(task: () => Promise<T>): Promise<T> {
   const run = sendQueue.then(async () => {
     const wait = lastSendAt + MIN_SEND_INTERVAL_MS - Date.now();
@@ -78,7 +94,9 @@ export async function sendEmailDetailed(
           from: `${fromName} <${fromEmail}>`,
           to,
           subject,
-          html: htmlBody,
+          html: qpProofHtml(htmlBody),
+          // The plain-text part derives from the RAW html — text has no
+          // entity escape mechanism, so armoring can't help it there.
           text: textBody || htmlBody.replace(/<[^>]*>/g, ''),
           ...(effectiveReplyTo ? { replyTo: effectiveReplyTo } : {}),
           ...(attachments && attachments.length > 0 ? { attachments } : {}),

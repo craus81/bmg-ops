@@ -166,4 +166,67 @@ describe('sendEmail', () => {
     expect(await first).toBe(false);
     expect(await second).toBe(true);
   });
+
+  it('armors the html against QP re-decoding but leaves the text part raw', async () => {
+    const sendEmail = await loadSendEmail();
+    sendMock.mockResolvedValue({ error: null });
+
+    const html = '<a href="https://app/tracking?vehicle=5fe1ac28-e6ab">Open</a>';
+    const result = sendEmail('a@example.com', 'Subject', html);
+    await vi.runAllTimersAsync();
+
+    expect(await result).toBe(true);
+    expect(sendMock.mock.calls[0][0]).toMatchObject({
+      html: '<a href="https://app/tracking?vehicle&#61;5fe1ac28-e6ab">Open</a>',
+      text: 'Open',
+    });
+  });
+});
+
+describe('qpProofHtml', () => {
+  async function loadQpProofHtml() {
+    vi.resetModules();
+    const mod = await import('./resend');
+    return { qpProofHtml: mod.qpProofHtml, buildNotificationEmail: mod.buildNotificationEmail };
+  }
+
+  it('armors = before two hex digits — the UUID query-param case', async () => {
+    const { qpProofHtml } = await loadQpProofHtml();
+    expect(qpProofHtml('href="/graphics?id=5f5cbf95-7749-4d37-8e32-0deef05aa78f"')).toBe(
+      'href="/graphics?id&#61;5f5cbf95-7749-4d37-8e32-0deef05aa78f"'
+    );
+  });
+
+  it('armors every fragile param in multi-param links', async () => {
+    const { qpProofHtml } = await loadQpProofHtml();
+    expect(qpProofHtml('href="/upfit?id=ab12cd34&task=ef56aa77"')).toBe(
+      'href="/upfit?id&#61;ab12cd34&task&#61;ef56aa77"'
+    );
+  });
+
+  it('leaves attribute syntax and non-hex-pair params alone', async () => {
+    const { qpProofHtml } = await loadQpProofHtml();
+    const html = '<div style="color:#fff"><a href="/approve/estimate/tok?via=email&to=cg%40x.com">y</a></div>';
+    expect(qpProofHtml(html)).toBe(html);
+  });
+
+  it('armors the viewport meta, the other field-observed casualty', async () => {
+    const { qpProofHtml } = await loadQpProofHtml();
+    expect(qpProofHtml('content="width=device-width,initial-scale=1"')).toBe(
+      'content="width&#61;device-width,initial-scale=1"'
+    );
+  });
+
+  it('leaves no fragile sequence in a full notification email and is idempotent', async () => {
+    const { qpProofHtml, buildNotificationEmail } = await loadQpProofHtml();
+    const html = buildNotificationEmail(
+      'Assigned to Graphics Job',
+      "You've been assigned",
+      'https://app/graphics?id=5f5cbf95-7749-4d37-8e32-0deef05aa78f',
+      'Open in App'
+    );
+    const armored = qpProofHtml(html);
+    expect(armored).not.toMatch(/=[0-9A-Fa-f]{2}/);
+    expect(qpProofHtml(armored)).toBe(armored);
+  });
 });
