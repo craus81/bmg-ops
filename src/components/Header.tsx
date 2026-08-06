@@ -6,6 +6,7 @@ import { useAuth } from '@/components/AuthProvider';
 import { theme } from '@/lib/theme';
 import UniversalSearch from '@/components/UniversalSearch';
 import { useFocusTrap } from '@/lib/use-focus-trap';
+import { useMentions, mentionUrl } from '@/lib/use-mentions';
 
 interface HeaderProps {
   clockStatus: 'out' | 'in' | 'break';
@@ -45,6 +46,9 @@ export default function Header({ clockStatus, activePartNumber, activeEndCustome
 
   // Notifications state
   const [showNotifications, setShowNotifications] = useState(false);
+  const [showMentions, setShowMentions] = useState(false);
+  const mentionsRef = useRef<HTMLDivElement>(null);
+  const { unread: unreadMentions, mentions: allMentions, names: mentionNames, load: loadMentions, markRead: markMentionRead, markAllRead: markAllMentionsRead } = useMentions();
   const [notifications, setNotifications] = useState<Notification[]>([]);
   const [unreadCount, setUnreadCount] = useState(0);
   const [loadingNotifs, setLoadingNotifs] = useState(false);
@@ -68,14 +72,18 @@ export default function Header({ clockStatus, activePartNumber, activeEndCustome
       if (notifRef.current && !notifRef.current.contains(e.target as Node)) {
         setShowNotifications(false);
       }
+      if (mentionsRef.current && !mentionsRef.current.contains(e.target as Node)) {
+        setShowMentions(false);
+      }
     };
     const handleKey = (e: KeyboardEvent) => {
       if (e.key === 'Escape') {
         setShowMenu(false);
         setShowNotifications(false);
+        setShowMentions(false);
       }
     };
-    if (showMenu || showNotifications) {
+    if (showMenu || showNotifications || showMentions) {
       document.addEventListener('mousedown', handleClick);
       document.addEventListener('keydown', handleKey);
     }
@@ -83,7 +91,7 @@ export default function Header({ clockStatus, activePartNumber, activeEndCustome
       document.removeEventListener('mousedown', handleClick);
       document.removeEventListener('keydown', handleKey);
     };
-  }, [showMenu, showNotifications]);
+  }, [showMenu, showNotifications, showMentions]);
 
   // Set dynamic page title based on role
   useEffect(() => {
@@ -94,7 +102,8 @@ export default function Header({ clockStatus, activePartNumber, activeEndCustome
   useEffect(() => {
     if (!user) return;
     loadUnreadCount();
-    const interval = setInterval(loadUnreadCount, 30000);
+    loadMentions();
+    const interval = setInterval(() => { loadUnreadCount(); loadMentions(); }, 30000);
     return () => clearInterval(interval);
   // eslint-disable-next-line react-hooks/exhaustive-deps -- intentional: load once on mount
   }, [user]);
@@ -174,6 +183,7 @@ export default function Header({ clockStatus, activePartNumber, activeEndCustome
     }
     setShowNotifications(!showNotifications);
     setShowMenu(false);
+    setShowMentions(false);
   };
 
   const markAsRead = async (id: string) => {
@@ -441,6 +451,106 @@ export default function Header({ clockStatus, activePartNumber, activeEndCustome
               </span>
             )}
           </button>
+
+          {/* Mentions */}
+          <div ref={mentionsRef} style={{ position: 'relative' }}>
+            <button
+              onClick={() => { if (!showMentions) loadMentions(); setShowMentions(v => !v); setShowMenu(false); setShowNotifications(false); }}
+              aria-haspopup="menu"
+              aria-expanded={showMentions}
+              aria-label={unreadMentions.length > 0 ? `Mentions, ${unreadMentions.length} unread` : 'Mentions'}
+              style={{
+                background: showMentions ? 'rgba(255,255,255,0.12)' : 'transparent',
+                border: '1px solid transparent', borderRadius: '8px',
+                padding: '6px 6px', fontSize: '11px', fontWeight: 600, position: 'relative',
+                color: 'rgba(255,255,255,0.7)',
+                cursor: 'pointer', transition: 'all 0.15s',
+                lineHeight: 1,
+              }}
+            >
+              ＠
+              {unreadMentions.length > 0 && (
+                <span aria-hidden="true" style={{
+                  position: 'absolute', top: '2px', right: '-2px',
+                  background: '#60a5fa', color: '#fff',
+                  fontSize: '9px', fontWeight: 800,
+                  minWidth: '16px', height: '16px',
+                  borderRadius: '8px', display: 'flex',
+                  alignItems: 'center', justifyContent: 'center',
+                  padding: '0 4px',
+                  boxShadow: '0 2px 6px rgba(96,165,250,0.4)',
+                }}>
+                  {unreadMentions.length > 99 ? '99+' : unreadMentions.length}
+                </span>
+              )}
+            </button>
+
+            {/* Mentions dropdown — same shell as the notifications dropdown */}
+            {showMentions && (
+              <div style={{
+                position: 'absolute', top: '100%', right: 0, marginTop: '6px',
+                background: 'var(--card)', border: '1px solid var(--border)',
+                borderRadius: '14px', boxShadow: '0 12px 40px rgba(0,0,0,0.3)',
+                width: '320px', maxHeight: '440px', display: 'flex', flexDirection: 'column',
+                zIndex: 160, overflow: 'hidden',
+              }}>
+                <div style={{
+                  padding: '12px 14px', borderBottom: '1px solid var(--border)',
+                  display: 'flex', justifyContent: 'space-between', alignItems: 'center',
+                  flexShrink: 0,
+                }}>
+                  <div style={{ fontSize: '14px', fontWeight: 800, color: 'var(--text-primary)' }}>
+                    Mentions
+                    {unreadMentions.length > 0 && (
+                      <span style={{ fontSize: '11px', fontWeight: 700, color: '#60a5fa', marginLeft: '6px' }}>
+                        {unreadMentions.length} new
+                      </span>
+                    )}
+                  </div>
+                  {unreadMentions.length > 0 && (
+                    <button onClick={markAllMentionsRead} style={{
+                      background: 'none', border: 'none', fontSize: '11px',
+                      fontWeight: 700, color: 'var(--navy-light)', cursor: 'pointer',
+                      padding: '4px 8px', borderRadius: '6px',
+                    }}>
+                      Mark all read
+                    </button>
+                  )}
+                </div>
+                <div style={{ overflowY: 'auto' }}>
+                  {allMentions.length === 0 && (
+                    <div style={{ padding: '18px 14px', fontSize: '12px', color: 'var(--text-muted)', textAlign: 'center' }}>
+                      No mentions — when a teammate @tags you in a note, it lands here.
+                    </div>
+                  )}
+                  {allMentions.slice(0, 20).map(m => (
+                    <div
+                      key={m.id}
+                      onClick={() => {
+                        markMentionRead(m);
+                        setShowMentions(false);
+                        const url = mentionUrl(m);
+                        if (url) router.push(url);
+                      }}
+                      style={{ padding: '10px 14px', borderBottom: '1px solid var(--border)', cursor: 'pointer', opacity: m.read_at ? 0.6 : 1 }}
+                    >
+                      <div style={{ fontSize: '12px', fontWeight: 700, color: 'var(--text-primary)' }}>
+                        {!m.read_at && <span style={{ color: '#60a5fa', marginRight: '5px' }}>●</span>}
+                        {(m.mentioned_by && mentionNames[m.mentioned_by]) || 'A teammate'}
+                        {m.context_label && <span style={{ color: 'var(--text-muted)', fontWeight: 600 }}> · {m.context_label}</span>}
+                      </div>
+                      {m.note_excerpt && (
+                        <div style={{ fontSize: '12px', color: 'var(--text-secondary)', marginTop: '2px', whiteSpace: 'pre-wrap', display: '-webkit-box', WebkitLineClamp: 3, WebkitBoxOrient: 'vertical', overflow: 'hidden' }}>{m.note_excerpt}</div>
+                      )}
+                      <div style={{ fontSize: '10px', color: 'var(--text-muted)', marginTop: '3px' }}>
+                        {new Date(m.created_at).toLocaleString([], { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' })}
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
+          </div>
 
           {/* Notification bell */}
           <div ref={notifRef} style={{ position: 'relative' }}>
