@@ -125,6 +125,26 @@ export async function POST(req: NextRequest) {
 
     if (id) {
       // ── UPDATE existing estimate ──
+      // A builder Save/Sync only ever submits 'draft' or 'pushed'. The sales
+      // stages ('sent'/'accepted'/'rejected') are owned by the send-for-approval
+      // and customer-approval flows — letting a Save write 'draft' over them
+      // silently erased approvals and dropped sent estimates out of the
+      // follow-up queue. Preserve the sales stage unless the caller is
+      // explicitly moving to one (Send for Approval pre-saves with 'sent').
+      const SALES_STAGES = ['sent', 'accepted', 'rejected'];
+      const requestedStatus = status || 'draft';
+      let effectiveStatus = requestedStatus;
+      if (requestedStatus === 'draft' || requestedStatus === 'pushed') {
+        const { data: existing } = await supabase
+          .from('estimates')
+          .select('status')
+          .eq('id', id)
+          .maybeSingle();
+        if (existing && SALES_STAGES.includes(existing.status)) {
+          effectiveStatus = existing.status;
+        }
+      }
+
       const { error: updateErr } = await supabase
         .from('estimates')
         .update({
@@ -133,7 +153,7 @@ export async function POST(req: NextRequest) {
           customer_netsuite_id: customer_netsuite_id || null,
           title: title || null,
           notes: notes || null,
-          status: status || 'draft',
+          status: effectiveStatus,
           tax_rate: effectiveTaxRate,
           tax_exempt: !!tax_exempt,
           labor_rate: effectiveLaborRate,
