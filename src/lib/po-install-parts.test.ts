@@ -1,0 +1,98 @@
+import { describe, it, expect } from 'vitest';
+import {
+  isInstallDescription,
+  correctInstallPartNumber,
+  applyInstallPartRule,
+  type InstallRuleLine,
+} from './po-install-parts';
+
+// 02 = the physical part, 06 = the install charge for it, and the two share a
+// suffix. The description is the tiebreaker: an install line is always an 06.
+
+describe('isInstallDescription', () => {
+  it('catches install in the forms these POs use', () => {
+    for (const d of [
+      'INSTALL GRAPHIC KIT',
+      'Installation of shelving',
+      'KIT INSTALLED AT PLANT',
+      'INSTL PARTITION',
+      'INST LADDER RACK',
+      'labor to install rack',
+    ]) {
+      expect(isInstallDescription(d), d).toBe(true);
+    }
+  });
+
+  it('leaves physical-part descriptions alone', () => {
+    for (const d of ['GRAPHIC KIT-FORD TRANSIT', 'SHELF UNIT 48IN', 'PARTITION', '', null, undefined]) {
+      expect(isInstallDescription(d as any), String(d)).toBe(false);
+    }
+  });
+});
+
+describe('correctInstallPartNumber', () => {
+  it('rewrites a 02 on an install line to its 06 counterpart', () => {
+    expect(correctInstallPartNumber('02T278', 'INSTALL GRAPHIC KIT'))
+      .toEqual({ value: '06T278', corrected: true });
+    expect(correctInstallPartNumber(' 02t278 ', 'Installation'))
+      .toEqual({ value: '06t278', corrected: true });
+  });
+
+  it('leaves everything else as read', () => {
+    // Already correct
+    expect(correctInstallPartNumber('06T278', 'INSTALL KIT')).toEqual({ value: '06T278', corrected: false });
+    // Physical-part line keeps its 02
+    expect(correctInstallPartNumber('02T278', 'GRAPHIC KIT-FORD TRANSIT')).toEqual({ value: '02T278', corrected: false });
+    // Not a 02/06 number at all
+    expect(correctInstallPartNumber('RM530432', 'INSTALL KIT')).toEqual({ value: 'RM530432', corrected: false });
+    // No number
+    expect(correctInstallPartNumber('', 'INSTALL KIT')).toEqual({ value: '', corrected: false });
+    expect(correctInstallPartNumber(null, 'INSTALL KIT')).toEqual({ value: '', corrected: false });
+  });
+
+  it('never rewrites an 06 down to an 02 on a non-install line', () => {
+    // Absence of the word "install" isn't proof of a misread, so leave it.
+    expect(correctInstallPartNumber('06T278', 'GRAPHIC KIT')).toEqual({ value: '06T278', corrected: false });
+  });
+});
+
+describe('applyInstallPartRule', () => {
+  it('corrects both the buyer part and the supplier part, and flags the line', () => {
+    const { lines, correctedCount } = applyInstallPartRule<InstallRuleLine>([
+      { part_number: '02T278', supplier_part: '02T278', description: 'GRAPHIC KIT-FORD TRANSIT', quantity: 10 },
+      { part_number: '02T278', supplier_part: '02T278', description: 'INSTALL GRAPHIC KIT-FORD TRANSIT', quantity: 10 },
+    ]);
+    expect(correctedCount).toBe(1);
+    expect(lines[0]).toEqual({ part_number: '02T278', supplier_part: '02T278', description: 'GRAPHIC KIT-FORD TRANSIT', quantity: 10 });
+    expect(lines[1].part_number).toBe('06T278');
+    expect(lines[1].supplier_part).toBe('06T278');
+    expect(lines[1].install_prefix_corrected).toBe(true);
+    // Other fields survive
+    expect(lines[1].quantity).toBe(10);
+  });
+
+  it('corrects a supplier part even when the buyer part uses another scheme', () => {
+    const { lines, correctedCount } = applyInstallPartRule([
+      { part_number: 'RM530432', supplier_part: '02T278', description: 'INSTALL KIT' },
+    ]);
+    expect(correctedCount).toBe(1);
+    expect(lines[0].part_number).toBe('RM530432');
+    expect(lines[0].supplier_part).toBe('06T278');
+  });
+
+  it('leaves a clean extraction untouched', () => {
+    const input = [
+      { part_number: '02T278', description: 'GRAPHIC KIT' },
+      { part_number: '06T278', description: 'INSTALL GRAPHIC KIT' },
+    ];
+    const { lines, correctedCount } = applyInstallPartRule(input);
+    expect(correctedCount).toBe(0);
+    expect(lines).toEqual(input);
+    expect(lines[0]).toBe(input[0]); // untouched lines aren't cloned
+  });
+
+  it('handles empty / missing input', () => {
+    expect(applyInstallPartRule([])).toEqual({ lines: [], correctedCount: 0 });
+    expect(applyInstallPartRule(null)).toEqual({ lines: [], correctedCount: 0 });
+  });
+});

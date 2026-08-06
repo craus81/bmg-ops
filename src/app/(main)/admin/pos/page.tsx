@@ -16,6 +16,7 @@ import { useDialog } from '@/components/DialogProvider';
 import CustomerPicker from '@/components/CustomerPicker';
 import { isProofLikeName } from '@/lib/pdf-classify';
 import { deepLinks } from '@/lib/deep-links';
+import { applyInstallPartRule, isInstallDescription } from '@/lib/po-install-parts';
 import { formatShipTo, shipToCityLabel } from '@/lib/graphics-job-from-po';
 import { printPos } from '@/lib/po-print';
 import { PART_FIELDS, partToCatalogItem, findOrCreateManualPart } from '@/lib/parts-catalog';
@@ -761,7 +762,11 @@ export default function POsPage() {
       // reload falls back to the in-memory copy rather than treating every
       // line as unmatched.
       const freshCatalog = (await refreshCatalog()) || catalog;
-      const lines: ImportLine[] = parsed.lines.map((line) => {
+      // Same 02/06 rule the AI extraction runs: an install line is an 06 part,
+      // never an 02. Applied before catalog matching so a corrected number
+      // matches the right catalog entry.
+      const ruledLines = applyInstallPartRule(parsed.lines).lines as ParsedPOLine[];
+      const lines: ImportLine[] = ruledLines.map((line) => {
         const match = freshCatalog.find((c) =>
           c.part_number.toUpperCase() === line.part_number.toUpperCase()
         );
@@ -2559,6 +2564,11 @@ export default function POsPage() {
               const catalogMatch = catalog.find(c =>
                 c.part_number.toUpperCase() === (line.part_number || '').toUpperCase()
               );
+              // 02 = physical part, 06 = its installation charge. An install
+              // line is always an 06, so say when the extraction was corrected
+              // to one — and flag it if an edit puts it back to an 02.
+              const installMismatch = isInstallDescription(line.description)
+                && (line.part_number || '').trim().toUpperCase().startsWith('02');
               return (
                 <div key={idx} style={{
                   padding: '10px', marginBottom: '6px', borderRadius: '8px',
@@ -2570,6 +2580,17 @@ export default function POsPage() {
                     <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
                       {catalogMatch && <span style={{ fontSize: '9px', color: '#4ade80', fontWeight: 600 }}>✓ Catalog match</span>}
                       {!catalogMatch && <span style={{ fontSize: '9px', color: '#fbbf24', fontWeight: 600 }}>No catalog match</span>}
+                      {installMismatch ? (
+                        <span
+                          title="This line reads as an installation charge, so its item number should start with 06 (02 is the physical part)."
+                          style={{ fontSize: '9px', color: '#f87171', fontWeight: 700 }}
+                        >⚠ Install line — expected 06</span>
+                      ) : line.install_prefix_corrected ? (
+                        <span
+                          title="Read as an 02 (physical part) on an install line — corrected to the 06 installation number. Edit it if that's wrong."
+                          style={{ fontSize: '9px', color: '#60a5fa', fontWeight: 700 }}
+                        >02→06 install</span>
+                      ) : null}
                       {createdNsLines.has(idx) ? (
                         <span style={{ fontSize: '9px', color: '#4ade80', fontWeight: 700 }}>✓ NetSuite</span>
                       ) : line.part_number ? (
