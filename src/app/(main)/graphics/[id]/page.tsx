@@ -18,6 +18,7 @@
 import { useState, useEffect, useRef } from 'react';
 import { useRouter, useParams } from 'next/navigation';
 import { createClient } from '@/lib/supabase-browser';
+import { deepLinks } from '@/lib/deep-links';
 import { storage } from '@/lib/storage';
 import { apiFetch } from '@/lib/api-client';
 import { useAuth } from '@/components/AuthProvider';
@@ -484,25 +485,47 @@ export default function GraphicsJobRecordPage() {
       sourceType: 'graphics_note',
       sourceId: job.id,
       contextLabel: job.title || job.job_number || 'Graphics job',
-      contextUrl: `/graphics/${job.id}`,
+      contextUrl: deepLinks.graphicsJob(job.id),
     });
     setNewNote('');
     await loadHistory();
   };
 
-  // ── Edit / save (same sanitized update as the board's saveJob) ──────────
+  // ── Edit / save ──────────────────────────────────────────────────────────
+  // Only the fields the edit form actually renders. The old rest-spread
+  // wrote back EVERY column at page-load values — silently reverting
+  // status, customer approval, invoice ids, and wrap/estimate links that
+  // changed while the page sat open. (assigned_to is owned by the
+  // AssignmentPicker; status by the pipeline buttons; approval/invoice
+  // columns by their flows — none of them belong in this update.)
+  const EDITABLE_FIELDS = [
+    'title', 'part_number', 'customer', 'quantity', 'po_number', 'priority',
+    'due_date', 'scheduled_install_date', 'install_location', 'supplier',
+    'content', 'vinyl_type', 'vinyl_color', 'laminate', 'print_method',
+    'cut_method', 'premask', 'tracking_number', 'ship_to', 'notes',
+  ] as const;
+  // Unsaved-changes signal: any editable field differing between the edit
+  // copy and the loaded job. Warns on tab close/refresh while dirty (in-app
+  // navigation isn't interceptable in the app router without patching Link).
+  const isDirty = !!edit && !!job && EDITABLE_FIELDS.some(f => ((edit as any)[f] ?? '') !== ((job as any)[f] ?? ''));
+  useEffect(() => {
+    if (!isDirty) return;
+    const warn = (e: BeforeUnloadEvent) => { e.preventDefault(); e.returnValue = ''; };
+    window.addEventListener('beforeunload', warn);
+    return () => window.removeEventListener('beforeunload', warn);
+  }, [isDirty]);
+
   const saveJob = async () => {
     if (!edit || !job) return;
     setSaving(true);
-    // assigned_to is owned by the AssignmentPicker (saved immediately via
-    // the /api/jobs/assign route, which also keeps the legacy column in
-    // sync). Including it here would clobber a fresh save with stale state.
-    const { id, created_at, created_by, assigned_to: _assigned_to, ...updateFields } = edit;
+    const id = edit.id;
+    const picked: Record<string, any> = {};
+    for (const f of EDITABLE_FIELDS) picked[f] = (edit as any)[f];
     // Convert non-date values like "N/A" or empty strings to null for date columns
     const sanitized = {
-      ...updateFields,
-      due_date: updateFields.due_date && updateFields.due_date !== 'N/A' ? updateFields.due_date : null,
-      scheduled_install_date: updateFields.scheduled_install_date && updateFields.scheduled_install_date !== 'N/A' ? updateFields.scheduled_install_date : null,
+      ...picked,
+      due_date: picked.due_date && picked.due_date !== 'N/A' ? picked.due_date : null,
+      scheduled_install_date: picked.scheduled_install_date && picked.scheduled_install_date !== 'N/A' ? picked.scheduled_install_date : null,
       updated_at: new Date().toISOString(),
     };
     const { error } = await supabase
@@ -520,11 +543,11 @@ export default function GraphicsJobRecordPage() {
           sourceType: 'graphics_note',
           sourceId: id,
           contextLabel: edit.title || edit.job_number || 'Graphics job',
-          contextUrl: `/graphics/${id}`,
+          contextUrl: deepLinks.graphicsJob(id),
         });
       }
 
-      setJob(edit);
+      setJob({ ...job, ...sanitized } as any);
       setEdit(null);
 
       // Sync install date to Google Calendar (create, update, or delete event)
@@ -885,12 +908,21 @@ export default function GraphicsJobRecordPage() {
               Edit Job
             </button>
           ) : (
-            <button
-              onClick={() => setEdit(null)}
-              style={{ flex: 1, padding: '10px', borderRadius: '8px', background: 'transparent', border: '1px solid var(--border)', color: 'var(--text-body)', fontSize: '12px', fontWeight: 700, cursor: 'pointer' }}
-            >
-              Discard Edits
-            </button>
+            <>
+              <button
+                onClick={saveJob}
+                disabled={saving}
+                style={{ flex: 1, padding: '10px', borderRadius: '8px', background: '#22c55e', border: 'none', color: '#fff', fontSize: '12px', fontWeight: 800, cursor: 'pointer', opacity: saving ? 0.5 : 1 }}
+              >
+                {saving ? 'Saving...' : isDirty ? 'Save Changes •' : 'Save Changes'}
+              </button>
+              <button
+                onClick={() => setEdit(null)}
+                style={{ flex: 1, padding: '10px', borderRadius: '8px', background: 'transparent', border: '1px solid var(--border)', color: 'var(--text-body)', fontSize: '12px', fontWeight: 700, cursor: 'pointer' }}
+              >
+                Discard Edits
+              </button>
+            </>
           )}
           {isAdmin && (
             <button
@@ -1150,13 +1182,15 @@ export default function GraphicsJobRecordPage() {
             />
           </div>
 
-          <div style={{ display: 'flex', gap: '6px' }}>
+          {/* Sticky so Save is reachable without scrolling back down a
+              ~20-field form; bottom offset clears the tab bar + iOS safe area. */}
+          <div style={{ display: 'flex', gap: '6px', position: 'sticky', bottom: 'calc(env(safe-area-inset-bottom, 0px) + 64px)', zIndex: 5, background: 'var(--card-bg, rgba(17,24,39,0.92))', padding: '8px', margin: '0 -8px -8px', borderRadius: '10px', backdropFilter: 'blur(6px)' }}>
             <button
               onClick={saveJob}
               disabled={saving}
               style={{ flex: 1, padding: '12px', borderRadius: '8px', background: '#22c55e', color: '#fff', fontSize: '13px', fontWeight: 800, border: 'none', cursor: 'pointer', opacity: saving ? 0.5 : 1, boxShadow: '0 4px 12px rgba(34,197,94,0.25)' }}
             >
-              {saving ? 'Saving...' : 'Save Changes'}
+              {saving ? 'Saving...' : isDirty ? 'Save Changes •' : 'Save Changes'}
             </button>
             <button
               onClick={() => setEdit(null)}

@@ -571,6 +571,24 @@ export interface GraphicsJob {
   invoice_pdf_url: string | null;
   // Parent upfit project (null for standalone graphics jobs)
   upfit_project_id: string | null;
+  // Proof approval flow (migrations 084/090/154). These live on the row a
+  // detail page loads, so they MUST be modeled here — an untyped rest-spread
+  // of a job row once wrote stale copies of them back over live approvals.
+  // Owned by the approval routes/cron; never write them from an edit form.
+  approval_token: string | null;
+  approval_token_expires_at: string | null;
+  approval_proof_file_id: string | null;
+  approval_reminder_sent_at: string | null;
+  approval_reminder_count: number;
+  approval_escalated_at: string | null;
+  customer_approved: boolean;
+  customer_approved_at: string | null;
+  customer_rejected_at: string | null;
+  customer_rejection_reason: string | null;
+  sent_for_approval_at: string | null;
+  sent_for_approval_by: string | null;
+  signed_document_storage_path: string | null;
+  signed_document_hash: string | null;
 }
 
 export interface GraphicsStatusHistory {
