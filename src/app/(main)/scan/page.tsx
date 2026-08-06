@@ -38,6 +38,13 @@ interface ScanEntry {
   scanned_at: string;
 }
 
+interface ScanPhoto {
+  id: string;
+  scan_log_id: string;
+  storage_path: string;
+  uploaded_by: string;
+}
+
 // Verizon RFID installs (VERIZON_RFID_PART) get an extra capture flow handled by
 // the shared <RfidCapture> component — VIN then serial / IMEI / CCID. Every
 // other part keeps the plain VIN flow below.
@@ -88,6 +95,21 @@ export default function ScanPage() {
   // Part files/proofs
   const [partProofs, setPartProofs] = useState<{ file_name: string; storage_path: string; bucket: 'graphics-proofs' | 'proofs' }[]>([]);
   const [showProof, setShowProof] = useState<string | null>(null);
+
+  // Completion photos: optional per-scan photo capture. Photos attach to the
+  // scan record and the server stamps them with the part number + VIN, so
+  // they're also searchable from the parts catalog like a proof/schematic.
+  const [scanPhotos, setScanPhotos] = useState<Record<string, ScanPhoto[]>>({});
+  // Scan ids the open photo panel targets — a multi-part scan registers the
+  // same photos against every scan row it created.
+  const [photoPanel, setPhotoPanel] = useState<string[] | null>(null);
+  const [photoUploading, setPhotoUploading] = useState(false);
+  const [photoProgress, setPhotoProgress] = useState<{ done: number; total: number } | null>(null);
+  const [photoError, setPhotoError] = useState('');
+  // Scan ids from the most recent successful scan, for the success banner's
+  // "add photos" shortcut. Empty for offline scans (no server record yet).
+  const [lastScanIds, setLastScanIds] = useState<string[]>([]);
+  const photoInputRef = useRef<HTMLInputElement>(null);
 
   // Offline
   const [isOffline, setIsOffline] = useState(false);
@@ -327,6 +349,9 @@ export default function ScanPage() {
     setVin('');
     setUnitNumber('');
     setPendingScan(null);
+    setLastScanIds([]);
+    setPhotoPanel(null);
+    setScanPhotos({});
     try { localStorage.removeItem('scan_session'); } catch {}
     prefillCustomJobDefaults();
   };
@@ -448,8 +473,78 @@ export default function ScanPage() {
 
     const { data } = await query;
     setScans((data || []) as ScanEntry[]);
+    loadScanPhotos((data || []).map((d: any) => d.id));
   // eslint-disable-next-line react-hooks/exhaustive-deps -- intentional: load once on mount
   }, [selectedParts, customJob, selectedLocation, user?.id]);
+
+  // ── Completion photos ──
+  const loadScanPhotos = async (ids: string[]) => {
+    if (isOffline || ids.length === 0) { setScanPhotos({}); return; }
+    try {
+      const res = await fetch(`/api/scans/photos?scanLogIds=${ids.join(',')}`, { headers: await authHeaders() });
+      if (!res.ok) return;
+      const json = await res.json();
+      const grouped: Record<string, ScanPhoto[]> = {};
+      for (const p of json.photos || []) {
+        (grouped[p.scan_log_id] = grouped[p.scan_log_id] || []).push(p);
+      }
+      setScanPhotos(grouped);
+    } catch {}
+  };
+
+  const uploadScanPhotos = async (files: File[]) => {
+    const targets = photoPanel;
+    if (!targets || targets.length === 0 || files.length === 0 || photoUploading) return;
+    setPhotoUploading(true);
+    setPhotoError('');
+    setPhotoProgress({ done: 0, total: files.length });
+    try {
+      const uploaded: { path: string; fileName: string }[] = [];
+      for (let i = 0; i < files.length; i++) {
+        const file = files[i];
+        const ext = (file.name.split('.').pop() || 'jpg').toLowerCase();
+        const path = `scan-photos/${targets[0]}/${Date.now()}-${i}-${Math.random().toString(36).slice(2, 8)}.${ext}`;
+        const { error } = await storage.from('photos').upload(path, file, { contentType: file.type || 'image/jpeg' });
+        if (error) { setPhotoError(error.message || 'Upload failed'); break; }
+        uploaded.push({ path, fileName: file.name });
+        setPhotoProgress({ done: i + 1, total: files.length });
+      }
+      if (uploaded.length > 0) {
+        const res = await fetch('/api/scans/photos', {
+          method: 'POST',
+          headers: await authHeaders(),
+          body: JSON.stringify({ scanLogIds: targets, photos: uploaded }),
+        });
+        const json = await res.json().catch(() => ({}));
+        if (!res.ok) {
+          setPhotoError(json.error || 'Failed to save photos');
+        } else {
+          setScanPhotos(prev => {
+            const next = { ...prev };
+            for (const p of json.photos || []) next[p.scan_log_id] = [...(next[p.scan_log_id] || []), p];
+            return next;
+          });
+        }
+      }
+    } finally {
+      setPhotoUploading(false);
+      setPhotoProgress(null);
+    }
+  };
+
+  const deleteScanPhoto = async (photo: ScanPhoto) => {
+    try {
+      const res = await fetch('/api/scans/photos', {
+        method: 'DELETE',
+        headers: await authHeaders(),
+        body: JSON.stringify({ id: photo.id }),
+      });
+      if (!res.ok) return;
+      setScanPhotos(prev => Object.fromEntries(
+        Object.entries(prev).map(([k, arr]) => [k, arr.filter(p => p.id !== photo.id)])
+      ));
+    } catch {}
+  };
 
   useEffect(() => {
     if (step === 'scan') loadTodayScans();
@@ -511,7 +606,7 @@ export default function ScanPage() {
     v: string,
     unit?: string,
     deviceFields?: { serial_number: string; imei: string; iccid: string },
-  ): Promise<{ ok: boolean; error?: string; entry?: ScanEntry; label?: string; parts: number; offline: boolean }> => {
+  ): Promise<{ ok: boolean; error?: string; entry?: ScanEntry; label?: string; parts: number; offline: boolean; ids?: string[] }> => {
     const unitClean = unit?.trim() || null;
 
     const partsToScan = selectedParts.length > 0
@@ -536,6 +631,7 @@ export default function ScanPage() {
     const locationOverrideCustomer = locationBillingOverride(selectedLocation?.name);
 
     let entry: ScanEntry | undefined;
+    const createdIds: string[] = [];
     for (const pt of partsToScan) {
       const record = {
         vin: v,
@@ -553,6 +649,7 @@ export default function ScanPage() {
       };
       const result = await postScanRecord(record);
       if (!result.ok) return { ok: false, error: result.error, parts: partsToScan.length, offline: isOffline };
+      if (result.id) createdIds.push(result.id);
       entry = {
         id: result.id || crypto.randomUUID(),
         vin: v,
@@ -568,7 +665,7 @@ export default function ScanPage() {
     }
 
     const label = [vehicleData.vehicle_year, vehicleData.vehicle_make, vehicleData.vehicle_model].filter(Boolean).join(' ') || (isOffline ? v : 'Scan logged');
-    return { ok: true, entry, label, parts: partsToScan.length, offline: isOffline };
+    return { ok: true, entry, label, parts: partsToScan.length, offline: isOffline, ids: createdIds };
   };
 
   // Verizon RFID capture finished — log it. Returns an error string for the
@@ -577,6 +674,7 @@ export default function ScanPage() {
     const r = await logVehicle(d.vin, d.unit_number || undefined, { serial_number: d.serial_number, imei: d.imei, iccid: d.iccid });
     if (!r.ok) return r.error || 'Failed to save';
     if (r.entry) setScans(prev => [r.entry!, ...prev]);
+    setLastScanIds(r.offline ? [] : (r.ids || []));
     const unitSuffix = d.unit_number ? ` · Unit ${d.unit_number}` : '';
     setScanSuccess(`${r.offline ? 'Saved offline: ' : ''}${r.label}${unitSuffix}`);
     return null;
@@ -599,8 +697,9 @@ export default function ScanPage() {
     setVinLoading(true);
     const r = await logVehicle(v, unit, deviceFields);
     setVinLoading(false);
-    if (!r.ok) { setScanError(r.error || 'Failed to save'); return false; }
+    if (!r.ok) { setScanError(r.error || 'Failed to save'); setLastScanIds([]); return false; }
     if (r.entry) setScans(prev => [r.entry!, ...prev]);
+    setLastScanIds(r.offline ? [] : (r.ids || []));
     const unitSuffix = unit?.trim() ? ` · Unit ${unit.trim()}` : '';
     setScanSuccess(`${r.offline ? 'Saved offline: ' : ''}${r.label}${unitSuffix}${r.parts > 1 ? ` (${r.parts} parts)` : ''}`);
     setVin('');
@@ -929,7 +1028,7 @@ export default function ScanPage() {
               </div>
             )}
             <div style={{ display: 'flex', gap: '6px', marginTop: '6px' }}>
-              <button onClick={() => { closeServerShift(); setStep('part'); setSelectedParts([]); setCustomJob(''); setCustomCustomer(''); setSelectedLocation(null); setScans([]); setShowCustom(false); setPendingScan(null); setUnitNumber(''); try { localStorage.removeItem('scan_session'); } catch {} prefillCustomJobDefaults(); }} style={{
+              <button onClick={() => { closeServerShift(); setStep('part'); setSelectedParts([]); setCustomJob(''); setCustomCustomer(''); setSelectedLocation(null); setScans([]); setShowCustom(false); setPendingScan(null); setUnitNumber(''); setLastScanIds([]); setPhotoPanel(null); setScanPhotos({}); try { localStorage.removeItem('scan_session'); } catch {} prefillCustomJobDefaults(); }} style={{
                 padding: '4px 10px', borderRadius: '6px', fontSize: '10px', fontWeight: 700,
                 background: 'rgba(107,114,128,0.08)', border: '1px solid rgba(107,114,128,0.2)',
                 color: '#6b7280', cursor: 'pointer',
@@ -955,10 +1054,11 @@ export default function ScanPage() {
             </div>
           )}
 
-          {/* Proof viewer modal */}
+          {/* Proof viewer modal — z-index above the photo panel so tapping a
+              completion-photo thumbnail reuses it as the full-size viewer. */}
           {showProof && (
             <div onClick={() => setShowProof(null)} style={{
-              position: 'fixed', inset: 0, zIndex: 200, background: 'rgba(0,0,0,0.9)',
+              position: 'fixed', inset: 0, zIndex: 400, background: 'rgba(0,0,0,0.9)',
               display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '16px',
             }}>
               <button onClick={() => setShowProof(null)} style={{ position: 'absolute', top: '12px', right: '16px', padding: '8px 14px', borderRadius: '10px', background: 'rgba(255,255,255,0.1)', border: '1px solid rgba(255,255,255,0.15)', color: '#fff', fontSize: '12px', fontWeight: 700, zIndex: 210 }}>✕ Close</button>
@@ -1166,11 +1266,96 @@ export default function ScanPage() {
             </div>
           )}
 
+          {/* Completion photos panel */}
+          {photoPanel && (
+            <div onClick={() => { if (!photoUploading) setPhotoPanel(null); }} style={{ position: 'fixed', inset: 0, zIndex: 300, background: 'rgba(0,0,0,0.7)', display: 'flex', alignItems: 'flex-end', justifyContent: 'center' }}>
+              <div onClick={e => e.stopPropagation()} style={{ width: '100%', maxWidth: '520px', background: theme.card, borderTopLeftRadius: '18px', borderTopRightRadius: '18px', padding: '16px', maxHeight: '92vh', overflowY: 'auto' }}>
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '4px' }}>
+                  <div style={{ fontSize: '15px', fontWeight: 800, color: theme.textPrimary }}>Completion Photos</div>
+                  <button onClick={() => { if (!photoUploading) setPhotoPanel(null); }} style={{ fontSize: '12px', fontWeight: 700, color: theme.textMuted, background: 'transparent', border: 'none', cursor: 'pointer' }}>Close</button>
+                </div>
+                <div style={{ fontSize: '11px', color: theme.textMuted, marginBottom: '12px' }}>
+                  Photos attach to this scan and show up under the part number in the
+                  catalog — proof of what the install looks like on a real vehicle.
+                </div>
+
+                {(scanPhotos[photoPanel[0]] || []).length > 0 && (
+                  <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(90px, 1fr))', gap: '6px', marginBottom: '10px' }}>
+                    {(scanPhotos[photoPanel[0]] || []).map(p => {
+                      const url = storage.from('photos').getPublicUrl(p.storage_path).data.publicUrl;
+                      return (
+                        <div key={p.id} style={{ position: 'relative' }}>
+                          <img
+                            src={url}
+                            alt="Completion photo"
+                            onClick={() => setShowProof(url)}
+                            style={{ width: '100%', aspectRatio: '1', objectFit: 'cover', borderRadius: '8px', border: `1px solid ${theme.border}`, cursor: 'pointer' }}
+                          />
+                          {(p.uploaded_by === user?.id || isAdmin) && (
+                            <button onClick={() => deleteScanPhoto(p)} style={{
+                              position: 'absolute', top: '3px', right: '3px', width: '20px', height: '20px',
+                              borderRadius: '6px', border: 'none', background: 'rgba(0,0,0,0.65)',
+                              color: '#f87171', fontSize: '11px', fontWeight: 800, cursor: 'pointer',
+                              display: 'flex', alignItems: 'center', justifyContent: 'center',
+                            }}>✕</button>
+                          )}
+                        </div>
+                      );
+                    })}
+                  </div>
+                )}
+
+                {photoError && (
+                  <div style={{ padding: '8px 12px', borderRadius: '8px', marginBottom: '8px', background: theme.errorBg, border: `1px solid ${theme.errorBorder}`, color: theme.error, fontSize: '12px', fontWeight: 600 }}>{photoError}</div>
+                )}
+
+                <input
+                  ref={photoInputRef}
+                  type="file"
+                  accept="image/*"
+                  multiple
+                  onChange={e => {
+                    const files = e.target.files;
+                    if (files && files.length > 0) uploadScanPhotos(Array.from(files));
+                    e.target.value = '';
+                  }}
+                  style={{ display: 'none' }}
+                />
+                <button
+                  onClick={() => photoInputRef.current?.click()}
+                  disabled={photoUploading}
+                  style={{
+                    width: '100%', padding: '14px', borderRadius: '10px', fontSize: '14px', fontWeight: 800,
+                    background: photoUploading ? theme.border : theme.navy, color: '#fff', border: 'none',
+                    cursor: photoUploading ? 'default' : 'pointer',
+                  }}
+                >
+                  {photoUploading
+                    ? photoProgress
+                      ? `Uploading ${photoProgress.done}/${photoProgress.total}...`
+                      : 'Uploading...'
+                    : (scanPhotos[photoPanel[0]] || []).length > 0 ? '+ Add More Photos' : 'Take / Choose Photos'}
+                </button>
+              </div>
+            </div>
+          )}
+
           {scanError && (
             <div style={{ padding: '8px 12px', borderRadius: '8px', marginBottom: '8px', background: theme.errorBg, border: `1px solid ${theme.errorBorder}`, color: theme.error, fontSize: '12px', fontWeight: 600 }}>{scanError}</div>
           )}
           {scanSuccess && (
-            <div style={{ padding: '8px 12px', borderRadius: '8px', marginBottom: '8px', background: 'rgba(34,197,94,0.06)', border: '1px solid rgba(34,197,94,0.2)', color: '#22c55e', fontSize: '12px', fontWeight: 700 }}>✓ {scanSuccess}</div>
+            <div style={{ padding: '8px 12px', borderRadius: '8px', marginBottom: '8px', background: 'rgba(34,197,94,0.06)', border: '1px solid rgba(34,197,94,0.2)', color: '#22c55e', fontSize: '12px', fontWeight: 700 }}>
+              ✓ {scanSuccess}
+              {lastScanIds.length > 0 && !isOffline && (
+                <button onClick={() => { setPhotoError(''); setPhotoPanel(lastScanIds); }} style={{
+                  display: 'block', width: '100%', marginTop: '8px', padding: '10px', borderRadius: '8px',
+                  fontSize: '12px', fontWeight: 800, background: 'rgba(34,197,94,0.12)',
+                  border: '1px solid rgba(34,197,94,0.35)', color: '#22c55e', cursor: 'pointer',
+                }}>
+                  📷 Add Completion Photos{(scanPhotos[lastScanIds[0]]?.length || 0) > 0 ? ` (${scanPhotos[lastScanIds[0]].length})` : ''}
+                </button>
+              )}
+            </div>
           )}
 
           {scans.length > 0 && (
@@ -1201,6 +1386,16 @@ export default function ScanPage() {
                         <span style={{ fontSize: '10px', fontWeight: 700, padding: '2px 7px', borderRadius: '6px', background: 'rgba(167,139,250,0.12)', color: '#a78bfa' }}>
                           Unit {s.unit_number}
                         </span>
+                      )}
+                      {!isOffline && (
+                        <button onClick={() => { setPhotoError(''); setPhotoPanel([s.id]); }} title="Completion photos" style={{
+                          padding: '3px 8px', borderRadius: '6px', fontSize: '10px', fontWeight: 700,
+                          background: (scanPhotos[s.id]?.length || 0) > 0 ? 'rgba(34,197,94,0.1)' : 'rgba(59,130,246,0.08)',
+                          border: (scanPhotos[s.id]?.length || 0) > 0 ? '1px solid rgba(34,197,94,0.3)' : '1px solid rgba(59,130,246,0.2)',
+                          color: (scanPhotos[s.id]?.length || 0) > 0 ? '#22c55e' : '#60a5fa', cursor: 'pointer',
+                        }}>
+                          📷{(scanPhotos[s.id]?.length || 0) > 0 ? ` ${scanPhotos[s.id].length}` : ''}
+                        </button>
                       )}
                       <div style={{ fontSize: '10px', color: theme.textMuted }}>
                         {new Date(s.scanned_at).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })}
