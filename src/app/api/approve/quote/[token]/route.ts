@@ -156,14 +156,20 @@ export async function POST(req: NextRequest, { params }: { params: { token: stri
 }
 
 function publicQuote(q: any) {
+  // hide_line_items is the persisted presentation choice from the send flow
+  // ("picture + total, no itemization"). Line data is stripped HERE, before
+  // it crosses the wire — hiding it client-side would still ship the rows
+  // to the customer's browser.
+  const hideLines = !!q.hide_line_items;
   return {
     id: q.id,
     quote_number: q.quote_number,
     vehicle_description: q.vehicle_description,
     project_type: q.project_type,
     project_notes: q.project_notes,
+    hide_line_items: hideLines,
     customer_name: (q.customer as any)?.name || null,
-    measurements: (q.measurements || []).map((m: any) => ({
+    measurements: (hideLines ? [] : q.measurements || []).map((m: any) => ({
       name: m.name,
       qty: m.qty,
       billed_area_sqft: m.billed_area_sqft,
@@ -171,10 +177,10 @@ function publicQuote(q: any) {
       unit_price: m.unit_price,
       line_total: m.line_total,
     })),
-    labor: q.labor || null,
+    labor: hideLines ? null : q.labor || null,
     package_qty: q.package_qty || 1,
     adjustments: q.adjustments || null,
-    nesting: q.nesting || null,
+    nesting: hideLines ? null : q.nesting || null,
     subtotal: q.subtotal,
     tax_rate: q.tax_rate,
     tax_amount: q.tax_amount,
@@ -305,6 +311,7 @@ function renderQuoteHtml(q: any, meta: any, agreement: string): string {
     rows.push(`<tr><td>${laborLabels[key]}</td><td class="r">1</td><td class="r">$${money(sec.total)}</td><td class="r">$${money(sec.total)}</td></tr>`);
   }
 
+  const hideLines = !!q.hide_line_items;
   return `<!doctype html>
 <html><head><meta charset="utf-8"/><title>Wrap Quote ${esc(q.quote_number)} — Signed</title>
 <style>
@@ -331,10 +338,10 @@ td { border-top:1px solid #e2e8f0; padding:8px 0; vertical-align:top; }
   ${q.vehicle_description ? `<div class="meta">${esc(q.vehicle_description)}</div>` : ''}
   <div class="meta">For ${esc(cust.name || 'customer')}</div>
 
-  <table>
+  ${hideLines ? '' : `<table>
     <thead><tr><th>Item</th><th class="r">Qty</th><th class="r">Price</th><th class="r">Total</th></tr></thead>
     <tbody>${rows.join('\n')}</tbody>
-  </table>
+  </table>`}
 
   <div class="totals">
     ${adj && ((parseFloat(adj.discount_amount) || 0) > 0.005 || (parseFloat(adj.min_bump) || 0) > 0.005) ? `<div class="row" style="color:#64748b;"><span>Subtotal before adjustments</span><span>$${money(adj.pre_subtotal)}</span></div>` : ''}

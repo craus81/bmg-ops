@@ -16,11 +16,21 @@ const supabase = createClient(
 
 const SendSchema = z.object({
   quoteId: z.string().uuid(),
-  // What the email contains: the full quote with the coverage drawing,
-  // the quote document alone, the coverage drawing alone (no pricing), or
-  // the NetSuite quote PDF attached (body carries no pricing — the PDF,
-  // with NetSuite's own tax math, is the document of record).
+  // Legacy single-select: what the email contains. Superseded by `include`
+  // (independent checkboxes) but still accepted — older clients and any
+  // queued requests keep working; `include` wins when both are present.
   mode: z.enum(['full', 'quote_only', 'coverage_only', 'netsuite_pdf']).optional().default('full'),
+  // Independent content flags. pricing = money in the body (totals block);
+  // lineItems = the itemized rows (only meaningful with pricing);
+  // diagram = the coverage picture; netsuitePdf = attach the NetSuite
+  // quote PDF. This is what lets "picture + total, no line items" exist —
+  // the modes were all-or-nothing.
+  include: z.object({
+    pricing: z.boolean().optional(),
+    lineItems: z.boolean().optional(),
+    diagram: z.boolean().optional(),
+    netsuitePdf: z.boolean().optional(),
+  }).optional(),
   // Personal note rendered at the top of the email body (plain text,
   // newlines preserved).
   message: z.string().trim().max(5000).optional(),
@@ -32,6 +42,14 @@ const SendSchema = z.object({
   preview: z.boolean().optional().default(false),
 });
 type SendMode = 'full' | 'quote_only' | 'coverage_only' | 'netsuite_pdf';
+type SendFlags = { pricing: boolean; lineItems: boolean; diagram: boolean; netsuitePdf: boolean };
+
+const MODE_FLAGS: Record<SendMode, SendFlags> = {
+  full: { pricing: true, lineItems: true, diagram: true, netsuitePdf: false },
+  quote_only: { pricing: true, lineItems: true, diagram: false, netsuitePdf: false },
+  coverage_only: { pricing: false, lineItems: false, diagram: true, netsuitePdf: false },
+  netsuite_pdf: { pricing: false, lineItems: false, diagram: true, netsuitePdf: true },
+};
 
 const esc = (s: any) =>
   String(s ?? '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
@@ -40,10 +58,11 @@ const money = (n: any) =>
 
 // Light-themed printable quote document (customers print/forward these, so
 // no dark chrome like the internal notification template).
-function buildQuoteHtml(quote: any, company: any, diagramUrl: string | null, logoUrl: string | null, mode: SendMode = 'full', message?: string, approveUrl?: string | null): string {
-  const pricing = mode === 'full' || mode === 'quote_only';
-  const showDiagram = mode !== 'quote_only' && !!diagramUrl;
-  const docTitle = mode === 'coverage_only' ? 'Wrap Coverage' : 'Wrap Quote';
+function buildQuoteHtml(quote: any, company: any, diagramUrl: string | null, logoUrl: string | null, flags: SendFlags, message?: string, approveUrl?: string | null): string {
+  const pricing = flags.pricing;
+  const lineItems = flags.pricing && flags.lineItems;
+  const showDiagram = flags.diagram && !!diagramUrl;
+  const docTitle = pricing || flags.netsuitePdf ? 'Wrap Quote' : 'Wrap Coverage';
   const cust = quote.customer || {};
   const rows: string[] = [];
   const cell = (v: string, right = false) =>
@@ -124,8 +143,8 @@ function buildQuoteHtml(quote: any, company: any, diagramUrl: string | null, log
       ${quote.project_type ? `<div style="font-size:12px;color:#374151;margin-bottom:4px;"><b>Project Type:</b> ${esc(quote.project_type)}</div>` : ''}
       ${quote.vehicle_description ? `<div style="font-size:12px;color:#374151;margin-bottom:14px;"><b>Vehicle:</b> ${esc(quote.vehicle_description)}</div>` : ''}
       ${showDiagram ? `<div style="margin:0 0 14px;"><div style="font-size:11px;color:#6b7280;text-transform:uppercase;font-weight:700;margin-bottom:4px;">Coverage Areas</div><img src="${esc(diagramUrl)}" alt="Wrap coverage diagram" width="584" style="width:100%;max-width:584px;display:block;border:1px solid #e5e7eb;border-radius:8px;"></div>` : ''}
-      ${mode === 'netsuite_pdf' ? `<div style="font-size:13px;color:#374151;margin:0 0 14px;">Your quote is attached as a PDF.</div>` : ''}
-      ${pricing ? `<table style="width:100%;border-collapse:collapse;">
+      ${flags.netsuitePdf && !pricing ? `<div style="font-size:13px;color:#374151;margin:0 0 14px;">Your quote is attached as a PDF.</div>` : ''}
+      ${lineItems ? `<table style="width:100%;border-collapse:collapse;">
         <thead>
           <tr>
             <th style="text-align:left;padding:8px 10px;background:#f9fafb;border-bottom:2px solid #e5e7eb;font-size:11px;color:#6b7280;text-transform:uppercase;">Item</th>
@@ -135,8 +154,8 @@ function buildQuoteHtml(quote: any, company: any, diagramUrl: string | null, log
           </tr>
         </thead>
         <tbody>${rows.join('')}</tbody>
-      </table>
-      <table style="width:100%;border-collapse:collapse;margin-top:14px;">
+      </table>` : ''}
+      ${pricing ? `<table style="width:100%;border-collapse:collapse;margin-top:14px;">
         ${adj && ((parseFloat(adj.discount_amount) || 0) > 0.005 || (parseFloat(adj.min_bump) || 0) > 0.005) ? `<tr><td style="text-align:right;font-size:13px;color:#6b7280;padding:2px 10px;">Subtotal before adjustments</td><td style="text-align:right;font-size:13px;color:#6b7280;padding:2px 10px;width:110px;">$${money(adj.pre_subtotal)}</td></tr>` : ''}
         ${adj && (parseFloat(adj.discount_amount) || 0) > 0.005 ? `<tr><td style="text-align:right;font-size:13px;color:#7c3aed;padding:2px 10px;">Quantity discount (${money(adj.discount_pct)}%)</td><td style="text-align:right;font-size:13px;color:#7c3aed;padding:2px 10px;">−$${money(adj.discount_amount)}</td></tr>` : ''}
         ${adj && (parseFloat(adj.min_bump) || 0) > 0.005 ? `<tr><td style="text-align:right;font-size:13px;color:#b45309;padding:2px 10px;">Shop minimum</td><td style="text-align:right;font-size:13px;color:#b45309;padding:2px 10px;">+$${money(adj.min_bump)}</td></tr>` : ''}
@@ -144,8 +163,8 @@ function buildQuoteHtml(quote: any, company: any, diagramUrl: string | null, log
         <tr><td style="text-align:right;font-size:13px;color:#374151;padding:2px 10px;">Tax (${money(quote.tax_rate)}%)</td><td style="text-align:right;font-size:13px;color:#111827;padding:2px 10px;">$${money(quote.tax_amount)}</td></tr>
         <tr><td style="text-align:right;font-size:16px;font-weight:800;color:#111827;padding:6px 10px;">Total</td><td style="text-align:right;font-size:16px;font-weight:800;color:#059669;padding:6px 10px;">$${money(quote.total)}</td></tr>
       </table>` : ''}
-      ${(quote.labor?.films || []).length ? `<div style="margin-top:12px;font-size:11px;color:#6b7280;"><b style="color:#374151;">Film usage:</b> ${(quote.labor.films as any[]).map((f: any) => `${esc(f.label)} — ${money(f.sqft)} ft²`).join(' &middot; ')}</div>` : ''}
-      ${nest && pricing ? `<div style="margin-top:4px;font-size:11px;color:#6b7280;"><b style="color:#374151;">Materials priced from nested roll layout:</b> ${money((nest.films || []).reduce((s: number, f: any) => s + (parseFloat(f.roll_sqft) || 0), 0))} ft² of ${money(nest.roll_width_in)}&quot; roll${(nest.sets || 1) > 1 ? ` &middot; ${nest.sets} sets nested together` : ''}</div>` : ''}
+      ${lineItems && (quote.labor?.films || []).length ? `<div style="margin-top:12px;font-size:11px;color:#6b7280;"><b style="color:#374151;">Film usage:</b> ${(quote.labor.films as any[]).map((f: any) => `${esc(f.label)} — ${money(f.sqft)} ft²`).join(' &middot; ')}</div>` : ''}
+      ${nest && lineItems ? `<div style="margin-top:4px;font-size:11px;color:#6b7280;"><b style="color:#374151;">Materials priced from nested roll layout:</b> ${money((nest.films || []).reduce((s: number, f: any) => s + (parseFloat(f.roll_sqft) || 0), 0))} ft² of ${money(nest.roll_width_in)}&quot; roll${(nest.sets || 1) > 1 ? ` &middot; ${nest.sets} sets nested together` : ''}</div>` : ''}
       ${quote.project_notes ? `<div style="margin-top:16px;font-size:12px;color:#374151;"><b>Project Notes:</b> ${esc(quote.project_notes)}</div>` : ''}
       ${approveUrl ? `
       <div style="margin-top:22px;padding:18px;background:#f0fdf4;border:1px solid #bbf7d0;border-radius:10px;text-align:center;">
@@ -172,7 +191,18 @@ export async function POST(req: NextRequest) {
   const parsed = await validateBody(req, SendSchema);
   if (parsed.error) return parsed.error;
 
-  const mode: SendMode = parsed.data.mode;
+  // include-flags win over the legacy mode when both arrive.
+  const inc = parsed.data.include;
+  const flags: SendFlags = inc
+    ? {
+        pricing: inc.pricing ?? false,
+        lineItems: (inc.pricing ?? false) && (inc.lineItems ?? false),
+        diagram: inc.diagram ?? false,
+        netsuitePdf: inc.netsuitePdf ?? false,
+      }
+    : MODE_FLAGS[parsed.data.mode];
+  // A quote email needs money somewhere — body pricing or the NetSuite PDF.
+  const carriesQuote = flags.pricing || flags.netsuitePdf;
 
   const { data: quote, error: qErr } = await supabase
     .from('wrap_quotes')
@@ -182,10 +212,13 @@ export async function POST(req: NextRequest) {
   if (qErr || !quote) {
     return NextResponse.json({ error: 'Quote not found' }, { status: 404 });
   }
-  if (mode === 'coverage_only' && !quote.diagram_path) {
+  if (!carriesQuote && !flags.diagram) {
+    return NextResponse.json({ error: 'Nothing selected to send — pick pricing, the coverage picture, or the NetSuite PDF.' }, { status: 400 });
+  }
+  if (!carriesQuote && flags.diagram && !quote.diagram_path) {
     return NextResponse.json({ error: 'This quote has no coverage drawing — save it from the estimator first.' }, { status: 400 });
   }
-  if (mode === 'netsuite_pdf' && !quote.netsuite_estimate_id) {
+  if (flags.netsuitePdf && !quote.netsuite_estimate_id) {
     return NextResponse.json({ error: 'This quote isn\'t in NetSuite yet — use "Create Quote in NetSuite" first.' }, { status: 400 });
   }
 
@@ -201,7 +234,7 @@ export async function POST(req: NextRequest) {
   // A mint failure (e.g. migration not applied yet) degrades to a quote
   // email without the button rather than blocking the send.
   let approveUrl: string | null = null;
-  if (mode !== 'coverage_only') {
+  if (carriesQuote) {
     let token: string | null = quote.approval_token || null;
     if (!token || !validateExpiry(quote.approval_token_expires_at).ok) {
       const minted = generateToken();
@@ -243,21 +276,21 @@ export async function POST(req: NextRequest) {
   const selectedMeta = (Array.isArray(quote.attachments) ? quote.attachments : [])
     .filter((a: any) => a?.path && (!wanted || wanted.has(a.path)));
 
-  const docWord = mode === 'coverage_only' ? 'Wrap Coverage' : 'Wrap Quote';
+  const docWord = carriesQuote ? 'Wrap Quote' : 'Wrap Coverage';
   const subject = `${docWord} ${quote.quote_number}${company?.name ? ` from ${company.name}` : ''}`;
 
   // Preview: return what would go out without touching R2/NetSuite or
   // marking anything sent.
   if (parsed.data.preview) {
     const names = selectedMeta.map((a: any) => a.name || a.path.split('/').pop() || 'attachment');
-    if (mode === 'netsuite_pdf') {
+    if (flags.netsuitePdf) {
       names.unshift(`Quote_${quote.netsuite_estimate_number || quote.netsuite_estimate_id}.pdf`);
     }
     return NextResponse.json({
       preview: true,
       to: cc ? [email, cc] : [email],
       subject,
-      html: buildQuoteHtml(quote, company, diagramUrl, logoUrl, mode, message, approveUrl),
+      html: buildQuoteHtml(quote, company, diagramUrl, logoUrl, flags, message, approveUrl),
       attachments: names,
     });
   }
@@ -286,7 +319,7 @@ export async function POST(req: NextRequest) {
   // The NetSuite quote PDF rides along as the first attachment — it's the
   // document of record (NetSuite's own totals and tax), so a fetch failure
   // fails the send rather than emailing a body that promises an attachment.
-  if (mode === 'netsuite_pdf') {
+  if (flags.netsuitePdf) {
     const pdf = await getNetSuitePdf('estimate', quote.netsuite_estimate_id);
     if (!pdf.success || !pdf.pdfBase64) {
       return NextResponse.json({
@@ -302,17 +335,26 @@ export async function POST(req: NextRequest) {
 
   // Replies route to the staff member who sent the quote — the from
   // address has no mailbox, so without this a customer reply bounces.
-  const ok = await sendEmail(to, subject, buildQuoteHtml(quote, company, diagramUrl, logoUrl, mode, message, approveUrl), undefined, attachments, auth.user?.email || undefined);
+  const ok = await sendEmail(to, subject, buildQuoteHtml(quote, company, diagramUrl, logoUrl, flags, message, approveUrl), undefined, attachments, auth.user?.email || undefined);
   if (!ok) {
     return NextResponse.json({ error: 'Email send failed (is Resend configured?)' }, { status: 502 });
   }
 
   // Only a real quote send marks the quote 'sent' — mailing just the
-  // coverage drawing doesn't put pricing in front of the customer.
-  if (mode !== 'coverage_only') {
+  // coverage drawing doesn't put pricing in front of the customer. The
+  // itemization choice is persisted so the acceptance page and the signed
+  // snapshot present exactly what this send did (hide_line_items strips
+  // line data server-side on the public route).
+  if (carriesQuote) {
     await supabase
       .from('wrap_quotes')
-      .update({ status: 'sent', sent_at: new Date().toISOString(), sent_to: email, updated_at: new Date().toISOString() })
+      .update({
+        status: 'sent',
+        sent_at: new Date().toISOString(),
+        sent_to: email,
+        hide_line_items: !flags.lineItems,
+        updated_at: new Date().toISOString(),
+      })
       .eq('id', quote.id);
   }
 
