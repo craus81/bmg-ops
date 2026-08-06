@@ -7,6 +7,7 @@ import { useAuth } from '@/components/AuthProvider';
 import { useDialog } from '@/components/DialogProvider';
 import { storage } from '@/lib/storage';
 import { apiFetch } from '@/lib/api-client';
+import { formatPhoneInput } from '@/lib/utils';
 import { openNetSuitePdf } from '@/lib/netsuite-pdf-client';
 import { DropZone } from '@/components/DropZone';
 import { theme } from '@/lib/theme';
@@ -2684,7 +2685,7 @@ export default function WrapQuotePage() {
             ] as const).map(([k, label]) => (
               <div key={k} style={{ marginBottom: '6px' }}>
                 <div style={labelStyle}>{label}</div>
-                <input value={customer[k] || ''} onChange={e => { setCustomer({ ...customer, [k]: e.target.value }); if (k === 'name') setCustomerId(null); }} style={inputStyle} />
+                <input value={customer[k] || ''} onChange={e => { const v = k === 'phone' ? formatPhoneInput(e.target.value) : e.target.value; setCustomer({ ...customer, [k]: v }); if (k === 'name') setCustomerId(null); }} style={inputStyle} />
               </div>
             ))}
             <div style={{ display: 'flex', alignItems: 'center', gap: '6px', flexWrap: 'wrap', marginBottom: '10px' }}>

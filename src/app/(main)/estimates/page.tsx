@@ -8,6 +8,7 @@ import { useAuth } from '@/components/AuthProvider';
 import { useDialog } from '@/components/DialogProvider';
 import { theme } from '@/lib/theme';
 import CustomerDefaultsEditor from '@/components/CustomerDefaultsEditor';
+import PhoneInput from '@/components/PhoneInput';
 import MentionTextArea, { reportMentions } from '@/components/MentionTextArea';
 import { flashNote } from '@/lib/focus-note';
 import { deepLinks } from '@/lib/deep-links';
@@ -1167,10 +1168,10 @@ export default function EstimatesPage() {
             </div>
             <div>
               <div style={labelStyle}>On-site Contact Phone</div>
-              <input
+              <PhoneInput
                 style={inputStyle}
                 value={onSiteContactPhone}
-                onChange={e => setOnSiteContactPhone(e.target.value)}
+                onChange={v => setOnSiteContactPhone(v)}
                 placeholder="(555) 555-5555"
               />
             </div>

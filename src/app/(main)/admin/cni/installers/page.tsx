@@ -4,6 +4,7 @@ import { useState, useEffect } from 'react';
 import { useRouter } from 'next/navigation';
 import { createClient } from '@/lib/supabase-browser';
 import { useAuth } from '@/components/AuthProvider';
+import PhoneInput from '@/components/PhoneInput';
 import { theme } from '@/lib/theme';
 
 interface CniInstaller {
@@ -239,8 +240,8 @@ export default function CniInstallersPage() {
             <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '8px', marginBottom: '16px' }}>
               <div>
                 <label style={{ fontSize: '12px', fontWeight: 700, color: 'var(--text-label)', marginBottom: '4px', display: 'block' }}>Phone</label>
-                <input
-                  type="tel" value={invPhone} onChange={e => setInvPhone(e.target.value)}
+                <PhoneInput
+                  value={invPhone} onChange={v => setInvPhone(v)}
                   placeholder="(555) 123-4567"
                   style={{
                     width: '100%', padding: '10px 14px', borderRadius: '10px', fontSize: '14px',

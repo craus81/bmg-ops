@@ -3,6 +3,7 @@
 import { useState, useEffect } from 'react';
 import { useRouter } from 'next/navigation';
 import { createClient } from '@/lib/supabase-browser';
+import PhoneInput from '@/components/PhoneInput';
 
 const SERVICE_TYPE_OPTIONS = [
   { id: 'graphics_install', label: 'Graphics Installation' },
@@ -253,7 +254,7 @@ export default function CniOnboardingPage() {
           </div>
           <div style={{ marginBottom: '12px' }}>
             <label style={labelStyle}>Phone *</label>
-            <input style={inputStyle} type="tel" value={phone} onChange={e => setPhone(e.target.value)} placeholder="(555) 123-4567" />
+            <PhoneInput style={inputStyle} value={phone} onChange={v => setPhone(v)} placeholder="(555) 123-4567" />
           </div>
         </div>
 

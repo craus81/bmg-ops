@@ -27,6 +27,7 @@ import { createClient } from '@/lib/supabase-browser';
 import { useAuth } from '@/components/AuthProvider';
 import { useDialog } from '@/components/DialogProvider';
 import { DropZone } from '@/components/DropZone';
+import PhoneInput from '@/components/PhoneInput';
 import { downloadXlsx } from '@/lib/xlsx-export';
 import { fetchAllRows } from '@/lib/fetch-all';
 import { SortableTh, useTableSort, type SortState } from '@/components/ui/SortableTh';
@@ -501,7 +502,7 @@ export default function ProspectsPage() {
             <div style={{ gridColumn: '1 / -1' }}><div style={labelStyle}>Company Name *</div><input style={inputStyle} value={form.company_name} onChange={e => setForm({ ...form, company_name: e.target.value })} /></div>
             <div><div style={labelStyle}>Contact Name</div><input style={inputStyle} value={form.contact_name} onChange={e => setForm({ ...form, contact_name: e.target.value })} /></div>
             <div><div style={labelStyle}>Email</div><input type="email" style={inputStyle} value={form.email} onChange={e => setForm({ ...form, email: e.target.value })} /></div>
-            <div><div style={labelStyle}>Phone</div><input style={inputStyle} value={form.phone} onChange={e => setForm({ ...form, phone: e.target.value })} /></div>
+            <div><div style={labelStyle}>Phone</div><PhoneInput style={inputStyle} value={form.phone} onChange={v => setForm({ ...form, phone: v })} /></div>
             <div><div style={labelStyle}>Website</div><input style={inputStyle} value={form.website} onChange={e => setForm({ ...form, website: e.target.value })} /></div>
             <div style={{ gridColumn: '1 / -1' }}><div style={labelStyle}>Address</div><input style={inputStyle} value={form.address} onChange={e => setForm({ ...form, address: e.target.value })} /></div>
             <div><div style={labelStyle}>City</div><input style={inputStyle} value={form.city} onChange={e => setForm({ ...form, city: e.target.value })} /></div>

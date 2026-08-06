@@ -7,6 +7,7 @@ import { useAuth } from '@/components/AuthProvider';
 import { useDialog } from '@/components/DialogProvider';
 import { storage } from '@/lib/storage';
 import NetsuiteVendorSearch, { type NsVendor } from '@/components/NetsuiteVendorSearch';
+import PhoneInput from '@/components/PhoneInput';
 
 interface CniCompany {
   id: string;
@@ -494,7 +495,7 @@ export default function CniCompanyDetailPage() {
         <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '8px', marginBottom: '10px' }}>
           <div>
             <label style={labelStyle}>Phone</label>
-            <input type="tel" value={phone} onChange={e => setPhone(e.target.value)} placeholder="(555) 123-4567" style={inputStyle} />
+            <PhoneInput value={phone} onChange={v => setPhone(v)} placeholder="(555) 123-4567" style={inputStyle} />
           </div>
           <div>
             <label style={labelStyle}>Email</label>

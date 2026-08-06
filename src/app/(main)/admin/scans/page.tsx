@@ -9,6 +9,7 @@ import { PartLabel } from '@/components/PartLabel';
 import { DropZone } from '@/components/DropZone';
 import { CreateNetsuiteItemModal, type CreatedPart } from '@/components/CreateNetsuiteItemModal';
 import EmailInvoicesModal, { type EmailableInvoice } from '@/components/EmailInvoicesModal';
+import PhoneInput from '@/components/PhoneInput';
 import { theme } from '@/lib/theme';
 import { locationBillingOverride } from '@/lib/scan-billing';
 import { findExistingScanVins, sameVehicleVin, vinTail, fetchScansMatchingVins, pickScanForLine } from '@/lib/vin-match';
@@ -3275,7 +3276,7 @@ function VendorInvoicesTab({ allParts, allLocations, poRequired, onCommitted, on
                 </div>
                 <div>
                   <div style={labelStyle}>Phone (optional)</div>
-                  <input value={addVendorPhone} onChange={e => setAddVendorPhone(e.target.value)} style={inputStyle} />
+                  <PhoneInput value={addVendorPhone} onChange={v => setAddVendorPhone(v)} style={inputStyle} />
                 </div>
                 <button onClick={handleAddVendor} disabled={addingVendor || !addVendorName.trim()} style={{ padding: '8px 14px', borderRadius: '6px', fontSize: '11px', fontWeight: 700, background: '#22c55e', color: '#fff', border: 'none', cursor: 'pointer', opacity: addingVendor || !addVendorName.trim() ? 0.6 : 1 }}>
                   {addingVendor ? 'Adding…' : 'Add Installer'}

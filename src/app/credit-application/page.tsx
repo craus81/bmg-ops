@@ -2,6 +2,7 @@
 
 import { useState } from 'react';
 import { createClient } from '@supabase/supabase-js';
+import PhoneInput from '@/components/PhoneInput';
 
 const supabase = createClient(
   process.env.NEXT_PUBLIC_SUPABASE_URL!,
@@ -120,7 +121,7 @@ export default function CreditApplicationPage() {
             <div><label style={labelStyle}>Name *</label><input required style={inputStyle} value={form.contact_name} onChange={e => u('contact_name', e.target.value)} /></div>
             <div><label style={labelStyle}>Title</label><input style={inputStyle} value={form.contact_title} onChange={e => u('contact_title', e.target.value)} /></div>
             <div><label style={labelStyle}>Email *</label><input required type="email" style={inputStyle} value={form.contact_email} onChange={e => u('contact_email', e.target.value)} /></div>
-            <div><label style={labelStyle}>Phone</label><input style={inputStyle} value={form.contact_phone} onChange={e => u('contact_phone', e.target.value)} /></div>
+            <div><label style={labelStyle}>Phone</label><PhoneInput style={inputStyle} value={form.contact_phone} onChange={v => u('contact_phone', v)} /></div>
           </div>
         </div>
 
@@ -143,7 +144,7 @@ export default function CreditApplicationPage() {
           <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '10px' }}>
             <div><label style={labelStyle}>Name</label><input style={inputStyle} value={form.ap_contact_name} onChange={e => u('ap_contact_name', e.target.value)} /></div>
             <div><label style={labelStyle}>Email</label><input type="email" style={inputStyle} value={form.ap_contact_email} onChange={e => u('ap_contact_email', e.target.value)} /></div>
-            <div><label style={labelStyle}>Phone</label><input style={inputStyle} value={form.ap_contact_phone} onChange={e => u('ap_contact_phone', e.target.value)} /></div>
+            <div><label style={labelStyle}>Phone</label><PhoneInput style={inputStyle} value={form.ap_contact_phone} onChange={v => u('ap_contact_phone', v)} /></div>
           </div>
         </div>
 
@@ -169,7 +170,7 @@ export default function CreditApplicationPage() {
               <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: '8px' }}>
                 <input style={inputStyle} placeholder="Company" value={(form as any)[`trade_ref_${n}_company`]} onChange={e => u(`trade_ref_${n}_company`, e.target.value)} />
                 <input style={inputStyle} placeholder="Contact Name" value={(form as any)[`trade_ref_${n}_contact`]} onChange={e => u(`trade_ref_${n}_contact`, e.target.value)} />
-                <input style={inputStyle} placeholder="Phone" value={(form as any)[`trade_ref_${n}_phone`]} onChange={e => u(`trade_ref_${n}_phone`, e.target.value)} />
+                <PhoneInput style={inputStyle} placeholder="Phone" value={(form as any)[`trade_ref_${n}_phone`] || ''} onChange={v => u(`trade_ref_${n}_phone`, v)} />
               </div>
             </div>
           ))}
@@ -181,7 +182,7 @@ export default function CreditApplicationPage() {
           <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '10px' }}>
             <div><label style={labelStyle}>Bank Name</label><input style={inputStyle} value={form.bank_name} onChange={e => u('bank_name', e.target.value)} /></div>
             <div><label style={labelStyle}>Contact</label><input style={inputStyle} value={form.bank_contact} onChange={e => u('bank_contact', e.target.value)} /></div>
-            <div><label style={labelStyle}>Phone</label><input style={inputStyle} value={form.bank_phone} onChange={e => u('bank_phone', e.target.value)} /></div>
+            <div><label style={labelStyle}>Phone</label><PhoneInput style={inputStyle} value={form.bank_phone} onChange={v => u('bank_phone', v)} /></div>
             <div><label style={labelStyle}>Account Type</label>
               <select style={inputStyle} value={form.bank_account_type} onChange={e => u('bank_account_type', e.target.value)}>
                 <option value="">Select...</option>

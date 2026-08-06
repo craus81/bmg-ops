@@ -4,6 +4,7 @@ import { useState, useEffect } from 'react';
 import { useRouter } from 'next/navigation';
 import { createClient } from '@/lib/supabase-browser';
 import { useAuth } from '@/components/AuthProvider';
+import PhoneInput from '@/components/PhoneInput';
 import { storage } from '@/lib/storage';
 
 // Compliance docs are saved through /api/cni/my-docs so the server can
@@ -253,7 +254,7 @@ export default function InstallerProfilePage() {
         </div>
         <div style={{ marginBottom: '12px' }}>
           <label style={labelStyle}>Phone</label>
-          <input style={inputStyle} value={phone} onChange={e => setPhone(e.target.value)} placeholder="(555) 555-5555" />
+          <PhoneInput style={inputStyle} value={phone} onChange={v => setPhone(v)} placeholder="(555) 555-5555" />
         </div>
         <label style={labelStyle}>Business Address</label>
         <input style={{ ...inputStyle, marginBottom: '8px' }} value={street} onChange={e => setStreet(e.target.value)} placeholder="Street" />

@@ -4,6 +4,7 @@ import { useState, useEffect } from 'react';
 import { useRouter } from 'next/navigation';
 import { createClient } from '@/lib/supabase-browser';
 import { useAuth } from '@/components/AuthProvider';
+import PhoneInput from '@/components/PhoneInput';
 import { GRAPHICS_STATUS_LABELS, GRAPHICS_STATUS_ORDER, GRAPHICS_STATUS_COLORS } from '@/lib/types';
 import type { GraphicsJobStatus, NotificationPreferences } from '@/lib/types';
 import { isPushSupported, getPushPermission, getExistingSubscription, subscribeToPush, unsubscribeFromPush } from '@/lib/push-client';
@@ -439,11 +440,11 @@ export default function SettingsPage() {
           {prefs.notify_sms && (
             <div style={{ marginLeft: '30px' }}>
               <div style={labelStyle}>Phone Number</div>
-              <input
+              <PhoneInput
                 style={{ ...inputStyle, maxWidth: '200px' }}
                 placeholder="(555) 123-4567"
                 value={prefs.phone_number || ''}
-                onChange={e => setPrefs({ ...prefs, phone_number: e.target.value })}
+                onChange={v => setPrefs({ ...prefs, phone_number: v })}
               />
             </div>
           )}
