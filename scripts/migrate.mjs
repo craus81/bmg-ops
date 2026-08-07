@@ -51,7 +51,9 @@ if (deploy && process.env.VERCEL_ENV !== 'production') {
   process.exit(0);
 }
 
-const dbUrl = process.env.SUPABASE_DB_URL || process.env.DATABASE_URL;
+// Trim so a stray space/newline picked up while pasting the value into
+// Vercel doesn't turn into an "Invalid URL" or a mystery connection failure.
+const dbUrl = (process.env.SUPABASE_DB_URL || process.env.DATABASE_URL || '').trim();
 if (!dbUrl) {
   if (deploy) {
     // Missing secret shouldn't brick every deploy — warn loudly and ship.
@@ -72,14 +74,60 @@ if (!dbUrl) {
   process.exit(1);
 }
 
+// Parse the URL up front so a malformed connection string produces an
+// actionable message (which host did we get?) instead of a raw Node stack
+// trace or a bare "ECONNREFUSED 127.0.0.1" — the two failure modes that make
+// a mis-pasted Supabase pooler URI so hard to diagnose. `host` is not a
+// secret, so echoing it is safe and is exactly the clue that's needed.
+let parsedHost = '';
+try {
+  parsedHost = new URL(dbUrl).hostname;
+} catch {
+  console.error(
+    'SUPABASE_DB_URL is not a valid Postgres URL.\n' +
+    'Common causes: surrounding quotes, a leftover [ ] around the password, ' +
+    'a "psql " prefix, or an unencoded character in the password.\n' +
+    'Fix: copy the whole "Session pooler" URI from Supabase (Connect → Session ' +
+    'pooler) and only replace [YOUR-PASSWORD]; percent-encode any @ : / ? # & % + or spaces.'
+  );
+  process.exit(1);
+}
+if (!parsedHost || parsedHost === 'localhost' || parsedHost === '127.0.0.1') {
+  console.error(
+    `SUPABASE_DB_URL host resolved to "${parsedHost || '(empty)'}" — that's the ` +
+    'localhost fallback, which means the @host part of your URL is missing.\n' +
+    'Usually the password has an unencoded character (@ : / ? # & % + or a space) ' +
+    'that truncated the host, or the host was dropped while editing.\n' +
+    'Fix: copy the whole "Session pooler" URI from Supabase and only swap the ' +
+    'password (ideally reset it to an alphanumeric one so no encoding is needed). ' +
+    'It should end with @aws-0-<region>.pooler.supabase.com:5432/postgres.'
+  );
+  process.exit(1);
+}
+
 const isLocal = /localhost|127\.0\.0\.1/.test(dbUrl);
 const client = new pg.Client({
   connectionString: dbUrl,
   ssl: isLocal ? undefined : { rejectUnauthorized: false },
+  // Fail fast instead of hanging the whole build until Vercel's global
+  // timeout when the host is wrong/unreachable — the connect-failure handler
+  // below then prints an actionable message.
+  connectionTimeoutMillis: 15000,
 });
 
 async function main() {
-  await client.connect();
+  try {
+    await client.connect();
+  } catch (err) {
+    // Reachability/auth problems: name the host and the likely cause instead
+    // of surfacing a bare driver error.
+    const hint = /password/i.test(err.message)
+      ? 'the password is wrong or unencoded — the Session pooler username must be "postgres.<project-ref>", not bare "postgres"'
+      : `could not reach ${parsedHost}:5432 — confirm it is the Session pooler host and the value is scoped to Production`;
+    console.error(`Migration DB connection failed: ${err.message}\n  → ${hint}.`);
+    process.exitCode = 1;
+    return;
+  }
   // Serialize concurrent runners (e.g. two production builds racing) — the
   // session-level lock releases automatically when this client disconnects.
   if (!dryRun) await client.query('SELECT pg_advisory_lock(727274001)');
