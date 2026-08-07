@@ -7,7 +7,7 @@ import { useAuth } from '@/components/AuthProvider';
 import { useDialog } from '@/components/DialogProvider';
 import { apiFetch } from '@/lib/api-client';
 import { theme } from '@/lib/theme';
-import { storage } from '@/lib/storage';
+import { storage, storageDownloadUrl } from '@/lib/storage';
 import { DropZone } from '@/components/DropZone';
 import MentionTextArea, { reportMentions } from '@/components/MentionTextArea';
 import { flashNote } from '@/lib/focus-note';
@@ -386,7 +386,10 @@ export default function SchedulePage() {
     loadEvents();
   };
 
-  const fileUrl = (path: string) => storage.from('graphics-proofs').getPublicUrl(path).data.publicUrl;
+  // Serve through the download route so a save keeps the original file_name —
+  // the raw public URL saves as the prefixed storage key.
+  const fileUrl = (f: { storage_path: string; file_name: string }) =>
+    storageDownloadUrl('graphics-proofs', f.storage_path, f.file_name);
 
   // Turn the card into a real graphics job: the job inherits the title,
   // install date, description, notes, and files, and takes over the Google
@@ -692,7 +695,7 @@ export default function SchedulePage() {
               {cardFiles.length === 0 && <div style={{ fontSize: '11px', color: 'var(--text-muted)', fontStyle: 'italic' }}>No files yet.</div>}
               {cardFiles.map(f => (
                 <div key={f.id} style={{ display: 'flex', alignItems: 'center', gap: '8px', background: 'var(--subtle-bg)', border: `1px solid ${theme.border}`, borderRadius: '8px', padding: '6px 10px' }}>
-                  <a href={fileUrl(f.storage_path)} target="_blank" rel="noopener noreferrer" style={{ flex: 1, fontSize: '12px', fontWeight: 600, color: '#60a5fa', textDecoration: 'none', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                  <a href={fileUrl(f)} target="_blank" rel="noopener noreferrer" style={{ flex: 1, fontSize: '12px', fontWeight: 600, color: '#60a5fa', textDecoration: 'none', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
                     📎 {f.file_name}
                   </a>
                   <button onClick={() => deleteCardFile(f)} title="Delete file" style={{ background: 'transparent', border: 'none', color: '#ef4444', cursor: 'pointer', fontSize: '12px', fontWeight: 700 }}>✕</button>

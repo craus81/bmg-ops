@@ -194,6 +194,42 @@ export async function r2PresignPut(
   return { url, key, publicUrl };
 }
 
+// ── Generate a presigned GET URL that restores the real filename ──
+// Objects are stored under randomized keys (…/<timestamp>-<rand>.<ext>), so a
+// download straight off the public URL saves under that random key name. Only
+// a signed URL honors the response-content-disposition override — the public
+// bucket domain ignores response-* params — hence this instead of r2PublicUrl
+// whenever the saved filename matters.
+export async function r2PresignGet(
+  prefix: string,
+  path: string,
+  opts: { filename?: string; disposition?: 'inline' | 'attachment'; expiresIn?: number } = {},
+): Promise<string> {
+  const config = getR2Config();
+  const client = getR2Client();
+  const key = `${prefix}/${path}`;
+
+  const type = opts.disposition || 'inline';
+  let disposition: string = type;
+  if (opts.filename) {
+    // Plain filename param must stay ASCII and quote-free; the full UTF-8
+    // name rides in RFC 5987 filename*, which every current browser prefers.
+    const ascii = opts.filename.replace(/[^\x20-\x7e]/g, '_').replace(/["\\]/g, '_');
+    const utf8 = encodeURIComponent(opts.filename).replace(/['()*]/g, c => '%' + c.charCodeAt(0).toString(16).toUpperCase());
+    disposition = `${type}; filename="${ascii}"; filename*=UTF-8''${utf8}`;
+  }
+
+  return getSignedUrl(
+    client,
+    new GetObjectCommand({
+      Bucket: config.bucket,
+      Key: key,
+      ResponseContentDisposition: disposition,
+    }),
+    { expiresIn: opts.expiresIn ?? 600 },
+  );
+}
+
 // ── Get a file from R2 (for server-side reads) ──
 export async function r2Get(
   prefix: string,

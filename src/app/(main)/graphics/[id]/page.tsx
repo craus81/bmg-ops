@@ -19,7 +19,7 @@ import { useState, useEffect, useRef } from 'react';
 import { useRouter, useParams } from 'next/navigation';
 import { createClient } from '@/lib/supabase-browser';
 import { deepLinks } from '@/lib/deep-links';
-import { storage } from '@/lib/storage';
+import { storage, storageDownloadUrl } from '@/lib/storage';
 import { apiFetch } from '@/lib/api-client';
 import { useAuth } from '@/components/AuthProvider';
 import { useDialog } from '@/components/DialogProvider';
@@ -641,10 +641,10 @@ export default function GraphicsJobRecordPage() {
     setJobFiles(prev => prev.filter(f => f.id !== file.id));
   };
 
-  const getFileUrl = (path: string) => {
-    const { data } = storage.from('graphics-proofs').getPublicUrl(path);
-    return data.publicUrl;
-  };
+  // Serve through the download route so a save keeps the original file_name —
+  // the raw public URL saves as the randomized storage key.
+  const getFileUrl = (f: { storage_path: string; file_name: string }) =>
+    storageDownloadUrl('graphics-proofs', f.storage_path, f.file_name);
 
   const formatFileSize = (bytes: number | null) => {
     if (!bytes) return '';
@@ -1532,7 +1532,7 @@ export default function GraphicsJobRecordPage() {
                   <div key={f.id} style={{ display: 'flex', alignItems: 'center', gap: '8px', padding: '6px 8px', borderRadius: '8px', background: 'var(--subtle-bg)' }}>
                     <span style={{ fontSize: '14px', flexShrink: 0 }}>{isImage ? '🖼️' : isPdf ? '📄' : '📎'}</span>
                     <a
-                      href={getFileUrl(f.storage_path)}
+                      href={getFileUrl(f)}
                       target="_blank"
                       rel="noopener noreferrer"
                       style={{ flex: 1, fontSize: '11px', fontWeight: 600, color: '#60a5fa', textDecoration: 'none', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}
@@ -1559,7 +1559,7 @@ export default function GraphicsJobRecordPage() {
                   <div key={f.id} style={{ display: 'flex', alignItems: 'center', gap: '8px', padding: '6px 8px', borderRadius: '8px', background: 'rgba(96,165,250,0.06)', border: '1px dashed rgba(96,165,250,0.3)' }}>
                     <span style={{ fontSize: '14px', flexShrink: 0 }}>📄</span>
                     <a
-                      href={getFileUrl(f.storage_path)}
+                      href={getFileUrl(f)}
                       target="_blank"
                       rel="noopener noreferrer"
                       style={{ flex: 1, fontSize: '11px', fontWeight: 600, color: '#60a5fa', textDecoration: 'none', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}
