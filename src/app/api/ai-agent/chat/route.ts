@@ -2,6 +2,11 @@ import { NextRequest, NextResponse } from 'next/server';
 import { suiteqlQuery } from '@/lib/netsuite';
 import { createClient } from '@supabase/supabase-js';
 import { requireAuth } from '@/lib/api-auth';
+import { logAudit } from '@/lib/audit';
+import {
+  rolesOf, canQueryNetSuite as canQueryNetSuiteFor, canSeeFinancials as canSeeFinancialsFor,
+  touchesFinancialData, stripFinancialGuidance,
+} from '@/lib/ai-agent-access';
 import { validateBody, z } from '@/lib/validate';
 
 export const dynamic = 'force-dynamic';
@@ -16,7 +21,11 @@ const Schema = z.object({
     )
     .min(1)
     .max(100),
-  userRole: z.string().max(60).optional(),
+  // NOTE: no `userRole` here on purpose. The role is resolved SERVER-side
+  // from the caller's profile (see POST). This endpoint used to trust a
+  // `userRole` in the body, which let anyone reach NetSuite GL balances by
+  // simply not claiming to be an installer — the access bypass this fix (K6)
+  // closes.
 });
 
 const supabase = createClient(
@@ -1056,8 +1065,34 @@ export async function POST(req: NextRequest) {
   const parsed = await validateBody(req, Schema);
   if (parsed.error) return parsed.error;
   const messages = parsed.data.messages as Message[];
-  const userRole = parsed.data.userRole;
-  const isInstallerRole = userRole === 'installer' || userRole === 'field_tech' || userRole === 'shop_tech';
+
+  // Role comes from the authenticated profile, never the request body.
+  const roles = rolesOf(auth.profile);
+  const canQueryNetSuite = canQueryNetSuiteFor(roles);
+  const canSeeFinancials = canSeeFinancialsFor(roles);
+
+  // Customers (and any account with no recognized role) don't get the data
+  // assistant at all — it queries company-wide operational data.
+  if (roles.length === 0 || roles.every(r => r === 'customer')) {
+    return NextResponse.json({ error: 'The assistant isn\'t available for your role.' }, { status: 403 });
+  }
+
+  // Accumulated for one audit_log row per chat turn (who ran what, when).
+  // Hoisted above the try so the catch path can flush it too.
+  const auditQueries: Array<Record<string, any>> = [];
+  let audited = false;
+  const recordAudit = async () => {
+    if (audited) return;
+    audited = true;
+    if (auditQueries.length === 0) return;
+    await logAudit(supabase, {
+      actorId: auth.user?.id ?? null,
+      table: 'ai_agent',
+      recordId: null,
+      action: 'query',
+      detail: { roles, canQueryNetSuite, canSeeFinancials, queries: auditQueries },
+    });
+  };
 
   try {
 
@@ -1066,18 +1101,31 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ error: 'AI not configured' }, { status: 500 });
     }
 
-    // Customize system prompt based on role
-    let systemPrompt = SYSTEM_PROMPT;
-    if (userRole === 'sales') {
+    // Financials-eligible callers get the full prompt; everyone else gets the
+    // A/R–A/P–revenue SuiteQL examples stripped out.
+    let systemPrompt = canSeeFinancials ? SYSTEM_PROMPT : stripFinancialGuidance(SYSTEM_PROMPT);
+
+    // Role-specific focus notes — driven by the server-resolved roles.
+    if (roles.includes('sales')) {
       systemPrompt += '\n\nIMPORTANT: This user has a "sales" role. They can view customer data, estimates, graphics production, and vehicle tracking. They should NOT be able to modify user accounts, delete records, or access admin-only settings. Focus on helping them with customer info, quotes, and production status.';
-    } else if (userRole === 'production' || userRole === 'graphics_production') {
+    } else if (roles.includes('graphics_production')) {
       systemPrompt += '\n\nIMPORTANT: This user has a "graphics_production" role. They primarily work with graphics jobs, production schedules, and the production pipeline. Focus on helping them with job statuses, vinyl specs, production metrics, and scheduling.';
-    } else if (userRole === 'field_tech') {
+    } else if (roles.includes('field_tech')) {
       systemPrompt += '\n\nIMPORTANT: This user has a "field_tech" role. They work outside the O\'Fallon shop as an installer/contractor. They can scan VINs and view vehicles assigned to them. Focus on helping them with VIN lookups, vehicle status, and installation details.';
-    } else if (userRole === 'shop_tech') {
+    } else if (roles.includes('shop_tech')) {
       systemPrompt += '\n\nIMPORTANT: This user has a "shop_tech" role. They work at the O\'Fallon shop. They can view the fleet dashboard, vehicle tracking, and shop status. Focus on helping them with vehicle statuses, production pipeline, and shop operations.';
-    } else if (userRole === 'installer') {
+    } else if (roles.includes('installer')) {
       systemPrompt += '\n\nIMPORTANT: This user has an "installer" role. They are a vehicle graphics installer.\n\nACCESS RESTRICTIONS:\n- You MUST NOT query NetSuite at all — no sales orders, invoices, customer financials, or pricing data. If they ask about financials, politely say you cannot access that data with their role.\n- You CAN query the BMG Fleet app database (supabase) for: fleet_checkins (vehicle tracking), vehicle_notes, vehicle_photos, job_assignments, graphics_jobs, vehicle_templates (wrap dimensions and panel data), profiles, and schedule_entries.\n- You CAN search the knowledge base for: installation SOPs, vehicle specs, wrap dimensions, techniques, and product information.\n- You CANNOT create estimates, view customer financial data, or access admin settings.\n\nFOCUS AREAS — help installers with:\n- Vehicle wrap dimensions and panel sizes (search vehicle_templates)\n- Installation techniques and best practices (search knowledge base)\n- Their assigned vehicles and current status\n- Vehicles currently in the shop (fleet_checkins)\n- Installation notes and photos for vehicles\n- Graphics job details (what graphics are needed for a vehicle)\n- Product specs from the knowledge base (SOPs, specs, pricing guides for materials)';
+    }
+
+    // Hard restrictions, independent of the focus notes above. The executor
+    // enforces these regardless; stating them keeps the model from proposing
+    // queries it will only get rejected.
+    if (!canQueryNetSuite) {
+      systemPrompt += '\n\nACCESS RESTRICTION: NetSuite is not available for your role. Use the app database (supabase) and knowledge base only. If asked about invoices, sales orders, or NetSuite financials, say you can\'t access NetSuite with your role.';
+    }
+    if (!canSeeFinancials) {
+      systemPrompt += '\n\nACCESS RESTRICTION: Financial data is restricted to leadership. Do NOT try to read GL accounts or balances, customer/vendor A/R or A/P, credit limits, or payment/bill/journal transactions, nor pay, payout, or audit tables — those queries are blocked. Offer operational data (jobs, parts, vehicles, schedules, customers by name) instead.';
     }
 
     const claudeMessages: any[] = messages.map(m => ({ role: m.role, content: m.content }));
@@ -1162,18 +1210,39 @@ export async function POST(req: NextRequest) {
           .replace(/^```(?:json)?\s*\n?/i, '')
           .replace(/\n?```\s*$/i, '')
           .trim();
+        await recordAudit();
         return NextResponse.json({
           reply: cleanReply,
           queriesExecuted: totalQueriesExecuted,
         });
       }
 
-      // Execute all queries/actions
+      // Execute all queries/actions, enforcing access server-side.
       const results: Record<string, any> = {};
       for (const q of queryBlock.queries) {
-        // Server-side enforcement: block NetSuite queries for installer roles
-        if (isInstallerRole && q.source === 'netsuite') {
-          results[q.id] = { error: 'NetSuite access is not available for your role. Use the knowledge base or app database instead.' };
+        const src = q.source || 'netsuite';
+        let blocked: string | null = null;
+
+        if (src === 'netsuite' && !canQueryNetSuite) {
+          blocked = 'NetSuite access is not available for your role. Use the knowledge base or app database instead.';
+        } else if (src === 'action' && !canQueryNetSuite) {
+          blocked = 'Actions (creating jobs or estimates, sending messages) aren\'t available for your role.';
+        } else if (!canSeeFinancials && touchesFinancialData(src, q.sql)) {
+          blocked = src === 'supabase'
+            ? 'That involves pay or audit data, which is restricted to leadership.'
+            : 'That involves financial data (GL balances, A/R, A/P, or payments), which is restricted to leadership. Ask about jobs, parts, customers, vehicles, or schedules instead.';
+        }
+
+        auditQueries.push({
+          source: src,
+          ...(q.sql ? { sql: q.sql.slice(0, 1000) } : {}),
+          ...(q.action ? { action: q.action } : {}),
+          ...(q.search ? { search: q.search.slice(0, 200) } : {}),
+          ...(blocked ? { blocked: true } : {}),
+        });
+
+        if (blocked) {
+          results[q.id] = { error: blocked };
           totalQueriesExecuted++;
           continue;
         }
@@ -1210,6 +1279,7 @@ export async function POST(req: NextRequest) {
       .replace(/\n?```\s*$/i, '')
       .trim();
 
+    await recordAudit();
     return NextResponse.json({
       reply: cleanFinal,
       queriesExecuted: totalQueriesExecuted,
@@ -1217,6 +1287,7 @@ export async function POST(req: NextRequest) {
 
   } catch (err: any) {
     console.error('AI agent error:', err);
+    await recordAudit();
     return NextResponse.json({ error: err.message || 'Failed to process request' }, { status: 500 });
   }
 }
