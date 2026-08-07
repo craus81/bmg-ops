@@ -173,6 +173,9 @@ export default function EstimatesPage() {
     billing_contact_email: string | null;
     ap_email: string | null;
     internal_notes: string | null;
+    tax_exempt: boolean;
+    tax_exempt_cert_number: string | null;
+    tax_exempt_expires_at: string | null;
   } | null>(null);
   const [editingCustomerDefaults, setEditingCustomerDefaults] = useState(false);
   const [savingCustomerDefaults, setSavingCustomerDefaults] = useState(false);
@@ -722,7 +725,7 @@ export default function EstimatesPage() {
     if (!cid) { setCustomerDefaults(null); return; }
     const { data } = await supabase
       .from('customers')
-      .select('delivery_instructions, billing_contact_name, billing_contact_email, ap_email, internal_notes')
+      .select('delivery_instructions, billing_contact_name, billing_contact_email, ap_email, internal_notes, tax_exempt, tax_exempt_cert_number, tax_exempt_expires_at')
       .eq('id', cid)
       .maybeSingle();
     setCustomerDefaults(data as any || null);
@@ -920,6 +923,15 @@ export default function EstimatesPage() {
   // eslint-disable-next-line react-hooks/exhaustive-deps -- intentional: load once on mount
   }, [customerDefaults, editingId]);
 
+  // Prefill the tax-exempt flag from the customer default on a NEW estimate
+  // (existing estimates keep whatever was saved on them).
+  useEffect(() => {
+    if (customerDefaults?.tax_exempt && !editingId) {
+      setTaxExempt(true);
+    }
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- intentional: apply once when defaults load
+  }, [customerDefaults, editingId]);
+
   // Save customer operations defaults (inline editor)
   const saveCustomerDefaults = async (defaults: typeof customerDefaults) => {
     if (!customerId || !defaults) return;
@@ -932,6 +944,9 @@ export default function EstimatesPage() {
         billing_contact_email: defaults.billing_contact_email || null,
         ap_email: defaults.ap_email || null,
         internal_notes: defaults.internal_notes || null,
+        tax_exempt: !!defaults.tax_exempt,
+        tax_exempt_cert_number: defaults.tax_exempt_cert_number || null,
+        tax_exempt_expires_at: defaults.tax_exempt_expires_at || null,
       })
       .eq('id', customerId);
     setSavingCustomerDefaults(false);
@@ -1286,6 +1301,7 @@ export default function EstimatesPage() {
       {editingCustomerDefaults && customerId && (
         <CustomerDefaultsEditor
           initial={customerDefaults}
+          customerId={customerId}
           customerName={customerName}
           saving={savingCustomerDefaults}
           onSave={saveCustomerDefaults}
@@ -1729,6 +1745,22 @@ export default function EstimatesPage() {
                 Tax Exempt
               </span>
             </label>
+            {customerDefaults?.tax_exempt && (() => {
+              const exp = customerDefaults.tax_exempt_expires_at;
+              const cert = customerDefaults.tax_exempt_cert_number;
+              let tone = 'var(--text-muted)';
+              const parts = ['Customer default'];
+              if (cert) parts.push(`cert #${cert}`);
+              if (exp) {
+                const d = new Date(exp + 'T00:00:00');
+                const days = Math.floor((d.getTime() - Date.now()) / 86400000);
+                const mmYYYY = `${d.getMonth() + 1}/${d.getFullYear()}`;
+                if (days < 0) { tone = '#f59e0b'; parts.push(`cert EXPIRED ${mmYYYY}`); }
+                else if (days <= 60) { tone = '#f59e0b'; parts.push(`cert expires ${mmYYYY}`); }
+                else parts.push(`exp ${mmYYYY}`);
+              }
+              return <div style={{ fontSize: '10px', color: tone, marginTop: '4px', maxWidth: '160px' }}>{parts.join(' · ')}</div>;
+            })()}
           </div>
         </div>
 
