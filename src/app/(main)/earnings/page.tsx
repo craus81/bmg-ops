@@ -42,7 +42,10 @@ const STATUS_STYLE: Record<string, { label: string; color: string }> = {
 /**
  * My Earnings: every vehicle the signed-in user has pay credit on — CNI jobs
  * and field shifts — with their cut, the crew size it split across, and
- * payout status. Each person sees only their own dollars.
+ * payout status. Each person sees only their own dollars. Field-source dollar
+ * figures are admin-only (field techs are payroll employees; the server
+ * strips them) — field rows still list so techs can verify their vehicles
+ * were tracked.
  */
 export default function MyEarningsPage() {
   const router = useRouter();
@@ -52,6 +55,7 @@ export default function MyEarningsPage() {
   const supabase = createClient();
   const [rows, setRows] = useState<EarningRow[]>([]);
   const [payouts, setPayouts] = useState<PayoutRow[]>([]);
+  const [fieldAmountsHidden, setFieldAmountsHidden] = useState(false);
   const [loading, setLoading] = useState(true);
   const [openGroups, setOpenGroups] = useState<Set<string>>(new Set());
   const [showAllPayouts, setShowAllPayouts] = useState(false);
@@ -68,6 +72,7 @@ export default function MyEarningsPage() {
         const body = await res.json();
         setRows(body.credits || []);
         setPayouts(body.payouts || []);
+        setFieldAmountsHidden(!!body.fieldAmountsHidden);
       }
       setLoading(false);
     })();
@@ -78,9 +83,16 @@ export default function MyEarningsPage() {
     return <div style={{ padding: '20px', textAlign: 'center', color: 'var(--text-muted)' }}>Loading...</div>;
   }
 
-  const total = rows.reduce((s, r) => s + (r.amount || 0), 0);
-  const paid = rows.filter(r => r.payoutStatus === 'paid').reduce((s, r) => s + (r.amount || 0), 0);
-  const unpriced = rows.filter(r => r.amount == null).length;
+  // Rows whose dollars the server withheld (field work for non-admins) still
+  // list for vehicle verification but stay out of every money computation —
+  // otherwise they'd read as $0 earned or "awaiting a pay rate".
+  const amountHidden = (r: EarningRow) => fieldAmountsHidden && r.source === 'field';
+  const moneyRows = rows.filter(r => !amountHidden(r));
+  const showMoney = moneyRows.length > 0;
+
+  const total = moneyRows.reduce((s, r) => s + (r.amount || 0), 0);
+  const paid = moneyRows.filter(r => r.payoutStatus === 'paid').reduce((s, r) => s + (r.amount || 0), 0);
+  const unpriced = moneyRows.filter(r => r.amount == null).length;
 
   const groups = new Map<string, EarningRow[]>();
   for (const r of rows) {
@@ -103,23 +115,35 @@ export default function MyEarningsPage() {
         <button onClick={() => router.back()} style={{ fontSize: '20px', color: 'var(--text-muted)' }}>←</button>
         <div>
           <div style={{ fontSize: '20px', fontWeight: 800, color: 'var(--text-primary)', letterSpacing: '-0.5px' }}>My Earnings</div>
-          <div style={{ fontSize: '12px', color: 'var(--text-muted)' }}>Your cut per completed vehicle</div>
+          <div style={{ fontSize: '12px', color: 'var(--text-muted)' }}>
+            {showMoney || rows.length === 0 ? 'Your cut per completed vehicle' : 'Your completed vehicles'}
+          </div>
         </div>
       </div>
 
-      {/* Totals */}
-      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: '10px', marginBottom: '16px' }}>
-        {[
-          { label: 'Total Earned', value: `$${total.toFixed(2)}`, color: 'var(--success)' },
-          { label: 'Paid Out', value: `$${paid.toFixed(2)}`, color: 'var(--text-primary)' },
-          { label: 'Awaiting Payout', value: `$${(total - paid).toFixed(2)}`, color: 'var(--orange)' },
-        ].map(card => (
-          <div key={card.label} style={{ padding: '14px 12px', borderRadius: '12px', background: 'var(--card)', border: '1px solid var(--border)', textAlign: 'center' }}>
-            <div style={{ fontSize: '16px', fontWeight: 800, color: card.color }}>{card.value}</div>
-            <div style={{ fontSize: '10px', fontWeight: 700, color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.5px', marginTop: '2px' }}>{card.label}</div>
+      {/* Totals — dollars when any are visible, otherwise just the vehicle count
+          (field-work dollars are admin-only; the API withholds them). */}
+      {showMoney ? (
+        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: '10px', marginBottom: '16px' }}>
+          {[
+            { label: 'Total Earned', value: `$${total.toFixed(2)}`, color: 'var(--success)' },
+            { label: 'Paid Out', value: `$${paid.toFixed(2)}`, color: 'var(--text-primary)' },
+            { label: 'Awaiting Payout', value: `$${(total - paid).toFixed(2)}`, color: 'var(--orange)' },
+          ].map(card => (
+            <div key={card.label} style={{ padding: '14px 12px', borderRadius: '12px', background: 'var(--card)', border: '1px solid var(--border)', textAlign: 'center' }}>
+              <div style={{ fontSize: '16px', fontWeight: 800, color: card.color }}>{card.value}</div>
+              <div style={{ fontSize: '10px', fontWeight: 700, color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.5px', marginTop: '2px' }}>{card.label}</div>
+            </div>
+          ))}
+        </div>
+      ) : rows.length > 0 && (
+        <div style={{ padding: '14px 12px', borderRadius: '12px', background: 'var(--card)', border: '1px solid var(--border)', textAlign: 'center', marginBottom: '16px' }}>
+          <div style={{ fontSize: '16px', fontWeight: 800, color: 'var(--text-primary)' }}>{rows.length}</div>
+          <div style={{ fontSize: '10px', fontWeight: 700, color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.5px', marginTop: '2px' }}>
+            Vehicle{rows.length === 1 ? '' : 's'} Credited to You
           </div>
-        ))}
-      </div>
+        </div>
+      )}
 
       {unpriced > 0 && (
         <div style={{ padding: '10px 14px', borderRadius: '10px', marginBottom: '12px', background: 'var(--warning-bg)', border: '1px solid var(--warning-border)', color: 'var(--warning)', fontSize: '12px', fontWeight: 600 }}>
@@ -170,6 +194,9 @@ export default function MyEarningsPage() {
           No earnings yet — vehicles you complete while tagged on a shift will show up here.
         </div>
       ) : [...groups.entries()].map(([group, items]) => {
+        // Groups are one CNI job or one field part, so hidden-ness is uniform
+        // within a group.
+        const groupHidden = amountHidden(items[0]);
         const groupTotal = items.reduce((s, r) => s + (r.amount || 0), 0);
         const open = openGroups.has(group);
         return (
@@ -185,7 +212,9 @@ export default function MyEarningsPage() {
                 </div>
               </div>
               <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
-                <span style={{ fontSize: '14px', fontWeight: 800, color: 'var(--success)' }}>${groupTotal.toFixed(2)}</span>
+                {!groupHidden && (
+                  <span style={{ fontSize: '14px', fontWeight: 800, color: 'var(--success)' }}>${groupTotal.toFixed(2)}</span>
+                )}
                 <span style={{ fontSize: '12px', color: 'var(--text-muted)' }}>{open ? '▾' : '▸'}</span>
               </div>
             </button>
@@ -201,9 +230,11 @@ export default function MyEarningsPage() {
                     </div>
                   </div>
                   <div style={{ textAlign: 'right' }}>
-                    <div style={{ fontSize: '13px', fontWeight: 800, color: r.amount != null ? 'var(--text-primary)' : 'var(--text-muted)' }}>
-                      {r.amount != null ? `$${r.amount.toFixed(2)}` : 'TBD'}
-                    </div>
+                    {!groupHidden && (
+                      <div style={{ fontSize: '13px', fontWeight: 800, color: r.amount != null ? 'var(--text-primary)' : 'var(--text-muted)' }}>
+                        {r.amount != null ? `$${r.amount.toFixed(2)}` : 'TBD'}
+                      </div>
+                    )}
                     <div style={{ fontSize: '9px', fontWeight: 700, color: st.color, textTransform: 'uppercase', letterSpacing: '0.5px' }}>{st.label}</div>
                   </div>
                 </div>

@@ -268,11 +268,18 @@ Reopening a completed VIN (or archiving/deleting a scan) voids its credits.
   split ("÷3"). New **My Earnings** page: per job and running totals —
   vehicles credited, crew size each, their amount, payout status.
 - **Field `/scan` page:** after part + location, an optional "Who's working
-  with you?" step (skipping = solo). The locked banner adds crew + "your cut"
-  when a rate exists. End Shift closes the work_shift.
-- Everyone sees their own dollar amounts. Crew composition per vehicle is
-  visible to anyone who was on that shift; other members' dollar figures are
-  not shown (admin sees everything).
+  with you?" step (skipping = solo). The locked banner shows the crew; the
+  "your cut" rate is admin-only (see below). End Shift closes the work_shift.
+- CNI installers see their own dollar amounts (their contracted vendor pay).
+  Crew composition per vehicle is visible to anyone who was on that shift;
+  other members' dollar figures are not shown (admin sees everything).
+- **Field dollar figures are admin-only** (revised 2026-08: field techs are
+  hourly/salary payroll employees, and per-vehicle rates are internal pricing
+  — some mirror CNI vendor payouts). `/api/shifts` returns no field rate to
+  non-admins, and `/api/my/earnings` strips field-source credit amounts and
+  payroll-period payout amounts. Field techs still see their credited
+  vehicles (VIN, date, crew split, payout status) to verify tracking; money
+  math is unchanged server-side, so payroll reporting still works.
 
 ## Admin screens
 
@@ -337,3 +344,11 @@ Reopening a completed VIN (or archiving/deleting a scan) voids its credits.
 
 - For `individual` CNI payouts: any employees without NetSuite vendor records
   yet, and who sets those up?
+- **Per-job earnings visibility for field techs.** Most field work is hourly/
+  salary, but a few jobs (e.g. the Verizon RFID installs) genuinely pay techs
+  per vehicle — and for those, techs should arguably see their cut and running
+  earnings again. Sketch: a `visible_to_techs` flag on `install_pay_rates`
+  (per part/custom job, managed on `/admin/pay-rates`) that re-enables the
+  scan-banner rate and the My Earnings dollars for just that job's credits,
+  while everything else stays admin-only. Not built — noted 2026-08 per
+  cgeorge.
