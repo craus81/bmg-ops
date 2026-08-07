@@ -405,7 +405,9 @@ export default function AiChat() {
       const res = await fetch('/api/ai-agent/chat', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ messages: history, userRole: profile?.role }),
+        // Role is resolved server-side from the session; sending it from the
+        // client was the access bypass (a client could claim any role).
+        body: JSON.stringify({ messages: history }),
       });
 
       const data = await res.json();
