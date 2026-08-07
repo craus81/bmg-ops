@@ -18,7 +18,7 @@ const IN_SHOP_STATUSES = ['received', 'checked_in', 'in_progress', 'stuck_parts'
 
 interface InboundRow {
   id: string;
-  source_type: 'graphics_job' | 'upfit_project' | 'manual';
+  source_type: 'graphics_job' | 'upfit_project' | 'manual' | 'sales_order';
   source_id: string;
   vehicle_desc: string | null;
   customer_name: string | null;
@@ -26,6 +26,8 @@ interface InboundRow {
   expected_date: string | null;
   need_back_date: string | null;
   status: 'expected' | 'arrived' | 'cancelled';
+  netsuite_so_number?: string | null;
+  vin?: string | null;
 }
 
 interface BackRow {
@@ -42,6 +44,7 @@ const SOURCE_BADGES: Record<InboundRow['source_type'], { label: string; color: s
   graphics_job: { label: 'Graphics', color: '#a78bfa' },
   upfit_project: { label: 'Upfit', color: '#fb923c' },
   manual: { label: 'Manual', color: '#94a3b8' },
+  sales_order: { label: 'Sales Order', color: '#2dd4bf' },
 };
 
 const todayStr = () => {
@@ -105,6 +108,7 @@ export default function ShopArrivals() {
   const openSource = (row: InboundRow) => {
     if (row.source_type === 'graphics_job') router.push(deepLinks.graphicsJob(row.source_id));
     else if (row.source_type === 'upfit_project') router.push(deepLinks.upfitProject(row.source_id));
+    else if (row.source_type === 'sales_order') router.push(deepLinks.estimate(row.source_id));
   };
 
   const addManual = async () => {

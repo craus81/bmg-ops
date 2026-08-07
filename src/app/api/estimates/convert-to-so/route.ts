@@ -7,6 +7,7 @@ import { safeStringLiteral } from '@/lib/sql-safe';
 import { logAudit } from '@/lib/audit';
 import { notifyMany } from '@/lib/notify';
 import { deepLinks } from '@/lib/deep-links';
+import { syncShopInboundForSalesOrder } from '@/lib/shop-inbound';
 
 const ConvertSchema = z.object({
   estimateId: z.string().uuid(),
@@ -238,6 +239,14 @@ export async function POST(req: NextRequest) {
         status: 'accepted',
       })
       .eq('id', estimateId);
+
+    // Put the vehicle on the shop's Arriving board (V1). Non-fatal — the SO
+    // already exists; a board hiccup shouldn't fail the conversion.
+    try {
+      await syncShopInboundForSalesOrder(supabase, estimateId);
+    } catch (inboundErr) {
+      console.error('shop_inbound sales-order sync failed:', inboundErr);
+    }
 
     // Conversion previously notified nobody at all. FYI the estimate's
     // creator and the account owner (minus whoever clicked Convert);
