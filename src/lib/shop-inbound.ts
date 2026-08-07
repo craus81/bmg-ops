@@ -33,11 +33,16 @@ interface InboundFields {
   install_location: string | null;
   expected_date: string | null;
   need_back_date: string | null;
+  // sales_order rows only — omitted (and so never written) by the other
+  // sources, since JSON.stringify drops undefined keys before the upsert.
+  netsuite_so_id?: string | null;
+  netsuite_so_number?: string | null;
+  vin?: string | null;
 }
 
 async function upsertInbound(
   service: SupabaseClient,
-  sourceType: 'graphics_job' | 'upfit_project',
+  sourceType: 'graphics_job' | 'upfit_project' | 'sales_order',
   sourceId: string,
   qualifies: boolean,
   fields: InboundFields,
@@ -105,6 +110,37 @@ export async function syncShopInboundForGraphicsJob(
     install_location: job.install_location,
     expected_date: schedDate,
     need_back_date: null,
+  });
+}
+
+export async function syncShopInboundForSalesOrder(
+  service: SupabaseClient,
+  estimateId: string,
+): Promise<void> {
+  const { data: est } = await service
+    .from('estimates')
+    .select('id, estimate_number, title, customer_name, status, netsuite_so_id, netsuite_so_number')
+    .eq('id', estimateId)
+    .maybeSingle();
+  if (!est) return;
+
+  // A vehicle is expected once the estimate becomes a Sales Order and hasn't
+  // been cancelled/lost. Estimates carry no drop-off date, so there's no
+  // expected_date — the row lands under "Further Out / No Date" until a date
+  // is known. Keyed on the estimate UUID (see migration 185).
+  const qualifies =
+    !!est.netsuite_so_id && !['cancelled', 'rejected', 'lost'].includes(est.status);
+
+  await upsertInbound(service, 'sales_order', est.id, qualifies, {
+    vehicle_desc: est.title || `Estimate ${est.estimate_number}`,
+    customer_name: est.customer_name || null,
+    work_summary: est.netsuite_so_number ? `Sales Order #${est.netsuite_so_number}` : 'Sales Order',
+    install_location: SHOP_INSTALL_LOCATION,
+    expected_date: null,
+    need_back_date: null,
+    netsuite_so_id: est.netsuite_so_id || null,
+    netsuite_so_number: est.netsuite_so_number || null,
+    vin: null,
   });
 }
 
