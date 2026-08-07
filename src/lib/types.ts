@@ -433,6 +433,9 @@ export interface NetsuiteSalesOrder {
   date: string;
   vin: string | null;
   status: string;
+  // Per-type display label from NetSuite (absent on rows reconstructed
+  // from fleet_checkin_sales_orders, which doesn't store status).
+  status_label?: string;
   customer_id: string;
   customer_name: string;
   memo: string | null;

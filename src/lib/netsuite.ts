@@ -172,6 +172,11 @@ export interface SalesOrder {
   date: string;
   vin: string | null;
   status: string;
+  // Human-readable status from NetSuite (BUILTIN.DF, type prefix stripped).
+  // Status keys are per-type — 'B' is Pending Fulfillment on an SO, Paid In
+  // Full on an invoice, Processed on an estimate — so display this, not a
+  // letter-to-label map.
+  status_label: string;
   customer_id: string;
   customer_name: string;
   memo: string | null;
@@ -208,6 +213,7 @@ export async function getOpenSalesOrdersByCustomer(customerName: string): Promis
       t.trandate,
       t.type,
       t.status,
+      BUILTIN.DF(t.status) AS status_label,
       t.entity AS customer_id,
       c.companyname AS customer_name,
       t.memo,
@@ -252,6 +258,9 @@ export async function getOpenSalesOrdersByCustomer(customerName: string): Promis
       date: so.trandate,
       vin: so.vin || null,
       status: so.status,
+      // BUILTIN.DF comes back type-prefixed ("Sales Order : Pending
+      // Fulfillment") — strip the prefix, keep the label.
+      status_label: (so.status_label || '').replace(/^[^:]+:\s*/, ''),
       customer_id: so.customer_id,
       customer_name: so.customer_name,
       memo: so.memo || null,
