@@ -194,6 +194,12 @@ export default function EstimatesPage() {
   const [deleting, setDeleting] = useState(false);
   const [convertingToSO, setConvertingToSO] = useState(false);
   const [sendingForApproval, setSendingForApproval] = useState(false);
+  // Compose + preview the approval email before it goes out (E4): a personal
+  // note plus the exact rendered document, recipient, and subject.
+  const [approvalModal, setApprovalModal] = useState(false);
+  const [approvalMessage, setApprovalMessage] = useState('');
+  const [approvalPreview, setApprovalPreview] = useState<{ to: string | null; subject: string; html: string } | null>(null);
+  const [approvalPreviewLoading, setApprovalPreviewLoading] = useState(false);
 
   // Part search
   const [partSearch, setPartSearch] = useState('');
@@ -588,17 +594,52 @@ export default function EstimatesPage() {
     setViewingPdf(false);
   };
 
-  // ── Convert Estimate to Sales Order in NetSuite ──
-  const sendForApproval = async () => {
+  // ── Send the estimate to the customer for approval (magic link) ──
+  // Compose + preview flow (E4): open the modal, persist edits so the preview
+  // matches, then render the exact email before the staffer commits to send.
+
+  const fetchApprovalPreview = async (message: string) => {
+    if (!editingId) return;
+    setApprovalPreviewLoading(true);
+    try {
+      const res = await fetch(`/api/estimates/${editingId}/send-for-approval`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ preview: true, message: message.trim() || undefined }),
+      });
+      const data = await res.json();
+      if (res.ok && data.preview) {
+        setApprovalPreview({ to: data.to ?? null, subject: data.subject, html: data.html });
+      } else {
+        await dialog.alert('Preview failed: ' + (data.error || 'Unknown error'));
+      }
+    } catch {
+      await dialog.alert('Network error building preview — please try again.');
+    }
+    setApprovalPreviewLoading(false);
+  };
+
+  const openApprovalModal = async () => {
     if (!editingId || sendingForApproval) return;
     if (!customerId) { await dialog.alert('Pick a customer first.'); return; }
+    // Persist current edits so the preview and the sent email match. Keep the
+    // estimate's current status — the send itself flips draft → sent
+    // server-side, so opening a preview never marks anything sent.
+    const currentStatus = estimates.find(e => e.id === editingId)?.status || 'draft';
+    await saveEstimate(currentStatus);
+    setApprovalMessage('');
+    setApprovalPreview(null);
+    setApprovalModal(true);
+    await fetchApprovalPreview('');
+  };
+
+  const confirmSendApproval = async () => {
+    if (!editingId || sendingForApproval) return;
     setSendingForApproval(true);
-    // Save current state first so the sent estimate reflects the latest edits
-    await saveEstimate('sent');
     const res = await fetch(`/api/estimates/${editingId}/send-for-approval`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({}),
+      body: JSON.stringify({ message: approvalMessage.trim() || undefined }),
     });
     const data = await res.json();
     setSendingForApproval(false);
@@ -606,6 +647,7 @@ export default function EstimatesPage() {
       await dialog.alert('Send failed: ' + (data.error || 'Unknown error'));
       return;
     }
+    setApprovalModal(false);
     const emailInfo = data.dispatch?.email
       ? (data.dispatch.email.ok ? `Email sent to ${data.dispatch.email.target}` : `Email failed: ${data.dispatch.email.error || 'unknown'}`)
       : null;
@@ -1858,7 +1900,7 @@ export default function EstimatesPage() {
         {/* Send for Customer Approval (magic link) */}
         {editingId && customerId && lines.length > 0 && !(estimates.find(e => e.id === editingId) as any)?.customer_approved && (
           <button
-            onClick={sendForApproval}
+            onClick={openApprovalModal}
             disabled={sendingForApproval}
             style={{
               width: '100%', padding: '12px', borderRadius: '10px',
@@ -1927,6 +1969,68 @@ export default function EstimatesPage() {
           </button>
         )}
       </div>
+
+      {/* Approval-email preview modal (E4) — compose a personal note and see
+          the exact document, recipient, and subject before it goes out. */}
+      {approvalModal && (
+        <div
+          style={{ position: 'fixed', inset: 0, background: 'var(--overlay, rgba(0,0,0,0.5))', zIndex: 1500, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '20px' }}
+          onClick={() => setApprovalModal(false)}
+        >
+          <div onClick={e => e.stopPropagation()} style={{
+            background: 'var(--card)', borderRadius: '14px', padding: '16px',
+            width: '100%', maxWidth: '760px', maxHeight: 'calc(100vh - 40px)',
+            display: 'flex', flexDirection: 'column', gap: '10px',
+            boxShadow: '0 8px 30px rgba(0,0,0,0.3)',
+          }}>
+            <div style={{ fontSize: '14px', fontWeight: 800, color: 'var(--text-primary)' }}>Review Approval Email Before Sending</div>
+            <div style={{ fontSize: '11px', color: 'var(--text-muted)' }}>
+              <b style={{ color: 'var(--text-secondary)' }}>To:</b> {approvalPreview?.to || <span style={{ color: '#f59e0b' }}>no email on file — add a contact, or it sends by SMS only</span>}
+              <span style={{ margin: '0 6px' }}>·</span>
+              <b style={{ color: 'var(--text-secondary)' }}>Subject:</b> {approvalPreview?.subject || '…'}
+            </div>
+            <div>
+              <div style={labelStyle}>Personal message (shown at the top of the email)</div>
+              <textarea
+                value={approvalMessage}
+                onChange={e => setApprovalMessage(e.target.value)}
+                onBlur={() => fetchApprovalPreview(approvalMessage)}
+                rows={3}
+                placeholder="Optional note to the customer — added above the estimate…"
+                style={{ ...inputStyle, resize: 'vertical' }}
+              />
+            </div>
+            <div style={{ flex: 1, minHeight: '220px', border: '1px solid var(--border)', borderRadius: '8px', overflow: 'hidden', background: '#f3f4f6', position: 'relative' }}>
+              {approvalPreviewLoading && (
+                <div style={{ position: 'absolute', inset: 0, display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: '12px', fontWeight: 700, color: '#6b7280', background: 'rgba(243,244,246,0.7)' }}>Updating preview…</div>
+              )}
+              <iframe srcDoc={approvalPreview?.html || ''} title="Approval email preview" sandbox="" style={{ width: '100%', height: '100%', minHeight: '220px', border: 'none', display: 'block' }} />
+            </div>
+            <div style={{ display: 'flex', gap: '8px', justifyContent: 'flex-end' }}>
+              <button
+                onClick={() => setApprovalModal(false)}
+                style={{ padding: '8px 14px', borderRadius: '8px', border: '1px solid var(--border)', background: 'transparent', color: 'var(--text-body)', fontWeight: 700, fontSize: '12px', cursor: 'pointer' }}
+              >
+                Cancel
+              </button>
+              <button
+                onClick={() => fetchApprovalPreview(approvalMessage)}
+                disabled={approvalPreviewLoading}
+                style={{ padding: '8px 14px', borderRadius: '8px', border: '1px solid rgba(59,130,246,0.3)', background: 'rgba(59,130,246,0.1)', color: '#3b82f6', fontWeight: 700, fontSize: '12px', cursor: 'pointer', opacity: approvalPreviewLoading ? 0.5 : 1 }}
+              >
+                Refresh Preview
+              </button>
+              <button
+                onClick={confirmSendApproval}
+                disabled={sendingForApproval || approvalPreviewLoading}
+                style={{ padding: '8px 16px', borderRadius: '8px', border: 'none', background: '#22c55e', color: '#fff', fontWeight: 800, fontSize: '12px', cursor: 'pointer', opacity: (sendingForApproval || approvalPreviewLoading) ? 0.6 : 1 }}
+              >
+                {sendingForApproval ? 'Sending…' : 'Send for Approval'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

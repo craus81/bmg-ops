@@ -19,6 +19,12 @@ const SendForApprovalSchema = z.object({
   email: z.string().email().max(254).optional().nullable(),
   phone: z.string().trim().max(40).optional().nullable(),
   expiryDays: z.number().int().positive().max(365).optional(),
+  // Personal note rendered at the top of the estimate email (plain text,
+  // newlines preserved). Same note block the wrap-quote email uses.
+  message: z.string().trim().max(5000).optional(),
+  // Preview: render exactly what would be sent (recipient, subject, HTML
+  // body) WITHOUT minting a token, sending, or marking the estimate sent.
+  preview: z.boolean().optional().default(false),
 });
 
 /**
@@ -84,8 +90,43 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
     }
   }
 
-  if (!email && !phone) {
+  if (!email && !phone && !body.preview) {
     return NextResponse.json({ error: 'No email or phone on file for this customer. Add a contact first.' }, { status: 400 });
+  }
+
+  const appUrl = process.env.NEXT_PUBLIC_APP_URL || 'https://bmg-ops.vercel.app';
+  const subject = `[BMG Fleet] Estimate #${estimate.estimate_number} — Ready for your approval`;
+  const message = body.message?.trim() || undefined;
+
+  // The customer-facing document — line items, quantities, rates, totals —
+  // loaded once for both the preview and the real send.
+  const { data: lineItems } = await supabase
+    .from('estimate_line_items')
+    .select('*')
+    .eq('estimate_id', estimate.id)
+    .order('sort_order')
+    .order('id');
+  const { data: settings } = await supabase
+    .from('wrap_quote_settings')
+    .select('company')
+    .eq('id', 1)
+    .maybeSingle();
+  const company = settings?.company || {};
+  const logoUrl = company?.logo_path ? r2PublicUrl('vehicle-templates', company.logo_path) : null;
+
+  // Preview: show exactly what would go out (message, line items, totals,
+  // Approve button) without minting a token, sending, or touching status.
+  // The CTA points at a placeholder — the real link is minted on send.
+  if (body.preview) {
+    const html = renderEstimateDocument(estimate, lineItems || [], {
+      company,
+      logoUrl,
+      message,
+      ctaUrl: `${appUrl}/approve/estimate/`,
+      ctaLabel: 'Review & Approve',
+      ctaNote: `A unique, secure link is generated when you send. It expires in ${expiryDays} days.`,
+    });
+    return NextResponse.json({ preview: true, to: email, subject, html });
   }
 
   // Mint a fresh token — rotating on resend invalidates prior links.
@@ -108,9 +149,6 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
     return NextResponse.json({ error: 'Failed to mint token: ' + updErr.message }, { status: 500 });
   }
 
-  const appUrl = process.env.NEXT_PUBLIC_APP_URL || 'https://bmg-ops.vercel.app';
-  const subject = `[BMG Fleet] Estimate #${estimate.estimate_number} — Ready for your approval`;
-
   const dispatch: Record<string, any> = { email: null, sms: null };
 
   if (email) {
@@ -118,22 +156,10 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
     // The real estimate document, not a notification card: the old email
     // carried a one-line summary and no quantities, rates, or line totals
     // at all — the fields customers kept asking about.
-    const { data: lineItems } = await supabase
-      .from('estimate_line_items')
-      .select('*')
-      .eq('estimate_id', estimate.id)
-      .order('sort_order')
-      .order('id');
-    const { data: settings } = await supabase
-      .from('wrap_quote_settings')
-      .select('company')
-      .eq('id', 1)
-      .maybeSingle();
-    const company = settings?.company || {};
-    const logoUrl = company?.logo_path ? r2PublicUrl('vehicle-templates', company.logo_path) : null;
     const html = renderEstimateDocument(estimate, lineItems || [], {
       company,
       logoUrl,
+      message,
       ctaUrl: link,
       ctaLabel: 'Review & Approve',
       ctaNote: `This link expires in ${expiryDays} days.`,
