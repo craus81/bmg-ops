@@ -24,10 +24,10 @@ export interface FinancialsData {
     buckets: { current: number; d1_30: number; d31_60: number; d61_90: number; d90plus: number };
     topOverdue: Overdue[];
   };
-  ap: { vendorBills: number | null; cardOwed: number | null; total: number | null };
+  ap: { vendorBills: number | null; cardOwed: number | null; salesTax: number | null; total: number | null };
   cash: number | null;
   net: number | null;
-  config: { balancesOk: boolean; balancesError: string | null; bankConfigured: boolean; cardConfigured: boolean; apConfigured: boolean };
+  config: { balancesOk: boolean; balancesError: string | null; bankConfigured: boolean; cardConfigured: boolean; apConfigured: boolean; salesTaxConfigured: boolean };
 }
 
 const usd = (n: number) => n.toLocaleString('en-US', { style: 'currency', currency: 'USD', maximumFractionDigits: 0 });
@@ -150,7 +150,7 @@ export default function FinancialsDashboard() {
             title="See past-due invoices">{usd(ar.pastDue)} past due</span></>} />
         <Tile swatch="var(--error)" label="We owe · A/P" value={money(ap.total)}
           onClick={() => setDrill({ view: 'bills' })}
-          sub={<>Bills {money(ap.vendorBills)} · Card {money(ap.cardOwed)}</>} />
+          sub={<>Bills {money(ap.vendorBills)} · Card {money(ap.cardOwed)}{config.salesTaxConfigured && <> · Tax {money(ap.salesTax)}</>}</>} />
         <Tile swatch={netColor} label="Net position" value={netValue} valueColor={netColor} sub="Cash + A/R − A/P"
           onClick={() => setDrill({ view: 'net' })} />
       </div>
@@ -239,11 +239,19 @@ export default function FinancialsDashboard() {
             <div style={{ ...bigNum, fontSize: '25px' }}>{money(ap.cardOwed)}</div>
             <Row label="Balances owed on cards" value={config.cardConfigured ? 'From NetSuite' : <span style={hint}>Set card account ID(s)</span>} />
           </div>
+          <div style={{ ...card, position: 'relative', cursor: 'pointer' }} className="fin-click" role="button" tabIndex={0}
+            onClick={() => setDrill({ view: 'salestax' })}
+            onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); setDrill({ view: 'salestax' }); } }}>
+            <div style={eyebrow}>Sales tax liability</div>
+            <span aria-hidden style={{ position: 'absolute', top: '13px', right: '14px', color: 'var(--text-muted)', fontSize: '14px', fontWeight: 700 }}>›</span>
+            <div style={{ ...bigNum, fontSize: '25px' }}>{money(ap.salesTax)}</div>
+            <Row label="Collected, not yet remitted" value={config.salesTaxConfigured ? 'Sales tax payable account' : <span style={hint}>Set sales tax account ID(s)</span>} />
+          </div>
         </div>
       </div>
 
       <div style={{ fontSize: '11.5px', color: 'var(--text-muted)', lineHeight: 1.6, borderTop: '1px solid var(--border)', paddingTop: '12px' }}>
-        Live from NetSuite · Cash / A/P / cards from GL account balances (financials RESTlet), A/R aged from open customer invoices. Net position = Cash + A/R − A/P.
+        Live from NetSuite · Cash / A/P / cards / sales tax from GL account balances (financials RESTlet), A/R aged from open customer invoices. Net position = Cash + A/R − A/P (bills, cards & sales tax).
         {' '}Click any tile or row to see the transactions behind it, chase past dues, and print statements, invoices, and bills.
       </div>
 

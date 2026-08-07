@@ -21,10 +21,13 @@ export const dynamic = 'force-dynamic';
  *  - A/R = open customer invoices, aged by due date (SuiteQL — the role can
  *    read invoices, so this reconciles to the A/R control account). Aged by
  *    open balance when foreignamountunpaid is available, else invoice total.
- *  - Cash / Card / A/P = GL account balances from the financials RESTlet
- *    (scripts/netsuite-financials-restlet.js), keyed by internal ID in env
- *    (NETSUITE_BANK_ACCOUNT_IDS / NETSUITE_CARD_ACCOUNT_ID /
- *    NETSUITE_AP_ACCOUNT_IDS). SuiteQL can't produce these for the integration
+ *  - Cash / Card / A/P / Sales tax = GL account balances from the financials
+ *    RESTlet (scripts/netsuite-financials-restlet.js), keyed by internal ID in
+ *    env (NETSUITE_BANK_ACCOUNT_IDS / NETSUITE_CARD_ACCOUNT_ID /
+ *    NETSUITE_AP_ACCOUNT_IDS / NETSUITE_SALES_TAX_ACCOUNT_IDS). Sales tax
+ *    payable rolls into the "we owe" total alongside bills and cards — it's
+ *    collected money that has to go out the door, so leaving it off overstates
+ *    the position. SuiteQL can't produce these for the integration
  *    role — it can't see bill payments / card charges / the account table, so
  *    summing transaction lines never matches the Chart of Accounts. The RESTlet
  *    runs an account search under its own role and returns the CoA balance.
@@ -44,15 +47,20 @@ async function loadFinancials(debug: boolean) {
   let cash: number | null = null;
   let cardOwed: number | null = null;
   let vendorBills: number | null = null;
+  let salesTax: number | null = null;
   if (balancesOk) {
     // Assets read positive; liability "owed" is the magnitude (a card in
     // credit — negative — isn't a payable, so it's excluded).
     cash = acct.bank.reduce((s, a) => s + (a.balance || 0), 0);
     cardOwed = acct.card.reduce((s, a) => s + ((a.balance || 0) > 0.005 ? Math.abs(a.balance || 0) : 0), 0);
     vendorBills = acct.ap.reduce((s, a) => s + Math.abs(a.balance || 0), 0);
+    // Sales tax payable is collected-but-not-remitted money — it's owed just
+    // like a bill, so it counts toward "we owe". In credit (a refund or
+    // overpayment) it isn't owed, same rule as the cards.
+    salesTax = acct.salesTax.reduce((s, a) => s + ((a.balance || 0) > 0.005 ? Math.abs(a.balance || 0) : 0), 0);
   }
 
-  const apTotal = balancesOk ? (vendorBills || 0) + (cardOwed || 0) : null;
+  const apTotal = balancesOk ? (vendorBills || 0) + (cardOwed || 0) + (salesTax || 0) : null;
   const net = balancesOk ? (cash || 0) + aging.total - (apTotal || 0) : null;
 
   return {
@@ -63,7 +71,7 @@ async function loadFinancials(debug: boolean) {
       buckets: aging.buckets,
       topOverdue: aging.topOverdue,
     },
-    ap: { vendorBills, cardOwed, total: apTotal },
+    ap: { vendorBills, cardOwed, salesTax, total: apTotal },
     cash,
     net,
     config: {
@@ -72,6 +80,7 @@ async function loadFinancials(debug: boolean) {
       bankConfigured: acct.bank.length > 0,
       cardConfigured: acct.card.length > 0,
       apConfigured: acct.ap.length > 0,
+      salesTaxConfigured: acct.salesTax.length > 0,
     },
     ...(debug ? { debug: { accounts: acct } } : {}),
   };
