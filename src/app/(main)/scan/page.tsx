@@ -8,7 +8,7 @@ import { theme } from '@/lib/theme';
 import VinScanner from '@/components/VinScanner';
 import RfidCapture, { type RfidCompletion } from '@/components/RfidCapture';
 import { locationBillingOverride } from '@/lib/scan-billing';
-import { VERIZON_RFID_PART, normalizePartNumber } from '@/lib/rfid';
+import { isVerizonRfidPart } from '@/lib/rfid';
 
 interface Part {
   id: string;
@@ -40,7 +40,8 @@ interface ScanEntry {
 
 // Verizon RFID installs (VERIZON_RFID_PART) get an extra capture flow handled by
 // the shared <RfidCapture> component — VIN then serial / IMEI / CCID. Every
-// other part keeps the plain VIN flow below.
+// other part keeps the plain VIN flow below. The RFID part counts whether it
+// was picked from the catalog or typed as a custom job name.
 
 export default function ScanPage() {
   const { user, isAdmin } = useAuth();
@@ -644,11 +645,20 @@ export default function ScanPage() {
       })()
     : [];
 
-  // Active only when the Verizon RFID part is the sole selected part — combining
-  // it with other parts falls back to the plain VIN flow (the device fields
-  // belong to one part, not a multi-part batch).
+  // Active when the Verizon RFID part is the sole selected part OR the custom
+  // job name IS that part number (the CNI custom-job stopgap means techs often
+  // type it rather than pick it from the catalog). The server rejects RFID-part
+  // scans without device IDs either way, so the client must match its logic —
+  // a plain VIN form here is a dead end ("Serial, IMEI, and CCID are all
+  // required"). Combining it with other parts is blocked at the picker.
   const isVerizonRfid = selectedParts.length === 1
-    && normalizePartNumber(selectedParts[0].item_number) === VERIZON_RFID_PART;
+    ? isVerizonRfidPart(selectedParts[0].item_number)
+    : selectedParts.length === 0 && isVerizonRfidPart(customJob);
+
+  // Multi-part batches can't carry per-vehicle device IDs, and the server
+  // hard-rejects the RFID part without them — block the combination up front.
+  const rfidInMulti = selectedParts.length > 1
+    && selectedParts.some(p => isVerizonRfidPart(p.item_number));
 
   const partLabel = selectedParts.length > 0
     ? selectedParts.map(p => p.item_number).join(' / ')
@@ -763,10 +773,21 @@ export default function ScanPage() {
           )}
 
           {/* Continue button when parts are selected */}
+          {rfidInMulti && (
+            <div style={{
+              padding: '10px 12px', borderRadius: '10px', marginTop: '12px',
+              background: 'rgba(239,68,68,0.08)', border: '1px solid rgba(239,68,68,0.3)',
+              color: '#f87171', fontSize: '12px', fontWeight: 600,
+            }}>
+              The Verizon RFID part captures a serial, IMEI, and CCID for each vehicle,
+              so it has to be scanned on its own — deselect the other parts to continue.
+            </div>
+          )}
           {selectedParts.length > 0 && (
-            <button onClick={() => setStep('location')} style={{
+            <button onClick={() => { if (!rfidInMulti) setStep('location'); }} disabled={rfidInMulti} style={{
               width: '100%', padding: '14px', borderRadius: '12px', fontSize: '15px', fontWeight: 800,
-              background: theme.navy, color: '#fff', border: 'none', cursor: 'pointer',
+              background: rfidInMulti ? theme.border : theme.navy, color: '#fff', border: 'none',
+              cursor: rfidInMulti ? 'default' : 'pointer', opacity: rfidInMulti ? 0.5 : 1,
               marginTop: '12px', marginBottom: '8px',
             }}>
               Continue with {selectedParts.length} part{selectedParts.length > 1 ? 's' : ''} →
