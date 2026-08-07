@@ -50,6 +50,23 @@ function xhrPut(
   });
 }
 
+// Same-origin URL that serves a stored object under the display name we have
+// on record (e.g. graphics_job_files.file_name) instead of its randomized
+// storage key. The route 302s to a presigned R2 GET with a
+// content-disposition override — a plain public URL can't rename, so linking
+// it directly makes every download save as "<timestamp>-<rand>.<ext>". Use
+// this for any file link where the user might hit Save.
+export function storageDownloadUrl(
+  bucket: string,
+  path: string,
+  filename: string,
+  disposition: 'inline' | 'attachment' = 'inline',
+): string {
+  const params = new URLSearchParams({ bucket, path, name: filename });
+  if (disposition === 'attachment') params.set('disposition', 'attachment');
+  return `/api/storage/download?${params.toString()}`;
+}
+
 export const storage = {
   from(bucket: string) {
     return {

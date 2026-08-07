@@ -10,6 +10,7 @@ import VehiclePhotoTimeline from '@/components/VehiclePhotoTimeline';
 import CompletionModal from '@/components/CompletionModal';
 import { PartLabel } from '@/components/PartLabel';
 import { openOrCreateVehicleThread } from '@/lib/customer-thread';
+import { storageDownloadUrl } from '@/lib/storage';
 
 interface VehicleData {
   id: string;
@@ -283,10 +284,10 @@ export default function VehiclePickListPage() {
   const onPhotoPick = (type: 'before' | 'completion') => (e: React.ChangeEvent<HTMLInputElement>) =>
     uploadPhotos(type, Array.from(e.target.files || []));
 
-  const fileUrl = (storagePath: string) => {
-    const { data } = supabase.storage.from('graphics-proofs').getPublicUrl(storagePath);
-    return data.publicUrl;
-  };
+  // Serve through the download route so a save keeps the original file_name —
+  // the raw public URL saves as the randomized storage key.
+  const fileUrl = (f: { storage_path: string; file_name: string }) =>
+    storageDownloadUrl('graphics-proofs', f.storage_path, f.file_name);
 
   const proofUrl = vehicle?.proof_file_path
     ? supabase.storage.from('graphics-proofs').getPublicUrl(vehicle.proof_file_path).data.publicUrl
@@ -659,7 +660,7 @@ export default function VehiclePickListPage() {
             {graphicsFiles.map(f => (
               <a
                 key={f.id}
-                href={fileUrl(f.storage_path)}
+                href={fileUrl(f)}
                 target="_blank"
                 rel="noopener noreferrer"
                 style={{
