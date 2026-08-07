@@ -65,7 +65,10 @@ export async function GET(req: NextRequest) {
     // BUILTIN.DF(t.status) comes back prefixed with the record type
     // ("Invoice : Paid In Full"), which breaks equality checks downstream —
     // map the raw status key for invoices and keep the display value only
-    // as a fallback for other transaction types.
+    // for other transaction types. The key mapping must stay invoice-only:
+    // status keys are per-type in NetSuite, so a SalesOrd 'B' is Pending
+    // Fulfillment and an Estimate 'B' is Processed — not Paid In Full.
+    const stripTypePrefix = (s: string) => (s || '').replace(/^[^:]+:\s*/, '');
     const transactions = (result?.items || []).map((t: any) => ({
       id: t.id,
       tranid: t.tranid,
@@ -73,9 +76,10 @@ export async function GET(req: NextRequest) {
       duedate: t.duedate || null,
       type: t.type,
       total: t.total ? parseFloat(t.total) : 0,
-      status: t.status_key === 'B' ? 'Paid In Full'
+      status: t.type !== 'CustInvc' ? stripTypePrefix(t.status_display)
+        : t.status_key === 'B' ? 'Paid In Full'
         : t.status_key === 'A' ? 'Open'
-        : (t.status_display || '').replace(/^[^:]+:\s*/, ''),
+        : stripTypePrefix(t.status_display),
     }));
 
     // hasMore is the standard "exhaustively-paginated-or-not" probe —
