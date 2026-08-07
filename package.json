@@ -4,7 +4,7 @@
   "private": true,
   "scripts": {
     "dev": "next dev",
-    "build": "next build",
+    "build": "node scripts/migrate.mjs --deploy && next build",
     "start": "next start",
     "lint": "next lint --dir src",
     "typecheck": "tsc --noEmit",

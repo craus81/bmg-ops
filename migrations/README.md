@@ -16,6 +16,31 @@ from the Supabase dashboard (Settings → Database → Connection string).
 Applied migrations are tracked in the `schema_migrations` table (filename +
 timestamp). Each file runs in its own transaction and is recorded on success.
 
+## Deploys apply migrations automatically
+
+`npm run build` runs `node scripts/migrate.mjs --deploy` before `next build`.
+On a **Vercel production build** this applies any pending migrations to the
+database; everywhere else (preview deploys, local builds, CI) it is a no-op —
+preview builds compile unmerged branches against the production database and
+must never apply their migrations.
+
+Requirements and behavior:
+
+- `SUPABASE_DB_URL` must be set in Vercel → Settings → Environment Variables,
+  **Production scope only**, using the **"Session pooler"** connection string
+  from the Supabase dashboard (the direct `db.*.supabase.co` host is
+  IPv6-only, which Vercel's build containers can't reach).
+- A failing migration fails the build, so code whose schema didn't apply
+  never goes live. Fix the SQL and push again.
+- If `SUPABASE_DB_URL` is missing, the build warns and deploys **without**
+  migrating — check the build logs if a deploy behaves like its migration
+  didn't run.
+- Concurrent builds serialize on a Postgres advisory lock; the second runner
+  finds nothing pending.
+- Applying a file by hand in the SQL editor stays safe: migrations are
+  idempotent by convention, so the runner re-applying one is a no-op, after
+  which it's recorded in `schema_migrations` as usual.
+
 ## Baseline for existing databases
 
 Databases that predate this runner (e.g. production, which was migrated by

@@ -13,6 +13,13 @@
  *                                   # running them (one-time, for databases
  *                                   # that were migrated by hand before this
  *                                   # runner existed)
+ *   node scripts/migrate.mjs --deploy
+ *                                   # build-pipeline mode (wired into `npm run
+ *                                   # build`): applies pending migrations only
+ *                                   # on Vercel PRODUCTION builds, is a no-op
+ *                                   # everywhere else, and fails the build if
+ *                                   # a migration fails — so code whose schema
+ *                                   # didn't apply never goes live
  *
  * Requires SUPABASE_DB_URL (Postgres connection string — Supabase dashboard
  * → Settings → Database → Connection string). DATABASE_URL also works.
@@ -31,9 +38,32 @@ const MIGRATIONS_DIR = path.join(root, 'migrations');
 const args = process.argv.slice(2);
 const baseline = args.includes('--baseline');
 const dryRun = args.includes('--dry-run');
+const deploy = args.includes('--deploy');
+
+// Deploy mode gates on the Vercel environment, not just the presence of a
+// connection string: preview deploys build unmerged PR branches against the
+// production database, and must never apply their migrations.
+if (deploy && process.env.VERCEL_ENV !== 'production') {
+  console.log(
+    `Migrations skipped (VERCEL_ENV=${process.env.VERCEL_ENV || 'unset'} — ` +
+    'deploy mode only runs on Vercel production builds).'
+  );
+  process.exit(0);
+}
 
 const dbUrl = process.env.SUPABASE_DB_URL || process.env.DATABASE_URL;
 if (!dbUrl) {
+  if (deploy) {
+    // Missing secret shouldn't brick every deploy — warn loudly and ship.
+    // (Once SUPABASE_DB_URL is set in Vercel's Production env, this branch
+    // never runs again.)
+    console.warn(
+      'WARNING: SUPABASE_DB_URL is not set — deploying WITHOUT applying ' +
+      'migrations. Add it in Vercel → Settings → Environment Variables ' +
+      '(Production scope, "Session pooler" URI from the Supabase dashboard).'
+    );
+    process.exit(0);
+  }
   console.error(
     'Missing SUPABASE_DB_URL (or DATABASE_URL).\n' +
     'Get the Postgres connection string from the Supabase dashboard:\n' +
@@ -50,6 +80,9 @@ const client = new pg.Client({
 
 async function main() {
   await client.connect();
+  // Serialize concurrent runners (e.g. two production builds racing) — the
+  // session-level lock releases automatically when this client disconnects.
+  if (!dryRun) await client.query('SELECT pg_advisory_lock(727274001)');
   await client.query(`
     CREATE TABLE IF NOT EXISTS schema_migrations (
       filename text PRIMARY KEY,
