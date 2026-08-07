@@ -697,6 +697,10 @@ export default function VehicleCheckIn({ onCheckedIn }: { onCheckedIn?: () => vo
   };
 
   // ─── Status Helpers ───────────────────────────────────────
+  // Fallback only, and only valid for Sales Order rows — NetSuite status
+  // keys are per-type ('B' on an invoice means Paid In Full, on an
+  // estimate Processed). Prefer status_label, which NetSuite resolves
+  // per type.
   const statusMap: Record<string, string> = {
     A: 'Pending Approval', B: 'Pending Fulfillment', D: 'Partially Fulfilled',
     E: 'Pending Billing/Partially Fulfilled', F: 'Pending Billing',
@@ -1199,7 +1203,7 @@ export default function VehicleCheckIn({ onCheckedIn }: { onCheckedIn?: () => vo
                   </div>
                   <div style={{ textAlign: 'right' }}>
                     <div style={{ fontSize: '14px', fontWeight: 700 }}>${(so.total || 0).toLocaleString('en-US', { minimumFractionDigits: 2 })}</div>
-                    <div style={{ fontSize: '10px', color: theme.textMuted }}>{statusMap[so.status] || so.status}</div>
+                    <div style={{ fontSize: '10px', color: theme.textMuted }}>{so.status_label || (so.record_type === 'Sales Order' ? statusMap[so.status] : '') || so.status}</div>
                     <div style={{ fontSize: '10px', color: theme.textMuted }}>{so.date}</div>
                   </div>
                 </button>
