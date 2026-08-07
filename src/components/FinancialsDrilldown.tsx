@@ -6,6 +6,7 @@
  *
  *  - cash  → per-bank-account balances (financials RESTlet)
  *  - cards → per-card balances (RESTlet; cards in credit flagged, not owed)
+ *  - salestax → sales tax payable balances (RESTlet; same in-credit rule)
  *  - ar    → every open customer invoice: aging-bucket chips, search,
  *            group-by-customer, invoice PDFs, printable customer statements
  *  - bills → open vendor bills (SuiteQL headers) with printable summaries,
@@ -34,7 +35,7 @@ export const AGE_META: { key: AgingBucketKey; label: string; shortLabel: string;
   { key: 'd90plus', label: '90+ days past due', shortLabel: '90+', color: 'var(--error)' },
 ];
 
-export type DrillView = 'cash' | 'cards' | 'ar' | 'bills' | 'net';
+export type DrillView = 'cash' | 'cards' | 'salestax' | 'ar' | 'bills' | 'net';
 export type BucketFilter = AgingBucketKey | 'pastdue' | 'all';
 /** Customer filter — keyed by NetSuite entity id, with the display name for chips/titles. */
 export interface CustomerRef { key: string; name: string }
@@ -52,7 +53,7 @@ const keyOf = (inv: { entityId: string | null; customer: string }): string =>
 
 interface ArBody { success: boolean; unpaidColumn: boolean; invoices: OpenArInvoice[] }
 interface BillsBody { success: boolean; unpaidColumn: boolean; bills: OpenVendorBill[] }
-interface AccountsBody { success: boolean; error?: string; bank: AccountBalance[]; card: AccountBalance[]; ap: AccountBalance[] }
+interface AccountsBody { success: boolean; error?: string; bank: AccountBalance[]; card: AccountBalance[]; ap: AccountBalance[]; salesTax: AccountBalance[] }
 
 /**
  * Fetch `url` once when `active` first becomes true; retry() re-arms it.
@@ -129,6 +130,7 @@ function nsLink(url: string) {
 const VIEW_TITLES: Record<DrillView, string> = {
   cash: 'Cash on hand — bank accounts',
   cards: 'Credit cards — balances',
+  salestax: 'Sales tax — liability accounts',
   ar: 'Accounts receivable — open invoices',
   bills: 'Accounts payable — open vendor bills',
   net: 'Net position — how it adds up',
@@ -165,7 +167,7 @@ export default function FinancialsDrilldown({ target, summary, onClose }: {
 
   const ar = useLazyFetch<ArBody>(view === 'ar', '/api/reports/financials/ar-invoices');
   const bills = useLazyFetch<BillsBody>(view === 'bills', '/api/reports/financials/ap-bills');
-  const accounts = useLazyFetch<AccountsBody>(view === 'cash' || view === 'cards', '/api/reports/financials/accounts');
+  const accounts = useLazyFetch<AccountsBody>(view === 'cash' || view === 'cards' || view === 'salestax', '/api/reports/financials/accounts');
 
   const arData = ar.data;
   const invoices = useMemo(() => arData?.invoices ?? [], [arData]);
@@ -220,7 +222,7 @@ export default function FinancialsDrilldown({ target, summary, onClose }: {
 
   // ── View bodies ─────────────────────────────────────────────────────────
 
-  const renderAccounts = (group: 'cash' | 'cards') => {
+  const renderAccounts = (group: 'cash' | 'cards' | 'salestax') => {
     if (accounts.error) return <LoadError message={accounts.error} onRetry={accounts.retry} />;
     if (!accounts.data) return <Spinner label="Pulling balances from NetSuite…" />;
     if (!accounts.data.success) {
@@ -232,24 +234,36 @@ export default function FinancialsDrilldown({ target, summary, onClose }: {
         </div>
       );
     }
-    const rows = group === 'cash' ? accounts.data.bank : accounts.data.card;
+    const meta = {
+      cash: {
+        rows: accounts.data.bank, env: 'NETSUITE_BANK_ACCOUNT_IDS', tile: summary.cash, totalLabel: 'Total cash',
+        info: 'Bank account balances straight from NetSuite’s chart of accounts — these add up to the Cash on hand tile.',
+      },
+      cards: {
+        rows: accounts.data.card, env: 'NETSUITE_CARD_ACCOUNT_ID', tile: summary.ap.cardOwed, totalLabel: 'Total owed on cards',
+        info: 'Credit card account balances from NetSuite. A card in credit (negative balance) isn’t money owed, so it’s excluded from the tile.',
+      },
+      salestax: {
+        rows: accounts.data.salesTax, env: 'NETSUITE_SALES_TAX_ACCOUNT_IDS', tile: summary.ap.salesTax, totalLabel: 'Total sales tax owed',
+        info: 'Sales tax payable balances from NetSuite — tax collected on invoices but not yet remitted. It counts toward the We owe tile; an account in credit (negative balance) doesn’t.',
+      },
+    }[group];
+    const rows = meta.rows;
     if (rows.length === 0) {
-      return <div style={{ ...infoText, padding: '18px 2px' }}>No accounts configured — set <code>{group === 'cash' ? 'NETSUITE_BANK_ACCOUNT_IDS' : 'NETSUITE_CARD_ACCOUNT_ID'}</code>.</div>;
+      return <div style={{ ...infoText, padding: '18px 2px' }}>No accounts configured — set <code>{meta.env}</code>.</div>;
     }
+    // Liability groups (cards, sales tax) count only positive balances as owed.
+    const isLiability = group !== 'cash';
     const owed = (b: number | null) => (b || 0) > 0.005 ? Math.abs(b || 0) : 0;
-    const total = group === 'cash'
-      ? rows.reduce((s, a) => s + (a.balance || 0), 0)
-      : rows.reduce((s, a) => s + owed(a.balance), 0);
-    const tile = group === 'cash' ? summary.cash : summary.ap.cardOwed;
+    const total = isLiability
+      ? rows.reduce((s, a) => s + owed(a.balance), 0)
+      : rows.reduce((s, a) => s + (a.balance || 0), 0);
+    const tile = meta.tile;
     return (
       <>
-        <div style={{ ...infoText, marginBottom: '12px' }}>
-          {group === 'cash'
-            ? 'Bank account balances straight from NetSuite’s chart of accounts — these add up to the Cash on hand tile.'
-            : 'Credit card account balances from NetSuite. A card in credit (negative balance) isn’t money owed, so it’s excluded from the tile.'}
-        </div>
+        <div style={{ ...infoText, marginBottom: '12px' }}>{meta.info}</div>
         <table style={{ width: '100%', borderCollapse: 'collapse' }}>
-          <thead><tr><th style={th}>Account</th><th style={thNum}>Balance</th>{group === 'cards' && <th style={thNum}>Counted as owed</th>}</tr></thead>
+          <thead><tr><th style={th}>Account</th><th style={thNum}>Balance</th>{isLiability && <th style={thNum}>Counted as owed</th>}</tr></thead>
           <tbody>
             {rows.map(a => (
               <tr key={a.id}>
@@ -258,14 +272,14 @@ export default function FinancialsDrilldown({ target, summary, onClose }: {
                   {a.name === null && <div style={{ fontSize: '11px', color: 'var(--warning)' }}>Not returned by the RESTlet — check the account id</div>}
                 </td>
                 <td style={tdNum}>{a.balance === null ? '—' : usd2(a.balance)}</td>
-                {group === 'cards' && <td style={tdNum}>{a.balance === null ? '—' : usd2(owed(a.balance))}</td>}
+                {isLiability && <td style={tdNum}>{a.balance === null ? '—' : usd2(owed(a.balance))}</td>}
               </tr>
             ))}
           </tbody>
           <tfoot>
             <tr>
-              <td style={{ ...td, fontWeight: 800, borderBottom: 'none' }}>{group === 'cash' ? 'Total cash' : 'Total owed on cards'}</td>
-              <td style={{ ...tdNum, fontWeight: 800, borderBottom: 'none' }} colSpan={group === 'cards' ? 2 : 1}>{usd2(total)}</td>
+              <td style={{ ...td, fontWeight: 800, borderBottom: 'none' }}>{meta.totalLabel}</td>
+              <td style={{ ...tdNum, fontWeight: 800, borderBottom: 'none' }} colSpan={isLiability ? 2 : 1}>{usd2(total)}</td>
             </tr>
           </tfoot>
         </table>
@@ -469,6 +483,7 @@ export default function FinancialsDrilldown({ target, summary, onClose }: {
       { label: 'Owed to us · A/R', amount: summary.ar.total, sign: '+', view: 'ar' },
       { label: 'Vendor bills', amount: summary.ap.vendorBills, sign: '−', view: 'bills' },
       { label: 'Credit card balances', amount: summary.ap.cardOwed, sign: '−', view: 'cards' },
+      { label: 'Sales tax liability', amount: summary.ap.salesTax, sign: '−', view: 'salestax' },
     ];
     return (
       <>
@@ -526,6 +541,7 @@ export default function FinancialsDrilldown({ target, summary, onClose }: {
         <div style={{ padding: '14px 16px', overflowY: 'auto', flex: 1 }}>
           {view === 'cash' && renderAccounts('cash')}
           {view === 'cards' && renderAccounts('cards')}
+          {view === 'salestax' && renderAccounts('salestax')}
           {view === 'ar' && renderAr()}
           {view === 'bills' && renderBills()}
           {view === 'net' && renderNet()}

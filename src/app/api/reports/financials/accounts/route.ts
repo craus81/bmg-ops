@@ -13,8 +13,9 @@ export const dynamic = 'force-dynamic';
  * accounts make up that number" drill-down.
  *
  * Response: { success, error?, bank: AccountBalance[], card: AccountBalance[],
- * ap: AccountBalance[] }. success=false (with the RESTlet's error) when the
- * RESTlet isn't deployed/reachable — the UI shows the hint instead of numbers.
+ * ap: AccountBalance[], salesTax: AccountBalance[] }. success=false (with the
+ * RESTlet's error) when the RESTlet isn't deployed/reachable — the UI shows
+ * the hint instead of numbers.
  */
 export async function GET(req: NextRequest) {
   const auth = await requireFinancials(req);

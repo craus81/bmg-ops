@@ -294,11 +294,13 @@ export async function fetchAccountGroups(): Promise<{
   bank: AccountBalance[];
   card: AccountBalance[];
   ap: AccountBalance[];
+  salesTax: AccountBalance[];
 }> {
   const bankIds = idList(process.env.NETSUITE_BANK_ACCOUNT_IDS);
   const cardIds = idList(process.env.NETSUITE_CARD_ACCOUNT_ID);
   const apIds = idList(process.env.NETSUITE_AP_ACCOUNT_IDS);
-  const allIds = [...new Set([...bankIds, ...cardIds, ...apIds])];
+  const salesTaxIds = idList(process.env.NETSUITE_SALES_TAX_ACCOUNT_IDS);
+  const allIds = [...new Set([...bankIds, ...cardIds, ...apIds, ...salesTaxIds])];
 
   const result = await getAccountBalancesFromRestlet(allIds);
   const bals = result.balances || {};
@@ -314,5 +316,6 @@ export async function fetchAccountGroups(): Promise<{
     bank: mk(bankIds),
     card: mk(cardIds),
     ap: mk(apIds),
+    salesTax: mk(salesTaxIds),
   };
 }
