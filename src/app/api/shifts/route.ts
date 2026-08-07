@@ -68,7 +68,10 @@ export async function GET(req: NextRequest) {
         .maybeSingle();
       if (data && !data.ended_at) {
         shift = { id: data.id, started_by: data.started_by, started_at: data.started_at, members: await memberViews(service, data.id) };
-        ratePerVehicle = await getFieldRate(service, data.part_number);
+        // Field techs are payroll employees — per-vehicle rates are internal
+        // pricing (some mirror CNI vendor payouts) and stay admin-only. Credits
+        // are still priced server-side at scan time regardless.
+        if (isAdmin) ratePerVehicle = await getFieldRate(service, data.part_number);
       }
     }
     return NextResponse.json({ shift, roster: await fieldRoster(service), ratePerVehicle });
@@ -135,7 +138,8 @@ export async function POST(req: NextRequest) {
     }
     allowedIds = new Set((await fieldRoster(service)).map(r => r.profile_id));
     allowedIds.add(auth.user.id);
-    ratePerVehicle = await getFieldRate(service, partNumber);
+    // Admin-only, same as GET: field techs don't see per-vehicle rates.
+    if (isAdmin) ratePerVehicle = await getFieldRate(service, partNumber);
   }
 
   const members = new Map<string, number>();
