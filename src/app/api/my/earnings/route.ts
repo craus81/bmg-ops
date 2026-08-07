@@ -27,13 +27,21 @@ export async function GET(req: NextRequest) {
 
   const q = validateSearchParams(req, QuerySchema);
   if (q.error) return q.error;
+  const viewerIsAdmin = rolesOf(auth.profile).includes('admin');
   let target = auth.user.id;
   if (q.data.profileId && q.data.profileId !== auth.user.id) {
-    if (!rolesOf(auth.profile).includes('admin')) {
+    if (!viewerIsAdmin) {
       return NextResponse.json({ error: 'Forbidden' }, { status: 403 });
     }
     target = q.data.profileId;
   }
+
+  // Field techs are payroll (hourly/salary) employees — per-vehicle dollar
+  // figures on field work are internal pricing and stay admin-only, same as
+  // the rate on /api/shifts. CNI credits keep their amounts for everyone:
+  // that's the installer's contracted vendor pay, and this page is their
+  // statement. Stripped server-side so no client can show them.
+  const hideFieldAmounts = !viewerIsAdmin;
 
   // Payout history: every payout ever issued to this worker — "when was I
   // paid, and for which period/job" — independent of the credit list below
@@ -58,7 +66,9 @@ export async function GET(req: NextRequest) {
     label: p.kind === 'payroll_period'
       ? `Pay period ${p.period_start || '?'} – ${p.period_end || '?'}`
       : (p.cni_job_id && payoutJobLabels.get(p.cni_job_id)) || 'CNI job payout',
-    amount: p.total_amount != null ? Number(p.total_amount) : null,
+    amount: hideFieldAmounts && p.kind === 'payroll_period'
+      ? null
+      : p.total_amount != null ? Number(p.total_amount) : null,
     status: p.status,
     createdAt: p.created_at,
     paidAt: p.paid_at,
@@ -72,7 +82,9 @@ export async function GET(req: NextRequest) {
     .is('voided_at', null)
     .order('created_at', { ascending: false })
     .limit(1000);
-  if (!credits || credits.length === 0) return NextResponse.json({ credits: [], payouts });
+  if (!credits || credits.length === 0) {
+    return NextResponse.json({ credits: [], payouts, fieldAmountsHidden: hideFieldAmounts });
+  }
 
   // Resolve CNI credits to their job for grouping.
   const vinIds = [...new Set(credits.map(c => c.cni_job_vin_id).filter(Boolean))] as string[];
@@ -100,6 +112,7 @@ export async function GET(req: NextRequest) {
 
   return NextResponse.json({
     payouts,
+    fieldAmountsHidden: hideFieldAmounts,
     credits: credits.map(c => {
       const jobId = c.cni_job_vin_id ? vinToJob.get(c.cni_job_vin_id) : undefined;
       return {
@@ -109,7 +122,9 @@ export async function GET(req: NextRequest) {
         partNumber: c.part_number,
         crewSize: c.crew_size,
         shareWeight: Number(c.share_weight),
-        amount: c.amount != null ? Number(c.amount) : null,
+        amount: hideFieldAmounts && c.source === 'field'
+          ? null
+          : c.amount != null ? Number(c.amount) : null,
         createdAt: c.created_at,
         group: c.source === 'cni'
           ? (jobId && jobLabels.get(jobId)) || 'CNI job'
