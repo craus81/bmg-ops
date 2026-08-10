@@ -74,6 +74,8 @@ export default function AdminScansPage() {
   const [expandedGroups, setExpandedGroups] = useState<Set<string>>(new Set());
   // Part requires_po_match lookup
   const [poRequired, setPoRequired] = useState<Record<string, boolean>>({});
+  // scan_log_id → completion-photo storage paths (K8), loaded after the list.
+  const [photosByScanId, setPhotosByScanId] = useState<Record<string, string[]>>({});
   // scan_log_id → CNI job number, for the source column/filter (a scan is "CNI"
   // when a cni_job_vins row points at it). See docs/cni-redesign.md §3.4.
   const [cniByScanId, setCniByScanId] = useState<Record<string, string>>({});
@@ -325,6 +327,23 @@ export default function AdminScansPage() {
 
     setSelectedScans(new Set());
     setLoading(false);
+
+    // Completion photos (K8) — chunked .in() over the loaded scans; non-fatal
+    // and loaded after the list renders so the log itself never waits on it.
+    try {
+      const allIds = [...(scansRes.data || []), ...(archivedRes.data || [])].map((s: any) => s.id);
+      const photoMap: Record<string, string[]> = {};
+      for (let i = 0; i < allIds.length; i += 200) {
+        const { data: photoRows } = await supabase
+          .from('scan_photos')
+          .select('scan_log_id, storage_path')
+          .in('scan_log_id', allIds.slice(i, i + 200));
+        for (const p of photoRows || []) {
+          (photoMap[p.scan_log_id] || (photoMap[p.scan_log_id] = [])).push(p.storage_path);
+        }
+      }
+      setPhotosByScanId(photoMap);
+    } catch { /* photos are an enhancement, not required for the log */ }
   };
 
   const needsPO = (scan: ScanLog) => poRequired[scan.part_number || ''] !== false;
@@ -2219,6 +2238,18 @@ export default function AdminScansPage() {
                                     <span style={{ fontSize: '8px', fontWeight: 700, padding: '2px 5px', borderRadius: '4px', background: 'rgba(6,182,212,0.12)', color: '#06b6d4' }}>
                                       {cniByScanId[scan.id]}
                                     </span>
+                                  )}
+                                  {(photosByScanId[scan.id]?.length ?? 0) > 0 && (
+                                    <a
+                                      href={storage.from('photos').getPublicUrl(photosByScanId[scan.id][0]).data.publicUrl}
+                                      target="_blank"
+                                      rel="noopener noreferrer"
+                                      title={`${photosByScanId[scan.id].length} completion photo${photosByScanId[scan.id].length !== 1 ? 's' : ''} — click to view`}
+                                      onClick={e => e.stopPropagation()}
+                                      style={{ fontSize: '8px', fontWeight: 700, padding: '2px 5px', borderRadius: '4px', background: 'rgba(34,197,94,0.1)', color: '#22c55e', textDecoration: 'none' }}
+                                    >
+                                      📷{photosByScanId[scan.id].length > 1 ? ` ${photosByScanId[scan.id].length}` : ''}
+                                    </a>
                                   )}
                                   {scan.install_cost != null && (
                                     <span title={scan.installer_name ? `Paid to ${scan.installer_name}` : 'Installer cost'} style={{ fontSize: '8px', fontWeight: 700, padding: '2px 5px', borderRadius: '4px', background: 'rgba(244,114,182,0.12)', color: '#f472b6' }}>

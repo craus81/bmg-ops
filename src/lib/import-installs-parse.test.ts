@@ -31,7 +31,20 @@ describe('parsePastedText', () => {
       vehicleMake: 'Ford',
       vehicleModel: 'Transit',
       unitNumber: 'U-9',
+      partNumber: '',
     }]);
+  });
+
+  it('picks up a per-row part column (K8 multi-part import)', () => {
+    const out = parsePastedText(
+      `VIN\tPart Number\n` +
+      `${VIN1}\t06N5TR\n` +
+      `${VIN2}\t\n`,
+    );
+    expect(out.mode).toBe('header');
+    expect(out.rows[0].partNumber).toBe('06N5TR');
+    // A blank cell means "use the run default" — stays empty here.
+    expect(out.rows[1].partNumber).toBe('');
   });
 
   it('falls back to positional order without a header row', () => {
