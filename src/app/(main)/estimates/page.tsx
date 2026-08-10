@@ -8,6 +8,7 @@ import { useAuth } from '@/components/AuthProvider';
 import { useDialog } from '@/components/DialogProvider';
 import { theme } from '@/lib/theme';
 import CustomerDefaultsEditor from '@/components/CustomerDefaultsEditor';
+import PartCatalogBrowser, { type BrowsePart } from '@/components/PartCatalogBrowser';
 import PhoneInput from '@/components/PhoneInput';
 import MentionTextArea, { reportMentions } from '@/components/MentionTextArea';
 import { flashNote } from '@/lib/focus-note';
@@ -164,6 +165,8 @@ export default function EstimatesPage() {
   // NetSuite's VIN field, and feeds the Shop Board's Arriving row.
   const [vin, setVin] = useState('');
   const [unitNumber, setUnitNumber] = useState('');
+  // N4-A: the visual faceted catalog browser (Ranger-style pick-from-list).
+  const [showCatalogBrowser, setShowCatalogBrowser] = useState(false);
   // T1.6 install context
   const [installInstructions, setInstallInstructions] = useState('');
   const [onSiteContactName, setOnSiteContactName] = useState('');
@@ -1360,16 +1363,24 @@ export default function EstimatesPage() {
           )}
         </div>
 
-        {/* Part search */}
+        {/* Part search + visual catalog browser (N4-A) */}
         {(
-          <div style={{ position: 'relative', marginBottom: '8px' }}>
+          <div style={{ position: 'relative', marginBottom: '8px', display: 'flex', gap: '8px' }}>
             <input
               ref={partSearchRef}
               placeholder="Search parts catalog to add..."
               value={partSearch}
               onChange={e => setPartSearch(e.target.value)}
-              style={{ ...inputStyle, background: 'var(--subtle-bg)' }}
+              style={{ ...inputStyle, background: 'var(--subtle-bg)', flex: 1 }}
             />
+            <button
+              type="button"
+              onClick={() => setShowCatalogBrowser(true)}
+              title="Browse the catalog by category and vendor, with photos"
+              style={{ padding: '8px 14px', borderRadius: '8px', border: '1px solid var(--border)', background: 'var(--card)', color: 'var(--text-primary)', fontSize: '12px', fontWeight: 800, cursor: 'pointer', whiteSpace: 'nowrap' }}
+            >
+              🗂 Browse Catalog
+            </button>
             {partResults.length > 0 && (
               <div style={{
                 position: 'absolute', top: '100%', left: 0, right: 0, zIndex: 50,
@@ -2100,6 +2111,25 @@ export default function EstimatesPage() {
           </div>
         </div>
       )}
+
+      {/* N4-A: Ranger-style visual catalog — add straight into the estimate */}
+      <PartCatalogBrowser
+        open={showCatalogBrowser}
+        onClose={() => setShowCatalogBrowser(false)}
+        isAdmin={isAdmin}
+        onAdd={(p: BrowsePart) => addPartLine({
+          id: p.id,
+          netsuite_id: p.netsuite_id || '',
+          item_number: p.item_number,
+          display_name: p.display_name || p.item_number,
+          description: p.marketing_description || p.description || '',
+          sales_price: p.sales_price || 0,
+          labor_hours: p.labor_hours || 0,
+          catalog: p.catalog,
+          purchase_price: p.purchase_price,
+          avg_install_cost: p.avg_install_cost,
+        })}
+      />
     </div>
   );
 }
