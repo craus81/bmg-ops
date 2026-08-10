@@ -67,7 +67,6 @@ export default function CniOnboardingPage() {
         router.replace('/installer');
         return;
       }
-      setCompanyName(cniProfile.company_name || '');
       setPhone(cniProfile.phone || '');
       setContactName(cniProfile.primary_contact_name || '');
       const addr = cniProfile.business_address || {};
@@ -80,14 +79,20 @@ export default function CniOnboardingPage() {
       setEquipmentCapabilities(cniProfile.equipment_capabilities || []);
     }
 
-    // Pre-fill contact name from profile
+    // Pre-fill contact name, and show the company the invite linked —
+    // membership is profiles.company_id (set at invite), read-only here.
     const { data: profile } = await supabase
       .from('profiles')
-      .select('full_name')
+      .select('full_name, company_id')
       .eq('id', session.user.id)
       .single();
     if (profile && !cniProfile?.primary_contact_name) {
       setContactName(profile.full_name || '');
+    }
+    if (profile?.company_id) {
+      const { data: company } = await supabase
+        .from('companies').select('name').eq('id', profile.company_id).maybeSingle();
+      setCompanyName(company?.name || '');
     }
 
     setStep(1);
@@ -99,8 +104,8 @@ export default function CniOnboardingPage() {
 
   const handleSubmit = async () => {
     if (!userId) return;
-    if (!companyName.trim() || !contactName.trim() || !phone.trim() || !city.trim()) {
-      setError('Please fill in all required fields (company, contact name, phone, city)');
+    if (!contactName.trim() || !phone.trim() || !city.trim()) {
+      setError('Please fill in all required fields (contact name, phone, city)');
       return;
     }
     if (serviceTypes.length === 0) {
@@ -113,7 +118,6 @@ export default function CniOnboardingPage() {
 
     const { error: dbError } = await supabase.from('cni_profiles').upsert({
       user_id: userId,
-      company_name: companyName.trim(),
       primary_contact_name: contactName.trim(),
       phone: phone.trim(),
       business_address: { street: street.trim(), city: city.trim(), state: state.trim(), zip: zip.trim() },
@@ -245,8 +249,13 @@ export default function CniOnboardingPage() {
           </div>
 
           <div style={{ marginBottom: '12px' }}>
-            <label style={labelStyle}>Company Name *</label>
-            <input style={inputStyle} value={companyName} onChange={e => setCompanyName(e.target.value)} placeholder="Your business name" />
+            <label style={labelStyle}>Company</label>
+            <div style={{ ...inputStyle, background: 'transparent', opacity: 0.85 }}>
+              {companyName || 'Set by BMG when you were invited'}
+            </div>
+            <div style={{ fontSize: 11, color: 'var(--text-muted)', marginTop: 4 }}>
+              Wrong company? Let your BMG contact know — membership is managed on BMG&apos;s side.
+            </div>
           </div>
           <div style={{ marginBottom: '12px' }}>
             <label style={labelStyle}>Primary Contact *</label>

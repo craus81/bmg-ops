@@ -150,13 +150,12 @@ export async function POST(req: NextRequest) {
     }, { onConflict: 'id' });
 
     // 3. Create a stub CNI profile so they show up in the installers list.
-    // company_name is kept as a transitional display fallback in sync with the
-    // company we just linked (a later migration drops it). photo_quality is set
+    // Membership lives on profiles.company_id (set above) — migration 192
+    // dropped the transitional company_name copy. photo_quality is set
     // explicitly because the column's table default ('good') is invalid under
     // its own CHECK, which would fail the insert.
     await supabase.from('cni_profiles').upsert({
       user_id: userId,
-      company_name: compName || null,
       phone: phone || null,
       availability_status: 'available',
       photo_quality: 'pass',

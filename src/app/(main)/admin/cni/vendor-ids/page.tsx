@@ -249,7 +249,7 @@ export default function CniVendorIdsPage() {
                       )}
                     </div>
                     <div style={{ fontSize: '11px', color: 'var(--text-muted)', marginTop: '2px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-                      {inst.company_name || 'Independent'}{inst.email ? ` • ${inst.email}` : ''}
+                      {inst.company_name || 'No company yet'}{inst.email ? ` • ${inst.email}` : ''}
                     </div>
                   </div>
                   <button

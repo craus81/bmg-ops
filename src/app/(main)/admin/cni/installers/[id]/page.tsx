@@ -116,17 +116,11 @@ export default function CniInstallerDetailPage() {
     // and its edits/saves — work without a separate provisioning step.
     const isInstaller = userData?.role === 'installer' || (userData?.roles || []).includes('installer');
     if (!cniData && userData && isInstaller) {
-      let companyName: string | null = null;
-      if (userData.company_id) {
-        const { data: comp } = await supabase
-          .from('companies').select('name').eq('id', userData.company_id).maybeSingle();
-        companyName = comp?.name || null;
-      }
       // photo_quality is set explicitly: its table default ('good') is invalid
       // under the column's own CHECK, so an insert that omits it fails.
       const { data: created } = await supabase
         .from('cni_profiles')
-        .upsert({ user_id: userId, company_name: companyName, photo_quality: 'pass' }, { onConflict: 'user_id' })
+        .upsert({ user_id: userId, photo_quality: 'pass' }, { onConflict: 'user_id' })
         .select('*')
         .single();
       cniData = created || null;
@@ -265,10 +259,9 @@ export default function CniInstallerDetailPage() {
       return;
     }
 
-    // Update cni_profiles table. company_name is kept in sync with the chosen
-    // company as a transitional display fallback (a later migration drops it).
+    // Update cni_profiles table — per-person data only; membership already
+    // landed on profiles.company_id above (migration 192 dropped company_name).
     const { error: cniErr } = await supabase.from('cni_profiles').update({
-      company_name: companyName,
       phone: editForm.phone.trim() || null,
       business_address: {
         street: editForm.street.trim(),
@@ -438,7 +431,7 @@ export default function CniInstallerDetailPage() {
             {userProfile.full_name}
           </div>
           <div style={{ fontSize: '12px', color: 'var(--text-muted)' }}>
-            {companies.find(c => c.id === userProfile.company_id)?.name || profile.company_name || 'Independent'} • {userProfile.email}
+            {companies.find(c => c.id === userProfile.company_id)?.name || 'No company yet'} • {userProfile.email}
           </div>
         </div>
         {!isEditing && (
