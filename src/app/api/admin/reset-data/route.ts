@@ -35,11 +35,10 @@ export async function POST(req: NextRequest) {
     // Order matters due to foreign key constraints — delete children first
     const tables = [
       'po_invoices',          // references purchase_orders
-      'vehicle_photos',       // references scanned_vehicles
-      'vehicle_status_history', // references scanned_vehicles
+      'vehicle_photos',       // references fleet_checkins
+      'vehicle_status_history', // references fleet_checkins
       'gmail_po_imports',     // references purchase_orders
       'po_line_items',        // references purchase_orders
-      'scanned_vehicles',     // may reference po_line_items
       'purchase_orders',      // parent table
       'notifications',        // transactional
     ];

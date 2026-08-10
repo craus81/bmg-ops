@@ -103,7 +103,7 @@ export default function BottomNav({ clockStatus }: BottomNavProps) {
   }
 
   const isActive = (tab: Tab) => {
-    if (tab.path === '/home') return pathname === '/home' || pathname === '/photos';
+    if (tab.path === '/home') return pathname === '/home';
     if (tab.path === '/scan') return pathname === '/scan';
     if (tab.path === '/fleet') return pathname === '/fleet';
     if (tab.path === '/tracking') return pathname === '/tracking';

@@ -12,7 +12,6 @@ export default function MorePage() {
   const { mode, setMode, resolvedTheme } = useTheme();
   const supabase = createClient();
   const [pendingUserCount, setPendingUserCount] = useState(0);
-  const [pendingReviewCount, setPendingReviewCount] = useState(0);
 
   useEffect(() => {
     if (!hasFeature('user_management') && !hasFeature('photo_reviews')) return;
@@ -23,14 +22,6 @@ export default function MorePage() {
           .select('*', { count: 'exact', head: true })
           .eq('status', 'pending');
         setPendingUserCount(userCount || 0);
-      }
-      if (hasFeature('photo_reviews')) {
-        const { count: reviewCount } = await supabase
-          .from('scanned_vehicles')
-          .select('*', { count: 'exact', head: true })
-          .eq('review_status', 'pending')
-          .eq('submitted_for_review', true);
-        setPendingReviewCount(reviewCount || 0);
       }
     };
     load();
@@ -63,7 +54,6 @@ export default function MorePage() {
         { title: 'Scan & Log', sub: 'Scan VINs and log work', path: '/scan', show: F('scan') },
         { title: 'Time Tracking', sub: 'Clock in/out & timesheets', path: '/time', show: F('time') },
         { title: 'Proof Search', sub: 'Find proof artwork in Dropbox by customer or part', path: '/admin/proof-search', show: F('proof_hygiene') },
-        { title: 'Photo Reviews', sub: pendingReviewCount > 0 ? `${pendingReviewCount} waiting for approval` : 'Review completion photos', path: '/admin/reviews', show: F('photo_reviews'), badge: pendingReviewCount > 0 ? pendingReviewCount : undefined },
       ],
     },
     {

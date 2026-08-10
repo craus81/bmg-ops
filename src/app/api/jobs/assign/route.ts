@@ -65,12 +65,17 @@ export async function POST(req: NextRequest) {
       }
     }
 
-    // 3. Update the legacy assigned_to field
-    const table = jobType === 'scanned_vehicle' ? 'scanned_vehicles' : 'graphics_jobs';
-    await supabase
-      .from(table)
-      .update({ assigned_to: userIds.length > 0 ? userIds[0] : null })
-      .eq('id', jobId);
+    // 3. Mirror the first assignee onto the legacy graphics assigned_to field.
+    // Vehicle assignments live in job_assignments alone: the old mirror onto
+    // the retired scanned_vehicles table silently matched nothing (the
+    // tracking page passes fleet_checkins ids), so it was dropped with the
+    // table (cni-redesign Phase 0).
+    if (jobType === 'graphics_job') {
+      await supabase
+        .from('graphics_jobs')
+        .update({ assigned_to: userIds.length > 0 ? userIds[0] : null })
+        .eq('id', jobId);
+    }
 
     // 4. Notify assigned users
     if (notifyUsers && userIds.length > 0) {
@@ -150,20 +155,22 @@ export async function DELETE(req: NextRequest) {
       return NextResponse.json({ error: error.message }, { status: 500 });
     }
 
-    // Update legacy assigned_to — set to next assigned user or null
-    const { data: remaining } = await supabase
-      .from('job_assignments')
-      .select('user_id')
-      .eq('job_type', jobType)
-      .eq('job_id', jobId)
-      .order('assigned_at', { ascending: true })
-      .limit(1);
+    // Mirror the next assignee onto the legacy graphics assigned_to field
+    // (vehicle assignments live in job_assignments alone — see POST step 3).
+    if (jobType === 'graphics_job') {
+      const { data: remaining } = await supabase
+        .from('job_assignments')
+        .select('user_id')
+        .eq('job_type', jobType)
+        .eq('job_id', jobId)
+        .order('assigned_at', { ascending: true })
+        .limit(1);
 
-    const table = jobType === 'scanned_vehicle' ? 'scanned_vehicles' : 'graphics_jobs';
-    await supabase
-      .from(table)
-      .update({ assigned_to: remaining?.[0]?.user_id || null })
-      .eq('id', jobId);
+      await supabase
+        .from('graphics_jobs')
+        .update({ assigned_to: remaining?.[0]?.user_id || null })
+        .eq('id', jobId);
+    }
 
     return NextResponse.json({ success: true });
   } catch (err: any) {

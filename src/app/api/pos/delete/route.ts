@@ -33,15 +33,7 @@ export async function POST(req: NextRequest) {
 
         const lineIds = (lineItems || []).map((li: any) => li.id);
 
-        // 2. Clear FK references from scanned_vehicles
-        if (lineIds.length > 0) {
-          await supabase
-            .from('scanned_vehicles')
-            .update({ po_line_item_id: null })
-            .in('po_line_item_id', lineIds);
-        }
-
-        // 3. Clear FK references from gmail_po_imports
+        // 2. Clear FK references from gmail_po_imports
         await supabase
           .from('gmail_po_imports')
           .update({ po_id: null })
@@ -61,7 +53,7 @@ export async function POST(req: NextRequest) {
             .in('po_line_item_id', lineIds);
         }
 
-        // 4. Delete line items
+        // 3. Delete line items
         const { error: lineErr } = await supabase
           .from('po_line_items')
           .delete()

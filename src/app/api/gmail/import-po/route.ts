@@ -546,11 +546,6 @@ export async function POST(req: NextRequest) {
       }
 
       if (existingPO && forceOverwrite) {
-        // Clear FK references
-        const existingLineIds = (existingPO.po_line_items || []).map((li: any) => li.id);
-        if (existingLineIds.length > 0) {
-          await supabase.from('scanned_vehicles').update({ po_line_item_id: null }).in('po_line_item_id', existingLineIds);
-        }
         await supabase.from('po_line_items').delete().eq('po_id', existingPO.id);
 
         // Resolve the extracted name to a real NetSuite customer (canonical
@@ -1056,15 +1051,6 @@ export async function POST(req: NextRequest) {
 
     // Overwrite existing PO if forceOverwrite is true
     if (existingPO && forceOverwrite) {
-      // Clear FK references from scanned_vehicles before deleting line items
-      const existingLineIds = (existingPO.po_line_items || []).map((li: any) => li.id);
-      if (existingLineIds.length > 0) {
-        await supabase
-          .from('scanned_vehicles')
-          .update({ po_line_item_id: null })
-          .in('po_line_item_id', existingLineIds);
-      }
-
       // Delete old line items
       const { error: deleteErr } = await supabase.from('po_line_items').delete().eq('po_id', existingPO.id);
       if (deleteErr) {
