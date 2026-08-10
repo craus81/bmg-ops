@@ -162,6 +162,8 @@ export async function PUT(req: NextRequest) {
   }
 
   fields.updated_at = new Date().toISOString();
+  // A2: the audit trigger attributes service-role writes via updated_by.
+  fields.updated_by = auth.user.id;
 
   const { data, error } = await supabase
     .from('upfit_projects')

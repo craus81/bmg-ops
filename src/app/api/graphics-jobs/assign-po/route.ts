@@ -98,6 +98,7 @@ export async function POST(req: NextRequest) {
         po_line_item_id: matchedLineId,
         po_number: po.po_number,
         customer_netsuite_id: po.customer_netsuite_id,
+        updated_by: auth.user.id,
       })
       .eq('id', jobId);
 
