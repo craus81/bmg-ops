@@ -109,7 +109,16 @@ export default function ImportInstallsPage() {
   const fileInputRef = useRef<HTMLInputElement>(null);
   const [importing, setImporting] = useState(false);
   const [progress, setProgress] = useState<{ done: number; total: number } | null>(null);
-  const [result, setResult] = useState<{ created: number; failed: number; errors: { vin: string; error?: string }[] } | null>(null);
+  const [result, setResult] = useState<{ created: number; failed: number; credited: number; errors: { vin: string; error?: string }[] } | null>(null);
+  // Pay credits (cni-redesign §1.6): when the company matches a real
+  // companies row, its installer roster loads here and the checked members
+  // get an equal credit split for every imported install.
+  const [crewOptions, setCrewOptions] = useState<{ id: string; name: string }[]>([]);
+  const [selectedCrew, setSelectedCrew] = useState<Set<string>>(new Set());
+  // Near-duplicate rows from the last run, offered for an admin override
+  // re-import (docs/cni-redesign.md §3.2 — soft flag, not a hard wall).
+  const [lastDuplicates, setLastDuplicates] = useState<{ vin: string; part?: string }[]>([]);
+  const [lastShiftId, setLastShiftId] = useState<string | null>(null);
 
   useEffect(() => {
     if (isAdmin === false) router.push('/home');
@@ -123,6 +132,28 @@ export default function ImportInstallsPage() {
     });
     return () => { cancelled = true; };
   }, [isAdmin]);
+
+  // Load the matched company's roster for the crew picker. Default: everyone
+  // checked — imported work should pay unless the admin says otherwise.
+  const matchedCompany = companies.find((c) => c.name.toLowerCase() === companyName.trim().toLowerCase()) || null;
+  useEffect(() => {
+    if (!matchedCompany) { setCrewOptions([]); setSelectedCrew(new Set()); return; }
+    let cancelled = false;
+    createClient()
+      .from('profiles')
+      .select('id, full_name')
+      .eq('company_id', matchedCompany.id)
+      .eq('status', 'approved')
+      .order('full_name')
+      .then(({ data }: { data: { id: string; full_name: string | null }[] | null }) => {
+        if (cancelled) return;
+        const opts = (data || []).map((p) => ({ id: p.id, name: p.full_name || 'Unnamed' }));
+        setCrewOptions(opts);
+        setSelectedCrew(new Set(opts.map((o) => o.id)));
+      });
+    return () => { cancelled = true; };
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- keyed on the resolved company id only
+  }, [matchedCompany?.id]);
 
   // Multi-part (K8): the part field accepts a comma-separated list — the
   // first is the primary (carries the description), the rest are logged for
@@ -175,9 +206,13 @@ export default function ImportInstallsPage() {
 
     setImporting(true);
     setResult(null);
+    setLastDuplicates([]);
     let created = 0;
     let failed = 0;
+    let credited = 0;
+    let shiftId: string | null = null;
     const errors: { vin: string; error?: string }[] = [];
+    const duplicates: { vin: string; part?: string }[] = [];
     setProgress({ done: 0, total: valid.length });
     for (let i = 0; i < valid.length; i += CHUNK) {
       const chunk = valid.slice(i, i + CHUNK);
@@ -192,6 +227,8 @@ export default function ImportInstallsPage() {
             billableCustomer: billableCustomer.trim() || undefined,
             locationName: locationName.trim() || undefined,
             additionalPartNumbers: partsList.length > 1 ? partsList.slice(1) : undefined,
+            crewProfileIds: selectedCrew.size > 0 ? [...selectedCrew] : undefined,
+            shiftId: shiftId || undefined,
             rows: chunk.map((r) => ({
               vin: r.vin,
               serialNumber: r.serialNumber || undefined,
@@ -211,16 +248,88 @@ export default function ImportInstallsPage() {
         if (!res.ok || !d) throw new Error(d?.error || `HTTP ${res.status}`);
         created += d.created || 0;
         failed += d.failed || 0;
-        for (const rr of d.results || []) if (!rr.ok) errors.push({ vin: rr.part ? `${rr.vin} (${rr.part})` : rr.vin, error: rr.error });
+        credited += d.credited || 0;
+        if (d.shiftId) shiftId = d.shiftId;
+        for (const rr of d.results || []) {
+          if (rr.ok) continue;
+          errors.push({ vin: rr.part ? `${rr.vin} (${rr.part})` : rr.vin, error: rr.error });
+          if (rr.duplicate) duplicates.push({ vin: rr.vin, part: rr.part });
+        }
       } catch (e: any) {
         failed += chunk.length;
         errors.push({ vin: '(chunk failed)', error: e?.message || 'request failed' });
       }
       setProgress({ done: Math.min(i + CHUNK, valid.length), total: valid.length });
     }
-    setResult({ created, failed, errors });
+    setResult({ created, failed, credited, errors });
+    setLastDuplicates(duplicates);
+    setLastShiftId(shiftId);
     setImporting(false);
     setProgress(null);
+  }
+
+  // Admin override for near-duplicate rows (§3.2): re-attempt ONLY the
+  // flagged (vin, part) combos with allowNearDuplicate. Exact repeats still
+  // refuse server-side, so this can't create identical rows.
+  async function importDuplicatesAnyway() {
+    if (lastDuplicates.length === 0) return;
+    const ok = await dialog.confirm(
+      `Log ${lastDuplicates.length} flagged duplicate${lastDuplicates.length !== 1 ? 's' : ''} anyway? Use this when the collision is two different vehicles sharing a VIN last-8, or a deliberate re-log. Exact repeats are still refused.`,
+      { confirmLabel: 'Log anyway' },
+    );
+    if (!ok) return;
+    const rowByVin = new Map(valid.map((r) => [r.vin, r]));
+    const overrideRows = lastDuplicates
+      .map((dup) => {
+        const r = rowByVin.get(dup.vin);
+        return r ? { ...r, partNumber: dup.part || r.partNumber || partsList[0] } : null;
+      })
+      .filter((r): r is NonNullable<typeof r> => !!r);
+    if (overrideRows.length === 0) return;
+
+    setImporting(true);
+    try {
+      const res = await fetch('/api/admin/import-installs', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          companyName: companyName.trim(),
+          partNumber: partsList[0],
+          partDescription: partDescription.trim() || undefined,
+          billableCustomer: billableCustomer.trim() || undefined,
+          locationName: locationName.trim() || undefined,
+          // No additionalPartNumbers here: each override row targets exactly
+          // one flagged (vin, part) combo via its own partNumber.
+          crewProfileIds: !lastShiftId && selectedCrew.size > 0 ? [...selectedCrew] : undefined,
+          shiftId: lastShiftId || undefined,
+          overrideDuplicates: true,
+          rows: overrideRows.map((r) => ({
+            vin: r.vin,
+            serialNumber: r.serialNumber || undefined,
+            imei: r.imei || undefined,
+            iccid: r.iccid || undefined,
+            vehicleYear: r.vehicleYear || undefined,
+            vehicleMake: r.vehicleMake || undefined,
+            vehicleModel: r.vehicleModel || undefined,
+            unitNumber: r.unitNumber || undefined,
+            partNumber: r.partNumber || undefined,
+          })),
+        }),
+      });
+      const d = await res.json().catch(() => null);
+      if (!res.ok || !d) throw new Error(d?.error || `HTTP ${res.status}`);
+      setResult((prev) => ({
+        created: (prev?.created || 0) + (d.created || 0),
+        failed: Math.max(0, (prev?.failed || 0) - (d.created || 0)),
+        credited: (prev?.credited || 0) + (d.credited || 0),
+        errors: (d.results || []).filter((rr: any) => !rr.ok).map((rr: any) => ({ vin: rr.part ? `${rr.vin} (${rr.part})` : rr.vin, error: rr.error })),
+      }));
+      if (d.shiftId) setLastShiftId(d.shiftId);
+      setLastDuplicates([]);
+    } catch (e: any) {
+      await dialog.alert(`Override import failed: ${e?.message || 'request failed'}`);
+    }
+    setImporting(false);
   }
 
   const card: CSSProperties = { background: theme.card, border: `1px solid ${theme.border}`, borderRadius: 12, padding: 16, marginBottom: 16 };
@@ -270,6 +379,46 @@ export default function ImportInstallsPage() {
           <label style={label}>Location (optional)</label>
           <input style={input} value={locationName} onChange={(e) => setLocationName(e.target.value)} />
         </div>
+      </div>
+
+      {/* Pay credits — imported work used to be billable but never PAID */}
+      <div style={card}>
+        <label style={label}>Pay credits</label>
+        {matchedCompany ? (
+          crewOptions.length > 0 ? (
+            <>
+              <div style={{ fontSize: 12, color: theme.textSecondary, marginBottom: 8 }}>
+                Checked crew members split the pay for every imported install (equal split, at the part&apos;s field rate — unpriced parts land in the needs-pricing queue). Uncheck everyone to import without pay.
+              </div>
+              <div style={{ display: 'flex', flexWrap: 'wrap', gap: 10 }}>
+                {crewOptions.map((m) => (
+                  <label key={m.id} style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 13, cursor: 'pointer', padding: '6px 10px', borderRadius: 8, border: `1px solid ${selectedCrew.has(m.id) ? theme.success : theme.border}`, background: selectedCrew.has(m.id) ? theme.successBg : theme.inputBg }}>
+                    <input
+                      type="checkbox"
+                      checked={selectedCrew.has(m.id)}
+                      onChange={(e) => {
+                        setSelectedCrew((prev) => {
+                          const next = new Set(prev);
+                          if (e.target.checked) next.add(m.id); else next.delete(m.id);
+                          return next;
+                        });
+                      }}
+                    />
+                    {m.name}
+                  </label>
+                ))}
+              </div>
+            </>
+          ) : (
+            <div style={{ fontSize: 12, color: theme.warning }}>
+              &quot;{matchedCompany.name}&quot; has no approved members — the import will be billable but nobody gets paid for it. Add members on the company page first if this work should pay.
+            </div>
+          )
+        ) : (
+          <div style={{ fontSize: 12, color: theme.textMuted }}>
+            Pick a registered CNI company above to credit its crew — a free-text company imports as billable work with no pay credits.
+          </div>
+        )}
       </div>
 
       <div style={card}>
@@ -392,7 +541,20 @@ export default function ImportInstallsPage() {
       {result && (
         <div style={{ ...card, background: result.failed ? theme.warningBg : theme.successBg, borderColor: result.failed ? theme.warningBorder : theme.successBorder }}>
           <div style={{ fontWeight: 700, marginBottom: 4 }}>Done</div>
-          <div style={{ fontSize: 14 }}>Imported <strong>{result.created}</strong>, skipped/failed <strong>{result.failed}</strong>.</div>
+          <div style={{ fontSize: 14 }}>
+            Imported <strong>{result.created}</strong>, skipped/failed <strong>{result.failed}</strong>
+            {result.credited > 0 && <>, pay credits written for <strong>{result.credited}</strong></>}.
+          </div>
+          {lastDuplicates.length > 0 && (
+            <div style={{ marginTop: 10 }}>
+              <button onClick={importDuplicatesAnyway} disabled={importing} style={{ ...btn, background: theme.orange, opacity: importing ? 0.5 : 1 }}>
+                Log {lastDuplicates.length} flagged duplicate{lastDuplicates.length !== 1 ? 's' : ''} anyway
+              </button>
+              <span style={{ marginLeft: 10, fontSize: 12, color: theme.textSecondary }}>
+                Duplicate flags compare the VIN last-8 — override when they&apos;re really different vehicles (or a deliberate re-log). Exact repeats stay blocked.
+              </span>
+            </div>
+          )}
           {result.errors.length > 0 && (
             <div style={{ marginTop: 8, fontSize: 12, color: theme.textSecondary, maxHeight: 160, overflow: 'auto' }}>
               {result.errors.slice(0, 100).map((e, i) => (
