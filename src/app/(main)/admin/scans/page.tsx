@@ -39,6 +39,7 @@ interface ScanLog {
   scanned_by_company: string | null;
   scanned_at: string;
   exported_at: string | null;
+  exported_by: string | null;
   archived_at: string | null;
   invoice_number?: string | null;
   date_invoiced?: string | null;
@@ -645,6 +646,33 @@ export default function AdminScansPage() {
     const ids = [...selectedScans];
     if (ids.length === 0) return;
     await supabase.from('scan_logs').update({ archived_at: null }).in('id', ids);
+    loadAll();
+  };
+
+  // Un-export: put scans back into the invoicing workflow. exported_at is
+  // load-bearing — it removes a scan from the invoice queue, the Ready/
+  // Waiting ops counts, and de-prioritizes it in PO auto-matching — so the
+  // confirm spells out the consequences, and the write goes through
+  // bulk-update for the audit trail.
+  const unexportScans = async () => {
+    const ids = [...selectedScans];
+    if (ids.length === 0) return;
+    const invoicedCount = tabScans.filter(s => selectedScans.has(s.id) && s.invoice_number).length;
+    const msg =
+      `Un-export ${ids.length} scan${ids.length !== 1 ? 's' : ''}? They return to the Ready/Waiting queues and count as uninvoiced work again (invoice page, ops dashboard, PO auto-match).` +
+      (invoicedCount > 0 ? `\n\n${invoicedCount} of them already carry an invoice # — un-exporting does NOT undo the NetSuite invoice, it only re-queues the scan.` : '');
+    if (!(await dialog.confirm(msg))) return;
+    const res = await fetch('/api/scans/bulk-update', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ scanIds: ids, updates: { exported_at: null, exported_by: null } }),
+    });
+    if (!res.ok) {
+      const data = await res.json().catch(() => ({}));
+      await dialog.alert(`Un-export failed: ${data.error || `HTTP ${res.status}`}`);
+      return;
+    }
+    setSelectedScans(new Set());
     loadAll();
   };
 
@@ -1263,6 +1291,9 @@ export default function AdminScansPage() {
             <button onClick={archiveExported} style={{ padding: '6px 10px', borderRadius: '6px', fontSize: '10px', fontWeight: 700, background: 'rgba(167,139,250,0.1)', border: '1px solid rgba(167,139,250,0.25)', color: '#a78bfa', cursor: 'pointer' }}>
               Archive {selectedScans.size}
             </button>
+            <button onClick={unexportScans} title="Move back to the Ready/Waiting queues — the scans count as uninvoiced work again" style={{ padding: '6px 10px', borderRadius: '6px', fontSize: '10px', fontWeight: 700, background: 'rgba(251,146,60,0.1)', border: '1px solid rgba(251,146,60,0.25)', color: '#fb923c', cursor: 'pointer' }}>
+              Un-export {selectedScans.size}
+            </button>
           </>
         )}
         {tab === 'archived' && selectedScans.size > 0 && (
@@ -1281,6 +1312,14 @@ export default function AdminScansPage() {
           </>
         )}
       </div>}
+
+      {/* What "Exported" actually means — the meeting concluded it had no
+          system meaning; it does, so say it where the tab lives. */}
+      {tab === 'exported' && (
+        <div style={{ padding: '8px 12px', borderRadius: '8px', marginBottom: '10px', background: 'rgba(96,165,250,0.07)', border: '1px solid rgba(96,165,250,0.2)', fontSize: '11px', color: 'var(--text-secondary)', lineHeight: 1.5 }}>
+          <b style={{ color: '#60a5fa' }}>Exported</b> = out of the invoicing workflow: these scans are hidden from the invoice queue and the Ready/Waiting counts, and PO auto-match deprioritizes them. Scans land here when their CSV is exported or when invoicing back-stamps them (each row says which). <b>Un-export</b> puts selected scans back in the queue; <b>Create Invoice</b> bills them from here as-is.
+        </div>
+      )}
 
       {/* Invoice result banner */}
       {invoiceResult && (
@@ -2163,6 +2202,17 @@ export default function AdminScansPage() {
                                   {scan.po_number && (
                                     <span style={{ fontSize: '8px', fontWeight: 700, padding: '2px 5px', borderRadius: '4px', background: 'rgba(34,197,94,0.1)', color: '#22c55e' }}>
                                       PO #{scan.po_number}
+                                    </span>
+                                  )}
+                                  {/* Why this scan is in Exported: which path stamped it, when, by whom (K9). */}
+                                  {tab === 'exported' && scan.exported_at && (
+                                    <span
+                                      title={`Exported ${new Date(scan.exported_at).toLocaleString()}${profiles[scan.exported_by || ''] ? ` by ${profiles[scan.exported_by || '']}` : ''}${scan.invoice_number ? ` — back-stamped by invoicing (#${scan.invoice_number})` : ' — via CSV export'}`}
+                                      style={{ fontSize: '8px', fontWeight: 700, padding: '2px 5px', borderRadius: '4px', background: 'rgba(96,165,250,0.12)', color: '#60a5fa', whiteSpace: 'nowrap' }}
+                                    >
+                                      {scan.invoice_number ? `Invoiced #${scan.invoice_number}` : 'CSV export'}
+                                      {' · '}{new Date(scan.exported_at).toLocaleDateString([], { month: 'short', day: 'numeric' })}
+                                      {profiles[scan.exported_by || ''] ? ` · ${profiles[scan.exported_by || '']}` : ''}
                                     </span>
                                   )}
                                   {cniByScanId[scan.id] && (
