@@ -2,7 +2,7 @@ import { describe, it, expect } from 'vitest';
 import {
   extractProduct, parseSitemapLocs, matchSkuToPart, skuKeys,
   looksLikeProductUrl, looksLikeListingUrl, extractSameOriginLinks,
-  extractPaginationLinks, originVariants,
+  extractPaginationLinks, originVariants, skuCandidatesFromUrl,
 } from './vendor-catalog-import';
 
 // Extraction is written blind to any one vendor's HTML — pin the layered
@@ -45,6 +45,33 @@ describe('extractProduct', () => {
     const p = extractProduct('<html><body>hello</body></html>');
     expect(p.imageUrl).toBeNull();
     expect(p.sku).toBeNull();
+  });
+
+  it('falls back to a visible WooCommerce sku span (class token, not sku_wrapper)', () => {
+    const html = `<html><body>
+      <span class="sku_wrapper">SKU: <span class="sku">OTC-U6036</span></span>
+    </body></html>`;
+    expect(extractProduct(html).sku).toBe('OTC-U6036');
+  });
+});
+
+describe('skuCandidatesFromUrl (slug fallback, exact match downstream)', () => {
+  it('yields trailing-token joins longest-first, part-number-looking only', () => {
+    const c = skuCandidatesFromUrl('https://x.com/products/over-the-cab-truck-rack-36-extension-otc-u6036/');
+    expect(c).toContain('OTC-U6036');
+    expect(c).toContain('U6036');
+    expect(c.indexOf('OTC-U6036')).toBeLessThan(c.indexOf('U6036'));
+    // "36" alone: too short, no letter — never a candidate.
+    expect(c).not.toContain('36');
+  });
+
+  it('survives percent-encoded characters in the slug', () => {
+    const c = skuCandidatesFromUrl('https://x.com/products/shelving-36%e2%80%b3-wide-3-trays-n4-ra36-3x12/');
+    expect(c).toContain('N4-RA36-3X12');
+  });
+
+  it('returns nothing for word-only slugs', () => {
+    expect(skuCandidatesFromUrl('https://x.com/products/heavy-duty-van-shelving/')).toEqual([]);
   });
 });
 

@@ -7,7 +7,7 @@ import { fetchAllRows } from '@/lib/fetch-all';
 import {
   extractProduct, parseSitemapLocs, matchSkuToPart, skuKeys,
   looksLikeProductUrl, looksLikeListingUrl, extractSameOriginLinks,
-  extractPaginationLinks, originVariants, SITEMAP_CANDIDATES,
+  extractPaginationLinks, originVariants, skuCandidatesFromUrl, SITEMAP_CANDIDATES,
 } from '@/lib/vendor-catalog-import';
 
 export const dynamic = 'force-dynamic';
@@ -19,8 +19,10 @@ const supabase = createClient(
 );
 
 const Schema = z.discriminatedUnion('mode', [
-  // Verify extraction against one live page — no writes.
-  z.object({ mode: z.literal('probe'), url: z.string().url().max(1000) }),
+  // Verify extraction against one live page — no writes. vendor is only
+  // echoed back as an in/out-of-scope verdict so a filter that would make
+  // the real import skip everything is visible at step 1.
+  z.object({ mode: z.literal('probe'), url: z.string().url().max(1000), vendor: z.string().trim().max(200).optional() }),
   // Walk the site's sitemap(s) / crawl and return product-ish URLs for the
   // client to batch through 'run'. listingUrl = "teach mode": harvest from
   // a specific category page (plus its pagination and sibling categories)
@@ -55,25 +57,44 @@ async function fetchText(url: string, maxBytes = 2_000_000): Promise<string> {
   return buf.toString('utf8');
 }
 
-/** Active-part SKU lookup (id per skuKeys of item_number), optionally per vendor. */
+interface MappedPart { item_number: string; vendor: string | null; image_path: string | null; marketing_description: string | null }
+
+/**
+ * Active-part SKU lookup (id per skuKeys of item_number) over the WHOLE
+ * catalog, plus an in-scope predicate for the vendor filter. The filter is
+ * applied after matching — not in the query — so an out-of-scope match can
+ * be reported as exactly that ("vendor is X, outside your filter") instead
+ * of a bogus "no part matches this SKU". NetSuite's item-record vendor
+ * field is optional and often blank, so a filter can silently exclude the
+ * entire catalog; scopedCount lets callers fail fast on that.
+ */
 async function buildPartMap(vendor?: string) {
-  const { data: rows, error } = await fetchAllRows<any>((from, to) => {
-    let q = supabase
-      .from('netsuite_parts')
-      .select('id, item_number, image_path, marketing_description')
-      .eq('is_active', true)
-      .not('item_number', 'is', null);
-    if (vendor) q = q.ilike('vendor', `%${vendor}%`);
-    return q.order('id').range(from, to);
-  });
+  const { data: rows, error } = await fetchAllRows<any>((from, to) => supabase
+    .from('netsuite_parts')
+    .select('id, item_number, vendor, image_path, marketing_description')
+    .eq('is_active', true)
+    .not('item_number', 'is', null)
+    .order('id')
+    .range(from, to));
   if (error) throw new Error('Parts read failed: ' + error.message);
+
+  const needle = vendor?.trim().toLowerCase() || null;
+  const inScope = (p: MappedPart) => !needle || (p.vendor || '').toLowerCase().includes(needle);
+
   const byKey = new Map<string, string>();
-  const partById = new Map<string, { item_number: string; image_path: string | null; marketing_description: string | null }>();
-  for (const p of rows || []) {
+  const partById = new Map<string, MappedPart>();
+  let scopedCount = 0;
+  const vendorsSeen = new Set<string>();
+  // In-scope parts claim SKU keys first so a cross-vendor SKU collision
+  // resolves to the part the filter asks for.
+  const all: any[] = rows || [];
+  for (const p of [...all.filter(inScope), ...all.filter((p: MappedPart) => !inScope(p))]) {
     for (const key of skuKeys(p.item_number)) if (!byKey.has(key)) byKey.set(key, p.id);
     partById.set(p.id, p);
+    if (inScope(p)) scopedCount++;
+    if (p.vendor) vendorsSeen.add(p.vendor);
   }
-  return { byKey, partById };
+  return { byKey, partById, inScope, scopedCount, total: all.length, vendorsSeen };
 }
 
 export async function POST(req: NextRequest) {
@@ -88,9 +109,16 @@ export async function POST(req: NextRequest) {
     if (body.mode === 'probe') {
       const html = await fetchText(body.url);
       const product = extractProduct(html);
-      const { byKey } = await buildPartMap();
-      const matchedPartId = matchSkuToPart(product.sku, byKey);
-      return NextResponse.json({ product, matchedPartId });
+      const { byKey, partById, inScope } = await buildPartMap(body.vendor);
+      const matchedPartId = matchSkuToPart(product.sku, byKey)
+        ?? skuCandidatesFromUrl(body.url).map(c => matchSkuToPart(c, byKey)).find(Boolean)
+        ?? null;
+      const part = matchedPartId ? partById.get(matchedPartId)! : null;
+      return NextResponse.json({
+        product,
+        matchedPartId,
+        matchedPart: part ? { itemNumber: part.item_number, vendor: part.vendor, inScope: inScope(part) } : null,
+      });
     }
 
     if (body.mode === 'discover') {
@@ -207,7 +235,15 @@ export async function POST(req: NextRequest) {
     }
 
     // mode === 'run'
-    const { byKey, partById } = await buildPartMap(body.vendor);
+    const { byKey, partById, inScope, scopedCount, total, vendorsSeen } = await buildPartMap(body.vendor);
+    if (body.vendor && scopedCount === 0) {
+      const sample = [...vendorsSeen].sort().slice(0, 8);
+      return NextResponse.json({
+        error: `No active parts have a vendor containing "${body.vendor}" — the import would match nothing. `
+          + (sample.length > 0 ? `Vendors on file include: ${sample.join(', ')}${vendorsSeen.size > sample.length ? `, +${vendorsSeen.size - sample.length} more` : ''}. ` : `No parts have a vendor set at all (${total.toLocaleString()} active parts). `)
+          + 'Clear the vendor box to match by part number across the whole catalog.',
+      }, { status: 400 });
+    }
     const results: { url: string; ok: boolean; partId?: string; sku?: string | null; imported?: string[]; error?: string }[] = [];
     let imagesSaved = 0;
     let descriptionsSaved = 0;
@@ -216,13 +252,21 @@ export async function POST(req: NextRequest) {
       try {
         const html = await fetchText(url);
         const product = extractProduct(html);
-        const partId = matchSkuToPart(product.sku, byKey);
+        // Page SKU first; fall back to the URL slug's trailing tokens.
+        // Either way the match against item_number stays exact-or-dashless.
+        const slugMatch = () => skuCandidatesFromUrl(url).map(c => matchSkuToPart(c, byKey)).find(Boolean) ?? null;
+        const partId = matchSkuToPart(product.sku, byKey) ?? slugMatch();
         if (!partId) {
-          results.push({ url, ok: false, sku: product.sku, error: product.sku ? 'No part matches this SKU' : 'No SKU found on page' });
+          results.push({ url, ok: false, sku: product.sku, error: product.sku ? 'No part matches this SKU' : 'No SKU on page (or in the URL) matches a part' });
           await sleep(700);
           continue;
         }
         const part = partById.get(partId)!;
+        if (!inScope(part)) {
+          results.push({ url, ok: false, partId, sku: product.sku, error: `SKU matches ${part.item_number}, but that part's vendor is ${part.vendor ? `"${part.vendor}"` : 'blank'} — outside your "${body.vendor}" filter` });
+          await sleep(700);
+          continue;
+        }
         const updates: Record<string, string> = {};
         const imported: string[] = [];
 
