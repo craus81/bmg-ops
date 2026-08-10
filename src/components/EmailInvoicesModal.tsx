@@ -86,20 +86,46 @@ export default function EmailInvoicesModal({ customerName, invoices: initialInvo
   const [sending, setSending] = useState(false);
   const [sendingTest, setSendingTest] = useState(false);
 
-  // Prefill the recipient field with the customer's saved billing emails.
+  // Billing workflow (K3): customers.billing_workflow routes invoices —
+  // po_portal customers get a "submit in the portal, don't email" banner and
+  // a send guard; email_ap/no notes surface too. Every call site passes only
+  // a display name, so the lookup happens here (same name-match the
+  // prospects prefill below uses) and all five screens get it for free.
+  const [billing, setBilling] = useState<{ workflow: string | null; portal: string | null; notes: string | null } | null>(null);
+  const [portalOverride, setPortalOverride] = useState(false);
+
+  // Prefill the recipient field with the customer's saved billing emails,
+  // falling back to the customer profile's AP / billing-contact emails
+  // (migration 080 — finally read by the invoice path).
   useEffect(() => {
     if (!customerName) return;
     let cancelled = false;
     (async () => {
-      const { data } = await supabase
-        .from('prospects')
-        .select('billing_emails')
-        .ilike('company_name', customerName)
-        .limit(1)
-        .maybeSingle();
-      const saved: string[] = (data as any)?.billing_emails || [];
-      if (!cancelled && saved.length > 0) {
-        setEmail(prev => prev || saved.join(', '));
+      const [prospectRes, customerRes] = await Promise.all([
+        supabase
+          .from('prospects')
+          .select('billing_emails')
+          .ilike('company_name', customerName)
+          .limit(1)
+          .maybeSingle(),
+        supabase
+          .from('customers')
+          .select('billing_workflow, billing_portal, billing_notes, ap_email, billing_contact_email')
+          .ilike('company_name', customerName)
+          .limit(1)
+          .maybeSingle(),
+      ]);
+      if (cancelled) return;
+      const cust = customerRes.data as any;
+      if (cust) {
+        setBilling({ workflow: cust.billing_workflow || null, portal: cust.billing_portal || null, notes: cust.billing_notes || null });
+      }
+      const saved: string[] = (prospectRes.data as any)?.billing_emails || [];
+      const profileEmails = [cust?.ap_email, cust?.billing_contact_email]
+        .filter((e: any): e is string => !!e && /^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(e));
+      const prefill = saved.length > 0 ? saved : [...new Set(profileEmails)];
+      if (prefill.length > 0) {
+        setEmail(prev => prev || prefill.join(', '));
       }
     })();
     return () => { cancelled = true; };
@@ -267,6 +293,25 @@ export default function EmailInvoicesModal({ customerName, invoices: initialInvo
           >✕</button>
         </div>
 
+        {/* Billing workflow (K3) — portal customers shouldn't be emailed */}
+        {billing?.workflow === 'po_portal' && (
+          <div style={{ marginBottom: '10px', fontSize: '11px', color: '#fbbf24', background: 'rgba(251,191,36,0.08)', border: '1px solid rgba(251,191,36,0.3)', borderRadius: '8px', padding: '8px 10px' }}>
+            <div style={{ fontWeight: 700 }}>
+              ⚠ {customerName} bills via the {billing.portal || 'customer'} portal — invoices are submitted there, not emailed.
+            </div>
+            {billing.notes && <div style={{ marginTop: '3px', color: 'var(--text-muted)' }}>{billing.notes}</div>}
+            <label style={{ display: 'flex', alignItems: 'center', gap: '6px', marginTop: '6px', cursor: 'pointer', color: 'var(--text-secondary)' }}>
+              <input type="checkbox" checked={portalOverride} onChange={e => setPortalOverride(e.target.checked)} style={{ accentColor: '#fbbf24' }} />
+              Email anyway (one-off exception)
+            </label>
+          </div>
+        )}
+        {billing?.workflow !== 'po_portal' && billing?.notes && (
+          <div style={{ marginBottom: '10px', fontSize: '11px', color: 'var(--text-muted)', background: 'rgba(255,255,255,0.03)', border: '1px solid var(--border)', borderRadius: '8px', padding: '8px 10px' }}>
+            Billing notes: {billing.notes}
+          </div>
+        )}
+
         {/* Email preview */}
         <div style={{ padding: '10px 12px', borderRadius: '8px', background: 'rgba(255,255,255,0.03)', border: '1px solid var(--border)', marginBottom: '10px', fontSize: '11px' }}>
           <div style={{ fontWeight: 700, color: 'var(--text-primary)', marginBottom: '4px' }}>
@@ -359,13 +404,20 @@ export default function EmailInvoicesModal({ customerName, invoices: initialInvo
             onChange={(e) => setEmail(e.target.value)}
             style={{ flex: 1, minWidth: '180px', padding: '8px 10px', borderRadius: '6px', fontSize: '12px', border: '1px solid var(--border)', background: 'var(--input-bg)', color: 'var(--text-primary)' }}
           />
-          <button
-            onClick={() => sendInvoices()}
-            disabled={sending || sendingTest || !email || includedCount === 0}
-            style={{ padding: '8px 14px', borderRadius: '6px', fontSize: '11px', fontWeight: 700, background: 'rgba(34,197,94,0.1)', border: '1px solid rgba(34,197,94,0.25)', color: '#22c55e', cursor: sending || sendingTest || !email || includedCount === 0 ? 'not-allowed' : 'pointer', opacity: (!email || includedCount === 0) ? 0.5 : 1, whiteSpace: 'nowrap' }}
-          >
-            {sending ? 'Sending...' : `Send ${includedCount} to Customer`}
-          </button>
+          {(() => {
+            const portalBlocked = billing?.workflow === 'po_portal' && !portalOverride;
+            const disabled = sending || sendingTest || !email || includedCount === 0 || portalBlocked;
+            return (
+              <button
+                onClick={() => sendInvoices()}
+                disabled={disabled}
+                title={portalBlocked ? `This customer bills via the ${billing?.portal || 'customer'} portal — check "Email anyway" to override` : undefined}
+                style={{ padding: '8px 14px', borderRadius: '6px', fontSize: '11px', fontWeight: 700, background: 'rgba(34,197,94,0.1)', border: '1px solid rgba(34,197,94,0.25)', color: '#22c55e', cursor: disabled ? 'not-allowed' : 'pointer', opacity: (!email || includedCount === 0 || portalBlocked) ? 0.5 : 1, whiteSpace: 'nowrap' }}
+              >
+                {sending ? 'Sending...' : `Send ${includedCount} to Customer`}
+              </button>
+            );
+          })()}
         </div>
 
         {/* Test send */}
