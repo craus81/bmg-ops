@@ -5,6 +5,7 @@ import { requireAdmin } from '@/lib/api-auth';
 import { syncPoInvoices } from '@/lib/po-invoice-sync';
 import { verifyPoInvoiceQuantities } from '@/lib/po-invoice-verify';
 import { syncVendorPos } from '@/lib/vendor-po-sync';
+import { syncSalesOrders } from '@/lib/sales-order-sync';
 import { syncInventoryQuantities } from '@/lib/inventory-sync';
 import { syncVendorBillPayments } from '@/lib/vendor-bill-sync';
 import { recordHeartbeat } from '@/lib/system-health';
@@ -374,6 +375,17 @@ export async function GET(req: NextRequest) {
   } catch (err: any) {
     console.error('[cron] Vendor PO sync error:', err.message);
     results.vendorPos = { error: err.message };
+  }
+
+  // ═══════════ 3b2. SALES ORDER SYNC (N3) ═══════════
+  // Customer sales orders — including ones entered directly in NetSuite —
+  // mirrored into netsuite_sales_orders and matched back to their estimate
+  // (createdfrom → Reference-No estimate number → memo, in that order).
+  try {
+    results.salesOrders = await syncSalesOrders(supabase);
+  } catch (err: any) {
+    console.error('[cron] Sales order sync error:', err.message);
+    results.salesOrders = { error: err.message };
   }
 
   // ═══════════ 3c. INVENTORY QUANTITY SWEEP ═══════════

@@ -31,6 +31,7 @@ export const HEALTH_MONITORS: HealthMonitor[] = [
   { syncType: 'netsuite_spend_refresh', label: 'NetSuite spend refresh', intervalMinutes: 120 },
   { syncType: 'netsuite_contacts', label: 'NetSuite contact sync', intervalMinutes: 120 },
   { syncType: 'netsuite_vendor_pos', label: 'NetSuite vendor PO sync', intervalMinutes: 120 },
+  { syncType: 'netsuite_sales_orders', label: 'NetSuite sales order sync', intervalMinutes: 120 },
   { syncType: 'parts_email_scan', label: 'Parts email ETA scan', intervalMinutes: 60 },
   { syncType: 'netsuite_parts', label: 'NetSuite parts catalog sync', intervalMinutes: 60 },
   { syncType: 'netsuite_inventory', label: 'NetSuite inventory sweep', intervalMinutes: 120 },
