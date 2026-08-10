@@ -146,6 +146,12 @@ export default function PartsPage() {
   // Part files
   interface PartFile { id: string; part_id: string; file_name: string; file_type: string | null; file_size: number | null; storage_path: string; bucket: string | null; }
   const [partFiles, setPartFiles] = useState<Record<string, PartFile[]>>({});
+
+  // Installed-on-vehicle photos: completion photos techs/CNI installers took
+  // when scanning this part onto real vehicles (see /api/parts/install-photos).
+  interface InstallPhoto { id: string; source: string; bucket: string; storagePath: string; fileName: string | null; photoType: string; vin: string | null; vehicle: string | null; uploadedAt: string | null; uploadedByName: string | null; }
+  const [installPhotos, setInstallPhotos] = useState<Record<string, InstallPhoto[] | 'loading'>>({});
+  const [installPhotoView, setInstallPhotoView] = useState<InstallPhoto | null>(null);
   const [uploadingFile, setUploadingFile] = useState(false);
   const partFileRef = useRef<HTMLInputElement>(null);
   // Which part (if any) has a proof-search panel open, and from which source.
@@ -551,6 +557,25 @@ export default function PartsPage() {
     if (data) setPartFiles(prev => ({ ...prev, [partId]: data as PartFile[] }));
   };
 
+  // The gallery is keyed by part id but queried by item number — install
+  // photos hang off scan records (part_number text), not catalog rows.
+  const loadInstallPhotos = async (partId: string) => {
+    const part = parts.find(p => p.id === partId);
+    if (!part?.item_number) return;
+    setInstallPhotos(prev => ({ ...prev, [partId]: Array.isArray(prev[partId]) ? prev[partId] : 'loading' }));
+    try {
+      const { data } = await supabase.auth.getSession();
+      const token = data?.session?.access_token;
+      const res = await fetch(`/api/parts/install-photos?part=${encodeURIComponent(part.item_number)}`, {
+        headers: token ? { Authorization: `Bearer ${token}` } : {},
+      });
+      const json = await res.json().catch(() => ({}));
+      setInstallPhotos(prev => ({ ...prev, [partId]: res.ok ? (json.items || []) : [] }));
+    } catch {
+      setInstallPhotos(prev => ({ ...prev, [partId]: [] }));
+    }
+  };
+
   // Once parts have loaded, open + scroll to the deep-linked item (exact item
   // number match from global search) and highlight it briefly.
   useEffect(() => {
@@ -560,6 +585,7 @@ export default function PartsPage() {
     setPendingFocus(null);
     setExpandedId(target.id);
     loadPartFiles(target.id);
+    loadInstallPhotos(target.id);
     setHighlightId(target.id);
     const t = setTimeout(() => setHighlightId(null), 2500);
     requestAnimationFrame(() => {
@@ -923,7 +949,7 @@ export default function PartsPage() {
               }}>
                 {/* Row summary */}
                 <div
-                  onClick={() => { const newId = isExpanded ? null : part.id; setExpandedId(newId); if (newId) loadPartFiles(newId); }}
+                  onClick={() => { const newId = isExpanded ? null : part.id; setExpandedId(newId); if (newId) { loadPartFiles(newId); loadInstallPhotos(newId); } }}
                   style={{
                     display: 'grid', gridTemplateColumns: '1fr 70px 50px 50px',
                     padding: '10px 12px', cursor: 'pointer', alignItems: 'center',
@@ -1233,6 +1259,44 @@ export default function PartsPage() {
                       )}
                     </DropZone>
 
+                    {/* Installed Photos — completion photos from field/CNI scans
+                        of this part, searchable here like a proof but showing
+                        the real install on a vehicle. */}
+                    {(() => {
+                      const state = installPhotos[part.id];
+                      const photos = Array.isArray(state) ? state : [];
+                      return (
+                        <div style={{ marginTop: '10px' }}>
+                          <div style={{ fontSize: '9px', fontWeight: 700, color: 'var(--text-muted)', textTransform: 'uppercase', marginBottom: '4px' }}>
+                            Installed Photos{photos.length > 0 ? ` (${photos.length})` : ''}
+                          </div>
+                          {state === 'loading' ? (
+                            <div style={{ fontSize: '11px', color: 'var(--text-muted)' }}>Loading…</div>
+                          ) : photos.length === 0 ? (
+                            <div style={{ fontSize: '11px', color: 'var(--text-muted)' }}>
+                              No install photos yet — techs can attach completion photos from the Scan page.
+                            </div>
+                          ) : (
+                            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(72px, 1fr))', gap: '5px' }}>
+                              {photos.map(ph => (
+                                <button key={ph.id} onClick={() => setInstallPhotoView(ph)} title={[ph.vehicle, ph.vin].filter(Boolean).join(' · ')} style={{
+                                  padding: 0, border: '1px solid var(--border)', borderRadius: '8px', overflow: 'hidden',
+                                  background: 'var(--subtle-bg)', cursor: 'pointer', aspectRatio: '1',
+                                }}>
+                                  <img
+                                    src={storage.from(ph.bucket).getPublicUrl(ph.storagePath).data.publicUrl}
+                                    alt={ph.vehicle || 'Install photo'}
+                                    loading="lazy"
+                                    style={{ width: '100%', height: '100%', objectFit: 'cover', display: 'block' }}
+                                  />
+                                </button>
+                              ))}
+                            </div>
+                          )}
+                        </div>
+                      );
+                    })()}
+
                     {/* Push a local-only part to NetSuite: creates the NetSuite
                         item and links its internal id to this catalog row. */}
                     {isAdmin && !isRealNsPart(part) && (
@@ -1328,6 +1392,32 @@ export default function PartsPage() {
           }}
           onClose={() => setNsCreatePart(null)}
         />
+      )}
+
+      {/* Install-photo lightbox: the photo full-size with its vehicle context */}
+      {installPhotoView && (
+        <div onClick={() => setInstallPhotoView(null)} style={{
+          position: 'fixed', inset: 0, zIndex: 400, background: 'rgba(0,0,0,0.9)',
+          display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', padding: '16px',
+        }}>
+          <button onClick={() => setInstallPhotoView(null)} style={{ position: 'absolute', top: '12px', right: '16px', padding: '8px 14px', borderRadius: '10px', background: 'rgba(255,255,255,0.1)', border: '1px solid rgba(255,255,255,0.15)', color: '#fff', fontSize: '12px', fontWeight: 700, cursor: 'pointer' }}>✕ Close</button>
+          <img
+            src={storage.from(installPhotoView.bucket).getPublicUrl(installPhotoView.storagePath).data.publicUrl}
+            alt={installPhotoView.vehicle || 'Install photo'}
+            onClick={e => e.stopPropagation()}
+            style={{ maxWidth: '100%', maxHeight: '80vh', objectFit: 'contain', borderRadius: '8px' }}
+          />
+          <div onClick={e => e.stopPropagation()} style={{ marginTop: '10px', textAlign: 'center', color: '#fff', fontSize: '13px', fontWeight: 700 }}>
+            {[installPhotoView.vehicle, installPhotoView.vin].filter(Boolean).join(' · ') || 'Install photo'}
+            <div style={{ fontSize: '11px', fontWeight: 600, color: 'rgba(255,255,255,0.7)', marginTop: '2px' }}>
+              {[
+                installPhotoView.uploadedAt ? new Date(installPhotoView.uploadedAt).toLocaleDateString() : null,
+                installPhotoView.uploadedByName ? `by ${installPhotoView.uploadedByName}` : null,
+                installPhotoView.source === 'cni_job' ? 'CNI job photo' : 'Scan photo',
+              ].filter(Boolean).join(' · ')}
+            </div>
+          </div>
+        </div>
       )}
     </div>
   );

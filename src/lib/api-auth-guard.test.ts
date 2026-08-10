@@ -27,6 +27,10 @@ const ALLOWLIST = new Set([
   // External installer companies log field scans by design; the route
   // enforces approved-account + non-customer-role checks itself.
   'src/app/api/scans/log/route.ts',
+  // Completion photos ride along with those same field scans (CNI installers
+  // included); the route enforces the scans/log role gate plus per-scan
+  // ownership checks itself.
+  'src/app/api/scans/photos/route.ts',
 ]);
 
 const repoRoot = join(__dirname, '..', '..');
