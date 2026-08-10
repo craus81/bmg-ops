@@ -41,8 +41,9 @@ export default function ImportVendorAssetsPage() {
   const [discovering, setDiscovering] = useState(false);
   const [urls, setUrls] = useState<string[]>([]);
   const [discoverError, setDiscoverError] = useState('');
-  const [discoverVia, setDiscoverVia] = useState<'sitemap' | 'crawl' | ''>('');
+  const [discoverVia, setDiscoverVia] = useState<'sitemap' | 'crawl' | 'listing' | ''>('');
   const [discoverChecked, setDiscoverChecked] = useState<string[]>([]);
+  const [listingUrlsText, setListingUrlsText] = useState('');
 
   const [running, setRunning] = useState(false);
   const [progress, setProgress] = useState<{ done: number; total: number } | null>(null);
@@ -79,17 +80,31 @@ export default function ImportVendorAssetsPage() {
   };
 
   const doDiscover = async () => {
+    // Teach mode: category page URLs (one per line) override sitemap/crawl.
+    const listingUrls = listingUrlsText
+      .split('\n')
+      .map(l => l.trim())
+      .filter(l => /^https?:\/\//i.test(l))
+      .slice(0, 20);
     setDiscovering(true);
     setDiscoverError('');
     setUrls([]);
     setDiscoverVia('');
     setDiscoverChecked([]);
     try {
-      const d = await post({ mode: 'discover', baseUrl: siteUrl.trim() });
+      const d = await post({
+        mode: 'discover',
+        baseUrl: siteUrl.trim(),
+        listingUrls: listingUrls.length > 0 ? listingUrls : undefined,
+      });
       setUrls(d.urls || []);
       setDiscoverVia(d.via || '');
       setDiscoverChecked(d.checked || []);
-      if ((d.urls || []).length === 0) setDiscoverError('No product pages found via sitemaps or a site crawl — check the site URL, or send me a category page URL to teach discovery this site.');
+      if ((d.urls || []).length === 0) {
+        setDiscoverError(listingUrls.length > 0
+          ? 'No product links found on those category pages — check "What was checked" below for what each page returned.'
+          : 'No product pages found via sitemaps or a site crawl. Paste one or more category page URLs into the box above (one per line) and try again — I’ll harvest product links straight from them, pagination included.');
+      }
     } catch (e: any) {
       setDiscoverError(e?.message || 'Discovery failed');
     }
@@ -207,10 +222,19 @@ export default function ImportVendorAssetsPage() {
       <div style={card}>
         <div style={{ fontWeight: 700, marginBottom: 6 }}>2 · Find the product pages</div>
         <div style={{ fontSize: 12, color: theme.textSecondary, marginBottom: 10 }}>
-          Reads the site&apos;s sitemap and collects product page URLs.
+          Reads the site&apos;s sitemap and collects product page URLs. If that comes up empty (some sites hide their
+          sitemap and build their menus with scripts we can&apos;t read), paste <strong>category page URLs</strong> below —
+          one per line — and product links are harvested straight from those pages instead, pagination and sibling
+          categories included.
         </div>
+        <textarea
+          style={{ ...input, minHeight: 64, fontFamily: 'monospace', fontSize: 12, marginBottom: 10, resize: 'vertical' }}
+          value={listingUrlsText}
+          onChange={e => setListingUrlsText(e.target.value)}
+          placeholder={`Optional — category pages, one per line, e.g.\n${siteUrl.replace(/\/$/, '')}/product-category/van-shelving-gallery/`}
+        />
         <button style={{ ...btn, opacity: discovering ? 0.6 : 1 }} onClick={doDiscover} disabled={discovering || !siteUrl.trim()}>
-          {discovering ? 'Scanning sitemap…' : 'Find product pages'}
+          {discovering ? 'Scanning…' : 'Find product pages'}
         </button>
         {discoverError && (
           <div style={{ marginTop: 8, fontSize: 12, color: theme.warning }}>
@@ -228,11 +252,19 @@ export default function ImportVendorAssetsPage() {
         {urls.length > 0 && (
           <div style={{ marginTop: 10, fontSize: 13 }}>
             Found <strong>{urls.length.toLocaleString()}</strong> product page{urls.length !== 1 ? 's' : ''}
-            {discoverVia && <span style={{ color: theme.textMuted, fontSize: 11 }}> · via {discoverVia === 'crawl' ? 'site crawl' : 'sitemap'}</span>}.
+            {discoverVia && <span style={{ color: theme.textMuted, fontSize: 11 }}> · via {discoverVia === 'crawl' ? 'site crawl' : discoverVia === 'listing' ? 'your category pages' : 'sitemap'}</span>}.
             <div style={{ marginTop: 6, fontSize: 11, fontFamily: 'monospace', color: theme.textMuted, maxHeight: 100, overflow: 'auto' }}>
               {urls.slice(0, 8).map(u => <div key={u}>{u}</div>)}
               {urls.length > 8 && <div>… and {(urls.length - 8).toLocaleString()} more</div>}
             </div>
+            {discoverChecked.length > 0 && (
+              <details style={{ marginTop: 4 }}>
+                <summary style={{ cursor: 'pointer', fontSize: 12, color: theme.textSecondary }}>What was checked</summary>
+                <div style={{ fontFamily: 'monospace', fontSize: 10, color: theme.textMuted, marginTop: 4 }}>
+                  {discoverChecked.map(c => <div key={c}>{c}</div>)}
+                </div>
+              </details>
+            )}
           </div>
         )}
       </div>
