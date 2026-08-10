@@ -530,16 +530,16 @@ data-entry decision before it's an engineering one.
 
 | # | Item | Contents |
 |---|---|---|
-| 183 | W2 | `wrap_quotes.hide_line_items` |
-| 184 | E5 | `customers.tax_exempt*`, `customer_files` |
-| 185 | V1/V2 | `fleet_checkins.arrived_at`, `shop_inbound` SO source |
-| 186 | E1 + K5 | estimate header fields **incl. `vin`** |
-| 187 | N3 | `netsuite_sales_orders` + lines |
-| 188 | A2 ph2 | `updated_by` on six job tables |
-| 189 | A2 ph3 | audit diff trigger |
-| 190 | S1/K11 | `product_line`, `customer_product_lines`, `upsell_nudges` |
-| 191 | K1 | customer parent/leasing linkage |
-| 192 | K2/K3 | customer tags vocabulary, `billing_workflow` |
+| 183 | W2 | `wrap_quotes.hide_line_items` — **landed** |
+| 184 | E5 | `customers.tax_exempt*`, `customer_files` — **landed** |
+| 185 | V1/V2 | `fleet_checkins.arrived_at`, `shop_inbound` SO source — **landed** |
+| 186 | K1 | customer parent/leasing linkage — **landed** (K1 built first, so it took the next free number per migrations/README) |
+| 187 | K2/K3 | customer tags vocabulary, `billing_workflow` — **landed** |
+| 188 | E1 + K5 | estimate header fields **incl. `vin`** |
+| 189 | N3 | `netsuite_sales_orders` + lines |
+| 190 | A2 ph2 | `updated_by` on six job tables |
+| 191 | A2 ph3 | audit diff trigger |
+| 192 | S1/K11 | `product_line`, `customer_product_lines`, `upsell_nudges` |
 | 193 | K4 | job-number sequences |
 | 194 | K8 | `scan_photos` |
 
