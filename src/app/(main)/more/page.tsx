@@ -73,6 +73,7 @@ export default function MorePage() {
         { title: 'Certified Network Installers', sub: 'Jobs, companies, installers & vendor payments', path: '/admin/cni', show: isAdmin },
         { title: 'Installer Portal', sub: 'The CNI installer view — available jobs, bids & invoices', path: '/installer', show: F('cni_management') },
         { title: 'Import Installs', sub: 'Bulk-import installs from a spreadsheet, credited to a CNI installer', path: '/admin/import-installs', show: isAdmin },
+        { title: 'Import Vendor Assets', sub: 'Pull product photos & descriptions from a vendor’s website onto matching parts', path: '/admin/import-vendor-assets', show: isAdmin },
         { title: 'Payments (AP)', sub: 'Approve CNI vendor invoices & push bills to NetSuite', path: '/admin/ap', show: isAdmin || hasRole('finance') },
       ],
     },
