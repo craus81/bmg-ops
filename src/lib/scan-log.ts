@@ -39,11 +39,21 @@ export interface ScanRecordInput {
    * Never set from an installer scan path — admin-only callers opt in.
    */
   skipDeviceValidation?: boolean;
+  /**
+   * Admin override for the NEAR-duplicate check (docs/cni-redesign.md §3.2):
+   * the last-8 VIN comparison flags a full-VIN scan against a last-8 bulk
+   * entry of the same vehicle — usually right, but two real VINs can share a
+   * last-8, and a deliberate re-log can be legitimate. Admin-only callers set
+   * this to log anyway. An EXACT match (same VIN string + part) is still
+   * refused — identical re-inserts are always wrong, and migration 191's
+   * unique index enforces that race-free at the DB regardless.
+   */
+  allowNearDuplicate?: boolean;
 }
 
 export type LogScanResult =
   | { ok: true; scanLogId: string }
-  | { ok: false; status: number; error: string };
+  | { ok: false; status: number; error: string; duplicate?: boolean };
 
 /**
  * Resolve the company to stamp on a scan, given the scanning user — their
@@ -97,25 +107,29 @@ export async function logScan(
   // Duplicate guards: same vehicle+part, and (for devices) same IMEI. The
   // vehicle match is on the VIN's last 8 (not exact string), so a full
   // 17-char scan collides with a last-8 bulk entry of the same vehicle and
-  // vice versa — see vin-match.ts.
-  const dupFilter = vinMatchOrFilter(vin);
-  if (rec.part_number && dupFilter) {
-    const { data: dup } = await service
+  // vice versa — see vin-match.ts. With allowNearDuplicate (admin override)
+  // only an EXACT string match still blocks; migration 191's unique index
+  // backstops the exact case race-free either way.
+  if (rec.part_number) {
+    const dupFilter = vinMatchOrFilter(vin);
+    let dupQuery = service
       .from('scan_logs')
       .select('id, vin, scanned_at')
-      .eq('part_number', rec.part_number)
-      .or(dupFilter)
-      .limit(1);
+      .eq('part_number', rec.part_number);
+    dupQuery = rec.allowNearDuplicate || !dupFilter
+      ? dupQuery.eq('vin', vin)
+      : dupQuery.or(dupFilter);
+    const { data: dup } = await dupQuery.limit(1);
     if (dup && dup.length > 0) {
       const when = new Date(dup[0].scanned_at).toLocaleDateString();
       const loggedAs = dup[0].vin === vin ? '' : ` (logged as ${dup[0].vin})`;
-      return { ok: false, status: 409, error: `Duplicate — ${vin} already scanned for ${rec.part_number} on ${when}${loggedAs}` };
+      return { ok: false, status: 409, duplicate: true, error: `Duplicate — ${vin} already scanned for ${rec.part_number} on ${when}${loggedAs}` };
     }
   }
   if (imei) {
     const { data: dupImei } = await service.from('scan_logs').select('id').eq('imei', imei).limit(1);
     if (dupImei && dupImei.length > 0) {
-      return { ok: false, status: 409, error: `IMEI ${imei} is already logged` };
+      return { ok: false, status: 409, duplicate: true, error: `IMEI ${imei} is already logged` };
     }
   }
 
