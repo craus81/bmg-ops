@@ -1,5 +1,8 @@
 import { describe, it, expect } from 'vitest';
-import { extractProduct, parseSitemapLocs, matchSkuToPart, skuKeys, looksLikeProductUrl } from './vendor-catalog-import';
+import {
+  extractProduct, parseSitemapLocs, matchSkuToPart, skuKeys,
+  looksLikeProductUrl, looksLikeListingUrl, extractSameOriginLinks,
+} from './vendor-catalog-import';
 
 // Extraction is written blind to any one vendor's HTML — pin the layered
 // signals (JSON-LD > OpenGraph > <title>) and the never-fuzzy SKU match.
@@ -71,10 +74,33 @@ describe('SKU matching (never fuzzy — wrong photo is worse than none)', () => 
   });
 });
 
-describe('looksLikeProductUrl', () => {
+describe('looksLikeProductUrl / looksLikeListingUrl', () => {
   it('keeps product paths, drops assets and blogs', () => {
     expect(looksLikeProductUrl('https://x.com/products/3-shelf-unit')).toBe(true);
     expect(looksLikeProductUrl('https://x.com/blog/van-tips')).toBe(false);
     expect(looksLikeProductUrl('https://x.com/products/spec.pdf')).toBe(false);
+  });
+
+  it('classifies category/listing pages as listings, not products', () => {
+    expect(looksLikeListingUrl('https://x.com/product-category/shelving/')).toBe(true);
+    expect(looksLikeListingUrl('https://x.com/products/')).toBe(true);
+    expect(looksLikeProductUrl('https://x.com/product-category/shelving/')).toBe(false);
+    expect(looksLikeListingUrl('https://x.com/products/3-shelf-unit')).toBe(false);
+  });
+});
+
+describe('extractSameOriginLinks (crawl fallback)', () => {
+  const html = `
+    <a href="/products/shelf-1/">Shelf</a>
+    <a href="https://x.com/product-category/racks/?page=2#top">Racks</a>
+    <a href="https://other.com/products/external">External</a>
+    <a href="mailto:sales@x.com">Mail</a>
+    <a href="/products/shelf-1/">Duplicate</a>`;
+
+  it('resolves relative links, stays same-origin, strips query/hash, dedupes', () => {
+    const links = extractSameOriginLinks(html, 'https://x.com/');
+    expect(links).toContain('https://x.com/products/shelf-1/');
+    expect(links).toContain('https://x.com/product-category/racks/');
+    expect(links).toHaveLength(2);
   });
 });

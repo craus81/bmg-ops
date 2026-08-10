@@ -126,5 +126,40 @@ export function matchSkuToPart(
 export function looksLikeProductUrl(url: string): boolean {
   const u = url.toLowerCase();
   if (/\.(pdf|jpg|jpeg|png|webp|gif|xml)(\?|$)/.test(u)) return false;
+  if (looksLikeListingUrl(u)) return false;
   return /\/(product|products|shop|item|catalog|p)\//.test(u);
 }
+
+/** Category/listing pages — the crawl fallback fans out through these. */
+export function looksLikeListingUrl(url: string): boolean {
+  const u = url.toLowerCase();
+  if (/\.(pdf|jpg|jpeg|png|webp|gif|xml)(\?|$)/.test(u)) return false;
+  return /\/(product-category|product_category|collections|categories|category)\//.test(u)
+    || /\/(products|shop|catalog)\/?$/.test(u);
+}
+
+/**
+ * Same-origin links from a page (href attributes, relative resolved).
+ * Fragment/query stripped so pagination params don't fan out duplicates.
+ */
+export function extractSameOriginLinks(html: string, baseUrl: string): string[] {
+  const origin = new URL(baseUrl).origin;
+  const out = new Set<string>();
+  for (const m of html.matchAll(/href=["']([^"']+)["']/gi)) {
+    const raw = decodeEntities(m[1]);
+    if (/^(mailto:|tel:|javascript:)/i.test(raw)) continue;
+    try {
+      const u = new URL(raw, baseUrl);
+      if (u.origin !== origin) continue;
+      u.hash = '';
+      u.search = '';
+      out.add(u.toString());
+    } catch { /* unparseable href */ }
+  }
+  return [...out];
+}
+
+/** Conventional sitemap locations, tried when robots.txt names none —
+ *  covers WordPress/Yoast (sitemap_index.xml), WP core (wp-sitemap.xml),
+ *  and Shopify/most others (sitemap.xml). */
+export const SITEMAP_CANDIDATES = ['/sitemap.xml', '/sitemap_index.xml', '/wp-sitemap.xml', '/sitemap-index.xml'];

@@ -4,7 +4,10 @@ import { requireAdmin } from '@/lib/api-auth';
 import { validateBody, z } from '@/lib/validate';
 import { r2Upload } from '@/lib/r2';
 import { fetchAllRows } from '@/lib/fetch-all';
-import { extractProduct, parseSitemapLocs, matchSkuToPart, skuKeys, looksLikeProductUrl } from '@/lib/vendor-catalog-import';
+import {
+  extractProduct, parseSitemapLocs, matchSkuToPart, skuKeys,
+  looksLikeProductUrl, looksLikeListingUrl, extractSameOriginLinks, SITEMAP_CANDIDATES,
+} from '@/lib/vendor-catalog-import';
 
 export const dynamic = 'force-dynamic';
 export const maxDuration = 120;
@@ -84,29 +87,60 @@ export async function POST(req: NextRequest) {
     if (body.mode === 'discover') {
       const origin = new URL(body.baseUrl).origin;
       const candidates = new Set<string>();
-      // robots.txt Sitemap lines first, then the conventional path.
+      const checked: string[] = [];
+
+      // ── Sitemap pass: robots.txt Sitemap lines, then the conventional
+      // locations (WordPress/Yoast and WP core included — rangerdesign.com
+      // taught us /sitemap.xml alone isn't enough).
       const sitemaps: string[] = [];
       try {
         const robots = await fetchText(`${origin}/robots.txt`, 200_000);
         for (const m of robots.matchAll(/^sitemap:\s*(\S+)/gim)) sitemaps.push(m[1]);
       } catch { /* no robots.txt is fine */ }
-      if (sitemaps.length === 0) sitemaps.push(`${origin}/sitemap.xml`);
+      if (sitemaps.length === 0) sitemaps.push(...SITEMAP_CANDIDATES.map(p => `${origin}${p}`));
 
       const queue = [...new Set(sitemaps)];
       let fetched = 0;
-      while (queue.length > 0 && fetched < 12 && candidates.size < 3000) {
+      while (queue.length > 0 && fetched < 15 && candidates.size < 3000) {
         const smUrl = queue.shift()!;
         fetched++;
+        checked.push(smUrl);
         try {
           const xml = await fetchText(smUrl, 5_000_000);
           const { locs, isIndex } = parseSitemapLocs(xml);
-          if (isIndex) queue.push(...locs.slice(0, 12 - fetched));
+          if (isIndex) queue.push(...locs.slice(0, 15 - fetched));
           else for (const loc of locs) if (looksLikeProductUrl(loc)) candidates.add(loc);
-        } catch { /* skip unreachable child sitemaps */ }
-        await sleep(400);
+        } catch { /* skip unreachable sitemaps */ }
+        await sleep(300);
       }
+
+      // ── Crawl fallback: no product URLs from any sitemap — walk the
+      // homepage's same-origin links, fan out through category/listing
+      // pages, and collect product links. Tightly capped and paced.
+      let via: 'sitemap' | 'crawl' = 'sitemap';
+      if (candidates.size === 0) {
+        via = 'crawl';
+        try {
+          const home = await fetchText(body.baseUrl);
+          const homeLinks = extractSameOriginLinks(home, body.baseUrl);
+          for (const l of homeLinks) if (looksLikeProductUrl(l)) candidates.add(l);
+          const listings = homeLinks.filter(looksLikeListingUrl).slice(0, 12);
+          for (const listing of listings) {
+            checked.push(listing);
+            try {
+              const page = await fetchText(listing);
+              for (const l of extractSameOriginLinks(page, listing)) {
+                if (looksLikeProductUrl(l)) candidates.add(l);
+              }
+            } catch { /* skip unreachable listing */ }
+            await sleep(300);
+            if (candidates.size >= 3000) break;
+          }
+        } catch { /* homepage unreachable — reported below as zero */ }
+      }
+
       const urls = [...candidates];
-      return NextResponse.json({ urls, total: urls.length, sample: urls.slice(0, 10) });
+      return NextResponse.json({ urls, total: urls.length, sample: urls.slice(0, 10), via, checked: checked.slice(0, 20) });
     }
 
     // mode === 'run'

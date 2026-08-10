@@ -41,6 +41,8 @@ export default function ImportVendorAssetsPage() {
   const [discovering, setDiscovering] = useState(false);
   const [urls, setUrls] = useState<string[]>([]);
   const [discoverError, setDiscoverError] = useState('');
+  const [discoverVia, setDiscoverVia] = useState<'sitemap' | 'crawl' | ''>('');
+  const [discoverChecked, setDiscoverChecked] = useState<string[]>([]);
 
   const [running, setRunning] = useState(false);
   const [progress, setProgress] = useState<{ done: number; total: number } | null>(null);
@@ -80,10 +82,14 @@ export default function ImportVendorAssetsPage() {
     setDiscovering(true);
     setDiscoverError('');
     setUrls([]);
+    setDiscoverVia('');
+    setDiscoverChecked([]);
     try {
       const d = await post({ mode: 'discover', baseUrl: siteUrl.trim() });
       setUrls(d.urls || []);
-      if ((d.urls || []).length === 0) setDiscoverError('No product-looking URLs found in the sitemap — try probing a product page URL directly, or check the site URL.');
+      setDiscoverVia(d.via || '');
+      setDiscoverChecked(d.checked || []);
+      if ((d.urls || []).length === 0) setDiscoverError('No product pages found via sitemaps or a site crawl — check the site URL, or send me a category page URL to teach discovery this site.');
     } catch (e: any) {
       setDiscoverError(e?.message || 'Discovery failed');
     }
@@ -206,10 +212,23 @@ export default function ImportVendorAssetsPage() {
         <button style={{ ...btn, opacity: discovering ? 0.6 : 1 }} onClick={doDiscover} disabled={discovering || !siteUrl.trim()}>
           {discovering ? 'Scanning sitemap…' : 'Find product pages'}
         </button>
-        {discoverError && <div style={{ marginTop: 8, fontSize: 12, color: theme.warning }}>{discoverError}</div>}
+        {discoverError && (
+          <div style={{ marginTop: 8, fontSize: 12, color: theme.warning }}>
+            {discoverError}
+            {discoverChecked.length > 0 && (
+              <details style={{ marginTop: 4 }}>
+                <summary style={{ cursor: 'pointer' }}>What was checked</summary>
+                <div style={{ fontFamily: 'monospace', fontSize: 10, color: theme.textMuted, marginTop: 4 }}>
+                  {discoverChecked.map(c => <div key={c}>{c}</div>)}
+                </div>
+              </details>
+            )}
+          </div>
+        )}
         {urls.length > 0 && (
           <div style={{ marginTop: 10, fontSize: 13 }}>
-            Found <strong>{urls.length.toLocaleString()}</strong> product page{urls.length !== 1 ? 's' : ''}.
+            Found <strong>{urls.length.toLocaleString()}</strong> product page{urls.length !== 1 ? 's' : ''}
+            {discoverVia && <span style={{ color: theme.textMuted, fontSize: 11 }}> · via {discoverVia === 'crawl' ? 'site crawl' : 'sitemap'}</span>}.
             <div style={{ marginTop: 6, fontSize: 11, fontFamily: 'monospace', color: theme.textMuted, maxHeight: 100, overflow: 'auto' }}>
               {urls.slice(0, 8).map(u => <div key={u}>{u}</div>)}
               {urls.length > 8 && <div>… and {(urls.length - 8).toLocaleString()} more</div>}
