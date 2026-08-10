@@ -1049,6 +1049,9 @@ export async function createSalesOrder(payload: {
     zip?: string;
   };
   memo?: string;
+  /** Written to custbody_vin_number_ — the same custom field the SuiteQL
+   *  reads select as `vin`, so the SO shows the VIN wherever we display it. */
+  vin?: string | null;
   lineItems: {
     itemId: string | number;
     quantity: number;
@@ -1084,6 +1087,7 @@ export async function createSalesOrder(payload: {
     otherRefNum: payload.poNumber,
     item: { items },
     ...(payload.locationId ? { location: { id: payload.locationId } } : {}),
+    ...(payload.vin ? { custbody_vin_number_: payload.vin } : {}),
   };
 
   if (payload.orderDate) {

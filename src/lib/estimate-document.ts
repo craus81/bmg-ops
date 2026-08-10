@@ -94,6 +94,10 @@ export function renderEstimateDocument(est: any, lines: any[], opts: EstimateDoc
         <div style="font-size:22px;font-weight:800;color:#111827;">Estimate #${escHtml(est.estimate_number)}</div>
         ${est.title ? `<div style="font-size:13px;color:#6b7280;margin-top:2px;">${escHtml(est.title)}</div>` : ''}
         <div style="font-size:13px;color:#6b7280;margin-top:2px;">Prepared for ${escHtml(est.customer_name || 'you')}</div>
+        ${(est.vin || est.unit_number) ? `<div style="font-size:12px;color:#374151;margin-top:6px;font-weight:600;">${[
+          est.vin ? `VIN ${escHtml(est.vin)}` : '',
+          est.unit_number ? `Unit ${escHtml(est.unit_number)}` : '',
+        ].filter(Boolean).join(' &middot; ')}</div>` : ''}
       </td>
       <td style="vertical-align:top;text-align:right;font-size:12px;color:#374151;line-height:1.5;">${companyLines}</td>
     </tr></table>

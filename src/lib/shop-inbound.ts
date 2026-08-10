@@ -119,7 +119,7 @@ export async function syncShopInboundForSalesOrder(
 ): Promise<void> {
   const { data: est } = await service
     .from('estimates')
-    .select('id, estimate_number, title, customer_name, status, netsuite_so_id, netsuite_so_number')
+    .select('id, estimate_number, title, customer_name, status, netsuite_so_id, netsuite_so_number, vin, unit_number')
     .eq('id', estimateId)
     .maybeSingle();
   if (!est) return;
@@ -131,8 +131,11 @@ export async function syncShopInboundForSalesOrder(
   const qualifies =
     !!est.netsuite_so_id && !['cancelled', 'rejected', 'lost'].includes(est.status);
 
+  // K5: the estimate now carries the VIN, so the Arriving row gets it from
+  // the estimate chain instead of hoping a NetSuite rep typed one on the SO.
+  const unitSuffix = est.unit_number ? ` (Unit ${est.unit_number})` : '';
   await upsertInbound(service, 'sales_order', est.id, qualifies, {
-    vehicle_desc: est.title || `Estimate ${est.estimate_number}`,
+    vehicle_desc: (est.title || `Estimate ${est.estimate_number}`) + unitSuffix,
     customer_name: est.customer_name || null,
     work_summary: est.netsuite_so_number ? `Sales Order #${est.netsuite_so_number}` : 'Sales Order',
     install_location: SHOP_INSTALL_LOCATION,
@@ -140,7 +143,7 @@ export async function syncShopInboundForSalesOrder(
     need_back_date: null,
     netsuite_so_id: est.netsuite_so_id || null,
     netsuite_so_number: est.netsuite_so_number || null,
-    vin: null,
+    vin: est.vin || null,
   });
 }
 

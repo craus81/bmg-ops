@@ -77,6 +77,7 @@ async function createNetSuiteEstimate(config: ReturnType<typeof getNetSuiteConfi
   memo?: string;
   lineItems: { itemId: string; quantity: number; rate: number; description?: string }[];
   taxExempt: boolean;
+  vin?: string | null;
 }) {
   const { oauth, token, baseUrl: url } = await getOAuthHelpers(config);
 
@@ -97,6 +98,12 @@ async function createNetSuiteEstimate(config: ReturnType<typeof getNetSuiteConfi
 
   if (payload.memo) {
     body.memo = payload.memo;
+  }
+
+  // K5: the VIN lives on the estimate now — carry it into NetSuite's custom
+  // body field so it survives NS's own estimate→SO→invoice transforms.
+  if (payload.vin) {
+    body.custbody_vin_number_ = payload.vin;
   }
 
   // Only sent for exempt estimates so the common path's payload is
@@ -156,6 +163,7 @@ async function updateNetSuiteEstimate(config: ReturnType<typeof getNetSuiteConfi
   memo?: string;
   lineItems: { itemId: string; quantity: number; rate: number; description?: string }[];
   taxExempt: boolean;
+  vin?: string | null;
 }) {
   const { oauth, token, baseUrl } = await getOAuthHelpers(config);
   // ?replace=item tells NetSuite to replace the entire item sublist instead of
@@ -175,6 +183,9 @@ async function updateNetSuiteEstimate(config: ReturnType<typeof getNetSuiteConfi
   const body: any = {
     entity: { id: payload.customerId },
     item: { items },
+    // Always sent on PATCH (null clears) so removing the VIN locally also
+    // removes it from the NetSuite copy on the next re-push.
+    custbody_vin_number_: payload.vin || null,
   };
 
   if (payload.memo) {
@@ -355,6 +366,7 @@ export async function POST(req: NextRequest) {
         memo,
         lineItems: nsLineItems,
         taxExempt: estimate.tax_exempt,
+        vin: estimate.vin,
       });
 
       if (!updateResult.success) {
@@ -387,6 +399,7 @@ export async function POST(req: NextRequest) {
       memo,
       lineItems: nsLineItems,
       taxExempt: estimate.tax_exempt,
+      vin: estimate.vin,
     });
 
     if (!result.success) {

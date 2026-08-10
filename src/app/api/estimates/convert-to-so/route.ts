@@ -206,6 +206,9 @@ export async function POST(req: NextRequest) {
     if (estimate.delivery_preferences?.trim()) ctxLines.push(`Delivery: ${estimate.delivery_preferences.trim()}`);
     const onSite = [estimate.on_site_contact_name, estimate.on_site_contact_phone].filter(Boolean).join(' ');
     if (onSite) ctxLines.push(`On-site: ${onSite}`);
+    // The VIN gets its own NetSuite field (custbody_vin_number_, below); the
+    // unit number has no NS field, so the memo is where it survives.
+    if (estimate.unit_number?.trim()) ctxLines.push(`Unit: ${estimate.unit_number.trim()}`);
     if (ctxLines.length > 0) memoParts.push(ctxLines.join(' · '));
     memoParts.push(`FleetSuite Estimate #${estimate.estimate_number}`);
     const memo = memoParts.join('\n');
@@ -217,6 +220,7 @@ export async function POST(req: NextRequest) {
       poNumber: estimate.estimate_number,
       locationId: nsLocation?.id,
       memo,
+      vin: estimate.vin,
       lineItems: soLineItems,
     });
 
