@@ -32,7 +32,7 @@ export async function POST(req: NextRequest) {
       'unit_number', 'location_id', 'location_name',
       'po_id', 'po_number', 'po_line_item_id',
       'invoice_number', 'date_invoiced', 'is_paid',
-      'archived_at', 'exported_at',
+      'archived_at', 'exported_at', 'exported_by',
     ];
     const safeUpdates: Record<string, any> = {};
     for (const key of Object.keys(updates)) {
