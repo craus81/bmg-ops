@@ -88,7 +88,7 @@ export default function BidReviewPage() {
 
       const { data: cniProfiles } = await supabase
         .from('cni_profiles')
-        .select('user_id, company_name, availability_status, coverage_radius_miles, jobs_completed, risk_tags, completion_reliability, communication_rating, photo_quality, business_address')
+        .select('user_id, availability_status, coverage_radius_miles, jobs_completed, risk_tags, completion_reliability, communication_rating, photo_quality, business_address')
         .in('user_id', installerIds);
       const cniMap: Record<string, any> = {};
       (cniProfiles || []).forEach((p: any) => { cniMap[p.user_id] = p; });
@@ -107,7 +107,7 @@ export default function BidReviewPage() {
       setBids(bidsData.map((b: any) => ({
         ...b,
         installer_name: nameMap[b.installer_id] || 'Unknown',
-        company_name: (b.company_id && companyNameMap[b.company_id]) || cniMap[b.installer_id]?.company_name || null,
+        company_name: (b.company_id && companyNameMap[b.company_id]) || null,
         availability_status: cniMap[b.installer_id]?.availability_status || 'unknown',
         coverage_radius_miles: cniMap[b.installer_id]?.coverage_radius_miles || null,
         jobs_completed: cniMap[b.installer_id]?.jobs_completed || 0,
@@ -308,7 +308,7 @@ export default function BidReviewPage() {
                     <div style={{ fontSize: '11px', color: 'var(--text-muted)', marginTop: '2px' }}>
                       {group.company_id
                         ? `Company • ${group.bids.length} response${group.bids.length !== 1 ? 's' : ''}`
-                        : (legacyBid?.company_name || 'Independent') +
+                        : (legacyBid?.company_name || 'Legacy bid (no company)') +
                           (legacyBid?.business_address?.city ? ` • ${legacyBid.business_address.city}, ${legacyBid.business_address.state || ''}` : '')}
                     </div>
                   </div>

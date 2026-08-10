@@ -84,7 +84,6 @@ export default function InstallerProfilePage() {
 
     if (data) {
       setHasProfile(true);
-      setCompanyName(data.company_name || '');
       setContactName(data.primary_contact_name || '');
       setPhone(data.phone || '');
       const addr = data.business_address || {};
@@ -103,6 +102,16 @@ export default function InstallerProfilePage() {
         direct_deposit_file_path: data.direct_deposit_file_path || null,
       });
       setInsuranceExpiry(data.insurance_expiry || '');
+    }
+
+    // Company is read-only here — membership is profiles.company_id, managed
+    // by BMG (migration 192 dropped the cni_profiles.company_name copy).
+    const { data: me } = await supabase
+      .from('profiles').select('company_id').eq('id', user.id).maybeSingle();
+    if (me?.company_id) {
+      const { data: company } = await supabase
+        .from('companies').select('name').eq('id', me.company_id).maybeSingle();
+      setCompanyName(company?.name || '');
     }
     setLoading(false);
   };
@@ -175,7 +184,6 @@ export default function InstallerProfilePage() {
 
     const profileData = {
       user_id: user.id,
-      company_name: companyName.trim() || null,
       primary_contact_name: contactName.trim() || null,
       phone: phone.trim() || null,
       business_address: { street, city, state, zip },
@@ -184,7 +192,7 @@ export default function InstallerProfilePage() {
       equipment_capabilities: equipmentCapabilities,
       availability_status: availabilityStatus,
       availability_notes: availabilityNotes.trim() || null,
-      profile_complete: !!(companyName && contactName && phone && city && serviceTypes.length > 0),
+      profile_complete: !!(contactName && phone && city && serviceTypes.length > 0),
       updated_at: new Date().toISOString(),
     };
 
@@ -245,8 +253,13 @@ export default function InstallerProfilePage() {
           Basic Information
         </div>
         <div style={{ marginBottom: '12px' }}>
-          <label style={labelStyle}>Company Name</label>
-          <input style={inputStyle} value={companyName} onChange={e => setCompanyName(e.target.value)} placeholder="Your company name" />
+          <label style={labelStyle}>Company</label>
+          <div style={{ ...inputStyle, background: 'transparent', opacity: 0.85 }}>
+            {companyName || 'Not set — ask your BMG contact'}
+          </div>
+          <div style={{ fontSize: '11px', color: 'var(--text-muted)', marginTop: '4px' }}>
+            Company membership is managed by BMG.
+          </div>
         </div>
         <div style={{ marginBottom: '12px' }}>
           <label style={labelStyle}>Primary Contact Name</label>

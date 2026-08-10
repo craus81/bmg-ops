@@ -67,7 +67,7 @@ export default function CniInstallersPage() {
     // Pull cni_profiles extra data (availability, service_types, ratings, etc.).
     const { data: cniRows } = await supabase
       .from('cni_profiles')
-      .select('user_id, company_name, availability_status, service_types, risk_tags, jobs_completed, profile_complete, communication_rating, completion_reliability, photo_quality, coverage_radius_miles, business_address')
+      .select('user_id, availability_status, service_types, risk_tags, jobs_completed, profile_complete, communication_rating, completion_reliability, photo_quality, coverage_radius_miles, business_address')
       .in('user_id', userIds);
     const cniMap: Record<string, any> = {};
     if (cniRows) cniRows.forEach((r: any) => { cniMap[r.user_id] = r; });
@@ -87,7 +87,7 @@ export default function CniInstallersPage() {
         full_name: u.full_name || 'Unknown',
         email: u.email || '',
         deactivated: u.deactivated || false,
-        company_name: (u.company_id ? companyMap[u.company_id] : null) || cni.company_name || null,
+        company_name: (u.company_id ? companyMap[u.company_id] : null) || null,
         availability_status: cni.availability_status || 'unknown',
         service_types: cni.service_types || [],
         risk_tags: cni.risk_tags || [],
@@ -366,7 +366,7 @@ export default function CniInstallersPage() {
                     )}
                   </div>
                   <div style={{ fontSize: '11px', color: 'var(--text-muted)', marginTop: '2px' }}>
-                    {inst.company_name || 'Independent'}
+                    {inst.company_name || 'No company yet'}
                     {inst.business_address?.city ? ` • ${inst.business_address.city}, ${inst.business_address.state || ''}` : ''}
                   </div>
                 </div>
