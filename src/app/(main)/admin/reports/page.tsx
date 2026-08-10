@@ -49,6 +49,12 @@ const REPORTS: ReportLink[] = [
     source: 'FleetSuite',
   },
   {
+    title: 'Invoice Reconciliation',
+    blurb: 'NetSuite invoices for a period vs the FleetSuite records claiming them — amount mismatches, invoices with no FleetSuite record, and FleetSuite records pointing at invoices NetSuite doesn\'t have. CSV export. Admin only.',
+    href: '/admin/reports/invoice-reconciliation',
+    source: 'NetSuite',
+  },
+  {
     title: 'At-Risk Accounts',
     blurb: 'Customers who spent real money last year and have gone quiet — behind pace, no recent orders. A daily check alerts admins and the account owner when a new one appears.',
     href: '/admin/reports/at-risk',
