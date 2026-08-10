@@ -4,6 +4,7 @@ import { useState, useEffect } from 'react';
 import { useRouter, useParams } from 'next/navigation';
 import { createClient } from '@/lib/supabase-browser';
 import { useAuth } from '@/components/AuthProvider';
+import { useDialog } from '@/components/DialogProvider';
 
 interface Bid {
   id: string;
@@ -42,6 +43,7 @@ export default function BidReviewPage() {
   const params = useParams();
   const jobId = params.id as string;
   const { isAdmin, loading: authLoading } = useAuth();
+  const dialog = useDialog();
   const supabase = createClient();
 
   const [job, setJob] = useState<any>(null);
@@ -120,23 +122,34 @@ export default function BidReviewPage() {
     setLoading(false);
   };
 
-  // Legacy per-installer accept (null-company bids)
+  // Accept a legacy null-company bid by assigning the bidder's COMPANY —
+  // assignment is company-level only now (cni-redesign §1.5/§2.5; every
+  // installer belongs to a company). Writing assigned_installer_id here was
+  // the last live path creating individually-assigned jobs.
   const assignFromBid = async (bid: Bid) => {
     if (!job || assigning) return;
     setAssigning(true);
-
-    await supabase.from('cni_jobs').update({
-      assigned_installer_id: bid.installer_id,
-      assigned_at: new Date().toISOString(),
-      status: 'assigned_awaiting_scheduling',
-      // If the bid included proposed dates, seed them
-      ...(bid.proposed_start ? {
-        proposed_schedule_start: bid.proposed_start,
-        proposed_schedule_end: bid.proposed_end || bid.proposed_start,
-      } : {}),
-    }).eq('id', job.id);
-
-    router.push(`/admin/cni/jobs/${job.id}`);
+    try {
+      const { data: bidderProfile } = await supabase
+        .from('profiles').select('company_id').eq('id', bid.installer_id).maybeSingle();
+      if (!bidderProfile?.company_id) {
+        await dialog.alert(`${bid.installer_name} has no company set — assignment is company-level. Set their company on the installer page first (a solo installer gets a one-person company).`);
+        return;
+      }
+      await supabase.from('cni_jobs').update({
+        assigned_company_id: bidderProfile.company_id,
+        assigned_at: new Date().toISOString(),
+        status: 'assigned_awaiting_scheduling',
+        // If the bid included proposed dates, seed them
+        ...(bid.proposed_start ? {
+          proposed_schedule_start: bid.proposed_start,
+          proposed_schedule_end: bid.proposed_end || bid.proposed_start,
+        } : {}),
+      }).eq('id', job.id);
+      router.push(`/admin/cni/jobs/${job.id}`);
+    } finally {
+      setAssigning(false);
+    }
   };
 
   // Company-level accept — assigns the company, never an individual installer
@@ -400,7 +413,7 @@ export default function BidReviewPage() {
                             background: assigning ? 'var(--text-muted)' : 'var(--orange)', color: '#fff', border: 'none',
                           }}
                         >
-                          {assigning ? 'Assigning...' : 'Assign This Installer'}
+                          {assigning ? 'Assigning...' : 'Assign Their Company'}
                         </button>
                         <button
                           onClick={() => router.push(`/admin/cni/installers/${group.bids[0].installer_id}`)}

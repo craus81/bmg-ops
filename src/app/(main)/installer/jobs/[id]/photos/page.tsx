@@ -53,7 +53,7 @@ export default function InstallerPhotoUploadPage() {
   const loadData = async () => {
     const { data: jobData } = await supabase
       .from('cni_jobs')
-      .select('id, job_number, title, status, assigned_installer_id, is_multi_unit, vin_count')
+      .select('id, job_number, title, status, assigned_installer_id')
       .eq('id', jobId)
       .single();
     if (!jobData) { router.push('/installer'); return; }

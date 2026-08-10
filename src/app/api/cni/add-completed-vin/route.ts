@@ -4,7 +4,7 @@ import { requireAdmin } from '@/lib/api-auth';
 import { validateBody, z } from '@/lib/validate';
 import { isVerizonRfidPart, validateSerial, validateImei, validateIccid } from '@/lib/rfid';
 import { logScan, resolveScannerCompany } from '@/lib/scan-log';
-import { createCompletionCredits } from '@/lib/pay-credits';
+import { createCompletionCredits, getOpenCniShift } from '@/lib/pay-credits';
 
 export const dynamic = 'force-dynamic';
 
@@ -53,10 +53,19 @@ export async function POST(req: NextRequest) {
     .single();
   if (!job) return NextResponse.json({ error: 'Job not found' }, { status: 404 });
 
+  // The part is whatever the crew picked for the open shift (CNI field-shift
+  // model, §1.2), falling back to the job's default — same resolution as
+  // complete-vin, so an admin-added missed vehicle bills under the part the
+  // crew was actually installing.
+  const open = await getOpenCniShift(supabase, jobId);
+  const effPart = open?.part_number ?? job.part_number;
+  const effPartDescription = open?.part_number ? open.part_description : job.part_description;
+  const effBillableCustomer = open?.part_number ? open.billable_customer : job.billable_customer;
+
   // Device IDs are required when the job captures devices (Verizon part or
   // flag) — unless the admin opts to skip them to log a missed vehicle.
   // Whatever IDs ARE provided are still validated; missing ones stay null.
-  const rfid = isVerizonRfidPart(job.part_number) || !!job.device_capture;
+  const rfid = isVerizonRfidPart(effPart) || !!job.device_capture;
   let serial: string | null = null, imei: string | null = null, iccid: string | null = null;
   if (rfid) {
     serial = validateSerial(parsed.data.serial_number || '');
@@ -109,9 +118,9 @@ export async function POST(req: NextRequest) {
       vehicle_year: parsed.data.vehicle_year || null,
       vehicle_make: parsed.data.vehicle_make || null,
       vehicle_model: parsed.data.vehicle_model || null,
-      part_number: job.part_number,
-      part_description: job.part_description,
-      billable_customer: job.billable_customer,
+      part_number: effPart,
+      part_description: effPartDescription,
+      billable_customer: effBillableCustomer,
       serial_number: serial,
       imei,
       iccid,
@@ -143,7 +152,7 @@ export async function POST(req: NextRequest) {
     shiftId: shift.id,
     source: 'cni',
     ratePerVehicle: rate,
-    completion: { cniJobVinId: newVin.id, scanLogId, vin, partNumber: job.part_number },
+    completion: { cniJobVinId: newVin.id, scanLogId, vin, partNumber: effPart },
   });
 
   await supabase.from('cni_job_vins').update({ scan_log_id: scanLogId, shift_id: shift.id }).eq('id', newVin.id);

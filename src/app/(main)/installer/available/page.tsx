@@ -17,7 +17,7 @@ interface AvailableJob {
   budget: number | null;
   deadline: string | null;
   estimated_hours: number | null;
-  vin_count: number;
+  target_quantity: number | null;
   distribution_type: string;
   published_at: string | null;
   created_at: string;
@@ -88,7 +88,7 @@ export default function AvailableJobsPage() {
     // Load published jobs (open board) that I haven't been assigned to
     const { data: publishedJobs } = await supabase
       .from('cni_jobs')
-      .select('id, job_number, title, scope, customer_name, address, budget, deadline, estimated_hours, vin_count, distribution_type, published_at, created_at')
+      .select('id, job_number, title, scope, customer_name, address, budget, deadline, estimated_hours, target_quantity, distribution_type, published_at, created_at')
       .in('status', ['awaiting_assignment', 'bidding_open'])
       .eq('distribution_type', 'published')
       .is('assigned_installer_id', null);
@@ -98,7 +98,7 @@ export default function AvailableJobsPage() {
     if (inviteJobIds.length > 0) {
       const { data } = await supabase
         .from('cni_jobs')
-        .select('id, job_number, title, scope, customer_name, address, budget, deadline, estimated_hours, vin_count, distribution_type, published_at, created_at')
+        .select('id, job_number, title, scope, customer_name, address, budget, deadline, estimated_hours, target_quantity, distribution_type, published_at, created_at')
         .in('id', inviteJobIds)
         .in('status', ['awaiting_assignment', 'bidding_open'])
         .is('assigned_installer_id', null);
@@ -306,7 +306,7 @@ function JobCard({ job, onTap }: { job: AvailableJob; onTap: () => void }) {
       <div style={{ display: 'flex', gap: '12px', marginTop: '10px', fontSize: '11px', color: 'var(--text-muted)' }}>
         {addr.city && <span>{addr.city}, {addr.state || ''}</span>}
         {job.budget && <span>${Number(job.budget).toLocaleString()}</span>}
-        {job.vin_count > 0 && <span>{job.vin_count} vehicle{job.vin_count !== 1 ? 's' : ''}</span>}
+        {(job.target_quantity ?? 0) > 0 && <span>~{job.target_quantity} vehicle{job.target_quantity !== 1 ? 's' : ''}</span>}
         {job.deadline && <span>{new Date(job.deadline).toLocaleDateString()}</span>}
       </div>
     </button>
