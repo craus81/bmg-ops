@@ -33,7 +33,7 @@ export async function POST(req: NextRequest) {
 
   const { error: upErr } = await supabase
     .from('cni_jobs')
-    .update({ pay_per_vehicle: rate })
+    .update({ pay_per_vehicle: rate, updated_by: auth.user.id })
     .eq('id', jobId);
   if (upErr) {
     return NextResponse.json({ error: 'Failed to update rate: ' + upErr.message }, { status: 500 });

@@ -73,7 +73,7 @@ export async function POST(req: NextRequest) {
     if (jobType === 'graphics_job') {
       await supabase
         .from('graphics_jobs')
-        .update({ assigned_to: userIds.length > 0 ? userIds[0] : null })
+        .update({ assigned_to: userIds.length > 0 ? userIds[0] : null, updated_by: assignedBy || null })
         .eq('id', jobId);
     }
 

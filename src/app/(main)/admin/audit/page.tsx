@@ -22,7 +22,14 @@ const TABLE_LABELS: Record<string, string> = {
   payouts: 'Payouts',
   vendor_invoices: 'Vendor Invoices',
   install_credits: 'Pay Credits',
+  // A2 row-diff trigger tables (migration 195)
+  upfit_projects: 'Upfit Projects',
+  graphics_jobs: 'Graphics Jobs',
+  cni_jobs: 'CNI Jobs',
+  estimates: 'Estimates',
 };
+
+const PAGE = 100;
 
 export default function AuditLogPage() {
   const router = useRouter();
@@ -36,51 +43,74 @@ export default function AuditLogPage() {
   const [search, setSearch] = useState('');
   const [expanded, setExpanded] = useState<Set<string>>(new Set());
 
+  const [hasMore, setHasMore] = useState(false);
+  const [loadingMore, setLoadingMore] = useState(false);
+
+  // Server-side filtering + keyset pagination (A2 phase 1) — the old page
+  // loaded 300 rows and searched client-side over only those 300, which
+  // quietly missed anything older. The search now filters at the database
+  // (record id / action), and Load More pages on the created_at cursor.
+  const buildQuery = (cursor?: string) => {
+    let q = supabase
+      .from('audit_log')
+      .select('*')
+      .order('created_at', { ascending: false })
+      .limit(PAGE);
+    if (tableFilter) q = q.eq('table_name', tableFilter);
+    const s = search.trim().replace(/[,()]/g, ' ').trim();
+    if (s) q = q.or(`record_id.ilike.%${s}%,action.ilike.%${s}%`);
+    if (cursor) q = q.lt('created_at', cursor);
+    return q;
+  };
+
+  const loadNames = async (list: AuditRow[]) => {
+    const actorIds = [...new Set(list.map(r => r.actor_id).filter(Boolean))] as string[];
+    if (actorIds.length === 0) return;
+    const { data: profiles } = await supabase
+      .from('profiles').select('id, full_name').in('id', actorIds);
+    setNames(prev => {
+      const map = { ...prev };
+      for (const p of profiles || []) map[p.id] = p.full_name;
+      return map;
+    });
+  };
+
   useEffect(() => {
     if (authLoading) return; // role flags aren't resolved until auth finishes loading
     if (!isAdmin || !hasFeature('audit_log')) { router.push('/home'); return; }
-    const load = async () => {
+    // Debounce so each keystroke doesn't fire a query.
+    const t = setTimeout(async () => {
       setLoading(true);
-      let q = supabase
-        .from('audit_log')
-        .select('*')
-        .order('created_at', { ascending: false })
-        .limit(300);
-      if (tableFilter) q = q.eq('table_name', tableFilter);
-      const { data } = await q;
+      const { data } = await buildQuery();
       const list = (data || []) as AuditRow[];
       setRows(list);
-      const actorIds = [...new Set(list.map(r => r.actor_id).filter(Boolean))] as string[];
-      if (actorIds.length > 0) {
-        const { data: profiles } = await supabase
-          .from('profiles').select('id, full_name').in('id', actorIds);
-        const map: Record<string, string> = {};
-        for (const p of profiles || []) map[p.id] = p.full_name;
-        setNames(map);
-      }
+      setHasMore(list.length === PAGE);
+      await loadNames(list);
       setLoading(false);
-    };
-    load();
+    }, 250);
+    return () => clearTimeout(t);
   // eslint-disable-next-line react-hooks/exhaustive-deps -- supabase client is a stable singleton
-  }, [authLoading, isAdmin, tableFilter]);
+  }, [authLoading, isAdmin, tableFilter, search]);
 
-  const visible = rows.filter(r => {
-    if (!search.trim()) return true;
-    const q = search.trim().toLowerCase();
-    return (
-      (r.record_id || '').toLowerCase().includes(q) ||
-      r.action.toLowerCase().includes(q) ||
-      (names[r.actor_id || ''] || '').toLowerCase().includes(q) ||
-      JSON.stringify(r.detail || {}).toLowerCase().includes(q)
-    );
-  });
+  const loadMore = async () => {
+    if (rows.length === 0 || loadingMore) return;
+    setLoadingMore(true);
+    const { data } = await buildQuery(rows[rows.length - 1].created_at);
+    const list = (data || []) as AuditRow[];
+    setRows(prev => [...prev, ...list]);
+    setHasMore(list.length === PAGE);
+    await loadNames(list);
+    setLoadingMore(false);
+  };
+
+  const visible = rows;
 
   return (
     <div>
       <div style={{ marginBottom: '14px' }}>
         <div style={{ fontSize: '20px', fontWeight: 800 }}>Audit Log</div>
         <div style={{ fontSize: '12px', color: 'var(--text-muted)' }}>
-          Who changed what on money-touching records — bulk scan edits, part prices, pay rates, payout transitions, vendor invoices, and pay-credit corrections.
+          Who changed what — money-touching records, plus full field-level change history on upfit projects, graphics jobs, and CNI jobs (A2). &quot;System&quot; means a cron, sync, or webhook made the change.
         </div>
       </div>
 
@@ -91,7 +121,7 @@ export default function AuditLogPage() {
           {Object.entries(TABLE_LABELS).map(([k, v]) => <option key={k} value={k}>{v}</option>)}
         </select>
         <input value={search} onChange={e => setSearch(e.target.value)}
-          placeholder="Search record id, action, person, or detail…"
+          placeholder="Search record id or action (filters the whole log)…"
           style={{ flex: 1, minWidth: '220px', padding: '8px 12px', borderRadius: '8px', border: '1px solid var(--border)', background: 'var(--card)', color: 'var(--text-primary)', fontSize: '12px' }} />
       </div>
 
@@ -117,7 +147,9 @@ export default function AuditLogPage() {
                 <span style={{ fontSize: '11px', fontWeight: 700, color: 'var(--text-primary)', whiteSpace: 'nowrap' }}>{r.action}</span>
                 {r.record_id && <span style={{ fontSize: '10px', fontFamily: 'monospace', color: 'var(--text-muted)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{r.record_id}</span>}
                 <span style={{ flex: 1 }} />
-                <span style={{ fontSize: '11px', color: 'var(--text-secondary)', whiteSpace: 'nowrap' }}>{names[r.actor_id || ''] || '—'}</span>
+                <span style={{ fontSize: '11px', color: r.actor_id ? 'var(--text-secondary)' : 'var(--text-muted)', whiteSpace: 'nowrap', fontStyle: r.actor_id ? 'normal' : 'italic' }}>
+                  {r.actor_id ? (names[r.actor_id] || '…') : 'System'}
+                </span>
                 <span style={{ fontSize: '10px', color: 'var(--text-muted)', whiteSpace: 'nowrap' }}>
                   {new Date(r.created_at).toLocaleString([], { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' })}
                 </span>
@@ -133,9 +165,12 @@ export default function AuditLogPage() {
           );
         })}
       </div>
-      {!loading && rows.length === 300 && (
-        <div style={{ textAlign: 'center', padding: '10px', color: 'var(--text-muted)', fontSize: '11px' }}>
-          Showing the 300 most recent entries — filter by area to narrow further.
+      {!loading && hasMore && (
+        <div style={{ textAlign: 'center', padding: '12px' }}>
+          <button onClick={loadMore} disabled={loadingMore}
+            style={{ padding: '8px 18px', borderRadius: '8px', border: '1px solid var(--border)', background: 'var(--card)', color: 'var(--text-primary)', fontSize: '12px', fontWeight: 700, cursor: 'pointer', opacity: loadingMore ? 0.6 : 1 }}>
+            {loadingMore ? 'Loading…' : 'Load older entries'}
+          </button>
         </div>
       )}
     </div>

@@ -247,6 +247,7 @@ export async function POST(req: NextRequest) {
         netsuite_invoice_number: result.invoiceNumber,
         invoiced_at: new Date().toISOString(),
         invoiced_by: userId || auth.user.id,
+        updated_by: userId || auth.user.id,
         invoice_amount: invoiceAmount,
         customer_netsuite_id: customerNsId,
         updated_at: new Date().toISOString(),
