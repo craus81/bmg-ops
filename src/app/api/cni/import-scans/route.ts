@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { createClient } from '@supabase/supabase-js';
 import { requireAdmin } from '@/lib/api-auth';
 import { validateBody, validateSearchParams, z } from '@/lib/validate';
-import { assignVehicleCredits } from '@/lib/pay-credits';
+import { assignVehicleCredits, getOpenCniShift } from '@/lib/pay-credits';
 
 export const dynamic = 'force-dynamic';
 
@@ -129,6 +129,14 @@ export async function POST(req: NextRequest) {
     .from('cni_jobs').select('part_number, part_description, billable_customer').eq('id', cniJobId).single();
   if (!job) return NextResponse.json({ error: 'Job not found' }, { status: 404 });
 
+  // Consolidation target: the open shift's part beats the job default (the
+  // shift is what the crew is actually installing — §1.2), falling back to
+  // the job's part for jobs with no active shift.
+  const open = await getOpenCniShift(service, cniJobId);
+  const targetPart = open?.part_number ?? job.part_number;
+  const targetPartDescription = open?.part_number ? open.part_description : job.part_description;
+  const targetBillableCustomer = open?.part_number ? open.billable_customer : job.billable_customer;
+
   // Re-fetch the eligible set so a stale client can't import linked/dup scans.
   const { rows } = await candidates(cniJobId, partLike);
   const eligible = new Map(rows.map(r => [r.id, r]));
@@ -169,18 +177,18 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ error: 'Failed to import ' + s.vin + ': ' + (error?.message || 'unknown'), imported }, { status: 500 });
     }
 
-    // Consolidate the scan under the job's real part (e.g. "rfid" → 06CS901033).
-    if (job.part_number && s.part_number !== job.part_number) {
+    // Consolidate the scan under the real part (e.g. "rfid" → 06CS901033).
+    if (targetPart && s.part_number !== targetPart) {
       await service
         .from('scan_logs')
-        .update({ part_number: job.part_number, part_description: job.part_description, billable_customer: job.billable_customer })
+        .update({ part_number: targetPart, part_description: targetPartDescription, billable_customer: targetBillableCustomer })
         .eq('id', s.id);
     }
 
     // Associate (and re-stamp) any existing credits from this scan.
     await service
       .from('install_credits')
-      .update({ cni_job_vin_id: newVin.id, part_number: job.part_number })
+      .update({ cni_job_vin_id: newVin.id, part_number: targetPart })
       .eq('scan_log_id', s.id)
       .is('cni_job_vin_id', null)
       .is('voided_at', null);

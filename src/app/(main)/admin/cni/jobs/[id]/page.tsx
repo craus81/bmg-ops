@@ -25,8 +25,6 @@ interface CniJob {
   site_contact_name: string | null;
   site_contact_phone: string | null;
   site_contact_email: string | null;
-  is_multi_unit: boolean;
-  vin_count: number;
   target_quantity: number | null;
   budget: number | null;
   pay_per_vehicle: number | null;

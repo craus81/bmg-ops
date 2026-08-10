@@ -5,6 +5,7 @@ import { validateBody, z } from '@/lib/validate';
 import { validateSerial, validateImei, validateIccid } from '@/lib/rfid';
 import { logScan, resolveScannerCompany } from '@/lib/scan-log';
 import { canActOnCniJob, rolesOf } from '@/lib/cni-access';
+import { getOpenCniShift } from '@/lib/pay-credits';
 
 export const dynamic = 'force-dynamic';
 
@@ -71,9 +72,14 @@ export async function POST(req: NextRequest) {
       .update({ serial_number: serial, imei, iccid })
       .eq('id', scanLogId);
     if (error) return NextResponse.json({ error: 'Failed to update scan log: ' + error.message }, { status: 500 });
-  } else if (job.part_number) {
+  } else {
     // No canonical record yet (e.g. completed before the part was set) — create
-    // one so the device data is logged for reporting/invoicing.
+    // one so the device data is logged for reporting/invoicing. Part resolution
+    // matches complete-vin: the open shift's part beats the job default, and no
+    // part at all still logs (flagged "needs part" downstream) instead of
+    // silently keeping the vehicle out of billing (§1.3).
+    const open = await getOpenCniShift(supabase, vin.job_id);
+    const effPart = open?.part_number ?? job.part_number;
     const company = await resolveScannerCompany(supabase, auth.user.id);
     const addr = (job.address || {}) as { city?: string; state?: string };
     const locationName = [addr.city, addr.state].filter(Boolean).join(', ') || job.title || null;
@@ -82,9 +88,9 @@ export async function POST(req: NextRequest) {
       vehicle_year: vin.vehicle_year,
       vehicle_make: vin.vehicle_make,
       vehicle_model: vin.vehicle_model,
-      part_number: job.part_number,
-      part_description: job.part_description,
-      billable_customer: job.billable_customer,
+      part_number: effPart,
+      part_description: open?.part_number ? open.part_description : job.part_description,
+      billable_customer: open?.part_number ? open.billable_customer : job.billable_customer,
       serial_number: serial,
       imei,
       iccid,

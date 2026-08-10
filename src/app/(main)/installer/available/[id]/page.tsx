@@ -236,7 +236,9 @@ export default function AvailableJobDetailPage() {
           )}
           <div>
             <div style={{ fontSize: '11px', color: 'var(--text-muted)', fontWeight: 600 }}>Vehicles</div>
-            <div style={{ fontSize: '13px', fontWeight: 600, color: 'var(--text-primary)' }}>{job.vin_count}</div>
+            <div style={{ fontSize: '13px', fontWeight: 600, color: 'var(--text-primary)' }}>
+              {job.target_quantity != null ? `~${job.target_quantity}` : 'Open-ended'}
+            </div>
           </div>
         </div>
       </div>

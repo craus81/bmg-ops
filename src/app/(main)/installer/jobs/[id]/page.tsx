@@ -327,6 +327,9 @@ export default function InstallerJobDetailPage() {
       const { error } = await supabase.from('cni_jobs').update({
         status: 'completed_pending_review',
         completed_at: new Date().toISOString(),
+        // The 045 status-history trigger logs changed_by = updated_by; without
+        // this, installer-driven completions audit as changed_by NULL.
+        updated_by: user?.id ?? null,
       }).eq('id', job.id);
       if (error) { setActionError('Failed to mark complete: ' + error.message); return; }
       await loadJob();
