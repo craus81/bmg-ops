@@ -207,6 +207,14 @@ export default function PartCatalogBrowser({ open, onClose, onAdd, isAdmin }: {
                 <option value="price_desc">Price: high → low</option>
               </select>
             </div>
+            {isAdmin && (
+              <a
+                href="/admin/import-vendor-assets"
+                style={{ fontSize: '11px', fontWeight: 700, color: 'var(--accent, #2563eb)', textDecoration: 'none', marginTop: 'auto' }}
+              >
+                ⬇ Import photos & descriptions from a vendor site…
+              </a>
+            )}
           </div>
 
           {/* Card grid */}
