@@ -4,6 +4,7 @@ import { createClient } from '@supabase/supabase-js';
 import { requireAdmin } from '@/lib/api-auth';
 import { validateBody, z } from '@/lib/validate';
 import { fetchAllRows } from '@/lib/fetch-all';
+import { determineCatalog, promoteManualTwins } from '@/lib/parts-sync';
 
 const Schema = z.object({
   userId: z.string().uuid().optional().nullable(),
@@ -16,22 +17,6 @@ const supabase = createClient(
   process.env.NEXT_PUBLIC_SUPABASE_URL!,
   process.env.SUPABASE_SERVICE_ROLE_KEY!
 );
-
-/**
- * Determine which catalog a part belongs to.
- * 1. If ns_class contains "graphic" (case-insensitive) → graphics
- * 2. If item_number starts with "06" → graphics
- * 3. Everything else → upfit
- */
-function determineCatalog(itemNumber: string, nsClass: string | null): 'upfit' | 'graphics' {
-  if (nsClass && nsClass.toLowerCase().includes('graphic')) {
-    return 'graphics';
-  }
-  if (itemNumber && itemNumber.startsWith('06')) {
-    return 'graphics';
-  }
-  return 'upfit';
-}
 
 export async function POST(req: NextRequest) {
   const auth = await requireAdmin(req);
@@ -258,65 +243,12 @@ export async function POST(req: NextRequest) {
       .not('netsuite_id', 'in', `(${syncedIds.join(',')})`);
 
     // ── Fold manual rows into their new NetSuite twin ("promote") ──────────
-    // Graphics-only parts (source='manual', netsuite_id NULL) were folded in
-    // from the old proof catalog. If NetSuite later gains a real item with the
-    // same item number, the upsert above inserts a SEPARATE synced row, leaving
-    // two rows for one part. Promote the manual row into the synced one:
-    // preserve its graphics metadata, move its proofs + line/estimate/schedule
-    // references onto the synced row, then delete the manual row.
+    // Shared with the hourly incremental cron — see promoteManualTwins in
+    // src/lib/parts-sync.ts for the full story.
     try {
-      const syncedLower = new Set(
-        nsItems.map((it: any) => (it.item_number || '').toLowerCase()).filter(Boolean)
-      );
-      const { data: manualRows } = await fetchAllRows<any>((from, to) =>
-        supabase
-          .from('netsuite_parts')
-          .select('id, item_number, vehicle_type, graphic_package, customer, proof_pages, billable_customer')
-          .eq('source', 'manual')
-          .order('id')
-          .range(from, to));
-
-      const colliding = (manualRows || []).filter(
-        (m: any) => m.item_number && syncedLower.has(m.item_number.toLowerCase())
-      );
-
-      for (const m of colliding) {
-        // The freshly-synced twin (source='netsuite', same item number).
-        const { data: twins } = await supabase
-          .from('netsuite_parts')
-          .select('id, vehicle_type, graphic_package, customer, proof_pages, billable_customer')
-          .eq('source', 'netsuite')
-          .ilike('item_number', m.item_number)
-          .limit(1);
-        const twin = twins?.[0];
-        if (!twin || twin.id === m.id) continue;
-
-        // 1) Keep the graphics metadata the synced row doesn't already carry.
-        await supabase.from('netsuite_parts').update({
-          vehicle_type: twin.vehicle_type ?? m.vehicle_type,
-          graphic_package: twin.graphic_package ?? m.graphic_package,
-          customer: twin.customer ?? m.customer,
-          proof_pages: twin.proof_pages ?? m.proof_pages,
-          billable_customer: (twin.billable_customer && twin.billable_customer !== '')
-            ? twin.billable_customer : m.billable_customer,
-          catalog: 'graphics',
-          updated_at: now,
-        }).eq('id', twin.id);
-
-        // 2) Move proofs + every FK reference onto the twin. part_files cascades
-        //    on delete, so this MUST happen before the manual row is removed.
-        await supabase.from('part_files').update({ part_id: twin.id }).eq('part_id', m.id);
-        await supabase.from('po_line_items').update({ part_id: twin.id }).eq('part_id', m.id);
-        await supabase.from('estimate_line_items').update({ part_id: twin.id }).eq('part_id', m.id);
-        // schedule_assignments only exists in some environments — error ignored.
-        await supabase.from('schedule_assignments').update({ part_id: twin.id }).eq('part_id', m.id);
-
-        // 3) Remove the absorbed manual row.
-        await supabase.from('netsuite_parts').delete().eq('id', m.id);
-      }
-
-      if (colliding.length > 0) {
-        console.log(`[parts-sync] promoted ${colliding.length} manual part(s) into NetSuite twins`);
+      const promoted = await promoteManualTwins(supabase, nsItems);
+      if (promoted > 0) {
+        console.log(`[parts-sync] promoted ${promoted} manual part(s) into NetSuite twins`);
       }
     } catch (err: any) {
       console.error('[parts-sync] promote step failed:', err.message || err);
