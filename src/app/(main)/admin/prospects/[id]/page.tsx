@@ -39,6 +39,7 @@ import { exportStatementPDF } from '@/lib/statement-pdf';
 import { fetchCompanyLetterhead, type CompanyLetterhead } from '@/lib/company-profile';
 import { AGE_META } from '@/components/FinancialsDrilldown';
 import type { OpenArInvoice, AgingBucketKey, StatementInvoice, StatementScope } from '@/lib/financials-data';
+import { fetchAllRows } from '@/lib/fetch-all';
 
 interface Prospect {
   id: string;
@@ -68,6 +69,7 @@ interface Prospect {
 }
 
 interface CustomerRow {
+  id: string;
   netsuite_id: string;
   netsuite_url: string | null;
   company_name: string | null;
@@ -82,7 +84,28 @@ interface CustomerRow {
   last_year_spend: number | null;
   total_orders: number | null;
   last_order_date: string | null;
+  // K1–K3 (Aug 6 plan): parent linkage, sales rep, billing workflow.
+  netsuite_parent_id: string | null;
+  parent_customer_id: string | null;
+  parent_source: string | null;
+  account_owner_id: string | null;
+  billing_workflow: string | null;
+  billing_portal: string | null;
+  billing_notes: string | null;
+  internal_notes: string | null;
 }
+
+interface ParentRef { id: string; netsuite_id: string | null; company_name: string | null; source: 'manual' | 'netsuite' }
+interface ChildAccount { id: string; netsuite_id: string | null; company_name: string | null; ytd_spend: number | null; total_spend: number | null }
+interface ExtContact { id: string; name: string; title: string | null; email: string | null; phone: string | null; is_primary: boolean }
+interface CustTagRow { tag_id: string; label: string; kind: string }
+interface VocabRow { id: string; label: string; kind: string }
+
+const BILLING_WORKFLOWS: Record<string, string> = {
+  po_portal: 'Customer portal — submit there, don’t email',
+  email_ap: 'Email invoices to AP',
+  no_po_direct: 'Direct invoice — no PO required',
+};
 
 interface Contact { id: string; name: string; title: string | null; email: string | null; phone: string | null; is_decision_maker: boolean; netsuite_contact_id: string | null }
 interface Opportunity { id: string; title: string; type: string; stage: string; value: number | null; expected_close_date: string | null; created_at: string }
@@ -198,6 +221,28 @@ export default function CustomerRecordPage() {
   const [activities, setActivities] = useState<Activity[]>([]);
   const [reminders, setReminders] = useState<Reminder[]>([]);
   const [tags, setTags] = useState<Tag[]>([]);
+
+  // K1–K3 customer-model surfaces (Aug 6 plan) — all keyed on customers.id,
+  // so they only exist when the NetSuite mirror row does.
+  const [parentRef, setParentRef] = useState<ParentRef | null>(null);
+  const [children, setChildren] = useState<ChildAccount[]>([]);
+  const [childContacts, setChildContacts] = useState<Record<string, { name: string; title: string | null; phone: string | null; email: string | null }[]>>({});
+  const [extContacts, setExtContacts] = useState<ExtContact[]>([]);
+  const [custTags, setCustTags] = useState<CustTagRow[]>([]);
+  const [vocab, setVocab] = useState<VocabRow[]>([]);
+  const [salesReps, setSalesReps] = useState<{ id: string; full_name: string }[]>([]);
+  // Assign-parent dialog
+  const [parentPickerOpen, setParentPickerOpen] = useState(false);
+  const [parentSearch, setParentSearch] = useState('');
+  const [parentResults, setParentResults] = useState<{ id: string; company_name: string | null; netsuite_id: string | null }[]>([]);
+  const [parentChoice, setParentChoice] = useState<{ id: string; company_name: string | null; netsuite_id: string | null } | null>(null);
+  const [parentNote, setParentNote] = useState('');
+  const [parentSaving, setParentSaving] = useState(false);
+  // Billing card edit state
+  const [billForm, setBillForm] = useState({ workflow: '', portal: '', notes: '' });
+  const [billDirty, setBillDirty] = useState(false);
+  const [billSaving, setBillSaving] = useState(false);
+
   const [docs, setDocs] = useState<CustDocument[] | null>(null);
   const [docsHasMore, setDocsHasMore] = useState(false);
   const [docsLoading, setDocsLoading] = useState(false);
@@ -468,6 +513,216 @@ export default function CustomerRecordPage() {
     setTags(prev => prev.filter(t => t.id !== tag.id));
   };
 
+  // ── K1–K3: customer-model data (parent, sub-accounts, primary contact,
+  // industry tags, sales rep, billing) — fired from load() when the
+  // customers row exists. Each block is independent and fails soft. ────────
+  const loadCustomerExtras = (cust: CustomerRow) => {
+    setBillForm({ workflow: cust.billing_workflow || '', portal: cust.billing_portal || '', notes: cust.billing_notes || '' });
+
+    // Effective parent: the manual link wins; otherwise NetSuite's hierarchy.
+    (async () => {
+      if (cust.parent_customer_id) {
+        const { data } = await supabase.from('customers').select('id, netsuite_id, company_name').eq('id', cust.parent_customer_id).maybeSingle();
+        if (data) { setParentRef({ ...(data as any), source: 'manual' }); return; }
+      }
+      if (cust.netsuite_parent_id) {
+        const { data } = await supabase.from('customers').select('id, netsuite_id, company_name').eq('netsuite_id', cust.netsuite_parent_id).maybeSingle();
+        if (data) setParentRef({ ...(data as any), source: 'netsuite' });
+      }
+    })();
+
+    // Sub-accounts: manual children + NetSuite-hierarchy children, then each
+    // child's CRM contacts ("Jerry Kelly under all relevant parents").
+    (async () => {
+      const { data: kids } = await fetchAllRows<ChildAccount>((from, to) =>
+        supabase.from('customers')
+          .select('id, netsuite_id, company_name, ytd_spend, total_spend')
+          .or(`parent_customer_id.eq.${cust.id},netsuite_parent_id.eq.${cust.netsuite_id}`)
+          .order('netsuite_id').range(from, to));
+      const list = (kids || []).filter(k => k.id !== cust.id);
+      setChildren(list);
+      const nsIds = list.map(k => k.netsuite_id).filter(Boolean) as string[];
+      if (nsIds.length === 0) return;
+      const { data: pros } = await supabase.from('prospects').select('id, netsuite_id').in('netsuite_id', nsIds);
+      const childByNs: Record<string, string> = {};
+      for (const k of list) if (k.netsuite_id) childByNs[k.netsuite_id] = k.id;
+      const prospectToChild: Record<string, string> = {};
+      for (const pr of (pros || []) as { id: string; netsuite_id: string | null }[]) {
+        if (pr.netsuite_id && childByNs[pr.netsuite_id]) prospectToChild[pr.id] = childByNs[pr.netsuite_id];
+      }
+      const pids = Object.keys(prospectToChild);
+      if (pids.length === 0) return;
+      const { data: cons } = await supabase.from('prospect_contacts')
+        .select('prospect_id, name, title, email, phone').in('prospect_id', pids).order('name');
+      const grouped: Record<string, { name: string; title: string | null; phone: string | null; email: string | null }[]> = {};
+      for (const c of (cons || []) as any[]) {
+        const childId = prospectToChild[c.prospect_id];
+        if (!childId) continue;
+        (grouped[childId] ||= []).push({ name: c.name, title: c.title, phone: c.phone, email: c.email });
+      }
+      setChildContacts(grouped);
+    })();
+
+    // Primary contact (external_contacts drives estimate approvals, pickup
+    // notices, and SMS matching — surfacing it here is K2).
+    (async () => {
+      const { data } = await supabase.from('external_contacts')
+        .select('id, name, title, email, phone, is_primary')
+        .eq('customer_id', cust.id)
+        .order('is_primary', { ascending: false }).order('name');
+      setExtContacts((data || []) as ExtContact[]);
+    })();
+
+    // Industry/partner tags + the controlled vocabulary.
+    (async () => {
+      const [tRes, vRes] = await Promise.all([
+        supabase.from('customer_tags').select('tag_id, customer_tag_vocabulary(label, kind)').eq('customer_id', cust.id),
+        supabase.from('customer_tag_vocabulary').select('id, label, kind').eq('active', true).order('kind').order('label'),
+      ]);
+      setCustTags(((tRes.data || []) as any[]).map(r => ({
+        tag_id: r.tag_id,
+        label: r.customer_tag_vocabulary?.label || '?',
+        kind: r.customer_tag_vocabulary?.kind || 'industry',
+      })));
+      setVocab((vRes.data || []) as VocabRow[]);
+    })();
+
+    // Sales-rep picker options — same population as the at-risk report.
+    (async () => {
+      const { data } = await supabase.from('profiles')
+        .select('id, full_name, role, roles').eq('status', 'approved').order('full_name');
+      setSalesReps(((data || []) as any[])
+        .filter(p => {
+          const roleList: string[] = p.roles?.length ? p.roles : [p.role];
+          return roleList.includes('admin') || roleList.includes('super_admin') || roleList.includes('sales');
+        })
+        .map(p => ({ id: p.id, full_name: p.full_name || 'Unknown' })));
+    })();
+  };
+
+  const searchParents = async (term: string) => {
+    setParentSearch(term);
+    setParentChoice(null);
+    if (term.trim().length < 2) { setParentResults([]); return; }
+    const { data } = await supabase.from('customers')
+      .select('id, company_name, netsuite_id')
+      .ilike('company_name', `%${term.trim()}%`)
+      .neq('id', customer?.id || '')
+      .order('company_name').limit(12);
+    setParentResults((data || []) as any[]);
+  };
+
+  // Assign/clear the manual parent link. A note is required — the meeting was
+  // explicit that account moves need an explanation on the record. It lands in
+  // the activity feed (or internal_notes when there's no CRM row to log to).
+  const saveParent = async (clear: boolean) => {
+    if (!customer || parentSaving) return;
+    const choice = clear ? null : parentChoice;
+    if (!clear && !choice) return;
+    const note = parentNote.trim();
+    if (!note) { await dialog.alert('Add a note explaining the change — account moves need a paper trail.'); return; }
+    setParentSaving(true);
+    const patch = { parent_customer_id: choice?.id ?? null, parent_source: choice ? 'manual' : null };
+    const { error } = await supabase.from('customers').update(patch).eq('id', customer.id);
+    if (error) { setParentSaving(false); await dialog.alert(`Could not save: ${error.message}`); return; }
+    const summary = choice
+      ? `Parent account set to ${choice.company_name || choice.netsuite_id || 'unknown'} — ${note}`
+      : 'Parent account cleared — ' + note;
+    if (prospect) {
+      await logAuto('status_change', summary);
+    } else {
+      const stamp = new Date().toISOString().slice(0, 10);
+      const merged = `${customer.internal_notes ? customer.internal_notes + '\n' : ''}[${stamp}] ${summary}`;
+      await supabase.from('customers').update({ internal_notes: merged }).eq('id', customer.id);
+      setCustomer(prev => (prev ? { ...prev, internal_notes: merged } : prev));
+    }
+    setCustomer(prev => (prev ? { ...prev, ...patch } : prev));
+    if (choice) {
+      setParentRef({ id: choice.id, netsuite_id: choice.netsuite_id, company_name: choice.company_name, source: 'manual' });
+    } else if (customer.netsuite_parent_id) {
+      // Manual link cleared — fall back to the NetSuite hierarchy if present.
+      const { data } = await supabase.from('customers').select('id, netsuite_id, company_name').eq('netsuite_id', customer.netsuite_parent_id).maybeSingle();
+      setParentRef(data ? { ...(data as any), source: 'netsuite' } : null);
+    } else {
+      setParentRef(null);
+    }
+    setParentPickerOpen(false); setParentChoice(null); setParentNote(''); setParentSearch(''); setParentResults([]);
+    setParentSaving(false);
+  };
+
+  const setPrimaryContact = async (contactId: string) => {
+    if (!customer || !contactId) return;
+    try {
+      const res = await fetch(`/api/external-contacts/${contactId}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ is_primary: true, customerId: customer.id }),
+      });
+      if (!res.ok) {
+        const b = await res.json().catch(() => ({}));
+        throw new Error(b?.error || `HTTP ${res.status}`);
+      }
+      setExtContacts(prev => prev.map(c => ({ ...c, is_primary: c.id === contactId })));
+    } catch (err: any) {
+      await dialog.alert(`Could not set the primary contact: ${err?.message || 'unknown error'}`);
+    }
+  };
+
+  const addCustTag = async (tagId: string) => {
+    if (!customer || !tagId) return;
+    const v = vocab.find(x => x.id === tagId);
+    const { error } = await supabase.from('customer_tags').insert({ customer_id: customer.id, tag_id: tagId, created_by: user?.id });
+    if (error) { await dialog.alert(`Could not add the tag: ${error.message}`); return; }
+    if (v) setCustTags(prev => [...prev, { tag_id: v.id, label: v.label, kind: v.kind }]);
+  };
+
+  const removeCustTag = async (tagId: string) => {
+    if (!customer) return;
+    const { error } = await supabase.from('customer_tags').delete().eq('customer_id', customer.id).eq('tag_id', tagId);
+    if (error) { await dialog.alert(`Could not remove the tag: ${error.message}`); return; }
+    setCustTags(prev => prev.filter(t => t.tag_id !== tagId));
+  };
+
+  // Grow the controlled vocabulary in place (admin-only affordance) and apply
+  // the new value to this customer in one motion.
+  const addVocabValue = async (kind: 'industry' | 'partner') => {
+    if (!customer) return;
+    const label = (await dialog.prompt(`New ${kind} tag value:`))?.trim();
+    if (!label) return;
+    const { data, error } = await supabase.from('customer_tag_vocabulary').insert({ label, kind }).select('id, label, kind').single();
+    if (error || !data) { await dialog.alert(`Could not add the value: ${error?.message || 'unknown error'}`); return; }
+    const row = data as VocabRow;
+    setVocab(prev => [...prev, row].sort((a, b) => a.kind.localeCompare(b.kind) || a.label.localeCompare(b.label)));
+    const { error: tagErr } = await supabase.from('customer_tags').insert({ customer_id: customer.id, tag_id: row.id, created_by: user?.id });
+    if (!tagErr) setCustTags(prev => [...prev, { tag_id: row.id, label: row.label, kind: row.kind }]);
+  };
+
+  const setSalesRep = async (ownerId: string) => {
+    if (!customer) return;
+    const { error } = await supabase.from('customers').update({ account_owner_id: ownerId || null }).eq('id', customer.id);
+    if (error) { await dialog.alert(`Could not set the sales rep: ${error.message}`); return; }
+    setCustomer(prev => (prev ? { ...prev, account_owner_id: ownerId || null } : prev));
+  };
+
+  const saveBilling = async () => {
+    if (!customer || billSaving) return;
+    if (billForm.workflow === 'po_portal' && !billForm.portal.trim()) {
+      await dialog.alert('Name the portal (e.g. Masterack, Bogle) so everyone knows where invoices go.');
+      return;
+    }
+    setBillSaving(true);
+    const patch = {
+      billing_workflow: billForm.workflow || null,
+      billing_portal: billForm.portal.trim() || null,
+      billing_notes: billForm.notes.trim() || null,
+    };
+    const { error } = await supabase.from('customers').update(patch).eq('id', customer.id);
+    setBillSaving(false);
+    if (error) { await dialog.alert(`Could not save billing: ${error.message}`); return; }
+    setCustomer(prev => (prev ? { ...prev, ...patch } : prev));
+    setBillDirty(false);
+  };
+
   const emptyOppForm = { title: '', type: 'tech_install', value: '', expected_close_date: '' };
   const [oppFormOpen, setOppFormOpen] = useState(false);
   const [oppForm, setOppForm] = useState(emptyOppForm);
@@ -650,7 +905,7 @@ export default function CustomerRecordPage() {
     let cust: CustomerRow | null = null;
     if (nsId) {
       const { data } = await supabase.from('customers')
-        .select('netsuite_id, netsuite_url, company_name, entity_id, email, phone, address, total_spend, avg_order_value, ytd_spend, ytd_orders, last_year_spend, total_orders, last_order_date')
+        .select('id, netsuite_id, netsuite_url, company_name, entity_id, email, phone, address, total_spend, avg_order_value, ytd_spend, ytd_orders, last_year_spend, total_orders, last_order_date, netsuite_parent_id, parent_customer_id, parent_source, account_owner_id, billing_workflow, billing_portal, billing_notes, internal_notes')
         .eq('netsuite_id', nsId).maybeSingle();
       cust = data as CustomerRow | null;
     }
@@ -658,6 +913,7 @@ export default function CustomerRecordPage() {
     if (!p && !cust) { setNotFound(true); setLoading(false); return; }
     setProspect(p);
     setCustomer(cust);
+    if (cust) loadCustomerExtras(cust);
 
     if (p) {
       const [cRes, oRes, aRes, tRes, rRes] = await Promise.all([
@@ -1233,11 +1489,147 @@ export default function CustomerRecordPage() {
                 <span style={{ color: 'var(--text-secondary)', fontWeight: 600, textAlign: 'right', overflowWrap: 'anywhere' }}>{r.v}</span>
               </div>
             ))}
+            {customer && (
+              <div style={{ ...infoRow, alignItems: 'center' }}>
+                <span style={{ color: 'var(--text-muted)', flexShrink: 0 }}>Parent account</span>
+                <span style={{ display: 'inline-flex', alignItems: 'center', gap: '6px', flexWrap: 'wrap', justifyContent: 'flex-end' }}>
+                  {parentRef ? (
+                    <>
+                      <a href={`/admin/prospects/ns-${parentRef.netsuite_id}`} style={{ color: '#60a5fa', fontWeight: 700, textDecoration: 'none', fontSize: '12.5px' }}>
+                        {parentRef.company_name || parentRef.netsuite_id}
+                      </a>
+                      <span title={parentRef.source === 'manual' ? 'Assigned here (survives NetSuite resync)' : 'From the NetSuite customer hierarchy'}
+                        style={{ fontSize: '9px', fontWeight: 800, padding: '2px 6px', borderRadius: '4px', background: 'var(--subtle-bg)', border: '1px solid var(--border)', color: 'var(--text-muted)', textTransform: 'uppercase' }}>
+                        {parentRef.source === 'manual' ? 'manual' : 'NetSuite'}
+                      </span>
+                    </>
+                  ) : (
+                    <span style={{ color: 'var(--text-muted)', fontSize: '12px' }}>None</span>
+                  )}
+                  <button onClick={() => setParentPickerOpen(true)} title="Assign to a parent account / leasing company"
+                    style={{ background: 'none', border: 'none', cursor: 'pointer', color: 'var(--text-muted)', fontSize: '12px', padding: '0 2px' }}>✎</button>
+                </span>
+              </div>
+            )}
+            {customer && (
+              <div style={{ ...infoRow, alignItems: 'center' }}>
+                <span style={{ color: 'var(--text-muted)', flexShrink: 0 }}>Sales rep</span>
+                <select value={customer.account_owner_id || ''} onChange={e => setSalesRep(e.target.value)}
+                  style={{ ...cInput, width: 'auto', maxWidth: '58%', padding: '4px 8px', fontSize: '11.5px' }}>
+                  <option value="">Unassigned</option>
+                  {salesReps.map(r => <option key={r.id} value={r.id}>{r.full_name}</option>)}
+                </select>
+              </div>
+            )}
+            {customer && (
+              <div style={{ ...infoRow, alignItems: 'center' }}>
+                <span style={{ color: 'var(--text-muted)', flexShrink: 0 }}>Industry / Partner</span>
+                <span style={{ display: 'flex', gap: '5px', flexWrap: 'wrap', justifyContent: 'flex-end', alignItems: 'center' }}>
+                  {custTags.map(t => (
+                    <button key={t.tag_id} onClick={() => removeCustTag(t.tag_id)} title={`${t.kind} tag — click to remove`}
+                      style={{
+                        fontSize: '10px', fontWeight: 700, padding: '3px 8px', borderRadius: '999px', cursor: 'pointer',
+                        background: t.kind === 'partner' ? 'rgba(167,139,250,0.1)' : 'rgba(96,165,250,0.1)',
+                        border: `1px solid ${t.kind === 'partner' ? 'rgba(167,139,250,0.3)' : 'rgba(96,165,250,0.3)'}`,
+                        color: t.kind === 'partner' ? '#a78bfa' : '#60a5fa',
+                      }}>
+                      {t.label} ✕
+                    </button>
+                  ))}
+                  <select value="" onChange={e => {
+                    const v = e.target.value;
+                    if (v === '__new_industry') addVocabValue('industry');
+                    else if (v === '__new_partner') addVocabValue('partner');
+                    else if (v) addCustTag(v);
+                  }} style={{ ...cInput, width: 'auto', padding: '3px 6px', fontSize: '10.5px' }}>
+                    <option value="">+ tag</option>
+                    <optgroup label="Industry">
+                      {vocab.filter(v => v.kind === 'industry' && !custTags.some(t => t.tag_id === v.id)).map(v => <option key={v.id} value={v.id}>{v.label}</option>)}
+                      {isAdmin && <option value="__new_industry">+ New industry value…</option>}
+                    </optgroup>
+                    <optgroup label="Partner">
+                      {vocab.filter(v => v.kind === 'partner' && !custTags.some(t => t.tag_id === v.id)).map(v => <option key={v.id} value={v.id}>{v.label}</option>)}
+                      {isAdmin && <option value="__new_partner">+ New partner value…</option>}
+                    </optgroup>
+                  </select>
+                </span>
+              </div>
+            )}
             {prospect?.notes && (
               <div style={{ marginTop: '10px', padding: '10px 12px', borderRadius: '9px', background: 'var(--subtle-bg)', fontSize: '12px', color: 'var(--text-secondary)', whiteSpace: 'pre-wrap' }}>{prospect.notes}</div>
             )}
-            {!email && !phone && !address && !prospect?.notes && <div style={{ fontSize: '12px', color: 'var(--text-muted)' }}>Nothing on file.</div>}
+            {!email && !phone && !address && !prospect?.notes && !customer && <div style={{ fontSize: '12px', color: 'var(--text-muted)' }}>Nothing on file.</div>}
           </div>
+
+          {/* Billing (K3) — how invoices reach this customer. Read by the
+              Email Invoices modal on every invoice surface. */}
+          {customer && (
+            <div style={card}>
+              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '8px' }}>
+                <div style={{ ...eyebrow, marginBottom: 0 }}>Billing</div>
+                {billDirty && (
+                  <button onClick={saveBilling} disabled={billSaving}
+                    style={{ background: 'none', border: 'none', cursor: 'pointer', fontSize: '11px', fontWeight: 700, color: '#22c55e', padding: 0, opacity: billSaving ? 0.6 : 1 }}>
+                    {billSaving ? 'Saving…' : 'Save'}
+                  </button>
+                )}
+              </div>
+              <div style={{ display: 'flex', flexDirection: 'column', gap: '6px', marginTop: '8px' }}>
+                <select value={billForm.workflow} onChange={e => { setBillForm(f => ({ ...f, workflow: e.target.value })); setBillDirty(true); }} style={cInput}>
+                  <option value="">Workflow not set</option>
+                  {Object.entries(BILLING_WORKFLOWS).map(([k, label]) => <option key={k} value={k}>{label}</option>)}
+                </select>
+                {billForm.workflow === 'po_portal' && (
+                  <input style={cInput} placeholder="Portal name (e.g. Masterack, Bogle) *" value={billForm.portal}
+                    onChange={e => { setBillForm(f => ({ ...f, portal: e.target.value })); setBillDirty(true); }} />
+                )}
+                <textarea style={{ ...cInput, resize: 'vertical', fontFamily: 'inherit' }} rows={2}
+                  placeholder="Billing notes — portal URL, required fields, cadence…"
+                  value={billForm.notes} onChange={e => { setBillForm(f => ({ ...f, notes: e.target.value })); setBillDirty(true); }} />
+                {billForm.workflow === 'po_portal' && (
+                  <div style={{ fontSize: '10.5px', color: '#fbbf24' }}>
+                    Invoice emails for this customer will warn staff to submit in the portal instead.
+                  </div>
+                )}
+              </div>
+            </div>
+          )}
+
+          {/* Sub-accounts (K1) — children by manual link or NetSuite hierarchy,
+              with consolidated spend and each child's contacts. */}
+          {customer && children.length > 0 && (
+            <div style={card}>
+              <div style={eyebrow}>Sub-accounts · {children.length}</div>
+              {(() => {
+                const kidYtd = children.reduce((s, k) => s + (k.ytd_spend || 0), 0);
+                const kidTotal = children.reduce((s, k) => s + (k.total_spend || 0), 0);
+                return (
+                  <div style={{ fontSize: '11.5px', color: 'var(--text-secondary)', marginBottom: '4px' }}>
+                    Combined incl. this account:{' '}
+                    <strong style={{ fontVariantNumeric: 'tabular-nums' }}>{fmtMoney((m?.ytd_spend || 0) + kidYtd)}</strong> YTD ·{' '}
+                    <strong style={{ fontVariantNumeric: 'tabular-nums' }}>{fmtMoney((m?.total_spend || 0) + kidTotal)}</strong> all time
+                  </div>
+                );
+              })()}
+              {children.map(k => (
+                <div key={k.id} style={{ padding: '7px 0', borderTop: '1px solid var(--border)' }}>
+                  <div style={{ display: 'flex', justifyContent: 'space-between', gap: '8px', fontSize: '12.5px', alignItems: 'baseline' }}>
+                    <a href={`/admin/prospects/ns-${k.netsuite_id}`} style={{ color: '#60a5fa', fontWeight: 700, textDecoration: 'none' }}>
+                      {k.company_name || k.netsuite_id}
+                    </a>
+                    <span style={{ color: 'var(--text-secondary)', fontVariantNumeric: 'tabular-nums', flexShrink: 0 }}>
+                      {fmtMoney(k.ytd_spend || 0)} YTD · {fmtMoney(k.total_spend || 0)} total
+                    </span>
+                  </div>
+                  {(childContacts[k.id] || []).length > 0 && (
+                    <div style={{ fontSize: '11px', color: 'var(--text-muted)', marginTop: '2px' }}>
+                      {(childContacts[k.id] || []).map(c => `${c.name}${c.phone ? ` (${c.phone})` : c.email ? ` (${c.email})` : ''}`).join(' · ')}
+                    </div>
+                  )}
+                </div>
+              ))}
+            </div>
+          )}
 
           <div style={card}>
             <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '8px' }}>
@@ -1248,6 +1640,33 @@ export default function CustomerRecordPage() {
                 </button>
               )}
             </div>
+            {customer && (
+              <div style={{ margin: '8px 0 2px', padding: '8px 10px', borderRadius: '8px', background: 'var(--subtle-bg)', fontSize: '12px' }}>
+                <div style={{ fontSize: '9.5px', fontWeight: 800, textTransform: 'uppercase', letterSpacing: '0.5px', color: 'var(--text-muted)', marginBottom: '3px' }}>Primary contact — notifications</div>
+                {extContacts.length === 0 ? (
+                  <span style={{ color: 'var(--text-muted)' }}>None on file — one is created automatically from the customer’s email/phone on the first send.</span>
+                ) : (
+                  <div style={{ display: 'flex', alignItems: 'center', gap: '8px', flexWrap: 'wrap' }}>
+                    {(() => {
+                      const p = extContacts.find(c => c.is_primary);
+                      return p ? (
+                        <span style={{ fontWeight: 700, color: 'var(--text-primary)', overflowWrap: 'anywhere' }}>
+                          ★ {p.name}{p.phone ? ` · ${p.phone}` : ''}{p.email ? ` · ${p.email}` : ''}
+                        </span>
+                      ) : <span style={{ color: 'var(--text-muted)' }}>No primary set.</span>;
+                    })()}
+                    {(extContacts.length > 1 || !extContacts.some(c => c.is_primary)) && (
+                      <select value="" onChange={e => setPrimaryContact(e.target.value)}
+                        style={{ ...cInput, width: 'auto', padding: '3px 6px', fontSize: '10.5px' }}>
+                        <option value="">change…</option>
+                        {extContacts.filter(c => !c.is_primary).map(c => <option key={c.id} value={c.id}>{c.name}</option>)}
+                      </select>
+                    )}
+                  </div>
+                )}
+                <div style={{ fontSize: '10px', color: 'var(--text-muted)', marginTop: '3px' }}>Estimate approvals, pickup notices, and SMS threads go to this contact.</div>
+              </div>
+            )}
             {cFormOpen && (
               <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '6px', margin: '10px 0 4px', padding: '10px', background: 'var(--subtle-bg)', borderRadius: '9px' }}>
                 <input style={cInput} placeholder="Name (First Last) *" value={cForm.name} onChange={e => setCForm({ ...cForm, name: e.target.value })} />
@@ -1746,6 +2165,55 @@ export default function CustomerRecordPage() {
                 {emailingSt ? 'Sending…' : '✉️ Email…'}
               </button>
               <button onClick={() => setStModalOpen(false)} disabled={stWorking || emailingSt} style={{ ...btnSm, padding: '9px 12px', fontSize: '12px' }}>Cancel</button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Assign parent / leasing company (K1) — the manual link that wins
+          over the NetSuite hierarchy and survives resync. Note required. */}
+      {parentPickerOpen && customer && (
+        <div onClick={() => !parentSaving && setParentPickerOpen(false)}
+          style={{ position: 'fixed', inset: 0, zIndex: 1200, background: 'rgba(0,0,0,0.6)', backdropFilter: 'blur(4px)', display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '16px' }}>
+          <div onClick={e => e.stopPropagation()} role="dialog" aria-modal="true" aria-label="Assign parent account"
+            style={{ background: 'var(--card)', border: '1px solid var(--border)', borderRadius: '14px', padding: '18px', width: 'min(440px, 100%)' }}>
+            <div style={{ fontSize: '14px', fontWeight: 800, color: 'var(--text-primary)', marginBottom: '4px' }}>Assign parent / leasing company</div>
+            <div style={{ fontSize: '11px', color: 'var(--text-muted)', lineHeight: 1.5, marginBottom: '10px' }}>
+              Links this account under a parent (e.g. a leasing company). The manual link wins over NetSuite’s hierarchy and survives resync.
+            </div>
+            <input autoFocus placeholder="Search customers…" value={parentSearch} onChange={e => searchParents(e.target.value)} style={{ ...cInput, marginBottom: '6px' }} />
+            {parentChoice ? (
+              <div style={{ display: 'flex', alignItems: 'center', gap: '8px', padding: '8px 10px', borderRadius: '8px', background: 'rgba(34,197,94,0.08)', border: '1px solid rgba(34,197,94,0.25)', fontSize: '12px', fontWeight: 700, color: 'var(--text-primary)', marginBottom: '6px' }}>
+                <span style={{ flex: 1 }}>{parentChoice.company_name || parentChoice.netsuite_id}</span>
+                <button onClick={() => setParentChoice(null)} style={{ background: 'none', border: 'none', cursor: 'pointer', color: 'var(--text-muted)', fontSize: '12px' }}>✕</button>
+              </div>
+            ) : parentResults.length > 0 && (
+              <div style={{ maxHeight: '180px', overflowY: 'auto', marginBottom: '6px', border: '1px solid var(--border)', borderRadius: '8px' }}>
+                {parentResults.map(r => (
+                  <button key={r.id} onClick={() => setParentChoice(r)}
+                    style={{ display: 'block', width: '100%', textAlign: 'left', padding: '7px 10px', background: 'none', border: 'none', borderBottom: '1px solid var(--border)', cursor: 'pointer', fontSize: '12px', color: 'var(--text-secondary)' }}>
+                    {r.company_name || r.netsuite_id}
+                  </button>
+                ))}
+              </div>
+            )}
+            <textarea rows={2} placeholder="Why is this account moving? (required — logged on the record) *"
+              value={parentNote} onChange={e => setParentNote(e.target.value)}
+              style={{ ...cInput, resize: 'vertical', fontFamily: 'inherit', marginBottom: '10px' }} />
+            <div style={{ display: 'flex', gap: '6px', flexWrap: 'wrap' }}>
+              <button onClick={() => saveParent(false)} disabled={parentSaving || !parentChoice || !parentNote.trim()} style={{
+                flex: 1, padding: '9px 12px', borderRadius: '8px', fontSize: '12px', fontWeight: 700, whiteSpace: 'nowrap',
+                background: parentChoice && parentNote.trim() ? '#22c55e' : 'var(--border)', border: 'none', color: '#fff',
+                cursor: parentChoice && parentNote.trim() ? 'pointer' : 'default', opacity: parentSaving ? 0.6 : 1,
+              }}>{parentSaving ? 'Saving…' : 'Assign parent'}</button>
+              {customer.parent_customer_id && (
+                <button onClick={() => saveParent(true)} disabled={parentSaving || !parentNote.trim()}
+                  title="Remove the manual parent link (falls back to NetSuite's hierarchy if it has one)"
+                  style={{ ...btnSm, padding: '9px 12px', fontSize: '12px', color: 'var(--error)', opacity: parentNote.trim() ? 1 : 0.5 }}>
+                  Clear parent
+                </button>
+              )}
+              <button onClick={() => setParentPickerOpen(false)} disabled={parentSaving} style={{ ...btnSm, padding: '9px 12px', fontSize: '12px' }}>Cancel</button>
             </div>
           </div>
         </div>

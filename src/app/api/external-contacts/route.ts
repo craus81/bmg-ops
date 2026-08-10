@@ -18,7 +18,9 @@ const CreateSchema = z
     email: z.string().email().max(254).optional().nullable(),
     title: z.string().max(120).optional().nullable(),
     is_primary: z.boolean().optional(),
-    channel_pref: z.enum(['email', 'sms', 'both', 'none']).optional().nullable(),
+    // Matches the DB CHECK (078): 'both'/'none' were accepted here but always
+    // failed the constraint with a 500.
+    channel_pref: z.enum(['email', 'sms', 'phone']).optional().nullable(),
     notes: z.string().max(2000).optional().nullable(),
   })
   .refine((d) => !!(d.name || d.phone || d.email), {

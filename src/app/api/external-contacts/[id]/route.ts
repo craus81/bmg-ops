@@ -18,7 +18,9 @@ const PatchSchema = z.object({
   email: z.string().email().max(254).optional().nullable(),
   title: z.string().max(120).optional().nullable(),
   is_primary: z.boolean().optional(),
-  channel_pref: z.enum(['email', 'sms', 'both', 'none']).optional().nullable(),
+  // Matches the DB CHECK (078): 'both'/'none' were accepted here but always
+  // failed the constraint with a 500.
+  channel_pref: z.enum(['email', 'sms', 'phone']).optional().nullable(),
   notes: z.string().max(2000).optional().nullable(),
   is_unknown: z.boolean().optional(),
 });
@@ -36,14 +38,27 @@ export async function PATCH(req: NextRequest, { params }: { params: { id: string
     if (k in body) (update as any)[k] = (body as any)[k];
   }
 
-  // If promoting to primary, demote siblings first
-  if (update.is_primary === true && (update.customer_id || body.customerId)) {
-    const cid = update.customer_id || body.customerId;
-    await supabase
-      .from('external_contacts')
-      .update({ is_primary: false })
-      .eq('customer_id', cid)
-      .neq('id', params.id);
+  // If promoting to primary, demote siblings first. The customer id comes
+  // from the body when provided, otherwise from the row itself — a bare
+  // {is_primary: true} PATCH used to skip demotion and leave two primaries,
+  // which every .eq('is_primary', true).maybeSingle() consumer then threw on.
+  if (update.is_primary === true) {
+    let cid = update.customer_id || body.customerId || null;
+    if (!cid) {
+      const { data: row } = await supabase
+        .from('external_contacts')
+        .select('customer_id')
+        .eq('id', params.id)
+        .maybeSingle();
+      cid = row?.customer_id || null;
+    }
+    if (cid) {
+      await supabase
+        .from('external_contacts')
+        .update({ is_primary: false })
+        .eq('customer_id', cid)
+        .neq('id', params.id);
+    }
   }
 
   const { data, error } = await supabase

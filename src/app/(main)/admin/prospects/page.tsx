@@ -125,6 +125,12 @@ export default function ProspectsPage() {
   // tag (it used to only see tags of cards expanded this session).
   const [tagsByProspect, setTagsByProspect] = useState<Record<string, string[]>>({});
 
+  // Industry/partner tags (K2 — customer_tags behind the controlled
+  // vocabulary, keyed on customers.id and joined back to prospects via
+  // netsuite_id in the metrics loader).
+  const [industryFilter, setIndustryFilter] = useState<string>('');
+  const [custTagsByProspect, setCustTagsByProspect] = useState<Record<string, string[]>>({});
+
   // Contacts directory tab
   const [allContacts, setAllContacts] = useState<DirectoryContact[]>([]);
   const [contactsLoaded, setContactsLoaded] = useState(false);
@@ -216,15 +222,37 @@ export default function ProspectsPage() {
     const converted = prospects.filter(p => p.netsuite_id);
     if (converted.length === 0) return;
     (async () => {
-      const { data: rows } = await fetchAllRows<CustomerMetrics & { netsuite_id: string | null }>((from, to) =>
+      const { data: rows } = await fetchAllRows<CustomerMetrics & { id: string; netsuite_id: string | null }>((from, to) =>
         supabase.from('customers')
-          .select('netsuite_id, total_spend, avg_order_value, ytd_spend, ytd_orders, last_year_spend, total_orders, last_order_date')
+          .select('id, netsuite_id, total_spend, avg_order_value, ytd_spend, ytd_orders, last_year_spend, total_orders, last_order_date')
           .order('netsuite_id').range(from, to));
       const nsMap: Record<string, CustomerMetrics> = {};
-      for (const c of rows || []) { if (c.netsuite_id) nsMap[c.netsuite_id] = c; }
+      const idToNs: Record<string, string> = {};
+      for (const c of rows || []) {
+        if (c.netsuite_id) { nsMap[c.netsuite_id] = c; idToNs[c.id] = c.netsuite_id; }
+      }
       const metricsMap: Record<string, CustomerMetrics> = {};
-      converted.forEach(p => { if (nsMap[p.netsuite_id!]) metricsMap[p.id] = nsMap[p.netsuite_id!]; });
+      const prospectByNs: Record<string, string> = {};
+      converted.forEach(p => {
+        if (nsMap[p.netsuite_id!]) metricsMap[p.id] = nsMap[p.netsuite_id!];
+        prospectByNs[p.netsuite_id!] = p.id;
+      });
       setCustomerMetrics(metricsMap);
+
+      // Industry/partner tags ride the same read: customers.id → netsuite_id
+      // → prospect id, labels from the vocabulary join.
+      const { data: tagRows } = await fetchAllRows<{ customer_id: string; customer_tag_vocabulary: { label: string } | null }>((from, to) =>
+        supabase.from('customer_tags')
+          .select('customer_id, customer_tag_vocabulary(label)')
+          .order('customer_id').order('tag_id').range(from, to));
+      const map: Record<string, string[]> = {};
+      for (const t of (tagRows || []) as any[]) {
+        const ns = idToNs[t.customer_id];
+        const pid = ns ? prospectByNs[ns] : null;
+        const label = t.customer_tag_vocabulary?.label;
+        if (pid && label) (map[pid] = map[pid] || []).push(label);
+      }
+      setCustTagsByProspect(map);
     })();
   // eslint-disable-next-line react-hooks/exhaustive-deps -- intentional: load once per prospects load
   }, [prospects]);
@@ -364,6 +392,7 @@ export default function ProspectsPage() {
 
   // All unique tags for the filter dropdown
   const allTags = [...new Set(Object.values(tagsByProspect).flat())].sort();
+  const allIndustryTags = [...new Set(Object.values(custTagsByProspect).flat())].sort();
 
   // Distinct prospect owners (created_by) for the owner filter dropdown.
   const ownerOptions = (() => {
@@ -381,6 +410,7 @@ export default function ProspectsPage() {
       if (!stages || !want.some(w => stages.has(w))) return false;
     }
     if (tagFilter && !(tagsByProspect[p.id] || []).includes(tagFilter)) return false;
+    if (industryFilter && !(custTagsByProspect[p.id] || []).includes(industryFilter)) return false;
     if (ownerFilter !== 'all' && p.created_by !== ownerFilter) return false;
     if (openQuoteFilter && !openQuoteCustomers.has((p.company_name || '').toLowerCase())) return false;
     if (spendTierFilter !== 'all') {
@@ -614,8 +644,8 @@ export default function ProspectsPage() {
         )}
         <div style={{ flex: 1 }} />
         <FilterButton
-          activeCount={(ownerFilter !== 'all' ? 1 : 0) + (tagFilter ? 1 : 0) + (spendTierFilter !== 'all' ? 1 : 0) + (openQuoteFilter ? 1 : 0)}
-          onClear={() => { setOwnerFilter('all'); setTagFilter(''); setSpendTierFilter('all'); setOpenQuoteFilter(false); }}
+          activeCount={(ownerFilter !== 'all' ? 1 : 0) + (tagFilter ? 1 : 0) + (industryFilter ? 1 : 0) + (spendTierFilter !== 'all' ? 1 : 0) + (openQuoteFilter ? 1 : 0)}
+          onClear={() => { setOwnerFilter('all'); setTagFilter(''); setIndustryFilter(''); setSpendTierFilter('all'); setOpenQuoteFilter(false); }}
         >
           <FilterLabel>Owner</FilterLabel>
           <select value={ownerFilter} onChange={e => setOwnerFilter(e.target.value)} style={{ width: '100%', padding: '6px 8px', borderRadius: '7px', fontSize: '12px', fontWeight: 600, background: 'var(--input-bg)', border: '1px solid var(--border)', color: 'var(--text-primary)' }}>
@@ -628,6 +658,15 @@ export default function ProspectsPage() {
               <select value={tagFilter} onChange={e => setTagFilter(e.target.value)} style={{ width: '100%', padding: '6px 8px', borderRadius: '7px', fontSize: '12px', fontWeight: 600, background: 'var(--input-bg)', border: '1px solid var(--border)', color: 'var(--text-primary)' }}>
                 <option value="">All Tags</option>
                 {allTags.map(t => <option key={t} value={t}>{t}</option>)}
+              </select>
+            </>
+          )}
+          {allIndustryTags.length > 0 && (
+            <>
+              <FilterLabel>Industry / Partner</FilterLabel>
+              <select value={industryFilter} onChange={e => setIndustryFilter(e.target.value)} style={{ width: '100%', padding: '6px 8px', borderRadius: '7px', fontSize: '12px', fontWeight: 600, background: 'var(--input-bg)', border: '1px solid var(--border)', color: 'var(--text-primary)' }}>
+                <option value="">All Industries</option>
+                {allIndustryTags.map(t => <option key={t} value={t}>{t}</option>)}
               </select>
             </>
           )}
