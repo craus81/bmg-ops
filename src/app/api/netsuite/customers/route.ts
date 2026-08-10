@@ -30,6 +30,7 @@ export async function GET(req: NextRequest) {
         c.entityid,
         c.email,
         c.phone,
+        c.parent,
         c.isinactive
       FROM customer c
       WHERE c.isinactive = 'F'
@@ -194,6 +195,10 @@ export async function GET(req: NextRequest) {
           email: nsc.email || null,
           phone: nsc.phone || null,
           address: addressMap[nsId] || null,
+          // NS hierarchy only — the manual parent link (migration 186) is
+          // FleetSuite-owned and stays out of this SET list. NetSuite
+          // reports a customer as its own parent when it has none.
+          netsuite_parent_id: nsc.parent && nsc.parent.toString() !== nsId ? nsc.parent.toString() : null,
           total_orders: allTime.order_count,
           total_spend: allTime.total_spend,
           avg_order_value: Math.round(avgOrder * 100) / 100,
