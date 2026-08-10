@@ -856,18 +856,6 @@ export default function UsersPage() {
                   )}
 
                   <div style={{ display: 'flex', gap: '6px', alignItems: 'center', flexWrap: 'wrap' }}>
-                    {userRoles.includes('customer') && (
-                      <button
-                        onClick={() => router.push(`/admin/users/${user.id}/assignments`)}
-                        style={{
-                          padding: '6px 12px', borderRadius: '8px', fontSize: '10px', fontWeight: 700,
-                          background: 'rgba(16,185,129,0.1)', border: '1px solid rgba(16,185,129,0.2)',
-                          color: '#34d399', cursor: 'pointer',
-                        }}
-                      >
-                        Assign Jobs
-                      </button>
-                    )}
                     <button
                       onClick={() => handleResendInvite(user.id, user.email, user.full_name || '')}
                       disabled={resending === user.id}

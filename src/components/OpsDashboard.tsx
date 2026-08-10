@@ -126,7 +126,7 @@ export default function OpsDashboard() {
 
     const [
       invoicedRes, gfxRes, scansRes, partsRes, poRes,
-      importsRes, photosRes, unpaidRes, usersRes, cniPhotosRes, cniInvRes,
+      importsRes, unpaidRes, usersRes, cniPhotosRes, cniInvRes,
       shopRes, cniRes,
       schedGfxRes, schedUpfitRes, schedCniRes, schedEventsRes,
       scansTodayRes, scansWeekRes, msgRes, unreadRes,
@@ -153,7 +153,6 @@ export default function OpsDashboard() {
       supabase.from('purchase_orders').select('id, po_line_items(quantity, installed, unit_price)').eq('status', 'open'),
       // Queue rows — same queries as each destination screen
       supabase.from('gmail_po_imports').select('*', { count: 'exact', head: true }).eq('status', 'pending'),
-      supabase.from('scanned_vehicles').select('*', { count: 'exact', head: true }).eq('submitted_for_review', true).eq('review_status', 'pending'),
       supabase.from('fleet_checkins').select('*', { count: 'exact', head: true }).not('invoice_number', 'is', null).eq('is_paid', false),
       supabase.from('profiles').select('*', { count: 'exact', head: true }).eq('status', 'pending'),
       supabase.from('cni_job_photos').select('*', { count: 'exact', head: true }).eq('review_status', 'pending'),
@@ -294,11 +293,6 @@ export default function OpsDashboard() {
       key: 'flagged', count: flagged.length, tone: 'err', path: '/graphics',
       title: 'Graphics jobs flagged for review',
       detail: flagged.slice(0, 3).map(j => j.part_number || j.title).filter(Boolean).join(' · '),
-    });
-    const photos = count(photosRes);
-    if (photos > 0) queue.push({
-      key: 'photos', count: photos, tone: 'blue', path: '/admin/reviews',
-      title: 'Photo sets to review', detail: 'Submitted by installers',
     });
     const unpaid = count(unpaidRes);
     if (unpaid > 0) queue.push({

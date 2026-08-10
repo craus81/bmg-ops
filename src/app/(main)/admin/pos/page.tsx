@@ -909,15 +909,6 @@ export default function POsPage() {
     setImporting(true);
     const existingPo = pdfOverwriteExisting;
 
-    // Clear FK references from scanned_vehicles before deleting line items
-    const existingLineIds = (existingPo.line_items || []).map((li: any) => li.id);
-    if (existingLineIds.length > 0) {
-      await supabase
-        .from('scanned_vehicles')
-        .update({ po_line_item_id: null })
-        .in('po_line_item_id', existingLineIds);
-    }
-
     // Delete old line items
     const { error: deleteErr } = await supabase.from('po_line_items').delete().eq('po_id', existingPo.id);
     if (deleteErr) {

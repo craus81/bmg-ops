@@ -121,56 +121,51 @@ SUPABASE TABLES (BMG Fleet App)
    - id, job_id (FK graphics_jobs), from_status, to_status
    - changed_by (FK profiles), note, created_at
 
-6. scanned_vehicles — VEHICLE TRACKING
-   - id (uuid), vin, year, make, model, color, trim, body_class
-   - customer, location, status, notes
-   - created_at, updated_at
-
-7. fleet_checkins — INSTALLER CHECK-INS
-   - id, vehicle_id (FK scanned_vehicles), user_id (FK profiles)
+6. fleet_checkins — INSTALLER CHECK-INS
+   - id, user_id (FK profiles)
    - location, mileage, fuel_level, condition, notes
    - checked_in_at
 
-8. catalog — PARTS CATALOG
+7. catalog — PARTS CATALOG
    - id, part_number, customer, end_customer, vehicle_type, graphic_package
    - price, proof_pages, active (boolean)
    - created_at
 
-9. schedule_entries — INSTALLATION SCHEDULE
+8. schedule_entries — INSTALLATION SCHEDULE
    - id, installer_id (FK profiles), scheduled_date, catalog_id (FK catalog)
    - quantity, location_id, notes
    - status ('scheduled'|'in_progress'|'complete')
    - assigned_by, updated_at
 
-10. conversations — IN-APP MESSAGING
+9. conversations — IN-APP MESSAGING
     - id, participant_1, participant_2 (both FK profiles)
     - last_message_at, created_at
 
-11. messages — CHAT MESSAGES
+10. messages — CHAT MESSAGES
     - id, conversation_id (FK conversations), sender_id (FK profiles)
     - body, read_at, via_sms (boolean), sms_sid
     - created_at
 
-12. notifications
+11. notifications
     - id, user_id (FK profiles), type, title, body
     - read_at, created_at
 
-13. notification_preferences
+12. notification_preferences
     - id, user_id, notify_new_job, notify_status_change, notify_ready, notify_shipped
     - notify_in_app, notify_email, notify_sms, phone_number
     - sms_messages, sms_messages_mode, email_messages
     - custom_statuses (text array)
 
-14. po_invoices
+13. po_invoices
     - id, po_id (FK), invoice_number, invoice_date, amount, status, notes
 
-15. knowledge_docs — KNOWLEDGE BASE (SOPs, specs, guides, uploaded files)
+14. knowledge_docs — KNOWLEDGE BASE (SOPs, specs, guides, uploaded files)
     - id, title, category ('SOP'|'spec'|'pricing'|'process'|'policy')
     - content (full text — extracted from uploaded files or manually entered), tags (text array)
     - file_name, file_type, file_size, file_path (if uploaded from a file)
     - uploaded_by (FK profiles), created_at
 
-16. netsuite_parts — PARTS CATALOG (synced from NetSuite)
+15. netsuite_parts — PARTS CATALOG (synced from NetSuite)
     - id (uuid), netsuite_id (text), item_number (text), display_name (text)
     - description (text), item_type ('InventoryItem'|'NonInventoryItem'|'ServiceItem')
     - catalog ('upfit'|'graphics'), sales_price (numeric), purchase_price (numeric)
@@ -179,7 +174,7 @@ SUPABASE TABLES (BMG Fleet App)
     - is_active (boolean), last_synced_at, created_at
     - USE THIS TABLE to look up parts before creating estimates
 
-17. estimates — ESTIMATES / QUOTES
+16. estimates — ESTIMATES / QUOTES
     - id (uuid), estimate_number (text, e.g. 'EST-2603-0001')
     - customer_id (FK customers), customer_name, customer_netsuite_id
     - title, notes, status ('draft'|'sent'|'accepted'|'rejected'|'pushed')
@@ -188,13 +183,13 @@ SUPABASE TABLES (BMG Fleet App)
     - netsuite_estimate_id, netsuite_estimate_number (after push)
     - created_by (FK profiles), created_at, updated_at
 
-18. estimate_line_items — ESTIMATE LINE ITEMS
+17. estimate_line_items — ESTIMATE LINE ITEMS
     - id (uuid), estimate_id (FK estimates), sort_order (int)
     - part_id (FK netsuite_parts), netsuite_item_id (text)
     - item_number, description, quantity (numeric), unit_price (numeric)
     - line_total (numeric), labor_hours (numeric), is_custom (boolean)
 
-19. vehicle_templates — VEHICLE WRAP DIMENSIONS (panel sizes for quoting)
+18. vehicle_templates — VEHICLE WRAP DIMENSIONS (panel sizes for quoting)
     - id (uuid), name (full display name e.g. "Ford Transit Long Wheelbase High Roof 2015-Present")
     - make, model, year, variant (e.g. "Long Wheelbase", "High Roof", "Extended")
     - overall_length_in, overall_height_in, wheelbase_in
@@ -202,20 +197,20 @@ SUPABASE TABLES (BMG Fleet App)
     - Panel labels: A=Driver Side, B=Passenger Side, C=Rear, D=Front/Hood, E=Roof/Hood, F=Roof, G-K=Window Film panels
     - ~550 vehicles with full wrap dimension data
 
-20. netsuite_vendor_pos — VENDOR PURCHASE ORDERS (BMG buying parts from vendors; synced from NetSuite every 2h)
+19. netsuite_vendor_pos — VENDOR PURCHASE ORDERS (BMG buying parts from vendors; synced from NetSuite every 2h)
     - id (uuid), netsuite_id (text), tranid (text — the PO number, e.g. "PO376")
     - vendor_name (text), trandate (date)
     - status (text — NetSuite code; 'F'/'G'/'H' = Fully Billed / Closed / Cancelled = DONE, anything else incl. NULL = OPEN / still receiving), status_label (text)
     - eta_date (date — expected arrival, filled in from vendor confirmation emails), tracking_number, carrier, total (numeric)
     - These are what's ON ORDER.
 
-21. netsuite_vendor_po_lines — VENDOR PO LINE ITEMS (one row per part on a vendor PO)
+20. netsuite_vendor_po_lines — VENDOR PO LINE ITEMS (one row per part on a vendor PO)
     - id (uuid), po_id (FK netsuite_vendor_pos), item_number (text — normalized), description (text — line memo)
     - quantity (ordered), quantity_received, quantity_billed (all numeric)
     - INCOMING quantity for a part = quantity − quantity_received, on lines whose PO status is OPEN.
     - Join netsuite_vendor_pos for vendor / ETA / tracking; match netsuite_parts and part_allocations by item_number.
 
-22. part_allocations — PARTS RESERVED TO JOBS (FleetSuite-side holds)
+21. part_allocations — PARTS RESERVED TO JOBS (FleetSuite-side holds)
     - id (uuid), project_id (FK upfit_projects), item_number (text), quantity (numeric)
     - status ('reserved' = active hold, 'consumed' = job finished, 'released' = freed). Only 'reserved' is a live commitment.
     - Join upfit_projects(project_name) to name the job a part is held for.

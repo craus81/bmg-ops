@@ -19,13 +19,6 @@ export async function POST(req: NextRequest) {
   const { lineId } = parsed.data;
 
   try {
-
-    // Clear FK references from scanned_vehicles
-    await supabase
-      .from('scanned_vehicles')
-      .update({ po_line_item_id: null })
-      .eq('po_line_item_id', lineId);
-
     // Delete the line item
     const { error } = await supabase
       .from('po_line_items')
