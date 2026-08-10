@@ -38,6 +38,7 @@ import { fetchAllRows } from '@/lib/fetch-all';
 import { SortableTh, useTableSort } from '@/components/ui/SortableTh';
 import FilterButton, { FilterLabel } from '@/components/ui/FilterButton';
 import type { GraphicsJob, GraphicsJobStatus, GraphicsJobCategory, GraphicsJobView } from '@/lib/types';
+import { nextJobNumber, legacyJobNumber } from '@/lib/job-numbers';
 import {
   GRAPHICS_STATUS_LABELS, GRAPHICS_STATUS_COLORS, GRAPHICS_STATUS_ORDER,
   GRAPHICS_CATEGORY_LABELS, GRAPHICS_CATEGORY_COLORS,
@@ -483,7 +484,7 @@ export default function GraphicsPage() {
     setCreating(true);
     const cat = createForm.job_category || 'production';
     const prefix = cat === 'proofing' ? 'PRF' : cat === 'internal' ? 'INT' : cat === 'customer_supplied' ? 'CSG' : 'GFX';
-    const jobNumber = `${prefix}-${Date.now().toString(36).toUpperCase()}`;
+    const jobNumber = await nextJobNumber(supabase, prefix, () => legacyJobNumber.gfx(prefix));
     const initialStatus: GraphicsJobStatus = cat === 'proofing' ? 'designing' : 'received';
     const { data, error } = await supabase
       .from('graphics_jobs')

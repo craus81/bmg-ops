@@ -8,6 +8,7 @@ import {
   touchesFinancialData, stripFinancialGuidance,
 } from '@/lib/ai-agent-access';
 import { validateBody, z } from '@/lib/validate';
+import { nextJobNumber, legacyJobNumber } from '@/lib/job-numbers';
 
 export const dynamic = 'force-dynamic';
 
@@ -761,7 +762,7 @@ async function executeQuery(q: QuerySpec): Promise<any> {
 async function executeAction(action: string, params: Record<string, any>): Promise<any> {
   switch (action) {
     case 'create_graphics_job': {
-      const jobNumber = `GFX-${Date.now().toString(36).toUpperCase()}-${Math.random().toString(36).slice(2, 5).toUpperCase()}`;
+      const jobNumber = await nextJobNumber(supabase, 'GFX', () => legacyJobNumber.gfx());
       const { data, error } = await supabase
         .from('graphics_jobs')
         .insert({
@@ -886,15 +887,7 @@ async function executeAction(action: string, params: Record<string, any>): Promi
         throw new Error('line_items array is required with at least one item');
       }
 
-      // Generate estimate number: EST-YYMM-XXXX
-      const now = new Date();
-      const prefix = `EST-${now.getFullYear().toString().slice(2)}${String(now.getMonth() + 1).padStart(2, '0')}`;
-      const { count } = await supabase
-        .from('estimates')
-        .select('*', { count: 'exact', head: true })
-        .like('estimate_number', `${prefix}%`);
-      const seq = String((count || 0) + 1).padStart(4, '0');
-      const estimateNumber = `${prefix}-${seq}`;
+      const estimateNumber = await nextJobNumber(supabase, 'EST', legacyJobNumber.est);
 
       // Look up customer by name if netsuite ID not provided
       let customerId: string | null = null;

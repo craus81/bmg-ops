@@ -11,6 +11,7 @@ import { storage, storageDownloadUrl } from '@/lib/storage';
 import { DropZone } from '@/components/DropZone';
 import MentionTextArea, { reportMentions } from '@/components/MentionTextArea';
 import { flashNote } from '@/lib/focus-note';
+import { nextJobNumber, legacyJobNumber } from '@/lib/job-numbers';
 import UploadProgressBar, { type UploadProgress } from '@/components/UploadProgressBar';
 
 interface CalendarEvent {
@@ -401,7 +402,7 @@ export default function SchedulePage() {
     setCardBusy(true);
     try {
       const { data: job, error } = await supabase.from('graphics_jobs').insert({
-        job_number: `GFX-${Date.now().toString(36).toUpperCase()}`,
+        job_number: await nextJobNumber(supabase, 'GFX', () => legacyJobNumber.gfx()),
         job_category: 'production',
         title: cardEvent.title,
         notes: cardEvent.description || null,
