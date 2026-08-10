@@ -161,5 +161,36 @@ export function extractSameOriginLinks(html: string, baseUrl: string): string[] 
 
 /** Conventional sitemap locations, tried when robots.txt names none —
  *  covers WordPress/Yoast (sitemap_index.xml), WP core (wp-sitemap.xml),
- *  and Shopify/most others (sitemap.xml). */
-export const SITEMAP_CANDIDATES = ['/sitemap.xml', '/sitemap_index.xml', '/wp-sitemap.xml', '/sitemap-index.xml'];
+ *  Shopify's product sitemap, and most others (sitemap.xml). */
+export const SITEMAP_CANDIDATES = ['/sitemap.xml', '/sitemap_index.xml', '/wp-sitemap.xml', '/sitemap-index.xml', '/sitemap_products_1.xml'];
+
+/** Both host spellings — a site can serve (or block) www and apex differently. */
+export function originVariants(baseUrl: string): string[] {
+  const u = new URL(baseUrl);
+  const hosts = u.hostname.startsWith('www.')
+    ? [u.hostname, u.hostname.slice(4)]
+    : [u.hostname, `www.${u.hostname}`];
+  return hosts.map(h => `${u.protocol}//${h}`);
+}
+
+/**
+ * Pagination links of a listing page: same-origin URLs on the same path
+ * (or /page/N children) carrying a page indicator. Query is kept — ?page=2
+ * IS the pagination on many platforms.
+ */
+export function extractPaginationLinks(html: string, listingUrl: string): string[] {
+  const base = new URL(listingUrl);
+  const out = new Set<string>();
+  for (const m of html.matchAll(/href=["']([^"']+)["']/gi)) {
+    try {
+      const u = new URL(decodeEntities(m[1]), listingUrl);
+      if (u.origin !== base.origin) continue;
+      const paged = /\/page\/\d+\/?$/.test(u.pathname) || /(^|&)page=\d+/.test(u.search.slice(1));
+      if (!paged) continue;
+      if (!u.pathname.startsWith(base.pathname.replace(/\/$/, '')) ) continue;
+      u.hash = '';
+      out.add(u.toString());
+    } catch { /* unparseable href */ }
+  }
+  return [...out];
+}

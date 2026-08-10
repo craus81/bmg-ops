@@ -6,7 +6,8 @@ import { r2Upload } from '@/lib/r2';
 import { fetchAllRows } from '@/lib/fetch-all';
 import {
   extractProduct, parseSitemapLocs, matchSkuToPart, skuKeys,
-  looksLikeProductUrl, looksLikeListingUrl, extractSameOriginLinks, SITEMAP_CANDIDATES,
+  looksLikeProductUrl, looksLikeListingUrl, extractSameOriginLinks,
+  extractPaginationLinks, originVariants, SITEMAP_CANDIDATES,
 } from '@/lib/vendor-catalog-import';
 
 export const dynamic = 'force-dynamic';
@@ -20,9 +21,17 @@ const supabase = createClient(
 const Schema = z.discriminatedUnion('mode', [
   // Verify extraction against one live page — no writes.
   z.object({ mode: z.literal('probe'), url: z.string().url().max(1000) }),
-  // Walk the site's sitemap(s) and return product-ish URLs for the client
-  // to batch through 'run'.
-  z.object({ mode: z.literal('discover'), baseUrl: z.string().url().max(300) }),
+  // Walk the site's sitemap(s) / crawl and return product-ish URLs for the
+  // client to batch through 'run'. listingUrl = "teach mode": harvest from
+  // a specific category page (plus its pagination and sibling categories)
+  // instead — for sites whose sitemaps and homepage nav are unreadable.
+  z.object({
+    mode: z.literal('discover'),
+    baseUrl: z.string().url().max(300),
+    /** Teach mode: harvest from these category/listing pages (plus their
+     *  pagination and sibling categories) instead of sitemaps/crawl. */
+    listingUrls: z.array(z.string().url().max(1000)).max(20).optional(),
+  }),
   // Import a batch of product pages: extract, match SKU, upload image to
   // R2, stamp image_path + marketing_description.
   z.object({
@@ -85,62 +94,116 @@ export async function POST(req: NextRequest) {
     }
 
     if (body.mode === 'discover') {
-      const origin = new URL(body.baseUrl).origin;
       const candidates = new Set<string>();
       const checked: string[] = [];
+      const note = (url: string, msg: string) => checked.push(`${url} — ${msg}`);
 
-      // ── Sitemap pass: robots.txt Sitemap lines, then the conventional
-      // locations (WordPress/Yoast and WP core included — rangerdesign.com
-      // taught us /sitemap.xml alone isn't enough).
+      // Category-page-ish, generously: the standard shapes plus paths like
+      // /trazer-truck-products/ (rangerdesign.com's other category flavor).
+      const listingish = (u: string) => looksLikeListingUrl(u) || /-products?\/?$/.test(new URL(u).pathname);
+
+      // Harvest one listing page: product links into candidates, pagination +
+      // sibling category links back to the caller for the queue.
+      const harvestListing = async (listing: string): Promise<string[]> => {
+        try {
+          const page = await fetchText(listing);
+          let found = 0;
+          const links = extractSameOriginLinks(page, listing);
+          for (const l of links) if (looksLikeProductUrl(l)) { candidates.add(l); found++; }
+          note(listing, `${found} product links`);
+          return [
+            ...extractPaginationLinks(page, listing),
+            ...links.filter(listingish),
+          ];
+        } catch (err: any) {
+          note(listing, `fetch failed: ${err?.message || 'error'}`);
+          return [];
+        }
+      };
+
+      // ── Teach mode: Craig hands us category pages; we fan out through
+      // their pagination and sibling categories. No sitemap guessing.
+      if (body.listingUrls && body.listingUrls.length > 0) {
+        const seen = new Set<string>();
+        const queue = [...new Set(body.listingUrls)];
+        let fetched = 0;
+        while (queue.length > 0 && fetched < 25 && candidates.size < 3000) {
+          const listing = queue.shift()!;
+          const key = listing.replace(/\/$/, '');
+          if (seen.has(key)) continue;
+          seen.add(key);
+          fetched++;
+          for (const next of await harvestListing(listing)) {
+            if (!seen.has(next.replace(/\/$/, ''))) queue.push(next);
+          }
+          await sleep(300);
+        }
+        const urls = [...candidates];
+        return NextResponse.json({ urls, total: urls.length, sample: urls.slice(0, 10), via: 'listing', checked: checked.slice(0, 30) });
+      }
+
+      // ── Sitemap pass over BOTH host spellings (www and apex can behave
+      // differently), robots.txt Sitemap lines first.
+      const origins = originVariants(body.baseUrl);
       const sitemaps: string[] = [];
-      try {
-        const robots = await fetchText(`${origin}/robots.txt`, 200_000);
-        for (const m of robots.matchAll(/^sitemap:\s*(\S+)/gim)) sitemaps.push(m[1]);
-      } catch { /* no robots.txt is fine */ }
-      if (sitemaps.length === 0) sitemaps.push(...SITEMAP_CANDIDATES.map(p => `${origin}${p}`));
+      for (const origin of origins) {
+        try {
+          const robots = await fetchText(`${origin}/robots.txt`, 200_000);
+          for (const m of robots.matchAll(/^sitemap:\s*(\S+)/gim)) sitemaps.push(m[1]);
+        } catch { /* no robots.txt is fine */ }
+      }
+      if (sitemaps.length === 0) {
+        for (const origin of origins) sitemaps.push(...SITEMAP_CANDIDATES.map(p => `${origin}${p}`));
+      }
 
       const queue = [...new Set(sitemaps)];
       let fetched = 0;
       while (queue.length > 0 && fetched < 15 && candidates.size < 3000) {
         const smUrl = queue.shift()!;
         fetched++;
-        checked.push(smUrl);
         try {
           const xml = await fetchText(smUrl, 5_000_000);
           const { locs, isIndex } = parseSitemapLocs(xml);
-          if (isIndex) queue.push(...locs.slice(0, 15 - fetched));
-          else for (const loc of locs) if (looksLikeProductUrl(loc)) candidates.add(loc);
-        } catch { /* skip unreachable sitemaps */ }
+          if (isIndex) {
+            queue.push(...locs.slice(0, 15 - fetched));
+            note(smUrl, `index with ${locs.length} child sitemaps`);
+          } else {
+            const before = candidates.size;
+            for (const loc of locs) if (looksLikeProductUrl(loc)) candidates.add(loc);
+            note(smUrl, `${locs.length} locs, ${candidates.size - before} product-like`);
+          }
+        } catch (err: any) {
+          note(smUrl, err?.message || 'fetch failed');
+        }
         await sleep(300);
       }
 
-      // ── Crawl fallback: no product URLs from any sitemap — walk the
-      // homepage's same-origin links, fan out through category/listing
-      // pages, and collect product links. Tightly capped and paced.
+      // ── Crawl fallback: homepage links (both spellings) → listing pages.
       let via: 'sitemap' | 'crawl' = 'sitemap';
       if (candidates.size === 0) {
         via = 'crawl';
-        try {
-          const home = await fetchText(body.baseUrl);
-          const homeLinks = extractSameOriginLinks(home, body.baseUrl);
-          for (const l of homeLinks) if (looksLikeProductUrl(l)) candidates.add(l);
-          const listings = homeLinks.filter(looksLikeListingUrl).slice(0, 12);
-          for (const listing of listings) {
-            checked.push(listing);
-            try {
-              const page = await fetchText(listing);
-              for (const l of extractSameOriginLinks(page, listing)) {
-                if (looksLikeProductUrl(l)) candidates.add(l);
-              }
-            } catch { /* skip unreachable listing */ }
-            await sleep(300);
-            if (candidates.size >= 3000) break;
+        for (const origin of origins) {
+          try {
+            const home = await fetchText(origin);
+            const homeLinks = extractSameOriginLinks(home, origin);
+            let found = 0;
+            for (const l of homeLinks) if (looksLikeProductUrl(l)) { candidates.add(l); found++; }
+            const listings = homeLinks.filter(l => listingish(l)).slice(0, 10);
+            note(origin, `homepage: ${homeLinks.length} links, ${found} product-like, ${listings.length} category-like`);
+            for (const listing of listings) {
+              await harvestListing(listing);
+              await sleep(300);
+              if (candidates.size >= 3000) break;
+            }
+            if (candidates.size > 0) break;
+          } catch (err: any) {
+            note(origin, `homepage fetch failed: ${err?.message || 'error'}`);
           }
-        } catch { /* homepage unreachable — reported below as zero */ }
+        }
       }
 
       const urls = [...candidates];
-      return NextResponse.json({ urls, total: urls.length, sample: urls.slice(0, 10), via, checked: checked.slice(0, 20) });
+      return NextResponse.json({ urls, total: urls.length, sample: urls.slice(0, 10), via, checked: checked.slice(0, 30) });
     }
 
     // mode === 'run'

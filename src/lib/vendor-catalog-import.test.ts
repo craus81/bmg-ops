@@ -2,6 +2,7 @@ import { describe, it, expect } from 'vitest';
 import {
   extractProduct, parseSitemapLocs, matchSkuToPart, skuKeys,
   looksLikeProductUrl, looksLikeListingUrl, extractSameOriginLinks,
+  extractPaginationLinks, originVariants,
 } from './vendor-catalog-import';
 
 // Extraction is written blind to any one vendor's HTML — pin the layered
@@ -101,6 +102,36 @@ describe('extractSameOriginLinks (crawl fallback)', () => {
     const links = extractSameOriginLinks(html, 'https://x.com/');
     expect(links).toContain('https://x.com/products/shelf-1/');
     expect(links).toContain('https://x.com/product-category/racks/');
+    expect(links).toHaveLength(2);
+  });
+});
+
+describe('originVariants (www and apex can behave differently)', () => {
+  it('returns both spellings, input host first', () => {
+    expect(originVariants('https://www.rangerdesign.com')).toEqual([
+      'https://www.rangerdesign.com',
+      'https://rangerdesign.com',
+    ]);
+    expect(originVariants('https://rangerdesign.com/some/page')).toEqual([
+      'https://rangerdesign.com',
+      'https://www.rangerdesign.com',
+    ]);
+  });
+});
+
+describe('extractPaginationLinks (teach mode fan-out)', () => {
+  const listing = 'https://x.com/product-category/shelving/';
+  const html = `
+    <a href="/product-category/shelving/page/2/">2</a>
+    <a href="https://x.com/product-category/shelving/?page=3#list">3</a>
+    <a href="/product-category/racks/page/2/">other category</a>
+    <a href="https://other.com/product-category/shelving/page/2/">external</a>
+    <a href="/product-category/shelving/">current page</a>`;
+
+  it('keeps /page/N and ?page=N on the same listing path only', () => {
+    const links = extractPaginationLinks(html, listing);
+    expect(links).toContain('https://x.com/product-category/shelving/page/2/');
+    expect(links).toContain('https://x.com/product-category/shelving/?page=3');
     expect(links).toHaveLength(2);
   });
 });
