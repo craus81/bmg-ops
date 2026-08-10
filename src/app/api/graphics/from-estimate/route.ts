@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { createClient } from '@supabase/supabase-js';
 import { requireAuth } from '@/lib/api-auth';
 import { validateBody, z } from '@/lib/validate';
+import { nextJobNumber, legacyJobNumber } from '@/lib/job-numbers';
 
 export const dynamic = 'force-dynamic';
 
@@ -24,9 +25,6 @@ function getSupabase() {
   );
 }
 
-function generateJobNumber(): string {
-  return `GFX-${Date.now().toString(36).toUpperCase()}`;
-}
 
 /**
  * POST /api/graphics/from-estimate
@@ -68,7 +66,7 @@ export async function POST(req: NextRequest) {
 
     const { data: estimate, error: estErr } = await supabase
       .from('estimates')
-      .select('id, estimate_number, customer_id, customer_name, customer_netsuite_id, title, notes')
+      .select('id, estimate_number, customer_id, customer_name, customer_netsuite_id, title, notes, vin')
       .eq('id', estimateId)
       .single();
     if (estErr || !estimate) {
@@ -159,8 +157,11 @@ export async function POST(req: NextRequest) {
       .limit(1)
       .maybeSingle();
 
-    const jobNumber = generateJobNumber();
+    const jobNumber = await nextJobNumber(supabase, 'GFX', () => legacyJobNumber.gfx());
+    // K4/K5: the meeting wants VINs in job naming — carry the estimate's VIN
+    // last-6 into the graphics job title so the shop can say the job out loud.
     const titleParts = [estimate.title || `Estimate ${estimate.estimate_number}`];
+    if (estimate.vin) titleParts.push(`· ${String(estimate.vin).slice(-6)}`);
     const title = titleParts.join(' ');
 
     const { data: newJob, error: insErr } = await supabase

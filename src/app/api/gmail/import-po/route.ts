@@ -12,6 +12,7 @@ import { recomputePoFulfillment } from '@/lib/scan-match';
 import { fetchAllRows } from '@/lib/fetch-all';
 import { notifyPoImported, countGraphicsLines } from '@/lib/po-import-notify';
 import { applyInstallPartRule } from '@/lib/po-install-parts';
+import { nextJobNumber, legacyJobNumber } from '@/lib/job-numbers';
 
 // Full active catalog for part matching — paginated past PostgREST's
 // 1000-row cap. A truncated read here marks real parts "not in catalog"
@@ -196,7 +197,7 @@ async function flagGraphicParts(
     .select('id, part_number')
     .eq('po_id', poId);
 
-  const jobInserts = graphicLines.map((l: any) => {
+  const jobInserts = await Promise.all(graphicLines.map(async (l: any) => {
     const partNum = l.supplier_part || l.part_number;
     const matchedLine = (poLineItems || []).find((pli: any) =>
       pli.part_number?.toUpperCase() === (partNum || '').toUpperCase()
@@ -204,7 +205,7 @@ async function flagGraphicParts(
     return {
       po_id: poId,
       po_line_item_id: matchedLine?.id || null,
-      job_number: `GFX-${Date.now().toString(36).toUpperCase()}-${Math.random().toString(36).slice(2, 5).toUpperCase()}`,
+      job_number: await nextJobNumber(supabase, 'GFX', () => legacyJobNumber.gfx()),
       title: l.description || `Graphic - ${partNum}`,
       part_number: partNum,
       customer: customer || null,
@@ -213,7 +214,7 @@ async function flagGraphicParts(
       priority: 'normal',
       created_by: createdBy || null,
     };
-  });
+  }));
 
   const { data: createdJobs } = await supabase
     .from('graphics_jobs')

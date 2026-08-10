@@ -3,6 +3,7 @@ import { createClient } from '@supabase/supabase-js';
 import { requireAuth } from '@/lib/api-auth';
 import { validateBody, z } from '@/lib/validate';
 import { fmtInches } from '@/lib/format';
+import { nextJobNumber, legacyJobNumber } from '@/lib/job-numbers';
 
 export const dynamic = 'force-dynamic';
 
@@ -25,9 +26,6 @@ function getSupabase() {
   );
 }
 
-function generateJobNumber(): string {
-  return `GFX-${Date.now().toString(36).toUpperCase()}`;
-}
 
 /**
  * A quote that turned into (or got linked to) a graphics job is won — mark
@@ -188,7 +186,7 @@ export async function POST(req: NextRequest) {
     const { data: newJob, error: insErr } = await supabase
       .from('graphics_jobs')
       .insert({
-        job_number: generateJobNumber(),
+        job_number: await nextJobNumber(supabase, 'GFX', () => legacyJobNumber.gfx()),
         job_category: 'production',
         title,
         customer: customerName,

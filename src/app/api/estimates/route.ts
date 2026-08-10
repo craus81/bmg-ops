@@ -3,6 +3,7 @@ import { createClient } from '@supabase/supabase-js';
 import { requireStaff } from '@/lib/api-auth';
 import { validateBody, z } from '@/lib/validate';
 import { computeTotals } from '@/lib/estimate-totals';
+import { nextJobNumber, legacyJobNumber } from '@/lib/job-numbers';
 
 export const dynamic = 'force-dynamic';
 
@@ -52,13 +53,6 @@ function getSupabase() {
   );
 }
 
-function generateEstimateNumber(): string {
-  const d = new Date();
-  const yy = d.getFullYear().toString().slice(-2);
-  const mm = (d.getMonth() + 1).toString().padStart(2, '0');
-  const rand = Math.random().toString(36).substring(2, 6).toUpperCase();
-  return `EST-${yy}${mm}-${rand}`;
-}
 
 // GET — list estimates
 export async function GET(req: NextRequest) {
@@ -219,7 +213,7 @@ export async function POST(req: NextRequest) {
       let data: any = null;
       let insertErr: any = null;
       for (let attempt = 0; attempt < 3; attempt++) {
-        const estimate_number = generateEstimateNumber();
+        const estimate_number = await nextJobNumber(supabase, 'EST', legacyJobNumber.est);
         const res = await supabase
         .from('estimates')
         .insert({

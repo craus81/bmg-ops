@@ -193,6 +193,15 @@ export async function POST(req: NextRequest) {
     const poNumber = (job.po_number || '').trim();
     const memoParts = [`Graphics Job #${job.job_number || job.id.slice(0, 8)}`];
     if (job.customer) memoParts.push(job.customer);
+    // K4: carry the human number through the chain — a job spawned from an
+    // estimate stamps that estimate's number on the invoice memo, so
+    // estimate → job → invoice all say the same thing. (The customer's PO
+    // keeps the dedicated PO field; the memo is where our number rides.)
+    if (job.estimate_id) {
+      const { data: est } = await supabase
+        .from('estimates').select('estimate_number').eq('id', job.estimate_id).maybeSingle();
+      if (est?.estimate_number) memoParts.push(`Estimate #${est.estimate_number}`);
+    }
     const memo = memoParts.join(' — ');
 
     // Resolve the NetSuite location from the job's PO (customer + ship-to),

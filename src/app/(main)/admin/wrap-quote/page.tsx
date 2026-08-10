@@ -12,6 +12,7 @@ import { openNetSuitePdf } from '@/lib/netsuite-pdf-client';
 import { DropZone } from '@/components/DropZone';
 import { theme } from '@/lib/theme';
 import { RollNesting, RollFilmInfo } from '@/components/RollNesting';
+import { nextJobNumber, legacyJobNumber } from '@/lib/job-numbers';
 import {
   DEFAULT_ROLL,
   MAX_ROLLS_PER_FILM,
@@ -1104,19 +1105,10 @@ export default function WrapQuotePage() {
   };
 
   // ----- Quote snapshot / save / email -----
-  // Quote numbers are date-based: WQ-MMDDYY for the first quote of the day,
-  // then WQ-MMDDYY-1, -2, … for additional quotes that day.
-  const wqBase = () => {
-    const d = new Date();
-    return `WQ-${String(d.getMonth() + 1).padStart(2, '0')}${String(d.getDate()).padStart(2, '0')}${String(d.getFullYear()).slice(-2)}`;
-  };
-  const nextQuoteNumber = async (): Promise<string> => {
-    const base = wqBase();
-    const { data } = await supabase.from('wrap_quotes').select('quote_number').like('quote_number', `${base}%`);
-    const taken = new Set((data || []).map((r: { quote_number: string }) => r.quote_number));
-    if (!taken.has(base)) return base;
-    for (let n = 1; ; n++) if (!taken.has(`${base}-${n}`)) return `${base}-${n}`;
-  };
+  // Quote numbers use the shared dated sequence (K4): WQ-2608-003. Old
+  // WQ-MMDDYY-N numbers stay as-is on existing quotes.
+  const nextQuoteNumber = (): Promise<string> =>
+    nextJobNumber(supabase, 'WQ', legacyJobNumber.wq);
 
   const buildSnapshot = () => {
     // With roll pricing on, the per-shape lines are informational (sizes and
@@ -1190,7 +1182,7 @@ export default function WrapQuotePage() {
       };
     }
     return {
-      quote_number: quoteNumber || wqBase(),
+      quote_number: quoteNumber || legacyJobNumber.wq(),
       template_id: template?.id || null,
       vehicle_description: template ? templateLabel(template) : null,
       customer_id: customerId,

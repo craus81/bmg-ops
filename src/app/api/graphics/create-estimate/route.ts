@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { createClient } from '@supabase/supabase-js';
 import { requireAuth } from '@/lib/api-auth';
 import { validateBody, z } from '@/lib/validate';
+import { nextJobNumber, legacyJobNumber } from '@/lib/job-numbers';
 
 export const dynamic = 'force-dynamic';
 
@@ -17,13 +18,6 @@ function getSupabase() {
   );
 }
 
-function generateEstimateNumber(): string {
-  const d = new Date();
-  const yy = d.getFullYear().toString().slice(-2);
-  const mm = (d.getMonth() + 1).toString().padStart(2, '0');
-  const rand = Math.random().toString(36).substring(2, 6).toUpperCase();
-  return `EST-${yy}${mm}-${rand}`;
-}
 
 /**
  * POST /api/graphics/create-estimate
@@ -147,7 +141,7 @@ export async function POST(req: NextRequest) {
     const grandTotal = subtotal + laborTotal + taxAmount;
 
     // Create the estimate
-    const estimateNumber = generateEstimateNumber();
+    const estimateNumber = await nextJobNumber(supabase, 'EST', legacyJobNumber.est);
     const titleParts = [`Graphics Job #${job.job_number || job.id.slice(0, 8)}`];
     if (job.title) titleParts.push(job.title);
     const title = titleParts.join(' — ');
