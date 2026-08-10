@@ -79,6 +79,35 @@ export default function ScanPage() {
   const [scans, setScans] = useState<ScanEntry[]>([]);
   const [scanError, setScanError] = useState('');
   const [scanSuccess, setScanSuccess] = useState('');
+  // K8: optional completion photo for the scan just logged. photoTargets
+  // holds the scan_logs ids the last capture created (empty offline — no
+  // server rows to attach to yet). Skipping costs zero taps.
+  const [photoTargets, setPhotoTargets] = useState<string[]>([]);
+  const [photoCount, setPhotoCount] = useState(0);
+  const [photoUploading, setPhotoUploading] = useState(false);
+  const photoInputRef = useRef<HTMLInputElement>(null);
+
+  const uploadScanPhoto = async (file: File) => {
+    if (photoTargets.length === 0) return;
+    setPhotoUploading(true);
+    try {
+      const ext = file.name.split('.').pop()?.toLowerCase() || 'jpg';
+      const path = `scans/${photoTargets[0]}/${Date.now()}.${ext}`;
+      const { error: upErr } = await storage.from('photos').upload(path, file, { contentType: file.type });
+      if (upErr) { setScanError('Photo upload failed: ' + upErr.message); return; }
+      const { data: { session } } = await supabase.auth.getSession();
+      const res = await fetch('/api/scans/photos', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', ...(session?.access_token ? { Authorization: `Bearer ${session.access_token}` } : {}) },
+        body: JSON.stringify({ scanIds: photoTargets, storagePath: path, contentType: file.type || undefined }),
+      });
+      const json = await res.json().catch(() => ({}));
+      if (!res.ok) { setScanError('Photo save failed: ' + (json.error || `HTTP ${res.status}`)); return; }
+      setPhotoCount(c => c + 1);
+    } finally {
+      setPhotoUploading(false);
+    }
+  };
   // VIN captured by the camera, awaiting confirmation (+ optional unit #).
   // While set, the camera stays on but pauses detection.
   const [pendingScan, setPendingScan] = useState<string | null>(null);
@@ -512,7 +541,7 @@ export default function ScanPage() {
     v: string,
     unit?: string,
     deviceFields?: { serial_number: string; imei: string; iccid: string },
-  ): Promise<{ ok: boolean; error?: string; entry?: ScanEntry; label?: string; parts: number; offline: boolean }> => {
+  ): Promise<{ ok: boolean; error?: string; entry?: ScanEntry; label?: string; parts: number; offline: boolean; createdIds: string[] }> => {
     const unitClean = unit?.trim() || null;
 
     const partsToScan = selectedParts.length > 0
@@ -537,6 +566,7 @@ export default function ScanPage() {
     const locationOverrideCustomer = locationBillingOverride(selectedLocation?.name);
 
     let entry: ScanEntry | undefined;
+    const createdIds: string[] = [];
     for (const pt of partsToScan) {
       const record = {
         vin: v,
@@ -553,7 +583,8 @@ export default function ScanPage() {
         shift_id: sid,
       };
       const result = await postScanRecord(record);
-      if (!result.ok) return { ok: false, error: result.error, parts: partsToScan.length, offline: isOffline };
+      if (!result.ok) return { ok: false, error: result.error, parts: partsToScan.length, offline: isOffline, createdIds: [] };
+      if (result.id) createdIds.push(result.id);
       entry = {
         id: result.id || crypto.randomUUID(),
         vin: v,
@@ -569,7 +600,7 @@ export default function ScanPage() {
     }
 
     const label = [vehicleData.vehicle_year, vehicleData.vehicle_make, vehicleData.vehicle_model].filter(Boolean).join(' ') || (isOffline ? v : 'Scan logged');
-    return { ok: true, entry, label, parts: partsToScan.length, offline: isOffline };
+    return { ok: true, entry, label, parts: partsToScan.length, offline: isOffline, createdIds };
   };
 
   // Verizon RFID capture finished — log it. Returns an error string for the
@@ -580,6 +611,8 @@ export default function ScanPage() {
     if (r.entry) setScans(prev => [r.entry!, ...prev]);
     const unitSuffix = d.unit_number ? ` · Unit ${d.unit_number}` : '';
     setScanSuccess(`${r.offline ? 'Saved offline: ' : ''}${r.label}${unitSuffix}`);
+    setPhotoTargets(r.offline ? [] : r.createdIds);
+    setPhotoCount(0);
     return null;
   };
 
@@ -604,6 +637,8 @@ export default function ScanPage() {
     if (r.entry) setScans(prev => [r.entry!, ...prev]);
     const unitSuffix = unit?.trim() ? ` · Unit ${unit.trim()}` : '';
     setScanSuccess(`${r.offline ? 'Saved offline: ' : ''}${r.label}${unitSuffix}${r.parts > 1 ? ` (${r.parts} parts)` : ''}`);
+    setPhotoTargets(r.offline ? [] : r.createdIds);
+    setPhotoCount(0);
     setVin('');
     setTimeout(() => vinRef.current?.focus(), 100);
     return true;
@@ -1191,7 +1226,33 @@ export default function ScanPage() {
             <div style={{ padding: '8px 12px', borderRadius: '8px', marginBottom: '8px', background: theme.errorBg, border: `1px solid ${theme.errorBorder}`, color: theme.error, fontSize: '12px', fontWeight: 600 }}>{scanError}</div>
           )}
           {scanSuccess && (
-            <div style={{ padding: '8px 12px', borderRadius: '8px', marginBottom: '8px', background: 'rgba(34,197,94,0.06)', border: '1px solid rgba(34,197,94,0.2)', color: '#22c55e', fontSize: '12px', fontWeight: 700 }}>✓ {scanSuccess}</div>
+            <div style={{ padding: '8px 12px', borderRadius: '8px', marginBottom: '8px', background: 'rgba(34,197,94,0.06)', border: '1px solid rgba(34,197,94,0.2)', color: '#22c55e', fontSize: '12px', fontWeight: 700 }}>
+              ✓ {scanSuccess}
+              {/* Optional completion photo (K8) — one tap to add, zero to skip. */}
+              {photoTargets.length > 0 && (
+                <span style={{ marginLeft: '8px' }}>
+                  <input
+                    ref={photoInputRef}
+                    type="file"
+                    accept="image/*"
+                    capture="environment"
+                    style={{ display: 'none' }}
+                    onChange={async (e) => {
+                      const f = e.target.files?.[0];
+                      e.target.value = '';
+                      if (f) await uploadScanPhoto(f);
+                    }}
+                  />
+                  <button
+                    onClick={() => photoInputRef.current?.click()}
+                    disabled={photoUploading}
+                    style={{ padding: '3px 10px', borderRadius: '6px', border: '1px solid rgba(34,197,94,0.35)', background: 'transparent', color: '#22c55e', fontSize: '11px', fontWeight: 700, cursor: 'pointer', opacity: photoUploading ? 0.6 : 1 }}
+                  >
+                    {photoUploading ? 'Uploading…' : photoCount > 0 ? `📷 ${photoCount} added · add another` : '📷 Add photo (optional)'}
+                  </button>
+                </span>
+              )}
+            </div>
           )}
 
           {scans.length > 0 && (

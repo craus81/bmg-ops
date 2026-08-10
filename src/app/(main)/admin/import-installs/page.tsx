@@ -124,13 +124,26 @@ export default function ImportInstallsPage() {
     return () => { cancelled = true; };
   }, [isAdmin]);
 
-  const isRfid = isVerizonRfidPart(partNumber);
+  // Multi-part (K8): the part field accepts a comma-separated list — the
+  // first is the primary (carries the description), the rest are logged for
+  // every vehicle on top of it. A row's own Part column overrides the primary.
+  const partsList = useMemo(
+    () => partNumber.split(',').map((p) => p.trim()).filter(Boolean),
+    [partNumber],
+  );
+  const isRfid = partsList.some(isVerizonRfidPart);
+  const hasRowParts = useMemo(() => (parsed?.rows || []).some((r) => r.partNumber), [parsed]);
   const validated = useMemo(
-    () => (parsed?.rows || []).map((r) => ({ ...r, errors: rowErrors(r, isRfid) })),
-    [parsed, isRfid],
+    () => (parsed?.rows || []).map((r) => {
+      // RFID device fields are required when any part this row will log is
+      // the Verizon RFID part (its own override, or the run's list).
+      const rowParts = [r.partNumber?.trim() || partsList[0] || '', ...partsList.slice(1)];
+      return { ...r, errors: rowErrors(r, rowParts.some(isVerizonRfidPart)) };
+    }),
+    [parsed, partsList],
   );
   const valid = validated.filter((r) => r.errors.length === 0);
-  const canImport = companyName.trim().length > 0 && partNumber.trim().length > 0 && valid.length > 0 && !importing;
+  const canImport = companyName.trim().length > 0 && partsList.length > 0 && valid.length > 0 && !importing;
 
   async function handleFile(file: File) {
     setParsingFile(true);
@@ -153,8 +166,9 @@ export default function ImportInstallsPage() {
 
   async function doImport() {
     if (!canImport) return;
+    const partsNote = partsList.length > 1 ? ` × ${partsList.length} parts (${partsList.join(', ')})` : '';
     const ok = await dialog.confirm(
-      `Import ${valid.length} install${valid.length !== 1 ? 's' : ''} credited to "${companyName.trim()}"? Duplicates already in the system are skipped.`,
+      `Import ${valid.length} vehicle${valid.length !== 1 ? 's' : ''}${partsNote} credited to "${companyName.trim()}"? Duplicates already in the system are skipped.`,
       { confirmLabel: 'Import' },
     );
     if (!ok) return;
@@ -173,10 +187,11 @@ export default function ImportInstallsPage() {
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
             companyName: companyName.trim(),
-            partNumber: partNumber.trim(),
+            partNumber: partsList[0],
             partDescription: partDescription.trim() || undefined,
             billableCustomer: billableCustomer.trim() || undefined,
             locationName: locationName.trim() || undefined,
+            additionalPartNumbers: partsList.length > 1 ? partsList.slice(1) : undefined,
             rows: chunk.map((r) => ({
               vin: r.vin,
               serialNumber: r.serialNumber || undefined,
@@ -186,6 +201,7 @@ export default function ImportInstallsPage() {
               vehicleMake: r.vehicleMake || undefined,
               vehicleModel: r.vehicleModel || undefined,
               unitNumber: r.unitNumber || undefined,
+              partNumber: r.partNumber || undefined,
             })),
           }),
         });
@@ -195,7 +211,7 @@ export default function ImportInstallsPage() {
         if (!res.ok || !d) throw new Error(d?.error || `HTTP ${res.status}`);
         created += d.created || 0;
         failed += d.failed || 0;
-        for (const rr of d.results || []) if (!rr.ok) errors.push({ vin: rr.vin, error: rr.error });
+        for (const rr of d.results || []) if (!rr.ok) errors.push({ vin: rr.part ? `${rr.vin} (${rr.part})` : rr.vin, error: rr.error });
       } catch (e: any) {
         failed += chunk.length;
         errors.push({ vin: '(chunk failed)', error: e?.message || 'request failed' });
@@ -227,8 +243,13 @@ export default function ImportInstallsPage() {
           <CompanyNameField value={companyName} onChange={setCompanyName} companies={companies} inputStyle={input} />
         </div>
         <div>
-          <label style={label}>Part number *</label>
-          <input style={input} value={partNumber} onChange={(e) => setPartNumber(e.target.value)} />
+          <label style={label}>Part number(s) *</label>
+          <input style={input} value={partNumber} onChange={(e) => setPartNumber(e.target.value)} placeholder="Comma-separate for multi-part installs" />
+          {partsList.length > 1 && (
+            <div style={{ fontSize: 10, color: theme.textSecondary, fontWeight: 700, marginTop: 3 }}>
+              {partsList.length} parts per vehicle — one install record each
+            </div>
+          )}
         </div>
         <div>
           <label style={label}>Part description</label>
@@ -322,7 +343,9 @@ export default function ImportInstallsPage() {
               <thead>
                 <tr style={{ background: theme.subtleBg, textAlign: 'left', position: 'sticky', top: 0 }}>
                   <th style={th}>VIN</th><th style={th}>SN</th><th style={th}>IMEI</th><th style={th}>CCID</th>
-                  <th style={th}>Year</th><th style={th}>Make</th><th style={th}>Model</th><th style={th}>Status</th>
+                  <th style={th}>Year</th><th style={th}>Make</th><th style={th}>Model</th>
+                  {hasRowParts && <th style={th}>Part</th>}
+                  <th style={th}>Status</th>
                 </tr>
               </thead>
               <tbody>
@@ -335,6 +358,7 @@ export default function ImportInstallsPage() {
                     <td style={td}>{r.vehicleYear || '—'}</td>
                     <td style={td}>{r.vehicleMake || '—'}</td>
                     <td style={td}>{r.vehicleModel || '—'}</td>
+                    {hasRowParts && <td style={td}>{r.partNumber || `(${partsList[0] || 'default'})`}</td>}
                     <td style={{ ...td, color: r.errors.length ? theme.warning : theme.success, fontWeight: 600 }}>
                       {r.errors.length ? `fix: ${r.errors.join(', ')}` : 'ok'}
                     </td>

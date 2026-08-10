@@ -19,6 +19,9 @@ export interface ImportRow {
   vehicleMake: string;
   vehicleModel: string;
   unitNumber: string;
+  /** K8: optional per-row part number — overrides the page-level default,
+   *  so one sheet can carry mixed parts. */
+  partNumber: string;
 }
 
 export interface ParseOutcome {
@@ -40,6 +43,9 @@ const FIELD_ALIASES: [keyof ImportRow, string[]][] = [
   ['vehicleMake', ['make', 'vehiclemake']],
   ['vehicleModel', ['model', 'vehiclemodel']],
   ['unitNumber', ['unit', 'unitnumber', 'unitno', 'unitnum']],
+  // Last on purpose: the positional fallback (no header row) keeps the
+  // historical VIN, SN, IMEI, CCID, … column order intact.
+  ['partNumber', ['part', 'partnumber', 'partno', 'partnum', 'item', 'itemnumber']],
 ];
 
 const VIN_ALIASES = FIELD_ALIASES[0][1];
@@ -126,6 +132,7 @@ function cellsToRows(cells: string[][]): ParseOutcome {
       vehicleMake: get(r, 'vehicleMake'),
       vehicleModel: get(r, 'vehicleModel'),
       unitNumber: get(r, 'unitNumber'),
+      partNumber: get(r, 'partNumber'),
     }))
     .filter((r) => r.vin);
   return { rows, mode };
