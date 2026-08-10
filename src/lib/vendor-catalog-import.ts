@@ -72,6 +72,13 @@ function jsonLdImageUrl(image: any): string | null {
   return null;
 }
 
+/** WooCommerce-style visible SKU: <span class="sku">OTC-U6036</span>.
+ *  Class-token match ("sku" exactly, not "sku_wrapper"). */
+function visibleSkuSpan(html: string): string | null {
+  const m = html.match(/class=["'](?:[^"']*\s)?sku(?:\s[^"']*)?["'][^>]*>\s*([^<>\s][^<>]{0,58}?)\s*</i);
+  return m ? m[1].trim() : null;
+}
+
 export function extractProduct(html: string): ExtractedProduct {
   const ld = findJsonLdProduct(html);
   const og = {
@@ -88,8 +95,29 @@ export function extractProduct(html: string): ExtractedProduct {
     name: (ld?.name ? stripTags(String(ld.name)) : null) || (og.title ? stripTags(og.title) : null) || (titleTag ? stripTags(titleTag) : null),
     description: description && description.length > 10 ? description.slice(0, 2000) : null,
     imageUrl: jsonLdImageUrl(ld?.image) || og.image,
-    sku: ld?.sku ? String(ld.sku).trim() : (ld?.mpn ? String(ld.mpn).trim() : null),
+    sku: ld?.sku ? String(ld.sku).trim() : (ld?.mpn ? String(ld.mpn).trim() : visibleSkuSpan(html)),
   };
+}
+
+/**
+ * SKU candidates from a product URL's slug — vendors routinely end the slug
+ * with the part number (…/over-the-cab-truck-rack-36-extension-otc-u6036/).
+ * Returns trailing-token joins, LONGEST first (most specific wins when the
+ * catalog holds both OTC-U6036 and U6036). Candidates must look like part
+ * numbers (≥4 chars, a letter AND a digit); matching stays exact via
+ * matchSkuToPart, so a non-SKU word tail simply matches nothing.
+ */
+export function skuCandidatesFromUrl(pageUrl: string): string[] {
+  let path: string;
+  try { path = decodeURIComponent(new URL(pageUrl).pathname); } catch { return []; }
+  const slug = path.replace(/\/+$/, '').split('/').pop() || '';
+  const tokens = slug.toUpperCase().split(/[^A-Z0-9]+/).filter(Boolean);
+  const out: string[] = [];
+  for (let n = Math.min(4, tokens.length); n >= 1; n--) {
+    const cand = tokens.slice(tokens.length - n).join('-');
+    if (cand.length >= 4 && /\d/.test(cand) && /[A-Z]/.test(cand)) out.push(cand);
+  }
+  return out;
 }
 
 /** <loc> entries from a sitemap or sitemap index. */

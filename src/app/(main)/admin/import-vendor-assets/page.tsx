@@ -18,6 +18,7 @@ import { theme } from '@/lib/theme';
 interface ProbeResult {
   product: { name: string | null; description: string | null; imageUrl: string | null; sku: string | null };
   matchedPartId: string | null;
+  matchedPart?: { itemNumber: string; vendor: string | null; inScope: boolean } | null;
 }
 
 interface RunRow { url: string; ok: boolean; partId?: string; sku?: string | null; imported?: string[]; error?: string }
@@ -30,7 +31,10 @@ export default function ImportVendorAssetsPage() {
   const dialog = useDialog();
 
   const [siteUrl, setSiteUrl] = useState('https://www.rangerdesign.com');
-  const [vendorScope, setVendorScope] = useState('Ranger');
+  // Blank = match by part number across the whole catalog. NetSuite's
+  // item-record vendor field is often blank, so a prefilled filter can
+  // silently exclude everything — opt in only when you know the values.
+  const [vendorScope, setVendorScope] = useState('');
   const [overwrite, setOverwrite] = useState(false);
 
   const [probeUrl, setProbeUrl] = useState('');
@@ -72,7 +76,7 @@ export default function ImportVendorAssetsPage() {
     setProbe(null);
     setProbeError('');
     try {
-      setProbe(await post({ mode: 'probe', url: probeUrl.trim() }));
+      setProbe(await post({ mode: 'probe', url: probeUrl.trim(), vendor: vendorScope.trim() || undefined }));
     } catch (e: any) {
       setProbeError(e?.message || 'Probe failed');
     }
@@ -178,8 +182,8 @@ export default function ImportVendorAssetsPage() {
           <input style={input} value={siteUrl} onChange={e => setSiteUrl(e.target.value)} placeholder="https://www.rangerdesign.com" />
         </div>
         <div>
-          <label style={label}>Match only parts whose vendor contains…</label>
-          <input style={input} value={vendorScope} onChange={e => setVendorScope(e.target.value)} placeholder="Ranger (blank = all parts)" />
+          <label style={label}>Match only parts whose vendor contains… (optional)</label>
+          <input style={input} value={vendorScope} onChange={e => setVendorScope(e.target.value)} placeholder="blank = all parts (matching is by exact part number)" />
         </div>
         <div style={{ display: 'flex', alignItems: 'flex-end', paddingBottom: 4 }}>
           <label style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 13, cursor: 'pointer' }}>
@@ -210,8 +214,16 @@ export default function ImportVendorAssetsPage() {
               <div><strong>{probe.product.name || '(no name found)'}</strong></div>
               <div style={{ fontFamily: 'monospace', fontSize: 12 }}>SKU: {probe.product.sku || '—'}</div>
               <div style={{ color: probe.matchedPartId ? theme.success : theme.warning, fontWeight: 700, fontSize: 12 }}>
-                {probe.matchedPartId ? '✓ matches a part in our catalog' : probe.product.sku ? '✗ no part with this number' : '✗ no SKU on the page'}
+                {probe.matchedPartId
+                  ? `✓ matches ${probe.matchedPart?.itemNumber || 'a part'} in our catalog${probe.matchedPart?.vendor ? ` (vendor: ${probe.matchedPart.vendor})` : ''}`
+                  : probe.product.sku ? '✗ no part with this number' : '✗ no SKU on the page'}
               </div>
+              {probe.matchedPart && !probe.matchedPart.inScope && (
+                <div style={{ color: theme.warning, fontWeight: 700, fontSize: 12 }}>
+                  ⚠ this part&apos;s vendor is {probe.matchedPart.vendor ? `“${probe.matchedPart.vendor}”` : 'blank'}, which doesn&apos;t contain
+                  “{vendorScope.trim()}” — the import would skip it. Clear or fix the vendor box above.
+                </div>
+              )}
               {probe.product.description && <div style={{ color: theme.textSecondary, fontSize: 12, marginTop: 4 }}>{probe.product.description.slice(0, 220)}{probe.product.description.length > 220 ? '…' : ''}</div>}
             </div>
           </div>
