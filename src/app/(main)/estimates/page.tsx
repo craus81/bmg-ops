@@ -96,6 +96,8 @@ interface Estimate {
   created_by: string | null;
   created_at: string;
   updated_at: string;
+  vin: string | null;
+  unit_number: string | null;
 }
 
 interface Customer {
@@ -158,6 +160,10 @@ export default function EstimatesPage() {
   // Margin floor (%) below which a quote gets flagged — admin-set, shared
   // with the wrap-quote builder via the quote_settings singleton.
   const [marginFloor, setMarginFloor] = useState(30);
+  // K5: vehicle identity — prints on the estimate document, pushes to
+  // NetSuite's VIN field, and feeds the Shop Board's Arriving row.
+  const [vin, setVin] = useState('');
+  const [unitNumber, setUnitNumber] = useState('');
   // T1.6 install context
   const [installInstructions, setInstallInstructions] = useState('');
   const [onSiteContactName, setOnSiteContactName] = useState('');
@@ -474,6 +480,8 @@ export default function EstimatesPage() {
         on_site_contact_phone: onSiteContactPhone,
         delivery_preferences: deliveryPreferences,
         internal_notes: internalNotes,
+        vin,
+        unit_number: unitNumber,
         line_items: lines.map(l => ({
           part_id: l.part_id,
           netsuite_item_id: l.netsuite_item_id,
@@ -743,6 +751,8 @@ export default function EstimatesPage() {
     setTaxExempt(est.tax_exempt);
     setLaborRate(est.labor_rate || DEFAULT_LABOR_RATE);
     setLaborOverride(est.labor_hours_override);
+    setVin(est.vin || '');
+    setUnitNumber(est.unit_number || '');
 
     // Load install context + line items + customer defaults in parallel
     const [{ data: fullEst }, { data: lineData }] = await Promise.all([
@@ -892,6 +902,8 @@ export default function EstimatesPage() {
     setPartResults([]);
     setCustSearch('');
     setCustResults([]);
+    setVin('');
+    setUnitNumber('');
     setInstallInstructions('');
     setOnSiteContactName('');
     setOnSiteContactPhone('');
@@ -1011,7 +1023,9 @@ export default function EstimatesPage() {
       return (
         e.estimate_number?.toLowerCase().includes(s) ||
         e.customer_name?.toLowerCase().includes(s) ||
-        e.title?.toLowerCase().includes(s)
+        e.title?.toLowerCase().includes(s) ||
+        e.vin?.toLowerCase().includes(s) ||
+        e.unit_number?.toLowerCase().includes(s)
       );
     });
 
@@ -1218,6 +1232,29 @@ export default function EstimatesPage() {
             value={notes}
             onChange={e => setNotes(e.target.value)}
             placeholder="Appears on the NS SO memo"
+          />
+        </div>
+      </div>
+
+      {/* ── Vehicle (K5) — prints on the estimate + pushes to the NS VIN field ── */}
+      <div style={{ display: 'grid', gridTemplateColumns: '2fr 1fr', gap: '8px', marginBottom: '12px' }}>
+        <div>
+          <div style={labelStyle}>VIN</div>
+          <input
+            style={{ ...inputStyle, textTransform: 'uppercase' }}
+            value={vin}
+            onChange={e => setVin(e.target.value.toUpperCase())}
+            maxLength={17}
+            placeholder="Full 17 or last 8 — prints on the estimate"
+          />
+        </div>
+        <div>
+          <div style={labelStyle}>Unit / Fleet #</div>
+          <input
+            style={inputStyle}
+            value={unitNumber}
+            onChange={e => setUnitNumber(e.target.value)}
+            placeholder="Customer's unit #"
           />
         </div>
       </div>

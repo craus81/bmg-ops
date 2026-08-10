@@ -37,6 +37,10 @@ const UpsertEstimateSchema = z.object({
   on_site_contact_phone: z.string().max(40).optional().nullable(),
   delivery_preferences: z.string().max(2000).optional().nullable(),
   internal_notes: z.string().max(5000).optional().nullable(),
+  // K5: header VIN (full 17 or a partial, matching the scanner's tolerance)
+  // and the customer's fleet unit number.
+  vin: z.string().max(32).optional().nullable(),
+  unit_number: z.string().max(60).optional().nullable(),
 });
 
 const DeleteSchema = z.object({ id: z.string().uuid() });
@@ -109,10 +113,15 @@ export async function POST(req: NextRequest) {
     // T1.6 install context
     install_instructions, on_site_contact_name, on_site_contact_phone,
     delivery_preferences, internal_notes,
+    vin, unit_number,
   } = parsed.data;
 
   try {
     const supabase = getSupabase();
+    // VINs are case-insensitive; store them the way the scanner does so
+    // vin-match suffix comparisons work across estimates and scan_logs.
+    const normalizedVin = vin?.trim().toUpperCase() || null;
+    const normalizedUnit = unit_number?.trim() || null;
 
     const lines = line_items || [];
     const effectiveTaxRate = parseFloat(String(tax_rate ?? 0.0795));
@@ -172,6 +181,8 @@ export async function POST(req: NextRequest) {
           on_site_contact_phone: on_site_contact_phone || null,
           delivery_preferences: delivery_preferences || null,
           internal_notes: internal_notes || null,
+          vin: normalizedVin,
+          unit_number: normalizedUnit,
           updated_at: new Date().toISOString(),
         })
         .eq('id', id);
@@ -233,6 +244,8 @@ export async function POST(req: NextRequest) {
           on_site_contact_phone: on_site_contact_phone || null,
           delivery_preferences: delivery_preferences || null,
           internal_notes: internal_notes || null,
+          vin: normalizedVin,
+          unit_number: normalizedUnit,
           created_by: created_by || null,
         })
         .select()
