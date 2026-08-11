@@ -800,6 +800,26 @@ export async function findVendors(name: string): Promise<{
   }
 }
 
+/**
+ * Every active NetSuite vendor, names only — for dropdowns that must stay
+ * in lockstep with NetSuite's vendor list (e.g. the vendor-asset import's
+ * "tag matched parts" picker). No address lookups; one cheap query.
+ */
+export async function listVendors(): Promise<{ vendors: { id: string; name: string }[]; error?: string }> {
+  try {
+    const q = `SELECT id, entityid, companyname FROM vendor WHERE isinactive = 'F' ORDER BY COALESCE(companyname, entityid) FETCH FIRST 1000 ROWS ONLY`;
+    const result = await suiteqlQuery(q);
+    const rows = result?.items || [];
+    return { vendors: rows.map((v: any) => ({ id: String(v.id), name: v.companyname || v.entityid || String(v.id) })) };
+  } catch (e: any) {
+    console.error('NetSuite vendor list failed:', e?.message);
+    let detail = String(e?.message || 'Vendor list failed');
+    const m = detail.match(/"detail"\s*:\s*"([^"]+)"/);
+    if (m) detail = m[1];
+    return { vendors: [], error: detail.slice(0, 160) };
+  }
+}
+
 /** NetSuite UI link for a vendor record, given its numeric internal id. */
 export function vendorUrl(internalId: string | number): string {
   const accountForUrl = getConfig().accountId.replace(/-/g, '_').toUpperCase();

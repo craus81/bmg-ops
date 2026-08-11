@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, type CSSProperties } from 'react';
+import { useState, useEffect, type CSSProperties } from 'react';
 import { useRouter } from 'next/navigation';
 import { useAuth } from '@/components/AuthProvider';
 import { useDialog } from '@/components/DialogProvider';
@@ -47,7 +47,24 @@ export default function ImportVendorAssetsPage() {
   const [vendorScope, setVendorScope] = useState('');
   // Vendor name stamped onto matched parts whose vendor is blank — we know
   // whose site the assets came from (Craig 2026-08-11). Fill-blank only.
+  // Picked from NetSuite's vendor list so names match exactly; free text
+  // only as a fallback when the list can't load.
   const [setVendorName, setSetVendorName] = useState('');
+  const [nsVendors, setNsVendors] = useState<{ id: string; name: string }[] | null>(null);
+  const [nsVendorsError, setNsVendorsError] = useState('');
+
+  useEffect(() => {
+    let cancelled = false;
+    fetch('/api/netsuite/vendors')
+      .then(r => r.json().then(d => ({ ok: r.ok, d })))
+      .then(({ ok, d }) => {
+        if (cancelled) return;
+        if (ok && Array.isArray(d.vendors) && d.vendors.length > 0) setNsVendors(d.vendors);
+        else { setNsVendors([]); setNsVendorsError(d?.error || 'No vendors returned'); }
+      })
+      .catch(e => { if (!cancelled) { setNsVendors([]); setNsVendorsError(e?.message || 'Vendor list failed'); } });
+    return () => { cancelled = true; };
+  }, []);
   const [overwrite, setOverwrite] = useState(false);
 
   const [probeUrl, setProbeUrl] = useState('');
@@ -228,7 +245,24 @@ export default function ImportVendorAssetsPage() {
         </div>
         <div>
           <label style={label}>Tag matched parts with this vendor (optional)</label>
-          <input style={input} value={setVendorName} onChange={e => setSetVendorName(e.target.value)} placeholder="e.g. Masterack — fills blank vendors only" />
+          {nsVendors === null || nsVendors.length > 0 ? (
+            <select
+              style={input}
+              value={setVendorName}
+              onChange={e => setSetVendorName(e.target.value)}
+              disabled={nsVendors === null}
+            >
+              <option value="">{nsVendors === null ? 'Loading NetSuite vendors…' : 'Don’t tag vendors'}</option>
+              {(nsVendors || []).map(v => <option key={v.id} value={v.name}>{v.name}</option>)}
+            </select>
+          ) : (
+            <>
+              <input style={input} value={setVendorName} onChange={e => setSetVendorName(e.target.value)} placeholder="e.g. Masterack — fills blank vendors only" />
+              <div style={{ fontSize: 10, color: theme.textMuted, marginTop: 2 }}>
+                NetSuite vendor list unavailable ({nsVendorsError}) — type the name carefully.
+              </div>
+            </>
+          )}
         </div>
         <div>
           <label style={label}>Match only parts whose vendor contains… (optional)</label>
