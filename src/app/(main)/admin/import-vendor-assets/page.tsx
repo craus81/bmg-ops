@@ -24,6 +24,11 @@ interface ProbeResult {
   matchedPart?: MatchedPart | null;
   /** Family pages (one page, a table of variant part numbers) match many. */
   matchedParts?: MatchedPart[];
+  /** How many catalog parts the match ran against — a suspiciously round
+   *  number here (1000…) means the part read is being truncated. */
+  catalogSearched?: { active: number; all: number };
+  /** No match → the catalog rows nearest this SKU (spelling/active truth). */
+  closest?: { itemNumber: string; active: boolean; vendor: string | null }[];
 }
 
 interface RunRow { url: string; ok: boolean; partId?: string; sku?: string | null; matched?: number; imported?: string[]; error?: string; nearItemNumber?: string }
@@ -261,6 +266,25 @@ export default function ImportVendorAssetsPage() {
                   </div>
                 );
               })()}
+              {probe.catalogSearched && (
+                <div style={{ fontSize: 11, color: theme.textMuted }}>
+                  searched {probe.catalogSearched.active.toLocaleString()} active parts ({probe.catalogSearched.all.toLocaleString()} incl. inactive)
+                </div>
+              )}
+              {!probe.matchedPartId && probe.closest && (
+                <div style={{ fontSize: 12, marginTop: 2 }}>
+                  {probe.closest.length > 0 ? (
+                    <>
+                      <span style={{ color: theme.textSecondary, fontWeight: 700 }}>Closest catalog numbers: </span>
+                      <span style={{ fontFamily: 'monospace' }}>
+                        {probe.closest.map(c => `${c.itemNumber}${c.active ? '' : ' (inactive)'}`).join(', ')}
+                      </span>
+                    </>
+                  ) : (
+                    <span style={{ color: theme.textMuted }}>Nothing in the catalog contains this number&apos;s core.</span>
+                  )}
+                </div>
+              )}
               {(() => {
                 const out = (probe.matchedParts || (probe.matchedPart ? [probe.matchedPart] : [])).filter(p => !p.inScope);
                 if (out.length === 0) return null;
