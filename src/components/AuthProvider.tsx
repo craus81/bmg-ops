@@ -39,6 +39,10 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const [featureOverrides, setFeatureOverrides] = useState<{ feature: string; granted: boolean }[]>([]);
   const [loading, setLoading] = useState(true);
   const mountedRef = useRef(true);
+  // True once init() has finished its awaited profile load (or failed).
+  // Until then, ONLY init() may flip `loading` false — see the auth-state
+  // callback below for why.
+  const initDoneRef = useRef(false);
   const supabase = createClient();
 
   const loadProfileAndOverrides = async (userId: string) => {
@@ -73,6 +77,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       } catch (e: any) {
         console.error('[AUTH] Init error:', e.message);
       }
+      initDoneRef.current = true;
       if (mountedRef.current) setLoading(false);
     };
     init();
@@ -93,12 +98,16 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         // real sign-ins go through a full page navigation and hit init().
         loadProfileAndOverrides(u.id).catch(() => {});
       }
-      // INITIAL_SESSION fires while init() is still awaiting the profile
-      // row. Flipping `loading` here would let role-gated pages evaluate
-      // their gates with a user but NO roles yet, silently bouncing cold
-      // deep links (e.g. the Customer Record in a fresh tab) to /home.
-      // init() always flips `loading` itself once the profile resolves.
-      if (mountedRef.current && !(u && event === 'INITIAL_SESSION')) setLoading(false);
+      // While init() is still awaiting the profile row, NO signed-in event
+      // may flip `loading` — not just INITIAL_SESSION: a cold tab whose
+      // token is due for refresh fires TOKEN_REFRESHED (or SIGNED_IN)
+      // during that same window. Flipping early lets role-gated pages
+      // evaluate their gates with a user but NO roles yet, silently
+      // bouncing cold deep links (Customer Record, /parts?q=… "Open full
+      // record") to /home. init() always flips `loading` itself once the
+      // profile resolves; after that, callbacks may flip freely (and
+      // signed-out events always may — there are no roles to wait for).
+      if (mountedRef.current && (!u || initDoneRef.current)) setLoading(false);
     });
 
     return () => {
