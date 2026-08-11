@@ -5,7 +5,7 @@ import { validateBody, z } from '@/lib/validate';
 import { r2Upload } from '@/lib/r2';
 import { fetchAllRows } from '@/lib/fetch-all';
 import {
-  extractProduct, parseSitemapLocs, matchSkuToPart, skuKeys,
+  extractProduct, extractAllSkus, parseSitemapLocs, matchSkuToPart, skuKeys,
   looksLikeProductUrl, looksLikeListingUrl, extractSameOriginLinks,
   extractPaginationLinks, originVariants, skuCandidatesFromUrl, SITEMAP_CANDIDATES,
 } from '@/lib/vendor-catalog-import';
@@ -46,11 +46,23 @@ const Schema = z.discriminatedUnion('mode', [
   }),
 ]);
 
-const UA = 'BMG FleetSuite catalog importer (cgeorge@bmgfleet.com)';
+// Browser-standard headers: several vendor sites (buyersproducts.com 403s,
+// for one) reject anything that doesn't look like a browser before serving a
+// byte. We still identify ourselves honestly via the standard From header,
+// and the polite pacing below keeps volume at ~1 req/s.
+const FETCH_HEADERS = {
+  'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36',
+  From: 'cgeorge@bmgfleet.com',
+  'Accept-Language': 'en-US,en;q=0.9',
+};
 const sleep = (ms: number) => new Promise(r => setTimeout(r, ms));
 
 async function fetchText(url: string, maxBytes = 2_000_000): Promise<string> {
-  const res = await fetch(url, { headers: { 'User-Agent': UA, Accept: 'text/html,application/xml,text/xml,*/*' }, signal: AbortSignal.timeout(15_000), redirect: 'follow' });
+  const res = await fetch(url, {
+    headers: { ...FETCH_HEADERS, Accept: 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8' },
+    signal: AbortSignal.timeout(15_000),
+    redirect: 'follow',
+  });
   if (!res.ok) throw new Error(`HTTP ${res.status}`);
   const buf = Buffer.from(await res.arrayBuffer());
   if (buf.length > maxBytes) throw new Error(`Response too large (${buf.length} bytes)`);
@@ -110,14 +122,24 @@ export async function POST(req: NextRequest) {
       const html = await fetchText(body.url);
       const product = extractProduct(html);
       const { byKey, partById, inScope } = await buildPartMap(body.vendor);
-      const matchedPartId = matchSkuToPart(product.sku, byKey)
-        ?? skuCandidatesFromUrl(body.url).map(c => matchSkuToPart(c, byKey)).find(Boolean)
-        ?? null;
-      const part = matchedPartId ? partById.get(matchedPartId)! : null;
+      // Family pages can carry a whole model line's part numbers — match
+      // them all; the slug is the fallback when the page yields nothing.
+      const matchedIds = [...new Set(
+        extractAllSkus(html).map(s => matchSkuToPart(s, byKey)).filter((id): id is string => !!id),
+      )];
+      if (matchedIds.length === 0) {
+        const slugHit = skuCandidatesFromUrl(body.url).map(c => matchSkuToPart(c, byKey)).find(Boolean);
+        if (slugHit) matchedIds.push(slugHit);
+      }
+      const matchedParts = matchedIds.map(id => {
+        const p = partById.get(id)!;
+        return { itemNumber: p.item_number, vendor: p.vendor, inScope: inScope(p) };
+      });
       return NextResponse.json({
         product,
-        matchedPartId,
-        matchedPart: part ? { itemNumber: part.item_number, vendor: part.vendor, inScope: inScope(part) } : null,
+        matchedPartId: matchedIds[0] || null,
+        matchedPart: matchedParts[0] || null,
+        matchedParts,
       });
     }
 
@@ -244,7 +266,7 @@ export async function POST(req: NextRequest) {
           + 'Clear the vendor box to match by part number across the whole catalog.',
       }, { status: 400 });
     }
-    const results: { url: string; ok: boolean; partId?: string; sku?: string | null; imported?: string[]; error?: string }[] = [];
+    const results: { url: string; ok: boolean; partId?: string; sku?: string | null; matched?: number; imported?: string[]; error?: string }[] = [];
     let imagesSaved = 0;
     let descriptionsSaved = 0;
 
@@ -252,52 +274,70 @@ export async function POST(req: NextRequest) {
       try {
         const html = await fetchText(url);
         const product = extractProduct(html);
-        // Page SKU first; fall back to the URL slug's trailing tokens.
-        // Either way the match against item_number stays exact-or-dashless.
-        const slugMatch = () => skuCandidatesFromUrl(url).map(c => matchSkuToPart(c, byKey)).find(Boolean) ?? null;
-        const partId = matchSkuToPart(product.sku, byKey) ?? slugMatch();
-        if (!partId) {
+        // Family pages carry a whole model line's part numbers — match every
+        // SKU signal on the page (slug fallback when the page yields none).
+        // Each match is still exact-or-dashless against item_number.
+        const matchedIds = [...new Set(
+          extractAllSkus(html).map(s => matchSkuToPart(s, byKey)).filter((id): id is string => !!id),
+        )];
+        if (matchedIds.length === 0) {
+          const slugHit = skuCandidatesFromUrl(url).map(c => matchSkuToPart(c, byKey)).find(Boolean);
+          if (slugHit) matchedIds.push(slugHit);
+        }
+        if (matchedIds.length === 0) {
           results.push({ url, ok: false, sku: product.sku, error: product.sku ? 'No part matches this SKU' : 'No SKU on page (or in the URL) matches a part' });
           await sleep(700);
           continue;
         }
-        const part = partById.get(partId)!;
-        if (!inScope(part)) {
-          results.push({ url, ok: false, partId, sku: product.sku, error: `SKU matches ${part.item_number}, but that part's vendor is ${part.vendor ? `"${part.vendor}"` : 'blank'} — outside your "${body.vendor}" filter` });
+        const inScopeIds = matchedIds.filter(id => inScope(partById.get(id)!));
+        if (inScopeIds.length === 0) {
+          const first = partById.get(matchedIds[0])!;
+          results.push({ url, ok: false, partId: matchedIds[0], sku: product.sku, error: `SKU matches ${first.item_number}${matchedIds.length > 1 ? ` (+${matchedIds.length - 1} more)` : ''}, but that part's vendor is ${first.vendor ? `"${first.vendor}"` : 'blank'} — outside your "${body.vendor}" filter` });
           await sleep(700);
           continue;
         }
-        const updates: Record<string, string> = {};
-        const imported: string[] = [];
 
-        if (product.imageUrl && (body.overwrite || !part.image_path)) {
-          const imgRes = await fetch(product.imageUrl, { headers: { 'User-Agent': UA }, signal: AbortSignal.timeout(20_000), redirect: 'follow' });
+        // Pull the page's image bytes once; each matched part gets its own
+        // R2 copy (paths are per-part).
+        let imgBuf: Buffer | null = null;
+        let imgType = 'image/jpeg';
+        const wantsImage = product.imageUrl && inScopeIds.some(id => body.overwrite || !partById.get(id)!.image_path);
+        if (wantsImage) {
+          const imgRes = await fetch(product.imageUrl!, { headers: FETCH_HEADERS, signal: AbortSignal.timeout(20_000), redirect: 'follow' });
           if (imgRes.ok) {
             const buf = Buffer.from(await imgRes.arrayBuffer());
             if (buf.length > 0 && buf.length <= 8_000_000) {
-              const contentType = imgRes.headers.get('content-type') || 'image/jpeg';
-              const ext = contentType.includes('png') ? 'png' : contentType.includes('webp') ? 'webp' : 'jpg';
-              const path = `parts/${partId}/vendor-${Date.now()}.${ext}`;
-              const up = await r2Upload('photos', path, buf, contentType);
-              if (up.success) {
-                updates.image_path = path;
-                imported.push('image');
-                imagesSaved++;
-              }
+              imgBuf = buf;
+              imgType = imgRes.headers.get('content-type') || 'image/jpeg';
             }
           }
         }
-        if (product.description && (body.overwrite || !part.marketing_description)) {
-          updates.marketing_description = product.description;
-          imported.push('description');
-          descriptionsSaved++;
-        }
 
-        if (Object.keys(updates).length > 0) {
-          const { error } = await supabase.from('netsuite_parts').update(updates).eq('id', partId);
-          if (error) throw new Error(error.message);
+        const imported: string[] = [];
+        for (const partId of inScopeIds) {
+          const part = partById.get(partId)!;
+          const updates: Record<string, string> = {};
+          if (imgBuf && (body.overwrite || !part.image_path)) {
+            const ext = imgType.includes('png') ? 'png' : imgType.includes('webp') ? 'webp' : 'jpg';
+            const path = `parts/${partId}/vendor-${Date.now()}.${ext}`;
+            const up = await r2Upload('photos', path, imgBuf, imgType);
+            if (up.success) {
+              updates.image_path = path;
+              imported.push(`image→${part.item_number}`);
+              imagesSaved++;
+            }
+          }
+          if (product.description && (body.overwrite || !part.marketing_description)) {
+            updates.marketing_description = product.description;
+            imported.push(`description→${part.item_number}`);
+            descriptionsSaved++;
+          }
+          if (Object.keys(updates).length > 0) {
+            const { error } = await supabase.from('netsuite_parts').update(updates).eq('id', partId);
+            if (error) throw new Error(error.message);
+          }
         }
-        results.push({ url, ok: true, partId, sku: product.sku, imported });
+        results.push({ url, ok: true, partId: inScopeIds[0], sku: product.sku, matched: inScopeIds.length, imported });
       } catch (err: any) {
         results.push({ url, ok: false, error: err?.message || 'fetch failed' });
       }

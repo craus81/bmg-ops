@@ -15,13 +15,17 @@ import { theme } from '@/lib/theme';
  * case is "no match", never a wrong photo.
  */
 
+interface MatchedPart { itemNumber: string; vendor: string | null; inScope: boolean }
+
 interface ProbeResult {
   product: { name: string | null; description: string | null; imageUrl: string | null; sku: string | null };
   matchedPartId: string | null;
-  matchedPart?: { itemNumber: string; vendor: string | null; inScope: boolean } | null;
+  matchedPart?: MatchedPart | null;
+  /** Family pages (one page, a table of variant part numbers) match many. */
+  matchedParts?: MatchedPart[];
 }
 
-interface RunRow { url: string; ok: boolean; partId?: string; sku?: string | null; imported?: string[]; error?: string }
+interface RunRow { url: string; ok: boolean; partId?: string; sku?: string | null; matched?: number; imported?: string[]; error?: string }
 
 const BATCH = 25;
 
@@ -145,7 +149,7 @@ export default function ImportVendorAssetsPage() {
         images += d.imagesSaved || 0;
         descriptions += d.descriptionsSaved || 0;
         for (const r of (d.results || []) as RunRow[]) {
-          if (r.ok) matched++;
+          if (r.ok) matched += r.matched ?? 1; // family pages can match several parts
           else failed.push(r);
         }
       } catch (e: any) {
@@ -215,15 +219,23 @@ export default function ImportVendorAssetsPage() {
               <div style={{ fontFamily: 'monospace', fontSize: 12 }}>SKU: {probe.product.sku || '—'}</div>
               <div style={{ color: probe.matchedPartId ? theme.success : theme.warning, fontWeight: 700, fontSize: 12 }}>
                 {probe.matchedPartId
-                  ? `✓ matches ${probe.matchedPart?.itemNumber || 'a part'} in our catalog${probe.matchedPart?.vendor ? ` (vendor: ${probe.matchedPart.vendor})` : ''}`
+                  ? (probe.matchedParts && probe.matchedParts.length > 1
+                    ? `✓ matches ${probe.matchedParts.length} parts in our catalog: ${probe.matchedParts.slice(0, 6).map(p => p.itemNumber).join(', ')}${probe.matchedParts.length > 6 ? ` +${probe.matchedParts.length - 6} more` : ''}`
+                    : `✓ matches ${probe.matchedPart?.itemNumber || 'a part'} in our catalog${probe.matchedPart?.vendor ? ` (vendor: ${probe.matchedPart.vendor})` : ''}`)
                   : probe.product.sku ? '✗ no part with this number' : '✗ no SKU on the page'}
               </div>
-              {probe.matchedPart && !probe.matchedPart.inScope && (
-                <div style={{ color: theme.warning, fontWeight: 700, fontSize: 12 }}>
-                  ⚠ this part&apos;s vendor is {probe.matchedPart.vendor ? `“${probe.matchedPart.vendor}”` : 'blank'}, which doesn&apos;t contain
-                  “{vendorScope.trim()}” — the import would skip it. Clear or fix the vendor box above.
-                </div>
-              )}
+              {(() => {
+                const out = (probe.matchedParts || (probe.matchedPart ? [probe.matchedPart] : [])).filter(p => !p.inScope);
+                if (out.length === 0) return null;
+                return (
+                  <div style={{ color: theme.warning, fontWeight: 700, fontSize: 12 }}>
+                    ⚠ {out.length === 1
+                      ? `${out[0].itemNumber}'s vendor is ${out[0].vendor ? `“${out[0].vendor}”` : 'blank'}, which doesn't contain “${vendorScope.trim()}”`
+                      : `${out.length} of these parts have vendors that don't contain “${vendorScope.trim()}”`}
+                    {' '}— the import would skip {out.length === 1 ? 'it' : 'them'}. Clear or fix the vendor box above.
+                  </div>
+                );
+              })()}
               {probe.product.description && <div style={{ color: theme.textSecondary, fontSize: 12, marginTop: 4 }}>{probe.product.description.slice(0, 220)}{probe.product.description.length > 220 ? '…' : ''}</div>}
             </div>
           </div>
@@ -289,7 +301,7 @@ export default function ImportVendorAssetsPage() {
         </button>
         {progress && (
           <div style={{ marginTop: 12 }}>
-            <div style={{ fontSize: 12, marginBottom: 6 }}>{progress.done} / {progress.total} pages · {matchedCount} matched · {imagesSaved} photos · {descriptionsSaved} descriptions</div>
+            <div style={{ fontSize: 12, marginBottom: 6 }}>{progress.done} / {progress.total} pages · {matchedCount} parts matched · {imagesSaved} photos · {descriptionsSaved} descriptions</div>
             <div style={{ height: 8, background: theme.progressTrack, borderRadius: 4, overflow: 'hidden' }}>
               <div style={{ height: '100%', width: `${(progress.done / progress.total) * 100}%`, background: theme.orange }} />
             </div>
@@ -297,7 +309,7 @@ export default function ImportVendorAssetsPage() {
         )}
         {!running && ranTotal > 0 && (
           <div style={{ marginTop: 12, fontSize: 14 }}>
-            Done — <strong>{matchedCount}</strong> of {ranTotal.toLocaleString()} pages matched a part · <strong>{imagesSaved}</strong> photos and <strong>{descriptionsSaved}</strong> descriptions saved.
+            Done — <strong>{matchedCount}</strong> catalog part{matchedCount !== 1 ? 's' : ''} matched across {ranTotal.toLocaleString()} pages · <strong>{imagesSaved}</strong> photos and <strong>{descriptionsSaved}</strong> descriptions saved.
             <div style={{ fontSize: 12, color: theme.textSecondary, marginTop: 4 }}>
               Unmatched pages are normal — vendors list plenty of products we don&apos;t carry. Open the estimate builder&apos;s Browse Catalog to see the results.
             </div>

@@ -27,7 +27,8 @@ export interface ExtractedProduct {
   sku: string | null;
 }
 
-/** First JSON-LD Product object in the page, searching @graph nests too. */
+/** First JSON-LD Product (or ProductGroup — family pages) in the page,
+ *  searching @graph nests too. */
 function findJsonLdProduct(html: string): any | null {
   const blocks = [...html.matchAll(/<script[^>]*type=["']application\/ld\+json["'][^>]*>([\s\S]*?)<\/script>/gi)];
   for (const m of blocks) {
@@ -39,7 +40,7 @@ function findJsonLdProduct(html: string): any | null {
       if (!node || typeof node !== 'object') continue;
       const type = node['@type'];
       const types = Array.isArray(type) ? type : [type];
-      if (types.includes('Product')) return node;
+      if (types.includes('Product') || types.includes('ProductGroup')) return node;
       if (Array.isArray(node['@graph'])) queue.push(...node['@graph']);
     }
   }
@@ -97,6 +98,35 @@ export function extractProduct(html: string): ExtractedProduct {
     imageUrl: jsonLdImageUrl(ld?.image) || og.image,
     sku: ld?.sku ? String(ld.sku).trim() : (ld?.mpn ? String(ld.mpn).trim() : visibleSkuSpan(html)),
   };
+}
+
+/**
+ * Every SKU signal on the page, primary first: JSON-LD sku/mpn (including
+ * offers and hasVariant entries — family pages advertise a whole model
+ * line's part numbers) plus every visible class="sku" element. Downstream
+ * matching stays exact-or-dashless per SKU, so extra non-SKU strings here
+ * simply match nothing.
+ */
+export function extractAllSkus(html: string): string[] {
+  const out: string[] = [];
+  const push = (v: unknown) => {
+    if (v == null || typeof v === 'object') return;
+    const s = String(v).trim();
+    if (s && s.length <= 60 && !out.includes(s)) out.push(s);
+  };
+  const ld = findJsonLdProduct(html);
+  if (ld) {
+    push(ld.sku);
+    push(ld.mpn);
+    const offers = Array.isArray(ld.offers) ? ld.offers : ld.offers ? [ld.offers] : [];
+    for (const o of offers) { push(o?.sku); push(o?.mpn); }
+    const variants = Array.isArray(ld.hasVariant) ? ld.hasVariant : [];
+    for (const v of variants) { push(v?.sku); push(v?.mpn); }
+  }
+  for (const m of html.matchAll(/class=["'](?:[^"']*\s)?sku(?:\s[^"']*)?["'][^>]*>\s*([^<>\s][^<>]{0,58}?)\s*</gi)) {
+    push(m[1]);
+  }
+  return out;
 }
 
 /**
