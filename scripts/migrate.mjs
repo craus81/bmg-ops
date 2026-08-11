@@ -137,6 +137,25 @@ async function main() {
       applied_at timestamptz NOT NULL DEFAULT now()
     )
   `);
+  // Keep the tracking table off the public API: Supabase's default grants
+  // would otherwise let anyone with the anon key rewrite migration history
+  // through PostgREST (the "rls_disabled_in_public" advisor finding). This
+  // runner is unaffected — it connects as the table's owner, whom RLS does
+  // not constrain. The role checks keep local non-Supabase databases
+  // working, where anon/authenticated don't exist.
+  await client.query(`
+    DO $harden$
+    BEGIN
+      ALTER TABLE schema_migrations ENABLE ROW LEVEL SECURITY;
+      IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'anon') THEN
+        REVOKE ALL ON schema_migrations FROM anon;
+      END IF;
+      IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'authenticated') THEN
+        REVOKE ALL ON schema_migrations FROM authenticated;
+      END IF;
+    END
+    $harden$
+  `);
 
   const files = (await readdir(MIGRATIONS_DIR))
     .filter((f) => f.endsWith('.sql'))
