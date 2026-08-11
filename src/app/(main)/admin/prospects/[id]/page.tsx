@@ -44,6 +44,7 @@ import { fetchAllRows } from '@/lib/fetch-all';
 interface Prospect {
   id: string;
   company_name: string;
+  record_type: string;
   contact_name: string | null;
   email: string | null;
   phone: string | null;
@@ -398,7 +399,7 @@ export default function CustomerRecordPage() {
 
   // ── Record editing (ported from the CRM list card — the record page is
   // the primary edit surface now, the list is just the index) ──────────────
-  const emptyEditForm = { company_name: '', contact_name: '', email: '', phone: '', website: '', address: '', city: '', state: '', zip: '', notes: '', location_count: 1, lead_source: '', lead_source_other: '' };
+  const emptyEditForm = { company_name: '', contact_name: '', email: '', phone: '', website: '', address: '', city: '', state: '', zip: '', notes: '', location_count: 1, lead_source: '', lead_source_other: '', record_type: 'customer' };
   const [editOpen, setEditOpen] = useState(false);
   const [editForm, setEditForm] = useState(emptyEditForm);
   const [editSaving, setEditSaving] = useState(false);
@@ -411,6 +412,7 @@ export default function CustomerRecordPage() {
       address: prospect.address || '', city: prospect.city || '', state: prospect.state || '', zip: prospect.zip || '',
       notes: prospect.notes || '', location_count: prospect.location_count || 1,
       lead_source: prospect.lead_source || '', lead_source_other: prospect.lead_source_other || '',
+      record_type: prospect.record_type || 'customer',
     });
     setEditOpen(true);
   };
@@ -425,6 +427,7 @@ export default function CustomerRecordPage() {
       notes: editForm.notes || null, location_count: editForm.location_count || 1,
       lead_source: editForm.lead_source || null,
       lead_source_other: editForm.lead_source === 'Other' ? editForm.lead_source_other || null : null,
+      record_type: editForm.record_type || 'customer',
     };
     const { error } = await supabase.from('prospects').update(patch).eq('id', prospect.id);
     setEditSaving(false);
@@ -759,6 +762,32 @@ export default function CustomerRecordPage() {
     const { error } = await supabase.from('prospect_reminders').update({ completed_at: new Date().toISOString() }).eq('id', r.id);
     if (error) { await dialog.alert(`Could not complete the reminder: ${error.message}`); return; }
     setReminders(prev => prev.filter(x => x.id !== r.id));
+  };
+
+  // Manual reminder ("call them next Wednesday") — same prospect_reminders
+  // table the voice-note flow writes, so it shows here and on the Schedule
+  // page's calendar (Sales type) without any extra plumbing.
+  const [remFormOpen, setRemFormOpen] = useState(false);
+  const [remForm, setRemForm] = useState({ title: '', date: '', time: '' });
+  const [remSaving, setRemSaving] = useState(false);
+
+  const addReminder = async () => {
+    if (!prospect || !remForm.title.trim() || !remForm.date || remSaving) return;
+    setRemSaving(true);
+    // No time picked → 9:00 AM local, matching the voice-note default.
+    const dueAt = new Date(`${remForm.date}T${remForm.time || '09:00'}`);
+    const { data, error } = await supabase.from('prospect_reminders').insert({
+      prospect_id: prospect.id,
+      title: remForm.title.trim(),
+      due_at: dueAt.toISOString(),
+      created_by: user?.id,
+    }).select('id, title, description, due_at').single();
+    setRemSaving(false);
+    if (error || !data) { await dialog.alert(`Could not set the reminder: ${error?.message || 'unknown error'}`); return; }
+    setReminders(prev => [...prev, data as Reminder].sort((a, b) => a.due_at.localeCompare(b.due_at)));
+    logAuto('note', `Reminder set: ${remForm.title.trim()} — due ${dueAt.toLocaleDateString()}`);
+    setRemForm({ title: '', date: '', time: '' });
+    setRemFormOpen(false);
   };
 
   // Older history pages on demand — the CRM list capped at 50 and this page
@@ -1297,6 +1326,7 @@ export default function CustomerRecordPage() {
   }
 
   const name = prospect?.company_name || customer?.company_name || 'Unknown';
+  const isVendor = prospect?.record_type === 'vendor';
   const email = prospect?.email || customer?.email || null;
   const phone = prospect?.phone || customer?.phone || null;
   const address = prospect
@@ -1316,7 +1346,9 @@ export default function CustomerRecordPage() {
         <div style={{ display: 'flex', alignItems: 'center', gap: '10px', flexWrap: 'wrap' }}>
           <div style={{ fontSize: '24px', fontWeight: 800, letterSpacing: '-0.5px', color: 'var(--text-primary)' }}>{name}</div>
           {prospect ? (
-            !prospect.netsuite_id && (
+            isVendor ? (
+              <span title="Supplier/partner contact — FleetSuite only, never created in NetSuite as a customer" style={{ fontSize: '10px', fontWeight: 800, padding: '3px 9px', borderRadius: '999px', background: 'rgba(167,139,250,0.12)', color: '#a78bfa' }}>Vendor</span>
+            ) : !prospect.netsuite_id && (
               <span title="The NetSuite create failed or hasn't run — use Add to NetSuite below" style={{ fontSize: '10px', fontWeight: 800, padding: '3px 9px', borderRadius: '999px', background: 'var(--warning-bg)', color: 'var(--warning)' }}>Not in NetSuite yet</span>
             )
           ) : (
@@ -1342,7 +1374,7 @@ export default function CustomerRecordPage() {
           {phone && <a href={`tel:${phone}`} style={{ ...btnSm, color: '#22c55e' }}>📞 {phone}</a>}
           {email && <a href={`mailto:${email}`} style={{ ...btnSm, color: '#60a5fa' }}>✉️ Email</a>}
           {prospect && <button onClick={openEdit} title="Edit company details, lead source, and notes" style={btnSm}>✎ Edit</button>}
-          {prospect && !prospect.netsuite_id && (
+          {prospect && !prospect.netsuite_id && !isVendor && (
             <button onClick={addToNetSuite} disabled={converting} title="Create this customer in NetSuite (normally automatic at creation — this retries)" style={{ ...btnSm, color: '#a78bfa', opacity: converting ? 0.6 : 1 }}>
               {converting ? 'Adding…' : 'Add to NetSuite'}
             </button>
@@ -1384,7 +1416,8 @@ export default function CustomerRecordPage() {
         )}
       </div>
 
-      {/* Spend KPIs (NetSuite) */}
+      {/* Spend KPIs (NetSuite) — a vendor has no spend history by design,
+          so it gets neither the KPIs nor the "not linked yet" nudge. */}
       {m ? (
         <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(150px, 1fr))', gap: '10px' }}>
           <Kpi label="YTD spend" value={fmtMoney(m.ytd_spend || 0)} sub={`${m.ytd_orders || 0} orders this year`} />
@@ -1392,7 +1425,7 @@ export default function CustomerRecordPage() {
           <Kpi label="Avg order" value={fmtMoney(m.avg_order_value || 0)} sub={m.last_year_spend ? `${fmtMoney(m.last_year_spend)} last year` : undefined} />
           <Kpi label="Last order" value={fmtDate(m.last_order_date)} />
         </div>
-      ) : (
+      ) : !isVendor && (
         <div style={{ ...card, fontSize: '12px', color: 'var(--text-muted)' }}>
           No NetSuite spend history — {prospect ? 'this record isn’t linked to a NetSuite customer yet.' : 'customer not synced.'}
         </div>
@@ -1869,9 +1902,40 @@ export default function CustomerRecordPage() {
             </div>
           )}
 
-          {reminders.length > 0 && (
+          {(prospect || reminders.length > 0) && (
             <div style={card}>
-              <div style={eyebrow}>Reminders · {reminders.length}</div>
+              <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: reminders.length > 0 || remFormOpen ? '6px' : 0 }}>
+                <div style={{ ...eyebrow, marginBottom: 0 }}>Reminders{reminders.length > 0 ? ` · ${reminders.length}` : ''}</div>
+                <span style={{ flex: 1 }} />
+                {prospect && (
+                  <button onClick={() => setRemFormOpen(v => !v)} title="Set a follow-up reminder — it shows here and on the Schedule calendar" style={{
+                    padding: '4px 10px', borderRadius: '6px', fontSize: '10px', fontWeight: 700, cursor: 'pointer',
+                    background: 'rgba(251,191,36,0.1)', border: '1px solid rgba(251,191,36,0.25)', color: '#f59e0b',
+                  }}>{remFormOpen ? 'Cancel' : '+ Reminder'}</button>
+                )}
+              </div>
+              {remFormOpen && (
+                <div style={{ display: 'flex', gap: '6px', flexWrap: 'wrap', marginBottom: '8px' }}>
+                  <input
+                    value={remForm.title} onChange={e => setRemForm({ ...remForm, title: e.target.value })}
+                    onKeyDown={e => { if (e.key === 'Enter') addReminder(); }}
+                    placeholder="Call about the upfit quote…" autoFocus
+                    style={{ flex: '1 1 180px', minWidth: 0, padding: '8px 10px', borderRadius: '8px', fontSize: '12px', background: 'var(--input-bg)', border: '1px solid var(--border)', color: 'var(--text-primary)' }}
+                  />
+                  <input type="date" value={remForm.date} onChange={e => setRemForm({ ...remForm, date: e.target.value })}
+                    style={{ padding: '8px 10px', borderRadius: '8px', fontSize: '12px', background: 'var(--input-bg)', border: '1px solid var(--border)', color: 'var(--text-primary)' }} />
+                  <input type="time" value={remForm.time} onChange={e => setRemForm({ ...remForm, time: e.target.value })} title="Optional — defaults to 9:00 AM"
+                    style={{ padding: '8px 10px', borderRadius: '8px', fontSize: '12px', background: 'var(--input-bg)', border: '1px solid var(--border)', color: 'var(--text-primary)' }} />
+                  <button onClick={addReminder} disabled={remSaving || !remForm.title.trim() || !remForm.date} style={{
+                    padding: '8px 14px', borderRadius: '8px', fontSize: '11px', fontWeight: 700,
+                    background: remForm.title.trim() && remForm.date ? '#22c55e' : 'var(--border)', color: '#fff', border: 'none',
+                    cursor: remForm.title.trim() && remForm.date ? 'pointer' : 'default', opacity: remSaving ? 0.6 : 1,
+                  }}>{remSaving ? 'Saving…' : 'Set reminder'}</button>
+                </div>
+              )}
+              {reminders.length === 0 && !remFormOpen && (
+                <div style={{ fontSize: '11.5px', color: 'var(--text-muted)', marginTop: '6px' }}>No reminders — set one to follow up (it also shows on the Schedule calendar).</div>
+              )}
               {reminders.map(r => (
                 <div key={r.id} style={{ display: 'flex', alignItems: 'center', gap: '8px', padding: '7px 0', borderTop: '1px solid var(--border)', fontSize: '12.5px' }}>
                   <span style={{ fontWeight: 700, flexShrink: 0, color: new Date(r.due_at) < new Date() ? 'var(--error)' : 'var(--text-primary)' }}>{fmtDate(r.due_at.slice(0, 10))}</span>
@@ -2101,6 +2165,18 @@ export default function CustomerRecordPage() {
               <div>
                 <div style={{ fontSize: '9px', fontWeight: 700, color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.5px', marginBottom: '4px' }}>Locations</div>
                 <input style={cInput} type="number" min={1} value={editForm.location_count} onChange={e => setEditForm({ ...editForm, location_count: parseInt(e.target.value) || 1 })} />
+              </div>
+              <div style={{ gridColumn: '1 / -1' }}>
+                <div style={{ fontSize: '9px', fontWeight: 700, color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.5px', marginBottom: '4px' }}>Record type</div>
+                <select style={cInput} value={editForm.record_type} onChange={e => setEditForm({ ...editForm, record_type: e.target.value })}>
+                  <option value="customer">Customer</option>
+                  <option value="vendor">Vendor — supplier/partner contact, FleetSuite only</option>
+                </select>
+                {editForm.record_type === 'vendor' && prospect.netsuite_id && (
+                  <div style={{ fontSize: '10px', color: 'var(--warning)', marginTop: '4px' }}>
+                    Already created in NetSuite as a customer — this only reclassifies the record in FleetSuite; the NetSuite customer stays until removed there.
+                  </div>
+                )}
               </div>
               <textarea style={{ ...cInput, gridColumn: '1 / -1', resize: 'vertical' }} rows={3} placeholder="Notes" value={editForm.notes} onChange={e => setEditForm({ ...editForm, notes: e.target.value })} />
             </div>
