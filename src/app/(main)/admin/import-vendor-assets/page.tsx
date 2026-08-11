@@ -77,6 +77,7 @@ export default function ImportVendorAssetsPage() {
   const [discoverError, setDiscoverError] = useState('');
   const [discoverVia, setDiscoverVia] = useState<'sitemap' | 'crawl' | 'listing' | ''>('');
   const [discoverChecked, setDiscoverChecked] = useState<string[]>([]);
+  const [discoverProgress, setDiscoverProgress] = useState('');
   const [listingUrlsText, setListingUrlsText] = useState('');
 
   const [running, setRunning] = useState(false);
@@ -117,7 +118,7 @@ export default function ImportVendorAssetsPage() {
   const doDiscover = async () => {
     // Teach mode: category page URLs (one per line) override sitemap/crawl.
     // Scheme optional — pasted hostnames get https:// prepended, not dropped.
-    const listingUrls = listingUrlsText
+    const seedListings = listingUrlsText
       .split('\n')
       .map(l => l.trim())
       .filter(l => l.includes('.'))
@@ -128,23 +129,50 @@ export default function ImportVendorAssetsPage() {
     setUrls([]);
     setDiscoverVia('');
     setDiscoverChecked([]);
+    setDiscoverProgress('');
     try {
-      const d = await post({
-        mode: 'discover',
-        baseUrl: ensureScheme(siteUrl),
-        listingUrls: listingUrls.length > 0 ? listingUrls : undefined,
-      });
-      setUrls(d.urls || []);
-      setDiscoverVia(d.via || '');
-      setDiscoverChecked(d.checked || []);
-      if ((d.urls || []).length === 0) {
-        setDiscoverError(listingUrls.length > 0
-          ? 'No product links found on those category pages — check "What was checked" below for what each page returned.'
-          : 'No product pages found via sitemaps or a site crawl. Paste one or more category page URLs into the box above (one per line) and try again — I’ll harvest product links straight from them, pagination included.');
+      if (seedListings.length > 0) {
+        // The server fetches ~25 listing pages per call and returns the
+        // remaining queue — loop until the whole pagination chain is walked
+        // (big catalogs run to hundreds of pages: rangerdesign.com is 470).
+        const urlSet = new Set<string>();
+        const visited: string[] = [];
+        const allChecked: string[] = [];
+        let pending = seedListings;
+        while (pending.length > 0 && visited.length < 600 && urlSet.size < 3000) {
+          const d = await post({
+            mode: 'discover',
+            baseUrl: ensureScheme(siteUrl),
+            listingUrls: pending.slice(0, 500),
+            visited,
+          });
+          for (const u of d.urls || []) urlSet.add(u);
+          visited.push(...(d.fetchedListings || []));
+          allChecked.push(...(d.checked || []));
+          setUrls([...urlSet]);
+          setDiscoverVia('listing');
+          setDiscoverChecked(allChecked.slice(-80));
+          setDiscoverProgress(`${visited.length} listing pages scanned · ${urlSet.size.toLocaleString()} product pages found…`);
+          pending = d.pendingListings || [];
+          if ((d.fetchedListings || []).length === 0) break; // nothing new — done
+        }
+        setDiscoverProgress('');
+        if (urlSet.size === 0) {
+          setDiscoverError('No product links found on those category pages — check "What was checked" below for what each page returned.');
+        }
+      } else {
+        const d = await post({ mode: 'discover', baseUrl: ensureScheme(siteUrl) });
+        setUrls(d.urls || []);
+        setDiscoverVia(d.via || '');
+        setDiscoverChecked(d.checked || []);
+        if ((d.urls || []).length === 0) {
+          setDiscoverError('No product pages found via sitemaps or a site crawl. Paste one or more category page URLs into the box above (one per line) and try again — I’ll harvest product links straight from them, pagination included.');
+        }
       }
     } catch (e: any) {
       setDiscoverError(e?.message || 'Discovery failed');
     }
+    setDiscoverProgress('');
     setDiscovering(false);
   };
 
@@ -368,6 +396,9 @@ export default function ImportVendorAssetsPage() {
         <button style={{ ...btn, opacity: discovering ? 0.6 : 1 }} onClick={doDiscover} disabled={discovering || !siteUrl.trim()}>
           {discovering ? 'Scanning…' : 'Find product pages'}
         </button>
+        {discoverProgress && (
+          <div style={{ marginTop: 8, fontSize: 12, color: theme.textSecondary }}>{discoverProgress}</div>
+        )}
         {discoverError && (
           <div style={{ marginTop: 8, fontSize: 12, color: theme.warning }}>
             {discoverError}
