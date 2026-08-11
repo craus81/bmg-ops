@@ -79,22 +79,23 @@ async function fetchText(url: string, maxBytes = 2_000_000): Promise<string> {
   return buf.toString('utf8');
 }
 
-interface MappedPart { item_number: string; vendor: string | null; image_path: string | null; marketing_description: string | null }
+interface MappedPart { item_number: string; vendor: string | null; is_active: boolean; image_path: string | null; marketing_description: string | null }
 
 /**
- * Active-part SKU lookup (id per skuKeys of item_number) over the WHOLE
- * catalog, plus an in-scope predicate for the vendor filter. The filter is
- * applied after matching — not in the query — so an out-of-scope match can
- * be reported as exactly that ("vendor is X, outside your filter") instead
- * of a bogus "no part matches this SKU". NetSuite's item-record vendor
- * field is optional and often blank, so a filter can silently exclude the
- * entire catalog; scopedCount lets callers fail fast on that.
+ * SKU lookup (id per skuKeys of item_number) over the WHOLE catalog —
+ * inactive rows included, so "that part exists but is INACTIVE" can be
+ * reported instead of a bogus "no part matches this SKU". Imports still
+ * only stamp active parts; the vendor filter is likewise applied after
+ * matching so an out-of-scope match reports as exactly that. Key-claim
+ * priority: active+in-scope > active > inactive — a live row always wins
+ * a number shared with a retired duplicate. scopedCount counts ACTIVE
+ * in-scope parts so callers can fail fast on a filter that excludes the
+ * entire catalog (NetSuite's item-record vendor field is often blank).
  */
 async function buildPartMap(vendor?: string) {
   const { data: rows, error } = await fetchAllRows<any>((from, to) => supabase
     .from('netsuite_parts')
-    .select('id, item_number, vendor, image_path, marketing_description')
-    .eq('is_active', true)
+    .select('id, item_number, vendor, is_active, image_path, marketing_description')
     .not('item_number', 'is', null)
     .order('id')
     .range(from, to));
@@ -106,17 +107,24 @@ async function buildPartMap(vendor?: string) {
   const byKey = new Map<string, string>();
   const partById = new Map<string, MappedPart>();
   let scopedCount = 0;
+  let activeTotal = 0;
   const vendorsSeen = new Set<string>();
-  // In-scope parts claim SKU keys first so a cross-vendor SKU collision
-  // resolves to the part the filter asks for.
-  const all: any[] = rows || [];
-  for (const p of [...all.filter(inScope), ...all.filter((p: MappedPart) => !inScope(p))]) {
+  const all: (MappedPart & { id: string })[] = rows || [];
+  const tiers = [
+    all.filter(p => p.is_active && inScope(p)),
+    all.filter(p => p.is_active && !inScope(p)),
+    all.filter(p => !p.is_active),
+  ];
+  for (const p of tiers.flat()) {
     for (const key of skuKeys(p.item_number)) if (!byKey.has(key)) byKey.set(key, p.id);
     partById.set(p.id, p);
-    if (inScope(p)) scopedCount++;
-    if (p.vendor) vendorsSeen.add(p.vendor);
+    if (p.is_active) {
+      activeTotal++;
+      if (inScope(p)) scopedCount++;
+      if (p.vendor) vendorsSeen.add(p.vendor);
+    }
   }
-  return { byKey, partById, inScope, scopedCount, total: all.length, vendorsSeen };
+  return { byKey, partById, inScope, scopedCount, total: activeTotal, vendorsSeen };
 }
 
 export async function POST(req: NextRequest) {
@@ -143,7 +151,7 @@ export async function POST(req: NextRequest) {
       }
       const matchedParts = matchedIds.map(id => {
         const p = partById.get(id)!;
-        return { itemNumber: p.item_number, vendor: p.vendor, inScope: inScope(p) };
+        return { itemNumber: p.item_number, vendor: p.vendor, inScope: inScope(p), active: p.is_active };
       });
       return NextResponse.json({
         product,
@@ -312,7 +320,12 @@ export async function POST(req: NextRequest) {
           let nearSku: string | undefined;
           for (const s of skuPool) {
             const id = nearMatchSkuToPart(s, byKey);
-            if (id) { nearItemNumber = partById.get(id)!.item_number; nearSku = s; break; }
+            if (id) {
+              const p = partById.get(id)!;
+              nearItemNumber = p.is_active ? p.item_number : `${p.item_number} (inactive)`;
+              nearSku = s;
+              break;
+            }
           }
           results.push({
             url, ok: false, sku: product.sku ?? nearSku ?? null, nearItemNumber,
@@ -321,10 +334,17 @@ export async function POST(req: NextRequest) {
           await sleep(700);
           continue;
         }
-        const inScopeIds = matchedIds.filter(id => inScope(partById.get(id)!));
-        if (inScopeIds.length === 0) {
+        const activeIds = matchedIds.filter(id => partById.get(id)!.is_active);
+        if (activeIds.length === 0) {
           const first = partById.get(matchedIds[0])!;
-          results.push({ url, ok: false, partId: matchedIds[0], sku: product.sku, error: `SKU matches ${first.item_number}${matchedIds.length > 1 ? ` (+${matchedIds.length - 1} more)` : ''}, but that part's vendor is ${first.vendor ? `"${first.vendor}"` : 'blank'} — outside your "${body.vendor}" filter` });
+          results.push({ url, ok: false, partId: matchedIds[0], sku: product.sku, error: `SKU matches ${first.item_number}${matchedIds.length > 1 ? ` (+${matchedIds.length - 1} more)` : ''}, but that part is INACTIVE in the catalog — reactivate it in NetSuite and re-run` });
+          await sleep(700);
+          continue;
+        }
+        const inScopeIds = activeIds.filter(id => inScope(partById.get(id)!));
+        if (inScopeIds.length === 0) {
+          const first = partById.get(activeIds[0])!;
+          results.push({ url, ok: false, partId: activeIds[0], sku: product.sku, error: `SKU matches ${first.item_number}${activeIds.length > 1 ? ` (+${activeIds.length - 1} more)` : ''}, but that part's vendor is ${first.vendor ? `"${first.vendor}"` : 'blank'} — outside your "${body.vendor}" filter` });
           await sleep(700);
           continue;
         }
