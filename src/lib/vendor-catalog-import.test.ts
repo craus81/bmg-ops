@@ -79,6 +79,20 @@ describe('extractAllSkus (family pages: one page, many part numbers)', () => {
   it('returns an empty list when nothing sku-shaped exists', () => {
     expect(extractAllSkus('<html><body>hello</body></html>')).toEqual([]);
   });
+
+  it('falls back to visible "Part #:" labels only when no structured SKU exists', () => {
+    const labeled = `<html><body>
+      <p><strong>Part #:</strong> 022824KP</p>
+      <p>Part Number: <span>027561KP</span></p>
+      <p>Part: One</p>
+    </body></html>`;
+    expect(extractAllSkus(labeled)).toEqual(['022824KP', '027561KP']);
+
+    const withJsonLd = `<html><head>
+      <script type="application/ld+json">{"@type":"Product","sku":"02T408KP"}</script>
+      </head><body><strong>Part #:</strong> 999111ZZ</body></html>`;
+    expect(extractAllSkus(withJsonLd)).toEqual(['02T408KP']);
+  });
 });
 
 describe('skuCandidatesFromUrl (slug fallback, exact match downstream)', () => {
@@ -166,6 +180,19 @@ describe('looksLikeProductUrl / looksLikeListingUrl', () => {
     expect(looksLikeListingUrl('https://x.com/products/')).toBe(true);
     expect(looksLikeProductUrl('https://x.com/product-category/shelving/')).toBe(false);
     expect(looksLikeListingUrl('https://x.com/products/3-shelf-unit')).toBe(false);
+  });
+
+  it('treats pagination as a listing shape, never a product (masterack /catalog/page/N/)', () => {
+    expect(looksLikeListingUrl('https://www.masterack.com/catalog/page/2/')).toBe(true);
+    expect(looksLikeProductUrl('https://www.masterack.com/catalog/page/2/')).toBe(false);
+    expect(looksLikeListingUrl('https://x.com/catalog/?page=3')).toBe(true);
+    expect(looksLikeProductUrl('https://www.masterack.com/product/chevy-trax-cargo-partition/')).toBe(true);
+  });
+
+  it('drops assets and feeds from both classifications', () => {
+    expect(looksLikeProductUrl('https://x.com/wp-content/plugins/x/assets/css/product/global.0f804f5f.css')).toBe(false);
+    expect(looksLikeProductUrl('https://x.com/catalog/feed/')).toBe(false);
+    expect(looksLikeListingUrl('https://x.com/catalog/theme.js')).toBe(false);
   });
 });
 

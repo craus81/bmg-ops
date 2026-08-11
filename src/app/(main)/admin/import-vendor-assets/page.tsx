@@ -16,7 +16,7 @@ import { ensureScheme } from '@/lib/vendor-catalog-import';
  * case is "no match", never a wrong photo.
  */
 
-interface MatchedPart { itemNumber: string; vendor: string | null; inScope: boolean }
+interface MatchedPart { itemNumber: string; vendor: string | null; inScope: boolean; active?: boolean }
 
 interface ProbeResult {
   product: { name: string | null; description: string | null; imageUrl: string | null; sku: string | null };
@@ -247,10 +247,20 @@ export default function ImportVendorAssetsPage() {
               <div style={{ color: probe.matchedPartId ? theme.success : theme.warning, fontWeight: 700, fontSize: 12 }}>
                 {probe.matchedPartId
                   ? (probe.matchedParts && probe.matchedParts.length > 1
-                    ? `✓ matches ${probe.matchedParts.length} parts in our catalog: ${probe.matchedParts.slice(0, 6).map(p => p.itemNumber).join(', ')}${probe.matchedParts.length > 6 ? ` +${probe.matchedParts.length - 6} more` : ''}`
+                    ? `✓ matches ${probe.matchedParts.length} parts in our catalog: ${probe.matchedParts.slice(0, 6).map(p => `${p.itemNumber}${p.active === false ? ' (inactive)' : ''}`).join(', ')}${probe.matchedParts.length > 6 ? ` +${probe.matchedParts.length - 6} more` : ''}`
                     : `✓ matches ${probe.matchedPart?.itemNumber || 'a part'} in our catalog${probe.matchedPart?.vendor ? ` (vendor: ${probe.matchedPart.vendor})` : ''}`)
                   : probe.product.sku ? '✗ no part with this number' : '✗ no SKU on the page'}
               </div>
+              {(() => {
+                const inactive = (probe.matchedParts || (probe.matchedPart ? [probe.matchedPart] : [])).filter(p => p.active === false);
+                if (inactive.length === 0) return null;
+                return (
+                  <div style={{ color: theme.warning, fontWeight: 700, fontSize: 12 }}>
+                    ⚠ {inactive.length === 1 ? `${inactive[0].itemNumber} is INACTIVE` : `${inactive.length} of these parts are INACTIVE`} in the catalog —
+                    the import only stamps active parts. Reactivate in NetSuite, let the parts sync run, then re-import.
+                  </div>
+                );
+              })()}
               {(() => {
                 const out = (probe.matchedParts || (probe.matchedPart ? [probe.matchedPart] : [])).filter(p => !p.inScope);
                 if (out.length === 0) return null;

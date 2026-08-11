@@ -126,6 +126,15 @@ export function extractAllSkus(html: string): string[] {
   for (const m of html.matchAll(/class=["'](?:[^"']*\s)?sku(?:\s[^"']*)?["'][^>]*>\s*([^<>\s][^<>]{0,58}?)\s*</gi)) {
     push(m[1]);
   }
+  // Last resort: visible "Part #: 022824KP" labels. Only when the page
+  // offered NO structured SKU at all — so a product page's own signals
+  // always win and related-product cards can't hijack a page's photo.
+  // Tokens must carry a digit (labels like "Part: One" match nothing).
+  if (out.length === 0) {
+    for (const m of html.matchAll(/part\s*(?:#|no\.?|number)?\s*:?\s*(?:<[^>]+>\s*)*([A-Z0-9][A-Z0-9._/-]{3,29})/gi)) {
+      if (/\d/.test(m[1])) push(m[1]);
+    }
+  }
   return out;
 }
 
@@ -208,10 +217,14 @@ export function nearMatchSkuToPart(
   return hits.size === 1 ? [...hits][0] : null;
 }
 
+/** Static assets and feeds — never product or listing pages. */
+const ASSET_URL_RE = /\.(pdf|jpe?g|png|webp|gif|xml|css|js|json|ico|svg|woff2?|ttf|eot|mp4|webm)(\?|$)/;
+
 /** Product-page-ish URLs, to keep the crawl off blog posts and PDFs. */
 export function looksLikeProductUrl(url: string): boolean {
   const u = url.toLowerCase();
-  if (/\.(pdf|jpg|jpeg|png|webp|gif|xml)(\?|$)/.test(u)) return false;
+  if (ASSET_URL_RE.test(u)) return false;
+  if (/\/feed\/?$/.test(u.split('?')[0])) return false;
   if (looksLikeListingUrl(u)) return false;
   return /\/(product|products|shop|item|catalog|p)\//.test(u);
 }
@@ -219,9 +232,13 @@ export function looksLikeProductUrl(url: string): boolean {
 /** Category/listing pages — the crawl fallback fans out through these. */
 export function looksLikeListingUrl(url: string): boolean {
   const u = url.toLowerCase();
-  if (/\.(pdf|jpg|jpeg|png|webp|gif|xml)(\?|$)/.test(u)) return false;
+  if (ASSET_URL_RE.test(u)) return false;
+  const path = u.split('?')[0];
+  // Pagination is a listing shape, never a product (…/catalog/page/2/) —
+  // Masterack's paged catalog was slipping into run lists as "products".
+  if (/\/page\/\d+\/?$/.test(path) || /[?&]page=\d+/.test(u)) return true;
   return /\/(product-category|product_category|collections|categories|category)\//.test(u)
-    || /\/(products|shop|catalog)\/?$/.test(u);
+    || /\/(products|shop|catalog)\/?$/.test(path);
 }
 
 /**
