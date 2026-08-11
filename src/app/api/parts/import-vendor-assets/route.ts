@@ -7,7 +7,8 @@ import { fetchAllRows } from '@/lib/fetch-all';
 import {
   extractProduct, extractAllSkus, parseSitemapLocs, matchSkuToPart, skuKeys,
   looksLikeProductUrl, looksLikeListingUrl, extractSameOriginLinks,
-  extractPaginationLinks, originVariants, skuCandidatesFromUrl, SITEMAP_CANDIDATES,
+  extractPaginationLinks, originVariants, skuCandidatesFromUrl, ensureScheme,
+  SITEMAP_CANDIDATES,
 } from '@/lib/vendor-catalog-import';
 
 export const dynamic = 'force-dynamic';
@@ -18,27 +19,33 @@ const supabase = createClient(
   process.env.SUPABASE_SERVICE_ROLE_KEY!,
 );
 
+// URL that tolerates a missing scheme ("www.masterack.com" — people paste
+// hostnames as often as full URLs). Normalized to https:// before the
+// strict check, so downstream code always sees a real URL.
+const urlish = (max: number) =>
+  z.preprocess(v => (typeof v === 'string' ? ensureScheme(v) : v), z.string().url().max(max));
+
 const Schema = z.discriminatedUnion('mode', [
   // Verify extraction against one live page — no writes. vendor is only
   // echoed back as an in/out-of-scope verdict so a filter that would make
   // the real import skip everything is visible at step 1.
-  z.object({ mode: z.literal('probe'), url: z.string().url().max(1000), vendor: z.string().trim().max(200).optional() }),
+  z.object({ mode: z.literal('probe'), url: urlish(1000), vendor: z.string().trim().max(200).optional() }),
   // Walk the site's sitemap(s) / crawl and return product-ish URLs for the
   // client to batch through 'run'. listingUrl = "teach mode": harvest from
   // a specific category page (plus its pagination and sibling categories)
   // instead — for sites whose sitemaps and homepage nav are unreadable.
   z.object({
     mode: z.literal('discover'),
-    baseUrl: z.string().url().max(300),
+    baseUrl: urlish(300),
     /** Teach mode: harvest from these category/listing pages (plus their
      *  pagination and sibling categories) instead of sitemaps/crawl. */
-    listingUrls: z.array(z.string().url().max(1000)).max(20).optional(),
+    listingUrls: z.array(urlish(1000)).max(20).optional(),
   }),
   // Import a batch of product pages: extract, match SKU, upload image to
   // R2, stamp image_path + marketing_description.
   z.object({
     mode: z.literal('run'),
-    urls: z.array(z.string().url().max(1000)).min(1).max(25),
+    urls: z.array(urlish(1000)).min(1).max(25),
     /** Restrict SKU matching to parts of this vendor (ilike). */
     vendor: z.string().trim().max(200).optional(),
     /** Replace existing photos/descriptions instead of only filling blanks. */
