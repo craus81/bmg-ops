@@ -10,6 +10,7 @@ import JobAttachments from '@/components/JobAttachments';
 import { isVerizonRfidPart, validateSerial, validateImei, validateIccid } from '@/lib/rfid';
 import VinScanner from '@/components/VinScanner';
 import { theme } from '@/lib/theme';
+import RecordChanges from '@/components/RecordChanges';
 
 interface CniJob {
   id: string;
@@ -1968,6 +1969,9 @@ export default function CniJobDetailPage() {
           </div>
         </div>
       )}
+
+      {/* Field-level audit history (A2 phase 4) — page is already admin-only */}
+      <RecordChanges table="cni_jobs" recordId={jobId} />
 
       <div style={{ height: '80px' }} />
     </div>

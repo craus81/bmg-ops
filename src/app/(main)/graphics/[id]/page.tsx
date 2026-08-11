@@ -25,6 +25,7 @@ import { useAuth } from '@/components/AuthProvider';
 import { useDialog } from '@/components/DialogProvider';
 import { theme } from '@/lib/theme';
 import AssignmentPicker from '@/components/AssignmentPicker';
+import RecordChanges from '@/components/RecordChanges';
 import AssignJobPOModal from '@/components/AssignJobPOModal';
 import GraphicsInvoiceReviewModal from '@/components/GraphicsInvoiceReviewModal';
 import EmailInvoicesModal, { type EmailableInvoice } from '@/components/EmailInvoicesModal';
@@ -1811,6 +1812,9 @@ export default function GraphicsJobRecordPage() {
           onClose={() => setEmailInvoiceTarget(null)}
         />
       )}
+
+      {/* Field-level audit history (A2 phase 4) — admin-only per audit_log RLS */}
+      {isAdmin && job && <RecordChanges table="graphics_jobs" recordId={job.id} />}
 
       <UploadProgressBar progress={uploadProgress} />
     </div>
