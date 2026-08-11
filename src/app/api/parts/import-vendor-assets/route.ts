@@ -124,7 +124,7 @@ async function buildPartMap(vendor?: string) {
       if (p.vendor) vendorsSeen.add(p.vendor);
     }
   }
-  return { byKey, partById, inScope, scopedCount, total: activeTotal, vendorsSeen };
+  return { byKey, partById, inScope, scopedCount, total: activeTotal, allTotal: all.length, vendorsSeen };
 }
 
 export async function POST(req: NextRequest) {
@@ -139,7 +139,7 @@ export async function POST(req: NextRequest) {
     if (body.mode === 'probe') {
       const html = await fetchText(body.url);
       const product = extractProduct(html);
-      const { byKey, partById, inScope } = await buildPartMap(body.vendor);
+      const { byKey, partById, inScope, total, allTotal } = await buildPartMap(body.vendor);
       // Family pages can carry a whole model line's part numbers — match
       // them all; the slug is the fallback when the page yields nothing.
       const matchedIds = [...new Set(
@@ -153,11 +153,29 @@ export async function POST(req: NextRequest) {
         const p = partById.get(id)!;
         return { itemNumber: p.item_number, vendor: p.vendor, inScope: inScope(p), active: p.is_active };
       });
+      // No match → show what the catalog holds NEAR this number (ilike on
+      // the SKU's distinctive middle), so "not matching" is debuggable from
+      // the probe alone: wrong spelling, inactive row, or truly absent.
+      let closest: { itemNumber: string; active: boolean; vendor: string | null }[] | undefined;
+      if (matchedIds.length === 0 && product.sku) {
+        const bare = String(product.sku).toUpperCase().replace(/[^A-Z0-9]/g, '');
+        const core = bare.length >= 6 ? bare.slice(2, bare.length - 2) : bare;
+        if (core) {
+          const { data: rows } = await supabase
+            .from('netsuite_parts')
+            .select('item_number, is_active, vendor')
+            .ilike('item_number', `%${core}%`)
+            .limit(5);
+          closest = (rows || []).map(r => ({ itemNumber: r.item_number, active: r.is_active, vendor: r.vendor }));
+        }
+      }
       return NextResponse.json({
         product,
         matchedPartId: matchedIds[0] || null,
         matchedPart: matchedParts[0] || null,
         matchedParts,
+        catalogSearched: { active: total, all: allTotal },
+        closest,
       });
     }
 
