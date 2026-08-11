@@ -26,7 +26,7 @@ interface ProbeResult {
   matchedParts?: MatchedPart[];
 }
 
-interface RunRow { url: string; ok: boolean; partId?: string; sku?: string | null; matched?: number; imported?: string[]; error?: string }
+interface RunRow { url: string; ok: boolean; partId?: string; sku?: string | null; matched?: number; imported?: string[]; error?: string; nearItemNumber?: string }
 
 const BATCH = 25;
 
@@ -122,32 +122,33 @@ export default function ImportVendorAssetsPage() {
     setDiscovering(false);
   };
 
-  const doRun = async () => {
-    if (urls.length === 0) return;
-    const ok = await dialog.confirm(
-      `Import from ${urls.length} product page${urls.length !== 1 ? 's' : ''}? Photos and descriptions land on parts whose part number matches the page's SKU${vendorScope.trim() ? ` (matching only "${vendorScope.trim()}" parts)` : ''}. ${overwrite ? 'Existing photos/descriptions WILL be replaced.' : 'Existing photos/descriptions are kept; only blanks fill in.'} Pages are fetched politely (~1/sec), so this takes a while.`,
-      { confirmLabel: 'Start import' },
-    );
-    if (!ok) return;
-
+  // Shared batch runner. A near-miss retry ADDS to the finished run's
+  // tallies and replaces just the retried failure rows; a fresh run resets.
+  const runBatches = async (urlList: string[], opts: { nearMatch?: boolean } = {}) => {
     setRunning(true);
-    setProgress({ done: 0, total: urls.length });
-    setImagesSaved(0);
-    setDescriptionsSaved(0);
-    setMatchedCount(0);
-    setFailures([]);
-    setRanTotal(urls.length);
+    setProgress({ done: 0, total: urlList.length });
+    let images = opts.nearMatch ? imagesSaved : 0;
+    let descriptions = opts.nearMatch ? descriptionsSaved : 0;
+    let matched = opts.nearMatch ? matchedCount : 0;
+    const retried = new Set(urlList);
+    const failed: RunRow[] = opts.nearMatch ? failures.filter(f => !retried.has(f.url)) : [];
+    if (!opts.nearMatch) {
+      setImagesSaved(0);
+      setDescriptionsSaved(0);
+      setMatchedCount(0);
+      setFailures([]);
+      setRanTotal(urlList.length);
+    }
 
-    let images = 0, descriptions = 0, matched = 0;
-    const failed: RunRow[] = [];
-    for (let i = 0; i < urls.length; i += BATCH) {
-      const chunk = urls.slice(i, i + BATCH);
+    for (let i = 0; i < urlList.length; i += BATCH) {
+      const chunk = urlList.slice(i, i + BATCH);
       try {
         const d = await post({
           mode: 'run',
           urls: chunk,
           vendor: vendorScope.trim() || undefined,
           overwrite: overwrite || undefined,
+          nearMatch: opts.nearMatch || undefined,
         });
         images += d.imagesSaved || 0;
         descriptions += d.descriptionsSaved || 0;
@@ -158,7 +159,7 @@ export default function ImportVendorAssetsPage() {
       } catch (e: any) {
         failed.push({ url: `(batch of ${chunk.length} failed)`, ok: false, error: e?.message || 'request failed' });
       }
-      setProgress({ done: Math.min(i + BATCH, urls.length), total: urls.length });
+      setProgress({ done: Math.min(i + BATCH, urlList.length), total: urlList.length });
       setImagesSaved(images);
       setDescriptionsSaved(descriptions);
       setMatchedCount(matched);
@@ -166,6 +167,29 @@ export default function ImportVendorAssetsPage() {
     }
     setRunning(false);
     setProgress(null);
+  };
+
+  const doRun = async () => {
+    if (urls.length === 0) return;
+    const ok = await dialog.confirm(
+      `Import from ${urls.length} product page${urls.length !== 1 ? 's' : ''}? Photos and descriptions land on parts whose part number matches the page's SKU${vendorScope.trim() ? ` (matching only "${vendorScope.trim()}" parts)` : ''}. ${overwrite ? 'Existing photos/descriptions WILL be replaced.' : 'Existing photos/descriptions are kept; only blanks fill in.'} Pages are fetched politely (~1/sec), so this takes a while.`,
+      { confirmLabel: 'Start import' },
+    );
+    if (!ok) return;
+    await runBatches(urls);
+  };
+
+  // Re-run just the pages whose SKU sits inside exactly one catalog part
+  // number (or vice versa) with containment matching enabled.
+  const doNearRetry = async () => {
+    const list = failures.filter(f => f.nearItemNumber && !f.url.startsWith('(')).map(f => f.url);
+    if (list.length === 0) return;
+    const ok = await dialog.confirm(
+      `Retry ${list.length} unmatched page${list.length !== 1 ? 's' : ''} with prefix/suffix matching?\n\nA page SKU then also matches when exactly ONE catalog part number contains it (or vice versa) — e.g. page 0091065 → catalog BP-0091065. Anything ambiguous still refuses to match, so a photo can't land on the wrong part.`,
+      { confirmLabel: 'Retry near-misses' },
+    );
+    if (!ok) return;
+    await runBatches(list, { nearMatch: true });
   };
 
   const card: CSSProperties = { background: theme.card, border: `1px solid ${theme.border}`, borderRadius: 12, padding: 16, marginBottom: 16 };
@@ -316,11 +340,30 @@ export default function ImportVendorAssetsPage() {
             <div style={{ fontSize: 12, color: theme.textSecondary, marginTop: 4 }}>
               Unmatched pages are normal — vendors list plenty of products we don&apos;t carry. Open the estimate builder&apos;s Browse Catalog to see the results.
             </div>
+            {(() => {
+              const near = failures.filter(f => f.nearItemNumber);
+              if (near.length === 0) return null;
+              return (
+                <div style={{ marginTop: 10, padding: '10px 12px', borderRadius: 10, background: 'rgba(251,191,36,0.08)', border: '1px solid rgba(251,191,36,0.25)', fontSize: 12, lineHeight: 1.5 }}>
+                  <strong>{near.length}</strong> unmatched page{near.length !== 1 ? 's' : ''} look like <strong>prefix/suffix near-misses</strong> —
+                  the page&apos;s SKU sits inside exactly one catalog part number (or the other way around):
+                  <div style={{ fontFamily: 'monospace', fontSize: 11, margin: '6px 0', color: theme.textSecondary }}>
+                    {near.slice(0, 4).map(f => <div key={f.url}>page {f.sku} ↔ catalog {f.nearItemNumber}</div>)}
+                    {near.length > 4 && <div>… and {near.length - 4} more</div>}
+                  </div>
+                  <button onClick={doNearRetry} disabled={running} style={{ ...btn, padding: '8px 16px', fontSize: 12 }}>
+                    Retry {near.length} near-miss page{near.length !== 1 ? 's' : ''} with this matching
+                  </button>
+                </div>
+              );
+            })()}
             {failures.length > 0 && (
               <details style={{ marginTop: 8 }}>
                 <summary style={{ fontSize: 12, cursor: 'pointer', color: theme.textSecondary }}>{failures.length} skipped/failed pages</summary>
                 <div style={{ marginTop: 6, fontSize: 11, fontFamily: 'monospace', color: theme.textMuted, maxHeight: 160, overflow: 'auto' }}>
-                  {failures.slice(0, 200).map((f, i) => <div key={i}>{f.url} — {f.error}</div>)}
+                  {failures.slice(0, 200).map((f, i) => (
+                    <div key={i}>{f.url} — {f.error}{f.sku ? ` (SKU: ${f.sku})` : ''}{f.nearItemNumber ? ` — near-miss: ${f.nearItemNumber}` : ''}</div>
+                  ))}
                 </div>
               </details>
             )}
