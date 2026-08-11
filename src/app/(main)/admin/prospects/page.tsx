@@ -11,7 +11,10 @@
  *
  * Prospects and customers are unified: creating a record (typed or scanned
  * off a business card) immediately creates it in NetSuite as a customer —
- * there is no separate "prospect" stage or convert step. The legacy
+ * there is no separate "prospect" stage or convert step. The one exception
+ * is vendor records (record_type 'vendor'): supplier/partner reps captured
+ * for their contact info live under the Vendors tab and are never pushed to
+ * NetSuite as customers. The legacy
  * prospects.status column persists in the DB but is no longer surfaced;
  * the only distinction that matters is whether the record is linked to
  * NetSuite yet (netsuite_id), and the record page offers a retry when the
@@ -36,6 +39,7 @@ import FilterButton, { FilterLabel } from '@/components/ui/FilterButton';
 interface Prospect {
   id: string;
   company_name: string;
+  record_type: string;
   contact_name: string | null;
   email: string | null;
   phone: string | null;
@@ -102,7 +106,7 @@ export default function ProspectsPage() {
   const [prospects, setProspects] = useState<Prospect[]>([]);
   const [loading, setLoading] = useState(true);
   const [search, setSearch] = useState('');
-  const [crmTab, setCrmTab] = useState<'prospects' | 'contacts'>('prospects');
+  const [crmTab, setCrmTab] = useState<'prospects' | 'vendors' | 'contacts'>('prospects');
   const [tagFilter, setTagFilter] = useState<string>('');
 
   // Extended filters (Ashley's request: spend, recent activity, owner, open
@@ -137,8 +141,9 @@ export default function ProspectsPage() {
   const [contactSearch, setContactSearch] = useState('');
   const [syncingContacts, setSyncingContacts] = useState(false);
 
-  // Create form (creation only — editing lives on the record page)
-  const emptyForm = { company_name: '', contact_name: '', email: '', phone: '', address: '', city: '', state: '', zip: '', website: '', notes: '', location_count: 1 };
+  // Create form (creation only — editing lives on the record page).
+  // record_type 'vendor' = supplier/partner rep: same record, no NetSuite push.
+  const emptyForm = { company_name: '', contact_name: '', title: '', email: '', phone: '', address: '', city: '', state: '', zip: '', website: '', notes: '', location_count: 1, record_type: 'customer' };
   const [showCreate, setShowCreate] = useState(false);
   const [form, setForm] = useState(emptyForm);
   const [saving, setSaving] = useState(false);
@@ -308,29 +313,46 @@ export default function ProspectsPage() {
   // step: the record is pushed to NetSuite as a customer immediately (no
   // separate prospect stage / convert step). If the NetSuite create fails,
   // the local record still exists and the record page offers a retry.
+  // Vendor records skip the NetSuite push entirely — they're FleetSuite-only.
   const createCustomer = async () => {
     if (!form.company_name.trim() || saving) return;
     setSaving(true);
+    const isVendor = form.record_type === 'vendor';
     const { data, error } = await supabase.from('prospects')
       .insert({ ...form, company_name: form.company_name.trim(), location_count: form.location_count || 1, created_by: user?.id })
       .select().single();
     if (error || !data) {
       setSaving(false);
-      await dialog.alert(`Could not create the customer: ${error?.message || 'unknown error'}`);
+      await dialog.alert(`Could not create the ${isVendor ? 'vendor' : 'customer'}: ${error?.message || 'unknown error'}`);
       return;
     }
     if (form.location_count > 1) {
       await supabase.from('prospect_tags').insert({ prospect_id: data.id, tag: 'multilocation', auto_generated: true });
     }
-    try {
-      const res = await fetch('/api/prospects/push-to-netsuite', {
+    if (!isVendor) {
+      try {
+        const res = await fetch('/api/prospects/push-to-netsuite', {
+          method: 'POST', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ prospectId: data.id, type: 'customer', userId: user?.id }),
+        });
+        const body = await res.json().catch(() => ({}));
+        if (!res.ok || !body.success) throw new Error(body?.error || `HTTP ${res.status}`);
+      } catch (e: any) {
+        await dialog.alert(`Saved locally, but the NetSuite customer could not be created: ${e?.message || 'unknown error'}\n\nUse "Add to NetSuite" on the record to retry.`);
+      }
+    }
+    // The contact person (typed or scanned off a card) becomes a real
+    // contact row on the record — and a NetSuite contact when linked — not
+    // just the header contact field. Best-effort: the record is already
+    // created, and contacts can be added on the record page.
+    if (form.contact_name.trim()) {
+      await fetch('/api/prospects/contacts', {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ prospectId: data.id, type: 'customer', userId: user?.id }),
-      });
-      const body = await res.json().catch(() => ({}));
-      if (!res.ok || !body.success) throw new Error(body?.error || `HTTP ${res.status}`);
-    } catch (e: any) {
-      await dialog.alert(`Saved locally, but the NetSuite customer could not be created: ${e?.message || 'unknown error'}\n\nUse "Add to NetSuite" on the record to retry.`);
+        body: JSON.stringify({
+          prospectId: data.id, name: form.contact_name.trim(),
+          title: form.title || undefined, email: form.email || undefined, phone: form.phone || undefined,
+        }),
+      }).catch(() => {});
     }
     router.push(`/admin/prospects/${data.id}`);
   };
@@ -368,6 +390,7 @@ export default function ProspectsPage() {
           ...prev,
           company_name: card.company_name || prev.company_name,
           contact_name: card.contact_name || prev.contact_name,
+          title: card.title || prev.title,
           email: card.email || prev.email,
           phone: card.phone || prev.phone,
           address: card.address || prev.address,
@@ -402,8 +425,13 @@ export default function ProspectsPage() {
       .sort((a, b) => a.name.localeCompare(b.name));
   })();
 
-  // Filter
+  const vendorCount = prospects.filter(p => p.record_type === 'vendor').length;
+  const customerCount = prospects.length - vendorCount;
+
+  // Filter — the Customers and Vendors tabs share the table; each shows only
+  // its own record type.
   const filtered = prospects.filter(p => {
+    if ((p.record_type === 'vendor') !== (crmTab === 'vendors')) return false;
     if (stageFilter && oppStagesByProspect) {
       const want = stageFilter === 'open' ? ['lead', 'quoted', 'negotiating'] : [stageFilter];
       const stages = oppStagesByProspect[p.id];
@@ -446,6 +474,7 @@ export default function ProspectsPage() {
       total_spend: { key: 'total', dir: 'desc' },
       ytd_spend: { key: 'ytd', dir: 'desc' },
       last_order: { key: 'last', dir: 'desc' },
+      added: { key: 'added', dir: 'desc' },
     };
     const sortParam = searchParams.get('sort');
     if (sortParam && map[sortParam]) setSort(map[sortParam]);
@@ -494,7 +523,7 @@ export default function ProspectsPage() {
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: '14px' }}>
         <div>
           <div style={{ fontSize: '22px', fontWeight: 800, color: 'var(--text-primary)' }}>Customers</div>
-          <div style={{ fontSize: '11px', color: 'var(--text-muted)', marginTop: '2px' }}>{prospects.length} total · {prospects.filter(p => p.netsuite_id).length} in NetSuite</div>
+          <div style={{ fontSize: '11px', color: 'var(--text-muted)', marginTop: '2px' }}>{customerCount} total · {prospects.filter(p => p.netsuite_id).length} in NetSuite{vendorCount > 0 ? ` · ${vendorCount} vendor${vendorCount === 1 ? '' : 's'}` : ''}</div>
         </div>
         <div style={{ display: 'flex', gap: '6px', flexWrap: 'wrap' }}>
           <button onClick={async () => {
@@ -529,8 +558,22 @@ export default function ProspectsPage() {
       {showCreate && (
         <div style={{ background: 'var(--card)', border: '1px solid var(--border)', borderRadius: '14px', padding: '14px', marginBottom: '14px' }}>
           <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '8px', marginBottom: '8px' }}>
+            <div style={{ gridColumn: '1 / -1', display: 'flex', gap: '6px', alignItems: 'center', flexWrap: 'wrap' }}>
+              {([['customer', 'Customer'], ['vendor', 'Vendor']] as const).map(([k, label]) => (
+                <button key={k} onClick={() => setForm({ ...form, record_type: k })} style={{
+                  padding: '5px 12px', borderRadius: '999px', fontSize: '11px', fontWeight: 700, cursor: 'pointer',
+                  background: form.record_type === k ? 'var(--tab-active-bg)' : 'var(--subtle-bg)',
+                  border: `1px solid ${form.record_type === k ? 'var(--tab-active-border)' : 'var(--border)'}`,
+                  color: form.record_type === k ? 'var(--text-primary)' : 'var(--text-muted)',
+                }}>{label}</button>
+              ))}
+              {form.record_type === 'vendor' && (
+                <span style={{ fontSize: '10px', color: 'var(--text-muted)' }}>Supplier/partner contact — stays in FleetSuite, never created in NetSuite as a customer.</span>
+              )}
+            </div>
             <div style={{ gridColumn: '1 / -1' }}><div style={labelStyle}>Company Name *</div><input style={inputStyle} value={form.company_name} onChange={e => setForm({ ...form, company_name: e.target.value })} /></div>
             <div><div style={labelStyle}>Contact Name</div><input style={inputStyle} value={form.contact_name} onChange={e => setForm({ ...form, contact_name: e.target.value })} /></div>
+            <div><div style={labelStyle}>Contact Title</div><input style={inputStyle} value={form.title} onChange={e => setForm({ ...form, title: e.target.value })} /></div>
             <div><div style={labelStyle}>Email</div><input type="email" style={inputStyle} value={form.email} onChange={e => setForm({ ...form, email: e.target.value })} /></div>
             <div><div style={labelStyle}>Phone</div><PhoneInput style={inputStyle} value={form.phone} onChange={v => setForm({ ...form, phone: v })} /></div>
             <div><div style={labelStyle}>Website</div><input style={inputStyle} value={form.website} onChange={e => setForm({ ...form, website: e.target.value })} /></div>
@@ -547,18 +590,18 @@ export default function ProspectsPage() {
             width: '100%', padding: '12px', borderRadius: '10px', fontSize: '13px', fontWeight: 700,
             background: form.company_name.trim() ? '#22c55e' : 'var(--border)', color: '#fff', border: 'none', cursor: 'pointer',
             opacity: saving ? 0.5 : 1,
-          }}>{saving ? 'Creating...' : 'Create Customer'}</button>
+          }}>{saving ? 'Creating...' : form.record_type === 'vendor' ? 'Create Vendor' : 'Create Customer'}</button>
         </div>
       )}
 
       {/* Tab switcher */}
       <div style={{ display: 'flex', gap: '0', marginBottom: '12px', borderBottom: '2px solid var(--border)' }}>
-        {(['prospects', 'contacts'] as const).map(tab => (
+        {(['prospects', 'vendors', 'contacts'] as const).map(tab => (
           <button key={tab} onClick={() => { setCrmTab(tab); if (tab === 'contacts') loadAllContacts(); }} style={{
             padding: '8px 16px', fontSize: '12px', fontWeight: 700, cursor: 'pointer',
             background: 'none', border: 'none', borderBottom: crmTab === tab ? '2px solid #3b82f6' : '2px solid transparent',
             color: crmTab === tab ? '#3b82f6' : 'var(--text-muted)', marginBottom: '-2px',
-          }}>{tab === 'prospects' ? `Customers (${prospects.length})` : `Contacts${contactsLoaded ? ` (${allContacts.length})` : ''}`}</button>
+          }}>{tab === 'prospects' ? `Customers (${customerCount})` : tab === 'vendors' ? `Vendors (${vendorCount})` : `Contacts${contactsLoaded ? ` (${allContacts.length})` : ''}`}</button>
         ))}
       </div>
 
@@ -630,7 +673,7 @@ export default function ProspectsPage() {
       {/* Search & Filters */}
       <input
         value={search} onChange={e => setSearch(e.target.value)}
-        placeholder="Search customers..."
+        placeholder={crmTab === 'vendors' ? 'Search vendors...' : 'Search customers...'}
         style={{ ...inputStyle, marginBottom: '8px' }}
       />
       <div style={{ display: 'flex', gap: '4px', marginBottom: '6px', flexWrap: 'wrap', alignItems: 'center' }}>
@@ -699,7 +742,7 @@ export default function ProspectsPage() {
       {/* Result count + export */}
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '14px' }}>
         <div style={{ fontSize: '10px', color: 'var(--text-muted)' }}>
-          {sorted.length} of {prospects.length} {prospects.length === 1 ? 'record' : 'records'}
+          {sorted.length} of {crmTab === 'vendors' ? vendorCount : customerCount} {(crmTab === 'vendors' ? vendorCount : customerCount) === 1 ? 'record' : 'records'}
         </div>
         <button
           onClick={exportToExcel}
@@ -712,10 +755,14 @@ export default function ProspectsPage() {
         >{exporting ? 'Exporting…' : 'Export to Excel'}</button>
       </div>
 
-      {/* Customer table — every row opens the customer record */}
+      {/* Customer/vendor table — every row opens the record */}
       {sorted.length === 0 ? (
         <div style={{ textAlign: 'center', padding: '40px', color: 'var(--text-muted)' }}>
-          <div style={{ fontSize: '13px', fontWeight: 700 }}>{search ? 'No matching customers' : 'No customers match the current filters'}</div>
+          <div style={{ fontSize: '13px', fontWeight: 700 }}>
+            {crmTab === 'vendors'
+              ? (search ? 'No matching vendors' : vendorCount === 0 ? 'No vendors yet — use + New (or Scan Card) and pick Vendor to capture a supplier contact' : 'No vendors match the current filters')
+              : (search ? 'No matching customers' : 'No customers match the current filters')}
+          </div>
         </div>
       ) : (() => {
         const thStyle: React.CSSProperties = {
@@ -729,16 +776,18 @@ export default function ProspectsPage() {
         const badge = (label: string, color: string, bg: string) => (
           <span style={{ fontSize: '8px', fontWeight: 700, padding: '1px 5px', borderRadius: '3px', background: bg, color, marginLeft: '5px', verticalAlign: '1px' }}>{label}</span>
         );
+        // Vendors have no NetSuite spend — their tab drops the money columns.
+        const vendorsTab = crmTab === 'vendors';
         return (
           <div style={{ background: 'var(--card)', border: '1px solid var(--border)', borderRadius: '12px', overflow: 'hidden' }}>
             <div className="responsive-table">
-              <table style={{ borderCollapse: 'collapse', width: '100%', minWidth: '760px' }}>
+              <table style={{ borderCollapse: 'collapse', width: '100%', minWidth: vendorsTab ? '480px' : '760px' }}>
                 <thead><tr>
                   <SortableTh label="Company" sortKey="company" sort={sort} onToggle={toggle} style={thStyle} />
                   <SortableTh label="Contact" sortKey="contact" sort={sort} onToggle={toggle} style={thStyle} />
-                  <SortableTh label="YTD Spend" sortKey="ytd" sort={sort} onToggle={toggle} defaultDir="desc" align="right" style={thStyle} />
-                  <SortableTh label="Total Spend" sortKey="total" sort={sort} onToggle={toggle} defaultDir="desc" align="right" style={thStyle} />
-                  <SortableTh label="Last Order" sortKey="last" sort={sort} onToggle={toggle} defaultDir="desc" style={thStyle} />
+                  {!vendorsTab && <SortableTh label="YTD Spend" sortKey="ytd" sort={sort} onToggle={toggle} defaultDir="desc" align="right" style={thStyle} />}
+                  {!vendorsTab && <SortableTh label="Total Spend" sortKey="total" sort={sort} onToggle={toggle} defaultDir="desc" align="right" style={thStyle} />}
+                  {!vendorsTab && <SortableTh label="Last Order" sortKey="last" sort={sort} onToggle={toggle} defaultDir="desc" style={thStyle} />}
                   <SortableTh label="Added" sortKey="added" sort={sort} onToggle={toggle} defaultDir="desc" style={thStyle} />
                 </tr></thead>
                 <tbody>
@@ -763,15 +812,21 @@ export default function ProspectsPage() {
                             </>
                           ) : <span style={{ color: 'var(--text-muted)' }}>—</span>}
                         </td>
-                        <td style={numStyle}>
-                          {m?.ytd_spend ? <span style={{ fontWeight: 700, color: '#4ade80' }}>{fmtK(m.ytd_spend)}</span> : <span style={{ color: 'var(--text-muted)' }}>—</span>}
-                        </td>
-                        <td style={numStyle}>
-                          {m?.total_spend ? <span style={{ color: 'var(--text-secondary)' }}>{fmtK(m.total_spend)}</span> : <span style={{ color: 'var(--text-muted)' }}>—</span>}
-                        </td>
-                        <td style={tdStyle}>
-                          {m?.last_order_date ? new Date(m.last_order_date).toLocaleDateString() : <span style={{ color: 'var(--text-muted)' }}>—</span>}
-                        </td>
+                        {!vendorsTab && (
+                          <td style={numStyle}>
+                            {m?.ytd_spend ? <span style={{ fontWeight: 700, color: '#4ade80' }}>{fmtK(m.ytd_spend)}</span> : <span style={{ color: 'var(--text-muted)' }}>—</span>}
+                          </td>
+                        )}
+                        {!vendorsTab && (
+                          <td style={numStyle}>
+                            {m?.total_spend ? <span style={{ color: 'var(--text-secondary)' }}>{fmtK(m.total_spend)}</span> : <span style={{ color: 'var(--text-muted)' }}>—</span>}
+                          </td>
+                        )}
+                        {!vendorsTab && (
+                          <td style={tdStyle}>
+                            {m?.last_order_date ? new Date(m.last_order_date).toLocaleDateString() : <span style={{ color: 'var(--text-muted)' }}>—</span>}
+                          </td>
+                        )}
                         <td style={{ ...tdStyle, color: 'var(--text-muted)' }}>{new Date(prospect.created_at).toLocaleDateString()}</td>
                       </tr>
                     );

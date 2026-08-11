@@ -46,6 +46,12 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ error: 'Already pushed to NetSuite' }, { status: 400 });
     }
 
+    // Vendor records are FleetSuite-only — creating them in NetSuite would
+    // make a supplier's rep a NetSuite Customer.
+    if (prospect.record_type === 'vendor') {
+      return NextResponse.json({ error: 'This is a vendor record — vendors are never created in NetSuite as customers' }, { status: 400 });
+    }
+
     // Push to NetSuite
     const result = await createCustomerOrLead({
       companyName: prospect.company_name,
