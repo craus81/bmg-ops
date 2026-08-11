@@ -45,6 +45,9 @@ export default function ImportVendorAssetsPage() {
   // item-record vendor field is often blank, so a prefilled filter can
   // silently exclude everything — opt in only when you know the values.
   const [vendorScope, setVendorScope] = useState('');
+  // Vendor name stamped onto matched parts whose vendor is blank — we know
+  // whose site the assets came from (Craig 2026-08-11). Fill-blank only.
+  const [setVendorName, setSetVendorName] = useState('');
   const [overwrite, setOverwrite] = useState(false);
 
   const [probeUrl, setProbeUrl] = useState('');
@@ -63,6 +66,7 @@ export default function ImportVendorAssetsPage() {
   const [progress, setProgress] = useState<{ done: number; total: number } | null>(null);
   const [imagesSaved, setImagesSaved] = useState(0);
   const [descriptionsSaved, setDescriptionsSaved] = useState(0);
+  const [vendorsTagged, setVendorsTagged] = useState(0);
   const [matchedCount, setMatchedCount] = useState(0);
   const [failures, setFailures] = useState<RunRow[]>([]);
   const [ranTotal, setRanTotal] = useState(0);
@@ -135,12 +139,14 @@ export default function ImportVendorAssetsPage() {
     let images = opts.nearMatch ? imagesSaved : 0;
     let descriptions = opts.nearMatch ? descriptionsSaved : 0;
     let matched = opts.nearMatch ? matchedCount : 0;
+    let vendors = opts.nearMatch ? vendorsTagged : 0;
     const retried = new Set(urlList);
     const failed: RunRow[] = opts.nearMatch ? failures.filter(f => !retried.has(f.url)) : [];
     if (!opts.nearMatch) {
       setImagesSaved(0);
       setDescriptionsSaved(0);
       setMatchedCount(0);
+      setVendorsTagged(0);
       setFailures([]);
       setRanTotal(urlList.length);
     }
@@ -154,9 +160,11 @@ export default function ImportVendorAssetsPage() {
           vendor: vendorScope.trim() || undefined,
           overwrite: overwrite || undefined,
           nearMatch: opts.nearMatch || undefined,
+          setVendor: setVendorName.trim() || undefined,
         });
         images += d.imagesSaved || 0;
         descriptions += d.descriptionsSaved || 0;
+        vendors += d.vendorsSet || 0;
         for (const r of (d.results || []) as RunRow[]) {
           if (r.ok) matched += r.matched ?? 1; // family pages can match several parts
           else failed.push(r);
@@ -168,6 +176,7 @@ export default function ImportVendorAssetsPage() {
       setImagesSaved(images);
       setDescriptionsSaved(descriptions);
       setMatchedCount(matched);
+      setVendorsTagged(vendors);
       setFailures([...failed]);
     }
     setRunning(false);
@@ -177,7 +186,7 @@ export default function ImportVendorAssetsPage() {
   const doRun = async () => {
     if (urls.length === 0) return;
     const ok = await dialog.confirm(
-      `Import from ${urls.length} product page${urls.length !== 1 ? 's' : ''}? Photos and descriptions land on parts whose part number matches the page's SKU${vendorScope.trim() ? ` (matching only "${vendorScope.trim()}" parts)` : ''}. ${overwrite ? 'Existing photos/descriptions WILL be replaced.' : 'Existing photos/descriptions are kept; only blanks fill in.'} Pages are fetched politely (~1/sec), so this takes a while.`,
+      `Import from ${urls.length} product page${urls.length !== 1 ? 's' : ''}? Photos and descriptions land on parts whose part number matches the page's SKU${vendorScope.trim() ? ` (matching only "${vendorScope.trim()}" parts)` : ''}.${setVendorName.trim() ? ` Matched parts with no vendor get tagged "${setVendorName.trim()}".` : ''} ${overwrite ? 'Existing photos/descriptions WILL be replaced.' : 'Existing photos/descriptions are kept; only blanks fill in.'} Pages are fetched politely (~1/sec), so this takes a while.`,
       { confirmLabel: 'Start import' },
     );
     if (!ok) return;
@@ -216,6 +225,10 @@ export default function ImportVendorAssetsPage() {
         <div>
           <label style={label}>Vendor website *</label>
           <input style={input} value={siteUrl} onChange={e => setSiteUrl(e.target.value)} placeholder="https://www.rangerdesign.com" />
+        </div>
+        <div>
+          <label style={label}>Tag matched parts with this vendor (optional)</label>
+          <input style={input} value={setVendorName} onChange={e => setSetVendorName(e.target.value)} placeholder="e.g. Masterack — fills blank vendors only" />
         </div>
         <div>
           <label style={label}>Match only parts whose vendor contains… (optional)</label>
@@ -362,7 +375,7 @@ export default function ImportVendorAssetsPage() {
         </button>
         {progress && (
           <div style={{ marginTop: 12 }}>
-            <div style={{ fontSize: 12, marginBottom: 6 }}>{progress.done} / {progress.total} pages · {matchedCount} parts matched · {imagesSaved} photos · {descriptionsSaved} descriptions</div>
+            <div style={{ fontSize: 12, marginBottom: 6 }}>{progress.done} / {progress.total} pages · {matchedCount} parts matched · {imagesSaved} photos · {descriptionsSaved} descriptions{vendorsTagged > 0 ? ` · ${vendorsTagged} vendors tagged` : ''}</div>
             <div style={{ height: 8, background: theme.progressTrack, borderRadius: 4, overflow: 'hidden' }}>
               <div style={{ height: '100%', width: `${(progress.done / progress.total) * 100}%`, background: theme.orange }} />
             </div>
@@ -370,7 +383,7 @@ export default function ImportVendorAssetsPage() {
         )}
         {!running && ranTotal > 0 && (
           <div style={{ marginTop: 12, fontSize: 14 }}>
-            Done — <strong>{matchedCount}</strong> catalog part{matchedCount !== 1 ? 's' : ''} matched across {ranTotal.toLocaleString()} pages · <strong>{imagesSaved}</strong> photos and <strong>{descriptionsSaved}</strong> descriptions saved.
+            Done — <strong>{matchedCount}</strong> catalog part{matchedCount !== 1 ? 's' : ''} matched across {ranTotal.toLocaleString()} pages · <strong>{imagesSaved}</strong> photos and <strong>{descriptionsSaved}</strong> descriptions saved{vendorsTagged > 0 ? <> · <strong>{vendorsTagged}</strong> part{vendorsTagged !== 1 ? 's' : ''} tagged &quot;{setVendorName.trim()}&quot;</> : null}.
             <div style={{ fontSize: 12, color: theme.textSecondary, marginTop: 4 }}>
               Unmatched pages are normal — vendors list plenty of products we don&apos;t carry. Open the estimate builder&apos;s Browse Catalog to see the results.
             </div>

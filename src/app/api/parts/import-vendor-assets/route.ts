@@ -53,6 +53,10 @@ const Schema = z.discriminatedUnion('mode', [
     /** Opt-in: when nothing matches exactly, accept a UNIQUE containment
      *  match (page SKU inside one catalog number, or vice versa). */
     nearMatch: z.boolean().optional(),
+    /** Assign this vendor name to matched parts whose vendor is blank —
+     *  we know exactly whose site the assets came from. Never replaces a
+     *  NetSuite-provided vendor. */
+    setVendor: z.string().trim().min(1).max(200).optional(),
   }),
 ]);
 
@@ -305,6 +309,7 @@ export async function POST(req: NextRequest) {
     const results: { url: string; ok: boolean; partId?: string; sku?: string | null; matched?: number; imported?: string[]; error?: string; nearItemNumber?: string }[] = [];
     let imagesSaved = 0;
     let descriptionsSaved = 0;
+    let vendorsSet = 0;
 
     for (const url of body.urls) {
       try {
@@ -402,6 +407,14 @@ export async function POST(req: NextRequest) {
             imported.push(`description→${part.item_number}`);
             descriptionsSaved++;
           }
+          // Fill-blank only — a NetSuite-provided vendor is never replaced.
+          // (Both sync paths preserve this assignment while NetSuite's
+          // item-record vendor field stays blank.)
+          if (body.setVendor && !part.vendor) {
+            updates.vendor = body.setVendor;
+            part.vendor = body.setVendor; // in-memory too, so later pages in this batch don't re-count it
+            vendorsSet++;
+          }
           if (Object.keys(updates).length > 0) {
             const { error } = await supabase.from('netsuite_parts').update(updates).eq('id', partId);
             if (error) throw new Error(error.message);
@@ -415,7 +428,7 @@ export async function POST(req: NextRequest) {
       await sleep(700);
     }
 
-    return NextResponse.json({ results, imagesSaved, descriptionsSaved });
+    return NextResponse.json({ results, imagesSaved, descriptionsSaved, vendorsSet });
   } catch (err: any) {
     return NextResponse.json({ error: err?.message || 'Import failed' }, { status: 500 });
   }
