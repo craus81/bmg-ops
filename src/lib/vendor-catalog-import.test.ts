@@ -261,4 +261,23 @@ describe('extractPaginationLinks (teach mode fan-out)', () => {
     expect(links).toContain('https://x.com/products/page/470/');
     expect(links).not.toContain('https://x.com/other/page/5/');
   });
+
+  it('strips cart-action decorations so page N is ONE page, not one per product card', () => {
+    const woo = `
+      <a href="/product-category/van-accessories-gallery/page/5/?add-to-cart=9340">Add</a>
+      <a href="/product-category/van-accessories-gallery/page/5/?add-to-cart=9341">Add</a>
+      <a href="/product-category/van-accessories-gallery/page/5/">5</a>
+      <a href="/product-category/van-accessories-gallery/?page=6&add-to-cart=9342">6</a>`;
+    const links = extractPaginationLinks(woo, 'https://x.com/product-category/van-accessories-gallery/');
+    expect(links).toContain('https://x.com/product-category/van-accessories-gallery/page/5/');
+    expect(links).toContain('https://x.com/product-category/van-accessories-gallery/?page=6');
+    expect(links).toHaveLength(2);
+  });
+});
+
+describe('cart-action URLs are never product or listing pages', () => {
+  it('rejects add-to-cart decorated URLs in both classifiers', () => {
+    expect(looksLikeListingUrl('https://x.com/product-category/racks/page/5/?add-to-cart=9340')).toBe(false);
+    expect(looksLikeProductUrl('https://x.com/products/shelf-1/?add-to-cart=9340')).toBe(false);
+  });
 });

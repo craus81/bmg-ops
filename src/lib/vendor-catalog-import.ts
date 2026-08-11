@@ -220,10 +220,14 @@ export function nearMatchSkuToPart(
 /** Static assets and feeds — never product or listing pages. */
 const ASSET_URL_RE = /\.(pdf|jpe?g|png|webp|gif|xml|css|js|json|ico|svg|woff2?|ttf|eot|mp4|webm)(\?|$)/;
 
+/** Cart/session actions (WooCommerce ?add-to-cart=… on listing cards) —
+ *  fetching one performs the action on the vendor's site. Never crawl. */
+const CART_ACTION_RE = /[?&](add[-_]to[-_]cart|remove_item|wc-ajax|apply_coupon)=/;
+
 /** Product-page-ish URLs, to keep the crawl off blog posts and PDFs. */
 export function looksLikeProductUrl(url: string): boolean {
   const u = url.toLowerCase();
-  if (ASSET_URL_RE.test(u)) return false;
+  if (ASSET_URL_RE.test(u) || CART_ACTION_RE.test(u)) return false;
   if (/\/feed\/?$/.test(u.split('?')[0])) return false;
   if (looksLikeListingUrl(u)) return false;
   return /\/(product|products|shop|item|catalog|p)\//.test(u);
@@ -232,7 +236,7 @@ export function looksLikeProductUrl(url: string): boolean {
 /** Category/listing pages — the crawl fallback fans out through these. */
 export function looksLikeListingUrl(url: string): boolean {
   const u = url.toLowerCase();
-  if (ASSET_URL_RE.test(u)) return false;
+  if (ASSET_URL_RE.test(u) || CART_ACTION_RE.test(u)) return false;
   const path = u.split('?')[0];
   // Pagination is a listing shape, never a product (…/catalog/page/2/) —
   // Masterack's paged catalog was slipping into run lists as "products".
@@ -299,10 +303,17 @@ export function extractPaginationLinks(html: string, listingUrl: string): string
     try {
       const u = new URL(decodeEntities(m[1]), listingUrl);
       if (u.origin !== base.origin) continue;
-      const paged = /\/page\/\d+\/?$/.test(u.pathname) || /(^|&)page=\d+/.test(u.search.slice(1));
-      if (!paged) continue;
+      const pagedByPath = /\/page\/\d+\/?$/.test(u.pathname);
+      const pageParam = u.searchParams.get('page');
+      if (!pagedByPath && !/^\d+$/.test(pageParam || '')) continue;
       if (!u.pathname.startsWith(basePath)) continue;
       u.hash = '';
+      // Keep ONLY the pagination signal. WooCommerce decorates listing
+      // URLs with ?add-to-cart=<id> per product card — carrying that
+      // along makes every card a "distinct" page (burning the crawl
+      // budget refetching page N once per product) and fetching it
+      // performs a cart action on the vendor's site.
+      u.search = pagedByPath ? '' : `?page=${pageParam}`;
       out.add(u.toString());
     } catch { /* unparseable href */ }
   }
