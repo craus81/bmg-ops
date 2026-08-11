@@ -10,6 +10,7 @@ import { DropZone } from '@/components/DropZone';
 import MentionTextArea, { reportMentions } from '@/components/MentionTextArea';
 import { theme } from '@/lib/theme';
 import { flashNote } from '@/lib/focus-note';
+import RecordChanges from '@/components/RecordChanges';
 
 interface UpfitNote {
   id: string;
@@ -122,7 +123,7 @@ const NOTE_ICONS: Record<string, string> = {
 };
 
 export default function UpfitProjectsPage() {
-  const { user } = useAuth();
+  const { user, isAdmin } = useAuth();
   const supabase = createClient();
   const dialog = useDialog();
   const searchParams = useSearchParams();
@@ -1168,6 +1169,9 @@ export default function UpfitProjectsPage() {
             ))}
           </div>
         )}
+
+        {/* Field-level audit history (A2 phase 4) — admin-only per audit_log RLS */}
+        {isAdmin && <RecordChanges table="upfit_projects" recordId={selected.id} />}
       </div>
     );
   }
