@@ -10,6 +10,7 @@ import EmailProofSearch, { type EmailProofFile } from '@/components/EmailProofSe
 import DropboxProofSearch, { type DropboxProofFile } from '@/components/DropboxProofSearch';
 import { CreateNetsuiteItemModal } from '@/components/CreateNetsuiteItemModal';
 import { DropZone } from '@/components/DropZone';
+import PartCatalogBrowser from '@/components/PartCatalogBrowser';
 
 interface Part {
   id: string;
@@ -40,6 +41,10 @@ interface Part {
   // vendor_invoice_lines, maintained by recompute_part_install_cost)
   avg_install_cost: number | null;
   install_cost_count: number | null;
+  // Catalog-browser assets (FleetSuite-owned; stocked by the vendor-asset
+  // import or manual upload in the visual catalog)
+  image_path: string | null;
+  marketing_description: string | null;
 }
 
 interface SyncLog {
@@ -92,6 +97,11 @@ export default function PartsPage() {
 
   const [parts, setParts] = useState<Part[]>([]);
   const [loading, setLoading] = useState(true);
+  // The visual catalog (same component as the estimate builder's Browse
+  // Catalog) is the default face of this page; the ops list keeps the
+  // sync/edit/stats tooling. Deep links (?q=) land on the list view so the
+  // focused-row behavior keeps working.
+  const [view, setView] = useState<'gallery' | 'list'>('gallery');
   const [catalog, setCatalog] = useState<'upfit' | 'graphics'>('upfit');
   const [search, setSearch] = useState('');
   const [syncing, setSyncing] = useState(false);
@@ -177,7 +187,7 @@ export default function PartsPage() {
     const c = params.get('catalog');
     const q = params.get('q');
     if (c === 'graphics' || c === 'upfit') setCatalog(c);
-    if (q) { setSearch(q); setPendingFocus(q.toUpperCase()); }
+    if (q) { setSearch(q); setPendingFocus(q.toUpperCase()); setView('list'); }
   // eslint-disable-next-line react-hooks/exhaustive-deps -- read URL once on mount
   }, []);
 
@@ -738,6 +748,41 @@ export default function PartsPage() {
         </div>
       )}
 
+      {/* View toggle: the visual catalog (same component as the estimate
+          builder's Browse Catalog) vs. the ops list with sync/edit tooling. */}
+      <div style={{
+        display: 'flex', gap: '4px', padding: '4px',
+        background: 'var(--card)', border: '1px solid var(--border)',
+        borderRadius: '12px', marginBottom: '10px',
+      }}>
+        {([
+          { id: 'gallery' as const, label: '🗂 Visual Catalog', desc: 'Photos, categories, browse' },
+          { id: 'list' as const, label: '≡ Ops List', desc: 'Prices, labor, stats, files' },
+        ]).map((tab) => (
+          <button
+            key={tab.id}
+            onClick={() => setView(tab.id)}
+            style={{
+              flex: 1, padding: '10px 8px', borderRadius: '10px',
+              fontSize: '13px', fontWeight: 700, textAlign: 'center',
+              background: view === tab.id ? 'var(--tab-active-bg)' : 'transparent',
+              border: view === tab.id ? '1px solid var(--tab-active-border)' : '1px solid transparent',
+              color: view === tab.id ? 'var(--text-primary)' : 'var(--text-muted)',
+              cursor: 'pointer', transition: 'all 0.15s',
+            }}
+          >
+            <div>{tab.label}</div>
+            <div style={{ fontSize: '9px', fontWeight: 400, marginTop: '1px', color: 'var(--text-muted)' }}>{tab.desc}</div>
+          </button>
+        ))}
+      </div>
+
+      {/* Visual catalog — the shared browser, embedded (no Add button here) */}
+      {view === 'gallery' && (
+        <PartCatalogBrowser open variant="inline" isAdmin={isAdmin} />
+      )}
+
+      {view === 'list' && (<>
       {/* Catalog tabs */}
       <div style={{
         display: 'flex', gap: '4px', padding: '4px',
@@ -1041,6 +1086,29 @@ export default function PartsPage() {
                       </div>
                     </div>
 
+                    {/* Catalog photo + marketing description — stocked by the
+                        vendor-asset import / visual catalog; part of the record. */}
+                    {(part.image_path || part.marketing_description) && (
+                      <div style={{ display: 'flex', gap: '10px', marginTop: '12px', alignItems: 'flex-start' }}>
+                        {part.image_path && (
+                          // eslint-disable-next-line @next/next/no-img-element
+                          <img
+                            src={storage.from('photos').getPublicUrl(part.image_path).data.publicUrl}
+                            alt={part.item_number}
+                            style={{ width: '132px', height: '99px', objectFit: 'cover', borderRadius: '8px', border: '1px solid var(--border)', flexShrink: 0 }}
+                          />
+                        )}
+                        <div style={{ flex: 1, minWidth: 0 }}>
+                          <div style={{ fontSize: '9px', fontWeight: 700, color: 'var(--text-muted)', textTransform: 'uppercase', marginBottom: '2px' }}>
+                            Marketing Description
+                          </div>
+                          <div style={{ fontSize: '11px', color: 'var(--text-secondary)', lineHeight: 1.5 }}>
+                            {part.marketing_description || '—'}
+                          </div>
+                        </div>
+                      </div>
+                    )}
+
                     {/* Part Number & Display Name (editable by admins; written back to NetSuite) */}
                     {isAdmin && (
                       <div style={{ marginTop: '10px' }}>
@@ -1307,6 +1375,7 @@ export default function PartsPage() {
           Showing {filtered.length} of {parts.length} {catalog} parts
         </div>
       )}
+      </>)}
 
       {/* Create-in-NetSuite modal for a local-only catalog part */}
       {nsCreatePart && (
