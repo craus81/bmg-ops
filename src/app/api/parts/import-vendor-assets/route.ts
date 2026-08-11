@@ -8,7 +8,7 @@ import {
   extractProduct, extractAllSkus, parseSitemapLocs, matchSkuToPart, skuKeys,
   looksLikeProductUrl, looksLikeListingUrl, extractSameOriginLinks,
   extractPaginationLinks, originVariants, skuCandidatesFromUrl, ensureScheme,
-  SITEMAP_CANDIDATES,
+  nearMatchSkuToPart, SITEMAP_CANDIDATES,
 } from '@/lib/vendor-catalog-import';
 
 export const dynamic = 'force-dynamic';
@@ -50,6 +50,9 @@ const Schema = z.discriminatedUnion('mode', [
     vendor: z.string().trim().max(200).optional(),
     /** Replace existing photos/descriptions instead of only filling blanks. */
     overwrite: z.boolean().optional(),
+    /** Opt-in: when nothing matches exactly, accept a UNIQUE containment
+     *  match (page SKU inside one catalog number, or vice versa). */
+    nearMatch: z.boolean().optional(),
   }),
 ]);
 
@@ -273,7 +276,7 @@ export async function POST(req: NextRequest) {
           + 'Clear the vendor box to match by part number across the whole catalog.',
       }, { status: 400 });
     }
-    const results: { url: string; ok: boolean; partId?: string; sku?: string | null; matched?: number; imported?: string[]; error?: string }[] = [];
+    const results: { url: string; ok: boolean; partId?: string; sku?: string | null; matched?: number; imported?: string[]; error?: string; nearItemNumber?: string }[] = [];
     let imagesSaved = 0;
     let descriptionsSaved = 0;
 
@@ -284,15 +287,37 @@ export async function POST(req: NextRequest) {
         // Family pages carry a whole model line's part numbers — match every
         // SKU signal on the page (slug fallback when the page yields none).
         // Each match is still exact-or-dashless against item_number.
+        const allSkus = extractAllSkus(html);
+        const skuPool = [...allSkus, ...skuCandidatesFromUrl(url)];
         const matchedIds = [...new Set(
-          extractAllSkus(html).map(s => matchSkuToPart(s, byKey)).filter((id): id is string => !!id),
+          allSkus.map(s => matchSkuToPart(s, byKey)).filter((id): id is string => !!id),
         )];
         if (matchedIds.length === 0) {
           const slugHit = skuCandidatesFromUrl(url).map(c => matchSkuToPart(c, byKey)).find(Boolean);
           if (slugHit) matchedIds.push(slugHit);
         }
+        // Opt-in near matching: unique containment only (page 0091065 ↔
+        // catalog BP-0091065). Never runs unless the admin asked for it.
+        if (matchedIds.length === 0 && body.nearMatch) {
+          for (const s of skuPool) {
+            const id = nearMatchSkuToPart(s, byKey);
+            if (id && !matchedIds.includes(id)) matchedIds.push(id);
+          }
+        }
         if (matchedIds.length === 0) {
-          results.push({ url, ok: false, sku: product.sku, error: product.sku ? 'No part matches this SKU' : 'No SKU on page (or in the URL) matches a part' });
+          // Diagnose, even when near matching is off: report what a unique
+          // containment match WOULD hit, so the summary can show the
+          // prefix/suffix drift pattern instead of a bare "no match".
+          let nearItemNumber: string | undefined;
+          let nearSku: string | undefined;
+          for (const s of skuPool) {
+            const id = nearMatchSkuToPart(s, byKey);
+            if (id) { nearItemNumber = partById.get(id)!.item_number; nearSku = s; break; }
+          }
+          results.push({
+            url, ok: false, sku: product.sku ?? nearSku ?? null, nearItemNumber,
+            error: product.sku ? 'No part matches this SKU' : 'No SKU on page (or in the URL) matches a part',
+          });
           await sleep(700);
           continue;
         }

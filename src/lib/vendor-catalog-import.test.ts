@@ -3,6 +3,7 @@ import {
   extractProduct, extractAllSkus, parseSitemapLocs, matchSkuToPart, skuKeys,
   looksLikeProductUrl, looksLikeListingUrl, extractSameOriginLinks,
   extractPaginationLinks, originVariants, skuCandidatesFromUrl, ensureScheme,
+  nearMatchSkuToPart,
 } from './vendor-catalog-import';
 
 // Extraction is written blind to any one vendor's HTML — pin the layered
@@ -124,6 +125,32 @@ describe('SKU matching (never fuzzy — wrong photo is worse than none)', () => 
     expect(matchSkuToPart('C4-RA24', map)).toBeNull();
     expect(matchSkuToPart('C4-RA24-31', map)).toBeNull();
     expect(matchSkuToPart(null, map)).toBeNull();
+  });
+});
+
+describe('nearMatchSkuToPart (unique containment only — the opt-in bridge)', () => {
+  const map = new Map<string, string>();
+  for (const key of skuKeys('BP-0091065')) map.set(key, 'buyers-1');
+  for (const key of skuKeys('02T408KP')) map.set(key, 'masterack-1');
+
+  it('bridges a vendor prefix (page 0091065 → catalog BP-0091065)', () => {
+    expect(nearMatchSkuToPart('0091065', map)).toBe('buyers-1');
+  });
+
+  it('bridges a suffix the other way (page 02T408 → catalog 02T408KP)', () => {
+    expect(nearMatchSkuToPart('02T408', map)).toBe('masterack-1');
+  });
+
+  it('bridges page-side extra tokens (page BP-0091065-XL → catalog BP-0091065)', () => {
+    expect(nearMatchSkuToPart('BP-0091065-XL', map)).toBe('buyers-1');
+  });
+
+  it('refuses short SKUs and ambiguity', () => {
+    expect(nearMatchSkuToPart('0091', map)).toBeNull();
+    const ambiguous = new Map(map);
+    for (const key of skuKeys('CP-0091065')) ambiguous.set(key, 'other-1');
+    expect(nearMatchSkuToPart('0091065', ambiguous)).toBeNull();
+    expect(nearMatchSkuToPart(null, map)).toBeNull();
   });
 });
 

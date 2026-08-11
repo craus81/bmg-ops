@@ -180,6 +180,34 @@ export function matchSkuToPart(
   return null;
 }
 
+/**
+ * Near-miss lookup for a SKU that matched nothing exactly: the dashless
+ * catalog number CONTAINS the dashless SKU, or vice versa — the common
+ * vendor-prefix/suffix drift (page 0091065 ↔ catalog BP-0091065, page
+ * 02T408 ↔ catalog 02T408KP). Guardrails keep it honest: both strings
+ * ≥5 chars, and exactly ONE catalog part may qualify — any ambiguity
+ * refuses to match. Used to DIAGNOSE unmatched pages on every run, and
+ * to import only when the admin explicitly opts in.
+ */
+export function nearMatchSkuToPart(
+  sku: string | null | undefined,
+  partsByKey: Map<string, string>,
+): string | null {
+  if (!sku) return null;
+  const bare = String(sku).trim().toUpperCase().replace(/[^A-Z0-9]/g, '');
+  if (bare.length < 5) return null;
+  const hits = new Set<string>();
+  for (const [key, id] of partsByKey) {
+    const kBare = key.replace(/[^A-Z0-9]/g, '');
+    if (kBare.length < 5) continue;
+    if (kBare === bare || kBare.includes(bare) || bare.includes(kBare)) {
+      hits.add(id);
+      if (hits.size > 1) return null; // ambiguous — refuse
+    }
+  }
+  return hits.size === 1 ? [...hits][0] : null;
+}
+
 /** Product-page-ish URLs, to keep the crawl off blog posts and PDFs. */
 export function looksLikeProductUrl(url: string): boolean {
   const u = url.toLowerCase();
