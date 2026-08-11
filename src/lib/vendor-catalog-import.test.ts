@@ -249,4 +249,16 @@ describe('extractPaginationLinks (teach mode fan-out)', () => {
     expect(links).toContain('https://x.com/product-category/shelving/?page=3');
     expect(links).toHaveLength(2);
   });
+
+  it('chains through a paginated base: /products/page/4/ still yields page/5', () => {
+    const midWalk = `
+      <a href="/products/page/3/">prev</a>
+      <a href="/products/page/5/">next</a>
+      <a href="/products/page/470/">last</a>
+      <a href="/other/page/5/">other section</a>`;
+    const links = extractPaginationLinks(midWalk, 'https://x.com/products/page/4/');
+    expect(links).toContain('https://x.com/products/page/5/');
+    expect(links).toContain('https://x.com/products/page/470/');
+    expect(links).not.toContain('https://x.com/other/page/5/');
+  });
 });

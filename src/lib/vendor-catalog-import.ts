@@ -286,10 +286,14 @@ export function originVariants(baseUrl: string): string[] {
 /**
  * Pagination links of a listing page: same-origin URLs on the same path
  * (or /page/N children) carrying a page indicator. Query is kept — ?page=2
- * IS the pagination on many platforms.
+ * IS the pagination on many platforms. The base's own /page/N suffix is
+ * stripped before the same-path check, so /products/page/4/ still yields
+ * /products/page/5/ (a widget only links a few neighbors at a time — the
+ * walk has to chain through them).
  */
 export function extractPaginationLinks(html: string, listingUrl: string): string[] {
   const base = new URL(listingUrl);
+  const basePath = base.pathname.replace(/\/page\/\d+\/?$/, '/').replace(/\/$/, '');
   const out = new Set<string>();
   for (const m of html.matchAll(/href=["']([^"']+)["']/gi)) {
     try {
@@ -297,7 +301,7 @@ export function extractPaginationLinks(html: string, listingUrl: string): string
       if (u.origin !== base.origin) continue;
       const paged = /\/page\/\d+\/?$/.test(u.pathname) || /(^|&)page=\d+/.test(u.search.slice(1));
       if (!paged) continue;
-      if (!u.pathname.startsWith(base.pathname.replace(/\/$/, '')) ) continue;
+      if (!u.pathname.startsWith(basePath)) continue;
       u.hash = '';
       out.add(u.toString());
     } catch { /* unparseable href */ }
