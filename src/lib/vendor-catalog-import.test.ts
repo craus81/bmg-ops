@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import {
-  extractProduct, parseSitemapLocs, matchSkuToPart, skuKeys,
+  extractProduct, extractAllSkus, parseSitemapLocs, matchSkuToPart, skuKeys,
   looksLikeProductUrl, looksLikeListingUrl, extractSameOriginLinks,
   extractPaginationLinks, originVariants, skuCandidatesFromUrl,
 } from './vendor-catalog-import';
@@ -52,6 +52,31 @@ describe('extractProduct', () => {
       <span class="sku_wrapper">SKU: <span class="sku">OTC-U6036</span></span>
     </body></html>`;
     expect(extractProduct(html).sku).toBe('OTC-U6036');
+  });
+});
+
+describe('extractAllSkus (family pages: one page, many part numbers)', () => {
+  it('collects JSON-LD variant SKUs (ProductGroup + hasVariant + offers) and all sku spans, deduped', () => {
+    const html = `<html><head>
+      <script type="application/ld+json">{"@context":"https://schema.org","@type":"ProductGroup",
+        "name":"Straight Tongue Couplers - 314","sku":"314",
+        "hasVariant":[{"@type":"Product","sku":"0091060"},{"@type":"Product","sku":"0091065"}],
+        "offers":[{"@type":"Offer","sku":"0091070"}]}</script>
+      </head><body>
+      <td class="sku">0091065</td>
+      <td class="sku">0091075</td>
+    </body></html>`;
+    const skus = extractAllSkus(html);
+    expect(skus).toContain('314');
+    expect(skus).toContain('0091060');
+    expect(skus).toContain('0091065');
+    expect(skus).toContain('0091070');
+    expect(skus).toContain('0091075');
+    expect(skus.filter(s => s === '0091065')).toHaveLength(1);
+  });
+
+  it('returns an empty list when nothing sku-shaped exists', () => {
+    expect(extractAllSkus('<html><body>hello</body></html>')).toEqual([]);
   });
 });
 
