@@ -74,6 +74,7 @@ export default function MorePage() {
         { title: 'Installer Portal', sub: 'The CNI installer view — available jobs, bids & invoices', path: '/installer', show: F('cni_management') },
         { title: 'Import Installs', sub: 'Bulk-import installs from a spreadsheet, credited to a CNI installer', path: '/admin/import-installs', show: isAdmin },
         { title: 'Import Vendor Assets', sub: 'Pull product photos & descriptions from a vendor’s website onto matching parts', path: '/admin/import-vendor-assets', show: isAdmin },
+        { title: 'Proof Sweep', sub: 'Search Gmail for proofs by part number and attach them to part records', path: '/admin/proof-sweep', show: isAdmin },
         { title: 'Payments (AP)', sub: 'Approve CNI vendor invoices & push bills to NetSuite', path: '/admin/ap', show: isAdmin || hasRole('finance') },
       ],
     },
