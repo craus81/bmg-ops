@@ -257,18 +257,22 @@ export async function syncPartsIncremental(service: SupabaseClient): Promise<Par
   }
 
   // ── Manual catalog re-files (Parts page "Move to … Catalog") win over the
-  // derived classification, otherwise the sync would undo the move.
+  // derived classification, otherwise the sync would undo the move. Same
+  // idea for vendors assigned by the vendor-asset import: NetSuite's
+  // item-record vendor wins when it exists, but a locally assigned vendor
+  // survives while NetSuite's field is blank (which it almost always is).
   const catalogOverrides: Record<string, 'upfit' | 'graphics'> = {};
+  const localVendors: Record<string, string> = {};
   for (const ids of chunk(activeIds, 200)) {
     const { data: rows } = await service
       .from('netsuite_parts')
-      .select('netsuite_id, catalog_override')
-      .not('catalog_override', 'is', null)
+      .select('netsuite_id, catalog_override, vendor')
       .in('netsuite_id', ids);
     for (const r of rows || []) {
       if (r.netsuite_id && (r.catalog_override === 'upfit' || r.catalog_override === 'graphics')) {
         catalogOverrides[String(r.netsuite_id)] = r.catalog_override;
       }
+      if (r.netsuite_id && r.vendor) localVendors[String(r.netsuite_id)] = r.vendor;
     }
   }
 
@@ -294,7 +298,7 @@ export async function syncPartsIncremental(service: SupabaseClient): Promise<Par
         labor_hours: parseFloat(item.labor_hours || '0'),
         ns_class: className || null,
         ns_department: item.department_name || null,
-        vendor: item.vendor_name || null,
+        vendor: item.vendor_name || localVendors[nsId] || null,
         is_active: true,
         last_synced_at: now,
         updated_at: now,

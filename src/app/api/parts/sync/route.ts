@@ -158,12 +158,16 @@ export async function POST(req: NextRequest) {
 
     // Manual catalog re-files (Parts page "Move to … Catalog") win over the
     // derived classification, otherwise every sync would undo the move.
+    // Vendors assigned by the vendor-asset import survive the same way:
+    // NetSuite's item-record vendor wins when set, the local assignment
+    // holds while NetSuite's field is blank.
     const catalogOverrides: Record<string, 'upfit' | 'graphics'> = {};
+    const localVendors: Record<string, string> = {};
     const { data: overrideRows } = await fetchAllRows<any>((from, to) =>
       supabase
         .from('netsuite_parts')
-        .select('netsuite_id, catalog_override')
-        .not('catalog_override', 'is', null)
+        .select('netsuite_id, catalog_override, vendor')
+        .or('catalog_override.not.is.null,vendor.not.is.null')
         .not('netsuite_id', 'is', null)
         .order('id')
         .range(from, to));
@@ -171,6 +175,7 @@ export async function POST(req: NextRequest) {
       if (r.netsuite_id && (r.catalog_override === 'upfit' || r.catalog_override === 'graphics')) {
         catalogOverrides[String(r.netsuite_id)] = r.catalog_override;
       }
+      if (r.netsuite_id && r.vendor) localVendors[String(r.netsuite_id)] = r.vendor;
     }
 
     // Build upsert batch
@@ -206,7 +211,7 @@ export async function POST(req: NextRequest) {
           ns_class: className || null,
           ns_category: null,
           ns_department: item.department_name || null,
-          vendor: item.vendor_name || null,
+          vendor: item.vendor_name || localVendors[nsId] || null,
           is_active: true,
           last_synced_at: now,
           updated_at: now,
