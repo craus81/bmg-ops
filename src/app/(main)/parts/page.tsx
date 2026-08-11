@@ -116,6 +116,7 @@ export default function PartsPage() {
   const [showDuplicates, setShowDuplicates] = useState(false);
   const [keeperByGroup, setKeeperByGroup] = useState<Record<string, string>>({});
   const [merging, setMerging] = useState<string | null>(null);
+  const [mergingAll, setMergingAll] = useState(false);
   // Deep-link focus: the item number to open + scroll to once parts load, and
   // the row to briefly highlight so it's obvious where the search landed you.
   const [pendingFocus, setPendingFocus] = useState<string | null>(null);
@@ -518,42 +519,89 @@ export default function PartsPage() {
     }
   };
 
-  // Fold a group of duplicate rows into the chosen survivor. Proofs, PO lines,
-  // scans and estimates move to the keeper; the rest are removed. Local only.
-  const mergeGroup = async (groupKey: string, group: Part[]) => {
+  // One merge call: fold a group's non-keeper rows into the chosen survivor.
+  // Proofs, PO lines, scans and estimates move to the keeper; the rest are
+  // removed. Local only — NetSuite is never changed. No confirm here; the
+  // callers (single-group and merge-all) own the confirmation.
+  const executeMerge = async (groupKey: string, group: Part[]): Promise<
+    { merged: number; moved: number; warn: boolean } | { error: string }
+  > => {
     const keepId = keeperByGroup[groupKey] || bestKeeperId(group);
     const mergeIds = group.filter(p => p.id !== keepId).map(p => p.id);
-    if (mergeIds.length === 0) return;
+    if (mergeIds.length === 0) return { merged: 0, moved: 0, warn: false };
+    const { data } = await supabase.auth.getSession();
+    const token = data?.session?.access_token;
+    const res = await fetch('/api/parts/merge', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', ...(token ? { Authorization: `Bearer ${token}` } : {}) },
+      body: JSON.stringify({ keepId, mergeIds }),
+    });
+    const body = await res.json().catch(() => ({}));
+    if (!res.ok) return { error: body.error || String(res.status) };
+    return { merged: body.mergedCount || 0, moved: body.movedReferences || 0, warn: !!body.netsuiteDuplicateWarning };
+  };
+
+  const mergeGroup = async (groupKey: string, group: Part[]) => {
+    const keepId = keeperByGroup[groupKey] || bestKeeperId(group);
+    const mergeCount = group.length - 1;
     const itemNumber = group.find(p => p.id === keepId)?.item_number || group[0].item_number;
     if (!(await dialog.confirm(
-      `Merge ${mergeIds.length} duplicate row${mergeIds.length === 1 ? '' : 's'} of "${itemNumber}" into the selected one?\n\n` +
-      `Proofs, PO lines, scans and estimates move to the kept part; the others are removed. NetSuite is not changed.`,
-      { confirmLabel: 'Merge' },
+      `Keep the selected "${itemNumber}" row and merge the other ${mergeCount === 1 ? 'row' : `${mergeCount} rows`} into it?\n\n` +
+      `Proofs, PO lines, scans and estimates move to the kept part; the duplicate rows are removed. NetSuite is not changed.`,
+      { confirmLabel: 'Keep & merge' },
     ))) return;
 
     setMerging(groupKey);
     try {
-      const { data } = await supabase.auth.getSession();
-      const token = data?.session?.access_token;
-      const res = await fetch('/api/parts/merge', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json', ...(token ? { Authorization: `Bearer ${token}` } : {}) },
-        body: JSON.stringify({ keepId, mergeIds }),
-      });
-      const body = await res.json().catch(() => ({}));
-      if (!res.ok) {
-        setSyncMessage(`Merge failed: ${body.error || res.status}`);
+      const r = await executeMerge(groupKey, group);
+      if ('error' in r) {
+        setSyncMessage(`Merge failed: ${r.error}`);
         setTimeout(() => setSyncMessage(''), 6000);
         return;
       }
-      const moved = body.movedReferences ? ` · moved ${body.movedReferences} reference${body.movedReferences === 1 ? '' : 's'}` : '';
-      const warn = body.netsuiteDuplicateWarning ? ' (a NetSuite-side duplicate may return on the next sync)' : '';
-      setSyncMessage(`Merged ${body.mergedCount} duplicate${body.mergedCount === 1 ? '' : 's'} of "${itemNumber}"${moved}.${warn}`);
+      const moved = r.moved ? ` · moved ${r.moved} reference${r.moved === 1 ? '' : 's'}` : '';
+      const warn = r.warn ? ' (a NetSuite-side duplicate may return on the next sync)' : '';
+      setSyncMessage(`Kept "${itemNumber}" — merged ${r.merged} duplicate${r.merged === 1 ? '' : 's'} into it${moved}.${warn}`);
       setTimeout(() => setSyncMessage(''), 7000);
       await loadParts(); // recomputes the duplicate groups
     } finally {
       setMerging(null);
     }
+  };
+
+  // Resolve every duplicate group in one go, honoring the per-group radio
+  // selections (defaulting to the recommended keeper where untouched).
+  const mergeAllGroups = async () => {
+    const n = duplicateGroups.length;
+    if (n === 0) return;
+    if (!(await dialog.confirm(
+      `Resolve all ${n} duplicate part number${n === 1 ? '' : 's'}?\n\n` +
+      `For each one, the row you selected (✓ recommended where you didn't pick) is kept — proofs, PO lines, scans and estimates move to it, and the duplicate rows are removed. NetSuite is not changed.`,
+      { confirmLabel: 'Keep selections & merge all' },
+    ))) return;
+
+    setMergingAll(true);
+    let merged = 0, moved = 0, failedCount = 0, warn = false;
+    try {
+      for (const group of duplicateGroups) {
+        const gk = (group[0].item_number || '').trim().toLowerCase();
+        setMerging(gk);
+        const r = await executeMerge(gk, group);
+        if ('error' in r) failedCount++;
+        else { merged += r.merged; moved += r.moved; warn = warn || r.warn; }
+      }
+    } finally {
+      setMerging(null);
+      setMergingAll(false);
+    }
+    setSyncMessage(
+      `Resolved ${n - failedCount} of ${n} duplicate part number${n === 1 ? '' : 's'} — merged ${merged} row${merged === 1 ? '' : 's'}` +
+      (moved ? `, moved ${moved} reference${moved === 1 ? '' : 's'}` : '') + '.' +
+      (failedCount ? ` ${failedCount} failed — reopen the panel to retry those.` : '') +
+      (warn ? ' (Some NetSuite-side duplicates may return on the next sync.)' : ''),
+    );
+    setTimeout(() => setSyncMessage(''), 9000);
+    await loadParts();
   };
 
   const loadPartFiles = async (partId: string) => {
@@ -829,6 +877,25 @@ export default function PartsPage() {
 
           {showDuplicates && (
             <div style={{ marginTop: '8px', display: 'flex', flexDirection: 'column', gap: '8px' }}>
+              {/* How-to + resolve-everything in one tap. The per-group green
+                  button is the confirm; this is the bulk version of it. */}
+              <div style={{ display: 'flex', alignItems: 'center', gap: '10px', padding: '8px 10px', borderRadius: '10px', background: 'var(--subtle-bg)', border: '1px solid var(--border)', flexWrap: 'wrap' }}>
+                <div style={{ flex: 1, minWidth: '220px', fontSize: '11px', color: 'var(--text-secondary)', lineHeight: 1.4 }}>
+                  Pick the row to keep in each group, then confirm with its green button — or resolve everything at once. Scans, PO lines, proofs and estimates move to the kept row; the duplicates are removed. NetSuite is untouched.
+                </div>
+                <button
+                  onClick={mergeAllGroups}
+                  disabled={mergingAll || merging !== null}
+                  style={{
+                    padding: '9px 14px', borderRadius: '9px', border: 'none', whiteSpace: 'nowrap',
+                    background: mergingAll ? 'var(--subtle-bg)' : 'rgba(34,197,94,0.9)', color: '#fff',
+                    fontSize: '11px', fontWeight: 800,
+                    cursor: mergingAll ? 'default' : 'pointer', opacity: mergingAll || merging !== null ? 0.6 : 1,
+                  }}
+                >
+                  {mergingAll ? 'Merging…' : `✓ Keep selections & merge all (${duplicateGroups.length})`}
+                </button>
+              </div>
               {duplicateGroups.map(group => {
                 const gk = (group[0].item_number || '').trim().toLowerCase();
                 const keepId = keeperByGroup[gk] || bestKeeperId(group);
@@ -839,7 +906,7 @@ export default function PartsPage() {
                       {group[0].item_number} <span style={{ fontSize: '10px', fontWeight: 700, color: 'var(--text-muted)' }}>×{group.length}</span>
                     </div>
                     <div style={{ fontSize: '9px', fontWeight: 700, color: 'var(--text-muted)', textTransform: 'uppercase', marginBottom: '4px' }}>
-                      Keep which row?
+                      Pick the row to keep
                     </div>
                     <div style={{ display: 'flex', flexDirection: 'column', gap: '3px' }}>
                       {group.map(p => {
@@ -866,14 +933,14 @@ export default function PartsPage() {
                         );
                       })}
                     </div>
-                    <button onClick={() => mergeGroup(gk, group)} disabled={isMerging}
+                    <button onClick={() => mergeGroup(gk, group)} disabled={isMerging || mergingAll}
                       style={{
-                        width: '100%', marginTop: '8px', padding: '8px', borderRadius: '8px',
-                        background: isMerging ? 'var(--subtle-bg)' : 'var(--accent)', color: '#fff',
+                        width: '100%', marginTop: '8px', padding: '9px', borderRadius: '8px',
+                        background: isMerging ? 'var(--subtle-bg)' : 'rgba(34,197,94,0.9)', color: '#fff',
                         fontSize: '11px', fontWeight: 800, border: 'none',
-                        cursor: isMerging ? 'default' : 'pointer', opacity: isMerging ? 0.6 : 1,
+                        cursor: isMerging || mergingAll ? 'default' : 'pointer', opacity: isMerging || mergingAll ? 0.6 : 1,
                       }}>
-                      {isMerging ? 'Merging…' : `Merge ${group.length - 1} other${group.length - 1 === 1 ? '' : 's'} into selected`}
+                      {isMerging ? 'Merging…' : `✓ Keep this one — merge ${group.length - 1 === 1 ? 'the duplicate' : `${group.length - 1} duplicates`} into it`}
                     </button>
                   </div>
                 );
