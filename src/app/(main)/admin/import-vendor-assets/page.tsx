@@ -33,6 +33,19 @@ interface ProbeResult {
 
 interface RunRow { url: string; ok: boolean; partId?: string; sku?: string | null; matched?: number; imported?: string[]; error?: string; nearItemNumber?: string }
 
+interface ImportProfile {
+  id: string;
+  name: string;
+  base_url: string;
+  listing_urls: string[] | null;
+  vendor_scope: string | null;
+  set_vendor: string | null;
+  discovered_urls: string[] | null;
+  discovered_at: string | null;
+  last_run_at: string | null;
+  last_run_stats: { pages: number; matched: number; imagesSaved: number; descriptionsSaved: number; vendorsSet: number } | null;
+}
+
 const BATCH = 25;
 
 export default function ImportVendorAssetsPage() {
@@ -65,6 +78,109 @@ export default function ImportVendorAssetsPage() {
       .catch(e => { if (!cancelled) { setNsVendors([]); setNsVendorsError(e?.message || 'Vendor list failed'); } });
     return () => { cancelled = true; };
   }, []);
+
+  // Saved import profiles — the whole recipe (site, teach URLs, vendor tag)
+  // plus the cached discovery, so a re-run is load → Import.
+  const [profiles, setProfiles] = useState<ImportProfile[]>([]);
+  const [profileId, setProfileId] = useState<string | null>(null);
+  const [savingProfile, setSavingProfile] = useState(false);
+
+  const loadProfiles = async () => {
+    try {
+      const res = await fetch('/api/parts/import-profiles');
+      const d = await res.json();
+      if (res.ok) setProfiles(d.profiles || []);
+    } catch { /* list stays empty */ }
+  };
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- load once on mount
+  useEffect(() => { loadProfiles(); }, []);
+
+  const teachLines = () => listingUrlsText
+    .split('\n')
+    .map(l => l.trim())
+    .filter(l => l.includes('.'))
+    .map(ensureScheme)
+    .slice(0, 20);
+
+  const loadProfile = (p: ImportProfile) => {
+    setProfileId(p.id);
+    setSiteUrl(p.base_url);
+    setListingUrlsText((p.listing_urls || []).join('\n'));
+    setVendorScope(p.vendor_scope || '');
+    setSetVendorName(p.set_vendor || '');
+    const cached = (p.discovered_urls || []) as string[];
+    setUrls(cached);
+    setDiscoverVia(cached.length > 0 ? 'listing' : '');
+    setDiscoverChecked([]);
+    setDiscoverError('');
+    setRanTotal(0);
+    setFailures([]);
+    setMatchedCount(0);
+    setImagesSaved(0);
+    setDescriptionsSaved(0);
+    setVendorsTagged(0);
+  };
+
+  const saveProfile = async () => {
+    const loaded = profiles.find(p => p.id === profileId);
+    let defaultName = loaded?.name || setVendorName.trim();
+    if (!defaultName) {
+      try { defaultName = new URL(ensureScheme(siteUrl)).hostname.replace(/^www\./, ''); } catch { defaultName = ''; }
+    }
+    const name = await dialog.prompt('Save this import as:', defaultName, { confirmLabel: 'Save' });
+    if (!name?.trim()) return;
+    setSavingProfile(true);
+    try {
+      const res = await fetch('/api/parts/import-profiles', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          id: profileId || undefined,
+          name: name.trim(),
+          baseUrl: ensureScheme(siteUrl),
+          listingUrls: teachLines(),
+          vendorScope: vendorScope.trim() || undefined,
+          setVendor: setVendorName.trim() || undefined,
+          discoveredUrls: urls.length > 0 ? urls.slice(0, 5000) : undefined,
+        }),
+      });
+      const d = await res.json().catch(() => ({}));
+      if (res.ok && d.id) { setProfileId(d.id); await loadProfiles(); }
+    } finally {
+      setSavingProfile(false);
+    }
+  };
+
+  const deleteProfile = async (p: ImportProfile) => {
+    if (!(await dialog.confirm(`Delete saved import "${p.name}"? The catalog itself is untouched — this only removes the saved recipe and its cached page list.`, { confirmLabel: 'Delete', destructive: true }))) return;
+    await fetch('/api/parts/import-profiles', {
+      method: 'DELETE',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ id: p.id }),
+    });
+    if (profileId === p.id) setProfileId(null);
+    await loadProfiles();
+  };
+
+  // Keep a loaded profile's cached discovery fresh without extra clicks.
+  const syncProfileDiscovery = async (found: string[]) => {
+    const loaded = profiles.find(p => p.id === profileId);
+    if (!loaded || found.length === 0) return;
+    await fetch('/api/parts/import-profiles', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        id: loaded.id,
+        name: loaded.name,
+        baseUrl: ensureScheme(siteUrl),
+        listingUrls: teachLines(),
+        vendorScope: vendorScope.trim() || undefined,
+        setVendor: setVendorName.trim() || undefined,
+        discoveredUrls: found.slice(0, 5000),
+      }),
+    }).catch(() => {});
+    loadProfiles();
+  };
   const [overwrite, setOverwrite] = useState(false);
 
   const [probeUrl, setProbeUrl] = useState('');
@@ -159,6 +275,8 @@ export default function ImportVendorAssetsPage() {
         setDiscoverProgress('');
         if (urlSet.size === 0) {
           setDiscoverError('No product links found on those category pages — check "What was checked" below for what each page returned.');
+        } else {
+          syncProfileDiscovery([...urlSet]);
         }
       } else {
         const d = await post({ mode: 'discover', baseUrl: ensureScheme(siteUrl) });
@@ -167,6 +285,8 @@ export default function ImportVendorAssetsPage() {
         setDiscoverChecked(d.checked || []);
         if ((d.urls || []).length === 0) {
           setDiscoverError('No product pages found via sitemaps or a site crawl. Paste one or more category page URLs into the box above (one per line) and try again — I’ll harvest product links straight from them, pagination included.');
+        } else {
+          syncProfileDiscovery(d.urls || []);
         }
       }
     } catch (e: any) {
@@ -226,6 +346,20 @@ export default function ImportVendorAssetsPage() {
     }
     setRunning(false);
     setProgress(null);
+    // Record the run on the loaded profile (fire-and-forget).
+    if (profileId) {
+      fetch('/api/parts/import-profiles', {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          id: profileId,
+          lastRunStats: {
+            pages: opts.nearMatch ? ranTotal : urlList.length,
+            matched, imagesSaved: images, descriptionsSaved: descriptions, vendorsSet: vendors,
+          },
+        }),
+      }).then(() => loadProfiles()).catch(() => {});
+    }
   };
 
   const doRun = async () => {
@@ -265,6 +399,35 @@ export default function ImportVendorAssetsPage() {
         is &quot;no match&quot;, never a wrong photo. Works for any vendor whose parts we carry (Ranger Design, Masterack, …).
       </p>
 
+      {/* Saved imports — load a recipe (site + teach URLs + vendor tag) and
+          its cached page list, then jump straight to Run. */}
+      {profiles.length > 0 && (
+        <div style={card}>
+          <div style={{ fontWeight: 700, marginBottom: 8 }}>Saved imports</div>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+            {profiles.map(p => (
+              <div key={p.id} style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '8px 10px', borderRadius: 8, background: profileId === p.id ? theme.inputBg : 'transparent', border: `1px solid ${profileId === p.id ? theme.orange : theme.border}`, flexWrap: 'wrap' }}>
+                <div style={{ flex: 1, minWidth: 220 }}>
+                  <div style={{ fontWeight: 700, fontSize: 13 }}>{p.name}</div>
+                  <div style={{ fontSize: 11, color: theme.textMuted }}>
+                    {p.base_url.replace(/^https?:\/\//, '')}
+                    {(p.discovered_urls?.length || 0) > 0 && ` · ${p.discovered_urls!.length.toLocaleString()} pages${p.discovered_at ? ` (found ${new Date(p.discovered_at).toLocaleDateString()})` : ''}`}
+                    {p.last_run_stats && ` · last run: ${p.last_run_stats.matched} matched, ${p.last_run_stats.imagesSaved} photos${p.last_run_stats.vendorsSet ? `, ${p.last_run_stats.vendorsSet} tagged` : ''}`}
+                  </div>
+                </div>
+                <button onClick={() => loadProfile(p)} style={{ ...btn, padding: '7px 14px', fontSize: 12 }}>
+                  {profileId === p.id ? 'Reload' : 'Load'}
+                </button>
+                <button onClick={() => deleteProfile(p)} title="Delete saved import" style={{ background: 'none', border: 'none', color: theme.textMuted, fontSize: 14, cursor: 'pointer' }}>🗑</button>
+              </div>
+            ))}
+          </div>
+          <div style={{ fontSize: 11, color: theme.textMuted, marginTop: 6 }}>
+            Loading fills in the setup and the discovered page list — hit Run to re-import, or Find product pages to refresh the list first.
+          </div>
+        </div>
+      )}
+
       {/* Setup */}
       <div style={{ ...card, display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))', gap: 12 }}>
         <div>
@@ -296,11 +459,14 @@ export default function ImportVendorAssetsPage() {
           <label style={label}>Match only parts whose vendor contains… (optional)</label>
           <input style={input} value={vendorScope} onChange={e => setVendorScope(e.target.value)} placeholder="blank = all parts (matching is by exact part number)" />
         </div>
-        <div style={{ display: 'flex', alignItems: 'flex-end', paddingBottom: 4 }}>
+        <div style={{ display: 'flex', alignItems: 'flex-end', gap: 12, paddingBottom: 4, flexWrap: 'wrap' }}>
           <label style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 13, cursor: 'pointer' }}>
             <input type="checkbox" checked={overwrite} onChange={e => setOverwrite(e.target.checked)} />
             Replace existing photos/descriptions
           </label>
+          <button onClick={saveProfile} disabled={savingProfile || !siteUrl.trim()} style={{ ...btn, padding: '8px 14px', fontSize: 12, background: theme.card, color: theme.textPrimary, border: `1px solid ${theme.border}`, opacity: savingProfile ? 0.6 : 1 }}>
+            {savingProfile ? 'Saving…' : profileId ? '💾 Update saved import' : '💾 Save import'}
+          </button>
         </div>
       </div>
 
