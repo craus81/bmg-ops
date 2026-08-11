@@ -201,6 +201,10 @@ export default function ImportVendorAssetsPage() {
   const [imagesSaved, setImagesSaved] = useState(0);
   const [descriptionsSaved, setDescriptionsSaved] = useState(0);
   const [vendorsTagged, setVendorsTagged] = useState(0);
+  // The vendor tag active for the CURRENT/most recent run — captured when
+  // Import is clicked, so the progress line can show "0 tagged" (tagging is
+  // on, nothing tagged yet) vs nothing at all (no tag was set for this run).
+  const [runTagName, setRunTagName] = useState('');
   const [matchedCount, setMatchedCount] = useState(0);
   const [failures, setFailures] = useState<RunRow[]>([]);
   const [ranTotal, setRanTotal] = useState(0);
@@ -309,6 +313,7 @@ export default function ImportVendorAssetsPage() {
       setVendorsTagged(0);
       setFailures([]);
       setRanTotal(urlList.length);
+      setRunTagName(setVendorName.trim());
     }
 
     for (let i = 0; i < urlList.length; i += BATCH) {
@@ -601,7 +606,10 @@ export default function ImportVendorAssetsPage() {
         </button>
         {progress && (
           <div style={{ marginTop: 12 }}>
-            <div style={{ fontSize: 12, marginBottom: 6 }}>{progress.done} / {progress.total} pages · {matchedCount} parts matched · {imagesSaved} photos · {descriptionsSaved} descriptions{vendorsTagged > 0 ? ` · ${vendorsTagged} vendors tagged` : ''}</div>
+            <div style={{ fontSize: 12, marginBottom: 6 }}>
+              {progress.done} / {progress.total} pages · {matchedCount} parts matched · {imagesSaved} photos · {descriptionsSaved} descriptions
+              {runTagName ? ` · ${vendorsTagged} tagged "${runTagName}"` : ' · vendor tagging OFF'}
+            </div>
             <div style={{ height: 8, background: theme.progressTrack, borderRadius: 4, overflow: 'hidden' }}>
               <div style={{ height: '100%', width: `${(progress.done / progress.total) * 100}%`, background: theme.orange }} />
             </div>
@@ -609,7 +617,7 @@ export default function ImportVendorAssetsPage() {
         )}
         {!running && ranTotal > 0 && (
           <div style={{ marginTop: 12, fontSize: 14 }}>
-            Done — <strong>{matchedCount}</strong> catalog part{matchedCount !== 1 ? 's' : ''} matched across {ranTotal.toLocaleString()} pages · <strong>{imagesSaved}</strong> photos and <strong>{descriptionsSaved}</strong> descriptions saved{vendorsTagged > 0 ? <> · <strong>{vendorsTagged}</strong> part{vendorsTagged !== 1 ? 's' : ''} tagged &quot;{setVendorName.trim()}&quot;</> : null}.
+            Done — <strong>{matchedCount}</strong> catalog part{matchedCount !== 1 ? 's' : ''} matched across {ranTotal.toLocaleString()} pages · <strong>{imagesSaved}</strong> photos and <strong>{descriptionsSaved}</strong> descriptions saved{runTagName ? <> · <strong>{vendorsTagged}</strong> part{vendorsTagged !== 1 ? 's' : ''} tagged &quot;{runTagName}&quot;</> : <> · <strong>no vendor tag was set for this run</strong></>}.
             <div style={{ fontSize: 12, color: theme.textSecondary, marginTop: 4 }}>
               Unmatched pages are normal — vendors list plenty of products we don&apos;t carry. Open the estimate builder&apos;s Browse Catalog to see the results.
             </div>
