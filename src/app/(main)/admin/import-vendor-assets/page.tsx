@@ -234,12 +234,7 @@ export default function ImportVendorAssetsPage() {
   const doDiscover = async () => {
     // Teach mode: category page URLs (one per line) override sitemap/crawl.
     // Scheme optional — pasted hostnames get https:// prepended, not dropped.
-    const seedListings = listingUrlsText
-      .split('\n')
-      .map(l => l.trim())
-      .filter(l => l.includes('.'))
-      .map(ensureScheme)
-      .slice(0, 20);
+    const seedListings = teachLines();
     setDiscovering(true);
     setDiscoverError('');
     setUrls([]);
