@@ -222,6 +222,13 @@ export function extractSameOriginLinks(html: string, baseUrl: string): string[] 
  *  Shopify's product sitemap, and most others (sitemap.xml). */
 export const SITEMAP_CANDIDATES = ['/sitemap.xml', '/sitemap_index.xml', '/wp-sitemap.xml', '/sitemap-index.xml', '/sitemap_products_1.xml'];
 
+/** Prepend https:// when a pasted URL has no scheme ("www.masterack.com").
+ *  People paste hostnames as often as full URLs — don't reject them. */
+export const ensureScheme = (u: string): string => {
+  const t = u.trim();
+  return /^[a-z][a-z0-9+.-]*:\/\//i.test(t) ? t : `https://${t}`;
+};
+
 /** Both host spellings — a site can serve (or block) www and apex differently. */
 export function originVariants(baseUrl: string): string[] {
   const u = new URL(baseUrl);

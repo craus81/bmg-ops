@@ -2,7 +2,7 @@ import { describe, it, expect } from 'vitest';
 import {
   extractProduct, extractAllSkus, parseSitemapLocs, matchSkuToPart, skuKeys,
   looksLikeProductUrl, looksLikeListingUrl, extractSameOriginLinks,
-  extractPaginationLinks, originVariants, skuCandidatesFromUrl,
+  extractPaginationLinks, originVariants, skuCandidatesFromUrl, ensureScheme,
 } from './vendor-catalog-import';
 
 // Extraction is written blind to any one vendor's HTML — pin the layered
@@ -155,6 +155,15 @@ describe('extractSameOriginLinks (crawl fallback)', () => {
     expect(links).toContain('https://x.com/products/shelf-1/');
     expect(links).toContain('https://x.com/product-category/racks/');
     expect(links).toHaveLength(2);
+  });
+});
+
+describe('ensureScheme (pasted hostnames vs full URLs)', () => {
+  it('prepends https:// only when a scheme is missing', () => {
+    expect(ensureScheme('www.masterack.com')).toBe('https://www.masterack.com');
+    expect(ensureScheme('  masterack.com/catalog/?category=partition#products ')).toBe('https://masterack.com/catalog/?category=partition#products');
+    expect(ensureScheme('https://www.masterack.com')).toBe('https://www.masterack.com');
+    expect(ensureScheme('http://x.com/a')).toBe('http://x.com/a');
   });
 });
 

@@ -5,6 +5,7 @@ import { useRouter } from 'next/navigation';
 import { useAuth } from '@/components/AuthProvider';
 import { useDialog } from '@/components/DialogProvider';
 import { theme } from '@/lib/theme';
+import { ensureScheme } from '@/lib/vendor-catalog-import';
 
 /**
  * Admin front-end for /api/parts/import-vendor-assets (N4-A): pull product
@@ -80,7 +81,7 @@ export default function ImportVendorAssetsPage() {
     setProbe(null);
     setProbeError('');
     try {
-      setProbe(await post({ mode: 'probe', url: probeUrl.trim(), vendor: vendorScope.trim() || undefined }));
+      setProbe(await post({ mode: 'probe', url: ensureScheme(probeUrl), vendor: vendorScope.trim() || undefined }));
     } catch (e: any) {
       setProbeError(e?.message || 'Probe failed');
     }
@@ -89,10 +90,12 @@ export default function ImportVendorAssetsPage() {
 
   const doDiscover = async () => {
     // Teach mode: category page URLs (one per line) override sitemap/crawl.
+    // Scheme optional — pasted hostnames get https:// prepended, not dropped.
     const listingUrls = listingUrlsText
       .split('\n')
       .map(l => l.trim())
-      .filter(l => /^https?:\/\//i.test(l))
+      .filter(l => l.includes('.'))
+      .map(ensureScheme)
       .slice(0, 20);
     setDiscovering(true);
     setDiscoverError('');
@@ -102,7 +105,7 @@ export default function ImportVendorAssetsPage() {
     try {
       const d = await post({
         mode: 'discover',
-        baseUrl: siteUrl.trim(),
+        baseUrl: ensureScheme(siteUrl),
         listingUrls: listingUrls.length > 0 ? listingUrls : undefined,
       });
       setUrls(d.urls || []);
