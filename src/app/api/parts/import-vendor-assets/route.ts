@@ -38,8 +38,13 @@ const Schema = z.discriminatedUnion('mode', [
     mode: z.literal('discover'),
     baseUrl: urlish(300),
     /** Teach mode: harvest from these category/listing pages (plus their
-     *  pagination and sibling categories) instead of sitemaps/crawl. */
-    listingUrls: z.array(urlish(1000)).max(20).optional(),
+     *  pagination and sibling categories) instead of sitemaps/crawl. Each
+     *  call fetches ~25 listing pages and returns the remaining queue as
+     *  pendingListings — the client loops until the chain is walked (big
+     *  catalogs paginate into hundreds of pages; rangerdesign.com is 470). */
+    listingUrls: z.array(urlish(1000)).max(500).optional(),
+    /** Listing URLs already fetched in earlier calls of this walk. */
+    visited: z.array(z.string().trim().max(1000)).max(5000).optional(),
   }),
   // Import a batch of product pages: extract, match SKU, upload image to
   // R2, stamp image_path + marketing_description.
@@ -213,23 +218,31 @@ export async function POST(req: NextRequest) {
 
       // ── Teach mode: Craig hands us category pages; we fan out through
       // their pagination and sibling categories. No sitemap guessing.
+      // Resumable: ~25 listing fetches per call (the serverless budget),
+      // remaining queue returned for the client to continue with.
       if (body.listingUrls && body.listingUrls.length > 0) {
-        const seen = new Set<string>();
+        const seen = new Set((body.visited || []).map(u => u.replace(/\/$/, '')));
         const queue = [...new Set(body.listingUrls)];
-        let fetched = 0;
-        while (queue.length > 0 && fetched < 25 && candidates.size < 3000) {
+        const fetchedListings: string[] = [];
+        while (queue.length > 0 && fetchedListings.length < 25 && candidates.size < 3000) {
           const listing = queue.shift()!;
           const key = listing.replace(/\/$/, '');
           if (seen.has(key)) continue;
           seen.add(key);
-          fetched++;
+          fetchedListings.push(listing);
           for (const next of await harvestListing(listing)) {
             if (!seen.has(next.replace(/\/$/, ''))) queue.push(next);
           }
           await sleep(300);
         }
+        const pendingListings = [...new Set(queue)]
+          .filter(u => !seen.has(u.replace(/\/$/, '')))
+          .slice(0, 500);
         const urls = [...candidates];
-        return NextResponse.json({ urls, total: urls.length, sample: urls.slice(0, 10), via: 'listing', checked: checked.slice(0, 30) });
+        return NextResponse.json({
+          urls, total: urls.length, sample: urls.slice(0, 10), via: 'listing',
+          checked: checked.slice(0, 30), pendingListings, fetchedListings,
+        });
       }
 
       // ── Sitemap pass over BOTH host spellings (www and apex can behave
