@@ -13,23 +13,38 @@ describe('resolvePlatform', () => {
     expect(resolvePlatform({ make: 'HONDA', model: 'Civic' }).platformKey).toBeNull();
   });
 
-  it('reads Transit roof + wheelbase from the VIN body code (positions 5-7)', () => {
-    // R1C = van, medium roof, 130" WB (Craig's real-world VIN family)
-    const r1c = resolvePlatform({ make: 'FORD', model: 'Transit' }, '1FTBR1C89RKB58750');
+  it('reads Transit roof + wheelbase from the VIN body code (positions 5-7, MY2024 and older)', () => {
+    // R1C = van, medium roof, 130" WB — confirmed against a real 2023 listing
+    const r1c = resolvePlatform({ make: 'FORD', model: 'Transit', year: '2023' }, '1FTBR1C89PKB74203');
     expect(r1c.roof).toBe('medium');
     expect(r1c.wheelbase).toBe('130');
     // R2X = van, high roof, 148"
-    const r2x = resolvePlatform({ make: 'FORD', model: 'Transit' }, '1FTBR2X84PKA30462');
+    const r2x = resolvePlatform({ make: 'FORD', model: 'Transit', year: '2023' }, '1FTBR2X84PKA30462');
     expect(r2x.roof).toBe('high');
     expect(r2x.wheelbase).toBe('148');
     // R3X = van, high roof, 148" EL
-    expect(resolvePlatform({ make: 'FORD', model: 'Transit' }, '1FTBR3X84PKA30462').wheelbase).toBe('148 EL');
+    expect(resolvePlatform({ make: 'FORD', model: 'Transit', year: '2023' }, '1FTBR3X84PKA30462').wheelbase).toBe('148 EL');
     // R1Y = van, low roof, 130"
-    expect(resolvePlatform({ make: 'FORD', model: 'Transit' }, '1FTYR1Y84PKA30462').roof).toBe('low');
+    expect(resolvePlatform({ make: 'FORD', model: 'Transit', year: '2023' }, '1FTYR1Y84PKA30462').roof).toBe('low');
+    // No decoded year → the gate falls back to VIN position 10 (R = 2024)
+    expect(resolvePlatform({ make: 'FORD', model: 'Transit' }, '1FTBR1C89RKB58750').roof).toBe('medium');
     // Unknown body code → ask, never guess
-    const unknown = resolvePlatform({ make: 'FORD', model: 'Transit' }, '1FTBZZZM5PKA12345');
+    const unknown = resolvePlatform({ make: 'FORD', model: 'Transit', year: '2023' }, '1FTBZZZM5PKA12345');
     expect(unknown.roof).toBeNull();
     expect(unknown.wheelbase).toBeNull();
+  });
+
+  it('refuses to apply the legacy Transit body table to MY2025+ VINs', () => {
+    // Ford revised the body codes for MY2025 — a 2026 R1C is NOT a
+    // medium/130 (that combo died with MY2023). Craig's real 2026 VIN.
+    const my2026 = resolvePlatform({ make: 'FORD', model: 'Transit', year: '2026' }, '1FTBR1C82TKA17431');
+    expect(my2026.platformKey).toBe('transit');
+    expect(my2026.roof).toBeNull();
+    expect(my2026.wheelbase).toBeNull();
+    // Same gate from VIN position 10 alone (T = 2026) when no year decoded
+    const noYear = resolvePlatform({ make: 'FORD', model: 'Transit' }, '1FTBR1C82TKA17431');
+    expect(noYear.roof).toBeNull();
+    expect(noYear.wheelbase).toBeNull();
   });
 
   it('reads Sprinter wheelbase from VIN positions 5-6; roof stays null', () => {

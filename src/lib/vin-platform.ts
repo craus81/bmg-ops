@@ -17,21 +17,37 @@ export interface PlatformResolution {
   roof: 'low' | 'medium' | 'high' | null;
 }
 
-// Ford Transit VIN body code, positions 5-7 (2015+ US full-size Transit).
+// Ford Transit VIN body code, positions 5-7 (US full-size Transit).
 // Position 5: R = van (wagons/cutaways use other letters — not decoded).
 // Position 6 digit = wheelbase: 1 = 130", 2 = 148", 3 = 148" EL.
 // Position 7 letter = roof (+ door config): Y/Z = low, C/D = medium,
 // X/U = high. Y/Z/C/X confirmed against Ford dealer body-decoder tables
-// (R1Y/R1Z low·130, R2Y/R2Z low·148, R1C medium·130, R2C medium·148,
-// R2X high·148, R3X high·148 EL); D/U are the same tables' door variants.
+// and real listings (a 2023 R1C is a documented 130" medium roof); D/U are
+// the same tables' door variants.
+//
+// This scheme is confirmed ONLY through MY2024: Ford's 2025 order guide
+// ships with a "body codes have changed" warning, and MY2025 VINs reuse
+// letters with new meanings (Craig's 2026 R1C is NOT a medium/130 — that
+// combo died with MY2023). 2025+ codes go in TRANSIT_BODY_2025 one at a
+// time as they're confirmed against real vans; unknown ones resolve to
+// null ("pick by hand"), never a guess from the old table.
 const TRANSIT_WB: Record<string, string> = { '1': '130', '2': '148', '3': '148 EL' };
 const TRANSIT_ROOF: Record<string, 'low' | 'medium' | 'high'> = {
   Y: 'low', Z: 'low', C: 'medium', D: 'medium', X: 'high', U: 'high',
 };
+// VIN position 10 chars for MY2015-2024 — the years the legacy table covers.
+const TRANSIT_LEGACY_YEAR_CHARS = 'FGHJKLMNPR';
+// MY2025+ body codes, added only as confirmed against real vans.
+const TRANSIT_BODY_2025: Record<string, { roof: PlatformResolution['roof']; wheelbase: string | null }> = {};
 
-function transitBody(v: string): { roof: PlatformResolution['roof']; wheelbase: string | null } | null {
+function transitBody(
+  v: string,
+  modelYear: number | null,
+): { roof: PlatformResolution['roof']; wheelbase: string | null } | null {
   const code = v.slice(4, 7);
   if (!/^R\d[A-Z]$/.test(code)) return null;
+  const legacy = modelYear ? modelYear <= 2024 : TRANSIT_LEGACY_YEAR_CHARS.includes(v[9]);
+  if (!legacy) return TRANSIT_BODY_2025[code] || null;
   const wheelbase = TRANSIT_WB[code[1]] || null;
   const roof = TRANSIT_ROOF[code[2]] || null;
   return wheelbase || roof ? { roof, wheelbase } : null;
@@ -61,12 +77,13 @@ const MODEL_MAP: { re: RegExp; key: string }[] = [
 ];
 
 export function resolvePlatform(
-  decoded: { make?: string | null; model?: string | null; series?: string | null },
+  decoded: { make?: string | null; model?: string | null; series?: string | null; year?: string | null },
   vin?: string | null,
 ): PlatformResolution {
   const make = (decoded.make || '').toUpperCase();
   const model = (decoded.model || '').toUpperCase();
   const series = (decoded.series || '').toUpperCase();
+  const modelYear = parseInt(decoded.year || '', 10) || null;
   const v = (vin || '').toUpperCase();
 
   let platformKey: string | null = null;
@@ -85,7 +102,7 @@ export function resolvePlatform(
   let wheelbase: string | null = null;
   let roof: PlatformResolution['roof'] = null;
   if (platformKey === 'transit' && v.length === 17) {
-    const body = transitBody(v);
+    const body = transitBody(v, modelYear);
     if (body) { roof = body.roof; wheelbase = body.wheelbase; }
   }
   if (platformKey === 'sprinter' && v.length === 17) {
