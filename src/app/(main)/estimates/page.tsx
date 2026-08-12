@@ -256,7 +256,7 @@ export default function EstimatesPage() {
           setVinStatus({ kind: 'failed' });
           return;
         }
-        const res = resolvePlatform({ make: decoded.make, model: decoded.model, series: decoded.series }, vin);
+        const res = resolvePlatform({ make: decoded.make, model: decoded.model, series: decoded.series, year: decoded.year }, vin);
         if (decoded.year) setVehicleYear(decoded.year);
         const vehicleName = [decoded.year, decoded.make, decoded.model === 'Vehicle' ? '' : decoded.model]
           .filter(Boolean).join(' ');
