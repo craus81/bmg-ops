@@ -8,6 +8,13 @@ export interface VehicleData {
   fuelType: string;
   doors: string;
   gvwr: string;
+  // Fitment inputs (N4-B2): vPIC's dimensional/config fields, when set.
+  // wheelBaseIn/bedLengthIn are inch strings ("147.8"); cabType is vPIC's
+  // BodyCabType category ("Regular", "Crew/ Super Crew/ Crew Max", …).
+  series: string;
+  wheelBaseIn: string;
+  bedLengthIn: string;
+  cabType: string;
 }
 
 export async function decodeVIN(vin: string): Promise<VehicleData> {
@@ -32,6 +39,10 @@ export async function decodeVIN(vin: string): Promise<VehicleData> {
         fuelType: r.FuelTypePrimary || '',
         doors: r.Doors || '',
         gvwr: r.GVWR || '',
+        series: r.Series || '',
+        wheelBaseIn: r.WheelBaseShort || r.WheelBaseLong || '',
+        bedLengthIn: r.BedLengthIN || '',
+        cabType: r.BodyCabType || '',
       };
     }
   } catch {}
@@ -81,7 +92,7 @@ function offlineDecode(vin: string): VehicleData {
   } else if (make.includes('Mercedes')) {
     model = 'Sprinter'; bodyClass = 'Van';
   }
-  return { year, make: make.replace(/ \(.*\)/, ''), model, trim: '', bodyClass, driveType: '', fuelType: '', doors: '', gvwr: '' };
+  return { year, make: make.replace(/ \(.*\)/, ''), model, trim: '', bodyClass, driveType: '', fuelType: '', doors: '', gvwr: '', series: '', wheelBaseIn: '', bedLengthIn: '', cabType: '' };
 }
 
 export function isValidVIN(v: string): boolean {

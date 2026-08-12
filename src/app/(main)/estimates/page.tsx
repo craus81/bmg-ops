@@ -12,7 +12,7 @@ import PartCatalogBrowser, { type BrowsePart, type KitWithMembers } from '@/comp
 import MentionTextArea, { reportMentions } from '@/components/MentionTextArea';
 import { flashNote } from '@/lib/focus-note';
 import { decodeVIN, isValidVIN } from '@/lib/vin-decoder';
-import { resolvePlatform } from '@/lib/vin-platform';
+import { resolvePlatform, matchQualifiersToConfig } from '@/lib/vin-platform';
 import { deepLinks } from '@/lib/deep-links';
 import { openNetSuitePdf } from '@/lib/netsuite-pdf-client';
 
@@ -126,6 +126,15 @@ interface VehiclePlatform {
   config: PlatformConfig | null;
 }
 
+// Live feedback under the VIN input — the decode is never silent.
+type VinStatus =
+  | { kind: 'partial'; len: number }
+  | { kind: 'invalid' }
+  | { kind: 'decoding' }
+  | { kind: 'filled'; summary: string; needs: string[] }
+  | { kind: 'no-platform'; summary: string }
+  | { kind: 'failed' };
+
 interface Customer {
   id: string;
   netsuite_id: string;
@@ -227,32 +236,77 @@ export default function EstimatesPage() {
     setVehicleBed(prev => (cfg.beds || []).includes(prev) ? prev : '');
   };
 
+  // The decode is never silent (Craig 2026-08-12: "I don't see the vin field
+  // doing anything") — every state the VIN box can be in reports under it:
+  // partial length, invalid characters, decoding, filled-with-summary, or
+  // decoded-but-unrecognized.
+  const [vinStatus, setVinStatus] = useState<VinStatus | null>(null);
+
   useEffect(() => {
-    if (!isValidVIN(vin)) return;
+    if (!vin) { setVinStatus(null); return; }
+    if (vin.length < 17) { setVinStatus({ kind: 'partial', len: vin.length }); return; }
+    if (!isValidVIN(vin)) { setVinStatus({ kind: 'invalid' }); return; }
     let cancelled = false;
+    setVinStatus({ kind: 'decoding' });
     const t = setTimeout(async () => {
       try {
         const decoded = await decodeVIN(vin);
-        const res = resolvePlatform({ make: decoded?.make, model: decoded?.model }, vin);
         if (cancelled) return;
-        if (decoded?.year) setVehicleYear(decoded.year);
-        if (!res.platformKey) return;
+        if (!decoded || (decoded.make === 'Unknown' && decoded.model === 'Vehicle')) {
+          setVinStatus({ kind: 'failed' });
+          return;
+        }
+        const res = resolvePlatform({ make: decoded.make, model: decoded.model, series: decoded.series }, vin);
+        if (decoded.year) setVehicleYear(decoded.year);
+        const vehicleName = [decoded.year, decoded.make, decoded.model === 'Vehicle' ? '' : decoded.model]
+          .filter(Boolean).join(' ');
+        if (!res.platformKey) {
+          setVinStatus({ kind: 'no-platform', summary: vehicleName });
+          return;
+        }
         const { data: plat } = await supabase
           .from('vehicle_platforms')
-          .select('id, config')
+          .select('id, label, config')
           .eq('key', res.platformKey)
           .eq('active', true)
           .maybeSingle();
-        if (cancelled || !plat) return;
+        if (cancelled) return;
+        if (!plat) {
+          setVinStatus({ kind: 'no-platform', summary: vehicleName });
+          return;
+        }
         const cfg: PlatformConfig = plat.config || {};
+        // VIN-encoded qualifiers (Transit body code, Sprinter WB) win;
+        // vPIC's dimensional fields fill the rest where unambiguous.
+        const matched = matchQualifiersToConfig(decoded, cfg);
+        const wb = res.wheelbase || matched.wheelbase;
+        const roof = res.roof && (cfg.roofs || []).includes(res.roof) ? res.roof : null;
+        const cab = matched.cab;
+        const bed = matched.bed;
         setVehiclePlatformId(plat.id);
-        // Fill only what the VIN actually encodes; a hand-picked qualifier
-        // survives the decode unless it doesn't exist on this platform.
-        setVehicleWheelbase(prev => res.wheelbase || ((cfg.wheelbases || []).includes(prev) ? prev : ''));
-        setVehicleRoof(prev => res.roof || ((cfg.roofs || []).includes(prev) ? prev : ''));
-        setVehicleCab(prev => (cfg.cabs || []).includes(prev) ? prev : '');
-        setVehicleBed(prev => (cfg.beds || []).includes(prev) ? prev : '');
-      } catch { /* decode is best-effort — the selects work by hand */ }
+        // Fill only what the decode actually produced; a hand-picked
+        // qualifier survives unless it doesn't exist on this platform.
+        setVehicleWheelbase(prev => wb || ((cfg.wheelbases || []).includes(prev) ? prev : ''));
+        setVehicleRoof(prev => roof || ((cfg.roofs || []).includes(prev) ? prev : ''));
+        setVehicleCab(prev => cab || ((cfg.cabs || []).includes(prev) ? prev : ''));
+        setVehicleBed(prev => bed || ((cfg.beds || []).includes(prev) ? prev : ''));
+        const got = [
+          decoded.year, plat.label,
+          roof && `${roof} roof`,
+          wb && (/^\d/.test(wb) ? `${wb}" WB` : `${wb} WB`),
+          cab && `${cab} cab`,
+          bed && `${bed}' bed`,
+        ].filter(Boolean).join(' · ');
+        const needs = [
+          cfg.roofs?.length && !roof ? 'roof height' : null,
+          cfg.wheelbases?.length && !wb ? 'wheelbase' : null,
+          cfg.cabs?.length && !cab ? 'cab size' : null,
+          cfg.beds?.length && !bed ? 'bed length' : null,
+        ].filter((n): n is string => !!n);
+        setVinStatus({ kind: 'filled', summary: got, needs });
+      } catch {
+        if (!cancelled) setVinStatus({ kind: 'failed' });
+      }
     }, 600);
     return () => { cancelled = true; clearTimeout(t); };
   // eslint-disable-next-line react-hooks/exhaustive-deps -- decode purely from vin
@@ -1442,6 +1496,34 @@ export default function EstimatesPage() {
             maxLength={17}
             placeholder="Full 17 auto-fills the vehicle below — prints on the estimate"
           />
+          {vinStatus && (
+            <div style={{
+              marginTop: '4px', fontSize: '11px', fontWeight: 700,
+              color: vinStatus.kind === 'filled' ? '#34d399'
+                : vinStatus.kind === 'partial' || vinStatus.kind === 'decoding' ? 'var(--text-muted)'
+                : '#fbbf24',
+            }}>
+              {vinStatus.kind === 'partial' && (
+                <span style={{ fontWeight: 400 }}>
+                  {vinStatus.len} of 17 characters — a full VIN auto-fills the vehicle fields below
+                </span>
+              )}
+              {vinStatus.kind === 'invalid' && '⚠ Not a valid VIN — check for typos (VINs never contain I, O, or Q)'}
+              {vinStatus.kind === 'decoding' && <span style={{ fontWeight: 400 }}>Decoding VIN…</span>}
+              {vinStatus.kind === 'filled' && (
+                <>
+                  {'✓ '}{vinStatus.summary}{' — vehicle fields filled below'}
+                  {vinStatus.needs.length > 0 && (
+                    <span style={{ color: 'var(--text-muted)', fontWeight: 400 }}>
+                      {' '}(not in this VIN, pick by hand: {vinStatus.needs.join(', ')})
+                    </span>
+                  )}
+                </>
+              )}
+              {vinStatus.kind === 'no-platform' && `Decoded${vinStatus.summary ? `: ${vinStatus.summary}` : ''} — not a vehicle we stock parts for; pick the vehicle below if needed`}
+              {vinStatus.kind === 'failed' && '⚠ Couldn’t decode this VIN — pick the vehicle below by hand'}
+            </div>
+          )}
         </div>
         <div>
           <div style={labelStyle}>Unit/Stock #</div>
