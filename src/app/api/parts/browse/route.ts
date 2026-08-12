@@ -18,6 +18,8 @@ const Schema = z.object({
   uncategorized: z.enum(['1']).optional(),
   vendor: z.string().trim().max(200).optional(),
   catalog: z.enum(['upfit', 'graphics']).optional(),
+  /** N4-B2: only parts with a fitment row for this vehicle platform. */
+  platformId: z.string().uuid().optional(),
   sort: z.enum(['name', 'price_asc', 'price_desc']).optional(),
   page: z.coerce.number().int().min(0).max(500).optional(),
 });
@@ -35,13 +37,17 @@ export async function GET(req: NextRequest) {
 
   const parsed = validateSearchParams(req, Schema);
   if (parsed.error) return parsed.error;
-  const { q, categoryId, uncategorized, vendor, catalog, sort, page } = parsed.data;
+  const { q, categoryId, uncategorized, vendor, catalog, platformId, sort, page } = parsed.data;
 
   try {
+    // A vehicle filter needs an inner join to part_fitment; without one the
+    // select stays flat (no embedded arrays in the payload).
+    const baseColumns = 'id, netsuite_id, item_number, display_name, description, marketing_description, catalog, item_type, vendor, sales_price, purchase_price, avg_install_cost, labor_hours, quantity_available, product_category_id, image_path';
     let query = supabase
       .from('netsuite_parts')
-      .select('id, netsuite_id, item_number, display_name, description, marketing_description, catalog, item_type, vendor, sales_price, purchase_price, avg_install_cost, labor_hours, quantity_available, product_category_id, image_path', { count: 'exact' })
+      .select(platformId ? `${baseColumns}, part_fitment!inner(platform_id)` : baseColumns, { count: 'exact' })
       .eq('is_active', true);
+    if (platformId) query = query.eq('part_fitment.platform_id', platformId);
 
     if (q) {
       const s = q.replace(/[%_,()]/g, ' ').trim();
@@ -67,6 +73,7 @@ export async function GET(req: NextRequest) {
     // though the table isn't.
     let categories: { id: string; name: string; sort_order: number }[] | null = null;
     let vendors: string[] | null = null;
+    let platforms: { id: string; key: string; label: string; body_type: string }[] | null = null;
     if (!page) {
       const { data: cats } = await supabase
         .from('product_categories')
@@ -75,6 +82,13 @@ export async function GET(req: NextRequest) {
         .order('sort_order')
         .order('name');
       categories = cats || [];
+
+      const { data: plats } = await supabase
+        .from('vehicle_platforms')
+        .select('id, key, label, body_type')
+        .eq('active', true)
+        .order('sort_order');
+      platforms = plats || [];
 
       const seen = new Set<string>();
       for (let offset = 0; offset < 20_000; offset += 1000) {
@@ -98,6 +112,7 @@ export async function GET(req: NextRequest) {
       pageSize: PAGE_SIZE,
       ...(categories ? { categories } : {}),
       ...(vendors ? { vendors } : {}),
+      ...(platforms ? { platforms } : {}),
     });
   } catch (err: any) {
     return NextResponse.json({ error: err.message || 'Browse failed' }, { status: 500 });
