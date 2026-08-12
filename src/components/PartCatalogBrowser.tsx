@@ -57,7 +57,7 @@ export interface KitWithMembers {
 const money = (v: number | null | undefined) =>
   v || v === 0 ? `$${Number(v).toLocaleString(undefined, { minimumFractionDigits: 2 })}` : '—';
 
-export default function PartCatalogBrowser({ open, onClose, onAdd, onAddKit, isAdmin, variant = 'modal' }: {
+export default function PartCatalogBrowser({ open, onClose, onAdd, onAddKit, isAdmin, variant = 'modal', initialPlatformId }: {
   open: boolean;
   onClose?: () => void;
   /** When set (estimate builder), cards and the record modal get an Add button. */
@@ -69,6 +69,9 @@ export default function PartCatalogBrowser({ open, onClose, onAdd, onAddKit, isA
   /** 'modal' floats over the page; 'inline' renders the same browser as a
    *  page section (the /parts Visual Catalog view). */
   variant?: 'modal' | 'inline';
+  /** Pre-select the Vehicle filter on open (estimate VIN resolution) —
+   *  the user can still change it in the rail. */
+  initialPlatformId?: string;
 }) {
   const [q, setQ] = useState('');
   const [categoryId, setCategoryId] = useState('');
@@ -95,6 +98,12 @@ export default function PartCatalogBrowser({ open, onClose, onAdd, onAddKit, isA
   const [addedKits, setAddedKits] = useState<Record<string, number>>({});
   const photoInputRef = useRef<HTMLInputElement>(null);
   const photoTargetRef = useRef<string | null>(null);
+
+  // Estimate VIN resolution pre-selects the vehicle each time the modal
+  // opens; the rail select stays fully changeable during the session.
+  useEffect(() => {
+    if (open && initialPlatformId !== undefined) setPlatformId(initialPlatformId || '');
+  }, [open, initialPlatformId]);
 
   useEffect(() => {
     if (!open || kits !== null) return;
